@@ -1,23 +1,9 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """Dolma 3 Pool dataset definitions and tokenization.
 
-This module defines 333 partitions for the Dolma 3 Pool pretraining corpus.
+This module defines 333 declared partitions for the Dolma 3 Pool pretraining corpus.
 
 The Dolma 3 Pool is assembled from multiple HuggingFace datasets:
 - allenai/dolma3_pool: Common Crawl (290) + olmOCR PDFs (25) = 315 partitions
@@ -25,7 +11,20 @@ The Dolma 3 Pool is assembled from multiple HuggingFace datasets:
 - HuggingFaceTB/finemath: FineMath 3+ (1 partition)
 - allenai/dolma (v1.7): arXiv (1) + Wikipedia (1) = 2 partitions
 
-Total: 333 partitions, ~9.31T tokens
+Total raw dataset: 333 partitions, ~9.31T tokens
+
+As of the 2026-03 GCS audit in `us-central1`, completed tokenized caches exist for
+293 partitions totaling 6,391,092,209,185 tokens with the Marin/Llama 3 tokenizer:
+- 290 Common Crawl partitions under `tokenized/dolma3_pool/`
+- `finemath_3plus` via `tokenized/finemath_3_plus-a26b0f`
+- `arxiv` via `tokenized/dolma/arxiv-07a51f`
+- `wikipedia` via `tokenized/dolma/wiki-212315`
+
+The remaining 40 incomplete partitions are:
+- 25 known-broken `olmocr_pdfs/*` partitions
+- 15 `stack_edu/*` partitions; the current Hugging Face export contains only
+  Software Heritage blob IDs and metadata, so a content hydration step is
+  required before tokenization
 
 Per the OLMo 3 technical report:
 - Common Crawl is partitioned by topic (18 categories) and quality tier (vigintile buckets)
@@ -42,6 +41,10 @@ Usage:
     )
 """
 
+from experiments.llama import llama3_tokenizer
+from experiments.marin_models import marin_tokenizer
+from experiments.midtraining_datasets import finemath_3_plus_tokenized
+from experiments.pretraining_datasets.dolma import tokenize_dolma
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
@@ -154,6 +157,11 @@ HF_STACK_EDU_ID = "HuggingFaceTB/stack-edu"
 HF_FINEMATH_ID = "HuggingFaceTB/finemath"
 HF_DOLMA_V17_ID = "allenai/dolma"
 
+STACK_EDU_TOKENIZATION_BLOCKER = (
+    "Stack-Edu raw parquet files only contain Software Heritage blob IDs and metadata, not source text. "
+    "Hydrate blob contents first (per the Hugging Face dataset README) before tokenization."
+)
+
 # =============================================================================
 # PARTITION DEFINITIONS
 # =============================================================================
@@ -209,9 +217,8 @@ DOLMA3_POOL_PARTITIONS["wikipedia"] = ["wiki"]
 # TOKEN COUNTS
 # =============================================================================
 
-# Token counts in billions, measured from GCS .stats.json files via count_dolma3_tokens.py.
-# Common Crawl counts are exact (measured 2026-03). Non-CC counts are still approximate
-# (from dataset card) until those caches are tokenized.
+# Token counts in billions, measured from GCS `train/.stats.json` files via
+# `count_dolma3_tokens.py`. Only completed tokenized partitions are included here.
 DOLMA3_POOL_TOKEN_COUNTS_B: dict[str, float] = {
     # Common Crawl — 290 partitions, 6325.18B total (measured)
     "common_crawl/adult_content/0007": 8.1102,
@@ -504,18 +511,23 @@ DOLMA3_POOL_TOKEN_COUNTS_B: dict[str, float] = {
     "common_crawl/science_math_and_technology/0015": 35.8001,
     "common_crawl/science_math_and_technology/0016": 40.4560,
     "common_crawl/science_math_and_technology/0017": 38.2456,
+    # Reused equivalent-tokenizer caches outside tokenized/dolma3_pool.
+    "finemath_3plus": 34.0019,  # 34,001,855,255 tokens
+    "arxiv": 28.2376,  # 28,237,567,983 tokens
+    "wikipedia": 3.6691,  # 3,669,138,258 tokens
 }
 
-# Non-CC partitions — approximate counts from dataset cards (not yet measured)
-for partition in DOLMA3_POOL_PARTITIONS:
-    if partition.startswith("olmocr_pdfs/"):
-        DOLMA3_POOL_TOKEN_COUNTS_B[partition] = 38.9  # ~972B / 25 partitions
-for partition in DOLMA3_POOL_PARTITIONS:
-    if partition.startswith("stack_edu/"):
-        DOLMA3_POOL_TOKEN_COUNTS_B[partition] = 9.1  # ~137B / 15 languages
-DOLMA3_POOL_TOKEN_COUNTS_B["finemath_3plus"] = 34.1
-DOLMA3_POOL_TOKEN_COUNTS_B["arxiv"] = 21.4
-DOLMA3_POOL_TOKEN_COUNTS_B["wikipedia"] = 3.69
+DOLMA3_POOL_REUSED_EQUIVALENT_CACHE_PARTITIONS = frozenset({"finemath_3plus", "arxiv", "wikipedia"})
+
+DOLMA3_POOL_COMPLETED_PARTITIONS: tuple[str, ...] = tuple(DOLMA3_POOL_TOKEN_COUNTS_B)
+
+DOLMA3_POOL_KNOWN_BROKEN_PARTITIONS: tuple[str, ...] = tuple(
+    partition for partition in DOLMA3_POOL_PARTITIONS if partition.startswith("olmocr_pdfs/")
+)
+
+DOLMA3_POOL_INCOMPLETE_PARTITIONS: tuple[str, ...] = tuple(
+    partition for partition in DOLMA3_POOL_PARTITIONS if partition not in DOLMA3_POOL_TOKEN_COUNTS_B
+)
 
 # =============================================================================
 # DOWNLOAD STEPS
@@ -591,18 +603,48 @@ def download_dolma_v17() -> ExecutorStep:
     return _download_dolma_v17_step
 
 
-def download_all_dolma3_pool_sources() -> list[ExecutorStep]:
-    """Get all download steps needed for the complete Dolma 3 Pool.
+def _uses_reused_equivalent_cache(partition_name: str, tokenizer: str) -> bool:
+    """Return whether a partition reuses an existing equivalent-tokenizer cache."""
+    return (
+        tokenizer in {marin_tokenizer, llama3_tokenizer}
+        and partition_name in DOLMA3_POOL_REUSED_EQUIVALENT_CACHE_PARTITIONS
+    )
+
+
+def download_all_dolma3_pool_sources(
+    partitions: list[str] | None = None,
+    tokenizer: str | None = None,
+) -> list[ExecutorStep]:
+    """Get the download steps required for the requested Dolma 3 Pool partitions.
 
     Returns:
-        List of ExecutorSteps for all source datasets.
+        List of ExecutorSteps for the source datasets that still need raw inputs.
     """
-    return [
-        download_dolma3_pool(),
-        download_stack_edu(),
-        download_finemath(),
-        download_dolma_v17(),
-    ]
+    if partitions is None:
+        partitions = list(DOLMA3_POOL_PARTITIONS)
+
+    if tokenizer is None:
+        tokenizer = marin_tokenizer
+
+    download_steps: dict[str, ExecutorStep] = {}
+    for partition_name in partitions:
+        if _uses_reused_equivalent_cache(partition_name, tokenizer):
+            continue
+
+        if partition_name.startswith("common_crawl/") or partition_name.startswith("olmocr_pdfs/"):
+            step = download_dolma3_pool()
+        elif partition_name.startswith("stack_edu/"):
+            step = download_stack_edu()
+        elif partition_name == "finemath_3plus":
+            step = download_finemath()
+        elif partition_name in {"arxiv", "wikipedia"}:
+            step = download_dolma_v17()
+        else:
+            raise ValueError(f"Unknown partition source: {partition_name}")
+
+        download_steps[step.name] = step
+
+    return list(download_steps.values())
 
 
 def _get_dolma3_pool_base_dir():
@@ -613,7 +655,10 @@ def _get_dolma3_pool_base_dir():
 
 def _get_stack_edu_base_dir():
     """Get the base directory for Stack-Edu data."""
-    return download_stack_edu().cd("data")
+    # Stack-Edu raw downloads are written directly under the dataset root
+    # (e.g. gs://.../raw/stack_edu-<sha>/Python/train-*.parquet), not under
+    # an intermediate data/ directory.
+    return download_stack_edu()
 
 
 def _get_finemath_base_dir():
@@ -693,9 +738,23 @@ def tokenize_dolma3_pool_subset(
         return _tokenize_cache[cache_key]
 
     if tokenizer is None:
-        from experiments.marin_models import marin_tokenizer
-
         tokenizer = marin_tokenizer
+
+    if partition_name.startswith("stack_edu/"):
+        raise ValueError(STACK_EDU_TOKENIZATION_BLOCKER)
+
+    if _uses_reused_equivalent_cache(partition_name, tokenizer):
+        if partition_name == "finemath_3plus":
+            step = finemath_3_plus_tokenized
+        elif partition_name == "arxiv":
+            step = tokenize_dolma(tokenizer=llama3_tokenizer)["dolma/arxiv"]
+        elif partition_name == "wikipedia":
+            step = tokenize_dolma(tokenizer=llama3_tokenizer)["dolma/wiki"]
+        else:
+            raise ValueError(f"Unexpected reused-cache partition: {partition_name}")
+
+        _tokenize_cache[cache_key] = step
+        return step
 
     # Create output path
     safe_name = partition_name.replace("/", "_")

@@ -1,33 +1,23 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """Dolma 3 Dolmino Pool dataset definitions and tokenization.
 
 This module defines 133 partitions from the Dolma 3 Dolmino Pool dataset
 (https://huggingface.co/datasets/allenai/dolma3_dolmino_pool).
 
-The dataset contains 2.19T tokens organized into several categories:
+The raw dataset is documented at roughly 2.19T tokens organized into several categories:
 - Common Crawl HQ: 48 partitions (24 topics x 2 years: 2019, 2020)
 - olmOCR Science PDFs HQ: 23 partitions (23 topics, with 2e12/2e13 size variants merged)
 - Stack-Edu FIM: 15 partitions (15 programming languages, shards merged)
 - STEM Heavy Crawl: 24 partitions (24 topics)
 - Synthetic datasets: 23 partitions
 
-Total: 133 partitions
+Completed tokenized caches on GCS in `us-central1` total 2,288,298,862,641
+tokens with the Marin tokenizer across all 133 declared partitions. The
+`dolmino_1-flan` source directory contains three known-corrupted shards
+(`tulu_flan-0064`, `0122`, and `0163`), which are stored on GCS with a
+`.corrupted` suffix and therefore excluded from tokenization inputs.
 
 Note: The original dataset card lists ~135 distinct data sources. The discrepancy of 2
 is due to counting methodology:
@@ -189,66 +179,158 @@ DOLMINO_POOL_PARTITIONS["synth_instruction/dolmino_flan"] = ["dolmino_1-flan"]  
 DOLMINO_POOL_PARTITIONS["synth_instruction/tulu_3_sft"] = ["tulu-3-sft"]  # 1.61B
 
 # =============================================================================
-# TOKEN COUNTS (estimated from dataset card)
+# RAW DATA AUDIT NOTES
 # =============================================================================
 
-# Token counts in billions, from the dataset documentation
-# These are approximate and should be verified by running count_tokens.py after tokenization
+KNOWN_CORRUPTED_DOLMINO_SOURCE_FILES: tuple[str, ...] = (
+    "dolmino_1-flan/tulu_flan-0064.jsonl.zst.corrupted",
+    "dolmino_1-flan/tulu_flan-0122.jsonl.zst.corrupted",
+    "dolmino_1-flan/tulu_flan-0163.jsonl.zst.corrupted",
+)
+
+# =============================================================================
+# TOKEN COUNTS
+# =============================================================================
+
+# Token counts in billions, measured from GCS `train/.stats.json` files via
+# `count_dolmino_pool_tokens.py`.
 DOLMINO_POOL_TOKEN_COUNTS_B: dict[str, float] = {
-    # Common Crawl HQ - total ~1.32T, distributed across 48 partitions
-    # Average ~27.5B per partition, but varies by topic
-    # We'll use placeholder values - actual counts should be measured
+    "common_crawl_hq/19_adult_content": 8.3810,  # 8,381,037,655 tokens
+    "common_crawl_hq/19_art_and_design": 15.9377,  # 15,937,673,069 tokens
+    "common_crawl_hq/19_crime_and_law": 20.3919,  # 20,391,917,102 tokens
+    "common_crawl_hq/19_education_and_jobs": 30.6153,  # 30,615,268,029 tokens
+    "common_crawl_hq/19_electronics_and_hardware": 16.5263,  # 16,526,336,822 tokens
+    "common_crawl_hq/19_entertainment": 56.9343,  # 56,934,318,529 tokens
+    "common_crawl_hq/19_fashion_and_beauty": 20.6187,  # 20,618,718,869 tokens
+    "common_crawl_hq/19_finance_and_business": 58.2013,  # 58,201,301,469 tokens
+    "common_crawl_hq/19_food_and_dining": 19.2608,  # 19,260,774,360 tokens
+    "common_crawl_hq/19_games": 29.2777,  # 29,277,676,675 tokens
+    "common_crawl_hq/19_health": 54.3096,  # 54,309,609,972 tokens
+    "common_crawl_hq/19_history_and_geography": 20.0166,  # 20,016,567,948 tokens
+    "common_crawl_hq/19_home_and_hobbies": 54.8049,  # 54,804,861,525 tokens
+    "common_crawl_hq/19_industrial": 9.5765,  # 9,576,492,233 tokens
+    "common_crawl_hq/19_literature": 44.6384,  # 44,638,386,888 tokens
+    "common_crawl_hq/19_politics": 54.8123,  # 54,812,285,796 tokens
+    "common_crawl_hq/19_religion": 31.0000,  # 30,999,999,638 tokens
+    "common_crawl_hq/19_science_math_and_technology": 44.9178,  # 44,917,823,508 tokens
+    "common_crawl_hq/19_social_life": 31.3450,  # 31,345,026,701 tokens
+    "common_crawl_hq/19_software": 16.5842,  # 16,584,201,955 tokens
+    "common_crawl_hq/19_software_development": 16.1923,  # 16,192,310,540 tokens
+    "common_crawl_hq/19_sports_and_fitness": 40.2728,  # 40,272,829,283 tokens
+    "common_crawl_hq/19_transportation": 16.7638,  # 16,763,804,995 tokens
+    "common_crawl_hq/19_travel_and_tourism": 25.0952,  # 25,095,232,417 tokens
+    "common_crawl_hq/20_adult_content": 0.4796,  # 479,608,373 tokens
+    "common_crawl_hq/20_art_and_design": 12.0004,  # 12,000,384,386 tokens
+    "common_crawl_hq/20_crime_and_law": 16.6171,  # 16,617,087,516 tokens
+    "common_crawl_hq/20_education_and_jobs": 25.0890,  # 25,088,986,752 tokens
+    "common_crawl_hq/20_electronics_and_hardware": 13.5571,  # 13,557,052,917 tokens
+    "common_crawl_hq/20_entertainment": 52.2176,  # 52,217,644,862 tokens
+    "common_crawl_hq/20_fashion_and_beauty": 16.5287,  # 16,528,701,064 tokens
+    "common_crawl_hq/20_finance_and_business": 50.1801,  # 50,180,102,412 tokens
+    "common_crawl_hq/20_food_and_dining": 15.7125,  # 15,712,460,719 tokens
+    "common_crawl_hq/20_games": 25.7855,  # 25,785,481,876 tokens
+    "common_crawl_hq/20_health": 40.4163,  # 40,416,327,553 tokens
+    "common_crawl_hq/20_history_and_geography": 13.0872,  # 13,087,198,319 tokens
+    "common_crawl_hq/20_home_and_hobbies": 44.6649,  # 44,664,885,954 tokens
+    "common_crawl_hq/20_industrial": 8.3613,  # 8,361,279,734 tokens
+    "common_crawl_hq/20_literature": 32.9940,  # 32,994,013,793 tokens
+    "common_crawl_hq/20_politics": 44.2785,  # 44,278,458,224 tokens
+    "common_crawl_hq/20_religion": 22.0074,  # 22,007,365,839 tokens
+    "common_crawl_hq/20_science_math_and_technology": 28.7562,  # 28,756,164,218 tokens
+    "common_crawl_hq/20_social_life": 25.8833,  # 25,883,299,728 tokens
+    "common_crawl_hq/20_software": 12.7998,  # 12,799,804,093 tokens
+    "common_crawl_hq/20_software_development": 12.0337,  # 12,033,705,145 tokens
+    "common_crawl_hq/20_sports_and_fitness": 33.4371,  # 33,437,104,070 tokens
+    "common_crawl_hq/20_transportation": 14.3233,  # 14,323,250,744 tokens
+    "common_crawl_hq/20_travel_and_tourism": 19.9014,  # 19,901,437,416 tokens
+    "olmocr_pdfs_hq/adult_content": 0.0189,  # 18,861,709 tokens
+    "olmocr_pdfs_hq/art_and_design": 1.4688,  # 1,468,806,367 tokens
+    "olmocr_pdfs_hq/crime_and_law": 7.5491,  # 7,549,087,174 tokens
+    "olmocr_pdfs_hq/education_and_jobs": 23.8538,  # 23,853,758,087 tokens
+    "olmocr_pdfs_hq/electronics_and_hardware": 1.7216,  # 1,721,626,962 tokens
+    "olmocr_pdfs_hq/entertainment": 0.7015,  # 701,489,491 tokens
+    "olmocr_pdfs_hq/fashion_and_beauty": 0.1206,  # 120,615,956 tokens
+    "olmocr_pdfs_hq/finance_and_business": 11.7713,  # 11,771,251,347 tokens
+    "olmocr_pdfs_hq/food_and_dining": 0.5393,  # 539,297,159 tokens
+    "olmocr_pdfs_hq/games": 0.3146,  # 314,604,548 tokens
+    "olmocr_pdfs_hq/health": 28.1396,  # 28,139,614,976 tokens
+    "olmocr_pdfs_hq/history_and_geography": 3.3578,  # 3,357,787,565 tokens
+    "olmocr_pdfs_hq/home_and_hobbies": 0.8420,  # 841,956,470 tokens
+    "olmocr_pdfs_hq/industrial": 5.8769,  # 5,876,949,084 tokens
+    "olmocr_pdfs_hq/literature": 4.4739,  # 4,473,927,184 tokens
+    "olmocr_pdfs_hq/politics": 7.8518,  # 7,851,757,650 tokens
+    "olmocr_pdfs_hq/religion": 3.3180,  # 3,318,027,266 tokens
+    "olmocr_pdfs_hq/science_math_and_technology": 93.8071,  # 93,807,115,671 tokens
+    "olmocr_pdfs_hq/software": 0.7758,  # 775,792,563 tokens
+    "olmocr_pdfs_hq/software_development": 4.4800,  # 4,479,963,800 tokens
+    "olmocr_pdfs_hq/sports_and_fitness": 1.1666,  # 1,166,579,038 tokens
+    "olmocr_pdfs_hq/transportation": 3.1957,  # 3,195,687,882 tokens
+    "olmocr_pdfs_hq/travel_and_tourism": 0.5578,  # 557,827,150 tokens
+    "stack_edu_fim/C": 4.7944,  # 4,794,378,523 tokens
+    "stack_edu_fim/CSharp": 7.2804,  # 7,280,376,665 tokens
+    "stack_edu_fim/Cpp": 12.5377,  # 12,537,737,094 tokens
+    "stack_edu_fim/Go": 1.4168,  # 1,416,818,637 tokens
+    "stack_edu_fim/Java": 31.1296,  # 31,129,627,881 tokens
+    "stack_edu_fim/JavaScript": 8.9608,  # 8,960,779,585 tokens
+    "stack_edu_fim/Markdown": 25.9952,  # 25,995,237,784 tokens
+    "stack_edu_fim/PHP": 7.4808,  # 7,480,845,163 tokens
+    "stack_edu_fim/Python": 17.7957,  # 17,795,732,931 tokens
+    "stack_edu_fim/Ruby": 1.4206,  # 1,420,554,277 tokens
+    "stack_edu_fim/Rust": 1.4312,  # 1,431,212,270 tokens
+    "stack_edu_fim/SQL": 6.9786,  # 6,978,561,755 tokens
+    "stack_edu_fim/Shell": 2.5910,  # 2,590,981,737 tokens
+    "stack_edu_fim/Swift": 1.5320,  # 1,531,963,169 tokens
+    "stack_edu_fim/TypeScript": 2.5383,  # 2,538,259,767 tokens
+    "stem_heavy_crawl/adult_content": 0.0015,  # 1,526,613 tokens
+    "stem_heavy_crawl/art_and_design": 0.0352,  # 35,160,664 tokens
+    "stem_heavy_crawl/crime_and_law": 0.0468,  # 46,837,223 tokens
+    "stem_heavy_crawl/education_and_jobs": 0.1632,  # 163,161,047 tokens
+    "stem_heavy_crawl/electronics_and_hardware": 0.0745,  # 74,515,890 tokens
+    "stem_heavy_crawl/entertainment": 0.0848,  # 84,849,784 tokens
+    "stem_heavy_crawl/fashion_and_beauty": 0.0132,  # 13,220,186 tokens
+    "stem_heavy_crawl/finance_and_business": 0.2849,  # 284,875,709 tokens
+    "stem_heavy_crawl/food_and_dining": 0.0298,  # 29,849,150 tokens
+    "stem_heavy_crawl/games": 0.0909,  # 90,938,673 tokens
+    "stem_heavy_crawl/health": 0.2426,  # 242,591,532 tokens
+    "stem_heavy_crawl/history_and_geography": 0.1098,  # 109,839,314 tokens
+    "stem_heavy_crawl/home_and_hobbies": 0.0425,  # 42,531,797 tokens
+    "stem_heavy_crawl/industrial": 0.0216,  # 21,554,048 tokens
+    "stem_heavy_crawl/literature": 0.2250,  # 224,991,359 tokens
+    "stem_heavy_crawl/politics": 0.1417,  # 141,669,175 tokens
+    "stem_heavy_crawl/religion": 0.0634,  # 63,377,894 tokens
+    "stem_heavy_crawl/science_math_and_technology": 2.2053,  # 2,205,270,315 tokens
+    "stem_heavy_crawl/social_life": 0.0411,  # 41,101,470 tokens
+    "stem_heavy_crawl/software": 0.1725,  # 172,534,368 tokens
+    "stem_heavy_crawl/software_development": 1.0403,  # 1,040,276,580 tokens
+    "stem_heavy_crawl/sports_and_fitness": 0.0439,  # 43,859,279 tokens
+    "stem_heavy_crawl/transportation": 0.0302,  # 30,166,406 tokens
+    "stem_heavy_crawl/travel_and_tourism": 0.0091,  # 9,054,760 tokens
+    "synth_code/cranecode": 18.8608,  # 18,860,808,823 tokens
+    "synth_instruction/dolmino_flan": 16.4424,  # 16,442,404,921 tokens
+    "synth_instruction/tulu_3_sft": 1.5380,  # 1,538,031,598 tokens
+    "synth_math/cranemath": 5.6329,  # 5,632,856,885 tokens
+    "synth_math/dolmino_math": 10.7086,  # 10,708,619,773 tokens
+    "synth_math/megamatt": 3.8993,  # 3,899,255,174 tokens
+    "synth_math/tinymath_mind": 0.8992,  # 899,172,352 tokens
+    "synth_math/tinymath_pot": 0.2423,  # 242,255,476 tokens
+    "synth_math/verifiable_gpt41": 0.3648,  # 364,813,694 tokens
+    "synth_math/verifiable_o4mini": 0.0739,  # 73,921,022 tokens
+    "synth_qa/nemotron_synth_qa": 488.3019,  # 488,301,926,682 tokens
+    "synth_qa/reddit_to_flashcards": 34.5974,  # 34,597,359,285 tokens
+    "synth_qa/wiki_to_rcqa": 4.2541,  # 4,254,057,981 tokens
+    "synth_thinking/code_meta_reasoning": 1.2675,  # 1,267,452,019 tokens
+    "synth_thinking/gemini_reasoning": 0.2458,  # 245,803,085 tokens
+    "synth_thinking/general_reasoning_mix": 2.4688,  # 2,468,826,907 tokens
+    "synth_thinking/llama_nemotron_reasoning": 20.8186,  # 20,818,607,573 tokens
+    "synth_thinking/math_meta_reasoning": 1.0515,  # 1,051,507,567 tokens
+    "synth_thinking/omr_rewrite_fullthoughts": 0.8499,  # 849,884,028 tokens
+    "synth_thinking/openthoughts2_reasoning": 5.5798,  # 5,579,818,653 tokens
+    "synth_thinking/program_verifiable": 0.3916,  # 391,614,940 tokens
+    "synth_thinking/qwq_reasoning": 4.7556,  # 4,755,570,038 tokens
+    "synth_thinking/r1_reasoning": 2.4688,  # 2,468,826,907 tokens
 }
 
-# Populate approximate token counts for Common Crawl HQ
-# Total: 1.32T / 48 = ~27.5B average per partition
-for partition in DOLMINO_POOL_PARTITIONS:
-    if partition.startswith("common_crawl_hq/"):
-        DOLMINO_POOL_TOKEN_COUNTS_B[partition] = 27.5  # Approximate, to be measured
-
-# olmOCR PDFs HQ - total ~240B / 23 = ~10.4B average
-for partition in DOLMINO_POOL_PARTITIONS:
-    if partition.startswith("olmocr_pdfs_hq/"):
-        DOLMINO_POOL_TOKEN_COUNTS_B[partition] = 10.4  # Approximate
-
-# Stack-Edu FIM - total ~21.4B / 15 = ~1.4B average
-for partition in DOLMINO_POOL_PARTITIONS:
-    if partition.startswith("stack_edu_fim/"):
-        DOLMINO_POOL_TOKEN_COUNTS_B[partition] = 1.4  # Approximate
-
-# STEM Heavy Crawl - total ~5.21B / 24 = ~0.217B average per topic
-for partition in DOLMINO_POOL_PARTITIONS:
-    if partition.startswith("stem_heavy_crawl/"):
-        DOLMINO_POOL_TOKEN_COUNTS_B[partition] = 0.217  # Approximate
-
-# Individual synthetic datasets (from documentation)
-DOLMINO_POOL_TOKEN_COUNTS_B.update(
-    {
-        "synth_qa/nemotron_synth_qa": 487.0,
-        "synth_qa/reddit_to_flashcards": 21.6,
-        "synth_qa/wiki_to_rcqa": 4.22,
-        "synth_code/cranecode": 18.8,
-        "synth_thinking/llama_nemotron_reasoning": 20.9,
-        "synth_thinking/openthoughts2_reasoning": 5.6,
-        "synth_thinking/qwq_reasoning": 4.77,
-        "synth_thinking/general_reasoning_mix": 2.48,
-        "synth_thinking/code_meta_reasoning": 1.27,
-        "synth_thinking/math_meta_reasoning": 1.05,
-        "synth_thinking/omr_rewrite_fullthoughts": 0.85,
-        "synth_thinking/program_verifiable": 0.438,
-        "synth_thinking/gemini_reasoning": 0.246,
-        "synth_thinking/r1_reasoning": 1.0,  # Approximate
-        "synth_math/dolmino_math": 10.7,
-        "synth_math/cranemath": 5.62,
-        "synth_math/megamatt": 3.88,
-        "synth_math/tinymath_mind": 0.899,
-        "synth_math/tinymath_pot": 0.241,
-        "synth_math/verifiable_gpt41": 0.5,  # Approximate
-        "synth_math/verifiable_o4mini": 0.5,  # Approximate
-        "synth_instruction/dolmino_flan": 16.8,
-        "synth_instruction/tulu_3_sft": 1.61,
-    }
-)
+DOLMINO_POOL_COMPLETED_PARTITIONS: tuple[str, ...] = tuple(DOLMINO_POOL_TOKEN_COUNTS_B)
 
 # =============================================================================
 # DOWNLOAD STEP

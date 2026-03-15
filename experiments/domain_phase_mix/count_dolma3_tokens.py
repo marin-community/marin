@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["google-cloud-storage"]
@@ -18,9 +20,15 @@ import sys
 
 from google.cloud import storage
 
-
 GCS_BUCKET = "marin-us-central1"
 GCS_PREFIX = "tokenized/dolma3_pool/"
+EXTERNAL_CACHE_COUNTS = {
+    # These three partitions reuse equivalent-tokenizer caches outside tokenized/dolma3_pool.
+    # Their exact token counts were measured directly from the caches during the 2026-03 audit.
+    "finemath_3plus": 34_001_855_255,
+    "arxiv": 28_237_567_983,
+    "wikipedia": 3_669_138_258,
+}
 
 
 def find_completed_caches(bucket_name: str, prefix: str) -> dict[str, int]:
@@ -96,7 +104,7 @@ def safe_name_to_partition(safe_name: str) -> str | None:
     """
     # Common crawl: common_crawl_{topic}_{tier}
     if safe_name.startswith("common_crawl_"):
-        rest = safe_name[len("common_crawl_"):]
+        rest = safe_name[len("common_crawl_") :]
         # The tier is always a 4-digit number at the end
         if len(rest) >= 5 and rest[-4:].isdigit() and rest[-5] == "_":
             topic = rest[:-5]
@@ -108,7 +116,7 @@ def safe_name_to_partition(safe_name: str) -> str | None:
     # Wait, the safe_name comes from partition_name.replace("/", "_")
     # partition_name = "olmocr_pdfs/{topic}" -> safe_name = "olmocr_pdfs_{topic}"
     if safe_name.startswith("olmocr_pdfs_"):
-        rest = safe_name[len("olmocr_pdfs_"):]
+        rest = safe_name[len("olmocr_pdfs_") :]
         # Check for part1/part2 suffix
         if rest.endswith("_part1"):
             topic = rest[:-6]
@@ -121,7 +129,7 @@ def safe_name_to_partition(safe_name: str) -> str | None:
 
     # Stack-edu: stack_edu_{language}
     if safe_name.startswith("stack_edu_"):
-        lang = safe_name[len("stack_edu_"):]
+        lang = safe_name[len("stack_edu_") :]
         return f"stack_edu/{lang}"
 
     # Simple names
@@ -146,6 +154,8 @@ def main():
             partition_counts[partition] = tokens
         else:
             unmapped.append(safe_name)
+
+    partition_counts.update(EXTERNAL_CACHE_COUNTS)
 
     if unmapped:
         print(f"\nWARNING: Could not map {len(unmapped)} safe names to partitions:", file=sys.stderr)
