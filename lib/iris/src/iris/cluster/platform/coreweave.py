@@ -361,13 +361,23 @@ class CoreweavePlatform:
 
     # -- RBAC / Namespace Prerequisites ----------------------------------------
 
+    def _rbac_cluster_role_name(self) -> str:
+        """Namespace-qualified ClusterRole name to avoid collisions across Iris instances."""
+        return f"iris-controller-{self._namespace}"
+
     def ensure_rbac(self) -> None:
         """Create the namespace, ServiceAccount, ClusterRole, and ClusterRoleBinding.
 
         Idempotent (kubectl apply). These were previously manual operator
         prerequisites; now they're auto-applied at cluster start so a single
         ``iris cluster start`` is sufficient.
+
+        ClusterRole and ClusterRoleBinding names are qualified with the namespace
+        (e.g. ``iris-controller-iris``) so multiple Iris instances on the same
+        CKS cluster don't collide on these cluster-scoped resources.
         """
+        cluster_role_name = self._rbac_cluster_role_name()
+
         namespace_manifest = {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": self._namespace}}
 
         sa_manifest = {
@@ -379,7 +389,7 @@ class CoreweavePlatform:
         role_manifest = {
             "apiVersion": "rbac.authorization.k8s.io/v1",
             "kind": "ClusterRole",
-            "metadata": {"name": "iris-controller"},
+            "metadata": {"name": cluster_role_name},
             "rules": [
                 {
                     "apiGroups": ["compute.coreweave.com"],
@@ -412,13 +422,13 @@ class CoreweavePlatform:
         binding_manifest = {
             "apiVersion": "rbac.authorization.k8s.io/v1",
             "kind": "ClusterRoleBinding",
-            "metadata": {"name": "iris-controller"},
+            "metadata": {"name": cluster_role_name},
             "subjects": [
                 {"kind": "ServiceAccount", "name": "iris-controller", "namespace": self._namespace},
             ],
             "roleRef": {
                 "kind": "ClusterRole",
-                "name": "iris-controller",
+                "name": cluster_role_name,
                 "apiGroup": "rbac.authorization.k8s.io",
             },
         }
@@ -426,7 +436,7 @@ class CoreweavePlatform:
         for manifest in [namespace_manifest, sa_manifest, role_manifest, binding_manifest]:
             self._kubectl.apply_json(manifest)
 
-        logger.info("RBAC prerequisites applied (namespace=%s)", self._namespace)
+        logger.info("RBAC prerequisites applied (namespace=%s, clusterRole=%s)", self._namespace, cluster_role_name)
 
     # -- Storage Detection ----------------------------------------------------
 
@@ -1151,7 +1161,7 @@ class CoreweavePlatform:
         return self.start_controller(config)
 
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
-        """Stop the controller by deleting its K8s resources."""
+        """Stop the controller and clean up its RBAC resources."""
         cw = config.controller.coreweave
         service_name = cw.service_name or "iris-controller-svc"
 
@@ -1160,7 +1170,12 @@ class CoreweavePlatform:
         self._kubectl.delete("configmap", "iris-cluster-config")
         if self._uses_s3_storage(config):
             self._kubectl.delete("secret", _S3_SECRET_NAME)
-        logger.info("Controller resources deleted")
+
+        # Clean up cluster-scoped RBAC resources created by ensure_rbac().
+        cluster_role_name = self._rbac_cluster_role_name()
+        self._kubectl.delete("clusterrolebinding", cluster_role_name, cluster_scoped=True)
+        self._kubectl.delete("clusterrole", cluster_role_name, cluster_scoped=True)
+        logger.info("Controller resources deleted (including RBAC %s)", cluster_role_name)
 
     def stop_all(
         self,
