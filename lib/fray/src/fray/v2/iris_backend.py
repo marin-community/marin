@@ -363,17 +363,23 @@ class IrisActorGroup:
         """Number of actors that are available for RPC."""
         return len(self._handles)
 
-    def discover_new(self) -> list[ActorHandle]:
+    def discover_new(self, target: int | None = None) -> list[ActorHandle]:
         """Probe for newly available actors without blocking.
 
         Returns only the handles discovered during this call (not previously
         known ones). Call repeatedly to pick up workers as they come online.
+
+        Args:
+            target: Stop probing once this many total actors are discovered.
+                If None, probes all indices.
         """
         client = self._get_client()
         resolver = client.resolver_for_job(self._job_id)
 
         newly_discovered: list[ActorHandle] = []
         for i in range(self._count):
+            if target is not None and len(self._discovered_names) >= target:
+                break
             # Absolute endpoint name matches what _host_actor registers
             endpoint_name = f"{self._job_id}/{self._name}-{i}"
             if endpoint_name in self._discovered_names:
@@ -407,7 +413,7 @@ class IrisActorGroup:
         sleep_secs = 0.5
 
         while True:
-            self.discover_new()
+            self.discover_new(target=target)
 
             if len(self._discovered_names) >= target:
                 return list(self._handles[:target])
