@@ -166,12 +166,12 @@ class WorkerServiceImpl:
                     return cluster_pb2.ProfileTaskResponse(profile_data=data)
 
                 # Task target: parse optional :attempt_id and delegate to the container handle
-                parsed = parse_profile_target(request.target)
+                target = parse_profile_target(request.target)
                 data = self._provider.profile_task(
-                    parsed.task_id,
+                    target.task_id.to_wire(),
                     duration_seconds=duration,
                     profile_type=request.profile_type,
-                    attempt_id=parsed.attempt_id,
+                    attempt_id=target.attempt_id,
                 )
                 return cluster_pb2.ProfileTaskResponse(profile_data=data)
             except Exception as e:

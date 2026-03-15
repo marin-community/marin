@@ -13,10 +13,19 @@ without coupling scheduler internals to autoscaler routing.
 
 from __future__ import annotations
 
+import dataclasses
 from collections import Counter, defaultdict
 
 from iris.cluster.types import JobName
 from iris.rpc import vm_pb2
+
+
+@dataclasses.dataclass(frozen=True)
+class PendingHint:
+    """Autoscaler-derived hint for a pending job."""
+
+    message: str
+    is_scaling_up: bool
 
 
 def _task_id_to_job_id(task_id: str) -> str | None:
@@ -41,14 +50,14 @@ def _group_status_detail(routing: vm_pb2.RoutingDecision, group_name: str) -> st
     return ""
 
 
-def build_job_pending_hints(routing: vm_pb2.RoutingDecision | None) -> dict[str, str]:
+def build_job_pending_hints(routing: vm_pb2.RoutingDecision | None) -> dict[str, PendingHint]:
     """Build autoscaler pending hints keyed by job id.
 
     Args:
         routing: Latest autoscaler routing decision, if available.
 
     Returns:
-        Map of job_id wire format -> concise pending diagnostic message.
+        Map of job_id wire format -> structured pending hint.
     """
     if routing is None:
         return {}
@@ -70,7 +79,7 @@ def build_job_pending_hints(routing: vm_pb2.RoutingDecision | None) -> dict[str,
             if job_id is not None:
                 unmet_reasons_by_job[job_id][reason] += 1
 
-    hints: dict[str, str] = {}
+    hints: dict[str, PendingHint] = {}
 
     for job_id, group_counts in routed_counts_by_job.items():
         ranked_groups = sorted(group_counts.items(), key=lambda x: (-x[1], x[0]))
@@ -79,8 +88,9 @@ def build_job_pending_hints(routing: vm_pb2.RoutingDecision | None) -> dict[str,
         if launch_groups:
             group_name, _ = launch_groups[0]
             launch_count = routing.group_to_launch.get(group_name, 0)
-            hints[job_id] = (
-                f"Waiting for worker scale-up in scale group '{group_name}' ({launch_count} slice(s) requested)"
+            hints[job_id] = PendingHint(
+                message=f"Waiting for worker scale-up in scale group '{group_name}' ({launch_count} slice(s) requested)",
+                is_scaling_up=True,
             )
             continue
 
@@ -89,12 +99,18 @@ def build_job_pending_hints(routing: vm_pb2.RoutingDecision | None) -> dict[str,
         primary_group, _ = ranked_groups[0]
         status_detail = _group_status_detail(routing, primary_group)
         suffix = f" ({status_detail})" if status_detail else ""
-        hints[job_id] = f"Waiting for workers in scale group '{primary_group}' to become ready{suffix}"
+        hints[job_id] = PendingHint(
+            message=f"Waiting for workers in scale group '{primary_group}' to become ready{suffix}",
+            is_scaling_up=False,
+        )
 
     for job_id, reason_counts in unmet_reasons_by_job.items():
         if job_id in hints:
             continue
         reason, _ = reason_counts.most_common(1)[0]
-        hints[job_id] = f"Unsatisfied autoscaler demand: {reason}"
+        hints[job_id] = PendingHint(
+            message=f"Unsatisfied autoscaler demand: {reason}",
+            is_scaling_up=False,
+        )
 
     return hints

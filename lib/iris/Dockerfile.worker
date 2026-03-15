@@ -6,6 +6,7 @@
 # Or via CLI:
 #   uv run python -m iris.cluster.vm.cli build-image
 #
+
 FROM python:3.12
 
 LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
@@ -55,15 +56,19 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
 COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
 
 WORKDIR /app
+ENV PATH="/app/.venv/bin:$PATH"
 
-# Copy pyproject first so the heavy dependency install is cached
-# independently of source changes.
-COPY pyproject.toml ./
+# Copy pyproject and build hook first so the heavy dependency install is
+# cached independently of source changes.
+COPY pyproject.toml hatch_build.py ./
 RUN uv sync --no-install-project
 
 # Copy source and install the project itself (fast, deps already installed above)
 COPY src/ ./src/
 RUN uv sync
+
+# Dashboard assets are pre-built by `iris build dashboard` before docker build.
+COPY dashboard/dist /app/dashboard/dist
 
 # Install profiling tools (py-spy for CPU/thread profiling, memray for memory profiling).
 # These are needed for /system/process profiling on the worker.

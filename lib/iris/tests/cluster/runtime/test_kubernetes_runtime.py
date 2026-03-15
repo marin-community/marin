@@ -14,6 +14,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import zipfile
 
 
@@ -174,6 +175,7 @@ def test_gpu_resources_and_tolerations(monkeypatch):
 
     tolerations = manifest["spec"]["tolerations"]
     assert any(t["key"] == "nvidia.com/gpu" and t["operator"] == "Exists" for t in tolerations)
+    assert any(t["key"] == "qos.coreweave.cloud/interruptable" and t["effect"] == "NoExecute" for t in tolerations)
 
 
 def test_no_gpu_resources_when_zero_gpus(monkeypatch):
@@ -479,7 +481,7 @@ def test_k8s_init_script_fetches_and_extracts_bundle(tmp_path):
             "IRIS_WORKDIR": str(workdir),
         }
         result = subprocess.run(
-            ["python", script_path],
+            [sys.executable, "-I", script_path],
             env=env,
             capture_output=True,
             text=True,

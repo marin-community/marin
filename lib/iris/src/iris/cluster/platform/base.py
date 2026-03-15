@@ -30,9 +30,11 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
 import socket
 import threading
 import uuid
+from pathlib import Path
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
@@ -95,9 +97,17 @@ def find_free_port(start: int = -1) -> int:
             s.bind(("", 0))
             return s.getsockname()[1]
     for port in range(start, start + 1000):
+        lock = Path(f"/tmp/iris/port_{port}")
+        try:
+            os.kill(int(lock.read_text()), 0)
+            continue  # port locked by a live process
+        except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+            pass
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
                 s.bind(("", port))
+                lock.parent.mkdir(parents=True, exist_ok=True)
+                lock.write_text(str(os.getpid()))
                 return port
             except OSError:
                 continue
@@ -445,11 +455,12 @@ class Platform(Protocol):
     def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
         """Start or discover existing controller. Returns address (host:port).
 
-        Each platform implements its own controller lifecycle:
+        Each remote platform implements its own controller lifecycle:
         - GCP: creates GCE VM, SSHes in, bootstraps container
         - Manual: SSHes to configured host, bootstraps container
         - CoreWeave: kubectl apply ConfigMap + NodePool + Deployment + Service
-        - Local: starts in-process LocalController
+
+        Local mode uses LocalCluster directly and does not go through Platform.
         """
         ...
 
@@ -465,11 +476,12 @@ class Platform(Protocol):
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
         """Stop the controller.
 
-        Each platform tears down its own controller resources:
+        Each remote platform tears down its own controller resources:
         - GCP: terminates GCE VM
         - Manual: terminates bootstrap on host
         - CoreWeave: kubectl delete Deployment + Service + NodePool
-        - Local: stops in-process LocalController
+
+        Local mode uses LocalCluster.close() directly and does not go through Platform.
         """
         ...
 

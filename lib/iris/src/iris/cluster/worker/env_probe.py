@@ -289,6 +289,43 @@ class HardwareProbe:
     tpu_worker_hostnames: str
     tpu_worker_id: str
     tpu_chips_per_host_bounds: str
+    gce_instance_name: str = ""
+
+
+def _probe_gce_instance_name() -> str:
+    """Read the GCE instance name from metadata. Empty string if not on GCP."""
+    if not _is_gcp_vm():
+        return ""
+    return _get_gcp_metadata("name") or ""
+
+
+def construct_worker_id(slice_id: str, worker_index: int) -> str:
+    """Build a deterministic worker ID from slice identity and within-slice index."""
+    return f"{slice_id}-worker-{worker_index}"
+
+
+IRIS_WORKER_ID_ENV = "IRIS_WORKER_ID"
+
+
+def infer_worker_id(hardware: HardwareProbe) -> str | None:
+    """Infer worker_id from environment or GCP metadata probes.
+
+    Priority:
+    1. IRIS_WORKER_ID env var (set by all platforms via WorkerConfig or pod env).
+    2. TPU metadata: combines tpu_name (the slice name) with the TPU worker index.
+    3. GCE instance name: uses the instance name as slice_id with worker index 0.
+
+    Returns None when not running on a recognized cloud VM and no env var is set.
+    """
+    env_worker_id = os.environ.get(IRIS_WORKER_ID_ENV)
+    if env_worker_id:
+        return env_worker_id
+    if hardware.tpu_name:
+        worker_index = int(hardware.tpu_worker_id) if hardware.tpu_worker_id else 0
+        return construct_worker_id(hardware.tpu_name, worker_index)
+    if hardware.gce_instance_name:
+        return construct_worker_id(hardware.gce_instance_name, 0)
+    return None
 
 
 def probe_hardware() -> HardwareProbe:
@@ -297,6 +334,7 @@ def probe_hardware() -> HardwareProbe:
     ip_address = _get_ip_address()
     tpu_name, tpu_type, tpu_worker_hostnames, tpu_worker_id, tpu_chips_per_host_bounds = _probe_tpu_metadata()
     gpu_count, gpu_name, gpu_memory_mb = _probe_gpu_info()
+    gce_instance_name = _probe_gce_instance_name()
     return HardwareProbe(
         hostname=hostname,
         ip_address=ip_address,
@@ -311,6 +349,7 @@ def probe_hardware() -> HardwareProbe:
         tpu_worker_hostnames=tpu_worker_hostnames,
         tpu_worker_id=tpu_worker_id,
         tpu_chips_per_host_bounds=tpu_chips_per_host_bounds,
+        gce_instance_name=gce_instance_name,
     )
 
 
@@ -391,7 +430,7 @@ def build_worker_metadata(
         gpu_memory_mb=gpu_memory_mb,
         device=device,
         attributes=attributes,
-        vm_address=hardware.ip_address,
+        gce_instance_name=hardware.gce_instance_name,
         git_hash=os.environ.get("IRIS_GIT_HASH", "unknown"),
     )
 

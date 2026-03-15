@@ -32,12 +32,12 @@ from iris.cluster.runtime.types import (
 )
 from iris.cluster.types import (
     JobName,
+    TaskAttempt as TaskAttemptIdentity,
     is_task_finished,
 )
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.worker.profile_capture import ProfileCapture
 from iris.cluster.log_store import LogCursor, LogStore, task_log_key
 from iris.logging import parse_log_level, str_to_log_level
 from iris.rpc import cluster_pb2, logging_pb2
@@ -119,12 +119,18 @@ class TaskCancelled(Exception):
 class TaskAttemptConfig:
     """Immutable configuration for a task attempt, derived from the RPC request."""
 
-    task_id: JobName
+    task_attempt: TaskAttemptIdentity
     num_tasks: int
-    attempt_id: int
     request: cluster_pb2.Worker.RunTaskRequest
     cache_dir: Path
-    storage_prefix: str = ""
+
+    @property
+    def task_id(self) -> JobName:
+        return self.task_attempt.task_id
+
+    @property
+    def attempt_id(self) -> int:
+        return self.task_attempt.require_attempt()
 
 
 def _get_host_ip() -> str:
@@ -164,11 +170,8 @@ def build_iris_env(
     env = {}
 
     # N.B. This needs to mirror JobInfo.from_env()
-    # XXX: Should we move this code there instead?
-    # Core task metadata
-    env["IRIS_JOB_ID"] = task.task_id.to_wire()
+    env["IRIS_TASK_ID"] = task.task_attempt.to_wire()
     env["IRIS_NUM_TASKS"] = str(task.num_tasks)
-    env["IRIS_ATTEMPT_ID"] = str(task.attempt_id)
     env["IRIS_BUNDLE_ID"] = task.request.bundle_id
 
     if worker_id:
@@ -248,7 +251,6 @@ class TaskAttempt:
         default_task_image: str | None,
         resolve_image: Callable[[str], str],
         port_allocator: PortAllocator,
-        report_state: Callable[[], None],
         log_store: LogStore,
         poll_interval_seconds: float = 5.0,
     ):
@@ -270,7 +272,6 @@ class TaskAttempt:
             resolve_image: Resolves image tags for the current platform
                 (e.g. GHCR→AR rewriting on GCP). Zone is pre-bound by the worker.
             port_allocator: Port allocator for releasing ports on cleanup
-            report_state: Callback to report task state changes to Worker
             log_store: Shared LogStore for appending and querying task logs.
             poll_interval_seconds: How often to poll container status
         """
@@ -283,12 +284,12 @@ class TaskAttempt:
         self._default_task_image = default_task_image
         self._resolve_image_fn = resolve_image
         self._port_allocator = port_allocator
-        self._report_state = report_state
         self._poll_interval_seconds = poll_interval_seconds
         self._log_store = log_store
-        self._log_key = task_log_key(config.task_id, config.attempt_id)
+        self._log_key = task_log_key(config.task_attempt)
 
         # Task identity (from config)
+        self.task_attempt: TaskAttemptIdentity = config.task_attempt
         self.task_id: JobName = config.task_id
         self.num_tasks: int = config.num_tasks
         self.attempt_id: int = config.attempt_id
@@ -296,7 +297,6 @@ class TaskAttempt:
         self.ports: dict[str, int] = {}
         self.workdir: Path | None = None
         self._cache_dir: Path = config.cache_dir
-        self._storage_prefix: str = config.storage_prefix
         # Task state
         self.status: TaskState = cluster_pb2.TASK_STATE_PENDING
         self.exit_code: int | None = None
@@ -515,8 +515,6 @@ class TaskAttempt:
             self._append_log(source="error", data=f"Task failed:\n{error_msg}")
             self.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
-            if is_task_finished(self.status):
-                self._report_state()
             self._cleanup()
             logger.info(
                 "TaskAttempt finished: task_id=%s attempt=%s state=%s exit_code=%s",
@@ -535,7 +533,6 @@ class TaskAttempt:
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
         self.started_at = Timestamp.now()
         self._building_start_monotonic = time.monotonic()
-        self._report_state()  # Report BUILDING state to controller
 
         download_start = time.monotonic()
 
@@ -589,6 +586,15 @@ class TaskAttempt:
             self._controller_address,
         )
         env = dict(iris_env)
+
+        # Expose the worker's region so child jobs can inherit a region
+        # constraint (e.g. when the parent holds a reservation).
+        from iris.cluster.constraints import WellKnownAttribute
+
+        region_attr = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
+        if region_attr and region_attr.string_value:
+            env["IRIS_WORKER_REGION"] = region_attr.string_value
+
         env.update(self._default_task_env)
         env.update(dict(self.request.environment.env_vars))
 
@@ -653,7 +659,6 @@ class TaskAttempt:
         if self.request.entrypoint.setup_commands:
             self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="syncing dependencies")
             self.build_started = Timestamp.now()
-            self._report_state()
 
         build_logs = self._container_handle.build()
 
@@ -685,8 +690,7 @@ class TaskAttempt:
         Collects runtime statistics (CPU, memory, disk) and handles timeout enforcement.
         Updates task state to terminal status (SUCCEEDED/FAILED/KILLED) when container stops.
 
-        A background ProfileCapture thread periodically captures py-spy snapshots
-        and uploads the last N to cloud storage when the task finishes.
+        Profiling is handled centrally by the controller's profile loop thread.
         """
         assert self._container_handle is not None
         assert self.workdir is not None
@@ -699,15 +703,7 @@ class TaskAttempt:
             deadline = Deadline.from_seconds(timeout_seconds)
 
         log_reader = handle.log_reader()
-
-        with ProfileCapture(
-            container_handle=handle,
-            safe_token=self.task_id.to_safe_token(),
-            attempt_id=self.attempt_id,
-            workdir=self.workdir,
-            storage_prefix=self._storage_prefix,
-        ):
-            self._monitor_loop(handle, log_reader, deadline)
+        self._monitor_loop(handle, log_reader, deadline)
 
     def _monitor_loop(
         self,
@@ -747,7 +743,6 @@ class TaskAttempt:
                 building_duration = time.monotonic() - self._building_start_monotonic
                 logger.info("Task %s BUILDING→RUNNING after %.1fs", self.task_id, building_duration)
                 self.transition_to(cluster_pb2.TASK_STATE_RUNNING)
-                self._report_state()
 
             if status.phase == ContainerPhase.STOPPED:
                 logger.info(
