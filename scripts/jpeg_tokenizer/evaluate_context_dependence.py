@@ -11,8 +11,8 @@ import dataclasses
 import json
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 
+import fsspec
 import numpy as np
 from datasets import load_dataset
 from PIL import Image
@@ -338,14 +338,17 @@ def _metrics_payload(metrics: BlockContextMetrics) -> dict[str, object]:
     }
 
 
-def _write_json(path: Path, payload: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
+def _write_json(path: str, payload: object) -> None:
+    fs, fs_path = fsspec.core.url_to_fs(path)
+    parent = fs_path.rsplit("/", 1)[0]
+    if parent:
+        fs.makedirs(parent, exist_ok=True)
+    with fs.open(fs_path, "w") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
         handle.write("\n")
 
 
-def _write_summary(path: Path, payload: dict[str, object]) -> None:
+def _write_summary(path: str, payload: dict[str, object]) -> None:
     lines = [
         "# JPEG Context Dependence",
         "",
@@ -379,8 +382,11 @@ def _write_summary(path: Path, payload: dict[str, object]) -> None:
             "",
         ]
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
+    fs, fs_path = fsspec.core.url_to_fs(path)
+    parent = fs_path.rsplit("/", 1)[0]
+    if parent:
+        fs.makedirs(parent, exist_ok=True)
+    with fs.open(fs_path, "w") as handle:
         handle.write("\n".join(lines))
 
 
@@ -480,7 +486,7 @@ def main() -> None:
         if (i + 1) % args.log_every == 0:
             logger.info("Processed %s/%s context pairs", i + 1, num_examples)
 
-    output_dir = Path(args.output_dir)
+    output_dir = args.output_dir.rstrip("/")
     payload = {
         "dataset": args.dataset,
         "dataset_config": args.dataset_config,
@@ -499,8 +505,8 @@ def main() -> None:
             "coeff_absolute_control": _metrics_payload(coeff_control_metrics),
         },
     }
-    _write_json(output_dir / "context_dependence.json", payload)
-    _write_summary(output_dir / "summary.md", payload)
+    _write_json(f"{output_dir}/context_dependence.json", payload)
+    _write_summary(f"{output_dir}/summary.md", payload)
     logger.info("Wrote context dependence outputs to %s", output_dir)
 
 

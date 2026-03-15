@@ -1360,3 +1360,47 @@
 - Next action:
   - wait for terminal success and fold context-dependence scores into the rubric table next to perturbation
     amplification.
+
+### 2026-03-14 22:11 - Context-dependence runs completed (r2) and outputs fixed
+
+- Goal:
+  - close rubric axis `(3)` with full validation-set measurements and reproducible cloud outputs
+- Issue found:
+  - r1 jobs reached terminal success but wrote no `gs://...` artifacts because output writing in
+    `evaluate_context_dependence.py` used `Path(...)` instead of an FS-aware writer
+- Fix:
+  - switched summary/json writes to `fsspec` URL handling (same pattern used by sequence-level eval scripts)
+  - relaunched both jobs as r2
+- Relaunches:
+  - center:
+    - job: `/dlwh/jpeg-tokenizer-context-dependence-center-r2-iris1`
+    - output:
+      `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-context-dependence-center-r2-iris1`
+    - terminal state: `JOB_STATE_SUCCEEDED`
+  - off-center:
+    - job: `/dlwh/jpeg-tokenizer-context-dependence-offcenter-r2-iris1`
+    - output:
+      `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-context-dependence-offcenter-r2-iris1`
+    - terminal state: `JOB_STATE_SUCCEEDED`
+- Results (`3925` validation pairs each):
+  - center block `(16,16)`:
+    - `coeff_k64`: mean flip `0.0000`, p95 `0.0000`, exact-match `1.0000`
+    - `ac_dense`: mean flip `0.0156`, p95 `0.0156`, exact-match `0.0013`
+    - `symbols`: mean flip `0.0342`, p95 `0.0667`, exact-match `0.0013`
+    - `huffman_events`: mean flip `0.0353`, p95 `0.0741`, exact-match `0.0013`
+  - off-center block `(8,24)`:
+    - `coeff_k64`: mean flip `0.0000`, p95 `0.0000`, exact-match `1.0000`
+    - `ac_dense`: mean flip `0.0156`, p95 `0.0156`, exact-match `0.0013`
+    - `symbols`: mean flip `0.0435`, p95 `0.1000`, exact-match `0.0013`
+    - `huffman_events`: mean flip `0.0488`, p95 `0.1176`, exact-match `0.0013`
+  - control (`coeff_absolute_control`) stayed exact-invariant:
+    - mean flip `0.000000`, exact-match `1.000000` in both runs
+- Interpretation:
+  - axis `(3)` result is now strong at this scale:
+    - fixed-meaning tokens (`coeff_k64`) are context-invariant for a fixed block
+    - `ac_dense` has small context dependence from DC chaining
+    - variable-length syntax streams (`symbols`, `huffman_events`) add additional context dependence and heavier tails
+      (especially off-center)
+- Next action:
+  - run a focused ablation that keeps fixed-length dense AC tokens but removes DC chaining (absolute DC instead of
+    delta) to isolate "token meaning constancy" from sequence-length effects.
