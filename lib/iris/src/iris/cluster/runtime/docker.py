@@ -812,7 +812,8 @@ class DockerRuntime:
             return
         result = subprocess.run(["umount", str(workdir)], capture_output=True, text=True, check=False)
         if result.returncode != 0:
-            raise RuntimeError(f"Failed to unmount tmpfs workdir {workdir}: {result.stderr.strip()}")
+            logger.warning("Failed to unmount tmpfs workdir %s: %s", workdir, result.stderr.strip())
+            return
         logger.info("Unmounted tmpfs workdir %s", workdir)
 
     def track_container(self, container_id: str) -> None:

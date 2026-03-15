@@ -3,6 +3,7 @@
 
 """Tests for DockerRuntime prepare_workdir / cleanup_workdir tmpfs management."""
 
+import logging
 import subprocess
 
 import pytest
@@ -120,3 +121,18 @@ def test_prepare_workdir_raises_on_mount_failure(monkeypatch, tmp_path, runtime)
 
     with pytest.raises(RuntimeError, match="permission denied"):
         runtime.prepare_workdir(workdir=tmp_path / "w", disk_bytes=1024)
+
+
+def test_cleanup_workdir_warns_on_umount_failure(monkeypatch, tmp_path, runtime, caplog):
+    """Failed umount logs a warning instead of raising."""
+    monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: True)
+    monkeypatch.setattr(
+        "iris.cluster.runtime.docker.subprocess.run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, stdout="", stderr="device busy"),
+    )
+
+    workdir = tmp_path / "task-workdir"
+    with caplog.at_level(logging.WARNING, logger="iris.cluster.runtime.docker"):
+        runtime.cleanup_workdir(workdir)
+
+    assert "device busy" in caplog.text

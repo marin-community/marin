@@ -189,9 +189,9 @@ def _get_disk_bytes() -> int:
 def collect_workdir_size_mb(workdir: Path) -> int:
     """Return used space in MB on the filesystem containing workdir.
 
-    Uses shutil.disk_usage (a single statvfs syscall) instead of du,
-    which is O(1) vs O(files). When workdir is on its own tmpfs mount,
-    this gives per-task usage.
+    Uses shutil.disk_usage (O(1) statvfs) instead of du (O(files)).
+    When workdir is on its own tmpfs mount, this gives per-task usage.
+    On shared filesystems, this reports whole-disk usage as an approximation.
     """
     if not workdir.exists():
         return 0
