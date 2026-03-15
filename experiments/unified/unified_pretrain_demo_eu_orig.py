@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -605,7 +608,10 @@ def make_unified_0_6b(
         ),
         model_config=qwen3_0_6b,
         train_config=_demo_train_config(
-            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps, lr_schedule=lr_schedule,
+            muon_lr=muon_lr,
+            adam_lr=adam_lr,
+            num_train_steps=num_train_steps,
+            lr_schedule=lr_schedule,
             z_loss_weight=z_loss_weight,
         ),
         tags=["unified", "scaling", "qwen3", "0.6b", "demo"],
@@ -642,7 +648,10 @@ def make_unified_1_7b(
         ),
         model_config=qwen3_1_7b,
         train_config=_demo_train_config(
-            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps, lr_schedule=lr_schedule,
+            muon_lr=muon_lr,
+            adam_lr=adam_lr,
+            num_train_steps=num_train_steps,
+            lr_schedule=lr_schedule,
             z_loss_weight=z_loss_weight,
         ),
         tags=["unified", "scaling", "qwen3", "1.7b", "demo"],
@@ -678,7 +687,10 @@ def make_unified_4b(
         ),
         model_config=qwen3_4b,
         train_config=_demo_train_config(
-            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps, lr_schedule=lr_schedule,
+            muon_lr=muon_lr,
+            adam_lr=adam_lr,
+            num_train_steps=num_train_steps,
+            lr_schedule=lr_schedule,
             z_loss_weight=z_loss_weight,
         ),
         tags=["unified", "scaling", "qwen3", "4b", "demo"],
@@ -710,7 +722,10 @@ def make_visual_only_0_6b(
         tokenized=visual_only_data_config(eval_benchmarks=eval_benchmarks),
         model_config=qwen3_0_6b,
         train_config=_demo_train_config(
-            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps, lr_schedule=lr_schedule,
+            muon_lr=muon_lr,
+            adam_lr=adam_lr,
+            num_train_steps=num_train_steps,
+            lr_schedule=lr_schedule,
             z_loss_weight=z_loss_weight,
         ),
         tags=["visual-only", "scaling", "qwen3", "0.6b"],
@@ -734,7 +749,10 @@ def make_visual_only_1_7b(
         tokenized=visual_only_data_config(eval_benchmarks=eval_benchmarks),
         model_config=qwen3_1_7b,
         train_config=_demo_train_config(
-            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps, lr_schedule=lr_schedule,
+            muon_lr=muon_lr,
+            adam_lr=adam_lr,
+            num_train_steps=num_train_steps,
+            lr_schedule=lr_schedule,
             z_loss_weight=z_loss_weight,
         ),
         tags=["visual-only", "scaling", "qwen3", "1.7b"],
@@ -758,7 +776,10 @@ def make_visual_only_4b(
         tokenized=visual_only_data_config(eval_benchmarks=eval_benchmarks),
         model_config=qwen3_4b,
         train_config=_demo_train_config(
-            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps, lr_schedule=lr_schedule,
+            muon_lr=muon_lr,
+            adam_lr=adam_lr,
+            num_train_steps=num_train_steps,
+            lr_schedule=lr_schedule,
             z_loss_weight=z_loss_weight,
         ),
         tags=["visual-only", "scaling", "qwen3", "4b"],

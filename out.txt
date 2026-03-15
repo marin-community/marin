@@ -1,632 +1,337 @@
-rom exc
-(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: Cache ledger not found at gs://marin-vlm/visual_only_cache/train/shard_ledger.json
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) During handling of the above exception, another exception occurred:
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=8842, ip=10.130.1.33)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/main/train_lm.py", line 170, in main
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     train_dataset = config.data.train_set(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 724, in train_set
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     datasets = self.train_sets(Pos, key=shuffle_key, initial_batch_size=initial_batch_size)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 741, in train_sets
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     doc_caches = self.build_caches("train")
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 843, in build_caches
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise ValueError(f"No source and no cache found for component {name} split {split}")
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ValueError: No source and no cache found for component visual_only split train
-(run_on_pod_ray pid=43096, ip=10.130.0.71) Traceback (most recent call last):
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                                                  ^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return func(*args, **kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=8842, ip=10.130.1.33)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/core.py", line 105, in __enter__
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self.fs.open(self.path, mode=mode)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1310, in open
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self._open(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1638, in _open
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return GCSFile(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1804, in __init__
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     super().__init__(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1884, in __init__
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     self.size = self.details["size"]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1841, in details
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     self._details = self.fs.info(self.path, generation=self.generation)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return sync(self.loop, func, *args, **kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise return_result
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     result[0] = await coro
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1031, in _info
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     out = await self._ls(path, **kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1060, in _ls
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     for entry in await self._list_objects(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 621, in _list_objects
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return [await self._get_object(path)]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 557, in _get_object
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     res = await self._call(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     status, headers, info, contents = await self._request(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                                       ^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await caller(func, *(extras + args), **kw)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await func(*args, **kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     validate_response(status, contents, path, args)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 98, in validate_response
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(path)
-(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: b/marin-vlm/o/visual_only_cache%2Ftrain%2Fshard_ledger.json
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) The above exception was the direct cause of the following exception:
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=8842, ip=10.130.1.33)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 836, in build_caches
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     caches[name] = load_lm_dataset_cache(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                    ^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/cache.py", line 52, in load_lm_dataset_cache
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     cache = TreeCache.load(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/store/cache.py", line 136, in load
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     ledger = CacheLedger.load(cache_dir, options)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/store/cache.py", line 194, in load
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(f"Cache ledger not found at {ledger_path}") from exc
-(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: Cache ledger not found at gs://marin-vlm/visual_only_cache/train/shard_ledger.json
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) During handling of the above exception, another exception occurred:
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=8842, ip=10.130.1.33)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/main/train_lm.py", line 170, in main
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     train_dataset = config.data.train_set(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 724, in train_set
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     datasets = self.train_sets(Pos, key=shuffle_key, initial_batch_size=initial_batch_size)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 741, in train_sets
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     doc_caches = self.build_caches("train")
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 843, in build_caches
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise ValueError(f"No source and no cache found for component {name} split {split}")
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ValueError: No source and no cache found for component visual_only split train
-(SliceActor pid=1957, ip=10.130.0.43) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=8842, ip=10.130.1.33)
-(SliceActor pid=1957, ip=10.130.0.43) 
-(SliceActor pid=1957, ip=10.130.0.43) 
-(SliceActor pid=1957, ip=10.130.0.43) ray::<lambda>() (pid=8842, ip=10.130.1.33)
-(SliceActor pid=1957, ip=10.130.0.43) 
-(SliceActor pid=1957, ip=10.130.0.43) 
-(SliceActor pid=1957, ip=10.130.0.43) ray::<lambda>() (pid=8842, ip=10.130.1.33)
-(<lambda> pid=8842, ip=10.130.1.33) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f1e5023c860>
-(<lambda> pid=8842, ip=10.130.1.33)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
-(<lambda> pid=8842, ip=10.130.1.33)     conn.teardown(hooks.exit_code)
-(<lambda> pid=8842, ip=10.130.1.33)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
-(<lambda> pid=8842, ip=10.130.1.33)     self._asyncer.run(publish_teardown_and_close)
-(<lambda> pid=8842, ip=10.130.1.33)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run
-(<lambda> pid=8842, ip=10.130.1.33)     return future.result()
-(<lambda> pid=8842, ip=10.130.1.33)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
-(<lambda> pid=8842, ip=10.130.1.33)     return self.__get_result()
-(<lambda> pid=8842, ip=10.130.1.33)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
-(<lambda> pid=8842, ip=10.130.1.33)     raise self._exception
-(<lambda> pid=8842, ip=10.130.1.33)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
-(<lambda> pid=8842, ip=10.130.1.33)     return await fn()
-(<lambda> pid=8842, ip=10.130.1.33)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
-(<lambda> pid=8842, ip=10.130.1.33)     await self._client.close()
-(<lambda> pid=8842, ip=10.130.1.33)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
-(<lambda> pid=8842, ip=10.130.1.33)     await self._writer.wait_closed()
-(<lambda> pid=8842, ip=10.130.1.33)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
-(<lambda> pid=8842, ip=10.130.1.33)     await self._protocol._get_close_waiter(self)
-(<lambda> pid=8842, ip=10.130.1.33) BrokenPipeError: [Errno 32] Broken pipe
-(<lambda> pid=8842, ip=10.130.1.33) E0311 06:56:43.514997    8998 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
-(<lambda> pid=8842, ip=10.130.1.33) F0311 06:56:43.515040    8998 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
-(<lambda> pid=8842, ip=10.130.1.33) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
-(<lambda> pid=8842, ip=10.130.1.33) :UNKNOWN:Error received from peer  {grpc_status:14, grpc_message:"recvmsg:Connection reset by peer"}
-(run_on_pod_ray pid=43096, ip=10.130.0.71) Failed 5 times. Continuing to retry.
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return func(*args, **kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=8842, ip=10.130.1.33)
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=8842, ip=10.130.1.33)
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=8842, ip=10.130.1.33)
-(raylet) WARNING: 8 PYTHON worker processes have been started on node: 8e66857438327529af7f052d28bc085065606f216e41419da2352f44 with address: 10.130.0.4. This could be a result of using a large number of actors, or due to tasks blocked in ray.get() calls (see https://github.com/ray-project/ray/issues/3644 for some discussion of workarounds).
-(raylet) The node with node id: c42a61bb2c6bb07d392fbef5a3d09411198bbe6620db8a5ec1507d90 and address: 10.130.0.15 and node name: 10.130.0.15 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 7x across cluster]
-(<lambda> pid=9034, ip=10.130.1.65) 2026-03-11T06:56:58 - 2 - levanter.tracker.wandb - wandb.py:287 - INFO :: Setting wandb code_dir to .
-(<lambda> pid=9986, ip=10.130.0.43) 2026-03-11T06:56:40 - 4 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/10000 rate:- remaining:? elapsed:00:00 postfix:- [repeated 6x across cluster]
-(<lambda> pid=8832, ip=10.130.1.67) 2026-03-11T06:56:40 - 7 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a/checkpoints [repeated 6x across cluster]
-(<lambda> pid=9035, ip=10.130.1.65) 2026-03-11T06:56:41 - 2 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/visual_only_cache/train [repeated 6x across cluster]
-(<lambda> pid=9035, ip=10.130.1.65) 2026-03-11T06:56:41 - 2 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/visual_only_cache/train/shard_ledger.json [repeated 6x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/core.py", line 105, in __enter__ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self.fs.open(self.path, mode=mode) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1310, in open [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self._open( [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1638, in _open [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return GCSFile( [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1884, in __init__ [repeated 4x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     super().__init__( [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     self.size = self.details["size"] [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1841, in details [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     self._details = self.fs.info(self.path, generation=self.generation) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper [repeated 3x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return sync(self.loop, func, *args, **kwargs) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise return_result [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     result[0] = await coro [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^ [repeated 4x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1031, in _info [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     out = await self._ls(path, **kwargs) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1060, in _ls [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     for entry in await self._list_objects( [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 621, in _list_objects [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return [await self._get_object(path)] [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 557, in _get_object [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     res = await self._call( [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     status, headers, info, contents = await self._request( [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                                       ^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await caller(func, *(extras + args), **kw) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await func(*args, **kwargs) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     validate_response(status, contents, path, args) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 98, in validate_response [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(path) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: b/marin-vlm/o/visual_only_cache%2Ftrain%2Fshard_ledger.json [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71) The above exception was the direct cause of the following exception: [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 843, in build_caches [repeated 4x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     caches[name] = load_lm_dataset_cache( [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/cache.py", line 52, in load_lm_dataset_cache [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     cache = TreeCache.load( [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/store/cache.py", line 194, in load [repeated 4x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     ledger = CacheLedger.load(cache_dir, options) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(f"Cache ledger not found at {ledger_path}") from exc [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: Cache ledger not found at gs://marin-vlm/visual_only_cache/train/shard_ledger.json [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71) During handling of the above exception, another exception occurred: [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda> [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/main/train_lm.py", line 170, in main [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     train_dataset = config.data.train_set( [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 724, in train_set [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     datasets = self.train_sets(Pos, key=shuffle_key, initial_batch_size=initial_batch_size) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 741, in train_sets [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     doc_caches = self.build_caches("train") [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise ValueError(f"No source and no cache found for component {name} split {split}") [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ValueError: No source and no cache found for component visual_only split train [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71) Traceback (most recent call last): [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=8790, ip=10.130.0.200) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
-(<lambda> pid=8833, ip=10.130.1.67) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a.
-(<lambda> pid=8838, ip=10.130.1.49) wandb: Tracking run with wandb version 0.24.0
-(<lambda> pid=8838, ip=10.130.1.49) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
-(<lambda> pid=8838, ip=10.130.1.49) wandb: Run data is saved locally in /tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/wandb/offline-run-20260311_065658-unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
-(<lambda> pid=8790, ip=10.130.0.200) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
-(<lambda> pid=8790, ip=10.130.0.200) wandb: setting up run unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
-(autoscaler +14m33s) Adding 6 node(s) of type tpu_slice_v4_64.
-(autoscaler +14m33s) Resized to 10440 CPUs, 348 TPUs.
-(<lambda> pid=8790, ip=10.130.0.200) wandb: Run `wandb offline` to turn off syncing.
-(<lambda> pid=8790, ip=10.130.0.200) wandb: Resuming run unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
-(<lambda> pid=8790, ip=10.130.0.200) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin
-(<lambda> pid=8790, ip=10.130.0.200) wandb: 🚀 View run at https://wandb.ai/rui_li/marin/runs/unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
-(<lambda> pid=8790, ip=10.130.0.200) 2026-03-11T06:56:58 - 0 - levanter.tracker.wandb - wandb.py:287 - INFO :: Setting wandb code_dir to . [repeated 7x across cluster]
-(<lambda> pid=8846, ip=10.130.0.198) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a. [repeated 6x across cluster]
-(<lambda> pid=8790, ip=10.130.0.200) wandb: Tracking run with wandb version 0.24.0 [repeated 7x across cluster]
-(<lambda> pid=9034, ip=10.130.1.65) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 6x across cluster]
-(<lambda> pid=8790, ip=10.130.0.200) wandb: Run data is saved locally in /tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/wandb/run-20260311_065701-unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a [repeated 7x across cluster]
-(<lambda> pid=9034, ip=10.130.1.65) 2026-03-11T06:57:09 - 2 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: None unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
-(<lambda> pid=8790, ip=10.130.0.200) 2026-03-11T06:57:09 - 0 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
-(<lambda> pid=9985, ip=10.130.0.43) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
-(<lambda> pid=8790, ip=10.130.0.200) 2026-03-11T06:57:23 - 0 - levanter.tracker.wandb - wandb.py:287 - INFO :: Setting wandb code_dir to . [repeated 8x across cluster]
-(<lambda> pid=8838, ip=10.130.1.49) 2026-03-11T06:57:09 - 1 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: None unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a [repeated 6x across cluster]
-(<lambda> pid=8833, ip=10.130.1.67) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 6x across cluster]
-(<lambda> pid=8790, ip=10.130.0.200) 2026-03-11T06:57:25 - 0 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
-(<lambda> pid=8846, ip=10.130.0.198) 2026-03-11T06:57:25 - 6 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/10000 rate:- remaining:? elapsed:00:00 postfix:-
-(<lambda> pid=9034, ip=10.130.1.65) 2026-03-11T06:57:25 - 2 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a/checkpoints
-(<lambda> pid=8846, ip=10.130.0.198) 2026-03-11T06:57:26 - 6 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/visual_only_cache/train
-(<lambda> pid=8846, ip=10.130.0.198) 2026-03-11T06:57:26 - 6 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/visual_only_cache/train/shard_ledger.json
-(run_on_pod_ray pid=43096, ip=10.130.0.71) Task error ray::<lambda>() (pid=9985, ip=10.130.0.43)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/core.py", line 105, in __enter__
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self.fs.open(self.path, mode=mode)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1310, in open
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self._open(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1638, in _open
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return GCSFile(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1804, in __init__
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     super().__init__(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1884, in __init__
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     self.size = self.details["size"]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1841, in details
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     self._details = self.fs.info(self.path, generation=self.generation)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return sync(self.loop, func, *args, **kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise return_result
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     result[0] = await coro
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1031, in _info
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     out = await self._ls(path, **kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1060, in _ls
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     for entry in await self._list_objects(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 621, in _list_objects
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return [await self._get_object(path)]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 557, in _get_object
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     res = await self._call(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     status, headers, info, contents = await self._request(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                                       ^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await caller(func, *(extras + args), **kw)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await func(*args, **kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     validate_response(status, contents, path, args)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 98, in validate_response
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(path)
-(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: b/marin-vlm/o/visual_only_cache%2Ftrain%2Fshard_ledger.json
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) The above exception was the direct cause of the following exception:
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=9985, ip=10.130.0.43)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 836, in build_caches
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     caches[name] = load_lm_dataset_cache(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                    ^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/cache.py", line 52, in load_lm_dataset_cache
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     cache = TreeCache.load(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/store/cache.py", line 136, in load
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     ledger = CacheLedger.load(cache_dir, options)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/store/cache.py", line 194, in load
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(f"Cache ledger not found at {ledger_path}") from exc
-(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: Cache ledger not found at gs://marin-vlm/visual_only_cache/train/shard_ledger.json
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) During handling of the above exception, another exception occurred:
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=9985, ip=10.130.0.43)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/main/train_lm.py", line 170, in main
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     train_dataset = config.data.train_set(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 724, in train_set
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     datasets = self.train_sets(Pos, key=shuffle_key, initial_batch_size=initial_batch_size)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 741, in train_sets
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     doc_caches = self.build_caches("train")
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 843, in build_caches
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise ValueError(f"No source and no cache found for component {name} split {split}")
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ValueError: No source and no cache found for component visual_only split train
-(run_on_pod_ray pid=43096, ip=10.130.0.71) Traceback (most recent call last):
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                                                  ^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return func(*args, **kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=9985, ip=10.130.0.43)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/core.py", line 105, in __enter__
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self.fs.open(self.path, mode=mode)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1310, in open
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self._open(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1638, in _open
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return GCSFile(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1804, in __init__
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     super().__init__(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1884, in __init__
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     self.size = self.details["size"]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1841, in details
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     self._details = self.fs.info(self.path, generation=self.generation)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return sync(self.loop, func, *args, **kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise return_result
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     result[0] = await coro
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1031, in _info
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     out = await self._ls(path, **kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1060, in _ls
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     for entry in await self._list_objects(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 621, in _list_objects
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return [await self._get_object(path)]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 557, in _get_object
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     res = await self._call(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     status, headers, info, contents = await self._request(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                                       ^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await caller(func, *(extras + args), **kw)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await func(*args, **kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     validate_response(status, contents, path, args)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 98, in validate_response
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(path)
-(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: b/marin-vlm/o/visual_only_cache%2Ftrain%2Fshard_ledger.json
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) The above exception was the direct cause of the following exception:
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=9985, ip=10.130.0.43)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 836, in build_caches
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     caches[name] = load_lm_dataset_cache(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                    ^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/cache.py", line 52, in load_lm_dataset_cache
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     cache = TreeCache.load(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/store/cache.py", line 136, in load
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     ledger = CacheLedger.load(cache_dir, options)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/store/cache.py", line 194, in load
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(f"Cache ledger not found at {ledger_path}") from exc
-(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: Cache ledger not found at gs://marin-vlm/visual_only_cache/train/shard_ledger.json
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) During handling of the above exception, another exception occurred:
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=9985, ip=10.130.0.43)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/main/train_lm.py", line 170, in main
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     train_dataset = config.data.train_set(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 724, in train_set
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     datasets = self.train_sets(Pos, key=shuffle_key, initial_batch_size=initial_batch_size)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 741, in train_sets
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     doc_caches = self.build_caches("train")
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 843, in build_caches
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise ValueError(f"No source and no cache found for component {name} split {split}")
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ValueError: No source and no cache found for component visual_only split train
-(SliceActor pid=1957, ip=10.130.0.43) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=9985, ip=10.130.0.43)
-(SliceActor pid=1957, ip=10.130.0.43) 
-(SliceActor pid=1957, ip=10.130.0.43) 
-(SliceActor pid=1957, ip=10.130.0.43) ray::<lambda>() (pid=9985, ip=10.130.0.43)
-(SliceActor pid=1957, ip=10.130.0.43) 
-(SliceActor pid=1957, ip=10.130.0.43) 
-(SliceActor pid=1957, ip=10.130.0.43) ray::<lambda>() (pid=9985, ip=10.130.0.43)
-(<lambda> pid=9985, ip=10.130.0.43) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f7e600fc7c0>
-(<lambda> pid=9985, ip=10.130.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
-(<lambda> pid=9985, ip=10.130.0.43)     conn.teardown(hooks.exit_code)
-(<lambda> pid=9985, ip=10.130.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
-(<lambda> pid=9985, ip=10.130.0.43)     self._asyncer.run(publish_teardown_and_close)
-(<lambda> pid=9985, ip=10.130.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run
-(<lambda> pid=9985, ip=10.130.0.43)     return future.result()
-(<lambda> pid=9985, ip=10.130.0.43)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
-(<lambda> pid=9985, ip=10.130.0.43)     return self.__get_result()
-(<lambda> pid=9985, ip=10.130.0.43)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
-(<lambda> pid=9985, ip=10.130.0.43)     raise self._exception
-(<lambda> pid=9985, ip=10.130.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
-(<lambda> pid=9985, ip=10.130.0.43)     return await fn()
-(<lambda> pid=9985, ip=10.130.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
-(<lambda> pid=9985, ip=10.130.0.43)     await self._client.close()
-(<lambda> pid=9985, ip=10.130.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
-(<lambda> pid=9985, ip=10.130.0.43)     await self._writer.wait_closed()
-(<lambda> pid=9985, ip=10.130.0.43)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
-(<lambda> pid=9985, ip=10.130.0.43)     await self._protocol._get_close_waiter(self)
-(<lambda> pid=9985, ip=10.130.0.43) BrokenPipeError: [Errno 32] Broken pipe
-(run_on_pod_ray pid=43096, ip=10.130.0.71) Failed 6 times. Continuing to retry.
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return func(*args, **kwargs)
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=9985, ip=10.130.0.43)
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=9985, ip=10.130.0.43)
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) 
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=9985, ip=10.130.0.43)
-(<lambda> pid=8838, ip=10.130.1.49) 2026-03-11T06:57:25 - 1 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: None unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a [repeated 7x across cluster]
-(<lambda> pid=8790, ip=10.130.0.200) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
-(raylet) WARNING: 10 PYTHON worker processes have been started on node: 8e66857438327529af7f052d28bc085065606f216e41419da2352f44 with address: 10.130.0.4. This could be a result of using a large number of actors, or due to tasks blocked in ray.get() calls (see https://github.com/ray-project/ray/issues/3644 for some discussion of workarounds).
-(<lambda> pid=9985, ip=10.130.0.43) E0311 06:57:37.822629   11876 coordination_service.cc:681] /job:jax_worker/replica:0/task:1 unexpectedly tried to connect with a different incarnation. It has likely restarted.
-(<lambda> pid=9985, ip=10.130.0.43) E0311 06:57:37.822875   11876 coordination_service.cc:1858] Shutdown barrier in coordination service has failed:
-(<lambda> pid=9985, ip=10.130.0.43) INTERNAL: Barrier failed because: task is set to ERROR: ABORTED: /job:jax_worker/replica:0/task:1 unexpectedly tried to connect with a different incarnation. It has likely restarted. [type.googleapis.com/tensorflow.CoordinationServiceError='\"\x0e\n\njax_worker\x10\x01']. Barrier Id: Shutdown::12177662794209080691::0, Task: /job:jax_worker/replica:0/task:1 [type.googleapis.com/tensorflow.BarrierError='\n\x1eShutdown::12177662794209080691'] [type.googleapis.com/tensorflow.CoordinationServiceError='']
-(<lambda> pid=9985, ip=10.130.0.43) This suggests that the workers are out of sync. Either at least one worker (a) crashed early due to program error or scheduler events (e.g. preemption, eviction), (b) was too fast in its execution, or (c) too slow / hanging. Check the logs (both the program and scheduler events) for an earlier error to identify the root cause.
-(<lambda> pid=9985, ip=10.130.0.43) E0311 06:57:37.822909   11876 coordination_service.cc:1899] Use error polling to propagate the following error to all tasks: INTERNAL: Shutdown barrier has failed.
-(<lambda> pid=9985, ip=10.130.0.43) Barrier result: 'INTERNAL: Barrier failed because: task is set to ERROR: ABORTED: /job:jax_worker/replica:0/task:1 unexpectedly tried to connect with a different incarnation. It has likely restarted. [type.googleapis.com/tensorflow.CoordinationServiceError='\"\x0e\n\njax_worker\x10\x01']. Barrier Id: Shutdown::12177662794209080691::0, Task: /job:jax_worker/replica:0/task:1 [type.googleapis.com/tensorflow.BarrierError='\n\x1eShutdown::12177662794209080691'] [type.googleapis.com/tensorflow.CoordinationServiceError=''] [type.googleapis.com/tensorflow.CoordinationServiceError='']
-(<lambda> pid=9985, ip=10.130.0.43) E0311 06:57:37.823192   11898 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
-(<lambda> pid=9985, ip=10.130.0.43) E0311 06:57:37.823397   11876 coordination_service.cc:1899] Use error polling to propagate the following error to all tasks: ABORTED: /job:jax_worker/replica:0/task:1 unexpectedly tried to connect with a different incarnation. It has likely restarted. [type.googleapis.com/tensorflow.CoordinationServiceError='\"\x0e\n\njax_worker\x10\x01']
-(<lambda> pid=9985, ip=10.130.0.43) F0311 06:57:37.823398   11898 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: INTERNAL: Shutdown barrier has failed.
-(<lambda> pid=9985, ip=10.130.0.43) Barrier result: 'INTERNAL: Barrier failed because: task is set to ERROR: ABORTED: /job:jax_worker/replica:0/task:1 unexpectedly tried to connect with a different incarnation. It has likely restarted. [type.googleapis.com/tensorflow.CoordinationServiceError='\"\x0e\n\njax_worker\x10\x01']. Barrier Id: Shutdown::12177662794209080691::0, Task: /job:jax_worker/replica:0/task:1 [type.googleapis.com/tensorflow.BarrierError='\n\x1eShutdown::12177662794209080691'] [type.googleapis.com/tensorflow.CoordinationServiceError='']
-(<lambda> pid=9985, ip=10.130.0.43) 
-(<lambda> pid=9985, ip=10.130.0.43) RPC: /tensorflow.CoordinationService/PollForError [type.googleapis.com/tensorflow.CoordinationServiceError='']
-(<lambda> pid=8826, ip=10.130.0.93) 2026-03-11T06:57:25 - 3 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/10000 rate:- remaining:? elapsed:00:00 postfix:- [repeated 6x across cluster]
-(<lambda> pid=8843, ip=10.130.1.33) 2026-03-11T06:57:25 - 5 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a/checkpoints [repeated 6x across cluster]
-(<lambda> pid=8826, ip=10.130.0.93) 2026-03-11T06:57:26 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/visual_only_cache/train [repeated 6x across cluster]
-(<lambda> pid=8826, ip=10.130.0.93) 2026-03-11T06:57:26 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/visual_only_cache/train/shard_ledger.json [repeated 6x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/core.py", line 105, in __enter__ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self.fs.open(self.path, mode=mode) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1310, in open [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self._open( [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1638, in _open [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return GCSFile( [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1884, in __init__ [repeated 4x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     super().__init__( [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     self.size = self.details["size"] [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1841, in details [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     self._details = self.fs.info(self.path, generation=self.generation) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper [repeated 3x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return sync(self.loop, func, *args, **kwargs) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise return_result [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     result[0] = await coro [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^ [repeated 4x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1031, in _info [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     out = await self._ls(path, **kwargs) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1060, in _ls [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     for entry in await self._list_objects( [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 621, in _list_objects [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return [await self._get_object(path)] [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 557, in _get_object [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     res = await self._call( [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     status, headers, info, contents = await self._request( [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                                       ^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await caller(func, *(extras + args), **kw) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await func(*args, **kwargs) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     validate_response(status, contents, path, args) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 98, in validate_response [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(path) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: b/marin-vlm/o/visual_only_cache%2Ftrain%2Fshard_ledger.json [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71) The above exception was the direct cause of the following exception: [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 843, in build_caches [repeated 4x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     caches[name] = load_lm_dataset_cache( [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/cache.py", line 52, in load_lm_dataset_cache [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     cache = TreeCache.load( [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/store/cache.py", line 194, in load [repeated 4x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     ledger = CacheLedger.load(cache_dir, options) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(f"Cache ledger not found at {ledger_path}") from exc [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: Cache ledger not found at gs://marin-vlm/visual_only_cache/train/shard_ledger.json [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71) During handling of the above exception, another exception occurred: [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda> [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/main/train_lm.py", line 170, in main [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     train_dataset = config.data.train_set( [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 724, in train_set [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     datasets = self.train_sets(Pos, key=shuffle_key, initial_batch_size=initial_batch_size) [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 741, in train_sets [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     doc_caches = self.build_caches("train") [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise ValueError(f"No source and no cache found for component {name} split {split}") [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71) ValueError: No source and no cache found for component visual_only split train [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71) Traceback (most recent call last): [repeated 2x across cluster]
-(run_on_pod_ray pid=43096, ip=10.130.0.71)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=11897, ip=10.130.1.67) 2026-03-11T06:57:44 - 7 - levanter.tracker.wandb - wandb.py:287 - INFO :: Setting wandb code_dir to .
-(<lambda> pid=11825, ip=10.130.0.200) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
-(<lambda> pid=11906, ip=10.130.1.33) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a.
-(<lambda> pid=11897, ip=10.130.1.67) wandb: Tracking run with wandb version 0.24.0
-(<lambda> pid=11897, ip=10.130.1.67) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
-(<lambda> pid=11897, ip=10.130.1.67) wandb: Run data is saved locally in /tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/wandb/offline-run-20260311_065744-unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
-(<lambda> pid=11825, ip=10.130.0.200) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
-(<lambda> pid=11825, ip=10.130.0.200) wandb: setting up run unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
-(<lambda> pid=11825, ip=10.130.0.200) wandb: Run `wandb offline` to turn off syncing.
-(<lambda> pid=11825, ip=10.130.0.200) wandb: Resuming run unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
-(<lambda> pid=11825, ip=10.130.0.200) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin
-(<lambda> pid=11825, ip=10.130.0.200) wandb: 🚀 View run at https://wandb.ai/rui_li/marin/runs/unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
-(<lambda> pid=12128, ip=10.130.1.65) 2026-03-11T06:57:48 - 2 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: None unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
-(<lambda> pid=11825, ip=10.130.0.200) 2026-03-11T06:57:48 - 0 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[14] = gs://marin-eu-west4/tokenized/paloma/dolma-v1_5-d3bed7
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[15] = gs://marin-eu-west4/tokenized/paloma/dolma_100_programing_languages-369132
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[16] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[17] = gs://marin-eu-west4/tokenized/paloma/dolma_100_programing_languages-369132
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[18] = gs://marin-eu-west4/tokenized/paloma/dolma_100_subreddits-f25f70
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[19] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[20] = gs://marin-eu-west4/tokenized/paloma/dolma_100_subreddits-f25f70
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[21] = gs://marin-eu-west4/tokenized/paloma/falcon-refinedweb-75d43b
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[22] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[23] = gs://marin-eu-west4/tokenized/paloma/falcon-refinedweb-75d43b
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[24] = gs://marin-eu-west4/tokenized/paloma/gab-ccaced
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[25] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[26] = gs://marin-eu-west4/tokenized/paloma/gab-ccaced
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[27] = gs://marin-eu-west4/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[28] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[29] = gs://marin-eu-west4/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[30] = gs://marin-eu-west4/tokenized/paloma/m2d2_wikipedia_unsplit-b33d23
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[31] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[32] = gs://marin-eu-west4/tokenized/paloma/m2d2_wikipedia_unsplit-b33d23
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[33] = gs://marin-eu-west4/tokenized/paloma/manosphere_meta_sep-a07891
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[34] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[35] = gs://marin-eu-west4/tokenized/paloma/manosphere_meta_sep-a07891
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[36] = gs://marin-eu-west4/tokenized/paloma/mc4-ea36a2
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[37] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[38] = gs://marin-eu-west4/tokenized/paloma/mc4-ea36a2
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[39] = gs://marin-eu-west4/tokenized/paloma/ptb-628036
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[40] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[41] = gs://marin-eu-west4/tokenized/paloma/ptb-628036
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[42] = gs://marin-eu-west4/tokenized/paloma/redpajama-9d4ddd
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[43] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[44] = gs://marin-eu-west4/tokenized/paloma/redpajama-9d4ddd
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[45] = gs://marin-eu-west4/tokenized/paloma/twitterAAE_HELM_fixed-2e17c1
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[46] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[47] = gs://marin-eu-west4/tokenized/paloma/twitterAAE_HELM_fixed-2e17c1
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[48] = gs://marin-eu-west4/tokenized/paloma/wikitext_103-1f5636
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[49] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[50] = gs://marin-eu-west4/tokenized/paloma/wikitext_103-1f5636
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[51] = gs://marin-eu-west4/tokenized/uncheatable_eval/wikipedia_english-ba27aa
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[52] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[53] = gs://marin-eu-west4/tokenized/uncheatable_eval/wikipedia_english-ba27aa
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[54] = gs://marin-eu-west4/tokenized/uncheatable_eval/github_python-00e7de
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[55] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[56] = gs://marin-eu-west4/tokenized/uncheatable_eval/github_python-00e7de
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[57] = gs://marin-eu-west4/tokenized/uncheatable_eval/github_cpp-d0da6b
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,201  INFO executor.py:860 --   DEP[58] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,202  INFO executor.py:860 --   DEP[59] = gs://marin-eu-west4/tokenized/uncheatable_eval/github_cpp-d0da6b
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,202  INFO executor.py:860 --   DEP[60] = gs://marin-eu-west4/tokenized/uncheatable_eval/bbc_news-2ff739
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,202  INFO executor.py:860 --   DEP[61] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,202  INFO executor.py:860 --   DEP[62] = gs://marin-eu-west4/tokenized/uncheatable_eval/bbc_news-2ff739
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,202  INFO executor.py:860 --   DEP[63] = gs://marin-eu-west4/tokenized/uncheatable_eval/arxiv_physics-713363
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,202  INFO executor.py:860 --   DEP[64] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,202  INFO executor.py:860 --   DEP[65] = gs://marin-eu-west4/tokenized/uncheatable_eval/arxiv_physics-713363
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,202  INFO executor.py:860 --   DEP[66] = gs://marin-eu-west4/tokenized/uncheatable_eval/arxiv_computer_science-9760a5
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,202  INFO executor.py:860 --   DEP[67] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,202  INFO executor.py:860 --   DEP[68] = gs://marin-eu-west4/tokenized/uncheatable_eval/arxiv_computer_science-9760a5
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,202  INFO executor.py:860 --   DEP[69] = gs://marin-eu-west4/tokenized/uncheatable_eval/ao3_english-55e735
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,202  INFO executor.py:860 --   DEP[70] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,202  INFO executor.py:860 --   DEP[71] = gs://marin-eu-west4/tokenized/uncheatable_eval/ao3_english-55e735
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,239  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-3-140104909461312] Status checkpoints/unified-qwen3-1.7b-1-0-1-w0.5-8e3-2.4e3-linear-10k-correct-demo1: <function run_levanter_train_lm at 0x7f6aebe05580>: SUCCESS
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,239  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-3-140104909461312] Step checkpoints/unified-qwen3-1.7b-1-0-1-w0.5-8e3-2.4e3-linear-10k-correct-demo1: <function run_levanter_train_lm at 0x7f6aebe05580> has already succeeded.
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,239  INFO executor.py:757 -- ### Waiting for all steps to finish ###
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,239  INFO executor.py:1317 -- Executor run took 18.01s
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,239  INFO executor.py:1319 -- Executor info written to gs://marin-eu-west4/experiments/unified_pretrain_demo_eu-24d456.json
+I20260315 07:13:41 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:25,239  INFO executor.py:1322 -- View the experiment at https://marin.community/data-browser/experiment?path=gs%3A//marin-eu-west4/experiments/unified_pretrain_demo_eu-24d456.json
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,637  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,637  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,638  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,638  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,638  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _zero_fractional_transform at 0x7f81ca91f920>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,638  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _only_fractional_transform at 0x7f81ca91f9c0>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,638  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _only_fractional_transform at 0x7f81ca91f9c0>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,638  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _zero_fractional_transform at 0x7f81ca91f920>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,638  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,638  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,638  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,638  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,638  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,638  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,915  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,915  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,915  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,915  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,915  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _zero_fractional_transform at 0x7f81ca91f920>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,915  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _only_fractional_transform at 0x7f81ca91f9c0>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,915  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _only_fractional_transform at 0x7f81ca91f9c0>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,915  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _zero_fractional_transform at 0x7f81ca91f920>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,916  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,916  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,916  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,916  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,916  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:29,916  WARNING json_encoder.py:29 -- Could not serialize object of type <class 'function'>: <function _make_visual_weight_transform.<locals>.transform at 0x7f81ca91fe20>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,009  INFO executor.py:747 -- ### Launching 28 steps ###
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,010  INFO executor.py:856 -- raw/nemotro-cc: <function download_nemotron_cc at 0x7f81ca8d7ba0>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,010  INFO executor.py:857 --   output_path = gs://marin-eu-west4/raw/nemotro-cc-eeb783
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,010  INFO executor.py:858 --   config = {}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,065  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status raw/nemotro-cc: <function download_nemotron_cc at 0x7f81ca8d7ba0>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,065  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step raw/nemotro-cc: <function download_nemotron_cc at 0x7f81ca8d7ba0> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,065  INFO executor.py:856 -- raw/paloma: <function download_hf at 0x7f81caa13f60>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,065  INFO executor.py:857 --   output_path = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,065  INFO executor.py:858 --   config = {"hf_dataset_id": "allenai/paloma", "revision": "65cd6fc"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,112  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status raw/paloma: <function download_hf at 0x7f81caa13f60>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,112  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step raw/paloma: <function download_hf at 0x7f81caa13f60> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,112  INFO executor.py:856 -- raw/uncheatable-eval/latest: <function download_latest_uncheatable_eval at 0x7f81ca945c60>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,112  INFO executor.py:857 --   output_path = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,112  INFO executor.py:858 --   config = {"repo_owner": "ziqing-huang", "repo_name": "uncheatable_eval", "data_path": "data", "branch": "master"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,153  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status raw/uncheatable-eval/latest: <function download_latest_uncheatable_eval at 0x7f81ca945c60>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,153  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step raw/uncheatable-eval/latest: <function download_latest_uncheatable_eval at 0x7f81ca945c60> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,154  INFO executor.py:856 -- tokenized/nemotron_cc/hq_actual: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,154  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/nemotron_cc/hq_actual-5af4cc
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,154  INFO executor.py:858 --   config = {"train_paths.[0]": "DEP[0]/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/**/*.jsonl.gz", "validation_paths": [], "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,154  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/nemotro-cc-eeb783
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,212  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/nemotron_cc/hq_actual: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,212  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/nemotron_cc/hq_actual: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,212  INFO executor.py:856 -- tokenized/paloma/4chan: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,212  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/paloma/4chan-496ad5
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,213  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,213  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,250  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/paloma/4chan: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,250  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/paloma/4chan: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,250  INFO executor.py:856 -- tokenized/paloma/c4_100_domains: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,250  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/paloma/c4_100_domains-2b6db7
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,250  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/c4_100_domains/val/val*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,250  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,300  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/paloma/c4_100_domains: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,300  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/paloma/c4_100_domains: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,300  INFO executor.py:856 -- tokenized/paloma/c4_en: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,300  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/paloma/c4_en-cf1f79
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,300  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/c4_en/val/val*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,300  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,344  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/paloma/c4_en: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,344  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/paloma/c4_en: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,344  INFO executor.py:856 -- tokenized/paloma/dolma-v1_5: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,344  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/paloma/dolma-v1_5-d3bed7
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,344  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/dolma-v1_5/val/val*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,344  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,388  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/paloma/dolma-v1_5: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,388  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/paloma/dolma-v1_5: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,388  INFO executor.py:856 -- tokenized/paloma/dolma_100_programing_languages: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,388  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/paloma/dolma_100_programing_languages-369132
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,388  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,388  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,432  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/paloma/dolma_100_programing_languages: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,432  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/paloma/dolma_100_programing_languages: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,432  INFO executor.py:856 -- tokenized/paloma/dolma_100_subreddits: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,432  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/paloma/dolma_100_subreddits-f25f70
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,432  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,432  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,473  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/paloma/dolma_100_subreddits: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,473  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/paloma/dolma_100_subreddits: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,473  INFO executor.py:856 -- tokenized/paloma/falcon-refinedweb: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,473  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/paloma/falcon-refinedweb-75d43b
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,473  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,473  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,523  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/paloma/falcon-refinedweb: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,523  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/paloma/falcon-refinedweb: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,523  INFO executor.py:856 -- tokenized/paloma/gab: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,523  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/paloma/gab-ccaced
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,523  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/gab/val/val*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,523  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,563  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/paloma/gab: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,563  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/paloma/gab: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,563  INFO executor.py:856 -- tokenized/paloma/m2d2_s2orc_unsplit: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,563  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,563  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,563  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,604  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/paloma/m2d2_s2orc_unsplit: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,604  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/paloma/m2d2_s2orc_unsplit: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,604  INFO executor.py:856 -- tokenized/paloma/m2d2_wikipedia_unsplit: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,604  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/paloma/m2d2_wikipedia_unsplit-b33d23
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,604  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,604  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,649  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/paloma/m2d2_wikipedia_unsplit: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,649  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/paloma/m2d2_wikipedia_unsplit: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,649  INFO executor.py:856 -- tokenized/paloma/manosphere_meta_sep: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,649  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/paloma/manosphere_meta_sep-a07891
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,649  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,649  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,693  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/paloma/manosphere_meta_sep: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,693  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/paloma/manosphere_meta_sep: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,693  INFO executor.py:856 -- tokenized/paloma/mc4: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,693  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/paloma/mc4-ea36a2
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,693  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/mc4/val/val*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,693  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,734  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/paloma/mc4: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,734  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/paloma/mc4: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,734  INFO executor.py:856 -- tokenized/paloma/ptb: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,734  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/paloma/ptb-628036
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,734  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/ptb/val/val*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,734  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,770  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/paloma/ptb: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,770  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/paloma/ptb: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,770  INFO executor.py:856 -- tokenized/paloma/redpajama: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,770  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/paloma/redpajama-9d4ddd
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,770  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/redpajama/val/val*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,770  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,813  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/paloma/redpajama: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,813  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/paloma/redpajama: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,814  INFO executor.py:856 -- tokenized/paloma/twitterAAE_HELM_fixed: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,814  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/paloma/twitterAAE_HELM_fixed-2e17c1
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,814  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,814  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,861  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/paloma/twitterAAE_HELM_fixed: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,861  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/paloma/twitterAAE_HELM_fixed: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,861  INFO executor.py:856 -- tokenized/paloma/wikitext_103: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,861  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/paloma/wikitext_103-1f5636
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,861  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/wikitext_103/val/val*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,861  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,911  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/paloma/wikitext_103: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,911  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/paloma/wikitext_103: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,911  INFO executor.py:856 -- tokenized/uncheatable_eval/wikipedia_english: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,911  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/uncheatable_eval/wikipedia_english-ba27aa
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,911  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/wikipedia_english_*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,911  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,972  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/uncheatable_eval/wikipedia_english: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,972  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/uncheatable_eval/wikipedia_english: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,972  INFO executor.py:856 -- tokenized/uncheatable_eval/github_python: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,972  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/uncheatable_eval/github_python-00e7de
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,972  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/github_python_*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:30,972  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,012  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/uncheatable_eval/github_python: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,012  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/uncheatable_eval/github_python: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,012  INFO executor.py:856 -- tokenized/uncheatable_eval/github_cpp: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,012  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/uncheatable_eval/github_cpp-d0da6b
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,012  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/github_cpp_*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,012  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,059  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/uncheatable_eval/github_cpp: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,059  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/uncheatable_eval/github_cpp: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,059  INFO executor.py:856 -- tokenized/uncheatable_eval/bbc_news: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,059  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/uncheatable_eval/bbc_news-2ff739
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,059  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/bbc_news_*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,059  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,105  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/uncheatable_eval/bbc_news: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,105  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/uncheatable_eval/bbc_news: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,105  INFO executor.py:856 -- tokenized/uncheatable_eval/arxiv_physics: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,105  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/uncheatable_eval/arxiv_physics-713363
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,105  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/arxiv_physics_*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,105  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,143  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/uncheatable_eval/arxiv_physics: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,143  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/uncheatable_eval/arxiv_physics: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,143  INFO executor.py:856 -- tokenized/uncheatable_eval/arxiv_computer_science: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,143  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/uncheatable_eval/arxiv_computer_science-9760a5
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,143  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/arxiv_computer_science_*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,143  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,190  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/uncheatable_eval/arxiv_computer_science: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,190  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/uncheatable_eval/arxiv_computer_science: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,190  INFO executor.py:856 -- tokenized/uncheatable_eval/ao3_english: <function tokenize at 0x7f81ca8cb100>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,190  INFO executor.py:857 --   output_path = gs://marin-eu-west4/tokenized/uncheatable_eval/ao3_english-55e735
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,190  INFO executor.py:858 --   config = {"validation_paths.[0]": "DEP[0]/ao3_english_*.jsonl.gz", "tokenizer": "meta-llama/Meta-Llama-3.1-8B"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,190  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,237  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status tokenized/uncheatable_eval/ao3_english: <function tokenize at 0x7f81ca8cb100>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,237  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step tokenized/uncheatable_eval/ao3_english: <function tokenize at 0x7f81ca8cb100> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,237  INFO executor.py:856 -- checkpoints/unified-qwen3-1.7b-1-0-1-w0.5-8e3-2.4e3-linear-10k-correct-demo1: <function run_levanter_train_lm at 0x7f81ca8d5580>
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,237  INFO executor.py:857 --   output_path = gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-0-1-w0.5-8e3-2.4e3-linear-10k-correct-demo1-c5c3f9
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:858 --   config = {"train_config.data.components.nemotron_cc/hq_actual.source.cache_dir": "DEP[0]", "train_config.data.components.nemotron_cc/hq_actual.source.train_urls.[0]": "DEP[1]/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/**/*.jsonl.gz", "train_config.data.components.nemotron_cc/hq_actual.source.validation_urls": [], "train_config.data.components.nemotron_cc/hq_actual.cache_dir": "DEP[2]", "train_config.data.components.paloma/4chan.source.cache_dir": "DEP[3]", "train_config.data.components.paloma/4chan.source.validation_urls.[0]": "DEP[4]/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz", "train_config.data.components.paloma/4chan.cache_dir": "DEP[5]", "train_config.data.components.paloma/c4_100_domains.source.cache_dir": "DEP[6]", "train_config.data.components.paloma/c4_100_domains.source.validation_urls.[0]": "DEP[7]/65cd6fc/c4_100_domains/val/val*.jsonl.gz", "train_config.data.components.paloma/c4_100_domains.cache_dir": "DEP[8]", "train_config.data.components.paloma/c4_en.source.cache_dir": "DEP[9]", "train_config.data.components.paloma/c4_en.source.validation_urls.[0]": "DEP[10]/65cd6fc/c4_en/val/val*.jsonl.gz", "train_config.data.components.paloma/c4_en.cache_dir": "DEP[11]", "train_config.data.components.paloma/dolma-v1_5.source.cache_dir": "DEP[12]", "train_config.data.components.paloma/dolma-v1_5.source.validation_urls.[0]": "DEP[13]/65cd6fc/dolma-v1_5/val/val*.jsonl.gz", "train_config.data.components.paloma/dolma-v1_5.cache_dir": "DEP[14]", "train_config.data.components.paloma/dolma_100_programing_languages.source.cache_dir": "DEP[15]", "train_config.data.components.paloma/dolma_100_programing_languages.source.validation_urls.[0]": "DEP[16]/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz", "train_config.data.components.paloma/dolma_100_programing_languages.cache_dir": "DEP[17]", "train_config.data.components.paloma/dolma_100_subreddits.source.cache_dir": "DEP[18]", "train_config.data.components.paloma/dolma_100_subreddits.source.validation_urls.[0]": "DEP[19]/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz", "train_config.data.components.paloma/dolma_100_subreddits.cache_dir": "DEP[20]", "train_config.data.components.paloma/falcon-refinedweb.source.cache_dir": "DEP[21]", "train_config.data.components.paloma/falcon-refinedweb.source.validation_urls.[0]": "DEP[22]/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz", "train_config.data.components.paloma/falcon-refinedweb.cache_dir": "DEP[23]", "train_config.data.components.paloma/gab.source.cache_dir": "DEP[24]", "train_config.data.components.paloma/gab.source.validation_urls.[0]": "DEP[25]/65cd6fc/gab/val/val*.jsonl.gz", "train_config.data.components.paloma/gab.cache_dir": "DEP[26]", "train_config.data.components.paloma/m2d2_s2orc_unsplit.source.cache_dir": "DEP[27]", "train_config.data.components.paloma/m2d2_s2orc_unsplit.source.validation_urls.[0]": "DEP[28]/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz", "train_config.data.components.paloma/m2d2_s2orc_unsplit.cache_dir": "DEP[29]", "train_config.data.components.paloma/m2d2_wikipedia_unsplit.source.cache_dir": "DEP[30]", "train_config.data.components.paloma/m2d2_wikipedia_unsplit.source.validation_urls.[0]": "DEP[31]/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz", "train_config.data.components.paloma/m2d2_wikipedia_unsplit.cache_dir": "DEP[32]", "train_config.data.components.paloma/manosphere_meta_sep.source.cache_dir": "DEP[33]", "train_config.data.components.paloma/manosphere_meta_sep.source.validation_urls.[0]": "DEP[34]/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz", "train_config.data.components.paloma/manosphere_meta_sep.cache_dir": "DEP[35]", "train_config.data.components.paloma/mc4.source.cache_dir": "DEP[36]", "train_config.data.components.paloma/mc4.source.validation_urls.[0]": "DEP[37]/65cd6fc/mc4/val/val*.jsonl.gz", "train_config.data.components.paloma/mc4.cache_dir": "DEP[38]", "train_config.data.components.paloma/ptb.source.cache_dir": "DEP[39]", "train_config.data.components.paloma/ptb.source.validation_urls.[0]": "DEP[40]/65cd6fc/ptb/val/val*.jsonl.gz", "train_config.data.components.paloma/ptb.cache_dir": "DEP[41]", "train_config.data.components.paloma/redpajama.source.cache_dir": "DEP[42]", "train_config.data.components.paloma/redpajama.source.validation_urls.[0]": "DEP[43]/65cd6fc/redpajama/val/val*.jsonl.gz", "train_config.data.components.paloma/redpajama.cache_dir": "DEP[44]", "train_config.data.components.paloma/twitterAAE_HELM_fixed.source.cache_dir": "DEP[45]", "train_config.data.components.paloma/twitterAAE_HELM_fixed.source.validation_urls.[0]": "DEP[46]/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz", "train_config.data.components.paloma/twitterAAE_HELM_fixed.cache_dir": "DEP[47]", "train_config.data.components.paloma/wikitext_103.source.cache_dir": "DEP[48]", "train_config.data.components.paloma/wikitext_103.source.validation_urls.[0]": "DEP[49]/65cd6fc/wikitext_103/val/val*.jsonl.gz", "train_config.data.components.paloma/wikitext_103.cache_dir": "DEP[50]", "train_config.data.components.uncheatable_eval/wikipedia_english.source.cache_dir": "DEP[51]", "train_config.data.components.uncheatable_eval/wikipedia_english.source.validation_urls.[0]": "DEP[52]/wikipedia_english_*.jsonl.gz", "train_config.data.components.uncheatable_eval/wikipedia_english.cache_dir": "DEP[53]", "train_config.data.components.uncheatable_eval/github_python.source.cache_dir": "DEP[54]", "train_config.data.components.uncheatable_eval/github_python.source.validation_urls.[0]": "DEP[55]/github_python_*.jsonl.gz", "train_config.data.components.uncheatable_eval/github_python.cache_dir": "DEP[56]", "train_config.data.components.uncheatable_eval/github_cpp.source.cache_dir": "DEP[57]", "train_config.data.components.uncheatable_eval/github_cpp.source.validation_urls.[0]": "DEP[58]/github_cpp_*.jsonl.gz", "train_config.data.components.uncheatable_eval/github_cpp.cache_dir": "DEP[59]", "train_config.data.components.uncheatable_eval/bbc_news.source.cache_dir": "DEP[60]", "train_config.data.components.uncheatable_eval/bbc_news.source.validation_urls.[0]": "DEP[61]/bbc_news_*.jsonl.gz", "train_config.data.components.uncheatable_eval/bbc_news.cache_dir": "DEP[62]", "train_config.data.components.uncheatable_eval/arxiv_physics.source.cache_dir": "DEP[63]", "train_config.data.components.uncheatable_eval/arxiv_physics.source.validation_urls.[0]": "DEP[64]/arxiv_physics_*.jsonl.gz", "train_config.data.components.uncheatable_eval/arxiv_physics.cache_dir": "DEP[65]", "train_config.data.components.uncheatable_eval/arxiv_computer_science.source.cache_dir": "DEP[66]", "train_config.data.components.uncheatable_eval/arxiv_computer_science.source.validation_urls.[0]": "DEP[67]/arxiv_computer_science_*.jsonl.gz", "train_config.data.components.uncheatable_eval/arxiv_computer_science.cache_dir": "DEP[68]", "train_config.data.components.uncheatable_eval/ao3_english.source.cache_dir": "DEP[69]", "train_config.data.components.uncheatable_eval/ao3_english.source.validation_urls.[0]": "DEP[70]/ao3_english_*.jsonl.gz", "train_config.data.components.uncheatable_eval/ao3_english.cache_dir": "DEP[71]"}
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[0] = gs://marin-eu-west4/tokenized/nemotron_cc/hq_actual-5af4cc
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[1] = gs://marin-eu-west4/raw/nemotro-cc-eeb783
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[2] = gs://marin-eu-west4/tokenized/nemotron_cc/hq_actual-5af4cc
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[3] = gs://marin-eu-west4/tokenized/paloma/4chan-496ad5
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[4] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[5] = gs://marin-eu-west4/tokenized/paloma/4chan-496ad5
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[6] = gs://marin-eu-west4/tokenized/paloma/c4_100_domains-2b6db7
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[7] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[8] = gs://marin-eu-west4/tokenized/paloma/c4_100_domains-2b6db7
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[9] = gs://marin-eu-west4/tokenized/paloma/c4_en-cf1f79
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[10] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[11] = gs://marin-eu-west4/tokenized/paloma/c4_en-cf1f79
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[12] = gs://marin-eu-west4/tokenized/paloma/dolma-v1_5-d3bed7
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[13] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[14] = gs://marin-eu-west4/tokenized/paloma/dolma-v1_5-d3bed7
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[15] = gs://marin-eu-west4/tokenized/paloma/dolma_100_programing_languages-369132
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[16] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[17] = gs://marin-eu-west4/tokenized/paloma/dolma_100_programing_languages-369132
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[18] = gs://marin-eu-west4/tokenized/paloma/dolma_100_subreddits-f25f70
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[19] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[20] = gs://marin-eu-west4/tokenized/paloma/dolma_100_subreddits-f25f70
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[21] = gs://marin-eu-west4/tokenized/paloma/falcon-refinedweb-75d43b
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[22] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[23] = gs://marin-eu-west4/tokenized/paloma/falcon-refinedweb-75d43b
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[24] = gs://marin-eu-west4/tokenized/paloma/gab-ccaced
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[25] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[26] = gs://marin-eu-west4/tokenized/paloma/gab-ccaced
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[27] = gs://marin-eu-west4/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[28] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[29] = gs://marin-eu-west4/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[30] = gs://marin-eu-west4/tokenized/paloma/m2d2_wikipedia_unsplit-b33d23
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[31] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[32] = gs://marin-eu-west4/tokenized/paloma/m2d2_wikipedia_unsplit-b33d23
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[33] = gs://marin-eu-west4/tokenized/paloma/manosphere_meta_sep-a07891
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[34] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[35] = gs://marin-eu-west4/tokenized/paloma/manosphere_meta_sep-a07891
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[36] = gs://marin-eu-west4/tokenized/paloma/mc4-ea36a2
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[37] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[38] = gs://marin-eu-west4/tokenized/paloma/mc4-ea36a2
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[39] = gs://marin-eu-west4/tokenized/paloma/ptb-628036
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[40] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[41] = gs://marin-eu-west4/tokenized/paloma/ptb-628036
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[42] = gs://marin-eu-west4/tokenized/paloma/redpajama-9d4ddd
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[43] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[44] = gs://marin-eu-west4/tokenized/paloma/redpajama-9d4ddd
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[45] = gs://marin-eu-west4/tokenized/paloma/twitterAAE_HELM_fixed-2e17c1
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[46] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[47] = gs://marin-eu-west4/tokenized/paloma/twitterAAE_HELM_fixed-2e17c1
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[48] = gs://marin-eu-west4/tokenized/paloma/wikitext_103-1f5636
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[49] = gs://marin-eu-west4/raw/paloma-fc6827
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[50] = gs://marin-eu-west4/tokenized/paloma/wikitext_103-1f5636
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[51] = gs://marin-eu-west4/tokenized/uncheatable_eval/wikipedia_english-ba27aa
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[52] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,238  INFO executor.py:860 --   DEP[53] = gs://marin-eu-west4/tokenized/uncheatable_eval/wikipedia_english-ba27aa
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,239  INFO executor.py:860 --   DEP[54] = gs://marin-eu-west4/tokenized/uncheatable_eval/github_python-00e7de
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,239  INFO executor.py:860 --   DEP[55] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,239  INFO executor.py:860 --   DEP[56] = gs://marin-eu-west4/tokenized/uncheatable_eval/github_python-00e7de
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,239  INFO executor.py:860 --   DEP[57] = gs://marin-eu-west4/tokenized/uncheatable_eval/github_cpp-d0da6b
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,239  INFO executor.py:860 --   DEP[58] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,239  INFO executor.py:860 --   DEP[59] = gs://marin-eu-west4/tokenized/uncheatable_eval/github_cpp-d0da6b
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,239  INFO executor.py:860 --   DEP[60] = gs://marin-eu-west4/tokenized/uncheatable_eval/bbc_news-2ff739
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,239  INFO executor.py:860 --   DEP[61] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,239  INFO executor.py:860 --   DEP[62] = gs://marin-eu-west4/tokenized/uncheatable_eval/bbc_news-2ff739
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,239  INFO executor.py:860 --   DEP[63] = gs://marin-eu-west4/tokenized/uncheatable_eval/arxiv_physics-713363
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,239  INFO executor.py:860 --   DEP[64] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,239  INFO executor.py:860 --   DEP[65] = gs://marin-eu-west4/tokenized/uncheatable_eval/arxiv_physics-713363
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,239  INFO executor.py:860 --   DEP[66] = gs://marin-eu-west4/tokenized/uncheatable_eval/arxiv_computer_science-9760a5
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,239  INFO executor.py:860 --   DEP[67] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,239  INFO executor.py:860 --   DEP[68] = gs://marin-eu-west4/tokenized/uncheatable_eval/arxiv_computer_science-9760a5
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,239  INFO executor.py:860 --   DEP[69] = gs://marin-eu-west4/tokenized/uncheatable_eval/ao3_english-55e735
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,239  INFO executor.py:860 --   DEP[70] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,239  INFO executor.py:860 --   DEP[71] = gs://marin-eu-west4/tokenized/uncheatable_eval/ao3_english-55e735
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,289  INFO executor.py:1194 -- [t1v-n-ef9fd363-w-2-140203136317248] Status checkpoints/unified-qwen3-1.7b-1-0-1-w0.5-8e3-2.4e3-linear-10k-correct-demo1: <function run_levanter_train_lm at 0x7f81ca8d5580>: SUCCESS
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,289  INFO executor.py:1198 -- [t1v-n-ef9fd363-w-2-140203136317248] Step checkpoints/unified-qwen3-1.7b-1-0-1-w0.5-8e3-2.4e3-linear-10k-correct-demo1: <function run_levanter_train_lm at 0x7f81ca8d5580> has already succeeded.
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,289  INFO executor.py:757 -- ### Waiting for all steps to finish ###
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,289  INFO executor.py:1317 -- Executor run took 23.90s
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,289  INFO executor.py:1319 -- Executor info written to gs://marin-eu-west4/experiments/unified_pretrain_demo_eu-427b0c.json
+I20260315 07:13:47 139705890981888 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 attempt=0 | 2026-03-15 07:13:31,290  INFO executor.py:1322 -- View the experiment at https://marin.community/data-browser/experiment?path=gs%3A//marin-eu-west4/experiments/unified_pretrain_demo_eu-427b0c.json
+I20260315 07:13:47 139705890981888 iris.cluster.client.remote_client job=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 finished with state=JOB_STATE_SUCCEEDED, draining logs (total_lines=269)
+I20260315 07:13:48 139705890981888 iris.cluster.client.remote_client job=/ruili/iris-run-unified_pretrain_demo_eu-20260315-071213 finished with state=JOB_STATE_SUCCEEDED, draining logs (total_lines=0)
+I20260315 07:13:48 139705890981888 iris.cli.job Job completed with state: 4
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_scaling$ 

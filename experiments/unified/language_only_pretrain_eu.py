@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -44,7 +47,6 @@ from levanter.data.text.formats import PrebuiltLmDatasetFormat
 
 from experiments.defaults import default_train
 from experiments.evals.task_configs import CORE_TASKS
-from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import tokenize_nemotron
 from experiments.qwen3 import qwen3_1_7b
 from experiments.unified.unified_pretrain_demo_eu import (
@@ -149,13 +151,15 @@ def make_language_only_1_7b(
 
 
 if __name__ == "__main__":
-    steps = [make_language_only_1_7b(
-        muon_lr=MUON_LR,
-        adam_lr=ADAM_LR,
-        num_train_steps=NUM_STEPS,
-        lr_schedule=LR_SCHEDULE,
-        z_loss_weight=Z_LOSS_WEIGHT,
-    )]
+    steps = [
+        make_language_only_1_7b(
+            muon_lr=MUON_LR,
+            adam_lr=ADAM_LR,
+            num_train_steps=NUM_STEPS,
+            lr_schedule=LR_SCHEDULE,
+            z_loss_weight=Z_LOSS_WEIGHT,
+        )
+    ]
     executor_main(
         steps,
         description="Language-only pre-training with Qwen3 architecture (EU)",

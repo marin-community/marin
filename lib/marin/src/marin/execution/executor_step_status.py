@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -18,6 +21,7 @@ import time
 from dataclasses import asdict, dataclass
 
 import fsspec
+from google.api_core.exceptions import NotFound
 from google.cloud import storage
 
 logger = logging.getLogger("ray")
@@ -145,8 +149,11 @@ class StatusFile:
             blob = bucket.get_blob(blob_path)
             if blob is None:
                 return (0, None)
-            data = json.loads(blob.download_as_string())
-            return (blob.generation, Lease(**data))
+            try:
+                data = json.loads(blob.download_as_string())
+                return (blob.generation, Lease(**data))
+            except NotFound:
+                return (0, None)
         else:
             import fcntl
 
@@ -245,7 +252,7 @@ class StatusFile:
             if lock_data and lock_data.worker_id == self.worker_id:
                 self.fs.rm(self._lock_path)
                 logger.debug("[%s] Released lock", self.worker_id)
-        except FileNotFoundError:
+        except (FileNotFoundError, NotFound):
             pass
 
     def has_active_lock(self) -> bool:

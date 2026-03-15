@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -84,7 +87,9 @@ import json
 import logging
 import os
 import re
+import signal
 import subprocess
+import sys
 import time
 import urllib.parse
 from collections.abc import Callable
@@ -187,10 +192,11 @@ class StepRunner:
             if self._job is None:
                 raise RuntimeError("StepRunner.wait called before launch")
             result = self._job.wait(raise_on_failure=False)
-            if result == JobStatus.FAILED:
+            if result == JobStatus.SUCCEEDED:
+                self._status_file.write_status(STATUS_SUCCESS)
+            else:
                 self._status_file.write_status(STATUS_FAILED)
-                raise RuntimeError(f"Job {self.job_id} failed")
-            self._status_file.write_status(STATUS_SUCCESS)
+                raise RuntimeError(f"Job {self.job_id} finished with status {result}")
         except Exception:
             if self._status_file.status != STATUS_FAILED:
                 self._status_file.write_status(STATUS_FAILED)
@@ -774,58 +780,74 @@ class Executor:
         failed_steps: set[ExecutorStep] = set()
         failure_exceptions: list[Exception] = []
 
-        while ready or running:
-            # Launch ready steps, respecting max_concurrent limit if set
-            # Use pop(0) for FIFO ordering
-            while ready and (max_concurrent is None or len(running) < max_concurrent):
-                step = ready.pop(0)
-                runner = self._launch_step(step, dry_run=dry_run, force_run_failed=force_run_failed)
+        def _sigterm_handler(signum, frame):
+            logger.warning("Received SIGTERM, cleaning up active steps...")
+            for runner in running.values():
                 if runner is not None:
-                    self.step_runners[step] = runner
-                running[step] = runner
-
-            if not running:
-                break
-
-            finished_steps = []
-            for step, runner in running.items():
-                if runner is None:
-                    # Dry run or already completed - immediately finished
-                    finished_steps.append(step)
-                elif runner.poll():
-                    finished_steps.append(step)
-
-            if not finished_steps:
-                time.sleep(1)
-                continue
-
-            for finished_step in finished_steps:
-                runner = running[finished_step]
-                step_failed = False
-                if runner is not None:
-                    logger.info("Waiting for %s to finish for step %s", runner.job_id, finished_step.name)
                     try:
-                        runner.wait()
-                    except Exception as e:
-                        logger.exception("Step %s failed", finished_step.name)
-                        failed_steps.add(finished_step)
-                        failure_exceptions.append(e)
-                        step_failed = True
+                        runner._stop_heartbeat()
+                        runner._status_file.write_status(STATUS_FAILED)
+                        runner._status_file.release_lock()
+                    except Exception:
+                        pass
+            sys.exit(1)
 
-                running.pop(finished_step)
+        prev_handler = signal.signal(signal.SIGTERM, _sigterm_handler)
+        try:
+            while ready or running:
+                # Launch ready steps, respecting max_concurrent limit if set
+                # Use pop(0) for FIFO ordering
+                while ready and (max_concurrent is None or len(running) < max_concurrent):
+                    step = ready.pop(0)
+                    runner = self._launch_step(step, dry_run=dry_run, force_run_failed=force_run_failed)
+                    if runner is not None:
+                        self.step_runners[step] = runner
+                    running[step] = runner
 
-                if not step_failed:
-                    for child in dependents.get(finished_step, []):
-                        remaining_deps[child].remove(finished_step)
-                        if not remaining_deps[child]:
-                            ready.append(child)
+                if not running:
+                    break
 
-        if failed_steps:
-            failed_names = sorted(step.name for step in failed_steps)
-            message = f"{len(failed_steps)} step(s) failed: {failed_names}"
-            if failure_exceptions:
-                raise RuntimeError(message) from failure_exceptions[0]
-            raise RuntimeError(message)
+                finished_steps = []
+                for step, runner in running.items():
+                    if runner is None:
+                        # Dry run or already completed - immediately finished
+                        finished_steps.append(step)
+                    elif runner.poll():
+                        finished_steps.append(step)
+
+                if not finished_steps:
+                    time.sleep(1)
+                    continue
+
+                for finished_step in finished_steps:
+                    runner = running[finished_step]
+                    step_failed = False
+                    if runner is not None:
+                        logger.info("Waiting for %s to finish for step %s", runner.job_id, finished_step.name)
+                        try:
+                            runner.wait()
+                        except Exception as e:
+                            logger.exception("Step %s failed", finished_step.name)
+                            failed_steps.add(finished_step)
+                            failure_exceptions.append(e)
+                            step_failed = True
+
+                    running.pop(finished_step)
+
+                    if not step_failed:
+                        for child in dependents.get(finished_step, []):
+                            remaining_deps[child].remove(finished_step)
+                            if not remaining_deps[child]:
+                                ready.append(child)
+
+            if failed_steps:
+                failed_names = sorted(step.name for step in failed_steps)
+                message = f"{len(failed_steps)} step(s) failed: {failed_names}"
+                if failure_exceptions:
+                    raise RuntimeError(message) from failure_exceptions[0]
+                raise RuntimeError(message)
+        finally:
+            signal.signal(signal.SIGTERM, prev_handler)
 
     def _launch_step(self, step: ExecutorStep, *, dry_run: bool, force_run_failed: bool) -> StepRunner | None:
         config = self.configs[step]

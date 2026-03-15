@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Re-consolidate the visual-only validation shard caches into a proper TreeCache.
 
 The original tokenization produced per-shard validation caches under
