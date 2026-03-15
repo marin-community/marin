@@ -216,6 +216,7 @@ class GroupByOp:
     reducer_fn: Callable  # Function from (key, Iterator[items]) -> result
     num_output_shards: int | None = None  # None = auto-detect from current shard count
     sort_fn: Callable | None = None  # Optional secondary sort within each group
+    combiner_fn: Callable | None = None  # Optional local pre-aggregation during scatter
 
     def __repr__(self):
         return f"GroupByOp(key={_get_fn_name(self.key_fn)})"
@@ -734,6 +735,7 @@ class Dataset(Generic[T]):
         reducer: Callable[[K, Iterator[T]], Iterator[R]],
         sort_by: Callable[[T], Any] | None = None,
         num_output_shards: int | None = None,
+        combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
     ) -> Dataset[R]: ...
 
     @overload
@@ -744,6 +746,7 @@ class Dataset(Generic[T]):
         reducer: Callable[[K, Iterator[T]], R],
         sort_by: Callable[[T], Any] | None = None,
         num_output_shards: int | None = None,
+        combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
     ) -> Dataset[R]: ...
 
     def group_by(
@@ -753,6 +756,7 @@ class Dataset(Generic[T]):
         reducer: Callable[[K, Iterator[T]], R | Iterator[R]],
         sort_by: Callable[[T], Any] | None = None,
         num_output_shards: int | None = None,
+        combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
     ) -> Dataset[R]:
         """Group items by key and apply reducer function.
 
@@ -768,6 +772,9 @@ class Dataset(Generic[T]):
             sort_by: Optional function extracting a sort key from each item. When provided,
                 items within each group are delivered to the reducer sorted by this key.
             num_output_shards: Number of output shards (None = auto-detect, uses current shard count)
+            combiner: Optional local pre-aggregation applied during scatter. Receives
+                (key, Iterator[items]) and yields reduced items of the same type. Must be
+                associative — partial results are combined with the full reducer on the reduce side.
 
         Returns:
             New dataset with group_by operation appended
@@ -794,7 +801,10 @@ class Dataset(Generic[T]):
             ...     )
             ... )
         """
-        return Dataset(self.source, [*self.operations, GroupByOp(key, reducer, num_output_shards, sort_fn=sort_by)])
+        return Dataset(
+            self.source,
+            [*self.operations, GroupByOp(key, reducer, num_output_shards, sort_fn=sort_by, combiner_fn=combiner)],
+        )
 
     def deduplicate(self, key: Callable[[T], object], num_output_shards: int | None = None) -> Dataset[T]:
         """Deduplicate items by key.
