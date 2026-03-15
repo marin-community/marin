@@ -739,19 +739,6 @@ def _array_with_sharding_contract_from_named_input(
     return jax.lax.with_sharding_constraint(arr, sharding)
 
 
-def _state_partition_spec_from_sequence_specs(
-    q_spec: P | tuple | None,
-    v_spec: P | tuple | None,
-) -> P:
-    q_tuple = tuple(q_spec) if q_spec is not None else ()
-    v_tuple = tuple(v_spec) if v_spec is not None else ()
-    if len(q_tuple) < 4:
-        q_tuple = q_tuple + (None,) * (4 - len(q_tuple))
-    if len(v_tuple) < 4:
-        v_tuple = v_tuple + (None,) * (4 - len(v_tuple))
-    return P(q_tuple[0], q_tuple[1], q_tuple[3], v_tuple[3])
-
-
 def _apply_linear_weight(
     inputs: NamedArray,
     weight_arr: jnp.ndarray,
@@ -4116,74 +4103,6 @@ _chunk_gated_delta_rule_flash_pallas.defvjp(
 )
 
 
-def _prepared_array_leaf_train_kernel_layout_contract(
-    q_bhldk: jnp.ndarray,
-    k_bhldk: jnp.ndarray,
-    v_bhldv: jnp.ndarray,
-    g_bhl: jnp.ndarray,
-    b_bhl: jnp.ndarray,
-    *,
-    chunk_size: int,
-    segment_size: int,
-) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """Run the existing training leaf kernel on prepared head-first arrays."""
-    if q_bhldk.ndim != 4 or k_bhldk.ndim != 4 or v_bhldv.ndim != 4 or g_bhl.ndim != 3 or b_bhl.ndim != 3:
-        raise ValueError("Prepared-array leaf contract expects q/k/v rank-4 and g/b rank-3 arrays.")
-    shared_prefix = q_bhldk.shape[:3]
-    if (
-        k_bhldk.shape[:3] != shared_prefix
-        or v_bhldv.shape[:3] != shared_prefix
-        or g_bhl.shape != shared_prefix
-        or b_bhl.shape != shared_prefix
-    ):
-        raise ValueError("Prepared-array leaf contract expects a shared (B, H, L) prefix.")
-
-    return _chunk_gated_delta_rule_flash_pallas(
-        q_bhldk,
-        k_bhldk,
-        v_bhldv,
-        g_bhl,
-        b_bhl,
-        chunk_size,
-        segment_size,
-        None,
-    )
-
-
-def _prepared_array_leaf_train_kernel_sharding_envelope(
-    q_bhldk: jnp.ndarray,
-    k_bhldk: jnp.ndarray,
-    v_bhldv: jnp.ndarray,
-    g_bhl: jnp.ndarray,
-    b_bhl: jnp.ndarray,
-    *,
-    chunk_size: int,
-    segment_size: int,
-) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """Own one sharding envelope around the prepared-array training leaf call."""
-    mesh, q_spec = _get_mesh_and_spec(q_bhldk)
-    _, k_spec = _get_mesh_and_spec(k_bhldk)
-    _, v_spec = _get_mesh_and_spec(v_bhldv)
-    _, g_spec = _get_mesh_and_spec(g_bhl)
-    _, b_spec = _get_mesh_and_spec(b_bhl)
-
-    local_call = functools.partial(
-        _prepared_array_leaf_train_kernel_layout_contract,
-        chunk_size=chunk_size,
-        segment_size=segment_size,
-    )
-    if _mesh_size(mesh) <= 1:
-        return local_call(q_bhldk, k_bhldk, v_bhldv, g_bhl, b_bhl)
-
-    state_spec = _state_partition_spec_from_sequence_specs(q_spec, v_spec)
-    return _mk_shard_map(
-        local_call,
-        mesh=mesh,
-        in_specs=(q_spec, k_spec, v_spec, g_spec, b_spec),
-        out_specs=(v_spec, state_spec),
-    )(q_bhldk, k_bhldk, v_bhldv, g_bhl, b_bhl)
-
-
 def _apply_T_from_strict_A(A_strict: jnp.ndarray, rhs: jnp.ndarray, *, use_triangular_solve: bool) -> jnp.ndarray:
     """Compute (I - A_strict)^(-1) @ rhs for strictly-lower A_strict (diag must be 0).
 
@@ -4390,13 +4309,11 @@ def chunk_gated_delta_rule(
     use_triangular_solve: bool = True,
     use_checkpoint: bool = True,
     branch_core_prepared_array_sharding_diagnostic: bool = False,
-    branch_core_prepared_array_sharding_envelope: bool = False,
 ) -> tuple[NamedArray, Optional[jnp.ndarray]]:
     """Top-level API for chunkwise gated delta rule.
 
-    Optional boundary ownership on the prepared `(B, H, L, *)` arrays:
-    either a diagnostic sharding reassertion or the `W1` sharding envelope
-    around the existing training leaf kernel call.
+    The optional diagnostic only reasserts sharding/layout on the prepared
+    `(B, H, L, *)` arrays immediately before the existing leaf kernel call.
     """
     Batch = query.resolve_axis("batch")
     Heads = query.resolve_axis("heads")
@@ -4478,7 +4395,7 @@ def chunk_gated_delta_rule(
     q_arr = q_arr.astype(flash_io_dtype, copy=False)
     k_arr = k_arr.astype(flash_io_dtype, copy=False)
     v_arr = v_arr.astype(flash_io_dtype, copy=False)
-    if branch_core_prepared_array_sharding_diagnostic or branch_core_prepared_array_sharding_envelope:
+    if branch_core_prepared_array_sharding_diagnostic:
         q_arr = _array_with_sharding_contract_from_named_input(q32, q_arr, (Batch, Heads, Pos, Dk))
         k_arr = _array_with_sharding_contract_from_named_input(k32, k_arr, (Batch, Heads, Pos, Dk))
         v_arr = _array_with_sharding_contract_from_named_input(v32, v_arr, (Batch, Heads, Pos, Dv))
@@ -4486,20 +4403,9 @@ def chunk_gated_delta_rule(
         b_arr = _array_with_sharding_contract_from_named_input(b32, b_arr, (Batch, Heads, Pos))
 
     if backend == "pallas":
-        if branch_core_prepared_array_sharding_envelope and initial_state is None and not output_final_state:
-            out_arr, S_final = _prepared_array_leaf_train_kernel_sharding_envelope(
-                q_arr,
-                k_arr,
-                v_arr,
-                g_arr,
-                b_arr,
-                chunk_size=chunk_size,
-                segment_size=segment_size,
-            )
-        else:
-            out_arr, S_final = _chunk_gated_delta_rule_flash_pallas(
-                q_arr, k_arr, v_arr, g_arr, b_arr, chunk_size, segment_size, initial_state
-            )
+        out_arr, S_final = _chunk_gated_delta_rule_flash_pallas(
+            q_arr, k_arr, v_arr, g_arr, b_arr, chunk_size, segment_size, initial_state
+        )
     else:
         # Pure JAX/XLA path: compile train chunk math through standard XLA lowering.
         out_arr, S_final = _chunk_gated_delta_rule_fused_reference(
@@ -4715,7 +4621,6 @@ class GatedDeltaNet(eqx.Module):
         segment_size: int = 8,
         attention_mask: Optional[NamedArray] = None,
         train_kernel_entry_branch_core_sharding_diagnostic: bool = False,
-        train_prepared_array_branch_core_sharding_envelope: bool = False,
         decode_state: Optional[Tuple[jnp.ndarray, jnp.ndarray]] = None,  # (conv_state, S_state)
     ) -> Tuple[NamedArray, Optional[Tuple[jnp.ndarray, jnp.ndarray]]]:
         """Run the full GDN token mixer.
@@ -4728,9 +4633,6 @@ class GatedDeltaNet(eqx.Module):
           train_kernel_entry_branch_core_sharding_diagnostic: if True, own only
               the final prepared-array sharding/layout contract immediately
               around the existing `chunk_gated_delta_rule(...)` leaf call.
-          train_prepared_array_branch_core_sharding_envelope: if True, wrap the
-              prepared-array training leaf call in one outer sharding envelope
-              while keeping the existing leaf custom-VJP/backward ownership.
           decode_state: optional tuple (conv_state, S_state) for streaming decode:
               conv_state: (N, Channels, K)
               S_state:    (B, VHeads, d_k, d_v)
@@ -4851,9 +4753,6 @@ class GatedDeltaNet(eqx.Module):
         use_prepared_array_branch_core_sharding_diagnostic = (
             train_kernel_entry_branch_core_sharding_diagnostic and not inference and decode_state is None
         )
-        use_prepared_array_branch_core_sharding_envelope = (
-            train_prepared_array_branch_core_sharding_envelope and not inference and decode_state is None
-        )
 
         # Choose the kernel:
         if decode_state is not None and x.axis_size("position") == 1 and S_state is not None:
@@ -4881,11 +4780,7 @@ class GatedDeltaNet(eqx.Module):
                 output_final_state=inference,
                 use_qk_l2norm_in_kernel=True,
                 use_flash=self.use_flash,
-                branch_core_prepared_array_sharding_diagnostic=(
-                    use_prepared_array_branch_core_sharding_diagnostic
-                    and not use_prepared_array_branch_core_sharding_envelope
-                ),
-                branch_core_prepared_array_sharding_envelope=use_prepared_array_branch_core_sharding_envelope,
+                branch_core_prepared_array_sharding_diagnostic=use_prepared_array_branch_core_sharding_diagnostic,
             )
 
         # Keep the kernel output on "heads" so TP can shard the out-projection.
