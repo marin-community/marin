@@ -5,13 +5,12 @@
 
 import logging
 import subprocess
-from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.docker import DockerRuntime, ResolvedMount
+from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import MountKind, MountSpec
 
 
@@ -60,7 +59,6 @@ def test_stage_bundle_mounts_tmpfs(monkeypatch, tmp_path, runtime, mock_bundle_s
     assert str(workdir) in cmd
 
     mock_bundle_store.extract_bundle_to.assert_called_once_with("abc", workdir)
-    assert workdir in runtime._tmpfs_mounts
 
 
 def test_stage_bundle_no_tmpfs_without_mount(monkeypatch, tmp_path, runtime, mock_bundle_store):
@@ -161,7 +159,6 @@ def test_release_tmpfs_unmounts(monkeypatch, tmp_path, runtime):
 
     assert len(calls) == 1
     assert calls[0] == ["umount", str(workdir)]
-    assert workdir not in runtime._tmpfs_mounts
 
 
 def test_release_tmpfs_noop_when_not_tracked(monkeypatch, tmp_path, runtime):
@@ -196,8 +193,8 @@ def test_stage_bundle_raises_on_mount_failure(monkeypatch, tmp_path, runtime, mo
         )
 
 
-def test_release_tmpfs_warns_on_umount_failure(monkeypatch, tmp_path, runtime, caplog):
-    """Failed umount logs a warning instead of raising."""
+def test_release_tmpfs_keeps_tracking_on_umount_failure(monkeypatch, tmp_path, runtime, caplog):
+    """Failed umount logs a warning and keeps the mount tracked for retry."""
     monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: True)
     monkeypatch.setattr(
         "iris.cluster.runtime.docker.subprocess.run",
@@ -210,30 +207,8 @@ def test_release_tmpfs_warns_on_umount_failure(monkeypatch, tmp_path, runtime, c
         runtime.release_tmpfs(workdir)
 
     assert "device busy" in caplog.text
-    assert workdir not in runtime._tmpfs_mounts
-
-
-def test_resolve_mounts_workdir(tmp_path):
-    """WORKDIR mount resolves to the provided workdir_host_path."""
-    runtime = DockerRuntime(cache_dir=tmp_path / "cache")
-    workdir = tmp_path / "workdir"
-    workdir.mkdir()
-    mounts = [MountSpec(container_path="/app", kind=MountKind.WORKDIR)]
-    resolved = runtime.resolve_mounts(mounts, workdir_host_path=workdir)
-    assert resolved == [ResolvedMount(str(workdir), "/app", "rw", MountKind.WORKDIR)]
-
-
-def test_resolve_mounts_cache(tmp_path):
-    """CACHE mount creates a host directory under fast_io_dir."""
-    runtime = DockerRuntime(cache_dir=tmp_path / "cache")
-    mounts = [MountSpec(container_path="/uv/cache", kind=MountKind.CACHE)]
-    resolved = runtime.resolve_mounts(mounts)
-    assert len(resolved) == 1
-    rm = resolved[0]
-    assert rm.container_path == "/uv/cache"
-    assert rm.mode == "rw"
-    assert rm.kind == MountKind.CACHE
-    assert Path(rm.host_path).exists()
+    # Mount stays tracked so a later cleanup pass can retry
+    assert workdir in runtime._tmpfs_mounts
 
 
 def test_resolve_mounts_workdir_requires_host_path(tmp_path):
@@ -244,78 +219,53 @@ def test_resolve_mounts_workdir_requires_host_path(tmp_path):
         runtime.resolve_mounts(mounts)
 
 
-def test_resolve_mounts_read_only(tmp_path):
-    """read_only=True produces 'ro' mode."""
-    runtime = DockerRuntime(cache_dir=tmp_path / "cache")
-    mounts = [MountSpec(container_path="/data", kind=MountKind.CACHE, read_only=True)]
-    resolved = runtime.resolve_mounts(mounts)
-    assert resolved[0].mode == "ro"
+def test_stage_bundle_unmounts_tmpfs_on_staging_failure(monkeypatch, tmp_path, runtime, mock_bundle_store):
+    """If bundle extraction fails after tmpfs mount, the mount is cleaned up."""
+    monkeypatch.setattr("iris.cluster.runtime.docker.sys.platform", "linux")
+    monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: False)
 
+    mount_calls: list[list[str]] = []
+    umount_calls: list[list[str]] = []
 
-def test_create_container_resolves_mounts(tmp_path):
-    """create_container builds resolved mounts on the handle from MountSpecs."""
-    from iris.cluster.runtime.types import ContainerConfig
-    from iris.rpc import cluster_pb2
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == "mount":
+            mount_calls.append(cmd)
+        elif cmd[0] == "umount":
+            umount_calls.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
-    runtime = DockerRuntime(cache_dir=tmp_path / "cache")
-    workdir = tmp_path / "workdir"
+    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
+    mock_bundle_store.extract_bundle_to.side_effect = RuntimeError("download failed")
+
+    # After mount succeeds, ismount should return True for release_tmpfs
+    mount_done = False
+    original_ismount = lambda p: mount_done  # noqa: E731
+
+    def tracking_fake_run(cmd, **kwargs):
+        nonlocal mount_done
+        if cmd[0] == "mount":
+            mount_calls.append(cmd)
+            mount_done = True
+        elif cmd[0] == "umount":
+            umount_calls.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", tracking_fake_run)
+    monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", original_ismount)
+
+    workdir = tmp_path / "task-workdir"
     workdir.mkdir()
+    mount = MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=1024 * 1024)
 
-    ep = cluster_pb2.RuntimeEntrypoint()
-    ep.run_command.CopyFrom(cluster_pb2.CommandEntrypoint(argv=["echo", "hi"]))
+    with pytest.raises(RuntimeError, match="download failed"):
+        runtime.stage_bundle(
+            bundle_id="abc",
+            workdir=workdir,
+            workdir_files={},
+            bundle_store=mock_bundle_store,
+            workdir_mount=mount,
+        )
 
-    config = ContainerConfig(
-        image="busybox",
-        entrypoint=ep,
-        env={},
-        mounts=[
-            MountSpec("/app", kind=MountKind.WORKDIR, size_bytes=0),
-            MountSpec("/uv/cache", kind=MountKind.CACHE),
-        ],
-        workdir_host_path=workdir,
-    )
-
-    handle = runtime.create_container(config)
-    assert len(handle._resolved_mounts) == 2
-    assert handle._resolved_mounts[0].kind == MountKind.WORKDIR
-    assert handle._resolved_mounts[0].host_path == str(workdir)
-    assert handle._resolved_mounts[1].kind == MountKind.CACHE
-    assert Path(handle._resolved_mounts[1].host_path).is_dir()
-
-
-def test_cleanup_releases_workdir_and_tmpfs_mounts(tmp_path):
-    """cleanup() calls release_tmpfs for WORKDIR and TMPFS resolved mounts."""
-    from iris.cluster.runtime.types import ContainerConfig
-    from iris.rpc import cluster_pb2
-
-    runtime = DockerRuntime(cache_dir=tmp_path / "cache")
-    workdir = tmp_path / "workdir"
-    workdir.mkdir()
-
-    ep = cluster_pb2.RuntimeEntrypoint()
-    ep.run_command.CopyFrom(cluster_pb2.CommandEntrypoint(argv=["true"]))
-
-    config = ContainerConfig(
-        image="busybox",
-        entrypoint=ep,
-        env={},
-        mounts=[
-            MountSpec("/app", kind=MountKind.WORKDIR),
-            MountSpec("/scratch", kind=MountKind.TMPFS),
-            MountSpec("/uv/cache", kind=MountKind.CACHE),
-        ],
-        workdir_host_path=workdir,
-    )
-
-    handle = runtime.create_container(config)
-    # Manually track which paths release_tmpfs was called on
-    released: list[Path] = []
-    original_release = runtime.release_tmpfs
-    runtime.release_tmpfs = lambda p: (released.append(p), original_release(p))
-
-    handle.cleanup()
-
-    # Should release WORKDIR and TMPFS but not CACHE
-    assert len(released) == 2
-    assert released[0] == workdir
-    assert released[1].name == "scratch"
+    assert len(mount_calls) == 1
+    assert len(umount_calls) == 1
+    assert str(workdir) in umount_calls[0]

@@ -852,17 +852,27 @@ class DockerRuntime:
         bundle_store: BundleStore,
         workdir_mount: MountSpec | None = None,
     ) -> None:
-        """Provision backing storage, then stage bundle and workdir files."""
+        """Provision backing storage, then stage bundle and workdir files.
+
+        If tmpfs is mounted but staging fails, the mount is cleaned up to
+        prevent leaking RAM-backed mounts on the worker.
+        """
+        mounted = False
         if workdir_mount and workdir_mount.size_bytes > 0:
             self._mount_tmpfs(workdir, workdir_mount.size_bytes)
-        if bundle_id:
-            bundle_store.extract_bundle_to(bundle_id, workdir)
-        bundle_store.write_workdir_files(workdir, workdir_files)
+            mounted = True
+        try:
+            if bundle_id:
+                bundle_store.extract_bundle_to(bundle_id, workdir)
+            bundle_store.write_workdir_files(workdir, workdir_files)
+        except Exception:
+            if mounted:
+                self.release_tmpfs(workdir)
+            raise
 
     def _mount_tmpfs(self, workdir: Path, disk_bytes: int) -> None:
         if sys.platform != "linux":
             raise RuntimeError("Docker workdir disk limits require Linux tmpfs mounts")
-        workdir.mkdir(parents=True, exist_ok=True)
         if os.path.ismount(workdir):
             logger.info("Workdir %s is already a mountpoint; reusing", workdir)
             return
@@ -878,7 +888,11 @@ class DockerRuntime:
         logger.info("Mounted tmpfs workdir %s with size=%d bytes", workdir, disk_bytes)
 
     def release_tmpfs(self, workdir: Path) -> None:
-        """Unmount a tmpfs workdir if it was mounted by this runtime."""
+        """Unmount a tmpfs workdir if it was mounted by this runtime.
+
+        On umount failure the path stays in ``_tmpfs_mounts`` so a later
+        cleanup pass can retry, preventing leaked RAM-backed mounts.
+        """
         if workdir not in self._tmpfs_mounts:
             return
         if not os.path.ismount(workdir):
@@ -889,7 +903,7 @@ class DockerRuntime:
             logger.warning("Failed to unmount tmpfs workdir %s: %s", workdir, result.stderr.strip())
         else:
             logger.info("Unmounted tmpfs workdir %s", workdir)
-        self._tmpfs_mounts.discard(workdir)
+            self._tmpfs_mounts.discard(workdir)
 
     def track_container(self, container_id: str) -> None:
         """Track a container ID for cleanup."""
