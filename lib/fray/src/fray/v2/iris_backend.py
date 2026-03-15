@@ -370,8 +370,7 @@ class IrisActorGroup:
         known ones). Call repeatedly to pick up workers as they come online.
 
         Uses a single prefix-match RPC to discover all actors whose endpoint
-        names start with ``{job_id}/{name}-``, instead of issuing one exact
-        resolve per replica index.
+        names start with ``{job_id}/{name}-``.
 
         Args:
             target: Stop probing once this many total actors are discovered.
