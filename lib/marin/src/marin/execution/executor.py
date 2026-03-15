@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 The `Executor` framework provides a way to specify a DAG of `ExecutorStep`s that
@@ -102,35 +91,25 @@ from collections.abc import Callable
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from threading import Event, Thread
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from urllib.parse import urlparse
 
 import draccus
-import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
-from fray import (
-    Cluster,
-    Entrypoint,
-    EnvironmentConfig,
-    JobId,
-    JobRequest,
-    JobStatus,
-    ResourceConfig,
-    current_cluster,
-)
+from iris.marin_fs import open_url
+from iris.marin_fs import marin_prefix
 
+from marin.execution.step_spec import StepSpec
+from marin.execution.step_runner import StepRunner, worker_id
+from marin.execution.remote import RemoteCallable
 from marin.execution.executor_step_status import (
-    HEARTBEAT_INTERVAL,
-    STATUS_DEP_FAILED,
-    STATUS_FAILED,
-    STATUS_RUNNING,
     STATUS_SUCCESS,
     StatusFile,
 )
 from marin.utilities.json_encoder import CustomJsonEncoder
+from iris.logging import configure_logging
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 _LOCAL_DATA_BROWSER_PORT_RE = re.compile(r"^\s*port\s*:\s*(\d+)\s*(?:#.*)?$")
 _LOCAL_DATA_BROWSER_CONFIG_REL = Path("data_browser") / "conf" / "local.conf"
@@ -173,76 +152,6 @@ T_co = TypeVar("T_co", covariant=True)
 ExecutorFunction = Callable | None
 
 
-class StepRunner:
-    """Manages execution of a single step.
-
-    To prevent duplicate execution, Executor uses a per-step lease directory to track
-    the owner of a given step. Leases must be continually refreshed to prevent other
-    executors from running the same step.
-    """
-
-    def __init__(self, cluster: Cluster, status_file: StatusFile):
-        self.cluster = cluster
-        self._status_file = status_file
-        self._job_id: JobId | None = None
-        self._heartbeat_thread: Thread | None = None
-        self._stop_event = Event()
-
-    @property
-    def job_id(self) -> JobId | None:
-        return self._job_id
-
-    def launch(self, job_request: JobRequest) -> None:
-        """Launch job and start heartbeat thread."""
-        self._status_file.write_status(STATUS_RUNNING)
-        self._job_id = self.cluster.launch(job_request)
-        self._start_heartbeat()
-
-    def wait(self) -> None:
-        """Wait for job to complete, stop heartbeat, write final status."""
-        try:
-            result = self.cluster.wait(self._job_id)
-            if result.status == JobStatus.FAILED:
-                self._status_file.write_status(STATUS_FAILED)
-                raise RuntimeError(f"Job {self._job_id} failed: {result.error_message}")
-            self._status_file.write_status(STATUS_SUCCESS)
-        except Exception:
-            if self._status_file.status != STATUS_FAILED:
-                self._status_file.write_status(STATUS_FAILED)
-            raise
-        finally:
-            self._stop_heartbeat()
-            self._status_file.release_lock()
-
-    def poll(self) -> bool:
-        """Return True if job is finished."""
-        if self._job_id is None:
-            return True
-        return JobStatus.finished(self.cluster.poll(self._job_id).status)
-
-    def _start_heartbeat(self) -> None:
-        """Start background thread that periodically refreshes the lease."""
-
-        def heartbeat_loop():
-            while not self._stop_event.wait(HEARTBEAT_INTERVAL):
-                self._status_file.refresh_lock()
-
-        self._heartbeat_thread = Thread(target=heartbeat_loop, daemon=True)
-        self._heartbeat_thread.start()
-
-    def _stop_heartbeat(self) -> None:
-        """Stop the heartbeat thread."""
-        self._stop_event.set()
-        if self._heartbeat_thread is not None:
-            self._heartbeat_thread.join(timeout=5)
-
-
-def worker_id() -> str:
-    import threading
-
-    return f"{os.uname()[1]}-{threading.get_ident()}"
-
-
 def asdict_without_description(obj: dataclass) -> dict[str, Any]:
     """Return the dict form of a dataclass, but remove the `description` field."""
 
@@ -264,6 +173,55 @@ def asdict_without_description(obj: dataclass) -> dict[str, Any]:
     d.pop("description", None)
     assert isinstance(d, dict)
     return d
+
+
+def resolve_executor_step(
+    step: "ExecutorStep",
+    config: Any,
+    output_path: str,
+    deps: list[StepSpec] | None = None,
+) -> StepSpec:
+    """Convert an ExecutorStep into a StepSpec.
+
+    ``config`` should already be instantiated (no InputName / OutputName /
+    VersionedValue markers).  The old executor called ``fn(config)``; we wrap
+    that into a ``fn(output_path)`` closure expected by ``StepRunner``.
+    """
+    import ray
+
+    step_fn = step.fn
+    if isinstance(step_fn, RemoteCallable):
+        step_fn = step_fn.fn
+    if isinstance(step_fn, ray.remote_function.RemoteFunction):
+        remote_fn = step_fn
+
+        def step_fn(*args, **kw):
+            return ray.get(remote_fn.remote(*args, **kw))
+
+    assert step_fn is not None, f"Step {step.name} has no callable"
+
+    # Old-style ExecutorStep functions accept the resolved config as their only
+    # argument. The config already contains the output path, so we ignore the
+    # output_path parameter that StepRunner passes.
+    captured_fn = step_fn
+    captured_config = config
+
+    def resolved_fn(output_path):
+        return captured_fn(captured_config)
+
+    # If the original fn was decorated with @remote, propagate the
+    # RemoteCallable wrapper (with updated inner fn) so Fray dispatch
+    # is preserved.  Plain functions run locally in-thread.
+    final_fn: Callable = resolved_fn
+    if isinstance(step.fn, RemoteCallable):
+        final_fn = dataclasses.replace(step.fn, fn=resolved_fn)
+
+    return StepSpec(
+        name=step.name,
+        deps=deps or [],
+        override_output_path=output_path,
+        fn=final_fn,
+    )
 
 
 @dataclass(frozen=True)
@@ -301,9 +259,6 @@ class ExecutorStep(Generic[ConfigT]):
     override_output_path: str | None = None
     """Specifies the `output_path` that should be used.  Print warning if it
     doesn't match the automatically computed one."""
-
-    pip_dependency_groups: list[str] | None = None
-    """List of `extra` dependencies from pyproject.toml to include with this step."""
 
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
@@ -674,7 +629,6 @@ class Executor:
         executor_info_base_path: str,
         description: str | None = None,
     ):
-        self.cluster = current_cluster()
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
         self.description = description
@@ -689,12 +643,9 @@ class Executor:
         self.version_str_to_step: dict[str, ExecutorStep] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
         self.steps: list[ExecutorStep] = []
-        self.step_runners: dict[ExecutorStep, StepRunner] = {}
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
-        # Populated during dry runs to summarize which steps would be executed.
-        # Tuple is (step_name, action, reason, output_path)
-        self._dry_run_plan: list[tuple[str, str, str, str]] = []
+        self._depth_cache: dict[ExecutorStep, int] = {}
 
     def run(
         self,
@@ -702,7 +653,8 @@ class Executor:
         *,
         dry_run: bool = False,
         run_only: list[str] | None = None,
-        force_run_failed: bool = False,
+        force_run_failed: bool = True,
+        max_concurrent: int | None = None,
     ):
         """
         Run the pipeline of `ExecutorStep`s.
@@ -713,7 +665,10 @@ class Executor:
                 statuses to report which steps would actually be executed.
             run_only: If not None, only run the steps in the list and their dependencies. Matches steps' names as regex
             force_run_failed: If True, run steps even if they have already been run (including if they failed)
+            max_concurrent: Maximum number of steps to run concurrently. If None, run all ready steps in parallel.
         """
+        if max_concurrent is not None and max_concurrent < 1:
+            raise ValueError(f"max_concurrent must be a positive integer, got {max_concurrent}")
 
         # Gather all the steps, compute versions and output paths for all of them.
         logger.info(f"### Inspecting the {len(steps)} provided steps ###")
@@ -738,173 +693,36 @@ class Executor:
         self.write_infos()
 
         logger.info(f"### Launching {len(steps_to_run)} steps ###")
-        if dry_run:
-            self._dry_run_plan = []
-        self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
+        if max_concurrent is not None:
+            logger.info(f"### Max concurrent steps: {max_concurrent} ###")
 
-        if dry_run:
-            self._log_dry_run_summary()
-
-        logger.info("### Waiting for all steps to finish ###")
-        for runner in self.step_runners.values():
-            runner.wait()
-
-    def _run_steps(
-        self,
-        steps_to_run: list[ExecutorStep],
-        *,
-        dry_run: bool,
-        force_run_failed: bool,
-    ) -> None:
-        remaining_deps: dict[ExecutorStep, set[ExecutorStep]] = {
-            step: set(dep for dep in self.dependencies[step] if dep in steps_to_run) for step in steps_to_run
-        }
-        dependents: dict[ExecutorStep, list[ExecutorStep]] = {step: [] for step in steps_to_run}
-        for step, deps in remaining_deps.items():
-            for dep in deps:
-                dependents[dep].append(step)
-
-        ready = [step for step, deps in remaining_deps.items() if not deps]
-        running: dict[ExecutorStep, StepRunner | None] = {}
-
-        while ready or running:
-            while ready:
-                step = ready.pop()
-                runner = self._launch_step(step, dry_run=dry_run, force_run_failed=force_run_failed)
-                if runner is not None:
-                    self.step_runners[step] = runner
-                running[step] = runner
-
-            if not running:
-                break
-
-            finished_steps = []
-            for step, runner in running.items():
-                if runner is None:
-                    # Dry run or already completed - immediately finished
-                    finished_steps.append(step)
-                elif runner.poll():
-                    finished_steps.append(step)
-
-            if not finished_steps:
-                time.sleep(1)
-                continue
-
-            for finished_step in finished_steps:
-                runner = running[finished_step]
-                if runner is not None:
-                    logger.info("Waiting for %s to finish for step %s", runner.job_id, finished_step.name)
-                    runner.wait()
-
-                running.pop(finished_step)
-                for child in dependents.get(finished_step, []):
-                    remaining_deps[child].remove(finished_step)
-                    if not remaining_deps[child]:
-                        ready.append(child)
-
-    def _launch_step(self, step: ExecutorStep, *, dry_run: bool, force_run_failed: bool) -> StepRunner | None:
-        config = self.configs[step]
-        config_version = self.versions[step]["config"]
-        output_path = self.output_paths[step]
-
-        logger.info("%s: %s", step.name, get_fn_name(step.fn))
-        logger.info("  output_path = %s", output_path)
-        logger.info("  config = %s", json.dumps(config_version, cls=CustomJsonEncoder))
-        for i, dep in enumerate(self.dependencies[step]):
-            logger.info("  %s = %s", dependency_index_str(i), self.output_paths[dep])
-
-        if dry_run:
-            action, reason = self._plan_dry_run(step, force_run_failed=force_run_failed)
-            self._record_dry_run(step, action, reason, output_path)
-            if action == "run":
-                logger.info("[DRY RUN] Would run %s -> %s: %s", step.name, output_path, reason)
-            elif action == "wait":
-                logger.info("[DRY RUN] %s currently running elsewhere: %s", step.name, reason)
-            else:
-                logger.info("[DRY RUN] Skip %s: %s", step.name, reason)
-            return None
-
-        step_name = f"{step.name}: {get_fn_name(step.fn)}"
-        status_file = StatusFile(output_path, worker_id())
-
-        if not should_run(status_file, step_name, force_run_failed):
-            return None
-
-        # need this hack for now to make ray remote functions work, as they aren't directly callable.
-        import ray
-
-        step_fn = step.fn
-        if isinstance(step.fn, ray.remote_function.RemoteFunction):
-
-            def _call_remote(*args, **kw):
-                return ray.get(step.fn.remote(*args, **kw))
-
-            step_fn = _call_remote
-
-        # always run driver functions on a non-preemptible node
-        non_preemptible_cpu = ResourceConfig.with_cpu(preemptible=False)
-        fray_job = JobRequest(
-            name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
-            entrypoint=Entrypoint.from_callable(step_fn, args=[config]),
-            resources=non_preemptible_cpu,
-            environment=EnvironmentConfig.create(extras=step.pip_dependency_groups or []),
+        resolved_steps = self._resolve_steps(steps_to_run)
+        StepRunner().run(
+            resolved_steps,
+            dry_run=dry_run,
+            force_run_failed=force_run_failed,
+            max_concurrent=max_concurrent,
         )
 
-        runner = StepRunner(self.cluster, status_file)
-        runner.launch(fray_job)
-        return runner
-
-    def _plan_dry_run(self, step: ExecutorStep, *, force_run_failed: bool) -> tuple[str, str]:
-        """Return a dry-run action and reason without acquiring locks or writing."""
-        status_file = StatusFile(self.output_paths[step], worker_id="dry-run")
-        status = status_file.status
-
-        if status == STATUS_SUCCESS:
-            return ("skip", "already succeeded")
-
-        if status in [STATUS_FAILED, STATUS_DEP_FAILED]:
-            if force_run_failed:
-                return ("run", f"previous status {status}; would rerun because force_run_failed=True")
-            raise PreviousTaskFailedError(
-                f"Step {step.name} failed previously with status {status}. "
-                "Rerun with force_run_failed=True to execute again."
+    def _resolve_steps(self, steps: list[ExecutorStep]) -> list[StepSpec]:
+        """Convert computed ExecutorStep state into a flat list of StepSpec."""
+        # First pass: create StepSpecs without deps so we have a mapping
+        spec_by_step: dict[ExecutorStep, StepSpec] = {}
+        for step in steps:
+            spec_by_step[step] = resolve_executor_step(
+                step=step,
+                config=self.configs[step],
+                output_path=self.output_paths[step],
             )
-
-        if status == STATUS_RUNNING:
-            if status_file.has_active_lock():
-                return ("wait", "currently running with an active lock")
-            return ("run", "RUNNING with no active lock; would take over execution")
-
-        return ("run", "no status recorded")
-
-    def _record_dry_run(self, step: ExecutorStep, action: str, reason: str, output_path: str) -> None:
-        """Track dry-run decisions for summary output."""
-        self._dry_run_plan.append((step.name, action, reason, output_path))
-
-    def _log_dry_run_summary(self) -> None:
-        """Log a concise summary of dry-run decisions."""
-        if not self._dry_run_plan:
-            logger.info("### Dry run summary: no steps inspected ###")
-            return
-
-        to_run = [(name, path) for name, action, _, path in self._dry_run_plan if action == "run"]
-        waiting = [name for name, action, _, _ in self._dry_run_plan if action == "wait"]
-        skipped = [name for name, action, _, _ in self._dry_run_plan if action == "skip"]
-
-        logger.info("### Dry run summary ###")
-        if skipped:
-            formatted = "\n".join(f"- {name}" for name in skipped)
-            logger.info("Already succeeded:\n%s", formatted)
-
-        if to_run:
-            formatted = "\n".join(f"- {name} -> {path}" for name, path in to_run)
-            logger.info("Would run %d step(s):\n%s", len(to_run), formatted)
-        else:
-            logger.info("No steps need to be launched.")
-
-        if waiting:
-            formatted = "\n".join(f"- {name}" for name in waiting)
-            logger.info("Currently running (not relaunched):\n%s", formatted)
+        # Second pass: rebuild with deps pointing to resolved StepSpecs
+        result = []
+        for step in steps:
+            dep_specs = [spec_by_step[dep] for dep in self.dependencies[step] if dep in spec_by_step]
+            if dep_specs:
+                result.append(dataclasses.replace(spec_by_step[step], deps=dep_specs))
+            else:
+                result.append(spec_by_step[step])
+        return result
 
     def _compute_transitive_deps(self, steps: list[ExecutorStep], run_steps: list[str]) -> list[ExecutorStep]:
         """
@@ -985,15 +803,19 @@ class Executor:
         # The version specifies precisely all the information that uniquely
         # identifies this step.  Note that the fn name is not part of the
         # version.
+        #
+        # For deep dependency chains (depth > 4), we use output_paths (which
+        # already encode the version hash) instead of the full nested version
+        # dicts to avoid exponential blowup of the version structure.
         version = {
             "name": step.name,
             "config": computed_deps.version,
-            "dependencies": [self.versions[dep] for dep in computed_deps.dependencies],
+            "dependencies": [self._dep_version(dep) for dep in computed_deps.dependencies],
         }
 
         if computed_deps.pseudo_dependencies:
             # don't put this in the literal to avoid changing the hash for runs without pseudo-deps
-            version["pseudo_dependencies"] = [self.versions[dep] for dep in computed_deps.pseudo_dependencies]
+            version["pseudo_dependencies"] = [self._dep_version(dep) for dep in computed_deps.pseudo_dependencies]
 
         # Compute output path
         version_str = json.dumps(version, sort_keys=True, cls=CustomJsonEncoder)
@@ -1036,6 +858,26 @@ class Executor:
         self.version_strs[step] = version_str
         self.output_paths[step] = output_path
         self.is_pseudo_dep[step] = is_pseudo_dep
+
+    _MAX_INLINE_DEPTH = 4
+
+    def _dep_depth(self, step: ExecutorStep) -> int:
+        """Return the maximum dependency chain depth for a step (cached)."""
+        if step in self._depth_cache:
+            return self._depth_cache[step]
+        deps = self.dependencies.get(step, [])
+        if not deps:
+            depth = 0
+        else:
+            depth = 1 + max(self._dep_depth(dep) for dep in deps)
+        self._depth_cache[step] = depth
+        return depth
+
+    def _dep_version(self, dep: ExecutorStep) -> dict[str, Any] | str:
+        """Full version dict for shallow deps, output path for deep ones."""
+        if self._dep_depth(dep) <= self._MAX_INLINE_DEPTH:
+            return self.versions[dep]
+        return self.output_paths[dep]
 
     def canonicalize(self, step: ExecutorStep) -> ExecutorStep:
         """Multiple instances of `ExecutorStep` might have the same version."""
@@ -1112,62 +954,13 @@ class Executor:
         for step, info in zip(self.steps, executor_info_dict["steps"], strict=True):
             info_path = _get_info_path(self.output_paths[step])
             fsspec_utils.mkdirs(os.path.dirname(info_path))
-            with fsspec.open(info_path, "w") as f:
+            with open_url(info_path, "w") as f:
                 print(json.dumps(info, indent=2, cls=CustomJsonEncoder), file=f)
 
         # Write out info for the entire execution
         fsspec_utils.mkdirs(os.path.dirname(self.executor_info_path))
-        with fsspec.open(self.executor_info_path, "w") as f:
+        with open_url(self.executor_info_path, "w") as f:
             print(json.dumps(executor_info_dict, indent=2, cls=CustomJsonEncoder), file=f)
-
-
-class PreviousTaskFailedError(Exception):
-    """Raised when a step failed previously and force_run_failed is False."""
-
-    pass
-
-
-def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool = False) -> bool:
-    """Check if the step should run based on lease-based distributed locking.
-
-    Uses lease files for distributed locking and status file for final state.
-    """
-    worker_id = status_file.worker_id
-    log_once = True
-
-    while True:
-        status = status_file.status
-
-        if log_once:
-            logger.info(f"[{worker_id}] Status {step_name}: {status}")
-            log_once = False
-
-        if status == STATUS_SUCCESS:
-            logger.info(f"[{worker_id}] Step {step_name} has already succeeded.")
-            return False
-
-        if status in [STATUS_FAILED, STATUS_DEP_FAILED]:
-            if force_run_failed:
-                logger.info(f"[{worker_id}] Force running {step_name}, previous status: {status}")
-                # Fall through to acquire lock
-            else:
-                raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
-        elif status == STATUS_RUNNING and status_file.has_active_lock():
-            # Another worker is actively running with current lease
-            logger.debug(f"[{worker_id}] Step {step_name} has active lock, waiting...")
-            time.sleep(5)
-            continue
-        elif status == STATUS_RUNNING:
-            logger.info(f"[{worker_id}] Step {step_name} has no active lock, taking over.")
-
-        logger.info(f"[{worker_id}] Attempting to acquire lock for {step_name}")
-        if status_file.try_acquire_lock():
-            status_file.write_status(STATUS_RUNNING)
-            logger.info(f"[{worker_id}] Acquired lock for {step_name}")
-            return True
-
-        logger.info(f"[{worker_id}] Lost lock race for {step_name}, retrying...")
-        time.sleep(1)
 
 
 def get_fn_name(fn: ExecutorFunction, short: bool = False):
@@ -1213,30 +1006,22 @@ class ExecutorMainConfig:
     """Where the executor info should be stored under a file determined by a hash."""
 
     dry_run: bool = False
-    force_run_failed: bool = False  # Force run failed steps
+    force_run_failed: bool = True  # Force run failed steps
     run_only: list[str] | None = None
     """Run these steps (matched by regex.search) and their dependencies only. If None, run all steps."""
+
+    max_concurrent: int | None = None
+    """Maximum number of steps to run concurrently. If None, run all ready steps in parallel (default)."""
 
 
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    configure_logging(level=logging.INFO)
     time_in = time.time()
 
-    prefix = config.prefix
-    if prefix is None:
-        # infer from the environment
-        if "MARIN_PREFIX" in os.environ:
-            prefix = os.environ["MARIN_PREFIX"]
-        else:
-            raise ValueError("Must specify a prefix or set the MARIN_PREFIX environment variable")
-    elif "MARIN_PREFIX" in os.environ:
-        if prefix != os.environ["MARIN_PREFIX"]:
-            logger.warning(
-                f"MARIN_PREFIX environment variable ({os.environ['MARIN_PREFIX']}) is different from the "
-                f"specified prefix ({prefix})"
-            )
+    prefix = config.prefix or marin_prefix()
 
     executor_info_base_path = config.executor_info_base_path
     if executor_info_base_path is None:
@@ -1249,7 +1034,13 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
         description=description,
     )
 
-    executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
+    executor.run(
+        steps=steps,
+        dry_run=config.dry_run,
+        run_only=config.run_only,
+        force_run_failed=config.force_run_failed,
+        max_concurrent=config.max_concurrent,
+    )
     time_out = time.time()
     logger.info(f"Executor run took {time_out - time_in:.2f}s")
     # print json path again so it's easy to copy
