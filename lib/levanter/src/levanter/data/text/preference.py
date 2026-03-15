@@ -12,7 +12,7 @@ import functools
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Dict, Literal, TypedDict
+from typing import Any, Dict, Literal, TypedDict
 
 import equinox as eqx
 import haliax as hax
