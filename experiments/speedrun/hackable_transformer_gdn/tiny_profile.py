@@ -24,6 +24,8 @@ Environment overrides:
 - GDN_PROFILE_GDN_BLOCK_SIZE: optional GDN block-size override
 - GDN_PROFILE_GDN_KERNEL_ENTRY_BRANCH_CORE_SHARDING_DIAGNOSTIC: if `1`, enable
   the opt-in prepared-array leaf-call branch-core sharding diagnostic
+- GDN_PROFILE_GDN_PREPARED_ARRAY_BRANCH_CORE_SHARDING_ENVELOPE: if `1`, enable
+  the opt-in `W1` prepared-array leaf-call sharding envelope
 - GDN_PROFILE_GDN_BRANCH_BOUNDARY_PROTOTYPE: if `1`, enable the opt-in array-only GDN branch boundary prototype
 - GDN_PROFILE_DECODER_BLOCK_BOUNDARY_PROTOTYPE: if `1`, enable the opt-in fixed-`3/4` decoder-block boundary prototype
 - GDN_PROFILE_GRADIENT_CHECKPOINTING: optional transformer-layer checkpointing override
@@ -119,6 +121,9 @@ if __name__ == "__main__":
     gdn_kernel_entry_branch_core_sharding_diagnostic = _env_flag(
         "GDN_PROFILE_GDN_KERNEL_ENTRY_BRANCH_CORE_SHARDING_DIAGNOSTIC"
     )
+    gdn_prepared_array_branch_core_sharding_envelope = _env_flag(
+        "GDN_PROFILE_GDN_PREPARED_ARRAY_BRANCH_CORE_SHARDING_ENVELOPE"
+    )
     gdn_branch_boundary_prototype = _env_flag("GDN_PROFILE_GDN_BRANCH_BOUNDARY_PROTOTYPE")
     decoder_block_boundary_prototype = _env_flag("GDN_PROFILE_DECODER_BLOCK_BOUNDARY_PROTOTYPE")
     gradient_checkpointing_override = _env_optional_gradient_checkpointing("GDN_PROFILE_GRADIENT_CHECKPOINTING")
@@ -140,6 +145,8 @@ if __name__ == "__main__":
         model_cfg = dataclasses.replace(model_cfg, gdn_block_size=gdn_block_size_override)
     if gdn_kernel_entry_branch_core_sharding_diagnostic:
         model_cfg = dataclasses.replace(model_cfg, gdn_use_kernel_entry_branch_core_sharding_diagnostic=True)
+    if gdn_prepared_array_branch_core_sharding_envelope:
+        model_cfg = dataclasses.replace(model_cfg, gdn_use_prepared_array_branch_core_sharding_envelope=True)
     if gdn_branch_boundary_prototype:
         model_cfg = dataclasses.replace(model_cfg, gdn_use_branch_boundary_prototype=True)
     if decoder_block_boundary_prototype:
@@ -204,6 +211,8 @@ if __name__ == "__main__":
         f"gdn_block_size={model_cfg.gdn_block_size} "
         f"kernel_entry_branch_core_sharding_diagnostic="
         f"{int(model_cfg.gdn_use_kernel_entry_branch_core_sharding_diagnostic)} "
+        f"prepared_array_branch_core_sharding_envelope="
+        f"{int(model_cfg.gdn_use_prepared_array_branch_core_sharding_envelope)} "
         f"branch_boundary_prototype={int(model_cfg.gdn_use_branch_boundary_prototype)} "
         f"decoder_block_boundary_prototype={int(model_cfg.gdn_use_decoder_block_boundary_prototype)} "
         f"gradient_checkpointing={model_cfg.gradient_checkpointing} "

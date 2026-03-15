@@ -132,6 +132,7 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     gdn_chunk_size: int = 128
     gdn_segment_size: int = 16
     gdn_use_kernel_entry_branch_core_sharding_diagnostic: bool = False
+    gdn_use_prepared_array_branch_core_sharding_envelope: bool = False
     gdn_use_branch_boundary_prototype: bool = False
     gdn_use_decoder_block_boundary_prototype: bool = False
 
@@ -342,6 +343,7 @@ class HackableDecoderLayer(eqx.Module):
     gdn_chunk_size: int = eqx.field(static=True, default=64)
     gdn_segment_size: int = eqx.field(static=True, default=8)
     gdn_use_kernel_entry_branch_core_sharding_diagnostic: bool = eqx.field(static=True, default=False)
+    gdn_use_prepared_array_branch_core_sharding_envelope: bool = eqx.field(static=True, default=False)
     gdn_use_branch_boundary_prototype: bool = eqx.field(static=True, default=False)
 
     @staticmethod
@@ -378,6 +380,9 @@ class HackableDecoderLayer(eqx.Module):
             gdn_use_kernel_entry_branch_core_sharding_diagnostic=(
                 config.gdn_use_kernel_entry_branch_core_sharding_diagnostic
             ),
+            gdn_use_prepared_array_branch_core_sharding_envelope=(
+                config.gdn_use_prepared_array_branch_core_sharding_envelope
+            ),
             gdn_use_branch_boundary_prototype=config.gdn_use_branch_boundary_prototype,
         )
 
@@ -411,6 +416,9 @@ class HackableDecoderLayer(eqx.Module):
                 attention_mask=attn_mask,
                 train_kernel_entry_branch_core_sharding_diagnostic=(
                     self.gdn_use_kernel_entry_branch_core_sharding_diagnostic
+                ),
+                train_prepared_array_branch_core_sharding_envelope=(
+                    self.gdn_use_prepared_array_branch_core_sharding_envelope
                 ),
                 decode_state=None,
             )
@@ -493,12 +501,13 @@ class HackableTransformer(eqx.Module):
                 int(flag)
                 for flag in (
                     config.gdn_use_kernel_entry_branch_core_sharding_diagnostic,
+                    config.gdn_use_prepared_array_branch_core_sharding_envelope,
                     config.gdn_use_branch_boundary_prototype,
                     config.gdn_use_decoder_block_boundary_prototype,
                 )
             )
             if enabled_gdn_experiments > 1:
-                raise ValueError("GDN diagnostic/prototype flags are mutually exclusive.")
+                raise ValueError("GDN diagnostic/envelope/prototype flags are mutually exclusive.")
             if config.gdn_use_decoder_block_boundary_prototype and (
                 config.gdn_layers_per_block != 3 or config.gdn_block_size != 4
             ):

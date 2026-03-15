@@ -50,6 +50,12 @@ Current mainline target order:
   - direct array-entry cut: summary-side and xprof `dispatch_shard_shell_delta_ms` both improved, but `ad_wrapper_shell_delta_ms`, `layout_shell_delta_ms`, total hybrid shell, `interaction_remainder_ms`, and xprof `IDLE` still grew and the full step slowed
   - prepared-array leaf-call cut: summary-side `step_duration_ms`, `hybrid_generic_shell_delta_budget_ms`, and `dispatch_shard_shell_delta_ms` all improved, but `ad_wrapper_shell_delta_ms` and `interaction_remainder_ms` still grew, matched xprof `dispatch_shard_shell_delta_ms` stayed flat/up, and xprof `IDLE` worsened sharply
   - `D2` established the right subgraph but not the right ownership model
+- `W1`: first prepared-array leaf-call sharding-envelope attempt attempted and rejected
+  - full-step time regressed materially to about `173.4 ms` / `5.84 MFU`
+  - summary-side `dispatch_shard_shell_delta_ms` only nudged down (`9.77 -> 8.71 ms`)
+  - `ad_wrapper_shell_delta_ms`, `decoder_layer_shell_budget_ms`, and `interaction_remainder_ms` all worsened sharply
+  - a fresh matched xprof compare attempt stalled during dev-TPU XPlane staging, but the candidate was already rejectable on the step and summary-shell gates
+  - `W1` still points at the right subgraph, but the first true envelope recreates wrapper/remainder spill under `HackableDecoderLayer/shard_map/closed_call/pallas_call` rather than removing it
 
 ## W1 Definition
 
@@ -63,6 +69,12 @@ Required properties:
 - keep AD/backward unchanged on the first `W1` pass
 - avoid nested inner `shard_map` / `closed_call/shard_map` wrappers inside the island
 - summary-side wins are only prefilter; matched xprof dispatch + idle are the real gate
+
+Current status:
+
+- the first `W1` pass is complete and rejected
+- `A2` and `G2` remain locked because no positive `W1` exists on this cut
+- the next required mainline attempt is still `W1`, but it must directly eliminate the surviving prepared-array `closed_call/shard_map` / transpose-side wrapper shell instead of just hiding the old train-path bucket names
 
 ## A2 Definition
 
