@@ -1058,3 +1058,40 @@ Current reading from this run:
 - coefficients and dense-AC variants have near-zero immediate and short-horizon penalty but a larger integrated full-sequence delta
 - symbols and especially huffman-events show much higher immediate and long-tail penalty per corruption
 - at this scale, context-dependent syntax/event streams are more prefix-fragile than fixed-semantic coefficient-style tokens
+
+## Synthetic Mechanism Tease-Apart (`r1`)
+
+To isolate tokenizer mechanisms without JPEG confounds, we added a synthetic benchmark:
+
+- script:
+  `scripts/jpeg_tokenizer/evaluate_synthetic_tokenizer_mechanisms.py`
+- outputs:
+  - `artifacts/jpeg_tokenizer/analysis/synthetic_tokenizer_mechanisms_r1`
+  - `artifacts/jpeg_tokenizer/analysis/synthetic_tokenizer_mechanisms_r2_longswitch`
+
+The benchmark generates latent `(mode, value)` event sequences, then compares tokenizers over the same source:
+
+- `run_joint`: mode-change markers + mode-specific value tokens (fixed semantics)
+- `run_shared`: mode-change markers + shared value tokens (token meaning depends on current mode)
+- `run_shared_reset_32`: shared value tokens with periodic mode resets every `32` events
+- plus `flat_joint` as a no-marker control
+
+All reported losses are whole-sequence `bits/sequence` under a fixed `n`-gram LM. We also report decoded event-space
+tail corruption after one-token prefix perturbation (`semantic tail hamming`).
+
+Long-run setting (`mode_switch_prob=0.005`, average long mode runs) from
+`synthetic_tokenizer_mechanisms_r2_longswitch`:
+
+| Representation | Mean bits/sequence | Delta total | Semantic tail hamming |
+| --- | ---: | ---: | ---: |
+| `run_joint` | `1919.02` | `21.00` | `0.006` |
+| `run_shared` | `1248.64` | `13.51` | `0.057` |
+| `run_shared_reset_32` | `1455.97` | `10.44` | `0.045` |
+
+Initial reading:
+
+- switching from fixed-semantic (`run_joint`) to context-dependent (`run_shared`) sharply increases downstream semantic
+  corruption (`0.006 -> 0.057` tail hamming) after a one-token prefix edit
+- periodic resets reduce that fragility (`0.057 -> 0.045`)
+- token-level loss here is confounded by vocabulary/encoding choices, so the cleanest mechanism signal in this first
+  synthetic pass is the decoded-event corruption amplification rather than raw bits/sequence ranking
