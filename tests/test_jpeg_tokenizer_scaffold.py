@@ -46,6 +46,7 @@ from experiments.jpeg_tokenizer.base.jpeg_codecs import (
     byte_window_vocab_size,
     canonicalize_image,
     encode_dct_coeffs,
+    encode_jpeg_ac_dense_absolute_dc_tokens,
     encode_jpeg_ac_dense_tokens,
     encode_jpeg_bytes,
     encode_jpeg_huffman_events,
@@ -224,6 +225,21 @@ def test_libjpeg_ac_dense_tokens_are_deterministic_and_within_vocab():
     ac_dense_config = replace(V0_AC_DENSE_CONFIG, source=CoefficientTokenSource.LIBJPEG)
     first_tokens = encode_jpeg_ac_dense_tokens(canonical, config=ac_dense_config)
     second_tokens = encode_jpeg_ac_dense_tokens(canonical, config=ac_dense_config)
+
+    assert first_tokens.ndim == 1
+    assert np.array_equal(first_tokens, second_tokens)
+    assert first_tokens.min() >= 0
+    assert first_tokens.max() < ac_dense_vocab_size(ac_dense_config)
+    assert first_tokens.shape == (1024 * 64,)
+
+
+def test_libjpeg_ac_dense_absolute_dc_tokens_are_deterministic_and_within_vocab():
+    pixels = np.arange(32 * 32, dtype=np.uint8).reshape(32, 32)
+    image = Image.fromarray(pixels, mode="L").convert("RGB")
+    canonical = canonicalize_image(image)
+    ac_dense_config = replace(V0_AC_DENSE_CONFIG, source=CoefficientTokenSource.LIBJPEG)
+    first_tokens = encode_jpeg_ac_dense_absolute_dc_tokens(canonical, config=ac_dense_config)
+    second_tokens = encode_jpeg_ac_dense_absolute_dc_tokens(canonical, config=ac_dense_config)
 
     assert first_tokens.ndim == 1
     assert np.array_equal(first_tokens, second_tokens)

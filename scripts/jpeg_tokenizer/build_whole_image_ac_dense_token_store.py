@@ -26,6 +26,7 @@ from experiments.jpeg_tokenizer.base.jpeg_codecs import (
     CoefficientTokenSource,
     ac_dense_vocab_size,
     canonicalize_image,
+    encode_jpeg_ac_dense_absolute_dc_tokens,
     encode_jpeg_ac_dense_tokens,
 )
 
@@ -50,6 +51,7 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         default="artifacts/jpeg_tokenizer/token_store/imagenette_ac_dense_whole_libjpeg_v0",
     )
+    parser.add_argument("--dc-mode", choices=("delta", "absolute"), default="delta")
     parser.add_argument("--log-every", type=int, default=500)
     return parser.parse_args()
 
@@ -63,6 +65,7 @@ def main() -> None:
     blocks_per_axis = V0_CANONICAL_JPEG_CONFIG.resolution // 8
     seq_len = blocks_per_axis * blocks_per_axis * 64
     vocab_size = ac_dense_vocab_size(tokenizer_config)
+    encoder = encode_jpeg_ac_dense_tokens if args.dc_mode == "delta" else encode_jpeg_ac_dense_absolute_dc_tokens
 
     split_specs = {
         "train": (args.train_split, args.max_train_examples),
@@ -86,7 +89,7 @@ def main() -> None:
 
         for index, example in enumerate(dataset):
             canonical = canonicalize_image(example[args.image_column])
-            token_ids = encode_jpeg_ac_dense_tokens(canonical, config=tokenizer_config)
+            token_ids = encoder(canonical, config=tokenizer_config)
             if len(token_ids) != seq_len:
                 raise ValueError(f"Expected seq_len={seq_len} for {split_name} example {index}, got {len(token_ids)}")
             tokens[index] = token_ids
@@ -118,7 +121,7 @@ def main() -> None:
         vocab_size=vocab_size,
         seq_len=seq_len,
         canonical_config=asdict(V0_CANONICAL_JPEG_CONFIG),
-        tokenizer_config=asdict(tokenizer_config),
+        tokenizer_config={**asdict(tokenizer_config), "dc_mode": args.dc_mode},
         splits=split_infos,
     )
     write_token_store(output_dir, metadata=metadata, split_tokens=split_tokens, split_records=split_records)

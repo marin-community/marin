@@ -30,6 +30,7 @@ from experiments.jpeg_tokenizer.base.jpeg_codecs import (
     SymbolTokenizerConfig,
     canonicalize_image,
     encode_dct_coeffs,
+    encode_jpeg_ac_dense_absolute_dc_tokens,
     encode_jpeg_ac_dense_tokens,
     quantized_luma_blocks,
 )
@@ -365,7 +366,7 @@ def _write_summary(path: str, payload: dict[str, object]) -> None:
         "| --- | ---: | ---: | ---: |",
     ]
     results = payload["results"]
-    for key in ("coeff_k64", "ac_dense", "symbols", "huffman_events"):
+    for key in ("coeff_k64", "ac_dense", "ac_dense_absdc", "symbols", "huffman_events"):
         metric = results[key]
         mean_flip = metric["flip_rate"]["mean"]
         p95_flip = metric["flip_rate"]["p95"]
@@ -426,6 +427,7 @@ def main() -> None:
 
     coeff_metrics = BlockContextMetrics([], [], [])
     ac_dense_metrics = BlockContextMetrics([], [], [])
+    ac_dense_absdc_metrics = BlockContextMetrics([], [], [])
     symbol_metrics = BlockContextMetrics([], [], [])
     huffman_metrics = BlockContextMetrics([], [], [])
     coeff_control_metrics = BlockContextMetrics([], [], [])
@@ -467,6 +469,14 @@ def main() -> None:
         ac_dense_metrics.base_block_lengths.append(len(base_ac_dense_block))
         ac_dense_metrics.mixed_block_lengths.append(len(mixed_ac_dense_block))
 
+        base_ac_dense_absdc = encode_jpeg_ac_dense_absolute_dc_tokens(base_canonical, config=ac_dense_config)
+        mixed_ac_dense_absdc = encode_jpeg_ac_dense_absolute_dc_tokens(mixed_canonical, config=ac_dense_config)
+        base_ac_dense_absdc_block = base_ac_dense_absdc[ac_start:ac_end]
+        mixed_ac_dense_absdc_block = mixed_ac_dense_absdc[ac_start:ac_end]
+        ac_dense_absdc_metrics.flip_rates.append(_hamming_rate(base_ac_dense_absdc_block, mixed_ac_dense_absdc_block))
+        ac_dense_absdc_metrics.base_block_lengths.append(len(base_ac_dense_absdc_block))
+        ac_dense_absdc_metrics.mixed_block_lengths.append(len(mixed_ac_dense_absdc_block))
+
         base_symbol_blocks = _symbol_block_tokens(canonical=base_canonical, config=symbol_config)
         mixed_symbol_blocks = _symbol_block_tokens(canonical=mixed_canonical, config=symbol_config)
         base_symbol_block = base_symbol_blocks[target_block_index]
@@ -498,6 +508,7 @@ def main() -> None:
         "results": {
             "coeff_k64": _metrics_payload(coeff_metrics),
             "ac_dense": _metrics_payload(ac_dense_metrics),
+            "ac_dense_absdc": _metrics_payload(ac_dense_absdc_metrics),
             "symbols": _metrics_payload(symbol_metrics),
             "huffman_events": _metrics_payload(huffman_metrics),
         },

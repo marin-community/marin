@@ -598,6 +598,34 @@ def encode_jpeg_ac_dense_tokens(
     return np.asarray(tokens, dtype=np.int32)
 
 
+def encode_jpeg_ac_dense_absolute_dc_tokens(
+    canonical_jpeg: CanonicalJpegRepresentation,
+    *,
+    config: AcDenseTokenizerConfig = V0_AC_DENSE_CONFIG,
+) -> np.ndarray:
+    """Encode JPEG coefficients as fixed-length tokens with absolute DC and dense AC values."""
+
+    blocks = quantized_luma_blocks(
+        canonical_jpeg,
+        config=CoefficientTokenizerConfig(
+            quality=config.quality,
+            source=config.source,
+        ),
+    )
+    zigzag = blocks.reshape(-1, 64)[:, _ZIGZAG_ORDER]
+    dc_vocab = 2 * config.dc_bound + 1
+    tokens: list[int] = []
+
+    for block in zigzag:
+        dc_value = int(block[0])
+        tokens.append(_encode_bounded_value(dc_value, config.dc_bound, "dc_value"))
+        for coeff in block[1:]:
+            coeff_token = dc_vocab + _encode_bounded_value(int(coeff), config.ac_bound, "ac_coefficient")
+            tokens.append(coeff_token)
+
+    return np.asarray(tokens, dtype=np.int32)
+
+
 def whole_image_symbol_vocab_size(
     config: SymbolTokenizerConfig = V0_SYMBOL_CONFIG,
     *,
@@ -866,6 +894,7 @@ __all__ = sorted(
         "canonicalize_image",
         "coefficient_vocab_size",
         "encode_dct_coeffs",
+        "encode_jpeg_ac_dense_absolute_dc_tokens",
         "encode_jpeg_ac_dense_tokens",
         "encode_jpeg_bytes",
         "encode_jpeg_huffman_events",

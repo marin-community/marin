@@ -39,6 +39,9 @@ DEFAULT_HUFFMAN_EVENTS_WHOLE_LIBJPEG_STORE_PATH = (
 DEFAULT_AC_DENSE_WHOLE_LIBJPEG_STORE_PATH = (
     "gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_ac_dense_whole_libjpeg_v0"
 )
+DEFAULT_AC_DENSE_ABSDC_WHOLE_LIBJPEG_STORE_PATH = (
+    "gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_ac_dense_absdc_whole_libjpeg_v0"
+)
 DEFAULT_SYMBOL_WHOLE_LIBJPEG_STORE_PATH = (
     "gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0"
 )
@@ -229,6 +232,12 @@ RESOLVED_AC_DENSE_WHOLE_LIBJPEG_SWA4096_SMOKE_RUN_ID = _resolve_run_id(
     "jpeg-tokenizer-ac-dense-whole-libjpeg-swa4096-smoke"
 )
 RESOLVED_AC_DENSE_WHOLE_LIBJPEG_SWA4096_RUN_ID = _resolve_run_id("jpeg-tokenizer-ac-dense-whole-libjpeg-swa4096-trial")
+RESOLVED_AC_DENSE_ABSDC_WHOLE_LIBJPEG_SWA4096_SMOKE_RUN_ID = _resolve_run_id(
+    "jpeg-tokenizer-ac-dense-absdc-whole-libjpeg-swa4096-smoke"
+)
+RESOLVED_AC_DENSE_ABSDC_WHOLE_LIBJPEG_SWA4096_RUN_ID = _resolve_run_id(
+    "jpeg-tokenizer-ac-dense-absdc-whole-libjpeg-swa4096-trial"
+)
 RESOLVED_SYMBOLS_WHOLE_LIBJPEG_SWA4096_SMOKE_RUN_ID = _resolve_run_id(
     "jpeg-tokenizer-symbols-whole-libjpeg-swa4096-smoke"
 )
@@ -1852,6 +1861,106 @@ ac_dense_whole_libjpeg_swa4096_trial = ExecutorStep(
     ),
 )
 
+ac_dense_absdc_whole_libjpeg_swa4096_smoke = ExecutorStep(
+    name="tokexplore/jpeg-tokenizer-ac-dense-absdc-whole-libjpeg-swa4096-smoke",
+    fn=run_jpeg_tokenizer_trial,
+    config=JpegTokenizerLaunchConfig(
+        model=versioned(
+            dataclasses.replace(
+                JPEG_TOKENIZER_V0_MODEL,
+                vocab_size=6_142,
+                max_seq_len=DEFAULT_AC_DENSE_WHOLE_SEQ_LEN,
+                sliding_window=DEFAULT_BYTE_WHOLE_SWA,
+            )
+        ),
+        token_store_path=str(DEFAULT_AC_DENSE_ABSDC_WHOLE_LIBJPEG_STORE_PATH),
+        output_path=this_output_path(),
+        run_id=RESOLVED_AC_DENSE_ABSDC_WHOLE_LIBJPEG_SWA4096_SMOKE_RUN_ID,
+        resources=versioned(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE)),
+        steps=versioned(32),
+        batch_size=versioned(8),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=_build_wandb_tracker(
+            group="tokexplore-jpeg-tokenizer-ac-dense-absdc-whole-libjpeg-swa4096-smoke",
+            tags=["jpeg-tokenizer", "ac-dense-absdc", "whole-image", "libjpeg", "swa4096", "smoke"],
+        ),
+        checkpoint_minutes=versioned(2),
+        checkpoint_keep_every_steps=versioned(500),
+        optimizer=versioned(
+            AdamConfig(
+                learning_rate=3e-3,
+                weight_decay=0.1,
+                lr_schedule="cosine",
+                decay=0.2,
+                min_lr_ratio=0.1,
+                warmup=16,
+            )
+        ),
+        jpeg_trainer=versioned(JpegTrainerConfig(z_loss_weight=1e-4, ema_beta=None, log_every=1)),
+        eval=versioned(
+            JpegEvalConfig(
+                eval_batch_size=8,
+                steps_per_eval=16,
+                max_eval_batches=4,
+                eval_current=True,
+                eval_ema=False,
+                compute_bpb=False,
+            )
+        ),
+    ),
+)
+
+ac_dense_absdc_whole_libjpeg_swa4096_trial = ExecutorStep(
+    name="tokexplore/jpeg-tokenizer-ac-dense-absdc-whole-libjpeg-swa4096-trial",
+    fn=run_jpeg_tokenizer_trial,
+    config=JpegTokenizerLaunchConfig(
+        model=versioned(
+            dataclasses.replace(
+                JPEG_TOKENIZER_V0_MODEL,
+                vocab_size=6_142,
+                max_seq_len=DEFAULT_AC_DENSE_WHOLE_SEQ_LEN,
+                sliding_window=DEFAULT_BYTE_WHOLE_SWA,
+            )
+        ),
+        token_store_path=str(DEFAULT_AC_DENSE_ABSDC_WHOLE_LIBJPEG_STORE_PATH),
+        output_path=this_output_path(),
+        run_id=RESOLVED_AC_DENSE_ABSDC_WHOLE_LIBJPEG_SWA4096_RUN_ID,
+        resources=versioned(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE)),
+        steps=versioned(2_000),
+        batch_size=versioned(8),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=_build_wandb_tracker(
+            group="tokexplore-jpeg-tokenizer-context-ablations",
+            tags=["jpeg-tokenizer", "ac-dense-absdc", "whole-image", "libjpeg", "swa4096", "trial"],
+        ),
+        checkpoint_minutes=versioned(2),
+        checkpoint_keep_every_steps=versioned(500),
+        optimizer=versioned(
+            AdamConfig(
+                learning_rate=3e-3,
+                weight_decay=0.1,
+                lr_schedule="cosine",
+                decay=0.2,
+                min_lr_ratio=0.1,
+                warmup=1_000,
+            )
+        ),
+        jpeg_trainer=versioned(JpegTrainerConfig(z_loss_weight=1e-4, ema_beta=None, log_every=1)),
+        eval=versioned(
+            JpegEvalConfig(
+                eval_batch_size=8,
+                steps_per_eval=1_000,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+                compute_bpb=False,
+            )
+        ),
+    ),
+)
+
 symbols_whole_libjpeg_swa4096_smoke = ExecutorStep(
     name="tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-smoke",
     fn=run_jpeg_tokenizer_trial,
@@ -2184,6 +2293,8 @@ if __name__ == "__main__":
             huffman_events_whole_libjpeg_swa4096_retry,
             ac_dense_whole_libjpeg_swa4096_smoke,
             ac_dense_whole_libjpeg_swa4096_trial,
+            ac_dense_absdc_whole_libjpeg_swa4096_smoke,
+            ac_dense_absdc_whole_libjpeg_swa4096_trial,
             symbols_whole_libjpeg_swa4096_smoke,
             symbols_whole_libjpeg_swa4096_trial,
             symbols_whole_libjpeg_swa4096_long,
