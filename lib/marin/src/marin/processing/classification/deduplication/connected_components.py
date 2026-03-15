@@ -96,10 +96,15 @@ def connected_components(
             yield _make_link(ids[0], ids[0])
             return
 
-        for i in range(len(ids)):
-            for j in range(i + 1, len(ids)):
-                yield _make_link(ids[i], ids[j])
-                yield _make_link(ids[j], ids[i])
+        # Use a star topology: pick the node with the smallest record_id_norm
+        # as the hub and link all others to it. This is O(n) instead of O(n²)
+        # and produces the same connected components via hash-to-min propagation.
+        hub = min(ids, key=lambda x: x["record_id_norm"])
+        for node in ids:
+            if node["record_id_norm"] == hub["record_id_norm"]:
+                continue
+            yield _make_link(hub, node)
+            yield _make_link(node, hub)
 
     curr_it = ctx.execute(
         ds
