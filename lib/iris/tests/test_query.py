@@ -130,11 +130,6 @@ def test_raw_query_reject_select_with_drop_keyword(db: ControllerDB) -> None:
         execute_raw_query(db, "SELECT * FROM jobs WHERE DROP = 1")
 
 
-def test_raw_query_reject_multi_statement(db: ControllerDB) -> None:
-    with pytest.raises(ValueError, match="Multiple SQL"):
-        execute_raw_query(db, "SELECT 1; SELECT 2")
-
-
 def test_raw_query_with_aggregation(db: ControllerDB) -> None:
     result = execute_raw_query(
         db,

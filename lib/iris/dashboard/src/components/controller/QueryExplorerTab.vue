@@ -36,7 +36,6 @@ const sqlInput = ref(QUERY_TEMPLATES[0].sql)
 
 const columns = ref<ColumnMeta[]>([])
 const rows = ref<Record<string, unknown>[]>([])
-const totalCount = ref(0)
 const loading = ref(false)
 const error = ref<string | null>(null)
 const hasExecuted = ref(false)
@@ -64,13 +63,11 @@ async function execute() {
   currentPage.value = 0
   columns.value = []
   rows.value = []
-  totalCount.value = 0
 
   try {
     const response = await executeRawQuery({ sql: sqlInput.value })
     columns.value = response.columns
     rows.value = parseRows(response.columns, response.rows)
-    totalCount.value = rows.value.length
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -164,7 +161,7 @@ function handleKeydown(event: KeyboardEvent) {
       <!-- Results header -->
       <div class="flex items-center justify-between mb-2">
         <span class="text-xs text-text-secondary">
-          {{ totalCount }} row{{ totalCount !== 1 ? 's' : '' }} returned
+          {{ rows.length }} row{{ rows.length !== 1 ? 's' : '' }} returned
           <template v-if="columns.length > 0">
             &middot; {{ columns.length }} column{{ columns.length !== 1 ? 's' : '' }}
           </template>
