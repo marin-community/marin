@@ -35,7 +35,7 @@ from marin.execution.executor import ExecutorMainConfig  # for retry logic
 Run the canonical CORE_TASKS (subset of DCLM tasks) via LM Evaluation Harness:
 
 ```python
-# run_mcqa_eval.py
+# experiments/evals/run_core_eval.py
 from fray.cluster import ResourceConfig
 from experiments.evals.evals import default_eval
 from marin.execution.executor import executor_main
@@ -146,18 +146,21 @@ if __name__ == "__main__":
 
 ## 4. Launching Evaluation
 
-From the workspace root, pick your script and run:
+From the workspace root, pick one of the real example scripts in `experiments/evals/` or save one of the snippets above as your own script and run it with `uv`:
 
 ```bash
-python experiments/evals/run_mcqa_eval.py
-python experiments/evals/run_key_evals.py
-python experiments/evals/run_on_gpu.py
+uv run python experiments/evals/run_key_evals.py
+uv run python experiments/evals/run_base_model_evals.py
+uv run python experiments/evals/run_sft_model_evals.py
+uv run python experiments/evals/run_on_gpu.py
 ```
 Each will:
 1. Launch Ray + specified TPU/GPU hardware.
 2. Load the model checkpoint.
 3. Run the chosen eval tasks.
 4. Log results (accuracy, generation metrics) to W&B under your `model_name`.
+
+If you save the CORE_TASKS snippet above as your own script, launch it the same way, e.g. `uv run python experiments/evals/run_core_eval.py`.
 
 ## Parameter Reference
 

@@ -8,6 +8,9 @@ on:
       - lib/iris/**
       - .github/workflows/iris-unit-tests.yaml
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -21,12 +24,17 @@ jobs:
         python-version: ["3.12"]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -38,4 +46,73 @@ jobs:
         env:
           PYTHONASYNCIODEBUG: "1"
         run: |
-          cd lib/iris && uv run --group dev python -m pytest -n4 --durations=5 --tb=short -m 'not slow and not docker' tests/
+          cd lib/iris && uv run --group dev python -m pytest -n4 --durations=5 --tb=short -m 'not slow and not docker and not e2e' tests/
+
+  e2e-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "lib/iris/pyproject.toml"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('lib/iris/pyproject.toml') }}
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: cd lib/iris && uv run playwright install --with-deps chromium
+
+      - name: Install Playwright system deps
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: cd lib/iris && uv run playwright install-deps chromium
+
+      - name: Run E2E smoke tests
+        env:
+          IRIS_SCREENSHOT_DIR: ${{ github.workspace }}/iris-screenshots
+          PYTHONASYNCIODEBUG: "1"
+        run: |
+          mkdir -p ${{ github.workspace }}/iris-screenshots
+          cd lib/iris && uv run --group dev python -m pytest \
+            tests/e2e/test_smoke.py \
+            -m e2e -o "addopts=" --tb=short -v
+
+      - name: Verify screenshots with Claude
+        if: always() && hashFiles('iris-screenshots/*.txt') != ''
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          python lib/iris/scripts/verify_screenshots.py \
+            --screenshot-dir ${{ github.workspace }}/iris-screenshots
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iris-smoke-screenshots
+          path: iris-screenshots/
+          retention-days: 14
+          if-no-files-found: ignore

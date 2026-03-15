@@ -9,10 +9,11 @@ description: Add a Hugging Face dataset to Marin pipelines. Use when asked to ad
 This skill guides agents in inspecting Hugging Face dataset schemas using Marin's schema inspection tool. The inspection is the first step toward exposing a dataset for training. After capturing the schema, register an `ExecutorStep` so the dataset can be downloaded in Marin pipelines. For simple datasets, add the step to [`experiments/pretraining_datasets/__init__.py`](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/__init__.py) (see the `fineweb_edu` entry). If the dataset is multipart or more complex, create a dedicated file (e.g., [`experiments/pretraining_datasets/nemotron.py`](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/nemotron.py)) and add the step there instead. Datasets with Hugging Face–exposed subsets or splits should pattern match on [`experiments/pretraining_datasets/nemotron.py`](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/nemotron.py), defining separate steps for each subset.
 
 ## Prerequisites
-- Install the [Hugging Face `datasets` library](https://huggingface.co/docs/datasets/) (e.g., `pip install datasets`).
-- For YAML output, install `pyyaml` (e.g., `pip install pyyaml`).
+- Prefer repo-managed dependencies over ad hoc `pip install`.
+- For repeated work in a checked-out Marin repo, install the synced environment with `uv sync --all-packages`.
+- For one-off schema inspection, run the tool with ephemeral deps via `uv run --with datasets --with pyyaml lib/marin/tools/get_hf_dataset_schema.py ...`.
 - Ensure access to the dataset: Hugging Face Hub ID, local path, or other supported formats.
-- Use `uv run lib/marin/tools/get_hf_dataset_schema.py` for direct execution, or install Marin with `uv sync` for CLI access.
+- Use `uv run lib/marin/tools/get_hf_dataset_schema.py` from a synced Marin checkout, or the `uv run --with ...` form above when the environment is not already provisioned.
 
 ## Guidelines for Humans
 

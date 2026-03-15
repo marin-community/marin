@@ -26,6 +26,61 @@ import "logging.proto";
 
 message Empty {}
 
+// --- Authentication ---
+message LoginRequest {
+  string identity_token = 1;
+}
+message LoginResponse {
+  string token = 1;
+  string key_id = 2;
+  string user_id = 3;
+}
+
+message GetAuthInfoRequest {}
+message GetAuthInfoResponse {
+  string provider = 1;        // "gcp" or "static" or "" (no auth)
+  string gcp_project_id = 2;  // set when provider == "gcp"
+}
+
+message CreateApiKeyRequest {
+  string user_id = 1;
+  string name = 2;
+  int64 ttl_ms = 3;
+}
+message CreateApiKeyResponse {
+  string key_id = 1;
+  string token = 2;
+  string key_prefix = 3;
+}
+
+message RevokeApiKeyRequest {
+  string key_id = 1;
+}
+
+message ListApiKeysRequest {
+  string user_id = 1;
+}
+message ApiKeyInfo {
+  string key_id = 1;
+  string key_prefix = 2;
+  string user_id = 3;
+  string name = 4;
+  int64 created_at_ms = 5;
+  int64 last_used_at_ms = 6;
+  int64 expires_at_ms = 7;
+  bool revoked = 8;
+}
+message ListApiKeysResponse {
+  repeated ApiKeyInfo keys = 1;
+}
+
+message GetCurrentUserRequest {}
+message GetCurrentUserResponse {
+  string user_id = 1;
+  string role = 2;
+  string display_name = 3;
+}
+
 // --- Profiling ---
 // Shared by both ControllerService and WorkerService (controller proxies to worker).
 
@@ -465,13 +520,27 @@ message WorkerMetadata {
   // using format: key1=value1,key2=value2 (e.g., taint:maintenance=true,pool=large-jobs)
   map<string, AttributeValue> attributes = 40;
 
-  // VM IP address used for autoscaler slice/worker matching.
-  // Self-discovered by the worker at startup via socket probe.
+  // DEPRECATED: No longer used for worker identification.
+  // Worker identity is now set via RegisterRequest.worker_id.
+  // Field kept for proto wire compatibility but ignored by the controller.
   string vm_address = 41;
 
   // Git commit hash baked into the worker image at build time (IRIS_GIT_HASH).
   // Allows the controller to surface per-worker version info for debugging.
   string git_hash = 42;
+}
+
+enum JobPreemptionPolicy {
+  JOB_PREEMPTION_POLICY_UNSPECIFIED = 0;
+  JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN = 1;
+  JOB_PREEMPTION_POLICY_PRESERVE_CHILDREN = 2;
+}
+
+enum ExistingJobPolicy {
+  EXISTING_JOB_POLICY_UNSPECIFIED = 0;
+  EXISTING_JOB_POLICY_ERROR = 1;
+  EXISTING_JOB_POLICY_KEEP = 2;
+  EXISTING_JOB_POLICY_RECREATE = 3;
 }
 
 // ============================================================================
@@ -536,6 +605,9 @@ message Controller {
     // Resource reservation. When set, the autoscaler pre-provisions capacity
     // and the reserving job is held pending until the reservation is satisfied.
     ReservationConfig reservation = 30;
+
+    JobPreemptionPolicy preemption_policy = 31;
+    ExistingJobPolicy existing_job_policy = 32;
   }
 
   message LaunchJobResponse {
@@ -655,15 +727,15 @@ message Controller {
   message RegisterRequest {
     string address = 1;
     WorkerMetadata metadata = 2;
+    // Worker ID assigned by the autoscaler via WorkerConfig.
+    // When set, the controller uses this as the canonical worker identity
+    // instead of deriving it from vm_address.
+    string worker_id = 3;
   }
 
   message RegisterResponse {
     string worker_id = 1;
     bool accepted = 2;
-  }
-
-  message NotifyTaskUpdateRequest {
-    string worker_id = 1;
   }
 
   // --- Endpoint Registry ---
@@ -682,6 +754,7 @@ message Controller {
     string task_id = 3;              // Wire-format task ID (e.g. "/user/job/0")
     map<string, string> metadata = 4;
     int32 attempt_id = 5;            // Attempt number for stale endpoint cleanup
+    string endpoint_id = 6;          // Client-generated UUID for idempotency; server generates one if empty.
   }
 
   message RegisterEndpointResponse {
@@ -727,7 +800,7 @@ message Controller {
   // --- Checkpoint ---
   message BeginCheckpointRequest {}
   message BeginCheckpointResponse {
-    string snapshot_path = 1;
+    string checkpoint_path = 1;
     iris.time.Timestamp created_at = 2;
     int32 job_count = 3;
     int32 task_count = 4;
@@ -756,6 +829,7 @@ message Controller {
     int32 attempt_id = 6;            // Filter to specific attempt (-1 = all attempts)
     string min_level = 7;            // Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
     int64 cursor = 8;               // Autoincrement id cursor for incremental polling
+    bool tail = 9;                  // If true, return the last N lines instead of the first N
   }
 
   message TaskLogBatch {
@@ -904,8 +978,6 @@ service ControllerService {
   // Worker management
   rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);
   rpc ListWorkers(Controller.ListWorkersRequest) returns (Controller.ListWorkersResponse);
-  rpc NotifyTaskUpdate(Controller.NotifyTaskUpdateRequest) returns (Empty);
-
   // Endpoint registry (generic service discovery)
   rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
   rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (Empty);
@@ -936,6 +1008,14 @@ service ControllerService {
 
   // Process status (local process info + recent logs)
   rpc GetProcessStatus(GetProcessStatusRequest) returns (GetProcessStatusResponse);
+
+  // Authentication & API key management
+  rpc GetAuthInfo(GetAuthInfoRequest) returns (GetAuthInfoResponse);
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc CreateApiKey(CreateApiKeyRequest) returns (CreateApiKeyResponse);
+  rpc RevokeApiKey(RevokeApiKeyRequest) returns (Empty);
+  rpc ListApiKeys(ListApiKeysRequest) returns (ListApiKeysResponse);
+  rpc GetCurrentUser(GetCurrentUserRequest) returns (GetCurrentUserResponse);
 }
 
 service WorkerService {

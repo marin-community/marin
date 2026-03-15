@@ -149,7 +149,6 @@ class WriteOp:
     # Format-specific parameters (only used by relevant writer)
     levanter_metadata: dict[str, Any] | None = None
     schema: object | None = None  # For parquet (pyarrow.Schema)
-    batch_size: int = 1000  # For parquet and levanter_cache
     skip_existing: bool = False  # Skip writing if output file already exists
 
     def __repr__(self):
@@ -656,7 +655,6 @@ class Dataset(Generic[T]):
         self,
         output_pattern: str | Callable[[int, int], str],
         schema: object | None = None,
-        batch_size: int = 1000,
         skip_existing: bool = False,
     ) -> Dataset[str]:
         """Write records as Parquet files.
@@ -667,7 +665,6 @@ class Dataset(Generic[T]):
             output_pattern: Output path pattern (e.g., "dir/data-{shard:05d}.parquet")
                            or a callable that takes (shard_idx, total_shards) and returns the output path
             schema: PyArrow schema (optional, will be inferred if not provided)
-            batch_size: Number of records to batch before writing (default: 1000)
             skip_existing: If True, skip writing if output file already exists (for resuming pipelines)
         """
         return Dataset(
@@ -678,7 +675,6 @@ class Dataset(Generic[T]):
                     _normalize_output_pattern(output_pattern),
                     writer_type="parquet",
                     schema=schema,
-                    batch_size=batch_size,
                     skip_existing=skip_existing,
                 ),
             ],
@@ -687,6 +683,7 @@ class Dataset(Generic[T]):
     def write_vortex(
         self,
         output_pattern: str | Callable[[int, int], str],
+        schema: object | None = None,
         skip_existing: bool = False,
     ) -> Dataset[str]:
         """Write records as Vortex files."""
@@ -697,6 +694,7 @@ class Dataset(Generic[T]):
                 WriteOp(
                     _normalize_output_pattern(output_pattern),
                     writer_type="vortex",
+                    schema=schema,
                     skip_existing=skip_existing,
                 ),
             ],
@@ -707,7 +705,6 @@ class Dataset(Generic[T]):
         output_pattern: str | Callable[[int, int], str],
         metadata: dict[str, Any],
         skip_existing: bool = False,
-        batch_size: int = 1024,
     ) -> Dataset[str]:
         """Write tokenized records to Levanter cache format.
 
@@ -725,7 +722,6 @@ class Dataset(Generic[T]):
                     writer_type="levanter_cache",
                     levanter_metadata=metadata,
                     skip_existing=skip_existing,
-                    batch_size=batch_size,
                 ),
             ],
         )
@@ -762,6 +758,9 @@ class Dataset(Generic[T]):
 
         The reducer receives (key, iterator_of_items) and returns a single result or an iterator of
         results for that group.
+
+        Incoming records are strongly encouraged to be Arrow-serializable (dicts, lists, scalars, etc.).
+        Custom dataclasses and arbitrary objects will have degraded performance (serde via pickle).
 
         Args:
             key: Function extracting grouping key from item (must be hashable)

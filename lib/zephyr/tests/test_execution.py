@@ -258,11 +258,11 @@ def test_no_duplicate_results_on_heartbeat_timeout(actor_context, fray_client, t
 
 
 def test_disk_chunk_write_uses_unique_paths(tmp_path):
-    """Each DiskChunk.write() writes to a unique location, avoiding collisions."""
-    from zephyr.execution import DiskChunk
+    """Each PickleDiskChunk.write() writes to a unique location, avoiding collisions."""
+    from zephyr.execution import PickleDiskChunk
 
     base_path = str(tmp_path / "chunk.pkl")
-    refs = [DiskChunk.write(base_path, [i]) for i in range(3)]
+    refs = [PickleDiskChunk.write(base_path, [i]) for i in range(3)]
 
     # Each written to a distinct UUID path (no rename needed)
     paths = [r.path for r in refs]
@@ -281,7 +281,7 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
 
     Stale chunk files are left for context-dir cleanup (no per-chunk deletion).
     """
-    from zephyr.execution import DiskChunk, ResultChunk, Shard, ShardTask, TaskResult, ZephyrCoordinator
+    from zephyr.execution import PickleDiskChunk, ResultChunk, Shard, ShardTask, TaskResult, ZephyrCoordinator
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
@@ -301,7 +301,7 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
     _task_a, attempt_a, _config = pulled_a
 
     # Worker A writes a chunk (simulating slow completion)
-    stale_ref = DiskChunk.write(str(tmp_path / "stale-chunk.pkl"), [1, 2, 3])
+    stale_ref = PickleDiskChunk.write(str(tmp_path / "stale-chunk.pkl"), [1, 2, 3])
     assert Path(stale_ref.path).exists()
 
     # Heartbeat timeout re-queues the task
@@ -312,7 +312,7 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
     pulled_b = coord.pull_task("worker-B")
     _task_b, attempt_b, _config = pulled_b
 
-    winner_ref = DiskChunk.write(str(tmp_path / "winner-chunk.pkl"), [4, 5, 6])
+    winner_ref = PickleDiskChunk.write(str(tmp_path / "winner-chunk.pkl"), [4, 5, 6])
 
     coord.report_result(
         "worker-B",
@@ -343,13 +343,13 @@ def test_chunk_streaming_low_memory(tmp_path):
 
     Verifies iter_chunks yields data lazily and flat iteration works.
     """
-    from zephyr.execution import DiskChunk, Shard
+    from zephyr.execution import PickleDiskChunk, Shard
 
     # Write 3 chunks to disk (directly readable, no finalize needed)
     refs = []
     for i in range(3):
         path = str(tmp_path / f"chunk-{i}.pkl")
-        chunk = DiskChunk.write(path, [i * 10 + j for j in range(5)])
+        chunk = PickleDiskChunk.write(path, [i * 10 + j for j in range(5)])
         refs.append(chunk)
 
     shard = Shard(chunks=refs)
@@ -617,6 +617,50 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
     # Queue empty on last stage -> SHUTDOWN
     result = coord.pull_task("worker-A")
     assert result == "SHUTDOWN"
+
+
+def test_run_pipeline_rejects_concurrent_calls(actor_context, tmp_path):
+    """Calling run_pipeline while another is already running raises RuntimeError."""
+    import threading
+
+    from unittest.mock import MagicMock
+
+    from zephyr.execution import ZephyrCoordinator
+    from zephyr.plan import ExecutionHint, compute_plan
+
+    coord = ZephyrCoordinator()
+    coord.initialize(str(tmp_path / "chunks"), MagicMock())
+
+    gate = threading.Event()
+    ds = Dataset.from_list([42]).map(lambda x: gate.wait(timeout=5) or x)
+    plan = compute_plan(ds)
+    hints = ExecutionHint()
+
+    # First call blocks because the map waits on `gate` (no workers to run it
+    # anyway). We patch _wait_for_stage to signal when it's entered.
+    first_entered = threading.Event()
+    original_wait = coord._wait_for_stage
+
+    def blocking_wait():
+        first_entered.set()
+        time.sleep(0.5)
+        coord._fatal_error = "test: forced exit"
+        try:
+            original_wait()
+        except Exception:
+            pass
+
+    coord._wait_for_stage = blocking_wait
+
+    t = threading.Thread(target=lambda: coord.run_pipeline(plan, "exec-1", hints), daemon=True)
+    t.start()
+    first_entered.wait(timeout=5.0)
+
+    # Second call should fail immediately
+    with pytest.raises(RuntimeError, match="already running"):
+        coord.run_pipeline(plan, "exec-2", hints)
+
+    t.join(timeout=10.0)
 
 
 def test_execute_retries_on_coordinator_death(tmp_path):

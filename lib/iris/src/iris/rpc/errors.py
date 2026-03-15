@@ -173,7 +173,7 @@ def call_with_retry(
 
             if attempt + 1 >= max_attempts:
                 # Final attempt failed, raise
-                logger.warning(
+                logger.exception(
                     "Operation %s failed after %d attempts: %s",
                     operation,
                     max_attempts,
@@ -183,7 +183,7 @@ def call_with_retry(
 
             # Log and retry
             delay = backoff.next_interval()
-            logger.warning(
+            logger.exception(
                 "Operation %s failed (attempt %d/%d), retrying in %.2fs: %s",
                 operation,
                 attempt + 1,

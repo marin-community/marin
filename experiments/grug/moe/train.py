@@ -185,6 +185,7 @@ def _compute_flops(
     flops_per_token = lm_flops_per_token(
         hidden_dim=model_config.hidden_dim,
         intermediate_dim=model_config.intermediate_dim,
+        shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
         num_layers=model_config.num_layers,
         num_kv_heads=model_config.num_kv_heads,
         num_heads=model_config.num_heads,

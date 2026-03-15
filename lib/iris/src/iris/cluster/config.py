@@ -44,7 +44,7 @@ DEFAULT_CONFIG = config_pb2.DefaultsConfig(
     autoscaler=config_pb2.AutoscalerConfig(
         evaluation_interval=Duration.from_seconds(10).to_proto(),
         scale_up_delay=Duration.from_seconds(60).to_proto(),
-        scale_down_delay=Duration.from_seconds(300).to_proto(),
+        scale_down_delay=Duration.from_seconds(600).to_proto(),
     ),
     worker=config_pb2.WorkerConfig(
         port=10001,
@@ -487,7 +487,7 @@ def make_local_config(
     # Transform controller to local
     config.controller.ClearField("controller")
     config.controller.local.port = 0  # auto-assign
-    config.storage.bundle_prefix = ""  # LocalController will set temp path
+    config.storage.remote_state_dir = ""  # LocalCluster will set temp path
 
     # Apply local defaults (fast timings for testing)
     # Unconditionally use fast timings for local mode - this overrides any production timings
@@ -503,9 +503,9 @@ def make_local_config(
     # Set fast autoscaler timings for local testing
     config.defaults.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
     config.defaults.autoscaler.scale_up_delay.CopyFrom(Duration.from_seconds(1).to_proto())
-    # Keep scale_down_delay at 5min (same as production)
+    # Use fast scale_down_delay for local dev (matching scale_up_delay)
     if not config.defaults.autoscaler.HasField("scale_down_delay"):
-        config.defaults.autoscaler.scale_down_delay.CopyFrom(Duration.from_seconds(300).to_proto())
+        config.defaults.autoscaler.scale_down_delay.CopyFrom(Duration.from_seconds(1).to_proto())
 
     return config
 
@@ -987,6 +987,7 @@ def create_autoscaler(
     label_prefix: str,
     base_worker_config: config_pb2.WorkerConfig | None = None,
     threads: ThreadContainer | None = None,
+    db: "ControllerDB | None" = None,  # noqa: F821, UP037 — circular import
 ):
     """Create autoscaler from Platform and explicit config.
 
@@ -998,6 +999,7 @@ def create_autoscaler(
         base_worker_config: Base worker configuration passed through to platform.create_slice().
             None disables bootstrap (test/local mode).
         threads: Thread container for background threads. Uses global default if not provided.
+        db: Optional DB handle for write-through persistence.
 
     Returns:
         Configured Autoscaler instance
@@ -1019,6 +1021,7 @@ def create_autoscaler(
     _validate_scale_group_resources(_scale_groups_to_config(scale_groups))
 
     scale_up_delay = Duration.from_proto(autoscaler_config.scale_up_delay)
+    scale_down_delay = Duration.from_proto(autoscaler_config.scale_down_delay)
 
     scaling_groups: dict[str, ScalingGroup] = {}
     for name, group_config in scale_groups.items():
@@ -1027,8 +1030,10 @@ def create_autoscaler(
             platform=platform,
             label_prefix=label_prefix,
             scale_up_cooldown=scale_up_delay,
+            idle_threshold=scale_down_delay,
             scale_up_rate_limit=group_config.scale_up_rate_limit or DEFAULT_SCALE_UP_RATE_LIMIT,
             scale_down_rate_limit=group_config.scale_down_rate_limit or DEFAULT_SCALE_DOWN_RATE_LIMIT,
+            db=db,
         )
         resources = group_config.resources
         worker_attrs = dict(group_config.worker.attributes) if group_config.HasField("worker") else {}
@@ -1052,4 +1057,5 @@ def create_autoscaler(
         config=autoscaler_config,
         platform=platform,
         base_worker_config=base_worker_config,
+        db=db,
     )
