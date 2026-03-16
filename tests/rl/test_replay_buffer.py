@@ -135,8 +135,6 @@ def test_replay_buffer():
         writer.write_batch(batch)
 
     with data_loader:
-        import time
-
         time.sleep(0.2)  # Let it collect some batches
         rollouts = data_loader.get_rollouts(timeout=1.0)
         assert rollouts is not None
