@@ -258,3 +258,42 @@ The next meaningful follow-up is therefore not “retune `deepep_layout_ragged_a
 1. re-run the tiny deterministic host-only control with the new no-eager-sync path and a higher `dispatch_num_max_send_tokens`
 2. if that clears the remaining channel-`0` failures, propagate the same synchronization discipline into the real JAX `shard_map` path
 3. only if it does not, escalate from “config/progress bug” back to “same-process runtime-model mismatch” and continue with the process-model fork
+
+## New milestone: tiny pure-JAX `shard_map` success
+
+`2026-03-15`
+
+The tiny deterministic H100x8 `shard_map` case is now a real end-to-end success for the pure-JAX transport path.
+
+- Command:
+  ```bash
+  KUBECONFIG=/Users/romain/.kube/coreweave-iris \
+  uv run .agents/scripts/deepep_jax_transport_krt.py \
+    --config lib/iris/examples/coreweave-moe-jax-3677.yaml \
+    --worktree /Users/romain/marin-wt/moe-jax-megatron-root-cause \
+    --build-with-torch-extension \
+    --load-as-python-module \
+    --launch-debug \
+    --launch-debug-label shard-map-min-sms2-fix6 \
+    --tokens 128 \
+    --hidden 128 \
+    --experts 8 \
+    --topk-list 1 \
+    --distributions deterministic \
+    --dispatch-num-sms 2 \
+    --dispatch-num-max-send-tokens 32 \
+    --timeout-seconds 3600
+  ```
+- Result:
+  - dispatch launch resolved and executed on all `8` H100s
+  - correctness passed exactly:
+    - `CHECK x_max_abs=0.000000e+00 topk_max_abs=0.000000e+00`
+  - timing:
+    - `RESULT step_s=0.000480 tokens_per_s=266519.71`
+
+This is the first direct evidence that the pure-JAX DeepEP transport path can execute correctly on H100x8 with zero Torch in the step path.
+
+The remaining bug from this run is now smaller and later:
+- the benchmark process stayed alive after printing the final result instead of exiting cleanly
+
+So the thread has moved from “can pure-JAX transport run?” to “why does the successful benchmark process hang during teardown?”

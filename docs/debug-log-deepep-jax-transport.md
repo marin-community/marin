@@ -505,4 +505,45 @@ The shared dispatch helper is still imposing the wrong host-side synchronization
 - Conclusion:
   - the eager per-rank host sync in the shared helper was part of the problem, but not the whole problem
   - the remaining same-process host-only bug now looks even more like a live channel/progress/configuration problem than a generic pre-launch or XLA-ordering problem
+
+## Hypothesis 14
+
+The real JAX `shard_map` path should succeed on the tiny deterministic shape once the wrapper stops corrupting `notify_dispatch(...)`, returns the receive-side channel-prefix handle expected by combine, and actually propagates the debug dispatch config into the JAX bench.
+
+## Changes to make
+
+- Fix the `notify_dispatch(...)` wrapper bug:
+  - pass `runtime.dispatch_num_channels()` instead of `runtime.dispatch_config.num_sms`
+- Propagate CLI dispatch/combine overrides through `bench_deepep_dispatch_jax.py`
+- Return `recv_channel_prefix_matrix` from the dispatch FFI and pass it into combine
+- Repair the benchmark-side correctness check to compare host arrays rather than subtract differently sharded JAX arrays
+
+## Future Work
+
+- [ ] Explain the post-result hang in the JAX benchmark process
+- [ ] Re-run the tiny deterministic case without launch-debug spam once teardown is understood
+- [ ] Scale to a slightly larger shape before jumping back to the sealed `#3633` regime
+
+## Results
+
+- The tiny real `shard_map` rerun on the isolated H100x8 lane completed the transport step successfully:
+  - task: `deepep-jax-transport-krt-20260315-184150`
+  - pod: `iris-task-03e0519dbd58`
+  - repo ref: `2b86a3f6448481c600d311be42ae0b0c8f014a3d`
+- Launch debug on the real JAX path was healthy:
+  - `attr_status_code=0`
+  - `set_attr_status_code=0`
+  - `num_sms=2`
+  - `num_max_send_tokens=32`
+  - `max_dynamic_smem_bytes=196608`
+- All ranks reached the expected live-dispatch stages and the benchmark returned to Python cleanly enough to run the correctness check.
+- The correctness check passed exactly:
+  - `CHECK x_max_abs=0.000000e+00 topk_max_abs=0.000000e+00`
+- The benchmark produced the first clean pure-JAX timing line:
+  - `RESULT step_s=0.000480 tokens_per_s=266519.71`
+- The remaining issue has shifted again:
+  - after printing the result, the Python benchmark process stayed alive inside the pod instead of exiting
+  - `ps` inside the live container still showed `/opt/conda/bin/python lib/levanter/scripts/bench/bench_deepep_dispatch_jax.py ... --check`
+
+This means the current blocker is no longer “transport fails to run.” It is now a smaller teardown/lifecycle issue after a successful pure-JAX transport step.
   - the next concrete hypothesis is that the reduced-channel deterministic case is also underprovisioned by the default `dispatch_num_max_send_tokens` cap

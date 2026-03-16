@@ -921,3 +921,64 @@
 - Next action:
   - Re-run the same tiny deterministic host-only control with `dispatch_num_sms=2` and a higher `dispatch_num_max_send_tokens`, once the isolated H100 lane is free again.
   - If that clears the remaining failures, propagate the same no-eager-sync discipline into the real JAX path and rerun the pure-JAX `shard_map` bring-up.
+
+### 2026-03-15 18:45 PDT - Tiny pure-JAX `shard_map` transport now runs end to end on H100x8
+
+- Hypothesis:
+  - The remaining same-process failures are narrow enough that fixing the `notify_dispatch(num_sms vs num_channels)` corruption, returning the receive-side channel-prefix handle, and propagating the reduced debug config into the real JAX path should allow the tiny deterministic `shard_map` transport step to complete.
+- Code changes:
+  - Commit `6c53abefa2308ac3a1ad8b92c1fbe969961ae571`
+    - fix `notify_dispatch(...)` to pass `runtime.dispatch_num_channels()` instead of `runtime.dispatch_config.num_sms`
+  - Commit `22dbb2c5c18b7fff3728279465a662ffaa323775`
+    - thread CLI dispatch/combine overrides through the real JAX bench path
+  - Commit `380ea9d45eb326bb9f4b7dd96a043f97626360ad`
+    - repair the host helper signature after returning receive-side channel metadata
+  - Commit `2b86a3f6448481c600d311be42ae0b0c8f014a3d`
+    - fix the `shard_map` correctness check to compare host arrays instead of incompatible shardings
+- Commands:
+  ```bash
+  KUBECONFIG=/Users/romain/.kube/coreweave-iris \
+  uv run .agents/scripts/deepep_jax_transport_krt.py \
+    --config lib/iris/examples/coreweave-moe-jax-3677.yaml \
+    --worktree /Users/romain/marin-wt/moe-jax-megatron-root-cause \
+    --build-with-torch-extension \
+    --load-as-python-module \
+    --launch-debug \
+    --launch-debug-label shard-map-min-sms2-fix6 \
+    --tokens 128 \
+    --hidden 128 \
+    --experts 8 \
+    --topk-list 1 \
+    --distributions deterministic \
+    --dispatch-num-sms 2 \
+    --dispatch-num-max-send-tokens 32 \
+    --timeout-seconds 3600
+  ```
+- Result:
+  - The pod reached the real benchmark body and executed the pure-JAX `shard_map` transport path on the isolated H100x8 lane.
+  - Dispatch launch was healthy on the real JAX path:
+    - `attr_status_code=0`
+    - `set_attr_status_code=0`
+    - `num_sms=2`
+    - `num_max_send_tokens=32`
+    - `max_dynamic_smem_bytes=196608`
+  - All ranks repeatedly reached:
+    - `after_notify_dispatch`
+    - `after_wait_for_recv_counts`
+    - `after_dispatch_launch`
+  - The correctness check passed exactly:
+    - `CHECK x_max_abs=0.000000e+00 topk_max_abs=0.000000e+00`
+  - The tiny deterministic run produced the first clean pure-JAX result line:
+    - `RESULT step_s=0.000480 tokens_per_s=266519.71`
+- Interpretation:
+  - This is the first end-to-end success for the pure-JAX `shard_map` transport path on H100x8 with zero Torch in the step path.
+  - The previous “DeepEP transport still fails in JAX runtime” statement is no longer true for the tiny deterministic case.
+  - The current remaining issue from this run is smaller and later:
+    - after printing the result, the benchmark process remained alive instead of exiting cleanly
+    - `ps` inside the pod showed the Python benchmark process still running after the final `RESULT` line
+- Next action:
+  - Treat the post-result hang as a separate teardown/lifecycle bug.
+  - Capture this milestone on `#3677`.
+  - Then decide whether to:
+    - isolate the shutdown hang first, or
+    - immediately scale from the tiny deterministic case to a slightly larger shape while keeping the new transport path fixed.
