@@ -12,5 +12,13 @@ def migrate(conn: sqlite3.Connection) -> None:
     # tasks instead of scanning all attempts per worker.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state)")
 
-    # Cover _query_endpoints JOIN to jobs for terminal-job filtering.
+    # Index for endpoint lookups by job_id.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_endpoints_job_id ON endpoints(job_id)")
+
+    # Purge stale endpoints for terminal jobs. These accumulated due to a bug
+    # where endpoint cleanup was gated on worker_id being non-NULL, so tasks
+    # that went terminal without a worker assignment leaked their endpoints.
+    # Terminal states: SUCCEEDED=4, FAILED=5, KILLED=6, WORKER_FAILED=7, UNSCHEDULABLE=8
+    conn.execute(
+        "DELETE FROM endpoints WHERE job_id IN (" "  SELECT job_id FROM jobs WHERE state IN (4, 5, 6, 7, 8)" ")"
+    )
