@@ -319,29 +319,39 @@ def _jobs_in_states(db: ControllerDB, states: tuple[int, ...]) -> list[Job]:
 
 
 def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = None) -> dict[JobName, TaskJobSummary]:
+    """Aggregate task counts per job using SQL GROUP BY instead of Python-side iteration."""
+    if job_ids is not None:
+        placeholders = ",".join("?" for _ in job_ids)
+        where = f"WHERE t.job_id IN ({placeholders})"
+        params: tuple[object, ...] = tuple(j.to_wire() for j in job_ids)
+    else:
+        where = ""
+        params = ()
+
+    sql = f"""
+        SELECT t.job_id,
+               t.state,
+               COUNT(*) as cnt,
+               SUM(t.failure_count) as total_failures,
+               SUM(t.preemption_count) as total_preemptions
+        FROM tasks t
+        {where}
+        GROUP BY t.job_id, t.state
+    """
+    completed_states = (cluster_pb2.TASK_STATE_SUCCEEDED, cluster_pb2.TASK_STATE_KILLED)
     with db.read_snapshot() as q:
-        rows = q.select(
-            TASKS,
-            columns=(
-                TASKS.c.job_id,
-                TASKS.c.state,
-                TASKS.c.failure_count,
-                TASKS.c.preemption_count,
-            ),
-            where=TASKS.c.job_id.in_([j.to_wire() for j in job_ids]) if job_ids else None,
-        )
+        rows = q.raw(sql, params, decoders={"job_id": _decode_job_name})
+
     summaries: dict[JobName, TaskJobSummary] = {}
     for row in rows:
-        summary = summaries.get(row.job_id, TaskJobSummary(job_id=row.job_id))
-        state_count = summary.task_state_counts.get(row.state, 0) + 1
+        prev = summaries.get(row.job_id, TaskJobSummary(job_id=row.job_id))
         summaries[row.job_id] = TaskJobSummary(
             job_id=row.job_id,
-            task_count=summary.task_count + 1,
-            completed_count=summary.completed_count
-            + (1 if row.state in (cluster_pb2.TASK_STATE_SUCCEEDED, cluster_pb2.TASK_STATE_KILLED) else 0),
-            failure_count=summary.failure_count + row.failure_count,
-            preemption_count=summary.preemption_count + row.preemption_count,
-            task_state_counts={**summary.task_state_counts, row.state: state_count},
+            task_count=prev.task_count + row.cnt,
+            completed_count=prev.completed_count + (row.cnt if row.state in completed_states else 0),
+            failure_count=prev.failure_count + row.total_failures,
+            preemption_count=prev.preemption_count + row.total_preemptions,
+            task_state_counts={**prev.task_state_counts, row.state: row.cnt},
         )
     return summaries
 
