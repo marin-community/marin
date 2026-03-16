@@ -123,6 +123,8 @@ def _bench_block(args: argparse.Namespace) -> str:
         probe_flags += "  --host-kernel-probe-only \\\n"
     if args.host_dispatch_round_only:
         probe_flags += "  --host-dispatch-round-only \\\n"
+    if args.timing_breakdown:
+        probe_flags += "  --timing-breakdown \\\n"
     if args.dispatch_num_sms is not None:
         probe_flags += f"  --dispatch-num-sms {args.dispatch_num_sms} \\\n"
     if args.dispatch_num_max_send_tokens is not None:
@@ -299,6 +301,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--probe-only", action="store_true")
     parser.add_argument("--host-kernel-probe-only", action="store_true")
     parser.add_argument("--host-dispatch-round-only", action="store_true")
+    parser.add_argument("--timing-breakdown", action="store_true")
     parser.add_argument("--probe-max-elements", type=int, default=256)
     parser.add_argument("--dispatch-num-sms", type=int)
     parser.add_argument("--dispatch-num-max-send-tokens", type=int)

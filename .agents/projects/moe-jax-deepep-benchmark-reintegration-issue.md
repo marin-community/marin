@@ -30,12 +30,14 @@ This thread is specifically about:
 * Prior layout-only JAX issue (`#3665`): https://github.com/marin-community/marin/issues/3665
 * Prior Megatron scaling issue (`#3666`): https://github.com/marin-community/marin/issues/3666
 * Prior root-cause issue (`#3677`): https://github.com/marin-community/marin/issues/3677
-* Research logbook: `.agents/logbooks/moe-jax-deepep-benchmark-reintegration.md`
+* Research branch: https://github.com/marin-community/marin/tree/research/moe-jax-deepep-benchmark-reintegration
+* Research logbook: https://github.com/marin-community/marin/tree/research/moe-jax-deepep-benchmark-reintegration/.agents/logbooks/moe-jax-deepep-benchmark-reintegration.md
 
 ## Results
 
 Current state as of 2026-03-16:
 - new thread created from sealed `#3677` commit `6baa08edbd8ae9a782d0070a3b7cf0e1f38ba005`
+- working branch head: `cbc6f3aadd93cd5da6f73d850a80ffe33b891699`
 - experiment issue: https://github.com/marin-community/marin/issues/3711
 - baseline from `#3677`:
   - same-shape pure-JAX DeepEP transport now sits within `1.10x` to `1.54x` of Torch transport on H100x8

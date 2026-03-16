@@ -229,6 +229,184 @@ def _transport_local(
     return combined_x, combined_topk_weights, fanout
 
 
+def _layout_local(
+    topk_idx_local: jax.Array,
+    *,
+    num_experts: int,
+    num_ranks: int,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    num_tokens_per_rank, num_tokens_per_expert, is_token_in_rank = deepep_get_dispatch_layout(
+        topk_idx_local,
+        num_ranks=num_ranks,
+        num_experts=num_experts,
+    )
+    return num_tokens_per_rank[None, :], num_tokens_per_expert[None, :], is_token_in_rank
+
+
+def _dispatch_combine_from_layout_local(
+    x_local: jax.Array,
+    topk_idx_local: jax.Array,
+    topk_weights_local: jax.Array,
+    num_tokens_per_rank_local: jax.Array,
+    num_tokens_per_expert_local: jax.Array,
+    is_token_in_rank_local: jax.Array,
+    *,
+    num_experts: int,
+    dispatch_config,
+    combine_config,
+) -> tuple[jax.Array, jax.Array]:
+    num_tokens_per_rank = jnp.squeeze(num_tokens_per_rank_local, axis=0)
+    num_tokens_per_expert = jnp.squeeze(num_tokens_per_expert_local, axis=0)
+    (
+        recv_x,
+        _recv_topk_idx,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        _channel_prefix_matrix,
+        recv_channel_prefix_matrix,
+        send_head,
+        _local_expert_counts,
+        num_recv_tokens,
+    ) = deepep_dispatch_intranode(
+        x_local,
+        topk_idx_local,
+        topk_weights_local,
+        num_tokens_per_rank,
+        num_tokens_per_expert,
+        is_token_in_rank_local,
+        num_experts=num_experts,
+        dispatch_config=dispatch_config,
+        combine_config=combine_config,
+    )
+    return deepep_combine_intranode(
+        recv_x,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        recv_channel_prefix_matrix,
+        send_head,
+        num_recv_tokens,
+    )
+
+
+def _transport_from_layout_local(
+    x_local: jax.Array,
+    topk_idx_local: jax.Array,
+    topk_weights_local: jax.Array,
+    num_tokens_per_rank_local: jax.Array,
+    num_tokens_per_expert_local: jax.Array,
+    is_token_in_rank_local: jax.Array,
+    *,
+    num_experts: int,
+    dispatch_config,
+    combine_config,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    combined_x, combined_topk_weights = _dispatch_combine_from_layout_local(
+        x_local,
+        topk_idx_local,
+        topk_weights_local,
+        num_tokens_per_rank_local,
+        num_tokens_per_expert_local,
+        is_token_in_rank_local,
+        num_experts=num_experts,
+        dispatch_config=dispatch_config,
+        combine_config=combine_config,
+    )
+    fanout = jnp.sum(is_token_in_rank_local.astype(jnp.int32), axis=1)
+    return combined_x, combined_topk_weights, fanout
+
+
+def _layout_step(
+    topk_idx: jax.Array,
+    *,
+    mesh: Mesh,
+    num_experts: int,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    shard_fn = shard_map(
+        partial(
+            _layout_local,
+            num_experts=num_experts,
+            num_ranks=mesh.shape["expert"],
+        ),
+        mesh=mesh,
+        in_specs=(P("expert", None),),
+        out_specs=(P("expert", None), P("expert", None), P("expert", None)),
+        check_vma=False,
+    )
+    return shard_fn(topk_idx)
+
+
+def _dispatch_combine_from_layout_step(
+    x: jax.Array,
+    topk_idx: jax.Array,
+    topk_weights: jax.Array,
+    num_tokens_per_rank: jax.Array,
+    num_tokens_per_expert: jax.Array,
+    is_token_in_rank: jax.Array,
+    *,
+    mesh: Mesh,
+    num_experts: int,
+    dispatch_config,
+    combine_config,
+) -> tuple[jax.Array, jax.Array]:
+    shard_fn = shard_map(
+        partial(
+            _dispatch_combine_from_layout_local,
+            num_experts=num_experts,
+            dispatch_config=dispatch_config,
+            combine_config=combine_config,
+        ),
+        mesh=mesh,
+        in_specs=(
+            P("expert", None),
+            P("expert", None),
+            P("expert", None),
+            P("expert", None),
+            P("expert", None),
+            P("expert", None),
+        ),
+        out_specs=(P("expert", None), P("expert", None)),
+        check_vma=False,
+    )
+    return shard_fn(x, topk_idx, topk_weights, num_tokens_per_rank, num_tokens_per_expert, is_token_in_rank)
+
+
+def _transport_from_layout_step(
+    x: jax.Array,
+    topk_idx: jax.Array,
+    topk_weights: jax.Array,
+    num_tokens_per_rank: jax.Array,
+    num_tokens_per_expert: jax.Array,
+    is_token_in_rank: jax.Array,
+    *,
+    mesh: Mesh,
+    num_experts: int,
+    dispatch_config,
+    combine_config,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    shard_fn = shard_map(
+        partial(
+            _transport_from_layout_local,
+            num_experts=num_experts,
+            dispatch_config=dispatch_config,
+            combine_config=combine_config,
+        ),
+        mesh=mesh,
+        in_specs=(
+            P("expert", None),
+            P("expert", None),
+            P("expert", None),
+            P("expert", None),
+            P("expert", None),
+            P("expert", None),
+        ),
+        out_specs=(P("expert", None), P("expert", None), P("expert")),
+        check_vma=False,
+    )
+    return shard_fn(x, topk_idx, topk_weights, num_tokens_per_rank, num_tokens_per_expert, is_token_in_rank)
+
+
 def _transport_step(
     x: jax.Array,
     topk_idx: jax.Array,
@@ -364,6 +542,7 @@ def main() -> None:
     parser.add_argument("--host-dispatch-round-only", action="store_true")
     parser.add_argument("--execution-model", choices=("shard_map", "pmap"), default="shard_map")
     parser.add_argument("--probe-max-elements", type=int, default=256)
+    parser.add_argument("--timing-breakdown", action="store_true")
     parser.add_argument("--dispatch-num-sms", type=int)
     parser.add_argument("--dispatch-num-max-send-tokens", type=int)
     parser.add_argument("--dispatch-num-max-recv-tokens", type=int)
@@ -511,7 +690,10 @@ def main() -> None:
         _print0("PROBE_JSON " + json.dumps(payload, sort_keys=True))
         return
 
+    breakdown = None
     if args.execution_model == "pmap":
+        if args.timing_breakdown:
+            raise ValueError("--timing-breakdown currently supports only --execution-model=shard_map")
         dispatch_config = _dispatch_config_from_args(args, ep_size)
         combine_config = _combine_config_from_args(args, ep_size)
         tokens_per_rank = args.tokens // ep_size
@@ -566,6 +748,18 @@ def main() -> None:
         x_sharded, topk_idx_sharded, topk_weights_sharded = _shard_inputs(mesh, x, topk_idx, topk_weights)
 
         with jax.set_mesh(mesh):
+            layout_fn = partial(
+                _layout_step,
+                mesh=mesh,
+                num_experts=args.experts,
+            )
+            dispatch_combine_fn = partial(
+                _dispatch_combine_from_layout_step,
+                mesh=mesh,
+                num_experts=args.experts,
+                dispatch_config=dispatch_config,
+                combine_config=combine_config,
+            )
             step_fn = partial(
                 _transport_step,
                 mesh=mesh,
@@ -586,6 +780,33 @@ def main() -> None:
                 topk_error = float(np.max(np.abs(combined_topk_weights_host - topk_weights_host)))
                 _print0(f"CHECK x_max_abs={x_error:.6e} topk_max_abs={topk_error:.6e}")
 
+            if args.timing_breakdown:
+                layout = jax.jit(layout_fn)(topk_idx_sharded)
+                cached_transport_fn = partial(
+                    dispatch_combine_fn,
+                    num_tokens_per_rank=layout[0],
+                    num_tokens_per_expert=layout[1],
+                    is_token_in_rank=layout[2],
+                )
+                layout_dt = _time_fn(
+                    layout_fn,
+                    topk_idx_sharded,
+                    warmup=args.warmup,
+                    iters=args.iters,
+                )
+                cached_transport_dt = _time_fn(
+                    cached_transport_fn,
+                    x_sharded,
+                    topk_idx_sharded,
+                    topk_weights_sharded,
+                    warmup=args.warmup,
+                    iters=args.iters,
+                )
+                breakdown = {
+                    "layout_s": layout_dt,
+                    "dispatch_combine_cached_s": cached_transport_dt,
+                }
+
             dt = _time_fn(
                 step_fn,
                 x_sharded,
@@ -602,6 +823,12 @@ def main() -> None:
         f"tokens={args.tokens} hidden={args.hidden} experts={args.experts} topk={args.topk} "
         f"distribution={args.distribution} dtype=bfloat16 mode=intranode execution_model={args.execution_model}"
     )
+    if breakdown is not None:
+        _print0(
+            "BREAKDOWN "
+            f"layout_s={breakdown['layout_s']:.6f} "
+            f"dispatch_combine_cached_s={breakdown['dispatch_combine_cached_s']:.6f}"
+        )
     _print0(f"RESULT step_s={dt:.6f} tokens_per_s={tokens_per_second:.2f}")
 
 
