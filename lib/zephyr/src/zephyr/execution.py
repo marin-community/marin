@@ -1493,7 +1493,7 @@ class ZephyrContext:
         # max_concurrency allows workers to call pull_task/report_result
         # while run_pipeline blocks.
         logger.info("Starting coordinator for %s (pipeline %d, attempt %d)", self.name, self._pipeline_id, attempt)
-        coordinator_resources = ResourceConfig(cpu=1, ram="2g")
+        coordinator_resources = ResourceConfig(cpu=1, ram="5g")
         coordinator_actor_config = ActorConfig(max_concurrency=100)
         self._coordinator_group = self.client.create_actor_group(
             ZephyrCoordinator,
