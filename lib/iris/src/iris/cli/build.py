@@ -148,6 +148,30 @@ def push_to_ghcr(
     click.echo("\nDone!")
 
 
+def _ensure_protos() -> None:
+    """Regenerate protobuf Python bindings from .proto sources.
+
+    Called before ``docker build`` so that COPY always picks up fresh bindings.
+    The hatch build hook handles staleness for normal ``uv sync`` / ``uv run``,
+    but Docker has no ``npx`` so it cannot regenerate inside the image.
+    """
+    iris_root = find_iris_root()
+    generate_script = iris_root / "scripts" / "generate_protos.py"
+    if not generate_script.exists():
+        raise click.ClickException(f"Proto generation script not found: {generate_script}")
+    click.echo("Regenerating protobuf bindings...")
+    result = subprocess.run(
+        ["python", str(generate_script)],
+        cwd=iris_root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        click.echo(result.stderr, err=True)
+        raise click.ClickException("Protobuf generation failed")
+    click.echo("Protobuf bindings regenerated.")
+
+
 def _ensure_dashboard_dist() -> None:
     """Build Vue dashboard assets.
 
@@ -262,6 +286,8 @@ def _build_all(
     """
     marin_root = find_marin_root()
 
+    _ensure_protos()
+
     for image_type in ("worker", "controller"):
         tag = _default_versioned_tag(f"iris-{image_type}")
         build_image(image_type, tag, push, None, platform, ghcr_org)
@@ -324,6 +350,7 @@ def build_worker_image(
 ):
     """Build Docker image for Iris worker."""
     verbose = _is_verbose(ctx)
+    _ensure_protos()
     tag = tag or _default_versioned_tag("iris-worker")
     build_image("worker", tag, push, context, platform, ghcr_org, verbose=verbose)
 
@@ -345,6 +372,7 @@ def build_controller_image(
 ):
     """Build Docker image for Iris controller."""
     verbose = _is_verbose(ctx)
+    _ensure_protos()
     tag = tag or _default_versioned_tag("iris-controller")
     build_image("controller", tag, push, context, platform, ghcr_org, verbose=verbose)
 
@@ -370,6 +398,7 @@ def build_task_image(
     marin_root = find_marin_root()
 
     verbose = _is_verbose(ctx)
+    _ensure_protos()
     resolved_tag = tag or _default_versioned_tag("iris-task")
 
     build_image(
