@@ -397,6 +397,21 @@ def _jobs_paginated(
     return jobs, total
 
 
+def _descendants_for_roots(db: ControllerDB, root_job_ids: list[str]) -> list[Job]:
+    """Fetch all descendant jobs (depth > 1) for the given root job IDs in a single query."""
+    if not root_job_ids:
+        return []
+    placeholders = ",".join("?" for _ in root_job_ids)
+    sql = f"""
+        SELECT j.*
+        FROM jobs j
+        WHERE j.root_job_id IN ({placeholders}) AND j.depth > 1
+    """
+    with db.read_snapshot() as q:
+        rows = q.execute_sql(sql, tuple(root_job_ids)).fetchall()
+    return [db.decode_job(row) for row in rows]
+
+
 def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = None) -> dict[JobName, TaskJobSummary]:
     """Aggregate task counts per job using SQL GROUP BY instead of Python-side iteration."""
     if job_ids is not None:
@@ -958,8 +973,11 @@ class ControllerServiceImpl:
             offset=offset,
             limit=limit,
         )
-        task_summaries = _task_summaries_for_jobs(self._db, {j.job_id for j in jobs})
-        all_jobs = self._jobs_to_protos(jobs, task_summaries, autoscaler_pending_hints)
+        # Also fetch descendants so the dashboard can build the job tree.
+        descendants = _descendants_for_roots(self._db, [j.job_id.to_wire() for j in jobs])
+        all_db_jobs = jobs + descendants
+        task_summaries = _task_summaries_for_jobs(self._db, {j.job_id for j in all_db_jobs})
+        all_jobs = self._jobs_to_protos(all_db_jobs, task_summaries, autoscaler_pending_hints)
         has_more = limit > 0 and offset + limit < total_count
         return cluster_pb2.Controller.ListJobsResponse(
             jobs=all_jobs,

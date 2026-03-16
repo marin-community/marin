@@ -817,8 +817,8 @@ def test_list_jobs_name_filter(service, job_request):
     assert "alpha" in response.jobs[0].name.lower()
 
 
-def test_list_jobs_top_level_only(service, state, job_request):
-    """list_jobs only returns top-level jobs by default."""
+def test_list_jobs_includes_descendants(service, state, job_request):
+    """list_jobs returns top-level jobs plus their descendants for tree display."""
     service.launch_job(job_request("parent-job"), None)
     # Submit child job directly via transitions
     parent_id = JobName.root("test-user", "parent-job")
@@ -835,10 +835,11 @@ def test_list_jobs_top_level_only(service, state, job_request):
     request = cluster_pb2.Controller.ListJobsRequest()
     response = service.list_jobs(request, None)
 
-    # Only the parent should appear
+    # Both parent and child should appear; pagination counts only top-level jobs
     job_ids = [j.job_id for j in response.jobs]
     assert parent_id.to_wire() in job_ids
-    assert child_id.to_wire() not in job_ids
+    assert child_id.to_wire() in job_ids
+    assert response.total_count == 1
 
 
 # =============================================================================
