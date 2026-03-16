@@ -46,6 +46,7 @@ Kernel = Literal[
     "deepep_transport_second_ragged_dot_probe",
     "deepep_transport",
     "deepep_transport_prewarmed",
+    "deepep_transport_capped",
     "deepep_transport_capped_prewarmed",
     "deepep_transport_staged",
     "prefix_counts",
@@ -4234,6 +4235,99 @@ def _time_deepep_transport_forward_capped_prewarmed(
     )
 
 
+def _time_deepep_transport_forward_capped(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    shared_w13: jax.Array,
+    shared_w2: jax.Array,
+    *,
+    warmup: int,
+    iters: int,
+) -> float:
+    mesh = x.sharding.mesh
+    num_experts = int(w_up_gate.shape[0])
+    max_recv_tokens, max_local_assignments = _deepep_transport_exact_caps(
+        selected_experts,
+        mesh=mesh,
+        num_experts=num_experts,
+    )
+    return _time_fn(
+        partial(
+            _forward_deepep_transport_capped,
+            max_recv_tokens=max_recv_tokens,
+            max_local_assignments=max_local_assignments,
+        ),
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        shared_w13,
+        shared_w2,
+        warmup=warmup,
+        iters=iters,
+    )
+
+
+def _time_deepep_transport_forward_backward_capped_prewarmed(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    shared_w13: jax.Array,
+    shared_w2: jax.Array,
+    *,
+    warmup: int,
+    iters: int,
+) -> float:
+    mesh = x.sharding.mesh
+    num_experts = int(w_up_gate.shape[0])
+    max_recv_tokens, max_local_assignments = _deepep_transport_exact_caps(
+        selected_experts,
+        mesh=mesh,
+        num_experts=num_experts,
+    )
+    _prewarm_deepep_transport_local_compute(
+        x,
+        selected_experts,
+        w_up_gate,
+        w_down,
+        shared_w13,
+        shared_w2,
+        max_local_assignments=max_local_assignments,
+    )
+
+    def loss_fn(x_in, w_up_gate_in, w_down_in, shared_w13_in, shared_w2_in):
+        y = _forward_deepep_transport_capped(
+            x_in,
+            selected_experts,
+            combine_weights,
+            w_up_gate_in,
+            w_down_in,
+            shared_w13_in,
+            shared_w2_in,
+            max_recv_tokens=max_recv_tokens,
+            max_local_assignments=max_local_assignments,
+        )
+        return jnp.mean(jnp.square(y.astype(jnp.float32)))
+
+    grad_fn = jax.value_and_grad(loss_fn, argnums=(0, 1, 2, 3, 4))
+    return _time_fn(
+        grad_fn,
+        x,
+        w_up_gate,
+        w_down,
+        shared_w13,
+        shared_w2,
+        warmup=warmup,
+        iters=iters,
+    )
+
+
 def _flatten_tree_max_abs(tree_a, tree_b) -> float:
     leaves_a = jax.tree.leaves(tree_a)
     leaves_b = jax.tree.leaves(tree_b)
@@ -4275,6 +4369,7 @@ def main() -> None:
             "deepep_transport_second_ragged_dot_probe",
             "deepep_transport",
             "deepep_transport_prewarmed",
+            "deepep_transport_capped",
             "deepep_transport_capped_prewarmed",
             "deepep_transport_staged",
             "prefix_counts",
@@ -4427,6 +4522,20 @@ def main() -> None:
                             warmup=args.warmup,
                             iters=args.iters,
                         )
+                    elif kernel == "deepep_transport_capped":
+                        if args.profile_root is not None:
+                            raise ValueError("deepep_transport_capped does not yet support --profile-root")
+                        dt = _time_deepep_transport_forward_capped(
+                            x_sharded,
+                            selected_sharded,
+                            weights_sharded,
+                            w13_sharded,
+                            w2_sharded,
+                            shared_w13_sharded,
+                            shared_w2_sharded,
+                            warmup=args.warmup,
+                            iters=args.iters,
+                        )
                     elif kernel == "deepep_transport_capped_prewarmed":
                         if args.profile_root is not None:
                             raise ValueError("deepep_transport_capped_prewarmed does not yet support --profile-root")
@@ -4484,13 +4593,23 @@ def main() -> None:
                             iters=args.iters,
                         )
                 else:
-                    if kernel in {
-                        "deepep_transport_prewarmed",
-                        "deepep_transport_capped_prewarmed",
-                        "deepep_transport_staged",
-                    }:
+                    if kernel in {"deepep_transport_prewarmed", "deepep_transport_capped", "deepep_transport_staged"}:
                         raise ValueError(f"{kernel} currently supports only --bench-pass=forward")
-                    if args.profile_root is not None:
+                    if kernel == "deepep_transport_capped_prewarmed":
+                        if args.profile_root is not None:
+                            raise ValueError("deepep_transport_capped_prewarmed does not yet support --profile-root")
+                        dt = _time_deepep_transport_forward_backward_capped_prewarmed(
+                            x_sharded,
+                            selected_sharded,
+                            weights_sharded,
+                            w13_sharded,
+                            w2_sharded,
+                            shared_w13_sharded,
+                            shared_w2_sharded,
+                            warmup=args.warmup,
+                            iters=args.iters,
+                        )
+                    elif args.profile_root is not None:
                         dt = _profile_fn(
                             grad_fn,
                             x_sharded,

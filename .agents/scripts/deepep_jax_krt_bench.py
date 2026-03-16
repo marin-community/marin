@@ -128,13 +128,25 @@ def _bench_block(args: argparse.Namespace) -> str:
     kernels = " ".join(args.kernels.split(","))
     distributions = " ".join(args.distributions.split(","))
     topk_values = " ".join(args.topk_list.split(","))
+    timeout_prefix = ""
+    timeout_suffix = ""
+    if args.per_bench_timeout_seconds is not None:
+        timeout_prefix = f"timeout -k {args.per_bench_kill_after_seconds}s {args.per_bench_timeout_seconds}s "
+        timeout_suffix = """
+      bench_status=$?
+      if [ "$bench_status" -eq 124 ] || [ "$bench_status" -eq 137 ]; then
+        echo "BENCH_TIMEOUT kernel=$kernel distribution=$distribution topk=$topk"
+      elif [ "$bench_status" -ne 0 ]; then
+        exit "$bench_status"
+      fi
+"""
     return f"""
 echo RUNNING_BENCH_MATRIX
 for distribution in {distributions}; do
   for topk in {topk_values}; do
     for kernel in {kernels}; do
       echo "BENCH_START kernel=$kernel distribution=$distribution topk=$topk"
-      .venv/bin/python {BENCH_PATH} \\
+      {timeout_prefix}.venv/bin/python {BENCH_PATH} \\
         --tokens {args.tokens} \\
         --hidden {args.hidden} \\
         --mlp-dim {args.mlp_dim} \\
@@ -147,6 +159,7 @@ for distribution in {distributions}; do
         --ep-list {args.ep_list} \\
         --warmup {args.warmup} \\
         --iters {args.iters}
+{timeout_suffix}
       echo "BENCH_END kernel=$kernel distribution=$distribution topk=$topk"
     done
   done
@@ -255,8 +268,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--ep-list", default="1,2,4,8")
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--iters", type=int, default=3)
+    parser.add_argument("--per-bench-timeout-seconds", type=int, default=None)
+    parser.add_argument("--per-bench-kill-after-seconds", type=int, default=10)
     parser.add_argument("--build-with-torch-extension", action="store_true")
     parser.add_argument("--load-as-python-module", action="store_true")
+    parser.add_argument("--skip-cleanup", action="store_true")
     return parser.parse_args()
 
 
@@ -287,7 +303,8 @@ def main() -> int:
                 raise TimeoutError(f"pod {handle.container_id} did not finish in {args.timeout_seconds}s")
             time.sleep(args.poll_seconds)
     finally:
-        runtime.cleanup()
+        if not args.skip_cleanup:
+            runtime.cleanup()
 
 
 if __name__ == "__main__":
