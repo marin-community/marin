@@ -3973,7 +3973,7 @@ def _time_deepep_transport_staged_forward(
     warmup: int,
     iters: int,
 ) -> float:
-    mesh = get_abstract_mesh()
+    mesh = x.sharding.mesh
     num_experts = int(w_up_gate.shape[0])
     expert_axis_size = grug_moe_lib._mesh_axis_size(mesh, "expert")
     local_experts = num_experts // expert_axis_size
