@@ -18,6 +18,7 @@ import logging
 import os
 import pickle
 import re
+from datetime import datetime, timezone
 import threading
 import time
 import uuid
@@ -194,8 +195,6 @@ class TaskResult:
 
 def _generate_execution_id() -> str:
     """Generate unique ID for this execution to avoid conflicts."""
-    from datetime import datetime, timezone
-
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     return f"{ts}-{uuid.uuid4().hex[:8]}"
 
