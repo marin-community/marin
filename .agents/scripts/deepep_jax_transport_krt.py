@@ -116,29 +116,36 @@ def _bench_block(args: argparse.Namespace) -> str:
     python_runner = "/opt/conda/bin/python"
     if args.compute_sanitizer:
         python_runner = "compute-sanitizer --tool memcheck --target-processes all /opt/conda/bin/python"
-    probe_flags = ""
+    extra_flags: list[str] = []
     if args.probe_only:
-        probe_flags = f"  --probe-only \\\n  --probe-max-elements {args.probe_max_elements} \\\n"
+        extra_flags.extend(["--probe-only", f"--probe-max-elements {args.probe_max_elements}"])
     if args.layout_stats_only:
-        probe_flags += "  --layout-stats-only \\\n"
+        extra_flags.append("--layout-stats-only")
     if args.host_kernel_probe_only:
-        probe_flags += "  --host-kernel-probe-only \\\n"
+        extra_flags.append("--host-kernel-probe-only")
     if args.host_dispatch_round_only:
-        probe_flags += "  --host-dispatch-round-only \\\n"
+        extra_flags.append("--host-dispatch-round-only")
     if args.timing_breakdown:
-        probe_flags += "  --timing-breakdown \\\n"
+        extra_flags.append("--timing-breakdown")
+    if args.grad_probe is not None:
+        extra_flags.append(f"--grad-probe {args.grad_probe}")
     if args.dispatch_num_sms is not None:
-        probe_flags += f"  --dispatch-num-sms {args.dispatch_num_sms} \\\n"
+        extra_flags.append(f"--dispatch-num-sms {args.dispatch_num_sms}")
     if args.dispatch_num_max_send_tokens is not None:
-        probe_flags += f"  --dispatch-num-max-send-tokens {args.dispatch_num_max_send_tokens} \\\n"
+        extra_flags.append(f"--dispatch-num-max-send-tokens {args.dispatch_num_max_send_tokens}")
     if args.dispatch_num_max_recv_tokens is not None:
-        probe_flags += f"  --dispatch-num-max-recv-tokens {args.dispatch_num_max_recv_tokens} \\\n"
+        extra_flags.append(f"--dispatch-num-max-recv-tokens {args.dispatch_num_max_recv_tokens}")
     if args.combine_num_sms is not None:
-        probe_flags += f"  --combine-num-sms {args.combine_num_sms} \\\n"
+        extra_flags.append(f"--combine-num-sms {args.combine_num_sms}")
     if args.combine_num_max_send_tokens is not None:
-        probe_flags += f"  --combine-num-max-send-tokens {args.combine_num_max_send_tokens} \\\n"
+        extra_flags.append(f"--combine-num-max-send-tokens {args.combine_num_max_send_tokens}")
     if args.combine_num_max_recv_tokens is not None:
-        probe_flags += f"  --combine-num-max-recv-tokens {args.combine_num_max_recv_tokens} \\\n"
+        extra_flags.append(f"--combine-num-max-recv-tokens {args.combine_num_max_recv_tokens}")
+    if args.grad_probe is None:
+        extra_flags.append("--check")
+    extra_flag_block = ""
+    if extra_flags:
+        extra_flag_block = " \\\n" + " \\\n".join(f"  {flag}" for flag in extra_flags)
     for distribution in args.distributions.split(","):
         for topk_text in args.topk_list.split(","):
             topk = int(topk_text)
@@ -154,9 +161,7 @@ echo "BENCH_START distribution={distribution} topk={topk}"
   --execution-model {args.execution_model} \\
   --seed {args.seed} \\
   --warmup {args.warmup} \\
-  --iters {args.iters} \\
-{probe_flags}\
-  --check
+  --iters {args.iters}{extra_flag_block}
 echo "BENCH_END distribution={distribution} topk={topk}"
 """
             )
@@ -305,6 +310,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--host-kernel-probe-only", action="store_true")
     parser.add_argument("--host-dispatch-round-only", action="store_true")
     parser.add_argument("--timing-breakdown", action="store_true")
+    parser.add_argument("--grad-probe", choices=("dispatch", "combine", "transport"))
     parser.add_argument("--probe-max-elements", type=int, default=256)
     parser.add_argument("--dispatch-num-sms", type=int)
     parser.add_argument("--dispatch-num-max-send-tokens", type=int)

@@ -23,6 +23,7 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 Distribution = Literal["random", "runs", "deterministic"]
 ExecutionModel = Literal["shard_map", "pmap"]
+GradProbeMode = Literal["dispatch", "combine", "transport"]
 
 
 def _repo_root() -> Path:
@@ -203,7 +204,7 @@ def _transport_local(
         recv_topk_weights,
         recv_src_idx,
         rank_prefix_matrix,
-        _channel_prefix_matrix,
+        channel_prefix_matrix,
         recv_channel_prefix_matrix,
         send_head,
         _,
@@ -224,6 +225,7 @@ def _transport_local(
         recv_topk_weights,
         recv_src_idx,
         rank_prefix_matrix,
+        channel_prefix_matrix,
         recv_channel_prefix_matrix,
         send_head,
         num_recv_tokens,
@@ -267,7 +269,7 @@ def _dispatch_combine_from_layout_local(
         recv_topk_weights,
         recv_src_idx,
         rank_prefix_matrix,
-        _channel_prefix_matrix,
+        channel_prefix_matrix,
         recv_channel_prefix_matrix,
         send_head,
         _local_expert_counts,
@@ -288,6 +290,7 @@ def _dispatch_combine_from_layout_local(
         recv_topk_weights,
         recv_src_idx,
         rank_prefix_matrix,
+        channel_prefix_matrix,
         recv_channel_prefix_matrix,
         send_head,
         num_recv_tokens,
@@ -462,6 +465,183 @@ def _transport_step_pmap(
     return mapped(x, topk_idx, topk_weights)
 
 
+def _dispatch_grad_local(
+    x_local: jax.Array,
+    topk_idx_local: jax.Array,
+    topk_weights_local: jax.Array,
+    *,
+    num_experts: int,
+    num_ranks: int,
+    dispatch_config,
+    combine_config,
+) -> tuple[jax.Array, jax.Array]:
+    num_tokens_per_rank, num_tokens_per_expert, is_token_in_rank = deepep_get_dispatch_layout(
+        topk_idx_local,
+        num_ranks=num_ranks,
+        num_experts=num_experts,
+    )
+
+    def loss_fn(x_arg: jax.Array) -> jax.Array:
+        recv_x, *_ = deepep_dispatch_intranode(
+            x_arg,
+            topk_idx_local,
+            topk_weights_local,
+            num_tokens_per_rank,
+            num_tokens_per_expert,
+            is_token_in_rank,
+            num_experts=num_experts,
+            dispatch_config=dispatch_config,
+            combine_config=combine_config,
+        )
+        return jnp.sum(recv_x.astype(jnp.float32))
+
+    loss, grad_x = jax.value_and_grad(loss_fn)(x_local)
+    grad_norm = jnp.linalg.norm(grad_x.astype(jnp.float32))
+    return loss.astype(jnp.float32)[None], grad_norm.astype(jnp.float32)[None]
+
+
+def _combine_grad_local(
+    x_local: jax.Array,
+    topk_idx_local: jax.Array,
+    topk_weights_local: jax.Array,
+    *,
+    num_experts: int,
+    num_ranks: int,
+    dispatch_config,
+    combine_config,
+) -> tuple[jax.Array, jax.Array]:
+    num_tokens_per_rank, num_tokens_per_expert, is_token_in_rank = deepep_get_dispatch_layout(
+        topk_idx_local,
+        num_ranks=num_ranks,
+        num_experts=num_experts,
+    )
+    (
+        recv_x,
+        _recv_topk_idx,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        channel_prefix_matrix,
+        recv_channel_prefix_matrix,
+        send_head,
+        _local_expert_counts,
+        num_recv_tokens,
+    ) = deepep_dispatch_intranode(
+        x_local,
+        topk_idx_local,
+        topk_weights_local,
+        num_tokens_per_rank,
+        num_tokens_per_expert,
+        is_token_in_rank,
+        num_experts=num_experts,
+        dispatch_config=dispatch_config,
+        combine_config=combine_config,
+    )
+    recv_topk_weights_const = jax.lax.stop_gradient(recv_topk_weights)
+    recv_src_idx_const = jax.lax.stop_gradient(recv_src_idx)
+    rank_prefix_matrix_const = jax.lax.stop_gradient(rank_prefix_matrix)
+    channel_prefix_matrix_const = jax.lax.stop_gradient(channel_prefix_matrix)
+    recv_channel_prefix_matrix_const = jax.lax.stop_gradient(recv_channel_prefix_matrix)
+    send_head_const = jax.lax.stop_gradient(send_head)
+    num_recv_tokens_const = jax.lax.stop_gradient(num_recv_tokens)
+    is_token_in_rank_const = jax.lax.stop_gradient(is_token_in_rank)
+
+    def loss_fn(recv_x_arg: jax.Array) -> jax.Array:
+        combined_x, _ = deepep_combine_intranode(
+            recv_x_arg,
+            recv_topk_weights_const,
+            recv_src_idx_const,
+            rank_prefix_matrix_const,
+            channel_prefix_matrix_const,
+            recv_channel_prefix_matrix_const,
+            send_head_const,
+            num_recv_tokens_const,
+            is_token_in_rank_const,
+        )
+        return jnp.sum(combined_x.astype(jnp.float32))
+
+    recv_x_const = jax.lax.stop_gradient(recv_x)
+    loss, grad_recv_x = jax.value_and_grad(loss_fn)(recv_x_const)
+    grad_norm = jnp.linalg.norm(grad_recv_x.astype(jnp.float32))
+    return loss.astype(jnp.float32)[None], grad_norm.astype(jnp.float32)[None]
+
+
+def _transport_grad_local(
+    x_local: jax.Array,
+    topk_idx_local: jax.Array,
+    topk_weights_local: jax.Array,
+    *,
+    num_experts: int,
+    num_ranks: int,
+    dispatch_config,
+    combine_config,
+) -> tuple[jax.Array, jax.Array]:
+    def loss_fn(x_arg: jax.Array) -> jax.Array:
+        combined_x, _, _ = _transport_local(
+            x_arg,
+            topk_idx_local,
+            topk_weights_local,
+            num_experts=num_experts,
+            num_ranks=num_ranks,
+            dispatch_config=dispatch_config,
+            combine_config=combine_config,
+        )
+        return jnp.sum(combined_x.astype(jnp.float32))
+
+    loss, grad_x = jax.value_and_grad(loss_fn)(x_local)
+    grad_norm = jnp.linalg.norm(grad_x.astype(jnp.float32))
+    return loss.astype(jnp.float32)[None], grad_norm.astype(jnp.float32)[None]
+
+
+def _grad_probe_step(
+    x: jax.Array,
+    topk_idx: jax.Array,
+    topk_weights: jax.Array,
+    *,
+    mesh: Mesh,
+    num_experts: int,
+    dispatch_config,
+    combine_config,
+    mode: GradProbeMode,
+) -> tuple[jax.Array, jax.Array]:
+    local_fn: callable
+    if mode == "dispatch":
+        local_fn = partial(
+            _dispatch_grad_local,
+            num_experts=num_experts,
+            num_ranks=mesh.shape["expert"],
+            dispatch_config=dispatch_config,
+            combine_config=combine_config,
+        )
+    elif mode == "combine":
+        local_fn = partial(
+            _combine_grad_local,
+            num_experts=num_experts,
+            num_ranks=mesh.shape["expert"],
+            dispatch_config=dispatch_config,
+            combine_config=combine_config,
+        )
+    elif mode == "transport":
+        local_fn = partial(
+            _transport_grad_local,
+            num_experts=num_experts,
+            num_ranks=mesh.shape["expert"],
+            dispatch_config=dispatch_config,
+            combine_config=combine_config,
+        )
+    else:
+        raise ValueError(f"Unknown grad probe mode: {mode}")
+
+    shard_fn = shard_map(
+        local_fn,
+        mesh=mesh,
+        in_specs=(P("expert", None), P("expert", None), P("expert", None)),
+        out_specs=(P("expert"), P("expert")),
+        check_vma=False,
+    )
+    return shard_fn(x, topk_idx, topk_weights)
+
+
 def _time_fn(fn, *args, warmup: int, iters: int, jit_compile: bool = True) -> float:
     compiled = jax.jit(fn) if jit_compile else fn
     jax.block_until_ready(compiled(*args))
@@ -559,6 +739,7 @@ def main() -> None:
     parser.add_argument("--execution-model", choices=("shard_map", "pmap"), default="shard_map")
     parser.add_argument("--probe-max-elements", type=int, default=256)
     parser.add_argument("--timing-breakdown", action="store_true")
+    parser.add_argument("--grad-probe", choices=("dispatch", "combine", "transport"))
     parser.add_argument("--dispatch-num-sms", type=int)
     parser.add_argument("--dispatch-num-max-send-tokens", type=int)
     parser.add_argument("--dispatch-num-max-recv-tokens", type=int)
@@ -829,6 +1010,32 @@ def main() -> None:
         x_sharded, topk_idx_sharded, topk_weights_sharded = _shard_inputs(mesh, x, topk_idx, topk_weights)
 
         with jax.set_mesh(mesh):
+            if args.grad_probe is not None:
+                grad_probe_fn = partial(
+                    _grad_probe_step,
+                    mesh=mesh,
+                    num_experts=args.experts,
+                    dispatch_config=dispatch_config,
+                    combine_config=combine_config,
+                    mode=args.grad_probe,
+                )
+                losses, grad_norms = jax.jit(grad_probe_fn)(x_sharded, topk_idx_sharded, topk_weights_sharded)
+                losses_host = np.asarray(jax.device_get(losses), dtype=np.float32).reshape(-1)
+                grad_norms_host = np.asarray(jax.device_get(grad_norms), dtype=np.float32).reshape(-1)
+                _print0(f"devices={devices}")
+                _print0(
+                    "shape "
+                    f"tokens={args.tokens} hidden={args.hidden} experts={args.experts} topk={args.topk} "
+                    f"distribution={args.distribution} dtype=bfloat16 mode=intranode execution_model={args.execution_model}"
+                )
+                _print0(
+                    "GRAD_PROBE "
+                    f"mode={args.grad_probe} "
+                    f"losses={losses_host.tolist()} "
+                    f"grad_norms={grad_norms_host.tolist()}"
+                )
+                return
+
             layout_fn = partial(
                 _layout_step,
                 mesh=mesh,
