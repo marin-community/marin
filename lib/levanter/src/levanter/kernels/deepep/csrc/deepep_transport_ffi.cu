@@ -151,7 +151,14 @@ void ThrowOnCuda(cudaError_t status, const char* context) {
 
 void EnablePeerAccess(int peer_device_id) {
   cudaError_t status = cudaDeviceEnablePeerAccess(peer_device_id, 0);
-  if (status == cudaSuccess || status == cudaErrorPeerAccessAlreadyEnabled) {
+  if (status == cudaSuccess) {
+    return;
+  }
+  if (status == cudaErrorPeerAccessAlreadyEnabled) {
+    // cudaDeviceEnablePeerAccess leaves the runtime last-error state set even when
+    // peer access is already enabled. Clear it so later JAX/XLA CUDA calls do not
+    // fail before their own work starts.
+    (void)cudaGetLastError();
     return;
   }
   throw std::runtime_error(std::string("cudaDeviceEnablePeerAccess: ") + cudaGetErrorString(status));
