@@ -12,6 +12,7 @@ stale worker state or chaos bleed. Chaos state is also reset per-test via an
 autouse fixture.
 """
 
+import fcntl
 import logging
 import os
 import shutil
@@ -61,8 +62,6 @@ def _ensure_dashboard_built(tmp_path_factory):
     if shutil.which("npm") is None:
         logging.getLogger(__name__).warning("npm not found, skipping dashboard build for tests")
         return
-
-    import fcntl
 
     lock_path = tmp_path_factory.getbasetemp().parent / "dashboard_build.lock"
     with open(lock_path, "w") as lock_fd:

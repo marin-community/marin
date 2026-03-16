@@ -179,7 +179,7 @@ sudo docker run -d --name iris-worker \\
     --network=host \\
     --cap-add SYS_ADMIN \\
     --ulimit core=0:0 \\
-    -v {{ cache_dir }}:{{ cache_dir }} \\
+    -v {{ cache_dir }}:{{ cache_dir }}:shared \\
     -v /dev/shm:/dev/shm \\
     -v /var/run/docker.sock:/var/run/docker.sock \\
     -v /etc/iris/worker_config.json:/etc/iris/worker_config.json:ro \\
