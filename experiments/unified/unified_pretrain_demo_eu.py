@@ -86,14 +86,14 @@ _VLM_HLO_DUMP_XLA_FLAGS = [
 # --- Train Configs ---
 
 # 1 epoch ≈ 1,582,102 records / 256 batch_size ≈ 6,180 steps
-DEMO_TRAIN_STEPS = 10_000
+TEXT_STEPS = int(os.environ.get("TEXT_STEPS", "5000"))
+UND_STEPS = int(os.environ.get("UND_STEPS", "5000"))
+GEN_STEPS = int(os.environ.get("GEN_STEPS", "5000"))
+DEMO_TRAIN_STEPS = TEXT_STEPS + UND_STEPS + GEN_STEPS
 TPU_TYPE = os.environ.get("TPU_TYPE", "v4-64")
 EXP_NAME = os.environ.get("EXP_NAME", "")
-TEXT_WEIGHT = float(os.environ.get("TEXT_WEIGHT", "1.0"))
-MULTIMODAL_WEIGHT = float(os.environ.get("MULTIMODAL_WEIGHT", "2.0"))
 LEARNING_RATE = float(os.environ.get("LEARNING_RATE", "3e-4"))
 W_VISUAL = float(os.environ.get("W_VISUAL", "1.0"))
-UND_GEN_RATIO = float(os.environ.get("UND_GEN_RATIO", "1.0"))
 ABLATION_MODE = os.environ.get("ABLATION_MODE", "")
 
 VALID_ABLATION_MODES = {
@@ -263,23 +263,20 @@ def _make_modality_segment_ids(input_ids: np.ndarray) -> np.ndarray:
 
 
 def unified_data_config(
-    text_weight: float = 1.0,
-    multimodal_weight: float = 1.0,
     multimodal_cache_path: str = UNIFIED_CACHE_PATH,
     eval_benchmarks: list[str] | None = None,
     eval_cache_path: str = UNIFIED_EVAL_CACHE_PATH,
     w_visual: float | None = 1.0,
-    und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = None,
     text_eval_cache_path: str = TEXT_EVAL_CACHE_PATH,
     ablation_mode: str = "",
 ) -> LmDataConfig:
     """Build data mixture with Nemotron text + multimodal cache for unified model training.
 
+    Mixing weights are derived from the global TEXT_STEPS, UND_STEPS, GEN_STEPS
+    environment variables.
+
     Args:
-        text_weight: Scaling factor applied to each Nemotron split's weight (controls r1).
-        multimodal_weight: Total weight for multimodal data, split between understanding
-            and generation according to und_gen_ratio.
         multimodal_cache_path: GCS path to the pre-built multimodal Levanter cache.
         eval_benchmarks: List of VLM eval benchmark names to include as validation-only
             components (train_weight=0.0). Set to None to disable eval.
@@ -287,8 +284,6 @@ def unified_data_config(
         w_visual: Override for the visual token loss weight. When set, replaces
             the preprocessing-baked w_visual at data loading time. None uses the
             original preprocessing value unchanged.
-        und_gen_ratio: Ratio of understanding to generation weight. E.g. 3.0 means
-            understanding gets 3/(3+1) of multimodal_weight, generation gets 1/(3+1).
         text_eval_benchmarks: List of text eval benchmark names (e.g. hellaswag, mmlu)
             to include as validation-only components. Set to None to disable.
         text_eval_cache_path: GCS path to text eval benchmark Levanter caches.
@@ -299,11 +294,18 @@ def unified_data_config(
     if ablation_mode and ablation_mode not in VALID_ABLATION_MODES:
         raise ValueError(f"Unknown ablation_mode={ablation_mode!r}. Valid: {VALID_ABLATION_MODES}")
 
+    # Mixing weights derived from step counts: each component's weight is
+    # proportional to the number of steps allocated to it.
+    total_steps = TEXT_STEPS + UND_STEPS + GEN_STEPS
+    text_w = TEXT_STEPS / total_steps if total_steps > 0 else 1.0
+    und_w = UND_STEPS / total_steps if total_steps > 0 else 0.0
+    gen_w = GEN_STEPS / total_steps if total_steps > 0 else 0.0
+
     # Text: only hq_actual from Nemotron-CC
     nemotron_steps = tokenize_nemotron()
     hq_key = "nemotron_cc/hq_actual"
     text_components = {hq_key: step_to_lm_mixture_component(nemotron_steps[hq_key], include_raw_paths=True)}
-    text_weights = {hq_key: text_weight}
+    text_weights = {hq_key: text_w}
 
     # Multimodal: pre-built cache with per-token loss weights.
     # pack=True to avoid wasting compute padding short sequences (~600 tokens) to 4096.
@@ -348,9 +350,6 @@ def unified_data_config(
         segment_ids_transform=gen_seg_transform,
     )
 
-    und_weight = multimodal_weight * und_gen_ratio / (und_gen_ratio + 1)
-    gen_weight = multimodal_weight / (und_gen_ratio + 1)
-
     components = {
         **text_components,
         "multimodal_understanding": DatasetComponent(
@@ -368,8 +367,8 @@ def unified_data_config(
     }
     weights = {
         **text_weights,
-        "multimodal_understanding": und_weight,
-        "multimodal_generation": gen_weight,
+        "multimodal_understanding": und_w,
+        "multimodal_generation": gen_w,
     }
 
     # Multimodal validation: separate understanding and generation val loss.
@@ -554,23 +553,17 @@ DEFAULT_TEXT_EVAL_BENCHMARKS = [
 
 
 def make_unified_0_6b(
-    text_weight: float = 1.0,
-    multimodal_weight: float = 1.0,
     learning_rate: float = 3e-4,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
     w_visual: float | None = 1.0,
-    und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
     ablation_mode: str = "",
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-0.6b-demo",
         tokenized=unified_data_config(
-            text_weight=text_weight,
-            multimodal_weight=multimodal_weight,
             eval_benchmarks=eval_benchmarks,
             w_visual=w_visual,
-            und_gen_ratio=und_gen_ratio,
             text_eval_benchmarks=text_eval_benchmarks,
             ablation_mode=ablation_mode,
         ),
@@ -586,23 +579,17 @@ def make_unified_0_6b(
 
 
 def make_unified_1_7b(
-    text_weight: float = 1.0,
-    multimodal_weight: float = 1.0,
     learning_rate: float = 3e-4,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
     w_visual: float | None = 1.0,
-    und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
     ablation_mode: str = "",
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-1.7b-demo",
         tokenized=unified_data_config(
-            text_weight=text_weight,
-            multimodal_weight=multimodal_weight,
             eval_benchmarks=eval_benchmarks,
             w_visual=w_visual,
-            und_gen_ratio=und_gen_ratio,
             text_eval_benchmarks=text_eval_benchmarks,
             ablation_mode=ablation_mode,
         ),
@@ -617,23 +604,17 @@ def make_unified_1_7b(
 
 
 def make_unified_4b(
-    text_weight: float = 1.0,
-    multimodal_weight: float = 1.0,
     learning_rate: float = 1.5e-4,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
     w_visual: float | None = 1.0,
-    und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
     ablation_mode: str = "",
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-4b-demo",
         tokenized=unified_data_config(
-            text_weight=text_weight,
-            multimodal_weight=multimodal_weight,
             eval_benchmarks=eval_benchmarks,
             w_visual=w_visual,
-            und_gen_ratio=und_gen_ratio,
             text_eval_benchmarks=text_eval_benchmarks,
             ablation_mode=ablation_mode,
         ),
@@ -648,18 +629,15 @@ def make_unified_4b(
 
 
 if __name__ == "__main__":
-    # steps = [make_unified_0_6b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO, ablation_mode=ABLATION_MODE)]
+    # steps = [make_unified_0_6b(learning_rate=LEARNING_RATE, w_visual=W_VISUAL, ablation_mode=ABLATION_MODE)]
     steps = [
         make_unified_1_7b(
-            text_weight=TEXT_WEIGHT,
-            multimodal_weight=MULTIMODAL_WEIGHT,
             learning_rate=LEARNING_RATE,
             w_visual=W_VISUAL,
-            und_gen_ratio=UND_GEN_RATIO,
             ablation_mode=ABLATION_MODE,
         )
     ]
-    # steps = [make_unified_4b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO, ablation_mode=ABLATION_MODE)]
+    # steps = [make_unified_4b(learning_rate=LEARNING_RATE, w_visual=W_VISUAL, ablation_mode=ABLATION_MODE)]
     executor_main(
         steps,
         description="Unified image-text model pre-training with Qwen3 architecture",
