@@ -262,7 +262,7 @@ class ActorServer:
 
         op.future = self._executor.submit(run)
 
-        logger.info("Started operation %s for %s.%s", op_id, request.actor_name, request.method_name)
+        logger.debug("Started operation %s for %s.%s", op_id, request.actor_name, request.method_name)
         return op.to_proto()
 
     async def get_operation(self, request: actor_pb2.OperationId, ctx: RequestContext) -> actor_pb2.Operation:
