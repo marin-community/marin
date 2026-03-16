@@ -162,14 +162,8 @@ CREATE TABLE IF NOT EXISTS reservation_claims (
     entry_idx INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    key TEXT NOT NULL,
-    source TEXT NOT NULL,
-    data TEXT NOT NULL,
-    epoch_ms INTEGER NOT NULL,
-    level INTEGER NOT NULL DEFAULT 0
-);
+-- NOTE: The ``logs`` table lives in a separate ATTACHed database (logs.db).
+-- See ControllerDB._attach_log_db() for its schema.
 
 CREATE INDEX IF NOT EXISTS idx_task_attempts_worker ON task_attempts(worker_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_pending ON tasks(state, priority_neg_depth, priority_root_submitted_ms, submitted_at_ms, priority_insertion);
@@ -180,7 +174,6 @@ CREATE INDEX IF NOT EXISTS idx_dispatch_worker ON dispatch_queue(worker_id, id);
 CREATE INDEX IF NOT EXISTS idx_txn_actions_txn ON txn_actions(txn_id, id);
 CREATE INDEX IF NOT EXISTS idx_worker_task_history_worker ON worker_task_history(worker_id, assigned_at_ms DESC);
 CREATE INDEX IF NOT EXISTS idx_worker_resource_history_worker ON worker_resource_history(worker_id, id DESC);
-CREATE INDEX IF NOT EXISTS idx_logs_key ON logs(key, id);
 
 CREATE TRIGGER IF NOT EXISTS trg_task_attempt_active_worker
 BEFORE INSERT ON task_attempts

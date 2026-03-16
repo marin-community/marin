@@ -414,15 +414,28 @@ def test_controller_db_append_batch(controller_db: ControllerDB):
     assert len(result.entries) == 2
 
 
-def test_controller_db_evict_logs_if_needed(controller_db: ControllerDB):
-    """evict_logs_if_needed caps total log rows."""
-    entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(100)]
-    controller_db.append(KEY, entries)
+def test_controller_db_eviction_caps_total_rows(tmp_path):
+    """Appending beyond max_records triggers eviction down to max_records // 2."""
+    max_records = 50
+    db = ControllerDB(db_path=tmp_path / "evict_controller.sqlite3")
+    # Override the cap and interval so we can trigger eviction with a small dataset.
+    db._MAX_LOG_RECORDS = max_records
+    db._eviction_check_interval = max_records // 10
+    db._rows_since_eviction_check = 0
+    try:
+        entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(max_records)]
+        db.append(KEY, entries)
 
-    controller_db.evict_logs_if_needed(max_records=50)
+        total = db._log_read_conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
+        assert total == max_records
 
-    result = controller_db.get_logs(KEY)
-    assert len(result.entries) <= 26  # max_records // 2 + 1
+        entries2 = [_make_entry(f"line2-{i}", epoch_ms=100 + i) for i in range(max_records)]
+        db.append(KEY, entries2)
+
+        total = db._log_read_conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
+        assert total <= max_records // 2 + 1
+    finally:
+        db.close()
 
 
 def test_controller_db_log_cursor(controller_db: ControllerDB):

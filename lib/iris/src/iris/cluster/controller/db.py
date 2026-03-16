@@ -1000,7 +1000,13 @@ class TransactionCursor:
 
 
 class ControllerDB:
-    """Thread-safe SQLite wrapper with typed query and migration helpers."""
+    """Thread-safe SQLite wrapper with typed query and migration helpers.
+
+    Logs are stored in a separate ``logs.db`` file ATTACHed as ``log_db``.
+    This keeps the high-volume, append-heavy log data out of the main
+    controller database so WAL checkpoints on either side don't block
+    the other.
+    """
 
     def __init__(self, db_path: Path):
         self._db_path = db_path
@@ -1010,6 +1016,18 @@ class ControllerDB:
         self._conn.row_factory = sqlite3.Row
         self._configure(self._conn)
         self.apply_migrations()
+
+        # --- Attached log database ---
+        self._log_db_path = self._db_path.with_name("logs.db")
+        self._attach_log_db(self._conn)
+        # Separate read connection for log queries so WAL readers don't
+        # block the writer (mirrors original LogStore design).
+        self._log_read_conn = self._make_log_conn()
+        self._log_read_lock = RLock()
+        # Eviction check interval — only probe MIN/MAX(id) every N inserts
+        # rather than on every append (mirrors original LogStore).
+        self._rows_since_eviction_check = 0
+        self._eviction_check_interval = self._MAX_LOG_RECORDS // 10
 
     @property
     def db_path(self) -> Path:
@@ -1022,8 +1040,36 @@ class ControllerDB:
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA foreign_keys = ON")
 
+    def _attach_log_db(self, conn: sqlite3.Connection) -> None:
+        """ATTACH the logs database and ensure the schema exists."""
+        conn.execute("ATTACH DATABASE ? AS log_db", (str(self._log_db_path),))
+        conn.execute("PRAGMA log_db.journal_mode = WAL")
+        conn.execute("PRAGMA log_db.synchronous = NORMAL")
+        conn.execute("PRAGMA log_db.busy_timeout = 5000")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS log_db.logs ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  key TEXT NOT NULL,"
+            "  source TEXT NOT NULL,"
+            "  data TEXT NOT NULL,"
+            "  epoch_ms INTEGER NOT NULL,"
+            "  level INTEGER NOT NULL DEFAULT 0"
+            ")"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS log_db.idx_logs_key ON logs(key, id)")
+        conn.commit()
+
+    def _make_log_conn(self) -> sqlite3.Connection:
+        """Create a read-only connection to the attached log database."""
+        conn = sqlite3.connect(str(self._log_db_path), check_same_thread=False)
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        return conn
+
     def close(self) -> None:
         with self._lock:
+            self._log_read_conn.close()
             self._conn.close()
 
     @contextmanager
@@ -1130,7 +1176,10 @@ class ControllerDB:
         return value
 
     def backup_to(self, destination: Path) -> None:
-        """Create a hot backup to ``destination`` using SQLite backup API."""
+        """Create a hot backup to ``destination`` using SQLite backup API.
+
+        Backs up both the main controller DB and the attached log DB.
+        """
         destination.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
             dest = sqlite3.connect(str(destination))
@@ -1139,6 +1188,16 @@ class ControllerDB:
                 dest.commit()
             finally:
                 dest.close()
+            # Back up the log DB alongside the main DB.
+            log_dest_path = destination.with_name("logs.db")
+            log_dest = sqlite3.connect(str(log_dest_path))
+            try:
+                log_src = sqlite3.connect(str(self._log_db_path), check_same_thread=False)
+                log_src.backup(log_dest)
+                log_dest.commit()
+                log_src.close()
+            finally:
+                log_dest.close()
 
     def replace_from(self, source: str | Path) -> None:
         """Replace current DB file with ``source`` and reopen connection.
@@ -1154,17 +1213,21 @@ class ControllerDB:
             tmp_path = self._db_path.with_suffix(".tmp")
             with fsspec.core.open(str(source), "rb") as src, open(tmp_path, "wb") as dst:
                 dst.write(src.read())
+            self._log_read_conn.close()
             self._conn.close()
             tmp_path.rename(self._db_path)
             self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._configure(self._conn)
+            self._attach_log_db(self._conn)
+            self._log_read_conn = self._make_log_conn()
         self.apply_migrations()
 
     # --- Log methods (consolidated from LogStore) ---
+    # Logs live in the ATTACHed ``log_db`` namespace.
 
     _MAX_LOG_RECORDS = 5_000_000
-    _LOG_INSERT = "INSERT INTO logs (key, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?)"
+    _LOG_INSERT = "INSERT INTO log_db.logs (key, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?)"
 
     def append(self, key: str, entries: list | Sequence) -> None:
         """Insert log entries for a single key."""
@@ -1174,7 +1237,7 @@ class ControllerDB:
         with self._lock:
             self._conn.executemany(self._LOG_INSERT, rows)
             self._conn.commit()
-        self.evict_logs_if_needed(self._MAX_LOG_RECORDS)
+            self._post_write_maintenance(len(rows))
 
     def append_batch(self, items: Sequence[tuple[str, list | Sequence]]) -> None:
         """Write log entries for multiple keys in a single transaction."""
@@ -1186,7 +1249,14 @@ class ControllerDB:
         with self._lock:
             self._conn.executemany(self._LOG_INSERT, all_rows)
             self._conn.commit()
-        self.evict_logs_if_needed(self._MAX_LOG_RECORDS)
+            self._post_write_maintenance(len(all_rows))
+
+    def _post_write_maintenance(self, rows_written: int) -> None:
+        """Run eviction periodically after writes. Must hold self._lock."""
+        self._rows_since_eviction_check += rows_written
+        if self._rows_since_eviction_check >= self._eviction_check_interval:
+            self._evict_logs_if_needed()
+            self._rows_since_eviction_check = 0
 
     @staticmethod
     def _log_row_to_entry(row: tuple) -> logging_pb2.LogEntry:
@@ -1223,8 +1293,8 @@ class ControllerDB:
 
         if tail and max_lines > 0:
             params.append(max_lines)
-            with self._lock:
-                rows = self._conn.execute(
+            with self._log_read_lock:
+                rows = self._log_read_conn.execute(
                     f"SELECT id, source, data, epoch_ms, level FROM logs "
                     f"WHERE key = ? AND id > ?{where_extra} ORDER BY id DESC LIMIT ?",
                     params,
@@ -1235,8 +1305,8 @@ class ControllerDB:
             if max_lines > 0:
                 limit_clause = " LIMIT ?"
                 params.append(max_lines)
-            with self._lock:
-                rows = self._conn.execute(
+            with self._log_read_lock:
+                rows = self._log_read_conn.execute(
                     f"SELECT id, source, data, epoch_ms, level FROM logs "
                     f"WHERE key = ? AND id > ?{where_extra} ORDER BY id{limit_clause}",
                     params,
@@ -1281,8 +1351,8 @@ class ControllerDB:
 
         if tail and max_lines > 0:
             params.append(max_lines)
-            with self._lock:
-                rows = self._conn.execute(
+            with self._log_read_lock:
+                rows = self._log_read_conn.execute(
                     f"SELECT id, key, source, data, epoch_ms, level FROM logs {where} ORDER BY id DESC LIMIT ?",
                     params,
                 ).fetchall()
@@ -1292,8 +1362,8 @@ class ControllerDB:
             if max_lines > 0:
                 limit_clause = " LIMIT ?"
                 params.append(max_lines)
-            with self._lock:
-                rows = self._conn.execute(
+            with self._log_read_lock:
+                rows = self._log_read_conn.execute(
                     f"SELECT id, key, source, data, epoch_ms, level FROM logs {where} ORDER BY id{limit_clause}",
                     params,
                 ).fetchall()
@@ -1312,8 +1382,8 @@ class ControllerDB:
 
     def has_logs(self, key: str) -> bool:
         """Check if any logs exist for a key."""
-        with self._lock:
-            row = self._conn.execute(
+        with self._log_read_lock:
+            row = self._log_read_conn.execute(
                 "SELECT 1 FROM logs WHERE key = ? LIMIT 1",
                 (key,),
             ).fetchone()
@@ -1322,28 +1392,41 @@ class ControllerDB:
     def clear_logs(self, key: str) -> None:
         """Delete all logs for a key."""
         with self._lock:
-            self._conn.execute("DELETE FROM logs WHERE key = ?", (key,))
+            self._conn.execute("DELETE FROM log_db.logs WHERE key = ?", (key,))
             self._conn.commit()
 
-    def evict_logs_if_needed(self, max_records: int) -> None:
-        """Cap total log rows, evicting oldest when count exceeds limit."""
-        with self._lock:
-            row = self._conn.execute("SELECT MIN(id), MAX(id) FROM logs").fetchone()
-            min_id, max_id = row
-            if min_id is None:
-                return
-            approx_count = max_id - min_id + 1
-            if approx_count <= max_records:
-                return
-            target_cutoff = max_id - (max_records // 2)
-            batch_size = 100_000
-            cursor = min_id - 1
-            while cursor < target_cutoff:
-                batch_end = min(cursor + batch_size, target_cutoff)
-                self._conn.execute("DELETE FROM logs WHERE id > ? AND id <= ?", (cursor, batch_end))
-                self._conn.commit()
-                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                cursor = batch_end
+    def _evict_logs_if_needed(self) -> None:
+        """Cap total log rows, evicting oldest when count exceeds limit.
+
+        Must hold self._lock. Uses MAX(id) - MIN(id) as a cheap approximation
+        of row count (autoincrement IDs are nearly contiguous since we only
+        delete from the bottom). Evicts down to max_records // 2 so we don't
+        pay eviction cost on every subsequent interval.
+
+        After bulk deletion we truncate the WAL on the log database to prevent
+        it from growing unboundedly. Without this, the DELETE pages accumulate
+        in the WAL and the next automatic checkpoint stalls the writer while
+        flushing gigabytes of data.
+        """
+        row = self._conn.execute("SELECT MIN(id), MAX(id) FROM log_db.logs").fetchone()
+        min_id, max_id = row
+        if min_id is None:
+            return
+        approx_count = max_id - min_id + 1
+        if approx_count <= self._MAX_LOG_RECORDS:
+            return
+        # Keep the most recent max_records // 2 rows. Delete in batches to
+        # avoid a single enormous transaction that bloats the WAL.
+        target_cutoff = max_id - (self._MAX_LOG_RECORDS // 2)
+        batch_size = 100_000
+        evict_cursor = min_id - 1
+        while evict_cursor < target_cutoff:
+            batch_end = min(evict_cursor + batch_size, target_cutoff)
+            self._conn.execute("DELETE FROM log_db.logs WHERE id > ? AND id <= ?", (evict_cursor, batch_end))
+            self._conn.commit()
+            # Truncate the log DB WAL after each batch to keep it bounded.
+            self._conn.execute("PRAGMA log_db.wal_checkpoint(TRUNCATE)")
+            evict_cursor = batch_end
 
     def log_cursor(self, key: str) -> LogCursor:
         """Return a stateful cursor for incremental reads on *key*."""
