@@ -75,17 +75,21 @@ class CAdamCHeuristic:
         return get_vocab_size_for_tokenizer(self.tokenizer)
 
     # --- Learning rate scaling ---
+    # lr = lr_constant * sqrt(B) / H  (muP-style; Cerebras-GPT, Yang et al. 2022 https://arxiv.org/abs/2203.03466)
     lr_constant: float = 0.33
 
     # --- Adam hyperparameters ---
+    # Weight decay, beta1, epsilon, grad norm from Marin 2025 sweeps (https://arxiv.org/abs/2506.02285v1)
     weight_decay: float = 0.1
     beta1: float = 0.95
+    # beta2 = max(0.95, beta2_base^(B / beta2_batch_divisor))  (batch-scaled; cf. McCandlish et al. 2018)
     beta2_base: float = 0.98
     beta2_batch_divisor: float = 128
     epsilon: float = 1e-15
     max_grad_norm: float = 1.0
 
     # --- Schedule ---
+    # Cosine-style with linear warmup + decay tail (Hoffmann et al. 2022 Chinchilla)
     min_lr_ratio: float = 0.0
     warmup: float = 0.1
     lr_schedule: str = "linear"
@@ -93,9 +97,10 @@ class CAdamCHeuristic:
 
     # --- Architecture ratios ---
     mlp_ratio: int = 4
-    hidden_head_ratio: int = 128
+    hidden_head_ratio: int = 128  # heads = H / 128
 
     # --- Depth-to-width scaling ---
+    # num_layers ≈ H / (64 + 4*log2(H) - 9)  (empirical fit from Marin 2025 sweeps)
     base_hidden_layer_ratio: int = 64
     layer_scaling_factor: float = 4.0
     layer_formula_offset: int = 9
@@ -104,6 +109,7 @@ class CAdamCHeuristic:
     max_learning_rate: float = 0.01
     min_batch_size: int = 8
     max_batch_size: int = 8192
+    # max_params scales as base * sqrt(budget / base_budget), capped at global_max
     base_max_params: float = 12e9
     base_max_params_budget: float = 3e20
     global_max_params: float = 1e12
@@ -114,9 +120,11 @@ class CAdamCHeuristic:
     budget_step_threshold: float = 2e19
 
     def _compute_learning_rate(self, batch_size: int, hidden_dim: int) -> float:
+        """lr = lr_constant * sqrt(B) / H  (muP-style scaling)."""
         return (self.lr_constant * math.sqrt(batch_size)) / hidden_dim
 
     def _compute_beta2(self, batch_size: int) -> float:
+        """beta2 = max(0.95, beta2_base^(B / divisor)). Batch-scaled beta2."""
         return max(0.95, self.beta2_base ** (batch_size / self.beta2_batch_divisor))
 
     def _compute_num_layers(self, hidden_size: int) -> int:

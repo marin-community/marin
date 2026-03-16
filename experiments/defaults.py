@@ -381,7 +381,7 @@ def default_train(
             ),
             model_averaging=model_averaging,
             mesh=MeshConfig(
-                axes={"data": -1, "replica": 1, "model": train_config.tensor_parallel_size},
+                axes={"replica": 1, "data": -1, "model": train_config.tensor_parallel_size},
                 # Special axes for MoEs
                 # TODO: this is actually bad and we should remove, but keeping for now
                 compute_mapping={
