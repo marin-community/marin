@@ -729,7 +729,9 @@ def deepep_dispatch_intranode(
     num_experts: int,
     dispatch_config: IntranodeConfig | None = None,
     combine_config: IntranodeConfig | None = None,
-) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+) -> tuple[
+    jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array
+]:
     _register_targets()
     num_ranks = int(num_tokens_per_rank.shape[0])
     hidden_bytes = x.shape[1] * max(jnp.dtype(x.dtype).itemsize, 2)
@@ -755,6 +757,7 @@ def deepep_dispatch_intranode(
         jax.ShapeDtypeStruct((max_recv_tokens, topk), jnp.float32),
         jax.ShapeDtypeStruct((max_recv_tokens,), jnp.int32),
         jax.ShapeDtypeStruct((num_ranks, num_ranks), jnp.int32),
+        jax.ShapeDtypeStruct((num_ranks, num_channels), jnp.int32),
         jax.ShapeDtypeStruct((num_ranks, num_channels), jnp.int32),
         jax.ShapeDtypeStruct((x_bf16.shape[0], num_ranks), jnp.int32),
         jax.ShapeDtypeStruct((local_experts,), jnp.int32),

@@ -200,7 +200,8 @@ def _transport_local(
         recv_topk_weights,
         recv_src_idx,
         rank_prefix_matrix,
-        channel_prefix_matrix,
+        _channel_prefix_matrix,
+        recv_channel_prefix_matrix,
         send_head,
         _,
         num_recv_tokens,
@@ -220,7 +221,7 @@ def _transport_local(
         recv_topk_weights,
         recv_src_idx,
         rank_prefix_matrix,
-        channel_prefix_matrix,
+        recv_channel_prefix_matrix,
         send_head,
         num_recv_tokens,
     )
@@ -330,6 +331,12 @@ def _dispatch_config_from_args(args, ep_size: int):
 
 def _combine_config_from_args(args, ep_size: int):
     config = _TRANSPORT_FFI._default_combine_config(ep_size)
+    if args.combine_num_sms is None and args.dispatch_num_sms is not None:
+        return _TRANSPORT_FFI.IntranodeConfig(
+            num_sms=args.dispatch_num_sms,
+            num_max_send_tokens=args.combine_num_max_send_tokens or config.num_max_send_tokens,
+            num_max_recv_tokens=args.combine_num_max_recv_tokens or config.num_max_recv_tokens,
+        )
     if args.combine_num_sms is None:
         return config
     return _TRANSPORT_FFI.IntranodeConfig(

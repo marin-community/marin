@@ -448,6 +448,7 @@ void DispatchOnCurrentDevice(
     int* recv_src_idx,
     int* rank_prefix_matrix,
     int* channel_prefix_matrix,
+    int* recv_channel_prefix_matrix,
     int* send_head,
     int* local_expert_counts,
     int* num_recv_tokens_out,
@@ -515,7 +516,7 @@ void DispatchOnCurrentDevice(
       recv_src_idx,
       recv_topk_idx,
       recv_topk_weights,
-      runtime.recv_channel_offset_scratch,
+      recv_channel_prefix_matrix,
       send_head,
       x,
       nullptr,
@@ -549,7 +550,7 @@ void DispatchOnCurrentDevice(
       recv_src_idx,
       recv_topk_idx,
       recv_topk_weights,
-      runtime.recv_channel_offset_scratch,
+      recv_channel_prefix_matrix,
       send_head,
       x,
       nullptr,
@@ -611,6 +612,7 @@ ffi::Error DispatchIntranode(
     ffi::Result<ffi::Buffer<ffi::S32, 1>> recv_src_idx,
     ffi::Result<ffi::Buffer<ffi::S32, 2>> rank_prefix_matrix,
     ffi::Result<ffi::Buffer<ffi::S32, 2>> channel_prefix_matrix,
+    ffi::Result<ffi::Buffer<ffi::S32, 2>> recv_channel_prefix_matrix,
     ffi::Result<ffi::Buffer<ffi::S32, 2>> send_head,
     ffi::Result<ffi::Buffer<ffi::S32, 1>> local_expert_counts,
     ffi::Result<ffi::Buffer<ffi::S32, 1>> num_recv_tokens_buffer) {
@@ -661,6 +663,9 @@ ffi::Error DispatchIntranode(
         channel_prefix_matrix->dimensions().size() != 2 ||
         channel_prefix_matrix->dimensions()[0] != runtime.num_ranks ||
         channel_prefix_matrix->dimensions()[1] != num_channels ||
+        recv_channel_prefix_matrix->dimensions().size() != 2 ||
+        recv_channel_prefix_matrix->dimensions()[0] != runtime.num_ranks ||
+        recv_channel_prefix_matrix->dimensions()[1] != num_channels ||
         send_head->dimensions().size() != 2 ||
         send_head->dimensions()[0] != num_tokens ||
         send_head->dimensions()[1] != runtime.num_ranks) {
@@ -695,6 +700,7 @@ ffi::Error DispatchIntranode(
         recv_src_idx->typed_data(),
         rank_prefix_matrix->typed_data(),
         channel_prefix_matrix->typed_data(),
+        recv_channel_prefix_matrix->typed_data(),
         send_head->typed_data(),
         local_expert_counts->typed_data(),
         &num_recv_tokens,
@@ -851,6 +857,7 @@ auto DispatchBinding() {
       .Ret<ffi::Buffer<ffi::S64, 2>>()
       .Ret<ffi::Buffer<ffi::F32, 2>>()
       .Ret<ffi::Buffer<ffi::S32, 1>>()
+      .Ret<ffi::Buffer<ffi::S32, 2>>()
       .Ret<ffi::Buffer<ffi::S32, 2>>()
       .Ret<ffi::Buffer<ffi::S32, 2>>()
       .Ret<ffi::Buffer<ffi::S32, 2>>()
