@@ -3146,6 +3146,15 @@ def main() -> None:
     dtype = jnp.dtype(args.dtype)
     eps = [int(tok.strip()) for tok in args.ep_list.split(",") if tok.strip()]
     kernels: list[Kernel] = ["legacy", "current"] if args.kernel == "both" else [args.kernel]
+    visible_devices = jax.devices()
+
+    if len(visible_devices) in eps:
+        _maybe_init_deepep_runtime(
+            kernels=kernels,
+            ep_size=len(visible_devices),
+            hidden=args.hidden,
+            dtype=dtype,
+        )
 
     if args.profile_root is not None:
         if len(eps) != 1:
@@ -3190,13 +3199,6 @@ def main() -> None:
                 mesh, x, selected_experts, combine_weights, w_up_gate, w_down
             )
             shared_w13_sharded, shared_w2_sharded = _shard_shared_weights(mesh, shared_w13, shared_w2)
-            _maybe_init_deepep_runtime(
-                kernels=kernels,
-                ep_size=ep_size,
-                hidden=args.hidden,
-                dtype=dtype,
-            )
-
             if args.check_equivalence and set(kernels) == {"legacy", "current"}:
                 legacy_out = jax.jit(_forward, static_argnums=0)(
                     "legacy",
