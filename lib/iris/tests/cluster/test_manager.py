@@ -51,15 +51,13 @@ class FakeSliceHandle:
 class FakeManagerPlatform:
     """Minimal platform for manager tests with list_all_slices support."""
 
-    def __init__(self, slices: list[FakeSliceHandle] | None = None):
+    def __init__(self, slices: list[FakeSliceHandle] | None = None, label_prefix: str = "iris"):
         self._slices = slices or []
         self.controller_stopped = False
+        self._iris_labels = Labels(label_prefix)
 
-    def list_all_slices(self, labels: dict[str, str] | None = None) -> list[FakeSliceHandle]:
-        results = list(self._slices)
-        if labels:
-            results = [s for s in results if all(s.labels.get(k) == v for k, v in labels.items())]
-        return results
+    def list_all_slices(self) -> list[FakeSliceHandle]:
+        return [s for s in self._slices if s.labels.get(self._iris_labels.iris_managed) == "true"]
 
     def list_vms(self, zones: list[str], labels: dict[str, str] | None = None) -> list:
         return []
@@ -128,7 +126,7 @@ def test_stop_all_custom_label_prefix():
     iris_labels = Labels("iris")
     managed = FakeSliceHandle("slice-a", labels={custom_labels.iris_managed: "true"})
     wrong_prefix = FakeSliceHandle("slice-b", labels={iris_labels.iris_managed: "true"})
-    platform = FakeManagerPlatform(slices=[managed, wrong_prefix])
+    platform = FakeManagerPlatform(slices=[managed, wrong_prefix], label_prefix="custom")
     config = _make_manager_config()
 
     with patch("iris.cluster.manager.IrisConfig") as mock_config_cls:

@@ -372,13 +372,11 @@ class Platform(Protocol):
         """
         ...
 
-    def list_all_slices(
-        self,
-        labels: dict[str, str] | None = None,
-    ) -> list[SliceHandle]:
-        """List all slices across all configured zones, filtered by labels.
+    def list_all_slices(self) -> list[SliceHandle]:
+        """List all slices managed by this cluster across all zones.
 
-        Use list_slices() when the zone is already known for a more targeted query.
+        Automatically filters by iris-{prefix}-managed=true. Use list_slices()
+        when additional label filtering or zone scoping is needed.
         """
         ...
 
@@ -524,11 +522,8 @@ def default_stop_all(
     with a hard timeout. Daemon threads are used instead of ThreadPoolExecutor so
     that timed-out threads don't block interpreter shutdown.
     """
-    prefix = label_prefix or config.platform.label_prefix or "iris"
-    labels = Labels(prefix)
-
     target_names: list[str] = ["controller"]
-    all_slices = platform.list_all_slices(labels={labels.iris_managed: "true"})
+    all_slices = platform.list_all_slices()
     for s in all_slices:
         logger.info("Found managed slice %s", s.slice_id)
         target_names.append(f"slice:{s.slice_id}")
