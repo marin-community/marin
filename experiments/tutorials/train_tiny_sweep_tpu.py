@@ -17,7 +17,6 @@ from experiments.pretraining_datasets.simple import tokenized
 from experiments.simple_train_config import SimpleTrainConfig
 
 RESOURCES = ResourceConfig.with_tpu("v4-8")
-EVALS = CORE_TASKS
 
 small_train_config = SimpleTrainConfig(
     # Here we define the hardware resources we need.
