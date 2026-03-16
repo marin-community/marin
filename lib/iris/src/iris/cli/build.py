@@ -71,30 +71,28 @@ def find_marin_root() -> Path:
 
 
 def find_iris_root() -> Path:
-    """Find the iris package root directory containing Dockerfiles.
+    """Find the iris package root directory containing the unified Dockerfile.
 
     Searches in order:
     1. Relative to this file (cli/build.py -> iris root is 4 levels up from src/iris/cli/build.py)
     2. Current working directory
-    3. Walking up from cwd until Dockerfile.worker is found
+    3. Walking up from cwd until Dockerfile is found
     """
     build_path = Path(__file__).resolve()
     # build.py is at src/iris/cli/build.py, so iris root is 4 levels up
     iris_root = build_path.parent.parent.parent.parent
-    if (iris_root / "Dockerfile.worker").exists() and (iris_root / "Dockerfile.controller").exists():
+    if (iris_root / "Dockerfile").exists():
         return iris_root
 
     cwd = Path.cwd()
-    if (cwd / "Dockerfile.worker").exists():
+    if (cwd / "Dockerfile").exists():
         return cwd
 
     for parent in cwd.parents:
-        if (parent / "Dockerfile.worker").exists():
+        if (parent / "Dockerfile").exists():
             return parent
 
-    raise click.ClickException(
-        "Cannot find Dockerfile.worker. Run from the iris directory or specify --dockerfile and --context."
-    )
+    raise click.ClickException("Cannot find Dockerfile. Run from the iris directory.")
 
 
 def _resolve_image_name_and_version(
@@ -175,13 +173,12 @@ def build_image(
     image_type: str,
     tag: str,
     push: bool,
-    dockerfile: str | None,
     context: str | None,
     platform: str,
     ghcr_org: str = GHCR_DEFAULT_ORG,
     verbose: bool = False,
 ) -> None:
-    """Build a Docker image for Iris (worker or controller).
+    """Build a Docker image for Iris using the unified multi-stage Dockerfile.
 
     Always tags the image with both the git SHA and "latest" so that
     deployments can pin to a specific version while local workflows
@@ -191,10 +188,8 @@ def build_image(
     if image_type in ("controller", "worker"):
         _ensure_dashboard_dist()
 
-    dockerfile_name = f"Dockerfile.{image_type}"
-
     iris_root = find_iris_root()
-    dockerfile_path = Path(dockerfile) if dockerfile else iris_root / dockerfile_name
+    dockerfile_path = iris_root / "Dockerfile"
     context_path = Path(context) if context else iris_root
 
     if not dockerfile_path.exists():
@@ -210,6 +205,7 @@ def build_image(
 
     all_tags = dict.fromkeys([tag, sha_tag, latest_tag])
     cmd = ["docker", "buildx", "build", "--platform", platform]
+    cmd.extend(["--target", image_type])
     cmd.extend(["--build-arg", f"IRIS_GIT_HASH={git_sha}"])
     for t in all_tags:
         cmd.extend(["-t", t])
@@ -265,19 +261,17 @@ def _build_all(
     Tags are derived automatically: git SHA + latest.
     """
     marin_root = find_marin_root()
-    iris_root = find_iris_root()
 
     for image_type in ("worker", "controller"):
         tag = _default_versioned_tag(f"iris-{image_type}")
-        build_image(image_type, tag, push, None, None, platform, ghcr_org)
+        build_image(image_type, tag, push, None, platform, ghcr_org)
         click.echo()
 
-    task_dockerfile = str(iris_root / "Dockerfile.task")
+    # Task target uses the same Dockerfile but needs marin root as context
     build_image(
         "task",
         _default_versioned_tag("iris-task"),
         push,
-        task_dockerfile,
         str(marin_root),
         platform,
         ghcr_org,
@@ -316,7 +310,6 @@ def build_all(
 @build.command("worker-image")
 @click.option("--tag", "-t", default=None, help="Image tag (default: latest-<git-short-sha>)")
 @click.option("--push", is_flag=True, help="Push image to registry after building")
-@click.option("--dockerfile", type=click.Path(exists=True), help="Custom Dockerfile path")
 @click.option("--context", type=click.Path(exists=True), help="Build context directory")
 @click.option("--platform", default="linux/amd64", help="Target platform")
 @click.option("--ghcr-org", default=GHCR_DEFAULT_ORG, help="GHCR organization")
@@ -325,7 +318,6 @@ def build_worker_image(
     ctx,
     tag: str,
     push: bool,
-    dockerfile: str | None,
     context: str | None,
     platform: str,
     ghcr_org: str,
@@ -333,13 +325,12 @@ def build_worker_image(
     """Build Docker image for Iris worker."""
     verbose = _is_verbose(ctx)
     tag = tag or _default_versioned_tag("iris-worker")
-    build_image("worker", tag, push, dockerfile, context, platform, ghcr_org, verbose=verbose)
+    build_image("worker", tag, push, context, platform, ghcr_org, verbose=verbose)
 
 
 @build.command("controller-image")
 @click.option("--tag", "-t", default=None, help="Image tag (default: latest-<git-short-sha>)")
 @click.option("--push", is_flag=True, help="Push image to registry after building")
-@click.option("--dockerfile", type=click.Path(exists=True), help="Custom Dockerfile path")
 @click.option("--context", type=click.Path(exists=True), help="Build context directory")
 @click.option("--platform", default="linux/amd64", help="Target platform")
 @click.option("--ghcr-org", default=GHCR_DEFAULT_ORG, help="GHCR organization")
@@ -348,7 +339,6 @@ def build_controller_image(
     ctx,
     tag: str,
     push: bool,
-    dockerfile: str | None,
     context: str | None,
     platform: str,
     ghcr_org: str,
@@ -356,13 +346,12 @@ def build_controller_image(
     """Build Docker image for Iris controller."""
     verbose = _is_verbose(ctx)
     tag = tag or _default_versioned_tag("iris-controller")
-    build_image("controller", tag, push, dockerfile, context, platform, ghcr_org, verbose=verbose)
+    build_image("controller", tag, push, context, platform, ghcr_org, verbose=verbose)
 
 
 @build.command("task-image")
 @click.option("--tag", "-t", default=None, help="Image tag (default: latest-<git-short-sha>)")
 @click.option("--push", is_flag=True, help="Push image to registry after building")
-@click.option("--dockerfile", type=click.Path(exists=True), help="Custom Dockerfile path")
 @click.option("--platform", default="linux/amd64", help="Target platform")
 @click.option("--ghcr-org", default=GHCR_DEFAULT_ORG, help="GHCR organization")
 @click.pass_context
@@ -370,21 +359,15 @@ def build_task_image(
     ctx,
     tag: str,
     push: bool,
-    dockerfile: str | None,
     platform: str,
     ghcr_org: str,
 ):
     """Build base task image with system deps and pre-synced marin core deps.
 
     The build context is the marin repo root so that pyproject.toml and uv.lock
-    are available for COPY. The Dockerfile lives at lib/iris/Dockerfile.task.
+    are available for COPY. Uses the ``task`` target in ``lib/iris/Dockerfile``.
     """
     marin_root = find_marin_root()
-    iris_root = find_iris_root()
-    dockerfile_path = Path(dockerfile) if dockerfile else iris_root / "Dockerfile.task"
-
-    if not dockerfile_path.exists():
-        raise click.ClickException(f"Dockerfile not found: {dockerfile_path}")
 
     verbose = _is_verbose(ctx)
     resolved_tag = tag or _default_versioned_tag("iris-task")
@@ -393,7 +376,6 @@ def build_task_image(
         "task",
         resolved_tag,
         push,
-        str(dockerfile_path),
         str(marin_root),
         platform,
         ghcr_org,
