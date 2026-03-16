@@ -627,7 +627,7 @@ ffi::Error DispatchIntranode(
     DispatchOnCurrentDevice(
         runtime,
         stream,
-        x.typed_data(),
+        reinterpret_cast<const nv_bfloat16*>(x.typed_data()),
         topk_idx.typed_data(),
         topk_weights.typed_data(),
         num_tokens_per_rank.typed_data(),
@@ -637,7 +637,7 @@ ffi::Error DispatchIntranode(
         hidden,
         num_topk,
         num_experts,
-        recv_x->typed_data(),
+        reinterpret_cast<nv_bfloat16*>(recv_x->typed_data()),
         recv_topk_idx->typed_data(),
         recv_topk_weights->typed_data(),
         recv_src_idx->typed_data(),
