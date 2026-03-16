@@ -18,7 +18,7 @@ from iris.rpc import cluster_pb2
 
 DEFAULT_IMAGE = "pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel"
 DEFAULT_CONFIG = Path("lib/iris/examples/coreweave.yaml")
-DEFAULT_DEEPEP_REF = "567632dd59810d77b3cc05553df953cc0f779799"
+DEFAULT_DEEPEP_REF = "7febc6e25660af0f54d95dd781ecdcd62265ecca"
 BENCH_PATH = Path("lib/levanter/scripts/bench/bench_moe_hillclimb.py")
 
 
