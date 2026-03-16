@@ -25,6 +25,7 @@ import optax
 import pytest
 from fray.cluster import ResourceConfig
 from jax._src import config as jax_config
+from jax.sharding import PartitionSpec as P
 from jax.sharding import use_abstract_mesh
 
 from levanter.checkpoint import CheckpointerConfig
@@ -145,6 +146,51 @@ def test_grug_variant_one_step_contract_lowers_with_default_ctor(variant: str):
     assert "train/loss" in out_metrics_shape
     assert out_metrics_shape["train/loss"].shape == ()
     assert out_watch_shape is None
+
+
+@pytest.mark.parametrize(
+    ("variant", "expected_embed_spec", "expected_lm_head_spec", "expected_logits_spec"),
+    [
+        ("base", P("model", ("data",)), P(("data",), "model"), P(("data",), None, "model")),
+        ("modular_opt", P("model", ("data",)), P(("data",), "model"), P(("data",), None, "model")),
+        (
+            "moe",
+            P("model", ("data", "expert")),
+            P(("data", "expert"), "model"),
+            P(("data", "expert"), None, "model"),
+        ),
+    ],
+)
+def test_grug_variant_vocab_and_logits_sharding_contract(
+    variant: str, expected_embed_spec: P, expected_lm_head_spec: P, expected_logits_spec: P
+):
+    model_module = importlib.import_module(_variant_module_name(variant, "model"))
+    model_config_cls = model_module.GrugModelConfig
+    mesh_fn = getattr(model_module, "debug_mesh_and_token_pspec", None)
+    if mesh_fn is None:
+        raise AssertionError(f"{_variant_module_name(variant, 'model')} must define debug_mesh_and_token_pspec")
+
+    cfg = _small_model_config(model_config_cls, vocab_size=1024, seq_len=16)
+    mesh, token_pspec = mesh_fn(num_devices=4)
+    token_ids = jnp.zeros((8, 4), dtype=jnp.int32)
+
+    def init_model():
+        return model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0))
+
+    def lower_logits():
+        model = model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0))
+        return model.logits(
+            jax.sharding.reshard(token_ids, token_pspec),
+            mask=GrugAttentionMask.causal(),
+        )
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        model_shape = eqx.filter_eval_shape(init_model)
+        logits_shape = eqx.filter_eval_shape(lower_logits)
+
+    assert model_shape.token_embed.sharding.spec == expected_embed_spec
+    assert model_shape.output_proj.sharding.spec == expected_lm_head_spec
+    assert logits_shape.sharding.spec == expected_logits_spec
 
 
 def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
