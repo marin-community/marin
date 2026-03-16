@@ -48,7 +48,7 @@ DEFAULT_CONFIG = config_pb2.DefaultsConfig(
     ),
     worker=config_pb2.WorkerConfig(
         port=10001,
-        cache_dir="/var/cache/iris",
+        cache_dir="/dev/shm/iris",
         host="0.0.0.0",
         port_range="30000-40000",
     ),

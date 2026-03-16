@@ -174,13 +174,10 @@ if [ -n "$IRIS_CONTAINERS" ]; then
 fi
 
 # Start worker container without restart policy first (fail fast during bootstrap)
-# SYS_ADMIN: required for mounting tmpfs workdirs (disk quota enforcement)
 sudo docker run -d --name iris-worker \\
     --network=host \\
-    --cap-add SYS_ADMIN \\
     --ulimit core=0:0 \\
-    -v {{ cache_dir }}:{{ cache_dir }}:shared \\
-    -v /dev/shm:/dev/shm \\
+    -v {{ cache_dir }}:{{ cache_dir }} \\
     -v /var/run/docker.sock:/var/run/docker.sock \\
     -v /etc/iris/worker_config.json:/etc/iris/worker_config.json:ro \\
     {{ docker_image }} \\
