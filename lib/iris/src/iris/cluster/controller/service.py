@@ -222,13 +222,13 @@ def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str,
 
 
 def _read_job(db: ControllerDB, job_id: JobName) -> Job | None:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
 
 
 def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> Task | None:
     task_wire = task_id.to_wire()
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         task = q.one(TASKS, where=TASKS.c.task_id == task_wire)
         if task is None:
             return None
@@ -241,7 +241,7 @@ def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> Task | None:
 
 
 def _read_worker(db: ControllerDB, worker_id: WorkerId) -> Worker | None:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         return q.one(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
 
 
@@ -401,7 +401,7 @@ def _live_user_stats(db: ControllerDB) -> list[UserStats]:
 
 
 def _tasks_for_worker(db: ControllerDB, worker_id: WorkerId, limit: int = 50) -> list[Task]:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         history_rows = q.select(
             WORKER_TASK_HISTORY,
             columns=(WORKER_TASK_HISTORY.c.task_id,),
@@ -413,7 +413,7 @@ def _tasks_for_worker(db: ControllerDB, worker_id: WorkerId, limit: int = 50) ->
     if not task_ids:
         return []
     task_wires = [tid.to_wire() for tid in task_ids]
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         tasks = q.select(
             TASKS,
             where=TASKS.c.task_id.in_(task_wires),
