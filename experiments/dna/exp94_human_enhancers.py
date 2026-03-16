@@ -123,7 +123,7 @@ for version in TRAIN_DATASETS:
     )
 
     train_step = default_train(
-        name=f"exp94-human-enhancers-{version}-60m",
+        name=f"exp94-human-enhancers-{version}-60m-v2",
         tokenized=data_config,
         model_config=qwen3_60m,
         train_config=TRAIN_CONFIG,
