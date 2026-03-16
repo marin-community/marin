@@ -41,6 +41,7 @@ Kernel = Literal[
     "deepep_layout_ragged_a2a",
     "deepep_transport_identity",
     "deepep_transport_assignments_identity",
+    "deepep_transport_first_ragged_dot_probe",
     "deepep_transport",
     "prefix_counts",
     "vector_prefix",
@@ -1897,6 +1898,131 @@ def _moe_mlp_deepep_transport_assignments_identity(
     return x
 
 
+def _moe_mlp_ep_deepep_transport_first_ragged_dot_probe_local(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    _moe_w2_local: jax.Array,
+    *,
+    num_experts: int,
+) -> tuple[jax.Array, jax.Array]:
+    local_experts = moe_w13_local.shape[0]
+    if num_experts % local_experts != 0:
+        raise ValueError(
+            f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
+        )
+    if x_local.shape[1] % 8 != 0:
+        raise ValueError(f"DeepEP transport requires hidden % 8 == 0, got hidden={x_local.shape[1]}")
+
+    shard_id = jax.lax.axis_index("expert")
+    ep_size = num_experts // local_experts
+    expert_start = shard_id * local_experts
+
+    num_tokens_per_rank, num_tokens_per_expert, is_token_in_rank = deepep_get_dispatch_layout(
+        selected_experts_local,
+        num_ranks=ep_size,
+        num_experts=num_experts,
+    )
+    (
+        recv_x,
+        recv_topk_idx,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        _channel_prefix_matrix,
+        recv_channel_prefix_matrix,
+        send_head,
+        _local_expert_counts,
+        num_recv_tokens,
+    ) = deepep_dispatch_intranode(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        num_tokens_per_rank,
+        num_tokens_per_expert,
+        is_token_in_rank,
+        num_experts=num_experts,
+    )
+    num_recv_tokens_scalar = jnp.squeeze(num_recv_tokens, axis=0)
+    x_dispatch, assignment_weights, recv_token_indices, local_group_sizes = _pack_deepep_local_assignments(
+        recv_x,
+        recv_topk_idx,
+        recv_topk_weights,
+        expert_start=expert_start,
+        local_experts=local_experts,
+        num_recv_tokens=num_recv_tokens_scalar,
+    )
+    _ = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
+    recv_out = _collapse_deepep_local_assignments(
+        x_dispatch,
+        assignment_weights,
+        recv_token_indices,
+        recv_capacity=recv_x.shape[0],
+        num_recv_tokens=num_recv_tokens_scalar,
+    )
+    out_local, _ = deepep_combine_intranode(
+        recv_out,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        recv_channel_prefix_matrix,
+        send_head,
+        num_recv_tokens,
+    )
+    return out_local.astype(x_local.dtype), jnp.array(0, dtype=jnp.int32)
+
+
+def _moe_mlp_deepep_transport_first_ragged_dot_probe(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+) -> jax.Array:
+    if mesh is None:
+        mesh = get_abstract_mesh()
+
+    num_experts = int(w_up_gate.shape[0])
+    has_expert_axis = grug_moe_lib._mesh_has_axis(mesh, "expert")
+    expert_axis_size = grug_moe_lib._mesh_axis_size(mesh, "expert")
+
+    if mesh is None or mesh.empty:
+        return x
+
+    batch_spec = grug_moe_lib._batch_spec_from_x(x, mesh)
+
+    if has_expert_axis and expert_axis_size > 1:
+        if grug_moe_lib._mesh_axis_size(mesh, "data") != 1:
+            raise ValueError(
+                "deepep_transport_first_ragged_dot_probe currently requires the expert group to span all visible "
+                f"local GPUs; got data axis size={grug_moe_lib._mesh_axis_size(mesh, 'data')} and expert axis "
+                f"size={expert_axis_size}"
+            )
+        shard_fn = shard_map(
+            partial(
+                _moe_mlp_ep_deepep_transport_first_ragged_dot_probe_local,
+                num_experts=num_experts,
+            ),
+            mesh=mesh,
+            in_specs=(
+                batch_spec,
+                batch_spec,
+                batch_spec,
+                P("expert", None, None),
+                P("expert", None, None),
+            ),
+            out_specs=(batch_spec, P()),
+            check_vma=False,
+        )
+        out, _ = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        return out
+
+    return x
+
+
 def _moe_mlp_ep_ring_local_prefix_counts(
     x_local: jax.Array,
     selected_experts_local: jax.Array,
@@ -3132,6 +3258,14 @@ def _forward(
             w_up_gate,
             w_down,
         )
+    elif kernel == "deepep_transport_first_ragged_dot_probe":
+        routed = _moe_mlp_deepep_transport_first_ragged_dot_probe(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
     elif kernel == "deepep_transport":
         routed = _moe_mlp_deepep_transport(
             x,
@@ -3263,7 +3397,11 @@ def _forward(
     else:
         raise ValueError(f"Unknown kernel: {kernel}")
 
-    if kernel in {"deepep_transport_identity", "deepep_transport_assignments_identity"}:
+    if kernel in {
+        "deepep_transport_identity",
+        "deepep_transport_assignments_identity",
+        "deepep_transport_first_ragged_dot_probe",
+    }:
         return routed
     return routed + _shared_mlp(x, shared_w13, shared_w2)
 
@@ -3330,6 +3468,7 @@ def main() -> None:
             "deepep_layout_ragged_a2a",
             "deepep_transport_identity",
             "deepep_transport_assignments_identity",
+            "deepep_transport_first_ragged_dot_probe",
             "deepep_transport",
             "prefix_counts",
             "vector_prefix",
