@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import subprocess
 import time
 from pathlib import Path
@@ -20,6 +21,18 @@ DEFAULT_IMAGE = "pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel"
 DEFAULT_CONFIG = Path("lib/iris/examples/coreweave.yaml")
 DEFAULT_DEEPEP_REF = "7febc6e25660af0f54d95dd781ecdcd62265ecca"
 BENCH_PATH = Path("lib/levanter/scripts/bench/bench_moe_hillclimb.py")
+LOCAL_STAGE_PATHS: tuple[Path, ...] = (
+    Path("lib/iris/src/iris/rpc/actor_connect.py"),
+    Path("lib/iris/src/iris/rpc/actor_pb2.py"),
+    Path("lib/iris/src/iris/rpc/cluster_connect.py"),
+    Path("lib/iris/src/iris/rpc/cluster_pb2.py"),
+    Path("lib/iris/src/iris/rpc/config_pb2.py"),
+    Path("lib/iris/src/iris/rpc/errors_pb2.py"),
+    Path("lib/iris/src/iris/rpc/logging_pb2.py"),
+    Path("lib/iris/src/iris/rpc/query_pb2.py"),
+    Path("lib/iris/src/iris/rpc/time_pb2.py"),
+    Path("lib/iris/src/iris/rpc/vm_pb2.py"),
+)
 
 
 def _repo_root() -> Path:
@@ -72,6 +85,20 @@ with tarfile.open(download_path, "r:gz") as archive:
     for child in extracted_root.iterdir():
         shutil.move(str(child), target_dir / child.name)
 print("UNPACKED", target_dir)
+PY
+"""
+
+
+def _stage_file_block(path: Path, encoded: str) -> str:
+    return f"""
+/opt/conda/bin/python - <<'PY'
+import base64
+from pathlib import Path
+
+target = Path("/app/{path}")
+target.parent.mkdir(parents=True, exist_ok=True)
+target.write_bytes(base64.b64decode("{encoded}"))
+print("STAGED", target)
 PY
 """
 
@@ -154,9 +181,10 @@ done
 """
 
 
-def _build_run_script(args: argparse.Namespace) -> str:
+def _build_run_script(args: argparse.Namespace, *, staged_files: dict[Path, str]) -> str:
     repo_archive_url = f"https://codeload.github.com/marin-community/marin/tar.gz/{args.repo_ref}"
     deepep_archive_url = f"https://codeload.github.com/deepseek-ai/DeepEP/tar.gz/{args.deepep_ref}"
+    stage_block = "\n".join(_stage_file_block(path, encoded) for path, encoded in staged_files.items())
     return f"""set -euxo pipefail
 echo HOSTNAME=$(hostname)
 echo PYTHON=$(/opt/conda/bin/python -c 'import sys; print(sys.executable)')
@@ -170,6 +198,7 @@ if ! command -v git >/dev/null 2>&1; then
   DEBIAN_FRONTEND=noninteractive apt-get install -y git
 fi
 {_download_unpack_block(repo_archive_url, "/app")}
+{stage_block}
 {_download_unpack_block(deepep_archive_url, "/tmp/DeepEP")}
 cd /app
 export DEEPEP_SRC_ROOT=/tmp/DeepEP
@@ -202,7 +231,10 @@ def _make_container_config(args: argparse.Namespace) -> ContainerConfig:
         disk_bytes=args.disk_gib * 1024**3,
     )
     resources.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="H100", count=args.gpus))
-    run_script = _build_run_script(args)
+    staged_files = {
+        path: base64.b64encode((_repo_root() / path).read_bytes()).decode("ascii") for path in LOCAL_STAGE_PATHS
+    }
+    run_script = _build_run_script(args, staged_files=staged_files)
     return ContainerConfig(
         image=args.image,
         entrypoint=_entrypoint(["bash", "-lc", run_script]),
