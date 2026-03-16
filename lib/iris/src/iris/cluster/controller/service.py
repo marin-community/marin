@@ -58,7 +58,7 @@ from iris.cluster.controller.db import (
     TaskJobSummary,
     UserStats,
     Worker,
-    _decode_job_name,
+    decode_job_name,
     _tasks_with_attempts,
     endpoint_query_predicate,
     running_tasks_by_worker,
@@ -306,12 +306,6 @@ def _tasks_for_listing(db: ControllerDB, *, job_id: JobName | None = None) -> li
     return _tasks_with_attempts(tasks, attempts)
 
 
-def _worker_addresses(db: ControllerDB) -> dict[WorkerId, str]:
-    with db.read_snapshot() as q:
-        workers = q.select(WORKERS, columns=(WORKERS.c.worker_id, WORKERS.c.address))
-    return {row.worker_id: row.address for row in workers}
-
-
 def _worker_addresses_for_tasks(db: ControllerDB, tasks: list[Task]) -> dict[WorkerId, str]:
     """Fetch addresses only for workers referenced by the given tasks."""
     worker_ids = {t.worker_id for t in tasks if t.worker_id is not None}
@@ -351,16 +345,16 @@ def _jobs_paginated_by_date(
     conditions = []
     params: list[object] = []
 
-    state_placeholders = ",".join("?" for _ in states)
-    conditions.append(f"j.state IN ({state_placeholders})")
-    params.extend(states)
-
     if state_filter_int is not None:
         conditions.append("j.state = ?")
         params.append(state_filter_int)
+    else:
+        state_placeholders = ",".join("?" for _ in states)
+        conditions.append(f"j.state IN ({state_placeholders})")
+        params.extend(states)
 
     if top_level_only:
-        conditions.append("j.parent_job_id IS NULL")
+        conditions.append("j.depth = 1")
 
     where_clause = " AND ".join(conditions)
     direction = "DESC" if descending else "ASC"
@@ -375,7 +369,7 @@ def _jobs_paginated_by_date(
 
     with db.read_snapshot() as q:
         total = q.execute_sql(count_sql, tuple(params)).fetchone()[0]
-        rows = q._fetchall(select_sql, [*params, limit, offset])
+        rows = q.execute_sql(select_sql, tuple([*params, limit, offset])).fetchall()
 
     jobs = [db.decode_job(row) for row in rows]
     return jobs, total
@@ -403,7 +397,7 @@ def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = No
     """
     completed_states = (cluster_pb2.TASK_STATE_SUCCEEDED, cluster_pb2.TASK_STATE_KILLED)
     with db.read_snapshot() as q:
-        rows = q.raw(sql, params, decoders={"job_id": _decode_job_name})
+        rows = q.raw(sql, params, decoders={"job_id": decode_job_name})
 
     summaries: dict[JobName, TaskJobSummary] = {}
     for row in rows:

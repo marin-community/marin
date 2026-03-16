@@ -38,7 +38,7 @@ def _nullable(decoder: RowDecoder) -> RowDecoder:
     return inner
 
 
-def _decode_job_name(value: Any) -> JobName:
+def decode_job_name(value: Any) -> JobName:
     return JobName.from_wire(str(value))
 
 
@@ -530,7 +530,7 @@ ACTIVE_TASK_STATES: frozenset[int] = frozenset(
 
 @db_row_model
 class Attempt:
-    task_id: JobName = db_field("task_id", _decode_job_name)
+    task_id: JobName = db_field("task_id", decode_job_name)
     attempt_id: int = db_field("attempt_id", _decode_int)
     worker_id: WorkerId | None = db_field("worker_id", _nullable(_decode_worker_id))
     state: int = db_field("state", _decode_int)
@@ -551,7 +551,7 @@ class Attempt:
 
 @db_row_model
 class Job:
-    job_id: JobName = db_field("job_id", _decode_job_name)
+    job_id: JobName = db_field("job_id", decode_job_name)
     request: cluster_pb2.Controller.LaunchJobRequest = db_field(
         "request_proto",
         _proto_decoder(cluster_pb2.Controller.LaunchJobRequest),
@@ -591,8 +591,8 @@ class Job:
 
 @db_row_model
 class Task:
-    task_id: JobName = db_field("task_id", _decode_job_name)
-    job_id: JobName = db_field("job_id", _decode_job_name)
+    task_id: JobName = db_field("task_id", decode_job_name)
+    job_id: JobName = db_field("job_id", decode_job_name)
     state: int = db_field("state", _decode_int)
     error: str | None = db_field("error", _nullable(_decode_str))
     exit_code: int | None = db_field("exit_code", _nullable(_decode_int))
@@ -712,7 +712,7 @@ class Endpoint:
     endpoint_id: str = db_field("endpoint_id", _decode_str)
     name: str = db_field("name", _decode_str)
     address: str = db_field("address", _decode_str)
-    job_id: JobName = db_field("job_id", _decode_job_name)
+    job_id: JobName = db_field("job_id", decode_job_name)
     metadata: dict[str, str] = db_field("metadata_json", _decode_json_dict)
     registered_at: Timestamp = db_field("registered_at_ms", _decode_timestamp_ms)
 
@@ -791,7 +791,7 @@ WORKER_TASK_HISTORY = Table[tuple[str, str]](
     alias="wth",
     columns={
         "worker_id": Column("wth", "worker_id", _decode_worker_id),
-        "task_id": Column("wth", "task_id", _decode_job_name),
+        "task_id": Column("wth", "task_id", decode_job_name),
         "assigned_at_ms": Column("wth", "assigned_at_ms", _decode_timestamp_ms),
     },
 )
@@ -859,7 +859,7 @@ ENDPOINT_TASKS = Table[tuple[str, str]](
     alias="et",
     columns={
         "endpoint_id": Column("et", "endpoint_id", _decode_str),
-        "task_id": Column("et", "task_id", _decode_job_name),
+        "task_id": Column("et", "task_id", decode_job_name),
     },
 )
 TASK_PROFILES = Table[tuple[str, str]](
@@ -871,7 +871,7 @@ TASK_PROFILES = Table[tuple[str, str]](
         "captured_at_ms": Column("tp", "captured_at_ms", _decode_timestamp_ms),
     },
 )
-JOBS.columns["parent_job_id"] = Column("j", "parent_job_id", _nullable(_decode_job_name))
+JOBS.columns["parent_job_id"] = Column("j", "parent_job_id", _nullable(decode_job_name))
 TASKS.columns["priority_neg_depth"] = Column("t", "priority_neg_depth", _decode_int)
 TASKS.columns["priority_root_submitted_ms"] = Column("t", "priority_root_submitted_ms", _decode_timestamp_ms)
 TASKS.columns["task_index"] = Column("t", "task_index", _decode_int)
@@ -1038,9 +1038,9 @@ class ControllerDB:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
-        while not self._read_pool.empty():
+        for _ in range(self._READ_POOL_SIZE):
             try:
-                self._read_pool.get_nowait().close()
+                self._read_pool.get(timeout=1).close()
             except queue.Empty:
                 break
 
@@ -1086,7 +1086,10 @@ class ControllerDB:
             conn.execute("BEGIN")
             yield QuerySnapshot(conn, lock=None)
         finally:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             self._read_pool.put(conn)
 
     def decode_worker(self, row: sqlite3.Row) -> Worker:
@@ -1257,7 +1260,7 @@ def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict
             f"JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
             f"WHERE a.worker_id IN ({placeholders}) AND t.state IN (?, ?, ?)",
             (*[str(wid) for wid in worker_ids], *ACTIVE_TASK_STATES),
-            decoders={"worker_id": _decode_worker_id, "task_id": _decode_job_name},
+            decoders={"worker_id": _decode_worker_id, "task_id": decode_job_name},
         )
     running: dict[WorkerId, set[JobName]] = {wid: set() for wid in worker_ids}
     for row in rows:
