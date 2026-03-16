@@ -895,8 +895,7 @@ def test_terminal_states_clean_up_endpoints(job_request, worker_metadata):
 
 
 def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
-    """Endpoints are visible for all non-terminal job states (PENDING, RUNNING, BUILDING)
-    and hidden once the job reaches a terminal state."""
+    """Endpoints associated with a task are deleted when the task reaches a terminal state."""
     state = _make_state()
 
     worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
@@ -914,9 +913,9 @@ def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
         metadata={},
         registered_at=Timestamp.now(),
     )
-    state.add_endpoint(ep)
+    state.add_endpoint(ep, task_id=task.task_id)
 
-    # Visible while pending (task may be executing before job state updates)
+    # Visible while pending
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
     # Still visible after transition to running
@@ -924,10 +923,130 @@ def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
     assert _query_job(state, job.job_id).state == cluster_pb2.JOB_STATE_RUNNING
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
-    # Not visible after completion (terminal state)
+    # Deleted when task reaches terminal state
     transition_task(state, task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
     assert _query_job(state, job.job_id).state == cluster_pb2.JOB_STATE_SUCCEEDED
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 0
+
+
+def test_endpoint_deleted_on_task_failure_with_retry(job_request, worker_metadata):
+    """Endpoints are cleaned up when a task fails even if it retries back to PENDING."""
+    state = _make_state()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("test")
+    req.max_retries_failure = 1
+    tasks = submit_job(state, "ns-1", req)
+    task = tasks[0]
+
+    dispatch_task(state, task, worker_id)
+
+    ep = Endpoint(
+        endpoint_id="ep-1",
+        name="ns-1/actor",
+        address="10.0.0.1:8080",
+        job_id=JobName.root("test-user", "ns-1"),
+        metadata={},
+        registered_at=Timestamp.now(),
+    )
+    state.add_endpoint(ep, task_id=task.task_id)
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
+
+    # Task fails but retries (goes back to PENDING)
+    transition_task(state, task.task_id, cluster_pb2.TASK_STATE_FAILED, error="crash")
+    assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_PENDING
+
+    # Stale endpoints should be deleted even though the task retried
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 0
+
+
+def test_endpoint_deleted_on_worker_failure(job_request, worker_metadata):
+    """Endpoints are cleaned up when the worker dies, even if the task retries."""
+    state = _make_state()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("test")
+    req.max_retries_preemption = 1
+    tasks = submit_job(state, "ns-1", req)
+    task = tasks[0]
+
+    dispatch_task(state, task, worker_id)
+
+    ep = Endpoint(
+        endpoint_id="ep-1",
+        name="ns-1/actor",
+        address="10.0.0.1:8080",
+        job_id=JobName.root("test-user", "ns-1"),
+        metadata={},
+        registered_at=Timestamp.now(),
+    )
+    state.add_endpoint(ep, task_id=task.task_id)
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
+
+    # Worker fails -> task retries to PENDING
+    fail_worker(state, worker_id, "Connection lost")
+    assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_PENDING
+
+    # Endpoints should be cleaned up because the worker is dead
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 0
+
+
+def test_endpoint_survives_building_state(job_request, worker_metadata):
+    """Endpoints registered during BUILDING are not deleted by subsequent BUILDING updates."""
+    state = _make_state()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("test")
+    tasks = submit_job(state, "ns-1", req)
+    task = tasks[0]
+
+    # Assign task and transition to BUILDING
+    state.queue_assignments([Assignment(task_id=task.task_id, worker_id=worker_id)])
+    task = _query_task(state, task.task_id)
+    state.apply_task_updates(
+        HeartbeatApplyRequest(
+            worker_id=worker_id,
+            worker_resource_snapshot=None,
+            updates=[
+                TaskUpdate(
+                    task_id=task.task_id,
+                    attempt_id=task.current_attempt_id,
+                    new_state=cluster_pb2.TASK_STATE_BUILDING,
+                )
+            ],
+        )
+    )
+
+    # Register endpoint during BUILDING (e.g. jax_init.py pre-registration)
+    ep = Endpoint(
+        endpoint_id="ep-1",
+        name="ns-1/actor",
+        address="10.0.0.1:8080",
+        job_id=JobName.root("test-user", "ns-1"),
+        metadata={},
+        registered_at=Timestamp.now(),
+    )
+    state.add_endpoint(ep, task_id=task.task_id)
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
+
+    # Transition to RUNNING — endpoint should survive
+    state.apply_task_updates(
+        HeartbeatApplyRequest(
+            worker_id=worker_id,
+            worker_resource_snapshot=None,
+            updates=[
+                TaskUpdate(
+                    task_id=task.task_id,
+                    attempt_id=_query_task(state, task.task_id).current_attempt_id,
+                    new_state=cluster_pb2.TASK_STATE_RUNNING,
+                )
+            ],
+        )
+    )
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
 
 def test_namespace_isolation(job_request, worker_metadata):

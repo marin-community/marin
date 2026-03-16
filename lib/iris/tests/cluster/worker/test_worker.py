@@ -136,6 +136,7 @@ def create_mock_container_handle(
     handle.log_reader = Mock(return_value=log_reader_mock)
 
     handle.stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True))
+    handle.disk_usage_mb = Mock(return_value=0)
     handle.cleanup = Mock()
     return handle
 
@@ -794,7 +795,7 @@ def test_bundle(tmp_path):
 @pytest.fixture
 def real_worker(cache_dir):
     """Create Worker with real components (not mocks)."""
-    runtime = DockerRuntime()
+    runtime = DockerRuntime(cache_dir=cache_dir)
     config = WorkerConfig(
         port=0,
         cache_dir=cache_dir,

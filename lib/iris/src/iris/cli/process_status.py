@@ -109,15 +109,16 @@ def logs(ctx, worker: str | None, level: str, follow: bool, max_lines: int, subs
 @click.argument("profiler", type=click.Choice(["threads", "cpu", "mem"]))
 @click.option("--duration", "-d", default=10, help="Profiling duration in seconds")
 @click.option("--output", "-o", default=None, help="Output file path")
+@click.option("--locals", "include_locals", is_flag=True, help="Include local variables in thread dump")
 @click.pass_context
-def profile(ctx, worker: str | None, profiler: str, duration: int, output: str | None):
+def profile(ctx, worker: str | None, profiler: str, duration: int, output: str | None, include_locals: bool):
     """Profile the process (threads, cpu, or mem)."""
     url = require_controller_url(ctx)
     client = ControllerServiceClientSync(url)
 
     # Build profile type
     if profiler == "threads":
-        profile_type = cluster_pb2.ProfileType(threads=cluster_pb2.ThreadsProfile())
+        profile_type = cluster_pb2.ProfileType(threads=cluster_pb2.ThreadsProfile(locals=include_locals))
     elif profiler == "cpu":
         profile_type = cluster_pb2.ProfileType(cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.SPEEDSCOPE))
     elif profiler == "mem":

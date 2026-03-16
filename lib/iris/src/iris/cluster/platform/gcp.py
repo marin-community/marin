@@ -373,7 +373,6 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
             f"--project={self._project_id}",
             f"--zone={self._zone}",
             "--quiet",
-            "--async",
         ]
         logger.info("Rebooting GCE instance: %s", self._gce_vm_name)
         logger.info("gcloud command: %s", cmd)
@@ -389,10 +388,8 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
             f"--project={self._project_id}",
             f"--zone={self._zone}",
             "--quiet",
-            "--async",
         ]
-        logger.info("Deleting GCE instance (async): %s", self._gce_vm_name)
-        logger.info("gcloud command: %s", cmd)
+        logger.info("Deleting GCE instance: %s", self._gce_vm_name)
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             error = result.stderr.strip()
@@ -725,9 +722,8 @@ class GcpVmSliceHandle:
             f"--project={self._project_id}",
             f"--zone={self._zone}",
             "--quiet",
-            "--async",
         ]
-        logger.info("Terminating VM slice (async): %s (vm=%s)", self._slice_id, self._vm_name)
+        logger.info("Terminating VM slice: %s (vm=%s)", self._slice_id, self._vm_name)
         logger.info("gcloud command: %s", cmd)
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
@@ -814,7 +810,6 @@ class GcpPlatform:
         """Try to delete a GCE VM that may have been partially created.
 
         Silently ignores "not found" errors (resource was never created).
-        Uses --async so the caller is not blocked waiting for deletion.
         """
         cmd = [
             "gcloud",
@@ -825,9 +820,8 @@ class GcpPlatform:
             f"--zone={zone}",
             f"--project={self._project_id}",
             "--quiet",
-            "--async",
         ]
-        logger.info("Best-effort async cleanup of VM %s in %s", vm_name, zone)
+        logger.info("Best-effort cleanup of VM %s in %s", vm_name, zone)
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             error = result.stderr.strip()

@@ -20,7 +20,7 @@ import zipfile
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
-from iris.cluster.runtime.types import ContainerConfig, ContainerErrorKind, ContainerPhase
+from iris.cluster.runtime.types import ContainerConfig, ContainerErrorKind, ContainerPhase, MountKind, MountSpec
 from iris.rpc import cluster_pb2
 
 
@@ -410,6 +410,86 @@ def test_status_ignores_successful_init_containers(monkeypatch):
 
     status = handle.status()
     assert status.phase == ContainerPhase.RUNNING
+
+
+def test_disk_bytes_sets_emptydir_sizelimit(monkeypatch):
+    """When a WORKDIR MountSpec has size_bytes, the emptyDir volume should have a sizeLimit."""
+    manifests = _capture_manifest(monkeypatch)
+
+    device = cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(count=0))
+    resources = cluster_pb2.ResourceSpecProto(device=device, disk_bytes=10 * 1024**3)
+    config = ContainerConfig(
+        image="ghcr.io/example/task:latest",
+        entrypoint=_make_entrypoint(["python", "-c", "print('ok')"]),
+        env={"FOO": "bar"},
+        workdir="/app",
+        task_id="job/task/0",
+        network_mode="host",
+        resources=resources,
+        mounts=[MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=10 * 1024**3)],
+    )
+
+    runtime = KubernetesRuntime(namespace="iris")
+    handle = runtime.create_container(config)
+    handle.run()
+
+    pod = _pod_manifest(manifests)
+    workdir_vol = next(v for v in pod["spec"]["volumes"] if "emptyDir" in v)
+    assert "sizeLimit" in workdir_vol["emptyDir"]
+    assert workdir_vol["emptyDir"]["sizeLimit"] == str(10 * 1024**3)
+
+
+def test_cache_mounts_use_cache_dir_host_path(monkeypatch):
+    """CACHE mounts must map hostPath under worker cache_dir, not use the container path directly."""
+    manifests = _capture_manifest(monkeypatch)
+
+    config = _make_config()
+    config.mounts = [
+        MountSpec(container_path="/uv/cache", kind=MountKind.CACHE),
+        MountSpec(container_path="/root/.cargo/registry", kind=MountKind.CACHE),
+    ]
+    from pathlib import Path
+
+    runtime = KubernetesRuntime(namespace="iris", cache_dir=Path("/mnt/nvme/iris"))
+    handle = runtime.create_container(config)
+    handle.run()
+
+    pod = _pod_manifest(manifests)
+    volumes = pod["spec"]["volumes"]
+    cache_volumes = [v for v in volumes if "hostPath" in v]
+    assert len(cache_volumes) == 2
+    host_paths = sorted(v["hostPath"]["path"] for v in cache_volumes)
+    assert host_paths == ["/mnt/nvme/iris/root-.cargo-registry", "/mnt/nvme/iris/uv-cache"]
+
+
+def test_cache_mounts_fallback_without_cache_dir(monkeypatch):
+    """Without cache_dir, CACHE mounts fall back to container_path as hostPath."""
+    manifests = _capture_manifest(monkeypatch)
+
+    config = _make_config()
+    config.mounts = [MountSpec(container_path="/uv/cache", kind=MountKind.CACHE)]
+    runtime = KubernetesRuntime(namespace="iris")
+    handle = runtime.create_container(config)
+    handle.run()
+
+    pod = _pod_manifest(manifests)
+    cache_vol = next(v for v in pod["spec"]["volumes"] if "hostPath" in v)
+    assert cache_vol["hostPath"]["path"] == "/uv/cache"
+
+
+def test_no_disk_bytes_emptydir_has_no_sizelimit(monkeypatch):
+    """When a WORKDIR MountSpec has size_bytes=0, the emptyDir volume should have no sizeLimit."""
+    manifests = _capture_manifest(monkeypatch)
+
+    config = _make_config()
+    config.mounts = [MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=0)]
+    runtime = KubernetesRuntime(namespace="iris")
+    handle = runtime.create_container(config)
+    handle.run()
+
+    pod = _pod_manifest(manifests)
+    workdir_vol = next(v for v in pod["spec"]["volumes"] if "emptyDir" in v)
+    assert workdir_vol["emptyDir"] == {}
 
 
 def _make_zip(entries: dict[str, bytes]) -> bytes:

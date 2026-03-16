@@ -53,9 +53,7 @@ from iris.cluster.controller.db import (
     Endpoint,
     EndpointQuery,
     Job,
-    Join,
     Order,
-    SelectExpr,
     Task,
     TaskJobSummary,
     UserStats,
@@ -222,13 +220,13 @@ def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str,
 
 
 def _read_job(db: ControllerDB, job_id: JobName) -> Job | None:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
 
 
 def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> Task | None:
     task_wire = task_id.to_wire()
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         task = q.one(TASKS, where=TASKS.c.task_id == task_wire)
         if task is None:
             return None
@@ -241,7 +239,7 @@ def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> Task | None:
 
 
 def _read_worker(db: ControllerDB, worker_id: WorkerId) -> Worker | None:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         return q.one(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
 
 
@@ -255,7 +253,7 @@ class _WorkerDetail:
 def _read_worker_detail(
     db: ControllerDB, worker_id: WorkerId, *, resource_history_limit: int = 200
 ) -> _WorkerDetail | None:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         worker = q.one(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
         if worker is None:
             return None
@@ -282,7 +280,7 @@ def _read_worker_detail(
 
 
 def _child_jobs(db: ControllerDB, job_id: JobName) -> list[Job]:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         return q.select(
             JOBS,
             where=JOBS.c.parent_job_id == job_id.to_wire(),
@@ -291,7 +289,7 @@ def _child_jobs(db: ControllerDB, job_id: JobName) -> list[Job]:
 
 
 def _tasks_for_listing(db: ControllerDB, *, job_id: JobName | None = None) -> list[Task]:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         tasks = q.select(
             TASKS,
             where=(TASKS.c.job_id == job_id.to_wire()) if job_id else None,
@@ -307,69 +305,174 @@ def _tasks_for_listing(db: ControllerDB, *, job_id: JobName | None = None) -> li
     return _tasks_with_attempts(tasks, attempts)
 
 
-def _worker_addresses(db: ControllerDB) -> dict[WorkerId, str]:
-    with db.snapshot() as q:
-        workers = q.select(WORKERS, columns=(WORKERS.c.worker_id, WORKERS.c.address))
-    return {row.worker_id: row.address for row in workers}
+def _worker_addresses_for_tasks(db: ControllerDB, tasks: list[Task]) -> dict[WorkerId, str]:
+    """Fetch addresses only for workers referenced by the given tasks."""
+    worker_ids = {t.worker_id for t in tasks if t.worker_id is not None}
+    if not worker_ids:
+        return {}
+    placeholders = ",".join("?" for _ in worker_ids)
+    with db.read_snapshot() as q:
+        rows = q.raw(
+            f"SELECT worker_id, address FROM workers WHERE worker_id IN ({placeholders})",
+            tuple(str(wid) for wid in worker_ids),
+        )
+    return {WorkerId(str(row.worker_id)): row.address for row in rows}
 
 
-def _jobs_in_states(db: ControllerDB, states: tuple[int, ...]) -> list[Job]:
-    with db.snapshot() as q:
-        return q.select(JOBS, where=JOBS.c.state.in_(list(states)))
+# State display order for sorting (active states first)
+_STATE_SORT_EXPR = (
+    "CASE j.state"
+    " WHEN 3 THEN 0"  # RUNNING
+    " WHEN 2 THEN 1"  # BUILDING
+    " WHEN 1 THEN 2"  # PENDING
+    " WHEN 4 THEN 3"  # SUCCEEDED
+    " WHEN 5 THEN 4"  # FAILED
+    " WHEN 6 THEN 5"  # KILLED
+    " WHEN 7 THEN 6"  # WORKER_FAILED
+    " WHEN 8 THEN 7"  # UNSCHEDULABLE
+    " ELSE 99 END"
+)
+
+_SORT_FIELD_TO_SQL: dict[int, str] = {
+    cluster_pb2.Controller.JOB_SORT_FIELD_DATE: "j.submitted_at_ms",
+    cluster_pb2.Controller.JOB_SORT_FIELD_NAME: "j.name",
+    cluster_pb2.Controller.JOB_SORT_FIELD_STATE: _STATE_SORT_EXPR,
+    cluster_pb2.Controller.JOB_SORT_FIELD_FAILURES: "agg_failures",
+    cluster_pb2.Controller.JOB_SORT_FIELD_PREEMPTIONS: "agg_preemptions",
+}
+
+
+def _jobs_paginated(
+    db: ControllerDB,
+    states: tuple[int, ...],
+    *,
+    state_filter_int: int | None = None,
+    name_filter: str = "",
+    sort_field: int = 0,
+    descending: bool = True,
+    offset: int = 0,
+    limit: int = 50,
+) -> tuple[list[Job], int]:
+    """Fetch a page of top-level jobs with SQL-level filtering, sorting, and pagination."""
+    conditions = ["j.depth = 1"]
+    params: list[object] = []
+
+    if state_filter_int is not None:
+        conditions.append("j.state = ?")
+        params.append(state_filter_int)
+    else:
+        state_placeholders = ",".join("?" for _ in states)
+        conditions.append(f"j.state IN ({state_placeholders})")
+        params.extend(states)
+
+    if name_filter:
+        conditions.append("LOWER(j.name) LIKE ?")
+        params.append(f"%{name_filter}%")
+
+    where_clause = " AND ".join(conditions)
+    direction = "DESC" if descending else "ASC"
+    order_expr = _SORT_FIELD_TO_SQL.get(sort_field, "j.submitted_at_ms")
+
+    count_sql = f"SELECT COUNT(*) FROM jobs j WHERE {where_clause}"
+    select_sql = f"""
+        SELECT j.*,
+               COALESCE(SUM(t.failure_count), 0) AS agg_failures,
+               COALESCE(SUM(t.preemption_count), 0) AS agg_preemptions
+        FROM jobs j
+        LEFT JOIN tasks t ON j.job_id = t.job_id
+        WHERE {where_clause}
+        GROUP BY j.job_id
+        ORDER BY {order_expr} {direction}
+    """
+    select_params = list(params)
+    if limit > 0:
+        select_sql += " LIMIT ? OFFSET ?"
+        select_params.extend([limit, offset])
+
+    with db.read_snapshot() as q:
+        total = q.execute_sql(count_sql, tuple(params)).fetchone()[0]
+        rows = q.execute_sql(select_sql, tuple(select_params)).fetchall()
+
+    jobs = [db.decode_job(row) for row in rows]
+    return jobs, total
+
+
+def _descendants_for_roots(db: ControllerDB, root_job_ids: list[str]) -> list[Job]:
+    """Fetch all descendant jobs (depth > 1) for the given root job IDs in a single query."""
+    if not root_job_ids:
+        return []
+    placeholders = ",".join("?" for _ in root_job_ids)
+    sql = f"""
+        SELECT j.*
+        FROM jobs j
+        WHERE j.root_job_id IN ({placeholders}) AND j.depth > 1
+    """
+    with db.read_snapshot() as q:
+        rows = q.execute_sql(sql, tuple(root_job_ids)).fetchall()
+    return [db.decode_job(row) for row in rows]
 
 
 def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = None) -> dict[JobName, TaskJobSummary]:
-    with db.snapshot() as q:
-        rows = q.select(
-            TASKS,
-            columns=(
-                TASKS.c.job_id,
-                TASKS.c.state,
-                TASKS.c.failure_count,
-                TASKS.c.preemption_count,
-            ),
-            where=TASKS.c.job_id.in_([j.to_wire() for j in job_ids]) if job_ids else None,
-        )
+    """Aggregate task counts per job using SQL GROUP BY instead of Python-side iteration."""
+    if job_ids is not None:
+        placeholders = ",".join("?" for _ in job_ids)
+        where = f"WHERE t.job_id IN ({placeholders})"
+        params: tuple[object, ...] = tuple(j.to_wire() for j in job_ids)
+    else:
+        where = ""
+        params = ()
+
+    sql = f"""
+        SELECT t.job_id,
+               t.state,
+               COUNT(*) as cnt,
+               SUM(t.failure_count) as total_failures,
+               SUM(t.preemption_count) as total_preemptions
+        FROM tasks t
+        {where}
+        GROUP BY t.job_id, t.state
+    """
+    completed_states = (cluster_pb2.TASK_STATE_SUCCEEDED, cluster_pb2.TASK_STATE_KILLED)
+    with db.read_snapshot() as q:
+        rows = q.raw(sql, params, decoders={"job_id": JobName.from_wire})
+
     summaries: dict[JobName, TaskJobSummary] = {}
     for row in rows:
-        summary = summaries.get(row.job_id, TaskJobSummary(job_id=row.job_id))
-        state_count = summary.task_state_counts.get(row.state, 0) + 1
+        prev = summaries.get(row.job_id, TaskJobSummary(job_id=row.job_id))
         summaries[row.job_id] = TaskJobSummary(
             job_id=row.job_id,
-            task_count=summary.task_count + 1,
-            completed_count=summary.completed_count
-            + (1 if row.state in (cluster_pb2.TASK_STATE_SUCCEEDED, cluster_pb2.TASK_STATE_KILLED) else 0),
-            failure_count=summary.failure_count + row.failure_count,
-            preemption_count=summary.preemption_count + row.preemption_count,
-            task_state_counts={**summary.task_state_counts, row.state: state_count},
+            task_count=prev.task_count + row.cnt,
+            completed_count=prev.completed_count + (row.cnt if row.state in completed_states else 0),
+            failure_count=prev.failure_count + row.total_failures,
+            preemption_count=prev.preemption_count + row.total_preemptions,
+            task_state_counts={**prev.task_state_counts, row.state: row.cnt},
         )
     return summaries
 
 
 def _worker_roster(db: ControllerDB) -> list[Worker]:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         return q.select(WORKERS)
 
 
 def _query_endpoints(db: ControllerDB, query: EndpointQuery = EndpointQuery()) -> list[Endpoint]:
     joins, where = endpoint_query_predicate(query)
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         return q.select(
             ENDPOINTS,
             where=where,
             joins=tuple(joins),
-            order_by=(ENDPOINTS.c.registered_at_ms.desc(), ENDPOINTS.c.endpoint_id.asc()),
             limit=query.limit,
         )
 
 
 def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[Job]:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         return q.select(JOBS, where=JOBS.c.job_id.like(f"{job_id.to_wire()}/%"))
 
 
 def _transaction_actions(db: ControllerDB, limit: int = 100) -> list:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         actions = q.select(
             TXN_ACTIONS,
             order_by=(TXN_ACTIONS.c.created_at_ms.desc(),),
@@ -379,29 +482,38 @@ def _transaction_actions(db: ControllerDB, limit: int = 100) -> list:
 
 
 def _live_user_stats(db: ControllerDB) -> list[UserStats]:
-    jobs_for_tasks = JOBS.with_alias("ju")
-    with db.snapshot() as q:
-        job_rows = q.select(
-            JOBS,
-            columns=(SelectExpr("j.user_id", str, "user_id"), JOBS.c.state),
+    """Aggregate job/task counts per user for active (non-terminal) jobs."""
+    active_states = ",".join(
+        str(s)
+        for s in (
+            cluster_pb2.JOB_STATE_PENDING,
+            cluster_pb2.JOB_STATE_BUILDING,
+            cluster_pb2.JOB_STATE_RUNNING,
         )
-        task_rows = q.select(
-            TASKS,
-            columns=(SelectExpr("ju.user_id", str, "user_id"), TASKS.c.state),
-            joins=(Join(table=jobs_for_tasks, on=TASKS.c.job_id == jobs_for_tasks.c.job_id),),
+    )
+    with db.read_snapshot() as q:
+        job_rows = q.raw(
+            f"SELECT j.user_id, j.state, COUNT(*) as cnt FROM jobs j "
+            f"WHERE j.state IN ({active_states}) GROUP BY j.user_id, j.state"
+        )
+        task_rows = q.raw(
+            f"SELECT j.user_id, t.state, COUNT(*) as cnt "
+            f"FROM tasks t JOIN jobs j ON t.job_id = j.job_id "
+            f"WHERE j.state IN ({active_states}) "
+            f"GROUP BY j.user_id, t.state"
         )
     by_user: dict[str, UserStats] = {}
     for row in job_rows:
         stats = by_user.setdefault(row.user_id, UserStats(user=row.user_id))
-        stats.job_state_counts[row.state] = stats.job_state_counts.get(row.state, 0) + 1
+        stats.job_state_counts[row.state] = row.cnt
     for row in task_rows:
         stats = by_user.setdefault(row.user_id, UserStats(user=row.user_id))
-        stats.task_state_counts[row.state] = stats.task_state_counts.get(row.state, 0) + 1
+        stats.task_state_counts[row.state] = row.cnt
     return list(by_user.values())
 
 
 def _tasks_for_worker(db: ControllerDB, worker_id: WorkerId, limit: int = 50) -> list[Task]:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         history_rows = q.select(
             WORKER_TASK_HISTORY,
             columns=(WORKER_TASK_HISTORY.c.task_id,),
@@ -413,7 +525,7 @@ def _tasks_for_worker(db: ControllerDB, worker_id: WorkerId, limit: int = 50) ->
     if not task_ids:
         return []
     task_wires = [tid.to_wire() for tid in task_ids]
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         tasks = q.select(
             TASKS,
             where=TASKS.c.task_id.in_(task_wires),
@@ -679,7 +791,7 @@ class ControllerServiceImpl:
 
         # Build task statuses with attempts, aggregate counts in single pass
         tasks = tasks_for_job_with_attempts(self._db, job.job_id)
-        worker_addr_by_id = _worker_addresses(self._db)
+        worker_addr_by_id = _worker_addresses_for_tasks(self._db, tasks)
 
         task_statuses = []
         total_failure_count = 0
@@ -766,89 +878,71 @@ class ControllerServiceImpl:
         if result.tasks_to_kill:
             self._controller.kill_tasks_on_workers(result.tasks_to_kill)
 
+    def _job_to_proto(
+        self,
+        j: Job,
+        task_summary: TaskJobSummary | None,
+        autoscaler_pending_hints: dict[str, PendingHint],
+    ) -> cluster_pb2.JobStatus:
+        """Convert a Job + its task summary into a JobStatus proto."""
+        job_name = j.request.name if j.request else ""
+        task_state_counts = (
+            {_task_state_key(state): count for state, count in task_summary.task_state_counts.items()}
+            if task_summary
+            else {}
+        )
+
+        pending_reason = j.error or ""
+        if j.state == cluster_pb2.JOB_STATE_PENDING:
+            sched_reason = self._controller.get_job_scheduling_diagnostics(j.job_id.to_wire())
+            pending_reason = sched_reason or "Pending scheduler feedback"
+            hint = autoscaler_pending_hints.get(j.job_id.to_wire())
+            if hint is not None:
+                scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
+                pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
+
+        proto_job = cluster_pb2.JobStatus(
+            job_id=j.job_id.to_wire(),
+            state=j.state,
+            error=j.error or "",
+            exit_code=j.exit_code or 0,
+            failure_count=task_summary.failure_count if task_summary else 0,
+            preemption_count=task_summary.preemption_count if task_summary else 0,
+            name=job_name,
+            resources=j.request.resources if j.request else cluster_pb2.ResourceSpecProto(),
+            task_state_counts=task_state_counts,
+            task_count=task_summary.task_count if task_summary else 0,
+            completed_count=task_summary.completed_count if task_summary else 0,
+            pending_reason=pending_reason,
+        )
+        if j.started_at:
+            proto_job.started_at.CopyFrom(j.started_at.to_proto())
+        if j.finished_at:
+            proto_job.finished_at.CopyFrom(j.finished_at.to_proto())
+        if j.submitted_at:
+            proto_job.submitted_at.CopyFrom(j.submitted_at.to_proto())
+        return proto_job
+
+    def _jobs_to_protos(
+        self,
+        jobs: list[Job],
+        task_summaries: dict[JobName, TaskJobSummary],
+        autoscaler_pending_hints: dict[str, PendingHint],
+    ) -> list[cluster_pb2.JobStatus]:
+        return [self._job_to_proto(j, task_summaries.get(j.job_id), autoscaler_pending_hints) for j in jobs]
+
     def list_jobs(
         self,
         request: cluster_pb2.Controller.ListJobsRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.ListJobsResponse:
-        """List jobs with server-side pagination, sorting, and filtering."""
-        # State priority order for sorting (active states first)
-        STATE_ORDER = {
-            cluster_pb2.JOB_STATE_RUNNING: 0,
-            cluster_pb2.JOB_STATE_BUILDING: 1,
-            cluster_pb2.JOB_STATE_PENDING: 2,
-            cluster_pb2.JOB_STATE_SUCCEEDED: 3,
-            cluster_pb2.JOB_STATE_FAILED: 4,
-            cluster_pb2.JOB_STATE_KILLED: 5,
-            cluster_pb2.JOB_STATE_WORKER_FAILED: 6,
-            cluster_pb2.JOB_STATE_UNSCHEDULABLE: 7,
-        }
-
-        # Build all job status objects
-        all_jobs: list[cluster_pb2.JobStatus] = []
+        """List jobs with SQL-level filtering, sorting, and pagination."""
         name_filter = request.name_filter.lower() if request.name_filter else ""
         state_filter = request.state_filter.lower() if request.state_filter else ""
         autoscaler_pending_hints = self._get_autoscaler_pending_hints()
 
-        jobs = _jobs_in_states(self._db, USER_JOB_STATES)
-        task_summaries = _task_summaries_for_jobs(self._db, {job.job_id for job in jobs})
-
-        for j in jobs:
-            # Apply name filter
-            job_name = j.request.name if j.request else ""
-            if name_filter and name_filter not in job_name.lower():
-                continue
-
-            # Apply state filter (convert state enum to friendly name)
-            job_state_name = cluster_pb2.JobState.Name(j.state).replace("JOB_STATE_", "").lower()
-            if state_filter and state_filter != job_state_name:
-                continue
-
-            # Aggregate counts from all tasks in single pass
-            task_summary = task_summaries.get(j.job_id)
-            task_state_counts = (
-                {_task_state_key(state): count for state, count in task_summary.task_state_counts.items()}
-                if task_summary
-                else {}
-            )
-
-            pending_reason = j.error or ""
-            if j.state == cluster_pb2.JOB_STATE_PENDING:
-                sched_reason = self._controller.get_job_scheduling_diagnostics(j.job_id.to_wire())
-                pending_reason = sched_reason or "Pending scheduler feedback"
-                hint = autoscaler_pending_hints.get(j.job_id.to_wire())
-                if hint is not None:
-                    scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
-                    pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
-
-            proto_job = cluster_pb2.JobStatus(
-                job_id=j.job_id.to_wire(),
-                state=j.state,
-                error=j.error or "",
-                exit_code=j.exit_code or 0,
-                failure_count=task_summary.failure_count if task_summary else 0,
-                preemption_count=task_summary.preemption_count if task_summary else 0,
-                name=job_name,
-                resources=j.request.resources if j.request else cluster_pb2.ResourceSpecProto(),
-                task_state_counts=task_state_counts,
-                task_count=task_summary.task_count if task_summary else 0,
-                completed_count=task_summary.completed_count if task_summary else 0,
-                pending_reason=pending_reason,
-            )
-            if j.started_at:
-                proto_job.started_at.CopyFrom(j.started_at.to_proto())
-            if j.finished_at:
-                proto_job.finished_at.CopyFrom(j.finished_at.to_proto())
-            if j.submitted_at:
-                proto_job.submitted_at.CopyFrom(j.submitted_at.to_proto())
-            all_jobs.append(proto_job)
-
-        total_count = len(all_jobs)
-
-        # Sorting
         sort_field = request.sort_field or cluster_pb2.Controller.JOB_SORT_FIELD_DATE
         sort_dir = request.sort_direction
-        # Default direction: descending for date, ascending for others
         if sort_dir == cluster_pb2.Controller.SORT_DIRECTION_UNSPECIFIED:
             sort_dir = (
                 cluster_pb2.Controller.SORT_DIRECTION_DESC
@@ -857,64 +951,36 @@ class ControllerServiceImpl:
             )
         reverse = sort_dir == cluster_pb2.Controller.SORT_DIRECTION_DESC
 
-        def sort_key(job: cluster_pb2.JobStatus):
-            if sort_field == cluster_pb2.Controller.JOB_SORT_FIELD_DATE:
-                return job.submitted_at.epoch_ms if job.submitted_at.epoch_ms else 0
-            elif sort_field == cluster_pb2.Controller.JOB_SORT_FIELD_NAME:
-                return job.name.lower()
-            elif sort_field == cluster_pb2.Controller.JOB_SORT_FIELD_STATE:
-                return STATE_ORDER.get(job.state, 99)
-            elif sort_field == cluster_pb2.Controller.JOB_SORT_FIELD_FAILURES:
-                return job.failure_count
-            elif sort_field == cluster_pb2.Controller.JOB_SORT_FIELD_PREEMPTIONS:
-                return job.preemption_count
-            return job.submitted_at.epoch_ms if job.submitted_at.epoch_ms else 0
-
-        all_jobs.sort(key=sort_key, reverse=reverse)
-
-        # Build parent -> children map to keep families together during pagination
-        children_by_parent: dict[str, list[cluster_pb2.JobStatus]] = {}
-        job_by_name = {job.name: job for job in all_jobs}
-
-        for job in all_jobs:
-            # Extract parent name from hierarchical job name (e.g., "/a/b/c" -> "/a/b")
-            if job.name and "/" in job.name:
-                last_slash = job.name.rfind("/")
-                if last_slash > 0:
-                    parent_name = job.name[:last_slash]
-                    if parent_name in job_by_name:
-                        if parent_name not in children_by_parent:
-                            children_by_parent[parent_name] = []
-                        children_by_parent[parent_name].append(job)
-
-        # Pagination (limit=0 means return all jobs)
         offset = max(request.offset, 0)
-        if request.limit > 0:
-            limit = min(request.limit, 500)
+        limit = min(request.limit, 500) if request.limit > 0 else 0
 
-            # Include jobs in the requested range
-            paginated_jobs = all_jobs[offset : offset + limit]
+        state_filter_int: int | None = None
+        if state_filter:
+            for st in USER_JOB_STATES:
+                if cluster_pb2.JobState.Name(st).replace("JOB_STATE_", "").lower() == state_filter:
+                    state_filter_int = st
+                    break
+            if state_filter_int is None:
+                return cluster_pb2.Controller.ListJobsResponse(jobs=[], total_count=0, has_more=False)
 
-            # Extend pagination to include all children of any parent in this page
-            # This ensures parent-child groups stay together even when pagination would split them
-            included_names = {job.name for job in paginated_jobs}
-            additional_children = []
-
-            for job in paginated_jobs:
-                if job.name in children_by_parent:
-                    for child in children_by_parent[job.name]:
-                        if child.name not in included_names:
-                            additional_children.append(child)
-                            included_names.add(child.name)
-
-            paginated_jobs.extend(additional_children)
-            has_more = offset + limit < total_count
-        else:
-            paginated_jobs = all_jobs[offset:]
-            has_more = False
-
+        jobs, total_count = _jobs_paginated(
+            self._db,
+            USER_JOB_STATES,
+            state_filter_int=state_filter_int,
+            name_filter=name_filter,
+            sort_field=sort_field,
+            descending=reverse,
+            offset=offset,
+            limit=limit,
+        )
+        # Also fetch descendants so the dashboard can build the job tree.
+        descendants = _descendants_for_roots(self._db, [j.job_id.to_wire() for j in jobs])
+        all_db_jobs = jobs + descendants
+        task_summaries = _task_summaries_for_jobs(self._db, {j.job_id for j in all_db_jobs})
+        all_jobs = self._jobs_to_protos(all_db_jobs, task_summaries, autoscaler_pending_hints)
+        has_more = limit > 0 and offset + limit < total_count
         return cluster_pb2.Controller.ListJobsResponse(
-            jobs=paginated_jobs,
+            jobs=all_jobs,
             total_count=total_count,
             has_more=has_more,
         )
@@ -954,7 +1020,7 @@ class ControllerServiceImpl:
         """List all tasks, optionally filtered by job_id."""
         job_id = JobName.from_wire(request.job_id) if request.job_id else None
         tasks = _tasks_for_listing(self._db, job_id=job_id)
-        worker_addr_by_id = _worker_addresses(self._db)
+        worker_addr_by_id = _worker_addresses_for_tasks(self._db, tasks)
 
         task_statuses = []
         for task in tasks:
@@ -1627,7 +1693,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Empty:
         identity = require_identity()
-        with self._db.snapshot() as q:
+        with self._db.read_snapshot() as q:
             key = q.one(API_KEYS, where=API_KEYS.c.key_id == request.key_id)
         if key is None:
             raise ConnectError(Code.NOT_FOUND, f"API key not found: {request.key_id}")

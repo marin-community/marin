@@ -15,7 +15,6 @@ from connectrpc.errors import ConnectError
 
 from iris.cli.build import (
     build_image,
-    find_iris_root,
     find_marin_root,
     get_git_sha,
     push_to_ghcr,
@@ -99,7 +98,6 @@ def _build_and_push_for_tag(image_tag: str, image_type: str, verbose: bool = Fal
         image_type=image_type,
         tag=local_tag,
         push=False,
-        dockerfile=None,
         context=None,
         platform="linux/amd64",
         ghcr_org=org,
@@ -113,12 +111,10 @@ def _build_and_push_for_tag(image_tag: str, image_type: str, verbose: bool = Fal
 def _build_and_push_task_image(task_tag: str, verbose: bool = False) -> None:
     """Build and push the task image to GHCR.
 
-    The task image uses a different Dockerfile (Dockerfile.task) and build context
-    (marin repo root) than worker/controller, so it can't use _build_and_push_for_tag
-    directly.
+    The task image uses the ``task`` target in the unified Dockerfile and needs the
+    marin repo root as build context, so it can't use _build_and_push_for_tag directly.
     """
     marin_root = str(find_marin_root())
-    task_dockerfile = str(find_iris_root() / "Dockerfile.task")
 
     ghcr_parsed = _parse_ghcr_tag(task_tag)
     if not ghcr_parsed:
@@ -133,7 +129,6 @@ def _build_and_push_task_image(task_tag: str, verbose: bool = False) -> None:
         image_type="task",
         tag=local_tag,
         push=False,
-        dockerfile=task_dockerfile,
         context=marin_root,
         platform="linux/amd64",
         ghcr_org=org,
