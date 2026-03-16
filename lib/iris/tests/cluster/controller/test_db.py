@@ -295,3 +295,36 @@ def test_read_snapshot_pool_returns_connections(db: ControllerDB) -> None:
             q.raw("SELECT 1")
 
     assert db._read_pool.qsize() == pool_size
+
+
+def test_migration_with_dml_does_not_leave_open_transaction(tmp_path: Path) -> None:
+    """Migrations that issue DML (e.g. UPDATE) must not leave an implicit
+    transaction open, which would cause the subsequent BEGIN IMMEDIATE for
+    schema_migrations to fail."""
+    # ControllerDB.__init__ already runs apply_migrations which applies all
+    # standard migrations. Simulate adding a new migration with DML by
+    # directly exercising the commit-after-migrate pattern on the raw conn.
+    db = ControllerDB(tmp_path / "test_dml.db")
+
+    # Insert a row so the UPDATE below has something to hit
+    with db.transaction() as cur:
+        cur.execute("CREATE TABLE IF NOT EXISTS dml_test (id INTEGER PRIMARY KEY, val TEXT)")
+        cur.insert("dml_test", {"id": 1, "val": "hello"})
+
+    # Simulate what a migration's migrate(conn) does: DML on the raw conn
+    # which opens an implicit transaction.
+    db._conn.execute("UPDATE dml_test SET val = 'world' WHERE id = 1")
+
+    # Commit the implicit transaction (this is what apply_migrations does).
+    db._conn.commit()
+
+    # This would fail with "cannot start a transaction within a transaction"
+    # if the commit above were missing.
+    with db.transaction() as cur:
+        cur.insert("dml_test", {"id": 2, "val": "after_commit"})
+
+    rows = db.fetchall("SELECT id, val FROM dml_test ORDER BY id")
+    assert len(rows) == 2
+    assert rows[0]["val"] == "world"
+    assert rows[1]["val"] == "after_commit"
+    db.close()

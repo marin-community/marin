@@ -39,10 +39,6 @@ def _nullable(decoder: RowDecoder) -> RowDecoder:
     return inner
 
 
-def decode_job_name(value: Any) -> JobName:
-    return JobName.from_wire(str(value))
-
-
 def _decode_worker_id(value: Any) -> WorkerId:
     return WorkerId(str(value))
 
@@ -531,7 +527,7 @@ ACTIVE_TASK_STATES: frozenset[int] = frozenset(
 
 @db_row_model
 class Attempt:
-    task_id: JobName = db_field("task_id", decode_job_name)
+    task_id: JobName = db_field("task_id", JobName.from_wire)
     attempt_id: int = db_field("attempt_id", _decode_int)
     worker_id: WorkerId | None = db_field("worker_id", _nullable(_decode_worker_id))
     state: int = db_field("state", _decode_int)
@@ -552,7 +548,7 @@ class Attempt:
 
 @db_row_model
 class Job:
-    job_id: JobName = db_field("job_id", decode_job_name)
+    job_id: JobName = db_field("job_id", JobName.from_wire)
     request: cluster_pb2.Controller.LaunchJobRequest = db_field(
         "request_proto",
         _proto_decoder(cluster_pb2.Controller.LaunchJobRequest),
@@ -592,8 +588,8 @@ class Job:
 
 @db_row_model
 class Task:
-    task_id: JobName = db_field("task_id", decode_job_name)
-    job_id: JobName = db_field("job_id", decode_job_name)
+    task_id: JobName = db_field("task_id", JobName.from_wire)
+    job_id: JobName = db_field("job_id", JobName.from_wire)
     state: int = db_field("state", _decode_int)
     error: str | None = db_field("error", _nullable(_decode_str))
     exit_code: int | None = db_field("exit_code", _nullable(_decode_int))
@@ -713,7 +709,7 @@ class Endpoint:
     endpoint_id: str = db_field("endpoint_id", _decode_str)
     name: str = db_field("name", _decode_str)
     address: str = db_field("address", _decode_str)
-    job_id: JobName = db_field("job_id", decode_job_name)
+    job_id: JobName = db_field("job_id", JobName.from_wire)
     metadata: dict[str, str] = db_field("metadata_json", _decode_json_dict)
     registered_at: Timestamp = db_field("registered_at_ms", _decode_timestamp_ms)
 
@@ -792,7 +788,7 @@ WORKER_TASK_HISTORY = Table[tuple[str, str]](
     alias="wth",
     columns={
         "worker_id": Column("wth", "worker_id", _decode_worker_id),
-        "task_id": Column("wth", "task_id", decode_job_name),
+        "task_id": Column("wth", "task_id", JobName.from_wire),
         "assigned_at_ms": Column("wth", "assigned_at_ms", _decode_timestamp_ms),
     },
 )
@@ -860,7 +856,7 @@ ENDPOINT_TASKS = Table[tuple[str, str]](
     alias="et",
     columns={
         "endpoint_id": Column("et", "endpoint_id", _decode_str),
-        "task_id": Column("et", "task_id", decode_job_name),
+        "task_id": Column("et", "task_id", JobName.from_wire),
     },
 )
 TASK_PROFILES = Table[tuple[str, str]](
@@ -872,7 +868,7 @@ TASK_PROFILES = Table[tuple[str, str]](
         "captured_at_ms": Column("tp", "captured_at_ms", _decode_timestamp_ms),
     },
 )
-JOBS.columns["parent_job_id"] = Column("j", "parent_job_id", _nullable(decode_job_name))
+JOBS.columns["parent_job_id"] = Column("j", "parent_job_id", _nullable(JobName.from_wire))
 TASKS.columns["priority_neg_depth"] = Column("t", "priority_neg_depth", _decode_int)
 TASKS.columns["priority_root_submitted_ms"] = Column("t", "priority_root_submitted_ms", _decode_timestamp_ms)
 TASKS.columns["task_index"] = Column("t", "task_index", _decode_int)
@@ -1155,6 +1151,9 @@ class ControllerDB:
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             module.migrate(self._conn)
+            # Commit any implicit transaction left open by migrate() (e.g.
+            # row-by-row UPDATEs in 0008) so the next BEGIN IMMEDIATE succeeds.
+            self._conn.commit()
 
             with self.transaction() as cur:
                 cur.execute(
@@ -1270,7 +1269,7 @@ def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict
             f"JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
             f"WHERE a.worker_id IN ({placeholders}) AND t.state IN (?, ?, ?)",
             (*[str(wid) for wid in worker_ids], *ACTIVE_TASK_STATES),
-            decoders={"worker_id": _decode_worker_id, "task_id": decode_job_name},
+            decoders={"worker_id": _decode_worker_id, "task_id": JobName.from_wire},
         )
     running: dict[WorkerId, set[JobName]] = {wid: set() for wid in worker_ids}
     for row in rows:

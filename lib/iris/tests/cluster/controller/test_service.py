@@ -805,8 +805,8 @@ def test_list_jobs_state_filter(service, job_request):
     assert response.jobs[0].state == cluster_pb2.JOB_STATE_KILLED
 
 
-def test_list_jobs_name_filter_fallback(service, job_request):
-    """Name filter uses Python-side fallback path."""
+def test_list_jobs_name_filter(service, job_request):
+    """Name filter returns only matching jobs."""
     service.launch_job(job_request("alpha-job"), None)
     service.launch_job(job_request("beta-job"), None)
 

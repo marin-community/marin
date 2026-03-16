@@ -58,7 +58,6 @@ from iris.cluster.controller.db import (
     TaskJobSummary,
     UserStats,
     Worker,
-    decode_job_name,
     _tasks_with_attempts,
     endpoint_query_predicate,
     running_tasks_by_worker,
@@ -320,21 +319,42 @@ def _worker_addresses_for_tasks(db: ControllerDB, tasks: list[Task]) -> dict[Wor
     return {WorkerId(str(row.worker_id)): row.address for row in rows}
 
 
-def _jobs_paginated_by_date(
+# State display order for sorting (active states first)
+_STATE_SORT_EXPR = (
+    "CASE j.state"
+    " WHEN 3 THEN 0"  # RUNNING
+    " WHEN 2 THEN 1"  # BUILDING
+    " WHEN 1 THEN 2"  # PENDING
+    " WHEN 4 THEN 3"  # SUCCEEDED
+    " WHEN 5 THEN 4"  # FAILED
+    " WHEN 6 THEN 5"  # KILLED
+    " WHEN 7 THEN 6"  # WORKER_FAILED
+    " WHEN 8 THEN 7"  # UNSCHEDULABLE
+    " ELSE 99 END"
+)
+
+_SORT_FIELD_TO_SQL: dict[int, str] = {
+    cluster_pb2.Controller.JOB_SORT_FIELD_DATE: "j.submitted_at_ms",
+    cluster_pb2.Controller.JOB_SORT_FIELD_NAME: "j.name",
+    cluster_pb2.Controller.JOB_SORT_FIELD_STATE: _STATE_SORT_EXPR,
+    cluster_pb2.Controller.JOB_SORT_FIELD_FAILURES: "agg_failures",
+    cluster_pb2.Controller.JOB_SORT_FIELD_PREEMPTIONS: "agg_preemptions",
+}
+
+
+def _jobs_paginated(
     db: ControllerDB,
     states: tuple[int, ...],
     *,
     state_filter_int: int | None = None,
+    name_filter: str = "",
+    sort_field: int = 0,
     descending: bool = True,
     offset: int = 0,
     limit: int = 50,
-    top_level_only: bool = True,
 ) -> tuple[list[Job], int]:
-    """Fetch a page of jobs sorted by submission date using SQL LIMIT/OFFSET.
-
-    Returns (page_of_jobs, total_count). Only decodes protobuf for the page.
-    """
-    conditions = []
+    """Fetch a page of top-level jobs with SQL-level filtering, sorting, and pagination."""
+    conditions = ["j.depth = 1"]
     params: list[object] = []
 
     if state_filter_int is not None:
@@ -345,17 +365,24 @@ def _jobs_paginated_by_date(
         conditions.append(f"j.state IN ({state_placeholders})")
         params.extend(states)
 
-    if top_level_only:
-        conditions.append("j.depth = 1")
+    if name_filter:
+        conditions.append("LOWER(j.name) LIKE ?")
+        params.append(f"%{name_filter}%")
 
     where_clause = " AND ".join(conditions)
     direction = "DESC" if descending else "ASC"
+    order_expr = _SORT_FIELD_TO_SQL.get(sort_field, "j.submitted_at_ms")
 
     count_sql = f"SELECT COUNT(*) FROM jobs j WHERE {where_clause}"
     select_sql = f"""
-        SELECT j.* FROM jobs j
+        SELECT j.*,
+               COALESCE(SUM(t.failure_count), 0) AS agg_failures,
+               COALESCE(SUM(t.preemption_count), 0) AS agg_preemptions
+        FROM jobs j
+        LEFT JOIN tasks t ON j.job_id = t.job_id
         WHERE {where_clause}
-        ORDER BY j.submitted_at_ms {direction}
+        GROUP BY j.job_id
+        ORDER BY {order_expr} {direction}
         LIMIT ? OFFSET ?
     """
 
@@ -389,7 +416,7 @@ def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = No
     """
     completed_states = (cluster_pb2.TASK_STATE_SUCCEEDED, cluster_pb2.TASK_STATE_KILLED)
     with db.read_snapshot() as q:
-        rows = q.raw(sql, params, decoders={"job_id": decode_job_name})
+        rows = q.raw(sql, params, decoders={"job_id": JobName.from_wire})
 
     summaries: dict[JobName, TaskJobSummary] = {}
     for row in rows:
@@ -880,24 +907,7 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.ListJobsRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.ListJobsResponse:
-        """List jobs with server-side pagination, sorting, and filtering.
-
-        Uses SQL-level pagination for the common case (sort by date, no name filter)
-        to avoid decoding all job protobufs. Falls back to full fetch + Python sort
-        for name-filtered or exotic-sort queries.
-        """
-        # State priority order for sorting (active states first)
-        STATE_ORDER = {
-            cluster_pb2.JOB_STATE_RUNNING: 0,
-            cluster_pb2.JOB_STATE_BUILDING: 1,
-            cluster_pb2.JOB_STATE_PENDING: 2,
-            cluster_pb2.JOB_STATE_SUCCEEDED: 3,
-            cluster_pb2.JOB_STATE_FAILED: 4,
-            cluster_pb2.JOB_STATE_KILLED: 5,
-            cluster_pb2.JOB_STATE_WORKER_FAILED: 6,
-            cluster_pb2.JOB_STATE_UNSCHEDULABLE: 7,
-        }
-
+        """List jobs with SQL-level filtering, sorting, and pagination."""
         name_filter = request.name_filter.lower() if request.name_filter else ""
         state_filter = request.state_filter.lower() if request.state_filter else ""
         autoscaler_pending_hints = self._get_autoscaler_pending_hints()
@@ -913,9 +923,8 @@ class ControllerServiceImpl:
         reverse = sort_dir == cluster_pb2.Controller.SORT_DIRECTION_DESC
 
         offset = max(request.offset, 0)
-        limit = min(request.limit, 500) if request.limit > 0 else 0
+        limit = min(request.limit, 500) if request.limit > 0 else 500
 
-        # Resolve state_filter to an integer for SQL-level filtering
         state_filter_int: int | None = None
         if state_filter:
             for st in USER_JOB_STATES:
@@ -925,71 +934,21 @@ class ControllerServiceImpl:
             if state_filter_int is None:
                 return cluster_pb2.Controller.ListJobsResponse(jobs=[], total_count=0, has_more=False)
 
-        # SQL-level pagination: sort-by-date, no name filter
-        can_sql_paginate = sort_field == cluster_pb2.Controller.JOB_SORT_FIELD_DATE and not name_filter and limit > 0
-
-        if can_sql_paginate:
-            jobs, total_count = _jobs_paginated_by_date(
-                self._db,
-                USER_JOB_STATES,
-                state_filter_int=state_filter_int,
-                descending=reverse,
-                offset=offset,
-                limit=limit,
-                top_level_only=True,
-            )
-            task_summaries = _task_summaries_for_jobs(self._db, {j.job_id for j in jobs})
-            all_jobs = self._jobs_to_protos(jobs, task_summaries, autoscaler_pending_hints)
-            has_more = offset + limit < total_count
-            return cluster_pb2.Controller.ListJobsResponse(
-                jobs=all_jobs,
-                total_count=total_count,
-                has_more=has_more,
-            )
-
-        # Fallback: fetch all top-level jobs, filter/sort in Python
-        with self._db.read_snapshot() as q:
-            jobs = q.select(JOBS, where=JOBS.c.state.in_(list(USER_JOB_STATES)) & (JOBS.c.depth == 1))
+        jobs, total_count = _jobs_paginated(
+            self._db,
+            USER_JOB_STATES,
+            state_filter_int=state_filter_int,
+            name_filter=name_filter,
+            sort_field=sort_field,
+            descending=reverse,
+            offset=offset,
+            limit=limit,
+        )
         task_summaries = _task_summaries_for_jobs(self._db, {j.job_id for j in jobs})
-
-        all_protos: list[cluster_pb2.JobStatus] = []
-        for j in jobs:
-            job_name = j.request.name if j.request else ""
-            if name_filter and name_filter not in job_name.lower():
-                continue
-
-            job_state_name = cluster_pb2.JobState.Name(j.state).replace("JOB_STATE_", "").lower()
-            if state_filter and state_filter != job_state_name:
-                continue
-
-            all_protos.append(self._job_to_proto(j, task_summaries.get(j.job_id), autoscaler_pending_hints))
-
-        total_count = len(all_protos)
-
-        def sort_key(job: cluster_pb2.JobStatus):
-            if sort_field == cluster_pb2.Controller.JOB_SORT_FIELD_DATE:
-                return job.submitted_at.epoch_ms if job.submitted_at.epoch_ms else 0
-            elif sort_field == cluster_pb2.Controller.JOB_SORT_FIELD_NAME:
-                return job.name.lower()
-            elif sort_field == cluster_pb2.Controller.JOB_SORT_FIELD_STATE:
-                return STATE_ORDER.get(job.state, 99)
-            elif sort_field == cluster_pb2.Controller.JOB_SORT_FIELD_FAILURES:
-                return job.failure_count
-            elif sort_field == cluster_pb2.Controller.JOB_SORT_FIELD_PREEMPTIONS:
-                return job.preemption_count
-            return job.submitted_at.epoch_ms if job.submitted_at.epoch_ms else 0
-
-        all_protos.sort(key=sort_key, reverse=reverse)
-
-        if limit > 0:
-            paginated_jobs = all_protos[offset : offset + limit]
-            has_more = offset + limit < total_count
-        else:
-            paginated_jobs = all_protos[offset:]
-            has_more = False
-
+        all_jobs = self._jobs_to_protos(jobs, task_summaries, autoscaler_pending_hints)
+        has_more = offset + limit < total_count
         return cluster_pb2.Controller.ListJobsResponse(
-            jobs=paginated_jobs,
+            jobs=all_jobs,
             total_count=total_count,
             has_more=has_more,
         )
