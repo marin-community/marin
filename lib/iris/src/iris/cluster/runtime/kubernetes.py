@@ -152,6 +152,7 @@ class KubernetesContainerHandle:
 
     config: ContainerConfig
     kubectl: Kubectl
+    cache_dir: Path | None = None
     service_account_name: str = ""
     s3_secret_name: str = ""
     s3_endpoint_url: str = ""
@@ -239,6 +240,10 @@ class KubernetesContainerHandle:
                     }
                 )
             elif mount.kind == MountKind.CACHE:
+                if self.cache_dir is not None:
+                    host_path = str(self.cache_dir / mount.container_path.strip("/").replace("/", "-"))
+                else:
+                    host_path = mount.container_path
                 mounts.append(
                     {
                         "name": volume_name,
@@ -249,7 +254,7 @@ class KubernetesContainerHandle:
                 volumes.append(
                     {
                         "name": volume_name,
-                        "hostPath": {"path": mount.container_path, "type": "DirectoryOrCreate"},
+                        "hostPath": {"path": host_path, "type": "DirectoryOrCreate"},
                     }
                 )
 
@@ -629,6 +634,7 @@ class KubernetesRuntime:
         namespace: str | None = None,
         service_account_name: str | None = None,
         s3_secret_name: str | None = None,
+        cache_dir: Path | None = None,
     ) -> None:
         resolved_namespace = namespace or os.environ.get("IRIS_POD_NAMESPACE") or "iris"
         self._service_account_name = service_account_name or os.environ.get("IRIS_SERVICE_ACCOUNT_NAME") or ""
@@ -641,12 +647,14 @@ class KubernetesRuntime:
         # is deleted. If worker containers crash-loop in-place, task Pods remain.
         # Consider restartPolicy=Never for worker Pods or explicit stale-task cleanup.
         self._kubectl = Kubectl(namespace=resolved_namespace)
+        self._cache_dir = cache_dir
         self._handles: list[KubernetesContainerHandle] = []
 
     def create_container(self, config: ContainerConfig) -> KubernetesContainerHandle:
         handle = KubernetesContainerHandle(
             config=config,
             kubectl=self._kubectl,
+            cache_dir=self._cache_dir,
             service_account_name=self._service_account_name,
             s3_secret_name=self._s3_secret_name,
             s3_endpoint_url=self._s3_endpoint_url,
