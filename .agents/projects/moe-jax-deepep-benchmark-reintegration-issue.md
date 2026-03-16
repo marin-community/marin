@@ -220,3 +220,31 @@ Current state as of 2026-03-16:
   - the main unresolved hole is now very specific:
     - the JAX exact-cap transport kernels currently only support `--bench-pass=forward`
     - the full JAX `forward_backward` column is still not implemented for the DeepEP transport path
+- the remaining JAX `forward_backward` hole is now narrowed to a concrete AD blocker:
+  - I added a minimal backward probe around the exact-cap path:
+    - compute exact caps
+    - prewarm the exact local compute executable
+    - run `jax.value_and_grad(...)` over `_forward_deepep_transport_capped(...)`
+  - authoritative control:
+    - `current`, `random`, `topk=2`, `EP=8`, `forward_backward`
+    - `time_s=0.010978`
+    - `tokens_per_s=2.98M`
+  - authoritative exact-cap failure:
+    - `DEEPEP_EXACT_CAPS max_recv_tokens=7808 max_local_assignments=8320 recv_factor=4.196721 assign_factor=7.876923`
+    - then:
+      - `ValueError: The FFI call to levanter_deepep_dispatch_intranode cannot be differentiated. You can use jax.custom_jvp or jax.custom_jvp to add support.`
+  - traceback location:
+    - `loss_fn(...)`
+    - `_forward_deepep_transport_capped(...)`
+    - `_moe_mlp_deepep_transport(...)`
+    - `_moe_mlp_ep_deepep_transport_local(...)`
+    - `deepep_dispatch_intranode(...)`
+    - `jax.ffi.ffi_call(...)`
+    - JAX raises from `ffi_call_jvp`
+- current best factual narrowing:
+  - the missing JAX `forward_backward` column is no longer a vague performance gap
+  - it is specifically blocked by the lack of JAX AD support for the DeepEP dispatch custom call
+  - the fixed-shape scientific picture is now:
+    - JAX exact-cap DeepEP is positive in forward mode on all four original cells
+    - Torch DeepEP is strongly positive on the same shape in full forward+backward mode
+    - JAX full forward+backward cannot currently be measured because autodiff stops at `levanter_deepep_dispatch_intranode`

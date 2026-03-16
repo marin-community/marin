@@ -1007,3 +1007,55 @@
     - the JAX harness can force `distribution in {random, runs}`
     - the Megatron benchmark uses its own router behavior
   - So these rows are matched in shape and pass structure, but not perfectly matched in router/data-generation semantics.
+
+### 2026-03-16 09:49 PDT - The missing JAX `forward_backward` column is now blocked by a concrete transport-AD error, not by an unknown benchmark issue
+- Context:
+  - The remaining major hole in `#3711` after the fixed-shape JAX forward quadrant and fixed-shape Torch baseline was the full JAX `forward_backward` DeepEP column.
+  - The benchmark harness was previously blocking this path with a forward-only guard for the exact-cap kernels.
+  - I added the smallest possible backward probe:
+    - compute exact caps with `_deepep_transport_exact_caps(...)`
+    - prewarm the exact local compute executable
+    - run `jax.value_and_grad(...)` over `_forward_deepep_transport_capped(...)`
+  - Probe task:
+    - `deepep-jax-krt-bench-20260316-fb-probe-v2`
+  - Pod:
+    - `iris-task-44516cf9a7ac`
+- Command:
+  ```bash
+  KUBECONFIG=~/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+    --config lib/iris/examples/coreweave-moe-jax-3677.yaml \
+    --task-id deepep-jax-krt-bench-20260316-fb-probe-v2 \
+    --kernels current,deepep_transport_capped_prewarmed \
+    --topk-list 2 \
+    --distributions random \
+    --bench-pass forward_backward \
+    --ep-list 8 \
+    --warmup 1 \
+    --iters 1 \
+    --per-bench-timeout-seconds 180 \
+    --per-bench-kill-after-seconds 10 \
+    --build-with-torch-extension \
+    --load-as-python-module
+  ```
+- Result:
+  - Control cell:
+    - `current`, `random`, `topk=2`, `EP=8`, `forward_backward`
+    - `time_s=0.010978`
+    - `tokens_per_s=2.98M`
+  - Exact-cap probe:
+    - the benchmark reached the exact-cap setup and printed:
+      - `DEEPEP_EXACT_CAPS max_recv_tokens=7808 max_local_assignments=8320 recv_factor=4.196721 assign_factor=7.876923`
+    - it then failed during JAX differentiation with:
+      - `ValueError: The FFI call to levanter_deepep_dispatch_intranode cannot be differentiated. You can use jax.custom_jvp or jax.custom_jvp to add support.`
+  - The traceback locates the failure precisely:
+    - `loss_fn(...)`
+    - `_forward_deepep_transport_capped(...)`
+    - `_moe_mlp_deepep_transport(...)`
+    - `_moe_mlp_ep_deepep_transport_local(...)`
+    - `deepep_dispatch_intranode(...)`
+    - `jax.ffi.ffi_call(...)`
+    - JAX raises from `ffi_call_jvp`
+- Interpretation:
+  - The missing `forward_backward` JAX DeepEP column is no longer an ambiguous benchmark gap.
+  - The exact-cap path currently has no JAX AD support at the transport boundary.
+  - The first failing site is the dispatch custom call itself, before any broader backward benchmarking question can even be measured.
