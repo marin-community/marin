@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Static batch selectors for StarCoder subset studies and nextgen design."""
@@ -21,8 +21,8 @@ from experiments.domain_phase_mix.exploratory.dsre_ceq_tools import (
     fit_dsre_ceq_artifacts,
 )
 from experiments.domain_phase_mix.exploratory.general_scaling_models import DatasetSpec
-from experiments.domain_phase_mix.nextgen.contracts import RunRecord
-from experiments.domain_phase_mix.starcoder_metadata import infer_starcoder_metadata
+from experiments.domain_phase_mix.nextgen.contracts import LoopConfig, RunRecord
+from experiments.domain_phase_mix.nextgen.dataset_metadata import resolve_dataset_epoch_metadata
 
 DEFAULT_INFO_RIDGE = 1e-3
 FEATURE_EPS = 1e-8
@@ -84,6 +84,7 @@ def build_dataset_spec_from_frame(
     *,
     objective_metric: str,
     name: str,
+    loop: LoopConfig | None = None,
 ) -> DatasetSpec:
     """Construct a DatasetSpec from a run dataframe using StarCoder metadata when available."""
     if objective_metric not in df.columns:
@@ -114,12 +115,11 @@ def build_dataset_spec_from_frame(
         for domain_idx, domain_name in enumerate(domain_names):
             weights[:, phase_idx, domain_idx] = model_df[f"{phase_name}_{domain_name}"].to_numpy(dtype=float)
 
-    metadata = infer_starcoder_metadata(phase_names, domain_names)
-    if metadata is None:
-        epoch_multipliers = np.ones((len(phase_names), len(domain_names)), dtype=float)
-        small_domains = None
-    else:
-        epoch_multipliers, small_domains = metadata
+    epoch_multipliers, small_domains = resolve_dataset_epoch_metadata(
+        loop=loop,
+        phase_names=phase_names,
+        domain_names=domain_names,
+    )
 
     return DatasetSpec(
         weights=weights,
@@ -302,9 +302,7 @@ def _tie_break_candidate(
         finite_mask = np.isfinite(scores)
         if finite_mask.any():
             best_score = float(np.max(scores[finite_mask]))
-            candidate_indices = candidate_indices[
-                finite_mask & np.isclose(scores, best_score, atol=1e-12, rtol=1e-10)
-            ]
+            candidate_indices = candidate_indices[finite_mask & np.isclose(scores, best_score, atol=1e-12, rtol=1e-10)]
             if len(candidate_indices) == 1:
                 return int(candidate_indices[0])
 
@@ -313,9 +311,7 @@ def _tie_break_candidate(
         finite_mask = np.isfinite(scores)
         if finite_mask.any():
             best_score = float(np.max(scores[finite_mask]))
-            candidate_indices = candidate_indices[
-                finite_mask & np.isclose(scores, best_score, atol=1e-12, rtol=1e-10)
-            ]
+            candidate_indices = candidate_indices[finite_mask & np.isclose(scores, best_score, atol=1e-12, rtol=1e-10)]
             if len(candidate_indices) == 1:
                 return int(candidate_indices[0])
 
@@ -591,9 +587,7 @@ def greedy_feature_dpp_indices(
         finite_mask = np.isfinite(remaining_gains)
         if finite_mask.any():
             best_gain = float(np.max(remaining_gains[finite_mask]))
-            candidate_indices = remaining[
-                finite_mask & np.isclose(remaining_gains, best_gain, rtol=1e-10, atol=1e-12)
-            ]
+            candidate_indices = remaining[finite_mask & np.isclose(remaining_gains, best_gain, rtol=1e-10, atol=1e-12)]
         else:
             candidate_indices = np.array([], dtype=int)
 

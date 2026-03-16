@@ -183,6 +183,11 @@ def main():
         count, total = topic_totals[topic]
         print(f"#   {topic}: {count} tiers, {total:,} tokens ({total / 1e9:.2f}B)")
 
+    print("\n# Top-level Dolma 3 domains:")
+    for topic in sorted(topic_totals.keys()):
+        _, total = topic_totals[topic]
+        print(f'#   "dolma3_cc/{topic}": {total:,} tokens ({total / 1e9:.2f}B)')
+
     # olmOCR
     olmocr_partitions = {k: v for k, v in partition_counts.items() if k.startswith("olmocr_pdfs/")}
     if olmocr_partitions:
@@ -194,12 +199,14 @@ def main():
     if stack_partitions:
         stack_total = sum(stack_partitions.values())
         print(f"\n# Stack-Edu: {len(stack_partitions)} partitions, {stack_total:,} tokens ({stack_total / 1e9:.2f}B)")
+        print(f'#   "dolma3_stack_edu": {stack_total:,} tokens ({stack_total / 1e9:.2f}B)')
 
     # Others
     for name in ("finemath_3plus", "arxiv", "wikipedia"):
         if name in partition_counts:
             tokens = partition_counts[name]
             print(f"\n# {name}: {tokens:,} tokens ({tokens / 1e9:.2f}B)")
+            print(f'#   "dolma3_{name}": {tokens:,} tokens ({tokens / 1e9:.2f}B)')
 
     # Output Python dict for dolma3_pool.py
     print("\n\n# ===== Python code for dolma3_pool.py =====\n")

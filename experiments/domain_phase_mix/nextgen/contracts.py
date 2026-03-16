@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Contracts for the next-generation domain/phase mixture optimization loop.
@@ -54,6 +54,9 @@ class LoopConfig:
     validation_policy: Literal["top1_per_model_dedup"] = "top1_per_model_dedup"
     trajectory_granularity: Literal["eval_checkpoints_only"] = "eval_checkpoints_only"
     state_root: str = "domain_phase_mix/nextgen"
+    domain_token_counts: dict[str, int] | None = None
+    phase_fractions: tuple[float, ...] | None = None
+    target_budget: int | None = None
     # Optional model registry controls
     candidate_search_points: int = 8192
     candidate_search_seed: int = 42

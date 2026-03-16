@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Collection steps for legacy imports and newly launched runs."""
@@ -10,6 +10,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from typing import Any
 
 import fsspec
 import pandas as pd
@@ -128,15 +129,40 @@ def _scan_trajectory(wandb_run_id: str, entity: str, project: str, objective_met
         rows.append(
             {
                 "step": int(step),
-                "total_tokens": float(entry["throughput/total_tokens"])
-                if entry.get("throughput/total_tokens") is not None
-                else None,
+                "total_tokens": (
+                    float(entry["throughput/total_tokens"]) if entry.get("throughput/total_tokens") is not None else None
+                ),
                 "metric_key": objective_metric,
                 "metric_value": float(metric_value),
             }
         )
 
     return pd.DataFrame(rows)
+
+
+def _extract_summary_metrics(wandb_row: dict[str, Any]) -> dict[str, float]:
+    return {
+        key: float(value)
+        for key, value in wandb_row.items()
+        if isinstance(value, int | float) and key.startswith(("eval/", "lm_eval/"))
+    }
+
+
+def _backfill_objective_metric_from_trajectory(
+    metrics: dict[str, float],
+    trajectory: pd.DataFrame,
+    objective_metric: str,
+) -> dict[str, float]:
+    if objective_metric in metrics or trajectory.empty:
+        return metrics
+
+    objective_rows = trajectory.loc[trajectory["metric_key"] == objective_metric, "metric_value"]
+    if objective_rows.empty:
+        return metrics
+
+    backfilled = dict(metrics)
+    backfilled[objective_metric] = float(objective_rows.iloc[-1])
+    return backfilled
 
 
 def collect_new_run_data(config: CollectNewRunDataConfig) -> None:
@@ -180,12 +206,25 @@ def collect_new_run_data(config: CollectNewRunDataConfig) -> None:
 
         wandb_run_id = wb_row.get("wandb_run_id")
         status = wb_row.get("status", "unknown")
+        traj = pd.DataFrame()
 
-        metrics = {
-            key: float(value)
-            for key, value in wb_row.items()
-            if isinstance(value, int | float) and key.startswith(("eval/", "lm_eval/"))
-        }
+        if wandb_run_id is not None:
+            try:
+                traj = _scan_trajectory(
+                    wandb_run_id=wandb_run_id,
+                    entity=config.wandb_entity,
+                    project=config.wandb_project,
+                    objective_metric=config.objective_metric,
+                )
+            except Exception:
+                logger.exception("Failed trajectory scan for run %s", wandb_run_id)
+                traj = pd.DataFrame()
+
+        metrics = _backfill_objective_metric_from_trajectory(
+            _extract_summary_metrics(wb_row),
+            traj,
+            config.objective_metric,
+        )
 
         records.append(
             RunRecord(
@@ -199,21 +238,7 @@ def collect_new_run_data(config: CollectNewRunDataConfig) -> None:
             )
         )
 
-        if wandb_run_id is None:
-            continue
-
-        try:
-            traj = _scan_trajectory(
-                wandb_run_id=wandb_run_id,
-                entity=config.wandb_entity,
-                project=config.wandb_project,
-                objective_metric=config.objective_metric,
-            )
-        except Exception:
-            logger.exception("Failed trajectory scan for run %s", wandb_run_id)
-            continue
-
-        if traj.empty:
+        if wandb_run_id is None or traj.empty:
             continue
 
         traj["wandb_run_id"] = wandb_run_id
@@ -228,17 +253,21 @@ def collect_new_run_data(config: CollectNewRunDataConfig) -> None:
     with fsspec.open(os.path.join(config.output_path, NEW_RUNS_FILE), "w") as f:
         json.dump([dataclasses.asdict(row) for row in records], f, indent=2, sort_keys=True)
 
-    traj_df = pd.concat(trajectories, ignore_index=True) if trajectories else pd.DataFrame(
-        columns=[
-            "wandb_run_id",
-            "source_experiment",
-            "local_run_id",
-            "run_name",
-            "step",
-            "total_tokens",
-            "metric_key",
-            "metric_value",
-        ]
+    traj_df = (
+        pd.concat(trajectories, ignore_index=True)
+        if trajectories
+        else pd.DataFrame(
+            columns=[
+                "wandb_run_id",
+                "source_experiment",
+                "local_run_id",
+                "run_name",
+                "step",
+                "total_tokens",
+                "metric_key",
+                "metric_value",
+            ]
+        )
     )
     with fsspec.open(os.path.join(config.output_path, NEW_TRAJ_FILE), "wb") as f:
         traj_df.to_parquet(f, index=False)

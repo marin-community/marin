@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Planning logic for new runs in next-gen loops."""
@@ -51,6 +51,32 @@ def _existing_weight_configs(state: LoopState) -> list[WeightConfig]:
     return [WeightConfig(run_id=int(r.local_run_id), phase_weights=r.phase_weights) for r in rows]
 
 
+def _initial_fixed_runs(
+    experiment: MixtureExperiment,
+    state: LoopState,
+) -> tuple[list[PlannedRun], list[WeightConfig]]:
+    if state.runs:
+        return [], []
+
+    planned: list[PlannedRun] = []
+    remapped_configs: list[WeightConfig] = []
+    for offset, fixed in enumerate(experiment.initial_fixed_weight_configs):
+        local_run_id = state.next_local_run_id + offset
+        phase_weights = {
+            phase_name: dict(domain_weights) for phase_name, domain_weights in fixed.weight_config.phase_weights.items()
+        }
+        planned.append(
+            PlannedRun(
+                local_run_id=local_run_id,
+                run_name=fixed.run_name,
+                phase_weights=phase_weights,
+            )
+        )
+        remapped_configs.append(WeightConfig(run_id=local_run_id, phase_weights=phase_weights))
+
+    return planned, remapped_configs
+
+
 def _sample_with_current_sampler(
     loop: LoopConfig,
     experiment: MixtureExperiment,
@@ -75,6 +101,7 @@ def _sample_with_static_selector(
         run_df,
         objective_metric=loop.objective_metric,
         name=f"{loop.name}_state",
+        loop=loop,
     )
     selected, selection = prospective_d_optimal_selection(
         spec,
@@ -95,26 +122,30 @@ def _sample_with_static_selector(
 
 def plan_new_runs(loop: LoopConfig, experiment: MixtureExperiment, state: LoopState) -> list[PlannedRun]:
     """Sample new runs incrementally against prior loop state."""
-    if loop.n_new_runs <= 0:
+    fixed_planned_runs, fixed_configs = _initial_fixed_runs(experiment, state)
+    if loop.n_new_runs <= 0 and not fixed_planned_runs:
         return []
 
     existing = _existing_weight_configs(state)
+    sampler_existing = [*existing, *fixed_configs]
     sampled: list[WeightConfig]
-    if loop.design_policy == "static_d_optimal":
+    if loop.n_new_runs <= 0:
+        sampled = []
+    elif loop.design_policy == "static_d_optimal":
         try:
-            sampled = _sample_with_static_selector(loop, experiment, state, existing)
+            sampled = _sample_with_static_selector(loop, experiment, state, sampler_existing)
         except Exception as exc:
             logger.warning(
                 "Static D-optimal design unavailable for loop %s; falling back to sampler: %s",
                 loop.name,
                 exc,
             )
-            sampled = _sample_with_current_sampler(loop, experiment, existing)
+            sampled = _sample_with_current_sampler(loop, experiment, sampler_existing)
     else:
-        sampled = _sample_with_current_sampler(loop, experiment, existing)
+        sampled = _sample_with_current_sampler(loop, experiment, sampler_existing)
 
-    next_id = state.next_local_run_id
-    planned: list[PlannedRun] = []
+    next_id = state.next_local_run_id + len(fixed_planned_runs)
+    planned: list[PlannedRun] = list(fixed_planned_runs)
     for i, weight_config in enumerate(sampled):
         local_run_id = next_id + i
         phase_weights = {phase: dict(weights) for phase, weights in weight_config.phase_weights.items()}

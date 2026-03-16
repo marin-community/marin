@@ -1,0 +1,90 @@
+# Debugging log for nextgen east5 baselines
+
+Debugging why the east5 baseline canary diverged: `baseline_unimax` succeeded while `baseline_proportional` failed, and the nextgen fit stage then failed to find the `lm_eval/mmlu_5shot/bpb` objective metric.
+
+## Initial status
+
+The retry baseline job `ray-run-calvinxu-nextgen-east5-baselines-retry-20260315-224006` launched two runs on `us-east5-a`.
+
+- `baseline_unimax-6b6af9` succeeded and wrote full training artifacts.
+- `baseline_proportional-80b8b9` failed with TPU retries ending in `RuntimeError: No accelerator found. Please run on a TPU or GPU.`
+- The nextgen loop then failed in fit with `ValueError: Objective metric 'lm_eval/mmlu_5shot/bpb' missing from run table`.
+
+## Hypothesis 1
+
+The fit failure is caused by a collection bug: the successful run did log `lm_eval/mmlu_5shot/bpb`, but `collect_new` only copied numeric eval metrics from W&B summary and did not backfill from tracker metrics or history when summary was incomplete.
+
+## Changes to make
+
+- Inspect `experiments/domain_phase_mix/nextgen/collect.py` and reuse existing tracker-metrics readers if possible.
+- Patch collection so the objective metric, and ideally all final eval metrics, can be recovered from run-local artifacts when W&B summary is incomplete.
+
+## Future Work
+
+- [ ] Add a focused regression test for missing-summary / present-tracker-metrics collection.
+- [ ] Consider whether imported legacy sources should use the same tracker-metrics backfill path.
+
+## Results
+
+Confirmed. The successful run's `tracker_metrics.jsonl` contains `lm_eval/mmlu_5shot/bpb`, but `collect_new/new_runs.json` recorded `"metrics": {}`. The bug is in nextgen collection, not in the run itself.
+
+Implemented a fix in `experiments/domain_phase_mix/nextgen/collect.py` so `collect_new_run_data()` backfills the objective metric from W&B history when the summary row is missing it. Added a regression test covering the exact missing-summary / present-history case.
+
+## Hypothesis 2
+
+The proportional baseline failure is an infrastructure retry bug: a TPU slice launched without an accelerator-visible environment, and Fray retried it as a generic run failure instead of evicting that bad slice and forcing rescheduling onto a healthy slice.
+
+## Changes to make
+
+- Inspect `lib/fray/src/fray/v2/ray_backend/tpu.py` retry classification for worker/runtime errors.
+- Patch TPU retry handling so "No accelerator found" is treated as infrastructure failure/preemption-equivalent and the bad slice is discarded before retry.
+
+## Future Work
+
+- [ ] Add a focused TPU retry regression test for accelerator-missing startup failures.
+- [ ] Improve TPU failure logs to include slice identity in the final raised error.
+
+## Results
+
+Confirmed. The proportional baseline failed with `RuntimeError: No accelerator found. Please run on a TPU or GPU.`, raised inside the remote TPU worker and then retried by Fray until the retry budget was exhausted.
+
+Implemented a fix in `lib/fray/src/fray/v2/ray_backend/tpu.py` that:
+
+- classifies TPU startup errors such as "No accelerator found" as infrastructure-retryable,
+- marks the affected slice actor as failed so the next retry rebuilds it instead of reusing the same slice.
+
+Added a focused regression test for nested accelerator-missing exception detection.
+
+## Hypothesis 3
+
+Fresh east5 nextgen submissions are missing required Python modules from the runtime upload, so the canary may be failing before the training DAG even starts.
+
+## Changes to make
+
+- Inspect `lib/marin/src/marin/run/ray_run.py` working-dir exclusions.
+- Ensure nextgen-required code under `experiments/domain_phase_mix/exploratory/` is included in the uploaded package.
+
+## Future Work
+
+- [ ] Trim the remaining exploratory upload exclusions to data/artifact paths only.
+
+## Results
+
+Confirmed. `ray_run.py` excluded the entire `experiments/domain_phase_mix/exploratory` tree by default, but nextgen imports `experiments.domain_phase_mix.exploratory.general_scaling_models`. Removed that bad default exclusion so nextgen code is present on the cluster.
+
+## Hypothesis 4
+
+The nextgen loop may be allowing `collect_new` to run before training finishes because the training-step dependency markers are stored in a tuple field that the executor does not recurse into.
+
+## Changes to make
+
+- Inspect `collect_dependencies_and_version()` and `instantiate_config()` in `lib/marin/src/marin/execution/executor.py`.
+- Add tuple recursion so tuple-valued `InputName`s contribute real blocking dependencies and are instantiated into concrete paths.
+
+## Future Work
+
+- [ ] Audit other executor metadata fields that use tuple containers for dependencies or paths.
+
+## Results
+
+Confirmed. The executor ignored tuple-valued `InputName`s, so `CollectNewRunDataConfig.depends_on` silently dropped its dependency edges. Added tuple handling in both dependency collection and config instantiation, and added executor regression tests. After this fix, a fresh east5 baselines-only canary reached the desired state: both baseline checkpoint steps were `RUNNING` while `collect_new` and `fit` remained blocked.

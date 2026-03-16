@@ -1,19 +1,5 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """Base experiment runner for n-domain, n-phase mixture experiments.
 
@@ -83,6 +69,14 @@ class SaveWeightConfigsConfig:
     configs: str  # JSON-encoded list of configs
 
 
+@dataclass(frozen=True)
+class InitialFixedWeightConfig:
+    """One fixed schedule to prepend when a new loop starts from empty state."""
+
+    run_name: str
+    weight_config: WeightConfig
+
+
 def save_weight_configs(config: SaveWeightConfigsConfig):
     """Save weight configurations to GCS.
 
@@ -136,6 +130,7 @@ class MixtureExperiment:
         mixture_block_size: int = 2048,
         optimizer_config: MuonHConfig | None = None,
         eval_datasets_cache_path: str | None = None,
+        initial_fixed_weight_configs: Sequence[InitialFixedWeightConfig] | None = None,
     ):
         """Initialize the experiment.
 
@@ -159,6 +154,8 @@ class MixtureExperiment:
                 with hyperparameters from proxy_sweep.py.
             eval_datasets_cache_path: Optional GCS path to pre-cached evaluation datasets.
                 If provided, datasets will be synced from GCS to avoid HuggingFace rate limiting.
+            initial_fixed_weight_configs: Fixed schedules to prepend when a nextgen
+                loop starts from empty state.
         """
         self.name = name
         self.domains = domains
@@ -174,6 +171,7 @@ class MixtureExperiment:
         self.mixture_block_size = mixture_block_size
         self.optimizer_config = optimizer_config or DEFAULT_MUON_CONFIG
         self.eval_datasets_cache_path = eval_datasets_cache_path
+        self.initial_fixed_weight_configs = tuple(initial_fixed_weight_configs or ())
 
         # Compute training steps and budget
         self.tokens_per_step = batch_size * seq_len

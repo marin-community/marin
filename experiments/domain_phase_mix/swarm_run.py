@@ -28,7 +28,7 @@ Usage:
 import logging
 import os
 
-from marin.execution.executor import executor_main
+from marin.execution.executor import ExecutorMainConfig, executor_main
 
 from experiments.pretraining_datasets.dolma3_dolmino_pool import (
     download_dolmino_pool,
@@ -42,6 +42,7 @@ from experiments.pretraining_datasets.dolma3_dolmino_pool import (
 )
 from experiments.pretraining_datasets.dolma3_pool import (
     download_all_dolma3_pool_sources,
+    get_stack_edu_hydration_steps as get_dolma3_stack_edu_hydration_steps,
     tokenize_dolma3_pool,
     get_common_crawl_partitions as get_dolma3_common_crawl_partitions,
     get_olmocr_pdfs_partitions as get_dolma3_olmocr_pdfs_partitions,
@@ -57,6 +58,8 @@ from experiments.pretraining_datasets.dolma3_pool import (
 )
 
 logger = logging.getLogger("ray")
+STACK_EDU_EXECUTOR_MAX_CONCURRENT = 14
+STACK_EDU_SQL_PARTITION = "stack_edu/SQL"
 
 
 # ============================================================================
@@ -161,6 +164,9 @@ def prepare_dolma3_pool_data(
         tokenizer=tokenizer,
     )
 
+    # Stack-Edu requires a hydration pass from Software Heritage blob ids to text.
+    hydration_steps = get_dolma3_stack_edu_hydration_steps(partitions=partitions)
+
     # Get tokenization steps
     tokenize_steps = tokenize_dolma3_pool(
         tokenizer=tokenizer,
@@ -168,13 +174,23 @@ def prepare_dolma3_pool_data(
     )
 
     # Combine all steps
-    all_steps = [*download_steps, *tokenize_steps.values()]
+    all_steps = [*download_steps, *hydration_steps.values(), *tokenize_steps.values()]
 
     logger.info(f"Preparing {len(tokenize_steps)} partitions from Dolma 3 Pool")
     logger.info(f"Download steps: {len(download_steps)}")
+    logger.info(f"Hydration steps: {len(hydration_steps)}")
     logger.info(f"Tokenization steps: {len(tokenize_steps)}")
 
+    executor_config = ExecutorMainConfig()
+    if partitions and all(partition.startswith("stack_edu/") for partition in partitions):
+        executor_config = ExecutorMainConfig(max_concurrent=STACK_EDU_EXECUTOR_MAX_CONCURRENT)
+        logger.info(
+            "Limiting executor concurrency to %s for Stack-Edu hydration/tokenization",
+            STACK_EDU_EXECUTOR_MAX_CONCURRENT,
+        )
+
     executor_main(
+        executor_config,
         steps=all_steps,
         description=f"Dolma 3 Pool data preparation: {len(tokenize_steps)} partitions",
     )
@@ -187,7 +203,7 @@ def prepare_dolma3_pool_by_category(
     """Prepare a specific category of Dolma 3 Pool data.
 
     Args:
-        category: One of "common_crawl", "olmocr_pdfs", "stack_edu",
+        category: One of "common_crawl", "olmocr_pdfs", "stack_edu", "stack_edu_rest",
                   "finemath", "arxiv", "wikipedia", "web" (CC only),
                   "web_with_ocr" (CC + olmOCR), or "all"
         tokenizer: Tokenizer to use. Defaults to marin_tokenizer.
@@ -198,6 +214,10 @@ def prepare_dolma3_pool_by_category(
         partitions = get_dolma3_olmocr_pdfs_partitions()
     elif category == "stack_edu":
         partitions = get_dolma3_stack_edu_partitions()
+    elif category == "stack_edu_rest":
+        partitions = [
+            partition for partition in get_dolma3_stack_edu_partitions() if partition != STACK_EDU_SQL_PARTITION
+        ]
     elif category == "finemath":
         partitions = get_dolma3_finemath_partitions()
     elif category == "arxiv":
@@ -219,13 +239,15 @@ def prepare_dolma3_pool_by_category(
             available = ", ".join(get_dolma3_web_topics())
             raise ValueError(f"Unknown web topic: {topic}. Available topics: {available}")
         partitions = web_by_topic[topic]
+    elif category in DOLMA3_POOL_PARTITIONS:
+        partitions = [category]
     elif category == "all":
         partitions = None  # All partitions
     else:
         raise ValueError(
             f"Unknown category: {category}. "
-            "Must be one of: common_crawl, olmocr_pdfs, stack_edu, finemath, arxiv, wikipedia, "
-            "web (CC only), web_with_ocr (CC+olmOCR), web/<topic>, all"
+            "Must be one of: common_crawl, olmocr_pdfs, stack_edu, stack_edu_rest, finemath, arxiv, wikipedia, "
+            "web (CC only), web_with_ocr (CC+olmOCR), web/<topic>, any exact partition name, all"
         )
 
     logger.info(f"Preparing Dolma 3 Pool category: {category}")
@@ -253,6 +275,7 @@ DOLMA3_POOL_CATEGORIES = [
     "common_crawl",
     "olmocr_pdfs",
     "stack_edu",
+    "stack_edu_rest",
     "finemath",
     "arxiv",
     "wikipedia",
@@ -310,6 +333,7 @@ def main(
     logger.info(f"  - Common Crawl: {len(get_dolma3_common_crawl_partitions())} partitions")
     logger.info(f"  - olmOCR PDFs: {len(get_dolma3_olmocr_pdfs_partitions())} partitions")
     logger.info(f"  - Stack-Edu: {len(get_dolma3_stack_edu_partitions())} partitions")
+    logger.info(f"  - Stack-Edu (excluding SQL canary): {len(get_dolma3_stack_edu_partitions()) - 1} partitions")
     logger.info(f"  - FineMath: {len(get_dolma3_finemath_partitions())} partitions")
     logger.info(f"  - arXiv: {len(get_dolma3_arxiv_partitions())} partitions")
     logger.info(f"  - Wikipedia: {len(get_dolma3_wikipedia_partitions())} partitions")
@@ -353,8 +377,9 @@ def _parse_args():
         help=(
             "Data category to prepare (only used with --prepare_data). "
             "For dolmino_pool: common_crawl_hq, olmocr_pdfs_hq, stack_edu_fim, stem_heavy_crawl, synthetic, all. "
-            "For dolma3_pool: common_crawl, olmocr_pdfs, stack_edu, finemath, arxiv, wikipedia, "
-            "web (CC only, 290 partitions), web_with_ocr (CC+olmOCR, 315 partitions), web/<topic>, all."
+            "For dolma3_pool: common_crawl, olmocr_pdfs, stack_edu, stack_edu_rest, finemath, arxiv, wikipedia, "
+            "web (CC only, 290 partitions), web_with_ocr (CC+olmOCR, 315 partitions), web/<topic>, "
+            "or an exact partition like stack_edu/SQL, all."
         ),
     )
     parser.add_argument(

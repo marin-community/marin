@@ -149,6 +149,40 @@ def _print_group_summary(results: dict[str, int], prefix: str, label: str) -> No
     print(f"# {label}: {len(group)} partitions, {total:,} tokens ({total / 1e9:.2f}B)")
 
 
+def _print_top_level_summary(results: dict[str, int]) -> None:
+    top_level = {
+        "dolmino_common_crawl_hq": sum(
+            tokens for partition, tokens in results.items() if partition.startswith("common_crawl_hq/")
+        ),
+        "dolmino_olmocr_pdfs_hq": sum(
+            tokens for partition, tokens in results.items() if partition.startswith("olmocr_pdfs_hq/")
+        ),
+        "dolmino_stack_edu_fim": sum(
+            tokens for partition, tokens in results.items() if partition.startswith("stack_edu_fim/")
+        ),
+        "dolmino_stem_heavy_crawl": sum(
+            tokens for partition, tokens in results.items() if partition.startswith("stem_heavy_crawl/")
+        ),
+        "dolmino_synth_code": sum(
+            tokens for partition, tokens in results.items() if partition.startswith("synth_code/")
+        ),
+        "dolmino_synth_instruction": sum(
+            tokens for partition, tokens in results.items() if partition.startswith("synth_instruction/")
+        ),
+        "dolmino_synth_math": sum(
+            tokens for partition, tokens in results.items() if partition.startswith("synth_math/")
+        ),
+        "dolmino_synth_qa": sum(tokens for partition, tokens in results.items() if partition.startswith("synth_qa/")),
+        "dolmino_synth_thinking": sum(
+            tokens for partition, tokens in results.items() if partition.startswith("synth_thinking/")
+        ),
+    }
+
+    print("\n# Top-level Dolmino domains:")
+    for name, total in top_level.items():
+        print(f'#   "{name}": {total:,} tokens ({total / 1e9:.2f}B)')
+
+
 def main() -> None:
     print("Querying GCS for completed Dolmino Pool tokenized caches...", file=sys.stderr)
     results, duplicates, unmapped = find_completed_caches(GCS_BUCKET, GCS_PREFIX)
@@ -163,6 +197,7 @@ def main() -> None:
     synth_total = sum(tokens for partition, tokens in results.items() if partition.startswith("synth_"))
     synth_partition_count = sum(1 for partition in results if partition.startswith("synth_"))
     print(f"# Synthetic: {synth_partition_count} partitions, {synth_total:,} tokens " f"({synth_total / 1e9:.2f}B)")
+    _print_top_level_summary(results)
     grand_total = sum(results.values())
     print(f"# Grand total: {grand_total:,} tokens ({grand_total / 1e9:.2f}B)")
 

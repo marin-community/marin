@@ -48,6 +48,7 @@ from experiments.pretraining_datasets.dolma import tokenize_dolma
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.transform.stack_edu.hydrate import StackEduHydrationConfig, hydrate_stack_edu as hydrate_stack_edu_text
 
 # =============================================================================
 # CONSTANTS
@@ -156,11 +157,6 @@ STACK_EDU_LANGUAGES = [
 HF_STACK_EDU_ID = "HuggingFaceTB/stack-edu"
 HF_FINEMATH_ID = "HuggingFaceTB/finemath"
 HF_DOLMA_V17_ID = "allenai/dolma"
-
-STACK_EDU_TOKENIZATION_BLOCKER = (
-    "Stack-Edu raw parquet files only contain Software Heritage blob IDs and metadata, not source text. "
-    "Hydrate blob contents first (per the Hugging Face dataset README) before tokenization."
-)
 
 # =============================================================================
 # PARTITION DEFINITIONS
@@ -514,6 +510,22 @@ DOLMA3_POOL_TOKEN_COUNTS_B: dict[str, float] = {
     # Reused equivalent-tokenizer caches outside tokenized/dolma3_pool.
     "finemath_3plus": 34.0019,  # 34,001,855,255 tokens
     "arxiv": 28.2376,  # 28,237,567,983 tokens
+    # Stack-Edu — 15 partitions, 134.07B total (measured from hydrated/tokenized caches).
+    "stack_edu/C": 4.7191,  # 4,719,072,920 tokens
+    "stack_edu/CSharp": 7.1877,  # 7,187,732,301 tokens
+    "stack_edu/Cpp": 12.4844,  # 12,484,367,348 tokens
+    "stack_edu/Go": 1.3993,  # 1,399,268,360 tokens
+    "stack_edu/Java": 31.2876,  # 31,287,573,657 tokens
+    "stack_edu/JavaScript": 8.8594,  # 8,859,382,448 tokens
+    "stack_edu/Markdown": 26.5106,  # 26,510,597,487 tokens
+    "stack_edu/PHP": 7.3828,  # 7,382,771,394 tokens
+    "stack_edu/Python": 17.9413,  # 17,941,260,722 tokens
+    "stack_edu/Ruby": 1.3882,  # 1,388,223,902 tokens
+    "stack_edu/Rust": 1.4190,  # 1,419,025,899 tokens
+    "stack_edu/SQL": 6.9486,  # 6,948,605,401 tokens
+    "stack_edu/Shell": 2.5468,  # 2,546,795,208 tokens
+    "stack_edu/Swift": 1.5048,  # 1,504,820,240 tokens
+    "stack_edu/TypeScript": 2.4916,  # 2,491,556,983 tokens
     "wikipedia": 3.6691,  # 3,669,138,258 tokens
 }
 
@@ -676,6 +688,48 @@ def _get_dolma_v17_base_dir():
 # =============================================================================
 
 _tokenize_cache: dict[str, ExecutorStep] = {}
+_stack_edu_hydration_cache: dict[str, ExecutorStep] = {}
+STACK_EDU_HYDRATION_MAX_WORKERS = 200
+
+
+def hydrate_stack_edu_subset(partition_name: str) -> ExecutorStep:
+    """Create a hydration step for a Stack-Edu partition."""
+    if not partition_name.startswith("stack_edu/"):
+        raise ValueError(f"Expected a Stack-Edu partition, got {partition_name}")
+
+    if partition_name in _stack_edu_hydration_cache:
+        return _stack_edu_hydration_cache[partition_name]
+
+    language = partition_name.removeprefix("stack_edu/")
+    step = ExecutorStep(
+        name=f"documents/stack_edu/{language}",
+        fn=hydrate_stack_edu_text,
+        config=StackEduHydrationConfig(
+            input_path=_get_stack_edu_base_dir() / language,
+            output_path=this_output_path(),
+            language=language,
+            max_rows_per_task=versioned(20_000),
+            max_workers=STACK_EDU_HYDRATION_MAX_WORKERS,
+            max_retries_per_blob=8,
+            pipeline_version=versioned("v1"),
+        ),
+    )
+    _stack_edu_hydration_cache[partition_name] = step
+    return step
+
+
+def get_stack_edu_hydration_steps(
+    partitions: list[str] | None = None,
+) -> dict[str, ExecutorStep]:
+    """Create hydration steps for the requested Stack-Edu partitions."""
+    if partitions is None:
+        partitions = get_stack_edu_partitions()
+
+    return {
+        partition_name: hydrate_stack_edu_subset(partition_name)
+        for partition_name in partitions
+        if partition_name.startswith("stack_edu/")
+    }
 
 
 def _resolve_partition_paths(partition_name: str) -> list:
@@ -694,8 +748,7 @@ def _resolve_partition_paths(partition_name: str) -> list:
         base_dir = _get_dolma3_pool_base_dir()
         file_pattern = "**/*.jsonl.zst"
     elif partition_name.startswith("stack_edu/"):
-        base_dir = _get_stack_edu_base_dir()
-        file_pattern = "**/*.parquet"  # Stack-Edu uses parquet format
+        return [hydrate_stack_edu_subset(partition_name).cd("train") / "*.jsonl.zst"]
     elif partition_name == "finemath_3plus":
         base_dir = _get_finemath_base_dir()
         file_pattern = "**/*.parquet"  # FineMath uses parquet format
@@ -739,9 +792,6 @@ def tokenize_dolma3_pool_subset(
 
     if tokenizer is None:
         tokenizer = marin_tokenizer
-
-    if partition_name.startswith("stack_edu/"):
-        raise ValueError(STACK_EDU_TOKENIZATION_BLOCKER)
 
     if _uses_reused_equivalent_cache(partition_name, tokenizer):
         if partition_name == "finemath_3plus":

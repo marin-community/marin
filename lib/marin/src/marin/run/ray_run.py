@@ -34,18 +34,34 @@ from iris.logging import configure_logging
 logger = logging.getLogger(__name__)
 
 REMOTE_DASHBOARD_URL = "http://127.0.0.1:8265"
+RAY_RUNTIME_ENV_IGNORE_GITIGNORE_ENV = "RAY_RUNTIME_ENV_IGNORE_GITIGNORE"
 DEFAULT_WORKING_DIR_EXCLUDES = [
     ".git",
     ".venv",
     ".uv-cache",
     ".pytest_cache",
     ".ruff_cache",
+    ".agents",
+    ".claude",
+    ".codex",
+    ".specstory",
     "docs/",
+    "data_browser",
+    "logs/",
+    "tests/snapshots",
+    "wandb",
+    "**/.DS_Store",
+    "**/.idea",
+    "**/.idea/**",
+    "**/__pycache__",
+    "**/*.pyc",
     "**/*.pack",
     "lib/levanter/docs",
     "lib/dupekit/target",
-    "experiments/domain_phase_mix/exploratory",
+    "lib/dupekit/**/*.so",
     "experiments/domain_phase_mix/offline_rl/artifacts",
+    "experiments/domain_phase_mix/offline_rl/policy_assets",
+    "experiments/domain_phase_mix/validation_artifacts",
     "experiments/domain_phase_mix/exploratory/two_phase_starcoder_models.pkl",
     "experiments/domain_phase_mix/exploratory/three_phase_plots",
     "experiments/domain_phase_mix/exploratory/holdout_plots_116",
@@ -159,6 +175,11 @@ async def submit_and_track_job(
     entrypoint_resources: dict | None = None,
 ):
     """Submit a job to Ray and optionally track logs."""
+    # Ray's working_dir uploader honors .gitignore by default. Our source-tree
+    # imports depend on generated Iris protobuf files that are intentionally
+    # gitignored, so opt into explicit excludes instead.
+    os.environ.setdefault(RAY_RUNTIME_ENV_IGNORE_GITIGNORE_ENV, "1")
+
     client = make_client()
     current_dir = os.getcwd()
 

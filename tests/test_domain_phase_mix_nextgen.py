@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -43,10 +43,12 @@ from experiments.domain_phase_mix.nextgen.merge_export import (
     merge_dataset,
 )
 from experiments.domain_phase_mix.nextgen.collect import (
+    CollectNewRunDataConfig,
     IMPORTED_RUNS_FILE,
     IMPORTED_TRAJ_FILE,
     NEW_RUNS_FILE,
     NEW_TRAJ_FILE,
+    collect_new_run_data,
     source_to_dict,
 )
 from experiments.domain_phase_mix.nextgen.model_registry import _propose_top1_candidate
@@ -87,7 +89,6 @@ def _write_json(path: str | os.PathLike[str], payload) -> None:
         json.dump(payload, f, indent=2, sort_keys=True)
 
 
-
 def test_append_runs_planning_uses_next_local_run_id():
     existing_state = LoopState(
         loop_name="loop",
@@ -125,7 +126,6 @@ def test_default_legacy_sources_cover_core_experiments(monkeypatch):
     assert TWO_PHASE_STARCODER_EXPERIMENT in source_names
     assert THREE_PHASE_EXPERIMENT in source_names
     assert THREE_PHASE_STARCODER_EXPERIMENT in source_names
-
 
 
 def test_export_csv_contains_phase_columns_and_objective(tmp_path):
@@ -194,6 +194,63 @@ def test_export_csv_contains_phase_columns_and_objective(tmp_path):
     # Parquet exports must exist for downstream model fitting.
     assert (export_dir / RUNS_PARQUET).exists()
 
+
+def test_collect_new_backfills_objective_from_trajectory(tmp_path, monkeypatch):
+    output_dir = tmp_path / "collect_new"
+    output_dir.mkdir()
+
+    monkeypatch.setattr(
+        "experiments.domain_phase_mix.nextgen.collect.query_wandb_runs",
+        lambda **_: [
+            {
+                "wandb_run_id": "run-a",
+                "wandb_run_name": "loop/baseline_proportional",
+                "status": "finished",
+                "eval/loss": 1.23,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "experiments.domain_phase_mix.nextgen.collect._scan_trajectory",
+        lambda **_: pd.DataFrame(
+            [
+                {
+                    "step": 4576,
+                    "total_tokens": 1.199833088e9,
+                    "metric_key": "lm_eval/mmlu_5shot/bpb",
+                    "metric_value": 0.42,
+                }
+            ]
+        ),
+    )
+
+    collect_new_run_data(
+        CollectNewRunDataConfig(
+            output_path=str(output_dir),
+            loop_name="loop",
+            objective_metric="lm_eval/mmlu_5shot/bpb",
+            wandb_entity="marin-community",
+            wandb_project="marin",
+            planned_runs_json=json.dumps(
+                [
+                    {
+                        "local_run_id": 0,
+                        "run_name": "baseline_proportional",
+                        "phase_weights": {"phase_0": {"a": 1.0}},
+                    }
+                ]
+            ),
+        )
+    )
+
+    new_runs = json.load(open(output_dir / NEW_RUNS_FILE))
+    assert new_runs[0]["status"] == "completed"
+    assert new_runs[0]["metrics"]["eval/loss"] == 1.23
+    assert new_runs[0]["metrics"]["lm_eval/mmlu_5shot/bpb"] == 0.42
+
+    traj_df = pd.read_parquet(output_dir / NEW_TRAJ_FILE)
+    assert len(traj_df) == 1
+    assert traj_df.iloc[0]["run_name"] == "baseline_proportional"
 
 
 def test_model_resubmit_validation_plan_reuses_prior_candidate(tmp_path):

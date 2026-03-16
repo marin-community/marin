@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Model registry and fit/propose adapters for next-gen mixture loops.
@@ -24,9 +24,9 @@ from experiments.domain_phase_mix.exploratory.general_scaling_models import (
     GENERAL_MODELS,
     GeneralModelSpec,
 )
+from experiments.domain_phase_mix.nextgen.dataset_metadata import resolve_dataset_epoch_metadata
 from experiments.domain_phase_mix.nextgen.contracts import Candidate, LoopConfig, PolicyArtifactRef
 from experiments.domain_phase_mix.nextgen.utils import stable_hash
-from experiments.domain_phase_mix.starcoder_metadata import infer_starcoder_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -231,16 +231,7 @@ def _build_weights_tensor(df: pd.DataFrame, phase_names: list[str], domains: lis
     return weights
 
 
-def _default_small_domains(domains: list[str]) -> list[int] | None:
-    # Prefer keeping explicit behavior stable for StarCoder-style setups.
-    for i, name in enumerate(domains):
-        lower = name.lower()
-        if "starcoder" in lower or "rare" in lower or "small" in lower:
-            return [i]
-    return None
-
-
-def _build_dataset_spec(df: pd.DataFrame, objective_metric: str) -> DatasetSpec:
+def _build_dataset_spec(df: pd.DataFrame, objective_metric: str, loop: LoopConfig) -> DatasetSpec:
     if objective_metric not in df.columns:
         raise ValueError(f"Objective metric '{objective_metric}' missing from run table")
 
@@ -252,12 +243,11 @@ def _build_dataset_spec(df: pd.DataFrame, objective_metric: str) -> DatasetSpec:
     weights = _build_weights_tensor(model_df, phase_names, domains)
     y = model_df[objective_metric].to_numpy(dtype=float)
 
-    starcoder_metadata = infer_starcoder_metadata(phase_names, domains)
-    if starcoder_metadata is None:
-        epoch_multipliers = np.ones((len(phase_names), len(domains)), dtype=float)
-        small_domains = _default_small_domains(domains)
-    else:
-        epoch_multipliers, small_domains = starcoder_metadata
+    epoch_multipliers, small_domains = resolve_dataset_epoch_metadata(
+        loop=loop,
+        phase_names=phase_names,
+        domain_names=domains,
+    )
 
     return DatasetSpec(
         weights=weights,
@@ -449,7 +439,7 @@ def fit_and_propose(
 ) -> FitAndProposeResult:
     """Fit configured models and propose top-1 candidate per model."""
     _ensure_default_registry()
-    spec = _build_dataset_spec(run_df, loop.objective_metric)
+    spec = _build_dataset_spec(run_df, loop.objective_metric, loop)
 
     requested = list(loop.model_names)
 

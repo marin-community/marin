@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Fit and propose steps for next-gen loops."""
@@ -51,6 +51,15 @@ def _decode_loop_config(payload: str) -> LoopConfig:
         validation_policy=data.get("validation_policy", "top1_per_model_dedup"),
         trajectory_granularity=data.get("trajectory_granularity", "eval_checkpoints_only"),
         state_root=data.get("state_root", "domain_phase_mix/nextgen"),
+        domain_token_counts=(
+            {str(key): int(value) for key, value in data["domain_token_counts"].items()}
+            if data.get("domain_token_counts") is not None
+            else None
+        ),
+        phase_fractions=(
+            tuple(float(value) for value in data["phase_fractions"]) if data.get("phase_fractions") is not None else None
+        ),
+        target_budget=int(data["target_budget"]) if data.get("target_budget") is not None else None,
         candidate_search_points=int(data.get("candidate_search_points", 8192)),
         candidate_search_seed=int(data.get("candidate_search_seed", 42)),
         candidate_opt_method=data.get("candidate_opt_method", "sample"),
@@ -72,6 +81,9 @@ def _encode_loop_config(loop: LoopConfig) -> str:
             "validation_policy": loop.validation_policy,
             "trajectory_granularity": loop.trajectory_granularity,
             "state_root": loop.state_root,
+            "domain_token_counts": loop.domain_token_counts,
+            "phase_fractions": list(loop.phase_fractions) if loop.phase_fractions is not None else None,
+            "target_budget": loop.target_budget,
             "candidate_search_points": loop.candidate_search_points,
             "candidate_search_seed": loop.candidate_search_seed,
             "candidate_opt_method": loop.candidate_opt_method,
