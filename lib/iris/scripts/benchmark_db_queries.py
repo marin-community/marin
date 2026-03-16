@@ -34,11 +34,13 @@ from iris.cluster.controller.db import (
 )
 from iris.cluster.controller.service import (
     USER_JOB_STATES,
+    _jobs_paginated,
     _live_user_stats,
     _task_summaries_for_jobs,
     _tasks_for_listing,
     _worker_addresses_for_tasks,
 )
+from iris.rpc import cluster_pb2
 
 
 def bench(name: str, fn: object, *, iterations: int = 20) -> tuple[float, float]:
@@ -115,13 +117,44 @@ def benchmark_dashboard(db: ControllerDB, iterations: int) -> list[tuple[str, fl
     results.append(("_task_summaries_for_jobs (all)", p50, p95))
     print_result("_task_summaries_for_jobs (all)", p50, p95)
 
-    # _worker_addresses_for_tasks requires a list of Task objects
-    tasks = _tasks_for_listing(db)
+    # _jobs_paginated: the unified SQL pagination path
     p50, p95 = bench(
-        "_worker_addresses_for_tasks", lambda: _worker_addresses_for_tasks(db, tasks), iterations=iterations
+        "_jobs_paginated (date)",
+        lambda: _jobs_paginated(db, USER_JOB_STATES, limit=50),
+        iterations=iterations,
     )
-    results.append(("_worker_addresses_for_tasks", p50, p95))
-    print_result("_worker_addresses_for_tasks", p50, p95)
+    results.append(("_jobs_paginated (date)", p50, p95))
+    print_result("_jobs_paginated (date)", p50, p95)
+
+    p50, p95 = bench(
+        "_jobs_paginated (name filter)",
+        lambda: _jobs_paginated(db, USER_JOB_STATES, name_filter="test", limit=50),
+        iterations=iterations,
+    )
+    results.append(("_jobs_paginated (name filter)", p50, p95))
+    print_result("_jobs_paginated (name filter)", p50, p95)
+
+    p50, p95 = bench(
+        "_jobs_paginated (sort failures)",
+        lambda: _jobs_paginated(
+            db, USER_JOB_STATES, sort_field=cluster_pb2.Controller.JOB_SORT_FIELD_FAILURES, limit=50
+        ),
+        iterations=iterations,
+    )
+    results.append(("_jobs_paginated (sort failures)", p50, p95))
+    print_result("_jobs_paginated (sort failures)", p50, p95)
+
+    # _worker_addresses_for_tasks: use a representative job's tasks
+    sample_job = jobs[0] if jobs else None
+    if sample_job:
+        sample_tasks = _tasks_for_listing(db, job_id=sample_job.job_id)
+        p50, p95 = bench(
+            "_worker_addresses_for_tasks", lambda: _worker_addresses_for_tasks(db, sample_tasks), iterations=iterations
+        )
+        results.append(("_worker_addresses_for_tasks", p50, p95))
+        print_result("_worker_addresses_for_tasks", p50, p95)
+    else:
+        print("  _worker_addresses_for_tasks                  (skipped, no jobs)")
 
     p50, p95 = bench("_live_user_stats", lambda: _live_user_stats(db), iterations=iterations)
     results.append(("_live_user_stats", p50, p95))
