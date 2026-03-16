@@ -10,7 +10,7 @@ from unittest.mock import Mock
 import pytest
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.runtime.docker import DEFAULT_WORKDIR_DISK_BYTES, DockerRuntime
 from iris.cluster.runtime.types import MountKind, MountSpec
 
 
@@ -81,13 +81,18 @@ def test_stage_bundle_no_tmpfs_without_mount(monkeypatch, tmp_path, runtime, moc
     mock_bundle_store.extract_bundle_to.assert_called_once()
 
 
-def test_stage_bundle_no_tmpfs_when_zero_size(monkeypatch, tmp_path, runtime, mock_bundle_store):
-    """size_bytes=0 means no limit, so no tmpfs mount."""
-    calls: list = []
-    monkeypatch.setattr(
-        "iris.cluster.runtime.docker.subprocess.run",
-        lambda cmd, **kw: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0),
-    )
+def test_stage_bundle_uses_default_size_when_zero(monkeypatch, tmp_path, runtime, mock_bundle_store):
+    """size_bytes=0 mounts tmpfs with the default 10GB size."""
+    monkeypatch.setattr("iris.cluster.runtime.docker.sys.platform", "linux")
+    monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: False)
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
 
     workdir = tmp_path / "w"
     workdir.mkdir()
@@ -99,7 +104,10 @@ def test_stage_bundle_no_tmpfs_when_zero_size(monkeypatch, tmp_path, runtime, mo
         bundle_store=mock_bundle_store,
         workdir_mount=mount,
     )
-    assert len(calls) == 0
+    assert len(calls) == 1
+    cmd = calls[0]
+    assert cmd[0] == "mount"
+    assert f"size={DEFAULT_WORKDIR_DISK_BYTES}" in cmd[cmd.index("-o") + 1]
 
 
 def test_stage_bundle_rejects_non_linux(monkeypatch, tmp_path, runtime, mock_bundle_store):

@@ -9,7 +9,6 @@ bundle download -> image build -> container run -> monitor -> cleanup.
 
 import json
 import logging
-import os
 import shutil
 import socket
 import threading
@@ -31,6 +30,7 @@ from iris.cluster.runtime.types import (
     RuntimeLogReader,
     MountKind,
     MountSpec,
+    get_fast_io_dir,
 )
 from iris.cluster.types import (
     JobName,
@@ -82,33 +82,7 @@ def _format_exit_error(exit_code: int | None, oom_killed: bool = False) -> str:
     return f"Exit code: {exit_code}"
 
 
-# GCE persistent disks (pd-standard) provide only ~68 read / ~135 write IOPS on
-# small volumes, making uv sync extremely slow.  /dev/shm is tmpfs backed by RAM
-# and provides memory-speed IOPS.  The bootstrap script bind-mounts
-# /dev/shm/iris into the worker container so this path is available on GCE VMs.
-_TMPFS_DIR = Path("/dev/shm/iris")
-_TMPFS_MIN_FREE_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB
 _DISK_CHECK_INTERVAL_SECONDS = 60.0
-
-
-def get_fast_io_dir(cache_dir: Path) -> Path:
-    """Return a fast IO directory for ephemeral task data.
-
-    Prefers /dev/shm/iris (tmpfs) for memory-speed IOPS when available and has
-    sufficient free space.  Falls back to *cache_dir* on persistent disk.
-    """
-    try:
-        if _TMPFS_DIR.is_dir():
-            stat = os.statvfs(_TMPFS_DIR)
-            free_bytes = stat.f_bavail * stat.f_frsize
-            if free_bytes >= _TMPFS_MIN_FREE_BYTES:
-                logger.info("Using tmpfs at %s for fast IO (%d MB free)", _TMPFS_DIR, free_bytes // (1024 * 1024))
-                return _TMPFS_DIR
-    except OSError:
-        logger.warning("OSError checking tmpfs at %s, falling back to persistent disk", _TMPFS_DIR, exc_info=True)
-    else:
-        logger.warning("Fast IO (tmpfs) not available at %s, falling back to persistent disk", _TMPFS_DIR)
-    return cache_dir
 
 
 class TaskCancelled(Exception):

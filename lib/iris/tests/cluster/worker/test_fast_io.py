@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-from iris.cluster.worker.task_attempt import get_fast_io_dir
+from iris.cluster.runtime.types import get_fast_io_dir
 
 
 def test_fast_io_dir_uses_tmpfs_when_available(tmp_path: Path) -> None:
@@ -21,7 +21,7 @@ def test_fast_io_dir_uses_tmpfs_when_available(tmp_path: Path) -> None:
             "statvfs",
             return_value=os.statvfs_result((4096, 4096, 1000000, 900000, 800000, 1000000, 900000, 800000, 0, 255)),
         ),
-        patch("iris.cluster.worker.task_attempt._TMPFS_DIR", fake_tmpfs),
+        patch("iris.cluster.runtime.types._TMPFS_DIR", fake_tmpfs),
     ):
         result = get_fast_io_dir(tmp_path / "cache")
 
@@ -41,7 +41,7 @@ def test_fast_io_dir_falls_back_when_tmpfs_too_small(tmp_path: Path) -> None:
             "statvfs",
             return_value=os.statvfs_result((4096, 4096, 100, 50, 50, 100, 50, 50, 0, 255)),
         ),
-        patch("iris.cluster.worker.task_attempt._TMPFS_DIR", fake_tmpfs),
+        patch("iris.cluster.runtime.types._TMPFS_DIR", fake_tmpfs),
     ):
         result = get_fast_io_dir(cache_dir)
 
@@ -53,7 +53,7 @@ def test_fast_io_dir_falls_back_when_tmpfs_missing(tmp_path: Path) -> None:
     cache_dir = tmp_path / "cache"
     nonexistent = tmp_path / "nonexistent" / "iris"
 
-    with patch("iris.cluster.worker.task_attempt._TMPFS_DIR", nonexistent):
+    with patch("iris.cluster.runtime.types._TMPFS_DIR", nonexistent):
         result = get_fast_io_dir(cache_dir)
 
     assert result == cache_dir
@@ -67,7 +67,7 @@ def test_fast_io_dir_falls_back_on_oserror(tmp_path: Path) -> None:
 
     with (
         patch.object(os, "statvfs", side_effect=OSError("permission denied")),
-        patch("iris.cluster.worker.task_attempt._TMPFS_DIR", fake_tmpfs),
+        patch("iris.cluster.runtime.types._TMPFS_DIR", fake_tmpfs),
     ):
         result = get_fast_io_dir(cache_dir)
 

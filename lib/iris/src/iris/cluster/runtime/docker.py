@@ -46,6 +46,7 @@ from iris.cluster.runtime.types import (
     ImageInfo,
     MountKind,
     MountSpec,
+    get_fast_io_dir,
 )
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
@@ -76,22 +77,7 @@ def _is_docker_infra_error(stderr: str) -> bool:
     return any(p.lower() in stderr_lower for p in _INFRA_ERROR_PATTERNS)
 
 
-_TMPFS_DIR = Path("/dev/shm/iris")
-_TMPFS_MIN_FREE_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB
-
-
-def _resolve_fast_io_dir(cache_dir: Path) -> Path:
-    """Return tmpfs-backed dir when available, else cache_dir."""
-    try:
-        if _TMPFS_DIR.is_dir():
-            stat = os.statvfs(_TMPFS_DIR)
-            free_bytes = stat.f_bavail * stat.f_frsize
-            if free_bytes >= _TMPFS_MIN_FREE_BYTES:
-                logger.info("Using tmpfs at %s for fast IO (%d MB free)", _TMPFS_DIR, free_bytes // (1024 * 1024))
-                return _TMPFS_DIR
-    except OSError:
-        logger.warning("OSError checking tmpfs at %s, falling back to persistent disk", _TMPFS_DIR, exc_info=True)
-    return cache_dir
+DEFAULT_WORKDIR_DISK_BYTES = 10 * 1024 * 1024 * 1024  # 10 GB
 
 
 @dataclass(frozen=True)
@@ -760,7 +746,7 @@ class DockerRuntime:
 
     def __init__(self, cache_dir: Path) -> None:
         self._cache_dir = cache_dir
-        self._fast_io_dir = _resolve_fast_io_dir(cache_dir)
+        self._fast_io_dir = get_fast_io_dir(cache_dir)
         self._handles: list[DockerContainerHandle] = []
         self._created_containers: set[str] = set()
         self._tmpfs_mounts: set[Path] = set()
@@ -852,14 +838,20 @@ class DockerRuntime:
         bundle_store: BundleStore,
         workdir_mount: MountSpec | None = None,
     ) -> None:
-        """Provision backing storage, then stage bundle and workdir files.
+        """Provision tmpfs backing storage, then stage bundle and workdir files.
+
+        Every Docker workdir gets a dedicated tmpfs mount for isolation and
+        accurate per-task disk reporting via ``shutil.disk_usage``.  The mount
+        size defaults to ``DEFAULT_WORKDIR_DISK_BYTES`` (10 GB) when the task
+        does not specify ``disk_bytes``.
 
         If tmpfs is mounted but staging fails, the mount is cleaned up to
         prevent leaking RAM-backed mounts on the worker.
         """
         mounted = False
-        if workdir_mount and workdir_mount.size_bytes > 0:
-            self._mount_tmpfs(workdir, workdir_mount.size_bytes)
+        if workdir_mount:
+            size = workdir_mount.size_bytes if workdir_mount.size_bytes > 0 else DEFAULT_WORKDIR_DISK_BYTES
+            self._mount_tmpfs(workdir, size)
             mounted = True
         try:
             if bundle_id:

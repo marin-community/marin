@@ -16,6 +16,8 @@ tasks are in the BUILDING state per worker, preventing resource exhaustion from
 too many concurrent uv sync operations.
 """
 
+import logging
+import os
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -24,6 +26,32 @@ from typing import Protocol
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
+
+logger = logging.getLogger(__name__)
+
+
+_TMPFS_DIR = Path("/dev/shm/iris")
+_TMPFS_MIN_FREE_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB
+
+
+def get_fast_io_dir(cache_dir: Path) -> Path:
+    """Return a fast IO directory for ephemeral task data.
+
+    Prefers /dev/shm/iris (tmpfs) for memory-speed IOPS when available and has
+    sufficient free space.  Falls back to *cache_dir* on persistent disk.
+    """
+    try:
+        if _TMPFS_DIR.is_dir():
+            stat = os.statvfs(_TMPFS_DIR)
+            free_bytes = stat.f_bavail * stat.f_frsize
+            if free_bytes >= _TMPFS_MIN_FREE_BYTES:
+                logger.info("Using tmpfs at %s for fast IO (%d MB free)", _TMPFS_DIR, free_bytes // (1024 * 1024))
+                return _TMPFS_DIR
+    except OSError:
+        logger.warning("OSError checking tmpfs at %s, falling back to persistent disk", _TMPFS_DIR, exc_info=True)
+    else:
+        logger.warning("Fast IO (tmpfs) not available at %s, falling back to persistent disk", _TMPFS_DIR)
+    return cache_dir
 
 
 class ContainerInfraError(RuntimeError):
