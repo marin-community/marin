@@ -99,6 +99,17 @@ MULTIMODAL_WEIGHT = float(os.environ.get("MULTIMODAL_WEIGHT", "2.0"))
 LEARNING_RATE = float(os.environ.get("LEARNING_RATE", "3e-4"))
 W_VISUAL = float(os.environ.get("W_VISUAL", "1.0"))
 UND_GEN_RATIO = float(os.environ.get("UND_GEN_RATIO", "1.0"))
+ABLATION_MODE = os.environ.get("ABLATION_MODE", "")
+
+VALID_ABLATION_MODES = {
+    "",
+    "mask_und_visual",
+    "mask_und_text",
+    "mask_gen_visual",
+    "mask_gen_text",
+    "isolate_und_attn",
+    "isolate_gen_attn",
+}
 
 
 def _merge_xla_flags(existing: str, required_flags: list[str]) -> str:
@@ -208,6 +219,54 @@ def _only_fractional_transform(weights: np.ndarray) -> np.ndarray:
     return result
 
 
+def _swap_primary_secondary_transform(weights: np.ndarray) -> np.ndarray:
+    """Swap fractional and 1.0 weights to fix generation cache convention.
+
+    The generation cache was built with w_visual applied to text tokens instead of
+    visual tokens. This transform swaps fractional↔1.0 so that visual tokens get
+    the fractional weight and text tokens get 1.0, matching the understanding convention.
+    """
+    result = weights.copy()
+    fractional_mask = (weights > 0) & (weights < 1.0)
+    primary_mask = weights == 1.0
+    if fractional_mask.any():
+        frac_val = weights[fractional_mask][0]
+        result[fractional_mask] = 1.0
+        result[primary_mask] = frac_val
+    return result
+
+
+def _compose_transforms(
+    *transforms: Callable[[np.ndarray], np.ndarray] | None,
+) -> Callable[[np.ndarray], np.ndarray] | None:
+    """Chain multiple optional loss_weight_transforms, skipping Nones."""
+    active = [t for t in transforms if t is not None]
+    if not active:
+        return None
+    if len(active) == 1:
+        return active[0]
+
+    def composed(weights: np.ndarray) -> np.ndarray:
+        for t in active:
+            weights = t(weights)
+        return weights
+
+    return composed
+
+
+def _make_modality_segment_ids(input_ids: np.ndarray) -> np.ndarray:
+    """Return per-token modality offset: 0 for text tokens, 1 for visual tokens.
+
+    Visual tokens are identified by ID >= LLAMA3_VOCAB_SIZE (128256) or being a
+    vision sentinel token (vision_start / vision_end). This approach is robust to
+    chunk boundaries in concatenation-chunking since it doesn't depend on matching
+    start/end pairs.
+    """
+    is_visual = (input_ids >= LLAMA3_VOCAB_SIZE).astype(np.int32)
+    is_sentinel = ((input_ids == VISION_START_ID) | (input_ids == VISION_END_ID)).astype(np.int32)
+    return np.clip(is_visual + is_sentinel, 0, 1)
+
+
 def _replace_visual_with_eos(input_ids: np.ndarray) -> np.ndarray:
     """Replace visual tokens with EOS so block_cross_document_attention prevents
     real tokens from attending to them.
@@ -250,6 +309,7 @@ def unified_data_config(
     und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = None,
     text_eval_cache_path: str = TEXT_EVAL_CACHE_PATH,
+    ablation_mode: str = "",
 ) -> LmDataConfig:
     """Build data mixture with Nemotron text + multimodal cache for unified model training.
 
@@ -269,7 +329,13 @@ def unified_data_config(
         text_eval_benchmarks: List of text eval benchmark names (e.g. hellaswag, mmlu)
             to include as validation-only components. Set to None to disable.
         text_eval_cache_path: GCS path to text eval benchmark Levanter caches.
+        ablation_mode: Ablation mode for modality masking or attention isolation.
+            One of: "", "mask_und_visual", "mask_und_text", "mask_gen_visual",
+            "mask_gen_text", "isolate_und_attn", "isolate_gen_attn".
     """
+    if ablation_mode and ablation_mode not in VALID_ABLATION_MODES:
+        raise ValueError(f"Unknown ablation_mode={ablation_mode!r}. Valid: {VALID_ABLATION_MODES}")
+
     # Text: only hq_actual from Nemotron-CC
     nemotron_steps = tokenize_nemotron()
     hq_key = "nemotron_cc/hq_actual"
@@ -280,12 +346,45 @@ def unified_data_config(
     # pack=True to avoid wasting compute padding short sequences (~600 tokens) to 4096.
     # NOTE: cache_dir should NOT include the split suffix — Levanter's build_caches()
     # appends /{split} automatically (e.g., cache_dir/train, cache_dir/validation).
-    loss_weight_transform = _make_visual_weight_transform(w_visual) if w_visual is not None else None
-    prebuilt_format = PrebuiltLmDatasetFormat(
+    w_visual_transform = _make_visual_weight_transform(w_visual) if w_visual is not None else None
+
+    # Determine per-component ablation transforms.
+    # Understanding cache: fractional = visual, 1.0 = text (correct convention).
+    # Generation cache: fractional = text, 1.0 = visual (bug — swap fixes this).
+    und_ablation: Callable[[np.ndarray], np.ndarray] | None = None
+    gen_ablation: Callable[[np.ndarray], np.ndarray] | None = None
+    und_seg_transform: Callable[[np.ndarray], np.ndarray] | None = None
+    gen_seg_transform: Callable[[np.ndarray], np.ndarray] | None = None
+
+    if ablation_mode == "mask_und_visual":
+        und_ablation = _zero_fractional_transform
+    elif ablation_mode == "mask_und_text":
+        und_ablation = _only_fractional_transform
+    elif ablation_mode == "mask_gen_visual":
+        gen_ablation = _zero_fractional_transform
+    elif ablation_mode == "mask_gen_text":
+        gen_ablation = _only_fractional_transform
+    elif ablation_mode == "isolate_und_attn":
+        und_seg_transform = _make_modality_segment_ids
+    elif ablation_mode == "isolate_gen_attn":
+        gen_seg_transform = _make_modality_segment_ids
+
+    # Compose transforms: ablation runs before w_visual (ablation needs to distinguish
+    # fractional vs 1.0; w_visual replaces fractional values, destroying that signal).
+    # Generation additionally prepends a swap to fix the cache convention bug.
+    und_format = PrebuiltLmDatasetFormat(
         input_ids_key="input_ids",
         loss_weights_key="loss_weights",
-        loss_weight_transform=loss_weight_transform,
+        loss_weight_transform=_compose_transforms(und_ablation, w_visual_transform),
+        segment_ids_transform=und_seg_transform,
     )
+    gen_format = PrebuiltLmDatasetFormat(
+        input_ids_key="input_ids",
+        loss_weights_key="loss_weights",
+        loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, gen_ablation, w_visual_transform),
+        segment_ids_transform=gen_seg_transform,
+    )
+
     und_weight = multimodal_weight * und_gen_ratio / (und_gen_ratio + 1)
     gen_weight = multimodal_weight / (und_gen_ratio + 1)
 
@@ -293,13 +392,13 @@ def unified_data_config(
         **text_components,
         "multimodal_understanding": DatasetComponent(
             cache_dir=f"{multimodal_cache_path}/understanding",
-            format=prebuilt_format,
+            format=und_format,
             pack=True,
             tags=["multimodal", "understanding"],
         ),
         "multimodal_generation": DatasetComponent(
             cache_dir=f"{multimodal_cache_path}/generation",
-            format=prebuilt_format,
+            format=gen_format,
             pack=True,
             tags=["multimodal", "generation"],
         ),
@@ -312,9 +411,21 @@ def unified_data_config(
 
     # Multimodal validation: separate understanding and generation val loss.
     # These are produced by vlm_tokenize_captions.py with val_fraction > 0.
+    # Validation formats: no ablation transforms, but generation still needs the swap fix.
+    und_val_format = PrebuiltLmDatasetFormat(
+        input_ids_key="input_ids",
+        loss_weights_key="loss_weights",
+        loss_weight_transform=w_visual_transform,
+    )
+    gen_val_format = PrebuiltLmDatasetFormat(
+        input_ids_key="input_ids",
+        loss_weights_key="loss_weights",
+        loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, w_visual_transform),
+    )
+
     components["val_understanding"] = DatasetComponent(
         cache_dir=f"{multimodal_cache_path}/understanding/val_understanding",
-        format=prebuilt_format,
+        format=und_val_format,
         pack=True,
         tags=["multimodal", "understanding"],
     )
@@ -322,55 +433,61 @@ def unified_data_config(
 
     components["val_generation"] = DatasetComponent(
         cache_dir=f"{multimodal_cache_path}/generation/val_generation",
-        format=prebuilt_format,
+        format=gen_val_format,
         pack=True,
         tags=["multimodal", "generation"],
     )
     weights["val_generation"] = 0.0
 
     # Per-modality val loss breakdown (text-only and visual-only).
-    # In understanding cache: fractional=visual, 1.0=text.
-    # In generation cache: fractional=text, 1.0=visual.
-    fmt_primary_only = PrebuiltLmDatasetFormat(
-        input_ids_key="input_ids",
-        loss_weights_key="loss_weights",
-        loss_weight_transform=_zero_fractional_transform,
-    )
-    fmt_secondary_only = PrebuiltLmDatasetFormat(
-        input_ids_key="input_ids",
-        loss_weights_key="loss_weights",
-        loss_weight_transform=_only_fractional_transform,
-    )
-
+    # After the swap fix, both caches have: fractional=visual, 1.0=text.
+    # _zero_fractional_transform: zeros visual (fractional), keeps text (1.0).
+    # _only_fractional_transform: keeps visual (fractional→1.0), zeros text (1.0→0).
     und_val_cache = f"{multimodal_cache_path}/understanding/val_understanding"
     gen_val_cache = f"{multimodal_cache_path}/generation/val_generation"
 
-    # Understanding: primary=text, secondary=visual
+    # Understanding: no swap needed (convention already correct)
     components["val_understanding_text_only"] = DatasetComponent(
         cache_dir=und_val_cache,
-        format=fmt_primary_only,
+        format=PrebuiltLmDatasetFormat(
+            input_ids_key="input_ids",
+            loss_weights_key="loss_weights",
+            loss_weight_transform=_zero_fractional_transform,
+        ),
         pack=True,
         tags=["multimodal", "understanding"],
     )
     components["val_understanding_visual_only"] = DatasetComponent(
         cache_dir=und_val_cache,
-        format=fmt_secondary_only,
+        format=PrebuiltLmDatasetFormat(
+            input_ids_key="input_ids",
+            loss_weights_key="loss_weights",
+            loss_weight_transform=_only_fractional_transform,
+        ),
         pack=True,
         tags=["multimodal", "understanding"],
     )
     weights["val_understanding_text_only"] = 0.0
     weights["val_understanding_visual_only"] = 0.0
 
-    # Generation: primary=visual, secondary=text
+    # Generation: swap first to normalize convention, then filter
     components["val_generation_text_only"] = DatasetComponent(
         cache_dir=gen_val_cache,
-        format=fmt_secondary_only,
+        format=PrebuiltLmDatasetFormat(
+            input_ids_key="input_ids",
+            loss_weights_key="loss_weights",
+            loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, _zero_fractional_transform),
+        ),
         pack=True,
         tags=["multimodal", "generation"],
     )
     components["val_generation_visual_only"] = DatasetComponent(
         cache_dir=gen_val_cache,
-        format=fmt_primary_only,
+        format=PrebuiltLmDatasetFormat(
+            input_ids_key="input_ids",
+            loss_weights_key="loss_weights",
+            loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, _only_fractional_transform),
+        ),
         pack=True,
         tags=["multimodal", "generation"],
     )
@@ -388,7 +505,7 @@ def unified_data_config(
     fmt_gen_wo_language = PrebuiltLmDatasetFormat(
         input_ids_key="input_ids",
         loss_weights_key="loss_weights",
-        loss_weight_transform=_zero_fractional_transform,
+        loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, _zero_fractional_transform),
         input_ids_transform=_replace_text_with_eos,
     )
 
@@ -415,12 +532,16 @@ def unified_data_config(
             tags = ["eval"]
             if bench in UNDERSTANDING_BENCHMARKS:
                 tags.append("understanding")
+                eval_fmt = und_val_format
             elif bench in GENERATION_BENCHMARKS:
                 tags.append("generation")
+                eval_fmt = gen_val_format
+            else:
+                eval_fmt = und_val_format
 
             components[f"eval_{bench}"] = DatasetComponent(
                 cache_dir=f"{eval_cache_path}/{bench}",
-                format=prebuilt_format,
+                format=eval_fmt,
                 pack=True,
                 tags=tags,
             )
@@ -516,6 +637,7 @@ def make_unified_0_6b(
     w_visual: float | None = 1.0,
     und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
+    ablation_mode: str = "",
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-0.6b-demo",
@@ -526,6 +648,7 @@ def make_unified_0_6b(
             w_visual=w_visual,
             und_gen_ratio=und_gen_ratio,
             text_eval_benchmarks=text_eval_benchmarks,
+            ablation_mode=ablation_mode,
         ),
         model_config=qwen3_0_6b,
         train_config=_demo_train_config(learning_rate=learning_rate),
@@ -546,6 +669,7 @@ def make_unified_1_7b(
     w_visual: float | None = 1.0,
     und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
+    ablation_mode: str = "",
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-1.7b-demo",
@@ -556,6 +680,7 @@ def make_unified_1_7b(
             w_visual=w_visual,
             und_gen_ratio=und_gen_ratio,
             text_eval_benchmarks=text_eval_benchmarks,
+            ablation_mode=ablation_mode,
         ),
         model_config=qwen3_1_7b,
         train_config=_demo_train_config(learning_rate=learning_rate),
@@ -575,6 +700,7 @@ def make_unified_4b(
     w_visual: float | None = 1.0,
     und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
+    ablation_mode: str = "",
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-4b-demo",
@@ -585,6 +711,7 @@ def make_unified_4b(
             w_visual=w_visual,
             und_gen_ratio=und_gen_ratio,
             text_eval_benchmarks=text_eval_benchmarks,
+            ablation_mode=ablation_mode,
         ),
         model_config=qwen3_4b,
         train_config=_demo_train_config(learning_rate=learning_rate),
@@ -597,7 +724,7 @@ def make_unified_4b(
 
 
 if __name__ == "__main__":
-    # steps = [make_unified_0_6b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO)]
+    # steps = [make_unified_0_6b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO, ablation_mode=ABLATION_MODE)]
     steps = [
         make_unified_1_7b(
             text_weight=TEXT_WEIGHT,
@@ -605,9 +732,10 @@ if __name__ == "__main__":
             learning_rate=LEARNING_RATE,
             w_visual=W_VISUAL,
             und_gen_ratio=UND_GEN_RATIO,
+            ablation_mode=ABLATION_MODE,
         )
     ]
-    # steps = [make_unified_4b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO)]
+    # steps = [make_unified_4b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO, ablation_mode=ABLATION_MODE)]
     executor_main(
         steps,
         description="Unified image-text model pre-training with Qwen3 architecture",
