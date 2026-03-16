@@ -34,6 +34,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from iris.marin_fs import open_url, url_to_fs
 from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
+from fray.v2.actor import ActorGroup
 from iris.marin_fs import marin_temp_bucket
 from iris.time_utils import ExponentialBackoff
 
@@ -546,6 +547,7 @@ class ZephyrCoordinator:
         self._is_last_stage: bool = False
         self._initialized: bool = False
         self._pipeline_running: bool = False
+        self._worker_group: ActorGroup | None = None
 
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
@@ -558,6 +560,7 @@ class ZephyrCoordinator:
         chunk_prefix: str,
         coordinator_handle: ActorHandle,
         no_workers_timeout: float = 60.0,
+        worker_group: ActorGroup | None = None,
     ) -> None:
         """Initialize coordinator for push-based worker registration.
 
@@ -568,10 +571,13 @@ class ZephyrCoordinator:
             chunk_prefix: Storage prefix for intermediate chunks
             coordinator_handle: Handle to this coordinator actor (passed from context)
             no_workers_timeout: Seconds to wait for at least one worker before failing.
+            worker_group: Optional ActorGroup for workers, used to check job health
+                in _wait_for_stage() instead of requiring an external watchdog thread.
         """
         self._chunk_prefix = chunk_prefix
         self._self_handle = coordinator_handle
         self._no_workers_timeout = no_workers_timeout
+        self._worker_group = worker_group
 
         logger.info("Coordinator initialized")
 
@@ -772,11 +778,20 @@ class ZephyrCoordinator:
         with self._lock:
             return self._fatal_error
 
+    def set_worker_group(self, worker_group: ActorGroup) -> None:
+        """Set the worker ActorGroup for health checking in _wait_for_stage().
+
+        Called by ZephyrContext after creating the worker pool. Allows the
+        coordinator to detect permanent worker job termination (e.g. OOM)
+        without a separate watchdog thread.
+        """
+        self._worker_group = worker_group
+
     def abort(self, reason: str) -> None:
         """Set a fatal error that causes the current stage to fail immediately.
 
-        Called by the external worker watchdog when the worker job terminates
-        permanently (e.g. all retries exhausted after OOM).
+        Called externally when the worker job terminates permanently
+        (e.g. all retries exhausted after OOM).
         """
         with self._lock:
             if self._fatal_error is None:
@@ -797,6 +812,27 @@ class ZephyrCoordinator:
             self._fatal_error = None
             self._is_last_stage = is_last_stage
 
+    def _check_worker_group_health(self) -> None:
+        """Check worker group health and raise if the job has permanently terminated.
+
+        Called from _wait_for_stage() on each polling iteration. Only meaningful
+        for backends with real job lifecycle (e.g. Iris); Local/Ray groups always
+        report healthy.
+        """
+        if self._worker_group is None:
+            return
+        try:
+            health = self._worker_group.get_health()
+        except Exception:
+            logger.debug("Failed to check worker group health", exc_info=True)
+            return
+        if health.is_done:
+            error_detail = f": {health.error}" if health.error else ""
+            raise ZephyrWorkerError(
+                f"Worker job terminated permanently (all retries exhausted){error_detail}. "
+                "Workers likely crashed (OOM or other fatal error)."
+            )
+
     def _wait_for_stage(self) -> None:
         """Block until current stage completes or error occurs."""
         backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
@@ -804,6 +840,8 @@ class ZephyrCoordinator:
         start_time = time.monotonic()
         all_dead_since: float | None = None
         no_workers_timeout = self._no_workers_timeout
+        last_health_check = 0.0
+        health_check_interval = 10.0
 
         while True:
             with self._lock:
@@ -841,6 +879,14 @@ class ZephyrCoordinator:
                 else:
                     # Workers are alive — reset the dead timer
                     all_dead_since = None
+
+            # Periodically check if the worker job itself has permanently died.
+            # This catches cases where all retries are exhausted (e.g. OOM)
+            # without waiting for the full no_workers_timeout.
+            now = time.monotonic()
+            if now - last_health_check >= health_check_interval:
+                last_health_check = now
+                self._check_worker_group_health()
 
             if completed != last_log_completed:
                 logger.info("[%s] %d/%d tasks completed", self._stage_name, completed, total)
@@ -1404,24 +1450,17 @@ class ZephyrContext:
                 # mid-pipeline failure doesn't start with a long delay.
                 backoff.reset()
 
-                # Start watchdog that aborts the coordinator if the worker
-                # job terminates permanently (e.g. all retries exhausted
-                # after OOM). Without this, the coordinator would wait up to
-                # no_workers_timeout (6h default) before giving up.
-                watchdog_stop = threading.Event()
-                watchdog_thread = self._start_worker_watchdog(watchdog_stop)
+                # Run pipeline on coordinator (blocking call).
+                # run_pipeline() calls coordinator.shutdown() at the end,
+                # which causes workers to receive SHUTDOWN on their next
+                # pull_task() call.
+                #
+                # Worker job health is checked inline by the coordinator's
+                # _wait_for_stage() loop via worker_group.get_health(),
+                # eliminating the need for a separate watchdog thread.
+                results = self._coordinator.run_pipeline.remote(plan, execution_id, hints).result()
 
-                try:
-                    # Run pipeline on coordinator (blocking call).
-                    # run_pipeline() calls coordinator.shutdown() at the end,
-                    # which causes workers to receive SHUTDOWN on their next
-                    # pull_task() call.
-                    results = self._coordinator.run_pipeline.remote(plan, execution_id, hints).result()
-
-                    return results
-                finally:
-                    watchdog_stop.set()
-                    watchdog_thread.join(timeout=15.0)
+                return results
 
             except _NON_RETRYABLE_ERRORS:
                 raise
@@ -1450,40 +1489,6 @@ class ZephyrContext:
         # Should be unreachable, but just in case
         raise last_exception  # type: ignore[misc]
 
-    def _start_worker_watchdog(self, stop_event: threading.Event) -> threading.Thread:
-        """Start a daemon thread that aborts the coordinator when the worker job dies.
-
-        Polls worker_group.is_done() every 10s. When the worker job has
-        permanently terminated (retries exhausted), calls coordinator.abort()
-        which sets _fatal_error, causing _wait_for_stage() to raise
-        ZephyrWorkerError on the next iteration.
-        """
-        poll_interval = 10.0
-
-        def _watchdog():
-            while not stop_event.is_set():
-                stop_event.wait(poll_interval)
-                if stop_event.is_set():
-                    return
-                if self._worker_group is None:
-                    continue
-                try:
-                    if self._worker_group.is_done():
-                        reason = (
-                            "Worker job terminated permanently (all retries exhausted). "
-                            "Workers likely crashed (OOM or other fatal error)."
-                        )
-                        logger.error("Worker watchdog: %s", reason)
-                        if self._coordinator is not None:
-                            self._coordinator.abort.remote(reason)
-                        return
-                except Exception:
-                    logger.debug("Worker watchdog: failed to check worker status", exc_info=True)
-
-        thread = threading.Thread(target=_watchdog, daemon=True, name="zephyr-worker-watchdog")
-        thread.start()
-        return thread
-
     def _create_coordinator(self, attempt: int = 0) -> None:
         """Create a fresh coordinator actor."""
         # max_concurrency allows workers to call pull_task/report_result
@@ -1500,6 +1505,8 @@ class ZephyrContext:
         )
         self._coordinator = self._coordinator_group.wait_ready()[0]
 
+        # worker_group is set later by _create_workers(), so initialize
+        # without it first.  set_worker_group() is called after workers exist.
         self._coordinator.initialize.remote(
             self.chunk_storage_prefix,
             self._coordinator,
@@ -1540,6 +1547,11 @@ class ZephyrContext:
 
         # Wait for at least one worker to be ready before proceeding
         self._worker_group.wait_ready(count=1, timeout=3600.0)
+
+        # Pass worker group to coordinator for health checking in _wait_for_stage().
+        # This replaces the external watchdog thread — the coordinator polls
+        # worker_group.get_health() directly during its existing polling loop.
+        self._coordinator.set_worker_group.remote(self._worker_group).result()
 
         logger.info("ZephyrContext initialized with coordinator and %d workers", actual_workers)
 
