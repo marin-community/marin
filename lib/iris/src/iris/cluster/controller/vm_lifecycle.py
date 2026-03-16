@@ -397,12 +397,41 @@ def restart_controller(
     return address, vm
 
 
-def stop_controller(platform: Platform, config: config_pb2.IrisClusterConfig) -> None:
-    """Find and terminate the controller VM."""
+def stop_controller(
+    platform: Platform,
+    config: config_pb2.IrisClusterConfig,
+    wait: bool = False,
+) -> None:
+    """Find and terminate the controller VM.
+
+    When wait=True, polls until the VM is no longer discoverable. This ensures
+    the controller process has fully stopped and won't write stale checkpoints
+    after remote state is cleared.
+    """
     label_prefix = config.platform.label_prefix or "iris"
     vm = _discover_controller_vm(platform, label_prefix)
     if vm:
         logger.info("Stopping controller VM %s", vm.vm_id)
         vm.terminate()
+        if wait:
+            _wait_controller_gone(platform, label_prefix)
     else:
         logger.info("No controller VM found to stop")
+
+
+def _wait_controller_gone(
+    platform: Platform,
+    label_prefix: str,
+    timeout_seconds: float = 120,
+    poll_interval: float = 5,
+) -> None:
+    """Poll until the controller VM is no longer discoverable."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        vm = _discover_controller_vm(platform, label_prefix)
+        if vm is None:
+            logger.info("Controller VM confirmed gone")
+            return
+        logger.info("Waiting for controller VM to terminate...")
+        time.sleep(poll_interval)
+    logger.warning("Controller VM still present after %ds, proceeding anyway", timeout_seconds)
