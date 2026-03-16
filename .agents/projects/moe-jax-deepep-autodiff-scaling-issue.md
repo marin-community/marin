@@ -62,3 +62,40 @@ Planned first milestone:
   - `EP=8`
   - `distribution=random`
   - `topk=2`
+
+Current status after the first AD passes:
+- the original JAX autodiff blocker is cleared:
+
+```text
+ValueError: The FFI call to `levanter_deepep_dispatch_intranode` cannot be differentiated.
+```
+
+  is no longer the active failure.
+- the branch now contains:
+  - a cached-dispatch FFI target for the combine backward path
+  - `custom_vjp` wrappers around the JAX DeepEP dispatch/combine entrypoints
+  - plumbing changes in the reintegrated exact-cap benchmark path to thread the cached-dispatch handle metadata needed for backward
+- the current decisive fixed-shape H100x8 `forward_backward` probe now reaches live transport and fails later with:
+
+```text
+DeepEP timeout for dispatch receivers, rank <varies>, responsible_channel = <varies>, tokens remained: <varies>
+JaxRuntimeError: INTERNAL: cudaMemcpyAsync(read num_recv_tokens): unspecified launch failure
+```
+
+- an intermediate stale-peer-access failure was also fixed during bring-up:
+
+```text
+JaxRuntimeError: INTERNAL: [0] There was an error before calling cuModuleGetFunction (704): cudaErrorPeerAccessAlreadyEnabled : peer access is already enabled
+```
+
+  This was cleared by consuming the stale CUDA last-error state after `cudaDeviceEnablePeerAccess(...)` returned `cudaErrorPeerAccessAlreadyEnabled`.
+
+Most recent fixed-shape probe result:
+- `current`, `tokens=32768`, `distribution=random`, `topk=2`, `EP=8`, `bench_pass=forward_backward`:
+  - `time_s=0.011138`
+  - `tokens_per_s=2941944.89`
+
+Most recent commits:
+- first AD implementation: `e9b1bbfd07de5973b19a3d14649f7293c089d1bb`
+- custom-VJP forward-signature fix: `899ef966e200b71cb0a3c3a4f76e38bbfedb6255`
+- stale peer-access status cleanup: `26bd8d62e0341b94667149afe4cbc10b586ffa14`
