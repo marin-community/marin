@@ -864,15 +864,17 @@ class DockerRuntime:
             if os.path.ismount(workdir):
                 logger.info("Workdir %s is already a mountpoint; reusing", workdir)
                 return
+            # Use workdir name as the device string instead of "tmpfs" — the
+            # util-linux mount(8) command uses this for duplicate-mount detection
+            # and collides with Docker's "tmpfs /dev tmpfs" entry in /proc/mounts.
+            device_name = f"iris-{workdir.name}"
             result = subprocess.run(
-                ["mount", "-t", "tmpfs", "-o", f"size={disk_bytes},nodev,nosuid", "tmpfs", str(workdir)],
+                ["mount", "-t", "tmpfs", "-o", f"size={disk_bytes},nodev,nosuid", device_name, str(workdir)],
                 capture_output=True,
                 text=True,
                 check=False,
             )
             if result.returncode != 0:
-                # Under high concurrency the mount utility can spuriously fail
-                # even for distinct paths; if the target is now mounted, accept it.
                 if os.path.ismount(workdir):
                     logger.warning(
                         "mount command failed but %s is now a mountpoint; treating as success (stderr: %s)",
