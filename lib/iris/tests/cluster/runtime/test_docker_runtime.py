@@ -5,6 +5,8 @@
 
 import logging
 import subprocess
+import threading
+import time
 from unittest.mock import Mock
 
 import pytest
@@ -277,3 +279,93 @@ def test_stage_bundle_unmounts_tmpfs_on_staging_failure(monkeypatch, tmp_path, r
     assert len(mount_calls) == 1
     assert len(umount_calls) == 1
     assert str(workdir) in umount_calls[0]
+
+
+def test_mount_tmpfs_recovers_on_concurrent_race(monkeypatch, tmp_path, runtime, mock_bundle_store):
+    """When mount fails but the path is now a mountpoint, treat as success (concurrent race)."""
+    monkeypatch.setattr("iris.cluster.runtime.docker.sys.platform", "linux")
+
+    # First ismount check returns False (pre-mount), second returns True (post-failure recheck)
+    ismount_calls = iter([False, True])
+    monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: next(ismount_calls))
+
+    monkeypatch.setattr(
+        "iris.cluster.runtime.docker.subprocess.run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, stdout="", stderr="tmpfs already mounted on /dev"),
+    )
+
+    workdir = tmp_path / "task-workdir"
+    workdir.mkdir()
+    mount = MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=1024)
+    # Should NOT raise — the post-failure ismount check sees it's mounted
+    runtime.stage_bundle(
+        bundle_id="",
+        workdir=workdir,
+        workdir_files={},
+        bundle_store=mock_bundle_store,
+        workdir_mount=mount,
+    )
+    assert workdir in runtime._tmpfs_mounts
+
+
+def test_mount_tmpfs_fails_when_not_mounted_after_error(monkeypatch, tmp_path, runtime, mock_bundle_store):
+    """When mount fails and the path is still not a mountpoint, raise RuntimeError."""
+    monkeypatch.setattr("iris.cluster.runtime.docker.sys.platform", "linux")
+    monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: False)
+    monkeypatch.setattr(
+        "iris.cluster.runtime.docker.subprocess.run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, stdout="", stderr="permission denied"),
+    )
+
+    workdir = tmp_path / "task-workdir"
+    workdir.mkdir()
+    mount = MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=1024)
+    with pytest.raises(RuntimeError, match="permission denied"):
+        runtime.stage_bundle(
+            bundle_id="",
+            workdir=workdir,
+            workdir_files={},
+            bundle_store=mock_bundle_store,
+            workdir_mount=mount,
+        )
+
+
+def test_concurrent_mount_tmpfs_serialized(monkeypatch, tmp_path, mock_bundle_store):
+    """Multiple threads mounting different workdirs are serialized by _mount_lock."""
+    import concurrent.futures
+
+    runtime = DockerRuntime(cache_dir=tmp_path / "cache")
+    monkeypatch.setattr("iris.cluster.runtime.docker.sys.platform", "linux")
+    monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: False)
+
+    active = threading.Event()
+    overlap_detected = []
+
+    def fake_run(cmd, **kwargs):
+        if active.is_set():
+            overlap_detected.append(True)
+        active.set()
+        time.sleep(0.01)
+        active.clear()
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
+
+    mount = MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=1024)
+
+    def do_mount(i):
+        workdir = tmp_path / f"w{i}"
+        workdir.mkdir()
+        runtime.stage_bundle(
+            bundle_id="",
+            workdir=workdir,
+            workdir_files={},
+            bundle_store=mock_bundle_store,
+            workdir_mount=mount,
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(do_mount, range(8)))
+
+    assert not overlap_detected, "mount calls overlapped — _mount_lock is not working"
+    assert len(runtime._tmpfs_mounts) == 8

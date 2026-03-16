@@ -750,6 +750,9 @@ class DockerRuntime:
         self._handles: list[DockerContainerHandle] = []
         self._created_containers: set[str] = set()
         self._tmpfs_mounts: set[Path] = set()
+        # Serializes tmpfs mount/unmount to avoid concurrent `mount` failures
+        # under high task parallelism (e.g. 200 tasks mounting under /dev/shm).
+        self._mount_lock = threading.Lock()
         # Serializes `docker pull` per image tag so that concurrent task threads
         # don't each trigger docker-credential-gcloud against the metadata server,
         # which causes sporadic "no active account" errors under load.
@@ -865,19 +868,30 @@ class DockerRuntime:
     def _mount_tmpfs(self, workdir: Path, disk_bytes: int) -> None:
         if sys.platform != "linux":
             raise RuntimeError("Docker workdir disk limits require Linux tmpfs mounts")
-        if os.path.ismount(workdir):
-            logger.info("Workdir %s is already a mountpoint; reusing", workdir)
-            return
-        result = subprocess.run(
-            ["mount", "-t", "tmpfs", "-o", f"size={disk_bytes},nodev,nosuid", "tmpfs", str(workdir)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to mount tmpfs workdir {workdir}: {result.stderr.strip()}")
-        self._tmpfs_mounts.add(workdir)
-        logger.info("Mounted tmpfs workdir %s with size=%d bytes", workdir, disk_bytes)
+        workdir.mkdir(parents=True, exist_ok=True)
+        with self._mount_lock:
+            if os.path.ismount(workdir):
+                logger.info("Workdir %s is already a mountpoint; reusing", workdir)
+                return
+            result = subprocess.run(
+                ["mount", "-t", "tmpfs", "-o", f"size={disk_bytes},nodev,nosuid", "tmpfs", str(workdir)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                # Under high concurrency the mount utility can spuriously fail
+                # even for distinct paths; if the target is now mounted, accept it.
+                if os.path.ismount(workdir):
+                    logger.warning(
+                        "mount command failed but %s is now a mountpoint; treating as success (stderr: %s)",
+                        workdir,
+                        result.stderr.strip(),
+                    )
+                else:
+                    raise RuntimeError(f"Failed to mount tmpfs workdir {workdir}: {result.stderr.strip()}")
+            self._tmpfs_mounts.add(workdir)
+            logger.info("Mounted tmpfs workdir %s with size=%d bytes", workdir, disk_bytes)
 
     def release_tmpfs(self, workdir: Path) -> None:
         """Unmount a tmpfs workdir if it was mounted by this runtime.
@@ -885,17 +899,18 @@ class DockerRuntime:
         On umount failure the path stays in ``_tmpfs_mounts`` so a later
         cleanup pass can retry, preventing leaked RAM-backed mounts.
         """
-        if workdir not in self._tmpfs_mounts:
-            return
-        if not os.path.ismount(workdir):
-            self._tmpfs_mounts.discard(workdir)
-            return
-        result = subprocess.run(["umount", str(workdir)], capture_output=True, text=True, check=False)
-        if result.returncode != 0:
-            logger.warning("Failed to unmount tmpfs workdir %s: %s", workdir, result.stderr.strip())
-        else:
-            logger.info("Unmounted tmpfs workdir %s", workdir)
-            self._tmpfs_mounts.discard(workdir)
+        with self._mount_lock:
+            if workdir not in self._tmpfs_mounts:
+                return
+            if not os.path.ismount(workdir):
+                self._tmpfs_mounts.discard(workdir)
+                return
+            result = subprocess.run(["umount", str(workdir)], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                logger.warning("Failed to unmount tmpfs workdir %s: %s", workdir, result.stderr.strip())
+            else:
+                logger.info("Unmounted tmpfs workdir %s", workdir)
+                self._tmpfs_mounts.discard(workdir)
 
     def track_container(self, container_id: str) -> None:
         """Track a container ID for cleanup."""
