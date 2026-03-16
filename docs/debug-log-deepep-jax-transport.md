@@ -547,3 +547,67 @@ The real JAX `shard_map` path should succeed on the tiny deterministic shape onc
 
 This means the current blocker is no longer “transport fails to run.” It is now a smaller teardown/lifecycle issue after a successful pure-JAX transport step.
   - the next concrete hypothesis is that the reduced-channel deterministic case is also underprovisioned by the default `dispatch_num_max_send_tokens` cap
+
+## Hypothesis 15
+
+The apparent post-result "hang" is not a transport-execution failure anymore. The pure-JAX path should also complete on medium and full sealed-shape runs, with the remaining problem confined to teardown noise after a successful result.
+
+## Changes to make
+
+- Re-run the real pure-JAX transport path on:
+  - a medium random case (`tokens=1024 hidden=2048 experts=128 topk=2`)
+  - the sealed-shape random case (`tokens=32768 hidden=2048 experts=128 topk=2`)
+- Keep the same working bring-up settings:
+  - `DEEPEP_BUILD_WITH_TORCH_EXTENSION=1`
+  - `DEEPEP_LOAD_AS_PYTHON_MODULE=1`
+  - `dispatch_num_sms=2`
+  - larger send/recv token caps
+- Watch for:
+  - exact correctness-check lines
+  - timing lines
+  - final pod exit code
+  - whether the late CUDA/XLA error flood still appears after a successful result
+
+## Future Work
+
+- [ ] Compare the now-working pure-JAX transport path directly against the Torch/Megatron-style transport microbench on the same sealed shape
+- [ ] Reduce teardown noise to a minimal reproducer once performance comparisons are captured
+- [ ] Determine whether the cleanup failures come from outstanding DeepEP work, XLA device shutdown order, or both
+
+## Results
+
+- Medium random pure-JAX case:
+  - command:
+    - `tokens=1024 hidden=2048 experts=128 topk=2 distribution=random`
+    - `dispatch_num_sms=2`
+    - all send/recv caps set to `256`
+    - `warmup=0`, `iters=1`
+  - result:
+    - `CHECK x_max_abs=0.000000e+00 topk_max_abs=0.000000e+00`
+    - `RESULT step_s=0.000552 tokens_per_s=1855976.92`
+    - `EXIT_CODE=0`
+- Full sealed-shape random pure-JAX case:
+  - command:
+    - `tokens=32768 hidden=2048 experts=128 topk=2 distribution=random`
+    - `dispatch_num_sms=2`
+    - all send/recv caps set to `8192`
+    - `warmup=0`, `iters=1`
+  - result:
+    - `CHECK x_max_abs=0.000000e+00 topk_max_abs=0.000000e+00`
+    - `RESULT step_s=0.005023 tokens_per_s=6523372.00`
+    - `EXIT_CODE=0`
+- Both runs still end with a large late error flood:
+  - `DeepEP timeout check failed: rank = ...`
+  - `CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure`
+  - XLA/JAX CUDA stream, event, module-unload, and memory-free errors during shutdown
+
+## Conclusion
+
+- The remaining blocker has moved again.
+- It is no longer accurate to describe the pure-JAX path as "still hanging before a usable run."
+- The pure-JAX DeepEP transport step now executes correctly on:
+  - the tiny deterministic smoke
+  - a medium random case
+  - the full `#3633` token regime
+- The surviving issue is a teardown / device-shutdown problem after a successful transport step, not a front-half correctness or launch blocker.
+- That is enough progress to move back to the original goal: direct JAX-vs-Torch transport comparison on the sealed shape, while treating cleanup noise as a separate follow-up bug.

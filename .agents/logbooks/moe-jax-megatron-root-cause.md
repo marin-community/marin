@@ -982,3 +982,77 @@
   - Then decide whether to:
     - isolate the shutdown hang first, or
     - immediately scale from the tiny deterministic case to a slightly larger shape while keeping the new transport path fixed.
+
+### 2026-03-15 19:05 PDT - Medium and full-scale pure-JAX transport cells also pass; the remaining problem is noisy teardown, not a real hang
+
+- Hypothesis:
+  - The tiny deterministic success is not just a toy-case artifact; with the same fixed transport wrapper and reduced-channel config, the real `#3633` token regime should also complete end to end, and the apparent "hang" should resolve to late teardown noise with an eventual `EXIT_CODE=0`.
+- Commands:
+  ```bash
+  KUBECONFIG=/Users/romain/.kube/coreweave-iris \
+  uv run .agents/scripts/deepep_jax_transport_krt.py \
+    --config lib/iris/examples/coreweave-moe-jax-3677.yaml \
+    --worktree /Users/romain/marin-wt/moe-jax-megatron-root-cause \
+    --build-with-torch-extension \
+    --load-as-python-module \
+    --tokens 1024 \
+    --hidden 2048 \
+    --experts 128 \
+    --topk-list 2 \
+    --distributions random \
+    --dispatch-num-sms 2 \
+    --dispatch-num-max-send-tokens 256 \
+    --dispatch-num-max-recv-tokens 256 \
+    --combine-num-max-send-tokens 256 \
+    --combine-num-max-recv-tokens 256 \
+    --warmup 0 \
+    --iters 1 \
+    --timeout-seconds 3600
+  ```
+
+  ```bash
+  KUBECONFIG=/Users/romain/.kube/coreweave-iris \
+  uv run .agents/scripts/deepep_jax_transport_krt.py \
+    --config lib/iris/examples/coreweave-moe-jax-3677.yaml \
+    --worktree /Users/romain/marin-wt/moe-jax-megatron-root-cause \
+    --build-with-torch-extension \
+    --load-as-python-module \
+    --tokens 32768 \
+    --hidden 2048 \
+    --experts 128 \
+    --topk-list 2 \
+    --distributions random \
+    --dispatch-num-sms 2 \
+    --dispatch-num-max-send-tokens 8192 \
+    --dispatch-num-max-recv-tokens 8192 \
+    --combine-num-max-send-tokens 8192 \
+    --combine-num-max-recv-tokens 8192 \
+    --warmup 0 \
+    --iters 1 \
+    --timeout-seconds 3600
+  ```
+- Result:
+  - Medium random case:
+    - `CHECK x_max_abs=0.000000e+00 topk_max_abs=0.000000e+00`
+    - `RESULT step_s=0.000552 tokens_per_s=1855976.92`
+    - `EXIT_CODE=0`
+  - Full sealed-shape random case:
+    - `CHECK x_max_abs=0.000000e+00 topk_max_abs=0.000000e+00`
+    - `RESULT step_s=0.005023 tokens_per_s=6523372.00`
+    - `EXIT_CODE=0`
+  - Both runs still emit large volumes of late teardown noise after the result line, including:
+    - `DeepEP timeout check failed: rank = ...`
+    - `CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure`
+    - XLA/JAX CUDA stream and event destruction failures during device shutdown
+- Interpretation:
+  - The thread has crossed an important boundary:
+    - the pure-JAX DeepEP transport path is no longer only a tiny deterministic smoke
+    - it now runs correctly on both a medium random case and the full `#3633` token regime on H100x8
+  - The current remaining defect is narrower than "transport still hangs":
+    - the transport step itself succeeds
+    - correctness checks pass exactly
+    - the process ultimately exits `0`
+    - the remaining issue is noisy teardown / device shutdown after a successful run
+- Next action:
+  - Record this as a major milestone on `#3677`.
+  - Start the first direct pure-JAX-vs-Torch transport comparison on the sealed shape now that the JAX side is demonstrably live.

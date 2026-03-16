@@ -294,6 +294,38 @@ The tiny deterministic H100x8 `shard_map` case is now a real end-to-end success 
 This is the first direct evidence that the pure-JAX DeepEP transport path can execute correctly on H100x8 with zero Torch in the step path.
 
 The remaining bug from this run is now smaller and later:
-- the benchmark process stayed alive after printing the final result instead of exiting cleanly
+- the first tiny run looked like a post-result hang, but later reruns showed the more accurate story: the benchmark eventually exits `0` after noisy teardown failures from DeepEP/XLA/JAX device shutdown
 
-So the thread has moved from “can pure-JAX transport run?” to “why does the successful benchmark process hang during teardown?”
+So the thread has moved from “can pure-JAX transport run?” to “why does a successful pure-JAX run tear down noisily?”
+
+## New milestone: medium and full-scale pure-JAX success
+
+`2026-03-15`
+
+The working pure-JAX transport path is no longer limited to the tiny deterministic case.
+
+- Medium random case:
+  - Shape: `tokens=1024 hidden=2048 experts=128 topk=2 distribution=random`
+  - Config: `dispatch_num_sms=2`, all send/recv caps `256`, `warmup=0`, `iters=1`
+  - Result:
+    - `CHECK x_max_abs=0.000000e+00 topk_max_abs=0.000000e+00`
+    - `RESULT step_s=0.000552 tokens_per_s=1855976.92`
+    - `EXIT_CODE=0`
+- Full sealed-shape random case:
+  - Shape: `tokens=32768 hidden=2048 experts=128 topk=2 distribution=random`
+  - Config: `dispatch_num_sms=2`, all send/recv caps `8192`, `warmup=0`, `iters=1`
+  - Result:
+    - `CHECK x_max_abs=0.000000e+00 topk_max_abs=0.000000e+00`
+    - `RESULT step_s=0.005023 tokens_per_s=6523372.00`
+    - `EXIT_CODE=0`
+
+These runs still emit large late teardown errors after the result line, including:
+- `DeepEP timeout check failed: rank = ...`
+- `CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure`
+- XLA/JAX CUDA stream and event-destruction failures during device shutdown
+
+But the key change is that they now complete the actual transport step correctly and exit successfully.
+
+That means the thread can now return to its original comparison goal:
+- run the first direct pure-JAX-vs-Torch/Megatron transport head-to-head on the sealed shape
+- treat teardown noise as a separate follow-up defect rather than the main blocker
