@@ -997,6 +997,8 @@ extern "C" int levanter_deepep_run_host_dispatch_round(
               reinterpret_cast<int*>(allocate_zeroed(rank_prefix_bytes, "cudaMalloc(host round rank_prefix)"));
           auto* channel_prefix_matrix =
               reinterpret_cast<int*>(allocate_zeroed(channel_prefix_bytes, "cudaMalloc(host round channel_prefix)"));
+          auto* recv_channel_prefix_matrix = reinterpret_cast<int*>(
+              allocate_zeroed(channel_prefix_bytes, "cudaMalloc(host round recv_channel_prefix)"));
           auto* send_head =
               reinterpret_cast<int*>(allocate_zeroed(send_head_bytes, "cudaMalloc(host round send_head)"));
           auto* local_expert_counts = reinterpret_cast<int*>(
@@ -1064,6 +1066,7 @@ extern "C" int levanter_deepep_run_host_dispatch_round(
               recv_src_idx,
               rank_prefix_matrix,
               channel_prefix_matrix,
+              recv_channel_prefix_matrix,
               send_head,
               local_expert_counts,
               &num_recv_tokens,
