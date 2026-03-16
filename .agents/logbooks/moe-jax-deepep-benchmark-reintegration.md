@@ -176,3 +176,77 @@
   - This is not the earlier raw-build path.
   - It is the weaker torch-extension load mode.
   - The hillclimb lane needs to use the same stronger build/load combination that the transport harness already proved out.
+
+### 2026-03-16 00:05 PDT - Stronger load mode reached the benchmark body, but benchmark-level `deepep_transport` still failed before the first compiled call
+- Context:
+  - After switching the hillclimb launcher to the same stronger DeepEP load path used in the working transport harness:
+    - `DEEPEP_BUILD_WITH_TORCH_EXTENSION=1`
+    - `DEEPEP_LOAD_AS_PYTHON_MODULE=1`
+  - I reran the same single-cell benchmark smoke:
+    - `kernel=deepep_transport`
+    - `distribution=random`
+    - `topk=2`
+    - `bench_pass=forward`
+    - `ep_list=8`
+- Result:
+  - The benchmark again reached the real hillclimb body and printed the fixed-shape header.
+  - The failure then changed from loader-time to runtime:
+    - `jax.errors.JaxRuntimeError: INTERNAL: [0] There was an error before calling cuModuleGetFunction (704): cudaErrorPeerAccessAlreadyEnabled : peer access is already enabled`
+  - Two preinit variants were then tested outside the timed path:
+    - preinit after sharding
+    - preinit even earlier before JAX input creation
+  - Neither fixed the benchmark:
+    - the later preinit variant still failed at the benchmark call
+    - the earlier preinit variant failed even earlier at `jax.random.PRNGKey(...)`
+- Interpretation:
+  - The hillclimb reintegration blocker is no longer the old raw build / loader problem.
+  - Explicit host-side runtime preinit is not a viable fix.
+
+### 2026-03-16 00:18 PDT - Shared expert was ruled out, and identity diagnostics narrowed the failure above raw transport
+- Context:
+  - To separate transport runtime issues from higher-level full-layer logic, I first reran the same single-cell hillclimb smoke with `shared_expert_dim=0`.
+  - I then added diagnostic kernels inside `bench_moe_hillclimb.py` that reuse the same hillclimb process, mesh, and sharding setup while cutting away parts of the local expert path.
+- Result:
+  - `shared_expert_dim=0` still failed with the same peer-access error, so the shared-expert branch is not the trigger.
+  - `deepep_transport_identity` succeeded:
+    - `RESULT kernel=deepep_transport_identity ep=8 pass=forward time_s=0.000810 tokens_per_s=40435401.28`
+  - `deepep_transport_assignments_identity` also succeeded:
+    - `RESULT kernel=deepep_transport_assignments_identity ep=8 pass=forward time_s=0.002253 tokens_per_s=14542543.21`
+- Interpretation:
+  - The same hillclimb script/process/mesh/sharding setup is compatible with:
+    - DeepEP dispatch
+    - DeepEP combine
+    - local assignment pack/collapse bookkeeping
+  - The remaining failure domain moved above raw transport and above assignment bookkeeping into the live local expert compute path.
+
+### 2026-03-16 00:34 PDT - First trustworthy consumed-ragged-dot probe failed, moving the frontier to the first live local `ragged_dot`
+- Context:
+  - The first round of probe kernels was inconclusive because the intermediate tensors were not part of the returned value and could be dead-code-eliminated.
+  - I rewrote the probes so each intermediate is adapted to hidden width and then fed through collapse+combine.
+  - I also pushed that commit before rerunning so the pod could fetch the exact repo ref from GitHub.
+- Commits:
+  - `1f94cc153` — `Force DeepEP transport probes through returned outputs`
+  - `63862a86b` — `Trim benchmark pod bootstrap installs`
+- Command:
+  ```bash
+  KUBECONFIG=~/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+    --config lib/iris/examples/coreweave-moe-jax-3677.yaml \
+    --task-id deepep-jax-krt-bench-20260316-002917 \
+    --kernels deepep_transport_first_ragged_dot_probe \
+    --topk-list 2 \
+    --distributions random \
+    --bench-pass forward \
+    --ep-list 8 \
+    --warmup 1 \
+    --iters 1 \
+    --build-with-torch-extension \
+    --load-as-python-module
+  ```
+- Result:
+  - The pod completed the stronger load/build/bootstrap path and reached the real hillclimb benchmark body.
+  - The benchmark then failed again with the same runtime error:
+    - `jax.errors.JaxRuntimeError: INTERNAL: [0] There was an error before calling cuModuleGetFunction (704): cudaErrorPeerAccessAlreadyEnabled : peer access is already enabled`
+- Interpretation:
+  - This is the first trustworthy consumed-intermediate probe, and it fails.
+  - Since `deepep_transport_assignments_identity` succeeds but `deepep_transport_first_ragged_dot_probe` fails once the first `ragged_dot(...)` result is live in the returned value, the remaining benchmark-level frontier is now the first live local `ragged_dot` above DeepEP dispatch.
+  - This does **not** implicate `ragged_dot` in isolation, because the ring/current hillclimb kernels already use `ragged_dot` successfully. It implicates the same compiled graph that combines live DeepEP transport with the first live local `ragged_dot`.
