@@ -389,10 +389,8 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
             f"--project={self._project_id}",
             f"--zone={self._zone}",
             "--quiet",
-            "--async",
         ]
-        logger.info("Deleting GCE instance (async): %s", self._gce_vm_name)
-        logger.info("gcloud command: %s", cmd)
+        logger.info("Deleting GCE instance: %s", self._gce_vm_name)
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             error = result.stderr.strip()

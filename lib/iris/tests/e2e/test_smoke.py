@@ -158,18 +158,9 @@ def _cloud_smoke_cluster(config_path: str, mode: str, label_prefix: str | None =
     platform = iris_config.platform()
 
     # Tear down any existing cluster for a clean slate.
-    # stop_controller with wait=True ensures the old controller VM is fully gone
-    # before we clear remote state — otherwise the dying controller can write a
-    # checkpoint after we wipe it, and the new controller restores stale jobs.
-    from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
-
-    logger.info("Stopping existing controller (synchronous)...")
-    try:
-        vm_stop_controller(platform, config, wait=True)
-    except Exception:
-        logger.info("No controller to stop (or stop failed), continuing")
-
-    logger.info("Stopping any remaining slices...")
+    # GCE controller deletion is synchronous, so the old controller is fully
+    # gone before we clear remote state (no stale checkpoint race).
+    logger.info("Stopping any existing cluster...")
     try:
         platform.stop_all(config)
     except Exception:
