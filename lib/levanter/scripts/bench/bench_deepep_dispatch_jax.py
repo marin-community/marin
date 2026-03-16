@@ -227,6 +227,7 @@ def _transport_local(
         recv_channel_prefix_matrix,
         send_head,
         num_recv_tokens,
+        is_token_in_rank,
     )
     fanout = jnp.sum(is_token_in_rank.astype(jnp.int32), axis=1)
     return combined_x, combined_topk_weights, fanout
@@ -290,6 +291,7 @@ def _dispatch_combine_from_layout_local(
         recv_channel_prefix_matrix,
         send_head,
         num_recv_tokens,
+        is_token_in_rank_local,
     )
 
 

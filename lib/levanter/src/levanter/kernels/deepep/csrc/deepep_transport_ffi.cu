@@ -736,6 +736,159 @@ ffi::Error DispatchIntranode(
   }
 }
 
+ffi::Error DispatchIntranodeCached(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::BF16, 2> x,
+    ffi::Buffer<ffi::PRED, 2> is_token_in_rank,
+    ffi::Buffer<ffi::S32, 2> rank_prefix_matrix,
+    ffi::Buffer<ffi::S32, 2> channel_prefix_matrix,
+    ffi::Buffer<ffi::S32, 1> num_recv_tokens_buffer,
+    ffi::Result<ffi::Buffer<ffi::BF16, 2>> recv_x,
+    ffi::Result<ffi::Buffer<ffi::S32, 1>> recv_src_idx,
+    ffi::Result<ffi::Buffer<ffi::S32, 2>> recv_channel_prefix_matrix,
+    ffi::Result<ffi::Buffer<ffi::S32, 2>> send_head) {
+  try {
+    DeviceRuntime& runtime = RuntimeManager::Instance().RuntimeForCurrentDevice();
+    if (num_recv_tokens_buffer.dimensions().size() != 1 || num_recv_tokens_buffer.dimensions()[0] != 1) {
+      return ffi::Error::InvalidArgument(
+          "DeepEP intranode cached dispatch expects num_recv_tokens shape [1]");
+    }
+    int num_recv_tokens = -1;
+    cudaError_t status = cudaMemcpyAsync(
+        &num_recv_tokens,
+        num_recv_tokens_buffer.typed_data(),
+        sizeof(int),
+        cudaMemcpyDeviceToHost,
+        stream);
+    if (status != cudaSuccess) {
+      return CudaError(status, "cudaMemcpyAsync(read num_recv_tokens)");
+    }
+    status = cudaStreamSynchronize(stream);
+    if (status != cudaSuccess) {
+      return CudaError(status, "cudaStreamSynchronize(read num_recv_tokens)");
+    }
+
+    const auto x_dims = x.dimensions();
+    const auto token_rank_dims = is_token_in_rank.dimensions();
+    const auto rank_dims = rank_prefix_matrix.dimensions();
+    const auto channel_dims = channel_prefix_matrix.dimensions();
+    const auto recv_x_dims = recv_x->dimensions();
+    const auto recv_src_dims = recv_src_idx->dimensions();
+    const auto recv_channel_dims = recv_channel_prefix_matrix->dimensions();
+    const auto send_head_dims = send_head->dimensions();
+    if (x_dims.size() != 2 || token_rank_dims.size() != 2 || rank_dims.size() != 2 || channel_dims.size() != 2 ||
+        recv_x_dims.size() != 2 || recv_src_dims.size() != 1 || recv_channel_dims.size() != 2 ||
+        send_head_dims.size() != 2) {
+      return ffi::Error::InvalidArgument("DeepEP intranode cached dispatch expects rank-1/2 tensors");
+    }
+    const int num_tokens = static_cast<int>(x_dims[0]);
+    const int hidden = static_cast<int>(x_dims[1]);
+    const int num_channels = runtime.dispatch_num_channels();
+    if (hidden <= 0 || (hidden * static_cast<int>(ffi::ByteWidth(ffi::BF16))) % sizeof(int4) != 0) {
+      return ffi::Error::InvalidArgument(
+          "DeepEP intranode cached dispatch requires hidden*element_size divisible by int4");
+    }
+    if (token_rank_dims[0] != num_tokens || token_rank_dims[1] != runtime.num_ranks) {
+      return ffi::Error::InvalidArgument(
+          "DeepEP intranode cached dispatch token/rank metadata shape mismatch");
+    }
+    if (rank_dims[0] != runtime.num_ranks || rank_dims[1] != runtime.num_ranks ||
+        channel_dims[0] != runtime.num_ranks || channel_dims[1] != num_channels) {
+      return ffi::Error::InvalidArgument(
+          "DeepEP intranode cached dispatch handle tensor shapes are invalid");
+    }
+    if (recv_x_dims[1] != hidden || recv_src_dims[0] != recv_x_dims[0] || recv_x_dims[0] < num_recv_tokens ||
+        recv_channel_dims[0] != runtime.num_ranks || recv_channel_dims[1] != num_channels ||
+        send_head_dims[0] != num_tokens || send_head_dims[1] != runtime.num_ranks) {
+      return ffi::Error::InvalidArgument(
+          "DeepEP intranode cached dispatch output tensor shapes are invalid");
+    }
+    if (num_recv_tokens < 0) {
+      return ffi::Error::InvalidArgument("DeepEP intranode cached dispatch num_recv_tokens is out of range");
+    }
+
+    const int num_memset_int = runtime.dispatch_num_channels() * runtime.num_ranks * 4;
+    deep_ep::intranode::cached_notify_dispatch(
+        rank_prefix_matrix.typed_data(),
+        num_memset_int,
+        runtime.buffer_ptrs_gpu,
+        runtime.barrier_signal_ptrs_gpu,
+        runtime.rank,
+        runtime.num_ranks,
+        stream);
+
+#if defined(LEVANTER_DEEPEP_EXTENDED_INTRNODE_DISPATCH)
+    deep_ep::intranode::dispatch(
+        recv_x->typed_data(),
+        nullptr,
+        nullptr,
+        recv_src_idx->typed_data(),
+        nullptr,
+        nullptr,
+        recv_channel_prefix_matrix->typed_data(),
+        send_head->typed_data(),
+        x.typed_data(),
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        is_token_in_rank.typed_data(),
+        channel_prefix_matrix.typed_data(),
+        num_tokens,
+        num_recv_tokens,
+        hidden * static_cast<int>(ffi::ByteWidth(ffi::BF16)) / sizeof(int4),
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        runtime.buffer_ptrs_gpu,
+        runtime.rank,
+        runtime.num_ranks,
+        stream,
+        runtime.dispatch_config.num_sms,
+        runtime.dispatch_config.num_max_send_tokens,
+        runtime.dispatch_config.num_max_recv_tokens);
+#else
+    deep_ep::intranode::dispatch(
+        recv_x->typed_data(),
+        nullptr,
+        recv_src_idx->typed_data(),
+        nullptr,
+        nullptr,
+        recv_channel_prefix_matrix->typed_data(),
+        send_head->typed_data(),
+        x.typed_data(),
+        nullptr,
+        nullptr,
+        nullptr,
+        is_token_in_rank.typed_data(),
+        channel_prefix_matrix.typed_data(),
+        num_tokens,
+        num_recv_tokens,
+        hidden * static_cast<int>(ffi::ByteWidth(ffi::BF16)) / sizeof(int4),
+        0,
+        0,
+        0,
+        0,
+        0,
+        runtime.buffer_ptrs_gpu,
+        runtime.rank,
+        runtime.num_ranks,
+        stream,
+        runtime.dispatch_config.num_sms,
+        runtime.dispatch_config.num_max_send_tokens,
+        runtime.dispatch_config.num_max_recv_tokens);
+#endif
+    return ffi::Error::Success();
+  } catch (const std::exception& exc) {
+    return ffi::Error::Internal(exc.what());
+  }
+}
+
 ffi::Error CombineIntranode(
     cudaStream_t stream,
     ffi::Buffer<ffi::BF16, 2> recv_x,
@@ -875,6 +1028,20 @@ auto DispatchBinding() {
       .Ret<ffi::Buffer<ffi::S32, 2>>()
       .Ret<ffi::Buffer<ffi::S32, 1>>()
       .Ret<ffi::Buffer<ffi::S32, 1>>();
+}
+
+auto DispatchCachedBinding() {
+  return ffi::Ffi::Bind()
+      .Ctx<ffi::PlatformStream<cudaStream_t>>()
+      .Arg<ffi::Buffer<ffi::BF16, 2>>()
+      .Arg<ffi::Buffer<ffi::PRED, 2>>()
+      .Arg<ffi::Buffer<ffi::S32, 2>>()
+      .Arg<ffi::Buffer<ffi::S32, 2>>()
+      .Arg<ffi::Buffer<ffi::S32, 1>>()
+      .Ret<ffi::Buffer<ffi::BF16, 2>>()
+      .Ret<ffi::Buffer<ffi::S32, 1>>()
+      .Ret<ffi::Buffer<ffi::S32, 2>>()
+      .Ret<ffi::Buffer<ffi::S32, 2>>();
 }
 
 auto CombineBinding() {
@@ -1268,6 +1435,11 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     levanter_deepep_dispatch_intranode,
     DispatchIntranode,
     DispatchBinding());
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    levanter_deepep_dispatch_intranode_cached,
+    DispatchIntranodeCached,
+    DispatchCachedBinding());
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     levanter_deepep_combine_intranode,

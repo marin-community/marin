@@ -1600,6 +1600,7 @@ def _moe_mlp_ep_deepep_transport_local(
             recv_channel_prefix_matrix,
             send_head,
             num_recv_tokens,
+            is_token_in_rank,
         )
         dropped_total = jnp.array(0, dtype=jnp.int32)
     return out_local.astype(x_local.dtype), dropped_total
@@ -1827,6 +1828,7 @@ def _moe_mlp_ep_deepep_transport_dispatch_pack_local(
         recv_channel_prefix_matrix,
         send_head,
         num_recv_tokens,
+        is_token_in_rank,
     )
 
 
@@ -1840,7 +1842,17 @@ def _moe_mlp_deepep_transport_dispatch_pack(
     max_recv_tokens: int | None = None,
     max_local_assignments: int | None = None,
 ) -> tuple[
-    jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
 ]:
     if mesh is None:
         mesh = get_abstract_mesh()
@@ -1881,6 +1893,7 @@ def _moe_mlp_deepep_transport_dispatch_pack(
             P("expert", None),
             P("expert", None),
             P("expert"),
+            batch_spec,
         ),
         check_vma=False,
     )
@@ -1941,6 +1954,7 @@ def _moe_mlp_ep_deepep_transport_collapse_combine_local(
     recv_channel_prefix_matrix: jax.Array,
     send_head: jax.Array,
     num_recv_tokens: jax.Array,
+    is_token_in_rank: jax.Array,
 ) -> jax.Array:
     num_recv_tokens_scalar = jnp.squeeze(num_recv_tokens, axis=0)
     recv_out = _collapse_deepep_local_assignments(
@@ -1958,6 +1972,7 @@ def _moe_mlp_ep_deepep_transport_collapse_combine_local(
         recv_channel_prefix_matrix,
         send_head,
         num_recv_tokens,
+        is_token_in_rank,
     )
     return out_local
 
@@ -1972,6 +1987,7 @@ def _moe_mlp_deepep_transport_collapse_combine(
     recv_channel_prefix_matrix: jax.Array,
     send_head: jax.Array,
     num_recv_tokens: jax.Array,
+    is_token_in_rank: jax.Array,
     *,
     mesh: jax.sharding.AbstractMesh | None = None,
 ) -> jax.Array:
@@ -1992,6 +2008,7 @@ def _moe_mlp_deepep_transport_collapse_combine(
             P("expert", None),
             P("expert", None),
             P("expert"),
+            batch_spec,
         ),
         out_specs=batch_spec,
         check_vma=False,
@@ -2006,6 +2023,7 @@ def _moe_mlp_deepep_transport_collapse_combine(
         recv_channel_prefix_matrix,
         send_head,
         num_recv_tokens,
+        is_token_in_rank,
     )
 
 
@@ -2058,6 +2076,7 @@ def _moe_mlp_ep_deepep_transport_identity_local(
         recv_channel_prefix_matrix,
         send_head,
         num_recv_tokens,
+        is_token_in_rank,
     )
     fanout = jnp.maximum(jnp.sum(is_token_in_rank.astype(jnp.int32), axis=1), 1)
     return (out_local / fanout[:, None]).astype(x_local.dtype), jnp.array(0, dtype=jnp.int32)
@@ -2182,6 +2201,7 @@ def _moe_mlp_ep_deepep_transport_assignments_identity_local(
         recv_channel_prefix_matrix,
         send_head,
         num_recv_tokens,
+        is_token_in_rank,
     )
     return out_local.astype(x_local.dtype), jnp.array(0, dtype=jnp.int32)
 
@@ -2306,6 +2326,7 @@ def _moe_mlp_ep_deepep_transport_first_ragged_dot_probe_local(
         recv_channel_prefix_matrix,
         send_head,
         num_recv_tokens,
+        is_token_in_rank,
     )
     return out_local.astype(x_local.dtype), jnp.array(0, dtype=jnp.int32)
 
@@ -2435,6 +2456,7 @@ def _moe_mlp_ep_deepep_transport_gate_probe_local(
         recv_channel_prefix_matrix,
         send_head,
         num_recv_tokens,
+        is_token_in_rank,
     )
     return out_local.astype(x_local.dtype), jnp.array(0, dtype=jnp.int32)
 
@@ -2565,6 +2587,7 @@ def _moe_mlp_ep_deepep_transport_second_ragged_dot_probe_local(
         recv_channel_prefix_matrix,
         send_head,
         num_recv_tokens,
+        is_token_in_rank,
     )
     return out_local.astype(x_local.dtype), jnp.array(0, dtype=jnp.int32)
 
@@ -4081,6 +4104,7 @@ def _time_deepep_transport_staged_forward(
             recv_channel_prefix_matrix,
             send_head,
             num_recv_tokens,
+            is_token_in_rank,
         ) = dispatch_pack(x, selected_experts, combine_weights)
         out_dispatch = local_compute(x_dispatch, local_group_sizes, w_up_gate, w_down)
         routed = collapse_combine(
@@ -4093,6 +4117,7 @@ def _time_deepep_transport_staged_forward(
             recv_channel_prefix_matrix,
             send_head,
             num_recv_tokens,
+            is_token_in_rank,
         )
         return routed + shared_mlp(x, shared_w13, shared_w2)
 

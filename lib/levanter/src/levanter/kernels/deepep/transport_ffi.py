@@ -16,6 +16,7 @@ import subprocess
 import sys
 import sysconfig
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 import jax
@@ -24,6 +25,7 @@ import jaxlib
 import numpy as np
 
 _DISPATCH_TARGET = "levanter_deepep_dispatch_intranode"
+_DISPATCH_CACHED_TARGET = "levanter_deepep_dispatch_intranode_cached"
 _COMBINE_TARGET = "levanter_deepep_combine_intranode"
 _INIT_SYMBOL = "levanter_deepep_init_intranode_runtime"
 _SHUTDOWN_SYMBOL = "levanter_deepep_shutdown_intranode_runtime"
@@ -37,7 +39,7 @@ _BUILD_WITH_TORCH_EXTENSION_ENV = "DEEPEP_BUILD_WITH_TORCH_EXTENSION"
 _LOAD_AS_PYTHON_MODULE_ENV = "DEEPEP_LOAD_AS_PYTHON_MODULE"
 _EXTENDED_INTRNODE_DISPATCH_MACRO = "LEVANTER_DEEPEP_EXTENDED_INTRNODE_DISPATCH"
 _PYEXT_MODULE_NAME_MACRO = "LEVANTER_DEEPEP_PYEXT_MODULE_NAME"
-_BUILD_CACHE_SCHEMA_VERSION = "transport_ffi_raw_dlink_v4"
+_BUILD_CACHE_SCHEMA_VERSION = "transport_ffi_raw_dlink_v5"
 _LIBRARY_DLOPEN_MODE = getattr(os, "RTLD_NOW", 0) | getattr(ctypes, "RTLD_GLOBAL", 0)
 
 
@@ -571,7 +573,7 @@ def _register_targets() -> None:
     if getattr(_register_targets, "_done", False):
         return
     library = _load_library()
-    for target in (_DISPATCH_TARGET, _COMBINE_TARGET):
+    for target in (_DISPATCH_TARGET, _DISPATCH_CACHED_TARGET, _COMBINE_TARGET):
         handler = getattr(library, target)
         handler.restype = ctypes.c_void_p
         jax.ffi.register_ffi_target(
@@ -587,6 +589,22 @@ def _register_targets() -> None:
 def _library_function(name: str):
     library = _load_library()
     return getattr(library, name)
+
+
+def _materialize_cotangent(
+    cotangent: jax.Array | jax.custom_derivatives.SymbolicZero,
+    *,
+    dtype: jnp.dtype,
+    shape: tuple[int, ...] | None = None,
+    reference: jax.Array | None = None,
+) -> jax.Array:
+    if reference is None and shape is None:
+        raise ValueError("Either reference or shape must be provided when materializing a cotangent.")
+    if isinstance(cotangent, jax.custom_derivatives.SymbolicZero):
+        if reference is not None:
+            return jnp.zeros_like(reference, dtype=dtype)
+        return jnp.zeros(shape, dtype=dtype)
+    return jnp.asarray(cotangent, dtype=dtype)
 
 
 def _default_dispatch_config(num_ranks: int) -> IntranodeConfig:
@@ -718,7 +736,25 @@ def run_host_dispatch_round(
     return result
 
 
-def deepep_dispatch_intranode(
+def _resolve_runtime(
+    *,
+    x: jax.Array,
+    num_ranks: int,
+    dispatch_config: IntranodeConfig | None,
+    combine_config: IntranodeConfig | None,
+) -> IntranodeConfig:
+    _register_targets()
+    hidden_bytes = x.shape[1] * max(jnp.dtype(x.dtype).itemsize, 2)
+    ensure_intranode_runtime(
+        num_ranks=num_ranks,
+        hidden_bytes=hidden_bytes,
+        dispatch_config=dispatch_config,
+        combine_config=combine_config,
+    )
+    return dispatch_config or _default_dispatch_config(num_ranks)
+
+
+def _dispatch_intranode_impl(
     x: jax.Array,
     topk_idx: jax.Array,
     topk_weights: jax.Array,
@@ -727,18 +763,16 @@ def deepep_dispatch_intranode(
     is_token_in_rank: jax.Array,
     *,
     num_experts: int,
-    dispatch_config: IntranodeConfig | None = None,
-    combine_config: IntranodeConfig | None = None,
-    max_recv_tokens: int | None = None,
+    dispatch_config: IntranodeConfig | None,
+    combine_config: IntranodeConfig | None,
+    max_recv_tokens: int | None,
 ) -> tuple[
     jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array
 ]:
-    _register_targets()
     num_ranks = int(num_tokens_per_rank.shape[0])
-    hidden_bytes = x.shape[1] * max(jnp.dtype(x.dtype).itemsize, 2)
-    ensure_intranode_runtime(
+    resolved_dispatch_config = _resolve_runtime(
+        x=x,
         num_ranks=num_ranks,
-        hidden_bytes=hidden_bytes,
         dispatch_config=dispatch_config,
         combine_config=combine_config,
     )
@@ -753,7 +787,7 @@ def deepep_dispatch_intranode(
         max_recv_tokens = x_bf16.shape[0] * num_ranks
     elif max_recv_tokens <= 0:
         raise ValueError(f"max_recv_tokens must be positive, got {max_recv_tokens}")
-    num_channels = (dispatch_config or _default_dispatch_config(num_ranks)).num_sms // 2
+    num_channels = resolved_dispatch_config.num_sms // 2
     topk = topk_idx_i64.shape[1]
     result_shape_dtypes = (
         jax.ShapeDtypeStruct((max_recv_tokens, x_bf16.shape[1]), x_bf16.dtype),
@@ -783,7 +817,57 @@ def deepep_dispatch_intranode(
     )
 
 
-def deepep_combine_intranode(
+def _dispatch_intranode_cached_impl(
+    x: jax.Array,
+    is_token_in_rank: jax.Array,
+    rank_prefix_matrix: jax.Array,
+    channel_prefix_matrix: jax.Array,
+    num_recv_tokens: jax.Array,
+    *,
+    dispatch_config: IntranodeConfig | None,
+    combine_config: IntranodeConfig | None,
+    max_recv_tokens: int,
+) -> jax.Array:
+    if max_recv_tokens <= 0:
+        raise ValueError(f"max_recv_tokens must be positive, got {max_recv_tokens}")
+    num_ranks = int(rank_prefix_matrix.shape[0])
+    resolved_dispatch_config = _resolve_runtime(
+        x=x,
+        num_ranks=num_ranks,
+        dispatch_config=dispatch_config,
+        combine_config=combine_config,
+    )
+
+    x_bf16 = jnp.asarray(x, dtype=jnp.bfloat16)
+    is_token_in_rank_bool = jnp.asarray(is_token_in_rank, dtype=jnp.bool_)
+    rank_prefix_matrix_i32 = jnp.asarray(rank_prefix_matrix, dtype=jnp.int32)
+    channel_prefix_matrix_i32 = jnp.asarray(channel_prefix_matrix, dtype=jnp.int32)
+    num_recv_tokens_i32 = jnp.asarray(num_recv_tokens, dtype=jnp.int32)
+    num_channels = resolved_dispatch_config.num_sms // 2
+    result_shape_dtypes = (
+        jax.ShapeDtypeStruct((max_recv_tokens, x_bf16.shape[1]), x_bf16.dtype),
+        jax.ShapeDtypeStruct((max_recv_tokens,), jnp.int32),
+        jax.ShapeDtypeStruct((num_ranks, num_channels), jnp.int32),
+        jax.ShapeDtypeStruct((x_bf16.shape[0], num_ranks), jnp.int32),
+    )
+    recv_x, _, _, _ = jax.ffi.ffi_call(
+        _DISPATCH_CACHED_TARGET,
+        result_shape_dtypes,
+        has_side_effect=True,
+        vmap_method="broadcast_all",
+    )(
+        x_bf16,
+        is_token_in_rank_bool,
+        rank_prefix_matrix_i32,
+        channel_prefix_matrix_i32,
+        num_recv_tokens_i32,
+    )
+    recv_token_limit = jnp.squeeze(num_recv_tokens_i32, axis=0)
+    recv_valid = jnp.arange(max_recv_tokens, dtype=jnp.int32) < recv_token_limit
+    return jnp.where(recv_valid[:, None], recv_x, 0)
+
+
+def _combine_intranode_impl(
     recv_x: jax.Array,
     recv_topk_weights: jax.Array,
     recv_src_idx: jax.Array,
@@ -822,3 +906,268 @@ def deepep_combine_intranode(
         num_recv_tokens_i32,
     )
     return combined_x, combined_topk_weights
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(6, 7, 8, 9))
+def _dispatch_intranode_with_vjp(
+    x: jax.Array,
+    topk_idx: jax.Array,
+    topk_weights: jax.Array,
+    num_tokens_per_rank: jax.Array,
+    num_tokens_per_expert: jax.Array,
+    is_token_in_rank: jax.Array,
+    num_experts: int,
+    dispatch_config: IntranodeConfig | None,
+    combine_config: IntranodeConfig | None,
+    max_recv_tokens: int | None,
+) -> tuple[
+    jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array
+]:
+    return _dispatch_intranode_impl(
+        x,
+        topk_idx,
+        topk_weights,
+        num_tokens_per_rank,
+        num_tokens_per_expert,
+        is_token_in_rank,
+        num_experts=num_experts,
+        dispatch_config=dispatch_config,
+        combine_config=combine_config,
+        max_recv_tokens=max_recv_tokens,
+    )
+
+
+def _dispatch_intranode_with_vjp_fwd(
+    num_experts: int,
+    dispatch_config: IntranodeConfig | None,
+    combine_config: IntranodeConfig | None,
+    max_recv_tokens: int | None,
+    x: jax.Array,
+    topk_idx: jax.Array,
+    topk_weights: jax.Array,
+    num_tokens_per_rank: jax.Array,
+    num_tokens_per_expert: jax.Array,
+    is_token_in_rank: jax.Array,
+):
+    outputs = _dispatch_intranode_impl(
+        x,
+        topk_idx,
+        topk_weights,
+        num_tokens_per_rank,
+        num_tokens_per_expert,
+        is_token_in_rank,
+        num_experts=num_experts,
+        dispatch_config=dispatch_config,
+        combine_config=combine_config,
+        max_recv_tokens=max_recv_tokens,
+    )
+    (
+        recv_x,
+        _,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        _,
+        recv_channel_prefix_matrix,
+        send_head,
+        _,
+        num_recv_tokens,
+    ) = outputs
+    residuals = (
+        recv_x,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        recv_channel_prefix_matrix,
+        send_head,
+        num_recv_tokens,
+    )
+    return outputs, residuals
+
+
+def _dispatch_intranode_with_vjp_bwd(
+    num_experts: int,
+    dispatch_config: IntranodeConfig | None,
+    combine_config: IntranodeConfig | None,
+    max_recv_tokens: int | None,
+    residuals,
+    cotangents,
+):
+    (
+        recv_x,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        recv_channel_prefix_matrix,
+        send_head,
+        num_recv_tokens,
+    ) = residuals
+    grad_recv_x = _materialize_cotangent(cotangents[0], dtype=recv_x.dtype, reference=recv_x)
+    grad_recv_topk_weights = _materialize_cotangent(
+        cotangents[2],
+        dtype=recv_topk_weights.dtype,
+        reference=recv_topk_weights,
+    )
+    grad_x, grad_topk_weights = _combine_intranode_impl(
+        grad_recv_x,
+        grad_recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        recv_channel_prefix_matrix,
+        send_head,
+        num_recv_tokens,
+    )
+    return grad_x, None, grad_topk_weights, None, None, None
+
+
+_dispatch_intranode_with_vjp.defvjp(
+    _dispatch_intranode_with_vjp_fwd,
+    _dispatch_intranode_with_vjp_bwd,
+)
+
+
+@jax.custom_vjp
+def _combine_intranode_with_vjp(
+    recv_x: jax.Array,
+    recv_topk_weights: jax.Array,
+    recv_src_idx: jax.Array,
+    rank_prefix_matrix: jax.Array,
+    channel_prefix_matrix: jax.Array,
+    send_head: jax.Array,
+    num_recv_tokens: jax.Array,
+    is_token_in_rank: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    return _combine_intranode_impl(
+        recv_x,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        channel_prefix_matrix,
+        send_head,
+        num_recv_tokens,
+    )
+
+
+def _combine_intranode_with_vjp_fwd(
+    recv_x: jax.Array,
+    recv_topk_weights: jax.Array,
+    recv_src_idx: jax.Array,
+    rank_prefix_matrix: jax.Array,
+    channel_prefix_matrix: jax.Array,
+    send_head: jax.Array,
+    num_recv_tokens: jax.Array,
+    is_token_in_rank: jax.Array,
+):
+    outputs = _combine_intranode_impl(
+        recv_x,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        channel_prefix_matrix,
+        send_head,
+        num_recv_tokens,
+    )
+    residuals = (
+        recv_x,
+        recv_topk_weights,
+        rank_prefix_matrix,
+        channel_prefix_matrix,
+        send_head,
+        num_recv_tokens,
+        is_token_in_rank,
+    )
+    return outputs, residuals
+
+
+def _combine_intranode_with_vjp_bwd(residuals, cotangents):
+    (
+        recv_x,
+        recv_topk_weights,
+        rank_prefix_matrix,
+        channel_prefix_matrix,
+        send_head,
+        num_recv_tokens,
+        is_token_in_rank,
+    ) = residuals
+    grad_combined_x = _materialize_cotangent(
+        cotangents[0],
+        dtype=recv_x.dtype,
+        shape=(send_head.shape[0], recv_x.shape[1]),
+    )
+    grad_recv_x = _dispatch_intranode_cached_impl(
+        grad_combined_x,
+        is_token_in_rank,
+        rank_prefix_matrix,
+        channel_prefix_matrix,
+        num_recv_tokens,
+        dispatch_config=None,
+        combine_config=None,
+        max_recv_tokens=recv_x.shape[0],
+    )
+    return (
+        grad_recv_x,
+        jnp.zeros_like(recv_topk_weights),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+
+
+_combine_intranode_with_vjp.defvjp(
+    _combine_intranode_with_vjp_fwd,
+    _combine_intranode_with_vjp_bwd,
+)
+
+
+def deepep_dispatch_intranode(
+    x: jax.Array,
+    topk_idx: jax.Array,
+    topk_weights: jax.Array,
+    num_tokens_per_rank: jax.Array,
+    num_tokens_per_expert: jax.Array,
+    is_token_in_rank: jax.Array,
+    *,
+    num_experts: int,
+    dispatch_config: IntranodeConfig | None = None,
+    combine_config: IntranodeConfig | None = None,
+    max_recv_tokens: int | None = None,
+) -> tuple[
+    jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array
+]:
+    return _dispatch_intranode_with_vjp(
+        x,
+        topk_idx,
+        topk_weights,
+        num_tokens_per_rank,
+        num_tokens_per_expert,
+        is_token_in_rank,
+        num_experts,
+        dispatch_config,
+        combine_config,
+        max_recv_tokens,
+    )
+
+
+def deepep_combine_intranode(
+    recv_x: jax.Array,
+    recv_topk_weights: jax.Array,
+    recv_src_idx: jax.Array,
+    rank_prefix_matrix: jax.Array,
+    channel_prefix_matrix: jax.Array,
+    send_head: jax.Array,
+    num_recv_tokens: jax.Array,
+    is_token_in_rank: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    return _combine_intranode_with_vjp(
+        recv_x,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        channel_prefix_matrix,
+        send_head,
+        num_recv_tokens,
+        is_token_in_rank,
+    )
