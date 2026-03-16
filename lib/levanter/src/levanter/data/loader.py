@@ -246,8 +246,10 @@ class DataLoaderIterator(Iterator[Ex]):
         if self.mapping is None:
             self.mapping = hax.partitioning.current_thread_local_mapping()
 
+        self.step_metrics: dict[str, float] = {}
+
         buffered_batches = self.dl.max_buffered_batches
-        self._batches: Iterator[Ex]
+        self._batches: Iterator[tuple[Ex, dict[str, float]]]
         if buffered_batches == 0:
             self._batches = AsyncIteratorWrapper(self._produce_batches())
         else:
@@ -255,7 +257,7 @@ class DataLoaderIterator(Iterator[Ex]):
 
     def __next__(self):
         time_start = time.time()
-        batch = next(self._batches)
+        batch, self.step_metrics = next(self._batches)
         time_mid = time.time()
 
         time_end = time.time()
@@ -311,8 +313,9 @@ class DataLoaderIterator(Iterator[Ex]):
                 batch_of_batches: list[_Batch[Ex]] = await self._do_retrieve_batch_of_batches(batches)
 
                 for batch in batch_of_batches:
-                    batch = self._batchify_local_data(batch)
-                    yield batch
+                    metrics = self.dl.data_store.metrics_for_global_index(batch.global_data_offset)
+                    batchified = self._batchify_local_data(batch)
+                    yield batchified, metrics
 
                 batch_number = next_batch_numbers[-1] + 1
 
