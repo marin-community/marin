@@ -369,7 +369,7 @@ def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[Job]:
 
 
 def _transaction_actions(db: ControllerDB, limit: int = 100) -> list:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         actions = q.select(
             TXN_ACTIONS,
             order_by=(TXN_ACTIONS.c.created_at_ms.desc(),),
