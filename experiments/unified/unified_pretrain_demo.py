@@ -569,12 +569,13 @@ def unified_data_config(
         permutation_type="feistel",
         block_cross_document_attention=True,
         metadata={
-            "text_weight": text_weight,
-            "multimodal_weight": multimodal_weight,
+            "text_steps": TEXT_STEPS,
+            "und_steps": UND_STEPS,
+            "gen_steps": GEN_STEPS,
+            "text_w": text_w,
+            "und_w": und_w,
+            "gen_w": gen_w,
             "w_visual": w_visual,
-            "und_gen_ratio": und_gen_ratio,
-            "und_weight": und_weight,
-            "gen_weight": gen_weight,
         },
     )
 
@@ -597,7 +598,7 @@ def _demo_train_config(learning_rate: float = 3e-4) -> SimpleTrainConfig:
         lr_schedule="cosine",
         weight_decay=0.1,
         max_grad_norm=1.0,
-        per_device_parallelism=4,
+        per_device_parallelism=1,
         steps_per_eval=500,
         steps_per_export=1000,
     )

@@ -63,6 +63,8 @@ UNIFIED_VOCAB_SIZE = LLAMA3_VOCAB_SIZE + TOKLIP_CODEBOOK_SIZE  # 144,640
 # Reserved Llama3 special token IDs repurposed for vision sentinels
 VISION_START_ID = 128_004  # <|reserved_special_token_2|> → <|vision_start|>
 VISION_END_ID = 128_005  # <|reserved_special_token_3|> → <|vision_end|>
+ENDOFTEXT_ID = 128_001  # <|end_of_text|> (Llama3 EOS)
+VISUAL_TOKEN_OFFSET = 128_256  # Llama3 vocab size; TokLIP index c → unified ID c + 128256
 
 UNIFIED_TOKENIZER_PATH = "gs://marin-eu-west4/tokenizers/llama3-unified-144k"
 UNIFIED_CACHE_PATH = "gs://marin-vlm-eu/hf_85m_levanter_cache_v2"
@@ -247,6 +249,38 @@ def _compose_transforms(
         return weights
 
     return composed
+
+
+def _replace_visual_with_eos(input_ids: np.ndarray) -> np.ndarray:
+    """Replace visual tokens with EOS so block_cross_document_attention prevents
+    real tokens from attending to them.
+
+    Each replaced position becomes its own segment boundary, so the remaining
+    text tokens (in a later segment) cannot attend to any visual position.
+    """
+    result = input_ids.copy()
+    visual_mask = (result >= VISUAL_TOKEN_OFFSET) | (result == VISION_START_ID) | (result == VISION_END_ID)
+    result[visual_mask] = ENDOFTEXT_ID
+    return result
+
+
+def _replace_text_with_eos(input_ids: np.ndarray) -> np.ndarray:
+    """Replace text tokens with EOS so block_cross_document_attention prevents
+    real tokens from attending to them.
+
+    Each replaced position becomes its own segment boundary, so the remaining
+    visual tokens (in a later segment) cannot attend to any text position.
+    """
+    result = input_ids.copy()
+    text_mask = (
+        (result > 0)
+        & (result < VISUAL_TOKEN_OFFSET)
+        & (result != VISION_START_ID)
+        & (result != VISION_END_ID)
+        & (result != ENDOFTEXT_ID)
+    )
+    result[text_mask] = ENDOFTEXT_ID
+    return result
 
 
 def _make_modality_segment_ids(input_ids: np.ndarray) -> np.ndarray:
@@ -456,6 +490,37 @@ def unified_data_config(
     weights["val_generation_text_only"] = 0.0
     weights["val_generation_visual_only"] = 0.0
 
+    # Ablation val: replace one modality with EOS → segment-based attention blocking
+    # prevents real tokens from attending to the replaced positions.
+    fmt_und_wo_visual = PrebuiltLmDatasetFormat(
+        input_ids_key="input_ids",
+        loss_weights_key="loss_weights",
+        loss_weight_transform=_zero_fractional_transform,
+        input_ids_transform=_replace_visual_with_eos,
+    )
+    fmt_gen_wo_language = PrebuiltLmDatasetFormat(
+        input_ids_key="input_ids",
+        loss_weights_key="loss_weights",
+        loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, _zero_fractional_transform),
+        input_ids_transform=_replace_text_with_eos,
+    )
+
+    components["val_understanding_wo_visual"] = DatasetComponent(
+        cache_dir=und_val_cache,
+        format=fmt_und_wo_visual,
+        pack=True,
+        tags=["multimodal", "understanding"],
+    )
+    weights["val_understanding_wo_visual"] = 0.0
+
+    components["val_generation_wo_language"] = DatasetComponent(
+        cache_dir=gen_val_cache,
+        format=fmt_gen_wo_language,
+        pack=True,
+        tags=["multimodal", "generation"],
+    )
+    weights["val_generation_wo_language"] = 0.0
+
     # Eval benchmarks: weight 0.0 → eval-only (not used in training data).
     # Levanter's validation_sets() loads these for periodic eval during training.
     if eval_benchmarks is not None:
@@ -501,6 +566,15 @@ def unified_data_config(
         shuffle=True,
         permutation_type="feistel",
         block_cross_document_attention=True,
+        metadata={
+            "text_steps": TEXT_STEPS,
+            "und_steps": UND_STEPS,
+            "gen_steps": GEN_STEPS,
+            "text_w": text_w,
+            "und_w": und_w,
+            "gen_w": gen_w,
+            "w_visual": w_visual,
+        },
     )
 
     # Text-only validation sets (Paloma, uncheatable_eval) use the base Llama3
