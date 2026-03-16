@@ -45,6 +45,7 @@ Kernel = Literal[
     "deepep_transport_gate_probe",
     "deepep_transport_second_ragged_dot_probe",
     "deepep_transport",
+    "deepep_transport_prewarmed",
     "deepep_transport_staged",
     "prefix_counts",
     "vector_prefix",
@@ -3973,27 +3974,14 @@ def _time_deepep_transport_staged_forward(
     warmup: int,
     iters: int,
 ) -> float:
+    _prewarm_deepep_transport_local_compute(x, selected_experts, w_up_gate, w_down, shared_w13, shared_w2)
+
     mesh = x.sharding.mesh
     num_experts = int(w_up_gate.shape[0])
-    expert_axis_size = grug_moe_lib._mesh_axis_size(mesh, "expert")
-    local_experts = num_experts // expert_axis_size
-    local_assignments = x.shape[0] * selected_experts.shape[1]
     dispatch_pack = jax.jit(partial(_moe_mlp_deepep_transport_dispatch_pack, mesh=mesh, num_experts=num_experts))
     local_compute = jax.jit(partial(_moe_mlp_deepep_transport_local_compute, mesh=mesh))
     collapse_combine = jax.jit(partial(_moe_mlp_deepep_transport_collapse_combine, mesh=mesh))
     shared_mlp = jax.jit(_shared_mlp)
-
-    dummy_dispatch = jax.device_put(
-        np.zeros((expert_axis_size * local_assignments, x.shape[1]), dtype=np.dtype(x.dtype.name)),
-        NamedSharding(mesh, P("expert", None)),
-    )
-    dummy_group_sizes = np.zeros((num_experts,), dtype=np.int32)
-    for shard in range(expert_axis_size):
-        dummy_group_sizes[(shard + 1) * local_experts - 1] = local_assignments
-    dummy_group_sizes_sharded = jax.device_put(dummy_group_sizes, NamedSharding(mesh, P("expert")))
-
-    jax.block_until_ready(local_compute(dummy_dispatch, dummy_group_sizes_sharded, w_up_gate, w_down))
-    jax.block_until_ready(shared_mlp(x, shared_w13, shared_w2))
 
     def run_once() -> jax.Array:
         (
@@ -4029,6 +4017,62 @@ def _time_deepep_transport_staged_forward(
     for _ in range(iters):
         jax.block_until_ready(run_once())
     return (time.perf_counter() - start) / iters
+
+
+def _prewarm_deepep_transport_local_compute(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    shared_w13: jax.Array,
+    shared_w2: jax.Array,
+) -> None:
+    mesh = x.sharding.mesh
+    num_experts = int(w_up_gate.shape[0])
+    expert_axis_size = grug_moe_lib._mesh_axis_size(mesh, "expert")
+    local_experts = num_experts // expert_axis_size
+    local_assignments = x.shape[0] * selected_experts.shape[1]
+    local_compute = jax.jit(partial(_moe_mlp_deepep_transport_local_compute, mesh=mesh))
+    shared_mlp = jax.jit(_shared_mlp)
+
+    dummy_dispatch = jax.device_put(
+        np.zeros((expert_axis_size * local_assignments, x.shape[1]), dtype=np.dtype(x.dtype.name)),
+        NamedSharding(mesh, P("expert", None)),
+    )
+    dummy_group_sizes = np.zeros((num_experts,), dtype=np.int32)
+    for shard in range(expert_axis_size):
+        dummy_group_sizes[(shard + 1) * local_experts - 1] = local_assignments
+    dummy_group_sizes_sharded = jax.device_put(dummy_group_sizes, NamedSharding(mesh, P("expert")))
+
+    jax.block_until_ready(local_compute(dummy_dispatch, dummy_group_sizes_sharded, w_up_gate, w_down))
+    jax.block_until_ready(shared_mlp(x, shared_w13, shared_w2))
+
+
+def _time_deepep_transport_forward_prewarmed(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    shared_w13: jax.Array,
+    shared_w2: jax.Array,
+    *,
+    warmup: int,
+    iters: int,
+) -> float:
+    _prewarm_deepep_transport_local_compute(x, selected_experts, w_up_gate, w_down, shared_w13, shared_w2)
+    return _time_fn(
+        partial(_forward, "deepep_transport"),
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        shared_w13,
+        shared_w2,
+        warmup=warmup,
+        iters=iters,
+    )
 
 
 def _flatten_tree_max_abs(tree_a, tree_b) -> float:
@@ -4071,6 +4115,7 @@ def main() -> None:
             "deepep_transport_gate_probe",
             "deepep_transport_second_ragged_dot_probe",
             "deepep_transport",
+            "deepep_transport_prewarmed",
             "deepep_transport_staged",
             "prefix_counts",
             "vector_prefix",
@@ -4208,7 +4253,21 @@ def main() -> None:
                 grad_fn = partial(_loss_and_grads, kernel)
                 profile_name = f"moe_{kernel}_ep{ep_size}_{args.bench_pass}"
                 if args.bench_pass == "forward":
-                    if kernel == "deepep_transport_staged":
+                    if kernel == "deepep_transport_prewarmed":
+                        if args.profile_root is not None:
+                            raise ValueError("deepep_transport_prewarmed does not yet support --profile-root")
+                        dt = _time_deepep_transport_forward_prewarmed(
+                            x_sharded,
+                            selected_sharded,
+                            weights_sharded,
+                            w13_sharded,
+                            w2_sharded,
+                            shared_w13_sharded,
+                            shared_w2_sharded,
+                            warmup=args.warmup,
+                            iters=args.iters,
+                        )
+                    elif kernel == "deepep_transport_staged":
                         if args.profile_root is not None:
                             raise ValueError("deepep_transport_staged does not yet support --profile-root")
                         dt = _time_deepep_transport_staged_forward(
@@ -4251,8 +4310,8 @@ def main() -> None:
                             iters=args.iters,
                         )
                 else:
-                    if kernel == "deepep_transport_staged":
-                        raise ValueError("deepep_transport_staged currently supports only --bench-pass=forward")
+                    if kernel in {"deepep_transport_prewarmed", "deepep_transport_staged"}:
+                        raise ValueError(f"{kernel} currently supports only --bench-pass=forward")
                     if args.profile_root is not None:
                         dt = _profile_fn(
                             grad_fn,
