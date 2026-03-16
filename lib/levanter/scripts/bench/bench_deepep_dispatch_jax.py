@@ -544,11 +544,7 @@ def main() -> None:
             x_error = float(
                 jnp.max(jnp.abs(combined_x.astype(jnp.float32) / fanout_f32[..., None] - x_inputs.astype(jnp.float32)))
             )
-            topk_error = float(
-                jnp.max(
-                    jnp.abs(combined_topk_weights / fanout_f32[..., None] - topk_weights_inputs.astype(jnp.float32))
-                )
-            )
+            topk_error = float(jnp.max(jnp.abs(combined_topk_weights - topk_weights_inputs.astype(jnp.float32))))
             _print0(f"CHECK x_max_abs={x_error:.6e} topk_max_abs={topk_error:.6e}")
         dt = _time_fn(
             step_fn,
@@ -587,9 +583,7 @@ def main() -> None:
                 x_host = np.asarray(x_sharded, dtype=np.float32)
                 topk_weights_host = np.asarray(topk_weights_sharded, dtype=np.float32)
                 x_error = float(np.max(np.abs(combined_x_host / fanout_host[:, None] - x_host)))
-                topk_error = float(
-                    np.max(np.abs(combined_topk_weights_host / fanout_host[:, None] - topk_weights_host))
-                )
+                topk_error = float(np.max(np.abs(combined_topk_weights_host - topk_weights_host)))
                 _print0(f"CHECK x_max_abs={x_error:.6e} topk_max_abs={topk_error:.6e}")
 
             dt = _time_fn(
