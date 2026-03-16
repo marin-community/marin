@@ -71,29 +71,29 @@ def find_marin_root() -> Path:
 
 
 def find_iris_root() -> Path:
-    """Find the iris package root directory containing Dockerfiles.
+    """Find the iris package root directory containing the unified Dockerfile.
 
     Searches in order:
     1. Relative to this file (cli/build.py -> iris root is 4 levels up from src/iris/cli/build.py)
     2. Current working directory
-    3. Walking up from cwd until Dockerfile.worker is found
+    3. Walking up from cwd until Dockerfile is found
     """
     build_path = Path(__file__).resolve()
     # build.py is at src/iris/cli/build.py, so iris root is 4 levels up
     iris_root = build_path.parent.parent.parent.parent
-    if (iris_root / "Dockerfile.worker").exists() and (iris_root / "Dockerfile.controller").exists():
+    if (iris_root / "Dockerfile").exists():
         return iris_root
 
     cwd = Path.cwd()
-    if (cwd / "Dockerfile.worker").exists():
+    if (cwd / "Dockerfile").exists():
         return cwd
 
     for parent in cwd.parents:
-        if (parent / "Dockerfile.worker").exists():
+        if (parent / "Dockerfile").exists():
             return parent
 
     raise click.ClickException(
-        "Cannot find Dockerfile.worker. Run from the iris directory or specify --dockerfile and --context."
+        "Cannot find Dockerfile. Run from the iris directory or specify --dockerfile and --context."
     )
 
 
@@ -191,10 +191,8 @@ def build_image(
     if image_type in ("controller", "worker"):
         _ensure_dashboard_dist()
 
-    dockerfile_name = f"Dockerfile.{image_type}"
-
     iris_root = find_iris_root()
-    dockerfile_path = Path(dockerfile) if dockerfile else iris_root / dockerfile_name
+    dockerfile_path = Path(dockerfile) if dockerfile else iris_root / "Dockerfile"
     context_path = Path(context) if context else iris_root
 
     if not dockerfile_path.exists():
@@ -210,6 +208,7 @@ def build_image(
 
     all_tags = dict.fromkeys([tag, sha_tag, latest_tag])
     cmd = ["docker", "buildx", "build", "--platform", platform]
+    cmd.extend(["--target", image_type])
     cmd.extend(["--build-arg", f"IRIS_GIT_HASH={git_sha}"])
     for t in all_tags:
         cmd.extend(["-t", t])
@@ -272,7 +271,8 @@ def _build_all(
         build_image(image_type, tag, push, None, None, platform, ghcr_org)
         click.echo()
 
-    task_dockerfile = str(iris_root / "Dockerfile.task")
+    # Task target uses the same Dockerfile but needs marin root as context
+    task_dockerfile = str(iris_root / "Dockerfile")
     build_image(
         "task",
         _default_versioned_tag("iris-task"),
@@ -377,11 +377,11 @@ def build_task_image(
     """Build base task image with system deps and pre-synced marin core deps.
 
     The build context is the marin repo root so that pyproject.toml and uv.lock
-    are available for COPY. The Dockerfile lives at lib/iris/Dockerfile.task.
+    are available for COPY. Uses the ``task`` target in ``lib/iris/Dockerfile``.
     """
     marin_root = find_marin_root()
     iris_root = find_iris_root()
-    dockerfile_path = Path(dockerfile) if dockerfile else iris_root / "Dockerfile.task"
+    dockerfile_path = Path(dockerfile) if dockerfile else iris_root / "Dockerfile"
 
     if not dockerfile_path.exists():
         raise click.ClickException(f"Dockerfile not found: {dockerfile_path}")
