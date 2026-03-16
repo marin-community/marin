@@ -329,3 +329,76 @@ But the key change is that they now complete the actual transport step correctly
 That means the thread can now return to its original comparison goal:
 - run the first direct pure-JAX-vs-Torch/Megatron transport head-to-head on the sealed shape
 - treat teardown noise as a separate follow-up defect rather than the main blocker
+
+## New milestone: Torch-matched `20`-SM config works and collapses most of the sealed-shape JAX/Torch gap
+
+`2026-03-15`
+
+The earlier `num_sms=20` crash is no longer the right headline.
+
+I reran the sealed-shape pure-JAX transport cell with the same world-size `8` DeepEP defaults used by the Torch transport microbench:
+
+- dispatch: `num_sms=20`, `num_max_send_tokens=6`, `num_max_recv_tokens=256`
+- combine: `num_sms=20`, `num_max_send_tokens=4`, `num_max_recv_tokens=256`
+
+Command:
+
+```bash
+KUBECONFIG=/Users/romain/.kube/coreweave-iris \
+uv run .agents/scripts/deepep_jax_transport_krt.py \
+  --config lib/iris/examples/coreweave-moe-jax-3677.yaml \
+  --worktree /Users/romain/marin-wt/moe-jax-megatron-root-cause \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --tokens 32768 \
+  --hidden 2048 \
+  --experts 128 \
+  --topk-list 2 \
+  --distributions random \
+  --dispatch-num-sms 20 \
+  --dispatch-num-max-send-tokens 6 \
+  --dispatch-num-max-recv-tokens 256 \
+  --combine-num-sms 20 \
+  --combine-num-max-send-tokens 4 \
+  --combine-num-max-recv-tokens 256 \
+  --warmup 1 \
+  --iters 3 \
+  --timeout-seconds 7200
+```
+
+Result:
+
+- correctness still passes exactly:
+  - `CHECK x_max_abs=0.000000e+00 topk_max_abs=0.000000e+00`
+- authoritative timing:
+  - `RESULT step_s=0.000777 tokens_per_s=42173236.13`
+- pod:
+  - `iris-task-80418ae00b12`
+- exit:
+  - `0 Completed`
+
+The same late teardown/XLA CUDA shutdown noise still appears after the result line, but it no longer changes the benchmark outcome.
+
+This changes the interpretation of the thread materially.
+
+Updated sealed-shape transport ladder:
+
+- Torch transport baseline:
+  - `64.89M tokens/s`
+- JAX pure transport:
+  - `num_sms=2`: `6.64M tokens/s`
+  - `num_sms=4`: `12.51M tokens/s`
+  - `num_sms=8`: `21.95M tokens/s`
+  - `num_sms=20` with Torch-matched defaults: `42.17M tokens/s`
+
+So the live JAX/Torch gap on the sealed shape is now about `1.54x`, not `9.8x`.
+
+That strongly suggests that a large fraction of the earlier apparent “JAX is much slower” result was simply that the working pure-JAX path was still being measured in a reduced debug transport configuration rather than in the actual DeepEP-style `20`-SM regime.
+
+The current question is now narrower:
+
+- not “can pure JAX DeepEP transport run?”
+- not “does it still crash at `20` SMs?”
+- but:
+  - what explains the remaining ~`1.54x` gap once JAX also uses the real `20`-SM transport config?
+  - and how much of the remaining gap is wrapper/runtime overhead vs other benchmark differences?

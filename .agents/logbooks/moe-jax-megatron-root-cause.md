@@ -1056,3 +1056,57 @@
 - Next action:
   - Record this as a major milestone on `#3677`.
   - Start the first direct pure-JAX-vs-Torch transport comparison on the sealed shape now that the JAX side is demonstrably live.
+
+### 2026-03-15 20:16 PDT - Torch-matched `num_sms=20` config works on the sealed shape and collapses most of the head-to-head gap
+
+- Hypothesis:
+  - The earlier JAX `num_sms=20` crash may have been partly self-inflicted by the oversized debug caps (`8192/8192`) rather than by `20` SMs themselves.
+  - The clean next control is to rerun the sealed shape with the same world-size `8` DeepEP defaults used by the Torch transport microbench:
+    - dispatch: `num_sms=20`, `num_max_send_tokens=6`, `num_max_recv_tokens=256`
+    - combine: `num_sms=20`, `num_max_send_tokens=4`, `num_max_recv_tokens=256`
+- Command:
+  ```bash
+  KUBECONFIG=/Users/romain/.kube/coreweave-iris \
+  uv run .agents/scripts/deepep_jax_transport_krt.py \
+    --config lib/iris/examples/coreweave-moe-jax-3677.yaml \
+    --worktree /Users/romain/marin-wt/moe-jax-megatron-root-cause \
+    --build-with-torch-extension \
+    --load-as-python-module \
+    --tokens 32768 \
+    --hidden 2048 \
+    --experts 128 \
+    --topk-list 2 \
+    --distributions random \
+    --dispatch-num-sms 20 \
+    --dispatch-num-max-send-tokens 6 \
+    --dispatch-num-max-recv-tokens 256 \
+    --combine-num-sms 20 \
+    --combine-num-max-send-tokens 4 \
+    --combine-num-max-recv-tokens 256 \
+    --warmup 1 \
+    --iters 3 \
+    --timeout-seconds 7200
+  ```
+- Result:
+  - Pod: `iris-task-80418ae00b12`
+  - Repo ref: `fcdee0768f309acdff167c9fa615f155cfed3d6f`
+  - The run passed correctness:
+    - `CHECK x_max_abs=0.000000e+00 topk_max_abs=0.000000e+00`
+  - The run completed and the container terminated successfully:
+    - exit: `0 Completed`
+  - Authoritative timing:
+    - `RESULT step_s=0.000777 tokens_per_s=42173236.13`
+  - The same late teardown/XLA CUDA shutdown noise still appears after the result line, but it does not prevent successful completion.
+- Interpretation:
+  - The earlier `num_sms=20` illegal-address result is no longer the right headline. Under the actual DeepEP defaults, `20` SMs work on the JAX path.
+  - This materially changes the head-to-head story on the sealed shape:
+    - Torch transport baseline: `64.89M tokens/s`
+    - JAX `num_sms=2`: `6.64M tokens/s`
+    - JAX `num_sms=4`: `12.51M tokens/s`
+    - JAX `num_sms=8`: `21.95M tokens/s`
+    - JAX `num_sms=20` with Torch-matched defaults: `42.17M tokens/s`
+  - So the pure-JAX gap on the sealed shape is now about `1.54x`, not `9.8x`.
+  - This strongly suggests that a large part of the earlier gap was simply that the JAX path was still being measured in a reduced debug transport configuration.
+- Next action:
+  - Update `#3677` with this major milestone.
+  - Keep grinding rather than sealing: confirm whether the JAX wrapper defaults reproduce this result without manual overrides, then widen the same-shape head-to-head beyond the single `random, topk=2` cell.

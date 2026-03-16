@@ -611,3 +611,47 @@ The apparent post-result "hang" is not a transport-execution failure anymore. Th
   - the full `#3633` token regime
 - The surviving issue is a teardown / device-shutdown problem after a successful transport step, not a front-half correctness or launch blocker.
 - That is enough progress to move back to the original goal: direct JAX-vs-Torch transport comparison on the sealed shape, while treating cleanup noise as a separate follow-up bug.
+
+## Hypothesis 16
+
+The earlier `num_sms=20` crash was at least partly caused by using oversized debug send/recv caps instead of the actual DeepEP world-size `8` defaults.
+
+## Changes to make
+
+- Re-run the sealed `#3633`-shape pure-JAX transport cell with the same config family the Torch transport microbench uses for world-size `8`:
+  - dispatch: `num_sms=20`, `num_max_send_tokens=6`, `num_max_recv_tokens=256`
+  - combine: `num_sms=20`, `num_max_send_tokens=4`, `num_max_recv_tokens=256`
+- Keep the same now-working extension-style bring-up:
+  - `DEEPEP_BUILD_WITH_TORCH_EXTENSION=1`
+  - `DEEPEP_LOAD_AS_PYTHON_MODULE=1`
+- Use the same authoritative sealed-shape comparison cell:
+  - `tokens=32768 hidden=2048 experts=128 topk=2 distribution=random`
+
+## Future Work
+
+- [ ] Verify whether the wrapper defaults (without explicit CLI overrides) reproduce the same `20`-SM result
+- [ ] Expand the head-to-head beyond `random, topk=2` once the `20`-SM path is confirmed stable
+- [ ] Revisit the earlier `8192/8192` crash only if it still matters after the apples-to-apples comparisons are complete
+
+## Results
+
+- The Torch-matched `20`-SM config works on the pure-JAX sealed-shape cell.
+- Command family:
+  - `uv run .agents/scripts/deepep_jax_transport_krt.py ... --dispatch-num-sms 20 --dispatch-num-max-send-tokens 6 --dispatch-num-max-recv-tokens 256 --combine-num-sms 20 --combine-num-max-send-tokens 4 --combine-num-max-recv-tokens 256 --warmup 1 --iters 3`
+- Authoritative result:
+  - `CHECK x_max_abs=0.000000e+00 topk_max_abs=0.000000e+00`
+  - `RESULT step_s=0.000777 tokens_per_s=42173236.13`
+  - pod exit: `0 Completed`
+- The same late teardown/XLA CUDA shutdown noise still appears after the result line, but it no longer changes the outcome of the actual benchmark cell.
+- Most importantly, this overturns the earlier interpretation of the `20`-SM frontier:
+  - `num_sms=20` is not inherently broken on the JAX path
+  - the earlier failing `20`-SM run used the oversized debug caps (`8192/8192`)
+  - the clean Torch-matched config runs correctly and is much faster than the earlier debug settings
+- Updated sealed-shape transport ladder:
+  - JAX `num_sms=2`: `6.64M tokens/s`
+  - JAX `num_sms=4`: `12.51M tokens/s`
+  - JAX `num_sms=8`: `21.95M tokens/s`
+  - JAX `num_sms=20` with Torch-matched defaults: `42.17M tokens/s`
+  - Torch transport baseline: `64.89M tokens/s`
+
+This means the live question is no longer “why does JAX fall over at `20` SMs?” The live question is now “what explains the remaining ~`1.54x` gap once JAX also uses the real DeepEP-style `20`-SM transport config?”
