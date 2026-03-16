@@ -27,7 +27,12 @@ from jax import shard_map
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P, get_abstract_mesh
 
 from levanter.grug import grug_moe as grug_moe_lib
-from levanter.kernels.deepep import deepep_combine_intranode, deepep_dispatch_intranode, deepep_get_dispatch_layout
+from levanter.kernels.deepep import (
+    deepep_combine_intranode,
+    deepep_dispatch_intranode,
+    deepep_get_dispatch_layout,
+    ensure_intranode_runtime,
+)
 from levanter.utils.activation import ActivationFunctionEnum
 
 Distribution = Literal["random", "runs"]
@@ -2821,6 +2826,22 @@ def _shard_shared_weights(mesh: Mesh, shared_w13: jax.Array, shared_w2: jax.Arra
     )
 
 
+def _maybe_init_deepep_runtime(
+    *,
+    kernels: list[Kernel],
+    ep_size: int,
+    hidden: int,
+    dtype: jnp.dtype,
+) -> None:
+    if "deepep_transport" not in kernels:
+        return
+    visible_devices = jax.devices()
+    if ep_size != len(visible_devices):
+        return
+    hidden_bytes = hidden * max(dtype.itemsize, 2)
+    ensure_intranode_runtime(num_ranks=ep_size, hidden_bytes=hidden_bytes)
+
+
 def _forward(
     kernel: Kernel,
     x: jax.Array,
@@ -3169,6 +3190,12 @@ def main() -> None:
                 mesh, x, selected_experts, combine_weights, w_up_gate, w_down
             )
             shared_w13_sharded, shared_w2_sharded = _shard_shared_weights(mesh, shared_w13, shared_w2)
+            _maybe_init_deepep_runtime(
+                kernels=kernels,
+                ep_size=ep_size,
+                hidden=args.hidden,
+                dtype=dtype,
+            )
 
             if args.check_equivalence and set(kernels) == {"legacy", "current"}:
                 legacy_out = jax.jit(_forward, static_argnums=0)(
