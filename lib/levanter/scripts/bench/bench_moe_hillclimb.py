@@ -1183,6 +1183,16 @@ def _collapse_deepep_local_assignments(
     return jnp.where(recv_valid[:, None], recv_out, 0)
 
 
+def _fit_probe_output_to_hidden(probe_out: jax.Array, *, hidden_dim: int) -> jax.Array:
+    if probe_out.shape[1] == hidden_dim:
+        return probe_out
+    if probe_out.shape[1] > hidden_dim:
+        return probe_out[:, :hidden_dim]
+
+    pad_width = hidden_dim - probe_out.shape[1]
+    return jnp.pad(probe_out, ((0, 0), (0, pad_width)))
+
+
 def _moe_mlp_ep_ragged_a2a_local(
     x_local: jax.Array,
     selected_experts_local: jax.Array,
@@ -1955,9 +1965,9 @@ def _moe_mlp_ep_deepep_transport_first_ragged_dot_probe_local(
         local_experts=local_experts,
         num_recv_tokens=num_recv_tokens_scalar,
     )
-    _ = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
+    probe_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
     recv_out = _collapse_deepep_local_assignments(
-        x_dispatch,
+        _fit_probe_output_to_hidden(probe_out, hidden_dim=x_local.shape[1]),
         assignment_weights,
         recv_token_indices,
         recv_capacity=recv_x.shape[0],
@@ -2084,9 +2094,9 @@ def _moe_mlp_ep_deepep_transport_gate_probe_local(
     w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
     moe_dim = moe_w2_local.shape[1]
     gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-    _ = activation_fn(gate) * up
+    probe_out = activation_fn(gate) * up
     recv_out = _collapse_deepep_local_assignments(
-        x_dispatch,
+        _fit_probe_output_to_hidden(probe_out, hidden_dim=x_local.shape[1]),
         assignment_weights,
         recv_token_indices,
         recv_capacity=recv_x.shape[0],
@@ -2214,9 +2224,9 @@ def _moe_mlp_ep_deepep_transport_second_ragged_dot_probe_local(
     w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
     moe_dim = moe_w2_local.shape[1]
     gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-    _ = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
+    probe_out = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
     recv_out = _collapse_deepep_local_assignments(
-        x_dispatch,
+        probe_out,
         assignment_weights,
         recv_token_indices,
         recv_capacity=recv_x.shape[0],
