@@ -50,6 +50,7 @@ const threadDump = ref('')
 const loading = ref(false)
 const error = ref<string | null>(null)
 const lastFetched = ref<string | null>(null)
+const includeLocals = ref(false)
 
 async function fetchThreadDump() {
   const t = target.value
@@ -63,7 +64,7 @@ async function fetchThreadDump() {
     const body = {
       target: t,
       durationSeconds: 10,
-      profileType: { threads: {} },
+      profileType: { threads: { locals: includeLocals.value } },
     }
     const resp = await rpcCall.value<{ profileData?: string; error?: string }>('ProfileTask', body)
     if (resp.error) {
@@ -95,6 +96,14 @@ onMounted(fetchThreadDump)
       >
         {{ loading ? '⏳ Fetching...' : '↻ Refresh' }}
       </button>
+      <label class="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer select-none">
+        <input
+          v-model="includeLocals"
+          type="checkbox"
+          class="rounded border-surface-border"
+        />
+        Include locals
+      </label>
       <span v-if="lastFetched" class="text-xs text-text-muted">
         Last fetched: {{ lastFetched }}
       </span>
