@@ -205,13 +205,15 @@ def _emit_messages(node: CCNode) -> Iterator[dict]:
     }
 
     # 2. Propagate component ID to neighbors
+    # Use [""] instead of [] so Arrow infers list<string> consistently
+    # with the self-message's adjacency_list, avoiding schema evolution.
     for neighbor_id in node["adjacency_list"]:
         yield {
             "key": neighbor_id,
             "is_self": False,
             "record_id": node["record_id"],
             "id_norm": "",
-            "adjacency_list": [],
+            "adjacency_list": [""],
             "component_id": node["component_id"],
             "changed": False,
             "file_idx": 0,
