@@ -320,14 +320,6 @@ def _worker_addresses_for_tasks(db: ControllerDB, tasks: list[Task]) -> dict[Wor
     return {WorkerId(str(row.worker_id)): row.address for row in rows}
 
 
-def _jobs_in_states(db: ControllerDB, states: tuple[int, ...], *, top_level_only: bool = False) -> list[Job]:
-    where = JOBS.c.state.in_(list(states))
-    if top_level_only:
-        where = where & (JOBS.c.depth == 1)
-    with db.read_snapshot() as q:
-        return q.select(JOBS, where=where)
-
-
 def _jobs_paginated_by_date(
     db: ControllerDB,
     states: tuple[int, ...],
@@ -930,6 +922,8 @@ class ControllerServiceImpl:
                 if cluster_pb2.JobState.Name(st).replace("JOB_STATE_", "").lower() == state_filter:
                     state_filter_int = st
                     break
+            if state_filter_int is None:
+                return cluster_pb2.Controller.ListJobsResponse(jobs=[], total_count=0, has_more=False)
 
         # SQL-level pagination: sort-by-date, no name filter
         can_sql_paginate = sort_field == cluster_pb2.Controller.JOB_SORT_FIELD_DATE and not name_filter and limit > 0
@@ -954,7 +948,8 @@ class ControllerServiceImpl:
             )
 
         # Fallback: fetch all top-level jobs, filter/sort in Python
-        jobs = _jobs_in_states(self._db, USER_JOB_STATES, top_level_only=True)
+        with self._db.read_snapshot() as q:
+            jobs = q.select(JOBS, where=JOBS.c.state.in_(list(USER_JOB_STATES)) & (JOBS.c.depth == 1))
         task_summaries = _task_summaries_for_jobs(self._db, {j.job_id for j in jobs})
 
         all_protos: list[cluster_pb2.JobStatus] = []

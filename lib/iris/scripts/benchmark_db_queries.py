@@ -27,13 +27,13 @@ from iris.cluster.controller.controller import (
     _schedulable_tasks,
 )
 from iris.cluster.controller.db import (
+    JOBS,
     ControllerDB,
     healthy_active_workers_with_attributes,
     running_tasks_by_worker,
 )
 from iris.cluster.controller.service import (
     USER_JOB_STATES,
-    _jobs_in_states,
     _live_user_stats,
     _task_summaries_for_jobs,
     _tasks_for_listing,
@@ -97,12 +97,16 @@ def benchmark_dashboard(db: ControllerDB, iterations: int) -> list[tuple[str, fl
     """Benchmark dashboard/service queries."""
     results: list[tuple[str, float, float]] = []
 
-    p50, p95 = bench("_jobs_in_states (all)", lambda: _jobs_in_states(db, USER_JOB_STATES), iterations=iterations)
-    results.append(("_jobs_in_states (all)", p50, p95))
-    print_result("_jobs_in_states (all)", p50, p95)
+    def _bench_jobs_in_states(db):
+        with db.read_snapshot() as q:
+            return q.select(JOBS, where=JOBS.c.state.in_(list(USER_JOB_STATES)) & (JOBS.c.depth == 1))
+
+    p50, p95 = bench("jobs_in_states (top-level)", lambda: _bench_jobs_in_states(db), iterations=iterations)
+    results.append(("jobs_in_states (top-level)", p50, p95))
+    print_result("jobs_in_states (top-level)", p50, p95)
 
     # Pre-fetch job_ids for _task_summaries_for_jobs
-    jobs = _jobs_in_states(db, USER_JOB_STATES)
+    jobs = _bench_jobs_in_states(db)
     job_ids = {j.job_id for j in jobs}
 
     p50, p95 = bench(

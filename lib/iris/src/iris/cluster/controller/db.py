@@ -1016,8 +1016,16 @@ class ControllerDB:
         self._conn.row_factory = sqlite3.Row
         self._configure(self._conn)
         self.apply_migrations()
-        self._backfill_job_names()
         self._read_pool: queue.Queue[sqlite3.Connection] = queue.Queue()
+        self._init_read_pool()
+
+    def _init_read_pool(self) -> None:
+        """Create (or recreate) the read-only connection pool."""
+        while True:
+            try:
+                self._read_pool.get_nowait().close()
+            except queue.Empty:
+                break
         for _ in range(self._READ_POOL_SIZE):
             conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
             conn.row_factory = sqlite3.Row
@@ -1103,7 +1111,11 @@ class ControllerDB:
         return _decode_row(Task, row)
 
     def apply_migrations(self) -> None:
-        """Apply pending SQL migrations from the migrations/ directory.
+        """Apply pending migrations from the migrations/ directory.
+
+        Supports Python migration files that define a ``migrate(conn)``
+        function. Migration names are matched by stem so that a migration
+        previously applied as .sql is not re-run when converted to .py.
 
         Migrations run outside a transaction because executescript() implicitly
         commits. This is fine: migrations only run at startup before any
@@ -1112,6 +1124,8 @@ class ControllerDB:
         schema_migrations and the next startup will re-run it (migrations must
         be idempotent via IF NOT EXISTS / IF EXISTS guards).
         """
+        import importlib.util
+
         migrations_dir = Path(__file__).with_name("migrations")
         migrations_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1126,32 +1140,27 @@ class ControllerDB:
             )
             applied = {row[0] for row in cur.execute("SELECT name FROM schema_migrations ORDER BY name").fetchall()}
 
-        for path in sorted(migrations_dir.glob("*.sql")):
-            if path.name in applied:
+        # Match by stem so a migration previously recorded as .sql is not
+        # re-run after conversion to .py.
+        applied_stems = {Path(name).stem for name in applied}
+
+        for path in sorted(migrations_dir.glob("*.py")):
+            if path.name.startswith("__"):
                 continue
-            sql = path.read_text(encoding="utf-8")
-            self._conn.executescript(sql)
+            if path.stem in applied_stems:
+                continue
+
+            spec = importlib.util.spec_from_file_location(path.stem, path)
+            assert spec is not None and spec.loader is not None
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module.migrate(self._conn)
+
             with self.transaction() as cur:
                 cur.execute(
                     "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
                     (path.name, Timestamp.now().epoch_ms()),
                 )
-
-    def _backfill_job_names(self) -> None:
-        """Backfill the denormalized name column for existing jobs.
-
-        Extracts name from request_proto for any rows where name is still the
-        default empty string. Runs once at startup after migrations; a no-op
-        once all rows are populated.
-        """
-        rows = self._conn.execute("SELECT job_id, request_proto FROM jobs WHERE name = ''").fetchall()
-        if not rows:
-            return
-        with self.transaction() as cur:
-            for row in rows:
-                proto = cluster_pb2.Controller.LaunchJobRequest()
-                proto.ParseFromString(row[1])
-                cur.execute("UPDATE jobs SET name = ? WHERE job_id = ?", (proto.name, row[0]))
 
     def ensure_user(self, user_id: str, now: Timestamp, role: str = "user") -> None:
         """Create user if not exists. Does not update role for existing users."""
@@ -1213,8 +1222,8 @@ class ControllerDB:
             self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._configure(self._conn)
+            self._init_read_pool()
         self.apply_migrations()
-        self._backfill_job_names()
 
     # SQL-canonical read access is exposed through ``snapshot()`` and typed table
     # metadata at module scope. Legacy list/get/count helper methods were removed

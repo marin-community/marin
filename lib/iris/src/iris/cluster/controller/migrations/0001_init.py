@@ -1,3 +1,12 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import sqlite3
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -172,7 +181,8 @@ CREATE TABLE IF NOT EXISTS logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_task_attempts_worker ON task_attempts(worker_id);
-CREATE INDEX IF NOT EXISTS idx_tasks_pending ON tasks(state, priority_neg_depth, priority_root_submitted_ms, submitted_at_ms, priority_insertion);
+CREATE INDEX IF NOT EXISTS idx_tasks_pending
+    ON tasks(state, priority_neg_depth, priority_root_submitted_ms, submitted_at_ms, priority_insertion);
 CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_job_id);
 CREATE INDEX IF NOT EXISTS idx_endpoints_name ON endpoints(name);
 CREATE INDEX IF NOT EXISTS idx_endpoints_task ON endpoints(task_id);
@@ -207,3 +217,5 @@ BEGIN
      SELECT id FROM txn_log ORDER BY id DESC LIMIT 1000
    );
 END;
+"""
+    )
