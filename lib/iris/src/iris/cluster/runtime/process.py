@@ -492,7 +492,7 @@ class ProcessContainerHandle:
 
         if profile_type.HasField("threads"):
             pid = str(self._container._process.pid)
-            return run_pyspy_dump(pid)
+            return run_pyspy_dump(pid, include_locals=profile_type.threads.locals)
         elif profile_type.HasField("cpu"):
             return self._profile_cpu(duration_seconds, profile_type.cpu)
         elif profile_type.HasField("memory"):

@@ -392,7 +392,7 @@ exec {quoted_cmd}
         profile_id = uuid.uuid4().hex[:8]
 
         if profile_type.HasField("threads"):
-            return self._profile_threads(container_id)
+            return self._profile_threads(container_id, include_locals=profile_type.threads.locals)
         elif profile_type.HasField("cpu"):
             return self._profile_cpu(container_id, duration_seconds, profile_type.cpu, profile_id)
         elif profile_type.HasField("memory"):
@@ -400,9 +400,9 @@ exec {quoted_cmd}
         else:
             raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
-    def _profile_threads(self, container_id: str) -> bytes:
+    def _profile_threads(self, container_id: str, *, include_locals: bool = False) -> bytes:
         """Collect thread stacks from the container using py-spy dump."""
-        cmd = build_pyspy_dump_cmd(pid="1", py_spy_bin="/app/.venv/bin/py-spy")
+        cmd = build_pyspy_dump_cmd(pid="1", py_spy_bin="/app/.venv/bin/py-spy", include_locals=include_locals)
         result = self._docker_exec(container_id, cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
             raise RuntimeError(f"py-spy dump failed: {result.stderr}")

@@ -501,7 +501,7 @@ class KubernetesContainerHandle:
         profile_id = uuid.uuid4().hex[:8]
 
         if profile_type.HasField("threads"):
-            return self._profile_threads()
+            return self._profile_threads(include_locals=profile_type.threads.locals)
         elif profile_type.HasField("cpu"):
             return self._profile_cpu(duration_seconds, profile_type.cpu, profile_id)
         elif profile_type.HasField("memory"):
@@ -509,9 +509,9 @@ class KubernetesContainerHandle:
         else:
             raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
-    def _profile_threads(self) -> bytes:
+    def _profile_threads(self, *, include_locals: bool = False) -> bytes:
         """Collect thread stacks from the pod using py-spy dump."""
-        cmd = build_pyspy_dump_cmd(pid="1", py_spy_bin="py-spy")
+        cmd = build_pyspy_dump_cmd(pid="1", py_spy_bin="py-spy", include_locals=include_locals)
         result = self.kubectl.exec(self._pod_name, self._wrap_in_venv_shell(cmd), container="task", timeout=30)
         if result.returncode != 0:
             raise RuntimeError(f"py-spy dump failed: {result.stderr}")
