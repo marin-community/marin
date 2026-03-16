@@ -56,12 +56,12 @@ ENV PATH="/app/.venv/bin:$PATH"
 COPY pyproject.toml hatch_build.py ./
 RUN uv sync --no-install-project
 
-# Profiling tools (rarely change; installed before source copy to avoid cache busts)
-RUN uv pip install py-spy memray
-
 # Source + project install
 COPY src/ ./src/
 RUN uv sync
+
+# Profiling tools — installed after uv sync so they aren't pruned by the exact sync.
+RUN uv pip install py-spy memray
 
 # Dashboard assets (pre-built by `iris build dashboard` before docker build)
 COPY dashboard/dist /app/dashboard/dist
