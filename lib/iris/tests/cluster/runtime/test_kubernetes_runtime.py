@@ -439,6 +439,44 @@ def test_disk_bytes_sets_emptydir_sizelimit(monkeypatch):
     assert workdir_vol["emptyDir"]["sizeLimit"] == str(10 * 1024**3)
 
 
+def test_cache_mounts_use_cache_dir_host_path(monkeypatch):
+    """CACHE mounts must map hostPath under worker cache_dir, not use the container path directly."""
+    manifests = _capture_manifest(monkeypatch)
+
+    config = _make_config()
+    config.mounts = [
+        MountSpec(container_path="/uv/cache", kind=MountKind.CACHE),
+        MountSpec(container_path="/root/.cargo/registry", kind=MountKind.CACHE),
+    ]
+    from pathlib import Path
+
+    runtime = KubernetesRuntime(namespace="iris", cache_dir=Path("/mnt/nvme/iris"))
+    handle = runtime.create_container(config)
+    handle.run()
+
+    pod = _pod_manifest(manifests)
+    volumes = pod["spec"]["volumes"]
+    cache_volumes = [v for v in volumes if "hostPath" in v]
+    assert len(cache_volumes) == 2
+    host_paths = sorted(v["hostPath"]["path"] for v in cache_volumes)
+    assert host_paths == ["/mnt/nvme/iris/root-.cargo-registry", "/mnt/nvme/iris/uv-cache"]
+
+
+def test_cache_mounts_fallback_without_cache_dir(monkeypatch):
+    """Without cache_dir, CACHE mounts fall back to container_path as hostPath."""
+    manifests = _capture_manifest(monkeypatch)
+
+    config = _make_config()
+    config.mounts = [MountSpec(container_path="/uv/cache", kind=MountKind.CACHE)]
+    runtime = KubernetesRuntime(namespace="iris")
+    handle = runtime.create_container(config)
+    handle.run()
+
+    pod = _pod_manifest(manifests)
+    cache_vol = next(v for v in pod["spec"]["volumes"] if "hostPath" in v)
+    assert cache_vol["hostPath"]["path"] == "/uv/cache"
+
+
 def test_no_disk_bytes_emptydir_has_no_sizelimit(monkeypatch):
     """When a WORKDIR MountSpec has size_bytes=0, the emptyDir volume should have no sizeLimit."""
     manifests = _capture_manifest(monkeypatch)
