@@ -34,11 +34,20 @@ from iris.cluster.controller.db import (
 )
 from iris.cluster.controller.service import (
     USER_JOB_STATES,
+    _child_jobs,
+    _descendant_jobs,
     _jobs_paginated,
     _live_user_stats,
+    _query_endpoints,
+    _read_job,
+    _read_task_with_attempts,
+    _read_worker,
+    _read_worker_detail,
     _task_summaries_for_jobs,
     _tasks_for_listing,
+    _transaction_actions,
     _worker_addresses_for_tasks,
+    _worker_roster,
 )
 from iris.rpc import cluster_pb2
 
@@ -160,7 +169,22 @@ def benchmark_dashboard(db: ControllerDB, iterations: int) -> list[tuple[str, fl
     results.append(("_live_user_stats", p50, p95))
     print_result("_live_user_stats", p50, p95)
 
-    # Pre-fetch worker_ids for running_tasks_by_worker
+    # _query_endpoints: endpoint listing
+    p50, p95 = bench("_query_endpoints", lambda: _query_endpoints(db), iterations=iterations)
+    results.append(("_query_endpoints", p50, p95))
+    print_result("_query_endpoints", p50, p95)
+
+    # _transaction_actions: action log
+    p50, p95 = bench("_transaction_actions", lambda: _transaction_actions(db), iterations=iterations)
+    results.append(("_transaction_actions", p50, p95))
+    print_result("_transaction_actions", p50, p95)
+
+    # _worker_roster: list all workers
+    p50, p95 = bench("_worker_roster", lambda: _worker_roster(db), iterations=iterations)
+    results.append(("_worker_roster", p50, p95))
+    print_result("_worker_roster", p50, p95)
+
+    # Pre-fetch workers for running_tasks_by_worker
     workers = healthy_active_workers_with_attributes(db)
     worker_ids = {w.worker_id for w in workers}
     if worker_ids:
@@ -171,6 +195,60 @@ def benchmark_dashboard(db: ControllerDB, iterations: int) -> list[tuple[str, fl
         print_result("running_tasks_by_worker", p50, p95)
     else:
         print("  running_tasks_by_worker                      (skipped, no workers)")
+
+    # _tasks_for_listing: list tasks for a single job
+    if sample_job:
+        p50, p95 = bench(
+            "_tasks_for_listing (job)",
+            lambda: _tasks_for_listing(db, job_id=sample_job.job_id),
+            iterations=iterations,
+        )
+        results.append(("_tasks_for_listing (job)", p50, p95))
+        print_result("_tasks_for_listing (job)", p50, p95)
+
+    # _child_jobs: children of a job
+    if sample_job:
+        p50, p95 = bench("_child_jobs", lambda: _child_jobs(db, sample_job.job_id), iterations=iterations)
+        results.append(("_child_jobs", p50, p95))
+        print_result("_child_jobs", p50, p95)
+
+    # _descendant_jobs: all descendants
+    if sample_job:
+        p50, p95 = bench("_descendant_jobs", lambda: _descendant_jobs(db, sample_job.job_id), iterations=iterations)
+        results.append(("_descendant_jobs", p50, p95))
+        print_result("_descendant_jobs", p50, p95)
+
+    # _read_job: single job lookup
+    if sample_job:
+        p50, p95 = bench("_read_job", lambda: _read_job(db, sample_job.job_id), iterations=iterations)
+        results.append(("_read_job", p50, p95))
+        print_result("_read_job", p50, p95)
+
+    # _read_task_with_attempts: single task lookup
+    if sample_job:
+        sample_tasks_for_read = _tasks_for_listing(db, job_id=sample_job.job_id)
+        if sample_tasks_for_read:
+            sample_task_id = sample_tasks_for_read[0].task_id
+            p50, p95 = bench(
+                "_read_task_with_attempts",
+                lambda: _read_task_with_attempts(db, sample_task_id),
+                iterations=iterations,
+            )
+            results.append(("_read_task_with_attempts", p50, p95))
+            print_result("_read_task_with_attempts", p50, p95)
+
+    # _read_worker: single worker lookup
+    roster = _worker_roster(db)
+    if roster:
+        sample_worker_id = roster[0].worker_id
+        p50, p95 = bench("_read_worker", lambda: _read_worker(db, sample_worker_id), iterations=iterations)
+        results.append(("_read_worker", p50, p95))
+        print_result("_read_worker", p50, p95)
+
+        # _read_worker_detail: worker detail page
+        p50, p95 = bench("_read_worker_detail", lambda: _read_worker_detail(db, sample_worker_id), iterations=iterations)
+        results.append(("_read_worker_detail", p50, p95))
+        print_result("_read_worker_detail", p50, p95)
 
     return results
 
