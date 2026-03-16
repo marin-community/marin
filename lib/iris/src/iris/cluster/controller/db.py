@@ -760,6 +760,7 @@ class EndpointQuery:
     job_ids: tuple[JobName, ...] = ()
     job_id: JobName | None = None
     task_ids: tuple[JobName, ...] = ()
+    include_terminal_jobs: bool = False
     limit: int | None = None
 
 
@@ -930,6 +931,10 @@ def endpoint_query_predicate(query: EndpointQuery) -> tuple[list[Join], Predicat
             )
         )
         predicate = ENDPOINT_TASKS.c.task_id.in_([task_id.to_wire() for task_id in query.task_ids])
+        where = predicate if where is None else where & predicate
+    if not query.include_terminal_jobs:
+        joins.append(Join(table=JOBS, on=ENDPOINTS.c.job_id == JOBS.c.job_id))
+        predicate = ~JOBS.c.state.in_(list(TERMINAL_JOB_STATES))
         where = predicate if where is None else where & predicate
     return joins, where
 
