@@ -3975,10 +3975,25 @@ def _time_deepep_transport_staged_forward(
 ) -> float:
     mesh = get_abstract_mesh()
     num_experts = int(w_up_gate.shape[0])
+    expert_axis_size = grug_moe_lib._mesh_axis_size(mesh, "expert")
+    local_experts = num_experts // expert_axis_size
+    local_assignments = x.shape[0] * selected_experts.shape[1]
     dispatch_pack = jax.jit(partial(_moe_mlp_deepep_transport_dispatch_pack, mesh=mesh, num_experts=num_experts))
     local_compute = jax.jit(partial(_moe_mlp_deepep_transport_local_compute, mesh=mesh))
     collapse_combine = jax.jit(partial(_moe_mlp_deepep_transport_collapse_combine, mesh=mesh))
     shared_mlp = jax.jit(_shared_mlp)
+
+    dummy_dispatch = jax.device_put(
+        np.zeros((expert_axis_size * local_assignments, x.shape[1]), dtype=np.dtype(x.dtype.name)),
+        NamedSharding(mesh, P("expert", None)),
+    )
+    dummy_group_sizes = np.zeros((num_experts,), dtype=np.int32)
+    for shard in range(expert_axis_size):
+        dummy_group_sizes[(shard + 1) * local_experts - 1] = local_assignments
+    dummy_group_sizes_sharded = jax.device_put(dummy_group_sizes, NamedSharding(mesh, P("expert")))
+
+    jax.block_until_ready(local_compute(dummy_dispatch, dummy_group_sizes_sharded, w_up_gate, w_down))
+    jax.block_until_ready(shared_mlp(x, shared_w13, shared_w2))
 
     def run_once() -> jax.Array:
         (
