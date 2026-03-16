@@ -18,6 +18,7 @@ import logging
 import os
 import pickle
 import re
+from datetime import datetime, timezone
 import threading
 import time
 import uuid
@@ -194,7 +195,8 @@ class TaskResult:
 
 def _generate_execution_id() -> str:
     """Generate unique ID for this execution to avoid conflicts."""
-    return uuid.uuid4().hex[:12]
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return f"{ts}-{uuid.uuid4().hex[:8]}"
 
 
 def _shared_data_path(prefix: str, execution_id: str, name: str) -> str:
@@ -635,7 +637,8 @@ class ZephyrCoordinator:
         alive = sum(1 for s in self._worker_states.values() if s in {WorkerState.READY, WorkerState.BUSY})
         dead = sum(1 for s in self._worker_states.values() if s in {WorkerState.FAILED, WorkerState.DEAD})
         logger.info(
-            "[%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead",
+            "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead",
+            self._execution_id,
             self._stage_name,
             self._completed_shards,
             self._total_shards,
@@ -894,7 +897,7 @@ class ZephyrCoordinator:
 
                 # Build and submit tasks
                 tasks = _compute_tasks_from_shards(shards, stage, hints, aux_per_shard, stage_name=stage_label)
-                logger.info("Starting stage %s with %d tasks", stage_label, len(tasks))
+                logger.info("[%s] Starting stage %s with %d tasks", self._execution_id, stage_label, len(tasks))
                 self._start_stage(stage_label, tasks, is_last_stage=(stage_idx == last_worker_stage_idx))
 
                 # Wait for stage completion
@@ -1205,7 +1208,8 @@ class ZephyrWorker:
         _worker_ctx_var.set(self)
 
         logger.info(
-            "[shard %d/%d] Starting stage=%s, %d input chunks, %d ops",
+            "[%s] [shard %d/%d] Starting stage=%s, %d input chunks, %d ops",
+            self._execution_id,
             task.shard_idx,
             task.total_shards,
             task.stage_name,
