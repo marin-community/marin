@@ -11,3 +11,6 @@ def migrate(conn: sqlite3.Connection) -> None:
     # Cover _building_counts: start from the small set of BUILDING/ASSIGNED
     # tasks instead of scanning all attempts per worker.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state)")
+
+    # Cover _query_endpoints JOIN to jobs for terminal-job filtering.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_endpoints_job_id ON endpoints(job_id)")

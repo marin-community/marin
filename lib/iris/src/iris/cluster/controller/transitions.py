@@ -15,18 +15,13 @@ from typing import Any, NamedTuple
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
-    ENDPOINTS,
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
     WORKERS,
     ControllerDB,
     Endpoint,
-    EndpointQuery,
-    Join,
     TransactionCursor,
     Worker,
-    ENDPOINT_TASKS,
-    endpoint_query_predicate,
 )
 from iris.cluster.log_store import LogStore, task_log_key
 from iris.cluster.types import (
@@ -1599,26 +1594,6 @@ class ControllerTransitions:
 
     def remove_endpoint(self, endpoint_id: str) -> Endpoint | None:
         return self._db.delete_endpoint(endpoint_id)
-
-    def _remove_endpoints_for_task(self, task_id: JobName) -> list[Endpoint]:
-        """Remove all endpoints associated with a task."""
-        with self._db.snapshot() as snapshot:
-            endpoints = snapshot.select(
-                ENDPOINTS,
-                joins=(Join(ENDPOINT_TASKS, ENDPOINTS.c.endpoint_id == ENDPOINT_TASKS.c.endpoint_id),),
-                where=ENDPOINT_TASKS.c.task_id == task_id.to_wire(),
-            )
-        self._db.delete_endpoints([endpoint.endpoint_id for endpoint in endpoints])
-        return endpoints
-
-    def remove_endpoints_for_job(self, job_id: JobName) -> list[Endpoint]:
-        """Remove all endpoints for a job by removing endpoints for all its tasks."""
-        query = EndpointQuery(job_id=job_id, include_terminal_jobs=True)
-        joins, where = endpoint_query_predicate(query)
-        with self._db.snapshot() as q:
-            endpoints = q.select(ENDPOINTS, where=where, joins=tuple(joins))
-        self._db.delete_endpoints([endpoint.endpoint_id for endpoint in endpoints])
-        return endpoints
 
     # ---------------------------------------------------------------------
     # Test-only SQL mutation helpers

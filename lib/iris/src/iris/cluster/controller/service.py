@@ -444,7 +444,6 @@ def _query_endpoints(db: ControllerDB, query: EndpointQuery = EndpointQuery()) -
             ENDPOINTS,
             where=where,
             joins=tuple(joins),
-            order_by=(ENDPOINTS.c.registered_at_ms.desc(), ENDPOINTS.c.endpoint_id.asc()),
             limit=query.limit,
         )
 

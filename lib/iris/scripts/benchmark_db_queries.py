@@ -29,6 +29,7 @@ from iris.cluster.controller.controller import (
 from iris.cluster.controller.db import (
     JOBS,
     ControllerDB,
+    EndpointQuery,
     healthy_active_workers_with_attributes,
     running_tasks_by_worker,
 )
@@ -169,10 +170,18 @@ def benchmark_dashboard(db: ControllerDB, iterations: int) -> list[tuple[str, fl
     results.append(("_live_user_stats", p50, p95))
     print_result("_live_user_stats", p50, p95)
 
-    # _query_endpoints: endpoint listing
-    p50, p95 = bench("_query_endpoints", lambda: _query_endpoints(db), iterations=iterations)
-    results.append(("_query_endpoints", p50, p95))
-    print_result("_query_endpoints", p50, p95)
+    # _query_endpoints: unfiltered (all active endpoints) and with name prefix
+    p50, p95 = bench("_query_endpoints (all)", lambda: _query_endpoints(db), iterations=iterations)
+    results.append(("_query_endpoints (all)", p50, p95))
+    print_result("_query_endpoints (all)", p50, p95)
+
+    p50, p95 = bench(
+        "_query_endpoints (prefix)",
+        lambda: _query_endpoints(db, EndpointQuery(name_prefix="test")),
+        iterations=iterations,
+    )
+    results.append(("_query_endpoints (prefix)", p50, p95))
+    print_result("_query_endpoints (prefix)", p50, p95)
 
     # _transaction_actions: action log
     p50, p95 = bench("_transaction_actions", lambda: _transaction_actions(db), iterations=iterations)
