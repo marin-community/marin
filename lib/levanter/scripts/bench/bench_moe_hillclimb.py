@@ -27,7 +27,7 @@ from jax import shard_map
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P, get_abstract_mesh
 
 from levanter.grug import grug_moe as grug_moe_lib
-from levanter.kernels.deepep import deepep_get_dispatch_layout
+from levanter.kernels.deepep import deepep_combine_intranode, deepep_dispatch_intranode, deepep_get_dispatch_layout
 from levanter.utils.activation import ActivationFunctionEnum
 
 Distribution = Literal["random", "runs"]
@@ -39,6 +39,7 @@ Kernel = Literal[
     "stream_ring",
     "ragged_a2a",
     "deepep_layout_ragged_a2a",
+    "deepep_transport",
     "prefix_counts",
     "vector_prefix",
     "onehot_counts",
@@ -1120,6 +1121,63 @@ def _local_permute_from_counts(
     return sorted_inputs, sorted_indices, group_sizes
 
 
+def _pack_deepep_local_assignments(
+    recv_x: jax.Array,
+    recv_topk_idx: jax.Array,
+    recv_topk_weights: jax.Array,
+    *,
+    expert_start: jax.Array,
+    local_experts: int,
+    num_recv_tokens: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    max_recv_tokens, topk = recv_topk_idx.shape
+    total_assignments = max_recv_tokens * topk
+
+    recv_token_indices = jnp.repeat(jnp.arange(max_recv_tokens, dtype=jnp.int32), topk)
+    expert_flat = (recv_topk_idx.reshape(-1) - expert_start).astype(jnp.int32)
+    recv_valid = jnp.arange(max_recv_tokens, dtype=jnp.int32) < num_recv_tokens
+    local_mask = recv_valid[:, None] & (recv_topk_idx >= expert_start) & (recv_topk_idx < expert_start + local_experts)
+    local_mask_flat = local_mask.reshape(-1)
+    local_bucket = jnp.where(local_mask_flat, expert_flat, local_experts)
+    local_group_sizes = jnp.bincount(local_bucket, length=local_experts + 1).astype(jnp.int32)[:-1]
+    total_valid = jnp.sum(local_group_sizes, dtype=jnp.int32)
+
+    flat_positions = jnp.arange(total_assignments, dtype=jnp.int32)
+    order_key = local_bucket * total_assignments + flat_positions
+    max_order_key = (local_experts + 1) * total_assignments
+    selection_key = jnp.where(local_mask_flat, max_order_key - order_key, -1)
+    _, sorted_assignment_indices = jax.lax.top_k(selection_key, total_assignments)
+
+    recv_token_indices = jnp.take(recv_token_indices, sorted_assignment_indices, axis=0)
+    x_dispatch = jnp.take(recv_x, recv_token_indices, axis=0)
+    assignment_weights = jnp.take(recv_topk_weights.reshape(-1), sorted_assignment_indices, axis=0).astype(
+        recv_x.dtype
+    )
+    valid_sorted = jnp.arange(total_assignments, dtype=jnp.int32) < total_valid
+    x_dispatch = jnp.where(valid_sorted[:, None], x_dispatch, 0)
+    assignment_weights = jnp.where(valid_sorted, assignment_weights, 0)
+    local_group_sizes = local_group_sizes.at[-1].add(total_assignments - total_valid)
+    return x_dispatch, assignment_weights, recv_token_indices, local_group_sizes
+
+
+def _collapse_deepep_local_assignments(
+    out_dispatch: jax.Array,
+    assignment_weights: jax.Array,
+    recv_token_indices: jax.Array,
+    *,
+    recv_capacity: int,
+    num_recv_tokens: jax.Array,
+) -> jax.Array:
+    recv_out = jax.ops.segment_sum(
+        out_dispatch * assignment_weights[:, None],
+        recv_token_indices,
+        num_segments=recv_capacity,
+        indices_are_sorted=False,
+    )
+    recv_valid = jnp.arange(recv_capacity, dtype=jnp.int32) < num_recv_tokens
+    return jnp.where(recv_valid[:, None], recv_out, 0)
+
+
 def _moe_mlp_ep_ragged_a2a_local(
     x_local: jax.Array,
     selected_experts_local: jax.Array,
@@ -1371,6 +1429,91 @@ def _moe_mlp_ep_ragged_a2a_deepep_layout_local(
     return out_local, dropped_total
 
 
+def _moe_mlp_ep_deepep_transport_local(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+) -> tuple[jax.Array, jax.Array]:
+    local_experts = moe_w13_local.shape[0]
+    if num_experts % local_experts != 0:
+        raise ValueError(
+            f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
+        )
+    if x_local.shape[1] % 8 != 0:
+        raise ValueError(f"DeepEP transport requires hidden % 8 == 0, got hidden={x_local.shape[1]}")
+
+    shard_id = jax.lax.axis_index("expert")
+    ep_size = num_experts // local_experts
+    expert_start = shard_id * local_experts
+
+    with jax.named_scope("dispatch"):
+        num_tokens_per_rank, num_tokens_per_expert, is_token_in_rank = deepep_get_dispatch_layout(
+            selected_experts_local,
+            num_ranks=ep_size,
+            num_experts=num_experts,
+        )
+        (
+            recv_x,
+            recv_topk_idx,
+            recv_topk_weights,
+            recv_src_idx,
+            rank_prefix_matrix,
+            _channel_prefix_matrix,
+            recv_channel_prefix_matrix,
+            send_head,
+            _local_expert_counts,
+            num_recv_tokens,
+        ) = deepep_dispatch_intranode(
+            x_local,
+            selected_experts_local,
+            combine_weights_local,
+            num_tokens_per_rank,
+            num_tokens_per_expert,
+            is_token_in_rank,
+            num_experts=num_experts,
+        )
+        num_recv_tokens_scalar = jnp.squeeze(num_recv_tokens, axis=0)
+        x_dispatch, assignment_weights, recv_token_indices, local_group_sizes = _pack_deepep_local_assignments(
+            recv_x,
+            recv_topk_idx,
+            recv_topk_weights,
+            expert_start=expert_start,
+            local_experts=local_experts,
+            num_recv_tokens=num_recv_tokens_scalar,
+        )
+
+    with jax.named_scope("moe_up_down"):
+        w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
+        moe_dim = moe_w2_local.shape[1]
+        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
+
+    with jax.named_scope("combine"):
+        recv_out = _collapse_deepep_local_assignments(
+            out_dispatch,
+            assignment_weights,
+            recv_token_indices,
+            recv_capacity=recv_x.shape[0],
+            num_recv_tokens=num_recv_tokens_scalar,
+        )
+        out_local, _ = deepep_combine_intranode(
+            recv_out,
+            recv_topk_weights,
+            recv_src_idx,
+            rank_prefix_matrix,
+            recv_channel_prefix_matrix,
+            send_head,
+            num_recv_tokens,
+        )
+        dropped_total = jnp.array(0, dtype=jnp.int32)
+    return out_local.astype(x_local.dtype), dropped_total
+
+
 def _moe_mlp_ragged_a2a_deepep_layout(
     x: jax.Array,
     selected_experts: jax.Array,
@@ -1411,6 +1554,85 @@ def _moe_mlp_ragged_a2a_deepep_layout(
                 activation_fn=activation_fn,
                 num_experts=num_experts,
                 capacity_factor=capacity_factor,
+            ),
+            mesh=mesh,
+            in_specs=(
+                batch_spec,
+                batch_spec,
+                batch_spec,
+                P("expert", None, None),
+                P("expert", None, None),
+            ),
+            out_specs=(batch_spec, P()),
+            check_vma=False,
+        )
+        out, _ = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        return out
+
+    shard_fn = shard_map(
+        partial(
+            grug_moe_lib._moe_mlp_local,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+        ),
+        mesh=mesh,
+        in_specs=(
+            batch_spec,
+            batch_spec,
+            batch_spec,
+            local_expert_spec,
+            local_expert_spec,
+        ),
+        out_specs=(batch_spec, P()),
+        check_vma=False,
+    )
+    out, _ = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+    return out
+
+
+def _moe_mlp_deepep_transport(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+) -> jax.Array:
+    if mesh is None:
+        mesh = get_abstract_mesh()
+
+    activation_fn = ActivationFunctionEnum.silu.to_jax_fn()
+    num_experts = int(w_up_gate.shape[0])
+    has_expert_axis = grug_moe_lib._mesh_has_axis(mesh, "expert")
+    expert_axis_size = grug_moe_lib._mesh_axis_size(mesh, "expert")
+
+    if mesh is None or mesh.empty:
+        out, _ = grug_moe_lib._moe_mlp_local(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+        )
+        return out
+
+    batch_spec = grug_moe_lib._batch_spec_from_x(x, mesh)
+    local_expert_spec = P("expert", None, None) if has_expert_axis else P(None, None, None)
+
+    if has_expert_axis and expert_axis_size > 1:
+        if grug_moe_lib._mesh_axis_size(mesh, "data") != 1:
+            raise ValueError(
+                "deepep_transport currently requires the expert group to span all visible local GPUs; "
+                f"got data axis size={grug_moe_lib._mesh_axis_size(mesh, 'data')} and expert axis size={expert_axis_size}"
+            )
+        shard_fn = shard_map(
+            partial(
+                _moe_mlp_ep_deepep_transport_local,
+                activation_fn=activation_fn,
+                num_experts=num_experts,
             ),
             mesh=mesh,
             in_specs=(
@@ -2666,6 +2888,14 @@ def _forward(
             w_up_gate,
             w_down,
         )
+    elif kernel == "deepep_transport":
+        routed = _moe_mlp_deepep_transport(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
     elif kernel == "prefix_counts":
         routed = _moe_mlp_prefix_counts(
             x,
@@ -2852,6 +3082,7 @@ def main() -> None:
             "stream_ring",
             "ragged_a2a",
             "deepep_layout_ragged_a2a",
+            "deepep_transport",
             "prefix_counts",
             "vector_prefix",
             "onehot_counts",
