@@ -179,10 +179,22 @@ export DEEPEP_LOAD_AS_PYTHON_MODULE={1 if args.load_as_python_module else 0}
 export JAX_PLATFORMS=cuda
 export JAX_ENABLE_X64=1
 export MAX_JOBS=8
-env | grep -E \
-  '^(DEEPEP_SRC_ROOT|DEEPEP_BUILD_WITH_TORCH_EXTENSION|'\
-  'DEEPEP_LOAD_AS_PYTHON_MODULE|DISABLE_SM90_FEATURES|'\
-  'JAX_ENABLE_X64|JAX_PLATFORMS|MAX_JOBS)=' | sort
+/opt/conda/bin/python - <<'PY'
+import os
+
+for key in sorted(
+    (
+        "DEEPEP_BUILD_WITH_TORCH_EXTENSION",
+        "DEEPEP_LOAD_AS_PYTHON_MODULE",
+        "DEEPEP_SRC_ROOT",
+        "DISABLE_SM90_FEATURES",
+        "JAX_ENABLE_X64",
+        "JAX_PLATFORMS",
+        "MAX_JOBS",
+    )
+):
+    print(f"{{key}}={{os.environ[key]}}")
+PY
 /opt/conda/bin/python -m pip install --no-cache-dir "jax[cuda12]==0.8.0"
 /opt/conda/bin/python -m py_compile {py_compile_targets}
 /opt/conda/bin/python - <<'PY'
