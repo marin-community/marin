@@ -30,7 +30,6 @@ from iris.cluster.runtime.types import (
     RuntimeLogReader,
     MountKind,
     MountSpec,
-    get_fast_io_dir,
 )
 from iris.cluster.types import (
     JobName,
@@ -440,12 +439,9 @@ class TaskAttempt:
         allocated_ports = self._port_allocator.allocate(len(port_names)) if port_names else []
         self.ports = dict(zip(port_names, allocated_ports, strict=True))
 
-        # Resolve fast IO directory (tmpfs when available, else cache_dir)
-        self._fast_io_dir = get_fast_io_dir(self._cache_dir)
-
         # Create task working directory with attempt isolation
         safe_task_id = self.task_id.to_safe_token()
-        self.workdir = self._fast_io_dir / "workdirs" / f"{safe_task_id}_attempt_{self.attempt_id}"
+        self.workdir = self._cache_dir / "workdirs" / f"{safe_task_id}_attempt_{self.attempt_id}"
         self.workdir.mkdir(parents=True, exist_ok=True)
 
     def run(self) -> None:
@@ -525,18 +521,11 @@ class TaskAttempt:
         # to BundleStore.extract_bundle_to if long downloads become a problem.)
 
         assert self.workdir is not None
-        disk_bytes = self.request.resources.disk_bytes if self.request.HasField("resources") else 0
-        workdir_mount = MountSpec(
-            container_path="/app",
-            kind=MountKind.WORKDIR,
-            size_bytes=disk_bytes,
-        )
         self._runtime.stage_bundle(
             bundle_id=self.request.bundle_id,
             workdir=self.workdir,
             workdir_files=dict(self.request.entrypoint.workdir_files),
             bundle_store=self._bundle_store,
-            workdir_mount=workdir_mount,
         )
 
         logger.info(

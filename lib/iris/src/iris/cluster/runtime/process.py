@@ -50,7 +50,6 @@ from iris.cluster.runtime.types import (
     ContainerStats,
     ContainerStatus,
     MountKind,
-    MountSpec,
     RuntimeLogReader,
 )
 from iris.cluster.worker.worker_types import LogLine
@@ -639,10 +638,8 @@ class ProcessRuntime:
         workdir: Path,
         workdir_files: dict[str, bytes],
         bundle_store: BundleStore,
-        workdir_mount: MountSpec | None = None,
     ) -> None:
         """Stage bundle and workdir files on worker-local filesystem."""
-        del workdir_mount  # Process runtime has no backing storage to provision
         if bundle_id:
             bundle_store.extract_bundle_to(bundle_id, workdir)
         bundle_store.write_workdir_files(workdir, workdir_files)

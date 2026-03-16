@@ -668,24 +668,6 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     assert "IRIS_TASK_ID" in env
 
 
-def test_workdir_mount_passed_to_stage_bundle(worker, mock_runtime):
-    """stage_bundle receives a MountSpec when disk_bytes > 0."""
-    request = create_run_task_request()
-    request.resources.CopyFrom(cluster_pb2.ResourceSpecProto(disk_bytes=512 * 1024 * 1024))
-    task_id = worker.submit_task(request)
-
-    task = worker.get_task(task_id)
-    task.thread.join(timeout=15.0)
-
-    mock_runtime.stage_bundle.assert_called_once()
-    call_kwargs = mock_runtime.stage_bundle.call_args.kwargs
-    from iris.cluster.runtime.types import MountKind, MountSpec
-
-    assert isinstance(call_kwargs["workdir_mount"], MountSpec)
-    assert call_kwargs["workdir_mount"].size_bytes == 512 * 1024 * 1024
-    assert call_kwargs["workdir_mount"].kind == MountKind.WORKDIR
-
-
 def test_task_failure_error_appears_in_logs(worker):
     """Test that task failure errors appear in logs."""
     worker._runtime.stage_bundle = Mock(side_effect=Exception("Bundle download failed"))

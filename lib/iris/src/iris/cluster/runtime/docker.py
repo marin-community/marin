@@ -46,13 +46,36 @@ from iris.cluster.runtime.types import (
     ImageInfo,
     MountKind,
     MountSpec,
-    get_fast_io_dir,
 )
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
+
+_TMPFS_DIR = Path("/dev/shm/iris")
+_TMPFS_MIN_FREE_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB
+
+
+def get_fast_io_dir(cache_dir: Path) -> Path:
+    """Return a fast IO directory for ephemeral task data.
+
+    Prefers /dev/shm/iris (tmpfs) for memory-speed IOPS when available and has
+    sufficient free space.  Falls back to *cache_dir* on persistent disk.
+    """
+    try:
+        if _TMPFS_DIR.is_dir():
+            stat = os.statvfs(_TMPFS_DIR)
+            free_bytes = stat.f_bavail * stat.f_frsize
+            if free_bytes >= _TMPFS_MIN_FREE_BYTES:
+                logger.info("Using tmpfs at %s for fast IO (%d MB free)", _TMPFS_DIR, free_bytes // (1024 * 1024))
+                return _TMPFS_DIR
+    except OSError:
+        logger.warning("OSError checking tmpfs at %s, falling back to persistent disk", _TMPFS_DIR, exc_info=True)
+    else:
+        logger.warning("Fast IO (tmpfs) not available at %s, falling back to persistent disk", _TMPFS_DIR)
+    return cache_dir
+
 
 # Substrings that indicate a docker/registry infrastructure problem rather than
 # a user-code error.  Checked case-insensitively against stderr from docker
@@ -806,7 +829,8 @@ class DockerRuntime:
         """Convert semantic MountSpecs to ResolvedMount instances.
 
         Creates host directories as needed. WORKDIR uses the explicit host path
-        (created by task_attempt), CACHE and TMPFS get dirs under fast_io_dir.
+        (created by task_attempt) and mounts tmpfs on it for isolation.
+        CACHE and TMPFS get dirs under fast_io_dir.
         """
         result: list[ResolvedMount] = []
         for mount in mounts:
@@ -814,6 +838,8 @@ class DockerRuntime:
             if mount.kind == MountKind.WORKDIR:
                 if workdir_host_path is None:
                     raise RuntimeError("WORKDIR mount requires workdir_host_path")
+                size = mount.size_bytes if mount.size_bytes > 0 else DEFAULT_WORKDIR_DISK_BYTES
+                self._mount_tmpfs(workdir_host_path, size)
                 result.append(ResolvedMount(str(workdir_host_path), mount.container_path, mode, mount.kind))
             elif mount.kind in (MountKind.TMPFS, MountKind.CACHE):
                 host_dir = self._fast_io_dir / mount.container_path.strip("/").replace("/", "-")
@@ -839,31 +865,11 @@ class DockerRuntime:
         workdir: Path,
         workdir_files: dict[str, bytes],
         bundle_store: BundleStore,
-        workdir_mount: MountSpec | None = None,
     ) -> None:
-        """Provision tmpfs backing storage, then stage bundle and workdir files.
-
-        Every Docker workdir gets a dedicated tmpfs mount for isolation and
-        accurate per-task disk reporting via ``shutil.disk_usage``.  The mount
-        size defaults to ``DEFAULT_WORKDIR_DISK_BYTES`` (10 GB) when the task
-        does not specify ``disk_bytes``.
-
-        If tmpfs is mounted but staging fails, the mount is cleaned up to
-        prevent leaking RAM-backed mounts on the worker.
-        """
-        mounted = False
-        if workdir_mount:
-            size = workdir_mount.size_bytes if workdir_mount.size_bytes > 0 else DEFAULT_WORKDIR_DISK_BYTES
-            self._mount_tmpfs(workdir, size)
-            mounted = True
-        try:
-            if bundle_id:
-                bundle_store.extract_bundle_to(bundle_id, workdir)
-            bundle_store.write_workdir_files(workdir, workdir_files)
-        except Exception:
-            if mounted:
-                self.release_tmpfs(workdir)
-            raise
+        """Stage bundle and workdir files on worker-local filesystem."""
+        if bundle_id:
+            bundle_store.extract_bundle_to(bundle_id, workdir)
+        bundle_store.write_workdir_files(workdir, workdir_files)
 
     def _mount_tmpfs(self, workdir: Path, disk_bytes: int) -> None:
         if sys.platform != "linux":

@@ -38,7 +38,6 @@ from iris.cluster.runtime.types import (
     ContainerStats,
     ContainerStatus,
     MountKind,
-    MountSpec,
 )
 from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import cluster_pb2
@@ -665,10 +664,9 @@ class KubernetesRuntime:
         workdir: Path,
         workdir_files: dict[str, bytes],
         bundle_store: BundleStore,
-        workdir_mount: MountSpec | None = None,
     ) -> None:
         """No-op: Kubernetes task Pods materialize bundle/workdir in-pod."""
-        del bundle_id, workdir, workdir_files, bundle_store, workdir_mount
+        del bundle_id, workdir, workdir_files, bundle_store
 
     def list_containers(self) -> list[KubernetesContainerHandle]:
         return list(self._handles)
