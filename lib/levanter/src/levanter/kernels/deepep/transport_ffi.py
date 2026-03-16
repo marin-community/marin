@@ -938,16 +938,16 @@ def _dispatch_intranode_with_vjp(
 
 
 def _dispatch_intranode_with_vjp_fwd(
-    num_experts: int,
-    dispatch_config: IntranodeConfig | None,
-    combine_config: IntranodeConfig | None,
-    max_recv_tokens: int | None,
     x: jax.Array,
     topk_idx: jax.Array,
     topk_weights: jax.Array,
     num_tokens_per_rank: jax.Array,
     num_tokens_per_expert: jax.Array,
     is_token_in_rank: jax.Array,
+    num_experts: int,
+    dispatch_config: IntranodeConfig | None,
+    combine_config: IntranodeConfig | None,
+    max_recv_tokens: int | None,
 ):
     outputs = _dispatch_intranode_impl(
         x,
