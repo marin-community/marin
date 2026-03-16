@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <cstdlib>
 #include <string>
 #include <thread>
 #include <utility>
@@ -103,6 +104,14 @@ std::string& LastErrorStorage() {
 
 void SetLastError(std::string message) { LastErrorStorage() = std::move(message); }
 
+bool HostDispatchDebugEnabled() {
+  static const bool enabled = []() {
+    const char* value = std::getenv("LEVANTER_DEEPEP_HOST_DISPATCH_DEBUG");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+  }();
+  return enabled;
+}
+
 void LogHostDispatchStage(
     int rank,
     const char* stage,
@@ -111,6 +120,9 @@ void LogHostDispatchStage(
     int num_experts,
     int num_topk,
     int num_recv_tokens = -1) {
+  if (!HostDispatchDebugEnabled()) {
+    return;
+  }
   fprintf(
       stderr,
       "HOST_DISPATCH_STAGE {\"rank\":%d,\"stage\":\"%s\",\"num_tokens\":%d,\"hidden\":%d,"
