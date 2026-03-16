@@ -129,7 +129,7 @@ def call_with_retry(
     call_fn: Callable[[], T],
     *,
     on_retry: Callable[[Exception], None] | None = None,
-    max_attempts: int = 8,
+    max_attempts: int = 16,
     backoff: ExponentialBackoff | None = None,
 ) -> T:
     """Execute an RPC call with exponential backoff retry.
@@ -140,7 +140,7 @@ def call_with_retry(
         on_retry: Optional callback invoked with the exception on every retryable
             failure, including the final attempt. Useful for clearing cached
             connections so subsequent calls can re-resolve endpoints.
-        max_attempts: Maximum number of attempts (default: 8)
+        max_attempts: Maximum number of attempts (default: 16)
         backoff: Backoff configuration. A fresh copy is made internally so the
             caller's instance is not mutated. Defaults to
             ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0).
