@@ -1163,7 +1163,6 @@ def _pack_deepep_local_assignments(
     valid_sorted = jnp.arange(total_assignments, dtype=jnp.int32) < total_valid
     x_dispatch = jnp.where(valid_sorted[:, None], x_dispatch, 0)
     assignment_weights = jnp.where(valid_sorted, assignment_weights, 0)
-    local_group_sizes = local_group_sizes.at[-1].add(total_assignments - total_valid)
     return x_dispatch, assignment_weights, recv_token_indices, local_group_sizes
 
 
@@ -4030,21 +4029,21 @@ def _prewarm_deepep_transport_local_compute(
     mesh = x.sharding.mesh
     num_experts = int(w_up_gate.shape[0])
     expert_axis_size = grug_moe_lib._mesh_axis_size(mesh, "expert")
-    local_experts = num_experts // expert_axis_size
     local_assignments = x.shape[0] * selected_experts.shape[1]
     local_compute = jax.jit(partial(_moe_mlp_deepep_transport_local_compute, mesh=mesh))
     shared_mlp = jax.jit(_shared_mlp)
-
-    dummy_dispatch = jax.device_put(
-        np.zeros((expert_axis_size * local_assignments, x.shape[1]), dtype=np.dtype(x.dtype.name)),
-        NamedSharding(mesh, P("expert", None)),
+    dispatch_spec = jax.ShapeDtypeStruct(
+        (expert_axis_size * local_assignments, x.shape[1]),
+        x.dtype,
+        sharding=NamedSharding(mesh, P("expert", None)),
     )
-    dummy_group_sizes = np.zeros((num_experts,), dtype=np.int32)
-    for shard in range(expert_axis_size):
-        dummy_group_sizes[(shard + 1) * local_experts - 1] = local_assignments
-    dummy_group_sizes_sharded = jax.device_put(dummy_group_sizes, NamedSharding(mesh, P("expert")))
+    group_sizes_spec = jax.ShapeDtypeStruct(
+        (num_experts,),
+        jnp.int32,
+        sharding=NamedSharding(mesh, P("expert")),
+    )
 
-    jax.block_until_ready(local_compute(dummy_dispatch, dummy_group_sizes_sharded, w_up_gate, w_down))
+    local_compute.lower(dispatch_spec, group_sizes_spec, w_up_gate, w_down).compile()
     jax.block_until_ready(shared_mlp(x, shared_w13, shared_w2))
 
 
