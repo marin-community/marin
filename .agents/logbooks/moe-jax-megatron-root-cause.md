@@ -1110,3 +1110,114 @@
 - Next action:
   - Update `#3677` with this major milestone.
   - Keep grinding rather than sealing: confirm whether the JAX wrapper defaults reproduce this result without manual overrides, then widen the same-shape head-to-head beyond the single `random, topk=2` cell.
+
+### 2026-03-15 20:32 PDT - Full four-cell same-shape transport matrix under the corrected default `20`-SM regime
+
+- Hypothesis:
+  - If the `random, topk=2` `42.17M tokens/s` result was not a one-off, then the JAX wrapper defaults should hold up across the full same-shape transport matrix:
+    - `distribution in {random, runs}`
+    - `topk in {2, 8}`
+- Commands:
+  ```bash
+  KUBECONFIG=/Users/romain/.kube/coreweave-iris \
+  uv run .agents/scripts/deepep_jax_transport_krt.py \
+    --config lib/iris/examples/coreweave-moe-jax-3677.yaml \
+    --worktree /Users/romain/marin-wt/moe-jax-megatron-root-cause \
+    --build-with-torch-extension \
+    --load-as-python-module \
+    --tokens 32768 \
+    --hidden 2048 \
+    --experts 128 \
+    --topk-list 2 \
+    --distributions random \
+    --warmup 1 \
+    --iters 3 \
+    --timeout-seconds 7200
+
+  KUBECONFIG=/Users/romain/.kube/coreweave-iris \
+  uv run .agents/scripts/deepep_jax_transport_krt.py \
+    --config lib/iris/examples/coreweave-moe-jax-3677.yaml \
+    --worktree /Users/romain/marin-wt/moe-jax-megatron-root-cause \
+    --build-with-torch-extension \
+    --load-as-python-module \
+    --tokens 32768 \
+    --hidden 2048 \
+    --experts 128 \
+    --topk-list 8 \
+    --distributions random \
+    --warmup 1 \
+    --iters 3 \
+    --timeout-seconds 7200
+
+  KUBECONFIG=/Users/romain/.kube/coreweave-iris \
+  uv run .agents/scripts/deepep_jax_transport_krt.py \
+    --config lib/iris/examples/coreweave-moe-jax-3677.yaml \
+    --worktree /Users/romain/marin-wt/moe-jax-megatron-root-cause \
+    --build-with-torch-extension \
+    --load-as-python-module \
+    --tokens 32768 \
+    --hidden 2048 \
+    --experts 128 \
+    --topk-list 2 \
+    --distributions runs \
+    --warmup 1 \
+    --iters 3 \
+    --timeout-seconds 7200
+
+  KUBECONFIG=/Users/romain/.kube/coreweave-iris \
+  uv run .agents/scripts/deepep_jax_transport_krt.py \
+    --config lib/iris/examples/coreweave-moe-jax-3677.yaml \
+    --worktree /Users/romain/marin-wt/moe-jax-megatron-root-cause \
+    --build-with-torch-extension \
+    --load-as-python-module \
+    --tokens 32768 \
+    --hidden 2048 \
+    --experts 128 \
+    --topk-list 8 \
+    --distributions runs \
+    --warmup 1 \
+    --iters 3 \
+    --timeout-seconds 7200
+  ```
+- Results:
+  - `random, topk=2`
+    - `CHECK x_max_abs=0.000000e+00 topk_max_abs=0.000000e+00`
+    - `RESULT step_s=0.000748 tokens_per_s=43787427.16`
+  - `runs, topk=2`
+    - `CHECK x_max_abs=0.000000e+00 topk_max_abs=0.000000e+00`
+    - `RESULT step_s=0.001124 tokens_per_s=29145790.33`
+  - `random, topk=8`
+    - `CHECK x_max_abs=1.785707e-02 topk_max_abs=0.000000e+00`
+    - `RESULT step_s=0.001298 tokens_per_s=25254084.80`
+  - `runs, topk=8`
+    - `CHECK x_max_abs=1.785707e-02 topk_max_abs=0.000000e+00`
+    - `RESULT step_s=0.001429 tokens_per_s=22935953.20`
+- Comparison against the existing Torch transport matrix on the same shape:
+  - `random, topk=2`
+    - Torch: `67.44M`
+    - JAX: `43.79M`
+    - Torch/JAX: `1.54x`
+  - `runs, topk=2`
+    - Torch: `35.90M`
+    - JAX: `29.15M`
+    - Torch/JAX: `1.23x`
+  - `random, topk=8`
+    - Torch: `30.85M`
+    - JAX: `25.25M`
+    - Torch/JAX: `1.22x`
+  - `runs, topk=8`
+    - Torch: `25.25M`
+    - JAX: `22.94M`
+    - Torch/JAX: `1.10x`
+- Interpretation:
+  - The corrected default-config story absolutely generalizes beyond `random, topk=2`.
+  - Across the full four-cell same-shape transport matrix, the pure-JAX path is now within about `1.10x` to `1.54x` of the Torch transport baseline.
+  - That is a much stronger result than the earlier `num_sms=2` debug-config comparison, and it changes the root-cause conclusion materially:
+    - the earlier large JAX/Torch gap was mostly not an intrinsic framework gap
+    - it was largely that the working pure-JAX path was still being measured under a reduced debug transport configuration
+  - The remaining open technical issues are now narrower:
+    - persistent late teardown/XLA CUDA shutdown noise after successful runs
+    - a consistent `x_max_abs=1.785707e-02` drift on the `topk=8` cells while `topk_weights` remain exact
+- Next action:
+  - Update `#3677` again because this is a second major milestone.
+  - Decide whether to seal the transport-root-cause question now, or spend one more short pass on explaining the `topk=8` bf16 drift and teardown noise.

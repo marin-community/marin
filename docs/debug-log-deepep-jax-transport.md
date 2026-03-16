@@ -655,3 +655,46 @@ The earlier `num_sms=20` crash was at least partly caused by using oversized deb
   - Torch transport baseline: `64.89M tokens/s`
 
 This means the live question is no longer “why does JAX fall over at `20` SMs?” The live question is now “what explains the remaining ~`1.54x` gap once JAX also uses the real DeepEP-style `20`-SM transport config?”
+
+## Hypothesis 17
+
+The corrected pure-JAX transport path is now broadly competitive across the same-shape four-cell matrix; the remaining issues are bounded to small residual overhead plus a top-`8` bf16 reconstruction drift and the known teardown noise.
+
+## Changes to make
+
+- Run the remaining same-shape cells one pod at a time under the wrapper defaults:
+  - `random, topk=2`
+  - `runs, topk=2`
+  - `random, topk=8`
+  - `runs, topk=8`
+- Compare them directly against the existing Torch transport matrix already captured in the thread.
+- Treat the post-result teardown hang as an execution nuisance, not as a reason to avoid capturing the single-cell results.
+
+## Future Work
+
+- [ ] Decide whether the consistent `topk=8` `x_max_abs=1.785707e-02` drift is an acceptable bf16 accumulation artifact or deserves a targeted follow-up
+- [ ] Determine whether to seal the experiment at the transport-root-cause layer or keep it open for teardown cleanup
+- [ ] If continuing, isolate the `topk=8` drift with a smaller deterministic reproducer
+
+## Results
+
+- Single-cell pure-JAX results under the corrected default `20`-SM regime:
+  - `random, topk=2`
+    - `CHECK x_max_abs=0.000000e+00 topk_max_abs=0.000000e+00`
+    - `RESULT step_s=0.000748 tokens_per_s=43787427.16`
+  - `runs, topk=2`
+    - `CHECK x_max_abs=0.000000e+00 topk_max_abs=0.000000e+00`
+    - `RESULT step_s=0.001124 tokens_per_s=29145790.33`
+  - `random, topk=8`
+    - `CHECK x_max_abs=1.785707e-02 topk_max_abs=0.000000e+00`
+    - `RESULT step_s=0.001298 tokens_per_s=25254084.80`
+  - `runs, topk=8`
+    - `CHECK x_max_abs=1.785707e-02 topk_max_abs=0.000000e+00`
+    - `RESULT step_s=0.001429 tokens_per_s=22935953.20`
+- Direct comparison to the existing Torch transport matrix on the same shape:
+  - `random, topk=2`: Torch/JAX `1.54x`
+  - `runs, topk=2`: Torch/JAX `1.23x`
+  - `random, topk=8`: Torch/JAX `1.22x`
+  - `runs, topk=8`: Torch/JAX `1.10x`
+
+This is now a fundamentally different state from the earlier debug-config comparison. The pure-JAX transport path is no longer “far behind Torch” in a vague sense. On the corrected same-shape matrix, it is within about `10%` to `54%` depending on the cell, with the tightest gaps on the `topk=8` transport-heavy cells.

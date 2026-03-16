@@ -402,3 +402,63 @@ The current question is now narrower:
 - but:
   - what explains the remaining ~`1.54x` gap once JAX also uses the real `20`-SM transport config?
   - and how much of the remaining gap is wrapper/runtime overhead vs other benchmark differences?
+
+## New milestone: full corrected four-cell transport matrix
+
+`2026-03-15`
+
+I widened the same-shape pure-JAX transport comparison to the full four-cell matrix under the corrected default `20`-SM regime:
+
+- `distribution in {random, runs}`
+- `topk in {2, 8}`
+
+All cells used the wrapper defaults, which correspond to the same world-size `8` DeepEP config family as the Torch transport microbench.
+
+Pure-JAX results:
+
+- `random, topk=2`
+  - `CHECK x_max_abs=0.000000e+00 topk_max_abs=0.000000e+00`
+  - `RESULT step_s=0.000748 tokens_per_s=43787427.16`
+- `runs, topk=2`
+  - `CHECK x_max_abs=0.000000e+00 topk_max_abs=0.000000e+00`
+  - `RESULT step_s=0.001124 tokens_per_s=29145790.33`
+- `random, topk=8`
+  - `CHECK x_max_abs=1.785707e-02 topk_max_abs=0.000000e+00`
+  - `RESULT step_s=0.001298 tokens_per_s=25254084.80`
+- `runs, topk=8`
+  - `CHECK x_max_abs=1.785707e-02 topk_max_abs=0.000000e+00`
+  - `RESULT step_s=0.001429 tokens_per_s=22935953.20`
+
+Direct comparison to the existing Torch transport matrix on the same shape:
+
+- `random, topk=2`
+  - Torch: `67.44M`
+  - JAX: `43.79M`
+  - Torch/JAX: `1.54x`
+- `runs, topk=2`
+  - Torch: `35.90M`
+  - JAX: `29.15M`
+  - Torch/JAX: `1.23x`
+- `random, topk=8`
+  - Torch: `30.85M`
+  - JAX: `25.25M`
+  - Torch/JAX: `1.22x`
+- `runs, topk=8`
+  - Torch: `25.25M`
+  - JAX: `22.94M`
+  - Torch/JAX: `1.10x`
+
+This is the strongest update in the thread so far.
+
+The corrected conclusion is now:
+
+- the earlier large JAX/Torch gap was **mostly not** an intrinsic framework gap
+- it was largely that the working pure-JAX path was still being measured under a reduced debug transport configuration
+- once the JAX path uses the real DeepEP-style `20`-SM regime, it is within about `1.10x` to `1.54x` of the Torch transport baseline across the full same-shape four-cell matrix
+
+The remaining open issues are now much narrower:
+
+- persistent late teardown/XLA CUDA shutdown noise after successful runs
+- a consistent `x_max_abs=1.785707e-02` drift on the `topk=8` cells while `topk_weights` remain exact
+
+So the live question is no longer “why is JAX so far behind?” The live question is whether those remaining two issues are enough to keep the thread open, or whether the transport-root-cause question is already answered strongly enough to seal.
