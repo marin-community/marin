@@ -40,7 +40,6 @@ from iris.cluster.controller.db import (
     JOBS,
     RESERVATION_CLAIMS,
     TASKS,
-    TERMINAL_TASK_STATES,
     WORKERS,
     ControllerDB,
     Join,
@@ -287,10 +286,12 @@ def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, J
 
 
 def _schedulable_tasks(queries: ControllerDB) -> list[Task]:
+    # Only PENDING tasks can pass can_be_scheduled(); no need to fetch ASSIGNED/BUILDING/RUNNING.
+    SCHEDULABLE_STATES = (cluster_pb2.TASK_STATE_PENDING,)
     with queries.snapshot() as snapshot:
         tasks = snapshot.select(
             TASKS,
-            where=TASKS.c.state.not_null() & ~TASKS.c.state.in_(list(TERMINAL_TASK_STATES)),
+            where=TASKS.c.state.in_(list(SCHEDULABLE_STATES)),
             order_by=(
                 TASKS.c.priority_neg_depth.asc(),
                 TASKS.c.priority_root_submitted_ms.asc(),
