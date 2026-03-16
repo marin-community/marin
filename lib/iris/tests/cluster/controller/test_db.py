@@ -1,8 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for TransactionCursor mutation helpers in db.py."""
+"""Tests for TransactionCursor mutation helpers and read pool in db.py."""
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -232,3 +233,65 @@ def test_update_with_composite_predicate(db: ControllerDB) -> None:
     assert row["value"] == "new"
     row2 = db.fetchone("SELECT value FROM kv WHERE key = 'nomatch'")
     assert row2["value"] == "old"
+
+
+def test_read_snapshot_does_not_block_write(db: ControllerDB) -> None:
+    """read_snapshot() uses a separate connection, so a concurrent write transaction proceeds."""
+    _create_simple_table(db)
+    with db.transaction() as cur:
+        cur.insert("kv", {"key": "init", "value": "v"})
+
+    results: dict[str, bool] = {}
+
+    def writer() -> None:
+        """Hold the write lock for a short time, recording success."""
+        with db.transaction() as cur:
+            cur.insert("kv", {"key": "from_writer", "value": "w"})
+        results["writer_done"] = True
+
+    # Hold a read_snapshot open while a writer thread runs.
+    with db.read_snapshot() as q:
+        rows_before = q.raw("SELECT key FROM kv")
+        t = threading.Thread(target=writer)
+        t.start()
+        t.join(timeout=5)
+        assert not t.is_alive(), "writer should not block on read_snapshot"
+        results["reader_saw"] = len(rows_before)
+
+    assert results["writer_done"] is True
+    assert results["reader_saw"] == 1
+
+
+def test_read_snapshot_returns_consistent_data(db: ControllerDB) -> None:
+    """Changes committed after BEGIN in read_snapshot are not visible within that snapshot."""
+    _create_simple_table(db)
+    with db.transaction() as cur:
+        cur.insert("kv", {"key": "a", "value": "1"})
+
+    with db.read_snapshot() as q:
+        rows_start = q.raw("SELECT key FROM kv")
+        assert len(rows_start) == 1
+
+        # Commit a new row from outside the snapshot.
+        with db.transaction() as cur:
+            cur.insert("kv", {"key": "b", "value": "2"})
+
+        # The snapshot should still only see the original row.
+        rows_after = q.raw("SELECT key FROM kv")
+        assert len(rows_after) == 1
+
+    # Outside the snapshot, both rows are visible.
+    all_rows = db.fetchall("SELECT key FROM kv ORDER BY key")
+    assert len(all_rows) == 2
+
+
+def test_read_snapshot_pool_returns_connections(db: ControllerDB) -> None:
+    """Connections are returned to the pool after read_snapshot exits."""
+    _create_simple_table(db)
+    pool_size = db._READ_POOL_SIZE
+
+    for _i in range(pool_size * 2):
+        with db.read_snapshot() as q:
+            q.raw("SELECT 1")
+
+    assert db._read_pool.qsize() == pool_size

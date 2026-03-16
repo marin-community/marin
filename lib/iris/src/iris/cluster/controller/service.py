@@ -255,7 +255,7 @@ class _WorkerDetail:
 def _read_worker_detail(
     db: ControllerDB, worker_id: WorkerId, *, resource_history_limit: int = 200
 ) -> _WorkerDetail | None:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         worker = q.one(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
         if worker is None:
             return None
@@ -282,7 +282,7 @@ def _read_worker_detail(
 
 
 def _child_jobs(db: ControllerDB, job_id: JobName) -> list[Job]:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         return q.select(
             JOBS,
             where=JOBS.c.parent_job_id == job_id.to_wire(),
@@ -1627,7 +1627,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Empty:
         identity = require_identity()
-        with self._db.snapshot() as q:
+        with self._db.read_snapshot() as q:
             key = q.one(API_KEYS, where=API_KEYS.c.key_id == request.key_id)
         if key is None:
             raise ConnectError(Code.NOT_FOUND, f"API key not found: {request.key_id}")
