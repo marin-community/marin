@@ -15,7 +15,6 @@ from connectrpc.errors import ConnectError
 
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.db import JOBS, TASKS, ATTEMPTS, ControllerDB, _tasks_with_attempts
-from iris.cluster.log_store import LogStore
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.constraints import device_variant_constraint
@@ -162,10 +161,8 @@ def state(tmp_path):
     """Create a fresh ControllerTransitions for each test."""
     db_path = tmp_path / "controller.sqlite3"
     db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
-    s = ControllerTransitions(db=db, log_store=log_store)
+    s = ControllerTransitions(db=db)
     yield s
-    log_store.close()
     db.close()
 
 
@@ -197,7 +194,6 @@ def service(state, mock_scheduler, tmp_path):
         state._db,
         controller=mock_scheduler,
         bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
-        log_store=state._log_store,
     )
 
 
@@ -601,7 +597,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_scheduler, tmp_path, j
         state._db,
         controller=mock_scheduler,
         bundle_store=BundleStore(db_path=tmp_path / "bundles_owner.sqlite3"),
-        log_store=state._log_store,
+
         auth=ControllerAuth(provider="static"),
     )
 
@@ -632,7 +628,7 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_scheduler, tmp_path
         state._db,
         controller=mock_scheduler,
         bundle_store=BundleStore(db_path=tmp_path / "bundles_child.sqlite3"),
-        log_store=state._log_store,
+
         auth=ControllerAuth(provider="static"),
     )
 
@@ -883,7 +879,7 @@ def test_register_requires_worker_role(state, mock_scheduler, tmp_path, worker_m
         db,
         controller=mock_scheduler,
         bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
-        log_store=state._log_store,
+
         auth=auth,
     )
 
@@ -919,7 +915,7 @@ def test_register_allows_worker_role(state, mock_scheduler, tmp_path, worker_met
         db,
         controller=mock_scheduler,
         bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
-        log_store=state._log_store,
+
         auth=auth,
     )
 

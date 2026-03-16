@@ -7,7 +7,6 @@ import time
 
 import pytest
 from iris.cluster.controller.db import TASKS, WORKERS, ControllerDB
-from iris.cluster.log_store import LogStore
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -26,10 +25,8 @@ from iris.time_utils import Duration, Timestamp
 def state(tmp_path):
     db_path = tmp_path / "controller.sqlite3"
     db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
-    s = ControllerTransitions(db=db, log_store=log_store)
+    s = ControllerTransitions(db=db)
     yield s
-    log_store.close()
     db.close()
 
 
@@ -120,8 +117,7 @@ def test_fail_heartbeat_at_threshold(tmp_path, worker_metadata):
     """RPC failures at threshold return WORKER_FAILED and prune the worker."""
     db_path = tmp_path / "controller.sqlite3"
     db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
-    state = ControllerTransitions(db=db, log_store=log_store, heartbeat_failure_threshold=3)
+    state = ControllerTransitions(db=db, heartbeat_failure_threshold=3)
     _register_worker(state, "worker1", worker_metadata)
     snapshot = _make_snapshot("worker1")
 
@@ -160,8 +156,7 @@ def test_unhealthy_worker_cascades_to_tasks(tmp_path):
     """
     db_path = tmp_path / "controller.sqlite3"
     db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
-    state = ControllerTransitions(db=db, log_store=log_store, heartbeat_failure_threshold=1)
+    state = ControllerTransitions(db=db, heartbeat_failure_threshold=1)
     worker_metadata = cluster_pb2.WorkerMetadata(
         hostname="test-host",
         ip_address="192.168.1.1",

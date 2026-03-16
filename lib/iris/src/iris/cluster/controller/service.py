@@ -70,7 +70,7 @@ from iris.cluster.controller.query import execute_raw_query
 from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.transitions import ControllerTransitions
-from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, task_log_key
+from iris.cluster.log_store import PROCESS_LOG_KEY, task_log_key
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import JobName, TaskAttempt, WorkerId
@@ -509,10 +509,9 @@ class ControllerServiceImpl:
 
     Args:
         transitions: State machine for DB mutations (submit, cancel, register, etc.)
-        db: Query interface for direct DB reads
+        db: Query interface for direct DB reads (also provides log methods)
         controller: Controller runtime for scheduling and worker management
         bundle_store: Bundle store for zip storage.
-        log_store: Log store for task and process logs.
     """
 
     def __init__(
@@ -521,14 +520,12 @@ class ControllerServiceImpl:
         db: ControllerDB,
         controller: ControllerProtocol,
         bundle_store: BundleStore,
-        log_store: LogStore,
         auth: ControllerAuth | None = None,
     ):
         self._transitions = transitions
         self._db = db
         self._controller = controller
         self._bundle_store = bundle_store
-        self._log_store = log_store
         self._timer = Timer()
         self._auth = auth or ControllerAuth()
 
@@ -1173,7 +1170,7 @@ class ControllerServiceImpl:
         job_name = JobName.from_wire(request.id)
         max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
         requested_attempt_id = request.attempt_id
-        log_store = self._log_store
+        log_store = self._db
 
         # Collect child job statuses when requested (for streaming UI).
         child_job_statuses: list[cluster_pb2.JobStatus] = []
@@ -1379,7 +1376,7 @@ class ControllerServiceImpl:
         """Fetch logs by source key with filtering and pagination.
 
         Source routing:
-        - /system/process, /job/...: served from the controller's own LogStore
+        - /system/process, /job/...: served from ControllerDB
         - /system/worker/<worker_id>: proxied to the worker's FetchLogs(/system/process)
         """
         worker_id = _parse_worker_target(request.source)
@@ -1397,7 +1394,7 @@ class ControllerServiceImpl:
             return stub.fetch_logs(forwarded, timeout_ms=10000)
 
         max_lines = request.max_lines if request.max_lines > 0 else 1000
-        result = self._log_store.get_logs(
+        result = self._db.get_logs(
             request.source,
             since_ms=request.since_ms,
             cursor=request.cursor,
@@ -1501,7 +1498,7 @@ class ControllerServiceImpl:
         """
         target = request.target
         if not target or target == "/system/process":
-            return get_process_status(request, self._log_store, self._timer)
+            return get_process_status(request, self._db, self._timer)
 
         # Parse /system/worker/<worker_id>
         worker_id = _parse_worker_target(target)

@@ -15,8 +15,10 @@ from threading import RLock
 from typing import Any, Generic, Literal, TypeVar, overload
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.types import JobName, WorkerId, get_gpu_count, get_tpu_count
-from iris.rpc import cluster_pb2
+from iris.cluster.log_store import LogCursor, LogReadResult, escape_like
+from iris.cluster.types import JobName, TaskAttempt, WorkerId, get_gpu_count, get_tpu_count
+from iris.logging import str_to_log_level
+from iris.rpc import cluster_pb2, logging_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
 
 T = TypeVar("T")
@@ -1158,6 +1160,191 @@ class ControllerDB:
             self._conn.row_factory = sqlite3.Row
             self._configure(self._conn)
         self.apply_migrations()
+
+    # --- Log methods (consolidated from LogStore) ---
+
+    _LOG_INSERT = "INSERT INTO logs (key, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?)"
+
+    def append(self, key: str, entries: list | Sequence) -> None:
+        """Insert log entries for a single key."""
+        if not entries:
+            return
+        rows = [(key, e.source, e.data, e.timestamp.epoch_ms, e.level) for e in entries]
+        with self._lock:
+            self._conn.executemany(self._LOG_INSERT, rows)
+            self._conn.commit()
+
+    def append_batch(self, items: Sequence[tuple[str, list | Sequence]]) -> None:
+        """Write log entries for multiple keys in a single transaction."""
+        all_rows = []
+        for key, entries in items:
+            all_rows.extend((key, e.source, e.data, e.timestamp.epoch_ms, e.level) for e in entries)
+        if not all_rows:
+            return
+        with self._lock:
+            self._conn.executemany(self._LOG_INSERT, all_rows)
+            self._conn.commit()
+
+    @staticmethod
+    def _log_row_to_entry(row: tuple) -> logging_pb2.LogEntry:
+        """Convert (id, source, data, epoch_ms, level) to LogEntry proto."""
+        entry = logging_pb2.LogEntry(source=row[1], data=row[2], level=row[4])
+        entry.timestamp.epoch_ms = row[3]
+        return entry
+
+    def get_logs(
+        self,
+        key: str,
+        *,
+        since_ms: int = 0,
+        cursor: int = 0,
+        substring_filter: str = "",
+        max_lines: int = 0,
+        tail: bool = False,
+        min_level: str = "",
+    ) -> LogReadResult:
+        """Fetch logs for a single key with optional filtering."""
+        min_level_enum = str_to_log_level(min_level) if min_level else 0
+
+        params: list = [key, cursor]
+        where_extra = ""
+        if since_ms > 0:
+            where_extra += " AND epoch_ms > ?"
+            params.append(since_ms)
+        if substring_filter:
+            where_extra += " AND data LIKE ? ESCAPE '\\'"
+            params.append(f"%{escape_like(substring_filter)}%")
+        if min_level_enum > 0:
+            where_extra += " AND (level = 0 OR level >= ?)"
+            params.append(min_level_enum)
+
+        if tail and max_lines > 0:
+            params.append(max_lines)
+            with self._lock:
+                rows = self._conn.execute(
+                    f"SELECT id, source, data, epoch_ms, level FROM logs "
+                    f"WHERE key = ? AND id > ?{where_extra} ORDER BY id DESC LIMIT ?",
+                    params,
+                ).fetchall()
+            rows.reverse()
+        else:
+            limit_clause = ""
+            if max_lines > 0:
+                limit_clause = " LIMIT ?"
+                params.append(max_lines)
+            with self._lock:
+                rows = self._conn.execute(
+                    f"SELECT id, source, data, epoch_ms, level FROM logs "
+                    f"WHERE key = ? AND id > ?{where_extra} ORDER BY id{limit_clause}",
+                    params,
+                ).fetchall()
+
+        if not rows:
+            return LogReadResult(entries=[], cursor=cursor)
+
+        max_id = max(r[0] for r in rows)
+        entries = [self._log_row_to_entry(r) for r in rows]
+        return LogReadResult(entries=entries, cursor=max_id)
+
+    def get_logs_by_prefix(
+        self,
+        prefix: str,
+        *,
+        cursor: int = 0,
+        since_ms: int = 0,
+        substring_filter: str = "",
+        max_lines: int = 0,
+        tail: bool = False,
+        min_level: str = "",
+        shallow: bool = False,
+    ) -> LogReadResult:
+        """Fetch logs for all keys matching prefix, ordered by autoincrement id."""
+        min_level_enum = str_to_log_level(min_level) if min_level else 0
+
+        params: list = [prefix + "%", cursor]
+        where = "WHERE key LIKE ? AND id > ?"
+        if shallow:
+            where += " AND key NOT LIKE ?"
+            params.append(prefix + "%/%")
+        if since_ms > 0:
+            where += " AND epoch_ms > ?"
+            params.append(since_ms)
+        if substring_filter:
+            where += " AND data LIKE ? ESCAPE '\\'"
+            params.append(f"%{escape_like(substring_filter)}%")
+        if min_level_enum > 0:
+            where += " AND (level = 0 OR level >= ?)"
+            params.append(min_level_enum)
+
+        if tail and max_lines > 0:
+            params.append(max_lines)
+            with self._lock:
+                rows = self._conn.execute(
+                    f"SELECT id, key, source, data, epoch_ms, level FROM logs {where} ORDER BY id DESC LIMIT ?",
+                    params,
+                ).fetchall()
+            rows.reverse()
+        else:
+            limit_clause = ""
+            if max_lines > 0:
+                limit_clause = " LIMIT ?"
+                params.append(max_lines)
+            with self._lock:
+                rows = self._conn.execute(
+                    f"SELECT id, key, source, data, epoch_ms, level FROM logs {where} ORDER BY id{limit_clause}",
+                    params,
+                ).fetchall()
+
+        max_id = max((r[0] for r in rows), default=cursor)
+        entries = []
+        for r in rows:
+            key = r[1]
+            parsed = TaskAttempt.from_wire(key)
+            entry = logging_pb2.LogEntry(source=r[2], data=r[3], level=r[5])
+            entry.timestamp.epoch_ms = r[4]
+            entry.attempt_id = parsed.attempt_id if parsed.attempt_id is not None else 0
+            entries.append(entry)
+
+        return LogReadResult(entries=entries, cursor=max_id)
+
+    def has_logs(self, key: str) -> bool:
+        """Check if any logs exist for a key."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM logs WHERE key = ? LIMIT 1",
+                (key,),
+            ).fetchone()
+        return row is not None
+
+    def clear_logs(self, key: str) -> None:
+        """Delete all logs for a key."""
+        with self._lock:
+            self._conn.execute("DELETE FROM logs WHERE key = ?", (key,))
+            self._conn.commit()
+
+    def evict_logs_if_needed(self, max_records: int) -> None:
+        """Cap total log rows, evicting oldest when count exceeds limit."""
+        with self._lock:
+            row = self._conn.execute("SELECT MIN(id), MAX(id) FROM logs").fetchone()
+            min_id, max_id = row
+            if min_id is None:
+                return
+            approx_count = max_id - min_id + 1
+            if approx_count <= max_records:
+                return
+            target_cutoff = max_id - (max_records // 2)
+            batch_size = 100_000
+            cursor = min_id - 1
+            while cursor < target_cutoff:
+                batch_end = min(cursor + batch_size, target_cutoff)
+                self._conn.execute("DELETE FROM logs WHERE id > ? AND id <= ?", (cursor, batch_end))
+                self._conn.commit()
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                cursor = batch_end
+
+    def log_cursor(self, key: str) -> LogCursor:
+        """Return a stateful cursor for incremental reads on *key*."""
+        return LogCursor(self, key)
 
     # SQL-canonical read access is exposed through ``snapshot()`` and typed table
     # metadata at module scope. Legacy list/get/count helper methods were removed

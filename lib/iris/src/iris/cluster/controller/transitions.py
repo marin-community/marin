@@ -28,7 +28,7 @@ from iris.cluster.controller.db import (
     ENDPOINT_TASKS,
     endpoint_query_predicate,
 )
-from iris.cluster.log_store import LogStore, task_log_key
+from iris.cluster.log_store import task_log_key
 from iris.cluster.types import (
     JobName,
     TaskAttempt,
@@ -336,11 +336,9 @@ class ControllerTransitions:
     def __init__(
         self,
         db: ControllerDB,
-        log_store: LogStore,
         heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD,
     ):
         self._db = db
-        self._log_store = log_store
         self._heartbeat_failure_threshold = heartbeat_failure_threshold
 
     def _record_transaction(
@@ -921,7 +919,7 @@ class ControllerTransitions:
                 if attempt_row is None:
                     continue
                 worker_id = attempt_row["worker_id"]
-                if update.log_entries and self._log_store is not None:
+                if update.log_entries:
                     pending_logs.append(
                         (
                             task_log_key(TaskAttempt(task_id=update.task_id, attempt_id=update.attempt_id)),
@@ -1119,8 +1117,8 @@ class ControllerTransitions:
                     actions.append(("job_terminated", job_id.to_wire(), {}))
                 self._record_transaction(cur, "apply_task_updates", actions)
 
-        if pending_logs and self._log_store is not None:
-            self._log_store.append_batch(pending_logs)
+        if pending_logs:
+            self._db.append_batch(pending_logs)
 
         return TxResult(tasks_to_kill=tasks_to_kill)
 

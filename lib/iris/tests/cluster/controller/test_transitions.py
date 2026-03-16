@@ -36,7 +36,6 @@ from iris.cluster.controller.db import (
     endpoint_query_predicate,
     ENDPOINTS,
 )
-from iris.cluster.log_store import LogStore
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.transitions import (
     MAX_REPLICAS_PER_JOB,
@@ -58,12 +57,11 @@ from iris.time_utils import Duration, Timestamp
 
 
 def _make_state(**kwargs) -> ControllerTransitions:
-    """Create a ControllerTransitions with a fresh temp DB and log store."""
+    """Create a ControllerTransitions with a fresh temp DB."""
     tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
     db_path = tmp / "controller.sqlite3"
     db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
-    return ControllerTransitions(db=db, log_store=log_store, **kwargs)
+    return ControllerTransitions(db=db, **kwargs)
 
 
 def _schedulable_tasks(state: ControllerTransitions):
@@ -1593,7 +1591,7 @@ def test_log_entries_accumulated_in_log_store(job_request, worker_metadata):
     from iris.cluster.log_store import task_log_key
     from iris.cluster.types import TaskAttempt
 
-    log_result = state._log_store.get_logs(
+    log_result = state._db.get_logs(
         task_log_key(TaskAttempt(task_id=task.task_id, attempt_id=_query_task(state, task.task_id).current_attempt_id))
     )
     assert len(log_result.entries) == 1
@@ -1632,7 +1630,7 @@ def test_log_entries_accumulated_across_heartbeats(job_request, worker_metadata)
     from iris.cluster.log_store import task_log_key
     from iris.cluster.types import TaskAttempt
 
-    log_result = state._log_store.get_logs(
+    log_result = state._db.get_logs(
         task_log_key(TaskAttempt(task_id=task.task_id, attempt_id=_query_task(state, task.task_id).current_attempt_id))
     )
     assert len(log_result.entries) == 3
@@ -3069,8 +3067,7 @@ def test_snapshot_round_trip_preserves_reservation_holder():
         checkpoint_path = Path(tmpdir) / "checkpoint.sqlite3"
         state._db.backup_to(checkpoint_path)
         restored_db = ControllerDB(db_path=checkpoint_path)
-        restored_log_store = LogStore(db_path=checkpoint_path)
-        restored_state = ControllerTransitions(db=restored_db, log_store=restored_log_store)
+        restored_state = ControllerTransitions(db=restored_db)
 
         restored_holder = _query_job(restored_state, holder_job_id)
         assert restored_holder is not None

@@ -70,7 +70,7 @@ from iris.cluster.controller.transitions import (
     HeartbeatAction,
     ReservationClaim,
 )
-from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
+from iris.cluster.log_store import PROCESS_LOG_KEY, LogStoreHandler
 from iris.cluster.types import (
     JobName,
     WorkerStatus,
@@ -761,10 +761,8 @@ class Controller:
             self._db = db
         else:
             self._db = ControllerDB(db_path=config.local_state_dir / "controller.sqlite3")
-        self._log_store = LogStore(db_path=config.local_state_dir / "logs.sqlite3")
         self._transitions = ControllerTransitions(
             db=self._db,
-            log_store=self._log_store,
             heartbeat_failure_threshold=config.heartbeat_failure_threshold,
         )
         self._scheduler = Scheduler()
@@ -776,7 +774,6 @@ class Controller:
             self._db,
             controller=self,
             bundle_store=self._bundle_store,
-            log_store=self._log_store,
             auth=config.auth,
         )
         self._dashboard = ControllerDashboard(
@@ -787,8 +784,8 @@ class Controller:
             auth_provider=config.auth_provider,
         )
 
-        # Ingest process logs into the LogStore so they are available via FetchLogs.
-        self._log_store_handler = LogStoreHandler(self._log_store, key=PROCESS_LOG_KEY)
+        # Ingest process logs into ControllerDB so they are available via FetchLogs.
+        self._log_store_handler = LogStoreHandler(self._db, key=PROCESS_LOG_KEY)
         self._log_store_handler.setLevel(logging.DEBUG)
         self._log_store_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger("iris").addHandler(self._log_store_handler)
@@ -927,11 +924,10 @@ class Controller:
         self._threads.stop()
         self.stub_factory.close()
 
-        # Remove log handler before closing the log store to avoid
+        # Remove log handler before closing the DB to avoid
         # sqlite3.ProgrammingError spam from late log records.
         logging.getLogger("iris").removeHandler(self._log_store_handler)
         self._log_store_handler.close()
-        self._log_store.close()
         self._db.close()
         self._bundle_store.close()
 

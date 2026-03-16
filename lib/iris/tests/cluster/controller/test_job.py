@@ -8,7 +8,6 @@ import pytest
 
 from iris.cluster.controller.db import JOBS, TASKS, WORKERS, ControllerDB, Job, Task, Worker
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
-from iris.cluster.log_store import LogStore
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
@@ -44,10 +43,8 @@ def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
 def state(tmp_path):
     db_path = tmp_path / "controller.sqlite3"
     db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
-    s = ControllerTransitions(db=db, log_store=log_store)
+    s = ControllerTransitions(db=db)
     yield s
-    log_store.close()
     db.close()
 
 

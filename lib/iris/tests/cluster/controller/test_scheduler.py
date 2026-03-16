@@ -30,7 +30,6 @@ from iris.cluster.controller.db import (
     _decode_attribute_rows,
     _tasks_with_attempts,
 )
-from iris.cluster.log_store import LogStore
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.constraints import Constraint, merge_constraints
 from iris.cluster.types import JobName, WorkerId
@@ -447,10 +446,8 @@ def state(tmp_path):
     """Create a fresh ControllerTransitions for each test."""
     db_path = tmp_path / "controller.sqlite3"
     db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
-    s = ControllerTransitions(db=db, log_store=log_store)
+    s = ControllerTransitions(db=db)
     yield s
-    log_store.close()
     db.close()
 
 

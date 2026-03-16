@@ -43,7 +43,6 @@ from iris.cluster.controller.db import (
     _decode_attribute_rows,
     _tasks_with_attempts,
 )
-from iris.cluster.log_store import LogStore
 from iris.cluster.controller.transitions import (
     HEARTBEAT_FAILURE_THRESHOLD,
     RESERVATION_HOLDER_JOB_NAME,
@@ -71,12 +70,11 @@ from iris.time_utils import Timestamp
 
 
 def _make_state(**kwargs) -> ControllerTransitions:
-    """Create a ControllerTransitions with a fresh temp DB and log store."""
+    """Create a ControllerTransitions with a fresh temp DB."""
     tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
     db_path = tmp / "controller.sqlite3"
     db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
-    return ControllerTransitions(db=db, log_store=log_store, **kwargs)
+    return ControllerTransitions(db=db, **kwargs)
 
 
 def _schedulable_tasks(state: ControllerTransitions):

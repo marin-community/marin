@@ -20,6 +20,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
+from typing import Protocol
 
 from iris.cluster.types import TaskAttempt
 from iris.logging import str_to_log_level
@@ -42,7 +43,7 @@ _MAX_RECORDS = 5_000_000
 _LIKE_ESCAPE_TABLE = str.maketrans({"%": "\\%", "_": "\\_", "\\": "\\\\"})
 
 
-def _escape_like(s: str) -> str:
+def escape_like(s: str) -> str:
     """Escape SQL LIKE wildcards so the string matches literally."""
     return s.translate(_LIKE_ESCAPE_TABLE)
 
@@ -60,6 +61,28 @@ def task_log_key(task_attempt: TaskAttempt) -> str:
 class LogReadResult:
     entries: list[logging_pb2.LogEntry]
     cursor: int  # max autoincrement id seen
+
+
+class LogReader(Protocol):
+    """Protocol for types that can read logs by key (LogStore, ControllerDB)."""
+
+    def get_logs(
+        self,
+        key: str,
+        *,
+        since_ms: int = 0,
+        cursor: int = 0,
+        substring_filter: str = "",
+        max_lines: int = 0,
+        tail: bool = False,
+        min_level: str = "",
+    ) -> LogReadResult: ...
+
+
+class LogWriter(Protocol):
+    """Protocol for types that can append log entries (LogStore, ControllerDB)."""
+
+    def append(self, key: str, entries: list) -> None: ...
 
 
 class LogStore:
@@ -174,7 +197,7 @@ class LogStore:
             params.append(since_ms)
         if substring_filter:
             where_extra += " AND data LIKE ? ESCAPE '\\'"
-            params.append(f"%{_escape_like(substring_filter)}%")
+            params.append(f"%{escape_like(substring_filter)}%")
         if min_level_enum > 0:
             where_extra += " AND (level = 0 OR level >= ?)"
             params.append(min_level_enum)
@@ -241,7 +264,7 @@ class LogStore:
             params.append(since_ms)
         if substring_filter:
             where += " AND data LIKE ? ESCAPE '\\'"
-            params.append(f"%{_escape_like(substring_filter)}%")
+            params.append(f"%{escape_like(substring_filter)}%")
         if min_level_enum > 0:
             where += " AND (level = 0 OR level >= ?)"
             params.append(min_level_enum)
@@ -342,14 +365,14 @@ class LogStore:
 
 
 class LogCursor:
-    """Stateful incremental reader for a single LogStore key.
+    """Stateful incremental reader for a single log key.
 
     Tracks an autoincrement id cursor across calls to read() so callers don't
     need to manage cursor bookkeeping. Useful for streaming new log entries
     incrementally (e.g. heartbeat log forwarding).
     """
 
-    def __init__(self, store: LogStore, key: str) -> None:
+    def __init__(self, store: LogReader, key: str) -> None:
         self._store = store
         self._key = key
         self._cursor: int = 0
@@ -362,13 +385,13 @@ class LogCursor:
 
 
 class LogStoreHandler(logging.Handler):
-    """Logging handler that writes formatted records directly into a LogStore.
+    """Logging handler that writes formatted records into a log store.
 
     Each log record is written to SQLite immediately. WAL mode handles
     concurrent writes without contention on low-volume process logs.
     """
 
-    def __init__(self, log_store: LogStore, key: str = PROCESS_LOG_KEY):
+    def __init__(self, log_store: LogWriter, key: str = PROCESS_LOG_KEY):
         super().__init__()
         self._log_store = log_store
         self._key = key

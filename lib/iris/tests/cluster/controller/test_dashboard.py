@@ -26,7 +26,6 @@ from iris.cluster.controller.db import (
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
-from iris.cluster.log_store import LogStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
@@ -132,10 +131,8 @@ def set_task_state(state: ControllerTransitions, task_id: JobName, new_state: in
 def state(tmp_path):
     db_path = tmp_path / "controller.sqlite3"
     db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
-    s = ControllerTransitions(db=db, log_store=log_store)
+    s = ControllerTransitions(db=db)
     yield s
-    log_store.close()
     db.close()
 
 
@@ -207,7 +204,6 @@ def service(state, scheduler, tmp_path):
         state._db,
         controller=controller_mock,
         bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
-        log_store=state._log_store,
     )
 
 
@@ -226,7 +222,6 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
         state._db,
         controller=controller_mock,
         bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
-        log_store=state._log_store,
     )
 
 

@@ -13,7 +13,7 @@ import resource
 import sys
 import threading
 
-from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore
+from iris.cluster.log_store import PROCESS_LOG_KEY, LogReader
 from iris.cluster.runtime.process import _read_proc_cpu_percent
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timer
@@ -92,7 +92,7 @@ def collect_process_info(timer: Timer) -> cluster_pb2.ProcessInfo:
 
 def get_process_status(
     request: cluster_pb2.GetProcessStatusRequest,
-    log_store: LogStore | None,
+    log_store: LogReader | None,
     timer: Timer,
 ) -> cluster_pb2.GetProcessStatusResponse:
     """Build a GetProcessStatusResponse with local process info and recent logs.
