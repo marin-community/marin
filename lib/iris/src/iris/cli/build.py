@@ -153,9 +153,9 @@ def push_to_ghcr(
 def _ensure_protos() -> None:
     """Regenerate protobuf Python bindings from .proto sources.
 
-    Always runs unconditionally — the mtime-based staleness check in the hatch
-    build hook is unreliable after git checkout or Docker COPY (all files get
-    the same timestamp). Generation is fast (<2s) so always rebuilding is safe.
+    Called before ``docker build`` so that COPY always picks up fresh bindings.
+    The hatch build hook handles staleness for normal ``uv sync`` / ``uv run``,
+    but Docker has no ``npx`` so it cannot regenerate inside the image.
     """
     iris_root = find_iris_root()
     generate_script = iris_root / "scripts" / "generate_protos.py"

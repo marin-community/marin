@@ -3,9 +3,10 @@
 
 """Hatchling custom build hook for Iris.
 
-Regenerates protobuf files from .proto sources unconditionally when the
-generate script and npx are available. This runs automatically during
-``uv sync`` / ``pip install -e .`` / wheel builds.
+Regenerates protobuf files from .proto sources when source files are newer
+than their generated outputs. This runs automatically during ``uv sync`` /
+``pip install -e .`` / wheel builds, eliminating the need to check generated
+files into git or manually run build steps.
 
 Dashboard assets are built separately via ``iris build dashboard`` or
 ``_ensure_dashboard_dist()`` in the Docker image build pipeline.
@@ -21,8 +22,34 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 logger = logging.getLogger(__name__)
 
-# Glob patterns for source files, relative to the iris package root.
+# Glob patterns for source and generated files, relative to the iris package root.
 _PROTO_SOURCE_GLOBS = ["src/iris/rpc/*.proto"]
+_PROTO_OUTPUT_GLOBS = ["src/iris/rpc/*_pb2.py", "src/iris/rpc/*_pb2.pyi", "src/iris/rpc/*_connect.py"]
+
+
+def _newest_mtime(root: Path, globs: list[str]) -> float:
+    """Return the newest mtime across all files matching the given globs."""
+    newest = 0.0
+    for pattern in globs:
+        for path in root.glob(pattern):
+            if path.is_file():
+                newest = max(newest, path.stat().st_mtime)
+    return newest
+
+
+def _oldest_mtime(root: Path, globs: list[str]) -> float:
+    """Return the oldest mtime across all files matching the given globs.
+
+    Returns 0.0 if no files match (meaning outputs don't exist yet).
+    """
+    oldest = float("inf")
+    found = False
+    for pattern in globs:
+        for path in root.glob(pattern):
+            if path.is_file():
+                found = True
+                oldest = min(oldest, path.stat().st_mtime)
+    return oldest if found else 0.0
 
 
 def _has_missing_outputs(root: Path, source_globs: list[str]) -> bool:
@@ -35,19 +62,35 @@ def _has_missing_outputs(root: Path, source_globs: list[str]) -> bool:
     return False
 
 
+def _needs_rebuild(root: Path, source_globs: list[str], output_globs: list[str]) -> bool:
+    """Return True if any source file is strictly newer than the oldest output file.
+
+    Uses a 60-second tolerance because zip archives (used by task bundles)
+    can extract files with slightly different timestamps, causing spurious
+    rebuilds.
+    """
+    source_newest = _newest_mtime(root, source_globs)
+    output_oldest = _oldest_mtime(root, output_globs)
+    return source_newest > output_oldest + 60.0
+
+
 class CustomBuildHook(BuildHookInterface):
     PLUGIN_NAME = "iris-build"
 
     def initialize(self, version: str, build_data: dict) -> None:
         root = Path(self.root)
-        self._generate_protos(root)
+        self._maybe_generate_protos(root)
 
-    def _generate_protos(self, root: Path) -> None:
-        outputs_missing = _has_missing_outputs(root, _PROTO_SOURCE_GLOBS)
+    def _maybe_generate_protos(self, root: Path) -> None:
+        outputs_complete = not _has_missing_outputs(root, _PROTO_SOURCE_GLOBS)
+
+        if outputs_complete and not _needs_rebuild(root, _PROTO_SOURCE_GLOBS, _PROTO_OUTPUT_GLOBS):
+            logger.info("Protobuf outputs are up-to-date, skipping generation")
+            return
 
         generate_script = root / "scripts" / "generate_protos.py"
         if not generate_script.exists():
-            if outputs_missing:
+            if not outputs_complete:
                 raise RuntimeError(
                     "Protobuf outputs are missing and scripts/generate_protos.py not found. "
                     "Cannot build iris without generated protobuf files."
@@ -56,7 +99,7 @@ class CustomBuildHook(BuildHookInterface):
             return
 
         if shutil.which("npx") is None:
-            if outputs_missing:
+            if not outputs_complete:
                 raise RuntimeError(
                     "Protobuf outputs are missing and npx is not installed. "
                     "Install Node.js (which provides npx) to generate protobuf files: "
