@@ -6,12 +6,14 @@
 import json
 import logging
 import os
+import shlex
 import shutil
 import socket
 import subprocess
 import tempfile
 import time
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -413,7 +415,6 @@ def create_ssh_proxy_chain(
 
 def wait_for_tunnel(clusters: dict[str, ClusterInfo], port_mappings: dict[str, RayPortMapping]) -> None:
     """Wait for SSH tunnel to be ready by testing dashboard connections."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def check_dashboard(cluster_name: str, dashboard_port: int) -> tuple[str, bool]:
         """Check if a dashboard is accessible."""
@@ -525,10 +526,6 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
         logger.info("Exception during Ray proxy connection, tearing down.", exc_info=1)
         raise
     finally:
-        # Cleanup
-        if connection.proxy:
-            connection.proxy.stop()
-
         if ssh_process and ssh_process.poll() is None:
             ssh_process.terminate()
             ssh_process.wait()
@@ -638,8 +635,6 @@ def resubmit_job(
     runtime_env_args = ["--runtime-env-json", json.dumps(runtime_env)] if runtime_env else []
 
     logger.info(f"Resubmitting job {job_id}...")
-    import shlex
-
     job_array = [
         "ray",
         "job",
@@ -662,29 +657,6 @@ def resubmit_job(
         logger.error(f"Failed to resubmit job {job_id}: {e}")
         if raise_errors:
             raise ValueError(f"Failed to resubmit job {job_id}") from e
-
-
-#  {
-#    "type": "SUBMISSION",
-#    "job_id": "49000000",
-#    "submission_id": "raysubmit_H9G6A2FEvtMjuLp5",
-#    "driver_info": {
-#      "id": "49000000",
-#      "node_ip_address": "10.130.0.2",
-#      "pid": "737995"
-#    },
-#    "status": "STOPPED",
-#    "entrypoint": " python -m marin.training.training ...
-#    "message": "Job was intentionally stopped.",
-#    "error_type": null,
-#    "start_time": null,
-#    "end_time": null,
-#    "metadata": null,
-#    "runtime_env": null,
-#    "driver_agent_http_address": null,
-#    "driver_node_id": null,
-#    "driver_exit_code": null
-#  },
 
 
 def backup_jobs(cluster_config: str, local_path: str, raise_errors: bool = False) -> None:
@@ -804,8 +776,6 @@ def add_manual_worker(
         start_tpu_vm_queued_resources,
     )
 
-    logger = logging.getLogger(__name__)
-
     # Generate TPU name if not provided
     if tpu_name is None:
         tpu_name = f"ray-worker-manual-{default_run_id()}"
@@ -845,9 +815,8 @@ def initialize_manual_worker(config_file: str, tpu_name: str) -> None:
     """
     from levanter.infra.tpus import run_command, tpu_ssh
 
-    logger = logging.getLogger(__name__)
-
-    cluster_config = yaml.safe_load(open(config_file, "r"))
+    with open(config_file, "r") as f:
+        cluster_config = yaml.safe_load(f)
 
     initialization_commands = cluster_config.get("initialization_commands", [])
     setup_commands = cluster_config.get("setup_commands", []) + cluster_config.get("worker_setup_commands", [])
