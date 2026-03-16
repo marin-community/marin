@@ -168,6 +168,26 @@ Pure-JAX DeepEP transport bring-up:
     - several ranks also show `tokens remained: 11` on channel `0`
     - final surfaced failure: `rank 2: cudaStreamSynchronize(dispatch): unspecified launch failure`
   - so the remaining same-process host-round bug is not specific to the larger sealed `#3633` shape either
+- A new no-eager-sync refactor changed the failure shape again:
+  - commit: `2994b3d15d6dfc7ebbd76a1bf303a119050c800a`
+  - change:
+    - stop forcing `cudaStreamSynchronize(dispatch)` inside the shared `DispatchOnCurrentDevice(...)` helper
+    - copy `local_expert_counts` asynchronously once `WaitForRecvCounts(...)` has already produced stable metadata
+    - for the host-only control, enqueue dispatch on every rank first, then use a second host barrier, then synchronize each per-rank stream
+  - on the default tiny deterministic host-only control (`dispatch_num_sms=20`):
+    - all `8/8` ranks now reach `after_dispatch_launch`
+    - all `8/8` ranks also reach the new `after_launch_sync_barrier`
+    - only after that do they begin timing out and fail during `cudaStreamSynchronize(dispatch)`
+  - on the same tiny control with `dispatch_num_sms=2`:
+    - all `8/8` ranks again reach `after_dispatch_launch`
+    - all `8/8` ranks reach `after_launch_sync_barrier`
+    - rank `0` now fully reaches `after_dispatch_sync` and `thread_done`
+    - the remaining failing ranks still fail in `cudaStreamSynchronize(dispatch)`
+    - their timeout lines are now concentrated on `responsible_channel = 0`
+    - the stuck token counts are `8` or `16`, which is larger than the default `dispatch_num_max_send_tokens=6`
+  - this is the strongest partial success so far:
+    - the wrapper's own eager host sync was part of the problem
+    - the remaining failure is now more sharply localized to live dispatch progress / configuration on channel `0`
 
 Root-cause summary:
 1. `#3665` never exercised the winning DeepEP / Hybrid-EP transport kernels. It only replaced dispatch-layout metadata and then still used JAX `ragged_all_to_all`.
@@ -185,6 +205,14 @@ Root-cause summary:
    - `pmap`: peer-access-state ownership and ordering during JAX input placement
 12. The new host-only same-process dispatch control shows that the post-launch hang is not confined to JAX execution APIs. With the extension-style build, the remaining failure now reproduces even outside `jax.jit`, `shard_map`, and `pmap`, which points at same-process DeepEP runtime assumptions or rendezvous/progress ordering rather than XLA custom-call semantics alone.
 13. The smallest deterministic same-process host round still hangs, so the remaining failure is not a large-shape artifact. That further weakens “bad payload for the sealed shape” and strengthens the case for a shape-independent same-process runtime/progress bug.
+14. The latest no-eager-sync rerun is a real narrowing step:
+    - all ranks now launch before failure
+    - with `dispatch_num_sms=2`, at least one rank can complete fully
+    - the remaining failures are concentrated on `responsible_channel = 0`
+    - the stuck token counts exceed the default `dispatch_num_max_send_tokens` cap
+15. So the next live hypothesis is no longer just “same-process is hard.” It is more specific:
+    - the wrapper's old host sync discipline was wrong
+    - and the surviving tiny-case failures may also reflect underprovisioned dispatch token-cap configuration on the hot channel
 
 ## Decision Log
 
@@ -220,5 +248,13 @@ The root cause is now specific:
   - `pmap` collides with peer-access setup before transport launch
 - The newest same-process host-only control sharpens that further: once the extension-style build clears symbol resolution, the dispatch hang reproduces even without JAX execution APIs. That suggests the next debugging layer is the same-process runtime/rendezvous model itself, not just XLA custom-call sequencing.
 - The tiny deterministic rerun sharpens it again: the hang survives even on `tokens_per_rank=16, hidden=128, experts=8, topk=1`, so the next step should focus on runtime/progress instrumentation or changing the process model, not on large-shape-specific routing data.
+- The latest no-eager-sync rerun sharpens it again:
+  - the wrapper-level eager host sync was genuinely part of the problem
+  - after removing it, all ranks now enqueue dispatch before failure
+  - with `dispatch_num_sms=2`, one rank can complete fully and the remaining failures concentrate on channel `0`
+  - the next concrete check should be whether the hot channel is simply underprovisioned by the default `dispatch_num_max_send_tokens` cap before we conclude that the remaining blocker is purely architectural
 
-The next meaningful follow-up is therefore not “retune `deepep_layout_ragged_a2a`”. It is to compare the raw shared-library load/init path against a working Python-extension-style load path even more directly, for example by probing the same raw library immediately after load but before runtime init, or by loading the raw `.so` through CPython extension machinery instead of `ctypes`, to isolate the remaining in-process CUDA registration difference.
+The next meaningful follow-up is therefore not “retune `deepep_layout_ragged_a2a`”. It is:
+1. re-run the tiny deterministic host-only control with the new no-eager-sync path and a higher `dispatch_num_max_send_tokens`
+2. if that clears the remaining channel-`0` failures, propagate the same synchronization discipline into the real JAX `shard_map` path
+3. only if it does not, escalate from “config/progress bug” back to “same-process runtime-model mismatch” and continue with the process-model fork

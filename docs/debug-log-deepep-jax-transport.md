@@ -462,3 +462,47 @@ If the same-process host-only control still hangs on a tiny deterministic case, 
   - the post-launch hang is not a large-shape artifact
   - the same-process failure survives even on the smallest deterministic case tried so far
   - that strengthens the case that the remaining bug lives in same-process runtime/progress behavior rather than in specific routing payloads or the larger benchmark shape
+
+## Hypothesis 13
+
+The shared dispatch helper is still imposing the wrong host-side synchronization discipline: it waits on `cudaStreamSynchronize(dispatch)` inside `DispatchOnCurrentDevice(...)` even though the receive-count metadata is already ready before dispatch launch.
+
+## Changes to make
+
+- Refactor `DispatchOnCurrentDevice(...)` in `deepep_transport_ffi.cu` so that:
+  - `local_expert_counts` is copied asynchronously after `WaitForRecvCounts(...)`
+  - the helper can skip `cudaStreamSynchronize(dispatch)` after launch
+- Update the host-only control to:
+  - enqueue dispatch on all ranks
+  - wait at a second host barrier
+  - only then synchronize each per-rank stream
+
+## Future Work
+
+- [ ] Re-run the tiny deterministic host-only control with the same no-eager-sync path and higher `dispatch_num_max_send_tokens`
+- [ ] Carry the no-eager-sync discipline into the real JAX `shard_map` path once the host-only control is cleaner
+- [ ] If needed, split `dispatch` and completion/readback into distinct debug helpers instead of one shared wrapper
+
+## Results
+
+- Commit `2994b3d15d6dfc7ebbd76a1bf303a119050c800a` applies the no-eager-sync refactor.
+- On the default tiny deterministic host-only control (`tokens=128 hidden=128 experts=8 topk=1`, `dispatch_num_sms=20`):
+  - all `8/8` ranks now reach `after_dispatch_launch`
+  - all `8/8` ranks also reach the new `after_launch_sync_barrier`
+  - only after that do they start timing out and fail in `cudaStreamSynchronize(dispatch)`
+- This is a real behavior change:
+  - the earlier failure shape looked like ranks were collapsing while launch was still being entered
+  - the new failure shape is clearly inside live dispatch completion after all ranks have already launched
+- On the same tiny control with `dispatch_num_sms=2`:
+  - all `8/8` ranks again reach `after_dispatch_launch`
+  - all `8/8` ranks reach `after_launch_sync_barrier`
+  - rank `0` is now the first rank to fully reach:
+    - `after_dispatch_sync`
+    - `thread_done`
+  - the remaining failing ranks still die in `cudaStreamSynchronize(dispatch)`
+  - their timeout lines are now concentrated on `responsible_channel = 0`
+  - the stuck token counts are `8` or `16`, which is larger than the default `dispatch_num_max_send_tokens=6`
+- Conclusion:
+  - the eager per-rank host sync in the shared helper was part of the problem, but not the whole problem
+  - the remaining same-process host-only bug now looks even more like a live channel/progress/configuration problem than a generic pre-launch or XLA-ordering problem
+  - the next concrete hypothesis is that the reduced-channel deterministic case is also underprovisioned by the default `dispatch_num_max_send_tokens` cap

@@ -850,3 +850,74 @@
   - Decide whether the next isolating control should be:
     - a process-per-rank execution model, or
     - a stricter same-process debug mode with fewer simultaneous channels / simpler launch ordering.
+
+### 2026-03-15 18:02 PDT - Removing eager post-launch host sync changes the failure shape
+
+- Hypothesis:
+  - If `DispatchOnCurrentDevice(...)` stops forcing `cudaStreamSynchronize(dispatch)` inside the shared helper, then the host-only control can enqueue all ranks before any thread waits on completion, which should tell us whether the earlier failure was partly caused by the wrapper's own synchronization discipline.
+- Code change:
+  - Commit `2994b3d15d6dfc7ebbd76a1bf303a119050c800a`
+  - Refactor `deepep_transport_ffi.cu` so that:
+    - `local_expert_counts` is copied asynchronously after `WaitForRecvCounts(...)`
+    - dispatch no longer synchronizes the stream inside the shared helper unless explicitly requested
+    - the host-only control inserts a second host barrier after all ranks have enqueued dispatch and only then synchronizes each per-rank stream
+- Commands:
+  ```bash
+  KUBECONFIG=/Users/romain/.kube/coreweave-iris \
+  uv run .agents/scripts/deepep_jax_transport_krt.py \
+    --config lib/iris/examples/coreweave-moe-jax-3677.yaml \
+    --worktree /Users/romain/marin-wt/moe-jax-megatron-root-cause \
+    --build-with-torch-extension \
+    --load-as-python-module \
+    --host-dispatch-round-only \
+    --launch-debug \
+    --launch-debug-label host-round-min-nosync \
+    --tokens 128 \
+    --hidden 128 \
+    --experts 8 \
+    --topk-list 1 \
+    --distributions deterministic
+  ```
+
+  ```bash
+  KUBECONFIG=/Users/romain/.kube/coreweave-iris \
+  uv run .agents/scripts/deepep_jax_transport_krt.py \
+    --config lib/iris/examples/coreweave-moe-jax-3677.yaml \
+    --worktree /Users/romain/marin-wt/moe-jax-megatron-root-cause \
+    --build-with-torch-extension \
+    --load-as-python-module \
+    --host-dispatch-round-only \
+    --launch-debug \
+    --launch-debug-label host-round-min-nosync-sms2 \
+    --tokens 128 \
+    --hidden 128 \
+    --experts 8 \
+    --topk-list 1 \
+    --distributions deterministic \
+    --dispatch-num-sms 2
+  ```
+- Result:
+  - On the default tiny run (`dispatch_num_sms=20`), the failure moved later:
+    - all `8/8` ranks now reach `after_dispatch_launch`
+    - all `8/8` ranks now also reach the new `after_launch_sync_barrier`
+    - only after that do they begin timing out / failing during stream completion
+  - So the old failure mode, where ranks were stalling while launch was still being entered, is no longer the right description.
+  - On the reduced-channel run (`dispatch_num_sms=2`):
+    - all `8/8` ranks again reach `after_dispatch_launch`
+    - all `8/8` ranks reach `after_launch_sync_barrier`
+    - rank `0` now fully reaches `after_dispatch_sync` and `thread_done`
+    - the remaining failing ranks still die in `cudaStreamSynchronize(dispatch)`
+    - their receiver timeouts are now concentrated on `responsible_channel = 0`
+  - The stuck token counts on that reduced-channel run are suggestive:
+    - some failing ranks report `tokens remained: 16`
+    - others report `tokens remained: 8`
+    - this is materially larger than the default `dispatch_num_max_send_tokens=6`
+- Interpretation:
+  - Removing the eager per-rank host sync was a real correction. It did not fix the host-only control, but it changed the observed failure from “launch/progress immediately collapses” to “all ranks enqueue launch and then fail in live dispatch completion.”
+  - The `dispatch_num_sms=2` rerun is the strongest partial success yet:
+    - rank `0` completes the full same-process host-only dispatch round
+    - the remaining failures are now sharply concentrated on channel `0`
+  - The timeout counts make configuration pressure a live hypothesis, not just a generic same-process runtime hypothesis. In the tiny deterministic one-channel case, the default send-token cap (`6`) looks too small for channels that are trying to carry `8` or `16` tokens.
+- Next action:
+  - Re-run the same tiny deterministic host-only control with `dispatch_num_sms=2` and a higher `dispatch_num_max_send_tokens`, once the isolated H100 lane is free again.
+  - If that clears the remaining failures, propagate the same no-eager-sync discipline into the real JAX path and rerun the pure-JAX `shard_map` bring-up.
