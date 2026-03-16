@@ -895,8 +895,7 @@ def test_terminal_states_clean_up_endpoints(job_request, worker_metadata):
 
 
 def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
-    """Endpoints are visible for all non-terminal job states (PENDING, RUNNING, BUILDING)
-    and hidden once the job reaches a terminal state."""
+    """Endpoints associated with a task are deleted when the task reaches a terminal state."""
     state = _make_state()
 
     worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
@@ -914,9 +913,9 @@ def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
         metadata={},
         registered_at=Timestamp.now(),
     )
-    state.add_endpoint(ep)
+    state.add_endpoint(ep, task_id=task.task_id)
 
-    # Visible while pending (task may be executing before job state updates)
+    # Visible while pending
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
     # Still visible after transition to running
@@ -924,7 +923,7 @@ def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
     assert _query_job(state, job.job_id).state == cluster_pb2.JOB_STATE_RUNNING
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
-    # Not visible after completion (terminal state)
+    # Deleted when task reaches terminal state
     transition_task(state, task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
     assert _query_job(state, job.job_id).state == cluster_pb2.JOB_STATE_SUCCEEDED
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 0
