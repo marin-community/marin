@@ -451,7 +451,8 @@ void DispatchOnCurrentDevice(
     int* send_head,
     int* local_expert_counts,
     int* num_recv_tokens_out,
-    int max_recv_tokens) {
+    int max_recv_tokens,
+    bool synchronize_after_launch) {
   if (hidden <= 0 || (hidden * static_cast<int>(sizeof(nv_bfloat16))) % sizeof(int4) != 0) {
     throw std::runtime_error("DeepEP intranode dispatch requires hidden*element_size divisible by int4");
   }
@@ -496,6 +497,15 @@ void DispatchOnCurrentDevice(
   if (num_recv_tokens > max_recv_tokens) {
     throw std::runtime_error("DeepEP intranode dispatch recv buffer is smaller than actual recv tokens");
   }
+  ThrowOnCuda(
+      cudaMemcpyAsync(
+          local_expert_counts,
+          const_cast<int*>(runtime.moe_recv_expert_counter),
+          sizeof(int) * num_local_experts,
+          cudaMemcpyHostToDevice,
+          stream),
+      "cudaMemcpyAsync(local_expert_counts)");
+  *num_recv_tokens_out = num_recv_tokens;
 
 #if defined(LEVANTER_DEEPEP_EXTENDED_INTRNODE_DISPATCH)
   deep_ep::intranode::dispatch(
@@ -571,6 +581,9 @@ void DispatchOnCurrentDevice(
       num_experts,
       num_topk,
       num_recv_tokens);
+  if (!synchronize_after_launch) {
+    return;
+  }
 
   ThrowOnCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(dispatch)");
   LogHostDispatchStage(
@@ -581,14 +594,6 @@ void DispatchOnCurrentDevice(
       num_experts,
       num_topk,
       num_recv_tokens);
-  ThrowOnCuda(
-      cudaMemcpy(
-          local_expert_counts,
-          const_cast<int*>(runtime.moe_recv_expert_counter),
-          sizeof(int) * num_local_experts,
-          cudaMemcpyHostToDevice),
-      "cudaMemcpy(local_expert_counts)");
-  *num_recv_tokens_out = num_recv_tokens;
 }
 
 ffi::Error DispatchIntranode(
@@ -693,17 +698,19 @@ ffi::Error DispatchIntranode(
         send_head->typed_data(),
         local_expert_counts->typed_data(),
         &num_recv_tokens,
-        static_cast<int>(recv_x->dimensions()[0]));
+        static_cast<int>(recv_x->dimensions()[0]),
+        false);
 
     cudaError_t status = cudaSuccess;
     runtime.last_num_recv_tokens = num_recv_tokens;
-    status = cudaMemcpy(
+    status = cudaMemcpyAsync(
         num_recv_tokens_buffer->typed_data(),
         &runtime.last_num_recv_tokens,
         sizeof(int),
-        cudaMemcpyHostToDevice);
+        cudaMemcpyHostToDevice,
+        stream);
     if (status != cudaSuccess) {
-      return CudaError(status, "cudaMemcpy(num_recv_tokens)");
+      return CudaError(status, "cudaMemcpyAsync(num_recv_tokens)");
     }
     return ffi::Error::Success();
   } catch (const std::exception& exc) {
@@ -1053,7 +1060,34 @@ extern "C" int levanter_deepep_run_host_dispatch_round(
               send_head,
               local_expert_counts,
               &num_recv_tokens,
-              recv_capacity);
+              recv_capacity,
+              false);
+          LogHostDispatchStage(
+              rank,
+              "before_launch_sync_barrier",
+              num_tokens,
+              hidden,
+              num_experts,
+              num_topk,
+              num_recv_tokens);
+          barrier.Wait();
+          LogHostDispatchStage(
+              rank,
+              "after_launch_sync_barrier",
+              num_tokens,
+              hidden,
+              num_experts,
+              num_topk,
+              num_recv_tokens);
+          ThrowOnCuda(cudaStreamSynchronize(runtime.aux_stream), "cudaStreamSynchronize(dispatch)");
+          LogHostDispatchStage(
+              rank,
+              "after_dispatch_sync",
+              num_tokens,
+              hidden,
+              num_experts,
+              num_topk,
+              num_recv_tokens);
           LogHostDispatchStage(
               rank,
               "thread_done",
