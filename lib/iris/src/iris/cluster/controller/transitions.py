@@ -1033,7 +1033,7 @@ class ControllerTransitions:
                     if job_req is not None:
                         _decommit_worker_resources(cur, str(worker_id), job_req.resources)
 
-                if task_state in TERMINAL_TASK_STATES:
+                if task_state != cluster_pb2.TASK_STATE_RUNNING:
                     cur.execute("DELETE FROM endpoints WHERE task_id = ?", (update.task_id.to_wire(),))
 
                 # Coscheduled jobs: a terminal host failure should cascade to siblings.
