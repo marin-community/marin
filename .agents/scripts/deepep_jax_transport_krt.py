@@ -113,6 +113,9 @@ PY
 
 def _bench_block(args: argparse.Namespace) -> str:
     commands: list[str] = []
+    python_runner = "/opt/conda/bin/python"
+    if args.compute_sanitizer:
+        python_runner = "compute-sanitizer --tool memcheck --target-processes all /opt/conda/bin/python"
     probe_flags = ""
     if args.probe_only:
         probe_flags = f"  --probe-only \\\n  --probe-max-elements {args.probe_max_elements} \\\n"
@@ -138,7 +141,7 @@ def _bench_block(args: argparse.Namespace) -> str:
             commands.append(
                 f"""
 echo "BENCH_START distribution={distribution} topk={topk}"
-/opt/conda/bin/python {BENCH_PATH} \\
+{python_runner} {BENCH_PATH} \\
   --tokens {args.tokens} \\
   --hidden {args.hidden} \\
   --experts {args.experts} \\
@@ -177,6 +180,7 @@ echo PYTHON=$(/opt/conda/bin/python -c 'import sys; print(sys.executable)')
 /opt/conda/bin/python --version
 command -v nvcc
 command -v c++
+{"command -v compute-sanitizer" if args.compute_sanitizer else ""}
 nvcc --version
 nvidia-smi --query-gpu=name --format=csv,noheader
 {_download_unpack_block(repo_archive_url, "/app")}
@@ -304,6 +308,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--combine-num-max-recv-tokens", type=int)
     parser.add_argument("--launch-debug", action="store_true")
     parser.add_argument("--launch-debug-label", default="jax")
+    parser.add_argument("--compute-sanitizer", action="store_true")
     args = parser.parse_args()
     if args.repo_ref is None:
         args.repo_ref = _current_worktree_ref(args.worktree)
