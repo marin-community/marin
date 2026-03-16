@@ -57,31 +57,6 @@ uv run iris --config lib/iris/examples/marin.yaml job logs --level info --since-
 uv run iris --controller-url http://127.0.0.1:10001 job logs --level info <JOB_ID>
 ```
 
-### Thread Dumps via Playwright
-
-The dashboard THR button triggers a thread dump on the worker process. Use playwright to access programmatically:
-
-```python
-from playwright.sync_api import sync_playwright
-import time
-
-with sync_playwright() as p:
-    browser = p.chromium.launch(headless=True)
-    page = browser.new_page(viewport={'width': 1600, 'height': 1200})
-    page.goto('http://127.0.0.1:8080/#/job/<URL_ENCODED_JOB_ID>',
-              wait_until='networkidle', timeout=15000)
-    time.sleep(3)
-
-    thr_buttons = page.get_by_text('THR').all()  # one per task
-    thr_buttons[TASK_IDX].click()
-    time.sleep(4)
-    print(page.inner_text('body'))
-    browser.close()
-
-# Prerequisites: `playwright install chromium`
-# Gotcha: <select> dropdowns don't work with click() — use the API instead.
-```
-
 ### On-Demand Profiling (py-spy / memray)
 
 The dashboard CPU, MEM, and THR buttons trigger profiling via the `ProfileTask` RPC (controller → worker → task container). All profiling is on-demand — nothing is collected automatically.
