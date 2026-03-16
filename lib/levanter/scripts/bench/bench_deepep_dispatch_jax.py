@@ -297,6 +297,28 @@ def _config_payload(config) -> dict[str, int]:
     }
 
 
+def _dispatch_config_from_args(args, ep_size: int):
+    config = _TRANSPORT_FFI._default_dispatch_config(ep_size)
+    if args.dispatch_num_sms is None:
+        return config
+    return _TRANSPORT_FFI.IntranodeConfig(
+        num_sms=args.dispatch_num_sms,
+        num_max_send_tokens=args.dispatch_num_max_send_tokens or config.num_max_send_tokens,
+        num_max_recv_tokens=args.dispatch_num_max_recv_tokens or config.num_max_recv_tokens,
+    )
+
+
+def _combine_config_from_args(args, ep_size: int):
+    config = _TRANSPORT_FFI._default_combine_config(ep_size)
+    if args.combine_num_sms is None:
+        return config
+    return _TRANSPORT_FFI.IntranodeConfig(
+        num_sms=args.combine_num_sms,
+        num_max_send_tokens=args.combine_num_max_send_tokens or config.num_max_send_tokens,
+        num_max_recv_tokens=args.combine_num_max_recv_tokens or config.num_max_recv_tokens,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark pure-JAX DeepEP intranode dispatch/combine via XLA FFI.")
     parser.add_argument("--tokens", type=int, default=32768)
@@ -315,6 +337,12 @@ def main() -> None:
     parser.add_argument("--host-dispatch-round-only", action="store_true")
     parser.add_argument("--execution-model", choices=("shard_map", "pmap"), default="shard_map")
     parser.add_argument("--probe-max-elements", type=int, default=256)
+    parser.add_argument("--dispatch-num-sms", type=int)
+    parser.add_argument("--dispatch-num-max-send-tokens", type=int)
+    parser.add_argument("--dispatch-num-max-recv-tokens", type=int)
+    parser.add_argument("--combine-num-sms", type=int)
+    parser.add_argument("--combine-num-max-send-tokens", type=int)
+    parser.add_argument("--combine-num-max-recv-tokens", type=int)
     args = parser.parse_args()
 
     devices = [device for device in jax.devices() if device.platform == "gpu"]
@@ -327,8 +355,8 @@ def main() -> None:
         raise ValueError(f"experts={args.experts} must be divisible by visible_gpus={ep_size}")
 
     if args.host_kernel_probe_only:
-        dispatch_config = _TRANSPORT_FFI._default_dispatch_config(ep_size)
-        combine_config = _TRANSPORT_FFI._default_combine_config(ep_size)
+        dispatch_config = _dispatch_config_from_args(args, ep_size)
+        combine_config = _combine_config_from_args(args, ep_size)
         hidden_bytes = args.hidden * max(jnp.dtype(jnp.bfloat16).itemsize, 2)
         _TRANSPORT_FFI.ensure_intranode_runtime(
             num_ranks=ep_size,
@@ -350,8 +378,8 @@ def main() -> None:
         return
 
     if args.host_dispatch_round_only:
-        dispatch_config = _TRANSPORT_FFI._default_dispatch_config(ep_size)
-        combine_config = _TRANSPORT_FFI._default_combine_config(ep_size)
+        dispatch_config = _dispatch_config_from_args(args, ep_size)
+        combine_config = _combine_config_from_args(args, ep_size)
         hidden_bytes = args.hidden * max(jnp.dtype(jnp.bfloat16).itemsize, 2)
         _TRANSPORT_FFI.ensure_intranode_runtime(
             num_ranks=ep_size,
