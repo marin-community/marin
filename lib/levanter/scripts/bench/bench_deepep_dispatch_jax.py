@@ -581,17 +581,14 @@ def main() -> None:
                 x_sharded, topk_idx_sharded, topk_weights_sharded
             )
             if args.check:
-                fanout_f32 = fanout.astype(jnp.float32)
-                fanout_f32 = jnp.maximum(fanout_f32, 1.0)
-                x_error = float(
-                    jnp.max(
-                        jnp.abs(combined_x.astype(jnp.float32) / fanout_f32[:, None] - x_sharded.astype(jnp.float32))
-                    )
-                )
+                combined_x_host = np.asarray(combined_x, dtype=np.float32)
+                combined_topk_weights_host = np.asarray(combined_topk_weights, dtype=np.float32)
+                fanout_host = np.maximum(np.asarray(fanout, dtype=np.float32), 1.0)
+                x_host = np.asarray(x_sharded, dtype=np.float32)
+                topk_weights_host = np.asarray(topk_weights_sharded, dtype=np.float32)
+                x_error = float(np.max(np.abs(combined_x_host / fanout_host[:, None] - x_host)))
                 topk_error = float(
-                    jnp.max(
-                        jnp.abs(combined_topk_weights / fanout_f32[:, None] - topk_weights_sharded.astype(jnp.float32))
-                    )
+                    np.max(np.abs(combined_topk_weights_host / fanout_host[:, None] - topk_weights_host))
                 )
                 _print0(f"CHECK x_max_abs={x_error:.6e} topk_max_abs={topk_error:.6e}")
 
