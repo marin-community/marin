@@ -186,8 +186,8 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     Instantiates the actor class, creates an ActorServer, registers the
     endpoint for discovery, and blocks until the job is terminated.
 
-    For multi-replica jobs, each replica gets a unique actor name based on
-    its task index. Uses absolute endpoint names: "/{job_id}/{name_prefix}-{task_index}".
+    All replicas register under the same endpoint name so the resolver
+    returns the full set of workers for the group.
     """
 
     ctx = iris_ctx()
@@ -195,9 +195,9 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     if job_info is None:
         raise RuntimeError("_host_actor must run inside an Iris job but get_job_info() returned None")
 
-    # Absolute endpoint name - bypasses namespace prefix in resolver
-    # JobName.__str__ already includes leading slash
-    actor_name = f"{ctx.job_id}/{name_prefix}-{job_info.task_index}"
+    # All replicas share the same endpoint name; the controller stores each
+    # as a separate endpoint (unique endpoint_id + address).
+    actor_name = f"{ctx.job_id}/{name_prefix}"
     logger.info(f"Starting actor: {actor_name} (job_id={ctx.job_id})")
 
     # Create handle BEFORE instance so actor can access it during __init__
@@ -332,7 +332,7 @@ class IrisActorGroup:
         self._count = count
         self._job_id = job_id
         self._handles: list[ActorHandle] = []
-        self._discovered_names: set[str] = set()
+        self._discovered_urls: set[str] = set()
 
     def __getstate__(self) -> dict:
         # Serialize only the discovery parameters - discovery state resets on deserialize
@@ -347,7 +347,7 @@ class IrisActorGroup:
         self._count = state["count"]
         self._job_id = state["job_id"]
         self._handles = []
-        self._discovered_names = set()
+        self._discovered_urls = set()
 
     def _get_client(self) -> IrisClientLib:
         """Get IrisClient from context."""
@@ -369,34 +369,33 @@ class IrisActorGroup:
         Returns only the handles discovered during this call (not previously
         known ones). Call repeatedly to pick up workers as they come online.
 
-        Uses a single prefix-match RPC to discover all actors whose endpoint
-        names start with ``{job_id}/{name}-``.
+        All replicas register under the same endpoint name, so a single
+        ``resolve()`` returns every worker in the group.
 
         Args:
             target: Stop probing once this many total actors are discovered.
                 If None, probes all indices.
         """
         client = self._get_client()
-        # Single RPC: prefix match all actors for this group
-        # _host_actor registers endpoints as "{job_id}/{name}-{task_index}"
-        prefix = f"{self._job_id}/{self._name}-"
-        endpoints = client._cluster_client.list_endpoints(prefix=prefix, exact=False)
+        resolver = client.resolver_for_job(self._job_id)
+        result = resolver.resolve(self._name)
 
         newly_discovered: list[ActorHandle] = []
-        for ep in endpoints:
-            if target is not None and len(self._discovered_names) >= target:
+        for ep in result.endpoints:
+            if target is not None and len(self._discovered_urls) >= target:
                 break
-            if ep.name in self._discovered_names:
+            if ep.url in self._discovered_urls:
                 continue
-            self._discovered_names.add(ep.name)
-            handle = IrisActorHandle(ep.name)
+            self._discovered_urls.add(ep.url)
+            handle = IrisActorHandle(self._name)
             self._handles.append(handle)
             newly_discovered.append(handle)
             logger.info(
-                "discover_new: found actor=%s job_id=%s (%d/%d ready)",
-                ep.name,
+                "discover_new: found actor=%s url=%s job_id=%s (%d/%d ready)",
+                self._name,
+                ep.url,
                 self._job_id,
-                len(self._discovered_names),
+                len(self._discovered_urls),
                 self._count,
             )
 
@@ -416,7 +415,7 @@ class IrisActorGroup:
         while True:
             self.discover_new(target=target)
 
-            if len(self._discovered_names) >= target:
+            if len(self._discovered_urls) >= target:
                 return list(self._handles[:target])
 
             # Fail fast if the underlying job has terminated (e.g. crash, OOM,
@@ -428,13 +427,13 @@ class IrisActorGroup:
                 error = job_status.error or "unknown error"
                 raise RuntimeError(
                     f"Actor job {self._job_id} finished before all actors registered "
-                    f"({len(self._discovered_names)}/{target} ready). "
+                    f"({len(self._discovered_urls)}/{target} ready). "
                     f"Job state={job_status.state}, error={error}"
                 )
 
             elapsed = time.monotonic() - start
             if elapsed >= timeout:
-                raise TimeoutError(f"Only {len(self._discovered_names)}/{target} actors ready after {timeout}s")
+                raise TimeoutError(f"Only {len(self._discovered_urls)}/{target} actors ready after {timeout}s")
 
             time.sleep(sleep_secs)
 
