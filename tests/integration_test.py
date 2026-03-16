@@ -63,9 +63,6 @@ def _tee_fd(original_fd: int, log_file) -> None:
 
 def _setup_log_tee(log_path: str) -> None:
     """Tee stdout and stderr to a log file at the given path."""
-    os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    if os.path.exists(log_path):
-        os.remove(log_path)
     log_fh = open(log_path, "w")
     _tee_fd(sys.stdout.fileno(), log_fh)
     _tee_fd(sys.stderr.fileno(), log_fh)
@@ -285,7 +282,7 @@ def main(config: ExecutorMainConfig):
         else:
             bucket_prefix = "/tmp"  # Default to a temporary directory
 
-        _setup_log_tee(os.path.join(bucket_prefix, "integration_test.log"))
+        _setup_log_tee("/tmp/integration_test.log")
 
         experiment_prefix = "quickstart-tests"
         config = dataclasses.replace(
