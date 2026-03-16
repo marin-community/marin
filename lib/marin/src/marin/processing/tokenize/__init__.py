@@ -8,8 +8,10 @@ from .data_configs import (
     lm_data_config,
     lm_mixture_data_config,
     mixture_for_evaluation,
+    step_to_lm_dataset_source_config,
     step_to_lm_mixture_component,
 )
+from .merge_tokenized_caches import MergeTokenizedCachesConfig, merge_tokenized_caches
 from .tokenize import (
     HfDatasetSpec,
     TokenizeConfig,

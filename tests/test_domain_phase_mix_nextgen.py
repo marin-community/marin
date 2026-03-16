@@ -53,6 +53,11 @@ from experiments.domain_phase_mix.nextgen.collect import (
 )
 from experiments.domain_phase_mix.nextgen.model_registry import _propose_top1_candidate
 from experiments.domain_phase_mix.nextgen.state_store import write_loop_state
+from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
+    build_top_level_domains,
+    build_top_level_domain_steps,
+    create_two_phase_dolma3_dolmino_top_level_experiment,
+)
 from experiments.domain_phase_mix.nextgen.validation import (
     CollectValidationConfig,
     PENDING_CANDIDATES_JSON,
@@ -251,6 +256,31 @@ def test_collect_new_backfills_objective_from_trajectory(tmp_path, monkeypatch):
     traj_df = pd.read_parquet(output_dir / NEW_TRAJ_FILE)
     assert len(traj_df) == 1
     assert traj_df.iloc[0]["run_name"] == "baseline_proportional"
+
+
+def test_top_level_experiment_uses_merged_domain_caches():
+    domains = build_top_level_domains()
+    assert len(domains) == 31
+    assert sum(len(domain.components) for domain in domains) == 31
+    assert all(
+        domain.components[0].get_step().name.startswith("tokenized/merged/dolma3_dolmino_top_level/")
+        for domain in domains
+    )
+
+    experiment = create_two_phase_dolma3_dolmino_top_level_experiment()
+    baseline = experiment.initial_fixed_weight_configs[0].weight_config
+    mixture = experiment.create_mixture_config(baseline)
+
+    assert len(mixture.components) == 31
+    assert set(mixture.components) == {domain.name for domain in domains}
+
+
+def test_build_top_level_domain_steps_returns_one_merged_step_per_domain():
+    steps = build_top_level_domain_steps()
+
+    assert len(steps) == 31
+    assert set(steps) == {domain.name for domain in build_top_level_domains()}
+    assert all(step.name.startswith("tokenized/merged/dolma3_dolmino_top_level/") for step in steps.values())
 
 
 def test_model_resubmit_validation_plan_reuses_prior_candidate(tmp_path):

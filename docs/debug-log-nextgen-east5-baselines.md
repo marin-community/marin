@@ -88,3 +88,34 @@ The nextgen loop may be allowing `collect_new` to run before training finishes b
 ## Results
 
 Confirmed. The executor ignored tuple-valued `InputName`s, so `CollectNewRunDataConfig.depends_on` silently dropped its dependency edges. Added tuple handling in both dependency collection and config instantiation, and added executor regression tests. After this fix, a fresh east5 baselines-only canary reached the desired state: both baseline checkpoint steps were `RUNNING` while `collect_new` and `fit` remained blocked.
+
+## Hypothesis 5
+
+The empty W&B dashboards are not a W&B bug. The new top-level Dolma 3 + Dolmino topology may still expand to hundreds of underlying tokenized partitions at training time, so the trainer could be spending tens of minutes loading cache ledgers from GCS before it reaches the first metric emission.
+
+## Changes to make
+
+- Inspect the live east5 training logs for `load_lm_dataset_cache` activity during the blank-W&B window.
+- Check whether the "31 top-level domains" topology still expands to many underlying `DatasetComponent`s.
+- Verify whether the cache metadata mismatch warnings are fatal, rebuilding caches, or merely noisy.
+
+## Future Work
+
+- [ ] Consider a true top-level cache representation if we want startup to scale with domains instead of raw partitions.
+- [ ] Suppress one-sided `preprocessor_metadata=None` cache warnings to reduce noise during cache loads.
+- [ ] Measure startup time to first metric as a function of component count before launching the 202-run swarm.
+
+## Results
+
+Confirmed. The two baseline jobs are not stuck in W&B or TPU launch. They are still in dataset startup inside `train_lm`, sequentially loading tokenized cache ledgers from GCS.
+
+Evidence from the live east5 logs:
+
+- W&B initialized successfully for both runs.
+- After that, the logs show continuous `levanter.store.cache Loading cache from ...` lines for tokenized Dolma 3 and Dolmino partitions.
+- The jobs progressed from Dolma 3 Common Crawl into Dolmino Common Crawl, `olmocr_pdfs_hq`, and `stack_edu_fim`, so they are moving rather than deadlocked.
+- The warning `Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': ...}}` is emitted on cache load, but `CacheLedger.load()` only warns and still returns the cache ledger; it does not trigger a rebuild.
+
+The topology-level root cause is real: the supposed 31-domain experiment still expands to 441 underlying `DatasetComponent`s at training time because we preserve exact within-domain proportional allocation. That means each training run performs hundreds of remote cache-ledger loads before it reaches `parameter_count` logging or the first training step, which explains why W&B shows only the system panel for a long time.
+
+Conclusion: this is a startup performance bug / architectural mismatch in the job setup, not a W&B logging failure and not yet evidence of a correctness failure in training.

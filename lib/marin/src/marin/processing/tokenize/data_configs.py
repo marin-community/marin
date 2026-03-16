@@ -9,14 +9,15 @@ from functools import lru_cache
 import numpy
 
 import transformers
-from levanter.data.text import BlockShuffleConfig, DatasetComponent, LmDataConfig
+from levanter.data.text import BlockShuffleConfig, DatasetComponent, LmDataConfig, LmDatasetSourceConfigBase
 
 from marin.execution import unwrap_versioned_value
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
-from marin.processing.tokenize.tokenize import TokenizeConfig
+from marin.processing.tokenize.tokenize import TokenizeConfigBase
 from marin.utils import load_tokenizer_with_backoff
 
-TokenizerStep = ExecutorStep[TokenizeConfig]
+TokenizerStep = ExecutorStep[TokenizeConfigBase]
+TokenizerConfigLike = TokenizeConfigBase | TokenizerStep
 
 logger = logging.getLogger(__name__)
 
@@ -31,16 +32,24 @@ _KNOWN_VOCAB_SIZES: dict[str, int] = {
 }
 
 
-def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_raw_paths: bool) -> DatasetComponent:
+def step_to_lm_dataset_source_config(
+    step: TokenizerConfigLike,
+    *,
+    include_raw_paths: bool,
+) -> LmDatasetSourceConfigBase:
+    """Convert a tokenized-cache step or config to a Levanter source config."""
+    if isinstance(step, TokenizeConfigBase):
+        return step.as_lm_dataset_source_config(step.cache_path, include_raw_paths=include_raw_paths)
+
+    return step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
+
+
+def step_to_lm_mixture_component(step: TokenizerConfigLike, include_raw_paths: bool) -> DatasetComponent:
     """
     Converts a tokenizer step to a Levanter dataset component. This is useful for creating
     data mixture configs.
     """
-
-    if isinstance(step, TokenizeConfig):
-        source = step.as_lm_dataset_source_config(step.cache_path, include_raw_paths=include_raw_paths)
-    else:
-        source = step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
+    source = step_to_lm_dataset_source_config(step, include_raw_paths=include_raw_paths)
 
     return DatasetComponent(
         source=source,
@@ -97,7 +106,7 @@ def lm_data_config(
 
 
 def lm_mixture_data_config(
-    components: dict[str, TokenizerStep | TokenizeConfig],
+    components: dict[str, TokenizerConfigLike],
     weights: dict[str, float],
     *,
     shuffle: bool | int | BlockShuffleConfig = True,
@@ -192,7 +201,7 @@ def interpolate_mixture_weights(mixture_weights: list[dict[str, float]], weights
 
 
 def lm_varying_mixture_data_config(
-    components: dict[str, TokenizerStep],
+    components: dict[str, TokenizerConfigLike],
     weights_list: list[tuple[int, dict[str, float]]],
     *,
     shuffle: bool | int | BlockShuffleConfig = True,
@@ -389,7 +398,7 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
     return True
 
 
-def _verify_tokenizers_same(components: dict[str, TokenizerStep | TokenizeConfig]):
+def _verify_tokenizers_same(components: dict[str, TokenizerConfigLike]):
     first_name, first_step = next(iter(components.items()))
     tokenizer = first_step.config.tokenizer if isinstance(first_step, ExecutorStep) else first_step.tokenizer
     for name, step in components.items():

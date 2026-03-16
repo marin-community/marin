@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from functools import partial
+from functools import cache, partial
+import os
 
 from levanter.optim import MuonHConfig
 from fray.cluster import ResourceConfig
@@ -18,7 +19,6 @@ from experiments.domain_phase_mix.dolma3_dolmino_top_level_domains import (
     TOP_LEVEL_DOMAIN_TOKEN_COUNTS,
     TOP_LEVEL_TOTAL_AVAILABLE_TOKENS,
     all_top_level_domain_names,
-    top_level_domain_partition_counts,
 )
 from experiments.domain_phase_mix.experiment import (
     DEFAULT_MUON_CONFIG,
@@ -35,6 +35,7 @@ from experiments.evals.task_configs import MMLU_5_SHOT, MMLU_PRO_5_SHOT
 from experiments.marin_models import marin_tokenizer
 from experiments.pretraining_datasets.dolma3_dolmino_pool import tokenize_dolmino_pool_subset
 from experiments.pretraining_datasets.dolma3_pool import tokenize_dolma3_pool_subset
+from marin.processing.tokenize import merge_tokenized_caches
 
 NAME = "pinlin_calvin_xu/data_mixture/two_phase_dolma3_dolmino_top_level"
 EXPERIMENT_BUDGET = 1_200_000_000
@@ -90,27 +91,50 @@ def _partition_step_fn(partition_name: str):
     return partial(tokenize_dolmino_pool_subset, partition_name, tokenizer=marin_tokenizer)
 
 
+@cache
+def _top_level_domain_step(domain_name: str):
+    if domain_name not in TOP_LEVEL_DOMAIN_PARTITIONS:
+        raise ValueError(f"Unknown top-level domain {domain_name}")
+
+    input_steps = {
+        partition_name: _partition_step_fn(partition_name)()
+        for partition_name in TOP_LEVEL_DOMAIN_PARTITIONS[domain_name]
+    }
+    return merge_tokenized_caches(
+        os.path.join("dolma3_dolmino_top_level", domain_name),
+        input_steps,
+        tokenizer=marin_tokenizer,
+        tags=["top_level_domain", domain_name],
+    )
+
+
 def build_top_level_domains() -> list[Domain]:
-    """Build the 31 top-level domains with exact per-partition token counts."""
+    """Build the 31 top-level domains as one merged cache each."""
     domains: list[Domain] = []
     for domain_name in DOMAIN_NAMES:
-        partition_counts = top_level_domain_partition_counts(domain_name)
         components = [
             DatasetComponent(
-                name=partition_name,
-                step_fn=_partition_step_fn(partition_name),
-                weight=token_count,
+                name=domain_name,
+                step_fn=partial(_top_level_domain_step, domain_name),
+                weight=TOP_LEVEL_DOMAIN_TOKEN_COUNTS[domain_name],
             )
-            for partition_name, token_count in partition_counts.items()
         ]
         domains.append(
             Domain(
                 name=domain_name,
                 components=components,
-                description=f"Top-level domain backed by {len(components)} tokenized partitions.",
+                description=(
+                    "Top-level domain backed by one merged tokenized cache assembled from "
+                    f"{len(TOP_LEVEL_DOMAIN_PARTITIONS[domain_name])} partition caches."
+                ),
             )
         )
     return domains
+
+
+def build_top_level_domain_steps() -> dict[str, object]:
+    """Return one merged-cache preparation step per top-level domain."""
+    return {domain_name: _top_level_domain_step(domain_name) for domain_name in DOMAIN_NAMES}
 
 
 def _constant_phase_weights(domain_weights: dict[str, float]) -> dict[str, dict[str, float]]:
