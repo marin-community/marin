@@ -517,8 +517,8 @@ class ControllerTransitions:
                 "INSERT INTO jobs("
                 "job_id, user_id, parent_job_id, root_job_id, depth, request_proto, state, submitted_at_ms, "
                 "root_submitted_at_ms, started_at_ms, finished_at_ms, scheduling_deadline_epoch_ms, "
-                "error, exit_code, num_tasks, is_reservation_holder"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 0)",
+                "error, exit_code, num_tasks, is_reservation_holder, name"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 0, ?)",
                 (
                     job_id.to_wire(),
                     job_id.user,
@@ -533,6 +533,7 @@ class ControllerTransitions:
                     deadline_epoch_ms,
                     validation_error,
                     replicas,
+                    request.name,
                 ),
             )
 
@@ -582,8 +583,8 @@ class ControllerTransitions:
                         "INSERT INTO jobs("
                         "job_id, user_id, parent_job_id, root_job_id, depth, request_proto, state, submitted_at_ms, "
                         "root_submitted_at_ms, started_at_ms, finished_at_ms, scheduling_deadline_epoch_ms, "
-                        "error, exit_code, num_tasks, is_reservation_holder"
-                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, 1)",
+                        "error, exit_code, num_tasks, is_reservation_holder, name"
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, 1, ?)",
                         (
                             holder_id.to_wire(),
                             holder_id.user,
@@ -595,6 +596,7 @@ class ControllerTransitions:
                             effective_submission_ms,
                             root_submitted_ms,
                             len(request.reservation.entries),
+                            holder_request.name,
                         ),
                     )
                     holder_base = self._db.next_sequence("task_priority_insertion", cur=cur)

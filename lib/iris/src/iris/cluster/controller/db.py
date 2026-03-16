@@ -566,6 +566,7 @@ class Job:
     exit_code: int | None = db_field("exit_code", _nullable(_decode_int))
     num_tasks: int = db_field("num_tasks", _decode_int)
     is_reservation_holder: bool = db_field("is_reservation_holder", _decode_bool_int)
+    name: str = db_field("name", _decode_str, default="")
 
     def is_finished(self) -> bool:
         return self.state in TERMINAL_JOB_STATES
@@ -1013,6 +1014,7 @@ class ControllerDB:
         self._conn.row_factory = sqlite3.Row
         self._configure(self._conn)
         self.apply_migrations()
+        self._backfill_job_names()
         self._read_pool: queue.Queue[sqlite3.Connection] = queue.Queue()
         for _ in range(self._READ_POOL_SIZE):
             conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
@@ -1130,6 +1132,22 @@ class ControllerDB:
                     (path.name, Timestamp.now().epoch_ms()),
                 )
 
+    def _backfill_job_names(self) -> None:
+        """Backfill the denormalized name column for existing jobs.
+
+        Extracts name from request_proto for any rows where name is still the
+        default empty string. Runs once at startup after migrations; a no-op
+        once all rows are populated.
+        """
+        rows = self._conn.execute("SELECT job_id, request_proto FROM jobs WHERE name = ''").fetchall()
+        if not rows:
+            return
+        with self.transaction() as cur:
+            for row in rows:
+                proto = cluster_pb2.Controller.LaunchJobRequest()
+                proto.ParseFromString(row[1])
+                cur.execute("UPDATE jobs SET name = ? WHERE job_id = ?", (proto.name, row[0]))
+
     def ensure_user(self, user_id: str, now: Timestamp, role: str = "user") -> None:
         """Create user if not exists. Does not update role for existing users."""
         self.execute(
@@ -1191,6 +1209,7 @@ class ControllerDB:
             self._conn.row_factory = sqlite3.Row
             self._configure(self._conn)
         self.apply_migrations()
+        self._backfill_job_names()
 
     # SQL-canonical read access is exposed through ``snapshot()`` and typed table
     # metadata at module scope. Legacy list/get/count helper methods were removed
