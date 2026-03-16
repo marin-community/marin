@@ -51,15 +51,10 @@ uv run iris --config lib/iris/examples/marin.yaml job stop <JOB_ID>
 
 ### Health Checks
 
-Check the dashboard or API for child job states:
+Check child job states via the Iris CLI (returns per-task state and resourceUsage):
 ```bash
-# Navigate to: http://127.0.0.1:<DASHBOARD_PORT>/#/job/<URL_ENCODED_JOB_ID>
-
-# Or via API — returns per-task state and resourceUsage (memoryMb, diskMb, cpuPercent, etc.)
 # diskMb is updated every ~60s. On K8s it is always 0 (workdir lives inside the pod).
-curl -s -X POST 'http://127.0.0.1:<DASHBOARD_PORT>/iris.cluster.ControllerService/ListTasks' \
-  -H 'Content-Type: application/json' \
-  -d '{"jobId":"<JOB_ID>"}'
+uv run iris --config lib/iris/examples/marin.yaml rpc controller list-tasks --job-id <JOB_ID>
 ```
 
 A healthy zephyr job has:
@@ -73,11 +68,10 @@ The coordinator logs a progress line every 5s:
 [stage0-Map → Scatter] 347/1964 complete, 1617 in-flight, 0 queued, 1828/1891 workers alive, 63 dead
 ```
 
-Fetch via API:
+Fetch via the Iris CLI:
 ```bash
-curl -s -X POST 'http://127.0.0.1:<DASHBOARD_PORT>/iris.cluster.ControllerService/GetTaskLogs' \
-  -H 'Content-Type: application/json' \
-  -d '{"id":"<COORD_JOB_ID>","maxTotalLines":5000,"attemptId":-1,"tail":true}'
+uv run iris --config lib/iris/examples/marin.yaml rpc controller get-task-logs \
+  --id <COORD_JOB_ID> --max-total-lines 5000 --attempt-id -1 --tail
 ```
 
 **Caveat**: With large worker pools, `pull_task` operations flood the log buffer (#3707). Filter when parsing:
@@ -93,10 +87,8 @@ for entry in task_logs:
 
 When logs are flooded, a thread dump tells you if the coordinator is alive and working:
 ```bash
-curl -s -X POST 'http://127.0.0.1:<DASHBOARD_PORT>/iris.cluster.ControllerService/ProfileTask' \
-  -H 'Content-Type: application/json' \
-  -d '{"target":"<COORD_JOB_ID>/0","durationSeconds":1,"profileType":{"threads":{}}}' \
-  | python3 -c "import json,sys,base64; print(base64.b64decode(json.load(sys.stdin)['profileData']).decode())"
+uv run iris --config lib/iris/examples/marin.yaml rpc controller profile-task \
+  --json '{"target":"<COORD_JOB_ID>/0","durationSeconds":1,"profileType":{"threads":{}}}'
 ```
 
 Key patterns:

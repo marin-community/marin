@@ -36,17 +36,14 @@ The Iris dashboard at `http://127.0.0.1:<DASHBOARD_PORT>` proxies to the control
 
 ```bash
 # Task logs (coordinator or workers)
-curl -s -X POST 'http://127.0.0.1:<DASHBOARD_PORT>/iris.cluster.ControllerService/GetTaskLogs' \
-  -H 'Content-Type: application/json' \
-  -d '{"id":"<JOB_ID>","maxTotalLines":5000,"attemptId":-1,"tail":true}'
-# Response: {"taskLogs":[{"taskId":"...","logs":[{"timestamp":{"epochMs":"..."},"source":"stderr","data":"...","level":"INFO"}]}],"truncated":true,"cursor":123}
+# Response includes taskLogs with timestamp, source, data, level; plus truncated flag and cursor
+uv run iris --config lib/iris/examples/marin.yaml rpc controller get-task-logs \
+  --id <JOB_ID> --max-total-lines 5000 --attempt-id -1 --tail
 
 # List tasks (memory, CPU, disk, state per worker)
-curl -s -X POST 'http://127.0.0.1:<DASHBOARD_PORT>/iris.cluster.ControllerService/ListTasks' \
-  -H 'Content-Type: application/json' \
-  -d '{"jobId":"<JOB_ID>"}'
 # Each task's resourceUsage includes: memoryMb, diskMb, cpuPercent, memoryPeakMb, processCount
 # diskMb is updated every ~60s. On K8s it is always 0 (workdir lives inside the pod).
+uv run iris --config lib/iris/examples/marin.yaml rpc controller list-tasks --job-id <JOB_ID>
 ```
 
 ### Iris CLI
@@ -76,14 +73,12 @@ uv run iris process profile cpu --duration 10 --output /tmp/profile.speedscope.j
 uv run iris process profile mem --duration 10 --output /tmp/profile.html --worker <WORKER_ID>
 ```
 
-**Task-level profiling** (inside the task container) is not supported by the CLI yet. Use the dashboard buttons or call the `ProfileTask` RPC directly via curl:
+**Task-level profiling** (inside the task container) is not supported by the CLI scalar flags yet. Use the dashboard buttons or call the `ProfileTask` RPC via `--json`:
 
 ```bash
 # CPU profile a specific task (10s, speedscope JSON)
-curl -s -X POST 'http://127.0.0.1:<DASHBOARD_PORT>/iris.cluster.ControllerService/ProfileTask' \
-  -H 'Content-Type: application/json' \
-  -d '{"target":"<TASK_ID>","durationSeconds":10,"profileType":{"cpu":{"format":"SPEEDSCOPE"}}}' \
-  | python3 -c "import json,sys,base64; d=json.load(sys.stdin); open('/tmp/cpu.speedscope.json','wb').write(base64.b64decode(d['profileData'])); print('Done')"
+uv run iris --config lib/iris/examples/marin.yaml rpc controller profile-task \
+  --json '{"target":"<TASK_ID>","durationSeconds":10,"profileType":{"cpu":{"format":"SPEEDSCOPE"}}}'
 
 # Target format: /user/job-name/child-job/task-index
 # Profile types: {"threads":{}}  {"cpu":{"format":"SPEEDSCOPE"}}  {"memory":{"format":"FLAMEGRAPH"}}
