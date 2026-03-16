@@ -178,10 +178,10 @@ fi
 cd /app
 export DEEPEP_SRC_ROOT=/tmp/DeepEP
 export DEEPEP_BUILD_WITH_TORCH_EXTENSION={1 if args.build_with_torch_extension else 0}
+export DEEPEP_LOAD_AS_PYTHON_MODULE={1 if args.load_as_python_module else 0}
 export JAX_PLATFORMS=cuda
 export JAX_ENABLE_X64=1
 export PYTHONPATH=/opt/conda/lib/python3.11/site-packages${{PYTHONPATH:+:$PYTHONPATH}}
-env | grep -E '^(DEEPEP_SRC_ROOT|JAX_ENABLE_X64|JAX_PLATFORMS)=' | sort
 uv sync --quiet --frozen --link-mode symlink --python 3.11 --package levanter --no-group dev --extra gpu
 .venv/bin/python - <<'PY'
 import jax
@@ -192,6 +192,7 @@ print("JAX_VERSION", jax.__version__)
 print("JAXLIB_VERSION", jaxlib.__version__)
 print("JAX_DEVICES", jax.devices())
 print("DEEPEP_BUILD_WITH_TORCH_EXTENSION", os.environ["DEEPEP_BUILD_WITH_TORCH_EXTENSION"])
+print("DEEPEP_LOAD_AS_PYTHON_MODULE", os.environ["DEEPEP_LOAD_AS_PYTHON_MODULE"])
 print("TORCH_VERSION", torch.__version__)
 PY
 {_smoke_block(args)}
@@ -252,6 +253,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--iters", type=int, default=3)
     parser.add_argument("--build-with-torch-extension", action="store_true")
+    parser.add_argument("--load-as-python-module", action="store_true")
     return parser.parse_args()
 
 
