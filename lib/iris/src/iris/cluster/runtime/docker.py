@@ -72,6 +72,14 @@ def _is_docker_infra_error(stderr: str) -> bool:
     return any(p.lower() in stderr_lower for p in _INFRA_ERROR_PATTERNS)
 
 
+def _has_tpu_device(config: ContainerConfig) -> bool:
+    """Return True when config requests TPU resources."""
+    if not config.resources:
+        return False
+    has_device = config.resources.HasField("device")
+    return has_device and config.resources.device.HasField("tpu")
+
+
 def _build_device_flags(config: ContainerConfig) -> list[str]:
     """Build Docker device flags based on resource configuration.
 
@@ -85,12 +93,13 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
         return flags
 
     has_device = config.resources.HasField("device")
-    has_tpu = has_device and config.resources.device.HasField("tpu")
+    has_tpu = _has_tpu_device(config)
     logger.info("Device flags check: has_device=%s, has_tpu=%s", has_device, has_tpu)
 
     if has_tpu:
         flags.extend(
             [
+                "--privileged",
                 "--device",
                 "/dev/vfio:/dev/vfio",
                 "--shm-size=100g",
@@ -501,17 +510,18 @@ exec {quoted_cmd}
         """Create a Docker container. Returns container_id."""
         config = self.config
         self.runtime.ensure_image(config.image)
+        is_tpu_run_container = include_resources and _has_tpu_device(config)
 
         cmd = [
             "docker",
             "create",
-            "--security-opt",
-            "no-new-privileges",
             "--ulimit",
             "core=0:0",
             "-w",
             config.workdir,
         ]
+        if not is_tpu_run_container:
+            cmd.extend(["--security-opt", "no-new-privileges"])
 
         # Run as the owner of bind-mounted directories
         user_flag = _detect_mount_user(config.mounts)
@@ -523,8 +533,9 @@ exec {quoted_cmd}
         else:
             cmd.append("--add-host=host.docker.internal:host-gateway")
 
-        cmd.extend(["--cap-drop", "ALL"])
-        cmd.extend(["--cap-add", "SYS_PTRACE"])
+        if not is_tpu_run_container:
+            cmd.extend(["--cap-drop", "ALL"])
+            cmd.extend(["--cap-add", "SYS_PTRACE"])
 
         # Device flags (TPU passthrough etc) - only for run container
         if include_resources:
