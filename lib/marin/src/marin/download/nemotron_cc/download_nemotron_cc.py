@@ -21,6 +21,7 @@ import zstandard
 from iris.marin_fs import open_url
 from marin.execution import THIS_OUTPUT_PATH
 from marin.utils import fsspec_exists
+from fray.cluster import ResourceConfig
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 from zephyr import Dataset, ZephyrContext
@@ -113,7 +114,9 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
         .write_jsonl(os.path.join(cfg.output_path, ".metrics/download-{shard:05d}.jsonl"), skip_existing=True)
     )
 
-    ctx = ZephyrContext(name="download-nemotron-cc")
+    # Each worker downloads a ~350MB zstd file and decompresses to ~1.5-2GB in memory.
+    # Default ZephyrContext resources (1GB) causes OOMKill; 4GB gives sufficient headroom.
+    ctx = ZephyrContext(name="download-nemotron-cc", resources=ResourceConfig(cpu=1, ram="4g"))
     ctx.execute(pipeline)
 
     logger.info(f"Downloaded Nemotron CC files to {cfg.output_path}")
