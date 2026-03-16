@@ -314,12 +314,18 @@ def test_stop_controller_duplicate_vms_raises(config):
         stop_controller(platform, config)
 
 
-def test_gcp_controller_vm_config_defaults_to_100gb_disk():
-    """GCP controller VM defaults to 100GB disk."""
+def test_gcp_controller_vm_config_requires_machine_type_and_disk():
+    """GCP controller config must specify machine_type and boot_disk_size_gb."""
     config = config_pb2.IrisClusterConfig()
     config.platform.label_prefix = "test"
     config.controller.gcp.zone = "us-central1-a"
 
-    vm_config = _build_controller_vm_config(config)
+    with pytest.raises(RuntimeError, match=r"controller\.gcp\.machine_type"):
+        _build_controller_vm_config(config)
 
+    # With all required fields, it should succeed
+    config.controller.gcp.machine_type = "n2-standard-4"
+    config.controller.gcp.boot_disk_size_gb = 100
+    vm_config = _build_controller_vm_config(config)
+    assert vm_config.gcp.machine_type == "n2-standard-4"
     assert vm_config.gcp.boot_disk_size_gb == 100

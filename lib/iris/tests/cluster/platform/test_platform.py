@@ -82,6 +82,7 @@ def _make_vm_config(env: PlatformEnv, name: str = "test-controller") -> config_p
     if env.name == "gcp":
         cfg.gcp.zone = env.zone
         cfg.gcp.machine_type = "n2-standard-4"
+        cfg.gcp.boot_disk_size_gb = 100
     elif env.name == "manual":
         cfg.manual.CopyFrom(config_pb2.ManualVmConfig())
     return cfg
@@ -271,6 +272,7 @@ def test_gcp_validate_vm_slice_config_rejects_preemptible():
         name_prefix="test",
         num_vms=1,
         preemptible=True,
+        disk_size_gb=100,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -285,6 +287,8 @@ def test_gcp_validate_vm_slice_config_rejects_num_vms_not_one():
     cfg = config_pb2.SliceConfig(
         name_prefix="test",
         num_vms=2,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        disk_size_gb=100,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -304,6 +308,7 @@ def test_gcp_create_vm_slice_mode_produces_single_worker_slice():
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        disk_size_gb=100,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -347,6 +352,7 @@ def test_gcp_create_vm_slice_mode_with_long_prefix_uses_valid_slice_id():
         name_prefix="smoke-cpu_vm_e2_standard_4_ondemand-europe-west4-b",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        disk_size_gb=100,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -465,6 +471,7 @@ def test_gcp_list_slices_skips_inactive_vm_instances():
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        disk_size_gb=100,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -493,6 +500,7 @@ def test_gcp_list_slices_preserves_vm_creation_timestamp():
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        disk_size_gb=100,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -697,6 +705,7 @@ def test_gcp_vm_slice_bootstrap_monitors_serial_port():
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        disk_size_gb=100,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -742,6 +751,7 @@ def test_gcp_vm_slice_bootstrap_detects_startup_script_failure():
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        disk_size_gb=100,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM

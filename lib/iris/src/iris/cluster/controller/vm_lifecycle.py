@@ -290,13 +290,19 @@ def _build_controller_vm_config(
     if which == "gcp":
         gcp_ctrl = config.controller.gcp
 
-        zone = gcp_ctrl.zone
-        if not zone:
-            raise RuntimeError("controller.gcp.zone is required for GCP controller")
+        missing: list[str] = []
+        if not gcp_ctrl.zone:
+            missing.append("controller.gcp.zone")
+        if not gcp_ctrl.machine_type:
+            missing.append("controller.gcp.machine_type")
+        if not gcp_ctrl.boot_disk_size_gb:
+            missing.append("controller.gcp.boot_disk_size_gb")
+        if missing:
+            raise RuntimeError(f"GCP controller config is missing required fields: {', '.join(missing)}")
 
-        vm_config.gcp.zone = zone
-        vm_config.gcp.machine_type = gcp_ctrl.machine_type or "n2-standard-4"
-        vm_config.gcp.boot_disk_size_gb = gcp_ctrl.boot_disk_size_gb or 100
+        vm_config.gcp.zone = gcp_ctrl.zone
+        vm_config.gcp.machine_type = gcp_ctrl.machine_type
+        vm_config.gcp.boot_disk_size_gb = gcp_ctrl.boot_disk_size_gb
     elif which == "manual":
         manual_ctrl = config.controller.manual
         if not manual_ctrl.host:

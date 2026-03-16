@@ -900,7 +900,7 @@ class TestConfigValidation:
             name="cpu-vm",
             num_vms=1,
             resources=config_pb2.ScaleGroupResources(
-                cpu_millicores=8000, memory_bytes=16 * 1024**3, device_type=config_pb2.ACCELERATOR_TYPE_CPU
+                cpu_millicores=8000, memory_bytes=16 * 1024**3, device_type=config_pb2.ACCELERATOR_TYPE_CPU, disk_bytes=100 * 1024**3
             ),
         )
         sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
