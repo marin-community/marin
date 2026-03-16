@@ -314,12 +314,12 @@ def _worker_addresses(db: ControllerDB) -> dict[WorkerId, str]:
 
 
 def _jobs_in_states(db: ControllerDB, states: tuple[int, ...]) -> list[Job]:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         return q.select(JOBS, where=JOBS.c.state.in_(list(states)))
 
 
 def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = None) -> dict[JobName, TaskJobSummary]:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         rows = q.select(
             TASKS,
             columns=(
@@ -347,13 +347,13 @@ def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = No
 
 
 def _worker_roster(db: ControllerDB) -> list[Worker]:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         return q.select(WORKERS)
 
 
 def _query_endpoints(db: ControllerDB, query: EndpointQuery = EndpointQuery()) -> list[Endpoint]:
     joins, where = endpoint_query_predicate(query)
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         return q.select(
             ENDPOINTS,
             where=where,
@@ -364,7 +364,7 @@ def _query_endpoints(db: ControllerDB, query: EndpointQuery = EndpointQuery()) -
 
 
 def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[Job]:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         return q.select(JOBS, where=JOBS.c.job_id.like(f"{job_id.to_wire()}/%"))
 
 
@@ -380,7 +380,7 @@ def _transaction_actions(db: ControllerDB, limit: int = 100) -> list:
 
 def _live_user_stats(db: ControllerDB) -> list[UserStats]:
     jobs_for_tasks = JOBS.with_alias("ju")
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         job_rows = q.select(
             JOBS,
             columns=(SelectExpr("j.user_id", str, "user_id"), JOBS.c.state),
