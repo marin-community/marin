@@ -465,13 +465,25 @@ def _transaction_actions(db: ControllerDB, limit: int = 100) -> list:
 
 
 def _live_user_stats(db: ControllerDB) -> list[UserStats]:
-    """Aggregate job/task counts per user using SQL GROUP BY."""
+    """Aggregate job/task counts per user for active (non-terminal) jobs."""
+    active_states = ",".join(
+        str(s)
+        for s in (
+            cluster_pb2.JOB_STATE_PENDING,
+            cluster_pb2.JOB_STATE_BUILDING,
+            cluster_pb2.JOB_STATE_RUNNING,
+        )
+    )
     with db.read_snapshot() as q:
-        job_rows = q.raw("SELECT j.user_id, j.state, COUNT(*) as cnt FROM jobs j GROUP BY j.user_id, j.state")
+        job_rows = q.raw(
+            f"SELECT j.user_id, j.state, COUNT(*) as cnt FROM jobs j "
+            f"WHERE j.state IN ({active_states}) GROUP BY j.user_id, j.state"
+        )
         task_rows = q.raw(
-            "SELECT j.user_id, t.state, COUNT(*) as cnt "
-            "FROM tasks t JOIN jobs j ON t.job_id = j.job_id "
-            "GROUP BY j.user_id, t.state"
+            f"SELECT j.user_id, t.state, COUNT(*) as cnt "
+            f"FROM tasks t JOIN jobs j ON t.job_id = j.job_id "
+            f"WHERE j.state IN ({active_states}) "
+            f"GROUP BY j.user_id, t.state"
         )
     by_user: dict[str, UserStats] = {}
     for row in job_rows:
