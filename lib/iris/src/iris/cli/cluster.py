@@ -23,6 +23,7 @@ from iris.cli.build import (
 from iris.cli.main import require_controller_url
 from iris.cluster.config import IrisConfig, make_local_config
 from iris.cluster.manager import stop_all
+from iris.cluster.platform.restart_permissions import RestartPermissionError, RestartScope, ensure_restart_permissions
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_utils import Timestamp
@@ -310,6 +311,14 @@ def cluster_stop(ctx, dry_run: bool, label_override: str | None):
 @click.pass_context
 def cluster_restart(ctx):
     """Restart cluster by stopping then starting."""
+    config = ctx.obj.get("config")
+    if not config:
+        raise click.ClickException("--config is required for cluster restart")
+
+    try:
+        ensure_restart_permissions(config, scope=RestartScope.CLUSTER)
+    except RestartPermissionError as e:
+        raise click.ClickException(str(e)) from e
     ctx.invoke(cluster_stop)
     click.echo("")
     ctx.invoke(cluster_start)
@@ -552,6 +561,11 @@ def controller_restart(ctx):
             "controller restart is not supported for local clusters. "
             "Stop and restart the 'iris cluster start --local' process instead."
         )
+
+    try:
+        ensure_restart_permissions(config, scope=RestartScope.CONTROLLER)
+    except RestartPermissionError as e:
+        raise click.ClickException(str(e)) from e
 
     controller_url = require_controller_url(ctx)
 

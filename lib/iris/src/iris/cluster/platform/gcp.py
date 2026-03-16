@@ -105,6 +105,114 @@ _GCE_VM_SLICE_SSH_USER = "iris"
 # identical args share a single subprocess invocation via per-key locking.
 _GCLOUD_CACHE_TTL_SECS = 5.0
 
+_GCP_RESTART_REQUIRED_ROLE = "roles/resourcemanager.projectIamAdmin"
+_GCP_REQUIRED_PERMISSIONS_BY_SCOPE: dict[str, tuple[str, ...]] = {
+    "cluster": (
+        "compute.instances.create",
+        "compute.instances.delete",
+        "compute.instances.get",
+        "compute.instances.list",
+        "compute.instances.setLabels",
+        "compute.instances.setMetadata",
+        "tpu.nodes.create",
+        "tpu.nodes.delete",
+        "tpu.nodes.get",
+        "tpu.nodes.list",
+    ),
+    "controller": (
+        "compute.instances.get",
+        "compute.instances.list",
+    ),
+}
+
+
+def _run_gcloud_restart_permission_command(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        raise RuntimeError(f"gcloud command failed: {' '.join(cmd)}\nError: {stderr}")
+    return result
+
+
+def _active_gcloud_account_for_restart_permissions() -> str | None:
+    result = _run_gcloud_restart_permission_command(
+        ["gcloud", "auth", "list", "--filter=status:ACTIVE", "--format=value(account)"]
+    )
+    account = result.stdout.strip()
+    return account or None
+
+
+def _active_account_has_project_role_for_restart_permissions(project_id: str, account: str, role: str) -> bool:
+    filter_expr = (
+        f"(bindings.role={role}) AND " f"(bindings.members=user:{account} OR bindings.members=serviceAccount:{account})"
+    )
+    result = _run_gcloud_restart_permission_command(
+        [
+            "gcloud",
+            "projects",
+            "get-iam-policy",
+            project_id,
+            "--flatten=bindings[].members",
+            f"--filter={filter_expr}",
+            "--format=value(bindings.role)",
+        ]
+    )
+    roles = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+    return role in roles
+
+
+def _missing_project_permissions_for_restart(project_id: str, permissions: tuple[str, ...]) -> list[str]:
+    result = _run_gcloud_restart_permission_command(
+        [
+            "gcloud",
+            "projects",
+            "test-iam-permissions",
+            project_id,
+            f"--permissions={','.join(permissions)}",
+            "--format=json",
+        ]
+    )
+    try:
+        payload = json.loads(result.stdout) if result.stdout.strip() else {}
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Failed to parse test-iam-permissions output: {result.stdout}") from e
+
+    granted = set(payload.get("permissions", [])) if isinstance(payload, dict) else set()
+    return [permission for permission in permissions if permission not in granted]
+
+
+def ensure_gcp_restart_permissions(config: config_pb2.IrisClusterConfig, scope: str) -> None:
+    """Ensure active gcloud identity can perform restart operations for a given scope."""
+    platform_kind = config.platform.WhichOneof("platform")
+    if platform_kind != "gcp":
+        raise RuntimeError(f"GCP restart permission check called for non-GCP platform: {platform_kind}")
+
+    project_id = config.platform.gcp.project_id.strip()
+    if not project_id:
+        raise RuntimeError("platform.gcp.project_id is required for GCP restarts.")
+
+    account = _active_gcloud_account_for_restart_permissions()
+    if not account:
+        raise RuntimeError("No active gcloud account found. Run `gcloud auth login` and retry.")
+
+    if not _active_account_has_project_role_for_restart_permissions(project_id, account, _GCP_RESTART_REQUIRED_ROLE):
+        raise RuntimeError(
+            f"Active gcloud account '{account}' is missing required role "
+            f"'{_GCP_RESTART_REQUIRED_ROLE}' on project '{project_id}'."
+        )
+
+    required_permissions = _GCP_REQUIRED_PERMISSIONS_BY_SCOPE.get(scope)
+    if required_permissions is None:
+        supported_scopes = ", ".join(sorted(_GCP_REQUIRED_PERMISSIONS_BY_SCOPE))
+        raise RuntimeError(f"Unknown restart permission scope '{scope}'. Supported scopes: {supported_scopes}")
+
+    missing_permissions = _missing_project_permissions_for_restart(project_id, required_permissions)
+    if missing_permissions:
+        raise RuntimeError(
+            f"Active gcloud account '{account}' is missing required IAM permissions for restart "
+            f"on project '{project_id}': {', '.join(missing_permissions)}"
+        )
+
 
 class _GcloudCache:
     """Thread-safe TTL cache for gcloud subprocess calls.

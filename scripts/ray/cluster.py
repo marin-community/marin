@@ -356,6 +356,17 @@ def _check_cluster_head_running(config_path: str) -> bool:
         return False
 
 
+def _is_gcp_cluster(config_path: str) -> bool:
+    """Return whether the configured Ray provider is GCP."""
+    with open(config_path, "r") as f:
+        config_data = yaml.safe_load(f) or {}
+    provider = config_data.get("provider")
+    if not isinstance(provider, dict):
+        return False
+    provider_type = provider.get("type")
+    return isinstance(provider_type, str) and provider_type.lower() == "gcp"
+
+
 def _download_working_directory(
     cluster_config: str, job_id: str, working_dir: str, remote_working_dir: str, local_path: str
 ) -> str:
@@ -625,6 +636,13 @@ def restart_cluster(ctx, preserve_jobs):
     if not config_obj or not config_path:
         print("Error: --config required for cluster commands", file=sys.stderr)
         sys.exit(1)
+
+    if _is_gcp_cluster(config_path):
+        try:
+            gcp.ensure_active_account_can_restart_cluster(config_obj.project_id)
+        except RuntimeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
 
     print(f"Restarting cluster {config_obj.cluster_name}...")
     backup_dir = tempfile.TemporaryDirectory()
