@@ -16,7 +16,7 @@ uv run iris --config lib/iris/examples/marin.yaml cluster dashboard
 uv run iris --config lib/iris/examples/marin.yaml cluster dashboard-proxy
 ```
 
-You can modify the dashboard frontend locally and serve via `dashboard-proxy` to build custom views on top of the existing API (e.g. aggregate worker memory into a histogram, render stage progress charts). The backend is remote and cannot be changed — only the frontend. If the backend API doesn't expose data you need, file an issue. If you build a useful frontend component during debugging, also file an issue to upstream it.
+You can modify the dashboard frontend locally and serve via `dashboard-proxy` to build custom views on top of the existing API (e.g. aggregate worker memory into a histogram, render stage progress charts). The backend is remote and cannot be changed — only the frontend. If the backend API doesn't expose data you need, file an issue. If you build a useful frontend component during debugging, also file an issue to upstream it. You need to restart the `dashboard-proxy` after making frontend changes.
 
 ## Architecture
 
@@ -32,19 +32,18 @@ Child job naming: `<hash>-p<pipeline>-a<attempt>-{coord,workers}`. Focus on the 
 
 ### Dashboard API (ConnectRPC, JSON)
 
-The Iris dashboard at `http://127.0.0.1:8080` proxies to the controller. The proxy target is shown in the dashboard header (`Proxy → http://127.0.0.1:<port>`).
+The Iris dashboard at `http://127.0.0.1:<DASHBOARD_PORT>` proxies to the controller. The proxy target is shown in the dashboard header (`Proxy → http://127.0.0.1:<port>`).
 
 ```bash
 # Task logs (coordinator or workers)
-curl -s -X POST 'http://127.0.0.1:8080/iris.cluster.ControllerService/GetTaskLogs' \
-  -H 'Content-Type: application/json' \
-  -d '{"id":"<JOB_ID>","maxTotalLines":5000,"attemptId":-1,"tail":true}'
-# Response: {"taskLogs":[{"taskId":"...","logs":[{"timestamp":{"epochMs":"..."},"source":"stderr","data":"...","level":"INFO"}]}],"truncated":true,"cursor":123}
+# Response includes taskLogs with timestamp, source, data, level; plus truncated flag and cursor
+uv run iris --config lib/iris/examples/marin.yaml rpc controller get-task-logs \
+  --id <JOB_ID> --max-total-lines 5000 --attempt-id -1 --tail
 
-# List tasks (memory, CPU, state per worker)
-curl -s -X POST 'http://127.0.0.1:8080/iris.cluster.ControllerService/ListTasks' \
-  -H 'Content-Type: application/json' \
-  -d '{"jobId":"<JOB_ID>"}'
+# List tasks (memory, CPU, disk, state per worker)
+# Each task's resourceUsage includes: memoryMb, diskMb, cpuPercent, memoryPeakMb, processCount
+# diskMb is updated every ~60s. On K8s it is always 0 (workdir lives inside the pod).
+uv run iris --config lib/iris/examples/marin.yaml rpc controller list-tasks --job-id <JOB_ID>
 ```
 
 ### Iris CLI
@@ -74,14 +73,12 @@ uv run iris process profile cpu --duration 10 --output /tmp/profile.speedscope.j
 uv run iris process profile mem --duration 10 --output /tmp/profile.html --worker <WORKER_ID>
 ```
 
-**Task-level profiling** (inside the task container) is not supported by the CLI yet. Use the dashboard buttons or call the `ProfileTask` RPC directly via curl:
+**Task-level profiling** (inside the task container) is not supported by the CLI scalar flags yet. Use the dashboard buttons or call the `ProfileTask` RPC via `--json`:
 
 ```bash
 # CPU profile a specific task (10s, speedscope JSON)
-curl -s -X POST 'http://127.0.0.1:8080/iris.cluster.ControllerService/ProfileTask' \
-  -H 'Content-Type: application/json' \
-  -d '{"target":"<TASK_ID>","durationSeconds":10,"profileType":{"cpu":{"format":"SPEEDSCOPE"}}}' \
-  | python3 -c "import json,sys,base64; d=json.load(sys.stdin); open('/tmp/cpu.speedscope.json','wb').write(base64.b64decode(d['profileData'])); print('Done')"
+uv run iris --config lib/iris/examples/marin.yaml rpc controller profile-task \
+  --json '{"target":"<TASK_ID>","durationSeconds":10,"profileType":{"cpu":{"format":"SPEEDSCOPE"}}}'
 
 # Target format: /user/job-name/child-job/task-index
 # Profile types: {"threads":{}}  {"cpu":{"format":"SPEEDSCOPE"}}  {"memory":{"format":"FLAMEGRAPH"}}
@@ -120,12 +117,12 @@ for entry in task_logs:
 ### Straggler Detection
 
 1. **Progress line**: `in-flight >> 0` with `queued == 0` means stragglers — no new work to assign, waiting on slow shards.
-2. **Memory distribution**: Query `ListTasks` and bucket by memory. Idle workers: <200 MB. Finished workers: 1-5 GB. Stragglers: >5 GB (or high CPU).
+2. **Memory/disk distribution**: Query `ListTasks` and bucket by `memoryMb` and `diskMb`. Idle workers: <200 MB memory. Finished workers: 1-5 GB. Stragglers: >5 GB memory (or high CPU/disk).
 3. **THR on high-memory workers**: Confirm they're in `_execute_shard` with `active+gil`. The user function in the stack identifies the bottleneck.
 
 ### Data Skew
 
-Symptom: most shards complete fast, a few take orders of magnitude longer. The reduce function's complexity matters — O(n²) in group size (e.g. all-pairs link generation) turns hot keys into multi-hour stragglers.
+Symptom: most shards complete fast, a few take orders of magnitude longer.
 
 Diagnosis: THR on the straggler worker shows the user-level reduce function holding the GIL. Compare memory across workers — skewed keys produce 10-100x memory outliers.
 
@@ -133,33 +130,18 @@ Diagnosis: THR on the straggler worker shows the user-level reduce function hold
 
 Workers that failed and got reassigned show in the task table with an error like `Worker ... failed: Request timed out`. The replacement worker starts fresh (low memory) and must re-pull a task — if no tasks remain queued, it idles.
 
+### Misleading Diagnostics
+
+**"Terminated by user"** does not necessarily mean a human killed the job. The system uses this message for various internal termination reasons. Always check the actual logs at each level (parent job, coordinator, workers) to determine the real cause.
+
 ## Requesting New Tools
 
 If debugging reveals a need for capabilities not exposed by the existing API or CLI — e.g. you find yourself wanting to SSH into a worker to inspect something — do not work around it. File an issue requesting the capability be exposed as a proper RPC endpoint or CLI command. The platform should provide the tools; agents and users should not need to SSH into machines to debug.
 
-## Iterating: Fix → Rerun → Observe
+## After a Fix
 
-When debugging leads to a code fix, you need to rerun the job to verify. Before rerunning:
+When debugging leads to a code fix, use the **zephyr-babysit** skill to stop the current job, resubmit, and monitor the new run. Then spot-check the fix:
 
-1. **Ask the user** whether it's okay to stop the current job and rerun.
-2. **Stop the job** (with user permission):
-   ```bash
-   uv run iris --config lib/iris/examples/marin.yaml job stop <JOB_ID>
-   ```
-3. **Get the run command** from the user. Zephyr jobs are launched via experiment scripts through the Iris job submission flow. The exact invocation varies per experiment.
-
-### Monitoring a New Run
-
-After submitting, monitor in escalating stages:
-
-1. **Smoke check (first 2-5 minutes)**: Verify the job doesn't fail immediately. Confirm coordinator and workers child jobs appear and reach RUNNING state. Check for early errors in coordinator logs. If it fails here, dig into the error — likely a code bug or config issue.
-
-2. **Steady-state monitoring**: Once workers are executing shards, check stage progress via the coordinator logs. Confirm two things: (a) shards are completing within the current stage, and (b) stages are advancing. Calibrate your check-in interval to the pipeline — you want to see at least one stage transition between checks. For pipelines with many short stages, check every few minutes. For pipelines with few long stages, every 15-30 minutes may suffice.
-
-3. **Spot-check for regressions**: When most shards are complete, THR-sample a few active workers to confirm your fix had the intended effect (e.g. the hot function is no longer dominating the stack). Check memory distribution — are stragglers still present? How do they compare to the old run?
-
-4. **Investigate anomalies**: If something looks wrong (unexpected stragglers, high memory, slow progress), escalate:
-   - THR samples to identify the bottleneck function
-   - CPU profile (via `ProfileTask` RPC) for a detailed flamegraph
-   - Memory profile if memory is the concern
-   - Form a specific hypothesis, gather evidence, and iterate
+- THR-sample active workers to confirm the hot function is no longer dominating the stack
+- Check memory distribution — are stragglers still present? How do they compare to the old run?
+- If new anomalies appear, continue debugging with the techniques above
