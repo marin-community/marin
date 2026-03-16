@@ -425,3 +425,40 @@ If a host-only all-ranks dispatch round still hangs after the `CUDAExtension` / 
     - same-process DeepEP runtime assumptions,
     - rendezvous/progress ordering,
     - or runtime-manager ownership of the multi-rank dispatch lifecycle
+
+## Hypothesis 12
+
+If the same-process host-only control still hangs on a tiny deterministic case, then the bug is not specific to the larger sealed `#3633` payload shape.
+
+## Changes to make
+
+- Reuse the existing host-only control with a much smaller shape:
+  - `tokens=128` globally (`16` per rank)
+  - `hidden=128`
+  - `num_experts=8`
+  - `topk=1`
+- Keep the same:
+  - isolated CoreWeave H100x8 lane
+  - `CUDAExtension` / Python-extension load path
+  - launch-debug instrumentation
+
+## Future Work
+
+- [ ] Add stage-by-stage host logs for each rank around `notify_dispatch`, `WaitForRecvCounts`, and `dispatch`
+- [ ] Check whether channel `0` is consistently the outlier on the tiny case
+- [ ] Decide between a process-per-rank control and a stricter same-process debug mode as the next fork
+
+## Results
+
+- The tiny deterministic control still reaches a healthy H100 dispatch launch:
+  - `attr_status_code=0`, `set_attr_status_code=0`
+  - `binary_version=90`, `ptx_version=90`
+- It still hangs after launch:
+  - repeated receiver timeout lines with `tokens remained: 1`
+  - several ranks also show `tokens remained: 11` on channel `0`
+  - final surfaced failure:
+    - `rank 2: cudaStreamSynchronize(dispatch): unspecified launch failure`
+- Conclusion:
+  - the post-launch hang is not a large-shape artifact
+  - the same-process failure survives even on the smallest deterministic case tried so far
+  - that strengthens the case that the remaining bug lives in same-process runtime/progress behavior rather than in specific routing payloads or the larger benchmark shape

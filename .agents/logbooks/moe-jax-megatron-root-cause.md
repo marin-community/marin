@@ -803,3 +803,50 @@
   - Shrink the host-only control toward the smallest deterministic case (`topk=1`, `num_experts=8`, smaller token count) to test whether the current hang is shape-independent or triggered by the larger sealed shape.
   - Instrument the host-only round more precisely around `notify_dispatch`, `WaitForRecvCounts`, and `dispatch` completion so we can see whether one rank or channel is the first to stop making progress.
   - Compare the same-process host-only control against a process-per-rank control if the minimal same-process case still hangs.
+
+### 2026-03-15 17:37 PDT - Minimal deterministic same-process host round still hangs
+
+- Hypothesis:
+  - If the host-only control still fails on the smallest deterministic case (`tokens_per_rank=16`, `hidden=128`, `experts=8`, `topk=1`), then the remaining bug is not specific to the larger sealed `#3633` shape.
+- Command:
+  ```bash
+  KUBECONFIG=/Users/romain/.kube/coreweave-iris \
+  uv run .agents/scripts/deepep_jax_transport_krt.py \
+    --config lib/iris/examples/coreweave-moe-jax-3677.yaml \
+    --worktree /Users/romain/marin-wt/moe-jax-megatron-root-cause \
+    --build-with-torch-extension \
+    --load-as-python-module \
+    --host-dispatch-round-only \
+    --launch-debug \
+    --launch-debug-label host-round-min \
+    --tokens 128 \
+    --hidden 128 \
+    --experts 8 \
+    --topk-list 1 \
+    --distributions random
+  ```
+- Config:
+  - Same isolated CoreWeave lane and `CUDAExtension` / Python-extension load path as the previous host-only control
+  - Dispatch shape inside the host round: `num_tokens=16` per rank, `hidden=128`, `num_experts=8`, `num_topk=1`
+- Result:
+  - The host-only control again reaches a valid H100 dispatch launch:
+    - `attr_status_code=0`, `set_attr_status_code=0`
+    - `binary_version=90`, `ptx_version=90`
+  - It still hangs in dispatch progress:
+    - repeated receiver timeout lines with `tokens remained: 1`
+    - some ranks also show `tokens remained: 11` on channel `0`
+    - final Python-side failure:
+      - `rank 2: cudaStreamSynchronize(dispatch): unspecified launch failure`
+- Interpretation:
+  - The post-launch hang is not a large-shape artifact.
+  - The same-process host-only failure survives even on a tiny deterministic case that matches the external advice.
+  - That makes “bad routing payload for the large shape” much less likely and pushes the remaining explanation further toward:
+    - same-process DeepEP runtime assumptions,
+    - channel/progress ordering,
+    - or a runtime-manager lifecycle bug that is shape-independent.
+- Next action:
+  - Add per-rank host logging around the exact stage transitions inside the host-only control.
+  - Inspect whether channel `0` is systematically the outlier on the tiny case.
+  - Decide whether the next isolating control should be:
+    - a process-per-rank execution model, or
+    - a stricter same-process debug mode with fewer simultaneous channels / simpler launch ordering.

@@ -158,6 +158,16 @@ Pure-JAX DeepEP transport bring-up:
     - repeated `DeepEP timeout for dispatch senders ...`
     - final `CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure`
   - so the remaining blocker is no longer well-described as an XLA-specific execution bug; it reproduces in a same-process host-only dispatch round using the same singleton runtime manager
+- The smallest deterministic same-process host round also fails:
+  - shape: `tokens=128` globally (`16` per rank), `hidden=128`, `num_experts=8`, `topk=1`
+  - launch debug is still healthy:
+    - `attr_status_code=0`, `set_attr_status_code=0`
+    - `binary_version=90`, `ptx_version=90`
+  - but post-launch progress still stalls:
+    - repeated receiver timeout lines with `tokens remained: 1`
+    - several ranks also show `tokens remained: 11` on channel `0`
+    - final surfaced failure: `rank 2: cudaStreamSynchronize(dispatch): unspecified launch failure`
+  - so the remaining same-process host-round bug is not specific to the larger sealed `#3633` shape either
 
 Root-cause summary:
 1. `#3665` never exercised the winning DeepEP / Hybrid-EP transport kernels. It only replaced dispatch-layout metadata and then still used JAX `ragged_all_to_all`.
@@ -174,6 +184,7 @@ Root-cause summary:
    - `shard_map`: multi-GPU progress / rendezvous during live transport
    - `pmap`: peer-access-state ownership and ordering during JAX input placement
 12. The new host-only same-process dispatch control shows that the post-launch hang is not confined to JAX execution APIs. With the extension-style build, the remaining failure now reproduces even outside `jax.jit`, `shard_map`, and `pmap`, which points at same-process DeepEP runtime assumptions or rendezvous/progress ordering rather than XLA custom-call semantics alone.
+13. The smallest deterministic same-process host round still hangs, so the remaining failure is not a large-shape artifact. That further weakens “bad payload for the sealed shape” and strengthens the case for a shape-independent same-process runtime/progress bug.
 
 ## Decision Log
 
@@ -208,5 +219,6 @@ The root cause is now specific:
   - `shard_map` reaches real transport and then times out / launches fail during receiver progress
   - `pmap` collides with peer-access setup before transport launch
 - The newest same-process host-only control sharpens that further: once the extension-style build clears symbol resolution, the dispatch hang reproduces even without JAX execution APIs. That suggests the next debugging layer is the same-process runtime/rendezvous model itself, not just XLA custom-call sequencing.
+- The tiny deterministic rerun sharpens it again: the hang survives even on `tokens_per_rank=16, hidden=128, experts=8, topk=1`, so the next step should focus on runtime/progress instrumentation or changing the process model, not on large-shape-specific routing data.
 
 The next meaningful follow-up is therefore not “retune `deepep_layout_ragged_a2a`”. It is to compare the raw shared-library load/init path against a working Python-extension-style load path even more directly, for example by probing the same raw library immediately after load but before runtime init, or by loading the raw `.so` through CPython extension machinery instead of `ctypes`, to isolate the remaining in-process CUDA registration difference.
