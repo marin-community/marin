@@ -39,4 +39,11 @@ def build_device_env_vars(config: ContainerConfig) -> dict[str, str]:
         # Jax likes to ignore the fact we're on a TPU for some reason.
         env["JAX_FORCE_TPU_INIT"] = "1"
 
+        # libtpu needs TPU_ACCELERATOR_TYPE to infer the chip topology (e.g. 2x2x1
+        # for v4-8). Without it, libtpu falls back to querying the GCE metadata
+        # service, which fails inside Docker containers.
+        tpu_variant = config.resources.device.tpu.variant
+        if tpu_variant:
+            env["TPU_ACCELERATOR_TYPE"] = tpu_variant
+
     return env
