@@ -12,6 +12,7 @@ stale worker state or chaos bleed. Chaos state is also reset per-test via an
 autouse fixture.
 """
 
+import fcntl
 import logging
 import os
 import shutil
@@ -48,16 +49,28 @@ DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _ensure_dashboard_built():
-    """Build dashboard assets once per session so dashboard tests have content to render."""
+def _ensure_dashboard_built(tmp_path_factory):
+    """Build dashboard assets once per session so dashboard tests have content to render.
+
+    With pytest-xdist each worker gets its own session fixture, so all 8 workers
+    race to run ``npm ci`` in the same directory — corrupting node_modules.
+    A filelock serialises this so only one worker installs at a time.
+    """
     dashboard_dir = IRIS_ROOT / "dashboard"
     if not (dashboard_dir / "package.json").exists():
         return
     if shutil.which("npm") is None:
         logging.getLogger(__name__).warning("npm not found, skipping dashboard build for tests")
         return
-    subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True, capture_output=True)
-    subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, check=True, capture_output=True)
+
+    lock_path = tmp_path_factory.getbasetemp().parent / "dashboard_build.lock"
+    with open(lock_path, "w") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True, capture_output=True)
+            subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, check=True, capture_output=True)
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
 
 def pytest_addoption(parser):

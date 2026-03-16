@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import threading
 import time
@@ -42,6 +43,8 @@ from iris.cluster.runtime.types import (
     ContainerStats,
     ContainerStatus,
     ImageInfo,
+    MountKind,
+    MountSpec,
 )
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
@@ -70,6 +73,16 @@ def _is_docker_infra_error(stderr: str) -> bool:
     """Return True if *stderr* matches a known infrastructure failure pattern."""
     stderr_lower = stderr.lower()
     return any(p.lower() in stderr_lower for p in _INFRA_ERROR_PATTERNS)
+
+
+@dataclass(frozen=True)
+class ResolvedMount:
+    """A MountSpec resolved to concrete host and container paths for Docker."""
+
+    host_path: str
+    container_path: str
+    mode: str  # "rw" or "ro"
+    kind: MountKind
 
 
 def _build_device_flags(config: ContainerConfig) -> list[str]:
@@ -104,17 +117,17 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
     return flags
 
 
-def _detect_mount_user(mounts: list[tuple[str, str, str]]) -> str | None:
+def _detect_mount_user(mounts: list[ResolvedMount]) -> str | None:
     """Detect user to run container as based on bind mount ownership.
 
     When bind-mounting directories owned by non-root users, the container
     must run as that user to have write access. Returns "uid:gid" for
     --user flag, or None to run as root.
     """
-    for host_path, _container_path, mode in mounts:
-        if "w" not in mode:
+    for mount in mounts:
+        if "w" not in mount.mode:
             continue
-        path = Path(host_path)
+        path = Path(mount.host_path)
         if not path.exists():
             continue
         stat = path.stat()
@@ -234,6 +247,7 @@ class DockerContainerHandle:
 
     config: ContainerConfig
     runtime: "DockerRuntime"
+    _resolved_mounts: list[ResolvedMount] = field(default_factory=list, repr=False)
     _run_container_id: str | None = field(default=None, repr=False)
 
     @property
@@ -312,9 +326,9 @@ class DockerContainerHandle:
 
     def _write_setup_script(self, script: str) -> None:
         """Write the setup script to the workdir mount."""
-        for host_path, container_path, _mode in self.config.mounts:
-            if container_path == "/app":
-                (Path(host_path) / "_setup_env.sh").write_text(script)
+        for rm in self._resolved_mounts:
+            if rm.container_path == "/app":
+                (Path(rm.host_path) / "_setup_env.sh").write_text(script)
                 return
         raise RuntimeError("No /app mount found in config")
 
@@ -356,9 +370,9 @@ exec {quoted_cmd}
 
     def _write_run_script(self, script: str) -> None:
         """Write the run script to the workdir mount."""
-        for host_path, container_path, _mode in self.config.mounts:
-            if container_path == "/app":
-                (Path(host_path) / "_run.sh").write_text(script)
+        for rm in self._resolved_mounts:
+            if rm.container_path == "/app":
+                (Path(rm.host_path) / "_run.sh").write_text(script)
                 return
         raise RuntimeError("No /app mount found in config")
 
@@ -382,6 +396,15 @@ exec {quoted_cmd}
         if not self._run_container_id:
             return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
         return self._docker_stats(self._run_container_id)
+
+    def disk_usage_mb(self) -> int:
+        """Return used space in MB on the filesystem containing the workdir."""
+        for rm in self._resolved_mounts:
+            if rm.container_path == self.config.workdir:
+                path = Path(rm.host_path)
+                if path.exists():
+                    return int(shutil.disk_usage(path).used / (1024 * 1024))
+        return 0
 
     def profile(self, duration_seconds: int, profile_type: "cluster_pb2.ProfileType") -> bytes:
         """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
@@ -514,7 +537,7 @@ exec {quoted_cmd}
         ]
 
         # Run as the owner of bind-mounted directories
-        user_flag = _detect_mount_user(config.mounts)
+        user_flag = _detect_mount_user(self._resolved_mounts)
         if user_flag:
             cmd.extend(["--user", user_flag])
 
@@ -555,8 +578,8 @@ exec {quoted_cmd}
             cmd.extend(["-e", f"{k}={v}"])
 
         # Mounts
-        for host, container, mode in config.mounts:
-            cmd.extend(["-v", f"{host}:{container}:{mode}"])
+        for rm in self._resolved_mounts:
+            cmd.extend(["-v", f"{rm.host_path}:{rm.container_path}:{rm.mode}"])
 
         cmd.append(config.image)
         cmd.extend(command)
@@ -712,7 +735,8 @@ class DockerRuntime:
     Tracks all created containers for cleanup on shutdown.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, cache_dir: Path) -> None:
+        self._cache_dir = cache_dir
         self._handles: list[DockerContainerHandle] = []
         self._created_containers: set[str] = set()
         # Serializes `docker pull` per image tag so that concurrent task threads
@@ -764,15 +788,39 @@ class DockerRuntime:
             logger.info("Image %s pulled successfully", image)
             self._pulled_images.add(image)
 
+    def resolve_mounts(self, mounts: list[MountSpec], workdir_host_path: Path | None = None) -> list[ResolvedMount]:
+        """Convert semantic MountSpecs to ResolvedMount instances.
+
+        Creates host directories as needed. WORKDIR uses the explicit host path
+        (created by task_attempt) and mounts tmpfs on it for isolation.
+        CACHE and TMPFS get dirs under fast_io_dir.
+        """
+        result: list[ResolvedMount] = []
+        for mount in mounts:
+            mode = "ro" if mount.read_only else "rw"
+            if mount.kind == MountKind.WORKDIR:
+                if workdir_host_path is None:
+                    raise RuntimeError("WORKDIR mount requires workdir_host_path")
+                result.append(ResolvedMount(str(workdir_host_path), mount.container_path, mode, mount.kind))
+            elif mount.kind in (MountKind.TMPFS, MountKind.CACHE):
+                host_dir = self._cache_dir / mount.container_path.strip("/").replace("/", "-")
+                host_dir.mkdir(parents=True, exist_ok=True)
+                result.append(ResolvedMount(str(host_dir), mount.container_path, mode, mount.kind))
+        return result
+
     def create_container(self, config: ContainerConfig) -> DockerContainerHandle:
         """Create a container handle from config.
 
         The handle is not started - call handle.build() then handle.run()
         to execute the container.
         """
-        handle = DockerContainerHandle(config=config, runtime=self)
+        resolved = self.resolve_mounts(config.mounts, workdir_host_path=config.workdir_host_path)
+        handle = DockerContainerHandle(config=config, runtime=self, _resolved_mounts=resolved)
         self._handles.append(handle)
         return handle
+
+    def prepare_workdir(self, workdir: Path, disk_bytes: int) -> None:
+        """No-op: workdirs live on cache_dir (/dev/shm/iris) which is already tmpfs."""
 
     def stage_bundle(
         self,
