@@ -462,3 +462,33 @@ The remaining open issues are now much narrower:
 - a consistent `x_max_abs=1.785707e-02` drift on the `topk=8` cells while `topk_weights` remain exact
 
 So the live question is no longer “why is JAX so far behind?” The live question is whether those remaining two issues are enough to keep the thread open, or whether the transport-root-cause question is already answered strongly enough to seal.
+
+## Closing assessment
+
+At this point, I think the transport-root-cause question is answered strongly enough to seal.
+
+Why:
+
+1. The original large JAX/Torch gap is explained.
+   - The earlier negative JAX story mixed together:
+     - a layout-only path that never exercised the winning transport kernels
+     - and later a real pure-JAX path that was still being timed in a reduced debug transport configuration
+2. The corrected pure-JAX transport path now runs successfully on H100x8 and is broadly competitive on the same-shape matrix.
+   - Across the four transport cells, Torch/JAX is only about:
+     - `1.54x`
+     - `1.23x`
+     - `1.22x`
+     - `1.10x`
+3. The remaining `topk=8` drift looks plausibly numerical rather than transport-corruption-specific.
+   - A local bf16 fan-in sanity check outside the transport path produced:
+     - `err2=0.000000000`
+     - `err8=0.031250000`
+   - That is the same order as the observed transport-side `topk=8` drift:
+     - `x_max_abs=1.785707e-02`
+4. The remaining teardown noise is real, but it is now clearly separate from the main transport-performance/root-cause question.
+
+So the final conclusion of this experiment is:
+
+- The earlier “JAX cannot reach the Torch/Megatron DeepEP gains” story was mostly a methodology/configuration artifact.
+- A real pure-JAX DeepEP transport path on H100x8 does recover most of the transport-side advantage once it uses the actual `20`-SM DeepEP-style regime.
+- The residual gap is much smaller than originally thought and is now in the range where follow-up work should be framed as optimization/cleanup, not as a missing-feasibility or missing-kernel-coverage question.

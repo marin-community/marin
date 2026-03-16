@@ -1221,3 +1221,34 @@
 - Next action:
   - Update `#3677` again because this is a second major milestone.
   - Decide whether to seal the transport-root-cause question now, or spend one more short pass on explaining the `topk=8` bf16 drift and teardown noise.
+
+### 2026-03-15 20:38 PDT - Local bf16 fan-in sanity check makes the `topk=8` drift look plausibly numerical, not transport-corruption-specific
+
+- Hypothesis:
+  - The consistent `x_max_abs=1.785707e-02` seen on both `topk=8` cells may be a generic bf16 accumulation artifact from summing multiple copies before dividing by fanout, rather than evidence of a transport-path corruption bug.
+- Command:
+  ```bash
+  uv run python - <<'PY'
+  import jax
+  import jax.numpy as jnp
+
+  key = jax.random.key(0)
+  x = jax.random.normal(key, (32768, 2048), dtype=jnp.float32)
+  xbf = x.astype(jnp.bfloat16)
+  acc2 = sum([xbf for _ in range(2)])
+  err2 = float(jnp.max(jnp.abs(acc2.astype(jnp.float32) / 2.0 - xbf.astype(jnp.float32))))
+  acc8 = sum([xbf for _ in range(8)])
+  err8 = float(jnp.max(jnp.abs(acc8.astype(jnp.float32) / 8.0 - xbf.astype(jnp.float32))))
+  print(f"err2={err2:.9f}")
+  print(f"err8={err8:.9f}")
+  PY
+  ```
+- Result:
+  - `err2=0.000000000`
+  - `err8=0.031250000`
+- Interpretation:
+  - This is not a proof about the transport kernel itself, but it is strong supporting evidence that the observed `topk=8` drift magnitude is compatible with plain bf16 fan-in effects.
+  - The observed transport-check drift (`1.785707e-02`) is smaller than the naive local bf16 fan-in toy result (`3.125e-02`) and of the same order.
+  - That makes it much less likely that the `topk=8` `x_max_abs` is a show-stopping transport corruption signal.
+- Conclusion:
+  - The remaining unresolved points are now small enough that the transport-root-cause question itself is probably ready to seal.

@@ -698,3 +698,33 @@ The corrected pure-JAX transport path is now broadly competitive across the same
   - `runs, topk=8`: Torch/JAX `1.10x`
 
 This is now a fundamentally different state from the earlier debug-config comparison. The pure-JAX transport path is no longer “far behind Torch” in a vague sense. On the corrected same-shape matrix, it is within about `10%` to `54%` depending on the cell, with the tightest gaps on the `topk=8` transport-heavy cells.
+
+## Hypothesis 18
+
+The `topk=8` `x_max_abs=1.785707e-02` drift is likely consistent with bf16 fan-in noise rather than a transport-specific corruption bug.
+
+## Changes to make
+
+- Run a tiny local sanity check outside the transport path:
+  - create a random bf16 tensor
+  - sum it with itself `2` and `8` times
+  - divide back down in float32
+  - compare against the original bf16 tensor in the same way the benchmark’s `CHECK` logic does
+
+## Future Work
+
+- [ ] If someone still cares about the `topk=8` drift after sealing, build a smaller deterministic GPU reproducer to check whether the exact transport path and naive bf16 fan-in align more closely
+- [ ] Split teardown noise into its own follow-up if needed
+
+## Results
+
+- Local CPU/JAX bf16 fan-in sanity check:
+  - `err2=0.000000000`
+  - `err8=0.031250000`
+- The observed transport-side `topk=8` drift is:
+  - `x_max_abs=1.785707e-02`
+- Interpretation:
+  - the observed drift is smaller than the naive bf16 fan-in toy result but clearly in the same order of magnitude
+  - that makes the transport-side `topk=8` drift much more plausibly “expected bf16 accumulation noise under larger fan-in” than “evidence of token corruption or a broken transport handle”
+
+At this point the remaining uncertainty is too small to overturn the transport-root-cause conclusion.
