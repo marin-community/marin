@@ -1,0 +1,9 @@
+{
+  "topic": "moe-jax-deepep-benchmark-reintegration",
+  "started_at_utc": "2026-03-16T05:54:41.600101Z",
+  "target_end_at_utc": "2026-03-16T13:54:41.600101Z",
+  "issue_url": "https://github.com/marin-community/marin/issues/3711",
+  "originating_issue": 3677,
+  "baseline_commit": "6baa08edbd8ae9a782d0070a3b7cf0e1f38ba005",
+  "notes": "Persistent session memory for the next-round reintegration/attribution experiment."
+}
