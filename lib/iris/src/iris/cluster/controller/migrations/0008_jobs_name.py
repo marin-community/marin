@@ -4,8 +4,14 @@
 import sqlite3
 
 
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    return column in columns
+
+
 def migrate(conn: sqlite3.Connection) -> None:
-    conn.execute("ALTER TABLE jobs ADD COLUMN name TEXT NOT NULL DEFAULT ''")
+    if not _has_column(conn, "jobs", "name"):
+        conn.execute("ALTER TABLE jobs ADD COLUMN name TEXT NOT NULL DEFAULT ''")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_name ON jobs(name)")
 
     # Backfill name from request_proto in batches to avoid holding the write lock too long.

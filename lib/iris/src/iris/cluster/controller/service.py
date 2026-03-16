@@ -383,12 +383,15 @@ def _jobs_paginated(
         WHERE {where_clause}
         GROUP BY j.job_id
         ORDER BY {order_expr} {direction}
-        LIMIT ? OFFSET ?
     """
+    select_params = list(params)
+    if limit > 0:
+        select_sql += " LIMIT ? OFFSET ?"
+        select_params.extend([limit, offset])
 
     with db.read_snapshot() as q:
         total = q.execute_sql(count_sql, tuple(params)).fetchone()[0]
-        rows = q.execute_sql(select_sql, tuple([*params, limit, offset])).fetchall()
+        rows = q.execute_sql(select_sql, tuple(select_params)).fetchall()
 
     jobs = [db.decode_job(row) for row in rows]
     return jobs, total
@@ -934,7 +937,7 @@ class ControllerServiceImpl:
         reverse = sort_dir == cluster_pb2.Controller.SORT_DIRECTION_DESC
 
         offset = max(request.offset, 0)
-        limit = min(request.limit, 500) if request.limit > 0 else 500
+        limit = min(request.limit, 500) if request.limit > 0 else 0
 
         state_filter_int: int | None = None
         if state_filter:
@@ -957,7 +960,7 @@ class ControllerServiceImpl:
         )
         task_summaries = _task_summaries_for_jobs(self._db, {j.job_id for j in jobs})
         all_jobs = self._jobs_to_protos(jobs, task_summaries, autoscaler_pending_hints)
-        has_more = offset + limit < total_count
+        has_more = limit > 0 and offset + limit < total_count
         return cluster_pb2.Controller.ListJobsResponse(
             jobs=all_jobs,
             total_count=total_count,
