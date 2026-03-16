@@ -410,7 +410,7 @@ class LocalPlatform:
                 db_path=self._cache_path / f"bundles-{worker_id}.sqlite3",
                 controller_address=self._controller_address,
             )
-            container_runtime = ProcessRuntime()
+            container_runtime = ProcessRuntime(cache_dir=self._cache_path / worker_id)
             worker_port = find_free_port()
 
             # Collect extra worker attributes from scale group config

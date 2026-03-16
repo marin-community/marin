@@ -53,28 +53,7 @@ from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
 
-_TMPFS_DIR = Path("/dev/shm/iris")
-_TMPFS_MIN_FREE_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB
-
-
-def get_fast_io_dir(cache_dir: Path) -> Path:
-    """Return a fast IO directory for ephemeral task data.
-
-    Prefers /dev/shm/iris (tmpfs) for memory-speed IOPS when available and has
-    sufficient free space.  Falls back to *cache_dir* on persistent disk.
-    """
-    try:
-        if _TMPFS_DIR.is_dir():
-            stat = os.statvfs(_TMPFS_DIR)
-            free_bytes = stat.f_bavail * stat.f_frsize
-            if free_bytes >= _TMPFS_MIN_FREE_BYTES:
-                logger.info("Using tmpfs at %s for fast IO (%d MB free)", _TMPFS_DIR, free_bytes // (1024 * 1024))
-                return _TMPFS_DIR
-    except OSError:
-        logger.warning("OSError checking tmpfs at %s, falling back to persistent disk", _TMPFS_DIR, exc_info=True)
-    else:
-        logger.warning("Fast IO (tmpfs) not available at %s, falling back to persistent disk", _TMPFS_DIR)
-    return cache_dir
+_DEV_SHM = Path("/dev/shm")
 
 
 # Substrings that indicate a docker/registry infrastructure problem rather than
@@ -769,7 +748,7 @@ class DockerRuntime:
 
     def __init__(self, cache_dir: Path) -> None:
         self._cache_dir = cache_dir
-        self._fast_io_dir = get_fast_io_dir(cache_dir)
+        self._fast_io_dir = _DEV_SHM
         self._handles: list[DockerContainerHandle] = []
         self._created_containers: set[str] = set()
         self._tmpfs_mounts: set[Path] = set()
@@ -838,8 +817,6 @@ class DockerRuntime:
             if mount.kind == MountKind.WORKDIR:
                 if workdir_host_path is None:
                     raise RuntimeError("WORKDIR mount requires workdir_host_path")
-                size = mount.size_bytes if mount.size_bytes > 0 else DEFAULT_WORKDIR_DISK_BYTES
-                self._mount_tmpfs(workdir_host_path, size)
                 result.append(ResolvedMount(str(workdir_host_path), mount.container_path, mode, mount.kind))
             elif mount.kind in (MountKind.TMPFS, MountKind.CACHE):
                 host_dir = self._fast_io_dir / mount.container_path.strip("/").replace("/", "-")
@@ -857,6 +834,14 @@ class DockerRuntime:
         handle = DockerContainerHandle(config=config, runtime=self, _resolved_mounts=resolved)
         self._handles.append(handle)
         return handle
+
+    def prepare_workdir(self, workdir: Path, disk_bytes: int) -> None:
+        """Mount tmpfs on the workdir for quota enforcement and fast IO.
+
+        Must be called before staging bundle files into the workdir.
+        """
+        size = disk_bytes if disk_bytes > 0 else DEFAULT_WORKDIR_DISK_BYTES
+        self._mount_tmpfs(workdir, size)
 
     def stage_bundle(
         self,

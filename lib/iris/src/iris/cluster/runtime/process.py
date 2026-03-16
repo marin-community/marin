@@ -616,7 +616,7 @@ class ProcessRuntime:
     Creates ProcessContainerHandle instances with the build/run lifecycle.
     """
 
-    def __init__(self, cache_dir: Path | None = None):
+    def __init__(self, cache_dir: Path):
         self._cache_dir = cache_dir
         self._handles: list[ProcessContainerHandle] = []
         _active_runtimes.add(self)
@@ -630,6 +630,9 @@ class ProcessRuntime:
         handle = ProcessContainerHandle(config=config, runtime=self)
         self._handles.append(handle)
         return handle
+
+    def prepare_workdir(self, workdir: Path, disk_bytes: int) -> None:
+        pass
 
     def stage_bundle(
         self,

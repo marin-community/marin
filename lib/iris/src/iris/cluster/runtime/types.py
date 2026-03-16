@@ -266,6 +266,14 @@ class ContainerRuntime(Protocol):
         """
         ...
 
+    def prepare_workdir(self, workdir: Path, disk_bytes: int) -> None:
+        """Prepare the task workdir before bundle staging.
+
+        Docker: mounts a per-task tmpfs for quota enforcement.
+        Process/K8s: no-op.
+        """
+        ...
+
     def stage_bundle(
         self,
         *,

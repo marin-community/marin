@@ -444,6 +444,11 @@ class TaskAttempt:
         self.workdir = self._cache_dir / "workdirs" / f"{safe_task_id}_attempt_{self.attempt_id}"
         self.workdir.mkdir(parents=True, exist_ok=True)
 
+        # Mount tmpfs on workdir for quota enforcement (Docker only; no-op for process/k8s).
+        # Must happen before _download_bundle() so staged files land on the tmpfs.
+        disk_bytes = self.request.resources.disk_bytes if self.request.HasField("resources") else 0
+        self._runtime.prepare_workdir(self.workdir, disk_bytes)
+
     def run(self) -> None:
         """Execute the full task lifecycle. Intended to run in a background thread.
 
@@ -586,9 +591,8 @@ class TaskAttempt:
         assert self.workdir is not None
         job_id, _ = self.task_id.require_task()
 
-        disk_bytes = self.request.resources.disk_bytes if self.request.HasField("resources") else 0
         mounts = [
-            MountSpec("/app", kind=MountKind.WORKDIR, size_bytes=disk_bytes),
+            MountSpec("/app", kind=MountKind.WORKDIR),
             MountSpec("/uv/cache", kind=MountKind.CACHE),
             MountSpec("/root/.cargo/registry", kind=MountKind.CACHE),
             MountSpec("/root/.cargo/target", kind=MountKind.CACHE),

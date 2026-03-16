@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for DockerRuntime tmpfs management via resolve_mounts and release_tmpfs."""
+"""Tests for DockerRuntime tmpfs management via prepare_workdir, resolve_mounts, and release_tmpfs."""
 
 import concurrent.futures
 import logging
@@ -30,11 +30,8 @@ def mock_bundle_store():
     return store
 
 
-def test_resolve_mounts_workdir_mounts_tmpfs(monkeypatch, tmp_path, runtime):
-    """resolve_mounts mounts tmpfs on the workdir host path for WORKDIR mounts."""
-    monkeypatch.setattr("iris.cluster.runtime.docker.sys.platform", "linux")
-    monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: False)
-
+def test_resolve_mounts_workdir_does_not_mount_tmpfs(monkeypatch, tmp_path, runtime):
+    """resolve_mounts no longer mounts tmpfs; that is prepare_workdir's job."""
     calls: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
@@ -48,12 +45,8 @@ def test_resolve_mounts_workdir_mounts_tmpfs(monkeypatch, tmp_path, runtime):
     mounts = [MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=1024 * 1024 * 512)]
     resolved = runtime.resolve_mounts(mounts, workdir_host_path=workdir)
 
-    assert len(calls) == 1
-    cmd = calls[0]
-    assert cmd[0] == "mount"
-    assert "-t" in cmd and "tmpfs" in cmd
-    assert f"size={1024 * 1024 * 512}" in cmd[cmd.index("-o") + 1]
-    assert str(workdir) in cmd
+    # No subprocess calls — tmpfs mounting is not done here
+    assert len(calls) == 0
 
     assert len(resolved) == 1
     assert resolved[0].host_path == str(workdir)
@@ -61,8 +54,33 @@ def test_resolve_mounts_workdir_mounts_tmpfs(monkeypatch, tmp_path, runtime):
     assert resolved[0].kind == MountKind.WORKDIR
 
 
-def test_resolve_mounts_workdir_uses_default_size_when_zero(monkeypatch, tmp_path, runtime):
-    """size_bytes=0 mounts tmpfs with the default 10GB size."""
+def test_prepare_workdir_mounts_tmpfs(monkeypatch, tmp_path, runtime):
+    """prepare_workdir mounts tmpfs on the workdir with the given size."""
+    monkeypatch.setattr("iris.cluster.runtime.docker.sys.platform", "linux")
+    monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: False)
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
+
+    workdir = tmp_path / "task-workdir"
+    workdir.mkdir()
+    runtime.prepare_workdir(workdir, disk_bytes=1024 * 1024 * 512)
+
+    assert len(calls) == 1
+    cmd = calls[0]
+    assert cmd[0] == "mount"
+    assert "-t" in cmd and "tmpfs" in cmd
+    assert f"size={1024 * 1024 * 512}" in cmd[cmd.index("-o") + 1]
+    assert str(workdir) in cmd
+
+
+def test_prepare_workdir_uses_default_size_when_zero(monkeypatch, tmp_path, runtime):
+    """disk_bytes=0 mounts tmpfs with the default 10GB size."""
     monkeypatch.setattr("iris.cluster.runtime.docker.sys.platform", "linux")
     monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: False)
 
@@ -76,8 +94,7 @@ def test_resolve_mounts_workdir_uses_default_size_when_zero(monkeypatch, tmp_pat
 
     workdir = tmp_path / "w"
     workdir.mkdir()
-    mounts = [MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=0)]
-    runtime.resolve_mounts(mounts, workdir_host_path=workdir)
+    runtime.prepare_workdir(workdir, disk_bytes=0)
 
     assert len(calls) == 1
     cmd = calls[0]
@@ -85,16 +102,15 @@ def test_resolve_mounts_workdir_uses_default_size_when_zero(monkeypatch, tmp_pat
     assert f"size={DEFAULT_WORKDIR_DISK_BYTES}" in cmd[cmd.index("-o") + 1]
 
 
-def test_resolve_mounts_workdir_rejects_non_linux(monkeypatch, tmp_path, runtime):
+def test_prepare_workdir_rejects_non_linux(monkeypatch, tmp_path, runtime):
     """tmpfs mounts require Linux; other platforms should raise RuntimeError."""
     monkeypatch.setattr("iris.cluster.runtime.docker.sys.platform", "darwin")
 
-    mounts = [MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=1024)]
     with pytest.raises(RuntimeError, match="Linux"):
-        runtime.resolve_mounts(mounts, workdir_host_path=tmp_path / "w")
+        runtime.prepare_workdir(tmp_path / "w", disk_bytes=1024)
 
 
-def test_resolve_mounts_workdir_skips_already_mounted(monkeypatch, tmp_path, runtime):
+def test_prepare_workdir_skips_already_mounted(monkeypatch, tmp_path, runtime):
     """If workdir is already a mountpoint, no mount call is made."""
     monkeypatch.setattr("iris.cluster.runtime.docker.sys.platform", "linux")
     monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: True)
@@ -107,12 +123,11 @@ def test_resolve_mounts_workdir_skips_already_mounted(monkeypatch, tmp_path, run
 
     workdir = tmp_path / "task-workdir"
     workdir.mkdir()
-    mounts = [MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=1024)]
-    runtime.resolve_mounts(mounts, workdir_host_path=workdir)
+    runtime.prepare_workdir(workdir, disk_bytes=1024)
     assert len(calls) == 0
 
 
-def test_resolve_mounts_workdir_raises_on_mount_failure(monkeypatch, tmp_path, runtime):
+def test_prepare_workdir_raises_on_mount_failure(monkeypatch, tmp_path, runtime):
     """Failed mount command propagates as RuntimeError."""
     monkeypatch.setattr("iris.cluster.runtime.docker.sys.platform", "linux")
     monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: False)
@@ -121,9 +136,8 @@ def test_resolve_mounts_workdir_raises_on_mount_failure(monkeypatch, tmp_path, r
         lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, stdout="", stderr="mount: permission denied"),
     )
 
-    mounts = [MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=1024)]
     with pytest.raises(RuntimeError, match="permission denied"):
-        runtime.resolve_mounts(mounts, workdir_host_path=tmp_path / "w")
+        runtime.prepare_workdir(tmp_path / "w", disk_bytes=1024)
 
 
 def test_resolve_mounts_workdir_requires_host_path(tmp_path):
@@ -220,9 +234,8 @@ def test_mount_tmpfs_recovers_on_concurrent_race(monkeypatch, tmp_path, runtime)
 
     workdir = tmp_path / "task-workdir"
     workdir.mkdir()
-    mounts = [MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=1024)]
     # Should NOT raise — the post-failure ismount check sees it's mounted
-    runtime.resolve_mounts(mounts, workdir_host_path=workdir)
+    runtime.prepare_workdir(workdir, disk_bytes=1024)
     assert workdir in runtime._tmpfs_mounts
 
 
@@ -237,13 +250,12 @@ def test_mount_tmpfs_fails_when_not_mounted_after_error(monkeypatch, tmp_path, r
 
     workdir = tmp_path / "task-workdir"
     workdir.mkdir()
-    mounts = [MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=1024)]
     with pytest.raises(RuntimeError, match="permission denied"):
-        runtime.resolve_mounts(mounts, workdir_host_path=workdir)
+        runtime.prepare_workdir(workdir, disk_bytes=1024)
 
 
-def test_concurrent_resolve_mounts_serialized(monkeypatch, tmp_path):
-    """Multiple threads resolving WORKDIR mounts are serialized by _mount_lock."""
+def test_concurrent_prepare_workdir_serialized(monkeypatch, tmp_path):
+    """Multiple threads calling prepare_workdir are serialized by _mount_lock."""
     runtime = DockerRuntime(cache_dir=tmp_path / "cache")
     monkeypatch.setattr("iris.cluster.runtime.docker.sys.platform", "linux")
     monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: False)
@@ -261,15 +273,13 @@ def test_concurrent_resolve_mounts_serialized(monkeypatch, tmp_path):
 
     monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
 
-    mounts = [MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=1024)]
-
-    def do_resolve(i):
+    def do_prepare(i):
         workdir = tmp_path / f"w{i}"
         workdir.mkdir()
-        runtime.resolve_mounts(mounts, workdir_host_path=workdir)
+        runtime.prepare_workdir(workdir, disk_bytes=1024)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        list(pool.map(do_resolve, range(8)))
+        list(pool.map(do_prepare, range(8)))
 
     assert not overlap_detected, "mount calls overlapped — _mount_lock is not working"
     assert len(runtime._tmpfs_mounts) == 8
