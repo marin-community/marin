@@ -186,6 +186,8 @@ def _transport_local(
     *,
     num_experts: int,
     num_ranks: int,
+    dispatch_config,
+    combine_config,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     num_tokens_per_rank, num_tokens_per_expert, is_token_in_rank = deepep_get_dispatch_layout(
         topk_idx_local,
@@ -210,6 +212,8 @@ def _transport_local(
         num_tokens_per_expert,
         is_token_in_rank,
         num_experts=num_experts,
+        dispatch_config=dispatch_config,
+        combine_config=combine_config,
     )
     combined_x, combined_topk_weights = deepep_combine_intranode(
         recv_x,
@@ -231,9 +235,17 @@ def _transport_step(
     *,
     mesh: Mesh,
     num_experts: int,
+    dispatch_config,
+    combine_config,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     shard_fn = shard_map(
-        partial(_transport_local, num_experts=num_experts, num_ranks=mesh.shape["expert"]),
+        partial(
+            _transport_local,
+            num_experts=num_experts,
+            num_ranks=mesh.shape["expert"],
+            dispatch_config=dispatch_config,
+            combine_config=combine_config,
+        ),
         mesh=mesh,
         in_specs=(P("expert", None), P("expert", None), P("expert", None)),
         out_specs=(P("expert", None), P("expert", None), P("expert")),
@@ -249,9 +261,17 @@ def _transport_step_pmap(
     *,
     num_experts: int,
     num_ranks: int,
+    dispatch_config,
+    combine_config,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     mapped = jax.pmap(
-        partial(_transport_local, num_experts=num_experts, num_ranks=num_ranks),
+        partial(
+            _transport_local,
+            num_experts=num_experts,
+            num_ranks=num_ranks,
+            dispatch_config=dispatch_config,
+            combine_config=combine_config,
+        ),
         in_axes=0,
         out_axes=(0, 0, 0),
     )
@@ -485,6 +505,8 @@ def main() -> None:
         return
 
     if args.execution_model == "pmap":
+        dispatch_config = _dispatch_config_from_args(args, ep_size)
+        combine_config = _combine_config_from_args(args, ep_size)
         tokens_per_rank = args.tokens // ep_size
         device_list = [device for device in devices if device.platform == "gpu"]
         x_inputs = jax.device_put_sharded(
@@ -502,7 +524,13 @@ def main() -> None:
             ],
             device_list,
         )
-        step_fn = partial(_transport_step_pmap, num_experts=args.experts, num_ranks=ep_size)
+        step_fn = partial(
+            _transport_step_pmap,
+            num_experts=args.experts,
+            num_ranks=ep_size,
+            dispatch_config=dispatch_config,
+            combine_config=combine_config,
+        )
         combined_x, combined_topk_weights, fanout = step_fn(x_inputs, topk_idx_inputs, topk_weights_inputs)
         if args.check:
             fanout_f32 = jnp.maximum(fanout.astype(jnp.float32), 1.0)
@@ -525,6 +553,8 @@ def main() -> None:
             jit_compile=False,
         )
     else:
+        dispatch_config = _dispatch_config_from_args(args, ep_size)
+        combine_config = _combine_config_from_args(args, ep_size)
         x = jnp.asarray(x_np, dtype=jnp.bfloat16)
         topk_idx = jnp.asarray(topk_idx_np, dtype=jnp.int64)
         topk_weights = jnp.asarray(topk_weights_np, dtype=jnp.float32)
@@ -533,7 +563,13 @@ def main() -> None:
         x_sharded, topk_idx_sharded, topk_weights_sharded = _shard_inputs(mesh, x, topk_idx, topk_weights)
 
         with jax.set_mesh(mesh):
-            step_fn = partial(_transport_step, mesh=mesh, num_experts=args.experts)
+            step_fn = partial(
+                _transport_step,
+                mesh=mesh,
+                num_experts=args.experts,
+                dispatch_config=dispatch_config,
+                combine_config=combine_config,
+            )
             combined_x, combined_topk_weights, fanout = jax.jit(step_fn)(
                 x_sharded, topk_idx_sharded, topk_weights_sharded
             )
