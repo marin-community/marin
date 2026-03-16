@@ -1,5 +1,25 @@
 # Linear CE Loss Pallas Kernel – Status (2026-01-31)
 
+## 2026-03-11: XLA explicit batch-block override for tuning
+- Plumbed explicit `block_sizes.b_block_size` through the XLA fused CE path so tuning scripts can sweep the new batch-block knob instead of always using the inferred value.
+- Behavior:
+  - `block_sizes is None`: keep inferred `infer_xla_b_block_size(B, v_block_size)` behavior.
+  - explicit `block_sizes.b_block_size`: use it exactly for XLA if it divides `B` and satisfies the TPU/XLA int32 tile-word limit; otherwise raise.
+- Added regression coverage for:
+  - explicit XLA `b_block_size` reaching the custom-VJP path
+  - rejection of unsafe explicit `b_block_size * v_block_size` tiles
+
+## 2026-03-11: XLA fused CE batch tiling for issue #3530
+- Added an XLA-side `infer_xla_b_block_size(b, v_block_size)` heuristic to cap the streaming working set below the TPU/XLA int32 word-count limit.
+- Updated the XLA fused CE path to chunk over batch as well as vocab in both:
+  - forward streaming / `return_argmax`
+  - custom-VJP backward
+- Added focused tests for:
+  - large-batch `infer_xla_b_block_size` selection (`4194304 x 8192 -> 131072`)
+  - chunked custom-VJP gradients vs streaming autodiff
+  - chunked `return_argmax` forward vs reference
+- This change is local to `xla.py` / `tuned_block_sizes.py`; Pallas kernels are unchanged.
+
 ## Snapshot
 We now have a **new Pallas TPU backward kernel** for `fused_cross_entropy_loss_and_logsumexp_penalty` that uses a **parallel core grid axis** (no `core_map`) with per-core `w_grad` partials. This targets v5p megacore and uses **per-core batch splitting** plus explicit HBM↔VMEM staging.
 **Note (historical):** we previously experimented with a **split backward strategy** (separate Pallas calls for `x_grad` and `w_grad`, each rematting logits), but this path and its `BlockSizes(..., bwd_strategy="split")` hook have been removed; the current implementation only exposes block-size parameters (`b_block_size`, `h_block_size`, `v_block_size`) for the single combined backward kernel.
@@ -258,6 +278,42 @@ Notes:
 - `B=8192`: pallas bwd `43,580.19 tok/s` vs xla bwd `49,992.28 tok/s`
 - `B=16384`: pallas bwd `43,742.56 tok/s` vs xla bwd `51,350.72 tok/s`
 - `B=32768`: pallas bwd `43,151.46 tok/s` vs xla bwd `49,678.96 tok/s`
+
+### 2026-03-09: v5p-8 mixed-dtype large-batch-medium-h retune
+- Target reproducer:
+  - `B=40960`, `H=2048`, `V=128256`
+  - `x.dtype=bf16`, `w.dtype=float32`, `compute dtype=float32`
+  - `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`
+- Root cause for the earlier “autotune didn’t fire” report:
+  - the repro path called `infer_block_sizes_with_tuned_match(...)`, materialized a `BlockSizes(...)`, and passed it into `fused_cross_entropy_loss_and_logsumexp_penalty(...)`
+  - the API correctly treats any caller-supplied `block_sizes` as explicit/pinned, so autotune-on-miss was bypassed
+- Fixes landed:
+  - tuned block-size lookup now uses the widest participating dtype bucket, so mixed `x=bf16` / `w=float32` hits the float32 tuning
+  - added `large-batch-medium-h` TPU bucket for `B=32768..131072`, `H=1536..3072`, `V=120000..131072`
+  - TPU autotune miss sweep for this regime now explores `h in {256,512,1024,2048}` and `v in {128,256,512,768,1024}`
+  - autotune now raises if every candidate fails instead of silently caching the inferred miss config
+  - the checked-in repro helper leaves `block_sizes=None` on lookup miss unless the user explicitly overrides block sizes
+- Scoped-VMEM failure classification:
+  - all `v_block_size=512` candidates OOM in the same forward/JVP compile site:
+    - `jit(loss_fn)/jvp(jit(linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu))/pallas_call`
+    - scoped allocation `50.45M`, limit `48.83M`, exceeded by `1.62M`
+- Explicit mixed-dtype sweep on v5p-8 (`steps=1`, `value_and_grad=True`):
+
+| `h_block_size` | `v=128` | `v=256` | `v=512` | `v=768` | `v=1024` |
+| --- | ---: | ---: | --- | ---: | ---: |
+| `256` | `82,957.69` | `132,996.62` | `OOM` | `176,259.82` | `180,141.22` |
+| `512` | `82,962.24` | `132,996.63` | `OOM` | `183,573.79` | `180,073.16` |
+| `1024` | `82,976.04` | `132,986.13` | `OOM` | `183,801.09` | `180,212.50` |
+| `2048` | `82,966.04` | `133,023.67` | `OOM` | `183,796.71` | `180,247.28` |
+
+- Selected tuned entry:
+  - `BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=768)`
+  - checked in for `TPU v5p` and `TPU v5`, for both `bfloat16` and `float32` tuned buckets in `large-batch-medium-h`
+- Default-path verification after the table update:
+  - launcher: `ray-run-dlwh-bench_fused_ce_default_verify-20260309-verify`
+  - selected tuned block sizes: `BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=768)`
+  - repro ran with `block_sizes=None`, `has_tuned_match=True`, `autotune_bypassed=False`
+  - result: `compile_time_s=8.0815`, `steady_time_s=0.22973`, `tokens_per_s=178,293.57`, `loss=200.1534`
 - Net: forward parity is achieved/beaten; backward remains slower.
 
 #### Additional investigations
@@ -756,3 +812,770 @@ Notes:
   - add new TPU v4 tuned bucket for huge-batch/small-h shapes:
     - bucket: `B in [131073, 1048576], H in [256,1024], V in [120000,131072]`
     - tuned entry: `b=1024, h=128, v=256` (bf16/f32)
+
+### 2026-03-05: v4-8 no-streaming bwd retune + A/B against bwd streaming
+- Request:
+  - start from `origin/main`, tune `pallas_tpu` CE on `v4-8` without XLA streaming backward,
+    then compare directly against forced streaming backward.
+- Code changes:
+  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py`
+    - `linear_softmax_cross_entropy_loss_pallas(...)` no longer hardcodes `use_bwd_xla_streaming=True`.
+    - Added env override parsing:
+      - `LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=1` => force streaming backward.
+      - default (unset) => use Pallas backward.
+  - `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+    - added tests that validate default non-streaming selection and env-forced streaming override.
+- TPU setup:
+  - `scripts/ray/dev_tpu.py --config infra/marin-us-central2-staging.yaml --tpu-type v4-8`
+  - device kind: `TPU v4` (4 chips on slice)
+  - no special scoped VMEM flag (kept default v4 behavior)
+- Tuning run (non-streaming backward):
+  - command: `tune_fused_cross_entropy_loss_block_sizes.py`
+  - shape: `global_batch=256, seq_len=4096, data_shards=4` -> kernel `B=262144, H=1024, V=128256`
+  - grid: `b=1024`, `h in {128,256,512,1024}`, `v in {128,256,384,512}`
+  - summary:
+    - all `v >= 384` failed compile VMEM OOM.
+    - best successful config: `b=1024, h=1024, v=256` at `~395,150 tok/s` (`steady_time_s=2.6536`).
+    - next best was `b=1024, h=512, v=256` at `~354,086 tok/s`.
+- Direct A/B benchmark at tuned config (`b=1024,h=1024,v=256`):
+  - command: `bench_fused_cross_entropy_loss_pallas.py --batch 64 --pos 4096 --embed 1024 --vocab 128256 ...`
+  - no-streaming bwd (default):
+    - fwd `~900,763 tok/s` (`steady_time_s=0.2910`)
+    - bwd `~99,045 tok/s` (`bwd_steady_time_s=2.6467`)
+    - combined `~89,233 tok/s`
+  - forced streaming bwd (`--bwd-use-xla-streaming`):
+    - fwd `~900,485 tok/s` (`steady_time_s=0.2911`)
+    - bwd `~166,610 tok/s` (`bwd_steady_time_s=1.5734`)
+    - combined `~140,597 tok/s`
+  - relative:
+    - streaming backward is `~1.68x` faster on backward throughput.
+    - streaming path is `~1.58x` faster on combined fwd+bwd throughput.
+- Tuned table update from this run:
+  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/tuned_block_sizes.py`
+  - `TPU v4` + `huge-batch-small-h` updated to `b=1024, h=1024, v=256` (bf16/f32).
+
+### 2026-03-05: focus shift to non-streaming bwd internals (matmul vs softmax) + VLIW/LLO dumps
+- User direction:
+  - keep non-streaming bwd and make it match/beat streaming.
+  - do not pursue atomic accumulation.
+  - isolate "just matmul backward" first, then add softmax complications.
+  - inspect XLA choices via VLIW/LLO dumps.
+
+- Code changes:
+  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py`
+    - removed bench-only atomic accumulation path.
+    - added env flag:
+      - `LEVANTER_PALLAS_TPU_BWD_SKIP_LOGITS_RECOMPUTE_BENCH`
+      - when enabled, backward kernel bypasses logits recompute/softmax path and feeds a broadcast delta tile (matmul-dominant decomposition mode).
+    - retained existing bench flags:
+      - `LEVANTER_PALLAS_TPU_BWD_SKIP_SOFTMAX_BENCH`
+      - `LEVANTER_PALLAS_TPU_BWD_SKIP_LABEL_SUBTRACT_BENCH`
+      - `LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH`
+      - `LEVANTER_PALLAS_TPU_BWD_V_BLOCK_SIZE_BENCH`
+  - `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+    - updated `_make_custom_vjp` signature expectations (removed atomic arg, added `skip_logits_recompute_bench` arg).
+    - full file test pass: `25 passed, 12 skipped`.
+
+- v4-8 benchmark shape (all runs):
+  - `batch=64`, `pos=4096` => global tokens `262144`
+  - `embed=1024`, `vocab=128256`
+  - `pallas_tpu`, block sizes explicit `b=1024,h=1024,v=256`
+  - `--shard-map --data-shards 4`
+
+- Throughput results (steady-state):
+  - non-streaming bwd (full): `bwd_tokens_per_s ~384,450`, combined `~338,534`
+  - streaming bwd forced: `bwd_tokens_per_s ~507,697`, combined `~430,683`
+  - non-streaming bwd with `LEVANTER_PALLAS_TPU_BWD_SKIP_LOGITS_RECOMPUTE_BENCH=1`:
+    - `bwd_tokens_per_s ~539,093`, combined `~453,079`
+  - decomposition read:
+    - matmul-dominant non-streaming path is already faster than streaming.
+    - major gap in full non-streaming is from logits-recompute/softmax path, not one_hot subtraction and not backward GEMM core.
+
+- VLIW/LLO dump setup used (from TPU post workflow):
+  - `XLA_FLAGS="--xla_dump_to=<HLO_DIR> --xla_dump_hlo_as_text"`
+  - `LIBTPU_INIT_ARGS` included:
+    - `--xla_jf_dump_to=<LLO_DIR>`
+    - `--xla_jf_dump_hlo_text=true`
+    - `--xla_jf_dump_llo_text=true`
+    - `--xla_jf_dump_llo_html=false`
+    - `--xla_jf_dump_llo_static_gaps=true`
+    - `--xla_jf_emit_annotations=true`
+    - `--xla_jf_debug_level=2`
+    - `--xla_mosaic_dump_to=<MOSAIC_DIR>`
+    - `--xla_mosaic_enable_dump_debug_info=true`
+    - `--xla_mosaic_enable_llo_source_annotations=true`
+
+- Artifact locations on TPU:
+  - streaming run:
+    - HLO: `/tmp/ce_vliw/hlo_stream`
+    - LLO: `/tmp/ce_vliw/llo_stream`
+    - Mosaic: `/tmp/ce_vliw/mosaic_stream`
+  - full non-streaming run:
+    - HLO: `/tmp/ce_vliw_nonstream/hlo`
+    - LLO: `/tmp/ce_vliw_nonstream/llo`
+    - Mosaic: `/tmp/ce_vliw_nonstream/mosaic`
+  - matmul-dominant non-streaming run:
+    - HLO: `/tmp/ce_vliw_matmul/hlo`
+    - LLO: `/tmp/ce_vliw_matmul/llo`
+    - Mosaic: `/tmp/ce_vliw_matmul/mosaic`
+
+- Key LLO schedule-analysis bundle counts:
+  - full non-streaming custom call:
+    - file: `/tmp/ce_vliw_nonstream/llo/1772746582910987391-_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined.1-78-schedule-analysis_final_bundles.txt`
+    - scheduled bundles: `33035`
+  - matmul-dominant non-streaming custom call (`skip_logits_recompute=1`):
+    - file: `/tmp/ce_vliw_matmul/llo/1772746972106552048-_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined.1-78-schedule-analysis_final_bundles.txt`
+    - scheduled bundles: `19059`
+  - streaming bwd path key fusions (same source location metadata):
+    - `fusion.41`: `11658` bundles
+    - `fusion.45`: `8877` bundles
+    - `fusion.42`: `117` bundles
+    - files under `/tmp/ce_vliw/llo_stream/*fusion.4{1,2,5}-*-schedule-analysis_final_bundles.txt`
+
+### 2026-03-05: rerun after local fix + supertile compile/VMEM findings
+- User note: "ok i think i fixed it"; reran v4-8 benchmark at the same shape/config:
+  - `B=262144, H=1024, V=128256`
+  - block sizes `b=1024, h=1024, v=256`
+  - `--shard-map --data-shards 4`
+- Non-streaming rerun:
+  - `bwd_tokens_per_s ~384,487`
+  - `combined_tokens_per_s ~338,696`
+- Forced streaming rerun (`--bwd-use-xla-streaming`):
+  - `bwd_tokens_per_s ~507,856`
+  - `combined_tokens_per_s ~430,919`
+- Added supertile alignment hint in
+  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py`
+  - change: in the supertile kernel, `w_grad` sub-tile V start now uses
+    `pl.multiple_of(v_sub_start, NUM_LANES)` before `pl.ds(...)`.
+  - intent: fix Mosaic inability to prove tile divisibility for HBM tiled `memref_slice`.
+- Supertile run with `LEVANTER_PALLAS_TPU_BWD_SOFTMAX_V_BLOCK_SIZE_BENCH=768`:
+  - previous failure mode (`MosaicError` divisibility proof) no longer reproduced.
+  - new failure mode: compile-time VMEM OOM (`19.03M` required vs `16.00M` capacity).
+  - top contributors include `f32[1024,1024]`, `f32[1024,768]`, `f32[1024,256]`, plus spill slots.
+
+### 2026-03-05: fresh v4-8 dump matrix (streaming vs non-streaming decomposition)
+- Shape/config (all runs):
+  - `B=262144, H=1024, V=128256`
+  - block sizes `b=1024, h=1024, v=256`
+  - `--shard-map --data-shards 4`
+- Dump dirs:
+  - base: `/tmp/ce_vliw_20260305_rerun`
+  - variants:
+    - `nonstream_full`
+    - `streaming_bwd`
+    - `nonstream_skip_softmax`
+    - `nonstream_skip_label_subtract`
+    - `nonstream_skip_logits_recompute`
+- Throughput (`bwd_tokens_per_s`, `combined_tokens_per_s`):
+  - `nonstream_full`: `~384,488`, `~338,695`
+  - `streaming_bwd`: `~507,831`, `~430,846`
+  - `nonstream_skip_softmax`: `~398,902`, `~349,817`
+  - `nonstream_skip_label_subtract`: `~391,360`, `~344,025`
+  - `nonstream_skip_logits_recompute`: `~539,604`, `~453,479`
+- Additional ablation:
+  - `skip_softmax + skip_label_subtract` fails compile (with and without dumps):
+    - VMEM OOM `18.97M` vs `16.00M`
+    - largest allocation is RA spill slots `~7.94M`.
+
+- LLO schedule-analysis focus (files with `source_line=1216`, non-empty bundles):
+  - `nonstream_full`: 5 files, sum `34589`
+    - custom call `_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined`: `33035`
+  - `streaming_bwd`: 13 files, sum `33077`
+    - `fusion.41`: `11658`
+    - `fusion.45`: `8877`
+    - `fusion.44`: `8287`
+    - remainder spread over smaller ops (`TLP`, `reshape`, `compare_select`, `slice`, `fusion.42`, etc.).
+  - `nonstream_skip_softmax`: 5 files, sum `32900`
+    - custom call: `31346`
+  - `nonstream_skip_label_subtract`: 5 files, sum `33867`
+    - custom call: `32313`
+  - `nonstream_skip_logits_recompute`: 5 files, sum `20613`
+    - custom call: `19059`
+
+- Readout:
+  - Removing only softmax (`skip_softmax`) or only label subtraction (`skip_label_subtract`) gives modest speedups.
+  - The large gain comes from removing logits-recompute path (`skip_logits_recompute`), matching earlier hypothesis that the dominant non-streaming penalty is remat/softmax-side scaffolding, not backward GEMM core.
+  - Streaming backward remains faster than full non-streaming despite similar aggregate source-line bundle totals, because work is split across multiple smaller fusions instead of one large custom-call monolith.
+
+### 2026-03-05: splash-style split backward prototype (dq/dkv-inspired)
+- Goal:
+  - try a backward decomposition patterned after Splash attention backward:
+    - separate `dx`-like and `dw`-like kernels (bench-only), each with simpler responsibilities.
+- Code:
+  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py`
+    - added env flag: `LEVANTER_PALLAS_TPU_BWD_SPLIT_DX_DW_BENCH`
+    - added split kernels:
+      - `linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel_dx_only(...)`
+      - `linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel_dw_only(...)`
+    - added split wrappers:
+      - `_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_dx_only(...)`
+      - `_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_dw_only(...)`
+    - wired `split_dx_dw_bench` through:
+      - `_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(...)`
+      - `linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(...)`
+      - `_make_custom_vjp(...)`
+  - `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+    - updated fake `_make_custom_vjp` signatures and assertions for the new split flag plumbing.
+- Validation:
+  - `uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`:
+    - `25 passed, 12 skipped`.
+  - `./infra/pre-commit.py --all-files`: `OK`.
+- v4-8 benchmark (`B=262144,H=1024,V=128256,b/h/v=1024/1024/256`):
+  - split path (`LEVANTER_PALLAS_TPU_BWD_SPLIT_DX_DW_BENCH=1`):
+    - `bwd_tokens_per_s ~283,204`
+    - `combined_tokens_per_s ~257,555`
+  - baseline non-streaming on same code:
+    - `bwd_tokens_per_s ~384,518`
+  - forced streaming:
+    - `bwd_tokens_per_s ~507,815`
+  - split + `skip_logits_recompute`:
+    - `bwd_tokens_per_s ~490,293`
+    - still below non-split `skip_logits_recompute` (`~539k`).
+- Readout:
+  - this first splash-style split decomposition is functionally correct but slower at full backward because remat/softmax work is duplicated across separate `dx` and `dw` kernels.
+  - even in matmul-dominant mode, split overhead remains measurable (`~490k` vs `~539k`).
+
+### 2026-03-05: splash-style `block_kv_compute` experiments for CE backward
+- Goal:
+  - mimic Splash dkv style more closely by decoupling:
+    - `softmax/remat V tile` (memory tile)
+    - `inner compute V subtile` (compute tile)
+  - and check whether this removes non-streaming backward spill/perf gap.
+- Code:
+  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py`
+    - added bench env:
+      - `LEVANTER_PALLAS_TPU_BWD_COMPUTE_V_BLOCK_SIZE_BENCH`
+    - added/iterated kernel:
+      - `linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel_vsubtile(...)`
+    - wired `compute_v_block_size_bench` through:
+      - `_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(...)`
+      - `linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(...)`
+      - `_make_custom_vjp(...)`
+    - current guard:
+      - compute-vsubtile path requires `num_h_blocks == 1` (current implementation assumption).
+  - `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+    - updated `_make_custom_vjp` fake signatures/assertions for the new arg.
+- Validation:
+  - `uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`:
+    - `25 passed, 12 skipped`.
+- v4-8 benchmark (`B=262144,H=1024,V=128256,b/h/v=1024/1024/256`, `--shard-map --data-shards 4`):
+  - baseline non-streaming:
+    - `bwd_tokens_per_s ~384,214`
+  - forced streaming:
+    - `bwd_tokens_per_s ~507,680`
+  - compute-subtile (`LEVANTER_PALLAS_TPU_BWD_COMPUTE_V_BLOCK_SIZE_BENCH=128`):
+    - `bwd_tokens_per_s ~288,636` (slower)
+  - compute-subtile + no-remat (`...COMPUTE_V_BLOCK_SIZE_BENCH=128`, `...SKIP_LOGITS_RECOMPUTE_BENCH=1`):
+    - `bwd_tokens_per_s ~378,128`
+    - confirms compute-subtile fragmentation slows matmul core itself vs prior non-split matmul-dominant path (`~539k`).
+- Supertile+compute attempts:
+  - `softmax_v=768, compute_v=128`:
+    - still compile OOM at `16.74M / 16.00M` VMEM (overflow `~760 KiB`)
+    - spill slots around `~3.93M`
+  - `softmax_v=768, compute_v=256`:
+    - compile OOM much worse (`20.33M / 16.00M`, spills `~7.89M`)
+- Spill-focused edits attempted:
+  - replaced conditional init with scalar-mask multiply (`tile *= keep`) to reduce temporaries.
+  - attempted direct HBM load/store (no async copy) but TPU Pallas rejected it (`Loads are only allowed on VMEM and SMEM references`), so reverted.
+- Readout:
+  - the current compute-subtile CE backward path is not yet competitive:
+    - slower when it compiles (`128` compute subtile).
+    - supertile+compute variant remains just over VMEM limit due spills.
+  - next work should stay spill-first:
+    - simplify kernel control/dataflow to cut RA spill slots before any further tile-sweep.
+
+### 2026-03-06: XLA vs Pallas LLO comparison and scatter-label subtraction attempt
+- Goal:
+  - inspect XLA LLO for backward and align Pallas structure with what XLA is doing well.
+
+- Dump setup (v4-8, shape `B=262144,H=1024,V=128256`, block sizes `1024/1024/256`):
+  - XLA path dumps at `/tmp/ce_llo_compare_20260306/xla/llo`
+  - Pallas path dumps at `/tmp/ce_llo_compare_20260306/pallas/llo`
+
+- Key XLA structure from `final_bundles`:
+  - backward is split into three large fusions:
+    - `fusion.50` (produces `f32[8192,8,8,128]` temporary-like block)
+    - `fusion.53` (updates `bf16[65536,1024]`, aliases an input/output)
+    - `fusion.54` (updates `bf16[1024,129024]`, aliases an input/output)
+  - this matches a split pattern: softmax-ish block production + separate matmul-style updates.
+
+- Instruction mix comparison (from `*-79-final_bundles.txt`):
+  - XLA (sum of `fusion.50/53/54`) has much lower lane-rotation overhead in each fusion.
+  - Pallas combined custom-call (`_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined`) shows:
+    - `vrot.slane.down`: `10155`
+    - `vpow2.f32`: `2048`
+    - `vsel`: `4098`
+    - `vld`: `14143`, `vst`: `10387`
+    - indicates a heavy softmax/masking/reduction lane-shuffle footprint in a single monolithic kernel.
+
+- Perf re-check (same shape):
+  - baseline non-streaming pallas bwd: `~384,459 tok/s`
+  - forced streaming bwd: `~507,8xx tok/s` (unchanged from prior runs)
+
+- Ablations to isolate cost centers:
+  - `LEVANTER_PALLAS_TPU_BWD_SKIP_SOFTMAX_BENCH=1`:
+    - bwd `~398,832 tok/s` (small +3.7% gain)
+  - `LEVANTER_PALLAS_TPU_BWD_SKIP_LOGITS_RECOMPUTE_BENCH=1`:
+    - bwd `~539,770 tok/s` (large gain, surpasses streaming baseline)
+  - `SKIP_SOFTMAX + SKIP_LABEL_SUBTRACT`:
+    - compile OOM (`18.97M / 16.00M` VMEM), spill slots reported as largest allocation (`~7.94M`).
+
+- Readout from ablations:
+  - dominant gap is not the exp/softmax primitive by itself; it is the current logits-rematerialization path as lowered in the monolithic kernel.
+  - this aligns with user hypothesis to first match XLA matmul/backward structure, then layer in complications.
+
+- Code experiment implemented:
+  - added bench-only env flag `LEVANTER_PALLAS_TPU_BWD_SCATTER_LABEL_SUBTRACT_BENCH` and threaded it through backward kernels:
+    - switched label subtraction from emulated one-hot compare to row-wise scatter-add update when enabled.
+  - tests updated and passing (`25 passed, 12 skipped`).
+
+- Scatter experiment result:
+  - no meaningful perf change (`~384,484 tok/s`, essentially baseline).
+  - LLO instruction counts stayed effectively identical (`vrot.slane.down` remained `10155`).
+  - implies current lowering canonicalizes back to the same effective kernel shape; this is not the lever.
+
+- Next direction (based on XLA LLO):
+  - prototype an explicit split backward pipeline that mirrors XLA’s decomposition:
+    - split softmax/delta production from dx/dw matmul updates,
+    - avoid monolithic combined custom-call control flow and associated spill pressure.
+
+### 2026-03-06: bench-only split softmax/matmul backward pipeline prototype
+- Goal:
+  - implement the XLA-like staged backward decomposition directly in `pallas_tpu.py` for A/B:
+    - stage A: produce `delta` as a rematerialized softmax V-super-tile,
+    - stage B: consume that `delta` in smaller grad-V subtiles to update `dx` and `dw`.
+- Code changes:
+  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py`
+    - added new bench env flag:
+      - `LEVANTER_PALLAS_TPU_BWD_SPLIT_SOFTMAX_MATMUL_BENCH`
+    - added delta supertile producer kernel/wrapper:
+      - `linear_softmax_cross_entropy_loss_backward_pallas_delta_supertile_kernel(...)`
+      - `_linear_softmax_cross_entropy_loss_bwd_pallas_delta_supertile(...)`
+    - added split pipeline wrapper:
+      - `_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split_softmax_matmul(...)`
+    - wired flag through:
+      - `_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(...)`
+      - `linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(...)`
+      - `_make_custom_vjp(...)`
+      - `linear_softmax_cross_entropy_loss_pallas(...)`
+  - `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+    - updated `_make_custom_vjp` monkeypatch signatures/assertions for new flag plumbing.
+- Local validation:
+  - `uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py -q`
+    - `25 passed, 12 skipped`
+  - `./infra/pre-commit.py --all-files`
+    - `OK`
+- Next step:
+  - run v4-8 A/B with dumps:
+    - baseline non-streaming combined
+    - split softmax/matmul path (`LEVANTER_PALLAS_TPU_BWD_SPLIT_SOFTMAX_MATMUL_BENCH=1`)
+    - forced streaming
+  - compare `bwd_tokens_per_s` plus LLO bundle counts/spill slots.
+
+### 2026-03-06: first v4-8 A/B for split softmax/matmul path
+- Environment:
+  - `scripts/ray/dev_tpu.py --config infra/marin-us-central2-staging.yaml` (`TPU v4`, 4 chips)
+  - bench shape/config:
+    - `B=262144, H=1024, V=128256` (`batch=64,pos=4096,embed=1024,vocab=128256`, `--shard-map --data-shards 4`)
+    - `b/h/v = 1024/1024/256`
+- Baselines (same command family):
+  - non-streaming combined:
+    - `bwd_tokens_per_s ~384,524`
+    - `combined_tokens_per_s ~338,684`
+  - forced streaming (`--bwd-use-xla-streaming`):
+    - `bwd_tokens_per_s ~507,567`
+    - `combined_tokens_per_s ~430,691`
+- Split softmax/matmul path (`LEVANTER_PALLAS_TPU_BWD_SPLIT_SOFTMAX_MATMUL_BENCH=1`):
+  - `softmax_v` default (=256):
+    - `bwd_tokens_per_s ~325,458`
+    - `combined_tokens_per_s ~292,035`
+  - `softmax_v=512` (`LEVANTER_PALLAS_TPU_BWD_SOFTMAX_V_BLOCK_SIZE_BENCH=512`):
+    - `bwd_tokens_per_s ~298,086`
+    - `combined_tokens_per_s ~269,780`
+  - `softmax_v=1024`:
+    - compile VMEM OOM (`18.20M / 16.00M`)
+    - largest allocation: spill slots (`~8.01M`) in `_linear_softmax_cross_entropy_loss_bwd_pallas_delta_supertile`.
+- Implementation fixes made during this run:
+  - fixed split-path delta producer lowering constraints:
+    - switched HBM output handling to VMEM staging + async copy (TPU-compatible write path).
+  - this resolved earlier lowering errors (`HBM BlockSpec` restriction and direct HBM load/store rejection), but did not resolve spill-driven OOM/perf issues at larger `softmax_v`.
+- Readout:
+  - split-softmax/matmul as currently implemented does not close the gap to streaming; it is slower than baseline non-streaming at `softmax_v <= 512` and OOMs at `softmax_v=1024` due spills.
+  - current bottleneck remains VMEM spill pressure in the delta producer kernel.
+
+### 2026-03-06: replicate XLA structure in split path (replace Pallas delta producer)
+- Goal:
+  - make split non-streaming path structurally match XLA backward fusions by removing the Pallas delta custom-call.
+- Code changes:
+  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py`
+    - added `_linear_softmax_cross_entropy_loss_bwd_xla_delta_supertile(...)`:
+      - pure JAX/XLA delta stage (`dot -> mask -> exp/softmax -> label subtract`) with `dynamic_update`-style row scatter option,
+      - no Pallas custom-call in this stage.
+    - updated `_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split_softmax_matmul(...)` to call the new XLA-style delta producer.
+    - split path remains bench-only (`LEVANTER_PALLAS_TPU_BWD_SPLIT_SOFTMAX_MATMUL_BENCH=1`).
+- Local validation:
+  - `uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py -q`
+    - `25 passed, 12 skipped`
+  - `./infra/pre-commit.py --all-files`
+    - `OK`
+- v4-8 benchmark (`B=262144,H=1024,V=128256,b/h/v=1024/1024/256`, `--shard-map --data-shards 4`):
+  - baseline non-streaming:
+    - `bwd_tokens_per_s ~384,491`
+    - `combined_tokens_per_s ~338,685`
+  - forced streaming (`--bwd-use-xla-streaming`):
+    - `bwd_tokens_per_s ~507,846`
+    - `combined_tokens_per_s ~430,884`
+  - split path with new XLA-style delta stage (`LEVANTER_PALLAS_TPU_BWD_SPLIT_SOFTMAX_MATMUL_BENCH=1`):
+    - `bwd_tokens_per_s ~500,664`
+    - `combined_tokens_per_s ~425,655`
+  - readout:
+    - split path now closes almost all the gap to streaming (within ~1.4% on backward throughput).
+- LLO evidence (new dump: `/tmp/ce_llo_xla_repl/split/llo`):
+  - focused kernels:
+    - `fusion.28`: `9321` bundles (`dot_general` in split while body)
+    - `convolution_dynamic-update-slice_fusion.2`: `8812`
+    - `convolution_add_fusion.2`: `3445`
+  - aggregate focused instruction deltas vs old split dump (`/tmp/ce_llo_quick/split/llo`):
+    - `vrot.slane.down`: `19213 -> 0`
+    - `vpow2.f32`: `2048 -> 512`
+    - `vsel`: `8825 -> 2879`
+  - key register pressure snapshots:
+    - old split delta custom-call: `vregs=1944`
+    - new split delta fusion (`fusion.28`): `vregs=1799`
+  - interpretation:
+    - removing the Pallas delta custom-call eliminated lane-rotation-heavy lowering and recovered most of the throughput gap.
+
+### 2026-03-06: split-path matmul refactor (super-tile GEMMs) + softmax_v scaling win
+- Goal:
+  - remove remaining split-path overhead after XLA-style delta stage by:
+    - hoisting loop-invariant backward scalars/casts out of the softmax-block loop,
+    - replacing grad-v subtile inner loops with direct super-tile GEMMs.
+
+- Code change (`lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py`):
+  - `_linear_softmax_cross_entropy_loss_bwd_xla_delta_supertile(...)`
+    - switched from `(dout_loss, dout_lse)` per-iteration casts to precomputed inputs:
+      - `dout_loss_lse`
+      - `dout_loss_plus_lse`
+    - moved `labels -> int32` and scatter row-index creation to conditional paths.
+  - `_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split_softmax_matmul(...)`
+    - precomputes `dout_loss_lse` + `dout_loss_plus_lse` once before `fori_loop`.
+    - removes inner grad-subtile loop and uses direct super-tile updates:
+      - `dx += dot(delta_supertile, w_supertile)`
+      - `dw_supertile = dot(x, delta_supertile)` + `dynamic_update_slice`.
+
+- Local validation:
+  - `uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py -q`
+    - `25 passed, 12 skipped`.
+
+- v4-8 benchmark re-baseline (same shape/config):
+  - shape: `B=262144,H=1024,V=128256` (`batch=64,pos=4096,embed=1024,vocab=128256`)
+  - blocks: `b/h/v = 1024/1024/256`
+  - launch: `--shard-map --data-shards 4`
+  - non-streaming combined baseline:
+    - `bwd_tokens_per_s ~384,510`
+  - forced streaming (`--bwd-use-xla-streaming`):
+    - `bwd_tokens_per_s ~507,243`
+
+- Split path results after refactor (`LEVANTER_PALLAS_TPU_BWD_SPLIT_SOFTMAX_MATMUL_BENCH=1`):
+  - `softmax_v=256` (default):
+    - `bwd_tokens_per_s ~500,635` (about same as prior split)
+  - `softmax_v=512`:
+    - `bwd_tokens_per_s ~708,756`
+  - `softmax_v=768`:
+    - `bwd_tokens_per_s ~809,519`
+  - `softmax_v=1024`:
+    - `bwd_tokens_per_s ~850,804`
+  - `softmax_v=2048`:
+    - `bwd_tokens_per_s ~839,336`
+
+- Readout:
+  - this refactor fully removed the prior `softmax_v>256` regression and shifted the split-path optimum near `softmax_v=1024`.
+  - at `softmax_v=1024`, split-path backward is now substantially faster than forced streaming on this workload:
+    - `~850,804` vs `~507,243` tokens/s (`~1.68x`).
+
+- Correctness spot-check (TPU, small shape):
+  - script compares `pallas_tpu` split-path vs `xla` gradients at `tokens=16384, embed=512, vocab=4096`.
+  - `softmax_v=1024` metrics:
+    - `loss_abs = 7.63e-06`
+    - `dx_rel_linf ~ 1.16e-2`
+    - `dw_rel_linf ~ 3.29e-3`
+  - result indicates no obvious regression from the super-tile GEMM rewrite.
+
+### 2026-03-06: promote split/supertile backward to default + retune check
+- Goal:
+  - make the split/supertile backward path the default Pallas backward and remove old-path toggles.
+
+- Code cleanup:
+  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py`
+    - `_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(...)` now always dispatches to `_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split_softmax_matmul(...)`.
+    - removed old backward dispatch knobs from runtime path:
+      - `split_dx_dw_bench`
+      - `split_softmax_matmul_bench`
+      - `compute_v_block_size_bench`
+    - `_make_custom_vjp(...)` signature/call sites updated accordingly.
+    - default softmax supertile policy in backward wrapper:
+      - if no explicit override is set, use `softmax_v = max(1024, v_block_size)` rounded to a multiple of `v_block_size`.
+  - `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+    - updated monkeypatched `_make_custom_vjp` expectations for removed args.
+
+- Validation:
+  - `uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py -q`
+    - `25 passed, 12 skipped`
+  - `./infra/pre-commit.py --all-files`
+    - `OK`
+
+- Throughput check (v4-8, `B=262144,H=1024,V=128256`, `b/h/v=1024/1024/256`):
+  - default non-streaming Pallas (new default backward):
+    - `bwd_tokens_per_s ~850,739`
+    - `combined_tokens_per_s ~654,819`
+  - forced streaming (`--bwd-use-xla-streaming`):
+    - `bwd_tokens_per_s ~507,779`
+    - `combined_tokens_per_s ~430,808`
+
+- Block-size retune sweep (combined fwd+bwd tune script):
+  - command grid:
+    - `b=1024`, `h in {256,512,1024}`, `v in {256,512,1024,2048}`
+  - outcomes:
+    - only `v=256` compiled; `v>=512` still failed VMEM in forward/JVP path.
+    - successful results:
+      - `b1024_h256_v256`: `~900,840 tok/s`
+      - `b1024_h512_v256`: `~900,863 tok/s`
+      - `b1024_h1024_v256`: `~900,954 tok/s` (best, marginal)
+  - `b=2048` remains compile OOM (spot check `b2048_h1024_v256`).
+
+- Readout:
+  - backward performance is now mostly insensitive to `h_block_size` for this shape (`~850.7k tok/s` for `h=256/512/1024` at `v=256`), consistent with the new split/supertile design.
+  - tuned `b/h/v` recommendation for this workload does not change materially from current table (`b1024_h1024_v256`).
+
+### 2026-03-06: cleanup pass remove backward experiment hacks from runtime path
+- Removed backward experiment env toggles from runtime/VJP plumbing:
+  - `LEVANTER_PALLAS_TPU_BWD_SKIP_SOFTMAX_BENCH`
+  - `LEVANTER_PALLAS_TPU_BWD_SKIP_LABEL_SUBTRACT_BENCH`
+  - `LEVANTER_PALLAS_TPU_BWD_SCATTER_LABEL_SUBTRACT_BENCH`
+  - `LEVANTER_PALLAS_TPU_BWD_SKIP_LOGITS_RECOMPUTE_BENCH`
+  - `LEVANTER_PALLAS_TPU_BWD_V_BLOCK_SIZE_BENCH`
+  - `LEVANTER_PALLAS_TPU_BWD_SOFTMAX_V_BLOCK_SIZE_BENCH`
+- Simplified default backward API:
+  - `linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(...)` no longer accepts skip/bench knobs.
+  - `_make_custom_vjp(...)` no longer takes skip/bench parameters.
+- Kept only `LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH` as an explicit A/B switch.
+- Default non-streaming backward remains split/supertile with fixed policy:
+  - `softmax_v = max(1024, v_block_size)` (rounded up to a multiple of `v_block_size`).
+- Validation:
+  - `uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py -q`
+    - `25 passed, 12 skipped`
+  - `./infra/pre-commit.py --all-files` -> `OK`
+- TPU sanity (v4-8, `B=262144,H=1024,V=128256`, `b/h/v=1024/1024/256`):
+  - default non-streaming: `bwd_tokens_per_s ~850,780`
+  - forced streaming: `bwd_tokens_per_s ~507,813`
+
+### 2026-03-06: full v4 sweep follow-up (OOM attribution + block-size policy)
+- Sweep scope:
+  - ran the full v4 bucket sweep plus rescue grids for buckets with no successful configs:
+    - `llama3_ish_rescue`
+    - `medium_batch_mid_h_rescue`
+  - logs/artifacts under:
+    - `/tmp/ce_sweep_v4_20260306/*.stdout.log`
+    - `/tmp/ce_sweep_v4_20260306/*.compile.log`
+
+- OOM attribution:
+  - all observed OOM failures in this sweep were forward-path compile OOMs.
+  - no backward-attributed OOMs were found in bucket or rescue runs.
+  - failure traces consistently referenced forward/JVP paths (for example `...loss_fwd_pallas_mosaic_tpu...` sites).
+
+- Decision on separate fwd/bwd block sizes:
+  - based on this sweep, separate forward/backward block-size knobs are not needed as an OOM mitigation.
+  - if split knobs are introduced later, it should be for throughput-only tuning, not to address these OOMs.
+
+- v4 tuned-table impact:
+  - keep `TPU v4` `huge-batch-small-h` entry at `b=1024,h=1024,v=256` (bf16/f32).
+  - for this path, retune deltas among successful `v=256` variants were marginal and did not justify additional table fragmentation.
+
+### 2026-03-06: full v5p sweep (`v5p-8`) + tuned-table updates
+- Setup:
+  - `scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml --tpu-type v5p-8`
+  - `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`
+  - artifacts on TPU: `/tmp/ce_sweep_v5p_20260306`
+- Sweep buckets run:
+  - `small_vocab`, `mid_h_large_vocab`, `large_batch_small_h`, `huge_batch_small_h`, `llama3_ish`, `medium_batch_mid_h`
+  - each with `b_block_size=1024`, explicit `h/v` grids, and `--include-infer`.
+- Best observed configs from this sweep:
+  - `small_vocab`: `b1024_h512_v1024` (`~1.656M tok/s`)
+  - `mid_h_large_vocab`: `b1024_h256_v1024` (`~362.7k tok/s`)
+  - `large_batch_small_h`: `b1024_h512_v2048` (`~768.2k tok/s`)
+  - `huge_batch_small_h`: `b1024_h128_v1024` (`~410.4k tok/s`; close tie with `h=256/512/1024`)
+  - `llama3_ish`: `b1024_h256_v512` (`~79.5k tok/s`)
+  - `medium_batch_mid_h`: `b1024_h2048_v512` (`~168.2k tok/s`; near tie with `h=256/512/1024`)
+- Failure attribution:
+  - aggregate failed classifications across all six buckets:
+    - `forward`: `27`
+    - `backward`: `0`
+    - `unsupported (shape-divisibility)`: `40`
+    - `other`: `0`
+  - all VMEM OOMs observed in this run were forward/JVP-path OOMs.
+- Tuned table updates applied (`tuned_block_sizes.py`):
+  - `TPU v5p` and `TPU v5` (both bf16 and float32):
+    - `small-vocab`: `v_block_size 512 -> 1024`
+    - `llama3-ish`: `v_block_size 1024 -> 512`
+    - `large-batch-small-h`: `v_block_size 1024 -> 2048`
+    - `medium-batch-medium-h`: `v_block_size 2048 -> 512`
+  - retained `h_block_size` choices from existing bucket definitions so entries remain valid across the full bucket ranges.
+
+### 2026-03-06: full v5e sweep (`v5litepod-8`) + tuned-table updates
+- Setup:
+  - `scripts/ray/dev_tpu.py --config infra/marin-us-west4.yaml --tpu-type v5litepod-8`
+  - TPU reported `device_kind="TPU v5 lite"`.
+  - `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`
+  - artifacts on TPU: `/tmp/ce_sweep_v5e_20260306`
+- Sweep buckets run:
+  - `small_vocab`, `mid_h_large_vocab`, `large_batch_small_h`, `huge_batch_small_h`, `llama3_ish`, `medium_batch_mid_h`
+  - each with `b_block_size=1024`, explicit `h/v` grids, and `--include-infer`.
+- Best observed configs from this sweep:
+  - `small_vocab`: `b1024_h128_v1024` (`~1.521M tok/s`)
+  - `mid_h_large_vocab`: `b1024_h512_v1024` (`~164.1k tok/s`)
+  - `large_batch_small_h`: `b1024_h128_v2048` (`~328.3k tok/s`)
+  - `huge_batch_small_h`: `b1024_h128_v1024` (`~161.8k tok/s`; `h=256/512/1024` within noise)
+  - `llama3_ish`: `b1024_h512_v512` (`~30.8k tok/s`)
+  - `medium_batch_mid_h`: `b1024_h256_v512` (`~66.0k tok/s`; near tie with `h=512/1024/2048`)
+- Failure attribution:
+  - aggregate failed classifications across all six buckets:
+    - `forward`: `25`
+    - `backward`: `0`
+    - `unsupported (shape-divisibility)`: `35`
+    - `other`: `0`
+  - all VMEM OOMs observed in this run were forward/JVP-path OOMs.
+- Tuned table updates applied (`tuned_block_sizes.py`):
+  - `TPU v5e` (both bf16 and float32):
+    - `small-vocab`: `v_block_size 512 -> 1024`
+    - `llama3-ish`: `v_block_size 1024 -> 512`
+    - add `mid-h-large-vocab`: `b=1024,h=256,v=1024`
+    - add `huge-batch-small-h`: `b=1024,h=256,v=1024`
+    - add `medium-batch-medium-h`: `b=1024,h=256,v=512`
+    - keep `large-batch-small-h` at `b=1024,h=512,v=2048`
+  - device-key normalization update:
+    - map both `TPU v5e` and `TPU v5 lite` / `TPU v5litepod` strings to `TPU v5e` so v5litepod-8 uses the v5e table directly.
+
+### 2026-03-06: full v6e sweep (`v6e-4`, us-east1) + TPU v6 tuned-table updates
+- Setup:
+  - `dev_tpu.py allocate` remained blocked by Ray client timeout in this session, so the sweep ran as a Ray submission job pinned to `TPU-v6e-4-head` resources.
+  - job id: `raysubmit_HkNExTDUP22WCKkJ` (`infra/marin-us-east1.yaml`)
+  - artifacts on TPU: `/tmp/ce_sweep_v6e_20260306/*.stdout.log`
+- Sweep buckets run:
+  - `small_vocab`, `mid_h_large_vocab`, `large_batch_small_h`, `huge_batch_small_h`, `llama3_ish`, `medium_batch_mid_h`
+  - each with `b_block_size=1024`, explicit `h/v` grids, and `--include-infer`.
+- Best observed configs from this sweep:
+  - `small_vocab`: `b1024_h512_v2048` (`~2.399M tok/s`)
+  - `mid_h_large_vocab`: `b1024_h1024_v1024` (`~410.9k tok/s`)
+  - `large_batch_small_h`: `b1024_h256_v2048` (`~522.2k tok/s`)
+  - `huge_batch_small_h`: `b1024_h512_v1024` (`~318.3k tok/s`; `h=256/512/1024` near tie)
+  - `llama3_ish`: `b1024_h1024_v512` (`~70.6k tok/s`; `h=256/512/1024` near tie at `v=512`)
+  - `medium_batch_mid_h`: `b1024_h2048_v512` (`~155.2k tok/s`; `h=256/512/1024/2048` near tie at `v=512`)
+- Failure attribution:
+  - aggregate failed classifications across all six buckets:
+    - `forward`: `22`
+    - `backward`: `0`
+    - `unsupported (shape-divisibility)`: `8`
+    - `other`: `0`
+  - all VMEM OOM failures observed in this run were forward/JVP-path failures.
+- Tuned table updates applied (`tuned_block_sizes.py`, `TPU v6`, bf16 + float32):
+  - `small-vocab`: `v_block_size 512 -> 2048`
+  - `llama3-ish`: `v_block_size 1024 -> 512`
+  - add `huge-batch-small-h`: `b=1024,h=256,v=1024`
+  - add `medium-batch-medium-h`: `b=1024,h=256,v=512`
+  - kept `mid-h-large-vocab` and `large-batch-small-h` entries unchanged.
+
+### 2026-03-06: v4 robustness pass for Llama2/GPT-2/Llama3 vocab families
+- Goal:
+  - ensure v4 infer chooses robust tuned regimes for practical shapes when
+    `V` is Llama2-like (`32k`), GPT-2-like (`50,257`), or Llama3 (`128,256`).
+- Code change (`tuned_block_sizes.py`):
+  - added TPU v4 mid-vocab bucket extension logic:
+    - when the primary bucket lookup misses and `16,385 <= V <= 119,999`,
+      map shapes into existing tuned v4 regimes (`small-vocab`, `llama3-ish`,
+      `mid-h-large-vocab`, `large-batch-small-h`, `huge-batch-small-h`,
+      `medium-batch-medium-h`) instead of falling back to untuned defaults.
+  - this reuses already-proven v4 block-size entries and avoids introducing
+    a second independently tuned table for the same execution regimes.
+- Tests:
+  - added `test_infer_block_sizes_tpu_v4_mid_vocab_uses_tuned_buckets` covering
+    representative shapes for:
+    - Llama2 vocab (`32,000`)
+    - GPT-2 vocab (`50,257`)
+    - Llama3 vocab (`128,256`) sanity case
+  - assertions require both:
+    - `tuned_match=True`
+    - expected v4 block sizes for each regime.
+- Validation:
+  - `uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py -q`
+    - `55 passed, 12 skipped`
+- Infra notes:
+  - attempted a broad live v4 Ray coverage sweep, but shared-cluster head-node
+    memory pressure and intermittent submission tunnel resets prevented collecting
+    a complete on-cluster matrix in this session.
+
+### 2026-03-06: head-to-head vs XLA on currently tuned infer path (cross-platform)
+- Goal:
+  - run `pallas_tpu` vs `xla` head-to-head on the currently tuned infer path across platforms and record the results in one place.
+
+- Runner:
+  - `python scripts/ray/ce_h2h_platform_local.py`
+  - fixed settings:
+    - `H2H_STEPS=3`
+    - `H2H_WARMUP=1`
+    - script-level `LIBTPU_INIT_ARGS+=--xla_tpu_scoped_vmem_limit_kib=50000`
+  - each case invokes:
+    - `uv run --package levanter --extra tpu python lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_pallas.py ... --block-sizes infer --implementation <pallas_tpu|xla>`
+
+- Submitted jobs and status:
+  - `v4` (`infra/marin-us-central2.yaml`):
+    - job: `raysubmit_x6rNA8RpxZgCgjvL`
+    - status: `SUCCEEDED` (`2026-03-06 12:02:35 PST` -> `12:07:58 PST`)
+  - `v5p` (`infra/marin-us-central1.yaml`):
+    - job: `raysubmit_QFvDsEk4pUwbpr5B`
+    - status: `SUCCEEDED` (`2026-03-06 12:02:54 PST` -> `12:13:43 PST`)
+  - `v5e` (`infra/marin-eu-west4.yaml`):
+    - job: `raysubmit_y6mD81ysjCJ4gh8V`
+    - status: `SUCCEEDED` (`2026-03-06 11:48:14 PST` -> `12:13:36 PST`)
+  - `v6e`:
+    - east1 status API remained unavailable (`infra/marin-us-east1.yaml` list-jobs returns dashboard `Connection refused` as of `2026-03-06 12:42 PST`).
+    - fallback attempt on existing east5 cluster:
+      - job: `raysubmit_v6e_h2h_20260306_122610` (`infra/marin-us-east5.yaml`)
+      - status at capture time: `PENDING` (waiting for resources/runtime env), started `2026-03-06 12:26:43 PST`.
+      - stop attempts:
+        - `cluster.py stop-job` timed out in this session.
+        - direct `ray job stop --no-wait` was accepted, but job still reported `PENDING` as of `2026-03-06 12:45 PST`.
+
+- Aggregated h2h results (successful platforms):
+  - `v4`:
+    - `ok_pairs=2/6`, `failed_pairs=4`
+    - `avg_xla_over_pallas_combined=0.7412` (pallas `~+34.9%` combined on successful pairs)
+    - `avg_xla_over_pallas_bwd=0.8475` (pallas `~+18.0%` bwd on successful pairs)
+  - `v5p`:
+    - `ok_pairs=6/6`, `failed_pairs=0`
+    - `avg_xla_over_pallas_combined=0.7772` (pallas `~+28.7%` combined)
+    - `avg_xla_over_pallas_bwd=0.8135` (pallas `~+22.9%` bwd)
+  - `v5e`:
+    - `ok_pairs=6/6`, `failed_pairs=0`
+    - `avg_xla_over_pallas_combined=0.7666` (pallas `~+30.4%` combined)
+    - `avg_xla_over_pallas_bwd=0.7731` (pallas `~+29.4%` bwd)
+
+- Per-bucket highlights:
+  - `v4`:
+    - successful buckets:
+      - `mid_h_large_vocab`: xla/pallas combined `0.5405` (pallas substantially ahead)
+      - `huge_batch_small_h`: xla/pallas combined `0.9419` (pallas slight combined lead), but xla bwd higher on this bucket (`1.1315` ratio).
+    - pallas failures in this run on:
+      - `small_vocab`
+      - `large_batch_small_h`
+      - `llama3_ish` (forward compile VMEM OOM in log)
+      - `medium_batch_mid_h`
+  - `v5p`:
+    - pallas leads combined in 5/6 buckets; near parity on `llama3_ish` (`xla/pallas combined=0.9920`).
+  - `v5e`:
+    - pallas leads combined in 5/6 buckets; `xla` leads `llama3_ish` (`xla/pallas combined=1.0729`).
+
+- Instrumentation caveat (important):
+  - these h2h summary blobs report top-level `backend="cpu"` / `device_kind="cpu"`.
+  - logs also contain JAX warnings about falling back to CPU in the wrapper process.
+  - the per-case benchmark subprocesses still run via the TPU-enabled bench invocation (`--extra tpu`) and produce TPU-scale throughput numbers; so throughput comparisons above are still useful, but the wrapper-level backend metadata is misleading.
+  - follow-up hygiene item: plumb backend/device-kind from the subprocess `result_json` into the h2h summary to remove this ambiguity.

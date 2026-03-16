@@ -27,7 +27,7 @@ from marin.processing.tokenize import add_validation_sets_to_mixture
 from experiments.defaults import default_validation_sets
 from experiments.grug.base.model import GrugModelConfig
 from experiments.grug.base.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
-from experiments.tootsie.exp1295_32b import nemotron_mix
+from experiments.pretraining_datasets import nemotron_mix_block_shuffle
 
 
 @dataclass(frozen=True)
@@ -64,8 +64,8 @@ GRUG_130M_MODEL = GrugModelConfig(
 )
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
-    nemotron_mix,
-    default_validation_sets(tokenizer=nemotron_mix.tokenizer),
+    nemotron_mix_block_shuffle,
+    default_validation_sets(tokenizer=nemotron_mix_block_shuffle.tokenizer),
 )
 
 
@@ -141,6 +141,7 @@ grug_base_trial = ExecutorStep(
             tags=["grug", "template"],
             group="grug-base-trial",
             name=None,  # filled from run_id in _resolve_tracker
+            replicate_path=this_output_path(),
         ),
         optimizer=versioned(
             AdamConfig(

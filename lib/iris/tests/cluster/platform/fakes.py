@@ -284,7 +284,10 @@ class FakePlatform:
             slice_id = f"fake-slice-{self._config.config.name}-{self._slice_counter}"
             ts = Timestamp.now().epoch_ms()
 
-            topology = get_tpu_topology(self._config.config.accelerator_variant)
+            device_variant = (
+                self._config.config.resources.device_variant if self._config.config.HasField("resources") else ""
+            )
+            topology = get_tpu_topology(device_variant)
             vm_count = topology.vm_count
             zone = self._config.config.slice_template.gcp.zone or "us-central1-a"
 

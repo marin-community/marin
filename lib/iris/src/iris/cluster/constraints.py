@@ -1,0 +1,1001 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Constraint types and helpers for Iris resource scheduling.
+
+This module is the canonical home for all constraint-related types:
+
+- WellKnownAttribute: canonical string keys for worker metadata
+- AttributeValue, ConstraintOp, Constraint: core constraint dataclasses
+- DeviceType and device-config helpers (get_device_type, get_device_variant, etc.)
+- PlacementRequirements and extraction functions for demand routing
+- Constraint factory functions (preemptible_constraint, region_constraint, etc.)
+- constraints_from_resources: auto-generates device constraints from ResourceSpecProto
+
+All production code should reference WellKnownAttribute enum members instead of
+raw string literals so that typos are caught at import time.
+"""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from enum import Enum, IntEnum, StrEnum
+from typing import Any, ClassVar
+
+from iris.rpc import cluster_pb2, config_pb2
+
+
+class WellKnownAttribute(StrEnum):
+    """Canonical attribute keys for constraint-based scheduling."""
+
+    DEVICE_TYPE = "device-type"
+    DEVICE_VARIANT = "device-variant"
+    PREEMPTIBLE = "preemptible"
+    REGION = "region"
+    ZONE = "zone"
+    TPU_NAME = "tpu-name"
+    TPU_WORKER_ID = "tpu-worker-id"
+    TPU_TOPOLOGY = "tpu-topology"
+    TPU_VM_COUNT = "tpu-vm-count"
+    GPU_VARIANT = "gpu-variant"
+    GPU_COUNT = "gpu-count"
+
+
+# ---------------------------------------------------------------------------
+# Step 1 types: core constraint primitives (depend only on cluster_pb2)
+# ---------------------------------------------------------------------------
+
+
+class DeviceType(Enum):
+    """Device type for demand routing."""
+
+    CPU = "cpu"
+    GPU = "gpu"
+    TPU = "tpu"
+
+
+def get_device_type_enum(device: cluster_pb2.DeviceConfig) -> DeviceType:
+    """Extract device type as enum from DeviceConfig."""
+    if device.HasField("gpu"):
+        return DeviceType.GPU
+    if device.HasField("tpu"):
+        return DeviceType.TPU
+    return DeviceType.CPU
+
+
+def get_device_type(device: cluster_pb2.DeviceConfig) -> str:
+    """Extract device type from DeviceConfig."""
+    if device.HasField("cpu"):
+        return "cpu"
+    if device.HasField("gpu"):
+        return "gpu"
+    if device.HasField("tpu"):
+        return "tpu"
+    return "cpu"
+
+
+def get_device_variant(device: cluster_pb2.DeviceConfig) -> str | None:
+    """Extract device variant (e.g., GPU model) from DeviceConfig."""
+    if device.HasField("gpu"):
+        return device.gpu.variant if device.gpu.variant else None
+    if device.HasField("tpu"):
+        return device.tpu.variant if device.tpu.variant else None
+    return None
+
+
+@dataclass(frozen=True)
+class AttributeValue:
+    """Typed attribute value for worker attributes and constraint matching.
+
+    Used for coscheduling and constraint-based worker filtering.
+    Values can be strings, integers, or floats.
+    """
+
+    value: str | int | float
+
+    def to_proto(self) -> cluster_pb2.AttributeValue:
+        """Convert to protobuf representation."""
+        proto = cluster_pb2.AttributeValue()
+        if isinstance(self.value, str):
+            proto.string_value = self.value
+        elif isinstance(self.value, int):
+            proto.int_value = self.value
+        elif isinstance(self.value, float):
+            proto.float_value = self.value
+        return proto
+
+    @staticmethod
+    def from_proto(proto: cluster_pb2.AttributeValue) -> AttributeValue:
+        """Convert from protobuf representation."""
+        if proto.HasField("string_value"):
+            return AttributeValue(proto.string_value)
+        elif proto.HasField("int_value"):
+            return AttributeValue(proto.int_value)
+        elif proto.HasField("float_value"):
+            return AttributeValue(proto.float_value)
+        # Default to empty string if no value set
+        return AttributeValue("")
+
+
+class ConstraintOp(IntEnum):
+    """Constraint operators for worker attribute matching.
+
+    Used to define constraints that filter which workers can run a job.
+    Each operator compares a worker attribute against a constraint value.
+
+    Example:
+        >>> # Match workers where region equals "us-central1"
+        >>> Constraint(key="region", op=ConstraintOp.EQ, value="us-central1")
+        >>> # Match workers with memory > 32GB
+        >>> Constraint(key="memory_gb", op=ConstraintOp.GT, value=32)
+        >>> # Match workers that have the "gpu" attribute set
+        >>> Constraint(key="gpu", op=ConstraintOp.EXISTS)
+    """
+
+    EQ = 0
+    NE = 1
+    EXISTS = 2
+    NOT_EXISTS = 3
+    GT = 4
+    GE = 5
+    LT = 6
+    LE = 7
+    IN = 8
+
+    def to_proto(self) -> cluster_pb2.ConstraintOp:
+        """Convert to protobuf ConstraintOp enum value."""
+        mapping = {
+            ConstraintOp.EQ: cluster_pb2.CONSTRAINT_OP_EQ,
+            ConstraintOp.NE: cluster_pb2.CONSTRAINT_OP_NE,
+            ConstraintOp.EXISTS: cluster_pb2.CONSTRAINT_OP_EXISTS,
+            ConstraintOp.NOT_EXISTS: cluster_pb2.CONSTRAINT_OP_NOT_EXISTS,
+            ConstraintOp.GT: cluster_pb2.CONSTRAINT_OP_GT,
+            ConstraintOp.GE: cluster_pb2.CONSTRAINT_OP_GE,
+            ConstraintOp.LT: cluster_pb2.CONSTRAINT_OP_LT,
+            ConstraintOp.LE: cluster_pb2.CONSTRAINT_OP_LE,
+            ConstraintOp.IN: cluster_pb2.CONSTRAINT_OP_IN,
+        }
+        return mapping[self]
+
+
+@dataclass(frozen=True)
+class Constraint:
+    """Worker constraint for job scheduling.
+
+    Constraints filter which workers are eligible to run a job based on
+    worker attributes. Workers must satisfy all constraints to be considered.
+
+    Example:
+        >>> # Require a specific TPU pod
+        >>> Constraint(key="tpu-name", op=ConstraintOp.EQ, value="my-tpu-pod")
+        >>> # Require workers in a specific zone
+        >>> Constraint(key="zone", op=ConstraintOp.EQ, value="us-central1-a")
+        >>> # Require workers with at least 64GB memory
+        >>> Constraint(key="memory_gb", op=ConstraintOp.GE, value=64)
+        >>> # Require workers that have a GPU
+        >>> Constraint(key="gpu", op=ConstraintOp.EXISTS)
+        >>> # Require workers in one of several regions
+        >>> Constraint(key="region", op=ConstraintOp.IN, values=("us-central1", "us-central2"))
+    """
+
+    key: str
+    op: ConstraintOp
+    value: str | int | float | None = None
+    values: tuple[str | int | float, ...] | None = None
+
+    def to_proto(self) -> cluster_pb2.Constraint:
+        """Convert to protobuf representation."""
+        proto = cluster_pb2.Constraint(key=self.key, op=self.op.to_proto())
+        if self.value is not None:
+            proto.value.CopyFrom(AttributeValue(self.value).to_proto())
+        if self.values is not None:
+            for v in self.values:
+                proto.values.append(AttributeValue(v).to_proto())
+        return proto
+
+    @staticmethod
+    def from_proto(proto: cluster_pb2.Constraint) -> Constraint:
+        """Convert from protobuf representation."""
+        op = ConstraintOp(proto.op)
+        value: str | int | float | None = None
+        if proto.HasField("value"):
+            value = AttributeValue.from_proto(proto.value).value
+        values: tuple[str | int | float, ...] | None = None
+        if proto.values:
+            values = tuple(AttributeValue.from_proto(v).value for v in proto.values)
+        return Constraint(key=proto.key, op=op, value=value, values=values)
+
+
+# ---------------------------------------------------------------------------
+# Step 2 types: constraint helpers (depend on WellKnownAttribute)
+# ---------------------------------------------------------------------------
+
+
+def preemptible_constraint(preemptible: bool = True) -> Constraint:
+    """Constraint requiring workers to be preemptible (or not)."""
+    return Constraint(key=WellKnownAttribute.PREEMPTIBLE, op=ConstraintOp.EQ, value=str(preemptible).lower())
+
+
+def zone_constraint(zone: str) -> Constraint:
+    """Constraint requiring workers to be in a given zone."""
+    if not zone:
+        raise ValueError("zone must be non-empty")
+    return Constraint(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value=zone)
+
+
+def region_constraint(regions: list[str]) -> Constraint:
+    """Constraint requiring workers to be in one of the given regions.
+
+    Emits an EQ constraint for a single region or an IN constraint for multiple
+    regions.
+
+    Args:
+        regions: Non-empty list of region strings. Must be a list, not a bare string.
+
+    Raises:
+        TypeError: If regions is a string (common mistake — pass [region] instead).
+        ValueError: If regions is empty or contains empty strings.
+    """
+    if isinstance(regions, str):
+        raise TypeError("region_constraint() requires a list of strings, not a bare string. Use [region] instead.")
+    if not regions:
+        raise ValueError("regions must be non-empty")
+    for r in regions:
+        if not r:
+            raise ValueError("region must be non-empty")
+    if len(regions) == 1:
+        return Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value=regions[0])
+    return Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.IN, values=tuple(regions))
+
+
+def device_variant_constraint(variants: Sequence[str]) -> Constraint:
+    """Constraint requiring scheduling on workers with one of the given device variants.
+
+    Args:
+        variants: Non-empty sequence of device variant strings (e.g., ["v4-8", "v5p-8"]).
+
+    Raises:
+        TypeError: If variants is a string (common mistake — pass [variant] instead).
+        ValueError: If variants is empty or contains empty strings.
+    """
+    if isinstance(variants, str):
+        raise TypeError(
+            "device_variant_constraint() requires a sequence of strings, not a bare string. Use [variant] instead."
+        )
+    if not variants:
+        raise ValueError("variants must be non-empty")
+    for v in variants:
+        if not v:
+            raise ValueError("variant must be non-empty")
+    if len(variants) == 1:
+        return Constraint(key=WellKnownAttribute.DEVICE_VARIANT, op=ConstraintOp.EQ, value=variants[0].lower())
+    return Constraint(
+        key=WellKnownAttribute.DEVICE_VARIANT, op=ConstraintOp.IN, values=tuple(v.lower() for v in variants)
+    )
+
+
+@dataclass(frozen=True)
+class PlacementRequirements:
+    """Canonical placement constraints derived from proto constraints.
+
+    Combines device type, device variant, preemptible preference, and
+    region/zone requirements into a single object for demand routing.
+    The autoscaler uses this instead of carrying separate fields.
+    """
+
+    device_type: DeviceType | None
+    device_variants: frozenset[str] | None
+    preemptible: bool | None
+    required_regions: frozenset[str] | None
+    required_zones: frozenset[str] | None
+
+    _KEY_TO_FIELD: ClassVar[dict[str, str]] = {
+        "device-type": "device_type",
+        "device-variant": "device_variants",
+        "preemptible": "preemptible",
+        "region": "required_regions",
+        "zone": "required_zones",
+    }
+
+    def get(self, key: str) -> Any:
+        """Look up a routing constraint value by its well-known key."""
+        field_name = self._KEY_TO_FIELD.get(key)
+        if field_name is None:
+            return None
+        return getattr(self, field_name)
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers for extract_placement_requirements
+# ---------------------------------------------------------------------------
+
+
+def _collect_values(
+    constraint: Constraint,
+    *,
+    allow_in: bool = True,
+) -> list[str | int | float]:
+    """Flatten a Constraint's value(s) into a list. EQ → [value], IN → list(values)."""
+    if constraint.op == ConstraintOp.EQ:
+        if constraint.value is None:
+            raise ValueError(f"{constraint.key} constraint requires a value")
+        return [constraint.value]
+    if constraint.op == ConstraintOp.IN:
+        if not allow_in:
+            raise ValueError(f"{constraint.key} constraint must use EQ")
+        if not constraint.values:
+            raise ValueError(f"IN {constraint.key} constraint requires at least one value")
+        return list(constraint.values)
+    raise ValueError(f"{constraint.key} constraint must use EQ or IN, got {constraint.op}")
+
+
+def _extract_string_set(
+    constraints: list[Constraint],
+    key: str,
+    *,
+    transform: Callable[[str], str] = str.strip,
+    reject_empty: bool = True,
+) -> frozenset[str] | None:
+    """Extract a set of string values from constraints sharing the same key."""
+    values: set[str] = set()
+    has_in = False
+    for c in constraints:
+        raw_vals = _collect_values(c)
+        if c.op == ConstraintOp.IN:
+            has_in = True
+        for raw in raw_vals:
+            val = transform(str(raw))
+            if reject_empty and not val:
+                raise ValueError(f"{key} constraint must be non-empty")
+            values.add(val)
+    if not has_in and len(values) > 1:
+        raise ValueError(f"conflicting {key} constraints")
+    return frozenset(values) if values else None
+
+
+def _extract_preemptible(constraints: list[Constraint]) -> bool | None:
+    values: set[bool] = set()
+    for c in constraints:
+        for raw in _collect_values(c, allow_in=False):
+            s = str(raw).strip().lower()
+            if s == "true":
+                values.add(True)
+            elif s == "false":
+                values.add(False)
+            else:
+                raise ValueError("preemptible constraint must be 'true' or 'false'")
+    if len(values) > 1:
+        raise ValueError("conflicting preemptible constraints")
+    return next(iter(values)) if values else None
+
+
+def _extract_device_type(constraints: list[Constraint]) -> DeviceType | None:
+    values = _extract_string_set(
+        constraints,
+        WellKnownAttribute.DEVICE_TYPE,
+        transform=lambda s: s.strip().lower(),
+        reject_empty=False,
+    )
+    if not values:
+        return None
+    if len(values) > 1:
+        raise ValueError(f"conflicting device-type constraints: {values}")
+    raw = next(iter(values))
+    try:
+        return DeviceType(raw)
+    except ValueError as e:
+        raise ValueError(f"unknown device type: {raw}") from e
+
+
+def extract_placement_requirements(constraints: Sequence[cluster_pb2.Constraint]) -> PlacementRequirements:
+    """Extract canonical placement requirements from protobuf constraints.
+
+    Parses proto constraints once, groups by key, then extracts each field
+    using shared helpers.
+    """
+    parsed = [Constraint.from_proto(c) for c in constraints]
+
+    by_key: dict[str, list[Constraint]] = {}
+    for c in parsed:
+        by_key.setdefault(c.key, []).append(c)
+
+    return PlacementRequirements(
+        device_type=_extract_device_type(by_key.get(WellKnownAttribute.DEVICE_TYPE, [])),
+        device_variants=_extract_string_set(
+            by_key.get(WellKnownAttribute.DEVICE_VARIANT, []),
+            WellKnownAttribute.DEVICE_VARIANT,
+        ),
+        preemptible=_extract_preemptible(by_key.get(WellKnownAttribute.PREEMPTIBLE, [])),
+        required_regions=_extract_string_set(
+            by_key.get(WellKnownAttribute.REGION, []),
+            WellKnownAttribute.REGION,
+        ),
+        required_zones=_extract_string_set(
+            by_key.get(WellKnownAttribute.ZONE, []),
+            WellKnownAttribute.ZONE,
+        ),
+    )
+
+
+def merge_constraints(parent: Sequence[Constraint], child: Sequence[Constraint]) -> list[Constraint]:
+    """Merge parent and child constraints with canonical-key override semantics."""
+
+    merged_by_key: dict[str, list[Constraint]] = {}
+    for constraint in parent:
+        merged_by_key.setdefault(constraint.key, []).append(constraint)
+
+    _CANONICAL_KEYS = frozenset(d.key for d in CONSTRAINT_REGISTRY.values() if d.canonical)
+    for key in _CANONICAL_KEYS:
+        child_for_key = [constraint for constraint in child if constraint.key == key]
+        if child_for_key:
+            merged_by_key[key] = child_for_key
+
+    for constraint in child:
+        if constraint.key in _CANONICAL_KEYS:
+            continue
+        existing = merged_by_key.setdefault(constraint.key, [])
+        if constraint not in existing:
+            existing.append(constraint)
+
+    result: list[Constraint] = []
+    for constraints_for_key in merged_by_key.values():
+        result.extend(constraints_for_key)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# ConstraintDescriptor registry
+# ---------------------------------------------------------------------------
+
+
+class ConstraintKind(StrEnum):
+    """Whether a constraint is a label match or a capacity-deducted resource."""
+
+    TAG = "tag"
+    CONSUMABLE = "consumable"
+
+
+@dataclass(frozen=True)
+class ConstraintDescriptor:
+    """Single source of truth for a well-known constraint.
+
+    Each well-known attribute gets one descriptor that declares its type,
+    allowed operators, and (for routing constraints) how to match a scaling
+    group's value against a requested value.
+    """
+
+    key: str
+    kind: ConstraintKind
+    python_type: type
+    allowed_ops: frozenset[int]
+    canonical: bool
+    routing: bool
+    extract: Callable[..., Any] | None
+
+
+# --- Extract functions ---
+
+
+def _extract_string(constraint: cluster_pb2.Constraint) -> str:
+    return constraint.value.string_value.strip()
+
+
+def _extract_string_lower(constraint: cluster_pb2.Constraint) -> str:
+    return constraint.value.string_value.strip().lower()
+
+
+def _extract_bool_string(constraint: cluster_pb2.Constraint) -> str:
+    return constraint.value.string_value.strip().lower()
+
+
+def _extract_int(constraint: cluster_pb2.Constraint) -> int:
+    return constraint.value.int_value
+
+
+_EQ_IN = frozenset({cluster_pb2.CONSTRAINT_OP_EQ, cluster_pb2.CONSTRAINT_OP_IN})
+_EQ_ONLY = frozenset({cluster_pb2.CONSTRAINT_OP_EQ})
+_ALL_OPS = frozenset(
+    {
+        cluster_pb2.CONSTRAINT_OP_EQ,
+        cluster_pb2.CONSTRAINT_OP_NE,
+        cluster_pb2.CONSTRAINT_OP_EXISTS,
+        cluster_pb2.CONSTRAINT_OP_NOT_EXISTS,
+        cluster_pb2.CONSTRAINT_OP_GT,
+        cluster_pb2.CONSTRAINT_OP_GE,
+        cluster_pb2.CONSTRAINT_OP_LT,
+        cluster_pb2.CONSTRAINT_OP_LE,
+        cluster_pb2.CONSTRAINT_OP_IN,
+    }
+)
+
+
+CONSTRAINT_REGISTRY: dict[str, ConstraintDescriptor] = {}
+
+
+def _register(desc: ConstraintDescriptor) -> ConstraintDescriptor:
+    CONSTRAINT_REGISTRY[desc.key] = desc
+    return desc
+
+
+_register(
+    ConstraintDescriptor(
+        key="device-type",
+        kind=ConstraintKind.TAG,
+        python_type=str,
+        allowed_ops=_EQ_IN,
+        canonical=True,
+        routing=True,
+        extract=_extract_string_lower,
+    )
+)
+_register(
+    ConstraintDescriptor(
+        key="device-variant",
+        kind=ConstraintKind.TAG,
+        python_type=str,
+        allowed_ops=_EQ_IN,
+        canonical=True,
+        routing=True,
+        extract=_extract_string,
+    )
+)
+_register(
+    ConstraintDescriptor(
+        key="preemptible",
+        kind=ConstraintKind.TAG,
+        python_type=bool,
+        allowed_ops=_EQ_ONLY,
+        canonical=True,
+        routing=True,
+        extract=_extract_bool_string,
+    )
+)
+_register(
+    ConstraintDescriptor(
+        key="region",
+        kind=ConstraintKind.TAG,
+        python_type=str,
+        allowed_ops=_EQ_IN,
+        canonical=True,
+        routing=True,
+        extract=_extract_string,
+    )
+)
+_register(
+    ConstraintDescriptor(
+        key="zone",
+        kind=ConstraintKind.TAG,
+        python_type=str,
+        allowed_ops=_EQ_IN,
+        canonical=True,
+        routing=True,
+        extract=_extract_string,
+    )
+)
+_register(
+    ConstraintDescriptor(
+        key="tpu-name",
+        kind=ConstraintKind.TAG,
+        python_type=str,
+        allowed_ops=_ALL_OPS,
+        canonical=False,
+        routing=False,
+        extract=_extract_string,
+    )
+)
+_register(
+    ConstraintDescriptor(
+        key="tpu-worker-id",
+        kind=ConstraintKind.TAG,
+        python_type=int,
+        allowed_ops=_ALL_OPS,
+        canonical=False,
+        routing=False,
+        extract=_extract_int,
+    )
+)
+_register(
+    ConstraintDescriptor(
+        key="tpu-topology",
+        kind=ConstraintKind.TAG,
+        python_type=str,
+        allowed_ops=_ALL_OPS,
+        canonical=False,
+        routing=False,
+        extract=_extract_string,
+    )
+)
+_register(
+    ConstraintDescriptor(
+        key="tpu-vm-count",
+        kind=ConstraintKind.TAG,
+        python_type=int,
+        allowed_ops=_ALL_OPS,
+        canonical=False,
+        routing=False,
+        extract=_extract_int,
+    )
+)
+_register(
+    ConstraintDescriptor(
+        key="gpu-variant",
+        kind=ConstraintKind.TAG,
+        python_type=str,
+        allowed_ops=_ALL_OPS,
+        canonical=False,
+        routing=False,
+        extract=_extract_string,
+    )
+)
+_register(
+    ConstraintDescriptor(
+        key="gpu-count",
+        kind=ConstraintKind.CONSUMABLE,
+        python_type=int,
+        allowed_ops=_ALL_OPS,
+        canonical=False,
+        routing=False,
+        extract=_extract_int,
+    )
+)
+
+
+# Constraint keys that propagate from parent to child jobs via IRIS_JOB_CONSTRAINTS.
+# Device constraints are NOT inherited — each child re-derives them from its own
+# resource spec via constraints_from_resources(). Preemptible is per-job policy.
+INHERITED_CONSTRAINT_KEYS: frozenset[str] = frozenset(
+    {
+        WellKnownAttribute.REGION,
+        WellKnownAttribute.ZONE,
+    }
+)
+
+
+# ---------------------------------------------------------------------------
+# Resource-derived constraint generation
+# ---------------------------------------------------------------------------
+
+
+def constraints_from_resources(resources: cluster_pb2.ResourceSpecProto) -> list[Constraint]:
+    """Auto-generate device constraints from a job's resource spec.
+
+    Produces Constraint objects for device-type and device-variant when the
+    resource spec carries a non-CPU device.  CPU jobs get no auto-generated
+    device constraints since CPU resources are fungible across all workers.
+
+    The controller merges these with explicit user constraints using
+    merge_constraints(), where explicit constraints for canonical keys replace
+    auto-generated ones.
+    """
+    constraints: list[Constraint] = []
+
+    if not resources.HasField("device"):
+        return constraints
+
+    device_type = get_device_type(resources.device)
+    if device_type != "cpu":
+        constraints.append(
+            Constraint(
+                key=WellKnownAttribute.DEVICE_TYPE,
+                op=ConstraintOp.EQ,
+                value=device_type,
+            )
+        )
+
+    variant = get_device_variant(resources.device)
+    if variant and variant != "auto":
+        constraints.append(
+            Constraint(
+                key=WellKnownAttribute.DEVICE_VARIANT,
+                op=ConstraintOp.EQ,
+                value=variant.lower(),
+            )
+        )
+
+    return constraints
+
+
+def accelerator_type_to_string(accel_type: int) -> str:
+    """Convert AcceleratorType proto enum value to a scheduling string."""
+    if accel_type == config_pb2.ACCELERATOR_TYPE_UNSPECIFIED:
+        return "cpu"
+    if accel_type == config_pb2.ACCELERATOR_TYPE_CPU:
+        return "cpu"
+    if accel_type == config_pb2.ACCELERATOR_TYPE_GPU:
+        return "gpu"
+    if accel_type == config_pb2.ACCELERATOR_TYPE_TPU:
+        return "tpu"
+    raise ValueError(f"Unknown accelerator type: {accel_type}")
+
+
+def _compare_ordered(
+    attr_value: str | int | float,
+    target_value: str | int | float,
+    op: str,
+) -> bool:
+    """Compare two attribute values with an ordering operator.
+
+    Only numeric types (int, float) support ordered comparisons.
+    Strings are not orderable (comparing "v4-8" > "v5" is not meaningful).
+
+    Raises:
+        ValueError: If either value is a string (ordered comparison not supported).
+    """
+    if isinstance(attr_value, str) or isinstance(target_value, str):
+        raise ValueError(
+            f"Ordered comparison ({op}) not supported for string attributes: "
+            f"{attr_value!r} vs {target_value!r}. Use EQ or NE operators instead."
+        )
+
+    attr_num: int | float = attr_value
+    target_num: int | float = target_value
+
+    if op == "gt":
+        return attr_num > target_num
+    elif op == "ge":
+        return attr_num >= target_num
+    elif op == "lt":
+        return attr_num < target_num
+    elif op == "le":
+        return attr_num <= target_num
+    return False
+
+
+def evaluate_constraint(
+    attr: AttributeValue | None,
+    constraint: cluster_pb2.Constraint,
+) -> bool:
+    """Evaluate a single constraint against an entity's attribute.
+
+    Works for any entity (worker, scaling group, etc.) that has typed attributes.
+
+    Args:
+        attr: Attribute value (None if attribute doesn't exist on the entity)
+        constraint: Constraint to evaluate
+
+    Returns:
+        True if constraint is satisfied, False otherwise
+    """
+    op = constraint.op
+
+    # EXISTS/NOT_EXISTS don't need a value comparison
+    if op == cluster_pb2.CONSTRAINT_OP_EXISTS:
+        return attr is not None
+    if op == cluster_pb2.CONSTRAINT_OP_NOT_EXISTS:
+        return attr is None
+
+    # All other operators require the attribute to exist
+    if attr is None:
+        return False
+
+    target = AttributeValue.from_proto(constraint.value)
+
+    match op:
+        case cluster_pb2.CONSTRAINT_OP_EQ:
+            return attr.value == target.value
+        case cluster_pb2.CONSTRAINT_OP_NE:
+            return attr.value != target.value
+        case cluster_pb2.CONSTRAINT_OP_GT:
+            return _compare_ordered(attr.value, target.value, "gt")
+        case cluster_pb2.CONSTRAINT_OP_GE:
+            return _compare_ordered(attr.value, target.value, "ge")
+        case cluster_pb2.CONSTRAINT_OP_LT:
+            return _compare_ordered(attr.value, target.value, "lt")
+        case cluster_pb2.CONSTRAINT_OP_LE:
+            return _compare_ordered(attr.value, target.value, "le")
+        case cluster_pb2.CONSTRAINT_OP_IN:
+            target_values = {AttributeValue.from_proto(v).value for v in constraint.values}
+            return attr.value in target_values
+        case _:
+            return False
+
+
+def is_cpu_device_type_constraint(c: cluster_pb2.Constraint) -> bool:
+    """True if this constraint is device-type=cpu.
+
+    CPU jobs match any scaling group, so this constraint is stripped
+    before routing evaluation.
+    """
+    return (
+        c.key == WellKnownAttribute.DEVICE_TYPE
+        and c.op == cluster_pb2.CONSTRAINT_OP_EQ
+        and c.value.string_value.strip().lower() == "cpu"
+    )
+
+
+def routing_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> list[cluster_pb2.Constraint]:
+    """Filter to routing-only constraints, stripping CPU device-type.
+
+    Non-routing constraints (tpu-name, tpu-worker-id, etc.) and unknown
+    constraints match individual workers, not scaling groups, so they are
+    excluded from group routing.
+    """
+    result = []
+    for c in constraints:
+        if is_cpu_device_type_constraint(c):
+            continue
+        desc = CONSTRAINT_REGISTRY.get(c.key)
+        if desc is None or not desc.routing:
+            continue
+        result.append(c)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# ConstraintIndex: posting-list index for fast constraint matching
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ConstraintIndex:
+    """Posting-list index for fast constraint matching over a set of entities.
+
+    Entities are identified by plain strings. Each entity has a dict of
+    AttributeValue attributes. The index supports fast EQ/IN/EXISTS/NOT_EXISTS
+    lookups via posting lists, with a slow-path fallback for ordered operators.
+    """
+
+    _all_ids: frozenset[str]
+    _discrete_lists: dict[str, dict[str | int | float, set[str]]]
+    _entity_attributes: dict[str, dict[str, AttributeValue]]
+
+    @classmethod
+    def build(cls, entities: dict[str, dict[str, AttributeValue]]) -> ConstraintIndex:
+        """Build index from entity_id -> attributes mapping."""
+        discrete_lists: dict[str, dict[str | int | float, set[str]]] = {}
+        for entity_id, attrs in entities.items():
+            for key, attr_value in attrs.items():
+                if key not in discrete_lists:
+                    discrete_lists[key] = {}
+                value = attr_value.value
+                if value not in discrete_lists[key]:
+                    discrete_lists[key][value] = set()
+                discrete_lists[key][value].add(entity_id)
+        return cls(
+            _all_ids=frozenset(entities.keys()),
+            _discrete_lists=discrete_lists,
+            _entity_attributes=dict(entities),
+        )
+
+    def matching_entities(self, constraints: Sequence[cluster_pb2.Constraint]) -> set[str]:
+        """Get entity IDs matching ALL constraints."""
+        if not constraints:
+            return set(self._all_ids)
+        result: set[str] | None = None
+        for constraint in constraints:
+            matches = self._evaluate_constraint_set(constraint)
+            if result is None:
+                result = matches
+            else:
+                result = result & matches
+            if not result:
+                return set()
+        return result or set()
+
+    def _evaluate_constraint_set(self, constraint: cluster_pb2.Constraint) -> set[str]:
+        """Evaluate a single constraint, returning matching entity IDs."""
+        key = constraint.key
+        op = constraint.op
+
+        if op == cluster_pb2.CONSTRAINT_OP_EQ and key in self._discrete_lists:
+            target = AttributeValue.from_proto(constraint.value).value
+            return self._discrete_lists[key].get(target, set())
+
+        if op == cluster_pb2.CONSTRAINT_OP_EXISTS:
+            if key in self._discrete_lists:
+                result: set[str] = set()
+                for entities in self._discrete_lists[key].values():
+                    result.update(entities)
+                return result
+            return set()
+
+        if op == cluster_pb2.CONSTRAINT_OP_NOT_EXISTS:
+            if key in self._discrete_lists:
+                has_attr: set[str] = set()
+                for entities in self._discrete_lists[key].values():
+                    has_attr.update(entities)
+                return set(self._all_ids) - has_attr
+            return set(self._all_ids)
+
+        if op == cluster_pb2.CONSTRAINT_OP_IN and key in self._discrete_lists:
+            in_result: set[str] = set()
+            for av in constraint.values:
+                target_val = AttributeValue.from_proto(av).value
+                in_result |= self._discrete_lists[key].get(target_val, set())
+            return in_result
+
+        # Slow path for NE, GT, GE, LT, LE, or non-indexed attributes
+        result_set: set[str] = set()
+        for entity_id, attrs in self._entity_attributes.items():
+            attr = attrs.get(key)
+            if evaluate_constraint(attr, constraint):
+                result_set.add(entity_id)
+        return result_set
+
+    def entities_by_group(self, group_by: str, matching_ids: set[str]) -> dict[str, list[str]]:
+        """Group entities by the specified attribute value."""
+        groups: dict[str, list[str]] = defaultdict(list)
+        if group_by not in self._discrete_lists:
+            return groups
+        for value, entities in self._discrete_lists[group_by].items():
+            for entity_id in entities:
+                if entity_id in matching_ids:
+                    groups[str(value)].append(entity_id)
+        return groups
+
+
+@dataclass(frozen=True)
+class ResourceCapacity:
+    """Resource dimensions for capacity comparison.
+
+    Used by both the autoscaler (ScalingGroup resource fit) and the scheduler
+    (WorkerCapacity resource fit) to check whether a request fits available capacity.
+    """
+
+    cpu_millicores: int | None = None
+    memory_bytes: int | None = None
+    disk_bytes: int | None = None
+    gpu_count: int | None = None
+    tpu_count: int | None = None
+
+
+def check_resource_fit(
+    available: ResourceCapacity,
+    required: ResourceCapacity,
+) -> str | None:
+    """Check if required resources fit within available capacity.
+
+    Returns None if fit, human-readable reason string otherwise.
+
+    A None value on the available side means "not configured / unlimited" and
+    never rejects.  A None value on the required side means "not needed".
+    """
+
+    def _check(avail: int | None, req: int | None, name: str, fmt: str = "d") -> str | None:
+        if req is None or req <= 0:
+            return None
+        if avail is None:
+            return None
+        if req > avail:
+            return f"{name}: need {req:{fmt}}, available {avail:{fmt}}"
+        return None
+
+    for result in [
+        _check(available.cpu_millicores, required.cpu_millicores, "cpu"),
+        _check(available.memory_bytes, required.memory_bytes, "memory"),
+        _check(available.disk_bytes, required.disk_bytes, "disk"),
+        _check(available.gpu_count, required.gpu_count, "gpu"),
+        _check(available.tpu_count, required.tpu_count, "tpu"),
+    ]:
+        if result is not None:
+            return result
+    return None
+
+
+def resource_capacity_from_spec(spec: cluster_pb2.ResourceSpecProto) -> ResourceCapacity:
+    """Extract ResourceCapacity from a job's ResourceSpecProto."""
+    from iris.cluster.types import get_gpu_count, get_tpu_count
+
+    return ResourceCapacity(
+        cpu_millicores=spec.cpu_millicores,
+        memory_bytes=spec.memory_bytes,
+        disk_bytes=spec.disk_bytes,
+        gpu_count=get_gpu_count(spec.device) if spec.HasField("device") else 0,
+        tpu_count=get_tpu_count(spec.device) if spec.HasField("device") else 0,
+    )
+
+
+def worker_attributes_from_resources(resources: config_pb2.ScaleGroupResources) -> dict[str, str]:
+    """Derive well-known worker attributes from scale group resources config.
+
+    This ensures local workers advertise the same device-type, device-variant,
+    and preemptible attributes that constraint matching expects.
+    """
+    attrs: dict[str, str] = {}
+    attrs[WellKnownAttribute.DEVICE_TYPE] = accelerator_type_to_string(resources.device_type)
+    if resources.device_variant:
+        attrs[WellKnownAttribute.DEVICE_VARIANT] = resources.device_variant.lower()
+    attrs[WellKnownAttribute.PREEMPTIBLE] = str(resources.preemptible).lower()
+    return attrs

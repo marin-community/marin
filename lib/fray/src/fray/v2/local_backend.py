@@ -289,6 +289,10 @@ class LocalActorGroup:
         self._yielded = True
         return self._handles
 
+    def is_done(self) -> bool:
+        """Local actors run in-process and don't independently fail."""
+        return False
+
     def shutdown(self) -> None:
         """Terminate all local actors and clean up registry."""
         for job in self._jobs:

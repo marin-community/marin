@@ -44,21 +44,21 @@ class WorkerDashboard:
             Route("/health", self._health),
             Route("/", self._dashboard),
             Route("/task/{task_id:path}", self._task_detail_page),
-            Route("/logs", self._logs_page),
+            Route("/status", self._status_page),
             static_files_mount(),
             Mount(rpc_wsgi_app.path, app=rpc_app),
         ]
         return Starlette(routes=routes)
 
-    def _logs_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Iris Logs", "/static/worker/logs-page.js"))
+    def _status_page(self, _request: Request) -> HTMLResponse:
+        return HTMLResponse(html_shell("Iris Status", "worker"))
 
     def _health(self, _request: Request) -> JSONResponse:
         """Simple health check endpoint for bootstrap and load balancers."""
         return JSONResponse({"status": "healthy"})
 
     def _dashboard(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Iris Worker", "/static/worker/app.js"))
+        return HTMLResponse(html_shell("Iris Worker", "worker"))
 
     def _task_detail_page(self, request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Task Detail", "/static/worker/task-detail.js"))
+        return HTMLResponse(html_shell("Task Detail", "worker"))

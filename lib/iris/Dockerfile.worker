@@ -6,6 +6,7 @@
 # Or via CLI:
 #   uv run python -m iris.cluster.vm.cli build-image
 #
+
 FROM python:3.12
 
 LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
@@ -21,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-transport-https \
     openssh-client \
     git \
+    lldb \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Google Cloud SDK (required for platform.discover_controller() on GCP)
@@ -44,22 +46,33 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
     chmod a+r /etc/apt/keyrings/docker.asc && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list && \
     apt-get update && \
-    apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin && \
+    # TODO(#3341): TPU host VMs ship Docker daemon 24.0 (API 1.43). Pinning the
+    # CLI to the same major keeps client and daemon compatible. Revisit once GCP
+    # updates the base TPU VM image.
+    apt-get install -y --no-install-recommends 'docker-ce-cli=5:24.0*' 'docker-buildx-plugin=0.11*' && \
     rm -rf /var/lib/apt/lists/*
 
 # Install uv from official image
 COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
 
 WORKDIR /app
+ENV PATH="/app/.venv/bin:$PATH"
 
-# Copy pyproject first so the heavy dependency install is cached
-# independently of source changes.
-COPY pyproject.toml ./
+# Copy pyproject and build hook first so the heavy dependency install is
+# cached independently of source changes.
+COPY pyproject.toml hatch_build.py ./
 RUN uv sync --no-install-project
 
 # Copy source and install the project itself (fast, deps already installed above)
 COPY src/ ./src/
 RUN uv sync
+
+# Dashboard assets are pre-built by `iris build dashboard` before docker build.
+COPY dashboard/dist /app/dashboard/dist
+
+# Install profiling tools (py-spy for CPU/thread profiling, memray for memory profiling).
+# These are needed for /system/process profiling on the worker.
+RUN uv pip install py-spy memray
 
 # Default cache directory
 RUN mkdir -p /var/cache/iris

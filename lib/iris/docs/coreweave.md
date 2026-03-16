@@ -173,8 +173,8 @@ in `CoreweavePlatform`):
 |----------|---------|
 | `iris` Namespace | Isolation for all Iris resources |
 | `iris-controller` ServiceAccount | In-cluster K8s API auth for controller and worker Pods |
-| `iris-controller` ClusterRole | API permissions (see below) |
-| `iris-controller` ClusterRoleBinding | Binds ServiceAccount to ClusterRole |
+| `iris-controller-{namespace}` ClusterRole | API permissions (see below). Namespace-qualified to support multiple Iris instances on the same CKS cluster. |
+| `iris-controller-{namespace}` ClusterRoleBinding | Binds ServiceAccount to ClusterRole. Namespace-qualified to avoid collisions. |
 
 **ClusterRole permissions**:
 
@@ -364,7 +364,7 @@ The platform detects fatal errors before the full timeout expires:
 `CoreweavePlatform.start_controller()` orchestrates the full startup sequence.
 See `lib/iris/src/iris/cluster/platform/coreweave.py`.
 
-1. Apply RBAC prerequisites (Namespace, ServiceAccount, ClusterRole, ClusterRoleBinding)
+1. Apply RBAC prerequisites (Namespace, ServiceAccount, ClusterRole `iris-controller-{ns}`, ClusterRoleBinding `iris-controller-{ns}`)
 2. Create S3 credentials Secret (if S3 storage configured)
 3. Apply ConfigMap with cluster config
 4. Create/reconcile all shared NodePools in parallel via `ensure_nodepools()`
@@ -409,7 +409,81 @@ Standard Iris flow. Controller assigns task via heartbeat RPC. Worker calls
 2. `handle.terminate()` force-deletes the worker Pod
 3. CoreWeave autoscaler deprovisions the bare-metal node when no Pods remain
 
-## 13. Credentials Summary
+## 13. Multi-VM Jobs
+
+Multi-VM scale groups allow training across multiple nodes. Each slice in a
+multi-VM group provisions N worker Pods (one per VM) that share a single
+ConfigMap. All Pods in a slice must reach Ready before the slice is usable.
+
+### Configuration
+
+Define a scale group with `num_vms > 1` in the cluster config. The
+`slice_template.num_vms` must match the top-level `num_vms`:
+
+```yaml
+scale_groups:
+  h100-16x:
+    num_vms: 2
+    resources:
+      cpu: 128
+      ram: 2048GB
+      disk: 1TB
+      device_type: gpu
+      device_variant: H100
+      device_count: 8
+    worker:
+      attributes:
+        region: US-WEST-04A
+        pool: h100-16x
+    min_slices: 0
+    max_slices: 1
+    priority: 50
+    slice_template:
+      num_vms: 2
+      coreweave:
+        region: US-WEST-04A
+        instance_type: gd-8xh100ib-i128
+```
+
+### Submitting multi-replica jobs
+
+Jobs targeting a multi-VM group must use coscheduling so all replicas land on
+workers in the same pool. Include `ports=["jax"]` so Iris allocates a named
+port for JAX coordinator discovery:
+
+```python
+from iris.sdk import IrisClient, CoschedulingConfig
+
+client = IrisClient()
+client.submit(
+    name="multi-node-training",
+    image="ghcr.io/marin-community/iris-task:latest",
+    command=["python", "train.py"],
+    replicas=2,
+    ports=["jax"],
+    coscheduling=CoschedulingConfig(group_by="pool"),
+    resources={"gpu": 8},
+)
+```
+
+Each replica receives `IRIS_TASK_ID` (0 or 1), `IRIS_NUM_TASKS` (2), and
+`IRIS_PORT_JAX` (the allocated coordinator port). Task code calls
+`iris.runtime.jax_init.initialize_jax()` to bootstrap JAX distributed — task 0
+registers its coordinator address via the endpoint API, and task 1 discovers it
+by polling.
+
+### Requirements
+
+- **Coscheduling is mandatory**: Without `CoschedulingConfig(group_by="pool")`,
+  replicas may land on workers from different scale groups, which lack
+  InfiniBand connectivity.
+- **hostNetwork anti-affinity**: Because worker Pods use `hostNetwork: true`,
+  two Pods binding the same port cannot schedule on the same node. This
+  provides implicit anti-affinity — no explicit `podAntiAffinity` rule needed.
+- **Gang semantics**: If any task in a coscheduled group fails terminally, all
+  siblings are killed and the entire group retries together.
+
+## 14. Credentials Summary
 
 ### Platform-managed (all created by `iris cluster start`)
 
@@ -431,19 +505,16 @@ The `kubeconfig_path` config field is only needed when running the CLI
 **outside** the cluster (e.g., `iris cluster start` from a laptop). Inside the
 cluster, Pods use in-cluster auth automatically.
 
-## 14. Open Questions / Known Limitations
+## 15. Open Questions / Known Limitations
 
-1. **Multi-node slices**: `num_vms > 1` is not supported and raises `ValueError`.
-   InfiniBand co-scheduling for multi-node training needs investigation.
-
-2. **NodePool rate limits**: Creating many NodePools at scale has not been
+1. **NodePool rate limits**: Creating many NodePools at scale has not been
    validated with CoreWeave.
 
-3. **Task Pod GC**: `ownerReferences` on task Pods only trigger GC when the
+2. **Task Pod GC**: `ownerReferences` on task Pods only trigger GC when the
    worker Pod object is deleted. If the worker crash-loops in place, stale task
    Pods can accumulate. See TODO in `kubernetes.py`.
 
-## 15. Troubleshooting
+## 16. Troubleshooting
 
 ### NodePool not scaling up
 
@@ -487,7 +558,7 @@ kubectl logs <pod> -n iris --previous    # Logs from the last crash
 If `cache_dir` is not set to `/mnt/local/...`, the 15 GB root RAM disk fills
 instantly. Fix in config and redeploy.
 
-## 16. References
+## 17. References
 
 - [CoreWeave CKS Introduction](https://docs.coreweave.com/docs/products/cks)
 - [CKS Cluster Creation](https://docs.coreweave.com/docs/products/cks/clusters/create)

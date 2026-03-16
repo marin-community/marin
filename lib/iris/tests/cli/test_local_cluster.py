@@ -18,7 +18,7 @@ from click.testing import CliRunner
 from iris.cli import iris
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.cluster.controller.local import LocalController
+from iris.cluster.local_cluster import LocalCluster
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
@@ -48,7 +48,6 @@ def cluster_config_file(tmp_path: Path) -> Path:
                 },
                 "scale_groups": {
                     "local-cpu": {
-                        "accelerator_type": "ACCELERATOR_TYPE_CPU",
                         "min_slices": 1,
                         "max_slices": 1,
                         "num_vms": 1,
@@ -56,8 +55,8 @@ def cluster_config_file(tmp_path: Path) -> Path:
                             "cpu": 1,
                             "ram": "1GB",
                             "disk": 0,
-                            "gpu_count": 0,
-                            "tpu_count": 0,
+                            "device_type": "cpu",
+                            "device_count": 0,
                         },
                         "slice_template": {
                             "accelerator_type": "ACCELERATOR_TYPE_CPU",
@@ -91,10 +90,10 @@ def test_cli_local_cluster_e2e(cluster_config_file: Path):
     """Start a local cluster via CLI, submit a job via IrisClient, verify completion."""
     runner = CliRunner()
 
-    # Capture the LocalController instance so we can get the address and stop it
-    captured_controller: list[LocalController] = []
+    # Capture the LocalCluster instance so we can get the address and stop it
+    captured_controller: list[LocalCluster] = []
     controller_ready = threading.Event()
-    original_start = LocalController.start
+    original_start = LocalCluster.start
 
     def patched_start(self):
         captured_controller.append(self)
@@ -107,7 +106,7 @@ def test_cli_local_cluster_e2e(cluster_config_file: Path):
     invoke_result: list = []
 
     def run_cli():
-        with patch.object(LocalController, "start", patched_start):
+        with patch.object(LocalCluster, "start", patched_start):
             invoke_result.append(
                 runner.invoke(
                     iris,
@@ -143,7 +142,7 @@ def test_cli_local_cluster_e2e(cluster_config_file: Path):
         status = job.wait(timeout=30, raise_on_failure=True)
         assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
     finally:
-        controller.stop()
+        controller.close()
         cli_thread.join(timeout=5)
 
     assert invoke_result, "CLI did not return"

@@ -97,6 +97,8 @@ Set up your training configuration by calculating the number of training steps a
     )
     ```
 
+If you hit HBM OOM while scaling model size, batch size, or sequence length, see [Making Things Fit in HBM](../references/hbm-optimization.md) for a practical tuning checklist.
+
 ## Creating the Training Pipeline
 
 Connect your model configuration, training parameters, and dataset to create a training pipeline:
@@ -139,7 +141,7 @@ The `default_train` function creates a training pipeline that:
 To train the model with experiment tracking:
 
 ```bash
-python marin/run/ray_run.py --env_vars WANDB_API_KEY ${YOUR_WANDB_API_KEY} -- python experiments/${YOUR_EXPERIMENT_SCRIPT}.py
+uv run lib/marin/src/marin/run/ray_run.py --env_vars WANDB_API_KEY ${YOUR_WANDB_API_KEY} -- python experiments/${YOUR_EXPERIMENT_SCRIPT}.py
 ```
 
 Following Marin's guidelines, name your experiment script `experiments/exp{GITHUB_ISSUE_NUMBER}_{DESCRIPTOR}.py`, where `GITHUB_ISSUE_NUMBER` is the issue number for your experiment and `DESCRIPTOR` is a brief description.

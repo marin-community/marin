@@ -150,6 +150,27 @@ def push_to_ghcr(
     click.echo("\nDone!")
 
 
+def _ensure_dashboard_dist() -> None:
+    """Build Vue dashboard assets.
+
+    Called automatically before building controller/worker images so that
+    ``COPY dashboard/dist`` in the Dockerfile always has fresh assets.
+    """
+    iris_root = find_iris_root()
+    dashboard_dir = iris_root / "dashboard"
+    if not (dashboard_dir / "package.json").exists():
+        raise click.ClickException(
+            f"Dashboard source not found at {dashboard_dir}. " "Cannot build dashboard assets for Docker image."
+        )
+    click.echo("Building frontend assets...")
+    subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True)
+    result = subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, capture_output=True, text=True)
+    if result.returncode != 0:
+        click.echo(result.stderr, err=True)
+        raise click.ClickException("Dashboard build failed")
+    click.echo("Dashboard built successfully.")
+
+
 def build_image(
     image_type: str,
     tag: str,
@@ -166,6 +187,10 @@ def build_image(
     deployments can pin to a specific version while local workflows
     continue to use "latest".
     """
+    # Controller and worker images COPY dashboard/dist — ensure it exists.
+    if image_type in ("controller", "worker"):
+        _ensure_dashboard_dist()
+
     dockerfile_name = f"Dockerfile.{image_type}"
 
     iris_root = find_iris_root()
@@ -374,6 +399,23 @@ def build_task_image(
         ghcr_org,
         verbose=verbose,
     )
+
+
+@build.command("dashboard")
+def build_dashboard():
+    """Build Vue dashboard assets via Rsbuild."""
+    dashboard_dir = find_iris_root() / "dashboard"
+    if not (dashboard_dir / "package.json").exists():
+        raise click.ClickException(f"Dashboard source not found at {dashboard_dir}")
+    if not (dashboard_dir / "node_modules").exists():
+        click.echo("Installing dashboard dependencies...")
+        subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True)
+    click.echo("Building dashboard...")
+    result = subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, capture_output=True, text=True)
+    if result.returncode != 0:
+        click.echo(result.stderr, err=True)
+        raise click.ClickException("Dashboard build failed")
+    click.echo("Dashboard built successfully.")
 
 
 @build.command("push")

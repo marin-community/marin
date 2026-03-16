@@ -3,6 +3,7 @@
 # Build from the iris directory:
 #   docker build -f Dockerfile.controller -t iris-controller:latest .
 #
+
 FROM python:3.12
 
 LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
@@ -18,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-transport-https \
     openssh-client \
     git \
+    lldb \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Google Cloud SDK (required for TPU management via gcloud)
@@ -39,14 +41,22 @@ RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kub
 COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
 
 WORKDIR /app
+ENV PATH="/app/.venv/bin:$PATH"
 
-# Copy pyproject.toml first and sync dependencies (cached layer)
-COPY pyproject.toml ./
+# Copy pyproject.toml and build hook first and sync dependencies (cached layer)
+COPY pyproject.toml hatch_build.py ./
 RUN uv sync --no-install-project
 
 # Copy source and install the project
 COPY src/ ./src/
 RUN uv sync
+
+# Dashboard assets are pre-built by `iris build dashboard` before docker build.
+COPY dashboard/dist /app/dashboard/dist
+
+# Install profiling tools (py-spy for CPU/thread profiling, memray for memory profiling).
+# These are needed for /system/process profiling on the controller.
+RUN uv pip install py-spy memray
 
 # Default cache directory
 RUN mkdir -p /var/cache/iris

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Protocol
 
-LOG_FORMAT = "%(levelprefix)s%(asctime)s %(name)s %(message)s"
+LOG_FORMAT = "%(levelprefix)s%(asctime)s %(thread)s %(name)s %(message)s"
 LOG_DATEFMT = "%Y%m%d %H:%M:%S"
 
 # Map log level names to single-character prefixes for compact log output.
@@ -188,7 +188,7 @@ def get_global_buffer() -> LogRingBuffer:
 _configured = False
 
 
-def configure_logging(level: int = logging.DEBUG) -> LogRingBuffer:
+def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
     """Configure iris logging: stderr handler + ring buffer. Idempotent."""
     global _configured
     if _configured:
