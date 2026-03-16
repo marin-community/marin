@@ -1163,6 +1163,7 @@ class ControllerDB:
 
     # --- Log methods (consolidated from LogStore) ---
 
+    _MAX_LOG_RECORDS = 5_000_000
     _LOG_INSERT = "INSERT INTO logs (key, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?)"
 
     def append(self, key: str, entries: list | Sequence) -> None:
@@ -1173,6 +1174,7 @@ class ControllerDB:
         with self._lock:
             self._conn.executemany(self._LOG_INSERT, rows)
             self._conn.commit()
+        self.evict_logs_if_needed(self._MAX_LOG_RECORDS)
 
     def append_batch(self, items: Sequence[tuple[str, list | Sequence]]) -> None:
         """Write log entries for multiple keys in a single transaction."""
@@ -1184,6 +1186,7 @@ class ControllerDB:
         with self._lock:
             self._conn.executemany(self._LOG_INSERT, all_rows)
             self._conn.commit()
+        self.evict_logs_if_needed(self._MAX_LOG_RECORDS)
 
     @staticmethod
     def _log_row_to_entry(row: tuple) -> logging_pb2.LogEntry:
