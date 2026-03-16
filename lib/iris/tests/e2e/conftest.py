@@ -26,8 +26,7 @@ from pathlib import Path
 import pytest
 from iris.chaos import reset_chaos
 from iris.client.client import IrisClient, Job
-from iris.cluster.config import load_config, make_local_config
-from iris.cluster.manager import connect_cluster
+from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
 from iris.cluster.constraints import Constraint, WellKnownAttribute
 from iris.cluster.types import (

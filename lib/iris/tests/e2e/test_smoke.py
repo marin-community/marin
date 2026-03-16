@@ -22,7 +22,7 @@ from iris.cli.cluster import _build_cluster_images, _pin_latest_images
 from iris.client.client import IrisClient
 from iris.cluster.config import IrisConfig, load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
-from iris.cluster.manager import connect_cluster
+from iris.cluster.config import connect_cluster
 from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.types import (
     Entrypoint,
