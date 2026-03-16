@@ -36,7 +36,8 @@ from iris.cluster.controller.service import (
     _jobs_in_states,
     _live_user_stats,
     _task_summaries_for_jobs,
-    _worker_addresses,
+    _tasks_for_listing,
+    _worker_addresses_for_tasks,
 )
 
 
@@ -110,9 +111,13 @@ def benchmark_dashboard(db: ControllerDB, iterations: int) -> list[tuple[str, fl
     results.append(("_task_summaries_for_jobs (all)", p50, p95))
     print_result("_task_summaries_for_jobs (all)", p50, p95)
 
-    p50, p95 = bench("_worker_addresses", lambda: _worker_addresses(db), iterations=iterations)
-    results.append(("_worker_addresses", p50, p95))
-    print_result("_worker_addresses", p50, p95)
+    # _worker_addresses_for_tasks requires a list of Task objects
+    tasks = _tasks_for_listing(db)
+    p50, p95 = bench(
+        "_worker_addresses_for_tasks", lambda: _worker_addresses_for_tasks(db, tasks), iterations=iterations
+    )
+    results.append(("_worker_addresses_for_tasks", p50, p95))
+    print_result("_worker_addresses_for_tasks", p50, p95)
 
     p50, p95 = bench("_live_user_stats", lambda: _live_user_stats(db), iterations=iterations)
     results.append(("_live_user_stats", p50, p95))

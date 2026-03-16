@@ -323,7 +323,7 @@ def _worker_addresses_for_tasks(db: ControllerDB, tasks: list[Task]) -> dict[Wor
 def _jobs_in_states(db: ControllerDB, states: tuple[int, ...], *, top_level_only: bool = False) -> list[Job]:
     where = JOBS.c.state.in_(list(states))
     if top_level_only:
-        where = where & JOBS.c.parent_job_id.is_null()
+        where = where & (JOBS.c.depth == 1)
     with db.read_snapshot() as q:
         return q.select(JOBS, where=where)
 

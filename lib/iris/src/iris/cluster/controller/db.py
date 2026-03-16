@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import queue
 import sqlite3
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -1088,8 +1089,8 @@ class ControllerDB:
         finally:
             try:
                 conn.rollback()
-            except Exception:
-                pass
+            except sqlite3.OperationalError:
+                logging.getLogger(__name__).warning("read_snapshot rollback failed", exc_info=True)
             self._read_pool.put(conn)
 
     def decode_worker(self, row: sqlite3.Row) -> Worker:
