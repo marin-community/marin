@@ -6,8 +6,9 @@
 from __future__ import annotations
 
 import json
+import queue
 import sqlite3
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import MISSING, dataclass, field, fields, replace as dc_replace
 from pathlib import Path
@@ -353,12 +354,13 @@ class Row:
 class QuerySnapshot:
     """Read-only snapshot over the controller DB."""
 
-    def __init__(self, conn: sqlite3.Connection, lock: RLock):
+    def __init__(self, conn: sqlite3.Connection, lock: RLock | None):
         self._conn = conn
         self._lock = lock
 
     def __enter__(self) -> QuerySnapshot:
-        self._lock.acquire()
+        if self._lock is not None:
+            self._lock.acquire()
         self._conn.execute("BEGIN")
         return self
 
@@ -366,7 +368,8 @@ class QuerySnapshot:
         try:
             self._conn.rollback()
         finally:
-            self._lock.release()
+            if self._lock is not None:
+                self._lock.release()
 
     def execute_sql(self, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Cursor:
         """Execute raw SQL and return the cursor for result inspection."""
@@ -1000,6 +1003,8 @@ class TransactionCursor:
 class ControllerDB:
     """Thread-safe SQLite wrapper with typed query and migration helpers."""
 
+    _READ_POOL_SIZE = 4
+
     def __init__(self, db_path: Path):
         self._db_path = db_path
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1008,6 +1013,13 @@ class ControllerDB:
         self._conn.row_factory = sqlite3.Row
         self._configure(self._conn)
         self.apply_migrations()
+        self._read_pool: queue.Queue[sqlite3.Connection] = queue.Queue()
+        for _ in range(self._READ_POOL_SIZE):
+            conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            self._configure(conn)
+            conn.execute("PRAGMA query_only = ON")
+            self._read_pool.put(conn)
 
     @property
     def db_path(self) -> Path:
@@ -1023,6 +1035,11 @@ class ControllerDB:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+        while not self._read_pool.empty():
+            try:
+                self._read_pool.get_nowait().close()
+            except queue.Empty:
+                break
 
     @contextmanager
     def transaction(self):
@@ -1052,6 +1069,22 @@ class ControllerDB:
 
     def snapshot(self) -> QuerySnapshot:
         return QuerySnapshot(self._conn, self._lock)
+
+    @contextmanager
+    def read_snapshot(self) -> Iterator[QuerySnapshot]:
+        """Read-only snapshot that does NOT acquire the write lock.
+
+        Uses a pooled read-only connection with WAL isolation. Safe for
+        concurrent use from dashboard/RPC threads while the scheduling
+        loop holds the write lock.
+        """
+        conn = self._read_pool.get()
+        try:
+            conn.execute("BEGIN")
+            yield QuerySnapshot(conn, lock=None)
+        finally:
+            conn.rollback()
+            self._read_pool.put(conn)
 
     def decode_worker(self, row: sqlite3.Row) -> Worker:
         return _decode_row(Worker, row)
@@ -1214,7 +1247,7 @@ def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict
 
 def tasks_for_job_with_attempts(db: ControllerDB, job_id: JobName) -> list[Task]:
     """Fetch all tasks for a job with their attempt history."""
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         tasks = q.select(
             TASKS,
             where=TASKS.c.job_id == job_id.to_wire(),

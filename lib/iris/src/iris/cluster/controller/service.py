@@ -291,7 +291,7 @@ def _child_jobs(db: ControllerDB, job_id: JobName) -> list[Job]:
 
 
 def _tasks_for_listing(db: ControllerDB, *, job_id: JobName | None = None) -> list[Task]:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         tasks = q.select(
             TASKS,
             where=(TASKS.c.job_id == job_id.to_wire()) if job_id else None,
@@ -308,7 +308,7 @@ def _tasks_for_listing(db: ControllerDB, *, job_id: JobName | None = None) -> li
 
 
 def _worker_addresses(db: ControllerDB) -> dict[WorkerId, str]:
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         workers = q.select(WORKERS, columns=(WORKERS.c.worker_id, WORKERS.c.address))
     return {row.worker_id: row.address for row in workers}
 
