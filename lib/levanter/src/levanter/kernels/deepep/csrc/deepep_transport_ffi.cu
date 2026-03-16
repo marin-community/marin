@@ -481,7 +481,7 @@ void DispatchOnCurrentDevice(
       runtime.barrier_signal_ptrs_gpu,
       runtime.rank,
       stream,
-      runtime.dispatch_config.num_sms);
+      runtime.dispatch_num_channels());
   LogHostDispatchStage(runtime.rank, "after_notify_dispatch", num_tokens, hidden, num_experts, num_topk);
 
   int num_recv_tokens = -1;
