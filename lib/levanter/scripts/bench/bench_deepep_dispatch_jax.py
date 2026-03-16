@@ -114,19 +114,17 @@ def _route_topk_numpy(router_logits: np.ndarray, *, topk: int) -> tuple[np.ndarr
     return topk_idx, topk_weights
 
 
-def _global_arrays(
+def _global_routing_arrays(
     *,
     seed: int,
     tokens: int,
-    hidden: int,
     experts: int,
     topk: int,
     distribution: Distribution,
     run_alpha: float,
     run_noise_scale: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     if distribution == "deterministic":
-        x = np.arange(tokens * hidden, dtype=np.float32).reshape(tokens, hidden) / max(hidden, 1)
         topk_idx = np.empty((tokens, topk), dtype=np.int64)
         for token in range(tokens):
             for slot in range(topk):
@@ -134,10 +132,8 @@ def _global_arrays(
         raw_weights = np.arange(topk, 0, -1, dtype=np.float32)
         raw_weights /= np.sum(raw_weights, dtype=np.float32)
         topk_weights = np.broadcast_to(raw_weights, (tokens, topk)).copy()
-        return x, topk_idx, topk_weights
+        return topk_idx, topk_weights
 
-    rng = np.random.default_rng(seed)
-    x = rng.normal(loc=0.0, scale=1.0, size=(tokens, hidden)).astype(np.float32)
     router_logits = _sample_router_logits_numpy(
         seed=seed + 1,
         tokens=tokens,
@@ -147,7 +143,14 @@ def _global_arrays(
         run_noise_scale=run_noise_scale,
     )
     topk_idx, topk_weights = _route_topk_numpy(router_logits, topk=topk)
-    return x, topk_idx, topk_weights
+    return topk_idx, topk_weights
+
+
+def _sample_x_numpy(*, seed: int, tokens: int, hidden: int, distribution: Distribution) -> np.ndarray:
+    if distribution == "deterministic":
+        return np.arange(tokens * hidden, dtype=np.float32).reshape(tokens, hidden) / max(hidden, 1)
+    rng = np.random.default_rng(seed)
+    return rng.normal(loc=0.0, scale=1.0, size=(tokens, hidden)).astype(np.float32)
 
 
 def _make_mesh(ep_size: int) -> Mesh:
@@ -496,6 +499,16 @@ def _config_payload(config) -> dict[str, int]:
     }
 
 
+def _stats_payload(values: np.ndarray) -> dict[str, float | int]:
+    values_f32 = values.astype(np.float32)
+    return {
+        "min": int(np.min(values)),
+        "max": int(np.max(values)),
+        "mean": float(np.mean(values_f32)),
+        "sum": int(np.sum(values)),
+    }
+
+
 def _dispatch_config_from_args(args, ep_size: int):
     config = _TRANSPORT_FFI._default_dispatch_config(ep_size)
     if args.dispatch_num_sms is None:
@@ -538,6 +551,7 @@ def main() -> None:
     parser.add_argument("--iters", type=int, default=3)
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--probe-only", action="store_true")
+    parser.add_argument("--layout-stats-only", action="store_true")
     parser.add_argument("--host-kernel-probe-only", action="store_true")
     parser.add_argument("--host-dispatch-round-only", action="store_true")
     parser.add_argument("--execution-model", choices=("shard_map", "pmap"), default="shard_map")
@@ -613,10 +627,9 @@ def main() -> None:
         _print0("HOST_DISPATCH_JSON " + json.dumps(payload, sort_keys=True))
         return
 
-    x_np, topk_idx_np, topk_weights_np = _global_arrays(
+    topk_idx_np, topk_weights_np = _global_routing_arrays(
         seed=args.seed,
         tokens=args.tokens,
-        hidden=args.hidden,
         experts=args.experts,
         topk=args.topk,
         distribution=args.distribution,
@@ -624,6 +637,7 @@ def main() -> None:
         run_noise_scale=args.run_noise_scale,
     )
     if args.probe_only:
+        x_np = _sample_x_numpy(seed=args.seed, tokens=args.tokens, hidden=args.hidden, distribution=args.distribution)
         tokens_per_rank = args.tokens // ep_size
         device0 = next(device for device in devices if device.id == 0)
         with jax.default_device(device0):
@@ -690,6 +704,71 @@ def main() -> None:
         _print0("PROBE_JSON " + json.dumps(payload, sort_keys=True))
         return
 
+    if args.layout_stats_only:
+        if args.execution_model != "shard_map":
+            raise ValueError("--layout-stats-only currently supports only --execution-model=shard_map")
+        topk_idx = jnp.asarray(topk_idx_np, dtype=jnp.int64)
+        mesh = _make_mesh(ep_size)
+        batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+        topk_idx_sharded = jax.device_put(topk_idx, batch_sharding)
+
+        with jax.set_mesh(mesh):
+            layout = jax.jit(partial(_layout_step, mesh=mesh, num_experts=args.experts))(topk_idx_sharded)
+
+        num_tokens_per_rank = np.asarray(jax.device_get(layout[0]), dtype=np.int32)
+        num_tokens_per_expert = np.asarray(jax.device_get(layout[1]), dtype=np.int32)
+        del layout
+
+        tokens_per_rank = args.tokens // ep_size
+        local_experts = args.experts // ep_size
+        recv_tokens_per_rank = np.sum(num_tokens_per_rank, axis=0, dtype=np.int64)
+        global_assignments_per_expert = np.sum(num_tokens_per_expert, axis=0, dtype=np.int64)
+        local_assignments_per_rank = global_assignments_per_expert.reshape(ep_size, local_experts).sum(
+            axis=1, dtype=np.int64
+        )
+        wrapper_max_recv_tokens = tokens_per_rank * ep_size
+        wrapper_assignment_rows = wrapper_max_recv_tokens * args.topk
+
+        payload = {
+            "framework": "jax",
+            "mode": "layout_stats",
+            "distribution": args.distribution,
+            "world_size": ep_size,
+            "tokens": args.tokens,
+            "tokens_per_rank": tokens_per_rank,
+            "hidden": args.hidden,
+            "num_experts": args.experts,
+            "local_experts": local_experts,
+            "topk": args.topk,
+            "runtime": {
+                "dispatch_config": _config_payload(_dispatch_config_from_args(args, ep_size)),
+                "combine_config": _config_payload(_combine_config_from_args(args, ep_size)),
+            },
+            "layout": {
+                "source_to_dest_token_counts": num_tokens_per_rank.tolist(),
+                "recv_tokens_per_rank": recv_tokens_per_rank.tolist(),
+                "global_assignments_per_expert": global_assignments_per_expert.tolist(),
+                "local_assignments_per_rank": local_assignments_per_rank.tolist(),
+            },
+            "stats": {
+                "recv_tokens_per_rank": _stats_payload(recv_tokens_per_rank),
+                "local_assignments_per_rank": _stats_payload(local_assignments_per_rank),
+            },
+            "wrapper_bounds": {
+                "recv_capacity_per_rank": int(wrapper_max_recv_tokens),
+                "assignment_rows_per_rank": int(wrapper_assignment_rows),
+                "recv_overprovision_factor_max": float(
+                    wrapper_max_recv_tokens / max(1, int(np.max(recv_tokens_per_rank)))
+                ),
+                "assignment_overprovision_factor_max": float(
+                    wrapper_assignment_rows / max(1, int(np.max(local_assignments_per_rank)))
+                ),
+            },
+        }
+        _print0("LAYOUT_STATS_JSON " + json.dumps(payload, sort_keys=True))
+        return
+
+    x_np = _sample_x_numpy(seed=args.seed, tokens=args.tokens, hidden=args.hidden, distribution=args.distribution)
     breakdown = None
     if args.execution_model == "pmap":
         if args.timing_breakdown:

@@ -46,6 +46,7 @@ Kernel = Literal[
     "deepep_transport_second_ragged_dot_probe",
     "deepep_transport",
     "deepep_transport_prewarmed",
+    "deepep_transport_capped_prewarmed",
     "deepep_transport_staged",
     "prefix_counts",
     "vector_prefix",
@@ -69,6 +70,10 @@ BenchPass = Literal["forward", "forward_backward"]
 def _print0(*args, **kwargs) -> None:
     if jax.process_index() == 0:
         print(*args, **kwargs)
+
+
+def _round_up_capacity(value: int, *, multiple: int) -> int:
+    return ((value + multiple - 1) // multiple) * multiple
 
 
 def _time_fn(fn: Callable, *args, warmup: int = 2, iters: int = 5) -> float:
@@ -1128,6 +1133,20 @@ def _local_permute_from_counts(
     return sorted_inputs, sorted_indices, group_sizes
 
 
+def _deepep_transport_layout_counts_local(
+    selected_experts_local: jax.Array,
+    *,
+    num_experts: int,
+    num_ranks: int,
+) -> tuple[jax.Array, jax.Array]:
+    num_tokens_per_rank, num_tokens_per_expert, _ = deepep_get_dispatch_layout(
+        selected_experts_local,
+        num_ranks=num_ranks,
+        num_experts=num_experts,
+    )
+    return num_tokens_per_rank[None, :], num_tokens_per_expert[None, :]
+
+
 def _pack_deepep_local_assignments(
     recv_x: jax.Array,
     recv_topk_idx: jax.Array,
@@ -1136,9 +1155,13 @@ def _pack_deepep_local_assignments(
     expert_start: jax.Array,
     local_experts: int,
     num_recv_tokens: jax.Array,
+    max_local_assignments: int | None = None,
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
     max_recv_tokens, topk = recv_topk_idx.shape
     total_assignments = max_recv_tokens * topk
+    packed_assignments = (
+        total_assignments if max_local_assignments is None else min(max_local_assignments, total_assignments)
+    )
 
     recv_token_indices = jnp.repeat(jnp.arange(max_recv_tokens, dtype=jnp.int32), topk)
     expert_flat = (recv_topk_idx.reshape(-1) - expert_start).astype(jnp.int32)
@@ -1154,13 +1177,14 @@ def _pack_deepep_local_assignments(
     max_order_key = (local_experts + 1) * total_assignments
     selection_key = jnp.where(local_mask_flat, max_order_key - order_key, -1)
     _, sorted_assignment_indices = jax.lax.top_k(selection_key, total_assignments)
+    sorted_assignment_indices = sorted_assignment_indices[:packed_assignments]
 
     recv_token_indices = jnp.take(recv_token_indices, sorted_assignment_indices, axis=0)
     x_dispatch = jnp.take(recv_x, recv_token_indices, axis=0)
     assignment_weights = jnp.take(recv_topk_weights.reshape(-1), sorted_assignment_indices, axis=0).astype(
         recv_x.dtype
     )
-    valid_sorted = jnp.arange(total_assignments, dtype=jnp.int32) < total_valid
+    valid_sorted = jnp.arange(packed_assignments, dtype=jnp.int32) < total_valid
     x_dispatch = jnp.where(valid_sorted[:, None], x_dispatch, 0)
     assignment_weights = jnp.where(valid_sorted, assignment_weights, 0)
     return x_dispatch, assignment_weights, recv_token_indices, local_group_sizes
@@ -1182,6 +1206,52 @@ def _collapse_deepep_local_assignments(
     )
     recv_valid = jnp.arange(recv_capacity, dtype=jnp.int32) < num_recv_tokens
     return jnp.where(recv_valid[:, None], recv_out, 0)
+
+
+def _deepep_transport_exact_caps(
+    selected_experts: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh,
+    num_experts: int,
+    capacity_multiple: int = 128,
+) -> tuple[int, int]:
+    expert_axis_size = grug_moe_lib._mesh_axis_size(mesh, "expert")
+    if num_experts % expert_axis_size != 0:
+        raise ValueError(
+            f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size} for capped DeepEP"
+        )
+
+    batch_spec = grug_moe_lib._batch_spec_from_x(selected_experts, mesh)
+    shard_fn = shard_map(
+        partial(
+            _deepep_transport_layout_counts_local,
+            num_experts=num_experts,
+            num_ranks=expert_axis_size,
+        ),
+        mesh=mesh,
+        in_specs=(batch_spec,),
+        out_specs=(P("expert", None), P("expert", None)),
+        check_vma=False,
+    )
+    num_tokens_per_rank, num_tokens_per_expert = jax.jit(shard_fn)(selected_experts)
+    num_tokens_per_rank_host = np.asarray(jax.device_get(num_tokens_per_rank), dtype=np.int32)
+    num_tokens_per_expert_host = np.asarray(jax.device_get(num_tokens_per_expert), dtype=np.int32)
+    local_experts = num_experts // expert_axis_size
+    recv_tokens_per_rank = np.sum(num_tokens_per_rank_host, axis=0, dtype=np.int64)
+    global_assignments_per_expert = np.sum(num_tokens_per_expert_host, axis=0, dtype=np.int64)
+    local_assignments_per_rank = global_assignments_per_expert.reshape(expert_axis_size, local_experts).sum(
+        axis=1, dtype=np.int64
+    )
+    max_recv_tokens = _round_up_capacity(int(np.max(recv_tokens_per_rank)), multiple=capacity_multiple)
+    max_local_assignments = _round_up_capacity(int(np.max(local_assignments_per_rank)), multiple=capacity_multiple)
+    _print0(
+        "DEEPEP_EXACT_CAPS "
+        f"max_recv_tokens={max_recv_tokens} "
+        f"max_local_assignments={max_local_assignments} "
+        f"recv_factor={(selected_experts.shape[0] / expert_axis_size * expert_axis_size) / max_recv_tokens:.6f} "
+        f"assign_factor={((selected_experts.shape[0] / expert_axis_size) * expert_axis_size * selected_experts.shape[1]) / max_local_assignments:.6f}"
+    )
+    return max_recv_tokens, max_local_assignments
 
 
 def _fit_probe_output_to_hidden(probe_out: jax.Array, *, hidden_dim: int) -> jax.Array:
@@ -1454,6 +1524,8 @@ def _moe_mlp_ep_deepep_transport_local(
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
+    max_recv_tokens: int | None = None,
+    max_local_assignments: int | None = None,
 ) -> tuple[jax.Array, jax.Array]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -1492,6 +1564,7 @@ def _moe_mlp_ep_deepep_transport_local(
             num_tokens_per_expert,
             is_token_in_rank,
             num_experts=num_experts,
+            max_recv_tokens=max_recv_tokens,
         )
         num_recv_tokens_scalar = jnp.squeeze(num_recv_tokens, axis=0)
         x_dispatch, assignment_weights, recv_token_indices, local_group_sizes = _pack_deepep_local_assignments(
@@ -1501,6 +1574,7 @@ def _moe_mlp_ep_deepep_transport_local(
             expert_start=expert_start,
             local_experts=local_experts,
             num_recv_tokens=num_recv_tokens_scalar,
+            max_local_assignments=max_local_assignments,
         )
 
     with jax.named_scope("moe_up_down"):
@@ -1614,6 +1688,8 @@ def _moe_mlp_deepep_transport(
     w_down: jax.Array,
     *,
     mesh: jax.sharding.AbstractMesh | None = None,
+    max_recv_tokens: int | None = None,
+    max_local_assignments: int | None = None,
 ) -> jax.Array:
     if mesh is None:
         mesh = get_abstract_mesh()
@@ -1649,6 +1725,8 @@ def _moe_mlp_deepep_transport(
                 _moe_mlp_ep_deepep_transport_local,
                 activation_fn=activation_fn,
                 num_experts=num_experts,
+                max_recv_tokens=max_recv_tokens,
+                max_local_assignments=max_local_assignments,
             ),
             mesh=mesh,
             in_specs=(
@@ -1692,6 +1770,8 @@ def _moe_mlp_ep_deepep_transport_dispatch_pack_local(
     *,
     num_experts: int,
     local_experts: int,
+    max_recv_tokens: int | None = None,
+    max_local_assignments: int | None = None,
 ) -> tuple[
     jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array
 ]:
@@ -1723,6 +1803,7 @@ def _moe_mlp_ep_deepep_transport_dispatch_pack_local(
         num_tokens_per_expert,
         is_token_in_rank,
         num_experts=num_experts,
+        max_recv_tokens=max_recv_tokens,
     )
     num_recv_tokens_scalar = jnp.squeeze(num_recv_tokens, axis=0)
     x_dispatch, assignment_weights, recv_token_indices, local_group_sizes = _pack_deepep_local_assignments(
@@ -1732,6 +1813,7 @@ def _moe_mlp_ep_deepep_transport_dispatch_pack_local(
         expert_start=expert_start,
         local_experts=local_experts,
         num_recv_tokens=num_recv_tokens_scalar,
+        max_local_assignments=max_local_assignments,
     )
     return (
         x_dispatch,
@@ -1754,6 +1836,8 @@ def _moe_mlp_deepep_transport_dispatch_pack(
     *,
     mesh: jax.sharding.AbstractMesh | None = None,
     num_experts: int,
+    max_recv_tokens: int | None = None,
+    max_local_assignments: int | None = None,
 ) -> tuple[
     jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array
 ]:
@@ -1780,6 +1864,8 @@ def _moe_mlp_deepep_transport_dispatch_pack(
             _moe_mlp_ep_deepep_transport_dispatch_pack_local,
             num_experts=num_experts,
             local_experts=num_experts // expert_axis_size,
+            max_recv_tokens=max_recv_tokens,
+            max_local_assignments=max_local_assignments,
         ),
         mesh=mesh,
         in_specs=(batch_spec, batch_spec, batch_spec),
@@ -4025,11 +4111,15 @@ def _prewarm_deepep_transport_local_compute(
     w_down: jax.Array,
     shared_w13: jax.Array,
     shared_w2: jax.Array,
+    *,
+    max_local_assignments: int | None = None,
 ) -> None:
     mesh = x.sharding.mesh
     num_experts = int(w_up_gate.shape[0])
     expert_axis_size = grug_moe_lib._mesh_axis_size(mesh, "expert")
-    local_assignments = x.shape[0] * selected_experts.shape[1]
+    local_assignments = (
+        x.shape[0] * selected_experts.shape[1] if max_local_assignments is None else max_local_assignments
+    )
     local_compute = jax.jit(partial(_moe_mlp_deepep_transport_local_compute, mesh=mesh))
     shared_mlp = jax.jit(_shared_mlp)
     dispatch_spec = jax.ShapeDtypeStruct(
@@ -4047,6 +4137,30 @@ def _prewarm_deepep_transport_local_compute(
     jax.block_until_ready(shared_mlp(x, shared_w13, shared_w2))
 
 
+def _forward_deepep_transport_capped(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    shared_w13: jax.Array,
+    shared_w2: jax.Array,
+    *,
+    max_recv_tokens: int,
+    max_local_assignments: int,
+) -> jax.Array:
+    routed = _moe_mlp_deepep_transport(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        max_recv_tokens=max_recv_tokens,
+        max_local_assignments=max_local_assignments,
+    )
+    return routed + _shared_mlp(x, shared_w13, shared_w2)
+
+
 def _time_deepep_transport_forward_prewarmed(
     x: jax.Array,
     selected_experts: jax.Array,
@@ -4062,6 +4176,52 @@ def _time_deepep_transport_forward_prewarmed(
     _prewarm_deepep_transport_local_compute(x, selected_experts, w_up_gate, w_down, shared_w13, shared_w2)
     return _time_fn(
         partial(_forward, "deepep_transport"),
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        shared_w13,
+        shared_w2,
+        warmup=warmup,
+        iters=iters,
+    )
+
+
+def _time_deepep_transport_forward_capped_prewarmed(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    shared_w13: jax.Array,
+    shared_w2: jax.Array,
+    *,
+    warmup: int,
+    iters: int,
+) -> float:
+    mesh = x.sharding.mesh
+    num_experts = int(w_up_gate.shape[0])
+    max_recv_tokens, max_local_assignments = _deepep_transport_exact_caps(
+        selected_experts,
+        mesh=mesh,
+        num_experts=num_experts,
+    )
+    _prewarm_deepep_transport_local_compute(
+        x,
+        selected_experts,
+        w_up_gate,
+        w_down,
+        shared_w13,
+        shared_w2,
+        max_local_assignments=max_local_assignments,
+    )
+    return _time_fn(
+        partial(
+            _forward_deepep_transport_capped,
+            max_recv_tokens=max_recv_tokens,
+            max_local_assignments=max_local_assignments,
+        ),
         x,
         selected_experts,
         combine_weights,
@@ -4115,6 +4275,7 @@ def main() -> None:
             "deepep_transport_second_ragged_dot_probe",
             "deepep_transport",
             "deepep_transport_prewarmed",
+            "deepep_transport_capped_prewarmed",
             "deepep_transport_staged",
             "prefix_counts",
             "vector_prefix",
@@ -4266,6 +4427,20 @@ def main() -> None:
                             warmup=args.warmup,
                             iters=args.iters,
                         )
+                    elif kernel == "deepep_transport_capped_prewarmed":
+                        if args.profile_root is not None:
+                            raise ValueError("deepep_transport_capped_prewarmed does not yet support --profile-root")
+                        dt = _time_deepep_transport_forward_capped_prewarmed(
+                            x_sharded,
+                            selected_sharded,
+                            weights_sharded,
+                            w13_sharded,
+                            w2_sharded,
+                            shared_w13_sharded,
+                            shared_w2_sharded,
+                            warmup=args.warmup,
+                            iters=args.iters,
+                        )
                     elif kernel == "deepep_transport_staged":
                         if args.profile_root is not None:
                             raise ValueError("deepep_transport_staged does not yet support --profile-root")
@@ -4309,7 +4484,11 @@ def main() -> None:
                             iters=args.iters,
                         )
                 else:
-                    if kernel in {"deepep_transport_prewarmed", "deepep_transport_staged"}:
+                    if kernel in {
+                        "deepep_transport_prewarmed",
+                        "deepep_transport_capped_prewarmed",
+                        "deepep_transport_staged",
+                    }:
                         raise ValueError(f"{kernel} currently supports only --bench-pass=forward")
                     if args.profile_root is not None:
                         dt = _profile_fn(

@@ -23,7 +23,7 @@ DEFAULT_WORKTREE = Path("/Users/romain/marin-wt/moe-jax-megatron-root-cause")
 DEFAULT_DEEPEP_REF = "7febc6e25660af0f54d95dd781ecdcd62265ecca"
 BENCH_PATH = Path("lib/levanter/scripts/bench/bench_deepep_dispatch_jax.py")
 PATCH_SCRIPT_PATH = Path(".agents/scripts/patch_deepep_intranode_launch_debug.py")
-LOCAL_STAGE_PATHS: tuple[Path, ...] = ()
+LOCAL_STAGE_PATHS: tuple[Path, ...] = (BENCH_PATH,)
 PY_COMPILE_PATHS = (
     PATCH_SCRIPT_PATH,
     Path("lib/levanter/src/levanter/kernels/deepep/__init__.py"),
@@ -119,6 +119,8 @@ def _bench_block(args: argparse.Namespace) -> str:
     probe_flags = ""
     if args.probe_only:
         probe_flags = f"  --probe-only \\\n  --probe-max-elements {args.probe_max_elements} \\\n"
+    if args.layout_stats_only:
+        probe_flags += "  --layout-stats-only \\\n"
     if args.host_kernel_probe_only:
         probe_flags += "  --host-kernel-probe-only \\\n"
     if args.host_dispatch_round_only:
@@ -299,6 +301,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--build-with-torch-extension", action="store_true")
     parser.add_argument("--load-as-python-module", action="store_true")
     parser.add_argument("--probe-only", action="store_true")
+    parser.add_argument("--layout-stats-only", action="store_true")
     parser.add_argument("--host-kernel-probe-only", action="store_true")
     parser.add_argument("--host-dispatch-round-only", action="store_true")
     parser.add_argument("--timing-breakdown", action="store_true")

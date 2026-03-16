@@ -729,6 +729,7 @@ def deepep_dispatch_intranode(
     num_experts: int,
     dispatch_config: IntranodeConfig | None = None,
     combine_config: IntranodeConfig | None = None,
+    max_recv_tokens: int | None = None,
 ) -> tuple[
     jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array
 ]:
@@ -748,7 +749,10 @@ def deepep_dispatch_intranode(
     num_tokens_per_rank_i32 = jnp.asarray(num_tokens_per_rank, dtype=jnp.int32)
     num_tokens_per_expert_i32 = jnp.asarray(num_tokens_per_expert, dtype=jnp.int32)
     local_experts = num_experts // num_ranks
-    max_recv_tokens = x_bf16.shape[0] * num_ranks
+    if max_recv_tokens is None:
+        max_recv_tokens = x_bf16.shape[0] * num_ranks
+    elif max_recv_tokens <= 0:
+        raise ValueError(f"max_recv_tokens must be positive, got {max_recv_tokens}")
     num_channels = (dispatch_config or _default_dispatch_config(num_ranks)).num_sms // 2
     topk = topk_idx_i64.shape[1]
     result_shape_dtypes = (
