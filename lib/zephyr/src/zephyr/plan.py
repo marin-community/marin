@@ -97,6 +97,7 @@ class Scatter:
     key_fn: Callable[[Any], Any]  # item → key
     num_output_shards: int
     sort_fn: Callable[[Any], Any] | None = None  # Optional secondary sort within each group
+    combiner_fn: Callable | None = None  # Optional local pre-aggregation per key
 
 
 @dataclass
@@ -415,7 +416,12 @@ def _fuse_operations(operations: list, hints: ExecutionHint | None = None) -> li
         elif isinstance(op, GroupByOp):
             num_shards = op.num_output_shards if op.num_output_shards is not None else -1
             state.add_op(
-                Scatter(key_fn=op.key_fn, num_output_shards=num_shards, sort_fn=op.sort_fn),
+                Scatter(
+                    key_fn=op.key_fn,
+                    num_output_shards=num_shards,
+                    sort_fn=op.sort_fn,
+                    combiner_fn=op.combiner_fn,
+                ),
                 output_shards=num_shards if num_shards > 0 else None,
             )
             state.end_stage()
@@ -587,6 +593,17 @@ def _stream_chunks(items: Iterator, shard_idx: int, chunk_size: int) -> Iterator
         yield StageResultChunk(source_shard=shard_idx, target_shard=shard_idx, chunk=iter(chunk))
 
 
+def _apply_combiner(buffer: list, key_fn: Callable, combiner_fn: Callable) -> list:
+    """Apply combiner to a buffer, grouping by key and reducing locally."""
+    by_key: dict[object, list] = defaultdict(list)
+    for item in buffer:
+        by_key[key_fn(item)].append(item)
+    combined: list = []
+    for key, items in by_key.items():
+        combined.extend(combiner_fn(key, iter(items)))
+    return combined
+
+
 def _scatter_items(
     items: Iterable,
     key_fn: Callable,
@@ -594,6 +611,7 @@ def _scatter_items(
     chunk_size: int,
     sort_fn: Callable | None,
     source_shard: int,
+    combiner_fn: Callable | None = None,
 ) -> Iterator[StageResultChunk]:
     """Scatter items by key hash into sorted chunks per target shard.
 
@@ -604,6 +622,9 @@ def _scatter_items(
     Each chunk is pre-sorted by ``(key_fn, sort_fn)`` so the k-way merge in
     the Reduce phase can operate correctly.
 
+    When a combiner is provided, it is applied to each buffer before yielding,
+    reducing items locally per key (like a MapReduce combiner).
+
     Args:
         items: Input items to scatter
         key_fn: Function to extract grouping key from item
@@ -611,6 +632,7 @@ def _scatter_items(
         chunk_size: Maximum items per chunk (per target shard)
         sort_fn: Optional secondary sort key within each group
         source_shard: Index of the source shard
+        combiner_fn: Optional (key, Iterator[T]) -> Iterator[T] applied locally per key
 
     Yields:
         One StageResultChunk per chunk, with ``chunk`` being a sorted list of items.
@@ -631,16 +653,21 @@ def _scatter_items(
         target = deterministic_hash(key) % num_output_shards
         buffers[target].append(item)
         if chunk_size > 0 and len(buffers[target]) >= chunk_size:
-            buffers[target].sort(key=_sort_key)
+            buf = buffers[target]
+            if combiner_fn is not None:
+                buf = _apply_combiner(buf, key_fn, combiner_fn)
+            buf.sort(key=_sort_key)
             yield StageResultChunk(
                 source_shard=source_shard,
                 target_shard=target,
-                chunk=buffers[target],
+                chunk=buf,
             )
             buffers[target] = []
 
     for target, buffer in sorted(buffers.items()):
         if buffer:
+            if combiner_fn is not None:
+                buffer = _apply_combiner(buffer, key_fn, combiner_fn)
             buffer.sort(key=_sort_key)
             yield StageResultChunk(
                 source_shard=source_shard,
@@ -840,6 +867,7 @@ def run_stage(
                 ctx.chunk_size,
                 sort_fn=op.sort_fn,
                 source_shard=ctx.shard_idx,
+                combiner_fn=op.combiner_fn,
             )
             return
 
