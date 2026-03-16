@@ -103,6 +103,27 @@ std::string& LastErrorStorage() {
 
 void SetLastError(std::string message) { LastErrorStorage() = std::move(message); }
 
+void LogHostDispatchStage(
+    int rank,
+    const char* stage,
+    int num_tokens,
+    int hidden,
+    int num_experts,
+    int num_topk,
+    int num_recv_tokens = -1) {
+  fprintf(
+      stderr,
+      "HOST_DISPATCH_STAGE {\"rank\":%d,\"stage\":\"%s\",\"num_tokens\":%d,\"hidden\":%d,"
+      "\"num_experts\":%d,\"num_topk\":%d,\"num_recv_tokens\":%d}\n",
+      rank,
+      stage,
+      num_tokens,
+      hidden,
+      num_experts,
+      num_topk,
+      num_recv_tokens);
+}
+
 ffi::Error CudaError(cudaError_t status, const char* context) {
   if (status == cudaSuccess) {
     return ffi::Error::Success();
@@ -440,6 +461,7 @@ void DispatchOnCurrentDevice(
   const int num_local_experts = num_experts / runtime.num_ranks;
 
   ResetRecvCounters(runtime, num_local_experts);
+  LogHostDispatchStage(runtime.rank, "before_notify_dispatch", num_tokens, hidden, num_experts, num_topk);
   const int num_memset_int = runtime.dispatch_num_channels() * runtime.num_ranks * 4;
   deep_ep::intranode::notify_dispatch(
       num_tokens_per_rank,
@@ -459,9 +481,18 @@ void DispatchOnCurrentDevice(
       runtime.rank,
       stream,
       runtime.dispatch_config.num_sms);
+  LogHostDispatchStage(runtime.rank, "after_notify_dispatch", num_tokens, hidden, num_experts, num_topk);
 
   int num_recv_tokens = -1;
   WaitForRecvCounts(runtime, num_local_experts, &num_recv_tokens);
+  LogHostDispatchStage(
+      runtime.rank,
+      "after_wait_for_recv_counts",
+      num_tokens,
+      hidden,
+      num_experts,
+      num_topk,
+      num_recv_tokens);
   if (num_recv_tokens > max_recv_tokens) {
     throw std::runtime_error("DeepEP intranode dispatch recv buffer is smaller than actual recv tokens");
   }
@@ -532,8 +563,24 @@ void DispatchOnCurrentDevice(
       runtime.dispatch_config.num_max_send_tokens,
       runtime.dispatch_config.num_max_recv_tokens);
 #endif
+  LogHostDispatchStage(
+      runtime.rank,
+      "after_dispatch_launch",
+      num_tokens,
+      hidden,
+      num_experts,
+      num_topk,
+      num_recv_tokens);
 
   ThrowOnCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(dispatch)");
+  LogHostDispatchStage(
+      runtime.rank,
+      "after_dispatch_sync",
+      num_tokens,
+      hidden,
+      num_experts,
+      num_topk,
+      num_recv_tokens);
   ThrowOnCuda(
       cudaMemcpy(
           local_expert_counts,
@@ -887,6 +934,7 @@ extern "C" int levanter_deepep_run_host_dispatch_round(
         try {
           ThrowOnCuda(cudaSetDevice(rank), "cudaSetDevice(host dispatch round)");
           DeviceRuntime& runtime = manager.RuntimeForCurrentDevice();
+          LogHostDispatchStage(rank, "thread_start", num_tokens, hidden, num_experts, num_topk);
 
           std::vector<void*> allocations;
           auto allocate_zeroed = [&](size_t num_bytes, const char* context) -> void* {
@@ -978,7 +1026,9 @@ extern "C" int levanter_deepep_run_host_dispatch_round(
               cudaMemcpy(is_token_in_rank, host_is_token_in_rank.data(), token_rank_bytes, cudaMemcpyHostToDevice),
               "cudaMemcpy(host round is_token_in_rank)");
 
+          LogHostDispatchStage(rank, "before_barrier", num_tokens, hidden, num_experts, num_topk);
           barrier.Wait();
+          LogHostDispatchStage(rank, "after_barrier", num_tokens, hidden, num_experts, num_topk);
 
           int num_recv_tokens = -1;
           DispatchOnCurrentDevice(
@@ -1004,11 +1054,20 @@ extern "C" int levanter_deepep_run_host_dispatch_round(
               local_expert_counts,
               &num_recv_tokens,
               recv_capacity);
+          LogHostDispatchStage(
+              rank,
+              "thread_done",
+              num_tokens,
+              hidden,
+              num_experts,
+              num_topk,
+              num_recv_tokens);
 
           for (void* ptr : allocations) {
             cudaFree(ptr);
           }
         } catch (const std::exception& exc) {
+          fprintf(stderr, "HOST_DISPATCH_ERROR {\"rank\":%d,\"error\":\"%s\"}\n", rank, exc.what());
           std::lock_guard<std::mutex> lock(error_mu);
           if (!first_error.has_value()) {
             first_error = "rank " + std::to_string(rank) + ": " + exc.what();
