@@ -211,6 +211,7 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, LmExample]):
         loss_weights_key: str | None,
         loss_weight_transform: Callable[[np.ndarray], np.ndarray] | None,
         input_ids_transform: Callable[[np.ndarray], np.ndarray] | None = None,
+        segment_ids_transform: Callable[[np.ndarray], np.ndarray] | None = None,
         eos_id: int | None = None,
         block_cross_document_attention: bool = True,
     ):
@@ -222,6 +223,7 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, LmExample]):
         self.loss_weights_key = loss_weights_key
         self.loss_weight_transform = loss_weight_transform or _identity_loss_weight
         self.input_ids_transform = input_ids_transform or _identity_input_ids
+        self.segment_ids_transform = segment_ids_transform
 
         sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
 
@@ -241,6 +243,36 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, LmExample]):
             def _map(example: dict) -> LmExample:
                 input_ids = self.input_ids_transform(example[input_ids_key])
                 return _create_lm_example(input_ids)
+
+        elif segment_ids_transform is not None:
+
+            @functools.partial(eqx.filter_jit)
+            def _create_lm_example_with_segs(tokens, loss_weight, segment_ids):
+                tokens = hax.named(tokens, self.Pos)
+                loss_weight = hax.named(loss_weight, self.Pos)
+                segment_ids = hax.named(segment_ids, self.Pos)
+                example = LmExample.causal(
+                    tokens=tokens,
+                    loss_weight=loss_weight,
+                    segment_ids=segment_ids,
+                    block_cross_document_attention=block_cross_document_attention,
+                )
+                example = jax.lax.with_sharding_constraint(example, sharding)
+                return example
+
+            def _map(example: dict) -> LmExample:
+                input_ids = self.input_ids_transform(example[input_ids_key])
+                loss_weight = self.loss_weight_transform(example[loss_weights_key])
+                # Compute document-level segment IDs from EOS tokens (numpy).
+                # This replicates the JAX logic in LmExample.causal lines 68-73.
+                eos_mask = np.roll(input_ids, 1) == eos_id
+                eos_mask[0] = False
+                doc_seg = np.cumsum(eos_mask).astype(np.int32)
+                # Compute per-token modality offsets (e.g. 0=text, 1=visual)
+                modality_offset = segment_ids_transform(input_ids)
+                # Combine so each (document, modality) pair gets a unique segment ID
+                combined = doc_seg * 2 + modality_offset
+                return _create_lm_example_with_segs(input_ids, loss_weight, combined)
 
         else:
 
@@ -540,6 +572,7 @@ def dataset_for_component(
             loss_weights_key=fmt.loss_weights_key,
             loss_weight_transform=fmt.loss_weight_transform,
             input_ids_transform=fmt.input_ids_transform,
+            segment_ids_transform=fmt.segment_ids_transform,
             eos_id=eos_id,
             block_cross_document_attention=block_cross_document_attention,
         )

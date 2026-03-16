@@ -57,6 +57,7 @@ class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
     loss_weights_key: str | None = None
     loss_weight_transform: Callable[[np.ndarray], np.ndarray] | None = None
     input_ids_transform: Callable[[np.ndarray], np.ndarray] | None = None
+    segment_ids_transform: Callable[[np.ndarray], np.ndarray] | None = None
 
 
 class PrebuiltCacheProcessor(BatchProcessor[dict, dict]):
