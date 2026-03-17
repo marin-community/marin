@@ -196,7 +196,8 @@ def teardown_cluster(config_path: str, namespace: str, label_prefix: str) -> Non
     finally:
         platform.shutdown()
 
-    _kubectl(namespace, "delete", "nodepool", "-l", f"{label_prefix}-managed=true", "--ignore-not-found", check=False)
+    managed_label = f"iris-{label_prefix}-managed=true"
+    _kubectl(namespace, "delete", "nodepool", "-l", managed_label, "--ignore-not-found", check=False)
     click.echo("Teardown complete")
 
 

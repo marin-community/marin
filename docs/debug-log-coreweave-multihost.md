@@ -645,3 +645,22 @@ the task pod should run on that worker's node.
   → 6 passed
 - `uv run pytest lib/iris/tests/cluster/platform/test_coreweave_platform.py -k 'ensure_nodepools or multi_node or node_selector'`
   → 14 passed
+
+## Attempt 11: Fix canary teardown so it actually deletes NodePools
+
+After the end-of-day teardown, the controller resources were gone but the
+managed CoreWeave NodePools were still present. The teardown implementation was
+issuing `kubectl delete nodepool -l <label-prefix>-managed=true`, which does not
+match the actual managed label shape used everywhere else:
+`iris-<label-prefix>-managed=true`.
+
+### Changes made
+
+- Updated `scripts/canary/coreweave_multihost.py` so `teardown_cluster()`
+  deletes NodePools using the correct managed label selector:
+  `iris-{label_prefix}-managed=true`.
+
+### Expected result
+
+- `uv run python scripts/canary/coreweave_multihost.py -v teardown` will now
+  remove the managed H100 and CPU NodePools instead of leaving them running.
