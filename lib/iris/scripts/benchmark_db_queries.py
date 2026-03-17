@@ -334,6 +334,7 @@ def print_db_stats(db: ControllerDB) -> None:
 def main(db_path: Path, iterations: int, only_group: str | None) -> None:
     """Benchmark Iris controller DB queries against a local checkpoint."""
     db = ControllerDB(db_path)
+    db.apply_migrations()
     print(f"Benchmarking {db_path} ({iterations} iterations per query)")
     print_db_stats(db)
     print()
