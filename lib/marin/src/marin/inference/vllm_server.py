@@ -513,10 +513,14 @@ class VllmEnvironment:
         self._backend: VllmServerBackend
 
         if self.mode == "native":
+            # Pass only raw extra_args (not engine_kwargs converted to CLI flags)
+            # to the eligibility check.  engine_kwargs are read directly by
+            # _llm_kwargs(); passing them as CLI flags would look "supported"
+            # but any flag in raw extra_args is NOT applied to in-process LLM().
             self._inprocess_eligibility = evaluate_inprocess_eligibility(
                 model=self.model,
                 model_name_or_path=self.model_name_or_path,
-                extra_cli_args=self.extra_cli_args,
+                extra_cli_args=self._extra_args or None,
             )
             if self._inprocess_eligibility.eligible:
                 assert self._inprocess_eligibility.mapping_model_name is not None

@@ -39,17 +39,6 @@ logger = logging.getLogger(__name__)
 SAFE_TENSORS_MODEL = "model.safetensors"
 SAFE_TENSORS_INDEX_NAME = "model.safetensors.index.json"
 
-# These are already consumed from engine_kwargs by _engine_kwargs_to_cli_args.
-_SUPPORTED_ENGINE_CLI_FLAGS_WITH_VALUE = {
-    "--load-format",
-    "--max-model-len",
-    "--gpu-memory-utilization",
-    "--model-loader-extra-config",
-}
-_SUPPORTED_ENGINE_CLI_FLAGS_NO_VALUE = {
-    "--trust-remote-code",
-}
-
 _DEFAULT_LLAMA_MAPPING_KEY = "meta-llama/Llama-3.1-8B-Instruct"
 _DEFAULT_QWEN_MAPPING_KEY = "Qwen/Qwen3-8B"
 _INPROCESS_BOOTSTRAP_MODEL_KEY = "inprocess_bootstrap_model"
@@ -414,28 +403,24 @@ def _is_object_store_path(path: str) -> bool:
 
 
 def _unsupported_extra_cli_args(extra_cli_args: list[str] | None) -> list[str]:
+    """Return any extra CLI args that the in-process path cannot apply.
+
+    The in-process path reads model settings from ``engine_kwargs`` directly
+    (via ``_llm_kwargs``).  Raw CLI flags passed through ``extra_args`` are NOT
+    applied to the ``LLM()`` constructor, so any such flags trigger fallback to
+    the subprocess backend where ``vllm serve`` handles them natively.
+    """
     if not extra_cli_args:
         return []
 
-    unsupported: list[str] = []
-    i = 0
-    while i < len(extra_cli_args):
-        arg = extra_cli_args[i]
-
-        if arg in _SUPPORTED_ENGINE_CLI_FLAGS_WITH_VALUE:
-            if i + 1 >= len(extra_cli_args):
-                unsupported.append(arg)
-                break
-            i += 2
-            continue
-
-        if arg in _SUPPORTED_ENGINE_CLI_FLAGS_NO_VALUE:
-            i += 1
-            continue
-
-        unsupported.append(arg)
-        i += 1
-
+    # All raw extra_args are unsupported — engine_kwargs are handled separately.
+    unsupported = [arg for arg in extra_cli_args if arg.startswith("-")]
+    if unsupported:
+        logger.warning(
+            "In-process vLLM does not support extra CLI args (use engine_kwargs instead); "
+            "falling back to subprocess: %s",
+            unsupported,
+        )
     return unsupported
 
 
