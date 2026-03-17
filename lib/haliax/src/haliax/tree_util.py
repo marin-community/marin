@@ -9,6 +9,7 @@ import functools
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 import jax.tree_util as jtu
 from jaxtyping import PRNGKeyArray, PyTree
 
@@ -33,27 +34,66 @@ def tree_map(fn, tree, *rest, is_leaf=None):
     return jax.tree.map(fn, tree, *rest, is_leaf=is_leaf)
 
 
+def _is_scan_stack_leaf(x) -> bool:
+    from haliax.nn.array_stacked import ArrayStacked
+
+    return isinstance(x, (haliax.nn.Stacked, ArrayStacked))
+
+
+def _stack_scan_layers(layers, num_layers: int, block_axis=None):
+    if len(layers) != num_layers:
+        raise ValueError(f"Expected {num_layers} mapped layers, got {len(layers)}.")
+    leaves0, structure = jax.tree_util.tree_flatten(layers[0], is_leaf=is_named_array)
+    all_leaves = [jax.tree_util.tree_leaves(layer, is_leaf=is_named_array) for layer in layers]
+    stacked_leaves = []
+    for leaf_index, first_leaf in enumerate(leaves0):
+        layer_leaves = [layer[leaf_index] for layer in all_leaves]
+        if isinstance(first_leaf, NamedArray):
+            if block_axis is None:
+                raise TypeError("NamedArray leaves require a named block axis when stacking scan layers.")
+            stacked_leaves.append(haliax.stack(block_axis, layer_leaves))
+        elif isinstance(first_leaf, jax.Array):
+            stacked_leaves.append(jnp.stack(layer_leaves))
+        else:
+            stacked_leaves.append(first_leaf)
+
+    return jax.tree_util.tree_unflatten(structure, stacked_leaves)
+
+
 def scan_aware_tree_map(fn, tree, *rest, is_leaf=None):
     """
     Version of [haliax.tree_util.tree_map][] that is aware of the scan-layer pattern, specifically as implemented
-    in hax.nn.Stacked. This function will (implicitly) apply the transform to each layer in each Stacked module
-    (using vmap). If there are no Stacked modules in the tree, this function is equivalent to [haliax.tree_util.tree_map][].
+    in hax.nn.Stacked. This function will (implicitly) apply the transform to each layer in each stack-like module
+    (using vmap). If there are no scanned stack modules in the tree, this function is equivalent to
+    [haliax.tree_util.tree_map][].
 
     """
     old_is_leaf = is_leaf
     if is_leaf is None:
-        is_leaf = lambda x: isinstance(x, haliax.nn.Stacked)
+        is_leaf = _is_scan_stack_leaf
     else:
-        is_leaf = lambda x: old_is_leaf(x) or isinstance(x, haliax.nn.Stacked)
+        is_leaf = lambda x: old_is_leaf(x) or _is_scan_stack_leaf(x)
 
     mapped_fn = functools.partial(scan_aware_tree_map, fn, is_leaf=is_leaf)
 
     def rec_fn(x, *rest):
         if isinstance(x, haliax.nn.Stacked):
-            new_inner = haliax.vmap(mapped_fn, x.Block)(x.stacked, *[r.stacked for r in rest])
+            num_layers = x.Block.size
+            block_axis = x.Block
+
+            mapped_layers = [mapped_fn(x.get_layer(i), *[r.get_layer(i) for r in rest]) for i in range(num_layers)]
+            new_inner = _stack_scan_layers(mapped_layers, num_layers, block_axis=block_axis)
             return dataclasses.replace(x, stacked=new_inner)  # type: ignore
-        else:
-            return fn(x, *rest)
+
+        from haliax.nn.array_stacked import ArrayStacked
+
+        if isinstance(x, ArrayStacked):
+            num_layers = x.num_layers
+            mapped_layers = [mapped_fn(x.get_layer(i), *[r.get_layer(i) for r in rest]) for i in range(num_layers)]
+            new_inner = _stack_scan_layers(mapped_layers, num_layers, block_axis=None)
+            return dataclasses.replace(x, stacked=new_inner)  # type: ignore
+
+        return fn(x, *rest)
 
     return tree_map(rec_fn, tree, *rest, is_leaf=is_leaf)
 

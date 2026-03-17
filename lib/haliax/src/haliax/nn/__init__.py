@@ -37,6 +37,7 @@ from .activations import (
     softplus,
     swish,
 )
+from .array_stacked import ArrayStacked
 from .conv import Conv, ConvTranspose
 from .dropout import Dropout, dropout
 from .embedding import Embedding
@@ -102,6 +103,7 @@ __all__ = [
     "Linear",
     "MoELinear",
     "Embedding",
+    "ArrayStacked",
     "ragged_dot",
     "RmsNorm",
     "Stacked",
