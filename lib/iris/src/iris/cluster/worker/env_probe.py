@@ -484,11 +484,12 @@ def check_worker_health(disk_path: str = "/") -> HealthCheckResult:
     Docker probing is implicit: if the worker is processing heartbeats
     and fetching task status, Docker is operational.
 
-    If disk_path does not exist (e.g. during teardown), the probe is
-    skipped and the worker is considered healthy.
+    If disk_path is not an existing directory (e.g. during teardown, or on
+    platforms where the path does not exist), the probe is skipped and the
+    worker is considered healthy.
     """
     dp = Path(disk_path)
-    if not dp.exists():
+    if not dp.is_dir():
         return HealthCheckResult(healthy=True)
 
     errors: list[str] = []
@@ -498,6 +499,9 @@ def check_worker_health(disk_path: str = "/") -> HealthCheckResult:
         probe_path = dp / ".iris_health_probe"
         probe_path.write_text("ok")
         probe_path.unlink()
+    except FileNotFoundError:
+        # TOCTOU: directory vanished between is_dir() check and write
+        pass
     except OSError as e:
         errors.append(f"tempfile write failed: {e}")
 
