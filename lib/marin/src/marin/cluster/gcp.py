@@ -16,6 +16,12 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 RESTART_REQUIRED_PERMISSIONS = (
+    # Bootstrap reads used by `ray up --no-config-cache`.
+    "resourcemanager.projects.get",
+    "resourcemanager.projects.getIamPolicy",
+    "iam.serviceAccounts.get",
+    "compute.projects.get",
+    # Lifecycle operations used during stop/start.
     "compute.instances.create",
     "compute.instances.delete",
     "compute.instances.get",
