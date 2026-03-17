@@ -974,6 +974,49 @@ def test_pallas_autotune_skipped_when_tuned_match_exists(monkeypatch: pytest.Mon
     assert seen_block_sizes == [inferred]
 
 
+def test_autotune_benchmark_wraps_in_shard_map_when_named_sharding_present(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    y = jnp.zeros((4,), dtype=jnp.int32)
+
+    mesh = object()
+    x_sharding = type("FakeNamedSharding", (), {"mesh": mesh, "spec": ("data", None)})()
+    y_sharding = type("FakeNamedSharding", (), {"mesh": mesh, "spec": ("data",)})()
+    w_sharding = type("FakeNamedSharding", (), {"mesh": mesh, "spec": (None, "model")})()
+
+    def fake_named_sharding_of(value):
+        if value is x:
+            return x_sharding
+        if value is y:
+            return y_sharding
+        if value is w:
+            return w_sharding
+        return None
+
+    calls: list[tuple[object, tuple[object, ...], object, bool]] = []
+
+    def fake_shard_map(fn, *, mesh, in_specs, out_specs, check_vma):
+        calls.append((mesh, in_specs, out_specs, check_vma))
+        return fn
+
+    monkeypatch.setattr(fused_api.jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(fused_api, "_named_sharding_of", fake_named_sharding_of)
+    monkeypatch.setattr(fused_api.jax, "shard_map", fake_shard_map)
+
+    wrapped = fused_api._maybe_wrap_loss_in_shard_map_for_benchmark(
+        lambda x_value, labels_value, w_value: x_value[:, 0] + labels_value.astype(x_value.dtype) + w_value[0, 0],
+        x=x,
+        labels=y,
+        w=w,
+    )
+
+    out = wrapped(x, y, w)
+    assert out.shape == (4,)
+    assert calls == [(mesh, (x_sharding.spec, y_sharding.spec, w_sharding.spec), y_sharding.spec, False)]
+
+
 def test_pallas_tpu_vmem_compile_error_falls_back_to_xla_when_requested(monkeypatch: pytest.MonkeyPatch):
     x = jnp.ones((4, 8), dtype=jnp.float32)
     w = jnp.ones((8, 16), dtype=jnp.float32)

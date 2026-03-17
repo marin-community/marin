@@ -32,7 +32,6 @@ def mock_bundle_store(tmp_path):
     """Create mock BundleStore with a real temp directory."""
     cache = Mock(spec=BundleStore)
     cache.extract_bundle_to = Mock()
-    cache.write_workdir_files = Mock()
     return cache
 
 

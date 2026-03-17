@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.env import build_device_env_vars
+from iris.cluster.runtime.env import build_device_env_vars, write_workdir_files
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
     build_memray_transform_cmd,
@@ -616,7 +616,11 @@ exec {quoted_cmd}
 
         # Mounts
         for rm in self._resolved_mounts:
-            cmd.extend(["-v", f"{rm.host_path}:{rm.container_path}:{rm.mode}"])
+            if rm.kind == MountKind.TMPFS:
+                # Use Docker --tmpfs for per-container isolation instead of shared bind mount
+                cmd.extend(["--tmpfs", rm.container_path])
+            else:
+                cmd.extend(["-v", f"{rm.host_path}:{rm.container_path}:{rm.mode}"])
 
         cmd.append(config.image)
         cmd.extend(command)
@@ -829,8 +833,8 @@ class DockerRuntime:
         """Convert semantic MountSpecs to ResolvedMount instances.
 
         Creates host directories as needed. WORKDIR uses the explicit host path
-        (created by task_attempt) and mounts tmpfs on it for isolation.
-        CACHE and TMPFS get dirs under fast_io_dir.
+        (created by task_attempt). CACHE gets shared dirs under cache_dir.
+        TMPFS uses Docker --tmpfs for per-container isolation (no host dir).
         """
         result: list[ResolvedMount] = []
         for mount in mounts:
@@ -839,7 +843,10 @@ class DockerRuntime:
                 if workdir_host_path is None:
                     raise RuntimeError("WORKDIR mount requires workdir_host_path")
                 result.append(ResolvedMount(str(workdir_host_path), mount.container_path, mode, mount.kind))
-            elif mount.kind in (MountKind.TMPFS, MountKind.CACHE):
+            elif mount.kind == MountKind.TMPFS:
+                # TMPFS mounts use Docker --tmpfs (per-container isolation); no host dir needed
+                result.append(ResolvedMount("", mount.container_path, mode, mount.kind))
+            elif mount.kind == MountKind.CACHE:
                 host_dir = self._cache_dir / mount.container_path.strip("/").replace("/", "-")
                 host_dir.mkdir(parents=True, exist_ok=True)
                 result.append(ResolvedMount(str(host_dir), mount.container_path, mode, mount.kind))
@@ -870,7 +877,7 @@ class DockerRuntime:
         """Stage bundle and workdir files on worker-local filesystem."""
         if bundle_id:
             bundle_store.extract_bundle_to(bundle_id, workdir)
-        bundle_store.write_workdir_files(workdir, workdir_files)
+        write_workdir_files(workdir, workdir_files)
 
     def track_container(self, container_id: str) -> None:
         """Track a container ID for cleanup."""

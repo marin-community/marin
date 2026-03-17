@@ -768,7 +768,7 @@ class Controller:
         )
         self._scheduler = Scheduler()
 
-        self._bundle_store = BundleStore(db_path=config.local_state_dir / "bundles.sqlite3")
+        self._bundle_store = BundleStore(storage_dir=f"{config.remote_state_dir.rstrip('/')}/bundles")
 
         self._service = ControllerServiceImpl(
             self._transitions,

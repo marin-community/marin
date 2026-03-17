@@ -1,17 +1,41 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device environment variable construction for container runtimes.
+"""Runtime environment helpers for container runtimes.
 
-Builds the JAX/TPU environment variables needed for multi-host distributed
-initialization. Used by both Docker and process runtimes.
+Includes device environment variable construction and workdir file writing.
+Used by Docker, process, and Kubernetes runtimes.
 """
 
 import logging
+import posixpath
+from pathlib import Path
 
 from iris.cluster.runtime.types import ContainerConfig
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_workdir_relative_path(path: str) -> str:
+    """Return a normalized relative path safe to write under a task workdir."""
+    candidate = path.replace("\\", "/")
+    if candidate.startswith("/"):
+        raise ValueError(f"Invalid workdir file path (absolute paths are not allowed): {path}")
+    normalized = posixpath.normpath(candidate)
+    if normalized in {"", "."}:
+        raise ValueError(f"Invalid workdir file path: {path}")
+    if normalized.startswith("../") or normalized == "..":
+        raise ValueError(f"Invalid workdir file path (path traversal): {path}")
+    return normalized
+
+
+def write_workdir_files(dest: Path, files: dict[str, bytes]) -> None:
+    """Write workdir files under ``dest`` with path validation."""
+    for name, data in files.items():
+        normalized = normalize_workdir_relative_path(name)
+        path = dest / normalized
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
 
 
 def build_device_env_vars(config: ContainerConfig) -> dict[str, str]:

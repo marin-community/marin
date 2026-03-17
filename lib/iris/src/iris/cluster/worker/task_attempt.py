@@ -593,6 +593,7 @@ class TaskAttempt:
 
         mounts = [
             MountSpec("/app", kind=MountKind.WORKDIR),
+            MountSpec("/tmp", kind=MountKind.TMPFS),
             MountSpec("/uv/cache", kind=MountKind.CACHE),
             MountSpec("/root/.cargo/registry", kind=MountKind.CACHE),
             MountSpec("/root/.cargo/target", kind=MountKind.CACHE),

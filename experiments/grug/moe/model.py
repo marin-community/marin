@@ -12,7 +12,6 @@ import dataclasses
 
 from dataclasses import dataclass
 from typing import get_args
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -27,7 +26,7 @@ from jaxtyping import Array, Float, Int, PRNGKeyArray
 from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
 from levanter.grug.grug_moe import MoeActivation, MoeImplementation, moe_mlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pvocab, unshard
+from levanter.grug.sharding import embed_vocab_pspec, lm_head_pspec, logits_pspec, unshard
 from levanter.tracker.histogram import Histogram
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -393,8 +392,15 @@ class Transformer(eqx.Module):
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Transformer":
         embed_key, out_key, *block_keys = random.split(key, cfg.num_layers + 2)
-        token_embed = reshard(_init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pvocab)
-        output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Pvocab)
+        batch_axis = _batch_spec()[0]
+        token_embed = reshard(
+            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std),
+            embed_vocab_pspec(batch_axis),
+        )
+        output_proj = reshard(
+            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std),
+            lm_head_pspec(batch_axis),
+        )
         blocks = tuple(Block.init(cfg, key=layer_key) for layer_key in block_keys)
         final_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
 
@@ -438,7 +444,7 @@ class Transformer(eqx.Module):
     ) -> Float[Array, "B S V"]:
         batch_spec = _batch_spec()
         hidden, _ = self(token_ids, mask=mask)
-        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
+        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=logits_pspec(batch_spec[0]))
 
     def next_token_loss(
         self,

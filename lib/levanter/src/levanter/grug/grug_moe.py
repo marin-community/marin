@@ -22,7 +22,7 @@ from typing import Literal, TypeAlias, cast, get_args
 
 import jax
 import jax.numpy as jnp
-from haliax.jax_utils import named_call
+from haliax.jax_utils import named_call, tree_checkpoint_name
 from jax import shard_map
 from jax.sharding import PartitionSpec as P, get_abstract_mesh
 from jaxtyping import Array, Float, Int
@@ -117,12 +117,16 @@ def _moe_mlp_local(
         combine_weights,
         num_experts=num_experts,
     )
+    x_dispatch = tree_checkpoint_name(x_dispatch, "grug_moe_dispatch_input")
 
     with jax.named_scope("moe_up_down"):
-        w13_out = ragged_dot(x_dispatch, moe_w13, group_sizes)
+        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), "grug_moe_expert_hidden")
         moe_dim = moe_w2.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes)
+        out_dispatch = tree_checkpoint_name(
+            ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes),
+            "grug_moe_dispatch_output",
+        )
 
     with jax.named_scope("scatter"):
         out = jnp.zeros_like(x).at[token_dispatch].add(out_dispatch * w_dispatch[:, None], mode="drop")
@@ -312,6 +316,7 @@ def _moe_mlp_ep_ring_local(
 
         x_take = jnp.take(x_global, token_local, axis=0)
         x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
+        x_dispatch = tree_checkpoint_name(x_dispatch, "grug_moe_dispatch_input")
         weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
     group_sizes = accepted_counts
     # `local_idx` pads by appending invalid rows at the end; keep GMM segment
@@ -319,10 +324,13 @@ def _moe_mlp_ep_ring_local(
     group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
 
     with jax.named_scope("moe_up_down"):
-        w13_out = ragged_dot(x_dispatch, moe_w13_local, group_sizes)
+        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), "grug_moe_expert_hidden")
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
+        out_dispatch = tree_checkpoint_name(
+            ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes),
+            "grug_moe_dispatch_output",
+        )
 
     with jax.named_scope("scatter"):
         out_global = jnp.zeros_like(x_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
