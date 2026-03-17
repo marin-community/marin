@@ -6,7 +6,7 @@ In this tutorial, you will install Marin on your local machine.
 
 Before you begin, ensure you have the following installed:
 
-- Python 3.11 or higher
+- Python 3.11 or 3.12
 - uv (Python package manager)
 - Git
 - Rust toolchain via [rustup](https://rustup.rs) (needed for `lib/dupekit`, which is built with Maturin;
