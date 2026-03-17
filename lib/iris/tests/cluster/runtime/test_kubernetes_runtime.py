@@ -510,7 +510,7 @@ def test_k8s_init_script_fetches_and_extracts_bundle(tmp_path):
     bundle_id = hashlib.sha256(bundle_zip).hexdigest()
 
     # Set up a controller-side BundleStore and write the bundle
-    controller_store = BundleStore(db_path=tmp_path / "controller.sqlite3")
+    controller_store = BundleStore(storage_dir=str(tmp_path / "controller_bundles"))
     stored_id = controller_store.write_zip(bundle_zip)
     assert stored_id == bundle_id
 

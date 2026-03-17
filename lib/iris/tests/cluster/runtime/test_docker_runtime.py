@@ -24,7 +24,6 @@ def runtime(tmp_path):
 def mock_bundle_store():
     store = Mock(spec=BundleStore)
     store.extract_bundle_to = Mock()
-    store.write_workdir_files = Mock()
     return store
 
 
@@ -105,4 +104,3 @@ def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):
     )
     assert len(calls) == 0
     mock_bundle_store.extract_bundle_to.assert_called_once_with("abc", workdir)
-    mock_bundle_store.write_workdir_files.assert_called_once_with(workdir, {})
