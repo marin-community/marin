@@ -116,7 +116,8 @@ class BundleStore:
                 self._cache.move_to_end(bundle_id)
                 return bundle_id
 
-            self._write_to_storage(bundle_id, blob)
+            if not self._exists_in_storage(bundle_id):
+                self._write_to_storage(bundle_id, blob)
             self._cache_put(bundle_id, blob)
         return bundle_id
 

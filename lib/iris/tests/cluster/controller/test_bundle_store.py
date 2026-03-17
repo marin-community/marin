@@ -55,49 +55,25 @@ def test_store_survives_restart(tmp_path):
     assert store2.get_zip(bundle_id) == blob
 
 
-def test_migration_script_helpers(tmp_path):
-    """Test the offline migration helpers from migrate_bundle_store.py."""
-    import sqlite3
-    import time
+def test_write_zip_skips_upload_when_already_in_storage(tmp_path):
+    """write_zip should not re-upload if bundle exists in storage but was evicted from cache."""
+    storage_dir = str(tmp_path / "bundles")
+    store = BundleStore(storage_dir=storage_dir, max_cache_items=1)
 
-    from scripts.migrations.migrate_bundle_store import (
-        read_bundles_from_sqlite,
-        verify_bundles,
-        write_bundles_to_fsspec,
-    )
+    blob_a = b"bundle A"
+    blob_b = b"bundle B"
+    id_a = store.write_zip(blob_a)
+    store.write_zip(blob_b)  # evicts blob_a from in-memory cache
 
-    # Create a legacy SQLite bundle store
-    sqlite_path = tmp_path / "bundles.sqlite3"
-    conn = sqlite3.connect(str(sqlite_path))
-    conn.execute(
-        "CREATE TABLE bundles ("
-        "bundle_id TEXT PRIMARY KEY, zip_bytes BLOB NOT NULL, "
-        "created_at_ms INTEGER NOT NULL, last_access_ms INTEGER NOT NULL, size_bytes INTEGER NOT NULL)"
-    )
-    blob = b"legacy bundle data"
-    bundle_id = hashlib.sha256(blob).hexdigest()
-    now_ms = int(time.time() * 1000)
-    conn.execute(
-        "INSERT INTO bundles (bundle_id, zip_bytes, created_at_ms, last_access_ms, size_bytes) VALUES (?, ?, ?, ?, ?)",
-        (bundle_id, blob, now_ms, now_ms, len(blob)),
-    )
-    conn.commit()
-    conn.close()
+    # blob_a should still be in storage; re-submitting should not call _write_to_storage
+    original_write = store._write_to_storage
+    write_calls = []
 
-    # Read from sqlite
-    bundles = read_bundles_from_sqlite(sqlite_path)
-    assert len(bundles) == 1
-    assert bundles[bundle_id] == blob
+    def tracking_write(bundle_id, blob):
+        write_calls.append(bundle_id)
+        return original_write(bundle_id, blob)
 
-    # Write to fsspec storage
-    storage_dir = str(tmp_path / "new_bundles")
-    written = write_bundles_to_fsspec(bundles, storage_dir)
-    assert written == 1
-
-    # Idempotent: second write should skip existing
-    written2 = write_bundles_to_fsspec(bundles, storage_dir)
-    assert written2 == 0
-
-    # Verify via BundleStore
-    failures = verify_bundles(bundles, storage_dir)
-    assert failures == []
+    store._write_to_storage = tracking_write
+    id_a2 = store.write_zip(blob_a)
+    assert id_a2 == id_a
+    assert write_calls == [], "write_zip should not re-upload when bundle exists in storage"
