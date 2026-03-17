@@ -9,7 +9,7 @@ import jax.numpy as jnp
 from jax._src import config as jax_config
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P, use_abstract_mesh
 
-from levanter.grug.grug_moe import MoeImplementation, moe_mlp
+from levanter.grug.grug_moe import MoeImplementation, _shard_a2a_params, moe_mlp
 from levanter.utils.activation import ActivationFunctionEnum
 
 
@@ -184,6 +184,24 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
             .lower(lowering_platforms=(platform,))
         )
         assert lowered is not None
+
+
+def test_shard_a2a_params_uses_receive_axis_for_output_offsets():
+    shard_counts = jnp.array(
+        [
+            [1, 7, 2],
+            [3, 5, 4],
+            [6, 8, 9],
+        ],
+        dtype=jnp.int32,
+    )
+
+    input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(shard_counts, jnp.array(1, dtype=jnp.int32))
+
+    np.testing.assert_array_equal(np.asarray(send_sizes), np.array([3, 5, 4], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(input_offsets), np.array([0, 3, 8], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(recv_sizes), np.array([7, 5, 8], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(output_offsets), np.array([0, 7, 12], dtype=np.int32))
 
 
 def test_moe_mlp_runs_with_ep_axis_when_available():
