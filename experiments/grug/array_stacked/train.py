@@ -37,9 +37,9 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
-from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.array_stacked.model import GrugModelConfig, Transformer
+from experiments.grug.dispatch import dispatch_grug_training_run
+from levanter.grug.checkpointing import restore_grug_state_from_checkpoint
 
 logger = logging.getLogger(__name__)
 

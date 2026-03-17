@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ from pathlib import Path
 import jax.numpy as jnp
 import pytest
 
-from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from levanter.checkpoint import CheckpointInterval, Checkpointer
+from levanter.grug.checkpointing import restore_grug_state_from_checkpoint
 
 
 def _write_checkpoint_metadata(checkpoint_dir: Path, *, step: int, timestamp: str) -> None:
