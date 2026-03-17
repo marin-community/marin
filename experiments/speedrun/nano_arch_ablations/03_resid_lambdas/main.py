@@ -187,7 +187,9 @@ class Transformer(eqx.Module):
     @staticmethod
     def init(cfg: ModelConfig, *, key):
         embed_key, out_key, block_key = random.split(key, 3)
-        token_embed = reshard(_init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab)
+        token_embed = reshard(
+            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
+        )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
         blocks = tuple(Block.init(cfg, key=block_key) for _ in range(cfg.num_layers))
         resid_lambdas = tuple(jnp.ones((), dtype=jnp.float32) for _ in range(cfg.num_layers))
