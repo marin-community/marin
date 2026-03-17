@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for DockerRuntime resolve_mounts, prepare_workdir, and stage_bundle."""
+"""Tests for DockerRuntime mount resolution and staging."""
+
+from __future__ import annotations
 
 import subprocess
 from unittest.mock import Mock
@@ -71,7 +73,6 @@ def test_prepare_workdir_is_noop(tmp_path, runtime):
     """prepare_workdir is a no-op since cache_dir is already on /dev/shm."""
     workdir = tmp_path / "task-workdir"
     workdir.mkdir()
-    # Should return without doing anything
     runtime.prepare_workdir(workdir, disk_bytes=1024 * 1024 * 512)
 
 
