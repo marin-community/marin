@@ -11,7 +11,6 @@ grug copy-first workflow in `.agents/skills/change-grug/`.
 import dataclasses
 
 from dataclasses import dataclass
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -24,7 +23,10 @@ from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
-from levanter.grug.grug_moe import MoeActivation, moe_mlp
+from levanter.grug.grug_moe import (
+    MoeActivation,
+    moe_mlp,
+)
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import embed_vocab_pspec, lm_head_pspec, logits_pspec, unshard
 from levanter.tracker.histogram import Histogram
