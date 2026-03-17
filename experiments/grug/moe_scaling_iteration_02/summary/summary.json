@@ -1,0 +1,39 @@
+{
+  "model": "moe_iteration_02",
+  "description": "DeepSeek-style MoE with AF load balancing (bias_rate=0.01) + 0.001 aux loss, sigmoid routing, qk_mult=1.3, sliding_window=4096 (half on non-4th layers), init_std=0.5/sqrt(d), beta1=0.96, AdamW, 2 leading dense layers, 1 shared expert at hidden_dim, k=4, e=64, expert_dim=hidden_dim/2, warmup=0.1, cooldown=0.2, wd=0.1, router_z_loss_coef=0.001, z_loss_weight=1e-4.",
+  "metric": "eval/uncheatable_eval/macro_loss",
+  "predictions": {
+    "1e18": {
+      "optimal_tokens": 1106833698.552457,
+      "optimal_model_params": 298036876.4796922,
+      "predicted_loss": 3.494547048798573
+    },
+    "1e19": {
+      "optimal_tokens": 4621244570.81328,
+      "optimal_model_params": 1158673385.0032816,
+      "predicted_loss": 2.88718004876144
+    },
+    "1e20": {
+      "optimal_tokens": 19294589070.789013,
+      "optimal_model_params": 4504556714.499188,
+      "predicted_loss": 2.279813048724307
+    },
+    "1e21": {
+      "optimal_tokens": 80558637766.51276,
+      "optimal_model_params": 17512295921.151386,
+      "predicted_loss": 1.6724460486871742
+    }
+  },
+  "best_1e19_run": {
+    "name": "isoflop-moe-v3-1e+20-d1536",
+    "hidden_dim": 1536,
+    "mean_mfu": 20.604474567834963,
+    "tokens": 19955520326.558903,
+    "tokens_per_second": 728219.9675054201,
+    "total_params": 3859173248,
+    "active_params": 886460288,
+    "runtime_seconds": 34097.943089395,
+    "resource_type": "v5p-8",
+    "hardware_flops_per_second": 17600000000000000
+  }
+}
