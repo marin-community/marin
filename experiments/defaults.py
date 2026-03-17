@@ -78,6 +78,20 @@ from marin.training.training import (
 logger = logging.getLogger(__name__)
 
 
+HF_BUCKET_URI_PREFIX = "hf://buckets/"
+HF_BUCKET_PATH_PREFIX = "buckets/"
+
+
+def _is_hf_bucket_path(path: str) -> bool:
+    return path.startswith(HF_BUCKET_URI_PREFIX) or path.startswith(HF_BUCKET_PATH_PREFIX)
+
+
+def _normalize_hf_bucket_path(path: str) -> str:
+    if path.startswith(HF_BUCKET_URI_PREFIX):
+        return path.removeprefix("hf://")
+    return path
+
+
 DEFAULT_NEW_RUN_DATA_SHUFFLE = BlockShuffleConfig(
     io_block_size=256,
     window_blocks=512,
@@ -125,7 +139,7 @@ def _validate_train_length(train_seq_len: int | None, model_config: LmConfig) ->
 def default_download(
     name: str,
     hf_dataset_id: str,
-    revision: str,
+    revision: str | None = None,
     override_output_path: str | None = None,
     **kwargs: Any,
 ) -> InputName:
@@ -135,25 +149,41 @@ def default_download(
     Args:
         name: The name of the Download step. It forms the basis of the output path
             unless override_output_path is explicitly specified.
-        hf_dataset_id: The HuggingFace dataset ID to download. As `$ORG/$DATASET` on HF Hub
-        revision: The revision of the dataset to download.
-            Short Commit Hash from HF Dataset Repo (7 characters)
+        hf_dataset_id: Hugging Face source. Either `$ORG/$DATASET` on HF Hub or `hf://buckets/...`.
+        revision: The revision of the dataset to download for Hub datasets.
+            Optional for bucket paths.
         override_output_path: Optional. The output path for the dataset.
         **kwargs: Additional keyword arguments that are passed to the download config.
 
     The final output data will reside in '{output_path}/{revision}'.
     """
 
+    download_kwargs = dict(kwargs)
+    hf_repo_type_prefix = download_kwargs.pop("hf_repo_type_prefix", None)
+    if _is_hf_bucket_path(hf_dataset_id):
+        normalized_dataset_id = _normalize_hf_bucket_path(hf_dataset_id)
+        description = f"Download {hf_dataset_id}"
+        resolved_hf_repo_type_prefix = "" if hf_repo_type_prefix is None else hf_repo_type_prefix
+        resolved_revision = "main" if revision is None else revision
+    else:
+        if revision is None:
+            raise ValueError("revision is required for non-bucket Hugging Face dataset downloads.")
+        normalized_dataset_id = hf_dataset_id
+        description = f"Download {hf_dataset_id} revision {revision}"
+        resolved_hf_repo_type_prefix = "datasets" if hf_repo_type_prefix is None else hf_repo_type_prefix
+        resolved_revision = revision
+
     step = ExecutorStep(
         name=name,
-        description=f"Download {hf_dataset_id} revision {revision}",
+        description=description,
         fn=download_hf,
         config=DownloadConfig(
-            hf_dataset_id=hf_dataset_id,
-            revision=revision,
+            hf_dataset_id=normalized_dataset_id,
+            revision=resolved_revision,
             gcs_output_path=this_output_path(),
             wait_for_completion=True,
-            **kwargs,
+            hf_repo_type_prefix=resolved_hf_repo_type_prefix,
+            **download_kwargs,
         ),
         override_output_path=override_output_path,
     )
@@ -201,7 +231,12 @@ def default_tokenize(
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
         )
-    elif isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
+    elif (
+        isinstance(dataset, str)
+        and not _is_hf_bucket_path(dataset)
+        and dataset.count("/") == 1
+        and not fsspec_utils.exists(dataset)
+    ):
         config = HfTokenizeConfig(
             id=dataset,
             cache_path=this_output_path(),
