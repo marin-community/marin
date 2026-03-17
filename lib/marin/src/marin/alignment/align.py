@@ -12,14 +12,15 @@ Usage:
         pretrained_model=some_checkpoint_step,
         spec="path/to/spec.jsonl",
         model_config=llama_8b,
-        teacher_model="openai/gpt-4.1",
-        align_config=AlignConfig(dpo=SimpleDPOConfig(...)),
+        teacher_model=LiteLLMConfig(model="openai/gpt-4.1"),
+        align_config=AlignConfig(...),
     )
     executor_main(steps=[some_checkpoint_step, *aligned_steps])
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -30,9 +31,22 @@ from levanter.data.text.preference import PreferenceChatLmDatasetFormat
 
 from marin.alignment.generate_prompts import PromptGenConfig, generate_prompts_from_spec
 from marin.alignment.generate_responses import ResponseGenConfig, generate_responses
+from marin.alignment.inference_config import InferenceConfig, LiteLLMConfig, VLLMConfig
 from marin.alignment.judge import JudgePairConfig, judge_and_build_pairs
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.execution.remote import remote
+
+
+def _serialize_inference_config(config: InferenceConfig) -> dict:
+    """Serialize an InferenceConfig to a dict for executor config transport."""
+    d = dataclasses.asdict(config)
+    if isinstance(config, LiteLLMConfig):
+        d["backend"] = "litellm"
+    elif isinstance(config, VLLMConfig):
+        d["backend"] = "vllm"
+    else:
+        raise ValueError(f"Unknown InferenceConfig type: {type(config)}")
+    return d
 
 
 @dataclass(frozen=True)
@@ -55,10 +69,8 @@ class AlignConfig:
         rejected_max_tokens: Max tokens for rejected responses.
         judge_min_chosen_score: Teacher response must score >= this (1-10 scale).
         judge_min_gap: chosen_score - worst_rejected_score must be >= this.
-        response_workers: Parallelism for response generation API calls.
         judge_workers: Parallelism for judge API calls.
         tokenizer: HuggingFace tokenizer name for DPO training data.
-        inference_resources: Resources for vLLM when using local models.
         cpu_resources: Resources for CPU-only steps (prompt gen, judging).
     """
 
@@ -75,7 +87,6 @@ class AlignConfig:
     ideation_workers: int = 32
     concretize_workers: int = 32
     extract_workers: int = 128
-    response_workers: int = 64
     judge_workers: int = 64
 
     # Teacher response generation
@@ -95,8 +106,7 @@ class AlignConfig:
     # Tokenizer for DPO
     tokenizer: str = "meta-llama/Llama-3.1-8B-Instruct"
 
-    # Resources
-    inference_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_tpu("v6e-8"))
+    # Resources for CPU-only steps
     cpu_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"))
 
     # Statement filtering
@@ -119,10 +129,10 @@ def align(
     pretrained_model: ExecutorStep,
     spec: ExecutorStep | str,
     model_config,
-    teacher_model: ExecutorStep | str,
+    teacher_model: InferenceConfig,
     align_config: AlignConfig,
     dpo_config=None,
-    rejected_model: ExecutorStep | str | None = None,
+    rejected_model: InferenceConfig | None = None,
     tags: Sequence[str] = (),
 ) -> list[ExecutorStep]:
     """Produce an aligned model from a specification.
@@ -132,11 +142,12 @@ def align(
         pretrained_model: The model being aligned. Used for DPO init + reference only.
         spec: Path to specification JSONL or an ExecutorStep that produces one.
         model_config: Levanter model config (e.g. LlamaConfig) for the pretrained model.
-        teacher_model: Generates chosen responses. API string or ExecutorStep.
+        teacher_model: InferenceConfig for chosen response generation.
+            Use LiteLLMConfig for API models, VLLMConfig for local checkpoints.
         align_config: Configuration for the alignment pipeline.
         dpo_config: SimpleDPOConfig for DPO training. If None, returns steps up to preference pairs.
-        rejected_model: Generates rejected responses. Defaults to teacher_model with no spec guidance
-            (which is the standard setup — same model but without seeing the behavioral guideline).
+        rejected_model: InferenceConfig for rejected response generation.
+            Defaults to teacher_model (same model, but without spec guidance).
         tags: WandB tags for the DPO training run.
 
     Returns:
@@ -152,10 +163,6 @@ def align(
         spec_input = output_path_of(spec)
     else:
         spec_input = spec
-
-    # Resolve model strings for response generation
-    teacher_model_str = teacher_model if isinstance(teacher_model, str) else "local"
-    rejected_model_str = rejected_model if isinstance(rejected_model, str) else "local"
 
     # Step 1: Generate prompts from spec (stages 1-3)
     prompts_step = ExecutorStep(
@@ -183,46 +190,44 @@ def align(
     )
 
     # Step 2a: Teacher generates chosen responses (with spec guidance)
+    teacher_serialized = _serialize_inference_config(teacher_model)
     chosen_step = ExecutorStep(
         name=f"align/{name}/chosen",
-        description=f"Generate chosen responses via {teacher_model_str}",
+        description=f"Generate chosen responses via {teacher_model.model}",
         fn=remote(
             generate_responses,
-            resources=align_config.cpu_resources if isinstance(teacher_model, str) else align_config.inference_resources,
-            pip_dependency_groups=["cpu"] if isinstance(teacher_model, str) else [],
+            resources=teacher_model.resources,
+            pip_dependency_groups=["cpu"] if teacher_model.is_api else [],
         ),
         config=ResponseGenConfig(
             prompts_path=output_path_of(prompts_step),
             output_path=this_output_path(),
-            model=teacher_model if isinstance(teacher_model, str) else output_path_of(teacher_model),
+            model_config=teacher_serialized,
             n=align_config.teacher_n,
             temperature=align_config.teacher_temperature,
             max_tokens=align_config.teacher_max_tokens,
             behavior_statements_path=spec_input,  # teacher sees spec guidance
-            workers=align_config.response_workers,
         ),
     )
 
     # Step 2b: Rejected model generates rejected responses (NO spec guidance)
+    rejected_serialized = _serialize_inference_config(rejected_model)
     rejected_step = ExecutorStep(
         name=f"align/{name}/rejected",
-        description=f"Generate rejected responses via {rejected_model_str}",
+        description=f"Generate rejected responses via {rejected_model.model}",
         fn=remote(
             generate_responses,
-            resources=(
-                align_config.cpu_resources if isinstance(rejected_model, str) else align_config.inference_resources
-            ),
-            pip_dependency_groups=["cpu"] if isinstance(rejected_model, str) else [],
+            resources=rejected_model.resources,
+            pip_dependency_groups=["cpu"] if rejected_model.is_api else [],
         ),
         config=ResponseGenConfig(
             prompts_path=output_path_of(prompts_step),
             output_path=this_output_path(),
-            model=rejected_model if isinstance(rejected_model, str) else output_path_of(rejected_model),
+            model_config=rejected_serialized,
             n=align_config.rejected_n,
             temperature=align_config.rejected_temperature,
             max_tokens=align_config.rejected_max_tokens,
             behavior_statements_path=None,  # rejected model gets NO spec guidance
-            workers=align_config.response_workers,
         ),
     )
 

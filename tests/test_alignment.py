@@ -29,8 +29,8 @@ from marin.alignment.generate_prompts import (
 )
 from marin.alignment.generate_responses import (
     _build_messages,
-    _is_api_model,
 )
+from marin.alignment.inference_config import LiteLLMConfig, VLLMConfig
 from marin.alignment.judge import _parse_judge_response
 from marin.alignment.llm_client import LLMResponse, llm_chat, llm_chat_single
 from marin.alignment.prompts.concretize import make_concretize_prompt
@@ -441,14 +441,46 @@ class TestShardedOutput:
 # ===========================================================================
 
 
-class TestResponseHelpers:
-    def test_is_api_model(self):
-        assert _is_api_model("openai/gpt-4.1") is True
-        assert _is_api_model("anthropic/claude-sonnet-4-20250514") is True
-        assert _is_api_model("/local/path/to/model") is False
-        assert _is_api_model("gs://bucket/model") is False
-        assert _is_api_model("meta-llama/Llama-3.1-8B") is True
+class TestInferenceConfig:
+    def test_litellm_config_is_api(self):
+        config = LiteLLMConfig(model="openai/gpt-4.1")
+        assert config.is_api is True
+        assert config.is_local is False
 
+    def test_vllm_config_is_local(self):
+        config = VLLMConfig(model="/path/to/checkpoint")
+        assert config.is_local is True
+        assert config.is_api is False
+
+    def test_litellm_config_resources_are_cpu(self):
+        config = LiteLLMConfig(model="openai/gpt-4.1")
+        resources = config.resources
+        assert resources is not None
+
+    def test_vllm_config_resources_are_tpu(self):
+        config = VLLMConfig(model="/path/to/checkpoint", tpu_type="v6e-8")
+        resources = config.resources
+        assert resources is not None
+
+    def test_litellm_config_defaults(self):
+        config = LiteLLMConfig(model="openai/gpt-4.1")
+        assert config.num_retries == 10
+        assert config.workers == 64
+
+    def test_vllm_config_defaults(self):
+        config = VLLMConfig(model="/path/to/model")
+        assert config.tensor_parallel_size == 1
+        assert config.max_model_len == 4096
+        assert config.gpu_memory_utilization == 0.9
+
+    def test_vllm_config_custom(self):
+        config = VLLMConfig(model="my-model", tensor_parallel_size=4, max_model_len=8192, tpu_type="v5p-32")
+        assert config.tensor_parallel_size == 4
+        assert config.max_model_len == 8192
+        assert config.tpu_type == "v5p-32"
+
+
+class TestResponseHelpers:
     def test_build_messages_with_spec_guidance(self, sample_prompt):
         behavior_statements = {"be_helpful": "Always be helpful and friendly."}
         messages = _build_messages(sample_prompt, behavior_statements)
@@ -509,7 +541,7 @@ class TestLLMClient:
     def test_llm_chat_returns_responses(self, mock_completion, mock_litellm_response):
         mock_completion.return_value = mock_litellm_response("Hello world!")
         responses = llm_chat(
-            model_id="openai/gpt-4.1",
+            config=LiteLLMConfig(model="openai/gpt-4.1"),
             messages=[{"role": "user", "content": "Hi"}],
         )
         assert len(responses) == 1
@@ -518,10 +550,21 @@ class TestLLMClient:
         mock_completion.assert_called_once()
 
     @patch("marin.alignment.llm_client.litellm.completion")
+    def test_llm_chat_with_string_config(self, mock_completion, mock_litellm_response):
+        """Bare string is auto-converted to LiteLLMConfig."""
+        mock_completion.return_value = mock_litellm_response("Response")
+        responses = llm_chat(
+            config="openai/gpt-4.1",
+            messages=[{"role": "user", "content": "Hi"}],
+        )
+        assert len(responses) == 1
+        assert responses[0].content == "Response"
+
+    @patch("marin.alignment.llm_client.litellm.completion")
     def test_llm_chat_with_system_prompt(self, mock_completion, mock_litellm_response):
         mock_completion.return_value = mock_litellm_response("Response")
         llm_chat(
-            model_id="openai/gpt-4.1",
+            config=LiteLLMConfig(model="openai/gpt-4.1"),
             messages=[{"role": "user", "content": "Hi"}],
             system_prompt="You are helpful.",
         )
@@ -535,7 +578,7 @@ class TestLLMClient:
     def test_llm_chat_single(self, mock_completion, mock_litellm_response):
         mock_completion.return_value = mock_litellm_response("Single response")
         response = llm_chat_single(
-            model_id="openai/gpt-4.1",
+            config=LiteLLMConfig(model="openai/gpt-4.1"),
             messages=[{"role": "user", "content": "Hi"}],
         )
         assert isinstance(response, LLMResponse)
@@ -556,7 +599,7 @@ class TestLLMClient:
         mock_completion.return_value = mock_response
 
         responses = llm_chat(
-            model_id="openai/gpt-4.1",
+            config=LiteLLMConfig(model="openai/gpt-4.1"),
             messages=[{"role": "user", "content": "Hi"}],
             n=2,
         )

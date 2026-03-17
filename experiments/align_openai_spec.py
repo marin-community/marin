@@ -27,6 +27,7 @@ from experiments.models import llama_3_1_8b
 from experiments.simple_dpo_config import SimpleDPOConfig
 from fray.v2.types import ResourceConfig
 from marin.alignment.align import AlignConfig, align
+from marin.alignment.inference_config import LiteLLMConfig
 from marin.execution.executor import executor_main, output_path_of
 
 # ---------------------------------------------------------------------------
@@ -64,7 +65,6 @@ align_config = AlignConfig(
     tokenizer="meta-llama/Llama-3.1-8B-Instruct",
     # Resources
     cpu_resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
-    inference_resources=ResourceConfig.with_tpu("v6e-8"),
 )
 
 # ---------------------------------------------------------------------------
@@ -98,15 +98,22 @@ dpo_config = SimpleDPOConfig(
 # Pipeline: spec → synthetic preference data → DPO
 # ---------------------------------------------------------------------------
 
+# --- Inference configs for teacher and rejected models ---
+# Use LiteLLMConfig for API models. For local checkpoints, use VLLMConfig instead:
+#   from marin.alignment.inference_config import VLLMConfig
+#   teacher = VLLMConfig(model="/path/to/checkpoint", tensor_parallel_size=4, tpu_type="v6e-8")
+teacher = LiteLLMConfig(model="openai/gpt-4.1", workers=64)
+rejected = LiteLLMConfig(model="openai/gpt-4.1-mini", workers=64)
+
 aligned_steps = align(
     name="openai_spec_llama3_8b",
     pretrained_model=llama_3_1_8b,
     spec=SPEC_PATH,
     model_config=llama_8b,
-    teacher_model="openai/gpt-4.1",
+    teacher_model=teacher,
     align_config=align_config,
     dpo_config=dpo_config,
-    rejected_model="openai/gpt-4.1-mini",
+    rejected_model=rejected,
     tags=["alignment", "openai-spec", "llama3", "dpo", "synthetic-preference"],
 )
 

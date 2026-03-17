@@ -3,9 +3,9 @@
 
 """Steps 2a/2b: Generate chosen and rejected responses.
 
-Supports two backends:
-- API models via litellm (e.g. "openai/gpt-4.1") — used for teacher/rejected when specified as strings
-- vLLM for local model checkpoints — used when model is an ExecutorStep path
+Supports two backends via InferenceConfig:
+- LiteLLMConfig → API calls (OpenAI, Anthropic, etc.)
+- VLLMConfig → local vLLM instance
 
 Teacher responses receive spec guidance in the system prompt.
 Rejected responses receive NO spec guidance.
@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from marin.alignment.inference_config import InferenceConfig, LiteLLMConfig, VLLMConfig
 from marin.alignment.llm_client import llm_chat
 
 logger = logging.getLogger(__name__)
@@ -35,8 +36,8 @@ class ResponseGenConfig:
     prompts_path: str
     output_path: str
 
-    # Model: API string (e.g. "openai/gpt-4.1") or local checkpoint path
-    model: str
+    # Inference backend — LiteLLMConfig or VLLMConfig (serialized as dict for executor)
+    model_config: dict[str, Any] | InferenceConfig
 
     # Generation parameters
     n: int = 1
@@ -46,18 +47,19 @@ class ResponseGenConfig:
     # Spec guidance: path to behavior statements JSON (for teacher only, None for rejected)
     behavior_statements_path: str | None = None
 
-    # Parallelism
-    workers: int = 64
-
-    # vLLM settings (only used when model is a local path)
-    vllm_tensor_parallel_size: int = 1
-    vllm_max_model_len: int = 4096
-    vllm_gpu_memory_utilization: float = 0.9
-
-
-def _is_api_model(model: str) -> bool:
-    """Check if a model string refers to an API model (e.g. "openai/gpt-4.1")."""
-    return "/" in model and not model.startswith("/") and not model.startswith("gs://")
+    def resolve_inference_config(self) -> InferenceConfig:
+        """Resolve model_config to an InferenceConfig instance."""
+        if isinstance(self.model_config, InferenceConfig):
+            return self.model_config
+        # Reconstruct from serialized dict
+        cfg = dict(self.model_config)
+        backend = cfg.pop("backend")
+        if backend == "litellm":
+            return LiteLLMConfig(**cfg)
+        elif backend == "vllm":
+            return VLLMConfig(**cfg)
+        else:
+            raise ValueError(f"Unknown inference backend: {backend}")
 
 
 def _load_prompts(prompts_path: str) -> list[dict[str, Any]]:
@@ -106,9 +108,25 @@ def _build_messages(
     return messages
 
 
+def _make_response_record(
+    prompt: dict[str, Any],
+    model_name: str,
+    responses: list[dict[str, str]],
+) -> dict[str, Any]:
+    return {
+        "prompt_id": f"{prompt.get('behavior_id', '')}/{prompt.get('config_id', '')}",
+        "system_prompt": prompt.get("system_prompt", ""),  # scenario only, no spec
+        "user_message": prompt.get("user_message", ""),
+        "behavior_id": prompt.get("behavior_id", ""),
+        "rubric": prompt.get("rubric", ""),
+        "model": model_name,
+        "responses": responses,
+    }
+
+
 def _generate_for_prompt_api(
     prompt: dict[str, Any],
-    model: str,
+    inference_config: LiteLLMConfig,
     n: int,
     temperature: float,
     max_tokens: int,
@@ -118,26 +136,23 @@ def _generate_for_prompt_api(
     messages = _build_messages(prompt, behavior_statements)
 
     responses = llm_chat(
-        model_id=model,
+        config=inference_config,
         messages=messages,
         max_tokens=max_tokens,
         temperature=temperature,
         n=n,
     )
 
-    return {
-        "prompt_id": f"{prompt.get('behavior_id', '')}/{prompt.get('config_id', '')}",
-        "system_prompt": prompt.get("system_prompt", ""),  # scenario only, no spec
-        "user_message": prompt.get("user_message", ""),
-        "behavior_id": prompt.get("behavior_id", ""),
-        "rubric": prompt.get("rubric", ""),
-        "model": model,
-        "responses": [{"content": r.content, "index": i} for i, r in enumerate(responses)],
-    }
+    return _make_response_record(
+        prompt,
+        inference_config.model,
+        [{"content": r.content, "index": i} for i, r in enumerate(responses)],
+    )
 
 
 def _generate_via_api(
     prompts: list[dict[str, Any]],
+    inference_config: LiteLLMConfig,
     config: ResponseGenConfig,
     behavior_statements: dict[str, str] | None,
 ) -> list[dict[str, Any]]:
@@ -145,12 +160,12 @@ def _generate_via_api(
     results: list[dict[str, Any]] = []
     failures: list[str] = []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=config.workers) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=inference_config.workers) as pool:
         future_map = {
             pool.submit(
                 _generate_for_prompt_api,
                 prompt,
-                config.model,
+                inference_config,
                 config.n,
                 config.temperature,
                 config.max_tokens,
@@ -174,6 +189,7 @@ def _generate_via_api(
 
 def _generate_via_vllm(
     prompts: list[dict[str, Any]],
+    inference_config: VLLMConfig,
     config: ResponseGenConfig,
     behavior_statements: dict[str, str] | None,
 ) -> list[dict[str, Any]]:
@@ -183,12 +199,12 @@ def _generate_via_vllm(
     except ImportError as exc:
         raise ImportError("vLLM is required for local model inference. Install with: pip install vllm") from exc
 
-    logger.info("Starting vLLM with model: %s", config.model)
+    logger.info("Starting vLLM with model: %s", inference_config.model)
     llm = LLM(
-        model=config.model,
-        max_model_len=config.vllm_max_model_len,
-        tensor_parallel_size=config.vllm_tensor_parallel_size,
-        gpu_memory_utilization=config.vllm_gpu_memory_utilization,
+        model=inference_config.model,
+        max_model_len=inference_config.max_model_len,
+        tensor_parallel_size=inference_config.tensor_parallel_size,
+        gpu_memory_utilization=inference_config.gpu_memory_utilization,
     )
 
     sampling_params = SamplingParams(
@@ -197,15 +213,11 @@ def _generate_via_vllm(
         n=config.n,
     )
 
-    # Build all message lists
-    all_messages: list[list[dict[str, str]]] = []
-    for prompt in prompts:
-        all_messages.append(_build_messages(prompt, behavior_statements))
-
-    # Use vLLM's chat interface
+    # Build all message lists and apply chat template
     tokenizer = llm.get_tokenizer()
     all_prompt_texts = []
-    for messages in all_messages:
+    for prompt in prompts:
+        messages = _build_messages(prompt, behavior_statements)
         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         all_prompt_texts.append(text)
 
@@ -213,32 +225,17 @@ def _generate_via_vllm(
 
     results: list[dict[str, Any]] = []
     for prompt, output in zip(prompts, outputs, strict=True):
-        responses = []
-        for j, completion in enumerate(output.outputs):
-            responses.append({"content": completion.text, "index": j})
+        responses = [{"content": completion.text, "index": j} for j, completion in enumerate(output.outputs)]
+        results.append(_make_response_record(prompt, inference_config.model, responses))
 
-        results.append(
-            {
-                "prompt_id": f"{prompt.get('behavior_id', '')}/{prompt.get('config_id', '')}",
-                "system_prompt": prompt.get("system_prompt", ""),
-                "user_message": prompt.get("user_message", ""),
-                "behavior_id": prompt.get("behavior_id", ""),
-                "rubric": prompt.get("rubric", ""),
-                "model": config.model,
-                "responses": responses,
-            }
-        )
-
-    # Clean up
     del llm
-
     return results
 
 
 def generate_responses(config: ResponseGenConfig) -> None:
     """Generate responses for all prompts.
 
-    Dispatches to API (litellm) or local (vLLM) based on the model string.
+    Dispatches to litellm or vLLM based on the InferenceConfig type.
     """
     prompts = _load_prompts(config.prompts_path)
     logger.info("Loaded %d prompts", len(prompts))
@@ -250,12 +247,16 @@ def generate_responses(config: ResponseGenConfig) -> None:
     else:
         logger.info("No behavior statements provided (rejected mode)")
 
-    if _is_api_model(config.model):
-        logger.info("Using API model: %s", config.model)
-        results = _generate_via_api(prompts, config, behavior_statements)
+    inference_config = config.resolve_inference_config()
+
+    if isinstance(inference_config, LiteLLMConfig):
+        logger.info("Using litellm API: %s", inference_config.model)
+        results = _generate_via_api(prompts, inference_config, config, behavior_statements)
+    elif isinstance(inference_config, VLLMConfig):
+        logger.info("Using local vLLM: %s", inference_config.model)
+        results = _generate_via_vllm(prompts, inference_config, config, behavior_statements)
     else:
-        logger.info("Using local vLLM model: %s", config.model)
-        results = _generate_via_vllm(prompts, config, behavior_statements)
+        raise ValueError(f"Unknown inference config type: {type(inference_config)}")
 
     logger.info("Generated responses for %d prompts", len(results))
 
