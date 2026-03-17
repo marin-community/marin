@@ -6,8 +6,7 @@ from collections.abc import Iterator, Sequence
 from typing import Any, TypedDict
 
 import dupekit
-from zephyr import Dataset, ZephyrContext
-from zephyr.expr import col
+from zephyr import Dataset, ZephyrContext, write_vortex_file, ShardInfo
 
 logger = logging.getLogger(__name__)
 
@@ -133,32 +132,49 @@ def connected_components(
         verbose=True,
     )
 
+    def _get_write_shard_and_count_fn(iteration: int):
+        # NOTE: this function exists to make the iteration number closure capture explicit
+        def _write_shard_and_count(nodes: Iterator[CCNode], shard_info: ShardInfo) -> Iterator[dict]:
+            num_changes = 0
+
+            def counting_iter():
+                nonlocal num_changes
+                for node in nodes:
+                    if node["changed"]:
+                        num_changes += 1
+                    yield node
+
+            path = f"{output_dir}/it_{iteration}/part-{shard_info.shard_idx:05d}-of-{shard_info.total_shards:05d}.vortex"
+            result = write_vortex_file(counting_iter(), path)
+            yield {**result, "num_changes": num_changes}
+
+        return _write_shard_and_count
+
     converged = False
     for i in range(1, max_iterations + 1):  # type: ignore[bad-assignment]
         logger.info(f"Connected components iteration {i}...")
-        curr_it = ctx.execute(
-            Dataset.from_list(curr_it)
-            .load_vortex()
-            .map(lambda record: CCNode(**record))
-            .flat_map(_emit_messages)
-            .group_by(key=lambda x: x["key"], reducer=_reduce_node_step)
-            .write_vortex(f"{output_dir}/it_{i}/part-{{shard:05d}}.vortex"),
-            verbose=True,
+
+        shard_results = list(
+            ctx.execute(
+                Dataset.from_list(curr_it)
+                .load_vortex()
+                .map(lambda record: CCNode(**record))
+                .flat_map(_emit_messages)
+                .group_by(key=lambda x: x["key"], reducer=_reduce_node_step)
+                .map_shard(_get_write_shard_and_count_fn(i)),
+                verbose=True,
+            )
         )
 
-        # Check for convergence
-        changes = ctx.execute(
-            Dataset.from_list(curr_it).load_vortex(columns=["changed"]).filter(col("changed")).count(),
-        )
-
-        num_changes = changes[0]
+        curr_it = [r["path"] for r in shard_results]
+        num_changes = sum(r["num_changes"] for r in shard_results)
 
         if num_changes == 0:
             converged = True
             logger.info(f"Connected components converged after {i} iterations.")
             break
         else:
-            logger.info(f"Connected components iteration {i} found {num_changes} changes.")
+            logger.info(f"Connected components iteration {i} found {num_changes:,} changes.")
 
     return converged, curr_it
 
