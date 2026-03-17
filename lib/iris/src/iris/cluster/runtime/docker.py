@@ -85,6 +85,41 @@ class ResolvedMount:
     kind: MountKind
 
 
+def _has_tpu_device(config: ContainerConfig) -> bool:
+    """Return True when config requests TPU resources."""
+    if not config.resources:
+        return False
+    has_device = config.resources.HasField("device")
+    return has_device and config.resources.device.HasField("tpu")
+
+
+def _discover_tpu_device_mappings() -> list[str]:
+    """Return host TPU device mappings for Docker --device flags.
+
+    TPU hosts expose device nodes differently by generation:
+    - v4 commonly exposes /dev/accel*
+    - v5+/v6e commonly use /dev/vfio/<N> under /dev/vfio
+
+    We pass through whichever device paths exist on the current worker host.
+    """
+    mappings: list[str] = []
+
+    vfio_path = Path("/dev/vfio")
+    if vfio_path.exists():
+        mappings.append("/dev/vfio:/dev/vfio")
+
+    accel_devices: list[Path] = []
+    for device_path in Path("/dev").glob("accel[0-9]*"):
+        if device_path.is_char_device():
+            accel_devices.append(device_path)
+
+    accel_devices.sort(key=lambda path: int(path.name.removeprefix("accel")))
+    for device_path in accel_devices:
+        mappings.append(f"{device_path}:{device_path}")
+
+    return mappings
+
+
 def _build_device_flags(config: ContainerConfig) -> list[str]:
     """Build Docker device flags based on resource configuration.
 
@@ -98,20 +133,23 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
         return flags
 
     has_device = config.resources.HasField("device")
-    has_tpu = has_device and config.resources.device.HasField("tpu")
+    has_tpu = _has_tpu_device(config)
     logger.info("Device flags check: has_device=%s, has_tpu=%s", has_device, has_tpu)
 
     if has_tpu:
+        for device_mapping in _discover_tpu_device_mappings():
+            flags.extend(["--device", device_mapping])
+
         flags.extend(
             [
-                "--device",
-                "/dev/vfio:/dev/vfio",
                 "--shm-size=100g",
                 "--cap-add=SYS_RESOURCE",
                 "--ulimit",
                 "memlock=68719476736:68719476736",
             ]
         )
+        if "--device" not in flags:
+            logger.warning("TPU resources requested, but no TPU device nodes were discovered on host")
         logger.info("TPU device flags: %s", flags)
 
     return flags
@@ -528,13 +566,12 @@ exec {quoted_cmd}
         cmd = [
             "docker",
             "create",
-            "--security-opt",
-            "no-new-privileges",
             "--ulimit",
             "core=0:0",
             "-w",
             config.workdir,
         ]
+        cmd.extend(["--security-opt", "no-new-privileges"])
 
         # Run as the owner of bind-mounted directories
         user_flag = _detect_mount_user(self._resolved_mounts)
