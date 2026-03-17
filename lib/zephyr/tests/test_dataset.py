@@ -249,7 +249,7 @@ def test_reshard(zephyr_ctx):
 def test_reshard_noop(zephyr_ctx):
     """Test reshard with None is a noop, and non-positive values raise ValueError"""
 
-    def yield_1(it, shard_info):
+    def yield_1(it, _):
         yield from [1]
 
     ds = Dataset.from_list(range(10)).reshard(None).map_shard(yield_1)
@@ -877,7 +877,7 @@ def test_sorted_merge_join_empty_datasets(zephyr_ctx):
 def test_map_shard_stateful_deduplication(zephyr_ctx):
     """Test map_shard for stateful within-shard deduplication."""
 
-    def deduplicate_shard(items, shard_info):
+    def deduplicate_shard(items, _):
         seen = set()
         for item in items:
             key = item["id"]
@@ -906,7 +906,7 @@ def test_map_shard_stateful_deduplication(zephyr_ctx):
 def test_map_shard_empty_result(zephyr_ctx):
     """Test map_shard that filters everything out."""
 
-    def filter_all(items, shard_info):
+    def filter_all(items, _):
         for _ in items:
             pass  # Consume but don't yield
         return iter([])  # Return empty iterator
@@ -919,7 +919,7 @@ def test_map_shard_empty_result(zephyr_ctx):
 def test_map_shard_error_propagation(zephyr_ctx):
     """Test that exceptions in map_shard functions propagate correctly."""
 
-    def failing_generator(items, shard_info):
+    def failing_generator(items, _):
         for item in items:
             if item == 3:
                 raise ValueError("Test error")

@@ -583,7 +583,7 @@ class Dataset(Generic[T]):
             >>> from zephyr.execution import load_jsonl
             >>> from zephyr.dataset import ShardInfo
             >>> # Deduplicate items within each shard
-            >>> def deduplicate_shard(items: Iterator, shard_info: ShardInfo):
+            >>> def deduplicate_shard(items: Iterator, _: ShardInfo):
             ...     seen = set()
             ...     for item in items:
             ...         key = item["id"]
@@ -839,7 +839,7 @@ class Dataset(Generic[T]):
             [{"id": 1, "val": "a"}, {"id": 2, "val": "b"}]  # Or {"id": 1, "val": "c"}
         """
 
-        def streaming_dedup(items: Iterator[T], shard_info: ShardInfo) -> Iterator[T]:
+        def streaming_dedup(items: Iterator[T], _: ShardInfo) -> Iterator[T]:
             """Deduplicate items within a shard."""
             seen = set()
             for item in items:

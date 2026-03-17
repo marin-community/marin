@@ -184,7 +184,7 @@ def build_filter(
     Build a bloom filter from input dataset.
     """
 
-    def build_shard_bloom(records: Iterator[dict], shard_info) -> Iterator[bytes]:
+    def build_shard_bloom(records: Iterator[dict], _) -> Iterator[bytes]:
         """Build bloom filter from a shard of records and yield serialized bytes."""
         bf = dupekit.Bloom(config.estimated_doc_count, config.false_positive_rate)
 
@@ -198,7 +198,7 @@ def build_filter(
     all_files = _collect_input_files(input_path)
     logger.info(f"Building bloom filter from {all_files} into {bloom_path}")
 
-    def _merge_bloom(bloom_files: Iterator[str], shard_info):
+    def _merge_bloom(bloom_files: Iterator[str], _):
         merged_bloom = dupekit.Bloom(config.estimated_doc_count, config.false_positive_rate)
         for bloom_file_path in bloom_files:
             fs, path = url_to_fs(bloom_file_path)
@@ -267,7 +267,7 @@ def mark_duplicates_bloom(
     base_path = input_path[0] if isinstance(input_path, list) else input_path
     all_files = _collect_input_files(input_path)
 
-    def process_shard_with_bloom(records: Iterator[dict], shard_info) -> Iterator[dict]:
+    def process_shard_with_bloom(records: Iterator[dict], _) -> Iterator[dict]:
         """Load bloom filter once per shard and mark duplicates."""
         # Load bloom filter from storage
         fs, path = url_to_fs(bloom_path)
