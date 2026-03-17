@@ -947,6 +947,37 @@ def _config_with_gcp_sg(
     return config
 
 
+def _config_with_coreweave_gpu_sg(
+    *,
+    num_vms: int,
+    worker_attributes: dict[str, str] | None = None,
+) -> config_pb2.IrisClusterConfig:
+    sg = config_pb2.ScaleGroupConfig(
+        name="test",
+        min_slices=0,
+        max_slices=1,
+        num_vms=num_vms,
+        resources=config_pb2.ScaleGroupResources(
+            cpu_millicores=128000,
+            memory_bytes=2048 * 1024**3,
+            disk_bytes=1024**4,
+            device_type=config_pb2.ACCELERATOR_TYPE_GPU,
+            device_variant="H100",
+            device_count=8,
+        ),
+    )
+    sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_GPU
+    sg.slice_template.num_vms = num_vms
+    sg.slice_template.coreweave.region = "US-WEST-04A"
+    sg.slice_template.coreweave.instance_type = "gd-8xh100ib-i128"
+    if worker_attributes is not None:
+        for key, value in worker_attributes.items():
+            sg.worker.attributes[key] = value
+    config = config_pb2.IrisClusterConfig()
+    config.scale_groups["test"].CopyFrom(sg)
+    return config
+
+
 class TestWorkerSettingsValidation:
     """Tests for worker.attributes validation (region/zone consistency, preemptible agreement)."""
 
@@ -1024,6 +1055,28 @@ class TestWorkerSettingsValidation:
         config = _config_with_gcp_sg("us-west4-b", worker_attributes={WellKnownAttribute.ZONE: ""})
         with pytest.raises(ValueError, match="must be non-empty"):
             validate_config(config)
+
+    def test_coreweave_multihost_gpu_requires_topology_attribute(self):
+        config = _config_with_coreweave_gpu_sg(
+            num_vms=2,
+            worker_attributes={
+                WellKnownAttribute.REGION: "US-WEST-04A",
+                "pool": "h100-16x",
+            },
+        )
+        with pytest.raises(ValueError, match="must set at least one topology label"):
+            validate_config(config)
+
+    def test_coreweave_multihost_gpu_accepts_same_slice_topology_attribute(self):
+        config = _config_with_coreweave_gpu_sg(
+            num_vms=2,
+            worker_attributes={
+                WellKnownAttribute.REGION: "US-WEST-04A",
+                "pool": "h100-16x",
+                "backend.coreweave.cloud/superpod": "same-slice",
+            },
+        )
+        validate_config(config)
 
 
 class TestMultiZoneExpansion:

@@ -79,9 +79,9 @@ def _build_step_from_env() -> ExecutorStep:
         wandb_group = "canary-ferry-moe"
         wandb_tags = ["canary", "ferry", "grug", "moe"]
     else:
+        multi_host = os.environ.get("CANARY_MULTI_HOST", "").lower() in ("1", "true")
         batch_size = _env_int("CANARY_BATCH_SIZE", 32)
         target_tokens = _env_int("CANARY_TARGET_TOKENS", batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len * 50)
-        name = "canary-ferry-cw"
         # SlimPajama-6B with block-shuffle — small dataset, re-tokenized on first run.
         tokenize_step = default_tokenize(
             name="slimpajama-6b-cw",
@@ -101,10 +101,18 @@ def _build_step_from_env() -> ExecutorStep:
             training_set=tokenize_step,
             shuffle=BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel"),
         )
-        resources = ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="256g", disk="256g")
+
+        if multi_host:
+            name = "canary-ferry-cw-multihost"
+            resources = ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="256g", disk="256g", replicas=2)
+            wandb_group = "canary-ferry-moe-gpu-multihost"
+            wandb_tags = ["canary", "ferry", "grug", "moe", "gpu", "multihost"]
+        else:
+            name = "canary-ferry-cw"
+            resources = ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="256g", disk="256g")
+            wandb_group = "canary-ferry-moe-gpu"
+            wandb_tags = ["canary", "ferry", "grug", "moe", "gpu"]
         eval_config = None
-        wandb_group = "canary-ferry-moe-gpu"
-        wandb_tags = ["canary", "ferry", "grug", "moe", "gpu"]
 
     num_steps = target_tokens // (batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len)
     if num_steps <= 0:

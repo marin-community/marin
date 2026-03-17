@@ -87,6 +87,7 @@ class FakeKubectl:
 
     def __init__(self):
         self._nodepools: dict[str, dict] = {}
+        self._nodes: dict[str, dict] = {}
         self._pods: dict[str, dict] = {}
         self._deployments: dict[str, dict] = {}
         self._services: dict[str, dict] = {}
@@ -167,6 +168,8 @@ class FakeKubectl:
             return self._handle_get_nodepool(clean_args)
         if "get" in clean_args and "nodepools" in clean_args:
             return self._handle_get_nodepools(clean_args)
+        if "get" in clean_args and "node" in clean_args and "nodes" not in clean_args:
+            return self._handle_get_node(clean_args)
         if "get" in clean_args and "pod" in clean_args and "pods" not in clean_args:
             return self._handle_get_pod(clean_args, namespace)
         if "get" in clean_args and "pods" in clean_args:
@@ -243,6 +246,7 @@ class FakeKubectl:
                     "conditions": [],
                 },
             }
+            self._bind_pod_to_node(name)
             return _completed()
         elif kind == "Deployment":
             existing_status = self._deployments.get(name, {}).get("status", {"availableReplicas": 0})
@@ -306,6 +310,15 @@ class FakeKubectl:
                 items = self._filter_by_selector(items, selector)
 
         return _completed(stdout=json.dumps({"items": items}))
+
+    def _handle_get_node(self, args: list[str]) -> subprocess.CompletedProcess:
+        idx = args.index("node") + 1
+        if idx >= len(args):
+            return _completed(returncode=1, stderr="missing node name")
+        name = args[idx]
+        if name not in self._nodes:
+            return _completed(returncode=1, stderr=f"node {name} not found")
+        return _completed(stdout=json.dumps(self._nodes[name]))
 
     def _handle_get_pod(self, args: list[str], namespace: str) -> subprocess.CompletedProcess:
         idx = args.index("pod") + 1
@@ -488,6 +501,24 @@ class FakeKubectl:
             for item in items
             if all(item.get("metadata", {}).get("labels", {}).get(k) == v for k, v in required.items())
         ]
+
+    def _bind_pod_to_node(self, pod_name: str) -> None:
+        pod = self._pods[pod_name]
+        node_selector = pod.get("spec", {}).get("nodeSelector", {})
+        for node_name, node in self._nodes.items():
+            labels = node.get("metadata", {}).get("labels", {})
+            if all(labels.get(k) == v for k, v in node_selector.items()):
+                pod["spec"]["nodeName"] = node_name
+                return
+
+        node_name = f"fake-node-{len(self._nodes)}"
+        self._nodes[node_name] = {
+            "metadata": {
+                "name": node_name,
+                "labels": dict(node_selector),
+            }
+        }
+        pod["spec"]["nodeName"] = node_name
 
 
 @pytest.fixture
@@ -827,6 +858,78 @@ def test_create_slice_multi_node_creates_n_pods(fake_kubectl: FakeKubectl):
     assert status.state == CloudSliceState.READY
     assert status.worker_count == 2
     assert len(status.workers) == 2
+    platform.shutdown()
+
+
+def test_multi_node_slice_discovers_leader_topology_for_followers(fake_kubectl: FakeKubectl):
+    """Follower Pods inherit the leader Pod's discovered CoreWeave topology label."""
+    platform = _make_platform()
+    fake_kubectl._nodes["cw-h100-node-0"] = {
+        "metadata": {
+            "name": "cw-h100-node-0",
+            "labels": {
+                Labels("iris").iris_scale_group: "h100-8x",
+                "backend.coreweave.cloud/superpod": "sp-a",
+            },
+        }
+    }
+    config = config_pb2.SliceConfig(
+        name_prefix="h100-8x",
+        num_vms=2,
+        gpu_count=8,
+        coreweave=config_pb2.CoreweaveSliceConfig(
+            region="LGA1",
+            instance_type="gd-8xh100ib-i128",
+            gpu_class="H100",
+        ),
+    )
+    bootstrap = _make_worker_config()
+    bootstrap.worker_attributes["backend.coreweave.cloud/superpod"] = "same-slice"
+
+    handle = platform.create_slice(config, bootstrap)
+    slice_id = handle.slice_id
+    pod0 = f"iris-worker-{slice_id}-vm0"
+    pod1 = f"iris-worker-{slice_id}-vm1"
+
+    _wait_for_condition(lambda: pod0 in fake_kubectl._pods and pod1 in fake_kubectl._pods, timeout=5)
+
+    node_selector = fake_kubectl._pods[pod1]["spec"]["nodeSelector"]
+    assert node_selector == {
+        Labels("iris").iris_scale_group: "h100-8x",
+        "backend.coreweave.cloud/superpod": "sp-a",
+    }
+    platform.shutdown()
+
+
+def test_multi_node_slice_fails_when_leader_node_missing_topology_label(fake_kubectl: FakeKubectl):
+    """Leader Pod binding without the requested topology label fails the whole slice."""
+    platform = _make_platform()
+    fake_kubectl._nodes["cw-h100-node-0"] = {
+        "metadata": {
+            "name": "cw-h100-node-0",
+            "labels": {
+                Labels("iris").iris_scale_group: "h100-8x",
+            },
+        }
+    }
+    config = config_pb2.SliceConfig(
+        name_prefix="h100-8x",
+        num_vms=2,
+        gpu_count=8,
+        coreweave=config_pb2.CoreweaveSliceConfig(
+            region="LGA1",
+            instance_type="gd-8xh100ib-i128",
+            gpu_class="H100",
+        ),
+    )
+    bootstrap = _make_worker_config()
+    bootstrap.worker_attributes["backend.coreweave.cloud/superpod"] = "same-slice"
+
+    handle = platform.create_slice(config, bootstrap)
+    _wait_for_condition(lambda: handle.describe().state == CloudSliceState.FAILED, timeout=5)
+
+    assert handle.describe().error_message
+    assert fake_kubectl._pods == {}
     platform.shutdown()
 
 

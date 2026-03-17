@@ -94,6 +94,13 @@ _CW_INTERRUPTABLE_TOLERATION: dict = {
     "effect": "NoExecute",
 }
 
+_COREWEAVE_TOPOLOGY_LABEL_PREFIXES = (
+    "backend.coreweave.cloud/",
+    "ib.coreweave.cloud/",
+    "node.coreweave.cloud/",
+)
+_COREWEAVE_TOPOLOGY_DISCOVERY_VALUE = "same-slice"
+
 # S3-compatible endpoints that require virtual-hosted-style addressing where the
 # bucket name is a subdomain (https://<bucket>.cwobject.com). Path-style
 # requests are rejected with PathStyleRequestNotAllowed.
@@ -111,6 +118,19 @@ def _worker_pod_name(slice_id: str, vm_index: int = 0) -> str:
 
 def _worker_config_cm_name(slice_id: str) -> str:
     return f"iris-worker-{slice_id}-wc"
+
+
+def _split_coreweave_topology_selector(worker_attributes: dict[str, str]) -> tuple[dict[str, str], tuple[str, ...]]:
+    static_selector: dict[str, str] = {}
+    discovered_keys: list[str] = []
+    for key, value in worker_attributes.items():
+        if not any(key.startswith(prefix) for prefix in _COREWEAVE_TOPOLOGY_LABEL_PREFIXES):
+            continue
+        if value == _COREWEAVE_TOPOLOGY_DISCOVERY_VALUE:
+            discovered_keys.append(key)
+        else:
+            static_selector[key] = value
+    return static_selector, tuple(discovered_keys)
 
 
 def _classify_kubectl_error(stderr: str) -> PlatformError:
@@ -641,11 +661,11 @@ class CoreweavePlatform:
                 "worker_config is required for CoreWeave slices (need docker_image for worker Pod creation)"
             )
 
-        # prepare_slice_config() sets name_prefix to "{label_prefix}-{sg_name}" but
-        # the scale-group label to just sg_name. The nodeSelector must match the
-        # NodePool's nodeLabels, which use the bare scale-group name.
+        # prepare_slice_config() sets name_prefix to "{label_prefix}-{sg_name}",
+        # so name_prefix already contains the label_prefix. The nodeSelector must
+        # match the NodePool's nodeLabels, which use the bare scale-group name.
         scale_group_name = config.name_prefix
-        slice_id = f"{self._label_prefix}-{scale_group_name}-{generate_slice_suffix()}"
+        slice_id = f"{scale_group_name}-{generate_slice_suffix()}"
         labels = self._resource_labels(scale_group_name, slice_id)
 
         if config.labels:
@@ -676,11 +696,36 @@ class CoreweavePlatform:
         num_vms = max(config.num_vms, 1)
         try:
             handle._set_state(CloudSliceState.BOOTSTRAPPING)
+            static_selector, discovered_keys = _split_coreweave_topology_selector(dict(worker_config.worker_attributes))
+            base_node_selector = {
+                self._iris_labels.iris_scale_group: handle.scale_group,
+                **static_selector,
+            }
 
-            for vm_index in range(num_vms):
+            leader_pod_name = _worker_pod_name(handle.slice_id, 0)
+            handle._pod_names.append(leader_pod_name)
+            self._create_worker_pod(
+                handle,
+                config,
+                worker_config,
+                vm_index=0,
+                node_selector=base_node_selector,
+            )
+
+            follower_selector = dict(base_node_selector)
+            if discovered_keys:
+                follower_selector.update(self._discover_slice_topology_selector(leader_pod_name, discovered_keys))
+
+            for vm_index in range(1, num_vms):
                 pod_name = _worker_pod_name(handle.slice_id, vm_index)
                 handle._pod_names.append(pod_name)
-                self._create_worker_pod(handle, config, worker_config, vm_index=vm_index)
+                self._create_worker_pod(
+                    handle,
+                    config,
+                    worker_config,
+                    vm_index=vm_index,
+                    node_selector=follower_selector,
+                )
 
             for pod_name in handle._pod_names:
                 self._wait_for_pod_ready(pod_name)
@@ -723,6 +768,7 @@ class CoreweavePlatform:
         worker_config: config_pb2.WorkerConfig,
         *,
         vm_index: int = 0,
+        node_selector: dict[str, str] | None = None,
     ) -> None:
         """Create a single worker Pod on the NodePool's node."""
         cw = config.coreweave
@@ -843,7 +889,7 @@ class CoreweavePlatform:
             "CoreWeave pod %s: resource_limits=%s node_selector=%s",
             pod_name,
             resource_limits or "none",
-            {self._iris_labels.iris_scale_group: handle.scale_group},
+            node_selector or {self._iris_labels.iris_scale_group: handle.scale_group},
         )
 
         pod_manifest = {
@@ -858,9 +904,7 @@ class CoreweavePlatform:
                 "serviceAccountName": "iris-controller",
                 "hostNetwork": True,
                 "dnsPolicy": "ClusterFirstWithHostNet",
-                "nodeSelector": {
-                    self._iris_labels.iris_scale_group: handle.scale_group,
-                },
+                "nodeSelector": node_selector or {self._iris_labels.iris_scale_group: handle.scale_group},
                 "tolerations": [_CW_INTERRUPTABLE_TOLERATION],
                 "containers": [container_spec],
                 "volumes": [
@@ -872,6 +916,34 @@ class CoreweavePlatform:
         }
 
         self._kubectl.apply_json(pod_manifest)
+
+    def _wait_for_pod_scheduled(self, pod_name: str) -> str:
+        deadline = Deadline.from_seconds(_POD_READY_TIMEOUT)
+        while not self._shutdown_event.is_set():
+            if deadline.expired():
+                raise PlatformError(f"Pod {pod_name} did not get a node assignment within {_POD_READY_TIMEOUT}s")
+            data = self._kubectl.get_json("pod", pod_name)
+            if data is not None:
+                node_name = data.get("spec", {}).get("nodeName", "")
+                if node_name:
+                    return node_name
+            self._shutdown_event.wait(self._poll_interval)
+        raise PlatformError(f"Platform shutting down while waiting for Pod {pod_name} scheduling")
+
+    def _discover_slice_topology_selector(self, pod_name: str, keys: tuple[str, ...]) -> dict[str, str]:
+        node_name = self._wait_for_pod_scheduled(pod_name)
+        node = self._kubectl.get_json("node", node_name, cluster_scoped=True)
+        if node is None:
+            raise PlatformError(f"Node {node_name} for pod {pod_name} not found")
+        node_labels = node.get("metadata", {}).get("labels", {})
+        selector: dict[str, str] = {}
+        for key in keys:
+            value = node_labels.get(key, "")
+            if not value:
+                raise PlatformError(f"Node {node_name} for pod {pod_name} is missing required topology label {key}")
+            selector[key] = value
+        logger.info("Discovered CoreWeave topology selector for %s: %s", pod_name, selector)
+        return selector
 
     def _wait_for_pod_ready(self, pod_name: str) -> None:
         """Wait for the named Pod to pass its readiness probe.

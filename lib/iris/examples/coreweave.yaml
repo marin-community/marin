@@ -123,6 +123,7 @@ scale_groups:
       attributes:
         region: US-WEST-04A
         pool: h100-16x
+        backend.coreweave.cloud/superpod: same-slice
     min_slices: 0
     max_slices: 1
     priority: 100
