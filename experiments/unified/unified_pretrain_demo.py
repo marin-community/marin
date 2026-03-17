@@ -40,6 +40,7 @@ import numpy as np
 
 from levanter.data.text import DatasetComponent, LmDataConfig
 from levanter.data.text.formats import PrebuiltLmDatasetFormat
+from levanter.optim import MuonConfig
 
 from experiments.defaults import default_train, default_validation_sets
 from experiments.llama import llama3_tokenizer
@@ -97,7 +98,10 @@ GEN_STEPS = int(os.environ.get("GEN_STEPS", "5000"))
 DEMO_TRAIN_STEPS = TEXT_STEPS + UND_STEPS + GEN_STEPS
 TPU_TYPE = os.environ.get("TPU_TYPE", "v4-64")
 EXP_NAME = os.environ.get("EXP_NAME", "")
-LEARNING_RATE = float(os.environ.get("LEARNING_RATE", "3e-4"))
+OPTIMIZER = os.environ.get("OPTIMIZER", "muon")  # "muon" or "adam"
+MUON_LR = float(os.environ.get("MUON_LR", "0.004"))
+ADAM_LR = float(os.environ.get("ADAM_LR", "0.0012"))
+LR_SCHEDULE = os.environ.get("LR_SCHEDULE", "cosine")
 W_VISUAL = float(os.environ.get("W_VISUAL", "1.0"))
 ABLATION_MODE = os.environ.get("ABLATION_MODE", "")
 
@@ -588,19 +592,45 @@ def unified_data_config(
     return data_config
 
 
-def _demo_train_config(learning_rate: float = 3e-4) -> SimpleTrainConfig:
+def _demo_train_config() -> SimpleTrainConfig:
+    if OPTIMIZER == "muon":
+        optimizer = MuonConfig(
+            learning_rate=MUON_LR,
+            adam_lr=ADAM_LR,
+            weight_decay=0.1,
+            momentum=0.98,
+            beta1=0.8,
+            beta2=0.98,
+            epsilon=1e-15,
+            muon_epsilon=1e-5,
+            max_grad_norm=1.0,
+            lr_schedule=LR_SCHEDULE,
+            decay=1.0,
+            min_lr_ratio=0,
+            warmup=0,
+        )
+        lr = MUON_LR
+        warmup = 0
+    elif OPTIMIZER == "adam":
+        optimizer = None
+        lr = ADAM_LR
+        warmup = 0.01
+    else:
+        raise ValueError(f"Unknown OPTIMIZER={OPTIMIZER!r}. Valid: 'muon', 'adam'")
+
     return SimpleTrainConfig(
         resources=ResourceConfig.with_tpu(TPU_TYPE, slice_count=1),
         train_batch_size=256,
         num_train_steps=DEMO_TRAIN_STEPS,
-        learning_rate=learning_rate,
-        warmup=0.01,
-        lr_schedule="cosine",
+        learning_rate=lr,
+        warmup=warmup,
+        lr_schedule=LR_SCHEDULE,
         weight_decay=0.1,
         max_grad_norm=1.0,
         per_device_parallelism=1,
         steps_per_eval=500,
         steps_per_export=1000,
+        optimizer_config=optimizer,
     )
 
 
@@ -629,7 +659,6 @@ DEFAULT_TEXT_EVAL_BENCHMARKS = [
 
 
 def make_unified_0_6b(
-    learning_rate: float = 3e-4,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
     w_visual: float | None = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
@@ -644,7 +673,7 @@ def make_unified_0_6b(
             ablation_mode=ablation_mode,
         ),
         model_config=qwen3_0_6b,
-        train_config=_demo_train_config(learning_rate=learning_rate),
+        train_config=_demo_train_config(),
         tags=["unified", "scaling", "qwen3", "0.6b", "demo"],
         eval_harness_tasks=[],
         use_default_validation=False,
@@ -655,7 +684,6 @@ def make_unified_0_6b(
 
 
 def make_unified_1_7b(
-    learning_rate: float = 3e-4,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
     w_visual: float | None = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
@@ -670,7 +698,7 @@ def make_unified_1_7b(
             ablation_mode=ablation_mode,
         ),
         model_config=qwen3_1_7b,
-        train_config=_demo_train_config(learning_rate=learning_rate),
+        train_config=_demo_train_config(),
         tags=["unified", "scaling", "qwen3", "1.7b", "demo"],
         eval_harness_tasks=[],
         use_default_validation=False,
@@ -680,7 +708,6 @@ def make_unified_1_7b(
 
 
 def make_unified_4b(
-    learning_rate: float = 1.5e-4,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
     w_visual: float | None = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
@@ -695,7 +722,7 @@ def make_unified_4b(
             ablation_mode=ablation_mode,
         ),
         model_config=qwen3_4b,
-        train_config=_demo_train_config(learning_rate=learning_rate),
+        train_config=_demo_train_config(),
         tags=["unified", "scaling", "qwen3", "4b", "demo"],
         eval_harness_tasks=[],
         use_default_validation=False,
@@ -705,15 +732,14 @@ def make_unified_4b(
 
 
 if __name__ == "__main__":
-    # steps = [make_unified_0_6b(learning_rate=LEARNING_RATE, w_visual=W_VISUAL, ablation_mode=ABLATION_MODE)]
+    # steps = [make_unified_0_6b(w_visual=W_VISUAL, ablation_mode=ABLATION_MODE)]
     steps = [
         make_unified_1_7b(
-            learning_rate=LEARNING_RATE,
             w_visual=W_VISUAL,
             ablation_mode=ABLATION_MODE,
         )
     ]
-    # steps = [make_unified_4b(learning_rate=LEARNING_RATE, w_visual=W_VISUAL, ablation_mode=ABLATION_MODE)]
+    # steps = [make_unified_4b(w_visual=W_VISUAL, ablation_mode=ABLATION_MODE)]
     executor_main(
         steps,
         description="Unified image-text model pre-training with Qwen3 architecture",
