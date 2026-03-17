@@ -75,7 +75,7 @@ def restore_grug_state_from_checkpoint(
     checkpoint_path: str | None,
     load_checkpoint_setting: bool | None,
     mesh: jax.sharding.Mesh | None,
-    allow_partial: bool,
+    allow_partial: bool = False,
     _load_fn: Callable[..., StateT] = load_checkpoint,
 ) -> StateT:
     if checkpoint_path is None:

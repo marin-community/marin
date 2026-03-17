@@ -52,6 +52,7 @@ class GrugTrainerConfig:
     train_batch_pspec: P = field(default_factory=lambda: P(("data",)))
     data_seed: int | None = None
     log_every: int = 1
+    allow_partial_checkpoint: bool = False  # Grug checkpoint restore defaults to strict shape matching.
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
 
@@ -380,7 +381,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             checkpoint_path=checkpoint_path,
             load_checkpoint_setting=trainer.load_checkpoint,
             mesh=mesh,
-            allow_partial=trainer.allow_partial_checkpoint,
+            allow_partial=config.trainer.allow_partial_checkpoint,
         )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})

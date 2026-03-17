@@ -45,6 +45,27 @@ def test_restore_prefers_highest_step_over_latest_timestamp(tmp_path: Path):
     assert loaded == {"loaded_from": str(checkpoint_root / "step-100")}
 
 
+def test_restore_defaults_to_strict_non_partial_load(tmp_path: Path):
+    checkpoint_root = tmp_path / "checkpoints"
+    _write_checkpoint_metadata(checkpoint_root / "step-1", step=1, timestamp="2026-03-17T00:00:00")
+
+    captured_allow_partial: list[bool] = []
+
+    def fake_load(state, path, *, discover_latest, axis_mapping, mesh, allow_partial):
+        captured_allow_partial.append(allow_partial)
+        return {"loaded_from": path}
+
+    restore_grug_state_from_checkpoint(
+        {"state": "init"},
+        checkpoint_path=str(checkpoint_root),
+        load_checkpoint_setting=True,
+        mesh=None,
+        _load_fn=fake_load,
+    )
+
+    assert captured_allow_partial == [False]
+
+
 def test_restore_falls_back_to_older_checkpoint_when_latest_fails(tmp_path: Path):
     checkpoint_root = tmp_path / "checkpoints"
     _write_checkpoint_metadata(checkpoint_root / "step-100", step=100, timestamp="2026-03-17T10:00:00")
