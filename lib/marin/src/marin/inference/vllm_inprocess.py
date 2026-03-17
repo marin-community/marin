@@ -211,7 +211,7 @@ def start_inprocess_vllm_server(
         # Build a minimal OpenAI-compatible API around LLM.generate().
         # We avoid vLLM's build_app() because it spawns child processes that
         # fail with "TPU already in use by pid 1" on TPU.
-        app = _create_inprocess_openai_app(llm, model_name_or_path)
+        app = _create_inprocess_openai_app(llm, model_name_or_path, bootstrap_model_source)
 
         server = uvicorn_module.Server(
             uvicorn_module.Config(
@@ -697,18 +697,31 @@ def _import_inprocess_vllm_symbols() -> tuple[Any, Any]:
     return LLM, uvicorn
 
 
-def _create_inprocess_openai_app(llm: Any, model_name: str) -> Any:
+def _create_inprocess_openai_app(llm: Any, model_name: str, bootstrap_model_source: str) -> Any:
     """Create a minimal OpenAI-compatible API around LLM.generate().
 
     This avoids vLLM's build_app() which spawns child processes that fail
     on TPU with "TPU already in use by pid 1". Instead we wrap LLM.generate()
     in a simple FastAPI app running in the same process.
+
+    Exposes /v1/models, /v1/completions, and /v1/chat/completions.
     """
     from fastapi import FastAPI
     from fastapi.responses import JSONResponse
+    from transformers import AutoTokenizer
     from vllm import SamplingParams
 
     app = FastAPI()
+    tokenizer = AutoTokenizer.from_pretrained(bootstrap_model_source)
+
+    def _sampling_params_from_request(request: dict) -> SamplingParams:
+        return SamplingParams(
+            max_tokens=request.get("max_tokens", 128),
+            temperature=request.get("temperature", 1.0),
+            top_p=request.get("top_p", 1.0),
+            n=request.get("n", 1),
+            logprobs=request.get("logprobs"),
+        )
 
     @app.get("/v1/models")
     def list_models():
@@ -720,20 +733,8 @@ def _create_inprocess_openai_app(llm: Any, model_name: str) -> Any:
     @app.post("/v1/completions")
     def completions(request: dict):
         prompt = request.get("prompt", "")
-        max_tokens = request.get("max_tokens", 128)
-        temperature = request.get("temperature", 1.0)
-        top_p = request.get("top_p", 1.0)
-        n = request.get("n", 1)
         echo = request.get("echo", False)
-        logprobs = request.get("logprobs")
-
-        params = SamplingParams(
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            n=n,
-            logprobs=logprobs,
-        )
+        params = _sampling_params_from_request(request)
 
         try:
             outputs = llm.generate([prompt], params)
@@ -754,7 +755,8 @@ def _create_inprocess_openai_app(llm: Any, model_name: str) -> Any:
                 "index": i,
                 "finish_reason": completion.finish_reason,
             }
-            if logprobs is not None and completion.logprobs:
+            logprobs_req = request.get("logprobs")
+            if logprobs_req is not None and completion.logprobs:
                 choice["logprobs"] = {
                     "tokens": [lp.decoded_token for lp in completion.logprobs],
                     "token_logprobs": [lp.logprob for lp in completion.logprobs],
@@ -767,6 +769,47 @@ def _create_inprocess_openai_app(llm: Any, model_name: str) -> Any:
         return {
             "id": f"cmpl-inprocess-{id(output)}",
             "object": "text_completion",
+            "model": model_name,
+            "choices": choices,
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            },
+        }
+
+    @app.post("/v1/chat/completions")
+    def chat_completions(request: dict):
+        messages = request.get("messages", [])
+        params = _sampling_params_from_request(request)
+
+        prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
+        try:
+            outputs = llm.generate([prompt], params)
+        except Exception as exc:
+            return JSONResponse(
+                status_code=500,
+                content={"error": {"message": str(exc), "type": "Internal Server Error"}},
+            )
+
+        output = outputs[0]
+        choices = []
+        for i, completion in enumerate(output.outputs):
+            choices.append(
+                {
+                    "index": i,
+                    "message": {"role": "assistant", "content": completion.text},
+                    "finish_reason": completion.finish_reason,
+                }
+            )
+
+        prompt_tokens = len(output.prompt_token_ids)
+        completion_tokens = sum(len(c.token_ids) for c in output.outputs)
+
+        return {
+            "id": f"chatcmpl-inprocess-{id(output)}",
+            "object": "chat.completion",
             "model": model_name,
             "choices": choices,
             "usage": {
