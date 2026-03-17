@@ -72,20 +72,6 @@ def _get_fn_name(fn: Any) -> str:
     return getattr(fn, "__qualname__", getattr(fn, "__name__", str(fn)))
 
 
-def _fn_wants_shard_info(fn: Callable) -> bool:
-    """Detect whether fn expects (shard_idx, total_shards, items) vs just (items)."""
-    try:
-        sig = inspect.signature(fn)
-    except (ValueError, TypeError):
-        return False
-    positional = [
-        p
-        for p in sig.parameters.values()
-        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-    ]
-    return len(positional) >= 3
-
-
 @dataclass
 class MapOp:
     """Map operation - applies function to each element."""
@@ -602,6 +588,25 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = ctx.execute(ds)
         """
+
+        def _fn_wants_shard_info(fn: Callable) -> bool:
+            """Detect whether fn expects (shard_idx, total_shards, items) vs just (items)."""
+            try:
+                sig = inspect.signature(fn)
+            except (ValueError, TypeError):
+                return False
+            positional = [
+                p
+                for p in sig.parameters.values()
+                if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            ]
+            num_params = len(positional)
+            assert num_params in (
+                1,
+                3,
+            ), f"map_shard function must have signature fn(items) or fn(items, shard_idx, total_shards), got {sig}"
+            return num_params == 3
+
         return Dataset(self.source, [*self.operations, MapShardOp(fn, with_shard_info=_fn_wants_shard_info(fn))])
 
     def reshard(self, num_shards: int | None) -> Dataset[T]:
