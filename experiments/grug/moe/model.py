@@ -11,14 +11,12 @@ grug copy-first workflow in `.agents/skills/change-grug/`.
 import dataclasses
 
 from dataclasses import dataclass
-from typing import Literal
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
 from einops import rearrange
-from haliax.jax_utils import named_call, tree_checkpoint_name
+from haliax.jax_utils import named_call
 from jax import random
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
@@ -35,8 +33,6 @@ from levanter.tracker.histogram import Histogram
 from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
-BlockRematMode = Literal["full", "off", "save_moe", "offload_moe"]
-_VALID_BLOCK_REMAT_MODES: set[BlockRematMode] = {"full", "off", "save_moe", "offload_moe"}
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -51,36 +47,6 @@ def _batch_spec() -> P:
 
 def _token_batch_spec() -> P:
     return P(_batch_spec()[0], None)
-
-
-def _checkpointed_block_call(block: "Block", cfg: "GrugModelConfig"):
-    if cfg.block_remat == "off":
-        return block
-    if cfg.block_remat == "full":
-        return eqx.filter_checkpoint(block)
-
-    names = (
-        "grug_moe_dispatch_input",
-        "grug_moe_expert_hidden",
-        "grug_moe_dispatch_output",
-        "grug_moe_block_mlp_input",
-        "grug_moe_block_mlp_output",
-        "grug_moe_router_logits",
-        "grug_moe_router_probs",
-        "grug_moe_topk_logits",
-        "grug_moe_combine_weights",
-    )
-    if cfg.block_remat == "offload_moe":
-        policy = jax.checkpoint_policies.save_and_offload_only_these_names(
-            names_which_can_be_saved=(),
-            names_which_can_be_offloaded=names,
-            offload_src="device",
-            offload_dst="pinned_host",
-        )
-    else:
-        policy = jax.checkpoint_policies.save_only_these_names(*names)
-
-    return eqx.filter_checkpoint(block, policy=policy)
 
 
 @dataclass(frozen=True)
@@ -102,7 +68,6 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     load_balancing_loss_coef: float | None = 0.01
     router_z_loss_coef: float | None = 0.001
-    block_remat: BlockRematMode = "full"
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -125,8 +90,6 @@ class GrugModelConfig:
             raise ValueError("load_balancing_loss_coef must be non-negative when set")
         if self.router_z_loss_coef is not None and self.router_z_loss_coef < 0:
             raise ValueError("router_z_loss_coef must be non-negative when set")
-        if self.block_remat not in _VALID_BLOCK_REMAT_MODES:
-            raise ValueError(f"block_remat must be one of {sorted(_VALID_BLOCK_REMAT_MODES)}")
 
     @property
     def inferred_head_dim(self) -> int:
@@ -349,14 +312,9 @@ class MoEMLP(eqx.Module):
             reshard(self.router, P(None, None)),
             out_sharding=_token_batch_spec(),
         )
-        router_logits = tree_checkpoint_name(router_logits, "grug_moe_router_logits")
-        router_probs = tree_checkpoint_name(jax.nn.softmax(router_logits, axis=-1), "grug_moe_router_probs")
+        router_probs = jax.nn.softmax(router_logits, axis=-1)
         topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
-        topk_logits = tree_checkpoint_name(topk_logits, "grug_moe_topk_logits")
-        combine_weights = tree_checkpoint_name(
-            jax.nn.softmax(topk_logits, axis=-1).astype(x.dtype),
-            "grug_moe_combine_weights",
-        )
+        combine_weights = jax.nn.softmax(topk_logits, axis=-1).astype(x.dtype)
         router_stats = _routing_stats(
             selected_experts,
             router_probs,
@@ -413,9 +371,8 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         x = x + self.attn(self.rms_attn(x), mask)
-        mlp_in = tree_checkpoint_name(self.rms_mlp(x), "grug_moe_block_mlp_input")
+        mlp_in = self.rms_mlp(x)
         mlp_out, router_stats = self.mlp(mlp_in)
-        mlp_out = tree_checkpoint_name(mlp_out, "grug_moe_block_mlp_output")
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
@@ -458,7 +415,7 @@ class Transformer(eqx.Module):
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
         all_router_stats: list[dict[str, jax.Array]] = []
         for block in self.blocks:
-            hidden, router_stats = _checkpointed_block_call(block, self.config)(hidden, mask)
+            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, mask)
             all_router_stats.append(router_stats)
 
         router_metrics = {
