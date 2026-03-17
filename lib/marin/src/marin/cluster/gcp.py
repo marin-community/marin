@@ -15,7 +15,6 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-RESTART_REQUIRED_PROJECT_ROLE = "roles/resourcemanager.projectIamAdmin"
 RESTART_REQUIRED_PERMISSIONS = (
     "compute.instances.create",
     "compute.instances.delete",
@@ -58,50 +57,6 @@ def get_active_account() -> str | None:
         return None
 
 
-def account_has_project_role(project: str, account: str, role: str) -> bool:
-    """Check whether an account has a specific IAM role binding on a project."""
-    filter_expr = (
-        f"(bindings.role={role}) AND " f"(bindings.members=user:{account} OR bindings.members=serviceAccount:{account})"
-    )
-    result = run_gcloud_command(
-        [
-            "gcloud",
-            "projects",
-            "get-iam-policy",
-            project,
-            "--flatten=bindings[].members",
-            f"--filter={filter_expr}",
-            "--format=value(bindings.role)",
-        ]
-    )
-    roles = {line.strip() for line in result.stdout.splitlines() if line.strip()}
-    return role in roles
-
-
-def ensure_active_account_has_project_role(
-    project: str,
-    role: str = RESTART_REQUIRED_PROJECT_ROLE,
-) -> str:
-    """Ensure the active gcloud account has the required IAM role on the project.
-
-    Returns:
-        Active account email when the role check passes.
-
-    Raises:
-        RuntimeError: If no active account is configured or the role is missing.
-    """
-    account = get_active_account()
-    if not account:
-        raise RuntimeError("No active gcloud account found. Run `gcloud auth login` and retry.")
-
-    if not account_has_project_role(project, account, role):
-        raise RuntimeError(
-            f"Active gcloud account '{account}' is missing required role '{role}' on project '{project}'."
-        )
-
-    return account
-
-
 def missing_project_permissions(project: str, permissions: list[str] | tuple[str, ...]) -> list[str]:
     """Return IAM permissions from ``permissions`` not granted on ``project`` for the active identity."""
     result = run_gcloud_command(
@@ -126,11 +81,13 @@ def missing_project_permissions(project: str, permissions: list[str] | tuple[str
 
 def ensure_active_account_can_restart_cluster(
     project: str,
-    required_role: str = RESTART_REQUIRED_PROJECT_ROLE,
     required_permissions: tuple[str, ...] = RESTART_REQUIRED_PERMISSIONS,
 ) -> str:
-    """Ensure the active account has required role and permissions to restart a GCP-backed cluster."""
-    account = ensure_active_account_has_project_role(project, required_role)
+    """Ensure the active account has required permissions to restart a GCP-backed cluster."""
+    account = get_active_account()
+    if not account:
+        raise RuntimeError("No active gcloud account found. Run `gcloud auth login` and retry.")
+
     missing_permissions = missing_project_permissions(project, required_permissions)
     if missing_permissions:
         raise RuntimeError(
