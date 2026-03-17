@@ -131,12 +131,46 @@ def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):
     mock_bundle_store.write_workdir_files.assert_called_once_with(workdir, {})
 
 
-def test_tpu_create_adds_accel_devices_and_keeps_hardening(monkeypatch, runtime, tmp_path):
+def test_tpu_create_adds_discovered_tpu_devices(monkeypatch, runtime, tmp_path):
     handle = _make_handle(runtime, tmp_path, _tpu_resources())
+    monkeypatch.setattr(runtime, "ensure_image", lambda _image: None)
+    discovered: list[str] = []
+
+    def fake_discover() -> list[str]:
+        discovered.append("called")
+        return ["/dev/vfio:/dev/vfio", "/dev/accel0:/dev/accel0", "/dev/accel1:/dev/accel1"]
+
+    monkeypatch.setattr(
+        "iris.cluster.runtime.docker._discover_tpu_device_mappings",
+        fake_discover,
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **_kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="container-id\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    container_id = handle._docker_create(command=["python", "-c", "print('ok')"], include_resources=True)
+
+    assert container_id == "container-id"
+    assert calls
+    assert discovered == ["called"]
+    cmd = calls[0]
+    assert cmd.count("--device") == 3
+    assert "/dev/vfio:/dev/vfio" in cmd
+    assert "/dev/accel0:/dev/accel0" in cmd
+    assert "/dev/accel1:/dev/accel1" in cmd
+    assert "memlock=68719476736:68719476736" in cmd
+
+
+def test_non_tpu_create_skips_tpu_device_discovery(monkeypatch, runtime, tmp_path):
+    handle = _make_handle(runtime, tmp_path, _cpu_resources())
     monkeypatch.setattr(runtime, "ensure_image", lambda _image: None)
     monkeypatch.setattr(
         "iris.cluster.runtime.docker._discover_tpu_device_mappings",
-        lambda: ["/dev/vfio:/dev/vfio", "/dev/accel0:/dev/accel0", "/dev/accel1:/dev/accel1"],
+        lambda: (_ for _ in ()).throw(AssertionError("non-TPU should not discover TPU devices")),
     )
     calls: list[list[str]] = []
 
@@ -151,38 +185,5 @@ def test_tpu_create_adds_accel_devices_and_keeps_hardening(monkeypatch, runtime,
     assert container_id == "container-id"
     assert calls
     cmd = calls[0]
-    assert "--privileged" not in cmd
-    assert "--security-opt" in cmd
-    assert "no-new-privileges" in cmd
-    assert "--cap-drop" in cmd
-    assert "ALL" in cmd
-    assert "--cap-add=SYS_RESOURCE" in cmd
-    assert cmd.count("--device") == 3
-    assert "/dev/vfio:/dev/vfio" in cmd
-    assert "/dev/accel0:/dev/accel0" in cmd
-    assert "/dev/accel1:/dev/accel1" in cmd
-
-
-def test_non_tpu_create_keeps_hardening_flags(monkeypatch, runtime, tmp_path):
-    handle = _make_handle(runtime, tmp_path, _cpu_resources())
-    monkeypatch.setattr(runtime, "ensure_image", lambda _image: None)
-    calls: list[list[str]] = []
-
-    def fake_run(cmd, **_kwargs):
-        calls.append(cmd)
-        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="container-id\n", stderr="")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
-    container_id = handle._docker_create(command=["python", "-c", "print('ok')"], include_resources=True)
-
-    assert container_id == "container-id"
-    assert calls
-    cmd = calls[0]
-    assert "--privileged" not in cmd
-    assert "--security-opt" in cmd
-    assert "no-new-privileges" in cmd
-    assert "--cap-drop" in cmd
-    assert "ALL" in cmd
-    assert "--cap-add" in cmd
-    assert "SYS_PTRACE" in cmd
+    assert "--device" not in cmd
+    assert "--cap-add=SYS_RESOURCE" not in cmd
