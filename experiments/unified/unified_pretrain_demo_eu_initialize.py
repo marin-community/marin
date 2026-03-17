@@ -69,6 +69,7 @@ VISUAL_TOKEN_OFFSET = 128_256  # Llama3 vocab size; TokLIP index c → unified I
 
 UNIFIED_TOKENIZER_PATH = "gs://marin-eu-west4/tokenizers/llama3-unified-144k"
 UNIFIED_CACHE_PATH = "gs://marin-vlm-eu/hf_85m_levanter_cache_v2"
+VISUAL_ONLY_CACHE_PATH = "gs://marin-vlm-eu/hf_85m_levanter_cache_v2/visual_only"
 UNIFIED_EVAL_CACHE_PATH = "gs://marin-vlm-eu/unified_eval_cache"
 TEXT_EVAL_CACHE_PATH = "gs://marin-vlm-eu/text_eval_cache"
 
@@ -92,7 +93,8 @@ _VLM_HLO_DUMP_XLA_FLAGS = [
 TEXT_STEPS = int(os.environ.get("TEXT_STEPS", "5000"))
 UND_STEPS = int(os.environ.get("UND_STEPS", "5000"))
 GEN_STEPS = int(os.environ.get("GEN_STEPS", "5000"))
-DEMO_TRAIN_STEPS = TEXT_STEPS + UND_STEPS + GEN_STEPS
+VIS_STEPS = int(os.environ.get("VIS_STEPS", "0"))
+DEMO_TRAIN_STEPS = TEXT_STEPS + UND_STEPS + GEN_STEPS + VIS_STEPS
 TPU_TYPE = os.environ.get("TPU_TYPE", "v4-64")
 EXP_NAME = os.environ.get("EXP_NAME", "")
 OPTIMIZER = os.environ.get("OPTIMIZER", "muon")  # "muon" or "adam"
@@ -304,6 +306,7 @@ def _make_modality_segment_ids(input_ids: np.ndarray) -> np.ndarray:
 
 def unified_data_config(
     multimodal_cache_path: str = UNIFIED_CACHE_PATH,
+    visual_only_cache_path: str = VISUAL_ONLY_CACHE_PATH,
     eval_benchmarks: list[str] | None = None,
     eval_cache_path: str = UNIFIED_EVAL_CACHE_PATH,
     w_visual: float | None = 1.0,
@@ -336,10 +339,11 @@ def unified_data_config(
 
     # Mixing weights derived from step counts: each component's weight is
     # proportional to the number of steps allocated to it.
-    total_steps = TEXT_STEPS + UND_STEPS + GEN_STEPS
+    total_steps = TEXT_STEPS + UND_STEPS + GEN_STEPS + VIS_STEPS
     text_w = TEXT_STEPS / total_steps if total_steps > 0 else 1.0
     und_w = UND_STEPS / total_steps if total_steps > 0 else 0.0
     gen_w = GEN_STEPS / total_steps if total_steps > 0 else 0.0
+    vis_w = VIS_STEPS / total_steps if total_steps > 0 else 0.0
 
     # Text: only hq_actual from Nemotron-CC
     nemotron_steps = tokenize_nemotron()
@@ -410,6 +414,29 @@ def unified_data_config(
         "multimodal_understanding": und_w,
         "multimodal_generation": gen_w,
     }
+
+    # Visual-only: pure visual AR sequences (no text).
+    # Only included when VIS_STEPS > 0; all loss_weights in the cache are 1.0.
+    if VIS_STEPS > 0:
+        vis_format = PrebuiltLmDatasetFormat(
+            input_ids_key="input_ids",
+            loss_weights_key="loss_weights",
+        )
+        components["visual_only"] = DatasetComponent(
+            cache_dir=f"{visual_only_cache_path}/train",
+            format=vis_format,
+            pack=True,
+            tags=["visual"],
+        )
+        weights["visual_only"] = vis_w
+
+        components["val_visual_only"] = DatasetComponent(
+            cache_dir=f"{visual_only_cache_path}/validation",
+            format=vis_format,
+            pack=True,
+            tags=["visual"],
+        )
+        weights["val_visual_only"] = 0.0
 
     # Multimodal validation: separate understanding and generation val loss.
     # These are produced by vlm_tokenize_captions.py with val_fraction > 0.
@@ -576,9 +603,11 @@ def unified_data_config(
             "text_steps": TEXT_STEPS,
             "und_steps": UND_STEPS,
             "gen_steps": GEN_STEPS,
+            "vis_steps": VIS_STEPS,
             "text_w": text_w,
             "und_w": und_w,
             "gen_w": gen_w,
+            "vis_w": vis_w,
             "w_visual": w_visual,
         },
     )
