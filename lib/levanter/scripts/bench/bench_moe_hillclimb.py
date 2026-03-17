@@ -2044,6 +2044,7 @@ def _moe_mlp_ep_deepep_transport_identity_local(
     _moe_w2_local: jax.Array,
     *,
     num_experts: int,
+    max_recv_tokens: int | None = None,
 ) -> tuple[jax.Array, jax.Array]:
     local_experts = _moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -2076,6 +2077,7 @@ def _moe_mlp_ep_deepep_transport_identity_local(
         num_tokens_per_expert,
         is_token_in_rank,
         num_experts=num_experts,
+        max_recv_tokens=max_recv_tokens,
     )
     out_local, _ = deepep_combine_intranode(
         recv_x,
@@ -2111,6 +2113,11 @@ def _moe_mlp_deepep_transport_identity(
     if mesh is None or mesh.empty:
         return x
 
+    max_recv_tokens, _ = _deepep_transport_exact_caps(
+        selected_experts,
+        mesh=mesh,
+        num_experts=num_experts,
+    )
     batch_spec = grug_moe_lib._batch_spec_from_x(x, mesh)
 
     if has_expert_axis and expert_axis_size > 1:
@@ -2123,6 +2130,7 @@ def _moe_mlp_deepep_transport_identity(
             partial(
                 _moe_mlp_ep_deepep_transport_identity_local,
                 num_experts=num_experts,
+                max_recv_tokens=max_recv_tokens,
             ),
             mesh=mesh,
             in_specs=(
@@ -2149,6 +2157,8 @@ def _moe_mlp_ep_deepep_transport_assignments_identity_local(
     _moe_w2_local: jax.Array,
     *,
     num_experts: int,
+    max_recv_tokens: int | None = None,
+    max_local_assignments: int | None = None,
 ) -> tuple[jax.Array, jax.Array]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -2186,6 +2196,7 @@ def _moe_mlp_ep_deepep_transport_assignments_identity_local(
         num_tokens_per_expert,
         is_token_in_rank,
         num_experts=num_experts,
+        max_recv_tokens=max_recv_tokens,
     )
     num_recv_tokens_scalar = jnp.squeeze(num_recv_tokens, axis=0)
     x_dispatch, assignment_weights, recv_token_indices, _local_group_sizes = _pack_deepep_local_assignments(
@@ -2195,6 +2206,7 @@ def _moe_mlp_ep_deepep_transport_assignments_identity_local(
         expert_start=expert_start,
         local_experts=local_experts,
         num_recv_tokens=num_recv_tokens_scalar,
+        max_local_assignments=max_local_assignments,
     )
     recv_out = _collapse_deepep_local_assignments(
         x_dispatch,
@@ -2236,6 +2248,11 @@ def _moe_mlp_deepep_transport_assignments_identity(
     if mesh is None or mesh.empty:
         return x
 
+    max_recv_tokens, max_local_assignments = _deepep_transport_exact_caps(
+        selected_experts,
+        mesh=mesh,
+        num_experts=num_experts,
+    )
     batch_spec = grug_moe_lib._batch_spec_from_x(x, mesh)
 
     if has_expert_axis and expert_axis_size > 1:
@@ -2248,6 +2265,8 @@ def _moe_mlp_deepep_transport_assignments_identity(
             partial(
                 _moe_mlp_ep_deepep_transport_assignments_identity_local,
                 num_experts=num_experts,
+                max_recv_tokens=max_recv_tokens,
+                max_local_assignments=max_local_assignments,
             ),
             mesh=mesh,
             in_specs=(
@@ -2274,6 +2293,8 @@ def _moe_mlp_ep_deepep_transport_first_ragged_dot_probe_local(
     _moe_w2_local: jax.Array,
     *,
     num_experts: int,
+    max_recv_tokens: int | None = None,
+    max_local_assignments: int | None = None,
 ) -> tuple[jax.Array, jax.Array]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -2311,6 +2332,7 @@ def _moe_mlp_ep_deepep_transport_first_ragged_dot_probe_local(
         num_tokens_per_expert,
         is_token_in_rank,
         num_experts=num_experts,
+        max_recv_tokens=max_recv_tokens,
     )
     num_recv_tokens_scalar = jnp.squeeze(num_recv_tokens, axis=0)
     x_dispatch, assignment_weights, recv_token_indices, local_group_sizes = _pack_deepep_local_assignments(
@@ -2320,6 +2342,7 @@ def _moe_mlp_ep_deepep_transport_first_ragged_dot_probe_local(
         expert_start=expert_start,
         local_experts=local_experts,
         num_recv_tokens=num_recv_tokens_scalar,
+        max_local_assignments=max_local_assignments,
     )
     probe_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
     recv_out = _collapse_deepep_local_assignments(
@@ -2362,6 +2385,11 @@ def _moe_mlp_deepep_transport_first_ragged_dot_probe(
     if mesh is None or mesh.empty:
         return x
 
+    max_recv_tokens, max_local_assignments = _deepep_transport_exact_caps(
+        selected_experts,
+        mesh=mesh,
+        num_experts=num_experts,
+    )
     batch_spec = grug_moe_lib._batch_spec_from_x(x, mesh)
 
     if has_expert_axis and expert_axis_size > 1:
@@ -2375,6 +2403,8 @@ def _moe_mlp_deepep_transport_first_ragged_dot_probe(
             partial(
                 _moe_mlp_ep_deepep_transport_first_ragged_dot_probe_local,
                 num_experts=num_experts,
+                max_recv_tokens=max_recv_tokens,
+                max_local_assignments=max_local_assignments,
             ),
             mesh=mesh,
             in_specs=(
@@ -2402,6 +2432,8 @@ def _moe_mlp_ep_deepep_transport_gate_probe_local(
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
+    max_recv_tokens: int | None = None,
+    max_local_assignments: int | None = None,
 ) -> tuple[jax.Array, jax.Array]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -2439,6 +2471,7 @@ def _moe_mlp_ep_deepep_transport_gate_probe_local(
         num_tokens_per_expert,
         is_token_in_rank,
         num_experts=num_experts,
+        max_recv_tokens=max_recv_tokens,
     )
     num_recv_tokens_scalar = jnp.squeeze(num_recv_tokens, axis=0)
     x_dispatch, assignment_weights, recv_token_indices, local_group_sizes = _pack_deepep_local_assignments(
@@ -2448,6 +2481,7 @@ def _moe_mlp_ep_deepep_transport_gate_probe_local(
         expert_start=expert_start,
         local_experts=local_experts,
         num_recv_tokens=num_recv_tokens_scalar,
+        max_local_assignments=max_local_assignments,
     )
     w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
     moe_dim = moe_w2_local.shape[1]
@@ -2494,6 +2528,11 @@ def _moe_mlp_deepep_transport_gate_probe(
     if mesh is None or mesh.empty:
         return x
 
+    max_recv_tokens, max_local_assignments = _deepep_transport_exact_caps(
+        selected_experts,
+        mesh=mesh,
+        num_experts=num_experts,
+    )
     batch_spec = grug_moe_lib._batch_spec_from_x(x, mesh)
 
     if has_expert_axis and expert_axis_size > 1:
@@ -2507,6 +2546,8 @@ def _moe_mlp_deepep_transport_gate_probe(
                 _moe_mlp_ep_deepep_transport_gate_probe_local,
                 activation_fn=activation_fn,
                 num_experts=num_experts,
+                max_recv_tokens=max_recv_tokens,
+                max_local_assignments=max_local_assignments,
             ),
             mesh=mesh,
             in_specs=(
@@ -2534,6 +2575,8 @@ def _moe_mlp_ep_deepep_transport_second_ragged_dot_probe_local(
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
+    max_recv_tokens: int | None = None,
+    max_local_assignments: int | None = None,
 ) -> tuple[jax.Array, jax.Array]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -2571,6 +2614,7 @@ def _moe_mlp_ep_deepep_transport_second_ragged_dot_probe_local(
         num_tokens_per_expert,
         is_token_in_rank,
         num_experts=num_experts,
+        max_recv_tokens=max_recv_tokens,
     )
     num_recv_tokens_scalar = jnp.squeeze(num_recv_tokens, axis=0)
     x_dispatch, assignment_weights, recv_token_indices, local_group_sizes = _pack_deepep_local_assignments(
@@ -2580,6 +2624,7 @@ def _moe_mlp_ep_deepep_transport_second_ragged_dot_probe_local(
         expert_start=expert_start,
         local_experts=local_experts,
         num_recv_tokens=num_recv_tokens_scalar,
+        max_local_assignments=max_local_assignments,
     )
     w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
     moe_dim = moe_w2_local.shape[1]
@@ -2626,6 +2671,11 @@ def _moe_mlp_deepep_transport_second_ragged_dot_probe(
     if mesh is None or mesh.empty:
         return x
 
+    max_recv_tokens, max_local_assignments = _deepep_transport_exact_caps(
+        selected_experts,
+        mesh=mesh,
+        num_experts=num_experts,
+    )
     batch_spec = grug_moe_lib._batch_spec_from_x(x, mesh)
 
     if has_expert_axis and expert_axis_size > 1:
@@ -2640,6 +2690,8 @@ def _moe_mlp_deepep_transport_second_ragged_dot_probe(
                 _moe_mlp_ep_deepep_transport_second_ragged_dot_probe_local,
                 activation_fn=activation_fn,
                 num_experts=num_experts,
+                max_recv_tokens=max_recv_tokens,
+                max_local_assignments=max_local_assignments,
             ),
             mesh=mesh,
             in_specs=(
