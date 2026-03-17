@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Template: grug-base trial run.
@@ -18,6 +18,7 @@ from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LmDataConfig
 from levanter.optim import AdamConfig, OptimizerConfig
+from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
@@ -26,22 +27,26 @@ from marin.processing.tokenize import add_validation_sets_to_mixture
 from experiments.defaults import default_validation_sets
 from experiments.grug.base.model import GrugModelConfig
 from experiments.grug.base.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
-from experiments.tootsie.exp1295_32b import nemotron_mix
+from experiments.pretraining_datasets import nemotron_mix_block_shuffle
 
 
 @dataclass(frozen=True)
 class GrugBaseLaunchConfig:
+    """Last-mile run config for the base grug template.
+
+    Keep this as the main entry point for day-to-day edits (model/data/optimizer/trainer/eval knobs).
+    """
+
     model: GrugModelConfig
     data: LmDataConfig
     output_path: str
     run_id: str
+    resources: ResourceConfig
     steps: int
     batch_size: int
     seed: int
-    mp: str
-    wandb_project: str
-    wandb_tags: tuple[str, ...]
-    wandb_group: str | None
+    mp: str  # jmp policy string, e.g. "params=float32,compute=bfloat16,output=bfloat16".
+    tracker: TrackerConfig
     optimizer: OptimizerConfig
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
@@ -59,12 +64,13 @@ GRUG_130M_MODEL = GrugModelConfig(
 )
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
-    nemotron_mix,
-    default_validation_sets(tokenizer=nemotron_mix.tokenizer),
+    nemotron_mix_block_shuffle,
+    default_validation_sets(tokenizer=nemotron_mix_block_shuffle.tokenizer),
 )
 
 
 def _resolve_run_id(default_run_id: str) -> str:
+    """Resolve run id and append `FERRY_DATE` when launching from ferry workflows."""
     run_id = os.environ.get("GRUG_RUN_ID", default_run_id)
     ferry_date = os.environ.get("FERRY_DATE")
     if ferry_date:
@@ -72,7 +78,14 @@ def _resolve_run_id(default_run_id: str) -> str:
     return run_id
 
 
+def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
+    if isinstance(tracker, WandbConfig):
+        return dataclasses.replace(tracker, name=run_id)
+    return tracker
+
+
 def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
+    # Map template launch knobs onto full Levanter TrainerConfig.
     trainer = TrainerConfig(
         id=config.run_id,
         seed=config.seed,
@@ -80,12 +93,7 @@ def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
         num_train_steps=config.steps,
         profiler=ProfilerConfig(enabled=False, start_step=5, num_steps=100, perfetto_link=False),
         mp=jmp.get_policy(config.mp),
-        tracker=WandbConfig(
-            project=config.wandb_project,
-            name=config.run_id,
-            tags=list(config.wandb_tags),
-            group=config.wandb_group,
-        ),
+        tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
@@ -102,6 +110,7 @@ def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
     run_config = GrugRunConfig(
         model=config.model,
         data=config.data,
+        resources=config.resources,
         optimizer=config.optimizer,
         trainer=grug_trainer,
         eval=config.eval,
@@ -118,15 +127,22 @@ grug_base_trial = ExecutorStep(
     config=GrugBaseLaunchConfig(
         model=versioned(GRUG_130M_MODEL),
         data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+        # this_output_path() resolves to this step's output root (e.g. gs://.../grug/base-trial-<version>).
         output_path=this_output_path(),
-        run_id=versioned(RESOLVED_RUN_ID),
+        # Keep run id out of versioning so changing job metadata doesn't create a new output path.
+        run_id=RESOLVED_RUN_ID,
+        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
         steps=versioned(2_000),
         batch_size=versioned(512),
         seed=versioned(0),
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
-        wandb_project=versioned("marin"),
-        wandb_tags=versioned(("grug", "template")),
-        wandb_group=versioned("grug-base-trial"),
+        tracker=WandbConfig(
+            project="marin",
+            tags=["grug", "template"],
+            group="grug-base-trial",
+            name=None,  # filled from run_id in _resolve_tracker
+            replicate_path=this_output_path(),
+        ),
         optimizer=versioned(
             AdamConfig(
                 learning_rate=3e-3,
@@ -147,14 +163,13 @@ grug_base_trial = ExecutorStep(
         eval=versioned(
             GrugEvalConfig(
                 eval_batch_size=512,
-                steps_per_eval=200,
+                steps_per_eval=1000,
                 max_eval_batches=8,
                 eval_current=True,
                 eval_ema=False,
             )
         ),
     ),
-    resources=ResourceConfig.with_tpu("v5p-8"),
 )
 
 

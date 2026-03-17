@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """IsoFLOP analysis for finding compute-optimal training configurations.
@@ -158,19 +158,18 @@ class CandidateConfig:
     """Compute budget this config was generated for."""
 
 
-class ScalingRecipe(Protocol):
-    """Protocol defining the interface for scaling law recipes.
+class ScalingHeuristic(Protocol):
+    """Protocol defining the interface for scaling heuristics.
 
-    Concrete implementations (e.g., Marin2025Recipe) should implement these
-    model-specific methods. The recipe owns the vocab_size, which is derived
-    from the tokenizer choice.
+    Concrete implementations should implement these model-specific methods.
+    The heuristic owns the vocab_size, which is derived from the tokenizer choice.
     """
 
     name: str
-    """Name identifying this recipe (e.g., 'marin-2025')."""
+    """Name identifying this heuristic (e.g., 'completed-adamh')."""
 
     vocab_size: int
-    """Vocabulary size for the tokenizer used with this recipe."""
+    """Vocabulary size for the tokenizer used with this heuristic."""
 
     def estimate_memory_bytes(self, candidate: CandidateConfig) -> int:
         """Estimate memory usage in bytes for training a candidate configuration."""
@@ -219,16 +218,6 @@ class FitScalingLawsResult:
 
     fit_curves: dict[tuple[str, float], QuadraticFitCoeffs]
     """Quadratic fit coefficients {(label, flops): QuadraticFitCoeffs} for plotting."""
-
-
-# ---------------- Candidate Config Generation ----------------
-
-
-def round_to_power_of_two(x: float) -> int:
-    """Round ``x`` to the nearest power of two."""
-    if x <= 1:
-        return 1
-    return 2 ** math.ceil(math.log2(x))
 
 
 def round_flops_to_bucket(flops: float, base: float = 1.1) -> float:
@@ -386,7 +375,7 @@ def predict_optimal_config(
     scaling_fits: dict[str, ScalingFit],
     target_flops: float,
     label: str,
-    recipe: ScalingRecipe,
+    heuristic: ScalingHeuristic,
     seq_len: int = DEFAULT_SEQ_LEN,
 ) -> CandidateConfig | None:
     """Predict optimal training config for a target compute budget using fitted scaling laws.
@@ -402,7 +391,7 @@ def predict_optimal_config(
         scaling_fits: Dict of {label: ScalingFit} from scaling ladder result.
         target_flops: Target compute budget in FLOPs.
         label: Dataset/experiment label to use for scaling fit.
-        recipe: ScalingRecipe with architecture/hyperparameter settings (includes vocab_size).
+        heuristic: ScalingHeuristic with architecture/hyperparameter settings (includes vocab_size).
         seq_len: Sequence length for training.
 
     Returns:
@@ -418,7 +407,7 @@ def predict_optimal_config(
 
     logger.info(f"Predicted optimal tokens for {target_flops:.2e} FLOPs: {optimal_tokens:.2e}")
 
-    candidates = list(recipe.candidates_for_budget(target_flops, seq_len))
+    candidates = list(heuristic.candidates_for_budget(target_flops, seq_len))
 
     if not candidates:
         logger.warning(f"No valid candidates found for budget {target_flops:.2e}")
@@ -429,7 +418,7 @@ def predict_optimal_config(
     if best.tokens < optimal_tokens:
         best = max(candidates, key=lambda c: c.tokens)
 
-    params = best.model_config.total_trainable_params(recipe.vocab_size)
+    params = best.model_config.total_trainable_params(heuristic.vocab_size)
     logger.info(f"Selected config: N={params:.2e}, tokens={best.tokens:.2e} (optimal: {optimal_tokens:.2e})")
 
     return best

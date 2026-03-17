@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Live CoreWeave validation using KubernetesRuntime directly."""
@@ -6,20 +6,20 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import os
 import posixpath
-import shutil
 import time
 import uuid
+import zipfile
 from contextlib import contextmanager
 from pathlib import Path
-import zipfile
 
+import fsspec.core
 import pytest
 from iris.cluster.config import load_config
-import fsspec.core
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
-from iris.cluster.runtime.types import ContainerConfig
+from iris.cluster.runtime.types import ContainerConfig, ContainerPhase
 from iris.rpc import cluster_pb2
 
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
@@ -35,7 +35,7 @@ def _wait_finished(handle, timeout_seconds: float) -> cluster_pb2.TaskState:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         status = handle.status()
-        if not status.running:
+        if status.phase == ContainerPhase.STOPPED:
             return cluster_pb2.TASK_STATE_SUCCEEDED if status.exit_code == 0 else cluster_pb2.TASK_STATE_FAILED
         time.sleep(2.0)
     raise TimeoutError(f"pod {handle.container_id} did not finish in {timeout_seconds}s")
@@ -48,7 +48,9 @@ def coreweave_runtime() -> KubernetesRuntime:
     Simulates the env vars that CoreweavePlatform._s3_env_vars() sets on
     worker pods so KubernetesRuntime forwards them to task pods.
     """
+    pytest.skip("Coreweave tests require live resources.")
     import json
+
     from iris.cluster.platform.coreweave import _needs_virtual_host_addressing
 
     iris_root = Path(__file__).resolve().parents[2]
@@ -101,29 +103,32 @@ def _bundle_access_env(config) -> dict[str, str]:
     return env
 
 
-def _upload_test_bundle(bundle_prefix: str, run_id: str) -> tuple[str, object, str]:
+def _upload_test_bundle(remote_state_dir: str, run_id: str) -> tuple[str, object, str]:
     """Upload a tiny zip bundle for live runtime extraction checks."""
-    if not bundle_prefix:
-        raise ValueError("storage.bundle_prefix is required")
+    del run_id
+    if not remote_state_dir:
+        raise ValueError("storage.remote_state_dir is required")
 
     zip_bytes = io.BytesIO()
     with zipfile.ZipFile(zip_bytes, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("hello.txt", "hello-from-bundle\n")
         zf.writestr("sub/nested.txt", "nested-from-bundle\n")
-    bundle_url = f"{bundle_prefix.rstrip('/')}/live-runtime/{run_id}/bundle.zip"
-    fs, path = fsspec.core.url_to_fs(bundle_url)
+    bundle_id = hashlib.sha256(zip_bytes.getvalue()).hexdigest()
+    bundle_uri = f"{remote_state_dir.rstrip('/')}/bundles/{bundle_id}.zip"
+    fs, path = fsspec.core.url_to_fs(bundle_uri)
     parent = posixpath.dirname(path)
     if parent:
         fs.mkdirs(parent, exist_ok=True)
     with fs.open(path, "wb") as f:
         f.write(zip_bytes.getvalue())
-    return bundle_url, fs, path
+    return bundle_id, fs, path
 
 
 @contextmanager
 def _coreweave_upload_env(config) -> object:
     """Temporarily configure env vars and fsspec config so S3 uploads use R2 credentials."""
     import json
+
     import fsspec.config
     from iris.cluster.platform.coreweave import _needs_virtual_host_addressing
 
@@ -162,18 +167,44 @@ def _coreweave_upload_env(config) -> object:
             fsspec.config.conf.pop("s3", None)
 
 
-@pytest.mark.skipif(shutil.which("kubectl") is None, reason="kubectl is not available")
+@pytest.mark.timeout(120)
+def test_kubernetes_runtime_lifecycle(k8s_runtime: KubernetesRuntime):
+    """Full KubernetesRuntime lifecycle: create pod, run, succeed, read logs."""
+    run_id = uuid.uuid4().hex[:8]
+    config = ContainerConfig(
+        image="python:3.11-slim",
+        entrypoint=_entrypoint(["bash", "-c", "echo lifecycle-test-ok && sleep 2"]),
+        env={},
+        workdir="/app",
+        task_id=f"lifecycle-{run_id}",
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=100, memory_bytes=64 * 1024**2),
+    )
+
+    handle = k8s_runtime.create_container(config)
+    handle.run()
+
+    state = _wait_finished(handle, timeout_seconds=60)
+    assert state == cluster_pb2.TASK_STATE_SUCCEEDED
+
+    logs = handle.log_reader().read_all()
+    assert any("lifecycle-test-ok" in line.data for line in logs)
+
+
 @pytest.mark.timeout(1800)
 def test_coreweave_kubernetes_runtime_cpu_job_live(coreweave_runtime: KubernetesRuntime):
     """CPU pod should extract bundle and complete successfully via KubernetesRuntime."""
+    controller_url = os.environ.get("IRIS_TEST_CONTROLLER_BUNDLE_URL", "")
+    if not controller_url:
+        pytest.skip("IRIS_TEST_CONTROLLER_BUNDLE_URL is required for bundle_id-based staging")
+
     config = load_config(Path(__file__).resolve().parents[2] / "examples" / "coreweave.yaml")
     image = config.defaults.worker.default_task_image
     run_id = uuid.uuid4().hex[:8]
-    bundle_url = ""
+    bundle_id = ""
     bundle_fs = None
     bundle_path = ""
     with _coreweave_upload_env(config):
-        bundle_url, bundle_fs, bundle_path = _upload_test_bundle(config.storage.bundle_prefix, run_id)
+        bundle_id, bundle_fs, bundle_path = _upload_test_bundle(config.storage.remote_state_dir, run_id)
 
     try:
         cpu_config = ContainerConfig(
@@ -195,7 +226,8 @@ def test_coreweave_kubernetes_runtime_cpu_job_live(coreweave_runtime: Kubernetes
                 ]
             ),
             env={
-                "IRIS_BUNDLE_GCS_PATH": bundle_url,
+                "IRIS_BUNDLE_ID": bundle_id,
+                "IRIS_CONTROLLER_URL": controller_url.rstrip("/"),
                 **_bundle_access_env(config),
             },
             workdir="/app",
@@ -225,7 +257,6 @@ def test_coreweave_kubernetes_runtime_cpu_job_live(coreweave_runtime: Kubernetes
                 pass
 
 
-@pytest.mark.skipif(shutil.which("kubectl") is None, reason="kubectl is not available")
 @pytest.mark.timeout(1800)
 def test_incremental_log_reader_no_duplicates(coreweave_runtime: KubernetesRuntime):
     """Incremental log reads via byte-offset cursor must not produce duplicate lines.
@@ -265,7 +296,7 @@ def test_incremental_log_reader_no_duplicates(coreweave_runtime: KubernetesRunti
         for line in new_lines:
             collected.append(line.data)
         status = handle.status()
-        if not status.running:
+        if status.phase == ContainerPhase.STOPPED:
             # One final read to drain remaining
             for line in reader.read():
                 collected.append(line.data)
@@ -286,7 +317,6 @@ def test_incremental_log_reader_no_duplicates(coreweave_runtime: KubernetesRunti
     assert numbered == expected
 
 
-@pytest.mark.skipif(shutil.which("kubectl") is None, reason="kubectl is not available")
 @pytest.mark.timeout(3600)
 def test_coreweave_kubernetes_runtime_gpu_job_live(coreweave_runtime: KubernetesRuntime):
     """GPU pod should request GPU and prove device access via nvidia-smi."""
@@ -327,7 +357,6 @@ def test_coreweave_kubernetes_runtime_gpu_job_live(coreweave_runtime: Kubernetes
     assert gpu_state == cluster_pb2.TASK_STATE_SUCCEEDED, f"gpu pod failed logs={gpu_logs}"
 
 
-@pytest.mark.skipif(shutil.which("kubectl") is None, reason="kubectl is not available")
 @pytest.mark.timeout(600)
 def test_tensorstore_s3_roundtrip():
     """Verify tensorstore can write and read zarr3 data via S3-compatible storage.
@@ -356,7 +385,7 @@ def test_tensorstore_s3_roundtrip():
     os.environ.setdefault("AWS_SECRET_ACCESS_KEY", r2_secret)
 
     # Derive bucket from config
-    bucket = config.storage.bundle_prefix.removeprefix("s3://").split("/")[0]
+    bucket = config.storage.remote_state_dir.removeprefix("s3://").split("/")[0]
     run_id = uuid.uuid4().hex[:8]
     test_path = f"s3://{bucket}/iris/test-tensorstore/{run_id}/data"
 

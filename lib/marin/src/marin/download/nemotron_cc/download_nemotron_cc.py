@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -15,15 +15,15 @@ import logging
 import os
 from dataclasses import dataclass
 
-import fsspec
 import requests
+from iris.marin_fs import open_url
 from marin.download.nemotron_cc.utils import decompress_zstd_stream
 from marin.execution import THIS_OUTPUT_PATH
 from marin.utils import fsspec_exists
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 myagent = "marin-nemotron-ingress/1.0"
 NCC_PATH_FILE_URL = "https://data.commoncrawl.org/contrib/Nemotron/Nemotron-CC/data-jsonl.paths.gz"
@@ -54,7 +54,7 @@ def download_single_nemotron_path(input_file_path: str, output_file_path: str, c
         return None
 
     with atomic_rename(output_file_path) as temp_path:
-        with fsspec.open(temp_path, "w", compression="gzip") as f:
+        with open_url(temp_path, "w", compression="gzip") as f:
             for content in contents:
                 dolma_format = {
                     "id": content["warc_record_id"],
@@ -82,12 +82,12 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
     paths_file_path = os.path.join(cfg.output_path, "data-jsonl.paths")
     logger.info(f"Downloading Nemotron CC path file {paths_file_path}")
 
-    with fsspec.open(NCC_PATH_FILE_URL, "rb") as f, fsspec.open(paths_file_path, "wb") as f_out:
+    with open_url(NCC_PATH_FILE_URL, "rb") as f, open_url(paths_file_path, "wb") as f_out:
         f_out.write(f.read())
 
     logger.info(f"Reading paths from {paths_file_path}")
     all_files = []
-    with fsspec.open(paths_file_path, "r", compression="gzip") as f:
+    with open_url(paths_file_path, "r", compression="gzip") as f:
         for line in f:
             file = line.strip()
             output_file_path = os.path.join(cfg.output_path, file).replace("jsonl.zstd", "jsonl.gz")

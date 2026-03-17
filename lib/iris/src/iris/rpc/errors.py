@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """RPC error handling utilities with full traceback support."""
@@ -12,7 +12,9 @@ from collections.abc import Callable, Generator
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from google.protobuf.any_pb2 import Any as AnyProto
 
+from iris.rpc import errors_pb2
 from iris.time_utils import ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -57,9 +59,6 @@ def connect_error_with_traceback(
         message: Human-readable error message
         exc: Exception to extract traceback from (uses current if None)
     """
-    # Import here to avoid circular import during module load
-    from iris.rpc import errors_pb2
-
     details = errors_pb2.ErrorDetails(
         message=message,
     )
@@ -92,15 +91,20 @@ def extract_error_details(error: ConnectError):
     Returns:
         ErrorDetails proto if found, None otherwise
     """
-    from iris.rpc import errors_pb2
-
     for detail in error.details:
-        # Details are wrapped in google.protobuf.Any
-        if hasattr(detail, "type_url") and "ErrorDetails" in detail.type_url:
+        if isinstance(detail, AnyProto) and "ErrorDetails" in detail.type_url:
             error_details = errors_pb2.ErrorDetails()
             detail.Unpack(error_details)
             return error_details
     return None
+
+
+def format_connect_error(error: ConnectError) -> str:
+    """Format a ConnectError, including server traceback if available."""
+    details = extract_error_details(error)
+    if details and details.traceback:
+        return f"{error}\n\nServer traceback:\n{details.traceback}"
+    return str(error)
 
 
 def is_retryable_error(exc: Exception) -> bool:
@@ -125,10 +129,8 @@ def call_with_retry(
     call_fn: Callable[[], T],
     *,
     on_retry: Callable[[Exception], None] | None = None,
-    max_attempts: int = 5,
-    initial_backoff: float = 0.1,
-    max_backoff: float = 5.0,
-    backoff_factor: float = 2.0,
+    max_attempts: int = 20,
+    backoff: ExponentialBackoff | None = None,
 ) -> T:
     """Execute an RPC call with exponential backoff retry.
 
@@ -138,10 +140,10 @@ def call_with_retry(
         on_retry: Optional callback invoked with the exception on every retryable
             failure, including the final attempt. Useful for clearing cached
             connections so subsequent calls can re-resolve endpoints.
-        max_attempts: Maximum number of attempts (default: 5)
-        initial_backoff: Initial retry delay in seconds (default: 0.1)
-        max_backoff: Maximum delay between retries (default: 5.0)
-        backoff_factor: Exponential backoff multiplier (default: 2.0)
+        max_attempts: Maximum number of attempts (default: 20)
+        backoff: Backoff configuration. A fresh copy is made internally so the
+            caller's instance is not mutated. Defaults to
+            ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0).
 
     Returns:
         Result from call_fn
@@ -149,11 +151,10 @@ def call_with_retry(
     Raises:
         Exception from call_fn if all retries exhausted or error is not retryable
     """
-    backoff = ExponentialBackoff(
-        initial=initial_backoff,
-        maximum=max_backoff,
-        factor=backoff_factor,
-    )
+    if backoff is None:
+        backoff = ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0)
+    else:
+        backoff = backoff.copy()
     last_exception = None
 
     for attempt in range(max_attempts):
@@ -172,7 +173,7 @@ def call_with_retry(
 
             if attempt + 1 >= max_attempts:
                 # Final attempt failed, raise
-                logger.warning(
+                logger.exception(
                     "Operation %s failed after %d attempts: %s",
                     operation,
                     max_attempts,
@@ -182,7 +183,7 @@ def call_with_retry(
 
             # Log and retry
             delay = backoff.next_interval()
-            logger.warning(
+            logger.exception(
                 "Operation %s failed (attempt %d/%d), retrying in %.2fs: %s",
                 operation,
                 attempt + 1,

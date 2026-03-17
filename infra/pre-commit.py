@@ -1,5 +1,5 @@
 #!/usr/bin/env -S uv run --script
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # /// script
@@ -237,17 +237,28 @@ def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pa
                 break
 
         comment_block = "\n".join(comment_lines)
-        if license_template not in comment_block:
+        has_current_header = license_template in comment_block
+        if not has_current_header:
             files_without_header.append(file_path)
 
             if fix:
                 has_shebang = content.startswith("#!")
+                shebang_line = ""
                 if has_shebang:
                     shebang_line = lines[0]
                     rest_content = "\n".join(lines[1:])
-                    new_content = f"{shebang_line}\n{expected_header}\n{rest_content}"
                 else:
-                    new_content = f"{expected_header}\n{content}"
+                    rest_content = content
+
+                if not rest_content.startswith(expected_header):
+                    new_rest_content = f"{expected_header}\n{rest_content}" if rest_content else expected_header
+                else:
+                    new_rest_content = rest_content
+
+                if has_shebang:
+                    new_content = f"{shebang_line}\n{new_rest_content}"
+                else:
+                    new_content = new_rest_content
 
                 with open(file_path, "w") as f:
                     f.write(new_content)
@@ -517,11 +528,46 @@ def check_notebooks(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Jupyter notebooks", 0)
 
 
+def _ensure_iris_protos() -> None:
+    """Generate iris protobuf files if they are missing and npx is available.
+
+    Pyrefly needs the generated *_pb2.py and *_connect.py files on disk to
+    resolve imports from other modules, even when the generated files themselves
+    are excluded from type-checking via project-excludes.
+    """
+    import shutil
+
+    rpc_dir = ROOT_DIR / "lib" / "iris" / "src" / "iris" / "rpc"
+    # Check if any pb2 file exists already
+    if list(rpc_dir.glob("*_pb2.py")):
+        return
+
+    generate_script = ROOT_DIR / "lib" / "iris" / "scripts" / "generate_protos.py"
+    if not generate_script.exists():
+        return
+
+    if shutil.which("npx") is None:
+        print("  ⚠ Iris protobuf files are missing and npx is not installed; pyrefly may report false errors")
+        return
+
+    print("  Generating iris protobuf files for type checking...")
+    result = subprocess.run(
+        [sys.executable, str(generate_script)],
+        cwd=ROOT_DIR / "lib" / "iris",
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"  ⚠ Proto generation failed: {result.stderr.strip()}")
+
+
 def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
 
-    args = ["uvx", "pyrefly@0.40.0", "check", "--baseline", ".pyrefly-baseline.json"]
+    _ensure_iris_protos()
+
+    args = ["uvx", "pyrefly@0.42.0", "check", "--baseline", ".pyrefly-baseline.json"]
     result = run_cmd(args)
     output = (result.stdout + result.stderr).strip()
     return _record("Pyrefly type checker", result.returncode, output)

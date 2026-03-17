@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Docker runtime with cgroups v2 resource limits and BuildKit image caching.
@@ -18,33 +18,106 @@ import re
 import shlex
 import shutil
 import subprocess
+import threading
 import time
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.env import build_device_env_vars
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
     build_memray_transform_cmd,
     build_pyspy_cmd,
+    build_pyspy_dump_cmd,
     resolve_cpu_spec,
     resolve_memory_spec,
 )
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
+    ContainerInfraError,
+    ContainerPhase,
     ContainerStats,
     ContainerStatus,
     ImageInfo,
+    MountKind,
+    MountSpec,
 )
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
+
+# Substrings that indicate a docker/registry infrastructure problem rather than
+# a user-code error.  Checked case-insensitively against stderr from docker
+# create/start/pull.
+_INFRA_ERROR_PATTERNS: list[str] = [
+    "error getting credentials",
+    "denied: denied",
+    "unauthorized: authentication required",
+    "connection refused",
+    "dial tcp",
+    "no such host",
+    "i/o timeout",
+    "TLS handshake timeout",
+    "daemon is not running",
+    "Cannot connect to the Docker daemon",
+]
+
+
+def _is_docker_infra_error(stderr: str) -> bool:
+    """Return True if *stderr* matches a known infrastructure failure pattern."""
+    stderr_lower = stderr.lower()
+    return any(p.lower() in stderr_lower for p in _INFRA_ERROR_PATTERNS)
+
+
+@dataclass(frozen=True)
+class ResolvedMount:
+    """A MountSpec resolved to concrete host and container paths for Docker."""
+
+    host_path: str
+    container_path: str
+    mode: str  # "rw" or "ro"
+    kind: MountKind
+
+
+def _has_tpu_device(config: ContainerConfig) -> bool:
+    """Return True when config requests TPU resources."""
+    if not config.resources:
+        return False
+    has_device = config.resources.HasField("device")
+    return has_device and config.resources.device.HasField("tpu")
+
+
+def _discover_tpu_device_mappings() -> list[str]:
+    """Return host TPU device mappings for Docker --device flags.
+
+    TPU hosts expose device nodes differently by generation:
+    - v4 commonly exposes /dev/accel*
+    - v5+/v6e commonly use /dev/vfio/<N> under /dev/vfio
+
+    We pass through whichever device paths exist on the current worker host.
+    """
+    mappings: list[str] = []
+
+    vfio_path = Path("/dev/vfio")
+    if vfio_path.exists():
+        mappings.append("/dev/vfio:/dev/vfio")
+
+    accel_devices: list[Path] = []
+    for device_path in Path("/dev").glob("accel[0-9]*"):
+        if device_path.is_char_device():
+            accel_devices.append(device_path)
+
+    accel_devices.sort(key=lambda path: int(path.name.removeprefix("accel")))
+    for device_path in accel_devices:
+        mappings.append(f"{device_path}:{device_path}")
+
+    return mappings
 
 
 def _build_device_flags(config: ContainerConfig) -> list[str]:
@@ -60,36 +133,39 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
         return flags
 
     has_device = config.resources.HasField("device")
-    has_tpu = has_device and config.resources.device.HasField("tpu")
+    has_tpu = _has_tpu_device(config)
     logger.info("Device flags check: has_device=%s, has_tpu=%s", has_device, has_tpu)
 
     if has_tpu:
+        for device_mapping in _discover_tpu_device_mappings():
+            flags.extend(["--device", device_mapping])
+
         flags.extend(
             [
-                "--device",
-                "/dev/vfio:/dev/vfio",
                 "--shm-size=100g",
                 "--cap-add=SYS_RESOURCE",
                 "--ulimit",
                 "memlock=68719476736:68719476736",
             ]
         )
+        if "--device" not in flags:
+            logger.warning("TPU resources requested, but no TPU device nodes were discovered on host")
         logger.info("TPU device flags: %s", flags)
 
     return flags
 
 
-def _detect_mount_user(mounts: list[tuple[str, str, str]]) -> str | None:
+def _detect_mount_user(mounts: list[ResolvedMount]) -> str | None:
     """Detect user to run container as based on bind mount ownership.
 
     When bind-mounting directories owned by non-root users, the container
     must run as that user to have write access. Returns "uid:gid" for
     --user flag, or None to run as root.
     """
-    for host_path, _container_path, mode in mounts:
-        if "w" not in mode:
+    for mount in mounts:
+        if "w" not in mount.mode:
             continue
-        path = Path(host_path)
+        path = Path(mount.host_path)
         if not path.exists():
             continue
         stat = path.stat()
@@ -140,52 +216,29 @@ def _parse_memory_size(size_str: str) -> int:
 
 
 def _docker_logs(container_id: str, since: Timestamp | None = None) -> list[LogLine]:
-    """Get container logs, optionally filtered by timestamp."""
-    logs: list[LogLine] = []
+    """Get container logs, optionally filtered by timestamp.
 
-    base_cmd = ["docker", "logs", "--timestamps"]
+    Uses a single `docker logs` call with capture_output to get both stdout and
+    stderr in one shot, then parses each stream separately.
+    """
+    cmd = ["docker", "logs", "--timestamps"]
     if since:
-        base_cmd.extend(["--since", since.as_formatted_date()])
-    base_cmd.append(container_id)
+        cmd.extend(["--since", since.as_formatted_date()])
+    cmd.append(container_id)
 
-    # Check if container exists
-    result = subprocess.run(
-        base_cmd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         return []
 
-    # Fetch stdout
-    stdout_result = subprocess.run(
-        base_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        check=False,
-    )
-
-    for line in stdout_result.stdout.splitlines():
+    logs: list[LogLine] = []
+    for line in result.stdout.splitlines():
         if line:
             timestamp, data = _parse_docker_log_line(line)
             logs.append(LogLine(timestamp=timestamp, source="stdout", data=data))
-
-    # Fetch stderr
-    stderr_result = subprocess.run(
-        base_cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-
-    for line in stderr_result.stderr.splitlines():
+    for line in result.stderr.splitlines():
         if line:
             timestamp, data = _parse_docker_log_line(line)
             logs.append(LogLine(timestamp=timestamp, source="stderr", data=data))
-
     return logs
 
 
@@ -232,6 +285,7 @@ class DockerContainerHandle:
 
     config: ContainerConfig
     runtime: "DockerRuntime"
+    _resolved_mounts: list[ResolvedMount] = field(default_factory=list, repr=False)
     _run_container_id: str | None = field(default=None, repr=False)
 
     @property
@@ -283,7 +337,7 @@ class DockerContainerHandle:
                     build_logs.extend(new_logs)
                     last_log_time = Timestamp.from_seconds(new_logs[-1].timestamp.timestamp()).add_ms(1)
 
-                if not status.running:
+                if status.phase == ContainerPhase.STOPPED:
                     break
                 time.sleep(0.5)
 
@@ -310,9 +364,9 @@ class DockerContainerHandle:
 
     def _write_setup_script(self, script: str) -> None:
         """Write the setup script to the workdir mount."""
-        for host_path, container_path, _mode in self.config.mounts:
-            if container_path == "/app":
-                (Path(host_path) / "_setup_env.sh").write_text(script)
+        for rm in self._resolved_mounts:
+            if rm.container_path == "/app":
+                (Path(rm.host_path) / "_setup_env.sh").write_text(script)
                 return
         raise RuntimeError("No /app mount found in config")
 
@@ -343,7 +397,7 @@ exec {quoted_cmd}
             command=command,
             include_resources=True,
         )
-        self.runtime._track_container(self._run_container_id)
+        self.runtime.track_container(self._run_container_id)
         self._docker_start(self._run_container_id)
 
         logger.info(
@@ -354,9 +408,9 @@ exec {quoted_cmd}
 
     def _write_run_script(self, script: str) -> None:
         """Write the run script to the workdir mount."""
-        for host_path, container_path, _mode in self.config.mounts:
-            if container_path == "/app":
-                (Path(host_path) / "_run.sh").write_text(script)
+        for rm in self._resolved_mounts:
+            if rm.container_path == "/app":
+                (Path(rm.host_path) / "_run.sh").write_text(script)
                 return
         raise RuntimeError("No /app mount found in config")
 
@@ -368,7 +422,7 @@ exec {quoted_cmd}
     def status(self) -> ContainerStatus:
         """Check container status (running, exit code, error)."""
         if not self._run_container_id:
-            return ContainerStatus(running=False, error="Container not started")
+            return ContainerStatus(phase=ContainerPhase.STOPPED, error="Container not started")
         return self._docker_inspect(self._run_container_id)
 
     def log_reader(self) -> DockerLogReader:
@@ -381,22 +435,39 @@ exec {quoted_cmd}
             return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
         return self._docker_stats(self._run_container_id)
 
-    def profile(self, duration_seconds: int, profile_type: "cluster_pb2.ProfileType") -> bytes:
-        """Profile the running process using py-spy (CPU) or memray (memory)."""
+    def disk_usage_mb(self) -> int:
+        """Return used space in MB on the filesystem containing the workdir."""
+        for rm in self._resolved_mounts:
+            if rm.container_path == self.config.workdir:
+                path = Path(rm.host_path)
+                if path.exists():
+                    return int(shutil.disk_usage(path).used / (1024 * 1024))
+        return 0
 
+    def profile(self, duration_seconds: int, profile_type: "cluster_pb2.ProfileType") -> bytes:
+        """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
         container_id = self._run_container_id
         if not container_id:
             raise RuntimeError("Cannot profile: no running container")
 
         profile_id = uuid.uuid4().hex[:8]
 
-        # Dispatch to CPU or memory profiling based on profile_type
-        if profile_type.HasField("cpu"):
+        if profile_type.HasField("threads"):
+            return self._profile_threads(container_id, include_locals=profile_type.threads.locals)
+        elif profile_type.HasField("cpu"):
             return self._profile_cpu(container_id, duration_seconds, profile_type.cpu, profile_id)
         elif profile_type.HasField("memory"):
             return self._profile_memory(container_id, duration_seconds, profile_type.memory, profile_id)
         else:
-            raise RuntimeError("ProfileType must specify either cpu or memory profiler")
+            raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
+
+    def _profile_threads(self, container_id: str, *, include_locals: bool = False) -> bytes:
+        """Collect thread stacks from the container using py-spy dump."""
+        cmd = build_pyspy_dump_cmd(pid="1", py_spy_bin="/app/.venv/bin/py-spy", include_locals=include_locals)
+        result = self._docker_exec(container_id, cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError(f"py-spy dump failed: {result.stderr}")
+        return result.stdout.encode("utf-8")
 
     def _docker_exec(self, container_id: str, cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
         return subprocess.run(["docker", "exec", container_id, *cmd], **kwargs)
@@ -426,7 +497,8 @@ exec {quoted_cmd}
             spec.rate_hz,
         )
         try:
-            result = self._docker_exec(container_id, cmd, capture_output=True, text=True, timeout=duration_seconds + 5)
+            # py-spy needs extra headroom beyond the sample duration for writing output
+            result = self._docker_exec(container_id, cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
             if result.returncode != 0:
                 raise RuntimeError(f"py-spy failed: {result.stderr}")
             return self._docker_read_file(container_id, output_path)
@@ -474,7 +546,7 @@ exec {quoted_cmd}
         """Remove the run container and clean up resources."""
         if self._run_container_id:
             self._docker_remove(self._run_container_id)
-            self.runtime._untrack_container(self._run_container_id)
+            self.runtime.untrack_container(self._run_container_id)
             self._run_container_id = None
 
     # -------------------------------------------------------------------------
@@ -489,18 +561,20 @@ exec {quoted_cmd}
     ) -> str:
         """Create a Docker container. Returns container_id."""
         config = self.config
+        self.runtime.ensure_image(config.image)
 
         cmd = [
             "docker",
             "create",
-            "--security-opt",
-            "no-new-privileges",
+            "--ulimit",
+            "core=0:0",
             "-w",
             config.workdir,
         ]
+        cmd.extend(["--security-opt", "no-new-privileges"])
 
         # Run as the owner of bind-mounted directories
-        user_flag = _detect_mount_user(config.mounts)
+        user_flag = _detect_mount_user(self._resolved_mounts)
         if user_flag:
             cmd.extend(["--user", user_flag])
 
@@ -541,8 +615,8 @@ exec {quoted_cmd}
             cmd.extend(["-e", f"{k}={v}"])
 
         # Mounts
-        for host, container, mode in config.mounts:
-            cmd.extend(["-v", f"{host}:{container}:{mode}"])
+        for rm in self._resolved_mounts:
+            cmd.extend(["-v", f"{rm.host_path}:{rm.container_path}:{rm.mode}"])
 
         cmd.append(config.image)
         cmd.extend(command)
@@ -557,7 +631,10 @@ exec {quoted_cmd}
             check=False,
         )
         if result.returncode != 0:
-            raise RuntimeError(f"Failed to create container: {result.stderr}")
+            stderr = result.stderr
+            if _is_docker_infra_error(stderr):
+                raise ContainerInfraError(f"Failed to create container (infra): {stderr}")
+            raise RuntimeError(f"Failed to create container: {stderr}")
 
         return result.stdout.strip()
 
@@ -570,7 +647,10 @@ exec {quoted_cmd}
             check=False,
         )
         if result.returncode != 0:
-            raise RuntimeError(f"Failed to start container: {result.stderr}")
+            stderr = result.stderr
+            if _is_docker_infra_error(stderr):
+                raise ContainerInfraError(f"Failed to start container (infra): {stderr}")
+            raise RuntimeError(f"Failed to start container: {stderr}")
 
     def _docker_inspect(self, container_id: str) -> ContainerStatus:
         """Inspect container status."""
@@ -589,7 +669,7 @@ exec {quoted_cmd}
 
         if result.returncode != 0:
             return ContainerStatus(
-                running=False,
+                phase=ContainerPhase.STOPPED,
                 error=f"Container not found: id={container_id}",
                 error_kind=ContainerErrorKind.INFRA_NOT_FOUND,
             )
@@ -602,7 +682,7 @@ exec {quoted_cmd}
             oom_killed = state.get("OOMKilled", False)
 
             return ContainerStatus(
-                running=running,
+                phase=ContainerPhase.RUNNING if running else ContainerPhase.STOPPED,
                 exit_code=exit_code if not running else None,
                 error=error_msg,
                 error_kind=ContainerErrorKind.USER_CODE if error_msg else ContainerErrorKind.NONE,
@@ -610,7 +690,7 @@ exec {quoted_cmd}
             )
         except (json.JSONDecodeError, KeyError) as e:
             return ContainerStatus(
-                running=False,
+                phase=ContainerPhase.STOPPED,
                 error=f"Failed to parse inspect output: {e}",
                 error_kind=ContainerErrorKind.RUNTIME_ERROR,
             )
@@ -661,7 +741,7 @@ exec {quoted_cmd}
     def _docker_kill(self, container_id: str, force: bool = False) -> None:
         """Kill container."""
         status = self._docker_inspect(container_id)
-        if not status.running:
+        if status.phase == ContainerPhase.STOPPED:
             return
 
         signal = "SIGKILL" if force else "SIGTERM"
@@ -692,9 +772,78 @@ class DockerRuntime:
     Tracks all created containers for cleanup on shutdown.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, cache_dir: Path) -> None:
+        self._cache_dir = cache_dir
         self._handles: list[DockerContainerHandle] = []
         self._created_containers: set[str] = set()
+        # Serializes `docker pull` per image tag so that concurrent task threads
+        # don't each trigger docker-credential-gcloud against the metadata server,
+        # which causes sporadic "no active account" errors under load.
+        self._pull_lock = threading.Lock()
+        self._pulled_images: set[str] = set()
+
+    def ensure_image(self, image: str) -> None:
+        """Pull *image* if it isn't already present locally.
+
+        Only one `docker pull` runs at a time (via ``_pull_lock``).  This
+        prevents a thundering-herd of ``docker-credential-gcloud`` processes
+        when many task threads call ``docker create`` concurrently — each
+        invocation would otherwise shell out to the GCE metadata server for an
+        OAuth token, overwhelming it and causing sporadic auth failures.
+        """
+        if image in self._pulled_images:
+            return
+
+        with self._pull_lock:
+            # Double-check after acquiring lock
+            if image in self._pulled_images:
+                return
+
+            # Fast path: image already on disk
+            inspect = subprocess.run(
+                ["docker", "image", "inspect", image],
+                capture_output=True,
+                check=False,
+            )
+            if inspect.returncode == 0:
+                self._pulled_images.add(image)
+                return
+
+            logger.info("Pulling image %s", image)
+            result = subprocess.run(
+                ["docker", "pull", image],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                stderr = result.stderr
+                if _is_docker_infra_error(stderr):
+                    raise ContainerInfraError(f"Failed to pull image {image} (infra): {stderr}")
+                raise RuntimeError(f"Failed to pull image {image}: {stderr}")
+
+            logger.info("Image %s pulled successfully", image)
+            self._pulled_images.add(image)
+
+    def resolve_mounts(self, mounts: list[MountSpec], workdir_host_path: Path | None = None) -> list[ResolvedMount]:
+        """Convert semantic MountSpecs to ResolvedMount instances.
+
+        Creates host directories as needed. WORKDIR uses the explicit host path
+        (created by task_attempt) and mounts tmpfs on it for isolation.
+        CACHE and TMPFS get dirs under fast_io_dir.
+        """
+        result: list[ResolvedMount] = []
+        for mount in mounts:
+            mode = "ro" if mount.read_only else "rw"
+            if mount.kind == MountKind.WORKDIR:
+                if workdir_host_path is None:
+                    raise RuntimeError("WORKDIR mount requires workdir_host_path")
+                result.append(ResolvedMount(str(workdir_host_path), mount.container_path, mode, mount.kind))
+            elif mount.kind in (MountKind.TMPFS, MountKind.CACHE):
+                host_dir = self._cache_dir / mount.container_path.strip("/").replace("/", "-")
+                host_dir.mkdir(parents=True, exist_ok=True)
+                result.append(ResolvedMount(str(host_dir), mount.container_path, mode, mount.kind))
+        return result
 
     def create_container(self, config: ContainerConfig) -> DockerContainerHandle:
         """Create a container handle from config.
@@ -702,29 +851,32 @@ class DockerRuntime:
         The handle is not started - call handle.build() then handle.run()
         to execute the container.
         """
-        handle = DockerContainerHandle(config=config, runtime=self)
+        resolved = self.resolve_mounts(config.mounts, workdir_host_path=config.workdir_host_path)
+        handle = DockerContainerHandle(config=config, runtime=self, _resolved_mounts=resolved)
         self._handles.append(handle)
         return handle
+
+    def prepare_workdir(self, workdir: Path, disk_bytes: int) -> None:
+        """No-op: workdirs live on cache_dir (/dev/shm/iris) which is already tmpfs."""
 
     def stage_bundle(
         self,
         *,
-        bundle_gcs_path: str,
+        bundle_id: str,
         workdir: Path,
         workdir_files: dict[str, bytes],
-        fetch_bundle: Callable[[str], Path],
+        bundle_store: BundleStore,
     ) -> None:
         """Stage bundle and workdir files on worker-local filesystem."""
-        bundle_path = fetch_bundle(bundle_gcs_path)
-        shutil.copytree(bundle_path, workdir, dirs_exist_ok=True)
-        for name, data in workdir_files.items():
-            (workdir / name).write_bytes(data)
+        if bundle_id:
+            bundle_store.extract_bundle_to(bundle_id, workdir)
+        bundle_store.write_workdir_files(workdir, workdir_files)
 
-    def _track_container(self, container_id: str) -> None:
+    def track_container(self, container_id: str) -> None:
         """Track a container ID for cleanup."""
         self._created_containers.add(container_id)
 
-    def _untrack_container(self, container_id: str) -> None:
+    def untrack_container(self, container_id: str) -> None:
         """Untrack a container ID."""
         self._created_containers.discard(container_id)
 

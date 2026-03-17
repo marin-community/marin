@@ -1,7 +1,7 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,6 +30,7 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 
+from iris.cluster.controller.vm_lifecycle import restart_controller as vm_restart_controller
 from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
 from iris.cluster.platform._worker_base import RemoteExecWorkerBase
@@ -41,11 +42,13 @@ from iris.cluster.platform.base import (
     SliceStatus,
     WorkerStatus,
     default_stop_all,
+    generate_slice_suffix,
 )
 from iris.cluster.platform.bootstrap import build_worker_bootstrap_script
 from iris.cluster.platform.remote_exec import (
     DirectSshRemoteExec,
 )
+from iris.cluster.worker.env_probe import construct_worker_id
 from iris.rpc import config_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -164,11 +167,11 @@ class ManualSliceHandle:
             return SliceStatus(state=CloudSliceState.DELETING, worker_count=0)
         workers = [
             ManualWorkerHandle(
-                _vm_id=f"{self._slice_id}-{host.replace('.', '-').replace(':', '-')}",
+                _vm_id=construct_worker_id(self._slice_id, i),
                 _internal_address=host,
                 _remote_exec=ssh,
             )
-            for host, ssh in zip(self._hosts, self._ssh_connections, strict=True)
+            for i, (host, ssh) in enumerate(zip(self._hosts, self._ssh_connections, strict=True))
         ]
 
         # Composite state: if bootstrap was requested, reflect its progress
@@ -272,7 +275,7 @@ class ManualPlatform:
         bootstrap state with the base state.
         """
         manual = config.manual
-        slice_id = f"{config.name_prefix}-{Timestamp.now().epoch_ms()}"
+        slice_id = f"{config.name_prefix}-{generate_slice_suffix()}"
 
         # Use explicitly listed hosts if provided, otherwise draw from pool
         if manual.hosts:
@@ -346,7 +349,10 @@ class ManualPlatform:
                     raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} has no internal address")
                 if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
                     raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} not reachable via SSH")
-                script = build_worker_bootstrap_script(worker_config)
+                per_worker_config = config_pb2.WorkerConfig()
+                per_worker_config.CopyFrom(worker_config)
+                per_worker_config.worker_id = worker.worker_id
+                script = build_worker_bootstrap_script(per_worker_config)
                 worker.bootstrap(script)
             except Exception as e:
                 errors.append((worker.worker_id, e))
@@ -391,8 +397,8 @@ class ManualPlatform:
             results = [s for s in results if all(s.labels.get(k) == v for k, v in labels.items())]
         return results
 
-    def list_all_slices(self, labels: dict[str, str] | None = None) -> list[ManualSliceHandle]:
-        return self.list_slices(zones=[], labels=labels)
+    def list_all_slices(self) -> list[ManualSliceHandle]:
+        return self.list_slices(zones=[], labels={self._iris_labels.iris_managed: "true"})
 
     def list_vms(
         self,
@@ -430,6 +436,11 @@ class ManualPlatform:
         address, _vm = vm_start_controller(self, config)
         return address
 
+    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+        """Restart controller container in-place on the manual host."""
+        address, _vm = vm_restart_controller(self, config)
+        return address
+
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
         """Stop the controller on the manual host."""
         vm_stop_controller(self, config)
@@ -441,16 +452,6 @@ class ManualPlatform:
         label_prefix: str | None = None,
     ) -> list[str]:
         return default_stop_all(self, config, dry_run=dry_run, label_prefix=label_prefix)
-
-    def reload(self, config: config_pb2.IrisClusterConfig) -> str:
-        label_prefix = config.platform.label_prefix or "iris"
-        labels = Labels(label_prefix)
-        all_slices = self.list_all_slices(labels={labels.iris_managed: "true"})
-        for s in all_slices:
-            logger.info("Terminating slice %s for reload", s.slice_id)
-            s.terminate()
-        self.stop_controller(config)
-        return self.start_controller(config)
 
     # ========================================================================
     # Internal helpers

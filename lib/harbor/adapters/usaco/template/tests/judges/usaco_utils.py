@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # source: https://github.com/openai/human-eval/blob/master/human_eval/execution.py

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Namespace-aware resolver for actor discovery via cluster controller."""
@@ -81,11 +81,11 @@ class ClusterResolver:
 
         request = cluster_pb2.Controller.ListEndpointsRequest(
             prefix=prefixed_name,
+            exact=True,
         )
 
         resp = self._client.list_endpoints(request)
 
-        # Filter to exact name matches (controller uses prefix matching)
         # Rewrite addresses for host/container compatibility
         endpoints = [
             ResolvedEndpoint(
@@ -94,7 +94,6 @@ class ClusterResolver:
                 metadata=dict(ep.metadata),
             )
             for ep in resp.endpoints
-            if ep.name == prefixed_name
         ]
 
         return ResolveResult(name=name, endpoints=endpoints)

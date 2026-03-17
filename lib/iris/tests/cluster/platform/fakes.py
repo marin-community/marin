@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Fake implementations for testing.
@@ -284,7 +284,10 @@ class FakePlatform:
             slice_id = f"fake-slice-{self._config.config.name}-{self._slice_counter}"
             ts = Timestamp.now().epoch_ms()
 
-            topology = get_tpu_topology(self._config.config.accelerator_variant)
+            device_variant = (
+                self._config.config.resources.device_variant if self._config.config.HasField("resources") else ""
+            )
+            topology = get_tpu_topology(device_variant)
             vm_count = topology.vm_count
             zone = self._config.config.slice_template.gcp.zone or "us-central1-a"
 
@@ -326,8 +329,8 @@ class FakePlatform:
             slices = [s for s in slices if all(s.labels.get(k) == v for k, v in labels.items())]
         return slices
 
-    def list_all_slices(self, labels: dict[str, str] | None = None) -> list[FakeSliceHandle]:
-        return self.list_slices(zones=[], labels=labels)
+    def list_all_slices(self) -> list[FakeSliceHandle]:
+        return self.list_slices(zones=[], labels=None)
 
     def list_vms(self, zones: list[str], labels: dict[str, str] | None = None) -> list:
         return []
@@ -350,6 +353,16 @@ class FakePlatform:
         with self._lock:
             for fake_slice in self._slices.values():
                 fake_slice.tick(ts)
+
+    def inject_slice(self, handle: FakeSliceHandle) -> None:
+        """Add a slice without going through create_slice(). Simulates pre-existing cloud slices."""
+        with self._lock:
+            self._slices[handle.slice_id] = handle
+
+    def remove_slice(self, slice_id: str) -> None:
+        """Remove a slice without calling terminate(). Simulates termination during restart."""
+        with self._lock:
+            self._slices.pop(slice_id, None)
 
     def set_failure_mode(self, mode: FailureMode) -> None:
         """Set the failure mode for subsequent operations."""
@@ -423,6 +436,8 @@ class FakeGcloud:
     _failures: dict[str, tuple[str, int]] = field(default_factory=dict)
     # Serial port output per VM, appended to by tests to simulate startup-script progress.
     _serial_output: dict[tuple[str, str], str] = field(default_factory=dict)
+    # Cloud Logging entries keyed by TPU name, for testing _fetch_bootstrap_logs.
+    _cloud_log_entries: dict[str, list[str]] = field(default_factory=dict)
 
     def set_failure(self, operation: str, error: str, code: int = 1) -> None:
         """Make a specific operation type fail on the next call.
@@ -487,6 +502,8 @@ class FakeGcloud:
             return self._vm_add_metadata(cmd, tokens[3])
         if _matches_gcloud(tokens, ["compute", "instances", "get-serial-port-output", None]):
             return self._vm_get_serial_port_output(cmd, tokens[3])
+        if len(tokens) >= 2 and tokens[0] == "logging" and tokens[1] == "read":
+            return self._logging_read(cmd)
 
         raise ValueError(f"FakeGcloud: unrecognized command: {cmd}")
 
@@ -524,13 +541,31 @@ class FakeGcloud:
         if labels_str:
             labels = _parse_labels_string(labels_str)
 
+        # Parse --metadata-from-file=key=path and read file contents into metadata.
+        metadata: dict[str, str] = {}
+        metadata_from_file_str = _parse_flag(cmd, "metadata-from-file")
+        if metadata_from_file_str and "=" in metadata_from_file_str:
+            key, path = metadata_from_file_str.split("=", 1)
+            try:
+                with open(path) as f:
+                    metadata[key] = f.read()
+            except OSError:
+                pass
+
         idx = len(self._tpus)
+        try:
+            topology = get_tpu_topology(accel_type)
+            vm_count = topology.vm_count
+        except ValueError:
+            vm_count = 1
+        endpoints = [{"ipAddress": f"10.0.{idx}.{i + 1}"} for i in range(vm_count)]
         tpu_data = {
             "name": name,
             "state": "READY",
             "acceleratorType": accel_type,
             "labels": labels,
-            "networkEndpoints": [{"ipAddress": f"10.0.0.{idx + 1}"}],
+            "metadata": metadata,
+            "networkEndpoints": endpoints,
             "createTime": "2024-01-15T10:30:00.000Z",
         }
         self._tpus[(name, zone)] = tpu_data
@@ -541,16 +576,21 @@ class FakeGcloud:
             return failure
 
         zone = _parse_flag(cmd, "zone")
+        all_zones = zone == "-"
         filter_str = _parse_flag(cmd, "filter")
         required_labels = _parse_filter_labels(filter_str) if filter_str else {}
 
         matching = []
         for (_, tpu_zone), tpu in self._tpus.items():
-            if zone and tpu_zone != zone:
+            if not all_zones and zone and tpu_zone != zone:
                 continue
             tpu_labels = tpu.get("labels", {})
             if all(tpu_labels.get(k) == v for k, v in required_labels.items()):
-                matching.append(tpu)
+                entry = dict(tpu)
+                # --zone=- returns full resource paths for TPU names
+                if all_zones:
+                    entry["name"] = f"projects/test-project/locations/{tpu_zone}/nodes/{tpu['name']}"
+                matching.append(entry)
 
         return FakeResult(returncode=0, stdout=json.dumps(matching))
 
@@ -711,6 +751,26 @@ class FakeGcloud:
         """Append text to a VM's serial port output buffer for testing."""
         key = (name, zone)
         self._serial_output[key] = self._serial_output.get(key, "") + text
+
+    # -------------------------------------------------------------------------
+    # Cloud Logging handler
+    # -------------------------------------------------------------------------
+
+    def _logging_read(self, cmd: list[str]) -> FakeResult:
+        """Handle `gcloud logging read <filter>` by returning stored log entries."""
+        if failure := self._check_failure("logging_read"):
+            return failure
+
+        # Return all log entries that match any TPU name in _cloud_log_entries.
+        # In tests we key by TPU name for simplicity.
+        all_lines: list[str] = []
+        for entries in self._cloud_log_entries.values():
+            all_lines.extend(entries)
+        return FakeResult(returncode=0, stdout="\n".join(all_lines))
+
+    def append_cloud_log(self, tpu_name: str, text: str) -> None:
+        """Append a Cloud Logging entry for a TPU, used for testing _fetch_bootstrap_logs."""
+        self._cloud_log_entries.setdefault(tpu_name, []).append(text)
 
 
 def _matches_gcloud(tokens: list[str], pattern: list[str | None]) -> bool:

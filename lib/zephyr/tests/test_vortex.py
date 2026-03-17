@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for vortex file format support."""
@@ -56,6 +56,15 @@ class TestVortexReader:
         write_vortex_file([], str(empty_path))
 
         records = list(load_vortex(str(empty_path)))
+        assert records == []
+
+    def test_load_vortex_empty_file_with_column_projection(self, tmp_path):
+        """Test loading an empty vortex file with column projection."""
+        empty_path = tmp_path / "empty.vortex"
+        write_vortex_file([], str(empty_path))
+
+        spec = InputFileSpec(path=str(empty_path), columns=["id", "attributes"])
+        records = list(load_vortex(spec))
         assert records == []
 
 

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Ray backend for fray v2 Client protocol."""
@@ -29,6 +29,7 @@ from fray.v2.types import (
     create_environment,
     get_tpu_topology,
 )
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -163,13 +164,19 @@ def build_runtime_env(request: JobRequest) -> dict:
 
     env_vars = dict(environment.env_vars)
     extras = list(environment.extras)
+    skip_runtime_extras = os.environ.get("MARIN_SKIP_RUNTIME_EXTRAS", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    ) or env_vars.get("MARIN_SKIP_RUNTIME_EXTRAS", "").lower() in ("1", "true", "yes")
 
-    if isinstance(request.resources.device, TpuConfig):
-        if "tpu" not in extras:
-            extras.append("tpu")
-    elif isinstance(request.resources.device, GpuConfig):
-        if "gpu" not in extras:
-            extras.append("gpu")
+    if not skip_runtime_extras:
+        if isinstance(request.resources.device, TpuConfig):
+            if "tpu" not in extras:
+                extras.append("tpu")
+        elif isinstance(request.resources.device, GpuConfig):
+            if "gpu" not in extras:
+                extras.append("gpu")
 
     for key, value in request.resources.device.default_env_vars().items():
         env_vars.setdefault(key, value)
@@ -327,12 +334,16 @@ class RayClient:
         topo = get_tpu_topology(device.variant)
         replicas = request.replicas or 1
         num_slices = max(1, replicas // topo.vm_count)
+        # Only propagate env_vars to TPU workers. Other runtime_env keys (pip, py_modules,
+        # etc.) reference local temp files that don't exist on the run_on_pod_ray worker node.
+        tpu_runtime_env = {"env_vars": runtime_env["env_vars"]} if "env_vars" in runtime_env else {}
         object_ref = run_on_pod_ray.remote(
             remote_fn,
             tpu_type=device.variant,
             num_slices=num_slices,
             max_retries_preemption=request.max_retries_preemption,
             max_retries_failure=request.max_retries_failure,
+            runtime_env=tpu_runtime_env,
         )
 
         job_id = f"ray-tpu-{request.name}-{uuid.uuid4().hex[:8]}"
@@ -365,7 +376,7 @@ class RayClient:
     ) -> ActorGroup:
         """Create N Ray actors named "{name}-0", "{name}-1", ...
 
-        Uses _RayActorHost to wrap actors, enabling them to access their
+        Uses _RayActorHostBase to wrap actors, enabling them to access their
         own handle via current_actor().handle during __init__.
         """
         ray_options = _actor_ray_options(resources, actor_config)
@@ -374,7 +385,8 @@ class RayClient:
         handles: list[RayActorHandle] = []
         for i in range(count):
             actor_name = f"{name}-{i}"
-            actor_ref = _RayActorHost.options(name=actor_name, **ray_options).remote(
+            host_cls = _get_named_actor_cls(actor_name)
+            actor_ref = host_cls.options(name=actor_name, **ray_options).remote(
                 actor_class, actor_name, i, name, args, kwargs
             )
             handles.append(RayActorHandle(actor_ref))
@@ -412,13 +424,14 @@ def _actor_ray_options(resources: ResourceConfig, actor_config: ActorConfig = Ac
     # initialization beyond __init__.
     if actor_config.max_restarts is not None:
         options["max_restarts"] = actor_config.max_restarts
+    if actor_config.max_task_retries is not None:
+        options["max_task_retries"] = actor_config.max_task_retries
     if actor_config.max_concurrency > 1:
         options["max_concurrency"] = actor_config.max_concurrency
     return options
 
 
-@ray.remote(enable_task_events=False)
-class _RayActorHost:
+class _RayActorHostBase:
     """Wrapper that sets up ActorContext before creating the real actor.
 
     This enables actors to access their own handle via current_actor().handle
@@ -426,6 +439,10 @@ class _RayActorHost:
 
     Uses _proxy_call for method dispatch since Ray doesn't support __getattr__
     for dynamic method lookup on actor handles.
+
+    Not decorated with @ray.remote directly — use _get_named_actor_host() to
+    obtain a Ray remote class whose name matches the wrapped actor class,
+    so that `ps` shows e.g. ``ray::my_workers`` instead of ``ray::_RayActorHost``.
     """
 
     def __init__(
@@ -441,11 +458,8 @@ class _RayActorHost:
         # library code using logging.getLogger(__name__).info() is visible.
         # Ray forwards stdout/stderr to the driver, but Python's root logger
         # defaults to WARNING in fresh processes.
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s %(levelname)s %(name)s:%(lineno)d %(message)s",
-            force=True,
-        )
+
+        configure_logging(level=logging.INFO)
 
         # Create handle by name - will resolve via ray.get_actor() when used
         handle = RayActorHandle(actor_name)
@@ -461,10 +475,26 @@ class _RayActorHost:
         return getattr(self._instance, method_name)(*args, **kwargs)
 
 
+_named_actor_host_cache: dict[str, type] = {}
+
+
+def _get_named_actor_cls(actor_class_name: str) -> type:
+    """Return a Ray remote class named after the wrapped actor class.
+
+    Dynamically creates a subclass of _RayActorHostBase whose __name__ is
+    ``actor_class_name``, then wraps it with ``ray.remote``.  Results are
+    cached so each distinct name only triggers one ``ray.remote()`` call.
+    """
+    if actor_class_name not in _named_actor_host_cache:
+        cls = type(actor_class_name, (_RayActorHostBase,), {})
+        _named_actor_host_cache[actor_class_name] = ray.remote(enable_task_events=False)(cls)
+    return _named_actor_host_cache[actor_class_name]
+
+
 class RayActorHandle:
     """Handle to a Ray actor. Supports both direct ref and name-based lazy resolution.
 
-    All fray v2 Ray actors are wrapped by _RayActorHost, so method calls go through
+    All fray v2 Ray actors are wrapped by _RayActorHostBase, so method calls go through
     _proxy_call to reach the wrapped instance.
     """
 
@@ -505,7 +535,7 @@ class RayActorHandle:
 
 
 class RayProxyMethod:
-    """Wraps a method call that goes through _RayActorHost._proxy_call."""
+    """Wraps a method call that goes through _RayActorHostBase._proxy_call."""
 
     def __init__(self, ray_handle: ray.actor.ActorHandle, method_name: str):
         self._ray_handle = ray_handle
@@ -555,6 +585,10 @@ class RayActorGroup:
             return []
         self._yielded = True
         return self._handles
+
+    def is_done(self) -> bool:
+        """Ray actors managed by Zephyr don't have an independent job lifecycle."""
+        return False
 
     def shutdown(self) -> None:
         """Kill all Ray actors."""

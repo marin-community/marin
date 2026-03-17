@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Semantic helpers for profile op grouping and shape-signature extraction."""
@@ -19,7 +19,8 @@ _SEMANTIC_FAMILY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "collective",
         re.compile(
-            r"all-reduce|all_gather|all-gather|reduce-scatter|all-to-all|alltoall|collective",
+            r"all-reduce|all_gather|all-gather|reduce-scatter|all-to-all|alltoall|collective"
+            r"|nccl|allgather|allreduce|reducescatter",
             re.IGNORECASE,
         ),
     ),

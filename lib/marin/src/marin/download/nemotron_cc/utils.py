@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -6,7 +6,7 @@ import logging
 
 from tqdm import tqdm
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def decompress_zstd_stream(raw_stream, content_length: int, chunk_size: int):

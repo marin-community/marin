@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -7,6 +7,7 @@ from pathlib import Path
 
 from dataclasses import dataclass
 
+import pytest
 from fray.v2.types import ResourceConfig
 
 from marin.execution.artifact import Artifact, PathMetadata
@@ -30,6 +31,12 @@ class TokenizeMetadata:
 class TrainMetadata:
     tokens_seen: int
     checkpoint_path: str
+
+
+@dataclass
+class NestedMetadata:
+    path: str
+    resources: ResourceConfig
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +121,17 @@ def test_artifact_save_and_load_untyped(tmp_path: Path):
     assert isinstance(loaded, dict)
     assert loaded["path"] == "/tokenized"
     assert loaded["num_tokens"] == 42
+
+
+def test_artifact_save_nested_dataclass(tmp_path: Path):
+    artifact = NestedMetadata(path="/nested", resources=ResourceConfig(cpu=2, ram="4g"))
+    Artifact.save(artifact, tmp_path.as_posix())
+
+    loaded = Artifact.load(tmp_path.as_posix())
+    assert isinstance(loaded, dict)
+    assert loaded["path"] == "/nested"
+    assert loaded["resources"]["cpu"] == 2
+    assert loaded["resources"]["ram"] == "4g"
 
 
 def test_artifact_roundtrip_through_pipeline(tmp_path: Path):
@@ -315,6 +333,29 @@ def test_runner_max_concurrent(tmp_path: Path):
     assert train_artifact.tokens_seen > 0
 
 
+def test_runner_preserves_underlying_step_exception(tmp_path: Path):
+    """The top-level runner error should retain the original failing exception as a cause."""
+
+    def failing_step(_output_path: str) -> None:
+        raise ValueError("sentinel step failure")
+
+    step = StepSpec(
+        name="failing_step",
+        override_output_path=(tmp_path / "failing_step").as_posix(),
+        fn=failing_step,
+    )
+
+    runner = StepRunner()
+    with pytest.raises(RuntimeError, match=r"1 step\(s\) failed") as exc_info:
+        runner.run([step])
+
+    step_failure = exc_info.value.__cause__
+    assert isinstance(step_failure, RuntimeError)
+    assert "Step failed: failing_step" in str(step_failure)
+    assert isinstance(step_failure.__cause__, ValueError)
+    assert "sentinel step failure" in str(step_failure.__cause__)
+
+
 # ---------------------------------------------------------------------------
 # Local vs Fray execution tests
 # ---------------------------------------------------------------------------
@@ -377,35 +418,35 @@ def test_resolve_executor_step_picks_up_remote_decorator():
     def my_fn(config):
         pass
 
-    step = ExecutorStep(name="test", fn=my_fn, config=None, resources=None)
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
     resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
 
     assert isinstance(resolved.fn, RemoteCallable)
     assert resolved.fn.resources == ResourceConfig.with_cpu()
 
 
-def test_explicit_resources_override_remote_decorator():
-    """ExecutorStep.resources should take precedence over @remote decorator resources."""
-    explicit = ResourceConfig.with_cpu(cpu=8, ram="32g")
+def test_remote_decorator_resources_are_preserved():
+    """@remote decorator resources should be preserved through resolve_executor_step."""
+    custom = ResourceConfig.with_cpu(cpu=8, ram="32g")
 
-    @remote(resources=ResourceConfig.with_cpu(cpu=2))
+    @remote(resources=custom)
     def my_fn(config):
         pass
 
-    step = ExecutorStep(name="test", fn=my_fn, config=None, resources=explicit)
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
     resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
 
     assert isinstance(resolved.fn, RemoteCallable)
-    assert resolved.fn.resources == explicit
+    assert resolved.fn.resources == custom
 
 
-def test_step_without_remote_or_resources_is_plain_fn():
-    """A plain function with no @remote and no ExecutorStep.resources should not be RemoteCallable."""
+def test_step_without_remote_is_plain_fn():
+    """A plain function with no @remote should not be RemoteCallable."""
 
     def my_fn(config):
         pass
 
-    step = ExecutorStep(name="test", fn=my_fn, config=None, resources=None)
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
     resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
 
     assert not isinstance(resolved.fn, RemoteCallable)

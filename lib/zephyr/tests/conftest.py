@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Pytest fixtures for zephyr tests."""
@@ -32,14 +32,13 @@ from zephyr.execution import ZephyrContext
 ZEPHYR_ROOT = Path(__file__).resolve().parents[1]
 
 # Use Iris demo config as base
-IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "examples" / "demo.yaml"
+IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "examples" / "test.yaml"
 
 
 @pytest.fixture(scope="session")
 def iris_cluster():
     """Start local Iris cluster for testing - reused across all tests."""
-    from iris.cluster.manager import connect_cluster
-    from iris.cluster.config import load_config, make_local_config
+    from iris.cluster.config import load_config, make_local_config, connect_cluster
 
     config = load_config(IRIS_CONFIG)
     config = make_local_config(config)
@@ -85,7 +84,7 @@ def fray_client(request):
         client = FrayIrisClient.from_iris_client(iris_client)
 
         # Set up IrisContext so actor handles can resolve
-        ctx = IrisContext(job_id=JobName.root("test"), client=iris_client)
+        ctx = IrisContext(job_id=JobName.root("test-user", "test"), client=iris_client)
         with iris_ctx_scope(ctx):
             yield client
         client.shutdown(wait=True)
