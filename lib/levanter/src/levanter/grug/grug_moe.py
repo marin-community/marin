@@ -66,8 +66,6 @@ def resolve_moe_implementation(
             raise ValueError(f"implementation must be one of {valid} or None, got {implementation!r}")
         return cast(MoeImplementation, implementation)
 
-    if _mesh_axis_size(mesh, "expert") >= 16:
-        return "ragged_all_to_all"
     return "ring"
 
 
