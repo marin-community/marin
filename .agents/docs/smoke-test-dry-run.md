@@ -651,7 +651,7 @@ The `run-local` command becomes a thin wrapper around `ClusterManager` with
 
 **Files changed:**
 - `src/iris/rpc/config.proto` — add `LocalProvider`, `LocalControllerConfig`
-- `lib/iris/scripts/generate_protos.py` — run
+- `uv run python lib/iris/scripts/generate_protos.py` — run from the repo root
 - `src/iris/cluster/vm/controller.py` — add `LocalController`
 - `src/iris/cluster/vm/config.py` — add local provider branch
 - `src/iris/cluster/vm/local_platform.py` — add `_create_local_autoscaler()`
