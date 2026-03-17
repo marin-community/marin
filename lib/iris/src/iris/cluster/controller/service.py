@@ -268,7 +268,7 @@ def _read_worker_detail(
             WORKER_RESOURCE_HISTORY,
             columns=(WORKER_RESOURCE_HISTORY.c.snapshot_proto,),
             where=WORKER_RESOURCE_HISTORY.c.worker_id == str(worker_id),
-            order_by=(WORKER_RESOURCE_HISTORY.c.timestamp_ms.desc(),),
+            order_by=(WORKER_RESOURCE_HISTORY.c.id.desc(),),
             limit=max(resource_history_limit, 0),
         )
     resource_history = tuple(reversed([r.snapshot_proto for r in resource_rows]))

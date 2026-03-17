@@ -795,6 +795,7 @@ WORKER_RESOURCE_HISTORY = Table[tuple[str, str]](
     sql_name="worker_resource_history",
     alias="wrh",
     columns={
+        "id": Column("wrh", "id", _decode_int),
         "worker_id": Column("wrh", "worker_id", _decode_worker_id),
         "snapshot_proto": Column(
             "wrh",
