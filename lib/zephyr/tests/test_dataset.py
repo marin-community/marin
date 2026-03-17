@@ -249,7 +249,7 @@ def test_reshard(zephyr_ctx):
 def test_reshard_noop(zephyr_ctx):
     """Test reshard with None is a noop, and non-positive values raise ValueError"""
 
-    def yield_1(it):
+    def yield_1(it, shard_info):
         yield from [1]
 
     ds = Dataset.from_list(range(10)).reshard(None).map_shard(yield_1)
@@ -877,7 +877,7 @@ def test_sorted_merge_join_empty_datasets(zephyr_ctx):
 def test_map_shard_stateful_deduplication(zephyr_ctx):
     """Test map_shard for stateful within-shard deduplication."""
 
-    def deduplicate_shard(items):
+    def deduplicate_shard(items, shard_info):
         seen = set()
         for item in items:
             key = item["id"]
@@ -906,7 +906,7 @@ def test_map_shard_stateful_deduplication(zephyr_ctx):
 def test_map_shard_empty_result(zephyr_ctx):
     """Test map_shard that filters everything out."""
 
-    def filter_all(items):
+    def filter_all(items, shard_info):
         for _ in items:
             pass  # Consume but don't yield
         return iter([])  # Return empty iterator
@@ -919,7 +919,7 @@ def test_map_shard_empty_result(zephyr_ctx):
 def test_map_shard_error_propagation(zephyr_ctx):
     """Test that exceptions in map_shard functions propagate correctly."""
 
-    def failing_generator(items):
+    def failing_generator(items, shard_info):
         for item in items:
             if item == 3:
                 raise ValueError("Test error")
@@ -934,11 +934,11 @@ def test_map_shard_error_propagation(zephyr_ctx):
 
 
 def test_map_shard_with_shard_info(zephyr_ctx):
-    """Test map_shard auto-detects the (items, shard_idx, total_shards) signature."""
+    """Test map_shard passes ShardInfo to the function."""
 
-    def tag_with_shard_info(items, shard_idx, total_shards):
+    def tag_with_shard_info(items, shard_info):
         for item in items:
-            yield {**item, "shard_idx": shard_idx, "total_shards": total_shards}
+            yield {**item, "shard_idx": shard_info.shard_idx, "total_shards": shard_info.total_shards}
 
     data = [{"id": i} for i in range(10)]
     ds = Dataset.from_list([data]).flat_map(lambda x: x).map_shard(tag_with_shard_info)
@@ -954,13 +954,13 @@ def test_map_shard_with_shard_info(zephyr_ctx):
 
 
 def test_map_shard_with_shard_info_classmethod(zephyr_ctx):
-    """Test map_shard auto-detects shard info when fn is a classmethod."""
+    """Test map_shard passes ShardInfo when fn is a classmethod."""
 
     class ShardTagger:
         @classmethod
-        def tag(cls, items, shard_idx, total_shards):
+        def tag(cls, items, shard_info):
             for item in items:
-                yield {**item, "shard_idx": shard_idx, "total_shards": total_shards}
+                yield {**item, "shard_idx": shard_info.shard_idx, "total_shards": shard_info.total_shards}
 
     data = [{"id": i} for i in range(10)]
     ds = Dataset.from_list([data]).flat_map(lambda x: x).map_shard(ShardTagger.tag)

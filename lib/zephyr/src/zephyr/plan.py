@@ -37,6 +37,7 @@ from zephyr.dataset import (
     ReduceOp,
     ReshardOp,
     SelectOp,
+    ShardInfo,
     TakePerShardOp,
     WindowOp,
     WriteOp,
@@ -72,7 +73,7 @@ class Map:
         fn: Composed function that transforms an iterator to an iterator
         requires_full_shard: True if any composed op needs full shard context
             (e.g., MapShardOp). When True, chunk parallelism is disabled.
-        needs_shard_context: True if fn expects (stream, shard_idx, total_shards).
+        needs_shard_context: True if fn expects (stream, shard_info: ShardInfo).
     """
 
     fn: Callable[[Iterator], Iterator]
@@ -193,7 +194,7 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
 
     Returns:
         A function that transforms an iterator to an iterator.
-        When any op uses with_shard_info, also accepts shard_idx and total_shards kwargs.
+        For MapShardOp, also passes shard_idx and total_shards as ShardInfo.
     """
 
     def pipeline(stream: Iterator, *, shard_idx: int = 0, total_shards: int = 1) -> Iterator:
@@ -207,10 +208,7 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
             elif isinstance(op, FlatMapOp):
                 stream = _flatmap_gen(stream, op.fn)
             elif isinstance(op, MapShardOp):
-                if op.with_shard_info:
-                    stream = op.fn(stream, shard_idx, total_shards)
-                else:
-                    stream = op.fn(stream)
+                stream = op.fn(stream, ShardInfo(shard_idx=shard_idx, total_shards=total_shards))
             elif isinstance(op, TakePerShardOp):
                 stream = islice(stream, op.n)
             elif isinstance(op, WindowOp):
@@ -334,7 +332,7 @@ class FusionState:
             return
 
         requires_full_shard = any(isinstance(op, MapShardOp) for op in self.pending_fusible)
-        needs_shard_context = any(isinstance(op, MapShardOp) and op.with_shard_info for op in self.pending_fusible)
+        needs_shard_context = requires_full_shard
         self.current_ops.append(
             Map(
                 fn=compose_map(self.pending_fusible[:]),

@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import inspect
 import logging
 import re
 from collections.abc import Callable, Iterable, Iterator
@@ -19,6 +18,19 @@ from iris.marin_fs import url_to_fs
 from zephyr.expr import Expr
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ShardInfo:
+    """Metadata about the current shard passed to map_shard functions.
+
+    Attributes:
+        shard_idx: Zero-based index of this shard.
+        total_shards: Total number of shards in the dataset.
+    """
+
+    shard_idx: int
+    total_shards: int
 
 
 def format_shard_path(pattern: str, shard_idx: int, total: int) -> str:
@@ -188,13 +200,11 @@ class MapShardOp:
     Use when you need to maintain state across all items in a shard, such as
     deduplication, reservoir sampling, or loading expensive resources once.
 
-    Two signatures are supported (auto-detected from the function):
-        fn(items: Iterator[T]) -> Iterator[R]
-        fn(items: Iterator[T], shard_idx: int, total_shards: int) -> Iterator[R]
+    The function always receives a ShardInfo as the second argument:
+        fn(items: Iterator[T], shard_info: ShardInfo) -> Iterator[R]
     """
 
     fn: Callable
-    with_shard_info: bool = False
 
     def __repr__(self):
         return f"MapShardOp(fn={_get_fn_name(self.fn)})"
@@ -554,25 +564,26 @@ class Dataset(Generic[T]):
 
     def map_shard(
         self,
-        fn: Callable[[Iterator[T]], Iterator[R]] | Callable[[Iterator[T], int, int], Iterator[R]],
+        fn: Callable[[Iterator[T], ShardInfo], Iterator[R]],
     ) -> Dataset[R]:
         """Apply function to entire shard iterator.
 
-        The function receives an iterator of all items in the shard and returns
-        an iterator of results. This can be used to perform stateful
-        processing across a shard (deduplication, sampling, windowing, etc.).
+        The function receives an iterator of all items in the shard and a
+        ShardInfo dataclass, and returns an iterator of results. This can be
+        used to perform stateful processing across a shard (deduplication,
+        sampling, windowing, etc.).
 
-        Two signatures are supported (auto-detected):
-            fn(items: Iterator) -> Iterator
-            fn(items: Iterator, shard_idx: int, total_shards: int) -> Iterator
+        Args:
+            fn: Function with signature fn(items: Iterator[T], shard_info: ShardInfo) -> Iterator[R]
 
         Returns:
             New dataset with map_shard operation appended
 
         Example:
             >>> from zephyr.execution import load_jsonl
+            >>> from zephyr.dataset import ShardInfo
             >>> # Deduplicate items within each shard
-            >>> def deduplicate_shard(items: Iterator):
+            >>> def deduplicate_shard(items: Iterator, shard_info: ShardInfo):
             ...     seen = set()
             ...     for item in items:
             ...         key = item["id"]
@@ -588,26 +599,7 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = ctx.execute(ds)
         """
-
-        def _fn_wants_shard_info(fn: Callable) -> bool:
-            """Detect whether fn expects (shard_idx, total_shards, items) vs just (items)."""
-            try:
-                sig = inspect.signature(fn)
-            except (ValueError, TypeError):
-                return False
-            positional = [
-                p
-                for p in sig.parameters.values()
-                if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-            ]
-            num_params = len(positional)
-            assert num_params in (
-                1,
-                3,
-            ), f"map_shard function must have signature fn(items) or fn(items, shard_idx, total_shards), got {sig}"
-            return num_params == 3
-
-        return Dataset(self.source, [*self.operations, MapShardOp(fn, with_shard_info=_fn_wants_shard_info(fn))])
+        return Dataset(self.source, [*self.operations, MapShardOp(fn)])
 
     def reshard(self, num_shards: int | None) -> Dataset[T]:
         """Redistribute data across target number of shards (best-effort).
@@ -847,7 +839,7 @@ class Dataset(Generic[T]):
             [{"id": 1, "val": "a"}, {"id": 2, "val": "b"}]  # Or {"id": 1, "val": "c"}
         """
 
-        def streaming_dedup(items: Iterator[T]) -> Iterator[T]:
+        def streaming_dedup(items: Iterator[T], shard_info: ShardInfo) -> Iterator[T]:
             """Deduplicate items within a shard."""
             seen = set()
             for item in items:
