@@ -93,31 +93,41 @@ def _has_tpu_device(config: ContainerConfig) -> bool:
     return has_device and config.resources.device.HasField("tpu")
 
 
-def _discover_tpu_device_mappings() -> list[str]:
-    """Return host TPU device mappings for Docker --device flags.
+def _discover_tpu_device_mappings() -> tuple[list[str], bool]:
+    """Return TPU docker mappings and whether usable TPU devices were found.
 
     TPU hosts expose device nodes differently by generation:
     - v4 commonly exposes /dev/accel*
     - v5+/v6e commonly use /dev/vfio/<N> under /dev/vfio
 
-    We pass through whichever device paths exist on the current worker host.
+    Returns:
+        (mappings, has_usable_devices) where mappings are Docker --device
+        entries and has_usable_devices indicates whether TPU chips are
+        accessible on this host.
     """
-    mappings: list[str] = []
-
-    vfio_path = Path("/dev/vfio")
-    if vfio_path.exists():
-        mappings.append("/dev/vfio:/dev/vfio")
-
     accel_devices: list[Path] = []
     for device_path in Path("/dev").glob("accel[0-9]*"):
         if device_path.is_char_device():
             accel_devices.append(device_path)
 
+    has_vfio_device_nodes = False
+    vfio_path = Path("/dev/vfio")
+    if vfio_path.exists():
+        for device_path in vfio_path.glob("[0-9]*"):
+            if device_path.is_char_device():
+                has_vfio_device_nodes = True
+                break
+
+    mappings: list[str] = []
+    if vfio_path.exists() and (has_vfio_device_nodes or accel_devices):
+        mappings.append("/dev/vfio:/dev/vfio")
+
     accel_devices.sort(key=lambda path: int(path.name.removeprefix("accel")))
     for device_path in accel_devices:
         mappings.append(f"{device_path}:{device_path}")
 
-    return mappings
+    has_usable_devices = bool(accel_devices) or has_vfio_device_nodes
+    return mappings, has_usable_devices
 
 
 def _build_device_flags(config: ContainerConfig) -> list[str]:
@@ -137,7 +147,14 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
     logger.info("Device flags check: has_device=%s, has_tpu=%s", has_device, has_tpu)
 
     if has_tpu:
-        for device_mapping in _discover_tpu_device_mappings():
+        device_mappings, has_usable_devices = _discover_tpu_device_mappings()
+        if not has_usable_devices:
+            raise ContainerInfraError(
+                "TPU resources requested but no TPU device nodes were found "
+                "(expected /dev/accel* or /dev/vfio/[0-9]+)"
+            )
+
+        for device_mapping in device_mappings:
             flags.extend(["--device", device_mapping])
 
         flags.extend(
@@ -148,8 +165,6 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
                 "memlock=68719476736:68719476736",
             ]
         )
-        if "--device" not in flags:
-            logger.warning("TPU resources requested, but no TPU device nodes were discovered on host")
         logger.info("TPU device flags: %s", flags)
 
     return flags
