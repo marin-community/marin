@@ -75,6 +75,14 @@ def _is_docker_infra_error(stderr: str) -> bool:
     return any(p.lower() in stderr_lower for p in _INFRA_ERROR_PATTERNS)
 
 
+# Network sysctl tuning for containers with their own network namespace (#3066).
+# Host-network containers inherit host settings (configured at VM bootstrap).
+_NETWORK_SYSCTLS: dict[str, str] = {
+    "net.ipv4.ip_local_port_range": "1024 65535",
+    "net.ipv4.tcp_tw_reuse": "1",
+}
+
+
 @dataclass(frozen=True)
 class ResolvedMount:
     """A MountSpec resolved to concrete host and container paths for Docker."""
@@ -582,6 +590,12 @@ exec {quoted_cmd}
             cmd.extend(["--network", config.network_mode])
         else:
             cmd.append("--add-host=host.docker.internal:host-gateway")
+
+        # Network sysctl tuning for containers with own network namespace (#3066).
+        # Host-network containers inherit host settings from VM bootstrap.
+        if config.network_mode != "host":
+            for key, value in _NETWORK_SYSCTLS.items():
+                cmd.extend(["--sysctl", f"{key}={value}"])
 
         cmd.extend(["--cap-drop", "ALL"])
         cmd.extend(["--cap-add", "SYS_PTRACE"])
