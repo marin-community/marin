@@ -953,6 +953,27 @@ def test_map_shard_with_shard_info(zephyr_ctx):
         assert item["total_shards"] >= 1
 
 
+def test_map_shard_with_shard_info_classmethod(zephyr_ctx):
+    """Test map_shard auto-detects shard info when fn is a classmethod."""
+
+    class ShardTagger:
+        @classmethod
+        def tag(cls, items, shard_idx, total_shards):
+            for item in items:
+                yield {**item, "shard_idx": shard_idx, "total_shards": total_shards}
+
+    data = [{"id": i} for i in range(10)]
+    ds = Dataset.from_list([data]).flat_map(lambda x: x).map_shard(ShardTagger.tag)
+    result = list(zephyr_ctx.execute(ds))
+
+    assert len(result) == 10
+    for item in result:
+        assert "shard_idx" in item
+        assert "total_shards" in item
+        assert isinstance(item["shard_idx"], int)
+        assert item["total_shards"] >= 1
+
+
 @pytest.fixture
 def sample_input_files(tmp_path):
     """Create standard sample input files for skip_existing tests."""
