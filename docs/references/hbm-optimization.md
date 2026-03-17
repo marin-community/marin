@@ -107,7 +107,7 @@ When `B ~= sqrt(N)`, memory for saved boundaries is `O(sqrt(N))` instead of `O(N
 
 This is useful for deep scanned stacks where plain checkpointing/offloading still does not fit.
 In Haliax scanned modules, nested checkpointing is available as a policy option.
-For non-named stack containers, [`haliax.nn.ArrayStacked`](../../lib/haliax/docs/array-stacked.md) is another practical
+For non-named stack containers, [`haliax.nn.ArrayStacked`](https://github.com/marin-community/marin/blob/main/lib/haliax/docs/array-stacked.md) is another practical
 lever: keeping layer execution as a scan rather than a Python-unrolled loop can reduce compile-time memory pressure and
 often lowers compile time.
 

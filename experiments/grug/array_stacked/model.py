@@ -17,7 +17,7 @@ from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pbatch, Pvocab, unshard
+from levanter.grug.sharding import Pbatch, Pembed_vocab, Plm_head, unshard
 
 
 @dataclass(frozen=True)
@@ -162,8 +162,10 @@ class Transformer(eqx.Module):
         keys = random.split(key, cfg.num_layers + 2)
         embed_key, out_key = keys[0], keys[1]
         block_keys = keys[2:]
-        token_embed = reshard(_init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pvocab)
-        output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Pvocab)
+        token_embed = reshard(
+            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
+        )
+        output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
         blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg, key=block_keys)
         final_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
         return Transformer(
