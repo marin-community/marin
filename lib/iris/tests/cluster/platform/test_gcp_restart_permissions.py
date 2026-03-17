@@ -20,28 +20,6 @@ def _gcp_config(project_id: str = "test-project") -> config_pb2.IrisClusterConfi
     return config
 
 
-def test_active_account_has_project_role_checks_user_or_service_account_binding(monkeypatch):
-    seen_command: list[str] = []
-
-    def fake_run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
-        nonlocal seen_command
-        seen_command = cmd
-        return _completed_process("roles/resourcemanager.projectIamAdmin\n")
-
-    monkeypatch.setattr(gcp, "_run_gcloud_restart_permission_command", fake_run)
-
-    has_role = gcp._active_account_has_project_role_for_restart_permissions(
-        project_id="test-project",
-        account="test-user@example.com",
-        role="roles/resourcemanager.projectIamAdmin",
-    )
-
-    assert has_role
-    filter_arg = next(arg for arg in seen_command if arg.startswith("--filter="))
-    assert "bindings.members=user:test-user@example.com" in filter_arg
-    assert "bindings.members=serviceAccount:test-user@example.com" in filter_arg
-
-
 def test_missing_project_permissions_returns_ungranted_subset(monkeypatch):
     monkeypatch.setattr(
         gcp,
@@ -67,26 +45,10 @@ def test_ensure_gcp_restart_permissions_errors_without_active_account(monkeypatc
         gcp.ensure_gcp_restart_permissions(_gcp_config(), scope="cluster")
 
 
-def test_ensure_gcp_restart_permissions_errors_when_required_role_missing(monkeypatch):
-    def fake_run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
-        if cmd[:3] == ["gcloud", "auth", "list"]:
-            return _completed_process("test-user@example.com\n")
-        if cmd[:3] == ["gcloud", "projects", "get-iam-policy"]:
-            return _completed_process("")
-        pytest.fail(f"unexpected gcloud command: {cmd}")
-
-    monkeypatch.setattr(gcp, "_run_gcloud_restart_permission_command", fake_run)
-
-    with pytest.raises(RuntimeError, match="missing required role"):
-        gcp.ensure_gcp_restart_permissions(_gcp_config(), scope="cluster")
-
-
 def test_ensure_gcp_restart_permissions_errors_when_required_permissions_missing(monkeypatch):
     def fake_run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
         if cmd[:3] == ["gcloud", "auth", "list"]:
             return _completed_process("test-user@example.com\n")
-        if cmd[:3] == ["gcloud", "projects", "get-iam-policy"]:
-            return _completed_process("roles/resourcemanager.projectIamAdmin\n")
         if cmd[:3] == ["gcloud", "projects", "test-iam-permissions"]:
             return _completed_process(json.dumps({"permissions": ["compute.instances.list"]}))
         pytest.fail(f"unexpected gcloud command: {cmd}")
@@ -103,8 +65,6 @@ def test_ensure_gcp_restart_permissions_uses_scope_specific_permissions(monkeypa
     def fake_run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
         if cmd[:3] == ["gcloud", "auth", "list"]:
             return _completed_process("test-user@example.com\n")
-        if cmd[:3] == ["gcloud", "projects", "get-iam-policy"]:
-            return _completed_process("roles/resourcemanager.projectIamAdmin\n")
         if cmd[:3] == ["gcloud", "projects", "test-iam-permissions"]:
             permissions_arg = next(arg for arg in cmd if arg.startswith("--permissions="))
             permissions = tuple(permissions_arg.split("=", 1)[1].split(","))
@@ -126,8 +86,6 @@ def test_ensure_gcp_restart_permissions_errors_for_unknown_scope(monkeypatch):
         seen_commands.append(cmd)
         if cmd[:3] == ["gcloud", "auth", "list"]:
             return _completed_process("test-user@example.com\n")
-        if cmd[:3] == ["gcloud", "projects", "get-iam-policy"]:
-            return _completed_process("roles/resourcemanager.projectIamAdmin\n")
         pytest.fail(f"unexpected gcloud command: {cmd}")
 
     monkeypatch.setattr(gcp, "_run_gcloud_restart_permission_command", fake_run)
