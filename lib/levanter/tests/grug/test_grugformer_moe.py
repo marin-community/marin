@@ -9,7 +9,7 @@ import jax.numpy as jnp
 from jax._src import config as jax_config
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P, use_abstract_mesh
 
-from levanter.grug.grug_moe import moe_mlp
+from levanter.grug.grug_moe import MoeImplementation, moe_mlp, resolve_moe_implementation
 from levanter.utils.activation import ActivationFunctionEnum
 
 
@@ -113,7 +113,31 @@ def test_moe_mlp_runs_without_ep_axis():
         np.testing.assert_allclose(np.asarray(out), np.asarray(out_jit), rtol=1e-5, atol=1e-5)
 
 
-def test_moe_ring_ep_path_lowers_on_abstract_mesh():
+def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(8),
+        tokens=16,
+        hidden_dim=16,
+        intermediate_dim=24,
+        num_experts=8,
+        topk=2,
+    )
+
+    y_default = moe_mlp(x, selected_experts, combine_weights, w_up_gate, w_down, mesh=None)
+    y_ring = moe_mlp(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        implementation=MoeImplementation.ring,
+        mesh=None,
+    )
+    np.testing.assert_allclose(np.asarray(y_default), np.asarray(y_ring), rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize("implementation", [MoeImplementation.ring, MoeImplementation.ragged_all_to_all])
+def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
 
     tokens = 16
@@ -157,6 +181,7 @@ def test_moe_ring_ep_path_lowers_on_abstract_mesh():
                 up_gate,
                 down,
                 activation=ActivationFunctionEnum.silu,
+                implementation=implementation,
                 mesh=mesh,
             )
 
@@ -167,6 +192,14 @@ def test_moe_ring_ep_path_lowers_on_abstract_mesh():
             .lower(lowering_platforms=(platform,))
         )
         assert lowered is not None
+
+
+def test_resolve_moe_implementation_uses_ep_heuristic():
+    assert resolve_moe_implementation(None, _make_abstract_moe_mesh(data=2, expert=8, model=1)) == MoeImplementation.ring
+    assert (
+        resolve_moe_implementation(None, _make_abstract_moe_mesh(data=2, expert=16, model=1))
+        == MoeImplementation.ragged_all_to_all
+    )
 
 
 def test_moe_mlp_runs_with_ep_axis_when_available():
@@ -210,6 +243,18 @@ def test_moe_mlp_runs_with_ep_axis_when_available():
         assert out.shape == (tokens, hidden_dim)
         assert jnp.isfinite(out).all()
 
+        out_ragged = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation=ActivationFunctionEnum.silu,
+            implementation=MoeImplementation.ragged_all_to_all,
+            mesh=None,
+        )
+        np.testing.assert_allclose(np.asarray(out), np.asarray(out_ragged), rtol=1e-4, atol=1e-4)
+
 
 def test_functional_moe_mlp_accepts_enum_and_callable_activation():
     tokens = 16
@@ -246,6 +291,28 @@ def test_functional_moe_mlp_accepts_enum_and_callable_activation():
         mesh=None,
     )
     np.testing.assert_allclose(np.asarray(y_callable), np.asarray(y_enum), rtol=1e-5, atol=1e-5)
+
+
+def test_moe_mlp_rejects_invalid_implementation():
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(9),
+        tokens=8,
+        hidden_dim=16,
+        intermediate_dim=24,
+        num_experts=4,
+        topk=2,
+    )
+
+    with pytest.raises(ValueError, match="implementation must be one of"):
+        moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="not_a_real_transport",
+            mesh=None,
+        )
 
 
 def test_moe_mlp_reports_positive_drop_count_in_ep_when_over_capacity():

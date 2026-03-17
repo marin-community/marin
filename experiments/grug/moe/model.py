@@ -24,7 +24,7 @@ from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
-from levanter.grug.grug_moe import MoeActivation, moe_mlp
+from levanter.grug.grug_moe import MoeActivation, MoeImplementation, moe_mlp, normalize_moe_implementation
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pvocab, unshard
 from levanter.tracker.histogram import Histogram
@@ -66,9 +66,11 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     load_balancing_loss_coef: float | None = 0.01
     router_z_loss_coef: float | None = 0.001
+    moe_implementation: MoeImplementation | str | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "moe_implementation", normalize_moe_implementation(self.moe_implementation))
         _ = self.inferred_head_dim
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
@@ -328,6 +330,7 @@ class MoEMLP(eqx.Module):
             self.w_up_gate,
             self.w_down,
             activation=ActivationFunctionEnum.silu,
+            implementation=self.cfg.moe_implementation,
             mesh=get_abstract_mesh(),
             capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
         )
