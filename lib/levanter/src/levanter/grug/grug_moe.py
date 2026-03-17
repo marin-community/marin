@@ -14,12 +14,11 @@ Implementation overview:
   wiring lives in the Grug model files.
 """
 
-import enum
 import math
 
 from collections.abc import Callable
 from functools import partial
-from typing import TypeAlias
+from typing import Literal, TypeAlias, cast, get_args
 
 import jax
 import jax.numpy as jnp
@@ -35,12 +34,8 @@ _DEFAULT_EP_CAPACITY_FACTOR = 1.25
 # #2710 used 1.25 as the practical EP ring default to avoid over/under-packing.
 
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
-MoeImplementationLike: TypeAlias = "MoeImplementation | str | None"
-
-
-class MoeImplementation(enum.StrEnum):
-    ring = "ring"
-    ragged_all_to_all = "ragged_all_to_all"
+MoeImplementation: TypeAlias = Literal["ring", "ragged_all_to_all"]
+_VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 
 
 def _mesh_has_axis(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> bool:
@@ -61,27 +56,19 @@ def _batch_spec(mesh: jax.sharding.AbstractMesh | None) -> P:
     return P(("data",))
 
 
-def normalize_moe_implementation(implementation: MoeImplementationLike) -> MoeImplementation | None:
-    if implementation is None or isinstance(implementation, MoeImplementation):
-        return implementation
-    try:
-        return MoeImplementation(implementation)
-    except ValueError as exc:
-        valid = ", ".join(repr(choice.value) for choice in MoeImplementation)
-        raise ValueError(f"implementation must be one of {valid} or None, got {implementation!r}") from exc
-
-
 def resolve_moe_implementation(
-    implementation: MoeImplementationLike,
+    implementation: MoeImplementation | str | None,
     mesh: jax.sharding.AbstractMesh | None,
 ) -> MoeImplementation:
-    normalized = normalize_moe_implementation(implementation)
-    if normalized is not None:
-        return normalized
+    if implementation is not None:
+        if implementation not in _VALID_MOE_IMPLEMENTATIONS:
+            valid = ", ".join(repr(choice) for choice in _VALID_MOE_IMPLEMENTATIONS)
+            raise ValueError(f"implementation must be one of {valid} or None, got {implementation!r}")
+        return cast(MoeImplementation, implementation)
 
     if _mesh_axis_size(mesh, "expert") >= 16:
-        return MoeImplementation.ragged_all_to_all
-    return MoeImplementation.ring
+        return "ragged_all_to_all"
+    return "ring"
 
 
 @named_call
@@ -368,7 +355,9 @@ def _moe_mlp_ep_ragged_a2a_local(
     tokens_per_shard = x_local.shape[0]
     topk = selected_experts_local.shape[1]
     assignments_per_shard = tokens_per_shard * topk
-    recv_capacity = max(local_experts, int(math.ceil(capacity_factor * assignments_per_shard)))
+    # Ragged A2A does not clip overloaded receivers, so size the receive buffer
+    # for the worst case where every shard routes every assignment here.
+    recv_capacity = max(local_experts, assignments_per_shard * ep_size)
 
     with jax.named_scope("dispatch"):
         sorted_x, sorted_indices, group_sizes = _permute_by_global_expert(
@@ -437,7 +426,7 @@ def moe_mlp(
     w_down: Float[Array, "E I D"],
     *,
     activation: MoeActivation = ActivationFunctionEnum.silu,
-    implementation: MoeImplementationLike = None,
+    implementation: MoeImplementation | str | None = None,
     mesh: jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
@@ -505,9 +494,9 @@ def moe_mlp(
         if num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
 
-        if resolved_implementation == MoeImplementation.ring:
+        if resolved_implementation == "ring":
             shard_local_fn = _moe_mlp_ep_ring_local
-        elif resolved_implementation == MoeImplementation.ragged_all_to_all:
+        elif resolved_implementation == "ragged_all_to_all":
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
         else:
             raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
@@ -564,6 +553,5 @@ __all__ = [
     "MoeActivation",
     "MoeImplementation",
     "moe_mlp",
-    "normalize_moe_implementation",
     "resolve_moe_implementation",
 ]
