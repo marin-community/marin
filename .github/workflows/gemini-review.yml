@@ -2,7 +2,7 @@ name: Gemini PR Review
 
 on:
   pull_request:
-    types: [opened, ready_for_review, reopened]
+    types: [opened, ready_for_review, reopened, synchronize]
   issue_comment:
     # NOTE: there's no PR comment specific event, so we check issue comments and filter in the job.
     types: [created]
