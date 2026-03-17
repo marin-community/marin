@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import re
 from collections.abc import Callable, Iterable, Iterator
@@ -69,6 +70,20 @@ def _get_fn_name(fn: Any) -> str:
     while hasattr(fn, "func"):
         fn = fn.func
     return getattr(fn, "__qualname__", getattr(fn, "__name__", str(fn)))
+
+
+def _fn_wants_shard_info(fn: Callable) -> bool:
+    """Detect whether fn expects (shard_idx, total_shards, items) vs just (items)."""
+    try:
+        sig = inspect.signature(fn)
+    except (ValueError, TypeError):
+        return False
+    positional = [
+        p
+        for p in sig.parameters.values()
+        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    return len(positional) >= 3
 
 
 @dataclass
@@ -186,9 +201,14 @@ class MapShardOp:
 
     Use when you need to maintain state across all items in a shard, such as
     deduplication, reservoir sampling, or loading expensive resources once.
+
+    Two signatures are supported (auto-detected from the function):
+        fn(items: Iterator[T]) -> Iterator[R]
+        fn(items: Iterator[T], shard_idx: int, total_shards: int) -> Iterator[R]
     """
 
     fn: Callable
+    with_shard_info: bool = False
 
     def __repr__(self):
         return f"MapShardOp(fn={_get_fn_name(self.fn)})"
@@ -546,15 +566,19 @@ class Dataset(Generic[T]):
         """Load records from Vortex files."""
         return Dataset(self.source, [*self.operations, LoadFileOp("vortex", columns)])
 
-    def map_shard(self, fn: Callable[[Iterator[T]], Iterator[R]]) -> Dataset[R]:
+    def map_shard(
+        self,
+        fn: Callable[[Iterator[T]], Iterator[R]] | Callable[[Iterator[T], int, int], Iterator[R]],
+    ) -> Dataset[R]:
         """Apply function to entire shard iterator.
 
         The function receives an iterator of all items in the shard and returns
         an iterator of results. This can be used to perform stateful
         processing across a shard (deduplication, sampling, windowing, etc.).
 
-        Args:
-            fn: Function from Iterator[items] -> Iterator[results]
+        Two signatures are supported (auto-detected):
+            fn(items: Iterator) -> Iterator
+            fn(items: Iterator, shard_idx: int, total_shards: int) -> Iterator
 
         Returns:
             New dataset with map_shard operation appended
@@ -578,7 +602,7 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = ctx.execute(ds)
         """
-        return Dataset(self.source, [*self.operations, MapShardOp(fn)])
+        return Dataset(self.source, [*self.operations, MapShardOp(fn, with_shard_info=_fn_wants_shard_info(fn))])
 
     def reshard(self, num_shards: int | None) -> Dataset[T]:
         """Redistribute data across target number of shards (best-effort).
