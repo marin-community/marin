@@ -183,7 +183,7 @@ Recommendation / victory decision: <next action>
 
 #### 7) Seal and open log-only PR
 - Create and push a sealing tag for the exact launch commit (the commit containing the `experiments/ferries/daily.py` used for the run).
-- Open a PR that updates only `docs/experiments/daily-ferry-log.md`.
+- Open a PR that updates only `docs/experiments/daily-ferry-log.md`, following `.agents/skills/pull-request/SKILL.md` for description format.
 - Keep all detailed launch/retry/debug narrative in the run issue, not in the PR.
 - Apply canonical labels on the run-closure PR: `ferry`, `ferry-daily`, `ferry-log-only`, `ferry-sealed`.
 

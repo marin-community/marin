@@ -1,7 +1,12 @@
--- Task profiles captured by the controller's periodic profiling loop.
--- Stores the last N (default 10) CPU profiles per task, automatically
--- evicting the oldest when the cap is exceeded.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
+import sqlite3
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
 CREATE TABLE IF NOT EXISTS task_profiles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id TEXT NOT NULL,
@@ -11,8 +16,6 @@ CREATE TABLE IF NOT EXISTS task_profiles (
 
 CREATE INDEX IF NOT EXISTS idx_task_profiles_task ON task_profiles(task_id, id DESC);
 
--- Cap profiles at 10 per task: after each insert, delete the oldest
--- rows beyond the limit.
 CREATE TRIGGER IF NOT EXISTS trg_task_profiles_cap
 AFTER INSERT ON task_profiles
 BEGIN
@@ -25,3 +28,5 @@ BEGIN
         LIMIT 10
      );
 END;
+"""
+    )

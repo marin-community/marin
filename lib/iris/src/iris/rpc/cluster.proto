@@ -109,8 +109,10 @@ message MemoryProfile {
   bool leaks = 2;       // Focus on potential memory leaks
 }
 
-// Thread dump configuration (no additional options needed)
-message ThreadsProfile {}
+// Thread dump configuration
+message ThreadsProfile {
+  bool locals = 1;  // Include local variables in the dump (--locals flag)
+}
 
 // Profile type selector
 message ProfileType {

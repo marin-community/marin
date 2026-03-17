@@ -755,6 +755,165 @@ def test_list_jobs_returns_all_jobs(service, job_request):
     assert states_by_id[JobName.root("test-user", "job-3").to_wire()] == cluster_pb2.JOB_STATE_KILLED
 
 
+def test_list_jobs_sql_pagination(service, job_request):
+    """SQL-level pagination returns correct page when sorting by date."""
+    for i in range(5):
+        service.launch_job(job_request(f"job-{i}"), None)
+
+    # Request page of 2
+    request = cluster_pb2.Controller.ListJobsRequest(offset=0, limit=2)
+    response = service.list_jobs(request, None)
+
+    assert len(response.jobs) == 2
+    assert response.total_count == 5
+    assert response.has_more is True
+
+    # Second page
+    request2 = cluster_pb2.Controller.ListJobsRequest(offset=2, limit=2)
+    response2 = service.list_jobs(request2, None)
+
+    assert len(response2.jobs) == 2
+    assert response2.total_count == 5
+    assert response2.has_more is True
+
+    # No overlap between pages
+    page1_ids = {j.job_id for j in response.jobs}
+    page2_ids = {j.job_id for j in response2.jobs}
+    assert page1_ids.isdisjoint(page2_ids)
+
+    # Last page
+    request3 = cluster_pb2.Controller.ListJobsRequest(offset=4, limit=2)
+    response3 = service.list_jobs(request3, None)
+
+    assert len(response3.jobs) == 1
+    assert response3.has_more is False
+
+
+def test_list_jobs_state_filter(service, job_request):
+    """SQL pagination respects state_filter."""
+    service.launch_job(job_request("job-a"), None)
+    service.launch_job(job_request("job-b"), None)
+    service.terminate_job(
+        cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("test-user", "job-b").to_wire()), None
+    )
+
+    # Filter to killed only
+    request = cluster_pb2.Controller.ListJobsRequest(state_filter="killed", limit=10)
+    response = service.list_jobs(request, None)
+
+    assert len(response.jobs) == 1
+    assert response.jobs[0].state == cluster_pb2.JOB_STATE_KILLED
+
+
+def test_list_jobs_name_filter(service, job_request):
+    """Name filter returns only matching jobs."""
+    service.launch_job(job_request("alpha-job"), None)
+    service.launch_job(job_request("beta-job"), None)
+
+    request = cluster_pb2.Controller.ListJobsRequest(name_filter="alpha")
+    response = service.list_jobs(request, None)
+
+    assert len(response.jobs) == 1
+    assert "alpha" in response.jobs[0].name.lower()
+
+
+def test_list_jobs_includes_descendants(service, state, job_request):
+    """list_jobs returns top-level jobs plus their descendants for tree display."""
+    service.launch_job(job_request("parent-job"), None)
+    # Submit child job directly via transitions
+    parent_id = JobName.root("test-user", "parent-job")
+    child_id = JobName.from_wire(parent_id.to_wire() + "/child")
+    child_req = cluster_pb2.Controller.LaunchJobRequest(
+        name=child_id.to_wire(),
+        entrypoint=cluster_pb2.RuntimeEntrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+    )
+    child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
+    state.submit_job(child_id, child_req, Timestamp.now())
+
+    request = cluster_pb2.Controller.ListJobsRequest()
+    response = service.list_jobs(request, None)
+
+    # Both parent and child should appear; pagination counts only top-level jobs
+    job_ids = [j.job_id for j in response.jobs]
+    assert parent_id.to_wire() in job_ids
+    assert child_id.to_wire() in job_ids
+    assert response.total_count == 1
+
+
+# =============================================================================
+# SQL Aggregation Tests
+# =============================================================================
+
+
+def test_task_summaries_sql_group_by(state, service, job_request):
+    """_task_summaries_for_jobs SQL GROUP BY produces correct aggregates."""
+    from iris.cluster.controller.service import _task_summaries_for_jobs
+
+    # Launch a job with 3 replicas
+    service.launch_job(job_request("multi-task", replicas=3), None)
+
+    job_id = JobName.root("test-user", "multi-task")
+    summaries = _task_summaries_for_jobs(state._db, {job_id})
+
+    assert job_id in summaries
+    s = summaries[job_id]
+    assert s.task_count == 3
+    # All tasks should be pending
+    assert s.task_state_counts.get(cluster_pb2.TASK_STATE_PENDING, 0) == 3
+    assert s.completed_count == 0
+    assert s.failure_count == 0
+    assert s.preemption_count == 0
+
+
+def test_live_user_stats_sql_aggregation(state, service, job_request):
+    """_live_user_stats SQL GROUP BY produces correct per-user counts."""
+    from iris.cluster.controller.service import _live_user_stats
+
+    service.launch_job(job_request("job-x", replicas=2), None)
+    service.launch_job(job_request("job-y"), None)
+
+    stats_list = _live_user_stats(state._db)
+    assert len(stats_list) >= 1
+
+    user_stats = {s.user: s for s in stats_list}
+    assert "test-user" in user_stats
+    s = user_stats["test-user"]
+
+    # 2 jobs
+    total_jobs = sum(s.job_state_counts.values())
+    assert total_jobs == 2
+
+    # 3 tasks total (2 + 1)
+    total_tasks = sum(s.task_state_counts.values())
+    assert total_tasks == 3
+
+
+def test_worker_addresses_for_tasks(state, service, job_request):
+    """_worker_addresses_for_tasks fetches only referenced workers."""
+    from iris.cluster.controller.service import _worker_addresses_for_tasks
+
+    # Register workers
+    _register_worker(state, WorkerId("w-1"))
+    _register_worker(state, WorkerId("w-2"))
+    _register_worker(state, WorkerId("w-3"))
+
+    # Launch job and assign one task to w-1
+    service.launch_job(job_request("assigned-job"), None)
+    job_id = JobName.root("test-user", "assigned-job")
+    task_id = JobName.from_wire(job_id.to_wire() + "/0")
+    state.queue_assignments([Assignment(task_id=task_id, worker_id=WorkerId("w-1"))])
+
+    # Get tasks with attempts
+    tasks = _query_tasks_with_attempts(state, job_id)
+    addresses = _worker_addresses_for_tasks(state._db, tasks)
+
+    # Should only have w-1
+    assert WorkerId("w-1") in addresses
+    assert len(addresses) == 1
+
+
 # =============================================================================
 # Worker Tests
 # =============================================================================
