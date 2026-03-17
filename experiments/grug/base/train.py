@@ -485,7 +485,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 if checkpointer is not None:
                     checkpointer.on_step(tree={"train_state": state}, step=int(state.step))
         except BaseException:
-            logger.exception("Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause")
+            logger.exception(
+                "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
+            )
             raise
         else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
