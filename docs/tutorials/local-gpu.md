@@ -53,14 +53,17 @@ See [JAX's installation guide](https://jax.readthedocs.io/en/latest/installation
 
 !!! tip
 If you are using a DGX Spark or similar machine with unified memory, you may need to dramatically reduce the memory that XLA preallocates for itself. You can do this by setting the `XLA_PYTHON_CLIENT_MEM_FRACTION` variable, to something like 0.5:
-`bash
-    export XLA_PYTHON_CLIENT_MEM_FRACTION=0.5
-    `
+
+```bash
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.5
+```
 
     You can also set this in your `.bashrc` or `.zshrc` file.
     ```bash
     echo 'export XLA_PYTHON_CLIENT_MEM_FRACTION=0.5' >> ~/.bashrc
     ```
+
+    For broader JAX/Levanter memory tuning (sharding, checkpointing, offloading), see [Making Things Fit in HBM](../references/hbm-optimization.md).
 
 ## Running an Experiment
 
@@ -70,7 +73,7 @@ Let's start by running the tiny model training script (GPU version) [`experiment
 ```bash
 export MARIN_PREFIX=local_store
 export WANDB_ENTITY=...
-python3 experiments/tutorials/train_tiny_model_gpu.py --prefix local_store
+uv run python experiments/tutorials/train_tiny_model_gpu.py --prefix local_store
 ```
 
 The `prefix` is the directory where the output will be saved. It can be a local directory or anything fsspec supports,

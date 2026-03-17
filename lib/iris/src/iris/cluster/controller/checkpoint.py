@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Controller checkpoint: SQLite backup, upload, and restore.
+"""Controller checkpoint: SQLite backup to remote storage and restore.
 
-This module handles only checkpoint I/O: writing timestamped SQLite copies,
-uploading to remote storage, and restoring the DB file from a checkpoint.
+This module handles only checkpoint I/O: writing timestamped SQLite copies
+to remote storage and restoring the DB file from a remote checkpoint.
 
 Autoscaler/scaling-group reconciliation lives in autoscaler.py and
 scaling_group.py respectively.
@@ -13,13 +13,15 @@ scaling_group.py respectively.
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 import fsspec.core
 
 from iris.cluster.controller.db import JOBS, TASKS, WORKERS, ControllerDB
-from iris.time_utils import RateLimiter, Timestamp
+from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,7 @@ class CheckpointResult:
 
 
 # ---------------------------------------------------------------------------
-# Checkpoint write + upload
+# Checkpoint write + restore
 # ---------------------------------------------------------------------------
 
 
@@ -50,51 +52,34 @@ def _fsspec_copy(src: str, dst: str) -> None:
         f_dst.write(f_src.read())
 
 
-def is_remote_path(path: str) -> bool:
-    """Return True if *path* uses a remote fsspec scheme (e.g. ``gs://``, ``s3://``)."""
-    return "://" in path and not path.startswith("file://")
-
-
-CHECKPOINT_DIR_NAME = "controller-checkpoints"
-
-
-def remote_checkpoint_prefix(bundle_prefix: str) -> str | None:
-    """Remote fsspec path for checkpoint uploads, or None for local-only."""
-    if bundle_prefix and is_remote_path(bundle_prefix):
-        return bundle_prefix.rstrip("/") + "/controller-state"
-    return None
-
-
-def upload_checkpoint_to_remote(local_path: Path, created_at: Timestamp, bundle_prefix: str) -> None:
-    """Upload a local checkpoint file to remote storage via fsspec."""
-    prefix = remote_checkpoint_prefix(bundle_prefix)
-    if prefix is None:
-        return
-    try:
-        remote_timestamped = f"{prefix}/checkpoint-{created_at.epoch_ms()}.sqlite3"
-        remote_latest = f"{prefix}/latest.sqlite3"
-        _fsspec_copy(str(local_path), remote_timestamped)
-        _fsspec_copy(str(local_path), remote_latest)
-        logger.info("Checkpoint uploaded to %s", remote_timestamped)
-    except Exception:
-        logger.exception("Failed to upload checkpoint to remote storage")
-
-
 def write_checkpoint(
     db: ControllerDB,
-    bundle_prefix: str,
-) -> tuple[Path, CheckpointResult]:
-    """Write a timestamped SQLite checkpoint copy with local + remote upload.
+    remote_state_dir: str,
+) -> tuple[str, CheckpointResult]:
+    """Write a timestamped SQLite checkpoint copy directly to remote storage.
 
-    Returns the local path and a summary of the checkpoint contents.
+    Backs up the DB to a local temp file, uploads to remote, then deletes
+    the local copy. Returns the remote path and a summary of checkpoint contents.
     """
     created_at = Timestamp.now()
-    ckpt_dir = db.db_path.parent / CHECKPOINT_DIR_NAME
-    ckpt_dir.mkdir(parents=True, exist_ok=True)
-    path = ckpt_dir / f"checkpoint-{created_at.epoch_ms()}.sqlite3"
-    db.backup_to(path)
-    _fsspec_copy(str(path), str(ckpt_dir / "latest.sqlite3"))
-    upload_checkpoint_to_remote(path, created_at, bundle_prefix)
+    prefix = remote_state_dir.rstrip("/") + "/controller-state"
+    remote_timestamped = f"{prefix}/checkpoint-{created_at.epoch_ms()}.sqlite3"
+    remote_latest = f"{prefix}/latest.sqlite3"
+
+    # Write to a temp file next to the DB, upload, then clean up.
+    tmp_dir = db.db_path.parent
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(suffix=".sqlite3", dir=tmp_dir)
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        db.backup_to(tmp_path)
+        _fsspec_copy(str(tmp_path), remote_timestamped)
+        _fsspec_copy(str(tmp_path), remote_latest)
+        logger.info("Checkpoint uploaded to %s", remote_timestamped)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
     with db.snapshot() as snapshot:
         job_count = snapshot.count(JOBS)
         task_count = snapshot.count(TASKS)
@@ -105,47 +90,32 @@ def write_checkpoint(
         task_count=task_count,
         worker_count=worker_count,
     )
-    return path, result
+    return remote_timestamped, result
 
 
-def maybe_periodic_checkpoint(
-    db: ControllerDB,
-    bundle_prefix: str,
-    limiter: RateLimiter | None,
-    checkpoint_in_progress: bool,
-) -> None:
-    """Write a best-effort periodic checkpoint DB copy."""
-    if limiter is None:
-        return
-    if checkpoint_in_progress:
-        return
-    if not limiter.should_run():
-        return
-    try:
-        path, result = write_checkpoint(db, bundle_prefix)
-        logger.info(
-            "Periodic checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
-            path,
-            result.job_count,
-            result.task_count,
-            result.worker_count,
-        )
-    except Exception:
-        logger.exception("Periodic checkpoint failed")
-
-
-def restore_db_from_checkpoint(
-    db: ControllerDB,
-    bundle_prefix: str,
+def download_checkpoint_to_local(
+    remote_state_dir: str,
+    local_db_path: Path,
     checkpoint_path: str | None = None,
 ) -> bool:
-    """Restore the SQLite DB file from a checkpoint. Returns True if found."""
-    source = checkpoint_path if checkpoint_path else str(db.db_path.parent / CHECKPOINT_DIR_NAME / "latest.sqlite3")
+    """Download a remote checkpoint SQLite file to a local path.
+
+    Used at startup to seed the local DB before ControllerDB is created.
+    Returns True if a checkpoint was downloaded, False if none found.
+    """
+    if checkpoint_path:
+        source = checkpoint_path
+    else:
+        source = remote_state_dir.rstrip("/") + "/controller-state/latest.sqlite3"
+
     fs, fs_path = fsspec.core.url_to_fs(source)
     if not fs.exists(fs_path):
-        logger.info("No checkpoint DB found at %s, starting fresh", source)
+        logger.info("No remote checkpoint at %s, starting fresh", source)
         return False
 
-    db.replace_from(source)
-    logger.info("Restored checkpoint DB from %s", source)
+    local_db_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = local_db_path.with_suffix(".download.tmp")
+    _fsspec_copy(source, str(tmp_path))
+    tmp_path.rename(local_db_path)
+    logger.info("Downloaded checkpoint from %s to %s", source, local_db_path)
     return True

@@ -508,7 +508,7 @@ function idleThresholdMs(groupName: string): number {
                     @click="toggleSlices(gs.group)"
                   >
                     <span class="text-[10px] text-text-muted">
-                      {{ expandedSlices.has(gs.group) ? '\u25BC' : '\u25B6' }}
+                      {{ expandedSlices.has(gs.group) ? '▼' : '▶' }}
                     </span>
                     <span class="inline-flex items-center gap-1">
                       <template v-for="state in SLICE_BADGE_ORDER" :key="state">
@@ -545,7 +545,7 @@ function idleThresholdMs(groupName: string): number {
                     @click="toggleDemand(gs.group)"
                   >
                     <span class="text-[10px] text-text-muted mr-1">
-                      {{ expandedDemand.has(gs.group) ? '\u25BC' : '\u25B6' }}
+                      {{ expandedDemand.has(gs.group) ? '▼' : '▶' }}
                     </span>
                     {{ groupDemand(gs.group) }}
                   </button>
@@ -602,6 +602,12 @@ function idleThresholdMs(groupName: string): number {
                       <span v-else class="text-text-muted">unknown</span>
                       <span class="text-text-muted text-[11px]">
                         {{ timestampMs(slice.createdAt) ? formatRelativeTime(timestampMs(slice.createdAt)) : '-' }}
+                      </span>
+                      <!-- Per-VM task counts -->
+                      <span v-if="(slice.vms ?? []).length > 0" class="text-text-muted text-[11px]">
+                        <span v-for="(vm, vi) in (slice.vms ?? [])" :key="vm.vmId" :title="`${vm.vmId}: ${vm.runningTaskCount ?? 0} tasks`">
+                          {{ vi > 0 ? ', ' : '' }}vm{{ vi }}: {{ vm.runningTaskCount ?? 0 }}t
+                        </span>
                       </span>
                     </div>
                   </div>

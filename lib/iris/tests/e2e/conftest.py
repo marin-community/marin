@@ -12,6 +12,7 @@ stale worker state or chaos bleed. Chaos state is also reset per-test via an
 autouse fixture.
 """
 
+import fcntl
 import logging
 import os
 import shutil
@@ -25,8 +26,7 @@ from pathlib import Path
 import pytest
 from iris.chaos import reset_chaos
 from iris.client.client import IrisClient, Job
-from iris.cluster.config import load_config, make_local_config
-from iris.cluster.manager import connect_cluster
+from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
 from iris.cluster.constraints import Constraint, WellKnownAttribute
 from iris.cluster.types import (
@@ -48,11 +48,28 @@ DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _build_dashboard():
-    """Build the Vue dashboard once per test session so dashboard tests can render."""
-    from iris.cli.build import _ensure_dashboard_dist
+def _ensure_dashboard_built(tmp_path_factory):
+    """Build dashboard assets once per session so dashboard tests have content to render.
 
-    _ensure_dashboard_dist()
+    With pytest-xdist each worker gets its own session fixture, so all 8 workers
+    race to run ``npm ci`` in the same directory — corrupting node_modules.
+    A filelock serialises this so only one worker installs at a time.
+    """
+    dashboard_dir = IRIS_ROOT / "dashboard"
+    if not (dashboard_dir / "package.json").exists():
+        return
+    if shutil.which("npm") is None:
+        logging.getLogger(__name__).warning("npm not found, skipping dashboard build for tests")
+        return
+
+    lock_path = tmp_path_factory.getbasetemp().parent / "dashboard_build.lock"
+    with open(lock_path, "w") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True, capture_output=True)
+            subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, check=True, capture_output=True)
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
 
 def pytest_addoption(parser):

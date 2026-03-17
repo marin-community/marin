@@ -2,6 +2,11 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 
 const routes = [
   {
+    path: '/login',
+    component: () => import('./components/controller/LoginPage.vue'),
+    meta: { public: true },
+  },
+  {
     path: '/',
     component: () => import('./components/controller/JobsTab.vue'),
   },
@@ -28,6 +33,28 @@ const routes = [
   {
     path: '/users',
     component: () => import('./components/controller/UsersTab.vue'),
+  },
+  {
+    path: '/account',
+    component: () => import('./components/controller/AccountTab.vue'),
+  },
+  {
+    path: '/query',
+    component: () => import('./components/controller/QueryExplorerTab.vue'),
+  },
+  {
+    path: '/system/controller/threads',
+    component: () => import('./components/controller/ThreadDump.vue'),
+  },
+  {
+    path: '/system/worker/:workerId(.+)/threads',
+    component: () => import('./components/controller/ThreadDump.vue'),
+    props: true,
+  },
+  {
+    path: '/job/:jobId(.+)/task/:taskId(.+)/threads',
+    component: () => import('./components/controller/ThreadDump.vue'),
+    props: true,
   },
   {
     path: '/job/:jobId(.+)/task/:taskId(.+)',

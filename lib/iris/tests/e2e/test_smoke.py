@@ -17,13 +17,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from connectrpc.errors import ConnectError
 from iris.cli.cluster import _build_cluster_images, _pin_latest_images
 from iris.client.client import IrisClient
 from iris.cluster.config import IrisConfig, load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
-from iris.cluster.manager import connect_cluster
+from iris.cluster.config import connect_cluster
 from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.types import (
+    Entrypoint,
     ReservationEntry,
     ResourceSpec,
     gpu_device,
@@ -125,6 +127,15 @@ def _make_smoke_config() -> config_pb2.IrisClusterConfig:
     return make_local_config(config)
 
 
+def _clear_remote_state(remote_state_dir: str) -> None:
+    """Remove all files under the remote state dir so the controller starts fresh."""
+    import fsspec
+
+    fs, path = fsspec.core.url_to_fs(remote_state_dir)
+    if fs.exists(path):
+        fs.rm(path, recursive=True)
+
+
 def _cloud_smoke_cluster(config_path: str, mode: str, label_prefix: str | None = None):
     """Manage full cloud cluster lifecycle: stop old → build images → start → test → stop.
 
@@ -136,8 +147,8 @@ def _cloud_smoke_cluster(config_path: str, mode: str, label_prefix: str | None =
     if label_prefix:
         config.platform.label_prefix = label_prefix
         # Isolate snapshot storage so this run doesn't restore stale state
-        # from previous runs that shared the default bundle_prefix.
-        config.storage.bundle_prefix = f"gs://marin-tmp-eu-west4/ttl=7d/iris/bundles/{label_prefix}"
+        # from previous runs that shared the default remote_state_dir.
+        config.storage.remote_state_dir = f"gs://marin-tmp-eu-west4/ttl=7d/iris/state/{label_prefix}"
 
     logger.info("Pinning and building cluster images...")
     _pin_latest_images(config)
@@ -146,12 +157,21 @@ def _cloud_smoke_cluster(config_path: str, mode: str, label_prefix: str | None =
     iris_config = IrisConfig(config)
     platform = iris_config.platform()
 
-    # Tear down any existing cluster for a clean slate
+    # Tear down any existing cluster for a clean slate.
+    # GCE controller deletion is synchronous, so the old controller is fully
+    # gone before we clear remote state (no stale checkpoint race).
     logger.info("Stopping any existing cluster...")
     try:
         platform.stop_all(config)
     except Exception:
         logger.info("No existing cluster to stop (or stop failed), continuing")
+
+    # Wipe remote state so the new controller doesn't restore a stale checkpoint
+    # (old bundle IDs, finished jobs from a previous run).
+    remote_state_dir = config.storage.remote_state_dir
+    if remote_state_dir:
+        logger.info("Clearing remote state dir: %s", remote_state_dir)
+        _clear_remote_state(remote_state_dir)
 
     logger.info("Starting fresh controller...")
     address = platform.start_controller(config)
@@ -254,7 +274,7 @@ def smoke_screenshot(smoke_page, tmp_path_factory):
     """Module-scoped screenshot capture for smoke dashboard tests."""
     if isinstance(smoke_page, _NoOpPage):
 
-        def noop_capture(label: str) -> Path:
+        def noop_capture(label: str, description: str = "") -> Path:
             return tmp_path_factory.mktemp("screenshots") / f"smoke-{label}.png"
 
         return noop_capture
@@ -267,9 +287,12 @@ def smoke_screenshot(smoke_page, tmp_path_factory):
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    def capture(label: str) -> Path:
+    def capture(label: str, description: str = "") -> Path:
         path = output_dir / f"smoke-{label}.png"
         smoke_page.screenshot(path=str(path), full_page=True)
+        if description:
+            desc_path = output_dir / f"smoke-{label}.txt"
+            desc_path.write_text(description)
         return path
 
     return capture
@@ -307,7 +330,7 @@ def test_workers_ready(smoke_cluster, smoke_page, smoke_screenshot):
         "() => document.body.textContent.includes('Healthy')",
         timeout=10000,
     )
-    smoke_screenshot("workers-ready")
+    smoke_screenshot("workers-ready", "Fleet tab showing healthy workers with green Healthy badges")
 
 
 # ============================================================================
@@ -329,7 +352,9 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
     wait_for_dashboard_ready(smoke_page)
     for name in ["smoke-simple", "smoke-failed", "smoke-running"]:
         assert_visible(smoke_page, f"text={name}")
-    smoke_screenshot("jobs-tab")
+    smoke_screenshot(
+        "jobs-tab", "Jobs tab listing smoke-simple (succeeded), smoke-failed (failed), and smoke-running (running)"
+    )
 
     smoke_cluster.kill(running)
 
@@ -345,7 +370,9 @@ def test_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screenshot):
         "() => document.body.textContent.includes('Succeeded')",
         timeout=10000,
     )
-    smoke_screenshot("job-detail")
+    smoke_screenshot(
+        "job-detail", "Job detail page for succeeded job with state badge, task table, and job-level log viewer"
+    )
 
 
 def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
@@ -361,7 +388,11 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         "() => document.body.textContent.includes('DONE: all lines emitted')",
         timeout=10000,
     )
-    smoke_screenshot("task-logs-default")
+    smoke_screenshot(
+        "task-logs-default",
+        "Task detail page with a log viewer panel displaying log output lines. "
+        "Should have structural elements like a status card and resource info.",
+    )
 
     # "validation failed" only appears in ERROR lines
     smoke_page.fill("input[placeholder='Filter logs...']", "validation failed")
@@ -370,7 +401,10 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         "!document.body.textContent.includes('processing data batch')",
         timeout=5000,
     )
-    smoke_screenshot("task-logs-filtered")
+    smoke_screenshot(
+        "task-logs-filtered",
+        "Task detail page with log filter input populated and filtered log lines visible in the log viewer.",
+    )
 
 
 def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
@@ -391,21 +425,32 @@ def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
             timeout=5000,
         )
         assert_visible(smoke_page, "text=region")
-        smoke_screenshot("constraints")
+        smoke_screenshot(
+            "constraints", "Job detail page showing constraint chips for region, env-tag, and device-variant"
+        )
 
 
 def test_dashboard_scheduling_diagnostic(smoke_cluster, smoke_page, smoke_screenshot):
     """Scheduling diagnostic shows pending reason for oversized job."""
     smoke_cluster.wait_for_workers(1, timeout=smoke_cluster.job_timeout)
     with smoke_cluster.launched_job(TestJobs.quick, "smoke-diag-cpu", cpu=999_999) as job:
-        status = smoke_cluster.status(job)
+        # Poll until the scheduler has evaluated the job and produced a
+        # CPU-specific pending reason (avoids racing the scheduler loop).
+        deadline = time.monotonic() + smoke_cluster.job_timeout
+        while time.monotonic() < deadline:
+            status = smoke_cluster.status(job)
+            if "cpu" in status.pending_reason.lower():
+                break
+            time.sleep(0.2)
         assert status.state == cluster_pb2.JOB_STATE_PENDING
         assert "cpu" in status.pending_reason.lower()
 
         dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
         wait_for_dashboard_ready(smoke_page)
         assert_visible(smoke_page, "text=Scheduling Diagnostic")
-        smoke_screenshot("scheduling-diagnostic")
+        smoke_screenshot(
+            "scheduling-diagnostic", "Job detail page with yellow scheduling diagnostic banner explaining CPU capacity"
+        )
 
 
 def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot):
@@ -416,7 +461,7 @@ def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot):
         "() => document.body.textContent.includes('Healthy')",
         timeout=10000,
     )
-    smoke_screenshot("workers-tab")
+    smoke_screenshot("workers-tab", "Fleet tab showing worker list with health status badges")
 
 
 def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot):
@@ -435,14 +480,16 @@ def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot):
         f"() => document.body.textContent.includes('{worker_id}') && " "document.body.textContent.includes('Healthy')",
         timeout=10000,
     )
-    smoke_screenshot("worker-detail")
+    smoke_screenshot(
+        "worker-detail", "Worker detail page with identity info, health badge, metric sparklines, and task history"
+    )
 
 
 def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Autoscaler tab shows scale groups."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/autoscaler")
     wait_for_dashboard_ready(smoke_page)
-    smoke_screenshot("autoscaler-tab")
+    smoke_screenshot("autoscaler-tab", "Autoscaler tab showing scale group configuration")
 
 
 def test_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screenshot):
@@ -456,7 +503,45 @@ def test_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screenshot):
         "document.body.textContent.includes('GetProcessStatus')",
         timeout=10000,
     )
-    smoke_screenshot("status-tab")
+    smoke_screenshot("status-tab", "Status tab showing controller process info or GetProcessStatus error")
+
+
+def test_dashboard_job_detail_with_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
+    """Job detail page shows combined log viewer for all tasks."""
+    job_id = verbose_job.job_id.to_wire()
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}")
+    wait_for_dashboard_ready(smoke_page)
+    smoke_page.wait_for_function(
+        "() => document.body.textContent.includes('Job Logs')",
+        timeout=10000,
+    )
+    smoke_screenshot(
+        "job-detail-logs",
+        "Job detail page showing task table and combined job-level log viewer with log lines",
+    )
+
+
+def test_dashboard_task_detail_sparklines(smoke_cluster, smoke_page, smoke_screenshot):
+    """Task detail page shows resource sparklines for a running task."""
+    job = smoke_cluster.submit(TestJobs.busy_loop, "smoke-sparkline", 15)
+    smoke_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
+    time.sleep(8)
+
+    task_status = smoke_cluster.task_status(job)
+    task_id = task_status.task_id
+    job_id = job.job_id.to_wire()
+
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}/task/{task_id}")
+    wait_for_dashboard_ready(smoke_page)
+    smoke_page.wait_for_function(
+        "() => document.querySelectorAll('.sparkline').length >= 2",
+        timeout=15000,
+    )
+    smoke_screenshot(
+        "task-detail-sparklines",
+        "Task detail page for a running task showing CPU and memory sparkline charts with resource history",
+    )
+    smoke_cluster.kill(job)
 
 
 # ============================================================================
@@ -504,6 +589,33 @@ def test_reservation_gates_scheduling(smoke_cluster):
         regular = smoke_cluster.submit(TestJobs.quick, "smoke-regular-while-reserved")
         status = smoke_cluster.wait(regular, timeout=smoke_cluster.job_timeout)
         assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+
+def test_cancel_job_releases_resources(smoke_cluster):
+    """Cancelling a running job decommits worker resources so new jobs can schedule.
+
+    Submits a resource-heavy job, cancels it, then verifies a second job with
+    the same resource requirements succeeds — proving the worker's committed
+    resources were fully released by cancel_job().
+
+    Regression test for #3553.
+    """
+    # Use most of a single worker's CPU so the followup job can't schedule
+    # until the heavy job is cancelled. Local workers have 1000 cores, cloud
+    # TPU VMs have 128 — pick a value that works in both modes.
+    heavy_cpu = 8 if smoke_cluster.is_cloud else 900
+
+    job = smoke_cluster.submit(TestJobs.sleep, "smoke-cancel-heavy", 30, cpu=heavy_cpu)
+    smoke_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
+
+    smoke_cluster.kill(job)
+    killed_status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
+    assert killed_status.state == cluster_pb2.JOB_STATE_KILLED
+
+    # If resources weren't released, this job would stay PENDING forever.
+    followup = smoke_cluster.submit(TestJobs.quick, "smoke-cancel-followup", cpu=heavy_cpu)
+    followup_status = smoke_cluster.wait(followup, timeout=smoke_cluster.job_timeout)
+    assert followup_status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
 # ============================================================================
@@ -593,6 +705,7 @@ def test_region_constrained_routing(smoke_cluster, capabilities):
 # ============================================================================
 
 
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="py-spy ptrace can segfault worker threads in CI")
 def test_profile_running_task(smoke_cluster):
     """Profile a running task, verify data returned."""
     if smoke_cluster.is_cloud:
@@ -634,18 +747,19 @@ def test_profile_running_task(smoke_cluster):
 def test_checkpoint_restore():
     """Controller restart resumes from checkpoint: completed jobs visible, cluster functional.
 
-    Uses a dedicated cluster (not the shared smoke_cluster). A single platform
-    instance restarts its controller between phases so the persistent DB dir
-    (held by LocalController across stop/start) preserves checkpoint state.
+    Uses a dedicated LocalCluster (not the shared smoke_cluster). The persistent DB dir
+    (held by LocalCluster across stop/start) preserves checkpoint state.
     Phase 1 — run a job and write a checkpoint.
     Phase 2 — restart the controller and verify the job is still SUCCEEDED
               and the cluster can accept new work.
     """
+    from iris.cluster.local_cluster import LocalCluster
+
     config = load_config(DEFAULT_CONFIG)
     config = make_local_config(config)
 
-    platform = IrisConfig(config).platform()
-    url = platform.start_controller(config)
+    cluster = LocalCluster(config)
+    url = cluster.start()
     try:
         # Phase 1: complete a job, write checkpoint, restart controller.
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
@@ -662,7 +776,7 @@ def test_checkpoint_restore():
         assert ckpt.job_count >= 1
         controller_client.close()
 
-        url = platform.restart_controller(config)
+        url = cluster.restart()
 
         # Phase 2: verify restored state and submit new work.
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
@@ -682,8 +796,7 @@ def test_checkpoint_restore():
 
         controller_client.close()
     finally:
-        platform.stop_controller(config)
-        platform.shutdown()
+        cluster.close()
 
 
 # ============================================================================
@@ -737,6 +850,7 @@ def test_gpu_worker_metadata(tmp_path):
     works in local mode — it doesn't run against real GPU/TPU clusters.
     """
     config = _make_controller_only_config()
+
     with connect_cluster(config) as url:
         original_run = subprocess.run
         with patch(
@@ -762,7 +876,7 @@ def test_gpu_worker_metadata(tmp_path):
             )
             worker = Worker(
                 worker_config,
-                container_runtime=ProcessRuntime(),
+                container_runtime=ProcessRuntime(cache_dir=cache_dir),
                 environment_provider=env_provider,
                 threads=threads,
             )
@@ -799,3 +913,201 @@ def test_gpu_worker_metadata(tmp_path):
             finally:
                 worker.stop()
                 threads.stop(timeout=Duration.from_seconds(5.0))
+
+
+# ============================================================================
+# Dashboard authentication flow (standalone cluster with auth enabled)
+# ============================================================================
+
+_AUTH_TOKEN = "e2e-test-token"
+_AUTH_USER = "test-user"
+
+
+def test_dashboard_login_flow():
+    """Dashboard shows login page when auth is enabled, allows token login, and supports logout.
+
+    Creates a standalone local cluster with static auth via config. Exercises the
+    full browser auth flow: redirect to login, paste token, verify RPC data loads,
+    then logout back to the login page.
+    """
+    from iris.cluster.local_cluster import LocalCluster
+
+    try:
+        import playwright.sync_api as pw
+    except ImportError:
+        pytest.skip("playwright not installed")
+
+    config = _make_controller_only_config()
+    config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
+    controller = LocalCluster(config)
+    url = controller.start()
+
+    # Run Playwright in a separate thread to avoid conflict with the asyncio
+    # event loop that AnyIO worker threads may have installed.
+    errors: list[Exception] = []
+
+    def _run_browser_flow():
+        try:
+            with pw.sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+
+                # Navigate to dashboard root — auth guard should redirect to login
+                page.goto(f"{url}/")
+                page.wait_for_load_state("domcontentloaded")
+                wait_for_dashboard_ready(page)
+
+                page.wait_for_function(
+                    "() => window.location.hash.includes('/login')",
+                    timeout=10000,
+                )
+
+                # Login page should show the token textarea and login button
+                assert_visible(page, "text=Iris Dashboard")
+                assert_visible(page, "text=bearer token")
+                assert_visible(page, "button:has-text('Login')")
+
+                # Enter the token and submit
+                page.fill("textarea#token", _AUTH_TOKEN)
+                page.click("button:has-text('Login')")
+
+                # After login, should redirect to jobs tab (root hash)
+                page.wait_for_function(
+                    "() => !window.location.hash.includes('/login')",
+                    timeout=10000,
+                )
+                wait_for_dashboard_ready(page)
+
+                # Verify the dashboard loaded — the Jobs tab heading or
+                # an empty "No jobs" state should be visible
+                page.wait_for_function(
+                    "() => document.body.textContent.includes('Jobs') || "
+                    "document.body.textContent.includes('No jobs')",
+                    timeout=10000,
+                )
+
+                # Logout should redirect back to login
+                page.click("button:has-text('Logout')")
+                page.wait_for_function(
+                    "() => window.location.hash.includes('/login')",
+                    timeout=10000,
+                )
+                assert_visible(page, "text=bearer token")
+
+                page.close()
+                browser.close()
+        except Exception as exc:
+            errors.append(exc)
+
+    import threading
+
+    t = threading.Thread(target=_run_browser_flow)
+    t.start()
+    t.join(timeout=60)
+
+    try:
+        if errors:
+            raise errors[0]
+        if t.is_alive():
+            raise TimeoutError("Browser flow did not complete within 60s")
+    finally:
+        controller.close()
+
+
+def _login_for_jwt(url: str, identity_token: str) -> str:
+    """Exchange a raw identity token for a JWT via the Login RPC."""
+    client = ControllerServiceClientSync(address=url, timeout_ms=10000)
+    try:
+        resp = client.login(cluster_pb2.LoginRequest(identity_token=identity_token))
+        return resp.token
+    finally:
+        client.close()
+
+
+def test_static_auth_rpc_access():
+    """Static auth rejects unauthenticated and wrong-token RPCs, accepts valid JWT."""
+    from iris.cluster.local_cluster import LocalCluster
+    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
+
+    config = _make_controller_only_config()
+    config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
+    controller = LocalCluster(config)
+    url = controller.start()
+
+    try:
+        list_req = cluster_pb2.Controller.ListWorkersRequest()
+
+        # Unauthenticated: should be rejected with 401
+        unauth_client = ControllerServiceClientSync(address=url, timeout_ms=5000)
+        with pytest.raises(ConnectError, match=r"(?i)authorization"):
+            unauth_client.list_workers(list_req)
+        unauth_client.close()
+
+        # Wrong token: should be rejected
+        wrong_injector = AuthTokenInjector(StaticTokenProvider("wrong-token"))
+        wrong_client = ControllerServiceClientSync(address=url, timeout_ms=5000, interceptors=[wrong_injector])
+        with pytest.raises(ConnectError, match=r"(?i)authenticat"):
+            wrong_client.list_workers(list_req)
+        wrong_client.close()
+
+        # Exchange static token for JWT, then use JWT
+        jwt_token = _login_for_jwt(url, _AUTH_TOKEN)
+        valid_injector = AuthTokenInjector(StaticTokenProvider(jwt_token))
+        valid_client = ControllerServiceClientSync(address=url, timeout_ms=5000, interceptors=[valid_injector])
+        response = valid_client.list_workers(list_req)
+        assert response is not None
+        valid_client.close()
+    finally:
+        controller.close()
+
+
+def test_static_auth_job_ownership():
+    """Job ownership: user A cannot terminate user B's job.
+
+    Submits a job as user-a via the RPC layer (no workers needed; job stays
+    PENDING). Verifies user-b gets PERMISSION_DENIED when trying to terminate
+    it, while user-a can terminate their own job.
+    """
+    from iris.cluster.local_cluster import LocalCluster
+    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
+
+    _TOKEN_A = "token-user-a"
+    _TOKEN_B = "token-user-b"
+
+    config = _make_controller_only_config()
+    config.auth.static.tokens[_TOKEN_A] = "user-a"
+    config.auth.static.tokens[_TOKEN_B] = "user-b"
+    controller = LocalCluster(config)
+    url = controller.start()
+
+    try:
+        # Exchange static tokens for JWTs via Login RPC
+        jwt_a = _login_for_jwt(url, _TOKEN_A)
+        jwt_b = _login_for_jwt(url, _TOKEN_B)
+
+        # User A submits a job (stays PENDING since no workers)
+        injector_a = AuthTokenInjector(StaticTokenProvider(jwt_a))
+        client_a = ControllerServiceClientSync(address=url, timeout_ms=10000, interceptors=[injector_a])
+
+        entrypoint = Entrypoint.from_callable(TestJobs.quick)
+        launch_req = cluster_pb2.Controller.LaunchJobRequest(
+            name="/user-a/auth-owned-job",
+            entrypoint=entrypoint.to_proto(),
+            resources=ResourceSpec(cpu=1, memory="1g").to_proto(),
+        )
+        resp = client_a.launch_job(launch_req)
+        job_id = resp.job_id
+
+        # User B tries to terminate user A's job — should fail
+        injector_b = AuthTokenInjector(StaticTokenProvider(jwt_b))
+        client_b = ControllerServiceClientSync(address=url, timeout_ms=10000, interceptors=[injector_b])
+        with pytest.raises(ConnectError, match="cannot access resources owned by"):
+            client_b.terminate_job(cluster_pb2.Controller.TerminateJobRequest(job_id=job_id))
+
+        # User A can terminate their own job
+        client_a.terminate_job(cluster_pb2.Controller.TerminateJobRequest(job_id=job_id))
+
+        client_a.close()
+        client_b.close()
+    finally:
+        controller.close()

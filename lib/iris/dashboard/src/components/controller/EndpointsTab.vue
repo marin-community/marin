@@ -5,6 +5,7 @@ import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import type { EndpointInfo, ListEndpointsResponse } from '@/types/rpc'
 import EmptyState from '@/components/shared/EmptyState.vue'
+import CopyButton from '@/components/shared/CopyButton.vue'
 
 const SHOW_ALL_THRESHOLD = 100
 
@@ -143,7 +144,13 @@ function jobIdFromTaskId(taskId?: string): string | null {
           class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
         >
           <td class="px-3 py-2 text-[13px] font-mono">{{ ep.name }}</td>
-          <td class="px-3 py-2 text-[13px] font-mono text-text-secondary">{{ ep.address }}</td>
+          <td class="px-3 py-2 text-[13px] font-mono text-text-secondary">
+            <span v-if="ep.address" class="group/addr inline-flex items-center gap-1">
+              {{ ep.address }}
+              <CopyButton :value="ep.address" />
+            </span>
+            <span v-else>-</span>
+          </td>
           <td class="px-3 py-2 text-[13px]">
             <RouterLink
               v-if="ep.taskId && jobIdFromTaskId(ep.taskId)"

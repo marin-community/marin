@@ -186,27 +186,6 @@ def _get_disk_bytes() -> int:
         return 100 * 1024**3  # Default 100GB
 
 
-def collect_workdir_size_mb(workdir: Path) -> int:
-    """Calculate workdir size in MB using du -sm."""
-    if not workdir.exists():
-        return 0
-
-    result = subprocess.run(
-        ["du", "-sm", str(workdir)],
-        capture_output=True,
-        text=True,
-    )
-
-    if result.returncode != 0:
-        return 0
-
-    # du -sm output format: "SIZE\tPATH"
-    output = result.stdout.strip()
-    size_str = output.split("\t")[0]
-
-    return int(size_str)
-
-
 def _build_worker_attributes(
     *,
     accelerator_type: int,

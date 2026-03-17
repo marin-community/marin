@@ -14,11 +14,11 @@ Both ferries should keep core data assumptions aligned and share the same monito
 
 ## Ferry Lanes
 Templates:
-- `experiments/ferries/canary_ferry.py`
+- `experiments/ferries/canary_ferry.py` (MoE canary, TPU and GPU via `CANARY_ACCELERATOR`)
 - `experiments/ferries/daily.py`
 
 Current intent:
-- canary: catch infra/pretraining regressions early with a stable, mostly fixed config
+- canary: catch infra/pretraining regressions early with a stable Grug MoE config (one TPU, one GPU)
 - daily: exercise a larger run envelope and test small, explicit changes
 
 Shared baseline:
@@ -183,7 +183,7 @@ Recommendation / victory decision: <next action>
 
 #### 7) Seal and open log-only PR
 - Create and push a sealing tag for the exact launch commit (the commit containing the `experiments/ferries/daily.py` used for the run).
-- Open a PR that updates only `docs/experiments/daily-ferry-log.md`.
+- Open a PR that updates only `docs/experiments/daily-ferry-log.md`, following `.agents/skills/pull-request/SKILL.md` for description format.
 - Keep all detailed launch/retry/debug narrative in the run issue, not in the PR.
 - Apply canonical labels on the run-closure PR: `ferry`, `ferry-daily`, `ferry-log-only`, `ferry-sealed`.
 
@@ -191,12 +191,20 @@ Recommendation / victory decision: <next action>
 Default mode: launch the existing canary script as-is and monitor. Do not run the daily proposal/PR loop unless you are intentionally changing canary.
 Even for unchanged canary runs, ask the requester before launch unless they explicitly waived that requirement.
 
-Launch:
+Launch (TPU):
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py \
-  --no_wait \
-  --cluster us-central1 \
-  -- python experiments/ferries/canary_ferry.py
+uv run iris --config=lib/iris/examples/marin.yaml \
+  job run --memory=16G --disk=16G --cpu=1 --extra=tpu \
+  -- python -m experiments.ferries.canary_ferry
+```
+
+Launch (GPU / CoreWeave):
+```bash
+uv run iris --config=lib/iris/examples/coreweave.yaml \
+  job run --memory=16G --disk=16G --cpu=1 --extra=cpu \
+  -e MARIN_PREFIX s3://marin-na/marin \
+  -e CANARY_ACCELERATOR gpu \
+  -- python -m experiments.ferries.canary_ferry
 ```
 
 If canary fails:

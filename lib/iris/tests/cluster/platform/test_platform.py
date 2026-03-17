@@ -68,10 +68,12 @@ def _make_slice_config(env: PlatformEnv, group_name: str) -> config_pb2.SliceCon
     elif env.name == "manual":
         cfg = config_pb2.SliceConfig(name_prefix=f"iris-{group_name}", num_vms=1)
         cfg.manual.CopyFrom(config_pb2.ManualSliceConfig())
+        cfg.labels[labels.iris_managed] = "true"
         cfg.labels[labels.iris_scale_group] = group_name
         return cfg
     else:
         cfg = config_pb2.SliceConfig(name_prefix=f"test-{group_name}", num_vms=1)
+        cfg.labels[labels.iris_managed] = "true"
         cfg.labels[labels.iris_scale_group] = group_name
         return cfg
 
@@ -319,11 +321,11 @@ def test_gcp_create_vm_slice_mode_produces_single_worker_slice():
         assert status.workers[0].internal_address
         assert handle.scale_group == "cpu-vm"
 
-        listed = platform.list_all_slices(labels={Labels("iris").iris_managed: "true"})
+        listed = platform.list_all_slices()
         assert handle.slice_id in {s.slice_id for s in listed}
 
         handle.terminate()
-        listed_after = platform.list_all_slices(labels={Labels("iris").iris_managed: "true"})
+        listed_after = platform.list_all_slices()
         assert handle.slice_id not in {s.slice_id for s in listed_after}
 
 
@@ -361,7 +363,7 @@ def test_gcp_create_vm_slice_mode_with_long_prefix_uses_valid_slice_id():
         status = handle.describe()
         assert len(status.workers) == 1
         assert getattr(status.workers[0]._remote_exec, "ssh_user", None) == "iris"
-        listed = platform.list_all_slices(labels={Labels("iris").iris_managed: "true"})
+        listed = platform.list_all_slices()
         assert handle.slice_id in {s.slice_id for s in listed}
 
 
@@ -479,7 +481,7 @@ def test_gcp_list_slices_skips_inactive_vm_instances():
                 vm_data["status"] = "TERMINATED"
                 break
 
-        listed = platform.list_all_slices(labels={Labels("iris").iris_managed: "true"})
+        listed = platform.list_all_slices()
         assert handle.slice_id not in {s.slice_id for s in listed}
 
 
@@ -510,7 +512,7 @@ def test_gcp_list_slices_preserves_vm_creation_timestamp():
                 vm_data["creationTimestamp"] = vm_creation_ts
                 break
 
-        listed = platform.list_all_slices(labels={Labels("iris").iris_managed: "true"})
+        listed = platform.list_all_slices()
         listed_by_id = {s.slice_id: s for s in listed}
         assert listed_by_id[handle.slice_id].created_at.epoch_ms() == expected_epoch_ms
 
@@ -619,25 +621,15 @@ def test_list_all_slices_returns_created_slices(platform_env: PlatformEnv):
     assert handle.slice_id in {s.slice_id for s in all_slices}
 
 
-def test_list_all_slices_filters_by_labels(platform_env: PlatformEnv):
-    """list_all_slices respects label filter."""
+def test_list_all_slices_returns_all_managed(platform_env: PlatformEnv):
+    """list_all_slices returns all managed slices regardless of scale group."""
     cfg_a = _make_slice_config(platform_env, "group-a")
     cfg_b = _make_slice_config(platform_env, "group-b")
     platform_env.platform.create_slice(cfg_a)
     platform_env.platform.create_slice(cfg_b)
 
-    labels = Labels(platform_env.label_prefix)
-    filtered = platform_env.platform.list_all_slices(labels={labels.iris_scale_group: "group-a"})
-    assert all(s.scale_group == "group-a" for s in filtered)
-    assert len(filtered) == 1
-
-
-def test_gcp_list_all_slices_raises_without_zones():
-    """GcpPlatform.list_all_slices raises when no zones configured."""
-    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
-    platform = GcpPlatform(gcp_config, label_prefix="iris")
-    with pytest.raises(ValueError, match="no zones configured"):
-        platform.list_all_slices()
+    all_slices = platform_env.platform.list_all_slices()
+    assert len(all_slices) == 2
 
 
 def test_gcp_list_all_slices_multi_zone():

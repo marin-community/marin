@@ -87,6 +87,7 @@ nav:
       - Contributing: dev-guide/contributing.md
       - Deployment: dev-guide/deployment.md
       - Dev TPU: dev-guide/dev_tpu.md
+      - Dev TPU (Iris): dev-guide/dev_tpu_iris.md
       - Tutorial Guidelines: dev-guide/tutorial-guidelines.md
       - Internal Guidelines: dev-guide/guidelines-internal.md
       - Building Docs: dev-guide/building-docs.md
@@ -96,6 +97,7 @@ nav:
       - Executor API: references/executor-api.md
       - Default Steps: references/default-steps.md
       - Training Configuration: references/train-config.md
+      - HBM Optimization: references/hbm-optimization.md
 
 markdown_extensions:
   - markdown.extensions.footnotes

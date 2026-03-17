@@ -402,3 +402,41 @@ export interface GetTransactionsResponse {
 
 /** Mapping from lowercase state name to count, e.g. { running: 2, pending: 5 } */
 export type TaskStateCounts = Record<string, number>
+
+// -- Current User --
+
+export interface GetCurrentUserResponse {
+  userId: string
+  role: string
+  displayName?: string
+}
+
+// -- API Keys --
+
+export interface ApiKeyInfo {
+  keyId: string
+  keyPrefix: string
+  userId: string
+  name: string
+  createdAtMs: string
+  lastUsedAtMs: string
+  expiresAtMs: string
+  revoked: boolean
+}
+
+export interface ListApiKeysResponse {
+  keys: ApiKeyInfo[]
+}
+
+// -- Generic Query API --
+
+/** Column metadata describing a single column in a query result set. */
+export interface ColumnMeta {
+  name: string
+  type: string
+}
+
+export interface RawQueryResponse {
+  columns: ColumnMeta[]
+  rows: string[]
+}

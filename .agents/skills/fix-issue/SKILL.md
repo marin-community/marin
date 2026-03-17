@@ -108,8 +108,8 @@ beginning work. Your tests will be minimal and refrain from using mocks.
 ## Uploading
 
 When all tests pass, you may proceed to upload your branch.
-You will then open a pull request for the branch.
-You will attach it to the Github issue with a comment summarizing the fix.
+Open a pull request following `.agents/skills/pull-request/SKILL.md`.
+Attach it to the Github issue with a comment summarizing the fix.
 
 ## Verify CI Status
 

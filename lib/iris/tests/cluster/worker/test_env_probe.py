@@ -13,6 +13,7 @@ from iris.cluster.worker.env_probe import (
     HostMetricsCollector,
     _read_net_dev_bytes,
     build_worker_metadata,
+    construct_worker_id,
 )
 from iris.rpc import config_pb2
 
@@ -255,6 +256,61 @@ def test_build_worker_metadata_gpu_diagnostic_fields():
     assert metadata.gpu_name == "H100"
 
 
+# --- Worker ID resolution ---
+
+
+def test_construct_worker_id_format():
+    """construct_worker_id produces the expected '{slice_id}-worker-{index}' format."""
+    assert construct_worker_id("marin-tpu_v6e_4-europe-west4-a-xxxx", 2) == (
+        "marin-tpu_v6e_4-europe-west4-a-xxxx-worker-2"
+    )
+    assert construct_worker_id("my-slice", 0) == "my-slice-worker-0"
+
+
+def test_worker_id_from_slice_id_and_tpu_worker_index(tmp_path, monkeypatch):
+    """When WorkerConfig.slice_id is set and hardware reports a TPU worker index,
+    the Worker resolves worker_id as construct_worker_id(slice_id, tpu_worker_index).
+
+    This is the slice_id resolution path (priority 2), which takes precedence over
+    GCP metadata inference but not an explicit config.worker_id.
+    """
+    from iris.cluster.worker import worker as worker_mod
+    from iris.cluster.worker.worker import Worker, WorkerConfig
+
+    hardware = _make_hardware(tpu_worker_id="2", tpu_name="some-tpu-slice")
+
+    monkeypatch.setattr(worker_mod, "probe_hardware", lambda: hardware)
+
+    config = WorkerConfig(
+        cache_dir=tmp_path / "cache",
+        slice_id="marin-tpu_v6e_4-europe-west4-a-xxxx",
+        worker_id=None,
+        default_task_image="mock-image",
+    )
+    worker = Worker(config, container_runtime=None)
+
+    assert worker._worker_id == "marin-tpu_v6e_4-europe-west4-a-xxxx-worker-2"
+
+
+def test_worker_id_explicit_config_overrides_slice_id(tmp_path, monkeypatch):
+    """An explicit config.worker_id (priority 1) takes precedence over slice_id resolution."""
+    from iris.cluster.worker import worker as worker_mod
+    from iris.cluster.worker.worker import Worker, WorkerConfig
+
+    hardware = _make_hardware(tpu_worker_id="2", tpu_name="some-tpu-slice")
+    monkeypatch.setattr(worker_mod, "probe_hardware", lambda: hardware)
+
+    config = WorkerConfig(
+        cache_dir=tmp_path / "cache",
+        slice_id="marin-tpu_v6e_4-europe-west4-a-xxxx",
+        worker_id="my-explicit-id",
+        default_task_image="mock-image",
+    )
+    worker = Worker(config, container_runtime=None)
+
+    assert worker._worker_id == "my-explicit-id"
+
+
 # --- Network metrics ---
 
 
@@ -305,6 +361,9 @@ def test_host_metrics_collector_network_delta(monkeypatch):
     snapshot2 = collector.collect()
     assert snapshot2.net_recv_bps == 1000
     assert snapshot2.net_sent_bps == 2000
+
+
+# --- Network metrics ---
 
 
 def test_host_metrics_collector_network_graceful_on_non_linux(monkeypatch):

@@ -100,10 +100,10 @@ function hasSlot(name: string): boolean {
               <span class="inline-flex items-center gap-1">
                 {{ col.label }}
                 <span v-if="col.sortable && sortKey === col.key" class="text-accent">
-                  {{ sortDir === 'asc' ? '\u2191' : '\u2193' }}
+                  {{ sortDir === 'asc' ? '↑' : '↓' }}
                 </span>
                 <span v-else-if="col.sortable" class="text-text-muted/40">
-                  \u2195
+                  ↕
                 </span>
               </span>
             </th>
@@ -127,7 +127,7 @@ function hasSlot(name: string): boolean {
                 ]"
               >
                 <slot :name="`cell-${col.key}`" :value="cellValue(row, col.key)" :row="row">
-                  {{ cellValue(row, col.key) ?? '\u2014' }}
+                  {{ cellValue(row, col.key) ?? '—' }}
                 </slot>
               </td>
             </tr>
@@ -144,7 +144,7 @@ function hasSlot(name: string): boolean {
       <!-- Pagination -->
       <div v-if="totalPages > 1" class="flex items-center justify-between px-3 py-2 text-xs text-text-secondary border-t border-surface-border">
         <span>
-          {{ currentPage * pageSize + 1 }}\u2013{{ Math.min((currentPage + 1) * pageSize, rows.length) }}
+          {{ currentPage * pageSize + 1 }}–{{ Math.min((currentPage + 1) * pageSize, rows.length) }}
           of {{ rows.length }}
         </span>
         <div class="flex items-center gap-1">
@@ -153,7 +153,7 @@ function hasSlot(name: string): boolean {
             class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
             @click="goToPage(currentPage - 1)"
           >
-            \u2190 Prev
+            ← Prev
           </button>
           <span class="px-2 font-mono">{{ currentPage + 1 }} / {{ totalPages }}</span>
           <button
@@ -161,7 +161,7 @@ function hasSlot(name: string): boolean {
             class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
             @click="goToPage(currentPage + 1)"
           >
-            Next \u2192
+            Next →
           </button>
         </div>
       </div>

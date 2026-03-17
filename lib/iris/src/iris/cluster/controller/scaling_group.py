@@ -101,7 +101,7 @@ DEFAULT_SCALE_UP_COOLDOWN = Duration.from_minutes(1)
 DEFAULT_BACKOFF_INITIAL = Duration.from_minutes(5)
 DEFAULT_BACKOFF_MAX = Duration.from_minutes(15)
 DEFAULT_BACKOFF_FACTOR = 2.0
-DEFAULT_IDLE_THRESHOLD = Duration.from_minutes(5)
+DEFAULT_IDLE_THRESHOLD = Duration.from_minutes(10)
 DEFAULT_QUOTA_TIMEOUT = Duration.from_minutes(5)
 
 
@@ -483,8 +483,8 @@ class ScalingGroup:
     def reconcile(self) -> None:
         """Discover and adopt existing slices from the cloud.
 
-        Called once at startup to recover state from a previous controller.
-        Uses platform.list_slices() with the managed label to find our slices.
+        Used in tests to populate a scaling group with pre-injected slices.
+        Production restore uses prepare_for_restore() + restore_scaling_group().
         """
         zones = _zones_from_config(self._config)
         labels = {self._labels.iris_scale_group: self._config.name}
@@ -540,6 +540,11 @@ class ScalingGroup:
     def scale_down(self, slice_id: str, timestamp: Timestamp | None = None) -> None:
         """Terminate a slice.
 
+        Always removes the slice from in-memory tracking and the DB, even if
+        the cloud terminate call fails (e.g. resource already deleted by
+        preemption). This prevents ghost slices that the autoscaler counts as
+        live capacity but that no longer exist.
+
         Args:
             slice_id: ID of the slice to terminate
             timestamp: Optional timestamp (for testing)
@@ -548,7 +553,15 @@ class ScalingGroup:
         with self._slices_lock:
             state = self._slices.get(slice_id)
         if state:
-            state.handle.terminate()
+            try:
+                state.handle.terminate()
+            except Exception:
+                logger.warning(
+                    "Scale group %s: terminate() failed for slice %s, cleaning up anyway",
+                    self.name,
+                    slice_id,
+                    exc_info=True,
+                )
             with self._slices_lock:
                 self._slices.pop(slice_id, None)
             self._last_scale_down = timestamp
@@ -780,30 +793,39 @@ class ScalingGroup:
             if current_count <= self._config.min_slices:
                 break
 
+            # Verify idle before acquiring a rate-limit token so that
+            # failed verifications don't waste tokens.
+            if not self._verify_slice_idle(slice_state, worker_status_map):
+                continue
+
             if not self.acquire_scale_down_token(timestamp):
-                logger.info("Scale group %s: scale down rate-limited after %d terminations", self.name, len(terminated))
+                if terminated:
+                    logger.info(
+                        "Scale group %s: scale down rate-limited after %d terminations",
+                        self.name,
+                        len(terminated),
+                    )
                 break
 
-            if self._verify_slice_idle(slice_state, worker_status_map):
-                with self._slices_lock:
-                    state = self._slices.get(slice_state.handle.slice_id)
-                last_active = state.last_active if state else Timestamp.from_ms(0)
-                never_active = last_active.epoch_ms() == 0
-                idle_duration = Duration.from_ms(timestamp.epoch_ms() - last_active.epoch_ms())
-                logger.info(
-                    "Scale group %s: scaling down slice %s "
-                    "(idle for %dms, never_active=%s, ready=%d/%d, pending=%d, target=%d)",
-                    self.name,
-                    slice_state.handle.slice_id,
-                    idle_duration.to_ms(),
-                    never_active,
-                    ready,
-                    self.num_vms,
-                    pending,
-                    target_capacity,
-                )
-                self.scale_down(slice_state.handle.slice_id, timestamp)
-                terminated.append(slice_state.handle)
+            with self._slices_lock:
+                state = self._slices.get(slice_state.handle.slice_id)
+            last_active = state.last_active if state else Timestamp.from_ms(0)
+            never_active = last_active.epoch_ms() == 0
+            idle_duration = Duration.from_ms(timestamp.epoch_ms() - last_active.epoch_ms())
+            logger.info(
+                "Scale group %s: scaling down slice %s "
+                "(idle for %dms, never_active=%s, ready=%d/%d, pending=%d, target=%d)",
+                self.name,
+                slice_state.handle.slice_id,
+                idle_duration.to_ms(),
+                never_active,
+                ready,
+                self.num_vms,
+                pending,
+                target_capacity,
+            )
+            self.scale_down(slice_state.handle.slice_id, timestamp)
+            terminated.append(slice_state.handle)
 
         return terminated
 
@@ -1049,13 +1071,25 @@ class ScalingGroup:
         return list(self._get_slice_worker_ids(state))
 
     def terminate_all(self) -> None:
-        """Terminate all slices in this scale group."""
+        """Terminate all slices in this scale group.
+
+        Continues terminating remaining slices even if individual terminate
+        calls fail, to avoid leaking cloud resources.
+        """
         with self._slices_lock:
             snapshot = [s.handle for s in self._slices.values()]
             self._slices.clear()
             self._pending_scale_ups = 0
         for handle in snapshot:
-            handle.terminate()
+            try:
+                handle.terminate()
+            except Exception:
+                logger.warning(
+                    "Scale group %s: terminate() failed for slice %s during terminate_all, continuing",
+                    self.name,
+                    handle.slice_id,
+                    exc_info=True,
+                )
         self._db_clear_slices()
 
     def restore_from_snapshot(
@@ -1168,16 +1202,10 @@ class ScalingGroupRestoreResult:
 
 def restore_scaling_group(
     group_snapshot: GroupSnapshot,
-    platform: Platform,
-    config: config_pb2.ScaleGroupConfig,
+    cloud_handles: list[SliceHandle],
     label_prefix: str,
 ) -> ScalingGroupRestoreResult:
-    """Reconcile checkpointed group slices against live cloud slices."""
-    labels = Labels(label_prefix)
-    filter_labels = {labels.iris_scale_group: group_snapshot.name}
-
-    zones = _zones_from_config(config)
-    cloud_handles = platform.list_slices(zones=zones, labels=filter_labels)
+    """Reconcile checkpointed group slices against pre-fetched cloud handles."""
     cloud_by_id: dict[str, SliceHandle] = {h.slice_id: h for h in cloud_handles}
     checkpoint_slices = {s.slice_id: s for s in group_snapshot.slices}
 

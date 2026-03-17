@@ -895,8 +895,7 @@ def test_terminal_states_clean_up_endpoints(job_request, worker_metadata):
 
 
 def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
-    """Endpoints are visible for all non-terminal job states (PENDING, RUNNING, BUILDING)
-    and hidden once the job reaches a terminal state."""
+    """Endpoints associated with a task are deleted when the task reaches a terminal state."""
     state = _make_state()
 
     worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
@@ -914,9 +913,9 @@ def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
         metadata={},
         registered_at=Timestamp.now(),
     )
-    state.add_endpoint(ep)
+    state.add_endpoint(ep, task_id=task.task_id)
 
-    # Visible while pending (task may be executing before job state updates)
+    # Visible while pending
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
     # Still visible after transition to running
@@ -924,10 +923,130 @@ def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
     assert _query_job(state, job.job_id).state == cluster_pb2.JOB_STATE_RUNNING
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
-    # Not visible after completion (terminal state)
+    # Deleted when task reaches terminal state
     transition_task(state, task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
     assert _query_job(state, job.job_id).state == cluster_pb2.JOB_STATE_SUCCEEDED
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 0
+
+
+def test_endpoint_deleted_on_task_failure_with_retry(job_request, worker_metadata):
+    """Endpoints are cleaned up when a task fails even if it retries back to PENDING."""
+    state = _make_state()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("test")
+    req.max_retries_failure = 1
+    tasks = submit_job(state, "ns-1", req)
+    task = tasks[0]
+
+    dispatch_task(state, task, worker_id)
+
+    ep = Endpoint(
+        endpoint_id="ep-1",
+        name="ns-1/actor",
+        address="10.0.0.1:8080",
+        job_id=JobName.root("test-user", "ns-1"),
+        metadata={},
+        registered_at=Timestamp.now(),
+    )
+    state.add_endpoint(ep, task_id=task.task_id)
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
+
+    # Task fails but retries (goes back to PENDING)
+    transition_task(state, task.task_id, cluster_pb2.TASK_STATE_FAILED, error="crash")
+    assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_PENDING
+
+    # Stale endpoints should be deleted even though the task retried
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 0
+
+
+def test_endpoint_deleted_on_worker_failure(job_request, worker_metadata):
+    """Endpoints are cleaned up when the worker dies, even if the task retries."""
+    state = _make_state()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("test")
+    req.max_retries_preemption = 1
+    tasks = submit_job(state, "ns-1", req)
+    task = tasks[0]
+
+    dispatch_task(state, task, worker_id)
+
+    ep = Endpoint(
+        endpoint_id="ep-1",
+        name="ns-1/actor",
+        address="10.0.0.1:8080",
+        job_id=JobName.root("test-user", "ns-1"),
+        metadata={},
+        registered_at=Timestamp.now(),
+    )
+    state.add_endpoint(ep, task_id=task.task_id)
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
+
+    # Worker fails -> task retries to PENDING
+    fail_worker(state, worker_id, "Connection lost")
+    assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_PENDING
+
+    # Endpoints should be cleaned up because the worker is dead
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 0
+
+
+def test_endpoint_survives_building_state(job_request, worker_metadata):
+    """Endpoints registered during BUILDING are not deleted by subsequent BUILDING updates."""
+    state = _make_state()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("test")
+    tasks = submit_job(state, "ns-1", req)
+    task = tasks[0]
+
+    # Assign task and transition to BUILDING
+    state.queue_assignments([Assignment(task_id=task.task_id, worker_id=worker_id)])
+    task = _query_task(state, task.task_id)
+    state.apply_task_updates(
+        HeartbeatApplyRequest(
+            worker_id=worker_id,
+            worker_resource_snapshot=None,
+            updates=[
+                TaskUpdate(
+                    task_id=task.task_id,
+                    attempt_id=task.current_attempt_id,
+                    new_state=cluster_pb2.TASK_STATE_BUILDING,
+                )
+            ],
+        )
+    )
+
+    # Register endpoint during BUILDING (e.g. jax_init.py pre-registration)
+    ep = Endpoint(
+        endpoint_id="ep-1",
+        name="ns-1/actor",
+        address="10.0.0.1:8080",
+        job_id=JobName.root("test-user", "ns-1"),
+        metadata={},
+        registered_at=Timestamp.now(),
+    )
+    state.add_endpoint(ep, task_id=task.task_id)
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
+
+    # Transition to RUNNING — endpoint should survive
+    state.apply_task_updates(
+        HeartbeatApplyRequest(
+            worker_id=worker_id,
+            worker_resource_snapshot=None,
+            updates=[
+                TaskUpdate(
+                    task_id=task.task_id,
+                    attempt_id=_query_task(state, task.task_id).current_attempt_id,
+                    new_state=cluster_pb2.TASK_STATE_RUNNING,
+                )
+            ],
+        )
+    )
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
 
 def test_namespace_isolation(job_request, worker_metadata):
@@ -3081,3 +3200,184 @@ def test_snapshot_round_trip_preserves_reservation_holder():
         restored_parent = _query_job(restored_state, parent_job_id)
         assert restored_parent is not None
         assert restored_parent.is_reservation_holder is False
+
+
+# =============================================================================
+# Worker Death Cascade + Preemption Policy Tests
+# =============================================================================
+
+
+def test_worker_death_cascades_children_terminal(job_request, worker_metadata):
+    """Single-task parent exhausts preemption retries -> job terminal -> children killed."""
+    state = _make_state()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    # Parent job with 0 preemption retries so worker death => WORKER_FAILED (terminal task)
+    parent_req = job_request("parent")
+    parent_req.max_retries_preemption = 0
+    parent_req.max_task_failures = 0
+    parent_tasks = submit_job(state, "parent", parent_req)
+    dispatch_task(state, parent_tasks[0], worker_id)
+
+    # Child job under parent
+    child_req = job_request("child")
+    child_tasks = submit_job(state, "/test-user/parent/child", child_req)
+
+    # Register new worker for child and dispatch
+    w2 = register_worker(state, "w2", "host2:8080", worker_metadata())
+    dispatch_task(state, child_tasks[0], w2)
+    assert _query_task(state, child_tasks[0].task_id).state == cluster_pb2.TASK_STATE_RUNNING
+
+    # Worker w1 dies — parent task exhausts preemption retries
+    fail_worker(state, worker_id, "Connection lost")
+
+    # Parent task should be terminal (WORKER_FAILED)
+    parent_task = _query_task(state, parent_tasks[0].task_id)
+    assert parent_task.state == cluster_pb2.TASK_STATE_WORKER_FAILED
+
+    # Child should be killed via cascade
+    child_task = _query_task(state, child_tasks[0].task_id)
+    assert child_task.state == cluster_pb2.TASK_STATE_KILLED
+
+    child_job = _query_job(state, JobName.from_string("/test-user/parent/child"))
+    assert child_job.state == cluster_pb2.JOB_STATE_KILLED
+
+
+def test_worker_death_preemption_policy_terminate(job_request, worker_metadata):
+    """Single-task parent retried after worker death -> children killed (default TERMINATE)."""
+    state = _make_state()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    # Parent with retries so task goes back to PENDING
+    parent_req = job_request("parent")
+    parent_req.max_retries_preemption = 5
+    parent_tasks = submit_job(state, "parent", parent_req)
+    dispatch_task(state, parent_tasks[0], worker_id)
+
+    # Child job
+    child_req = job_request("child")
+    child_tasks = submit_job(state, "/test-user/parent/child", child_req)
+    w2 = register_worker(state, "w2", "host2:8080", worker_metadata())
+    dispatch_task(state, child_tasks[0], w2)
+    assert _query_task(state, child_tasks[0].task_id).state == cluster_pb2.TASK_STATE_RUNNING
+
+    # Worker w1 dies — parent task retried (goes to PENDING)
+    fail_worker(state, worker_id, "Connection lost")
+
+    # Parent task should be retried
+    parent_task = _query_task(state, parent_tasks[0].task_id)
+    assert parent_task.state == cluster_pb2.TASK_STATE_PENDING
+
+    # Default policy for single-task job is TERMINATE_CHILDREN: child killed
+    child_task = _query_task(state, child_tasks[0].task_id)
+    assert child_task.state == cluster_pb2.TASK_STATE_KILLED
+
+    child_job = _query_job(state, JobName.from_string("/test-user/parent/child"))
+    assert child_job.state == cluster_pb2.JOB_STATE_KILLED
+
+
+def test_worker_death_preemption_policy_preserve(job_request, worker_metadata):
+    """Parent with PRESERVE_CHILDREN policy -> children survive worker death retry."""
+    state = _make_state()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    # Parent with PRESERVE policy
+    parent_req = job_request("parent")
+    parent_req.max_retries_preemption = 5
+    parent_req.preemption_policy = cluster_pb2.JOB_PREEMPTION_POLICY_PRESERVE_CHILDREN
+    parent_tasks = submit_job(state, "parent", parent_req)
+    dispatch_task(state, parent_tasks[0], worker_id)
+
+    # Child job
+    child_req = job_request("child")
+    child_tasks = submit_job(state, "/test-user/parent/child", child_req)
+    w2 = register_worker(state, "w2", "host2:8080", worker_metadata())
+    dispatch_task(state, child_tasks[0], w2)
+    assert _query_task(state, child_tasks[0].task_id).state == cluster_pb2.TASK_STATE_RUNNING
+
+    # Worker w1 dies — parent task retried
+    fail_worker(state, worker_id, "Connection lost")
+
+    # Parent task goes back to PENDING
+    parent_task = _query_task(state, parent_tasks[0].task_id)
+    assert parent_task.state == cluster_pb2.TASK_STATE_PENDING
+
+    # PRESERVE_CHILDREN: child stays alive
+    child_task = _query_task(state, child_tasks[0].task_id)
+    assert child_task.state == cluster_pb2.TASK_STATE_RUNNING
+
+    child_job = _query_job(state, JobName.from_string("/test-user/parent/child"))
+    assert child_job.state == cluster_pb2.JOB_STATE_RUNNING
+
+
+def test_multi_task_parent_preserves_children(job_request, worker_metadata):
+    """Multi-task parent (replicas > 1) -> children preserved by default on retry."""
+    state = _make_state()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    # Multi-task parent (replicas=2) — default policy is PRESERVE_CHILDREN
+    parent_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="multi-parent",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=2,
+        max_retries_preemption=5,
+    )
+    parent_tasks = submit_job(state, "parent", parent_req)
+    dispatch_task(state, parent_tasks[0], worker_id)
+
+    # Leave second parent task pending, dispatch child
+    child_req = job_request("child")
+    child_tasks = submit_job(state, "/test-user/parent/child", child_req)
+    w2 = register_worker(state, "w2", "host2:8080", worker_metadata())
+    dispatch_task(state, child_tasks[0], w2)
+    assert _query_task(state, child_tasks[0].task_id).state == cluster_pb2.TASK_STATE_RUNNING
+
+    # Worker w1 dies — parent task[0] retried
+    fail_worker(state, worker_id, "Connection lost")
+
+    parent_task = _query_task(state, parent_tasks[0].task_id)
+    assert parent_task.state == cluster_pb2.TASK_STATE_PENDING
+
+    # Multi-task default is PRESERVE_CHILDREN: child stays running
+    child_task = _query_task(state, child_tasks[0].task_id)
+    assert child_task.state == cluster_pb2.TASK_STATE_RUNNING
+
+
+def test_task_update_worker_failed_cascades_children(job_request, worker_metadata):
+    """apply_task_updates with WORKER_FAILED terminal task cascades children via preemption policy."""
+    state = _make_state()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    # Parent job with 0 preemption retries so WORKER_FAILED makes the task terminal
+    parent_req = job_request("parent")
+    parent_req.max_retries_preemption = 0
+    parent_req.max_task_failures = 0
+    parent_tasks = submit_job(state, "parent", parent_req)
+    dispatch_task(state, parent_tasks[0], worker_id)
+
+    # Child job under parent
+    child_req = job_request("child")
+    child_tasks = submit_job(state, "/test-user/parent/child", child_req)
+    w2 = register_worker(state, "w2", "host2:8080", worker_metadata())
+    dispatch_task(state, child_tasks[0], w2)
+    assert _query_task(state, child_tasks[0].task_id).state == cluster_pb2.TASK_STATE_RUNNING
+
+    # Report WORKER_FAILED via heartbeat update (goes through apply_task_updates)
+    transition_task(state, parent_tasks[0].task_id, cluster_pb2.TASK_STATE_WORKER_FAILED, error="Worker crashed")
+
+    # Parent task terminal
+    parent_task = _query_task(state, parent_tasks[0].task_id)
+    assert parent_task.state == cluster_pb2.TASK_STATE_WORKER_FAILED
+
+    # Parent job should be WORKER_FAILED
+    parent_job = _query_job(state, JobName.root("test-user", "parent"))
+    assert parent_job.state == cluster_pb2.JOB_STATE_WORKER_FAILED
+
+    # Child should be killed via cascade
+    child_task = _query_task(state, child_tasks[0].task_id)
+    assert child_task.state == cluster_pb2.TASK_STATE_KILLED
+
+    child_job = _query_job(state, JobName.from_string("/test-user/parent/child"))
+    assert child_job.state == cluster_pb2.JOB_STATE_KILLED

@@ -31,7 +31,7 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
-from iris.cluster.types import EnvironmentSpec, ResourceSpec
+from iris.cluster.types import EnvironmentSpec, ResourceSpec, is_job_finished
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import cluster_pb2
 
@@ -363,35 +363,42 @@ class IrisActorGroup:
         """Number of actors that are available for RPC."""
         return len(self._handles)
 
-    def discover_new(self) -> list[ActorHandle]:
+    def discover_new(self, target: int | None = None) -> list[ActorHandle]:
         """Probe for newly available actors without blocking.
 
         Returns only the handles discovered during this call (not previously
         known ones). Call repeatedly to pick up workers as they come online.
+
+        Uses a single prefix-match RPC to discover all actors whose endpoint
+        names start with ``{job_id}/{name}-``.
+
+        Args:
+            target: Stop probing once this many total actors are discovered.
+                If None, probes all indices.
         """
         client = self._get_client()
-        resolver = client.resolver_for_job(self._job_id)
+        # Single RPC: prefix match all actors for this group
+        # _host_actor registers endpoints as "{job_id}/{name}-{task_index}"
+        prefix = f"{self._job_id}/{self._name}-"
+        endpoints = client._cluster_client.list_endpoints(prefix=prefix, exact=False)
 
         newly_discovered: list[ActorHandle] = []
-        for i in range(self._count):
-            # Absolute endpoint name matches what _host_actor registers
-            endpoint_name = f"{self._job_id}/{self._name}-{i}"
-            if endpoint_name in self._discovered_names:
+        for ep in endpoints:
+            if target is not None and len(self._discovered_names) >= target:
+                break
+            if ep.name in self._discovered_names:
                 continue
-            result = resolver.resolve(endpoint_name)
-
-            if not result.is_empty:
-                self._discovered_names.add(endpoint_name)
-                handle = IrisActorHandle(endpoint_name)
-                self._handles.append(handle)
-                newly_discovered.append(handle)
-                logger.info(
-                    "discover_new: found actor=%s job_id=%s (%d/%d ready)",
-                    endpoint_name,
-                    self._job_id,
-                    len(self._discovered_names),
-                    self._count,
-                )
+            self._discovered_names.add(ep.name)
+            handle = IrisActorHandle(ep.name)
+            self._handles.append(handle)
+            newly_discovered.append(handle)
+            logger.info(
+                "discover_new: found actor=%s job_id=%s (%d/%d ready)",
+                ep.name,
+                self._job_id,
+                len(self._discovered_names),
+                self._count,
+            )
 
         return newly_discovered
 
@@ -402,14 +409,12 @@ class IrisActorGroup:
         allowing the caller to start work immediately and discover more
         workers later via discover_new().
         """
-        from iris.cluster.types import is_job_finished
-
         target = count if count is not None else self._count
         start = time.monotonic()
         sleep_secs = 0.5
 
         while True:
-            self.discover_new()
+            self.discover_new(target=target)
 
             if len(self._discovered_names) >= target:
                 return list(self._handles[:target])
@@ -432,6 +437,12 @@ class IrisActorGroup:
                 raise TimeoutError(f"Only {len(self._discovered_names)}/{target} actors ready after {timeout}s")
 
             time.sleep(sleep_secs)
+
+    def is_done(self) -> bool:
+        """Return True if the Iris worker job has permanently terminated."""
+        client = self._get_client()
+        job_status = client.status(self._job_id)
+        return is_job_finished(job_status.state)
 
     def shutdown(self) -> None:
         """Terminate the actor job."""

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
@@ -65,6 +65,17 @@ const memPeakMb = computed(() => {
 const diskUsedMb = computed(() => {
   const raw = task.value?.resourceUsage?.diskMb
   return raw ? parseFloat(raw) : 0
+})
+
+const cpuHistory = ref<number[]>([])
+const memHistory = ref<number[]>([])
+const MAX_HISTORY = 60
+
+watch(task, (t) => {
+  if (!t?.resourceUsage) return
+  cpuHistory.value = [...cpuHistory.value, t.resourceUsage.cpuPercent ?? 0].slice(-MAX_HISTORY)
+  const memMb = t.resourceUsage.memoryMb ? parseFloat(t.resourceUsage.memoryMb) : 0
+  memHistory.value = [...memHistory.value, memMb].slice(-MAX_HISTORY)
 })
 
 // Build metrics
@@ -204,6 +215,20 @@ onMounted(async () => {
         </InfoCard>
       </div>
 
+      <!-- Resource sparklines -->
+      <div v-if="cpuHistory.length > 1" class="grid grid-cols-2 gap-4 mb-6">
+        <div class="rounded-lg border border-surface-border bg-surface p-3">
+          <div class="text-xs text-text-secondary mb-2">CPU %</div>
+          <Sparkline :data="cpuHistory" :width="200" :height="40" color="var(--color-accent, #2563eb)" />
+          <div class="text-xs font-mono text-text-muted mt-1">{{ cpuUsed.toFixed(0) }}%</div>
+        </div>
+        <div class="rounded-lg border border-surface-border bg-surface p-3">
+          <div class="text-xs text-text-secondary mb-2">Memory (MB)</div>
+          <Sparkline :data="memHistory" :width="200" :height="40" color="var(--color-status-purple, #8b5cf6)" />
+          <div class="text-xs font-mono text-text-muted mt-1">{{ memUsedMb.toFixed(0) }} MB</div>
+        </div>
+      </div>
+
       <!-- Error display -->
       <div
         v-if="task.error"
@@ -278,7 +303,7 @@ onMounted(async () => {
       <!-- Task logs -->
       <div class="mb-6">
         <h3 class="text-sm font-semibold text-text mb-3">Logs</h3>
-        <LogViewer :task-id="taskId" />
+        <LogViewer :task-id="taskId" :attempts="task.attempts" :current-attempt-id="task.currentAttemptId" />
       </div>
     </template>
   </PageShell>

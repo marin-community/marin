@@ -15,6 +15,17 @@ This workflow optimizes for:
 - fast iteration loops,
 - handoff quality for humans and future agents.
 
+## Specialization Policy
+
+`agent-research` is the base workflow for research-like work. Use domain
+specialization skills for task-specific constraints while keeping lifecycle
+process here.
+
+- For Pallas kernel work, use `.agents/skills/add-pallas-kernel/SKILL.md` as
+  a specialization layered on top of this skill.
+- Keep branch/issue/logbook/snapshot cadence in `agent-research`; keep
+  kernel-specific safety/perf rules in `add-pallas-kernel`.
+
 ## Naming
 Use **research logbook** consistently in prose and file naming.
 
@@ -136,6 +147,7 @@ Issue comment style:
 - Mostly append-only.
 - Do not rewrite historical comments.
 - It is fine (and preferred) to edit a comment to fix formatting/escaping/errors.
+- In issue bodies and comments, leave GitHub issue references like #1234 as plain text; do not wrap them in backticks, so GitHub cross-links them.
 - Keep claims scoped and falsifiable.
 
 ### 3) Maintain the Issue Body

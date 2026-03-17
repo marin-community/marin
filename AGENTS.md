@@ -8,24 +8,7 @@ Start with the shared practices below. Consult subproject manuals for directory-
 
 ## Workflow Playbooks
 
-Agent-friendly skills live in `.agents/skills/` (also accessible as `.claude/skills/`). Load a skill by reading its `SKILL.md`. Key ones:
-
-- [pull-request](.agents/skills/pull-request/SKILL.md) — PR descriptions, testing, review workflow
-- [fix-issue](.agents/skills/fix-issue/SKILL.md) — issue triage and fix protocol
-- [add-dataset](.agents/skills/add-dataset/SKILL.md) — dataset addition (start with schema inspection)
-- [organize-experiments](.agents/skills/organize-experiments/SKILL.md) — experiment organization
-- [agent-research](.agents/skills/agent-research/SKILL.md) — long-running benchmark/research threads
-- [ferries](.agents/skills/ferries/SKILL.md) — canary/daily ferry workflow
-- [change-grug](.agents/skills/change-grug/SKILL.md) — Grug/Grugformer changes
-- [agent-profiling](.agents/skills/agent-profiling/SKILL.md) — profiling and optimization
-- [github-pr-review](.agents/skills/github-pr-review/SKILL.md) — PR review prompt
-- [debugger](.agents/skills/debugger/SKILL.md) — structured debugging workflow
-- [design-doc](.agents/skills/design-doc/SKILL.md) — writing design documents
-- [multi-stage](.agents/skills/multi-stage/SKILL.md) — coordinator/sub-agent orchestration
-- [add-pallas-kernel](.agents/skills/add-pallas-kernel/SKILL.md) — TPU Pallas kernel development
-- [archive-experiments](.agents/skills/archive-experiments/SKILL.md) — retiring legacy experiments
-- [architecture](.agents/skills/architecture/SKILL.md) — codebase architecture reference
-- [iris-controller-debug](.agents/skills/iris-controller-debug/SKILL.md) — debug Iris controller via live SQLite DB
+Agent-friendly skills live in `.agents/skills/` (also accessible as `.claude/skills/`). Load a skill by reading its `SKILL.md`.
 
 ## Development
 
@@ -42,6 +25,8 @@ uv run pyrefly
 
 - Python >=3.11. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
 - NEVER stop, restart, or bounce a Ray or Iris cluster unless the user gives express permission.
+- In general, never read or write large amounts of data across GCS regions or to the open internet; storage and bandwidth are major cost drivers for this project.
+- do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
 
 ## Communication & Commits
 
@@ -49,6 +34,7 @@ uv run pyrefly
 - NEVER credit yourself in commits.
 - When an agent creates a PR or issue, add the `agent-generated` label.
 - Agent comments on PRs/issues must begin with `🤖` unless the exact text was explicitly approved by the user.
+- When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
 
 ## Code Style
 

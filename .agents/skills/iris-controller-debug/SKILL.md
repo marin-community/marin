@@ -1,33 +1,77 @@
 ---
 name: iris-controller-debug
-description: Debug Iris controller state using the live SQLite database. Use when investigating stuck jobs, resource leaks, scheduling failures, or worker issues.
+description: Debug Iris controller state using offline checkpoint snapshots and the process RPC. Use when investigating stuck jobs, resource leaks, scheduling failures, or worker issues.
 ---
 
 # Skill: Iris Controller Debug
 
-Debug Iris controller issues by querying the live SQLite database on the controller VM.
+Debug Iris controller issues by triggering a fresh checkpoint, downloading it, and querying offline. Use the `/system/process` RPC (via `iris process`) for profiling; SSH is acceptable as a fallback when RPC doesn't cover your needs.
 
 Read first: @lib/iris/AGENTS.md
 
 ## Access Pattern
 
-The DB is inside a Docker container on a GCP VM. Pipe a Python script through SSH:
+**Always debug offline against a checkpoint copy — never run queries against the live controller DB.**
+Trigger a fresh checkpoint on-demand and download it:
 
 ```bash
-cat <<'PYEOF' | gcloud compute ssh <VM> --zone=<ZONE> --project=<PROJECT> \
-  --command="cat > /tmp/query.py && docker cp /tmp/query.py <CONTAINER>:/tmp/ && docker exec <CONTAINER> python3 /tmp/query.py"
+# Trigger a fresh checkpoint (uses the BeginCheckpoint RPC)
+# The --config flag selects the cluster; adjust as needed.
+uv run iris --config lib/iris/examples/marin.yaml cluster controller checkpoint
+# Example output:
+#   Checkpoint DB written: gs://marin-us-central2/iris/marin/state/controller-state/checkpoint-1773533644027.sqlite3
+#   Jobs:    417
+#   Tasks:   46790
+#   Workers: 243
+
+# Download the checkpoint (use the path from the output above)
+gcloud storage cp gs://marin-us-central2/iris/marin/state/controller-state/checkpoint-<EPOCH_MS>.sqlite3 /tmp/controller.sqlite3
+
+# Query offline
+python3 -c "
 import sqlite3
-conn = sqlite3.connect("/tmp/iris/controller-logs/controller.sqlite3")
+conn = sqlite3.connect('/tmp/controller.sqlite3')
 conn.row_factory = sqlite3.Row
 # ... queries ...
-PYEOF
+"
 ```
 
-**Find the container ID** with `docker ps` on the VM — look for the iris controller container.
+If the state has changed and you need another snapshot, trigger another checkpoint with `uv run iris --config lib/iris/examples/marin.yaml cluster controller checkpoint` and re-download. **Do not SSH into the controller VM to run scripts against the live database** — a slow query can stall the controller and break other users.
 
 **Production defaults** (verify at session start):
-- VM: `iris-controller-marin`, zone `us-central1-a`, project `hai-gcp-models`
-- DB path: `/tmp/iris/controller-logs/controller.sqlite3`
+- Checkpoint location: `gs://marin-us-central2/iris/marin/state/controller-state/latest.sqlite3`
+- Timestamped checkpoints: `gs://marin-us-central2/iris/marin/state/controller-state/checkpoint-<epoch_ms>.sqlite3`
+
+## Profiling
+
+Prefer the `iris process` CLI which talks to the controller via the `/system/process` RPC. If the RPC endpoints don't cover what you need, SSH is acceptable as a fallback:
+
+```bash
+# Thread dump (instant snapshot of all threads)
+uv run iris process profile threads
+
+# CPU profile (writes speedscope JSON, 10s default)
+uv run iris process profile cpu --duration 10 --output /tmp/profile.speedscope.json
+
+# Memory profile (writes flamegraph HTML)
+uv run iris process profile mem --duration 10 --output /tmp/profile.html
+
+# Target a specific worker instead of the controller
+uv run iris process profile threads --worker <WORKER_ID>
+
+# Process status (host info, resource usage)
+uv run iris process status
+```
+
+Controller logs can also be fetched via the CLI:
+
+```bash
+# Tail controller logs
+uv run iris process logs --max-lines 200
+
+# Filter for slow-path warnings
+uv run iris process logs --substring "Slow "
+```
 
 ## Schema
 
@@ -79,8 +123,11 @@ These are real issues in the codebase that will mislead you if you don't know ab
 
 3. **Fleet view zone display**: `FleetTab.vue:82` reads `metadata.gceZone` (never populated) instead of `metadata.attributes["zone"]`. The dashboard shows blank zones even when workers have zone attributes.
 
+4. **Heartbeat thread stall on gcloud subprocess**: The heartbeat loop calls `notify_worker_failed` → `scale_down` → `terminate` which runs a synchronous `gcloud compute tpus tpu-vm delete` (`gcp.py:591`). If the gcloud API hangs, **all task dispatch stops** because dispatches are delivered via heartbeats. Symptoms: `dispatch_queue` growing, tasks stuck in ASSIGNED (9), stale `last_heartbeat_ms` across all workers. The autoscaler thread has the same exposure independently. Check with `py-spy dump` — look for `subprocess.run` → `terminate` on the heartbeat or autoscaler thread. The stuck gcloud process can be killed to unblock (#3678).
+
 ## Rules
 
-- **NEVER modify the database without explicit user approval.** Read-only queries first; writes only as a last resort with user consent. Always run a verification query after any write.
+- **NEVER run scripts or queries against the live controller DB.** Always work offline against a downloaded checkpoint. A slow or locking query on the live DB can stall the controller and break other users.
+- **Prefer `iris process profile` over SSH for profiling.** It uses the `/system/process` RPC and avoids direct access to the controller VM. SSH is acceptable as a fallback when the RPC endpoints don't cover what you need.
+- **NEVER modify the database without explicit user approval.** Read-only queries on the local checkpoint copy only; writes only as a last resort with user consent on a fresh checkpoint.
 - **NEVER restart the controller or Docker container** — this kills all running jobs cluster-wide.
-- Always verify VM name, zone, and container ID at the start of each session.

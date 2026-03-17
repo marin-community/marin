@@ -7,6 +7,7 @@ These tests focus on observable behavior - scaling policy decisions,
 VM group management, and state tracking - not on implementation details.
 """
 
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -263,6 +264,48 @@ class TestScalingGroupVmGroupOwnership:
         # Should not raise
         group.scale_down("nonexistent-slice")
 
+        assert group.slice_count() == 0
+
+    def test_scale_down_cleans_up_even_if_terminate_fails(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """scale_down() removes the slice from tracking even if terminate() raises.
+
+        This prevents ghost slices where the cloud resource is gone (e.g.
+        preempted) but the autoscaler still counts it as live capacity.
+        """
+        mock_handle = make_mock_slice_handle("slice-001")
+        mock_handle.terminate.side_effect = RuntimeError("resource not found")
+        platform = make_mock_platform(slice_handles_to_discover=[mock_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+
+        assert group.slice_count() == 1
+
+        # Should NOT raise despite terminate() failure
+        group.scale_down("slice-001")
+
+        mock_handle.terminate.assert_called_once()
+        assert group.slice_count() == 0
+        assert group.get_slice("slice-001") is None
+
+    def test_terminate_all_continues_on_individual_failure(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """terminate_all() terminates remaining slices even if one fails."""
+        handles = [
+            make_mock_slice_handle("slice-001"),
+            make_mock_slice_handle("slice-002"),
+            make_mock_slice_handle("slice-003"),
+        ]
+        handles[0].terminate.side_effect = RuntimeError("resource not found")
+        platform = make_mock_platform(slice_handles_to_discover=handles)
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+
+        assert group.slice_count() == 3
+
+        group.terminate_all()
+
+        # All three should have been attempted
+        for h in handles:
+            h.terminate.assert_called_once()
         assert group.slice_count() == 0
 
     def test_ready_slice_count(self, scale_group_config: config_pb2.ScaleGroupConfig):
@@ -651,6 +694,46 @@ class TestScalingGroupIdleTracking:
         group.scale_down("slice-001")
 
         assert group.get_slice("slice-001") is None
+
+
+def test_scale_down_no_misleading_rate_limit_log(unbounded_config: config_pb2.ScaleGroupConfig, caplog):
+    """When the token bucket is empty and no terminations occur, no rate-limit log is emitted."""
+    discovered = [
+        make_mock_slice_handle("slice-001", all_ready=True),
+        make_mock_slice_handle("slice-002", all_ready=True),
+    ]
+    platform = make_mock_platform(slice_handles_to_discover=discovered)
+    group = ScalingGroup(unbounded_config, platform, scale_down_rate_limit=1, idle_threshold=Duration.from_ms(100))
+    group.reconcile()
+    _mark_discovered_ready(group, discovered, timestamp=Timestamp.from_ms(0))
+
+    wid_001 = _get_worker_id(discovered[0])
+    wid_002 = _get_worker_id(discovered[1])
+
+    # Mark both active at t=0, then idle at t=1000 (well past idle_threshold)
+    active_map = {
+        wid_001: WorkerStatus(worker_id=wid_001, running_task_ids=frozenset({"task-1"})),
+        wid_002: WorkerStatus(worker_id=wid_002, running_task_ids=frozenset({"task-2"})),
+    }
+    group.update_slice_activity(active_map, Timestamp.from_ms(0))
+
+    idle_map = {
+        wid_001: WorkerStatus(worker_id=wid_001, running_task_ids=frozenset()),
+        wid_002: WorkerStatus(worker_id=wid_002, running_task_ids=frozenset()),
+    }
+
+    ts = Timestamp.from_ms(1000)
+
+    # Drain the token bucket (rate_limit=1, so one token available)
+    assert group.acquire_scale_down_token(ts)
+    assert not group.acquire_scale_down_token(ts)
+
+    # Now call scale_down_if_idle with an empty bucket — no terminations should happen
+    with caplog.at_level(logging.INFO, logger="iris.cluster.controller.scaling_group"):
+        scaled_down = group.scale_down_if_idle(idle_map, target_capacity=0, timestamp=ts)
+
+    assert scaled_down == []
+    assert "rate-limited after 0 terminations" not in caplog.text
 
 
 class TestScalingGroupVmGroupStateCounts:

@@ -51,7 +51,7 @@ One short newcomer-friendly summary paragraph.
 ## Label And Edit Guidance
 
 - The selector script output is the source of truth for candidate order and provided thread context.
-- Use `gh issue view`, `gh pr view`, and `gh api` to inspect related issues, PRs, or comments when the provided context is not enough.
+- Use `gh issue view --json <fields>`, `gh pr view --json <fields>`, explicit narrow flags such as `--comments`, and `gh api` to inspect related issues, PRs, or comments when the provided context is not enough.
 - Skip issues whose body already matches the desired managed block content.
 - The `tldr` label means the issue now has an adequate newcomer-friendly summary plus enough supporting links to dig deeper.
 - Add the `tldr` label when the issue now meets that bar. Remove it when the issue no longer meets that bar.

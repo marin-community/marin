@@ -6,8 +6,10 @@
 from __future__ import annotations
 
 import json
+import logging
+import queue
 import sqlite3
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import MISSING, dataclass, field, fields, replace as dc_replace
 from pathlib import Path
@@ -35,10 +37,6 @@ def _nullable(decoder: RowDecoder) -> RowDecoder:
         return decoder(value)
 
     return inner
-
-
-def _decode_job_name(value: Any) -> JobName:
-    return JobName.from_wire(str(value))
 
 
 def _decode_worker_id(value: Any) -> WorkerId:
@@ -353,12 +351,13 @@ class Row:
 class QuerySnapshot:
     """Read-only snapshot over the controller DB."""
 
-    def __init__(self, conn: sqlite3.Connection, lock: RLock):
+    def __init__(self, conn: sqlite3.Connection, lock: RLock | None):
         self._conn = conn
         self._lock = lock
 
     def __enter__(self) -> QuerySnapshot:
-        self._lock.acquire()
+        if self._lock is not None:
+            self._lock.acquire()
         self._conn.execute("BEGIN")
         return self
 
@@ -366,7 +365,12 @@ class QuerySnapshot:
         try:
             self._conn.rollback()
         finally:
-            self._lock.release()
+            if self._lock is not None:
+                self._lock.release()
+
+    def execute_sql(self, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Cursor:
+        """Execute raw SQL and return the cursor for result inspection."""
+        return self._conn.execute(sql, params)
 
     def _fetchall(self, sql: str, params: Sequence[object]) -> list[sqlite3.Row]:
         return list(self._conn.execute(sql, tuple(params)).fetchall())
@@ -523,7 +527,7 @@ ACTIVE_TASK_STATES: frozenset[int] = frozenset(
 
 @db_row_model
 class Attempt:
-    task_id: JobName = db_field("task_id", _decode_job_name)
+    task_id: JobName = db_field("task_id", JobName.from_wire)
     attempt_id: int = db_field("attempt_id", _decode_int)
     worker_id: WorkerId | None = db_field("worker_id", _nullable(_decode_worker_id))
     state: int = db_field("state", _decode_int)
@@ -544,7 +548,7 @@ class Attempt:
 
 @db_row_model
 class Job:
-    job_id: JobName = db_field("job_id", _decode_job_name)
+    job_id: JobName = db_field("job_id", JobName.from_wire)
     request: cluster_pb2.Controller.LaunchJobRequest = db_field(
         "request_proto",
         _proto_decoder(cluster_pb2.Controller.LaunchJobRequest),
@@ -559,14 +563,11 @@ class Job:
     exit_code: int | None = db_field("exit_code", _nullable(_decode_int))
     num_tasks: int = db_field("num_tasks", _decode_int)
     is_reservation_holder: bool = db_field("is_reservation_holder", _decode_bool_int)
+    name: str = db_field("name", _decode_str, default="")
+    depth: int = db_field("depth", _decode_int, default=0)
 
     def is_finished(self) -> bool:
-        return self.state in (
-            cluster_pb2.JOB_STATE_SUCCEEDED,
-            cluster_pb2.JOB_STATE_FAILED,
-            cluster_pb2.JOB_STATE_KILLED,
-            cluster_pb2.JOB_STATE_UNSCHEDULABLE,
-        )
+        return self.state in TERMINAL_JOB_STATES
 
     @property
     def is_coscheduled(self) -> bool:
@@ -587,8 +588,8 @@ class Job:
 
 @db_row_model
 class Task:
-    task_id: JobName = db_field("task_id", _decode_job_name)
-    job_id: JobName = db_field("job_id", _decode_job_name)
+    task_id: JobName = db_field("task_id", JobName.from_wire)
+    job_id: JobName = db_field("job_id", JobName.from_wire)
     state: int = db_field("state", _decode_int)
     error: str | None = db_field("error", _nullable(_decode_str))
     exit_code: int | None = db_field("exit_code", _nullable(_decode_int))
@@ -708,7 +709,7 @@ class Endpoint:
     endpoint_id: str = db_field("endpoint_id", _decode_str)
     name: str = db_field("name", _decode_str)
     address: str = db_field("address", _decode_str)
-    job_id: JobName = db_field("job_id", _decode_job_name)
+    job_id: JobName = db_field("job_id", JobName.from_wire)
     metadata: dict[str, str] = db_field("metadata_json", _decode_json_dict)
     registered_at: Timestamp = db_field("registered_at_ms", _decode_timestamp_ms)
 
@@ -738,6 +739,19 @@ class TaskJobSummary:
     task_state_counts: dict[int, int] = field(default_factory=dict)
 
 
+@db_row_model
+class ApiKey:
+    key_id: str = db_field("key_id", _decode_str)
+    key_hash: str = db_field("key_hash", _decode_str)
+    key_prefix: str = db_field("key_prefix", _decode_str)
+    user_id: str = db_field("user_id", _decode_str)
+    name: str = db_field("name", _decode_str)
+    created_at: Timestamp = db_field("created_at_ms", _decode_timestamp_ms)
+    last_used_at: Timestamp | None = db_field("last_used_at_ms", _nullable(_decode_timestamp_ms), default=None)
+    expires_at: Timestamp | None = db_field("expires_at_ms", _nullable(_decode_timestamp_ms), default=None)
+    revoked_at: Timestamp | None = db_field("revoked_at_ms", _nullable(_decode_timestamp_ms), default=None)
+
+
 @dataclass(frozen=True)
 class EndpointQuery:
     endpoint_ids: tuple[str, ...] = ()
@@ -746,7 +760,6 @@ class EndpointQuery:
     job_ids: tuple[JobName, ...] = ()
     job_id: JobName | None = None
     task_ids: tuple[JobName, ...] = ()
-    include_terminal_jobs: bool = False
     limit: int | None = None
 
 
@@ -756,6 +769,7 @@ ATTEMPTS = _table_for_model(Attempt, "task_attempts", "a")
 WORKERS = _table_for_model(Worker, "workers", "w")
 ENDPOINTS = _table_for_model(Endpoint, "endpoints", "e")
 TXN_ACTIONS = _table_for_model(TransactionAction, "txn_actions", "ta")
+API_KEYS = _table_for_model(ApiKey, "api_keys", "ak")
 WORKER_ATTRIBUTES = Table[tuple[str, str]](
     sql_name="worker_attributes",
     alias="wa",
@@ -773,7 +787,7 @@ WORKER_TASK_HISTORY = Table[tuple[str, str]](
     alias="wth",
     columns={
         "worker_id": Column("wth", "worker_id", _decode_worker_id),
-        "task_id": Column("wth", "task_id", _decode_job_name),
+        "task_id": Column("wth", "task_id", JobName.from_wire),
         "assigned_at_ms": Column("wth", "assigned_at_ms", _decode_timestamp_ms),
     },
 )
@@ -841,10 +855,19 @@ ENDPOINT_TASKS = Table[tuple[str, str]](
     alias="et",
     columns={
         "endpoint_id": Column("et", "endpoint_id", _decode_str),
-        "task_id": Column("et", "task_id", _decode_job_name),
+        "task_id": Column("et", "task_id", JobName.from_wire),
     },
 )
-JOBS.columns["parent_job_id"] = Column("j", "parent_job_id", _nullable(_decode_job_name))
+TASK_PROFILES = Table[tuple[str, str]](
+    sql_name="task_profiles",
+    alias="tp",
+    columns={
+        "task_id": Column("tp", "task_id", _decode_str),
+        "profile_data": Column("tp", "profile_data", _identity),
+        "captured_at_ms": Column("tp", "captured_at_ms", _decode_timestamp_ms),
+    },
+)
+JOBS.columns["parent_job_id"] = Column("j", "parent_job_id", _nullable(JobName.from_wire))
 TASKS.columns["priority_neg_depth"] = Column("t", "priority_neg_depth", _decode_int)
 TASKS.columns["priority_root_submitted_ms"] = Column("t", "priority_root_submitted_ms", _decode_timestamp_ms)
 TASKS.columns["task_index"] = Column("t", "task_index", _decode_int)
@@ -907,10 +930,6 @@ def endpoint_query_predicate(query: EndpointQuery) -> tuple[list[Join], Predicat
             )
         )
         predicate = ENDPOINT_TASKS.c.task_id.in_([task_id.to_wire() for task_id in query.task_ids])
-        where = predicate if where is None else where & predicate
-    if not query.include_terminal_jobs:
-        joins.append(Join(table=JOBS, on=ENDPOINTS.c.job_id == JOBS.c.job_id))
-        predicate = ~JOBS.c.state.in_(list(TERMINAL_JOB_STATES))
         where = predicate if where is None else where & predicate
     return joins, where
 
@@ -978,6 +997,8 @@ class TransactionCursor:
 class ControllerDB:
     """Thread-safe SQLite wrapper with typed query and migration helpers."""
 
+    _READ_POOL_SIZE = 4
+
     def __init__(self, db_path: Path):
         self._db_path = db_path
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -986,6 +1007,22 @@ class ControllerDB:
         self._conn.row_factory = sqlite3.Row
         self._configure(self._conn)
         self.apply_migrations()
+        self._read_pool: queue.Queue[sqlite3.Connection] = queue.Queue()
+        self._init_read_pool()
+
+    def _init_read_pool(self) -> None:
+        """Create (or recreate) the read-only connection pool."""
+        while True:
+            try:
+                self._read_pool.get_nowait().close()
+            except queue.Empty:
+                break
+        for _ in range(self._READ_POOL_SIZE):
+            conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            self._configure(conn)
+            conn.execute("PRAGMA query_only = ON")
+            self._read_pool.put(conn)
 
     @property
     def db_path(self) -> Path:
@@ -1001,6 +1038,11 @@ class ControllerDB:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+        for _ in range(self._READ_POOL_SIZE):
+            try:
+                self._read_pool.get(timeout=1).close()
+            except queue.Empty:
+                break
 
     @contextmanager
     def transaction(self):
@@ -1031,6 +1073,25 @@ class ControllerDB:
     def snapshot(self) -> QuerySnapshot:
         return QuerySnapshot(self._conn, self._lock)
 
+    @contextmanager
+    def read_snapshot(self) -> Iterator[QuerySnapshot]:
+        """Read-only snapshot that does NOT acquire the write lock.
+
+        Uses a pooled read-only connection with WAL isolation. Safe for
+        concurrent use from dashboard/RPC threads while the scheduling
+        loop holds the write lock.
+        """
+        conn = self._read_pool.get()
+        try:
+            conn.execute("BEGIN")
+            yield QuerySnapshot(conn, lock=None)
+        finally:
+            try:
+                conn.rollback()
+            except sqlite3.OperationalError:
+                logging.getLogger(__name__).warning("read_snapshot rollback failed", exc_info=True)
+            self._read_pool.put(conn)
+
     def decode_worker(self, row: sqlite3.Row) -> Worker:
         return _decode_row(Worker, row)
 
@@ -1041,7 +1102,11 @@ class ControllerDB:
         return _decode_row(Task, row)
 
     def apply_migrations(self) -> None:
-        """Apply pending SQL migrations from the migrations/ directory.
+        """Apply pending migrations from the migrations/ directory.
+
+        Supports Python migration files that define a ``migrate(conn)``
+        function. Migration names are matched by stem so that a migration
+        previously applied as .sql is not re-run when converted to .py.
 
         Migrations run outside a transaction because executescript() implicitly
         commits. This is fine: migrations only run at startup before any
@@ -1050,6 +1115,8 @@ class ControllerDB:
         schema_migrations and the next startup will re-run it (migrations must
         be idempotent via IF NOT EXISTS / IF EXISTS guards).
         """
+        import importlib.util
+
         migrations_dir = Path(__file__).with_name("migrations")
         migrations_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1064,16 +1131,51 @@ class ControllerDB:
             )
             applied = {row[0] for row in cur.execute("SELECT name FROM schema_migrations ORDER BY name").fetchall()}
 
-        for path in sorted(migrations_dir.glob("*.sql")):
-            if path.name in applied:
+        # Match by stem so a migration previously recorded as .sql is not
+        # re-run after conversion to .py.
+        applied_stems = {Path(name).stem for name in applied}
+
+        for path in sorted(migrations_dir.glob("*.py")):
+            if path.name.startswith("__"):
                 continue
-            sql = path.read_text(encoding="utf-8")
-            self._conn.executescript(sql)
+            if path.stem in applied_stems:
+                continue
+
+            spec = importlib.util.spec_from_file_location(path.stem, path)
+            assert spec is not None and spec.loader is not None
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module.migrate(self._conn)
+            # Commit any implicit transaction left open by migrate() (e.g.
+            # row-by-row UPDATEs in 0008) so the next BEGIN IMMEDIATE succeeds.
+            self._conn.commit()
+
             with self.transaction() as cur:
                 cur.execute(
                     "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
                     (path.name, Timestamp.now().epoch_ms()),
                 )
+
+    def ensure_user(self, user_id: str, now: Timestamp, role: str = "user") -> None:
+        """Create user if not exists. Does not update role for existing users."""
+        self.execute(
+            "INSERT OR IGNORE INTO users (user_id, created_at_ms, role) VALUES (?, ?, ?)",
+            (user_id, now.epoch_ms(), role),
+        )
+
+    def set_user_role(self, user_id: str, role: str) -> None:
+        """Update the role for an existing user."""
+        self.execute("UPDATE users SET role = ? WHERE user_id = ?", (role, user_id))
+
+    def get_user_role(self, user_id: str) -> str:
+        """Get a user's role. Returns 'user' if not found."""
+        with self.snapshot() as q:
+            rows = q.raw(
+                "SELECT role FROM users WHERE user_id = ?",
+                (user_id,),
+                decoders={"role": str},
+            )
+            return rows[0].role if rows else "user"
 
     def next_sequence(self, key: str, *, cur: TransactionCursor) -> int:
         row = cur.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
@@ -1114,6 +1216,7 @@ class ControllerDB:
             self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._configure(self._conn)
+            self._init_read_pool()
         self.apply_migrations()
 
     # SQL-canonical read access is exposed through ``snapshot()`` and typed table
@@ -1161,7 +1264,7 @@ def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict
             f"JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
             f"WHERE a.worker_id IN ({placeholders}) AND t.state IN (?, ?, ?)",
             (*[str(wid) for wid in worker_ids], *ACTIVE_TASK_STATES),
-            decoders={"worker_id": _decode_worker_id, "task_id": _decode_job_name},
+            decoders={"worker_id": _decode_worker_id, "task_id": JobName.from_wire},
         )
     running: dict[WorkerId, set[JobName]] = {wid: set() for wid in worker_ids}
     for row in rows:
@@ -1171,7 +1274,7 @@ def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict
 
 def tasks_for_job_with_attempts(db: ControllerDB, job_id: JobName) -> list[Task]:
     """Fetch all tasks for a job with their attempt history."""
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         tasks = q.select(
             TASKS,
             where=TASKS.c.job_id == job_id.to_wire(),
@@ -1207,3 +1310,25 @@ def healthy_active_workers_with_attributes(db: ControllerDB) -> list[Worker]:
         )
     attrs_by_worker = _decode_attribute_rows(attrs)
     return [dc_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
+
+
+def insert_task_profile(db: ControllerDB, task_id: str, profile_data: bytes, captured_at: Timestamp) -> None:
+    """Insert a captured profile snapshot for a task.
+
+    The DB trigger caps profiles at 10 per task, evicting the oldest automatically.
+    """
+    db.execute(
+        "INSERT INTO task_profiles (task_id, profile_data, captured_at_ms) VALUES (?, ?, ?)",
+        (task_id, profile_data, captured_at.epoch_ms()),
+    )
+
+
+def get_task_profiles(db: ControllerDB, task_id: str) -> list[tuple[bytes, Timestamp]]:
+    """Return all stored profile snapshots for a task, newest first."""
+    with db.snapshot() as q:
+        rows = q.raw(
+            "SELECT profile_data, captured_at_ms FROM task_profiles WHERE task_id = ? ORDER BY id DESC",
+            (task_id,),
+            decoders={"captured_at_ms": _decode_timestamp_ms},
+        )
+    return [(row.profile_data, row.captured_at_ms) for row in rows]
