@@ -82,7 +82,7 @@ jobs:
        github.event.issue.author_association == 'COLLABORATOR') &&
       !contains(github.event.issue.body, '@claude') &&
       !contains(github.event.issue.title, '@claude')
-    timeout-minutes: 30
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -112,62 +112,14 @@ jobs:
           additional_permissions: |
             actions: read
           prompt: |
-            ISSUE: #${{ github.event.issue.number }}
-            TITLE: ${{ github.event.issue.title }}
+            Read AGENTS.md and .agents/skills/fix-issue/SKILL.md, then analyze issue #${{ github.event.issue.number }}.
 
-            Read AGENTS.md and .agents/skills/fix-issue/SKILL.md.
+            Respond based on scope:
+            - **Small/clear changes**: open a PR following the fix-issue skill workflow.
+            - **Large changes** (multi-module design work): post a 🤖-prefixed research comment with root cause, relevant code links, and proposed approach.
+            - **Experiments/research questions**: post a 🤖-prefixed comment with concise feedback on the idea.
 
-            ## Step 1: Relevance Check
-            Read the issue title and body. If the issue is NOT obviously about a code change
-            (e.g. "run experiment X", "suggest an alternative backend for Y", "benchmark Z",
-            "investigate performance of W", feature discussions, research questions, or operational requests),
-            then exit immediately without posting any comment.
-
-            ## Step 2: Scope Assessment
-            Investigate the codebase to understand the issue. Determine whether the fix is
-            small and self-contained or whether it requires broader design work.
-
-            A fix is "small" if it meets ALL of these:
-            - Touches ≤3 files (excluding tests)
-            - The issue describes the problem clearly enough that the fix is unambiguous
-            - No new public API surface or architectural decisions needed
-
-            Examples of small fixes: changing a default value, adjusting a timeout/retry
-            parameter, fixing a typo, adding a missing import, fixing an off-by-one error,
-            adding a flag to an existing function, renaming a variable.
-
-            If in doubt, treat it as small and submit a PR. A reviewable PR is always more
-            useful than a research comment.
-
-            ## Step 3a: Small Fix (DEFAULT — use this unless the issue clearly requires design work)
-            Follow the full fix-issue skill workflow end-to-end:
-            1. Research the codebase and identify the fix
-            2. Create a branch, write tests, implement the fix
-            3. Run pre-commit and pytest
-            4. Open a PR and verify CI
-            5. Post a brief comment on the issue linking the PR
-
-            ## Step 3b: Research Report (ONLY for issues requiring multi-module design changes)
-            Use this path ONLY when the fix requires architectural decisions, touches >3 modules,
-            or needs human input on design trade-offs.
-
-            Post a single comment with this exact format:
-
-            🤖 ## Research
-            <2-3 sentences: root cause, not symptoms>
-
-            **Relevant code**
-            - [`file.py#L123`](permalink) - short annotation
-            - (max 5 links)
-
-            ## Proposed Fix
-            <1-2 sentences describing the recommended approach>
-            <code snippet if non-obvious>
-
-            Rules for research comments:
-            - Never post partial or "test" comments. Write the full comment, review it, then post once.
-            - Follow the exact format above. No deviations, no extra sections, no filler.
-            - If you cannot complete the research, post nothing rather than a partial comment.
+            Always produce output — either a PR or a comment. Never silently exit.
           claude_args: |
             --model opus
             --max-turns 250
