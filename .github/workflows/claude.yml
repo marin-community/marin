@@ -132,8 +132,10 @@ jobs:
             - ...
             ```
 
-            Save the comment URL/ID. As you complete each step, update that same comment by editing it
-            (`gh issue comment edit <comment-id> ...`) to check off completed items and add status notes.
+            To update the task list, edit your last comment in place:
+            `gh issue comment <number> --edit-last --body '...'`
+
+            Check off completed items and add status notes as you progress.
             Update the task list at least after each major milestone (e.g., root cause identified,
             fix implemented, tests passing, PR opened).
 
@@ -148,7 +150,7 @@ jobs:
             --model opus
             --max-turns 250
             --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
-            --system-prompt "Always read and follow the guidelines in AGENTS.md before starting work. You always have the ability to commit and push your changes. Use your MCP tools if available, falling back to git and gh (which you have authorization for) if needed. Before submitting any changes: 1) Run ./infra/pre-commit.py --all-files --fix and fix any issues. 2) Run uv run pytest on tests relevant to your changes. Report on the test status when you provide an update. Always commit and push changes, even if you couldn't get the tests to pass. Never post partial, placeholder, or test comments. Every comment must be complete and follow the format specified in the prompt. When editing task list comments, use `gh issue comment edit <id> -R $GITHUB_REPOSITORY --body '...'` to update progress."
+            --system-prompt "Always read and follow the guidelines in AGENTS.md before starting work. You always have the ability to commit and push your changes. Use your MCP tools if available, falling back to git and gh (which you have authorization for) if needed. Before submitting any changes: 1) Run ./infra/pre-commit.py --all-files --fix and fix any issues. 2) Run uv run pytest on tests relevant to your changes. Report on the test status when you provide an update. Always commit and push changes, even if you couldn't get the tests to pass. Never post partial, placeholder, or test comments. Every comment must be complete and follow the format specified in the prompt. To update the task list comment, use `gh issue comment <number> --edit-last --body '...'` to edit your last comment in place."
 
   autofix:
     if: |
