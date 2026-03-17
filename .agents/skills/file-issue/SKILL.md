@@ -130,20 +130,26 @@ drafted title and body before filing. Wait for approval or edits.
 
 ### 6. File the Issue
 
-Write the body to a temporary file first, then pass it with `--body-file`.
+Write the body to a uniquely named temporary file first, then pass it with
+`--body-file`.
 Do not inline the body with shell substitution such as `--body "$(cat <<'EOF' ...)"`
 because multiline issue text can be corrupted by pasted command output or shell
-escaping mistakes.
+escaping mistakes. Do not reuse a fixed path such as `/tmp/issue-body.md`,
+because concurrent agent runs can overwrite each other's drafts on shared
+hosts.
 
 ```bash
-cat > /tmp/issue-body.md <<'EOF'
+body_file="$(mktemp "${TMPDIR:-/tmp}/issue-body.XXXXXX.md")"
+trap 'rm -f "$body_file"' EXIT
+
+cat > "$body_file" <<'EOF'
 <body>
 EOF
 
 gh issue create --repo marin-community/marin \
   --title "<title>" \
   --label "agent-generated" \
-  --body-file /tmp/issue-body.md
+  --body-file "$body_file"
 ```
 
 Add the template-appropriate labels (e.g. `bug` for bug reports, `experiment`
