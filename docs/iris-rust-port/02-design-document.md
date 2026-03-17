@@ -19,15 +19,15 @@ Two complementary approaches, used at different architectural layers:
 
 Following the `lib/dupekit/` precedent (`dupekit/Cargo.toml:1-25`, `dupekit/pyproject.toml:1-55`):
 
-- A new `lib/iris-native/` Rust crate compiled as a cdylib via maturin
+- A new `lib/iris/rust/` Rust crate compiled as a cdylib via maturin
 - Exposed as `iris._native` Python module (like `dupekit._native`)
 - Used for CPU-bound hot paths: scheduler, constraint evaluation, time utilities
 - Python code calls Rust functions that return Python-compatible types (via PyO3 `#[pyfunction]`/`#[pyclass]`)
 
 ```toml
-# lib/iris-native/Cargo.toml
+# lib/iris/rust/Cargo.toml
 [package]
-name = "iris-native"
+name = "iris-rust"
 version = "0.1.0"
 edition = "2021"
 
@@ -254,36 +254,25 @@ Before cutting over a production RPC:
 
 ## Rollback Strategy
 
-### PyO3 Modules: Feature-Flag Imports
+### No Fallback Path — Delete Python Once Verified
 
-```python
-# iris/time_utils.py
-import os
-if os.environ.get("IRIS_USE_NATIVE", "1") == "1":
-    try:
-        from iris._native import Timestamp, Duration, Deadline, Timer
-    except ImportError:
-        from iris._time_utils_py import Timestamp, Duration, Deadline, Timer
-else:
-    from iris._time_utils_py import Timestamp, Duration, Deadline, Timer
-```
+Once Rust passes the full test suite for a module, the Python implementation is **deleted** (not preserved as a fallback). This keeps the codebase clean and avoids maintaining two implementations.
 
-The original Python implementation is renamed to `_time_utils_py.py` (not deleted). Setting `IRIS_USE_NATIVE=0` falls back to pure Python.
+- **Rollback mechanism**: `git revert` the cleanup commit that deleted the Python code. Each cleanup step is a single commit/PR, making reverts surgical.
+- **Risk mitigation**: Each Rust module passes the existing Python test suite before the Python code is deleted. CI validates both `make iris-dev` (source build) and `make iris-user` (pre-built wheel).
 
-### RPC Services: Binary Toggle
+### RPC Services: Docker Image Versioning
 
-The controller deployment (Docker image or systemd unit) switches between the Python and Rust binary:
+Since both Python and Rust controllers speak the same Connect-RPC protocol, rollback at the deployment level is a Docker image tag change:
 
 ```yaml
-# Kubernetes deployment — toggle via image tag
-image: iris-controller:rust-v0.3  # or iris-controller:python-v2.1
+# Kubernetes deployment — roll back by reverting image tag
+image: iris-controller:v2.3-rust  # or iris-controller:v2.2-python
 ```
-
-Since both speak the same Connect-RPC protocol, workers and clients don't notice the switch.
 
 ### Database: Forward-Compatible Migrations
 
-All Rust schema changes must be forward-compatible (additive only). This ensures the Python controller can read any DB written by the Rust controller if we need to roll back.
+All Rust schema changes must be forward-compatible (additive only). This ensures the Python controller can read any DB written by the Rust controller if we need to revert to an older image.
 
 ## Distribution: Dev Mode vs User Mode
 
@@ -306,7 +295,7 @@ Pre-built manylinux/macOS wheels published to PyPI. No Rust toolchain required. 
 ```bash
 # Triggered by:
 export IRIS_BUILD_MODE=user
-make iris-user  # pip install iris[native] from PyPI
+make iris-user  # downloads pre-built wheel from GitHub Releases
 ```
 
 ### Switching Mechanism
@@ -317,26 +306,29 @@ The env var `IRIS_BUILD_MODE=dev|user` selects the mode:
 # Makefile targets
 iris-dev:
 	@command -v rustup >/dev/null || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-	cd lib/iris-native && maturin develop --release
+	cd lib/iris/rust && maturin develop --release
 	@echo "iris._native built from source"
 
 iris-user:
-	uv pip install 'iris[native]'
-	@echo "iris._native installed from wheel"
+	gh release download iris-rust-latest --pattern '*.whl' --dir /tmp/iris-wheels --clobber
+	uv pip install /tmp/iris-wheels/iris_rust-*.whl
+	@echo "iris._native installed from pre-built wheel"
 ```
 
 ### CI/CD
 
-GitHub Actions builds wheels on tagged releases using `PyO3/maturin-action@v1`:
+GitHub Actions builds wheels on **every push to `main`** that touches `lib/iris/rust/`, not just tags. This ensures `make iris-user` always has a fresh wheel available.
 
 ```yaml
-# .github/workflows/iris-native-wheels.yml
+# .github/workflows/iris-rust-wheels.yml
 on:
   push:
-    tags: ['iris-native-v*']
+    branches: [main]
+    paths: ['lib/iris/rust/**']
+    tags: ['iris-rust-v*']
 
 jobs:
-  build:
+  build-wheels:
     strategy:
       matrix:
         target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu,
@@ -346,22 +338,51 @@ jobs:
       - uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release -m lib/iris-native/Cargo.toml
+          args: --release -m lib/iris/rust/Cargo.toml
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.target }}
           path: target/wheels/*.whl
 
-  publish:
-    needs: build
+  publish-wheels:
+    needs: build-wheels
     runs-on: ubuntu-latest
     steps:
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      # Always upload to GitHub Releases (latest tag)
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: iris-rust-latest
+          files: target/wheels/*.whl
+          prerelease: true
+      # Only publish to PyPI on version tags
+      - if: startsWith(github.ref, 'refs/tags/iris-rust-v')
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  build-docker:
+    needs: build-wheels
+    runs-on: ubuntu-latest
+    steps:
+      # Build Docker image with Rust extension baked in
+      - uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/iris:latest
+            ghcr.io/${{ github.repository }}/iris:${{ github.sha }}
 ```
 
-### Fallback
+The `make iris-user` target downloads the latest wheel from GitHub Releases:
 
-If `iris._native` is not importable (no wheel installed, no dev build), the existing `IRIS_USE_NATIVE=0` fallback activates automatically and uses pure Python implementations. User mode without Rust installed still works — just slower.
+```makefile
+iris-user:
+	gh release download iris-rust-latest --pattern '*.whl' --dir /tmp/iris-wheels --clobber
+	uv pip install /tmp/iris-wheels/iris_rust-*.whl
+	@echo "iris._native installed from pre-built wheel"
+```
+
+### No Fallback
+
+Once Python code for a module is deleted (per the incremental removal strategy), `iris._native` is **required**. There is no pure-Python fallback. If the extension is missing, import fails loudly. Users must run `make iris-dev` or `make iris-user` to install the extension.
 
 ## Key Design Decisions
 

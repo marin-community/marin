@@ -183,7 +183,7 @@ All protos use `edition = "2023"` (cluster, config, time, vm, query) or `syntax 
 - **User mode**: Pre-built wheels published via CI. Users install with `pip install dupekit` — no Rust toolchain required.
 - **CI**: GitHub Actions builds manylinux/macOS wheels using `PyO3/maturin-action@v1`, uploads to PyPI on tagged releases.
 
-This pattern should be replicated for `iris-native`. The same dual dev/user mode approach with `IRIS_BUILD_MODE` env var and `make iris-dev`/`make iris-user` targets keeps the workflow consistent across the repo.
+This pattern should be replicated for the Iris Rust extension at `lib/iris/rust/`. The same dual dev/user mode approach with `IRIS_BUILD_MODE` env var and `make iris-dev`/`make iris-user` targets keeps the workflow consistent across the repo.
 
 ## Key Architectural Observations
 

@@ -4,14 +4,14 @@ Each step is a single PR-sized change. The system works after every step with a 
 
 ---
 
-## Phase 1: Foundation (Steps 1–6)
+## Phase 1: Foundation (Steps 1–6, 6b)
 
 ### Step 1: Rust Project Scaffolding
 
-**What**: Create `lib/iris-native/` with Cargo.toml, pyproject.toml, and build integration.
+**What**: Create `lib/iris/rust/` with Cargo.toml, pyproject.toml, and build integration.
 
 **Source files**:
-- New: `lib/iris-native/Cargo.toml`, `lib/iris-native/pyproject.toml`, `lib/iris-native/src/lib.rs`
+- New: `lib/iris/rust/Cargo.toml`, `lib/iris/rust/pyproject.toml`, `lib/iris/rust/src/lib.rs`
 - Modified: root `pyproject.toml` (workspace member), `Cargo.toml` (workspace)
 
 **Rust crates**: `pyo3 0.26` (abi3-py311), `prost 0.13`, `prost-build`
@@ -26,12 +26,12 @@ Each step is a single PR-sized change. The system works after every step with a 
 
 ### Step 2: Dev/User Mode Build Infrastructure
 
-**What**: Set up dual build modes for `iris-native`. Dev mode: `make iris-dev` runs `maturin develop --release` to build and install the native extension locally. User mode: `make iris-user` or `pip install iris[native]` installs a pre-built wheel. No Rust toolchain needed for user mode.
+**What**: Set up dual build modes for iris-rust. Dev mode: `make iris-dev` runs `maturin develop --release` to build and install the native extension locally. User mode: `make iris-user` or `pip install iris[native]` installs a pre-built wheel from GitHub Releases. No Rust toolchain needed for user mode.
 
 **Source files**:
 - New: `Makefile` targets (`iris-dev`, `iris-user`)
-- New: `lib/iris-native/pyproject.toml` (maturin config with `[tool.maturin]` settings)
-- New: `.github/workflows/iris-native-wheels.yml` (CI wheel build)
+- New: `lib/iris/rust/pyproject.toml` (maturin config with `[tool.maturin]` settings)
+- New: `.github/workflows/iris-rust-wheels.yml` (CI wheel build + Docker image push)
 - New: `lib/iris/src/iris/_native_loader.py` (importlib-based loader with fallback)
 
 **Env var**: `IRIS_BUILD_MODE=dev|user` — `dev` triggers `maturin develop` on `make iris-dev`; `user` skips Rust compilation and installs from wheel.
@@ -57,7 +57,7 @@ def load_native():
         return None
 ```
 
-**CI**: GitHub Actions workflow using `PyO3/maturin-action@v1` to build wheels on push to tags matching `iris-native-v*`. Targets: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`. Uploads to PyPI and GitHub Releases.
+**CI**: GitHub Actions workflow using `PyO3/maturin-action@v1` to build wheels on every push to `main` that touches `lib/iris/rust/` (not just tags). Targets: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`. Wheels uploaded to GitHub Releases with `latest` tag. `make iris-user` downloads the latest wheel from GitHub Releases via `gh release download` — no PyPI needed. Tagged releases (`iris-rust-v*`) additionally publish to PyPI. Docker images with the Rust extension baked in are pushed to the container registry on each merge.
 
 **Tests**:
 - `make iris-dev` produces a working `iris._native` module (import succeeds, `hello_world()` returns expected value)
@@ -73,7 +73,7 @@ def load_native():
 **What**: Generate Rust types from the existing `.proto` files using `prost-build`.
 
 **Source files**:
-- New: `lib/iris-native/build.rs` (prost-build script), `lib/iris-native/src/proto/` (generated)
+- New: `lib/iris/rust/build.rs` (prost-build script), `lib/iris/rust/src/proto/` (generated)
 - Read: `lib/iris/src/iris/rpc/time.proto`, `errors.proto`, `logging.proto`, `query.proto`, `vm.proto`, `config.proto`, `cluster.proto`, `actor.proto`
 
 **Rust crates**: `prost 0.13`, `prost-build 0.13`, `prost-types`
@@ -91,22 +91,20 @@ def load_native():
 **What**: Port `Timestamp`, `Duration`, `Deadline`, `Timer`, `RateLimiter`, `TokenBucket`, `ExponentialBackoff` from `lib/iris/src/iris/time_utils.py:1-556`.
 
 **Source files**:
-- New: `lib/iris-native/src/time_utils.rs`
-- Modified: `lib/iris/src/iris/time_utils.py` (add import shim with `IRIS_USE_NATIVE` fallback)
-- Preserved: `lib/iris/src/iris/_time_utils_py.py` (copy of original for rollback)
+- New: `lib/iris/rust/src/time_utils.rs`
+- Modified: `lib/iris/src/iris/time_utils.py` (replace implementation with re-exports from `iris._native`)
 
 **Rust crates**: `pyo3`, `prost` (for proto conversion), `std::time` (Instant, SystemTime)
 
 **Python interface**: PyO3 `#[pyclass]` for each type. All existing methods exposed as `#[pymethods]`. The Python module re-exports from `iris._native`:
 ```python
-# time_utils.py
+# time_utils.py — the Python implementation is deleted, not preserved
 from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, TokenBucket, ExponentialBackoff
 ```
 
 **Tests**:
 - Rust unit tests mirroring `tests/test_time_utils.py` cases
-- Python integration test calling both `_time_utils_py` and `_native` versions, asserting identical results
-- Existing `tests/` that use `time_utils` pass unchanged
+- Existing `tests/` that use `time_utils` pass unchanged (they now exercise the Rust implementation)
 
 **Dependencies**: Step 3 (proto types for `to_proto()`/`from_proto()` methods).
 
@@ -117,7 +115,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Port `AttributeValue`, `ConstraintOp`, `WellKnownAttribute`, `DeviceType` from `lib/iris/src/iris/cluster/constraints.py:30-145`.
 
 **Source files**:
-- New: `lib/iris-native/src/types.rs`
+- New: `lib/iris/rust/src/types.rs`
 - Modified: `lib/iris/src/iris/cluster/constraints.py` (import shim for ported types)
 
 **Rust crates**: `pyo3`, `prost`
@@ -137,7 +135,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Port `Constraint`, `evaluate_constraint`, `check_resource_fit`, `ConstraintIndex`, `ResourceCapacity` from `lib/iris/src/iris/cluster/constraints.py:145-end`.
 
 **Source files**:
-- New: `lib/iris-native/src/constraints.rs`
+- New: `lib/iris/rust/src/constraints.rs`
 - Modified: `lib/iris/src/iris/cluster/constraints.py` (import shim for evaluation functions)
 
 **Rust crates**: `pyo3`, `prost`
@@ -156,14 +154,29 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 ---
 
-## Phase 2: Data Layer (Steps 7–11)
+### Step 6b: Remove Python Leaf Module Implementations
+
+**What**: Delete the Python implementations of `time_utils`, `constraints`, and enum types that are now fully served by Rust. The Python modules become thin re-export shims (`from iris._native import ...`). CI runs the full test suite against `make iris-user` (pre-built wheel) to verify user-mode works.
+
+**Source files**:
+- Modified: `lib/iris/src/iris/time_utils.py` — strip to re-exports only, delete all class/function bodies
+- Modified: `lib/iris/src/iris/cluster/constraints.py` — strip to re-exports for ported types and functions
+- Deleted: Any `_*_py.py` fallback copies if they were created
+
+**Tests**: Full test suite passes with `IRIS_USE_NATIVE=1` (required, no fallback). CI builds wheel, installs in clean venv, runs tests.
+
+**Dependencies**: Steps 4, 5, 6 all passing.
+
+---
+
+## Phase 2: Data Layer (Steps 7–11, 11b)
 
 ### Step 7: JobName and WorkerId Types
 
 **What**: Port `JobName`, `WorkerId`, `Namespace` from `lib/iris/src/iris/cluster/types.py:29-200`.
 
 **Source files**:
-- New: `lib/iris-native/src/job_name.rs`
+- New: `lib/iris/rust/src/job_name.rs`
 - Modified: `lib/iris/src/iris/cluster/types.py` (import shim)
 
 **Rust crates**: `pyo3`
@@ -181,7 +194,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Port `ResourceSpec`, `EnvironmentSpec` from `lib/iris/src/iris/cluster/types.py:200-500` (excluding `Entrypoint` which uses cloudpickle).
 
 **Source files**:
-- New: `lib/iris-native/src/resource_spec.rs`
+- New: `lib/iris/rust/src/resource_spec.rs`
 - Modified: `lib/iris/src/iris/cluster/types.py` (import shim for ResourceSpec, EnvironmentSpec)
 
 **Rust crates**: `pyo3`, `prost`, `humansize` (for human-readable byte parsing)
@@ -199,7 +212,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Create the Rust DB access layer — connection management, read snapshots, migration runner. Port the `Predicate` query builder.
 
 **Source files**:
-- New: `lib/iris-native/src/db.rs`, `lib/iris-native/src/db/predicate.rs`, `lib/iris-native/src/db/migrations.rs`
+- New: `lib/iris/rust/src/db.rs`, `lib/iris/rust/src/db/predicate.rs`, `lib/iris/rust/src/db/migrations.rs`
 - Read: `lib/iris/src/iris/cluster/controller/db.py:1-350` (Predicate, db_row_model, ControllerDB connection handling)
 - Read: `lib/iris/src/iris/cluster/controller/migrations/` (all 9 migration files)
 
@@ -218,7 +231,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Port the typed row models (`JobRow`, `TaskRow`, `WorkerRow`, `EndpointRow`) from `lib/iris/src/iris/cluster/controller/db.py:350-end`.
 
 **Source files**:
-- New: `lib/iris-native/src/db/models.rs`
+- New: `lib/iris/rust/src/db/models.rs`
 - Read: `lib/iris/src/iris/cluster/controller/db.py:350-1334`
 
 **Rust crates**: `rusqlite`, `pyo3`, `serde`
@@ -236,7 +249,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Port write operations: `insert_job`, `update_task_state`, `insert_worker`, `upsert_endpoint`, `insert_log_entries`, transaction support.
 
 **Source files**:
-- Extended: `lib/iris-native/src/db.rs`, `lib/iris-native/src/db/models.rs`
+- Extended: `lib/iris/rust/src/db.rs`, `lib/iris/rust/src/db/models.rs`
 - Modified: `lib/iris/src/iris/cluster/controller/db.py` (delegate writes to Rust via PyO3)
 
 **Rust crates**: `rusqlite`
@@ -249,14 +262,28 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 ---
 
-## Phase 3: RPC Layer (Steps 12–16)
+### Step 11b: Remove Python DB Layer
+
+**What**: Delete the Python `ControllerDB` implementation, `db_row_model` decorator, and `Predicate` query builder. The Python `db.py` becomes a thin wrapper that delegates all operations to `iris._native` DB functions. Remove the custom Python ORM code entirely.
+
+**Source files**:
+- Modified: `lib/iris/src/iris/cluster/controller/db.py` — strip to Rust delegation shim
+- Modified: `lib/iris/src/iris/cluster/types.py` — strip `JobName`, `WorkerId`, `ResourceSpec`, `EnvironmentSpec` to re-exports
+
+**Tests**: All `tests/cluster/controller/test_db.py` pass. All downstream tests (scheduler, transitions, service) pass.
+
+**Dependencies**: Steps 7–11 all passing.
+
+---
+
+## Phase 3: RPC Layer (Steps 12–16, 16b)
 
 ### Step 12: Connect-RPC Framework Crate
 
 **What**: Build the `iris-connect` Rust crate — a Connect-RPC server adapter on `axum`.
 
 **Source files**:
-- New: `lib/iris-native/src/connect/mod.rs`, `lib/iris-native/src/connect/handler.rs`, `lib/iris-native/src/connect/error.rs`, `lib/iris-native/src/connect/codec.rs`
+- New: `lib/iris/rust/src/connect/mod.rs`, `lib/iris/rust/src/connect/handler.rs`, `lib/iris/rust/src/connect/error.rs`, `lib/iris/rust/src/connect/codec.rs`
 
 **Rust crates**: `axum 0.8`, `hyper 1.0`, `tokio 1`, `prost`, `prost-reflect` (for JSON encoding), `serde_json`
 
@@ -273,7 +300,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Port JWT authentication from `lib/iris/src/iris/cluster/controller/auth.py:1-387` and `lib/iris/src/iris/rpc/auth.py`.
 
 **Source files**:
-- New: `lib/iris-native/src/auth.rs`
+- New: `lib/iris/rust/src/auth.rs`
 - Read: `lib/iris/src/iris/cluster/controller/auth.py` (JWT signing key management, token validation)
 - Read: `lib/iris/src/iris/rpc/auth.py` (RPC interceptor, token providers)
 
@@ -292,7 +319,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Implement read-only RPCs in Rust: `GetJobStatus`, `ListJobs`, `GetTaskStatus`, `ListTasks`, `ListWorkers`, `ListEndpoints`, `GetAutoscalerStatus`, `GetTransactions`, `ListUsers`.
 
 **Source files**:
-- New: `lib/iris-native/src/controller_service.rs`
+- New: `lib/iris/rust/src/controller_service.rs`
 - Read: `lib/iris/src/iris/cluster/controller/service.py:1-1759` (RPC implementations)
 
 **Rust crates**: `axum`, `prost`, `rusqlite`, `iris-connect` (from Step 12)
@@ -310,8 +337,8 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Implement write RPCs: `LaunchJob`, `TerminateJob`, `Register`, `RegisterEndpoint`, `UnregisterEndpoint`, `Login`, `CreateApiKey`, `RevokeApiKey`, `BeginCheckpoint`.
 
 **Source files**:
-- Extended: `lib/iris-native/src/controller_service.rs`
-- New: `lib/iris-native/src/controller_service/launch.rs`, `lib/iris-native/src/controller_service/worker_mgmt.rs`
+- Extended: `lib/iris/rust/src/controller_service.rs`
+- New: `lib/iris/rust/src/controller_service/launch.rs`, `lib/iris/rust/src/controller_service/worker_mgmt.rs`
 
 **Rust crates**: Same as Step 14.
 
@@ -328,7 +355,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Implement the WorkerService RPCs: `Heartbeat`, `GetTaskStatus`, `ListTasks`, `HealthCheck`, `FetchLogs`, `ProfileTask`, `GetProcessStatus`.
 
 **Source files**:
-- New: `lib/iris-native/src/worker_service.rs`
+- New: `lib/iris/rust/src/worker_service.rs`
 - Read: `lib/iris/src/iris/cluster/worker/service.py`
 
 **Rust crates**: `axum`, `prost`, `tokio`, `iris-connect`
@@ -341,14 +368,31 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 ---
 
-## Phase 4: Core Logic (Steps 17–21)
+### Step 16b: Remove Python RPC Service Implementations
+
+**What**: Delete the Python `ControllerService` and `WorkerService` RPC handler implementations. The Rust binary now serves all RPCs. Python `service.py` files are deleted entirely. Update Dockerfiles and deployment configs to use the Rust controller/worker binaries. Push updated Docker images to the container registry.
+
+**Source files**:
+- Deleted: `lib/iris/src/iris/cluster/controller/service.py` (Python RPC handlers)
+- Deleted: `lib/iris/src/iris/cluster/worker/service.py` (Python RPC handlers)
+- Modified: `lib/iris/src/iris/cluster/controller/auth.py` — strip to re-exports from `iris._native`
+- Modified: Dockerfile(s) — switch entrypoint from Python to Rust binary
+- Modified: `.github/workflows/` — add Docker image build+push step
+
+**Tests**: Full test suite runs against Rust-served RPCs. CI builds and pushes Docker image with Rust binary. `make iris-user` installs the latest wheel and Docker image works out of the box.
+
+**Dependencies**: Steps 12–16 all passing.
+
+---
+
+## Phase 4: Core Logic (Steps 17–21, 21b)
 
 ### Step 17: Scheduler in Rust
 
 **What**: Port the pure scheduler from `lib/iris/src/iris/cluster/controller/scheduler.py:1-840`.
 
 **Source files**:
-- New: `lib/iris-native/src/scheduler.rs`
+- New: `lib/iris/rust/src/scheduler.rs`
 - Modified: `lib/iris/src/iris/cluster/controller/scheduler.py` (delegate to Rust via PyO3)
 
 **Rust crates**: `pyo3`
@@ -366,7 +410,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Port the state machine from `lib/iris/src/iris/cluster/controller/transitions.py:1-1679`.
 
 **Source files**:
-- New: `lib/iris-native/src/transitions.rs`
+- New: `lib/iris/rust/src/transitions.rs`
 - Read: `lib/iris/src/iris/cluster/controller/transitions.py`
 
 **Rust crates**: `pyo3`, `rusqlite`
@@ -384,7 +428,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Port scaling group logic from `lib/iris/src/iris/cluster/controller/scaling_group.py:1-1275`.
 
 **Source files**:
-- New: `lib/iris-native/src/scaling_group.rs`
+- New: `lib/iris/rust/src/scaling_group.rs`
 - Read: `lib/iris/src/iris/cluster/controller/scaling_group.py`
 
 **Rust crates**: `pyo3`, `prost`
@@ -402,7 +446,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Port the autoscaler from `lib/iris/src/iris/cluster/controller/autoscaler.py:1-1566`.
 
 **Source files**:
-- New: `lib/iris-native/src/autoscaler.rs`
+- New: `lib/iris/rust/src/autoscaler.rs`
 - Read: `lib/iris/src/iris/cluster/controller/autoscaler.py`
 
 **Rust crates**: `pyo3`, `tokio` (for async platform calls)
@@ -420,7 +464,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Port the main controller loop from `lib/iris/src/iris/cluster/controller/controller.py:1-1646`.
 
 **Source files**:
-- New: `lib/iris-native/src/controller.rs`
+- New: `lib/iris/rust/src/controller.rs`
 - Read: `lib/iris/src/iris/cluster/controller/controller.py`
 
 **Rust crates**: `tokio`, `pyo3`
@@ -433,14 +477,31 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 ---
 
-## Phase 5: Platform & Runtime (Steps 22–26)
+### Step 21b: Remove Python Core Logic
+
+**What**: Delete the Python scheduler, transitions, autoscaler, scaling group, and controller coordinator implementations. These are now fully served by Rust via PyO3 or the standalone Rust binary.
+
+**Source files**:
+- Deleted: `lib/iris/src/iris/cluster/controller/scheduler.py`
+- Deleted: `lib/iris/src/iris/cluster/controller/transitions.py`
+- Deleted: `lib/iris/src/iris/cluster/controller/autoscaler.py`
+- Deleted: `lib/iris/src/iris/cluster/controller/scaling_group.py`
+- Deleted: `lib/iris/src/iris/cluster/controller/controller.py`
+
+**Tests**: Full test suite passes. No Python core logic remains in the controller.
+
+**Dependencies**: Steps 17–21 all passing.
+
+---
+
+## Phase 5: Platform & Runtime (Steps 22–26, 26b)
 
 ### Step 22: Platform Abstraction Trait
 
 **What**: Define the `Platform` trait in Rust mirroring the Protocol in `lib/iris/src/iris/cluster/platform/base.py:1-587`.
 
 **Source files**:
-- New: `lib/iris-native/src/platform/mod.rs`, `lib/iris-native/src/platform/traits.rs`
+- New: `lib/iris/rust/src/platform/mod.rs`, `lib/iris/rust/src/platform/traits.rs`
 - Read: `lib/iris/src/iris/cluster/platform/base.py` (Platform Protocol, SliceInfo, VmInfo)
 
 **Rust crates**: `async-trait`, `tokio`
@@ -458,7 +519,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Port `LocalPlatform` from `lib/iris/src/iris/cluster/platform/local.py:1-581`.
 
 **Source files**:
-- New: `lib/iris-native/src/platform/local.rs`
+- New: `lib/iris/rust/src/platform/local.rs`
 - Read: `lib/iris/src/iris/cluster/platform/local.py`
 
 **Rust crates**: `tokio::process`, `sysinfo`
@@ -476,7 +537,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Port GCP VM/TPU management from `lib/iris/src/iris/cluster/platform/gcp.py:1-1715`.
 
 **Source files**:
-- New: `lib/iris-native/src/platform/gcp.rs`
+- New: `lib/iris/rust/src/platform/gcp.rs`
 - Read: `lib/iris/src/iris/cluster/platform/gcp.py`
 
 **Rust crates**: `reqwest` (for GCE/TPU REST APIs), `google-cloud-auth`, `tokio`, `serde_json`
@@ -494,7 +555,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Port the `Runtime` abstraction and `ProcessRuntime` from `lib/iris/src/iris/cluster/runtime/types.py` and `lib/iris/src/iris/cluster/runtime/process.py:1-671`.
 
 **Source files**:
-- New: `lib/iris-native/src/runtime/mod.rs`, `lib/iris-native/src/runtime/process.rs`
+- New: `lib/iris/rust/src/runtime/mod.rs`, `lib/iris/rust/src/runtime/process.rs`
 - Read: `lib/iris/src/iris/cluster/runtime/process.py`, `lib/iris/src/iris/cluster/runtime/types.py`
 
 **Rust crates**: `tokio::process`, `nix` (signal handling)
@@ -512,7 +573,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Port Docker container management from `lib/iris/src/iris/cluster/runtime/docker.py:1-1013`.
 
 **Source files**:
-- New: `lib/iris-native/src/runtime/docker.rs`
+- New: `lib/iris/rust/src/runtime/docker.rs`
 - Read: `lib/iris/src/iris/cluster/runtime/docker.py`
 
 **Rust crates**: `bollard` (Docker API), `tokio`
@@ -525,6 +586,21 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 ---
 
+### Step 26b: Remove Python Platform & Runtime Implementations
+
+**What**: Delete the Python platform and runtime implementations. The Rust binaries handle all platform and runtime operations.
+
+**Source files**:
+- Deleted: `lib/iris/src/iris/cluster/platform/local.py`, `gcp.py`, `coreweave.py`, `manual.py`
+- Deleted: `lib/iris/src/iris/cluster/runtime/process.py`, `docker.py`, `kubernetes.py`
+- Keep: `lib/iris/src/iris/cluster/platform/base.py` (Protocol definition, still used by Python client)
+
+**Tests**: Full test suite passes with Rust platform/runtime. Integration tests against GCP and Docker confirm production readiness.
+
+**Dependencies**: Steps 22–26 all passing.
+
+---
+
 ## Phase 6: Client & CLI (Steps 27–34)
 
 ### Step 27: Rust Worker Binary
@@ -532,7 +608,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Build a standalone Rust binary that runs the full worker agent — combining WorkerService (Step 16), runtime (Steps 25-26), and env probe.
 
 **Source files**:
-- New: `lib/iris-native/src/bin/iris-worker.rs`
+- New: `lib/iris/rust/src/bin/iris-worker.rs`
 - Read: `lib/iris/src/iris/cluster/worker/worker.py`, `lib/iris/src/iris/cluster/worker/main.py`
 
 **Rust crates**: `tokio`, `axum`, `clap`, `tracing`
@@ -550,7 +626,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Build a standalone Rust binary that runs the full controller — combining ControllerService (Steps 14-15), scheduler (Step 17), transitions (Step 18), autoscaler (Step 20), DB (Steps 9-11).
 
 **Source files**:
-- New: `lib/iris-native/src/bin/iris-controller.rs`
+- New: `lib/iris/rust/src/bin/iris-controller.rs`
 - Read: `lib/iris/src/iris/cluster/controller/main.py`
 
 **Rust crates**: `tokio`, `axum`, `clap`, `tracing`, `rusqlite`
@@ -568,7 +644,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Port the CLI from `lib/iris/src/iris/cli/` (~3600 LOC) to Rust using `clap`.
 
 **Source files**:
-- New: `lib/iris-native/src/bin/iris.rs`, `lib/iris-native/src/cli/`
+- New: `lib/iris/rust/src/bin/iris.rs`, `lib/iris/rust/src/cli/`
 - Read: `lib/iris/src/iris/cli/main.py`, `job.py`, `cluster.py`, `query.py`, `build.py`, `rpc.py`
 
 **Rust crates**: `clap 4` (derive), `tabled` (table formatting), `tokio`, `reqwest`
@@ -604,7 +680,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Implement ActorService (`actor.proto:108-118`) in Rust as a bytes passthrough — Rust handles the Connect-RPC transport but delegates serialization/deserialization to Python cloudpickle.
 
 **Source files**:
-- New: `lib/iris-native/src/actor_service.rs`
+- New: `lib/iris/rust/src/actor_service.rs`
 - Read: `lib/iris/src/iris/actor/server.py`, `lib/iris/src/iris/actor/client.py`
 
 **Rust crates**: `axum`, `prost`, `iris-connect`
@@ -622,7 +698,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Port Kubernetes runtime from `lib/iris/src/iris/cluster/runtime/kubernetes.py:1-696` and CoreWeave platform from `lib/iris/src/iris/cluster/platform/coreweave.py:1-1577`.
 
 **Source files**:
-- New: `lib/iris-native/src/runtime/kubernetes.rs`, `lib/iris-native/src/platform/coreweave.rs`
+- New: `lib/iris/rust/src/runtime/kubernetes.rs`, `lib/iris/rust/src/platform/coreweave.rs`
 - Read: `lib/iris/src/iris/cluster/runtime/kubernetes.py`, `lib/iris/src/iris/cluster/platform/coreweave.py`
 
 **Rust crates**: `kube-rs`, `k8s-openapi`, `tokio`
@@ -640,7 +716,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 **What**: Port dashboard endpoints from `lib/iris/src/iris/cluster/controller/dashboard.py` and `lib/iris/src/iris/cluster/worker/dashboard.py`.
 
 **Source files**:
-- New: `lib/iris-native/src/dashboard.rs`
+- New: `lib/iris/rust/src/dashboard.rs`
 - Read: Controller and worker dashboard files
 
 **Rust crates**: `axum`, `askama` or `maud` (HTML templating), `tokio`
@@ -653,20 +729,21 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 ---
 
-### Step 34: Remove Python Controller and Worker
+### Step 34: Final Python Cleanup
 
-**What**: Delete the Python controller and worker implementations. The Rust binaries are now the sole implementation.
+**What**: Remove remaining Python scaffolding: worker main/entry, CLI, managed_thread, chaos, marin_fs (replaced by `object_store` in Rust), logging shims, and any remaining re-export shim modules. The Python `iris` package shrinks to: client library, actor system, and proto stubs.
 
 **Source files**:
-- Deleted: `lib/iris/src/iris/cluster/controller/controller.py`, `service.py`, `main.py`
-- Deleted: `lib/iris/src/iris/cluster/worker/worker.py`, `service.py`, `main.py`
-- Modified: Deployment configs, Dockerfiles, CI
+- Deleted: `lib/iris/src/iris/cluster/worker/worker.py`, `main.py`
+- Deleted: `lib/iris/src/iris/cluster/controller/main.py`
+- Deleted: `lib/iris/src/iris/cli/` (all CLI modules)
+- Deleted: `lib/iris/src/iris/managed_thread.py`, `chaos.py`, `marin_fs.py`
+- Deleted: All `_native_loader.py` and re-export shims (import directly from `iris._native`)
+- Modified: `lib/iris/src/iris/__init__.py` — re-export from Rust
 
-**Rust crates**: N/A
+**Python interface**: Python client library (`iris.client`) and actor system remain in Python. Everything else is Rust.
 
-**Python interface**: Python client library (`iris.client`) remains. CLI is Rust. Controller/worker are Rust.
-
-**Tests**: Full test suite passes with only Rust binaries. No Python controller/worker code remains.
+**Tests**: Full test suite passes. `pip install iris` installs the Rust extension wheel. `make iris-dev` and `make iris-user` both work. Docker image contains only the Rust binaries.
 
 **Dependencies**: Steps 27-33. All tests passing on Rust binaries.
 
@@ -675,7 +752,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 ## Dependency Graph
 
 ```
-Step 1 ─→ Step 2
+Step 1 ─→ Step 2 (CI wheels + Docker image pipeline)
   │         │
   ├─→ Step 3 (proto codegen)
   │    │ │
@@ -688,6 +765,8 @@ Step 1 ─→ Step 2
   │         ├→ Step 13 (auth)
   │         ├→ Step 16 (WorkerService, needs 3)
   │         └→ Step 31 (actor passthrough)
+  │
+  │    Step 6b (delete Python leaf modules, needs 4, 5, 6)
   │
   ├─→ Step 7 (JobName)
   │
@@ -703,10 +782,15 @@ Step 1 ─→ Step 2
   │              │
   │              └→ Step 18 (transitions, needs 11, 17)
   │
+  │    Step 11b (delete Python DB layer, needs 7-11)
+  │
   │    Step 17 (scheduler, needs 6, 7, 10)
   │    Step 19 (scaling groups, needs 6, 8, 3)
   │    Step 20 (autoscaler, needs 19, 18)
   │    Step 21 (controller, needs 17, 18, 20, 15)
+  │
+  │    Step 16b (delete Python RPC services + push Docker image, needs 12-16)
+  │    Step 21b (delete Python core logic, needs 17-21)
   │
   │    Step 22 (platform trait, needs 3, 8)
   │      ├→ Step 23 (local platform)
@@ -715,37 +799,57 @@ Step 1 ─→ Step 2
   │    Step 25 (process runtime, needs 8, 7)
   │      └→ Step 26 (Docker runtime)
   │
+  │    Step 26b (delete Python platform/runtime, needs 22-26)
+  │
   │    Step 27 (worker binary, needs 16, 25, 26)
   │    Step 28 (controller binary, needs 14-21)
   │    Step 29 (CLI, needs 28)
   │    Step 30 (client compat, needs 28)
   │    Step 32 (K8s runtime, needs 25, 22)
   │    Step 33 (dashboard, needs 28)
-  │    Step 34 (remove Python, needs 27-33)
+  │    Step 34 (final Python cleanup, needs 27-33)
 ```
+
+## Incremental Python Removal Strategy
+
+Each phase ends with a `*b` cleanup step that deletes the Python code replaced by Rust in that phase. This ensures:
+
+1. **No dead code accumulates.** Python implementations are deleted as soon as Rust replacements pass the full test suite.
+2. **CI validates the Rust path.** After each cleanup step, CI runs the test suite with `make iris-user` (pre-built wheel), confirming that user-mode installation works end-to-end.
+3. **Docker images stay current.** Each cleanup step triggers a Docker image rebuild+push so deployed clusters use the latest Rust code automatically.
+4. **No fallback path.** We do NOT keep `_*_py.py` backup copies or `IRIS_USE_NATIVE=0` fallback. Once Rust passes tests, the Python code is deleted. Rollback is via `git revert`.
+
+## CI/CD Pipeline
+
+Set up in Step 2 and used throughout:
+
+- **On every push to `main` touching `lib/iris/rust/`**: Build manylinux + macOS wheels, upload to GitHub Releases (`latest` tag). Build and push Docker image with iris-rust baked in.
+- **`make iris-user`**: Downloads the latest wheel from GitHub Releases via `gh release download`, installs it. No Rust toolchain needed.
+- **`make iris-dev`**: Runs `maturin develop --release` from source. Requires Rust toolchain.
+- **On tag `iris-rust-v*`**: Additionally publish to PyPI for external consumers.
 
 ## Timeline Estimate
 
 | Phase | Steps | Estimated Duration | Parallelism |
 |-------|-------|--------------------|-------------|
-| Phase 1 | 1–6 | 4–6 weeks | Step 2 parallel with Step 3; Steps 5-6 parallel with Step 4 |
-| Phase 2 | 7–11 | 4–6 weeks | Steps 7-8 parallel; Steps 10-11 sequential |
-| Phase 3 | 12–16 | 6–8 weeks | Step 12 first; Steps 14-16 partially parallel |
-| Phase 4 | 17–21 | 6–8 weeks | Steps 17-19 partially parallel; 20-21 sequential |
-| Phase 5 | 22–26 | 4–6 weeks | Steps 23-24 parallel; Steps 25-26 sequential |
-| Phase 6 | 27–34 | 6–8 weeks | Steps 27-28 parallel; 29-33 partially parallel |
+| Phase 1 | 1–6, 6b | 4–6 weeks | Step 2 ∥ Step 3; Steps 5-6 ∥ Step 4; 6b after all |
+| Phase 2 | 7–11, 11b | 4–6 weeks | Steps 7-8 ∥; Steps 10-11 sequential; 11b after |
+| Phase 3 | 12–16, 16b | 6–8 weeks | Step 12 first; Steps 14-16 partially ∥; 16b after |
+| Phase 4 | 17–21, 21b | 6–8 weeks | Steps 17-19 partially ∥; 20-21 sequential; 21b after |
+| Phase 5 | 22–26, 26b | 4–6 weeks | Steps 23-24 ∥; Steps 25-26 sequential; 26b after |
+| Phase 6 | 27–34 | 6–8 weeks | Steps 27-28 ∥; 29-33 partially ∥; 34 last |
 | **Total** | | **~8–12 months** | |
 
 ## Milestones
 
-1. **M1 (end of Phase 1)**: `iris._native` module builds and passes CI. Dev/user build modes work. Time utils and constraint evaluation run in Rust. Measurable speedup on scheduler benchmarks.
+1. **M1 (end of Phase 1)**: `iris._native` module builds and passes CI. Dev/user build modes work. Time utils and constraint evaluation run in Rust. **Python leaf module code deleted.** CI publishes wheels on every merge.
 
-2. **M2 (end of Phase 2)**: Rust can read and write the controller SQLite database. Schema compatibility verified.
+2. **M2 (end of Phase 2)**: Rust owns the controller SQLite database. **Python DB/ORM code deleted.**
 
-3. **M3 (end of Phase 3)**: A Rust binary serves ControllerService RPCs. Python clients work against it. Shadow mode deployed.
+3. **M3 (end of Phase 3)**: A Rust binary serves all ControllerService and WorkerService RPCs. **Python RPC handler code deleted.** Docker images with Rust binary pushed to registry.
 
-4. **M4 (end of Phase 4)**: Scheduler, transitions, and autoscaler run in Rust. Controller loop is Rust-native.
+4. **M4 (end of Phase 4)**: Scheduler, transitions, and autoscaler run in Rust. Controller loop is Rust-native. **Python core logic deleted.**
 
-5. **M5 (end of Phase 5)**: Worker agent runs as a Rust binary with Docker and process runtimes.
+5. **M5 (end of Phase 5)**: Platform and runtime implementations in Rust. **Python platform/runtime code deleted.**
 
-6. **M6 (end of Phase 6)**: Full Rust deployment. Python code remains only for client library and actor system.
+6. **M6 (end of Phase 6)**: Full Rust deployment. Python `iris` package contains only: client library, actor system, and proto stubs. CLI is a Rust binary.
