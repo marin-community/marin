@@ -44,7 +44,7 @@ Before opening a pull request:
 2. Run `uv run pytest -m 'not slow'` for the files or packages you changed.
 3. Make sure the PR body references an issue with `Fixes #NNNN` or `Part of #NNNN`.
 
-For the end-to-end branch and fork workflow, see [Submitting a pull request](../tutorials/submitting-pr.md).
+For the end-to-end branch and fork workflow, follow the PR steps in [Submitting to the Marin Speedrun](../tutorials/submitting-speedrun.md#submit). The same GitHub push and PR process applies to non-speedrun changes.
 
 ## Guidelines
 
