@@ -13,9 +13,7 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
-import os
 import posixpath
-import sqlite3
 import threading
 import time
 import zipfile
@@ -86,8 +84,6 @@ class BundleStore:
         # (most recently accessed at end).
         self._cache: OrderedDict[str, bytes] = OrderedDict()
         self._cache_bytes = 0
-
-        self._maybe_migrate_sqlite()
 
     def _bundle_fs_path(self, bundle_id: str) -> str:
         return f"{self._fs_path}/{bundle_id}.zip"
@@ -213,44 +209,6 @@ class BundleStore:
         for _ in range(n_to_evict):
             _bid, blob = self._cache.popitem(last=False)
             self._cache_bytes -= len(blob)
-
-    def _maybe_migrate_sqlite(self) -> None:
-        """Check for legacy sqlite bundle store and migrate in a background thread."""
-        # Only attempt migration for local filesystems
-        if not isinstance(self._fs, fsspec.implementations.local.LocalFileSystem):
-            return
-
-        storage_path = Path(self._fs_path)
-        sqlite_path = storage_path.parent / "bundles.sqlite3"
-        if not sqlite_path.exists():
-            return
-
-        logger.info("Found legacy SQLite bundle store at %s, starting background migration", sqlite_path)
-        thread = threading.Thread(
-            target=self._migrate_sqlite,
-            args=(sqlite_path,),
-            daemon=True,
-        )
-        thread.start()
-
-    def _migrate_sqlite(self, sqlite_path: Path) -> None:
-        """Read bundles from legacy SQLite store and write them to fsspec storage."""
-        migrated_path = sqlite_path.with_suffix(".sqlite3.migrated")
-        try:
-            conn = sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True)
-            cursor = conn.execute("SELECT bundle_id, zip_bytes FROM bundles")
-            count = 0
-            for bundle_id, zip_bytes in cursor:
-                if not self._exists_in_storage(bundle_id):
-                    self._write_to_storage(bundle_id, bytes(zip_bytes))
-                count += 1
-                if count % 100 == 0:
-                    logger.info("Migrated %d bundles from SQLite", count)
-            conn.close()
-            logger.info("SQLite migration complete: %d bundles migrated", count)
-            os.rename(sqlite_path, migrated_path)
-        except Exception:
-            logger.exception("Failed to migrate SQLite bundle store at %s", sqlite_path)
 
     def close(self) -> None:
         pass

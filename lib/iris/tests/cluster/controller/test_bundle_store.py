@@ -4,8 +4,6 @@
 """Tests for controller-side BundleStore behavior."""
 
 import hashlib
-import sqlite3
-import time
 
 import pytest
 
@@ -57,9 +55,16 @@ def test_store_survives_restart(tmp_path):
     assert store2.get_zip(bundle_id) == blob
 
 
-def test_sqlite_migration(tmp_path):
-    """Legacy SQLite bundles are migrated to fsspec storage."""
-    storage_dir = tmp_path / "bundles"
+def test_migration_script_helpers(tmp_path):
+    """Test the offline migration helpers from migrate_bundle_store.py."""
+    import sqlite3
+    import time
+
+    from scripts.migrations.migrate_bundle_store import (
+        read_bundles_from_sqlite,
+        verify_bundles,
+        write_bundles_to_fsspec,
+    )
 
     # Create a legacy SQLite bundle store
     sqlite_path = tmp_path / "bundles.sqlite3"
@@ -79,17 +84,20 @@ def test_sqlite_migration(tmp_path):
     conn.commit()
     conn.close()
 
-    store = BundleStore(storage_dir=str(storage_dir))
+    # Read from sqlite
+    bundles = read_bundles_from_sqlite(sqlite_path)
+    assert len(bundles) == 1
+    assert bundles[bundle_id] == blob
 
-    # Wait for background migration thread to complete
-    for _ in range(50):
-        if not sqlite_path.exists():
-            break
-        time.sleep(0.1)
+    # Write to fsspec storage
+    storage_dir = str(tmp_path / "new_bundles")
+    written = write_bundles_to_fsspec(bundles, storage_dir)
+    assert written == 1
 
-    # SQLite file should be renamed
-    assert not sqlite_path.exists()
-    assert sqlite_path.with_suffix(".sqlite3.migrated").exists()
+    # Idempotent: second write should skip existing
+    written2 = write_bundles_to_fsspec(bundles, storage_dir)
+    assert written2 == 0
 
-    # Bundle should be accessible
-    assert store.get_zip(bundle_id) == blob
+    # Verify via BundleStore
+    failures = verify_bundles(bundles, storage_dir)
+    assert failures == []
