@@ -154,16 +154,6 @@ class InferenceReplConfig:
             ),
         )
     )
-    # bad
-    #                 max_pages=32,
-    #                 max_seqs=2,
-    #                 page_size=8,
-    #                 max_pages_per_seq=8,
-    #                 max_queued_tokens=4,
-    #                 max_seqs_in_prefill=2,
-    #                 max_prefill_size=64,
-    #                 max_tokens_per_round=16,
-    #                 max_rounds=8,
     server: InferenceServerConfig = field(
         default_factory=lambda: InferenceServerConfig(
             service=InferenceEngineConfig(

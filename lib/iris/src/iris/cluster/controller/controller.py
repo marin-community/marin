@@ -40,7 +40,6 @@ from iris.cluster.controller.db import (
     JOBS,
     RESERVATION_CLAIMS,
     TASKS,
-    TERMINAL_TASK_STATES,
     WORKERS,
     ControllerDB,
     Join,
@@ -63,6 +62,7 @@ from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import (
     HEARTBEAT_FAILURE_THRESHOLD,
+    HEARTBEAT_STALENESS_THRESHOLD,
     RESERVATION_HOLDER_JOB_NAME,
     Assignment,
     ControllerTransitions,
@@ -287,10 +287,12 @@ def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, J
 
 
 def _schedulable_tasks(queries: ControllerDB) -> list[Task]:
+    # Only PENDING tasks can pass can_be_scheduled(); no need to fetch ASSIGNED/BUILDING/RUNNING.
+    SCHEDULABLE_STATES = (cluster_pb2.TASK_STATE_PENDING,)
     with queries.snapshot() as snapshot:
         tasks = snapshot.select(
             TASKS,
-            where=TASKS.c.state.not_null() & ~TASKS.c.state.in_(list(TERMINAL_TASK_STATES)),
+            where=TASKS.c.state.in_(list(SCHEDULABLE_STATES)),
             order_by=(
                 TASKS.c.priority_neg_depth.asc(),
                 TASKS.c.priority_root_submitted_ms.asc(),
@@ -320,30 +322,27 @@ def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -
 
 
 def _building_counts(queries: ControllerDB, workers: list[Worker]) -> dict[WorkerId, int]:
+    """Count tasks in BUILDING or ASSIGNED state per worker, excluding reservation-holder jobs."""
     if not workers:
         return {}
-    running_by_worker = running_tasks_by_worker(queries, {worker.worker_id for worker in workers})
-    running_task_ids = {task_id for task_ids in running_by_worker.values() for task_id in task_ids}
-    if not running_task_ids:
-        return {}
-    tasks = _tasks_by_ids_with_attempts(queries, running_task_ids)
-    jobs = _jobs_by_id(queries, {task.job_id for task in tasks.values()})
-    counts: dict[WorkerId, int] = {}
-    for worker_id, task_ids in running_by_worker.items():
-        count = 0
-        for task_id in task_ids:
-            task = tasks.get(task_id)
-            if task is None:
-                continue
-            if task.state not in (cluster_pb2.TASK_STATE_BUILDING, cluster_pb2.TASK_STATE_ASSIGNED):
-                continue
-            job = jobs.get(task.job_id)
-            if job is None or job.is_reservation_holder:
-                continue
-            count += 1
-        if count > 0:
-            counts[worker_id] = count
-    return counts
+    worker_ids = [str(w.worker_id) for w in workers]
+    placeholders = ",".join("?" for _ in worker_ids)
+    sql = (
+        "SELECT a.worker_id, COUNT(*) as cnt FROM tasks t "
+        "JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
+        "JOIN jobs j ON t.job_id = j.job_id "
+        f"WHERE a.worker_id IN ({placeholders}) "
+        "AND t.state IN (?, ?) "
+        "AND j.is_reservation_holder = 0 "
+        "GROUP BY a.worker_id"
+    )
+    with queries.snapshot() as q:
+        rows = q.raw(
+            sql,
+            (*worker_ids, cluster_pb2.TASK_STATE_BUILDING, cluster_pb2.TASK_STATE_ASSIGNED),
+            decoders={"worker_id": WorkerId, "cnt": int},
+        )
+    return {row.worker_id: row.cnt for row in rows}
 
 
 def _workers_by_id(queries: ControllerDB, worker_ids: set[WorkerId]) -> dict[WorkerId, Worker]:
@@ -769,7 +768,7 @@ class Controller:
         )
         self._scheduler = Scheduler()
 
-        self._bundle_store = BundleStore(db_path=config.local_state_dir / "bundles.sqlite3")
+        self._bundle_store = BundleStore(storage_dir=f"{config.remote_state_dir.rstrip('/')}/bundles")
 
         self._service = ControllerServiceImpl(
             self._transitions,
@@ -1387,6 +1386,37 @@ class Controller:
         if any_buffered:
             self._heartbeat_event.set()
 
+    def _reap_stale_workers(self) -> None:
+        """Fail workers whose last heartbeat exceeds the staleness threshold.
+
+        On controller restart from checkpoint, workers carry their old
+        last_heartbeat_ms but consecutive_failures=0 and healthy=1.  If the
+        backing VMs were preempted during the outage, we'd otherwise wait for
+        10 RPC timeouts per worker before marking them dead.  This check
+        short-circuits that by failing any worker that hasn't heartbeated in
+        HEARTBEAT_STALENESS_THRESHOLD (15 minutes).
+        """
+        threshold_ms = HEARTBEAT_STALENESS_THRESHOLD.to_ms()
+        workers = healthy_active_workers_with_attributes(self._db)
+        stale = [w for w in workers if w.last_heartbeat.age_ms() > threshold_ms]
+        if not stale:
+            return
+
+        logger.warning(
+            "Failing %d workers with stale heartbeats (threshold=%ds): %s",
+            len(stale),
+            HEARTBEAT_STALENESS_THRESHOLD.to_seconds(),
+            [str(w.worker_id) for w in stale[:10]],
+        )
+        removed = self._transitions.fail_workers_by_ids(
+            [str(w.worker_id) for w in stale],
+            reason=f"heartbeat stale (>{int(HEARTBEAT_STALENESS_THRESHOLD.to_seconds())}s since last heartbeat)",
+        )
+        for wid, addr in removed:
+            self.stub_factory.evict(addr)
+            if self._autoscaler:
+                self._autoscaler.notify_worker_failed(str(wid))
+
     def _heartbeat_all_workers(self) -> None:
         """Send heartbeats to all registered workers.
 
@@ -1405,6 +1435,12 @@ class Controller:
 
     def _heartbeat_all_workers_inner(self) -> None:
         round_timer = Timer()
+
+        # Phase 0: fail workers whose last heartbeat exceeds the staleness
+        # threshold.  This catches workers restored from a checkpoint whose
+        # backing VMs no longer exist — without it they'd sit "healthy" until
+        # 10 consecutive RPC failures accumulate.
+        self._reap_stale_workers()
 
         # Phase 1: create snapshots for all healthy workers (lock-acquiring).
         with slow_log(logger, "heartbeat phase 1 (snapshot)", threshold_ms=100):

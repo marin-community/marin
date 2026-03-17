@@ -224,7 +224,7 @@ class GrugTrainState:
     step: jax.Array
     params: Transformer
     opt_state: optax.OptState
-    ema_params: Transformer
+    ema_params: Transformer | None
 
 
 def initial_state(
@@ -233,13 +233,14 @@ def initial_state(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
     key: PRNGKeyArray,
+    ema_beta: float | None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
         opt_state=optimizer.init(params),
-        ema_params=params,
+        ema_params=params if ema_beta is not None else None,
     )
 
 
@@ -278,8 +279,10 @@ def _make_train_step(
         params = optax.apply_updates(state.params, updates)
 
         if ema_beta is None:
-            ema_params = params
+            ema_params = None
         else:
+            if state.ema_params is None:
+                raise ValueError("ema_params must be initialized when ema_beta is set.")
             ema_params = jax.tree_util.tree_map(
                 lambda old, new: ema_beta * old + (1.0 - ema_beta) * new,
                 state.ema_params,
@@ -363,6 +366,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 optimizer=optimizer,
                 mp=trainer.mp,
                 key=model_rng,
+                ema_beta=config.trainer.ema_beta,
             )
 
         state = _init_state(model_key)
@@ -404,7 +408,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks = StateCallbackRunner[GrugTrainState](
             step_getter=lambda s: s.step,
             model_getter=lambda s: s.params,
-            eval_model_getter=lambda s: s.ema_params,
+            eval_model_getter=lambda s: s.ema_params if s.ema_params is not None else s.params,
             opt_state_getter=lambda s: s.opt_state,
         )
         state_callbacks.add_hook(
@@ -470,7 +474,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 if checkpointer is not None:
                     checkpointer.on_step(tree=state, step=int(state.step))
-        finally:
+        except BaseException:
+            logger.exception(
+                "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
+            )
+            raise
+        else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:

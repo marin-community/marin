@@ -15,7 +15,7 @@ Use this skill for scheduled scrub turns.
 3. If useful work exists, implement and validate it.
 4. Publish outcomes before ending the run:
    - commit/push to a branch
-   - open/update a PR when code or docs changed
+   - open/update a PR when code or docs changed (follow `.agents/skills/pull-request/SKILL.md`)
 5. If publish is blocked (token/permissions/infra), keep the run open and schedule follow-up.
 6. If no-op is correct, explicitly report inspected scope and why no change was justified.
 

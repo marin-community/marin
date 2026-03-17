@@ -166,7 +166,7 @@ def dedup_fuzzy_document(
     if wandb.run:
         wandb.log(fuzzy_cnt.to_dict())
 
-    def mark_dup_documents(docs: Iterator[dict]) -> Iterator[dict]:
+    def mark_dup_documents(docs: Iterator[dict], _) -> Iterator[dict]:
         fuzzy_dup_map = _load_fuzzy_dupe_map_shard(fuzzy_dup_shards)
 
         for doc in docs:

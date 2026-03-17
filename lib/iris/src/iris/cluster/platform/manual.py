@@ -397,8 +397,8 @@ class ManualPlatform:
             results = [s for s in results if all(s.labels.get(k) == v for k, v in labels.items())]
         return results
 
-    def list_all_slices(self, labels: dict[str, str] | None = None) -> list[ManualSliceHandle]:
-        return self.list_slices(zones=[], labels=labels)
+    def list_all_slices(self) -> list[ManualSliceHandle]:
+        return self.list_slices(zones=[], labels={self._iris_labels.iris_managed: "true"})
 
     def list_vms(
         self,

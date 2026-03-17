@@ -15,18 +15,13 @@ from typing import Any, NamedTuple
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
-    ENDPOINTS,
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
     WORKERS,
     ControllerDB,
     Endpoint,
-    EndpointQuery,
-    Join,
     TransactionCursor,
     Worker,
-    ENDPOINT_TASKS,
-    endpoint_query_predicate,
 )
 from iris.cluster.log_store import LogStore, task_log_key
 from iris.cluster.types import (
@@ -69,6 +64,13 @@ accidental collision with normal job names."""
 
 HEARTBEAT_FAILURE_THRESHOLD = 10
 """Consecutive heartbeat failures before marking worker as failed."""
+
+HEARTBEAT_STALENESS_THRESHOLD = Duration.from_seconds(900)
+"""If a worker's last successful heartbeat is older than this, it is failed
+immediately. Catches workers restored from a checkpoint whose backing VMs
+no longer exist — without this, the controller would need 10 consecutive
+RPC failures (50s) per worker to notice, during which they appear healthy
+in the dashboard and block scheduling capacity."""
 
 WORKER_TASK_HISTORY_RETENTION = 500
 """Maximum worker_task_history rows retained per worker."""
@@ -517,8 +519,8 @@ class ControllerTransitions:
                 "INSERT INTO jobs("
                 "job_id, user_id, parent_job_id, root_job_id, depth, request_proto, state, submitted_at_ms, "
                 "root_submitted_at_ms, started_at_ms, finished_at_ms, scheduling_deadline_epoch_ms, "
-                "error, exit_code, num_tasks, is_reservation_holder"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 0)",
+                "error, exit_code, num_tasks, is_reservation_holder, name"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 0, ?)",
                 (
                     job_id.to_wire(),
                     job_id.user,
@@ -533,6 +535,7 @@ class ControllerTransitions:
                     deadline_epoch_ms,
                     validation_error,
                     replicas,
+                    request.name,
                 ),
             )
 
@@ -582,8 +585,8 @@ class ControllerTransitions:
                         "INSERT INTO jobs("
                         "job_id, user_id, parent_job_id, root_job_id, depth, request_proto, state, submitted_at_ms, "
                         "root_submitted_at_ms, started_at_ms, finished_at_ms, scheduling_deadline_epoch_ms, "
-                        "error, exit_code, num_tasks, is_reservation_holder"
-                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, 1)",
+                        "error, exit_code, num_tasks, is_reservation_holder, name"
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, 1, ?)",
                         (
                             holder_id.to_wire(),
                             holder_id.user,
@@ -595,6 +598,7 @@ class ControllerTransitions:
                             effective_submission_ms,
                             root_submitted_ms,
                             len(request.reservation.entries),
+                            holder_request.name,
                         ),
                     )
                     holder_base = self._db.next_sequence("task_priority_insertion", cur=cur)
@@ -1035,6 +1039,8 @@ class ControllerTransitions:
                 ):
                     if job_req is not None:
                         _decommit_worker_resources(cur, str(worker_id), job_req.resources)
+
+                if update.new_state in TERMINAL_TASK_STATES:
                     cur.execute("DELETE FROM endpoints WHERE task_id = ?", (update.task_id.to_wire(),))
 
                 # Coscheduled jobs: a terminal host failure should cascade to siblings.
@@ -1222,6 +1228,8 @@ class ControllerTransitions:
                                 tid,
                             ),
                         )
+                    # Worker is dead — purge stale endpoints for this task.
+                    cur.execute("DELETE FROM endpoints WHERE task_id = ?", (tid,))
                     task_id = JobName.from_wire(tid)
                     parent_job_id, _ = task_id.require_task()
                     new_job_state = self._recompute_job_state(cur, parent_job_id)
@@ -1597,26 +1605,6 @@ class ControllerTransitions:
 
     def remove_endpoint(self, endpoint_id: str) -> Endpoint | None:
         return self._db.delete_endpoint(endpoint_id)
-
-    def _remove_endpoints_for_task(self, task_id: JobName) -> list[Endpoint]:
-        """Remove all endpoints associated with a task."""
-        with self._db.snapshot() as snapshot:
-            endpoints = snapshot.select(
-                ENDPOINTS,
-                joins=(Join(ENDPOINT_TASKS, ENDPOINTS.c.endpoint_id == ENDPOINT_TASKS.c.endpoint_id),),
-                where=ENDPOINT_TASKS.c.task_id == task_id.to_wire(),
-            )
-        self._db.delete_endpoints([endpoint.endpoint_id for endpoint in endpoints])
-        return endpoints
-
-    def remove_endpoints_for_job(self, job_id: JobName) -> list[Endpoint]:
-        """Remove all endpoints for a job by removing endpoints for all its tasks."""
-        query = EndpointQuery(job_id=job_id, include_terminal_jobs=True)
-        joins, where = endpoint_query_predicate(query)
-        with self._db.snapshot() as q:
-            endpoints = q.select(ENDPOINTS, where=where, joins=tuple(joins))
-        self._db.delete_endpoints([endpoint.endpoint_id for endpoint in endpoints])
-        return endpoints
 
     # ---------------------------------------------------------------------
     # Test-only SQL mutation helpers

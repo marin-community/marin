@@ -20,7 +20,8 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from iris.cluster.bundle import BundleStore, normalize_workdir_relative_path
+from iris.cluster.bundle import BundleStore
+from iris.cluster.runtime.env import normalize_workdir_relative_path
 from iris.cluster.k8s.kubectl import Kubectl, KubectlLogLine
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
@@ -37,6 +38,7 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerStats,
     ContainerStatus,
+    MountKind,
 )
 from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import cluster_pb2
@@ -151,6 +153,7 @@ class KubernetesContainerHandle:
 
     config: ContainerConfig
     kubectl: Kubectl
+    cache_dir: Path | None = None
     service_account_name: str = ""
     s3_secret_name: str = ""
     s3_endpoint_url: str = ""
@@ -218,28 +221,43 @@ class KubernetesContainerHandle:
 
         mounts = []
         volumes = []
-        for i, (host_path, container_path, mode) in enumerate(self.config.mounts):
-            # /app is pod-local emptyDir so tasks can run on any node.
-            if container_path == self.config.workdir:
-                continue
-
+        for i, mount in enumerate(self.config.mounts):
             volume_name = f"mount-{i}"
-            mounts.append(
-                {
-                    "name": volume_name,
-                    "mountPath": container_path,
-                    "readOnly": "ro" in mode,
-                }
-            )
-            volumes.append(
-                {
-                    "name": volume_name,
-                    "hostPath": {"path": host_path, "type": "DirectoryOrCreate"},
-                }
-            )
-
-        mounts.append({"name": "workdir", "mountPath": self.config.workdir, "readOnly": False})
-        volumes.append({"name": "workdir", "emptyDir": {}})
+            if mount.kind in (MountKind.WORKDIR, MountKind.TMPFS):
+                empty_dir_spec: dict[str, str] = {}
+                if mount.size_bytes > 0:
+                    empty_dir_spec["sizeLimit"] = str(mount.size_bytes)
+                mounts.append(
+                    {
+                        "name": volume_name,
+                        "mountPath": mount.container_path,
+                        "readOnly": mount.read_only,
+                    }
+                )
+                volumes.append(
+                    {
+                        "name": volume_name,
+                        "emptyDir": empty_dir_spec,
+                    }
+                )
+            elif mount.kind == MountKind.CACHE:
+                if self.cache_dir is not None:
+                    host_path = str(self.cache_dir / mount.container_path.strip("/").replace("/", "-"))
+                else:
+                    host_path = mount.container_path
+                mounts.append(
+                    {
+                        "name": volume_name,
+                        "mountPath": mount.container_path,
+                        "readOnly": mount.read_only,
+                    }
+                )
+                volumes.append(
+                    {
+                        "name": volume_name,
+                        "hostPath": {"path": host_path, "type": "DirectoryOrCreate"},
+                    }
+                )
 
         workdir_files = dict(self.config.entrypoint.workdir_files)
         if workdir_files:
@@ -277,10 +295,17 @@ class KubernetesContainerHandle:
 
         container["volumeMounts"] = mounts
 
+        # Find the workdir volume name for the init container
+        workdir_volume_name = None
+        for i, mount in enumerate(self.config.mounts):
+            if mount.kind == MountKind.WORKDIR:
+                workdir_volume_name = f"mount-{i}"
+                break
+
         init_containers: list[dict[str, object]] = []
         bundle_id = self.config.env.get("IRIS_BUNDLE_ID", "")
         if bundle_id or workdir_files:
-            stage_mounts = [{"name": "workdir", "mountPath": self.config.workdir, "readOnly": False}]
+            stage_mounts = [{"name": workdir_volume_name, "mountPath": self.config.workdir, "readOnly": False}]
             stage_env = [
                 {"name": "IRIS_WORKDIR", "value": self.config.workdir},
                 {"name": "IRIS_BUNDLE_ID", "value": bundle_id},
@@ -376,12 +401,14 @@ class KubernetesContainerHandle:
                 self._workdir_configmap_name = None
             raise
         self._started = True
+        workdir_mount = next((m for m in self.config.mounts if m.kind == MountKind.WORKDIR), None)
+        workdir_size = workdir_mount.size_bytes if workdir_mount else 0
         logger.info(
             "Started Kubernetes task pod %s (task_id=%s, gpus=%s, disk=%s, hostNetwork=%s)",
             self._pod_name,
             self.config.task_id,
             gpu_limits.get("nvidia.com/gpu", "0"),
-            f"{disk_gi}Gi" if disk_bytes else "default",
+            f"{workdir_size // (1024 * 1024 * 1024)}Gi" if workdir_size else "default",
             self.config.network_mode == "host",
         )
 
@@ -493,6 +520,10 @@ class KubernetesContainerHandle:
             available=True,
         )
 
+    def disk_usage_mb(self) -> int:
+        """K8s workdir lives inside the pod; disk usage isn't observable from the worker."""
+        return 0
+
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
         """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
         if not self._pod_name:
@@ -501,7 +532,7 @@ class KubernetesContainerHandle:
         profile_id = uuid.uuid4().hex[:8]
 
         if profile_type.HasField("threads"):
-            return self._profile_threads()
+            return self._profile_threads(include_locals=profile_type.threads.locals)
         elif profile_type.HasField("cpu"):
             return self._profile_cpu(duration_seconds, profile_type.cpu, profile_id)
         elif profile_type.HasField("memory"):
@@ -509,9 +540,9 @@ class KubernetesContainerHandle:
         else:
             raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
-    def _profile_threads(self) -> bytes:
+    def _profile_threads(self, *, include_locals: bool = False) -> bytes:
         """Collect thread stacks from the pod using py-spy dump."""
-        cmd = build_pyspy_dump_cmd(pid="1", py_spy_bin="py-spy")
+        cmd = build_pyspy_dump_cmd(pid="1", py_spy_bin="py-spy", include_locals=include_locals)
         result = self.kubectl.exec(self._pod_name, self._wrap_in_venv_shell(cmd), container="task", timeout=30)
         if result.returncode != 0:
             raise RuntimeError(f"py-spy dump failed: {result.stderr}")
@@ -604,6 +635,7 @@ class KubernetesRuntime:
         namespace: str | None = None,
         service_account_name: str | None = None,
         s3_secret_name: str | None = None,
+        cache_dir: Path | None = None,
     ) -> None:
         resolved_namespace = namespace or os.environ.get("IRIS_POD_NAMESPACE") or "iris"
         self._service_account_name = service_account_name or os.environ.get("IRIS_SERVICE_ACCOUNT_NAME") or ""
@@ -616,12 +648,14 @@ class KubernetesRuntime:
         # is deleted. If worker containers crash-loop in-place, task Pods remain.
         # Consider restartPolicy=Never for worker Pods or explicit stale-task cleanup.
         self._kubectl = Kubectl(namespace=resolved_namespace)
+        self._cache_dir = cache_dir
         self._handles: list[KubernetesContainerHandle] = []
 
     def create_container(self, config: ContainerConfig) -> KubernetesContainerHandle:
         handle = KubernetesContainerHandle(
             config=config,
             kubectl=self._kubectl,
+            cache_dir=self._cache_dir,
             service_account_name=self._service_account_name,
             s3_secret_name=self._s3_secret_name,
             s3_endpoint_url=self._s3_endpoint_url,
@@ -631,6 +665,9 @@ class KubernetesRuntime:
         )
         self._handles.append(handle)
         return handle
+
+    def prepare_workdir(self, workdir: Path, disk_bytes: int) -> None:
+        pass
 
     def stage_bundle(
         self,

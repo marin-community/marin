@@ -20,6 +20,19 @@ from zephyr.expr import Expr
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class ShardInfo:
+    """Metadata about the current shard passed to map_shard functions.
+
+    Attributes:
+        shard_idx: Zero-based index of this shard.
+        total_shards: Total number of shards in the dataset.
+    """
+
+    shard_idx: int
+    total_shards: int
+
+
 def format_shard_path(pattern: str, shard_idx: int, total: int) -> str:
     """Format output path with shard information.
 
@@ -186,6 +199,9 @@ class MapShardOp:
 
     Use when you need to maintain state across all items in a shard, such as
     deduplication, reservoir sampling, or loading expensive resources once.
+
+    The function always receives a ShardInfo as the second argument:
+        fn(items: Iterator[T], shard_info: ShardInfo) -> Iterator[R]
     """
 
     fn: Callable
@@ -546,23 +562,28 @@ class Dataset(Generic[T]):
         """Load records from Vortex files."""
         return Dataset(self.source, [*self.operations, LoadFileOp("vortex", columns)])
 
-    def map_shard(self, fn: Callable[[Iterator[T]], Iterator[R]]) -> Dataset[R]:
+    def map_shard(
+        self,
+        fn: Callable[[Iterator[T], ShardInfo], Iterator[R]],
+    ) -> Dataset[R]:
         """Apply function to entire shard iterator.
 
-        The function receives an iterator of all items in the shard and returns
-        an iterator of results. This can be used to perform stateful
-        processing across a shard (deduplication, sampling, windowing, etc.).
+        The function receives an iterator of all items in the shard and a
+        ShardInfo dataclass, and returns an iterator of results. This can be
+        used to perform stateful processing across a shard (deduplication,
+        sampling, windowing, etc.).
 
         Args:
-            fn: Function from Iterator[items] -> Iterator[results]
+            fn: Function with signature fn(items: Iterator[T], shard_info: ShardInfo) -> Iterator[R]
 
         Returns:
             New dataset with map_shard operation appended
 
         Example:
             >>> from zephyr.execution import load_jsonl
+            >>> from zephyr.dataset import ShardInfo
             >>> # Deduplicate items within each shard
-            >>> def deduplicate_shard(items: Iterator):
+            >>> def deduplicate_shard(items: Iterator, _: ShardInfo):
             ...     seen = set()
             ...     for item in items:
             ...         key = item["id"]
@@ -818,7 +839,7 @@ class Dataset(Generic[T]):
             [{"id": 1, "val": "a"}, {"id": 2, "val": "b"}]  # Or {"id": 1, "val": "c"}
         """
 
-        def streaming_dedup(items: Iterator[T]) -> Iterator[T]:
+        def streaming_dedup(items: Iterator[T], _: ShardInfo) -> Iterator[T]:
             """Deduplicate items within a shard."""
             seen = set()
             for item in items:

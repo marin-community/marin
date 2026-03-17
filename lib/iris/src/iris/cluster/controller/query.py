@@ -53,7 +53,7 @@ def execute_raw_query(
         if re.search(rf"\b{keyword}\b", upper):
             raise ValueError(f"Forbidden SQL keyword: {keyword}")
 
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         cursor = q.execute_sql(stripped)
         col_descriptions = cursor.description
         raw_rows = cursor.fetchall()
