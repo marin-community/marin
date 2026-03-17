@@ -330,33 +330,25 @@ def load_and_inject_streaming(
     loop.close()
 ```
 
-### Memory Impact
+### Streaming Validated (March 16, 2026)
 
-| | Current (all-at-once) | Streaming (per-shard) |
+| | All-at-once | Streaming |
 |---|---|---|
-| Peak host RAM (70B) | ~131 GiB + NNX overhead | ~5 GiB (single shard) |
-| Iris `--memory` needed | 400GB | Default (few GB) |
-| HBM usage | Same (1× model size) | Same (1× model size) |
-| Number of `sync_weights` calls | 1 | 30 (one per shard) |
+| Iris `--memory` needed | 400GB | **24GB** (16.7x reduction) |
+| Peak host RAM (70B) | ~131 GiB | ~15 GiB (skeleton) + ~5 GiB (shard) |
+| Weight pipeline | 1453.4s | **1379.8s** (slightly faster) |
+| Total | 1739.6s | **1698.3s** |
+| HBM usage | Same | Same |
+| `sync_weights` calls | 1 | 30 |
+| Output correctness | 568 tokens, correct | 568 tokens, correct |
+
+- Job: `/ahmed/vllm-70b-stream-24g` — succeeded
+- 16GB OOM'd (skeleton alone needs ~15 GiB host RAM)
+- 24GB worked end-to-end with correct output
+- Prior all-at-once attempt at 64GB (`/ahmed/inprocess-70b-v2`) OOM'd — streaming fixes this
 
 ### Tensor Parallelism Required for 70B
 
-Separately from the streaming question: `load_format="dummy"` allocates the full model skeleton
-on HBM. For 70B (131 GiB BF16), this exceeds a single v5p chip's 95.7 GiB HBM. The 8B model
-(15 GiB) fit on one chip, but 70B requires `tensor_parallel_size=4` to shard across all 4 chips
-of a v5p-8 (~33 GiB per chip). The smoke test script must set this explicitly — vLLM defaults
-to TP=1.
-
-### Validation Plan
-
-1. **Baseline first**: get the 70B smoke test working end-to-end with the current all-at-once
-   loader + TP=4 (`/ahmed/vllm-70b-smoke-tp4` running now)
-2. **Test partial sync_weights**: on the same TPU, run a quick test loading just 1 shard and
-   calling `sync_weights` — confirm it doesn't error on the partial state
-3. **Implement streaming loader**: replace `load_safetensors_from_remote` with the streaming
-   variant above in `vllm_inprocess.py`
-4. **Validate correctness**: compare generation output between all-at-once and streaming on
-   the same prompts — outputs must match
-5. **Measure memory**: check Iris MEM column with streaming — should stay under 10 GiB
-   throughout the weight loading phase
-6. **Resubmit without `--memory`**: confirm the job runs with default memory reservation
+`load_format="dummy"` allocates the full model skeleton on HBM. For 70B (131 GiB BF16), this
+exceeds a single v5p chip's 95.7 GiB HBM. Requires `tensor_parallel_size=4` to shard across
+all 4 chips (~33 GiB per chip). vLLM defaults to TP=1.

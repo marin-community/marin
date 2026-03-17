@@ -1,6 +1,6 @@
 # vLLM Fast Weight Loading on TPU
 
-## Status: 70B Validated, Shard-Streaming Next
+## Status: Shard-Streaming Validated on 70B (24GB memory)
 
 **Issue:** https://github.com/marin-community/marin/issues/3768
 **Branch:** `vllm_load_fast` (off main, commit `dbeddbd45`)
@@ -164,20 +164,27 @@ Fallback: any failure → subprocess + runai_streamer (original path)
 
 ---
 
-## Next Step: Shard-Streaming Weight Injection
+## Shard-Streaming: Validated (March 16, 2026)
 
-### What
-Replace the all-at-once loader with per-shard streaming: load one shard (~4.6 GiB),
-reshape + convert + inject, free, repeat. This drops peak host RAM from ~131 GiB to ~5 GiB.
+### Result
+- Job `/ahmed/vllm-70b-stream-24g` — **succeeded at 24GB memory**
+- 16GB OOM'd (skeleton needs ~15 GiB host RAM)
+- Prior all-at-once at 64GB OOM'd — streaming fixes this completely
+- Weight pipeline: 1379.8s (slightly faster than all-at-once 1453.4s)
+- 568 tokens generated, correct output, 4.6 tok/s
+- Memory reduction: **400GB → 24GB** (16.7x)
 
-### Why we know it works
+### What was done
+Replaced all-at-once weight loading with per-shard streaming: load one shard (~4.6 GiB),
+reshape + convert + inject, free, repeat. Peak host RAM = skeleton (~15 GiB) + one shard (~5 GiB).
+
+### Why it works
 1. **`sync_weights`** iterates over source keys, skips missing ones (`continue`, no error).
-   Confirmed by reading `transfer_state_with_mappings` in tpu-inference source.
+   Confirmed from `transfer_state_with_mappings` in tpu-inference source, then validated on TPU.
 2. **`levanter_state_dict_to_nnx_state_on_cpu`** processes each key independently.
-   Works fine on any subset of the state dict.
 3. **Attention reshape** uses constants from config.json, independent of shard contents.
 
-### Implementation sketch
+### Implementation
 
 ```python
 def load_and_inject_streaming(model_path, llm, mapping_model_name, model_config):
@@ -209,22 +216,14 @@ def load_and_inject_streaming(model_path, llm, mapping_model_name, model_config)
 - `experiments/inference/exp_vllm_70b_smoke_test.py`:
   - Update to use the streaming path (or add a `--streaming` flag)
 
-### Validation plan
-1. Implement streaming loader in `vllm_inprocess.py`
-2. Test on TPU: load 70B with streaming, confirm correct output matches baseline
-3. Check Iris MEM column — should stay under 10 GiB throughout loading
-4. Resubmit job without `--memory 400GB` — confirm default memory works
-5. Compare timing: streaming may be slightly faster (less memory pressure) or slightly
-   slower (30 sync_weights calls vs 1). Measure both.
+### Validated memory impact
 
-### Memory impact
-
-| | Current (all-at-once) | Streaming (per-shard) |
+| | All-at-once | Streaming |
 |---|---|---|
-| Peak host RAM (70B) | ~131 GiB + NNX overhead | ~5 GiB (single shard) |
-| Iris `--memory` needed | 400GB | Default (few GB) |
-| HBM usage | Same (1x model size) | Same (1x model size) |
-| `sync_weights` calls | 1 | 30 (one per shard) |
+| Iris `--memory` | 400GB | **24GB** |
+| Peak host RAM | ~131 GiB + overhead | ~15 GiB (skeleton) + ~5 GiB (shard) |
+| Weight pipeline | 1453.4s | **1379.8s** |
+| `sync_weights` calls | 1 | 30 |
 
 ---
 
