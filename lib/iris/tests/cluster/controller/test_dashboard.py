@@ -206,7 +206,7 @@ def service(state, scheduler, tmp_path):
         state,
         state._db,
         controller=controller_mock,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
     )
 
@@ -225,7 +225,7 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
         state,
         state._db,
         controller=controller_mock,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
     )
 
