@@ -147,3 +147,41 @@ lib/marin/src/marin/alignment/
   6. Stage configs map cleanly to AlignConfig fields.
 - **Decision:** Start implementation with `coverage.py` (zero-risk port) and `align.py` (config + top-level function), then work through stages 1→2→3→judge in order.
 - **Next action:** Begin implementation. Port `coverage.py`, define `AlignConfig` and `align()` signature, then implement `generate_prompts_from_spec`.
+
+### 2026-03-16 — ALIGN-002: Core Implementation
+- **Action:** Implemented full `marin.alignment` module (14 files, ~2150 lines). All pre-commit checks pass.
+- **Commit:** 8e96e590c
+- **Modules implemented:**
+  - `alignment/coverage.py` — covering array algorithm (direct port from Bloom)
+  - `alignment/types.py` — Statement, ComplianceResult, StatementType, AuthorityLevel
+  - `alignment/llm_client.py` — unified litellm wrapper
+  - `alignment/generate_prompts.py` — 3-stage pipeline (understanding → concretize → extract)
+  - `alignment/generate_responses.py` — dual dispatch: litellm (API) + vLLM (local)
+  - `alignment/judge.py` — compliance scoring + preference pair construction + quality filtering
+  - `alignment/align.py` — top-level `align()` function + `AlignConfig`
+  - `alignment/prompts/` — all prompt templates (understanding, concretize, extract, judge)
+- **Dependency:** Added `litellm>=1.0.0` to `lib/marin/pyproject.toml`
+
+### 2026-03-16 — ALIGN-003: Unit Tests
+- **Action:** Added 58 unit tests covering all alignment submodules. All pass in <1s.
+- **Commit:** 977f0daec
+- **Coverage:** coverage algorithm (8), types (4), prompt parsing (12), response helpers (4), judge parsing (4), llm client (4), prompt templates (11), E2E prompt gen (1), E2E judge pair construction (3)
+
+### 2026-03-16 — ALIGN-004: Experiment Script + Spec Data
+- **Action:** Added `experiments/align_openai_spec.py` — full alignment experiment for Llama 3.1 8B on OpenAI Model Spec. Mirrors Bloom v2 config (3-way covering, GPT-4.1 teacher, GPT-4.1-mini rejected, beta=0.01). Bundled the 46-statement spec JSONL.
+- **Commit:** 5e999aedd
+- **Config:** Matches validated hyperparams from CS229 project (+1.7 adherence improvement).
+- **Caching:** Every pipeline stage is an ExecutorStep — synthetic dataset persists across runs.
+
+### 2026-03-16 — ALIGN-005: InferenceConfig Refactor
+- **Action:** Replaced string-based model dispatch with explicit `InferenceConfig` type hierarchy.
+- **Commit:** 84cb26e81
+- **Design:**
+  - `InferenceConfig` base class with `model`, `is_api`, `is_local`, `resources` properties
+  - `LiteLLMConfig(InferenceConfig)` — API models: model ID, num_retries, workers → CPU resources
+  - `VLLMConfig(InferenceConfig)` — local models: checkpoint path, tensor_parallel_size, max_model_len, tpu_type → TPU resources
+  - Both accepted interchangeably for teacher/rejected model roles
+  - `llm_chat()` still accepts bare strings (auto-wrapped as LiteLLMConfig) for convenience
+- **Removed:** `_is_api_model()` heuristic, `isinstance(model, str)` checks in `align.py`, vLLM params from `ResponseGenConfig`
+- **Tests:** 65 total (7 new InferenceConfig tests + 1 new string-config test)
+- **Next action:** End-to-end validation on a small spec subset (5-10 statements). Consider adding `generate_prompts` caching via executor fingerprinting.
