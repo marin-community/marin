@@ -285,6 +285,84 @@ Since both speak the same Connect-RPC protocol, workers and clients don't notice
 
 All Rust schema changes must be forward-compatible (additive only). This ensures the Python controller can read any DB written by the Rust controller if we need to roll back.
 
+## Distribution: Dev Mode vs User Mode
+
+Two build/install modes for `iris._native`, switchable via env var or Makefile target.
+
+### Dev Mode
+
+`maturin develop --release` compiles the Rust extension in-place from source. Requires a local Rust toolchain. Hot-reload friendly — edit Rust, `make iris-dev`, re-run Python.
+
+```bash
+# Triggered by:
+export IRIS_BUILD_MODE=dev
+make iris-dev  # installs rustup if needed, runs maturin develop --release
+```
+
+### User Mode
+
+Pre-built manylinux/macOS wheels published to PyPI. No Rust toolchain required. Default when no Rust toolchain is detected.
+
+```bash
+# Triggered by:
+export IRIS_BUILD_MODE=user
+make iris-user  # pip install iris[native] from PyPI
+```
+
+### Switching Mechanism
+
+The env var `IRIS_BUILD_MODE=dev|user` selects the mode:
+
+```makefile
+# Makefile targets
+iris-dev:
+	@command -v rustup >/dev/null || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+	cd lib/iris-native && maturin develop --release
+	@echo "iris._native built from source"
+
+iris-user:
+	uv pip install 'iris[native]'
+	@echo "iris._native installed from wheel"
+```
+
+### CI/CD
+
+GitHub Actions builds wheels on tagged releases using `PyO3/maturin-action@v1`:
+
+```yaml
+# .github/workflows/iris-native-wheels.yml
+on:
+  push:
+    tags: ['iris-native-v*']
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu,
+                 x86_64-apple-darwin, aarch64-apple-darwin]
+    runs-on: ${{ contains(matrix.target, 'linux') && 'ubuntu-latest' || 'macos-latest' }}
+    steps:
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release -m lib/iris-native/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.target }}
+          path: target/wheels/*.whl
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: pypa/gh-action-pypi-publish@release/v1
+```
+
+### Fallback
+
+If `iris._native` is not importable (no wheel installed, no dev build), the existing `IRIS_USE_NATIVE=0` fallback activates automatically and uses pure Python implementations. User mode without Rust installed still works — just slower.
+
 ## Key Design Decisions
 
 ### 1. Connect-RPC over gRPC
@@ -306,3 +384,7 @@ All Rust schema changes must be forward-compatible (additive only). This ensures
 ### 5. `rusqlite` with Bundled SQLite
 **Decision**: Use `rusqlite` with the `bundled` feature (compiles SQLite from source).
 **Why**: Guarantees the same SQLite version across all deployments. Avoids system SQLite version mismatches. WAL mode support is built-in.
+
+### 6. Dual Dev/User Build Modes
+**Decision**: `maturin develop` for developers, pre-built PyPI wheels for users, switchable via `IRIS_BUILD_MODE` env var or `make iris-dev`/`make iris-user`.
+**Why**: Mirrors the `lib/dupekit/` precedent. Developers need fast iteration with source builds; users need zero-Rust-toolchain installs. The env var / Makefile target keeps switching trivial. CI publishes wheels automatically on tagged releases.

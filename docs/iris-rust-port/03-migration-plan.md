@@ -4,7 +4,7 @@ Each step is a single PR-sized change. The system works after every step with a 
 
 ---
 
-## Phase 1: Foundation (Steps 1–5)
+## Phase 1: Foundation (Steps 1–6)
 
 ### Step 1: Rust Project Scaffolding
 
@@ -24,7 +24,51 @@ Each step is a single PR-sized change. The system works after every step with a 
 
 ---
 
-### Step 2: Proto Codegen in Rust
+### Step 2: Dev/User Mode Build Infrastructure
+
+**What**: Set up dual build modes for `iris-native`. Dev mode: `make iris-dev` runs `maturin develop --release` to build and install the native extension locally. User mode: `make iris-user` or `pip install iris[native]` installs a pre-built wheel. No Rust toolchain needed for user mode.
+
+**Source files**:
+- New: `Makefile` targets (`iris-dev`, `iris-user`)
+- New: `lib/iris-native/pyproject.toml` (maturin config with `[tool.maturin]` settings)
+- New: `.github/workflows/iris-native-wheels.yml` (CI wheel build)
+- New: `lib/iris/src/iris/_native_loader.py` (importlib-based loader with fallback)
+
+**Env var**: `IRIS_BUILD_MODE=dev|user` — `dev` triggers `maturin develop` on `make iris-dev`; `user` skips Rust compilation and installs from wheel.
+
+**Detection logic** in `_native_loader.py`:
+
+```python
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+
+def load_native():
+    try:
+        import iris._native
+        return iris._native
+    except ImportError:
+        if os.environ.get("IRIS_USE_NATIVE", "1") != "0":
+            logger.warning(
+                "iris._native not found. Run 'make iris-dev' to build from source "
+                "or 'pip install iris[native]' for the pre-built wheel."
+            )
+        return None
+```
+
+**CI**: GitHub Actions workflow using `PyO3/maturin-action@v1` to build wheels on push to tags matching `iris-native-v*`. Targets: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`. Uploads to PyPI and GitHub Releases.
+
+**Tests**:
+- `make iris-dev` produces a working `iris._native` module (import succeeds, `hello_world()` returns expected value)
+- Importing without the native extension falls back cleanly (no crash, warning logged)
+- CI wheel artifact is installable in a clean venv
+
+**Dependencies**: Step 1 (needs the Cargo project to exist).
+
+---
+
+### Step 3: Proto Codegen in Rust
 
 **What**: Generate Rust types from the existing `.proto` files using `prost-build`.
 
@@ -42,7 +86,7 @@ Each step is a single PR-sized change. The system works after every step with a 
 
 ---
 
-### Step 3: Time Utilities in Rust
+### Step 4: Time Utilities in Rust
 
 **What**: Port `Timestamp`, `Duration`, `Deadline`, `Timer`, `RateLimiter`, `TokenBucket`, `ExponentialBackoff` from `lib/iris/src/iris/time_utils.py:1-556`.
 
@@ -64,11 +108,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 - Python integration test calling both `_time_utils_py` and `_native` versions, asserting identical results
 - Existing `tests/` that use `time_utils` pass unchanged
 
-**Dependencies**: Step 2 (proto types for `to_proto()`/`from_proto()` methods).
+**Dependencies**: Step 3 (proto types for `to_proto()`/`from_proto()` methods).
 
 ---
 
-### Step 4: Core Enum and Value Types
+### Step 5: Core Enum and Value Types
 
 **What**: Port `AttributeValue`, `ConstraintOp`, `WellKnownAttribute`, `DeviceType` from `lib/iris/src/iris/cluster/constraints.py:30-145`.
 
@@ -84,11 +128,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 - Rust tests for AttributeValue proto roundtrips, ConstraintOp mapping
 - Python test asserting `_native.AttributeValue(42).to_proto()` matches Python version
 
-**Dependencies**: Step 2.
+**Dependencies**: Step 3.
 
 ---
 
-### Step 5: Constraint Evaluation Engine
+### Step 6: Constraint Evaluation Engine
 
 **What**: Port `Constraint`, `evaluate_constraint`, `check_resource_fit`, `ConstraintIndex`, `ResourceCapacity` from `lib/iris/src/iris/cluster/constraints.py:145-end`.
 
@@ -108,13 +152,13 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 - Python integration test running the scheduler test suite's constraint cases against both implementations
 - Existing `tests/cluster/controller/test_scheduler.py` passes unchanged
 
-**Dependencies**: Step 4.
+**Dependencies**: Step 5.
 
 ---
 
-## Phase 2: Data Layer (Steps 6–10)
+## Phase 2: Data Layer (Steps 7–11)
 
-### Step 6: JobName and WorkerId Types
+### Step 7: JobName and WorkerId Types
 
 **What**: Port `JobName`, `WorkerId`, `Namespace` from `lib/iris/src/iris/cluster/types.py:29-200`.
 
@@ -132,7 +176,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 ---
 
-### Step 7: ResourceSpec and EnvironmentSpec
+### Step 8: ResourceSpec and EnvironmentSpec
 
 **What**: Port `ResourceSpec`, `EnvironmentSpec` from `lib/iris/src/iris/cluster/types.py:200-500` (excluding `Entrypoint` which uses cloudpickle).
 
@@ -146,11 +190,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Rust tests for proto conversion, human-readable parsing ("4GB" -> bytes). Python test asserting `ResourceSpec(cpu=4, memory="8GB").to_proto()` matches.
 
-**Dependencies**: Step 2, Step 4.
+**Dependencies**: Step 3, Step 5.
 
 ---
 
-### Step 8: SQLite DB Foundation
+### Step 9: SQLite DB Foundation
 
 **What**: Create the Rust DB access layer — connection management, read snapshots, migration runner. Port the `Predicate` query builder.
 
@@ -169,7 +213,7 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 ---
 
-### Step 9: DB Row Models in Rust
+### Step 10: DB Row Models in Rust
 
 **What**: Port the typed row models (`JobRow`, `TaskRow`, `WorkerRow`, `EndpointRow`) from `lib/iris/src/iris/cluster/controller/db.py:350-end`.
 
@@ -183,11 +227,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Roundtrip test: Python inserts rows → Rust reads them → assert field values match. Rust inserts rows → Python reads them → assert match.
 
-**Dependencies**: Step 8, Step 6, Step 3 (Timestamp fields in rows).
+**Dependencies**: Step 9, Step 7, Step 4 (Timestamp fields in rows).
 
 ---
 
-### Step 10: DB Write Operations
+### Step 11: DB Write Operations
 
 **What**: Port write operations: `insert_job`, `update_task_state`, `insert_worker`, `upsert_endpoint`, `insert_log_entries`, transaction support.
 
@@ -201,13 +245,13 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Integration test: Rust writes → Python reads and vice versa. All existing `tests/cluster/controller/test_db.py` pass with Rust backend.
 
-**Dependencies**: Step 9.
+**Dependencies**: Step 10.
 
 ---
 
-## Phase 3: RPC Layer (Steps 11–15)
+## Phase 3: RPC Layer (Steps 12–16)
 
-### Step 11: Connect-RPC Framework Crate
+### Step 12: Connect-RPC Framework Crate
 
 **What**: Build the `iris-connect` Rust crate — a Connect-RPC server adapter on `axum`.
 
@@ -220,11 +264,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Rust integration tests that start an axum server with a dummy service, send Connect-RPC requests (both binary protobuf and JSON), and verify correct responses. Test error code mapping (NOT_FOUND, ALREADY_EXISTS, INTERNAL, etc.).
 
-**Dependencies**: Step 2.
+**Dependencies**: Step 3.
 
 ---
 
-### Step 12: Auth Middleware
+### Step 13: Auth Middleware
 
 **What**: Port JWT authentication from `lib/iris/src/iris/cluster/controller/auth.py:1-387` and `lib/iris/src/iris/rpc/auth.py`.
 
@@ -239,11 +283,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Rust tests for JWT create/verify roundtrip. Python test: create JWT with Python, verify with Rust and vice versa. Test GCP identity token validation flow.
 
-**Dependencies**: Step 11.
+**Dependencies**: Step 12.
 
 ---
 
-### Step 13: ControllerService Stubs (Read-Only RPCs)
+### Step 14: ControllerService Stubs (Read-Only RPCs)
 
 **What**: Implement read-only RPCs in Rust: `GetJobStatus`, `ListJobs`, `GetTaskStatus`, `ListTasks`, `ListWorkers`, `ListEndpoints`, `GetAutoscalerStatus`, `GetTransactions`, `ListUsers`.
 
@@ -251,17 +295,17 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 - New: `lib/iris-native/src/controller_service.rs`
 - Read: `lib/iris/src/iris/cluster/controller/service.py:1-1759` (RPC implementations)
 
-**Rust crates**: `axum`, `prost`, `rusqlite`, `iris-connect` (from Step 11)
+**Rust crates**: `axum`, `prost`, `rusqlite`, `iris-connect` (from Step 12)
 
 **Python interface**: None — these are served by the Rust binary directly.
 
 **Tests**: For each RPC: populate SQLite DB with known state, send Connect-RPC request, verify response matches expected proto. Run against both Python and Rust servers with identical DB state.
 
-**Dependencies**: Step 10 (DB reads), Step 11 (Connect framework), Step 12 (auth).
+**Dependencies**: Step 11 (DB reads), Step 12 (Connect framework), Step 13 (auth).
 
 ---
 
-### Step 14: ControllerService Write RPCs
+### Step 15: ControllerService Write RPCs
 
 **What**: Implement write RPCs: `LaunchJob`, `TerminateJob`, `Register`, `RegisterEndpoint`, `UnregisterEndpoint`, `Login`, `CreateApiKey`, `RevokeApiKey`, `BeginCheckpoint`.
 
@@ -269,17 +313,17 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 - Extended: `lib/iris-native/src/controller_service.rs`
 - New: `lib/iris-native/src/controller_service/launch.rs`, `lib/iris-native/src/controller_service/worker_mgmt.rs`
 
-**Rust crates**: Same as Step 13.
+**Rust crates**: Same as Step 14.
 
 **Python interface**: None.
 
 **Tests**: End-to-end: Python client → Rust controller → verify DB state. Specifically: submit job, check status, terminate job, verify state transitions. All existing `tests/cluster/controller/test_service.py` tests adapted to run against Rust server.
 
-**Dependencies**: Step 13.
+**Dependencies**: Step 14.
 
 ---
 
-### Step 15: WorkerService in Rust
+### Step 16: WorkerService in Rust
 
 **What**: Implement the WorkerService RPCs: `Heartbeat`, `GetTaskStatus`, `ListTasks`, `HealthCheck`, `FetchLogs`, `ProfileTask`, `GetProcessStatus`.
 
@@ -293,13 +337,13 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Mock task execution, verify heartbeat request/response proto compatibility. Test that Python controller can heartbeat a Rust worker and vice versa.
 
-**Dependencies**: Step 11, Step 2.
+**Dependencies**: Step 12, Step 3.
 
 ---
 
-## Phase 4: Core Logic (Steps 16–20)
+## Phase 4: Core Logic (Steps 17–21)
 
-### Step 16: Scheduler in Rust
+### Step 17: Scheduler in Rust
 
 **What**: Port the pure scheduler from `lib/iris/src/iris/cluster/controller/scheduler.py:1-840`.
 
@@ -313,11 +357,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Port all cases from `tests/cluster/controller/test_scheduler.py` to Rust. Python integration test: run scheduler with identical input on both backends, assert identical assignments (order-independent).
 
-**Dependencies**: Step 5 (constraints), Step 6 (JobName), Step 9 (WorkerRow for snapshot construction).
+**Dependencies**: Step 6 (constraints), Step 7 (JobName), Step 10 (WorkerRow for snapshot construction).
 
 ---
 
-### Step 17: State Transitions in Rust
+### Step 18: State Transitions in Rust
 
 **What**: Port the state machine from `lib/iris/src/iris/cluster/controller/transitions.py:1-1679`.
 
@@ -331,11 +375,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Port `tests/cluster/controller/test_transitions.py`. Critical: test every state edge (PENDING→RUNNING, RUNNING→SUCCEEDED, RUNNING→FAILED, RUNNING→WORKER_FAILED, etc.).
 
-**Dependencies**: Step 10 (DB writes), Step 16 (scheduler for assignment application).
+**Dependencies**: Step 11 (DB writes), Step 17 (scheduler for assignment application).
 
 ---
 
-### Step 18: Scaling Group Management
+### Step 19: Scaling Group Management
 
 **What**: Port scaling group logic from `lib/iris/src/iris/cluster/controller/scaling_group.py:1-1275`.
 
@@ -349,11 +393,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Port `tests/cluster/platform/test_scaling_group.py`. Test demand computation with various job mixes.
 
-**Dependencies**: Step 5 (constraints), Step 7 (ResourceSpec), Step 2 (config protos).
+**Dependencies**: Step 6 (constraints), Step 8 (ResourceSpec), Step 3 (config protos).
 
 ---
 
-### Step 19: Autoscaler in Rust
+### Step 20: Autoscaler in Rust
 
 **What**: Port the autoscaler from `lib/iris/src/iris/cluster/controller/autoscaler.py:1-1566`.
 
@@ -367,11 +411,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Port `tests/cluster/controller/test_autoscaler.py`. Test scale-up/scale-down decisions with mock platform responses.
 
-**Dependencies**: Step 18 (scaling groups), Step 17 (transitions for VM lifecycle).
+**Dependencies**: Step 19 (scaling groups), Step 18 (transitions for VM lifecycle).
 
 ---
 
-### Step 20: Controller Coordinator in Rust
+### Step 21: Controller Coordinator in Rust
 
 **What**: Port the main controller loop from `lib/iris/src/iris/cluster/controller/controller.py:1-1646`.
 
@@ -385,13 +429,13 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Integration test using `LocalCluster` harness: start cluster with Rust controller, submit job, verify execution. All existing `tests/cluster/controller/test_job.py` must pass.
 
-**Dependencies**: Step 16 (scheduler), Step 17 (transitions), Step 19 (autoscaler), Step 14 (RPC service).
+**Dependencies**: Step 17 (scheduler), Step 18 (transitions), Step 20 (autoscaler), Step 15 (RPC service).
 
 ---
 
-## Phase 5: Platform & Runtime (Steps 21–25)
+## Phase 5: Platform & Runtime (Steps 22–26)
 
-### Step 21: Platform Abstraction Trait
+### Step 22: Platform Abstraction Trait
 
 **What**: Define the `Platform` trait in Rust mirroring the Protocol in `lib/iris/src/iris/cluster/platform/base.py:1-587`.
 
@@ -405,11 +449,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Compile-time verification that the trait is implementable. A `MockPlatform` struct for testing.
 
-**Dependencies**: Step 2 (config protos), Step 7 (ResourceSpec).
+**Dependencies**: Step 3 (config protos), Step 8 (ResourceSpec).
 
 ---
 
-### Step 22: Local Platform Implementation
+### Step 23: Local Platform Implementation
 
 **What**: Port `LocalPlatform` from `lib/iris/src/iris/cluster/platform/local.py:1-581`.
 
@@ -423,11 +467,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Test VM create/delete/list lifecycle on localhost. Integration test: run `LocalCluster` with Rust platform backend.
 
-**Dependencies**: Step 21.
+**Dependencies**: Step 22.
 
 ---
 
-### Step 23: GCP Platform Implementation
+### Step 24: GCP Platform Implementation
 
 **What**: Port GCP VM/TPU management from `lib/iris/src/iris/cluster/platform/gcp.py:1-1715`.
 
@@ -441,11 +485,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Unit tests with mock HTTP responses for VM create/delete/list. Integration test against GCP (gated behind `IRIS_GCP_INTEGRATION_TEST` env var).
 
-**Dependencies**: Step 21.
+**Dependencies**: Step 22.
 
 ---
 
-### Step 24: Runtime Abstraction and Process Runtime
+### Step 25: Runtime Abstraction and Process Runtime
 
 **What**: Port the `Runtime` abstraction and `ProcessRuntime` from `lib/iris/src/iris/cluster/runtime/types.py` and `lib/iris/src/iris/cluster/runtime/process.py:1-671`.
 
@@ -459,11 +503,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Port `tests/cluster/runtime/test_entrypoint.py` cases. Test process lifecycle: start, monitor, kill, timeout.
 
-**Dependencies**: Step 7 (ResourceSpec), Step 6 (JobName).
+**Dependencies**: Step 8 (ResourceSpec), Step 7 (JobName).
 
 ---
 
-### Step 25: Docker Runtime
+### Step 26: Docker Runtime
 
 **What**: Port Docker container management from `lib/iris/src/iris/cluster/runtime/docker.py:1-1013`.
 
@@ -477,15 +521,15 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Port `tests/cluster/runtime/test_docker_runtime.py`. Test container create/start/stop/logs lifecycle. Requires Docker daemon (CI must have Docker).
 
-**Dependencies**: Step 24.
+**Dependencies**: Step 25.
 
 ---
 
-## Phase 6: Client & CLI (Steps 26–30+)
+## Phase 6: Client & CLI (Steps 27–34)
 
-### Step 26: Rust Worker Binary
+### Step 27: Rust Worker Binary
 
-**What**: Build a standalone Rust binary that runs the full worker agent — combining WorkerService (Step 15), runtime (Steps 24-25), and env probe.
+**What**: Build a standalone Rust binary that runs the full worker agent — combining WorkerService (Step 16), runtime (Steps 25-26), and env probe.
 
 **Source files**:
 - New: `lib/iris-native/src/bin/iris-worker.rs`
@@ -497,13 +541,13 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Integration test: Rust worker registers with Python controller, receives heartbeat, executes process task, reports completion. Test with Docker runtime.
 
-**Dependencies**: Step 15, Step 24, Step 25.
+**Dependencies**: Step 16, Step 25, Step 26.
 
 ---
 
-### Step 27: Rust Controller Binary
+### Step 28: Rust Controller Binary
 
-**What**: Build a standalone Rust binary that runs the full controller — combining ControllerService (Steps 13-14), scheduler (Step 16), transitions (Step 17), autoscaler (Step 19), DB (Steps 8-10).
+**What**: Build a standalone Rust binary that runs the full controller — combining ControllerService (Steps 14-15), scheduler (Step 17), transitions (Step 18), autoscaler (Step 20), DB (Steps 9-11).
 
 **Source files**:
 - New: `lib/iris-native/src/bin/iris-controller.rs`
@@ -515,11 +559,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Full integration: Rust controller + Rust worker. Submit job via Python client, verify execution. Run the full `tests/cluster/controller/` test suite against Rust controller.
 
-**Dependencies**: Steps 13-20.
+**Dependencies**: Steps 14-21.
 
 ---
 
-### Step 28: CLI in Rust
+### Step 29: CLI in Rust
 
 **What**: Port the CLI from `lib/iris/src/iris/cli/` (~3600 LOC) to Rust using `clap`.
 
@@ -533,11 +577,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: CLI integration tests: `iris job list`, `iris job submit`, `iris cluster status`. Compare output format with Python CLI.
 
-**Dependencies**: Step 27 (needs running controller to test against).
+**Dependencies**: Step 28 (needs running controller to test against).
 
 ---
 
-### Step 29: Python Client Library Compatibility Layer
+### Step 30: Python Client Library Compatibility Layer
 
 **What**: Ensure the Python client library (`lib/iris/src/iris/client/client.py:1-1092`) works seamlessly with Rust controller. Add any missing wire-format compatibility fixes.
 
@@ -551,11 +595,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Full client test suite against Rust controller. Test all client methods: `submit()`, `get_status()`, `terminate()`, `list_jobs()`, `get_logs()`, `wait_for_completion()`.
 
-**Dependencies**: Step 27.
+**Dependencies**: Step 28.
 
 ---
 
-### Step 30: Actor System RPC Passthrough
+### Step 31: Actor System RPC Passthrough
 
 **What**: Implement ActorService (`actor.proto:108-118`) in Rust as a bytes passthrough — Rust handles the Connect-RPC transport but delegates serialization/deserialization to Python cloudpickle.
 
@@ -569,11 +613,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: End-to-end actor test: Python client → Rust RPC layer → Python actor → response. All existing actor tests pass.
 
-**Dependencies**: Step 11.
+**Dependencies**: Step 12.
 
 ---
 
-### Step 31: Kubernetes Runtime
+### Step 32: Kubernetes Runtime
 
 **What**: Port Kubernetes runtime from `lib/iris/src/iris/cluster/runtime/kubernetes.py:1-696` and CoreWeave platform from `lib/iris/src/iris/cluster/platform/coreweave.py:1-1577`.
 
@@ -587,11 +631,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Port `tests/cluster/runtime/test_kubernetes_runtime.py` and `tests/cluster/platform/test_coreweave_platform.py`.
 
-**Dependencies**: Step 24 (runtime trait), Step 21 (platform trait).
+**Dependencies**: Step 25 (runtime trait), Step 22 (platform trait).
 
 ---
 
-### Step 32: Dashboard Integration
+### Step 33: Dashboard Integration
 
 **What**: Port dashboard endpoints from `lib/iris/src/iris/cluster/controller/dashboard.py` and `lib/iris/src/iris/cluster/worker/dashboard.py`.
 
@@ -605,11 +649,11 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: HTTP test: GET dashboard endpoints, verify HTML response contains expected elements.
 
-**Dependencies**: Step 27.
+**Dependencies**: Step 28.
 
 ---
 
-### Step 33: Remove Python Controller and Worker
+### Step 34: Remove Python Controller and Worker
 
 **What**: Delete the Python controller and worker implementations. The Rust binaries are now the sole implementation.
 
@@ -624,79 +668,77 @@ from iris._native import Timestamp, Duration, Deadline, Timer, RateLimiter, Toke
 
 **Tests**: Full test suite passes with only Rust binaries. No Python controller/worker code remains.
 
-**Dependencies**: Steps 26-32. All tests passing on Rust binaries.
+**Dependencies**: Steps 27-33. All tests passing on Rust binaries.
 
 ---
 
 ## Dependency Graph
 
 ```
-Step 1 ─→ Step 2 ─→ Step 3
-  │         │ │       │
-  │         │ ├→ Step 4 → Step 5
-  │         │ │               │
-  │         │ └→ Step 7       │
-  │         │     │           │
-  ├→ Step 6 │     │           │
-  │    │    │     │           │
-  │    └────┼─────┼───→ Step 9 → Step 10
-  │         │     │      │         │
-  ├→ Step 8─┘     │      │         │
-  │               │      │         │
-  │    Step 11 ←──┘      │         │
-  │      │               │         │
-  │      ├→ Step 12      │         │
-  │      │    │          │         │
-  │      ├────┼→ Step 13─┘─────────┘
-  │      │    │    │
-  │      │    │    └→ Step 14
-  │      │    │         │
-  │      └→ Step 15     │
-  │           │         │
-  │    Step 16 ←────────┤ (needs 5, 6, 9)
-  │      │              │
-  │    Step 17 ←────────┤ (needs 10, 16)
-  │      │              │
-  │    Step 18          │ (needs 5, 7)
-  │      │              │
-  │    Step 19 ←── Step 18, Step 17
-  │      │
-  │    Step 20 ←── Steps 14, 16, 17, 19
-  │      │
-  │    Step 21 (needs 2, 7)
-  │      │
-  │      ├→ Step 22
-  │      ├→ Step 23
-  │      │
-  │    Step 24 (needs 7, 6)
-  │      │
-  │      └→ Step 25
-  │           │
-  │    Step 26 ←── Steps 15, 24, 25
-  │    Step 27 ←── Steps 13-20
-  │    Step 28 ←── Step 27
-  │    Step 29 ←── Step 27
-  │    Step 30 ←── Step 11
-  │    Step 31 ←── Steps 24, 21
-  │    Step 32 ←── Step 27
-  │    Step 33 ←── Steps 26-32
+Step 1 ─→ Step 2
+  │         │
+  ├─→ Step 3 (proto codegen)
+  │    │ │
+  │    │ ├→ Step 4 (time utils, needs 3)
+  │    │ ├→ Step 5 → Step 6 (enums → constraints)
+  │    │ └→ Step 8 (ResourceSpec, needs 3, 5)
+  │    │
+  │    └→ Step 12 (Connect-RPC, needs 3)
+  │         │
+  │         ├→ Step 13 (auth)
+  │         ├→ Step 16 (WorkerService, needs 3)
+  │         └→ Step 31 (actor passthrough)
+  │
+  ├─→ Step 7 (JobName)
+  │
+  ├─→ Step 9 (SQLite DB)
+  │    │
+  │    └→ Step 10 (DB rows, needs 9, 7, 4)
+  │         │
+  │         └→ Step 11 (DB writes)
+  │              │
+  │              ├→ Step 14 (read RPCs, needs 11, 12, 13)
+  │              │    │
+  │              │    └→ Step 15 (write RPCs)
+  │              │
+  │              └→ Step 18 (transitions, needs 11, 17)
+  │
+  │    Step 17 (scheduler, needs 6, 7, 10)
+  │    Step 19 (scaling groups, needs 6, 8, 3)
+  │    Step 20 (autoscaler, needs 19, 18)
+  │    Step 21 (controller, needs 17, 18, 20, 15)
+  │
+  │    Step 22 (platform trait, needs 3, 8)
+  │      ├→ Step 23 (local platform)
+  │      └→ Step 24 (GCP platform)
+  │
+  │    Step 25 (process runtime, needs 8, 7)
+  │      └→ Step 26 (Docker runtime)
+  │
+  │    Step 27 (worker binary, needs 16, 25, 26)
+  │    Step 28 (controller binary, needs 14-21)
+  │    Step 29 (CLI, needs 28)
+  │    Step 30 (client compat, needs 28)
+  │    Step 32 (K8s runtime, needs 25, 22)
+  │    Step 33 (dashboard, needs 28)
+  │    Step 34 (remove Python, needs 27-33)
 ```
 
 ## Timeline Estimate
 
 | Phase | Steps | Estimated Duration | Parallelism |
 |-------|-------|--------------------|-------------|
-| Phase 1 | 1–5 | 4–6 weeks | Steps 4-5 parallel with Step 3 |
-| Phase 2 | 6–10 | 4–6 weeks | Steps 6-7 parallel; Steps 9-10 sequential |
-| Phase 3 | 11–15 | 6–8 weeks | Step 11 first; Steps 13-15 partially parallel |
-| Phase 4 | 16–20 | 6–8 weeks | Steps 16-18 partially parallel; 19-20 sequential |
-| Phase 5 | 21–25 | 4–6 weeks | Steps 22-23 parallel; Steps 24-25 sequential |
-| Phase 6 | 26–33 | 6–8 weeks | Steps 26-27 parallel; 28-32 partially parallel |
+| Phase 1 | 1–6 | 4–6 weeks | Step 2 parallel with Step 3; Steps 5-6 parallel with Step 4 |
+| Phase 2 | 7–11 | 4–6 weeks | Steps 7-8 parallel; Steps 10-11 sequential |
+| Phase 3 | 12–16 | 6–8 weeks | Step 12 first; Steps 14-16 partially parallel |
+| Phase 4 | 17–21 | 6–8 weeks | Steps 17-19 partially parallel; 20-21 sequential |
+| Phase 5 | 22–26 | 4–6 weeks | Steps 23-24 parallel; Steps 25-26 sequential |
+| Phase 6 | 27–34 | 6–8 weeks | Steps 27-28 parallel; 29-33 partially parallel |
 | **Total** | | **~8–12 months** | |
 
 ## Milestones
 
-1. **M1 (end of Phase 1)**: `iris._native` module builds and passes CI. Time utils and constraint evaluation run in Rust. Measurable speedup on scheduler benchmarks.
+1. **M1 (end of Phase 1)**: `iris._native` module builds and passes CI. Dev/user build modes work. Time utils and constraint evaluation run in Rust. Measurable speedup on scheduler benchmarks.
 
 2. **M2 (end of Phase 2)**: Rust can read and write the controller SQLite database. Schema compatibility verified.
 

@@ -175,6 +175,16 @@ The existing proto files define the complete wire protocol:
 
 All protos use `edition = "2023"` (cluster, config, time, vm, query) or `syntax = "proto3"` (actor). `prost-build` handles both. Proto import chain: `time` -> `config` -> `vm` -> `query` -> `cluster`.
 
+## Existing Rust Precedent: dupekit Distribution Model
+
+`lib/dupekit/` uses `maturin` for its PyO3/Rust native extension (`dupekit._native`). The distribution model:
+
+- **Dev mode**: `maturin develop --release` builds the extension in-place from Rust source. Used by developers iterating on the Rust code.
+- **User mode**: Pre-built wheels published via CI. Users install with `pip install dupekit` — no Rust toolchain required.
+- **CI**: GitHub Actions builds manylinux/macOS wheels using `PyO3/maturin-action@v1`, uploads to PyPI on tagged releases.
+
+This pattern should be replicated for `iris-native`. The same dual dev/user mode approach with `IRIS_BUILD_MODE` env var and `make iris-dev`/`make iris-user` targets keeps the workflow consistent across the repo.
+
 ## Key Architectural Observations
 
 1. **The scheduler is the ideal first complex port target.** It's a pure function (`lib/iris/src/iris/cluster/controller/scheduler.py:1-840`) operating on immutable snapshots (`WorkerSnapshot` Protocol, `JobRequirements` dataclass). Zero I/O. Zero threading. The `WorkerSnapshot` protocol boundary makes it trivially callable from Python via PyO3.
