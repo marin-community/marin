@@ -130,14 +130,20 @@ drafted title and body before filing. Wait for approval or edits.
 
 ### 6. File the Issue
 
+Write the body to a temporary file first, then pass it with `--body-file`.
+Do not inline the body with shell substitution such as `--body "$(cat <<'EOF' ...)"`
+because multiline issue text can be corrupted by pasted command output or shell
+escaping mistakes.
+
 ```bash
+cat > /tmp/issue-body.md <<'EOF'
+<body>
+EOF
+
 gh issue create --repo marin-community/marin \
   --title "<title>" \
   --label "agent-generated" \
-  --body "$(cat <<'EOF'
-<body>
-EOF
-)"
+  --body-file /tmp/issue-body.md
 ```
 
 Add the template-appropriate labels (e.g. `bug` for bug reports, `experiment`
@@ -146,6 +152,11 @@ creating new labels.
 
 For task issues, add a priority label (`p1`, `p2`, `p3`) if the user specifies
 one or severity is clear from context.
+
+Before creating the issue, re-open the body file once and verify it does not
+contain unrelated shell output (for example pre-commit logs, pytest session
+headers, or prompt transcripts). If it does, stop and clean the draft before
+posting.
 
 ### 7. Report Back
 
