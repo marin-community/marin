@@ -20,7 +20,8 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from iris.cluster.bundle import BundleStore, normalize_workdir_relative_path
+from iris.cluster.bundle import BundleStore
+from iris.cluster.runtime.env import normalize_workdir_relative_path
 from iris.cluster.k8s.kubectl import Kubectl, KubectlLogLine
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,

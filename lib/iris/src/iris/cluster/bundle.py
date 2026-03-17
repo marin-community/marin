@@ -13,7 +13,6 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
-import posixpath
 import threading
 import time
 import zipfile
@@ -29,28 +28,6 @@ logger = logging.getLogger(__name__)
 def bundle_id_for_zip(blob: bytes) -> str:
     """Return canonical bundle id for zip bytes."""
     return hashlib.sha256(blob).hexdigest()
-
-
-def normalize_workdir_relative_path(path: str) -> str:
-    """Return a normalized relative path safe to write under a task workdir."""
-    candidate = path.replace("\\", "/")
-    if candidate.startswith("/"):
-        raise ValueError(f"Invalid workdir file path (absolute paths are not allowed): {path}")
-    normalized = posixpath.normpath(candidate)
-    if normalized in {"", "."}:
-        raise ValueError(f"Invalid workdir file path: {path}")
-    if normalized.startswith("../") or normalized == "..":
-        raise ValueError(f"Invalid workdir file path (path traversal): {path}")
-    return normalized
-
-
-def write_workdir_files(dest: Path, files: dict[str, bytes]) -> None:
-    """Write workdir files under ``dest`` with path validation."""
-    for name, data in files.items():
-        normalized = normalize_workdir_relative_path(name)
-        path = dest / normalized
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
 
 
 class BundleStore:
