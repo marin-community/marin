@@ -8,6 +8,7 @@ then runs inference directly with LLM.generate().
 """
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -94,7 +95,7 @@ def main():
 
     config_path = os.path.join(bootstrap_source, "config.json")
     with open(config_path) as f:
-        model_config = __import__("json").load(f)
+        model_config = json.load(f)
     num_heads = model_config["num_attention_heads"]
     num_kv_heads = model_config.get("num_key_value_heads", num_heads)
     head_dim = model_config["hidden_size"] // num_heads

@@ -312,8 +312,6 @@ def _load_and_inject_streaming(
     """
     import asyncio
 
-    import numpy as np
-
     fs, remote_path = url_to_fs(model_path)
     shard_files = _discover_safetensor_shards(fs, remote_path)
 
@@ -348,7 +346,7 @@ def _load_and_inject_streaming(
                 shard_dict = loop.run_until_complete(_load_shard(shard_path))
 
             shard_tensors = len(shard_dict)
-            shard_bytes = sum(np.array(v).nbytes for v in shard_dict.values())
+            shard_bytes = sum(v.nbytes for v in shard_dict.values())
             total_tensors += shard_tensors
             total_bytes += shard_bytes
 
@@ -403,11 +401,11 @@ def _reshape_attention_tensors(
 
     for key in list(state_dict.keys()):
         if "q_proj" in key and "bias" not in key:
-            state_dict[key] = np.array(state_dict[key]).reshape(num_heads, head_dim, -1)
+            state_dict[key] = np.asarray(state_dict[key]).reshape(num_heads, head_dim, -1)
         elif ("k_proj" in key or "v_proj" in key) and "bias" not in key:
-            state_dict[key] = np.array(state_dict[key]).reshape(num_kv_heads, head_dim, -1)
+            state_dict[key] = np.asarray(state_dict[key]).reshape(num_kv_heads, head_dim, -1)
         elif "o_proj" in key and "bias" not in key:
-            state_dict[key] = np.array(state_dict[key]).reshape(-1, num_heads, head_dim)
+            state_dict[key] = np.asarray(state_dict[key]).reshape(-1, num_heads, head_dim)
 
 
 def _is_object_store_path(path: str) -> bool:

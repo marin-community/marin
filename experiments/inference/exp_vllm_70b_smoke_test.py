@@ -77,10 +77,10 @@ def main():
     t0 = time.time()
     bootstrap_source, bootstrap_local_dir = _resolve_bootstrap_model_source_for_start(model)
     timings["bootstrap"] = time.time() - t0
-    _iris_log(f"[1/6] Bootstrap resolved in {timings['bootstrap']:.1f}s: {bootstrap_source}")
+    _iris_log(f"[1/5] Bootstrap resolved in {timings['bootstrap']:.1f}s: {bootstrap_source}")
 
     # Stage 2: LLM skeleton with dummy weights
-    _iris_log("[2/6] Creating LLM skeleton (load_format=dummy, enforce_eager=True)...")
+    _iris_log("[2/5] Creating LLM skeleton (load_format=dummy, enforce_eager=True)...")
     t0 = time.time()
     llm = LLM(
         model=bootstrap_source,
@@ -91,7 +91,7 @@ def main():
         enforce_eager=True,
     )
     timings["skeleton"] = time.time() - t0
-    _iris_log(f"[2/6] LLM skeleton created in {timings['skeleton']:.1f}s")
+    _iris_log(f"[2/5] LLM skeleton created in {timings['skeleton']:.1f}s")
 
     # Stages 3-5: Streaming weight load + reshape + inject (per-shard)
     mapping_name = _resolve_mapping_model_name(model, args.model)
