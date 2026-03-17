@@ -521,8 +521,8 @@ class LocalPlatform:
             results = [s for s in results if all(s.labels.get(k) == v for k, v in labels.items())]
         return results
 
-    def list_all_slices(self, labels: dict[str, str] | None = None) -> list[LocalSliceHandle]:
-        return self.list_slices(zones=[], labels=labels)
+    def list_all_slices(self) -> list[LocalSliceHandle]:
+        return self.list_slices(zones=[], labels={self._iris_labels.iris_managed: "true"})
 
     def list_vms(
         self,
@@ -568,9 +568,7 @@ class LocalPlatform:
         label_prefix: str | None = None,
     ) -> list[str]:
         """Terminate all managed slices. No external controller to stop in local mode."""
-        prefix = label_prefix or config.platform.label_prefix or "iris"
-        labels = Labels(prefix)
-        all_slices = self.list_all_slices(labels={labels.iris_managed: "true"})
+        all_slices = self.list_all_slices()
         names = [f"slice:{s.slice_id}" for s in all_slices]
         if not dry_run:
             for s in all_slices:

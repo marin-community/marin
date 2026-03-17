@@ -483,8 +483,8 @@ class ScalingGroup:
     def reconcile(self) -> None:
         """Discover and adopt existing slices from the cloud.
 
-        Called once at startup to recover state from a previous controller.
-        Uses platform.list_slices() with the managed label to find our slices.
+        Used in tests to populate a scaling group with pre-injected slices.
+        Production restore uses prepare_for_restore() + restore_scaling_group().
         """
         zones = _zones_from_config(self._config)
         labels = {self._labels.iris_scale_group: self._config.name}
@@ -1202,16 +1202,10 @@ class ScalingGroupRestoreResult:
 
 def restore_scaling_group(
     group_snapshot: GroupSnapshot,
-    platform: Platform,
-    config: config_pb2.ScaleGroupConfig,
+    cloud_handles: list[SliceHandle],
     label_prefix: str,
 ) -> ScalingGroupRestoreResult:
-    """Reconcile checkpointed group slices against live cloud slices."""
-    labels = Labels(label_prefix)
-    filter_labels = {labels.iris_scale_group: group_snapshot.name}
-
-    zones = _zones_from_config(config)
-    cloud_handles = platform.list_slices(zones=zones, labels=filter_labels)
+    """Reconcile checkpointed group slices against pre-fetched cloud handles."""
     cloud_by_id: dict[str, SliceHandle] = {h.slice_id: h for h in cloud_handles}
     checkpoint_slices = {s.slice_id: s for s in group_snapshot.slices}
 

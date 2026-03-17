@@ -16,6 +16,8 @@ from __future__ import annotations
 import copy
 import logging
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -978,6 +980,37 @@ class IrisConfig:
         if worker.HasField("controller_address"):
             return worker.controller_address
         return ""
+
+
+@contextmanager
+def connect_cluster(config: config_pb2.IrisClusterConfig) -> Iterator[str]:
+    """Start controller, open tunnel, yield address, stop on exit.
+
+    Local mode uses LocalCluster directly (in-process controller + workers).
+    Remote modes delegate controller lifecycle to the platform (GCP, CoreWeave, etc.).
+    """
+    validate_config(config)
+    is_local = config.controller.WhichOneof("controller") == "local"
+
+    if is_local:
+        from iris.cluster.local_cluster import LocalCluster
+
+        cluster = LocalCluster(config)
+        address = cluster.start()
+        try:
+            yield address
+        finally:
+            cluster.close()
+    else:
+        iris_config = IrisConfig(config)
+        platform = iris_config.platform()
+        address = platform.start_controller(config)
+        try:
+            with platform.tunnel(address) as tunnel_url:
+                yield tunnel_url
+        finally:
+            platform.stop_controller(config)
+            platform.shutdown()
 
 
 def create_autoscaler(
