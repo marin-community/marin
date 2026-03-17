@@ -6,11 +6,13 @@
 import time
 
 import pytest
+from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import TASKS, WORKERS, ControllerDB
 from iris.cluster.log_store import LogStore
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
+    HEARTBEAT_STALENESS_THRESHOLD,
     HeartbeatAction,
     HeartbeatApplyRequest,
     DispatchBatch,
@@ -215,3 +217,76 @@ def test_unhealthy_worker_cascades_to_tasks(tmp_path):
         task = q.one(TASKS, where=TASKS.c.task_id == task_id.to_wire())
     assert task is not None
     assert task.state == cluster_pb2.TASK_STATE_WORKER_FAILED
+
+
+class _FakeStubFactory:
+    def get_stub(self, address: str):
+        raise NotImplementedError
+
+    def evict(self, address: str) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+def test_reap_stale_workers_removes_old_heartbeat(tmp_path, worker_metadata):
+    """Workers restored from checkpoint with heartbeat older than the staleness
+    threshold are failed immediately by the heartbeat loop's reap pass."""
+    db = ControllerDB(db_path=tmp_path / "controller.sqlite3")
+    log_store = LogStore(db_path=tmp_path / "controller.sqlite3")
+    config = ControllerConfig(remote_state_dir="file:///tmp/iris-test-state", local_state_dir=tmp_path)
+    controller = Controller(config=config, worker_stub_factory=_FakeStubFactory(), db=db)
+    state = controller.state
+
+    # Register a worker with a timestamp well beyond the staleness threshold.
+    stale_ts = Timestamp.from_ms(Timestamp.now().epoch_ms() - HEARTBEAT_STALENESS_THRESHOLD.to_ms() - 60_000)
+    state.register_or_refresh_worker(
+        worker_id=WorkerId("stale-worker"),
+        address="10.0.0.1:10001",
+        metadata=worker_metadata,
+        ts=stale_ts,
+    )
+    # Register a fresh worker that should survive.
+    state.register_or_refresh_worker(
+        worker_id=WorkerId("fresh-worker"),
+        address="10.0.0.2:10001",
+        metadata=worker_metadata,
+        ts=Timestamp.now(),
+    )
+
+    with db.snapshot() as q:
+        assert q.exists(WORKERS, where=WORKERS.c.worker_id == "stale-worker")
+        assert q.exists(WORKERS, where=WORKERS.c.worker_id == "fresh-worker")
+
+    controller._reap_stale_workers()
+
+    with db.snapshot() as q:
+        assert not q.exists(WORKERS, where=WORKERS.c.worker_id == "stale-worker")
+        assert q.exists(WORKERS, where=WORKERS.c.worker_id == "fresh-worker")
+
+    log_store.close()
+    db.close()
+
+
+def test_reap_stale_workers_no_op_when_all_fresh(tmp_path, worker_metadata):
+    """When all workers have recent heartbeats, no workers are reaped."""
+    db = ControllerDB(db_path=tmp_path / "controller.sqlite3")
+    log_store = LogStore(db_path=tmp_path / "controller.sqlite3")
+    config = ControllerConfig(remote_state_dir="file:///tmp/iris-test-state", local_state_dir=tmp_path)
+    controller = Controller(config=config, worker_stub_factory=_FakeStubFactory(), db=db)
+
+    controller.state.register_or_refresh_worker(
+        worker_id=WorkerId("worker1"),
+        address="10.0.0.1:10001",
+        metadata=worker_metadata,
+        ts=Timestamp.now(),
+    )
+
+    controller._reap_stale_workers()
+
+    with db.snapshot() as q:
+        assert q.exists(WORKERS, where=WORKERS.c.worker_id == "worker1")
+
+    log_store.close()
+    db.close()

@@ -82,7 +82,7 @@ jobs:
        github.event.issue.author_association == 'COLLABORATOR') &&
       !contains(github.event.issue.body, '@claude') &&
       !contains(github.event.issue.title, '@claude')
-    timeout-minutes: 30
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -104,6 +104,13 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
+      - name: Post initial comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment ${{ github.event.issue.number }} \
+            --body "🤖 I'm looking into this issue. I'll post a task list shortly with my plan and progress."
+
       - name: Triage Issue
         uses: anthropics/claude-code-action@v1
         with:
@@ -112,67 +119,38 @@ jobs:
           additional_permissions: |
             actions: read
           prompt: |
-            ISSUE: #${{ github.event.issue.number }}
-            TITLE: ${{ github.event.issue.title }}
+            Read AGENTS.md and .agents/skills/fix-issue/SKILL.md, then analyze issue #${{ github.event.issue.number }}.
 
-            Read AGENTS.md and .agents/skills/fix-issue/SKILL.md.
+            ## Progress tracking
 
-            ## Step 1: Relevance Check
-            Read the issue title and body. If the issue is NOT obviously about a code change
-            (e.g. "run experiment X", "suggest an alternative backend for Y", "benchmark Z",
-            "investigate performance of W", feature discussions, research questions, or operational requests),
-            then exit immediately without posting any comment.
+            After initial analysis, post a 🤖-prefixed comment with a task list using GitHub checkbox syntax:
 
-            ## Step 2: Scope Assessment
-            Investigate the codebase to understand the issue. Determine whether the fix is
-            small and self-contained or whether it requires broader design work.
+            ```
+            🤖 **Plan:**
+            - [ ] Step 1 description
+            - [ ] Step 2 description
+            - ...
+            ```
 
-            A fix is "small" if it meets ALL of these:
-            - Touches ≤3 files (excluding tests)
-            - The issue describes the problem clearly enough that the fix is unambiguous
-            - No new public API surface or architectural decisions needed
+            To update the task list, edit your last comment in place:
+            `gh issue comment <number> --edit-last --body '...'`
 
-            Examples of small fixes: changing a default value, adjusting a timeout/retry
-            parameter, fixing a typo, adding a missing import, fixing an off-by-one error,
-            adding a flag to an existing function, renaming a variable.
+            Check off completed items and add status notes as you progress.
+            Update the task list at least after each major milestone (e.g., root cause identified,
+            fix implemented, tests passing, PR opened).
 
-            If in doubt, treat it as small and submit a PR. A reviewable PR is always more
-            useful than a research comment.
+            ## Respond based on scope
 
-            ## Step 3a: Small Fix (DEFAULT — use this unless the issue clearly requires design work)
-            Follow the full fix-issue skill workflow end-to-end:
-            1. Research the codebase and identify the fix
-            2. Create a branch, write tests, implement the fix
-            3. Run pre-commit and pytest
-            4. Open a PR and verify CI
-            5. Post a brief comment on the issue linking the PR
+            - **Small/clear changes**: open a PR following the fix-issue skill workflow.
+            - **Large changes** (multi-module design work): post a 🤖-prefixed research comment with root cause, relevant code links, and proposed approach.
+            - **Experiments/research questions**: post a 🤖-prefixed comment with concise feedback on the idea.
 
-            ## Step 3b: Research Report (ONLY for issues requiring multi-module design changes)
-            Use this path ONLY when the fix requires architectural decisions, touches >3 modules,
-            or needs human input on design trade-offs.
-
-            Post a single comment with this exact format:
-
-            🤖 ## Research
-            <2-3 sentences: root cause, not symptoms>
-
-            **Relevant code**
-            - [`file.py#L123`](permalink) - short annotation
-            - (max 5 links)
-
-            ## Proposed Fix
-            <1-2 sentences describing the recommended approach>
-            <code snippet if non-obvious>
-
-            Rules for research comments:
-            - Never post partial or "test" comments. Write the full comment, review it, then post once.
-            - Follow the exact format above. No deviations, no extra sections, no filler.
-            - If you cannot complete the research, post nothing rather than a partial comment.
+            Always produce output — either a PR or a comment. Never silently exit.
           claude_args: |
             --model opus
             --max-turns 250
             --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
-            --system-prompt "Always read and follow the guidelines in AGENTS.md before starting work. You always have the ability to commit and push your changes. Use your MCP tools if available, falling back to git and gh (which you have authorization for) if needed. Before submitting any changes: 1) Run ./infra/pre-commit.py --all-files --fix and fix any issues. 2) Run uv run pytest on tests relevant to your changes. Report on the test status when you provide an update. Always commit and push changes, even if you couldn't get the tests to pass. Never post partial, placeholder, or test comments. Every comment must be complete and follow the format specified in the prompt."
+            --system-prompt "Always read and follow the guidelines in AGENTS.md before starting work. You always have the ability to commit and push your changes. Use your MCP tools if available, falling back to git and gh (which you have authorization for) if needed. Before submitting any changes: 1) Run ./infra/pre-commit.py --all-files --fix and fix any issues. 2) Run uv run pytest on tests relevant to your changes. Report on the test status when you provide an update. Always commit and push changes, even if you couldn't get the tests to pass. Never post partial, placeholder, or test comments. Every comment must be complete and follow the format specified in the prompt. To update the task list comment, use `gh issue comment <number> --edit-last --body '...'` to edit your last comment in place."
 
   autofix:
     if: |
