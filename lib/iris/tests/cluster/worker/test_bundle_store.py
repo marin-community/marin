@@ -37,7 +37,7 @@ def _make_zip(entries: dict[str, bytes]) -> bytes:
 @pytest.fixture
 def store(tmp_path):
     return BundleStore(
-        db_path=tmp_path / "bundles.sqlite3",
+        storage_dir=tmp_path / "bundles",
         controller_address="http://controller.internal",
         max_items=2,
     )

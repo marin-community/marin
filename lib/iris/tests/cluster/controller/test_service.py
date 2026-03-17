@@ -196,7 +196,7 @@ def service(state, mock_scheduler, tmp_path):
         state,
         state._db,
         controller=mock_scheduler,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        bundle_store=BundleStore(storage_dir=tmp_path / "bundles"),
         log_store=state._log_store,
     )
 
@@ -600,7 +600,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_scheduler, tmp_path, j
         state,
         state._db,
         controller=mock_scheduler,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles_owner.sqlite3"),
+        bundle_store=BundleStore(storage_dir=tmp_path / "bundles_owner"),
         log_store=state._log_store,
         auth=ControllerAuth(provider="static"),
     )
@@ -631,7 +631,7 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_scheduler, tmp_path
         state,
         state._db,
         controller=mock_scheduler,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles_child.sqlite3"),
+        bundle_store=BundleStore(storage_dir=tmp_path / "bundles_child"),
         log_store=state._log_store,
         auth=ControllerAuth(provider="static"),
     )
@@ -1041,7 +1041,7 @@ def test_register_requires_worker_role(state, mock_scheduler, tmp_path, worker_m
         state,
         db,
         controller=mock_scheduler,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        bundle_store=BundleStore(storage_dir=tmp_path / "bundles"),
         log_store=state._log_store,
         auth=auth,
     )
@@ -1077,7 +1077,7 @@ def test_register_allows_worker_role(state, mock_scheduler, tmp_path, worker_met
         state,
         db,
         controller=mock_scheduler,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        bundle_store=BundleStore(storage_dir=tmp_path / "bundles"),
         log_store=state._log_store,
         auth=auth,
     )

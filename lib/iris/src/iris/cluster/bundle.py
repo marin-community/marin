@@ -1,18 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bundle ID utilities and a single sqlite-backed BundleStore implementation."""
+"""Bundle ID utilities and a flat-file BundleStore with in-memory LRU cache.
+
+Bundles are stored as individual zip files on disk at ``{storage_dir}/{bundle_id}.zip``.
+An in-memory index tracks known bundles and their sizes for LRU eviction. The index
+is rebuilt by scanning the storage directory on startup, so no checkpoint/restore is
+needed — the store survives restarts as long as the storage directory is durable.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import io
 import logging
+import os
 import posixpath
-import sqlite3
 import threading
 import time
 import zipfile
+from collections import OrderedDict
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -38,95 +45,80 @@ def normalize_workdir_relative_path(path: str) -> str:
 
 
 class BundleStore:
-    """Single sqlite-backed bundle store for controller and workers.
+    """Flat-file bundle store with in-memory LRU index.
 
-    Bundles are stored as zip bytes in sqlite by ``bundle_id``.
+    Bundles are persisted as ``{storage_dir}/{bundle_id}.zip``. On init the
+    directory is scanned to rebuild the in-memory index, so the store survives
+    process restarts without any explicit checkpoint/restore step.
+
     Workers can lazily fetch missing bundles from the controller and cache
     them locally.
     """
 
     def __init__(
         self,
-        db_path: Path,
+        storage_dir: Path,
         controller_address: str | None = None,
         max_total_bytes: int = 1_000_000_000,
         max_items: int = 1000,
     ):
-        self._db_path = db_path
+        self._storage_dir = storage_dir
         self._controller_address = controller_address.rstrip("/") if controller_address else ""
         self._max_total_bytes = max_total_bytes
         self._max_items = max_items
         self._lock = threading.RLock()
 
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        # We intentionally share one sqlite connection across threads; every
-        # public DB operation must hold self._lock.
-        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=NORMAL")
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS bundles (
-                bundle_id TEXT PRIMARY KEY,
-                zip_bytes BLOB NOT NULL,
-                created_at_ms INTEGER NOT NULL,
-                last_access_ms INTEGER NOT NULL,
-                size_bytes INTEGER NOT NULL
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_bundles_last_access
-            ON bundles(last_access_ms)
-            """
-        )
-        self._conn.commit()
+        self._storage_dir.mkdir(parents=True, exist_ok=True)
 
-    @staticmethod
-    def _now_ms() -> int:
-        return int(time.time() * 1000)
+        # OrderedDict mapping bundle_id -> size_bytes, ordered by access time
+        # (most recently accessed at end).
+        self._index: OrderedDict[str, int] = OrderedDict()
+        self._total_bytes = 0
+        self._rebuild_index()
+
+    def _rebuild_index(self) -> None:
+        """Scan storage directory and populate in-memory index, ordered by mtime."""
+        entries: list[tuple[float, str, int]] = []
+        for entry in self._storage_dir.iterdir():
+            if entry.suffix == ".zip" and entry.is_file():
+                bundle_id = entry.stem
+                stat = entry.stat()
+                entries.append((stat.st_mtime, bundle_id, stat.st_size))
+
+        entries.sort(key=lambda e: e[0])
+        self._index.clear()
+        self._total_bytes = 0
+        for _mtime, bundle_id, size in entries:
+            self._index[bundle_id] = size
+            self._total_bytes += size
+
+    def _bundle_path(self, bundle_id: str) -> Path:
+        return self._storage_dir / f"{bundle_id}.zip"
 
     def write_zip(self, blob: bytes) -> str:
         """Write zip bytes if absent and return canonical bundle id."""
         bundle_id = bundle_id_for_zip(blob)
-        now_ms = self._now_ms()
         with self._lock:
-            row = self._conn.execute("SELECT 1 FROM bundles WHERE bundle_id = ?", (bundle_id,)).fetchone()
-            if row is None:
-                self._conn.execute(
-                    "INSERT INTO bundles(bundle_id, zip_bytes, created_at_ms, last_access_ms, size_bytes)"
-                    " VALUES (?, ?, ?, ?, ?)",
-                    (bundle_id, blob, now_ms, now_ms, len(blob)),
-                )
-            else:
-                self._conn.execute(
-                    "UPDATE bundles SET last_access_ms = ? WHERE bundle_id = ?",
-                    (now_ms, bundle_id),
-                )
-            self._conn.commit()
+            if bundle_id in self._index:
+                self._index.move_to_end(bundle_id)
+                return bundle_id
+
+            path = self._bundle_path(bundle_id)
+            path.write_bytes(blob)
+            self._index[bundle_id] = len(blob)
+            self._total_bytes += len(blob)
             self._evict_if_needed_locked()
         return bundle_id
 
     def get_zip(self, bundle_id: str) -> bytes:
-        """Read zip bytes by bundle id.
-
-        Note: this method mutates the DB (updates ``last_access_ms``), so it
-        must hold ``self._lock`` like all other public DB methods.
-        """
+        """Read zip bytes by bundle id."""
         with self._lock:
-            row = self._conn.execute(
-                "SELECT zip_bytes FROM bundles WHERE bundle_id = ?",
-                (bundle_id,),
-            ).fetchone()
-            if row is None:
+            if bundle_id not in self._index:
                 raise FileNotFoundError(f"Bundle not found: {bundle_id}")
-            self._conn.execute(
-                "UPDATE bundles SET last_access_ms = ? WHERE bundle_id = ?",
-                (self._now_ms(), bundle_id),
-            )
-            self._conn.commit()
-            return bytes(row[0])
+            self._index.move_to_end(bundle_id)
+
+        path = self._bundle_path(bundle_id)
+        return path.read_bytes()
 
     def _fetch_from_controller(self, bundle_id: str) -> None:
         """Fetch a bundle from the controller HTTP endpoint and store it locally.
@@ -187,41 +179,32 @@ class BundleStore:
     def _evict_if_needed_locked(self) -> None:
         if self._max_items <= 0 and self._max_total_bytes <= 0:
             return
-        row = self._conn.execute(
-            "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM bundles",
-        ).fetchone()
-        if row is None:
-            return
-        count = int(row[0])
-        total = int(row[1])
 
-        # Compute how many items to evict based on count and size limits.
+        count = len(self._index)
         evict_for_items = max(0, count - self._max_items) if self._max_items > 0 else 0
-        # For bytes, estimate conservatively: evict at least 1 item at a time
-        # but start with the count-based minimum.
         n_to_evict = evict_for_items
 
-        if self._max_total_bytes > 0 and total > self._max_total_bytes:
-            # Need to evict by size too — fetch LRU candidates and accumulate
-            # until we're under the byte limit.
-            candidates = self._conn.execute(
-                "SELECT bundle_id, size_bytes FROM bundles ORDER BY last_access_ms ASC",
-            ).fetchall()
+        if self._max_total_bytes > 0 and self._total_bytes > self._max_total_bytes:
+            # Walk LRU order (front = oldest) until under budget.
             freed = 0
-            for i, (_bid, sz) in enumerate(candidates):
-                if i >= n_to_evict and total - freed <= self._max_total_bytes:
+            for i, (_bid, sz) in enumerate(self._index.items()):
+                if i >= n_to_evict and self._total_bytes - freed <= self._max_total_bytes:
                     break
-                freed += int(sz)
+                freed += sz
                 n_to_evict = i + 1
 
-        if n_to_evict > 0:
-            victims = self._conn.execute(
-                "SELECT bundle_id FROM bundles ORDER BY last_access_ms ASC LIMIT ?",
-                (n_to_evict,),
-            ).fetchall()
-            victim_ids = [str(v[0]) for v in victims]
-            self._conn.executemany("DELETE FROM bundles WHERE bundle_id = ?", [(v,) for v in victim_ids])
-            self._conn.commit()
+        if n_to_evict <= 0:
+            return
+
+        # Pop from front (LRU end) of the OrderedDict.
+        for _ in range(n_to_evict):
+            bundle_id, size = self._index.popitem(last=False)
+            self._total_bytes -= size
+            path = self._bundle_path(bundle_id)
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
 
     def close(self) -> None:
-        self._conn.close()
+        pass

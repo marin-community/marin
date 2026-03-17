@@ -407,7 +407,7 @@ class LocalPlatform:
         for tpu_worker_id in range(worker_count):
             worker_id = f"worker-{slice_id}-{tpu_worker_id}-{uuid.uuid4().hex[:8]}"
             bundle_store = BundleStore(
-                db_path=self._cache_path / f"bundles-{worker_id}.sqlite3",
+                storage_dir=self._cache_path / f"bundles-{worker_id}",
                 controller_address=self._controller_address,
             )
             container_runtime = ProcessRuntime(cache_dir=self._cache_path / worker_id)

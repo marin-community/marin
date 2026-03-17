@@ -150,7 +150,7 @@ class E2ECluster:
         )
 
         bundle_store = BundleStore(
-            db_path=cache_path / "bundles.sqlite3",
+            storage_dir=cache_path / "bundles",
             controller_address=f"http://127.0.0.1:{self._controller_port}",
             max_items=10,
         )
