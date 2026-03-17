@@ -198,36 +198,15 @@ def start_inprocess_vllm_server(
         _record_event(events, f"Created in-process LLM skeleton for {model_name_or_path}")
         _iris_emit("I", "vllm.inprocess", f"LLM skeleton created in {t_skeleton:.1f}s")
 
-        t0 = time.time()
-        state_dict = load_safetensors_from_remote(model.path)
-        t_load = time.time() - t0
-        _record_event(events, f"Loaded {len(state_dict)} tensors from safetensors shards")
-        _iris_emit(
-            "I", "vllm.inprocess", f"Loaded {len(state_dict)} tensors from GCS in {t_load:.1f}s via Levanter fsspec"
+        sync_weights_fn = _resolve_sync_weights_callable(llm)
+        _load_and_inject_streaming(
+            model_path=model.path,
+            sync_weights_fn=sync_weights_fn,
+            mapping_model_name=mapping_model_name,
+            bootstrap_model_source=bootstrap_model_source,
+            events=events,
         )
-
-        t0 = time.time()
-        nnx_state = levanter_state_dict_to_nnx_state_on_cpu(state_dict)
-        t_convert = time.time() - t0
-        _iris_emit("I", "vllm.inprocess", f"Converted state dict to NNX in {t_convert:.1f}s")
-
-        sync_weights = _resolve_sync_weights_callable(llm)
-        t0 = time.time()
-        sync_weights(
-            nnx_state,
-            mappings=MODEL_MAPPINGS[mapping_model_name],
-            transpose_keys=MODEL_TRANSPOSE_KEYS[mapping_model_name],
-            reshard_fn=None,
-        )
-        t_inject = time.time() - t0
         _record_event(events, f"Injected weights via sync_weights using mapping key {mapping_model_name!r}")
-        t_total = t_load + t_convert + t_inject
-        _iris_emit(
-            "I",
-            "vllm.inprocess",
-            f"Weights injected in {t_inject:.1f}s "
-            f"(total: {t_total:.1f}s = load {t_load:.1f} + convert {t_convert:.1f} + inject {t_inject:.1f})",
-        )
 
         # Build a minimal OpenAI-compatible API around LLM.generate().
         # We avoid vLLM's build_app() because it spawns child processes that
@@ -313,6 +292,122 @@ def load_safetensors_from_remote(model_path: str) -> dict[str, Any]:
         loop.close()
 
     return state_dict
+
+
+def _load_and_inject_streaming(
+    *,
+    model_path: str,
+    sync_weights_fn: Any,
+    mapping_model_name: str,
+    bootstrap_model_source: str,
+    events: list[str],
+) -> float:
+    """Load safetensor shards one at a time and inject each into HBM immediately.
+
+    This keeps peak host RAM at ~5 GiB (one shard) instead of accumulating the
+    full model (~131 GiB for 70B).  ``sync_weights`` handles partial state dicts
+    by skipping target keys not present in the source.
+
+    Returns total wall-clock time for the weight pipeline (load + reshape + convert + inject).
+    """
+    import asyncio
+
+    import numpy as np
+
+    fs, remote_path = url_to_fs(model_path)
+    shard_files = _discover_safetensor_shards(fs, remote_path)
+
+    # Read model config for attention reshape constants.
+    config_path = os.path.join(bootstrap_model_source, "config.json")
+    with open(config_path) as f:
+        model_config = json.load(f)
+    num_heads = model_config["num_attention_heads"]
+    num_kv_heads = model_config.get("num_key_value_heads", num_heads)
+    head_dim = model_config["hidden_size"] // num_heads
+
+    mappings = MODEL_MAPPINGS[mapping_model_name]
+    transpose_keys = MODEL_TRANSPOSE_KEYS[mapping_model_name]
+
+    async def _load_shard(shard_path: str) -> dict[str, Any]:
+        return await read_safetensors_fsspec(shard_path, fs=fs, sharding_fn=None)
+
+    loop = asyncio.new_event_loop()
+    cpu_device = jax.devices("cpu")[0]
+
+    t_pipeline_start = time.time()
+    total_tensors = 0
+    total_bytes = 0
+
+    try:
+        for i, shard_file in enumerate(shard_files):
+            t_shard_start = time.time()
+            shard_path = os.path.join(remote_path, shard_file)
+
+            # 1. Download shard
+            with jax.default_device(cpu_device):
+                shard_dict = loop.run_until_complete(_load_shard(shard_path))
+
+            shard_tensors = len(shard_dict)
+            shard_bytes = sum(np.array(v).nbytes for v in shard_dict.values())
+            total_tensors += shard_tensors
+            total_bytes += shard_bytes
+
+            # 2. Reshape attention projections (HF 2D → Levanter 3D)
+            _reshape_attention_tensors(shard_dict, num_heads, num_kv_heads, head_dim)
+
+            # 3. Convert to NNX
+            nnx_state = levanter_state_dict_to_nnx_state_on_cpu(shard_dict)
+
+            # 4. Inject into HBM
+            sync_weights_fn(
+                nnx_state,
+                mappings=mappings,
+                transpose_keys=transpose_keys,
+                reshard_fn=None,
+            )
+
+            # 5. Free host RAM
+            del shard_dict, nnx_state
+
+            t_shard = time.time() - t_shard_start
+            _iris_emit(
+                "I",
+                "vllm.inprocess",
+                f"Shard {i + 1}/{len(shard_files)} injected: "
+                f"{shard_tensors} tensors, {shard_bytes / (1024**3):.2f} GiB in {t_shard:.1f}s",
+            )
+    finally:
+        loop.close()
+
+    t_total = time.time() - t_pipeline_start
+    total_gib = total_bytes / (1024**3)
+    throughput = (total_bytes / (1024**2)) / t_total if t_total > 0 else 0
+    _record_event(events, f"Streamed {total_tensors} tensors ({total_gib:.1f} GiB) across {len(shard_files)} shards")
+    _iris_emit(
+        "I",
+        "vllm.inprocess",
+        f"WEIGHT PIPELINE COMPLETE (streaming): {t_total:.1f}s, "
+        f"{total_tensors} tensors, {total_gib:.1f} GiB, {throughput:.0f} MiB/s aggregate",
+    )
+    return t_total
+
+
+def _reshape_attention_tensors(
+    state_dict: dict[str, Any],
+    num_heads: int,
+    num_kv_heads: int,
+    head_dim: int,
+) -> None:
+    """Reshape HF 2D attention projections to Levanter 3D format in-place."""
+    import numpy as np
+
+    for key in list(state_dict.keys()):
+        if "q_proj" in key and "bias" not in key:
+            state_dict[key] = np.array(state_dict[key]).reshape(num_heads, head_dim, -1)
+        elif ("k_proj" in key or "v_proj" in key) and "bias" not in key:
+            state_dict[key] = np.array(state_dict[key]).reshape(num_kv_heads, head_dim, -1)
+        elif "o_proj" in key and "bias" not in key:
+            state_dict[key] = np.array(state_dict[key]).reshape(-1, num_heads, head_dim)
 
 
 def _is_object_store_path(path: str) -> bool:

@@ -55,17 +55,15 @@ def main():
 
     _iris_log(f"Starting 70B smoke test with model={args.model}")
 
-    import numpy as np
     from vllm import LLM, SamplingParams
 
     from marin.evaluation.evaluators.evaluator import ModelConfig
     from marin.inference.vllm_inprocess import (
+        _load_and_inject_streaming,
         _resolve_bootstrap_model_source_for_start,
         _resolve_mapping_model_name,
-        load_safetensors_from_remote,
+        _resolve_sync_weights_callable,
     )
-    from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
-    from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 
     model = ModelConfig(
         name="70b-smoke-test",
@@ -95,76 +93,25 @@ def main():
     timings["skeleton"] = time.time() - t0
     _iris_log(f"[2/6] LLM skeleton created in {timings['skeleton']:.1f}s")
 
-    # Stage 3: Load weights from GCS via Levanter fsspec
-    _iris_log(f"[3/6] Loading safetensors from {args.model} ...")
-    t0 = time.time()
-    state_dict = load_safetensors_from_remote(args.model)
-    timings["load"] = time.time() - t0
-    num_tensors = len(state_dict)
-    total_bytes = sum(np.array(v).nbytes for v in state_dict.values())
-    total_gib = total_bytes / (1024**3)
-    throughput_mibs = (total_bytes / (1024**2)) / timings["load"] if timings["load"] > 0 else 0
-    _iris_log(
-        f"[3/6] Loaded {num_tensors} tensors ({total_gib:.1f} GiB) in {timings['load']:.1f}s "
-        f"({throughput_mibs:.0f} MiB/s)"
-    )
-
-    # Stage 4: Reshape HF 2D attention → Levanter 3D
-    import json as json_mod
-
-    config_path = os.path.join(bootstrap_source, "config.json")
-    with open(config_path) as f:
-        model_config = json_mod.load(f)
-    num_heads = model_config["num_attention_heads"]
-    num_kv_heads = model_config.get("num_key_value_heads", num_heads)
-    head_dim = model_config["hidden_size"] // num_heads
-
-    t0 = time.time()
-    reshaped = 0
-    for key in list(state_dict.keys()):
-        if "q_proj" in key and "bias" not in key:
-            w = np.array(state_dict[key])
-            state_dict[key] = w.reshape(num_heads, head_dim, -1)
-            reshaped += 1
-        elif ("k_proj" in key or "v_proj" in key) and "bias" not in key:
-            w = np.array(state_dict[key])
-            state_dict[key] = w.reshape(num_kv_heads, head_dim, -1)
-            reshaped += 1
-        elif "o_proj" in key and "bias" not in key:
-            w = np.array(state_dict[key])
-            state_dict[key] = w.reshape(-1, num_heads, head_dim)
-            reshaped += 1
-    timings["reshape"] = time.time() - t0
-    _iris_log(f"[4/6] Reshaped {reshaped} attention projections in {timings['reshape']:.1f}s")
-
-    # Stage 5: Convert to NNX + inject via sync_weights
+    # Stages 3-5: Streaming weight load + reshape + inject (per-shard)
     mapping_name = _resolve_mapping_model_name(model, args.model)
-    _iris_log(f"[5/6] Converting + injecting weights (mapping={mapping_name})...")
+    _iris_log(f"[3/5] Streaming weights from {args.model} (mapping={mapping_name})...")
 
+    sync_weights_fn = _resolve_sync_weights_callable(llm)
+    events: list[str] = []
     t0 = time.time()
-    nnx_state = levanter_state_dict_to_nnx_state_on_cpu(state_dict)
-    timings["convert"] = time.time() - t0
-    _iris_log(f"[5/6] NNX conversion: {timings['convert']:.1f}s")
-
-    t0 = time.time()
-    llm.llm_engine.model_executor.driver_worker.sync_weights(
-        nnx_state,
-        mappings=MODEL_MAPPINGS[mapping_name],
-        transpose_keys=MODEL_TRANSPOSE_KEYS[mapping_name],
-        reshard_fn=None,
+    _load_and_inject_streaming(
+        model_path=args.model,
+        sync_weights_fn=sync_weights_fn,
+        mapping_model_name=mapping_name,
+        bootstrap_model_source=bootstrap_source,
+        events=events,
     )
-    timings["inject"] = time.time() - t0
-    _iris_log(f"[5/6] Weight injection: {timings['inject']:.1f}s")
+    timings["weight_pipeline"] = time.time() - t0
+    _iris_log(f"[3/5] Weight pipeline (streaming): {timings['weight_pipeline']:.1f}s")
 
-    weight_pipeline = timings["load"] + timings["reshape"] + timings["convert"] + timings["inject"]
-    _iris_log(
-        f"[5/6] WEIGHT PIPELINE TOTAL: {weight_pipeline:.1f}s "
-        f"(load={timings['load']:.1f} reshape={timings['reshape']:.1f} "
-        f"convert={timings['convert']:.1f} inject={timings['inject']:.1f})"
-    )
-
-    # Stage 6: Generate from test prompts
-    _iris_log(f"[6/6] Running {len(TEST_PROMPTS)} test prompts (max_tokens={args.max_tokens})...")
+    # Stage 4: Generate from test prompts
+    _iris_log(f"[4/5] Running {len(TEST_PROMPTS)} test prompts (max_tokens={args.max_tokens})...")
     params = SamplingParams(max_tokens=args.max_tokens, temperature=0.7)
 
     t0 = time.time()
@@ -174,30 +121,25 @@ def main():
     total_gen_tokens = sum(len(o.outputs[0].token_ids) for o in outputs)
     gen_tps = total_gen_tokens / timings["generate"] if timings["generate"] > 0 else 0
     _iris_log(
-        f"[6/6] Generated {total_gen_tokens} tokens across {len(TEST_PROMPTS)} prompts "
+        f"[4/5] Generated {total_gen_tokens} tokens across {len(TEST_PROMPTS)} prompts "
         f"in {timings['generate']:.1f}s ({gen_tps:.1f} tok/s)"
     )
 
     # Print results
     print(f"\n{'='*70}")
-    print("70B IN-PROCESS vLLM SMOKE TEST RESULTS")
+    print("70B IN-PROCESS vLLM SMOKE TEST RESULTS (streaming)")
     print(f"{'='*70}")
     print(f"Model:         {args.model}")
     print(f"Max model len: {args.max_model_len}")
-    print(f"Tensors:       {num_tensors} ({total_gib:.1f} GiB)")
     print(f"{'='*70}")
     print("TIMING BREAKDOWN:")
-    print(f"  Bootstrap:      {timings['bootstrap']:>8.1f}s")
-    print(f"  LLM skeleton:   {timings['skeleton']:>8.1f}s")
-    print(f"  Weight load:    {timings['load']:>8.1f}s  ({throughput_mibs:.0f} MiB/s)")
-    print(f"  Reshape:        {timings['reshape']:>8.1f}s")
-    print(f"  NNX convert:    {timings['convert']:>8.1f}s")
-    print(f"  Weight inject:  {timings['inject']:>8.1f}s")
-    print(f"  Generation:     {timings['generate']:>8.1f}s  ({gen_tps:.1f} tok/s)")
+    print(f"  Bootstrap:        {timings['bootstrap']:>8.1f}s")
+    print(f"  LLM skeleton:     {timings['skeleton']:>8.1f}s")
+    print(f"  Weight pipeline:  {timings['weight_pipeline']:>8.1f}s  (streaming: load+reshape+convert+inject per shard)")
+    print(f"  Generation:       {timings['generate']:>8.1f}s  ({gen_tps:.1f} tok/s)")
     print("  ---")
-    print(f"  Weight pipeline:{weight_pipeline:>8.1f}s  (load+reshape+convert+inject)")
     total = sum(timings.values())
-    print(f"  Total:          {total:>8.1f}s")
+    print(f"  Total:            {total:>8.1f}s")
     print(f"{'='*70}")
 
     for i, (prompt, output) in enumerate(zip(TEST_PROMPTS, outputs, strict=True)):
