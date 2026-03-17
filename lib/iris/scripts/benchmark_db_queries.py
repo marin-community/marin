@@ -32,11 +32,13 @@ from iris.cluster.controller.db import (
     EndpointQuery,
     healthy_active_workers_with_attributes,
     running_tasks_by_worker,
+    tasks_for_job_with_attempts,
 )
 from iris.cluster.controller.service import (
     USER_JOB_STATES,
     _child_jobs,
     _descendant_jobs,
+    _descendants_for_roots,
     _jobs_paginated,
     _live_user_stats,
     _query_endpoints,
@@ -46,6 +48,7 @@ from iris.cluster.controller.service import (
     _read_worker_detail,
     _task_summaries_for_jobs,
     _tasks_for_listing,
+    _tasks_for_worker,
     _transaction_actions,
     _worker_addresses_for_tasks,
     _worker_roster,
@@ -227,11 +230,34 @@ def benchmark_dashboard(db: ControllerDB, iterations: int) -> list[tuple[str, fl
         results.append(("_descendant_jobs", p50, p95))
         print_result("_descendant_jobs", p50, p95)
 
+    # _descendants_for_roots: batch descendant lookup (used by list_jobs RPC)
+    root_job_ids = [j.job_id.to_wire() for j in jobs]
+    if root_job_ids:
+        p50, p95 = bench(
+            "_descendants_for_roots",
+            lambda: _descendants_for_roots(db, root_job_ids),
+            iterations=iterations,
+        )
+        results.append(("_descendants_for_roots", p50, p95))
+        print_result("_descendants_for_roots", p50, p95)
+    else:
+        print("  _descendants_for_roots                       (skipped, no jobs)")
+
     # _read_job: single job lookup
     if sample_job:
         p50, p95 = bench("_read_job", lambda: _read_job(db, sample_job.job_id), iterations=iterations)
         results.append(("_read_job", p50, p95))
         print_result("_read_job", p50, p95)
+
+    # tasks_for_job_with_attempts: job detail page query
+    if sample_job:
+        p50, p95 = bench(
+            "tasks_for_job_with_attempts",
+            lambda: tasks_for_job_with_attempts(db, sample_job.job_id),
+            iterations=iterations,
+        )
+        results.append(("tasks_for_job_with_attempts", p50, p95))
+        print_result("tasks_for_job_with_attempts", p50, p95)
 
     # _read_task_with_attempts: single task lookup
     if sample_job:
@@ -258,6 +284,27 @@ def benchmark_dashboard(db: ControllerDB, iterations: int) -> list[tuple[str, fl
         p50, p95 = bench("_read_worker_detail", lambda: _read_worker_detail(db, sample_worker_id), iterations=iterations)
         results.append(("_read_worker_detail", p50, p95))
         print_result("_read_worker_detail", p50, p95)
+
+        # _tasks_for_worker: worker detail task history
+        p50, p95 = bench(
+            "_tasks_for_worker",
+            lambda: _tasks_for_worker(db, sample_worker_id),
+            iterations=iterations,
+        )
+        results.append(("_tasks_for_worker", p50, p95))
+        print_result("_tasks_for_worker", p50, p95)
+
+    # Composite: simulate full list_jobs RPC path
+    def _list_jobs_full(db):
+        paginated_jobs, _total = _jobs_paginated(db, USER_JOB_STATES, limit=50)
+        root_ids = [j.job_id.to_wire() for j in paginated_jobs]
+        descendants = _descendants_for_roots(db, root_ids)
+        all_jobs = paginated_jobs + descendants
+        _task_summaries_for_jobs(db, {j.job_id for j in all_jobs})
+
+    p50, p95 = bench("list_jobs_full (composite)", lambda: _list_jobs_full(db), iterations=iterations)
+    results.append(("list_jobs_full (composite)", p50, p95))
+    print_result("list_jobs_full (composite)", p50, p95)
 
     return results
 

@@ -374,16 +374,33 @@ def _jobs_paginated(
     order_expr = _SORT_FIELD_TO_SQL.get(sort_field, "j.submitted_at_ms")
 
     count_sql = f"SELECT COUNT(*) FROM jobs j WHERE {where_clause}"
-    select_sql = f"""
-        SELECT j.*,
-               COALESCE(SUM(t.failure_count), 0) AS agg_failures,
-               COALESCE(SUM(t.preemption_count), 0) AS agg_preemptions
-        FROM jobs j
-        LEFT JOIN tasks t ON j.job_id = t.job_id
-        WHERE {where_clause}
-        GROUP BY j.job_id
-        ORDER BY {order_expr} {direction}
-    """
+
+    # Only join tasks when sorting by failure/preemption aggregates.
+    # The common case (sort by date, name, state) skips the expensive LEFT JOIN + GROUP BY.
+    needs_task_agg = sort_field in (
+        cluster_pb2.Controller.JOB_SORT_FIELD_FAILURES,
+        cluster_pb2.Controller.JOB_SORT_FIELD_PREEMPTIONS,
+    )
+
+    if needs_task_agg:
+        select_sql = f"""
+            SELECT j.*,
+                   COALESCE(SUM(t.failure_count), 0) AS agg_failures,
+                   COALESCE(SUM(t.preemption_count), 0) AS agg_preemptions
+            FROM jobs j
+            LEFT JOIN tasks t ON j.job_id = t.job_id
+            WHERE {where_clause}
+            GROUP BY j.job_id
+            ORDER BY {order_expr} {direction}
+        """
+    else:
+        select_sql = f"""
+            SELECT j.*
+            FROM jobs j
+            WHERE {where_clause}
+            ORDER BY {order_expr} {direction}
+        """
+
     select_params = list(params)
     if limit > 0:
         select_sql += " LIMIT ? OFFSET ?"
