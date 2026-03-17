@@ -61,6 +61,17 @@ def test_resolve_mounts_cache_uses_cache_dir(tmp_path, runtime):
     assert resolved[0].kind == MountKind.CACHE
 
 
+def test_resolve_mounts_tmpfs_has_no_host_path(tmp_path, runtime):
+    """TMPFS mounts get empty host_path (Docker --tmpfs provides per-container isolation)."""
+    mounts = [MountSpec(container_path="/tmp", kind=MountKind.TMPFS)]
+    resolved = runtime.resolve_mounts(mounts)
+
+    assert len(resolved) == 1
+    assert resolved[0].host_path == ""
+    assert resolved[0].container_path == "/tmp"
+    assert resolved[0].kind == MountKind.TMPFS
+
+
 def test_resolve_mounts_workdir_requires_host_path(tmp_path):
     """WORKDIR mount without workdir_host_path raises RuntimeError."""
     runtime = DockerRuntime(cache_dir=tmp_path / "cache")
