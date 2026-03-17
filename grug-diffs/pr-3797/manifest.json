@@ -1,0 +1,22 @@
+{
+  "added_variants": [
+    "array_stacked"
+  ],
+  "base_sha": "b19ee42b57bb267be68405df76b33775a52c215e",
+  "head_sha": "8821baa8ef9d408985a950df51ea227155415911",
+  "report_count": 1,
+  "reports": [
+    {
+      "closest_variant": "base",
+      "distance_score": 112,
+      "report_relpath": "array_stacked/index.html",
+      "status_counts": {
+        "added": 0,
+        "changed": 3,
+        "removed": 0,
+        "unchanged": 1
+      },
+      "variant": "array_stacked"
+    }
+  ]
+}
