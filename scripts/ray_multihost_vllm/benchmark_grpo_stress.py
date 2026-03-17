@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """GRPO mini-batch stress test for vLLM serving.
 
 Simulates Marin's exp2039_rl_math500 inference workload:
-- 10 mini-batches, each with 64 prompts × 16 completions = 1,024 requests
+- 10 mini-batches, each with 64 prompts x 16 completions = 1,024 requests
 - temperature=1.0, max_tokens=1024 (matching Marin config)
 - Round-robin across multiple replicas
 - Grades responses and times reward computation
@@ -16,11 +19,9 @@ Usage:
 import argparse
 import asyncio
 import json
-import re
 import statistics
 import sys
 import time
-from dataclasses import dataclass, field
 
 import aiohttp
 
@@ -41,17 +42,20 @@ def load_prompts(dataset_path: str, n_prompts: int):
         with open(dataset_path) as f:
             for line in f:
                 ex = json.loads(line)
-                prompts.append({
-                    "problem": ex["problem"],
-                    "answer": ex["answer"],
-                    "prompt": ex["prompt"],
-                })
+                prompts.append(
+                    {
+                        "problem": ex["problem"],
+                        "answer": ex["answer"],
+                        "prompt": ex["prompt"],
+                    }
+                )
                 if len(prompts) >= n_prompts:
                     break
         return prompts
 
     # Fallback: download from HuggingFace (non-deterministic order!)
     from datasets import load_dataset, get_dataset_config_names, concatenate_datasets
+
     print("WARNING: Loading from HuggingFace — order is NOT deterministic. Use --dataset-path for reproducibility.")
     test_ds = load_dataset("HuggingFaceH4/MATH-500", name="default", split="test")
     test_problems = {ex["problem"] for ex in test_ds}
@@ -69,11 +73,13 @@ def load_prompts(dataset_path: str, n_prompts: int):
     prompts = []
     for ex in full:
         answer = extract_boxed(ex["solution"]) if "\\boxed" in ex["solution"] else ex["solution"].strip()
-        prompts.append({
-            "problem": ex["problem"],
-            "answer": answer,
-            "prompt": ex["problem"] + QUESTION_SUFFIX,
-        })
+        prompts.append(
+            {
+                "problem": ex["problem"],
+                "answer": answer,
+                "prompt": ex["problem"] + QUESTION_SUFFIX,
+            }
+        )
         if len(prompts) >= n_prompts:
             break
     return prompts
@@ -82,6 +88,7 @@ def load_prompts(dataset_path: str, n_prompts: int):
 # ---------------------------------------------------------------------------
 # Answer extraction / grading (minimal)
 # ---------------------------------------------------------------------------
+
 
 def extract_boxed(text: str) -> str:
     i = text.find("\\boxed")
@@ -101,7 +108,7 @@ def extract_boxed(text: str) -> str:
         elif text[i] == "}":
             depth -= 1
         i += 1
-    return text[start:i - 1].strip() if depth == 0 else ""
+    return text[start : i - 1].strip() if depth == 0 else ""
 
 
 def grade_answer(model_answer: str, ground_truth: str) -> bool:
@@ -122,6 +129,7 @@ def grade_answer(model_answer: str, ground_truth: str) -> bool:
 # ---------------------------------------------------------------------------
 # Request sender
 # ---------------------------------------------------------------------------
+
 
 async def send_request(
     session: aiohttp.ClientSession,
@@ -179,7 +187,11 @@ async def send_request(
         t_end = time.perf_counter()
         e2e = t_end - t0
         ttft = (first_tok_time - t0) if first_tok_time else e2e
-        tpot = statistics.mean([token_times[i] - token_times[i-1] for i in range(1, len(token_times))]) if len(token_times) > 1 else 0
+        tpot = (
+            statistics.mean([token_times[i] - token_times[i - 1] for i in range(1, len(token_times))])
+            if len(token_times) > 1
+            else 0
+        )
 
         return {
             "text": "".join(chunks),
@@ -195,19 +207,20 @@ async def send_request(
 # Run one mini-batch
 # ---------------------------------------------------------------------------
 
+
 async def run_mini_batch(
     servers: list[str],
     model: str,
     prompts: list[dict],  # 64 prompts
-    n_gen: int,           # 16 completions per prompt
+    n_gen: int,  # 16 completions per prompt
     max_tokens: int,
     temperature: float,
     concurrency_per_replica: int,
     stream_file: str = "",  # JSONL file to stream results as they complete
 ) -> dict:
-    """Run one mini-batch: 64 prompts × 16 completions = 1024 requests across replicas."""
+    """Run one mini-batch: 64 prompts x 16 completions = 1024 requests across replicas."""
 
-    # Build request list: 64 prompts × 16 = 1024, round-robin servers
+    # Build request list: 64 prompts x 16 = 1024, round-robin servers
     requests = []
     for i, p in enumerate(prompts):
         for g in range(n_gen):
@@ -224,19 +237,24 @@ async def run_mini_batch(
 
     async def send_and_record(session, server, p, prompt_idx, gen_idx):
         r = await send_request(
-            session, f"{server}/v1/chat/completions",
-            model, p["prompt"], max_tokens, temperature, semaphore
+            session, f"{server}/v1/chat/completions", model, p["prompt"], max_tokens, temperature, semaphore
         )
         # Stream result to JSONL immediately
         if stream_fh:
             model_ans = extract_boxed(r.get("text", ""))
             correct = grade_answer(model_ans, p["answer"]) if not r.get("error") else False
             record = {
-                "prompt_idx": prompt_idx, "gen_idx": gen_idx,
-                "problem": p["problem"], "ground_truth": p["answer"],
-                "model_response": r.get("text", ""), "model_answer": model_ans,
-                "correct": correct, "tokens": r.get("tokens", 0),
-                "finish_reason": "error" if r.get("error") else ("length" if r.get("tokens", 0) >= max_tokens - 1 else "stop"),
+                "prompt_idx": prompt_idx,
+                "gen_idx": gen_idx,
+                "problem": p["problem"],
+                "ground_truth": p["answer"],
+                "model_response": r.get("text", ""),
+                "model_answer": model_ans,
+                "correct": correct,
+                "tokens": r.get("tokens", 0),
+                "finish_reason": (
+                    "error" if r.get("error") else ("length" if r.get("tokens", 0) >= max_tokens - 1 else "stop")
+                ),
                 "ttft_ms": round(r.get("ttft", 0) * 1000, 1),
                 "e2e_ms": round(r.get("e2e", 0) * 1000, 1),
                 "error": r.get("error", ""),
@@ -249,10 +267,7 @@ async def run_mini_batch(
     t_batch_start = time.perf_counter()
 
     async with aiohttp.ClientSession(connector=connector) as session:
-        tasks = [
-            send_and_record(session, server, p, prompt_idx, gen_idx)
-            for server, p, prompt_idx, gen_idx in requests
-        ]
+        tasks = [send_and_record(session, server, p, prompt_idx, gen_idx) for server, p, prompt_idx, gen_idx in requests]
         results = await asyncio.gather(*tasks)
 
     if stream_fh:
@@ -264,7 +279,7 @@ async def run_mini_batch(
     # Grade and time rewards
     t_reward_start = time.perf_counter()
     correct = 0
-    for req, r in zip(requests, results):
+    for req, r in zip(requests, results, strict=False):
         p = req[1]  # prompt dict
         if r.get("error"):
             continue
@@ -314,6 +329,7 @@ async def run_mini_batch(
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(description="GRPO mini-batch stress test")
     parser.add_argument("--servers", required=True, help="Comma-separated vLLM server URLs")
@@ -336,6 +352,7 @@ def main():
     model = args.model
     if not model:
         import urllib.request
+
         try:
             req = urllib.request.Request(f"{servers[0]}/v1/models")
             with urllib.request.urlopen(req, timeout=10) as resp:
@@ -348,15 +365,15 @@ def main():
     all_prompts = load_prompts(args.dataset_path, total_prompts_needed)
     print(f"Loaded {len(all_prompts)} prompts")
 
-    print(f"\nGRPO Stress Test Config:")
+    print("\nGRPO Stress Test Config:")
     print(f"  Servers:        {servers}")
     print(f"  Model:          {model}")
     print(f"  Batches:        {args.num_batches}")
-    print(f"  Per batch:      {args.n_prompts} prompts × {args.n_gen} gen = {args.n_prompts * args.n_gen} completions")
+    print(f"  Per batch:      {args.n_prompts} prompts x {args.n_gen} gen = {args.n_prompts * args.n_gen} completions")
     print(f"  Total:          {args.num_batches * args.n_prompts * args.n_gen} completions")
     print(f"  Max tokens:     {args.max_tokens}")
     print(f"  Temperature:    {args.temperature}")
-    print(f"  Concurrency:    {args.concurrency_per_replica}/replica × {len(servers)} replicas")
+    print(f"  Concurrency:    {args.concurrency_per_replica}/replica x {len(servers)} replicas")
     if args.stream_output:
         print(f"  Stream output:  {args.stream_output}.batch<N> (JSONL, live)")
     print()
@@ -368,25 +385,31 @@ def main():
     total_completions = args.num_batches * args.n_prompts * args.n_gen
     completions_done = 0
 
-    pbar = tqdm(total=total_completions, desc="GRPO completions", unit="req",
-                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}] batch {postfix}")
+    pbar = tqdm(
+        total=total_completions,
+        desc="GRPO completions",
+        unit="req",
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}] batch {postfix}",
+    )
     pbar.set_postfix_str("0/?")
 
     for batch_id in range(args.num_batches):
         start_idx = batch_id * args.n_prompts
-        batch_prompts = all_prompts[start_idx:start_idx + args.n_prompts]
+        batch_prompts = all_prompts[start_idx : start_idx + args.n_prompts]
 
         stream_file = f"{args.stream_output}.batch{batch_id+1}" if args.stream_output else ""
-        result = asyncio.run(run_mini_batch(
-            servers=servers,
-            model=model,
-            prompts=batch_prompts,
-            n_gen=args.n_gen,
-            max_tokens=args.max_tokens,
-            temperature=args.temperature,
-            concurrency_per_replica=args.concurrency_per_replica,
-            stream_file=stream_file,
-        ))
+        result = asyncio.run(
+            run_mini_batch(
+                servers=servers,
+                model=model,
+                prompts=batch_prompts,
+                n_gen=args.n_gen,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                concurrency_per_replica=args.concurrency_per_replica,
+                stream_file=stream_file,
+            )
+        )
         result["batch_id"] = batch_id + 1
         batch_results.append(result)
 
@@ -413,35 +436,47 @@ def main():
     stddev_batch = statistics.stdev(wall_times) if len(wall_times) > 1 else 0
 
     print(f"\n{'=' * 70}")
-    print(f"GRPO STRESS TEST RESULTS")
+    print("GRPO STRESS TEST RESULTS")
     print(f"{'=' * 70}")
     print(f"  Total wall time:            {t_total:.1f}s ({t_total/60:.1f} min)")
     print(f"  Total completions:          {sum(r['successful'] for r in batch_results)}")
     print(f"  Total tokens generated:     {total_tokens:,}")
     print(f"  Total errors:               {total_errors}")
     print(f"  Total reward time:          {total_reward:.2f}s")
-    print(f"")
+    print("")
     print(f"  Mean batch wall time:       {mean_batch:.1f}s")
     print(f"  Stddev batch wall time:     {stddev_batch:.1f}s")
     print(f"  Mean throughput:            {statistics.mean(tok_rates):.0f} tok/s")
     print(f"  Min/Max batch time:         {min(wall_times):.1f}s / {max(wall_times):.1f}s")
-    print(f"")
-    print(f"  --- Extrapolation to full epoch (188 batches) ---")
+    print("")
+    print("  --- Extrapolation to full epoch (188 batches) ---")
     print(f"  Projected inference time:   {mean_batch * 188:.0f}s ({mean_batch * 188 / 3600:.1f} hours)")
     print(f"  Projected reward time:      {statistics.mean([r['t_reward_s'] for r in batch_results]) * 188:.0f}s")
     print(f"{'=' * 70}")
 
     # Per-batch table
-    print(f"\n{'Batch':>5} {'Wall(s)':>8} {'Tok/s':>8} {'Req/s':>7} {'MeanTok':>8} {'Errors':>7} {'Reward(s)':>9} {'Acc%':>6}")
+    header = (
+        f"\n{'Batch':>5} {'Wall(s)':>8} {'Tok/s':>8} {'Req/s':>7}"
+        f" {'MeanTok':>8} {'Errors':>7} {'Reward(s)':>9} {'Acc%':>6}"
+    )
+    print(header)
     for r in batch_results:
-        print(f"{r['batch_id']:>5} {r['t_batch_wall']:>8.1f} {r['gen_tok_per_s']:>8.0f} {r['req_per_s']:>7.2f} {r['mean_gen_tokens']:>8.0f} {r['errors']:>7} {r['t_reward_s']:>9.3f} {r['accuracy_pct']:>6.1f}")
+        print(
+            f"{r['batch_id']:>5} {r['t_batch_wall']:>8.1f}"
+            f" {r['gen_tok_per_s']:>8.0f} {r['req_per_s']:>7.2f}"
+            f" {r['mean_gen_tokens']:>8.0f} {r['errors']:>7}"
+            f" {r['t_reward_s']:>9.3f} {r['accuracy_pct']:>6.1f}"
+        )
 
     if args.output:
         out = {
             "config": {
-                "servers": servers, "model": model,
-                "num_batches": args.num_batches, "n_prompts": args.n_prompts,
-                "n_gen": args.n_gen, "max_tokens": args.max_tokens,
+                "servers": servers,
+                "model": model,
+                "num_batches": args.num_batches,
+                "n_prompts": args.n_prompts,
+                "n_gen": args.n_gen,
+                "max_tokens": args.max_tokens,
                 "temperature": args.temperature,
             },
             "aggregate": {

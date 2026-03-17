@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Fix vLLM parallel state PP group for TPU Ray workers.
 
 On TPU Ray workers, vLLM distributed is initialized with world_size=1, rank=0.
@@ -10,8 +13,6 @@ override the PP group's attributes to match the actual TPU PP rank.
 This is safe because the TPU workers don't use torch distributed for PP
 communication — they use JAX transfer servers instead.
 """
-
-import os
 
 PATH = "/workspace/tpu_inference/tpu_inference/worker/tpu_worker.py"
 

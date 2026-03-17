@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Fix weight sharding for Ray multi-host: hardcode TP partition specs.
 
 nnx.get_named_sharding(params, mesh) fails under Ray, leaving all specs None.
@@ -18,6 +21,7 @@ Weight -> Shape -> PartitionSpec mapping (for 2D mesh with axes ('data', 'model'
 """
 
 import os
+import re
 
 BASE = "/workspace/tpu_inference/tpu_inference"
 PATH = os.path.join(BASE, "models/jax/utils/weight_utils.py")
@@ -33,10 +37,8 @@ patterns_to_try = [
     spec = model_weight.sharding.spec if isinstance(
         model_weight.sharding, NamedSharding) else model_weight.sharding
     model_weight.value = shard(hf_weight, spec)""",
-
     # Pattern 2: our v3 debug patch
     """    # Update the model weight - read sharding from underlying JAX array""",
-
     # Pattern 3: our v2 patch
     """    # Update the model weight
     # Try nnx.Param sharding metadata first, then fall back to the""",
@@ -77,15 +79,15 @@ replacement = """    # Update the model weight
     model_weight.value = shard(hf_weight, spec)"""
 
 # Find which pattern is in the code and replace everything up to model_weight.value = shard
-import re
+
 
 # Find the "# Update the model weight" section and replace it entirely
 # Match from "# Update the model weight" to "model_weight.value = shard(hf_weight, spec)"
-pattern = r'    # Update the model weight.*?model_weight\.value = shard\(hf_weight, spec\)'
+pattern = r"    # Update the model weight.*?model_weight\.value = shard\(hf_weight, spec\)"
 match = re.search(pattern, code, re.DOTALL)
 
 if match:
-    code = code[:match.start()] + replacement + code[match.end():]
+    code = code[: match.start()] + replacement + code[match.end() :]
     with open(PATH, "w") as f:
         f.write(code)
     print("PATCHED weight_utils.py: hardcoded TP sharding fallback for Ray multi-host")

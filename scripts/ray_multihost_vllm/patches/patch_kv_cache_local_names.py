@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Fix KV cache layer name registration AND allocation count for PP workers.
 
 Two issues:
@@ -8,8 +11,6 @@ Fix: After KV cache allocation, check local attention layers. If there are
 more local layers than KV caches, allocate additional caches. Then re-register
 all layer names from local attention modules.
 """
-
-import os
 
 PATH = "/workspace/tpu_inference/tpu_inference/runner/kv_cache_manager.py"
 
@@ -37,14 +38,19 @@ new = '''        # Fix for PP: re-register KV cache with LOCAL attention layer n
             # Remove shared KV cache layers
             for name in self.shared_kv_cache_layers:
                 local_layers.pop(name, None)
-            local_layer_names = sorted(local_layers.keys(),
-                key=lambda n: int(''.join(c for c in n.split('layers.')[1].split('.')[0] if c.isdigit())) if 'layers.' in n else 0)
+            def _layer_sort_key(n):
+                if 'layers.' in n:
+                    digits = ''.join(c for c in n.split('layers.')[1].split('.')[0] if c.isdigit())
+                    return int(digits)
+                return 0
+            local_layer_names = sorted(local_layers.keys(), key=_layer_sort_key)
 
             if local_layer_names:
                 # Allocate extra KV caches if local layers > existing caches
                 while len(kv_caches) < len(local_layer_names):
                     # Clone the last KV cache's spec for the extra layer
-                    last_spec = layer_name_to_spec.get(list(layer_name_to_spec.keys())[-1] if layer_name_to_spec else None)
+                    last_key = list(layer_name_to_spec.keys())[-1] if layer_name_to_spec else None
+                    last_spec = layer_name_to_spec.get(last_key)
                     if last_spec is None:
                         break
                     extra_kv = create_kv_caches(

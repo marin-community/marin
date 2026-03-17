@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """MATH-500 benchmark for vLLM serving.
 
 Sends all 500 MATH-500 problems to a vLLM server, collects per-request
@@ -12,12 +15,10 @@ Usage:
 import argparse
 import asyncio
 import json
-import re
 import statistics
 import sys
 import time
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 
 import aiohttp
 
@@ -32,15 +33,18 @@ MATH500_HF = "HuggingFaceH4/MATH-500"
 def load_math500_from_hf():
     """Load MATH-500 from HuggingFace."""
     from datasets import load_dataset
+
     ds = load_dataset(MATH500_HF, name="default", split="test")
     problems = []
     for ex in ds:
         answer = extract_boxed(ex["solution"]) if "\\boxed" in ex["solution"] else ex["solution"].strip()
-        problems.append({
-            "problem": ex["problem"],
-            "answer": answer,
-            "prompt": ex["problem"] + QUESTION_SUFFIX,
-        })
+        problems.append(
+            {
+                "problem": ex["problem"],
+                "answer": answer,
+                "prompt": ex["problem"] + QUESTION_SUFFIX,
+            }
+        )
     return problems
 
 
@@ -50,18 +54,25 @@ def load_math500_from_jsonl(path: str):
     with open(path) as f:
         for line in f:
             ex = json.loads(line)
-            answer = extract_boxed(ex.get("solution", "")) if "\\boxed" in ex.get("solution", "") else ex.get("answer", "").strip()
-            problems.append({
-                "problem": ex["problem"],
-                "answer": answer,
-                "prompt": ex["problem"] + QUESTION_SUFFIX,
-            })
+            answer = (
+                extract_boxed(ex.get("solution", ""))
+                if "\\boxed" in ex.get("solution", "")
+                else ex.get("answer", "").strip()
+            )
+            problems.append(
+                {
+                    "problem": ex["problem"],
+                    "answer": answer,
+                    "prompt": ex["problem"] + QUESTION_SUFFIX,
+                }
+            )
     return problems
 
 
 # ---------------------------------------------------------------------------
 # Answer extraction and grading
 # ---------------------------------------------------------------------------
+
 
 def extract_boxed(text: str) -> str:
     """Extract content from \\boxed{...} with nested brace handling."""
@@ -83,7 +94,7 @@ def extract_boxed(text: str) -> str:
             depth -= 1
         i += 1
     if depth == 0:
-        return text[start:i - 1].strip()
+        return text[start : i - 1].strip()
     return ""
 
 
@@ -118,6 +129,7 @@ def grade_answer(model_answer: str, ground_truth: str) -> bool:
     try:
         from sympy import simplify, sympify
         from sympy.parsing.latex import parse_latex
+
         try:
             m_expr = parse_latex(model_answer)
             g_expr = parse_latex(ground_truth)
@@ -141,6 +153,7 @@ def grade_answer(model_answer: str, ground_truth: str) -> bool:
 # Request/response data
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class RequestResult:
     idx: int
@@ -153,7 +166,7 @@ class RequestResult:
     # Timing (seconds)
     ttft: float = 0.0  # time to first token
     tpot: float = 0.0  # time per output token (mean)
-    e2e: float = 0.0   # end-to-end latency
+    e2e: float = 0.0  # end-to-end latency
     prompt_tokens: int = 0
     completion_tokens: int = 0
     # Reward timing
@@ -163,6 +176,7 @@ class RequestResult:
 # ---------------------------------------------------------------------------
 # Async benchmark client
 # ---------------------------------------------------------------------------
+
 
 async def send_request(
     session: aiohttp.ClientSession,
@@ -276,6 +290,7 @@ async def run_benchmark(
 # Grade all responses and time it
 # ---------------------------------------------------------------------------
 
+
 def grade_all(results: list[RequestResult]) -> None:
     """Grade all responses and record per-response reward timing."""
     for r in results:
@@ -290,6 +305,7 @@ def grade_all(results: list[RequestResult]) -> None:
 # ---------------------------------------------------------------------------
 # Compute and print summary
 # ---------------------------------------------------------------------------
+
 
 def percentile(data: list[float], p: float) -> float:
     if not data:
@@ -324,14 +340,14 @@ def compute_summary(results: list[RequestResult], batch_wall_time: float) -> dic
         "successful_requests": len(ok),
         "failed_requests": len(errors),
         "error_types": {},
-
         # Throughput
         "batch_wall_time_s": round(batch_wall_time, 2),
         "prompt_tok_per_s": round(total_prompt_toks / batch_wall_time, 1) if batch_wall_time > 0 else 0,
         "gen_tok_per_s": round(total_gen_toks / batch_wall_time, 1) if batch_wall_time > 0 else 0,
-        "total_tok_per_s": round((total_prompt_toks + total_gen_toks) / batch_wall_time, 1) if batch_wall_time > 0 else 0,
+        "total_tok_per_s": (
+            round((total_prompt_toks + total_gen_toks) / batch_wall_time, 1) if batch_wall_time > 0 else 0
+        ),
         "req_per_s": round(len(ok) / batch_wall_time, 2) if batch_wall_time > 0 else 0,
-
         # Latency (ms)
         "p50_ttft_ms": round(percentile(ttfts, 50), 1),
         "p95_ttft_ms": round(percentile(ttfts, 95), 1),
@@ -342,14 +358,12 @@ def compute_summary(results: list[RequestResult], batch_wall_time: float) -> dic
         "p50_e2e_ms": round(percentile(e2es, 50), 1),
         "p95_e2e_ms": round(percentile(e2es, 95), 1),
         "p99_e2e_ms": round(percentile(e2es, 99), 1),
-
         # Correctness
         "math500_accuracy_pct": round(correct_count / len(ok) * 100, 2) if ok else 0,
         "math500_correct": correct_count,
         "math500_total": len(ok),
         "math500_format_rate_pct": round(format_count / len(ok) * 100, 2) if ok else 0,
         "math500_empty_rate_pct": round(empty_count / len(ok) * 100, 2) if ok else 0,
-
         # Reward timing (ms)
         "t_reward_total_s": round(sum(r.reward_time for r in ok), 3),
         "t_reward_per_response_ms": round(statistics.mean(reward_times), 2) if reward_times else 0,
@@ -357,7 +371,6 @@ def compute_summary(results: list[RequestResult], batch_wall_time: float) -> dic
         "p95_t_reward_ms": round(percentile(reward_times, 95), 2),
         "p99_t_reward_ms": round(percentile(reward_times, 99), 2),
         "reward_timeouts": 0,  # TODO: track if sympy times out
-
         # Token counts
         "total_prompt_tokens": total_prompt_toks,
         "total_gen_tokens": total_gen_toks,
@@ -387,19 +400,26 @@ def print_summary(summary: dict):
 
     print(f"\n{'LATENCY (ms)':=^50}")
     print(f"  {'':20s} {'p50':>8s} {'p95':>8s} {'p99':>8s}")
-    print(f"  TTFT:                {summary['p50_ttft_ms']:>8.1f} {summary['p95_ttft_ms']:>8.1f} {summary['p99_ttft_ms']:>8.1f}")
-    print(f"  TPOT:                {summary['p50_tpot_ms']:>8.1f} {summary['p95_tpot_ms']:>8.1f} {summary['p99_tpot_ms']:>8.1f}")
-    print(f"  E2E:                 {summary['p50_e2e_ms']:>8.1f} {summary['p95_e2e_ms']:>8.1f} {summary['p99_e2e_ms']:>8.1f}")
+    p = summary
+    print(f"  TTFT:                {p['p50_ttft_ms']:>8.1f}" f" {p['p95_ttft_ms']:>8.1f} {p['p99_ttft_ms']:>8.1f}")
+    print(f"  TPOT:                {p['p50_tpot_ms']:>8.1f}" f" {p['p95_tpot_ms']:>8.1f} {p['p99_tpot_ms']:>8.1f}")
+    print(f"  E2E:                 {p['p50_e2e_ms']:>8.1f}" f" {p['p95_e2e_ms']:>8.1f} {p['p99_e2e_ms']:>8.1f}")
 
     print(f"\n{'CORRECTNESS':=^50}")
-    print(f"  Accuracy:            {summary['math500_accuracy_pct']:>8.2f}% ({summary['math500_correct']}/{summary['math500_total']})")
+    correct = summary["math500_correct"]
+    total = summary["math500_total"]
+    print(f"  Accuracy:            {summary['math500_accuracy_pct']:>8.2f}%" f" ({correct}/{total})")
     print(f"  Format rate:         {summary['math500_format_rate_pct']:>8.2f}%")
     print(f"  Empty rate:          {summary['math500_empty_rate_pct']:>8.2f}%")
 
     print(f"\n{'REWARD TIMING':=^50}")
     print(f"  Total grading time:  {summary['t_reward_total_s']:>10.3f} s")
     print(f"  Mean per response:   {summary['t_reward_per_response_ms']:>10.2f} ms")
-    print(f"  p50/p95/p99:         {summary['p50_t_reward_ms']:>8.2f} / {summary['p95_t_reward_ms']:>8.2f} / {summary['p99_t_reward_ms']:>8.2f} ms")
+    print(
+        f"  p50/p95/p99:         {summary['p50_t_reward_ms']:>8.2f}"
+        f" / {summary['p95_t_reward_ms']:>8.2f}"
+        f" / {summary['p99_t_reward_ms']:>8.2f} ms"
+    )
     print(f"  Timeouts:            {summary['reward_timeouts']:>10d}")
 
     print(f"\n{'TOKENS':=^50}")
@@ -420,6 +440,7 @@ def print_summary(summary: dict):
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main():
     parser = argparse.ArgumentParser(description="MATH-500 benchmark for vLLM")
@@ -442,13 +463,14 @@ def main():
     print(f"Loaded {len(problems)} problems")
 
     if args.limit > 0:
-        problems = problems[:args.limit]
+        problems = problems[: args.limit]
         print(f"Limited to {len(problems)} problems")
 
     # Auto-detect model name
     model = args.model
     if not model:
         import urllib.request
+
         try:
             req = urllib.request.Request(f"{args.server}/v1/models")
             with urllib.request.urlopen(req, timeout=10) as resp:
@@ -459,7 +481,7 @@ def main():
             print(f"Could not auto-detect model: {e}")
             sys.exit(1)
 
-    print(f"\nBenchmark config:")
+    print("\nBenchmark config:")
     print(f"  Server:      {args.server}")
     print(f"  Model:       {model}")
     print(f"  Concurrency: {args.concurrency}")
@@ -471,14 +493,16 @@ def main():
     # Run benchmark
     print("Running benchmark...")
     t_bench_start = time.perf_counter()
-    results = asyncio.run(run_benchmark(
-        server=args.server,
-        model=model,
-        problems=problems,
-        concurrency=args.concurrency,
-        max_tokens=args.max_tokens,
-        temperature=args.temperature,
-    ))
+    results = asyncio.run(
+        run_benchmark(
+            server=args.server,
+            model=model,
+            problems=problems,
+            concurrency=args.concurrency,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+        )
+    )
     batch_wall_time = time.perf_counter() - t_bench_start
 
     # Grade answers

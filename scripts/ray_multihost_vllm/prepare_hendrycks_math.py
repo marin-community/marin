@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Download Hendrycks MATH train set (minus MATH-500 test) to a fixed JSONL file.
 
 Produces a deterministic, shuffled dataset that any agent can load identically.
@@ -14,7 +17,6 @@ Output format (one JSON per line):
 import argparse
 import json
 import random
-import re
 
 from datasets import get_dataset_config_names, load_dataset
 
@@ -37,7 +39,7 @@ def extract_boxed(text: str) -> str:
         elif text[i] == "}":
             depth -= 1
         i += 1
-    return text[start:i - 1].strip() if depth == 0 else ""
+    return text[start : i - 1].strip() if depth == 0 else ""
 
 
 QUESTION_SUFFIX = " Write your answer in \\boxed{} format."
@@ -70,14 +72,17 @@ def main():
                     if ex["problem"] in test_problems:
                         continue
                     answer = extract_boxed(ex["solution"]) if "\\boxed" in ex["solution"] else ex["solution"].strip()
-                    all_examples.append({
-                        "problem": ex["problem"],
-                        "answer": answer,
-                        "prompt": ex["problem"] + QUESTION_SUFFIX,
-                        "config": cfg,
-                        "split": split,
-                    })
-                print(f"  {cfg}/{split}: {count_before} raw → {len([e for e in all_examples if e['config'] == cfg and e['split'] == split])} after decontam")
+                    all_examples.append(
+                        {
+                            "problem": ex["problem"],
+                            "answer": answer,
+                            "prompt": ex["problem"] + QUESTION_SUFFIX,
+                            "config": cfg,
+                            "split": split,
+                        }
+                    )
+                kept = len([e for e in all_examples if e["config"] == cfg and e["split"] == split])
+                print(f"  {cfg}/{split}: {count_before} raw -> {kept} after decontam")
             except Exception as e:
                 print(f"  {cfg}/{split}: FAILED ({e})")
 
@@ -98,10 +103,10 @@ def main():
 
     print(f"Wrote {len(all_examples)} examples to {args.output}")
     print(f"Seed: {args.seed}")
-    print(f"First 3 problems:")
+    print("First 3 problems:")
     for ex in all_examples[:3]:
         print(f"  [{ex['idx']}] ({ex['config']}/{ex['split']}) {ex['problem'][:80]}...")
-    print(f"Last 3 problems:")
+    print("Last 3 problems:")
     for ex in all_examples[-3:]:
         print(f"  [{ex['idx']}] ({ex['config']}/{ex['split']}) {ex['problem'][:80]}...")
 

@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Patch TPUModelRunner to add supports_mm_inputs attribute.
 
 The Ray executor's execute_model_ray checks worker.model_runner.supports_mm_inputs
@@ -16,8 +19,7 @@ with open(PATH) as f:
 target = '        logger.info(f"Init mesh | mesh={self.mesh}")'
 if target in code:
     code = code.replace(
-        target,
-        target + "\n        self.supports_mm_inputs = False  # TPU doesn't support MM inputs via Ray yet"
+        target, target + "\n        self.supports_mm_inputs = False  # TPU doesn't support MM inputs via Ray yet"
     )
     with open(PATH, "w") as f:
         f.write(code)

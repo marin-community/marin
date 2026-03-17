@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Comprehensive patch for Ray multi-host TPU vLLM.
 
 Applies three fixes inside a running container:
@@ -18,7 +21,6 @@ Usage: python patch_ray_multihost_v2.py
 """
 
 import os
-import sys
 
 BASE = "/workspace/tpu_inference/tpu_inference"
 
@@ -37,7 +39,7 @@ def patch_tpu_worker():
         return False
 
     # Replace with: Ray gets isolation vars, non-Ray gets existing PP setup
-    new_code = '''if multihost_backend == "ray":
+    new_code = """if multihost_backend == "ray":
             # Ray multi-host: isolate each worker to single-host JAX mode.
             # Without TPU_PROCESS_BOUNDS etc., JAX sees the full multi-host
             # topology via tpu-runtime, causing XLA device_id mismatches
@@ -60,7 +62,7 @@ def patch_tpu_worker():
                 f"TPU_CHIPS_PER_PROCESS_BOUNDS=1,{chips_needed},1 "
                 f"TPU_VISIBLE_CHIPS={','.join(str(i) for i in range(chips_needed))} "
                 f"CLOUD_TPU_TASK_ID=0")
-        elif self.parallel_config.pipeline_parallel_size > 1:'''
+        elif self.parallel_config.pipeline_parallel_size > 1:"""
 
     code = code.replace(old_guard, new_code)
 
@@ -77,46 +79,38 @@ def patch_coords_fallback():
         code = f.read()
 
     # Find the error-only check for missing coords
-    old_check = '''if not all(hasattr(d, "coords") for d in local_devices):
+    old_check = """if not all(hasattr(d, "coords") for d in local_devices):
         logger.error(
-            f"Expect TPU device but got {[type(d) for d in local_devices]}")'''
+            f"Expect TPU device but got {[type(d) for d in local_devices]}")"""
 
     if old_check not in code:
         # Try alternate pattern (single line error)
-        old_check = '''if not all(hasattr(d, "coords") for d in local_devices):
-        logger.error('''
+        old_check = """if not all(hasattr(d, "coords") for d in local_devices):
+        logger.error("""
         if old_check not in code:
             print("SKIP distributed/utils.py: coords check not found (may already be patched)")
             return False
 
-    new_check = '''if not all(hasattr(d, "coords") for d in local_devices):
-        logger.warning(
-            f"Devices lack .coords, falling back to process_index ordering. "
-            f"Types: {[type(d).__name__ for d in local_devices]}")
-        if hasattr(local_devices[0], "process_index"):
-            return local_devices[0].process_index
-        return 0'''
-
     # Replace just the check block, keeping the rest
     # Find the full block to replace (up to the next non-indented line)
-    lines = code.split('\n')
+    lines = code.split("\n")
     new_lines = []
     i = 0
     replaced = False
     while i < len(lines):
         line = lines[i]
         if 'if not all(hasattr(d, "coords") for d in local_devices):' in line and not replaced:
-            indent = line[:len(line) - len(line.lstrip())]
+            indent = line[: len(line) - len(line.lstrip())]
             new_lines.append(f'{indent}if not all(hasattr(d, "coords") for d in local_devices):')
-            new_lines.append(f'{indent}    logger.warning(')
+            new_lines.append(f"{indent}    logger.warning(")
             new_lines.append(f'{indent}        f"Devices lack .coords, falling back to process_index. "')
             new_lines.append(f'{indent}        f"Types: {{[type(d).__name__ for d in local_devices]}}")')
             new_lines.append(f'{indent}    if hasattr(local_devices[0], "process_index"):')
-            new_lines.append(f'{indent}        return local_devices[0].process_index')
-            new_lines.append(f'{indent}    return 0')
+            new_lines.append(f"{indent}        return local_devices[0].process_index")
+            new_lines.append(f"{indent}    return 0")
             # Skip old error lines
             i += 1
-            while i < len(lines) and ('logger.error' in lines[i] or 'Expect TPU device' in lines[i]):
+            while i < len(lines) and ("logger.error" in lines[i] or "Expect TPU device" in lines[i]):
                 i += 1
             replaced = True
             continue
@@ -125,7 +119,7 @@ def patch_coords_fallback():
 
     if replaced:
         with open(path, "w") as f:
-            f.write('\n'.join(new_lines))
+            f.write("\n".join(new_lines))
         print("PATCHED distributed/utils.py: added .coords fallback")
         return True
     else:
@@ -141,7 +135,7 @@ def patch_hbm_usage():
 
     # Check if the Ray branch already has adequate handling
     # Add a fallback after the Ray device loop in case no device worked
-    old_pattern = '''    multihost_backend = envs.TPU_MULTIHOST_BACKEND
+    old_pattern = """    multihost_backend = envs.TPU_MULTIHOST_BACKEND
     if multihost_backend == "ray":
         # MemoryStats is only supported for addressable PjRt devices.
         # Assume all the devices have similar memory usage for now.
@@ -158,13 +152,13 @@ def patch_hbm_usage():
             except Exception as e:
                 logger.warning(
                     "Failed to get memory stats for device %s: %s. ", device,
-                    e)'''
+                    e)"""
 
     if old_pattern not in code:
         print("SKIP utils.py hbm: Ray branch pattern not found (may already be patched)")
         return False
 
-    new_pattern = '''    multihost_backend = envs.TPU_MULTIHOST_BACKEND
+    new_pattern = """    multihost_backend = envs.TPU_MULTIHOST_BACKEND
     if multihost_backend == "ray":
         # MemoryStats is only supported for addressable PjRt devices.
         # Filter to locally addressable devices first.
@@ -194,7 +188,7 @@ def patch_hbm_usage():
                     "No device returned memory_stats. Using HBM limit fallback: %d bytes", limit)
                 usage.extend([(0, limit)] * len(devices))
             except Exception as fallback_err:
-                logger.error("HBM fallback also failed: %s", fallback_err)'''
+                logger.error("HBM fallback also failed: %s", fallback_err)"""
 
     code = code.replace(old_pattern, new_pattern)
     with open(path, "w") as f:

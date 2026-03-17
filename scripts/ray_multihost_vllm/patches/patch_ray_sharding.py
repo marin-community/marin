@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Patch weight_utils.py shard_put for Ray multi-host.
 
 When sharding spec is None or a PartitionSpec (not NamedSharding),
@@ -15,14 +18,14 @@ with open(PATH) as f:
     code = f.read()
 
 # Fix 1: shard_put — handle None and PartitionSpec shardings
-old_shard_put = '''    if isinstance(shardings, tuple):
+old_shard_put = """    if isinstance(shardings, tuple):
         return general_device_put(x,
                                   NamedSharding(mesh, P(*shardings)),
                                   source_mesh=x_mesh)
     else:
-        return general_device_put(x, shardings, source_mesh=x_mesh)'''
+        return general_device_put(x, shardings, source_mesh=x_mesh)"""
 
-new_shard_put = '''    if isinstance(shardings, tuple):
+new_shard_put = """    if isinstance(shardings, tuple):
         return general_device_put(x,
                                   NamedSharding(mesh, P(*shardings)),
                                   source_mesh=x_mesh)
@@ -37,7 +40,7 @@ new_shard_put = '''    if isinstance(shardings, tuple):
                                   NamedSharding(mesh, shardings),
                                   source_mesh=x_mesh)
     else:
-        return general_device_put(x, shardings, source_mesh=x_mesh)'''
+        return general_device_put(x, shardings, source_mesh=x_mesh)"""
 
 if old_shard_put in code:
     code = code.replace(old_shard_put, new_shard_put)
