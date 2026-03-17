@@ -1,0 +1,343 @@
+name: Gemini Code
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  gemini:
+    # Only run if comment/issue is from a repo writer (OWNER, MEMBER, or COLLABORATOR) and contains @gemini
+    if: |
+      (github.event_name == 'issue_comment' &&
+       (github.event.comment.author_association == 'OWNER' ||
+        github.event.comment.author_association == 'MEMBER' ||
+        github.event.comment.author_association == 'COLLABORATOR') &&
+       (contains(github.event.comment.body, '@gemini') || contains(github.event.comment.body, '@gemini-cli'))) ||
+      (github.event_name == 'pull_request_review_comment' &&
+       (github.event.comment.author_association == 'OWNER' ||
+        github.event.comment.author_association == 'MEMBER' ||
+        github.event.comment.author_association == 'COLLABORATOR') &&
+       (contains(github.event.comment.body, '@gemini') || contains(github.event.comment.body, '@gemini-cli'))) ||
+      (github.event_name == 'pull_request_review' &&
+       (github.event.review.author_association == 'OWNER' ||
+        github.event.review.author_association == 'MEMBER' ||
+        github.event.review.author_association == 'COLLABORATOR') &&
+       (contains(github.event.review.body, '@gemini') || contains(github.event.review.body, '@gemini-cli'))) ||
+      (github.event_name == 'issues' &&
+       (github.event.issue.author_association == 'OWNER' ||
+        github.event.issue.author_association == 'MEMBER' ||
+        github.event.issue.author_association == 'COLLABORATOR') &&
+       (contains(github.event.issue.body, '@gemini') ||
+        contains(github.event.issue.title, '@gemini') ||
+        contains(github.event.issue.body, '@gemini-cli') ||
+        contains(github.event.issue.title, '@gemini-cli')))
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run Gemini Code
+        id: gemini
+        uses: google-github-actions/run-gemini-cli@v0
+        env:
+          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN || github.token }}'
+        with:
+          gcp_location: '${{ vars.GOOGLE_CLOUD_LOCATION }}'
+          gcp_project_id: '${{ vars.GOOGLE_CLOUD_PROJECT }}'
+          gcp_service_account: '${{ vars.SERVICE_ACCOUNT_EMAIL }}'
+          gcp_workload_identity_provider: '${{ vars.GCP_WIF_PROVIDER }}'
+          gemini_api_key: '${{ secrets.GEMINI_API_KEY }}'
+          gemini_cli_version: '${{ vars.GEMINI_CLI_VERSION }}'
+          gemini_debug: '${{ fromJSON(vars.GEMINI_DEBUG || vars.ACTIONS_STEP_DEBUG || false) }}'
+          gemini_model: "${{ vars.GEMINI_MODEL || 'gemini-2.5-pro' }}"
+          google_api_key: '${{ secrets.GOOGLE_API_KEY }}'
+          use_gemini_code_assist: '${{ vars.GOOGLE_GENAI_USE_GCA }}'
+          use_vertex_ai: '${{ vars.GOOGLE_GENAI_USE_VERTEXAI }}'
+          upload_artifacts: '${{ vars.UPLOAD_ARTIFACTS }}'
+          workflow_name: 'gemini'
+          github_pr_number: '${{ github.event.pull_request.number }}'
+          github_issue_number: '${{ github.event.issue.number }}'
+          settings: |-
+            {
+              "model": {
+                "maxSessionTurns": 250
+              },
+              "telemetry": {
+                "enabled": true,
+                "target": "local",
+                "outfile": ".gemini/telemetry.log"
+              },
+              "tools": {
+                "core": [
+                  "run_shell_command(bash)",
+                  "run_shell_command(git)",
+                  "run_shell_command(gh)",
+                  "run_shell_command(uv)",
+                  "run_shell_command(pytest)",
+                  "run_shell_command(python)",
+                  "run_shell_command(cat)",
+                  "run_shell_command(echo)",
+                  "run_shell_command(grep)",
+                  "run_shell_command(head)",
+                  "run_shell_command(tail)"
+                ]
+              }
+            }
+          prompt: |
+            REPO: ${{ github.repository }}
+            EVENT: ${{ github.event_name }}
+            REQUEST: ${{ github.event.comment.body || github.event.review.body || github.event.issue.body || github.event.issue.title || '' }}
+
+            Always read and follow AGENTS.md before starting work.
+
+            You can commit and push changes. Use MCP tools if available, falling back to git and gh.
+
+            Before submitting changes:
+            1. Run ./infra/pre-commit.py --all-files --fix and fix all issues.
+            2. Run uv run pytest on tests relevant to your changes.
+            3. Report exact test commands and results in your final update.
+
+            Always commit and push changes, even if tests fail. If you comment on an issue/PR, prefix the comment with "🤖 ".
+
+  triage:
+    if: |
+      github.event_name == 'issues' &&
+      github.event.action == 'opened' &&
+      (github.event.issue.author_association == 'OWNER' ||
+       github.event.issue.author_association == 'MEMBER' ||
+       github.event.issue.author_association == 'COLLABORATOR') &&
+      !contains(github.event.issue.body, '@gemini') &&
+      !contains(github.event.issue.title, '@gemini') &&
+      !contains(github.event.issue.body, '@gemini-cli') &&
+      !contains(github.event.issue.title, '@gemini-cli')
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Triage Issue
+        uses: google-github-actions/run-gemini-cli@v0
+        env:
+          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN || github.token }}'
+        with:
+          gcp_location: '${{ vars.GOOGLE_CLOUD_LOCATION }}'
+          gcp_project_id: '${{ vars.GOOGLE_CLOUD_PROJECT }}'
+          gcp_service_account: '${{ vars.SERVICE_ACCOUNT_EMAIL }}'
+          gcp_workload_identity_provider: '${{ vars.GCP_WIF_PROVIDER }}'
+          gemini_api_key: '${{ secrets.GEMINI_API_KEY }}'
+          gemini_cli_version: '${{ vars.GEMINI_CLI_VERSION }}'
+          gemini_debug: '${{ fromJSON(vars.GEMINI_DEBUG || vars.ACTIONS_STEP_DEBUG || false) }}'
+          gemini_model: "${{ vars.GEMINI_MODEL || 'gemini-2.5-pro' }}"
+          google_api_key: '${{ secrets.GOOGLE_API_KEY }}'
+          use_gemini_code_assist: '${{ vars.GOOGLE_GENAI_USE_GCA }}'
+          use_vertex_ai: '${{ vars.GOOGLE_GENAI_USE_VERTEXAI }}'
+          upload_artifacts: '${{ vars.UPLOAD_ARTIFACTS }}'
+          workflow_name: 'gemini-triage'
+          github_issue_number: '${{ github.event.issue.number }}'
+          settings: |-
+            {
+              "model": {
+                "maxSessionTurns": 250
+              },
+              "telemetry": {
+                "enabled": true,
+                "target": "local",
+                "outfile": ".gemini/telemetry.log"
+              },
+              "tools": {
+                "core": [
+                  "run_shell_command(bash)",
+                  "run_shell_command(git)",
+                  "run_shell_command(gh)",
+                  "run_shell_command(uv)",
+                  "run_shell_command(pytest)",
+                  "run_shell_command(python)",
+                  "run_shell_command(cat)",
+                  "run_shell_command(echo)",
+                  "run_shell_command(grep)",
+                  "run_shell_command(head)",
+                  "run_shell_command(tail)"
+                ]
+              }
+            }
+          prompt: |
+            ISSUE: #${{ github.event.issue.number }}
+            TITLE: ${{ github.event.issue.title }}
+
+            Read AGENTS.md and .agents/skills/fix-issue/SKILL.md.
+
+            ## Step 1: Relevance Check
+            Read the issue title and body. If the issue is NOT obviously about a code change
+            (e.g. "run experiment X", "suggest an alternative backend for Y", "benchmark Z",
+            "investigate performance of W", feature discussions, research questions, or operational requests),
+            then exit immediately without posting any comment.
+
+            ## Step 2: Scope Assessment
+            Investigate the codebase to understand the issue. Determine whether the fix is
+            small and self-contained or whether it requires broader design work.
+
+            A fix is "small" if it meets ALL of these:
+            - Touches <=3 files (excluding tests)
+            - The issue describes the problem clearly enough that the fix is unambiguous
+            - No new public API surface or architectural decisions needed
+
+            If in doubt, treat it as small and submit a PR. A reviewable PR is always more
+            useful than a research comment.
+
+            ## Step 3a: Small Fix (DEFAULT)
+            Follow the full fix-issue skill workflow end-to-end:
+            1. Research the codebase and identify the fix
+            2. Create a branch, write tests, implement the fix
+            3. Run pre-commit and pytest
+            4. Open a PR and verify CI
+            5. Post a brief comment on the issue linking the PR
+
+            ## Step 3b: Research Report (ONLY for issues requiring multi-module design changes)
+            Use this path ONLY when the fix requires architectural decisions, touches >3 modules,
+            or needs human input on design trade-offs.
+
+            Post one complete comment using this format:
+
+            🤖 ## Research
+            <2-3 sentences: root cause, not symptoms>
+
+            **Relevant code**
+            - [`file.py#L123`](permalink) - short annotation
+            - (max 5 links)
+
+            ## Proposed Fix
+            <1-2 sentences describing the recommended approach>
+            <code snippet if non-obvious>
+
+            Never post partial or placeholder comments.
+
+  autofix:
+    if: |
+      github.event_name == 'pull_request_review' &&
+      (github.event.review.author_association == 'OWNER' ||
+       github.event.review.author_association == 'MEMBER' ||
+       github.event.review.author_association == 'COLLABORATOR') &&
+      contains(github.event.review.body, 'autofix') &&
+      !contains(github.event.review.body, '@gemini') &&
+      !contains(github.event.review.body, '@gemini-cli')
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Apply Autofix
+        uses: google-github-actions/run-gemini-cli@v0
+        env:
+          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN || github.token }}'
+        with:
+          gcp_location: '${{ vars.GOOGLE_CLOUD_LOCATION }}'
+          gcp_project_id: '${{ vars.GOOGLE_CLOUD_PROJECT }}'
+          gcp_service_account: '${{ vars.SERVICE_ACCOUNT_EMAIL }}'
+          gcp_workload_identity_provider: '${{ vars.GCP_WIF_PROVIDER }}'
+          gemini_api_key: '${{ secrets.GEMINI_API_KEY }}'
+          gemini_cli_version: '${{ vars.GEMINI_CLI_VERSION }}'
+          gemini_debug: '${{ fromJSON(vars.GEMINI_DEBUG || vars.ACTIONS_STEP_DEBUG || false) }}'
+          gemini_model: "${{ vars.GEMINI_MODEL || 'gemini-2.5-pro' }}"
+          google_api_key: '${{ secrets.GOOGLE_API_KEY }}'
+          use_gemini_code_assist: '${{ vars.GOOGLE_GENAI_USE_GCA }}'
+          use_vertex_ai: '${{ vars.GOOGLE_GENAI_USE_VERTEXAI }}'
+          upload_artifacts: '${{ vars.UPLOAD_ARTIFACTS }}'
+          workflow_name: 'gemini-autofix'
+          github_pr_number: '${{ github.event.pull_request.number }}'
+          settings: |-
+            {
+              "model": {
+                "maxSessionTurns": 100
+              },
+              "telemetry": {
+                "enabled": true,
+                "target": "local",
+                "outfile": ".gemini/telemetry.log"
+              },
+              "tools": {
+                "core": [
+                  "run_shell_command(bash)",
+                  "run_shell_command(git)",
+                  "run_shell_command(gh)",
+                  "run_shell_command(uv)",
+                  "run_shell_command(pytest)",
+                  "run_shell_command(python)",
+                  "run_shell_command(cat)",
+                  "run_shell_command(echo)",
+                  "run_shell_command(grep)",
+                  "run_shell_command(head)",
+                  "run_shell_command(tail)"
+                ]
+              }
+            }
+          prompt: |
+            PR: #${{ github.event.pull_request.number }}
+            REVIEW: ${{ github.event.review.body }}
+
+            A reviewer requested autofix. Read AGENTS.md.
+
+            1. Fetch the full review with inline comments: gh pr view ${{ github.event.pull_request.number }} --json reviews,comments
+            2. Fetch inline PR review comments: gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments
+            3. Apply all actionable changes from review comments.
+            4. Run ./infra/pre-commit.py --all-files --fix.
+            5. Run uv run pytest -m 'not slow' on affected tests.
+            6. Commit and push changes to the PR branch.
+            7. Post one comment prefixed with "🤖 Autofix:" summarizing changes and test results.
