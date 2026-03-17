@@ -3,17 +3,22 @@
 
 import dataclasses
 import glob
+import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import socket
 import subprocess
 import tempfile
+import threading
 import time
+import traceback
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -21,6 +26,13 @@ import requests
 from iris.marin_fs import marin_prefix
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.inference.vllm_inprocess import (
+    InProcessEligibility,
+    InProcessVllmRuntime,
+    evaluate_inprocess_eligibility,
+    start_inprocess_vllm_server,
+    stop_inprocess_vllm_server,
+)
 
 logger = logging.getLogger(__name__)
 DEFAULT_VLLM_TPU_DOCKER_IMAGE: str = "vllm/vllm-tpu:nightly-20260104-4a1e25b-0d4044e"
@@ -53,11 +65,14 @@ class VllmServerHandle:
     docker_container_name: str | None = None
     docker_image: str | None = None
     docker_run_cmd: str | None = None
+    inprocess_runtime: InProcessVllmRuntime | None = None
 
     @property
     def mode(self) -> Literal["native", "docker"]:
         if self.docker_container_name:
             return "docker"
+        if self.inprocess_runtime is not None:
+            return "native"
         if self.process is not None or self.log_dir is not None:
             return "native"
         raise RuntimeError("Unable to infer vLLM server mode from handle state.")
@@ -68,6 +83,10 @@ def resolve_model_name_or_path(model: ModelConfig) -> tuple[str, ModelConfig]:
     model = _maybe_enable_streaming(model)
     model_name_or_path = model.path if model.path is not None else model.name
     return model_name_or_path, model
+
+
+def _model_name_or_path_without_streaming(model: ModelConfig) -> str:
+    return model.path if model.path is not None else model.name
 
 
 def _tail_file(path: str, max_lines: int) -> str:
@@ -90,6 +109,109 @@ def _native_logs_tail(log_dir: str | None, *, max_lines: int = 200) -> str:
         "--- stderr (tail) ---\n"
         f"{_tail_file(stderr_path, max_lines)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Live log streaming for vLLM subprocess → Iris dashboard
+#
+# Iris determines log levels by parsing a single-letter prefix from each line:
+#   I20260314 12:34:56 thread source message  →  INFO
+#   W...  →  WARNING,  E...  →  ERROR,  D...  →  DEBUG
+#
+# vLLM logs to files (not the parent's stdout), so without streaming, the
+# Iris dashboard shows nothing during XLA compilation.  These helpers start
+# daemon threads that tail the log files and re-emit each line to stdout in
+# Iris-compatible format.
+# ---------------------------------------------------------------------------
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+_VLLM_LEVEL_PREFIXES = [
+    ("CRITICAL", "E"),
+    ("ERROR", "E"),
+    ("WARNING", "W"),
+    ("DEBUG", "D"),
+    ("INFO", "I"),
+]
+
+
+def _vllm_line_level(line: str) -> str:
+    """Parse a vLLM log line and return the Iris single-letter level prefix.
+
+    vLLM emits lines like ``INFO 03-14 04:01:46 [module.py:59] message``
+    or ANSI-colored variants like ``\\033[0;36m(APIServer pid=91)\\033[0;0m INFO ...``.
+    """
+    clean = _ANSI_RE.sub("", line).lstrip()
+    for level_str, prefix in _VLLM_LEVEL_PREFIXES:
+        if clean.startswith(level_str):
+            return prefix
+    return "I"
+
+
+def _iris_emit(level_char: str, source: str, message: str) -> None:
+    """Emit a single log line to stdout in Iris-compatible format.
+
+    The Iris worker captures task stdout, parses the level prefix, and stores
+    the entry with the correct ``LogLevel`` so dashboard filtering works.
+    """
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d %H:%M:%S")
+    tid = threading.current_thread().ident or 0
+    print(f"{level_char}{ts} {tid} {source} {message}", flush=True)
+
+
+def _emit_exception_to_iris(*, source: str, header: str, exc: BaseException, max_lines: int = 200) -> None:
+    """Emit exception details to Iris-visible stdout logs."""
+    _iris_emit("E", source, header)
+    _iris_emit("E", source, f"{type(exc).__name__}: {exc}")
+
+    emitted = 0
+    for line in traceback.format_exception(type(exc), exc, exc.__traceback__):
+        for rendered_line in line.rstrip().splitlines():
+            if not rendered_line:
+                continue
+            _iris_emit("E", source, rendered_line)
+            emitted += 1
+            if emitted >= max_lines:
+                _iris_emit("E", source, f"Traceback truncated after {max_lines} lines")
+                return
+
+
+def _tail_vllm_log(path: str, source: str, process: subprocess.Popen) -> None:
+    """Tail a vLLM log file and re-emit lines to stdout for Iris capture.
+
+    Runs as a daemon thread.  Stops when the vLLM process exits, then drains
+    any remaining buffered lines.
+    """
+    try:
+        with open(path) as f:
+            while process.poll() is None:
+                line = f.readline()
+                if line:
+                    line = line.rstrip()
+                    if line:
+                        _iris_emit(_vllm_line_level(line), f"vllm.{source}", line)
+                else:
+                    time.sleep(0.5)
+            # Drain remaining lines after process exits.
+            for line in f:
+                line = line.rstrip()
+                if line:
+                    _iris_emit(_vllm_line_level(line), f"vllm.{source}", line)
+    except Exception:
+        # Daemon thread — swallow errors silently.
+        pass
+
+
+def _start_vllm_log_tailers(log_dir: str, process: subprocess.Popen) -> tuple[threading.Thread, threading.Thread]:
+    """Start daemon threads that tail vLLM stdout/stderr log files."""
+    stdout_path = os.path.join(log_dir, "stdout.log")
+    stderr_path = os.path.join(log_dir, "stderr.log")
+
+    t_out = threading.Thread(target=_tail_vllm_log, args=(stdout_path, "stdout", process), daemon=True)
+    t_err = threading.Thread(target=_tail_vllm_log, args=(stderr_path, "stderr", process), daemon=True)
+    t_out.start()
+    t_err.start()
+    return t_out, t_err
 
 
 def _docker_container_running(container_name: str) -> bool:
@@ -234,6 +356,58 @@ class NativeVllmServerBackend(VllmServerBackend):
             handle.process.kill()
 
 
+class InProcessVllmServerBackend(VllmServerBackend):
+    def __init__(self, *, model: ModelConfig, mapping_model_name: str) -> None:
+        self._model = model
+        self._mapping_model_name = mapping_model_name
+
+    def start(
+        self,
+        *,
+        model_name_or_path: str,
+        host: str,
+        port: int | None,
+        timeout_seconds: int,
+        extra_cli_args: list[str] | None,
+    ) -> VllmServerHandle:
+        resolved_port = port if port is not None else 8000
+        runtime = start_inprocess_vllm_server(
+            model=self._model,
+            model_name_or_path=model_name_or_path,
+            mapping_model_name=self._mapping_model_name,
+            host=host,
+            port=resolved_port,
+            timeout_seconds=timeout_seconds,
+            extra_cli_args=extra_cli_args,
+        )
+        return VllmServerHandle(
+            server_url=runtime.server_url,
+            port=runtime.port,
+            inprocess_runtime=runtime,
+        )
+
+    def logs_tail(self, handle: VllmServerHandle, *, max_lines: int = 200) -> str:
+        runtime = handle.inprocess_runtime
+        if runtime is None:
+            return "<in-process runtime unavailable>"
+        return runtime.logs_tail(max_lines=max_lines)
+
+    def diagnostics(self, handle: VllmServerHandle, *, max_lines: int = 200) -> dict[str, str]:
+        runtime = handle.inprocess_runtime
+        if runtime is None:
+            return {"vLLM in-process diagnostics": "<runtime unavailable>"}
+        return {
+            "vLLM in-process model id": str(runtime.model_id),
+            "vLLM in-process events": runtime.logs_tail(max_lines=max_lines),
+        }
+
+    def stop(self, handle: VllmServerHandle) -> None:
+        runtime = handle.inprocess_runtime
+        if runtime is None:
+            return
+        stop_inprocess_vllm_server(runtime)
+
+
 def resolve_vllm_mode(mode: Literal["native", "docker"] | None) -> Literal["native", "docker"]:
     mode_str = (mode if mode is not None else os.environ.get("MARIN_VLLM_MODE", "docker")).lower()
     if mode_str not in ("native", "docker"):
@@ -286,6 +460,9 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     gpu_memory_utilization = engine_kwargs.get("gpu_memory_utilization")
     if gpu_memory_utilization is not None:
         args.extend(["--gpu-memory-utilization", str(gpu_memory_utilization)])
+    model_loader_extra_config = engine_kwargs.get("model_loader_extra_config")
+    if model_loader_extra_config is not None:
+        args.extend(["--model-loader-extra-config", json.dumps(model_loader_extra_config)])
     return args
 
 
@@ -317,19 +494,62 @@ class VllmEnvironment:
         docker_run_args: list[str] | None = None,
         extra_args: list[str] | None = None,
     ) -> None:
-        self.model_name_or_path, self.model = resolve_model_name_or_path(model)
         self.mode = resolve_vllm_mode(mode)
         self.host = host
         self.port = port
         self.timeout_seconds = timeout_seconds
         self.docker_image = docker_image
         self.docker_run_args = docker_run_args
-        self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
-        self._backend = _resolve_vllm_backend(
-            self.mode,
-            docker_image=self.docker_image,
-            docker_run_args=self.docker_run_args,
-        )
+        self._extra_args = list(extra_args or [])
+
+        self.model = model
+        self.model_name_or_path = _model_name_or_path_without_streaming(self.model)
+        self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *self._extra_args]
+
+        self._fallback_backend: VllmServerBackend | None = None
+        self._fallback_model: ModelConfig | None = None
+        self._fallback_extra_cli_args: list[str] | None = None
+        self._inprocess_eligibility: InProcessEligibility | None = None
+        self._backend: VllmServerBackend
+
+        if self.mode == "native":
+            self._inprocess_eligibility = evaluate_inprocess_eligibility(
+                model=self.model,
+                model_name_or_path=self.model_name_or_path,
+                extra_cli_args=self.extra_cli_args,
+            )
+            if self._inprocess_eligibility.eligible:
+                assert self._inprocess_eligibility.mapping_model_name is not None
+                self._backend = InProcessVllmServerBackend(
+                    model=self.model,
+                    mapping_model_name=self._inprocess_eligibility.mapping_model_name,
+                )
+
+                self._fallback_backend = NativeVllmServerBackend()
+                self._fallback_model = _maybe_enable_streaming(self.model)
+                self._fallback_extra_cli_args = [
+                    *_engine_kwargs_to_cli_args(self._fallback_model.engine_kwargs),
+                    *self._extra_args,
+                ]
+            else:
+                assert self._inprocess_eligibility is not None
+                logger.info(
+                    "In-process vLLM not selected; using subprocess native backend",
+                    extra={"reason": self._inprocess_eligibility.reason},
+                )
+                self.model = _maybe_enable_streaming(self.model)
+                self.model_name_or_path = _model_name_or_path_without_streaming(self.model)
+                self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *self._extra_args]
+                self._backend = NativeVllmServerBackend()
+        else:
+            self.model = _maybe_enable_streaming(self.model)
+            self.model_name_or_path = _model_name_or_path_without_streaming(self.model)
+            self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *self._extra_args]
+            self._backend = _resolve_vllm_backend(
+                self.mode,
+                docker_image=self.docker_image,
+                docker_run_args=self.docker_run_args,
+            )
 
         self.vllm_server: VllmServerHandle | None = None
         self.model_id: str | None = None
@@ -348,41 +568,82 @@ class VllmEnvironment:
                 },
             )
             try:
-                self.vllm_server = self._backend.start(
-                    model_name_or_path=self.model_name_or_path,
-                    host=self.host,
-                    port=self.port,
-                    timeout_seconds=self.timeout_seconds,
-                    extra_cli_args=self.extra_cli_args,
-                )
-                self.model_id = _get_first_model_id(self.vllm_server.server_url)
-                logger.info(
-                    "vLLM environment ready",
-                    extra={
-                        "server_url": self.vllm_server.server_url,
-                        "container": self.vllm_server.docker_container_name,
-                        "model_id": self.model_id,
-                    },
-                )
-            except Exception:
-                logger.exception("Failed to start vLLM environment", extra=self.debug_snapshot())
-                if self.vllm_server is not None:
+                self._start_with_current_backend()
+            except Exception as exc:
+                if self._fallback_backend is not None:
+                    _emit_exception_to_iris(
+                        source="vllm.inprocess",
+                        header="In-process vLLM startup failed; falling back to subprocess native backend",
+                        exc=exc,
+                    )
+                    logger.warning(
+                        "In-process vLLM startup failed; falling back to subprocess native backend",
+                        exc_info=True,
+                    )
+                    self._activate_fallback_backend()
                     try:
-                        diagnostics = self._backend.diagnostics(self.vllm_server)
-                        for label, value in diagnostics.items():
-                            logger.error("%s:\n%s", label, value)
+                        self._start_with_current_backend()
                     except Exception:
-                        logger.exception("Failed to collect vLLM diagnostics")
-                raise
+                        logger.exception("Failed to start fallback vLLM backend", extra=self.debug_snapshot())
+                        if self.vllm_server is not None:
+                            try:
+                                diagnostics = self._backend.diagnostics(self.vllm_server)
+                                for label, value in diagnostics.items():
+                                    logger.error("%s:\n%s", label, value)
+                            except Exception:
+                                logger.exception("Failed to collect vLLM diagnostics")
+                        raise
+                else:
+                    logger.exception("Failed to start vLLM environment", extra=self.debug_snapshot())
+                    if self.vllm_server is not None:
+                        try:
+                            diagnostics = self._backend.diagnostics(self.vllm_server)
+                            for label, value in diagnostics.items():
+                                logger.error("%s:\n%s", label, value)
+                        except Exception:
+                            logger.exception("Failed to collect vLLM diagnostics")
+                    raise
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
 
+    def _start_with_current_backend(self) -> None:
+        self.vllm_server = self._backend.start(
+            model_name_or_path=self.model_name_or_path,
+            host=self.host,
+            port=self.port,
+            timeout_seconds=self.timeout_seconds,
+            extra_cli_args=self.extra_cli_args,
+        )
+        self.model_id = _get_first_model_id(self.vllm_server.server_url)
+        logger.info(
+            "vLLM environment ready",
+            extra={
+                "server_url": self.vllm_server.server_url,
+                "container": self.vllm_server.docker_container_name,
+                "model_id": self.model_id,
+            },
+        )
+
+    def _activate_fallback_backend(self) -> None:
+        if self._fallback_backend is None or self._fallback_model is None:
+            raise RuntimeError("Fallback backend requested but not configured.")
+
+        self._backend = self._fallback_backend
+        self._fallback_backend = None
+
+        self.model = self._fallback_model
+        self._fallback_model = None
+        self.model_name_or_path = _model_name_or_path_without_streaming(self.model)
+        self.extra_cli_args = self._fallback_extra_cli_args or [*_engine_kwargs_to_cli_args(self.model.engine_kwargs)]
+        self._fallback_extra_cli_args = None
+
     def close(self) -> None:
         if self.vllm_server is not None:
             self._backend.stop(self.vllm_server)
             self.vllm_server = None
+            self.model_id = None
 
     @property
     def server_url(self) -> str:
@@ -393,6 +654,7 @@ class VllmEnvironment:
     def debug_snapshot(self) -> dict[str, str | int | None]:
         return {
             "mode": self.mode,
+            "backend": type(self._backend).__name__,
             "model_name_or_path": self.model_name_or_path,
             "host": self.host,
             "port": self.port,
@@ -400,6 +662,7 @@ class VllmEnvironment:
             "docker_container_name": self.vllm_server.docker_container_name if self.vllm_server else None,
             "docker_image": self.vllm_server.docker_image if self.vllm_server else self.docker_image,
             "docker_run_cmd": self.vllm_server.docker_run_cmd if self.vllm_server else None,
+            "inprocess_eligibility": self._inprocess_eligibility.reason if self._inprocess_eligibility else None,
         }
 
     def logs_tail(self, *, max_lines: int = 200) -> str:
@@ -836,8 +1099,14 @@ def _start_vllm_native_server(
     )
     process = subprocess.Popen(cmd, stdout=stdout_f, stderr=stderr_f, text=True, env=native_env)
 
+    # Stream vLLM logs to stdout in real time so they appear in the Iris
+    # dashboard.  Without this, XLA compilation is a silent black box.
+    _start_vllm_log_tailers(log_dir, process)
+
     server_url: str = f"http://{host}:{resolved_port}/v1"
     start_time: float = time.time()
+    last_heartbeat: float = start_time
+    _HEARTBEAT_INTERVAL: float = 30.0
 
     while True:
         if process.poll() is not None:
@@ -857,10 +1126,8 @@ def _start_vllm_native_server(
             if response.status_code == 200:
                 break
         except requests.ConnectionError:
-            # Server not ready yet.
             pass
         except requests.Timeout:
-            # Server not ready yet.
             pass
 
         elapsed_time = time.time() - start_time
@@ -871,8 +1138,13 @@ def _start_vllm_native_server(
             logs = _native_logs_tail(log_dir)
             raise TimeoutError("Failed to start vLLM server within timeout period.\n" f"Logs: {log_dir}\n" f"{logs}")
 
+        if time.time() - last_heartbeat >= _HEARTBEAT_INTERVAL:
+            _iris_emit("I", "vllm.startup", f"Waiting for vLLM server... ({int(elapsed_time)}s elapsed)")
+            last_heartbeat = time.time()
+
         time.sleep(5)
 
+    _iris_emit("I", "vllm.startup", f"vLLM server ready after {int(time.time() - start_time)}s")
     stdout_f.close()
     stderr_f.close()
     return VllmServerHandle(

@@ -257,3 +257,10 @@ apertus_8b = download_model_step(
         hf_revision="9325d4a",
     )
 )
+
+qwen3_235b_a22b_thinking = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-235B-A22B-Thinking-2507",
+        hf_revision="6cbffae",
+    )
+)
