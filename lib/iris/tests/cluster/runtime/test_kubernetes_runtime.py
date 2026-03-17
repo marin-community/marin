@@ -207,6 +207,17 @@ def test_service_account_name(monkeypatch):
     assert _pod_manifest(manifests)["spec"]["serviceAccountName"] == "iris-controller"
 
 
+def test_task_pod_pins_to_worker_node(monkeypatch):
+    manifests = _capture_manifest(monkeypatch)
+
+    monkeypatch.setenv("IRIS_WORKER_NODE_NAME", "gd92f4a")
+    runtime = KubernetesRuntime(namespace="iris")
+    handle = runtime.create_container(_make_config(gpu_count=8, gpu_name="H100"))
+    handle.run()
+
+    assert _pod_manifest(manifests)["spec"]["nodeName"] == "gd92f4a"
+
+
 def test_no_service_account_when_unset(monkeypatch):
     manifests = _capture_manifest(monkeypatch)
 

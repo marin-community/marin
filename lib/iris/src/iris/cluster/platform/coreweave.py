@@ -554,8 +554,9 @@ class CoreweavePlatform:
                 raise PlatformError(f"Scale group {name!r} must set min_slices for CoreWeave NodePool")
             if not sg.HasField("max_slices"):
                 raise PlatformError(f"Scale group {name!r} must set max_slices for CoreWeave NodePool")
-            min_nodes = sg.min_slices
-            max_nodes = sg.max_slices
+            num_vms = max(1, sg.slice_template.num_vms)
+            min_nodes = sg.min_slices * num_vms
+            max_nodes = sg.max_slices * num_vms
             futures.append(
                 self._executor.submit(
                     self._ensure_one_nodepool,
@@ -564,6 +565,7 @@ class CoreweavePlatform:
                     name,
                     min_nodes=min_nodes,
                     max_nodes=max_nodes,
+                    warm_nodes=num_vms,
                 )
             )
         for f in futures:
@@ -596,21 +598,19 @@ class CoreweavePlatform:
         *,
         min_nodes: int,
         max_nodes: int,
+        warm_nodes: int,
     ) -> None:
         """Create or reconcile a single NodePool.
 
         Always applies the manifest so that spec fields (minNodes, maxNodes)
-        are reconciled on every cluster start. Clamps targetNodes to
-        min(currentNodes, 1) to prevent runaway scaling from system pods
-        (e.g. konnectivity-agent) while keeping an existing node warm.
+        are reconciled on every cluster start. Existing pools keep one full
+        slice worth of nodes warm so a transient pod deletion does not collapse
+        multihost desired capacity back to a single node.
         """
-        # For existing pools, clamp targetNodes to avoid runaway autoscaling.
-        # New pools start at 0.
         target_nodes = 0
         existing = self._kubectl.get_json("nodepool", pool_name, cluster_scoped=True)
         if existing is not None:
-            current_nodes = existing.get("status", {}).get("currentNodes", 0)
-            target_nodes = min(current_nodes, 1)
+            target_nodes = max(min_nodes, min(max_nodes, warm_nodes))
 
         manifest = {
             "apiVersion": "compute.coreweave.com/v1alpha1",

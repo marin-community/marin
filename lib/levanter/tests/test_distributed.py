@@ -1,6 +1,9 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from unittest.mock import patch
+
+from levanter.distributed import DistributedConfig
 from levanter.distributed import _square_brace_expand
 
 
@@ -25,3 +28,19 @@ def test_square_brace_expand():
     custom_sequence_3 = "node[1-11,21]suffix"
     expanded_nodes_3 = _square_brace_expand(custom_sequence_3)
     assert expanded_nodes_3 == [f"node{i}suffix" for i in range(1, 12)] + ["node21suffix"]
+
+
+@patch("jax.distributed.initialize")
+@patch("iris.runtime.jax_init.initialize_jax")
+@patch("iris.cluster.client.job_info.get_job_info")
+def test_distributed_config_initializes_via_iris_when_iris_job_present(
+    mock_get_job_info,
+    mock_initialize_iris_jax,
+    mock_jax_initialize,
+):
+    mock_get_job_info.return_value = object()
+
+    DistributedConfig().initialize()
+
+    mock_initialize_iris_jax.assert_called_once_with()
+    mock_jax_initialize.assert_not_called()

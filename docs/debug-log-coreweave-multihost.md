@@ -325,3 +325,323 @@ removing multi-host slices.
 - Next actions: commit the task-related changes on the feature branch, push,
   then restart the real CoreWeave canary to see whether the old behavior can be
   replicated or whether the topology-aware implementation clears it.
+
+### Results
+
+- Commit created: `6ee2576f7` (`Add topology-aware CoreWeave multihost slices`)
+- Branch pushed: `origin/rjpower/20260317-coreweave-multi-host`
+- Pre-commit hooks run during `git commit` all passed, including pyrefly.
+
+Next step: restart `scripts/canary/coreweave_multihost.py -v run` from the
+pushed code and inspect whether the previous failure mode reproduces.
+
+## Hypothesis 8: JAX bootstrap env is wrong on the live run
+
+The next likely failure mode is no longer slice placement; it is JAX bootstrap
+configuration inside the task. The previous run appears to have missed or
+mis-set one or more JAX/Iris distributed env vars. Add targeted logging in
+`jax_init.py` so the next live run shows the exact bootstrap inputs before
+calling `jax.distributed.initialize()`.
+
+### Changes to make
+
+- Log the relevant Iris/JAX env vars at JAX init time.
+- Log the resolved `job_info` values used to choose coordinator, task index,
+  and task count.
+- Re-run the existing `jax_init` tests to verify the instrumentation does not
+  change behavior.
+
+### Changes made
+
+- Added targeted bootstrap logging to `lib/iris/src/iris/runtime/jax_init.py`.
+- The log now records:
+  - the Iris/JAX env vars present at init time,
+  - resolved `job_info.task_index`,
+  - `job_info.num_tasks`,
+  - `job_info.advertise_host`,
+  - the allocated JAX ports map.
+
+### Results
+
+- `uv run pytest lib/iris/tests/test_jax_init.py` → 8 passed
+
+This is instrumentation only; it does not change the coordinator registration
+or follower polling flow.
+
+## Attempt 7: Real CW run with JAX bootstrap logging
+
+**Started**: 2026-03-17 local evening
+
+- Restarted `source ~/.env && uv run python scripts/canary/coreweave_multihost.py -v run`
+  to capture the new `initialize_jax` bootstrap logs on a live job.
+- The run did not reach controller rollout or task startup.
+
+### Results
+
+- Failure occurred during the local Docker build for `iris-worker:31d253b42`.
+- The build failed in the Dockerfile step that installs `docker-ce-cli` and
+  `docker-buildx-plugin`:
+  `E: ... You don't have enough free space in /var/cache/apt/archives/`
+- Because the image build failed, the canary never reached the JAX
+  initialization path, so there are no new live `jax_init` logs yet.
+
+### New blocker
+
+- Local Docker builder disk space is exhausted. This must be cleared or the
+  image build path must be avoided before we can continue reproducing the live
+  JAX/bootstrap behavior.
+
+## Attempt 8: Clear Docker cache, rerun canary, inspect live capacity behavior
+
+**Started**: 2026-03-17 local evening
+
+- Cleared old Docker images and builder state with `docker system prune -af`.
+- Restarted the real CoreWeave multihost canary.
+- The rerun progressed past image build, pushed fresh worker/task images,
+  started the CoreWeave controller, and submitted the canary job successfully.
+- While watching the live cluster state, noticed the `h100-16x` scale group was
+  blocked at `max_slices` even though the multi-host slice had `num_vms: 2` and
+  no workers had come up yet.
+
+### Results
+
+- The rerun disproved the prior local blocker: Docker disk exhaustion was not
+  the root cause of the live CoreWeave issue.
+- Live `NodePool` apply logs showed:
+  - `h100-16x` configured with `num_vms: 2`
+  - `NodePool iris-canary-mh-h100-16x` applied with `targetNodes: 1`
+  - `NodePool iris-canary-mh-h100-16x` applied with `maxNodes: 1`
+- That is incorrect for a multihost group. The shared NodePool is sized in
+  nodes, not slices, so a single 2-VM slice requires 2 nodes of capacity.
+- This explains the UI behavior:
+  - Iris believed the one allowed slice was already the cap (`max_slices: 1`)
+  - CoreWeave could only ever provision one node
+  - the 2-worker slice therefore remained infeasible and showed `0 vms`
+
+## Hypothesis 9: Shared CoreWeave NodePool sizing still uses slice counts
+
+The topology-aware worker creation path was correct, but the shared NodePool
+reconciliation still mapped `min_slices`/`max_slices` directly to
+`minNodes`/`maxNodes`. That works for single-VM groups and is wrong for any
+CoreWeave group with `num_vms > 1`.
+
+### Fix
+
+- Keep Iris slice accounting unchanged.
+- Size shared CoreWeave NodePools in nodes:
+  - `minNodes = min_slices * num_vms`
+  - `maxNodes = max_slices * num_vms`
+
+### Changes made
+
+- Updated `lib/iris/src/iris/cluster/platform/coreweave.py` so
+  `ensure_nodepools()` multiplies node counts by `slice_template.num_vms`.
+- Added a regression test in
+  `lib/iris/tests/cluster/platform/test_coreweave_platform.py` asserting that a
+  group with `num_vms: 2` and `max_slices: 1` produces `maxNodes: 2`.
+
+### Results
+
+- `uv run pytest lib/iris/tests/cluster/platform/test_coreweave_platform.py -k 'ensure_nodepools or multi_node or node_selector'`
+  → 13 passed
+
+Next step: rerun the real canary from this patched code and confirm the
+`h100-16x` NodePool comes up with 2 nodes of capacity, then continue to the
+JAX bootstrap logs if the workers start.
+
+## Hypothesis 10: Adopted slices stay stale after controller restart
+
+The CPU worker looked healthy in Fleet after the controller restart, but the
+autoscaler UI still showed the adopted CPU slice as `0 vms` / `unknown` /
+booting. That suggested the naming was fine and the restore path was failing to
+reconcile adopted cloud slices back into their live lifecycle and worker list.
+
+### Changes made
+
+- Updated `lib/iris/src/iris/cluster/controller/scaling_group.py` so unknown
+  adopted cloud slices call `describe()` during restore.
+- Mapped the returned `CloudSliceState` into autoscaler lifecycle rather than
+  defaulting every adopted slice to `BOOTING`.
+- Seeded `worker_ids` from the live cloud status during adoption.
+- Added restore/reconciliation coverage in
+  `lib/iris/tests/cluster/test_snapshot_reconciliation.py`.
+
+### Results
+
+- `uv run pytest lib/iris/tests/cluster/test_snapshot_reconciliation.py`
+  → 15 passed
+- `uv run pytest lib/iris/tests/cluster/controller/test_autoscaler.py -k 'refresh or restore'`
+  → 1 passed
+
+This fix addresses the stale CPU slice view after warm controller restarts.
+
+## Hypothesis 11: Levanter is skipping Iris JAX bootstrap entirely
+
+After multihost placement converged, the live training logs still showed
+Levanter skipping distributed initialization:
+
+- `levanter.distributed Not initializing jax.distributed because no distributed config was provided, and no cluster was detected.`
+
+That meant the workers were running as independent single-process jobs rather
+than joining one distributed JAX job, even though Iris had launched a 2-worker
+multihost slice.
+
+### Changes made
+
+- Updated `lib/levanter/src/levanter/distributed.py` so when Levanter would
+  otherwise skip distributed init, but an Iris job context is present, it calls
+  `iris.runtime.jax_init.initialize_jax()` directly.
+- Added a focused regression test in
+  `lib/levanter/tests/test_distributed.py`.
+
+### Results
+
+- `uv run pytest lib/levanter/tests/test_distributed.py` → 2 passed
+- `uv run pytest lib/iris/tests/test_jax_init.py` → 8 passed
+
+This should make Iris multihost Levanter jobs run the same JAX bootstrap path
+we already instrumented in `jax_init.py`.
+
+## Attempt 9: Real rerun with patched Levanter distributed init
+
+**Started**: 2026-03-17 local evening
+
+- Rebuilt and pushed fresh images with tag `36cdd13f7`.
+- Warm-restarted the CoreWeave canary controller and resubmitted the canary.
+- Confirmed the H100 multihost scale group now applies a NodePool with
+  `maxNodes: 2` and later scales to `targetNodes: 2`.
+
+### Results so far
+
+- The controller created the expected multihost slice:
+  `iris-canary-mh-h100-16x-20260317-2216-970fcb0d`.
+- The leader pod `vm0` registered successfully and the controller discovered
+  `backend.coreweave.cloud/superpod=2` on its node.
+- The follower pod `vm1` was created with the expected selector:
+  `iris-iris-canary-mh-scale-group=h100-16x`,
+  `backend.coreweave.cloud/superpod=2`.
+- CoreWeave autoscaling triggered as expected:
+  `TriggeredScaleUp ... 1->2 (max: 2)`.
+- Live NodePool state confirms we are waiting on infrastructure capacity, not
+  an Iris sizing bug:
+  - `targetNodes: 2`
+  - `currentNodes: 1`
+  - `inProgress: 1`
+
+### New findings
+
+- The top-level canary task reached ferry dispatch, then logged:
+  `Job grug-train-mh-canary-20260317-221614 already exists, adopting existing job`
+- Controller logs show the child multihost Iris job was already submitted with
+  2 tasks at `22:16:52`, and later the duplicate launch attempt failed with:
+  `already exists and is still running`
+- At the same time, controller status remained:
+  `2 workers (0 failed), 1 active jobs, 2 pending tasks`
+- There are no H100 task pods yet; only the top-level CPU canary task pod is
+  running. That means we still have not reached the Levanter training worker
+  logs for this rerun.
+
+### Current blocker
+
+- We are now blocked on the second H100 worker pod. `vm1` is still pending
+  because it requires a second H100 node in the same discovered
+  `backend.coreweave.cloud/superpod=2` domain, and the existing node already
+  uses host port `10001` for `vm0`.
+- Until `vm1` becomes schedulable and the child Iris job can start its 2 H100
+  tasks, we cannot yet verify the patched Levanter JAX bootstrap behavior on
+  the live run.
+
+## Hypothesis 12: Fast GPU node loss came from desired capacity collapsing back to 1
+
+The fast H100 host loss did not match a normal nodepool idle timeout. The old
+multihost pool had been reconciled with a steady-state `targetNodes: 1`, and
+the second node only existed because the pending follower pod triggered a
+temporary autoscaling bump to `1->2`. When we killed the worker pods during
+restart, that temporary pressure disappeared, so the extra H100 node became
+excess capacity and CoreWeave could remove it quickly without waiting for an
+idle-node timer.
+
+### Changes made
+
+- Updated `lib/iris/src/iris/cluster/platform/coreweave.py` so existing
+  NodePools keep one full slice worth of nodes warm instead of always clamping
+  `targetNodes` back to `1`.
+- For CoreWeave multihost groups this means:
+  - `num_vms: 2` keeps `targetNodes: 2`
+  - single-host groups still keep `targetNodes: 1`
+- Added regression coverage in
+  `lib/iris/tests/cluster/platform/test_coreweave_platform.py` for an existing
+  `num_vms: 2` pool reconciling to `targetNodes: 2`.
+
+### Expected result
+
+- During the next restart / churn cycle, the H100 NodePool should retain
+  desired capacity for one whole multihost slice instead of shrinking back to a
+  single node between follower reschedules.
+
+## Hypothesis 13: The second H100 task attempt is churning pod identities
+
+After both H100 workers came up, the multihost job still did not converge.
+The Task History UI showed repeated `BUILDING` entries for logical task `/1`.
+Live Kubernetes and worker logs confirm that this is real pod churn, not just
+stale UI state.
+
+### Results
+
+- Current live state has:
+  - one H100 training task pod `Running`: `iris-task-52fba4efea4e`
+  - one H100 training task pod `Pending`: `iris-task-8fc01c138a66`
+- Worker `vm1` previously created `iris-task-d6c491a20ad1` for logical task
+  `/power/multihost-canary-mh-canary-20260317-221614/grug-train-mh-.../1`
+- That pod later disappeared, and the same worker created
+  `iris-task-8fc01c138a66` for the same logical task
+- The worker log repeatedly reports:
+  - `Started Kubernetes task pod iris-task-...`
+  - followed by repeated `kubectl ... get pod iris-task-...`
+  - followed by `Error from server (NotFound): pods "iris-task-..." not found`
+
+### Interpretation
+
+- The bug is no longer image pull or GPU node provisioning.
+- The second H100 task attempt is losing its Kubernetes pod identity and being
+  recreated under a fresh random pod name for the same logical Iris task.
+- That explains the repeated `BUILDING` rows for task `/1`: they are separate
+  task pod attempts, not one stable pod slowly booting.
+
+### Next step
+
+- Inspect the Kubernetes runtime / `TaskAttempt` path to understand why a
+  `NotFound` from polling causes a fresh pod to be created for the same logical
+  task instead of stabilizing on the existing attempt.
+
+## Attempt 10: Pin task pods to the owning worker node
+
+The multihost task-pod manifest was missing any node binding, so Kubernetes was
+free to place a worker-owned task pod on any compatible H100 node. That is the
+wrong contract for the Kubernetes runtime: once a task is assigned to a worker,
+the task pod should run on that worker's node.
+
+### Changes made
+
+- Updated `lib/iris/src/iris/cluster/runtime/kubernetes.py` so
+  `KubernetesRuntime` captures `IRIS_WORKER_NODE_NAME` from the worker pod
+  environment and passes it into each `KubernetesContainerHandle`.
+- When present, the task pod manifest now sets `spec.nodeName` to that worker
+  node.
+- Added regression coverage in
+  `lib/iris/tests/cluster/runtime/test_kubernetes_runtime.py` asserting that a
+  task pod inherits `nodeName=gd92f4a` when `IRIS_WORKER_NODE_NAME=gd92f4a`.
+
+### Expected result
+
+- Task `/0` launched by worker `vm0` will run on `vm0`'s node.
+- Task `/1` launched by worker `vm1` will run on `vm1`'s node.
+- The scheduler no longer has to solve a generic cluster-wide `8 GPU` placement
+  problem for worker-owned task pods.
+
+### Verification
+
+- `uv run pytest lib/iris/tests/cluster/runtime/test_kubernetes_runtime.py -k 'worker_node or gpu_resources or advertise_host or pod_not_found'`
+  → 6 passed
+- `uv run pytest lib/iris/tests/cluster/platform/test_coreweave_platform.py -k 'ensure_nodepools or multi_node or node_selector'`
+  → 14 passed

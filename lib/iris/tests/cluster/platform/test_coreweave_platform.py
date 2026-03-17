@@ -1061,6 +1061,56 @@ def test_ensure_nodepools_creates_all_pools(fake_kubectl: FakeKubectl):
     platform.shutdown()
 
 
+def test_ensure_nodepools_scales_multihost_groups_by_num_vms(fake_kubectl: FakeKubectl):
+    """NodePool capacity is counted in nodes, so multihost groups scale by num_vms per slice."""
+    platform = _make_platform()
+    cluster_config = _make_cluster_config()
+    sg = cluster_config.scale_groups["h100-16x"]
+    sg.min_slices = 0
+    sg.max_slices = 1
+    sg.slice_template.CopyFrom(
+        config_pb2.SliceConfig(
+            name_prefix="h100-16x",
+            num_vms=2,
+            coreweave=config_pb2.CoreweaveSliceConfig(instance_type="gd-8xh100ib-i128"),
+        )
+    )
+
+    platform.ensure_nodepools(cluster_config)
+
+    h100_pool = fake_kubectl._nodepools["iris-h100-16x"]
+    assert h100_pool["spec"]["minNodes"] == 0
+    assert h100_pool["spec"]["maxNodes"] == 2
+    platform.shutdown()
+
+
+def test_ensure_nodepools_keeps_one_multihost_slice_warm(fake_kubectl: FakeKubectl):
+    """Existing multihost pools keep one full slice worth of desired nodes."""
+    platform = _make_platform()
+    cluster_config = _make_cluster_config()
+    sg = cluster_config.scale_groups["h100-16x"]
+    sg.min_slices = 0
+    sg.max_slices = 1
+    sg.slice_template.CopyFrom(
+        config_pb2.SliceConfig(
+            name_prefix="h100-16x",
+            num_vms=2,
+            coreweave=config_pb2.CoreweaveSliceConfig(instance_type="gd-8xh100ib-i128"),
+        )
+    )
+
+    fake_kubectl._nodepools["iris-h100-16x"] = {
+        "metadata": {"name": "iris-h100-16x", "labels": {}},
+        "spec": {"instanceType": "gd-8xh100ib-i128", "minNodes": 0, "maxNodes": 1, "targetNodes": 1},
+        "status": {"readyNodes": 1, "currentNodes": 1, "conditions": []},
+    }
+
+    platform.ensure_nodepools(cluster_config)
+
+    assert fake_kubectl._nodepools["iris-h100-16x"]["spec"]["targetNodes"] == 2
+    platform.shutdown()
+
+
 def test_ensure_nodepools_errors_without_min_max_slices(fake_kubectl: FakeKubectl):
     """ensure_nodepools raises when a scale group is missing min_slices or max_slices."""
     platform = _make_platform()
@@ -1098,7 +1148,6 @@ def test_ensure_nodepools_reconciles_existing(fake_kubectl: FakeKubectl):
     pool = fake_kubectl._nodepools["iris-cpu-erapids"]
     assert pool["spec"]["minNodes"] == 0
     assert pool["spec"]["maxNodes"] == 10
-    # targetNodes clamped to min(currentNodes=3, 1) = 1
     assert pool["spec"]["targetNodes"] == 1
     platform.shutdown()
 

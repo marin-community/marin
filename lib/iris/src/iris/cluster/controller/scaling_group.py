@@ -18,7 +18,7 @@ from enum import Enum, StrEnum
 
 from collections.abc import Sequence
 
-from iris.cluster.platform.base import Labels, Platform, SliceHandle
+from iris.cluster.platform.base import CloudSliceState, Labels, Platform, SliceHandle
 from iris.cluster.constraints import (
     AttributeValue,
     CONSTRAINT_REGISTRY,
@@ -173,6 +173,18 @@ def _lifecycle_to_vm_state(lifecycle: SliceLifecycleState) -> vm_pb2.VmState:
         SliceLifecycleState.READY: vm_pb2.VM_STATE_READY,
         SliceLifecycleState.FAILED: vm_pb2.VM_STATE_FAILED,
     }[lifecycle]
+
+
+def _slice_lifecycle_from_cloud_state(cloud_state: CloudSliceState) -> SliceLifecycleState:
+    return {
+        CloudSliceState.CREATING: SliceLifecycleState.BOOTING,
+        CloudSliceState.BOOTSTRAPPING: SliceLifecycleState.BOOTING,
+        CloudSliceState.READY: SliceLifecycleState.READY,
+        CloudSliceState.FAILED: SliceLifecycleState.FAILED,
+        CloudSliceState.REPAIRING: SliceLifecycleState.INITIALIZING,
+        CloudSliceState.DELETING: SliceLifecycleState.FAILED,
+        CloudSliceState.UNKNOWN: SliceLifecycleState.BOOTING,
+    }[cloud_state]
 
 
 def slice_state_to_proto(state: SliceState, idle_threshold: Duration | None = None) -> vm_pb2.SliceInfo:
@@ -1241,8 +1253,28 @@ def restore_scaling_group(
     for slice_id, cloud_handle in cloud_by_id.items():
         if slice_id in checkpoint_slices:
             continue
-        logger.info("Scaling group %s: adopting unknown cloud slice %s as BOOTING", group_snapshot.name, slice_id)
-        result.slices[slice_id] = SliceState(handle=cloud_handle, lifecycle=SliceLifecycleState.BOOTING)
+        try:
+            cloud_status = cloud_handle.describe()
+            lifecycle = _slice_lifecycle_from_cloud_state(cloud_status.state)
+            worker_ids = [worker.worker_id for worker in cloud_status.workers]
+        except Exception as e:
+            logger.warning(
+                "Scaling group %s: failed to describe unknown cloud slice %s during restore (%s); defaulting to BOOTING",
+                group_snapshot.name,
+                slice_id,
+                e,
+            )
+            lifecycle = SliceLifecycleState.BOOTING
+            worker_ids = []
+
+        logger.info(
+            "Scaling group %s: adopting unknown cloud slice %s as %s (%d workers)",
+            group_snapshot.name,
+            slice_id,
+            lifecycle.name,
+            len(worker_ids),
+        )
+        result.slices[slice_id] = SliceState(handle=cloud_handle, lifecycle=lifecycle, worker_ids=worker_ids)
         result.adopted_count += 1
 
     if group_snapshot.backoff_until_ms > 0:

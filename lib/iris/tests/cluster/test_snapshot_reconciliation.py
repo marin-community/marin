@@ -48,6 +48,8 @@ def _make_fake_slice(
     scale_group: str = "tpu-group",
     label_prefix: str = "test",
     worker_ids: list[str] | None = None,
+    *,
+    ready: bool = False,
 ) -> FakeSliceHandle:
     """Build a FakeSliceHandle with the right labels for filtering."""
     labels = Labels(label_prefix)
@@ -64,13 +66,16 @@ def _make_fake_slice(
         )
         for i, addr in enumerate(addrs)
     ]
-    return FakeSliceHandle(
+    handle = FakeSliceHandle(
         slice_id=slice_id,
         scale_group=scale_group,
         zone="us-central1-a",
         vms=vms,
         labels=slice_labels,
     )
+    if ready:
+        handle.tick(Timestamp.now().epoch_ms() + 1)
+    return handle
 
 
 # =============================================================================
@@ -187,8 +192,8 @@ def test_restore_multiple_slices_some_missing():
 
 
 def test_restore_adopts_unknown_cloud_slice_as_booting():
-    """A cloud slice absent from checkpoint is adopted as BOOTING."""
-    orphan = _make_fake_slice("slice-orphan")
+    """A cloud slice absent from checkpoint is adopted from live cloud state."""
+    orphan = _make_fake_slice("slice-orphan", ready=True)
 
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[]),
@@ -197,8 +202,9 @@ def test_restore_adopts_unknown_cloud_slice_as_booting():
     )
 
     assert "slice-orphan" in result.slices
-    assert result.slices["slice-orphan"].lifecycle == SliceLifecycleState.BOOTING
+    assert result.slices["slice-orphan"].lifecycle == SliceLifecycleState.READY
     assert result.slices["slice-orphan"].handle is orphan
+    assert result.slices["slice-orphan"].worker_ids == [worker.worker_id for worker in orphan.describe().workers]
     assert result.adopted_count == 1
 
 
@@ -214,14 +220,15 @@ def test_restore_adopts_creating_cloud_slice():
 
     assert "slice-creating" in result.slices
     assert result.slices["slice-creating"].lifecycle == SliceLifecycleState.BOOTING
+    assert result.slices["slice-creating"].worker_ids == [worker.worker_id for worker in creating.describe().workers]
 
 
 def test_restore_mixed_known_and_unknown_slices():
     """Checkpoint has slice-a; cloud has slice-a and slice-b. slice-b is adopted."""
     snap_a = _make_slice_snapshot("slice-a", lifecycle="ready")
 
-    cloud_a = _make_fake_slice("slice-a")
-    cloud_b = _make_fake_slice("slice-b")
+    cloud_a = _make_fake_slice("slice-a", ready=True)
+    cloud_b = _make_fake_slice("slice-b", ready=True)
 
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[snap_a]),
@@ -230,7 +237,7 @@ def test_restore_mixed_known_and_unknown_slices():
     )
 
     assert result.slices["slice-a"].lifecycle == SliceLifecycleState.READY
-    assert result.slices["slice-b"].lifecycle == SliceLifecycleState.BOOTING
+    assert result.slices["slice-b"].lifecycle == SliceLifecycleState.READY
     assert result.adopted_count == 1
 
 
@@ -244,11 +251,11 @@ def test_restore_multiple_groups_independent_reconciliation():
     label_prefix = "test"
 
     # Group A: slice-a1 alive, slice-a2 gone
-    cloud_a1 = _make_fake_slice("slice-a1", scale_group="group-a", label_prefix=label_prefix)
+    cloud_a1 = _make_fake_slice("slice-a1", scale_group="group-a", label_prefix=label_prefix, ready=True)
 
     # Group B: slice-b1 alive, slice-b-orphan appeared during restart
-    cloud_b1 = _make_fake_slice("slice-b1", scale_group="group-b", label_prefix=label_prefix)
-    cloud_b_orphan = _make_fake_slice("slice-b-orphan", scale_group="group-b", label_prefix=label_prefix)
+    cloud_b1 = _make_fake_slice("slice-b1", scale_group="group-b", label_prefix=label_prefix, ready=True)
+    cloud_b_orphan = _make_fake_slice("slice-b-orphan", scale_group="group-b", label_prefix=label_prefix, ready=True)
 
     result_a = restore_scaling_group(
         group_snapshot=GroupSnapshot(
@@ -273,13 +280,13 @@ def test_restore_multiple_groups_independent_reconciliation():
 
     assert set(result_a.slices.keys()) == {"slice-a1"}
     assert set(result_b.slices.keys()) == {"slice-b1", "slice-b-orphan"}
-    assert result_b.slices["slice-b-orphan"].lifecycle == SliceLifecycleState.BOOTING
+    assert result_b.slices["slice-b-orphan"].lifecycle == SliceLifecycleState.READY
 
 
 def test_restore_empty_checkpoint_with_cloud_slices():
     """Empty checkpoint with existing cloud slices: all adopted."""
-    cloud_1 = _make_fake_slice("slice-1")
-    cloud_2 = _make_fake_slice("slice-2")
+    cloud_1 = _make_fake_slice("slice-1", ready=True)
+    cloud_2 = _make_fake_slice("slice-2", ready=True)
 
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[]),
@@ -288,7 +295,7 @@ def test_restore_empty_checkpoint_with_cloud_slices():
     )
 
     assert len(result.slices) == 2
-    assert all(s.lifecycle == SliceLifecycleState.BOOTING for s in result.slices.values())
+    assert all(s.lifecycle == SliceLifecycleState.READY for s in result.slices.values())
 
 
 def test_restore_empty_checkpoint_empty_cloud():

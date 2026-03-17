@@ -160,6 +160,7 @@ class KubernetesContainerHandle:
     fsspec_s3_conf: str = ""
     owner_pod_name: str = ""
     owner_pod_uid: str = ""
+    owner_node_name: str = ""
     _pod_name: str = field(default="", repr=False)
     _workdir_configmap_name: str | None = field(default=None, repr=False)
     _started: bool = field(default=False, repr=False)
@@ -365,6 +366,8 @@ class KubernetesContainerHandle:
         tolerations = _build_tolerations(self.config)
         if tolerations:
             spec["tolerations"] = tolerations
+        if self.owner_node_name:
+            spec["nodeName"] = self.owner_node_name
 
         metadata: dict[str, object] = {
             "name": self._pod_name,
@@ -644,6 +647,7 @@ class KubernetesRuntime:
         self._fsspec_s3_conf = os.environ.get("FSSPEC_S3", "")
         self._owner_pod_name = os.environ.get("IRIS_POD_NAME", "")
         self._owner_pod_uid = os.environ.get("IRIS_POD_UID", "")
+        self._owner_node_name = os.environ.get("IRIS_WORKER_NODE_NAME", "")
         # TODO(marin): ownerReferences only trigger GC when the worker Pod object
         # is deleted. If worker containers crash-loop in-place, task Pods remain.
         # Consider restartPolicy=Never for worker Pods or explicit stale-task cleanup.
@@ -662,6 +666,7 @@ class KubernetesRuntime:
             fsspec_s3_conf=self._fsspec_s3_conf,
             owner_pod_name=self._owner_pod_name,
             owner_pod_uid=self._owner_pod_uid,
+            owner_node_name=self._owner_node_name,
         )
         self._handles.append(handle)
         return handle
