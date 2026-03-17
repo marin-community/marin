@@ -415,6 +415,7 @@ class ProcessContainerHandle:
     _container_id: str | None = field(default=None, repr=False)
     _prev_cpu_total: float = field(default=0.0, repr=False)
     _prev_cpu_utime: float = field(default=0.0, repr=False)
+    _tmpfs_dirs: list[Path] = field(default_factory=list, repr=False)
 
     @property
     def container_id(self) -> str | None:
@@ -442,6 +443,14 @@ class ProcessContainerHandle:
         for key, value in env.items():
             if value in mount_map:
                 env[key] = mount_map[value]
+
+        # Track TMPFS dirs for cleanup and set TMPDIR so tempfile uses the mapped path
+        for mount in config.mounts:
+            if mount.kind == MountKind.TMPFS and mount.container_path in mount_map:
+                host_path = mount_map[mount.container_path]
+                self._tmpfs_dirs.append(Path(host_path))
+                if mount.container_path == "/tmp":
+                    env["TMPDIR"] = host_path
 
         # In local mode, resolve IRIS_PYTHON to the current interpreter so that
         # bash -c "exec $IRIS_PYTHON ..." works even when "python" isn't on PATH.
@@ -613,6 +622,9 @@ class ProcessContainerHandle:
             self._container.kill()
         self._container = None
         self._container_id = None
+        for tmpfs_dir in self._tmpfs_dirs:
+            shutil.rmtree(tmpfs_dir, ignore_errors=True)
+        self._tmpfs_dirs.clear()
 
 
 class ProcessRuntime:
