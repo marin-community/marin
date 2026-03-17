@@ -9,7 +9,7 @@ def list_and_stop_jobs(config: str, filter_str: str = "vlm"):
     """List and optionally stop jobs matching filter on an Iris cluster."""
     # List running jobs as JSON
     result = subprocess.run(
-        ["uv", "run", "iris", "--config", config, "job", "list", "--state", "running", "--json"],
+        ["uv", "run", "iris", "--config", config, "job", "list", "--state", "running", "--state", "pending", "--json"],
         capture_output=True,
         text=True,
         timeout=30,
