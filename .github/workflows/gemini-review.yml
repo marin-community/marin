@@ -120,7 +120,12 @@ jobs:
               "https://github.com/gemini-cli-extensions/code-review"
             ]
           prompt: |
-            /pr-code-review
+            /pr-code-review ${{ github.server_url }}/${{ github.repository }}/pull/${{ github.event.pull_request.number || github.event.issue.number }}
+
+            Context:
+            - REPOSITORY=${{ github.repository }}
+            - PULL_REQUEST_NUMBER=${{ github.event.pull_request.number || github.event.issue.number }}
+            - ADDITIONAL_CONTEXT=${{ github.event_name == 'issue_comment' && github.event.comment.body || '' }}
 
             Additional requirement:
             - Prefix every inline and summary review comment with "🤖 ".
