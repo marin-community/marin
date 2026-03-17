@@ -22,7 +22,7 @@ from iris.cli.cluster import _build_cluster_images, _pin_latest_images
 from iris.client.client import IrisClient
 from iris.cluster.config import IrisConfig, load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
-from iris.cluster.manager import connect_cluster
+from iris.cluster.config import connect_cluster
 from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.types import (
     Entrypoint,
@@ -157,7 +157,9 @@ def _cloud_smoke_cluster(config_path: str, mode: str, label_prefix: str | None =
     iris_config = IrisConfig(config)
     platform = iris_config.platform()
 
-    # Tear down any existing cluster for a clean slate
+    # Tear down any existing cluster for a clean slate.
+    # GCE controller deletion is synchronous, so the old controller is fully
+    # gone before we clear remote state (no stale checkpoint race).
     logger.info("Stopping any existing cluster...")
     try:
         platform.stop_all(config)
@@ -874,7 +876,7 @@ def test_gpu_worker_metadata(tmp_path):
             )
             worker = Worker(
                 worker_config,
-                container_runtime=ProcessRuntime(),
+                container_runtime=ProcessRuntime(cache_dir=cache_dir),
                 environment_provider=env_provider,
                 threads=threads,
             )

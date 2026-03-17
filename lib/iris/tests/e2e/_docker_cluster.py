@@ -154,7 +154,7 @@ class E2ECluster:
             controller_address=f"http://127.0.0.1:{self._controller_port}",
             max_items=10,
         )
-        self._container_runtime = DockerRuntime()
+        self._container_runtime = DockerRuntime(cache_dir=cache_path)
         container_runtime = self._container_runtime
 
         for i in range(self._num_workers):

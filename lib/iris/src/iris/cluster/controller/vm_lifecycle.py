@@ -398,7 +398,12 @@ def restart_controller(
 
 
 def stop_controller(platform: Platform, config: config_pb2.IrisClusterConfig) -> None:
-    """Find and terminate the controller VM."""
+    """Find and terminate the controller VM.
+
+    GCE instance deletion is synchronous (no --async), so the VM is fully gone
+    when this returns. This prevents the dying controller from writing stale
+    checkpoints after remote state is cleared.
+    """
     label_prefix = config.platform.label_prefix or "iris"
     vm = _discover_controller_vm(platform, label_prefix)
     if vm:

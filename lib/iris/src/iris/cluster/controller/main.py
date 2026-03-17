@@ -142,7 +142,7 @@ def serve(
         # Restore autoscaler state (tracked slices/workers/backoff) from the DB
         # so restarted controllers don't lose cloud resource tracking and
         # scale up duplicates.
-        autoscaler.restore_from_db(db)
+        autoscaler.restore_from_db(db, platform)
         logger.info("Autoscaler state restored from DB")
     except Exception as e:
         logger.exception("Failed to create autoscaler from config")

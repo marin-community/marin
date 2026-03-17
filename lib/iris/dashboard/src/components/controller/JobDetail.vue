@@ -6,10 +6,10 @@ import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName, stateDisplayName, statusColors } from '@/types/status'
 import type {
   JobStatus, TaskStatus, LaunchJobRequest,
-  GetJobStatusResponse, ListTasksResponse,
+  GetJobStatusResponse, ListTasksResponse, ListJobsResponse,
   ResourceUsage,
 } from '@/types/rpc'
-import { timestampMs, formatTimestamp, formatDuration, formatBytes, formatDeviceConfig } from '@/utils/formatting'
+import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatDeviceConfig } from '@/utils/formatting'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
@@ -30,10 +30,28 @@ const TERMINAL_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed
 const job = ref<JobStatus | null>(null)
 const jobRequest = ref<LaunchJobRequest | null>(null)
 const tasks = ref<TaskStatus[]>([])
+const childJobs = ref<JobStatus[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
 const profilingTaskId = ref<string | null>(null)
 const copiedName = ref(false)
+const taskSearch = ref('')
+const stateFilter = ref('')
+
+type SortColumn = 'task' | 'state' | 'mem' | 'cpu' | 'duration'
+type SortDir = 'asc' | 'desc'
+const sortColumn = ref<SortColumn | null>(null)
+const sortDir = ref<SortDir>('asc')
+
+function toggleSort(col: SortColumn) {
+  if (sortColumn.value === col) {
+    if (sortDir.value === 'asc') sortDir.value = 'desc'
+    else { sortColumn.value = null; sortDir.value = 'asc' }
+  } else {
+    sortColumn.value = col
+    sortDir.value = 'asc'
+  }
+}
 
 async function copyJobName() {
   const name = job.value?.name
@@ -59,6 +77,24 @@ async function fetchData() {
     job.value = jobResp.job
     jobRequest.value = jobResp.request ?? null
     tasks.value = tasksResp.tasks ?? []
+
+    // Fetch child jobs using the job name as a prefix filter
+    const jobName = jobResp.job.name
+    if (jobName) {
+      const childResp = await controllerRpcCall<ListJobsResponse>('ListJobs', {
+        nameFilter: jobName,
+        limit: 500,
+      })
+      // Filter to direct children only: name starts with "jobName/" and has no further "/"
+      const prefix = jobName + '/'
+      childJobs.value = (childResp.jobs ?? []).filter(j => {
+        if (!j.name.startsWith(prefix)) return false
+        const suffix = j.name.slice(prefix.length)
+        return suffix.length > 0 && !suffix.includes('/')
+      })
+    } else {
+      childJobs.value = []
+    }
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -115,6 +151,74 @@ function taskIndex(taskId: string): string {
   return isNaN(parsed) ? '-' : String(parsed)
 }
 
+// -- Child job helpers --
+
+function childJobLeafName(name: string): string {
+  const lastSlash = name.lastIndexOf('/')
+  return lastSlash >= 0 ? name.slice(lastSlash + 1) : name
+}
+
+function childJobDuration(j: JobStatus): string {
+  const started = timestampMs(j.startedAt)
+  if (started) {
+    const ended = timestampMs(j.finishedAt) || Date.now()
+    return formatDuration(started, ended)
+  }
+  const submitted = timestampMs(j.submittedAt)
+  if (submitted) return 'queued ' + formatRelativeTime(submitted)
+  return '-'
+}
+
+const SEGMENT_COLORS: Record<string, string> = {
+  succeeded: 'bg-status-success',
+  running: 'bg-accent',
+  building: 'bg-status-purple',
+  assigned: 'bg-status-orange',
+  failed: 'bg-status-danger',
+  worker_failed: 'bg-status-danger',
+  killed: 'bg-text-muted',
+  pending: 'bg-surface-border',
+}
+
+interface ProgressSegment {
+  count: number
+  colorClass: string
+  label: string
+}
+
+function progressSegments(j: JobStatus): ProgressSegment[] {
+  const counts = j.taskStateCounts ?? {}
+  const total = j.taskCount ?? 0
+  if (total === 0) return []
+  const succeeded = counts['succeeded'] ?? 0
+  const running = counts['running'] ?? 0
+  const building = counts['building'] ?? 0
+  const assigned = counts['assigned'] ?? 0
+  const failed = counts['failed'] ?? 0
+  const workerFailed = counts['worker_failed'] ?? 0
+  const killed = counts['killed'] ?? 0
+  const pending = total - succeeded - running - building - assigned - failed - workerFailed - killed
+  return [
+    { count: succeeded, colorClass: SEGMENT_COLORS['succeeded'], label: 'succeeded' },
+    { count: running, colorClass: SEGMENT_COLORS['running'], label: 'running' },
+    { count: building, colorClass: SEGMENT_COLORS['building'], label: 'building' },
+    { count: assigned, colorClass: SEGMENT_COLORS['assigned'], label: 'assigned' },
+    { count: failed, colorClass: SEGMENT_COLORS['failed'], label: 'failed' },
+    { count: workerFailed, colorClass: SEGMENT_COLORS['worker_failed'], label: 'worker_failed' },
+    { count: killed, colorClass: SEGMENT_COLORS['killed'], label: 'killed' },
+    { count: Math.max(0, pending), colorClass: SEGMENT_COLORS['pending'], label: 'pending' },
+  ].filter(s => s.count > 0)
+}
+
+function progressSummary(j: JobStatus): string {
+  const counts = j.taskStateCounts ?? {}
+  const running = counts['running'] ?? 0
+  const total = j.taskCount ?? 0
+  const succeeded = counts['succeeded'] ?? 0
+  if (running > 0) return `${running} running`
+  return `${succeeded}/${total}`
+}
+
 // -- Computed --
 
 const pageTitle = computed(() => {
@@ -167,6 +271,64 @@ const diskDisplay = computed(() => {
   const db = job.value?.resources?.diskBytes
   if (!db) return '-'
   return formatBytes(parseInt(db, 10))
+})
+
+const STATE_SORT_ORDER: Record<string, number> = {
+  running: 0, building: 1, assigned: 2, pending: 3,
+  succeeded: 4, killed: 5, failed: 6, worker_failed: 7, unschedulable: 8,
+}
+
+function taskDurationMs(t: TaskStatus): number {
+  const started = timestampMs(t.startedAt)
+  if (!started) return 0
+  const ended = timestampMs(t.finishedAt) || Date.now()
+  return ended - started
+}
+
+const availableStates = computed(() => {
+  const seen = new Set<string>()
+  for (const t of tasks.value) seen.add(stateToName(t.state))
+  return [...seen].sort((a, b) => (STATE_SORT_ORDER[a] ?? 99) - (STATE_SORT_ORDER[b] ?? 99))
+})
+
+const filteredTasks = computed(() => {
+  const q = taskSearch.value.toLowerCase().trim()
+  const sf = stateFilter.value
+  const result = (!q && !sf)
+    ? [...tasks.value]
+    : tasks.value.filter(t => {
+        if (sf && stateToName(t.state) !== sf) return false
+        if (!q) return true
+        return (t.workerId?.toLowerCase().includes(q))
+          || taskIndex(t.taskId).includes(q)
+      })
+
+  const col = sortColumn.value
+  if (!col) return result
+
+  const dir = sortDir.value === 'asc' ? 1 : -1
+  result.sort((a, b) => {
+    let cmp = 0
+    switch (col) {
+      case 'task':
+        cmp = parseInt(taskIndex(a.taskId)) - parseInt(taskIndex(b.taskId))
+        break
+      case 'state':
+        cmp = (STATE_SORT_ORDER[stateToName(a.state)] ?? 99) - (STATE_SORT_ORDER[stateToName(b.state)] ?? 99)
+        break
+      case 'mem':
+        cmp = (parseInt(a.resourceUsage?.memoryMb ?? '0') || 0) - (parseInt(b.resourceUsage?.memoryMb ?? '0') || 0)
+        break
+      case 'cpu':
+        cmp = (a.resourceUsage?.cpuPercent ?? 0) - (b.resourceUsage?.cpuPercent ?? 0)
+        break
+      case 'duration':
+        cmp = taskDurationMs(a) - taskDurationMs(b)
+        break
+    }
+    return cmp * dir
+  })
+  return result
 })
 
 // -- Profiling --
@@ -336,24 +498,126 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         </div>
       </div>
 
-      <!-- Tasks table -->
-      <h3 class="text-sm font-semibold uppercase tracking-wider text-text-secondary mb-3">
-        Tasks
-      </h3>
-
-      <EmptyState v-if="tasks.length === 0" message="No tasks" />
-
-      <div v-else class="overflow-x-auto">
+      <!-- Child Jobs -->
+      <div v-if="childJobs.length > 0" class="mb-6">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-text-secondary mb-3">
+          Child Jobs
+        </h3>
         <table class="w-full border-collapse">
           <thead>
             <tr class="border-b border-surface-border">
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Task</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Name</th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">State</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Worker</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Mem</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">CPU</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Started</th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Duration</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Tasks</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Diagnostic</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="child in childJobs"
+              :key="child.jobId"
+              class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
+            >
+              <td class="px-3 py-2 text-[13px]">
+                <RouterLink
+                  :to="'/job/' + encodeURIComponent(child.jobId)"
+                  class="text-accent hover:underline font-mono"
+                >
+                  {{ childJobLeafName(child.name) }}
+                </RouterLink>
+              </td>
+              <td class="px-3 py-2 text-[13px]">
+                <StatusBadge :status="child.state" size="sm" />
+              </td>
+              <td class="px-3 py-2 text-[13px] text-text-secondary font-mono">
+                {{ childJobDuration(child) }}
+              </td>
+              <td class="px-3 py-2 text-[13px]">
+                <div v-if="(child.taskCount ?? 0) === 0" class="text-xs text-text-muted">
+                  no tasks
+                </div>
+                <div v-else class="flex items-center gap-1.5">
+                  <div class="flex h-2 w-28 rounded-full overflow-hidden bg-surface-sunken">
+                    <div
+                      v-for="(seg, i) in progressSegments(child)"
+                      :key="i"
+                      :class="seg.colorClass"
+                      :style="{ width: (seg.count / (child.taskCount ?? 1) * 100).toFixed(1) + '%' }"
+                      :title="seg.label + ': ' + seg.count"
+                    />
+                  </div>
+                  <span class="text-xs text-text-secondary whitespace-nowrap">
+                    {{ progressSummary(child) }}
+                  </span>
+                </div>
+              </td>
+              <td class="px-3 py-2 text-xs text-text-muted max-w-xs truncate" :title="child.pendingReason ?? ''">
+                {{ child.pendingReason || '—' }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Tasks table -->
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-text-secondary">
+          Tasks
+        </h3>
+        <div v-if="tasks.length > 0" class="flex items-center gap-2">
+          <select
+            v-model="stateFilter"
+            class="px-3 py-1.5 text-sm rounded-md border border-surface-border bg-surface-primary text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
+          >
+            <option value="">All states</option>
+            <option v-for="s in availableStates" :key="s" :value="s">{{ stateDisplayName(s) }}</option>
+          </select>
+          <input
+            v-model="taskSearch"
+            type="text"
+            placeholder="Search workers..."
+            class="px-3 py-1.5 text-sm rounded-md border border-surface-border bg-surface-primary text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent w-64"
+          />
+        </div>
+      </div>
+
+      <EmptyState v-if="tasks.length === 0" message="No tasks" />
+      <EmptyState v-else-if="filteredTasks.length === 0" message="No matching tasks" />
+
+      <div v-else>
+        <table class="w-full border-collapse table-fixed">
+          <colgroup>
+            <col class="w-[4%]" />
+            <col class="w-[9%]" />
+            <col />
+            <col class="w-[6%]" />
+            <col class="w-[5%]" />
+            <col class="w-[13%]" />
+            <col class="w-[8%]" />
+            <col class="w-[4%]" />
+            <col class="w-[10%]" />
+            <col class="w-[11%]" />
+          </colgroup>
+          <thead>
+            <tr class="border-b border-surface-border">
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('task')">
+                Task <span v-if="sortColumn === 'task'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              </th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('state')">
+                State <span v-if="sortColumn === 'state'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              </th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Worker</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('mem')">
+                Mem <span v-if="sortColumn === 'mem'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              </th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('cpu')">
+                CPU <span v-if="sortColumn === 'cpu'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              </th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Started</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('duration')">
+                Duration <span v-if="sortColumn === 'duration'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              </th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Exit</th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Error</th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Profiling</th>
@@ -361,7 +625,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           </thead>
           <tbody>
             <tr
-              v-for="task in tasks"
+              v-for="task in filteredTasks"
               :key="task.taskId"
               class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
             >
@@ -375,11 +639,11 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               </td>
               <td class="px-3 py-2 text-[13px]">
                 <StatusBadge :status="task.state" size="sm" />
-                <div v-if="task.pendingReason" class="text-xs text-status-warning mt-0.5 max-w-xs truncate">
+                <div v-if="task.pendingReason" class="text-xs text-status-warning mt-0.5 max-w-xs truncate" :title="task.pendingReason">
                   {{ task.pendingReason }}
                 </div>
               </td>
-              <td class="px-3 py-2 text-[13px]">
+              <td class="px-3 py-2 text-[13px] truncate" :title="task.workerId ?? ''">
                 <RouterLink
                   v-if="task.workerId"
                   :to="'/worker/' + encodeURIComponent(task.workerId)"

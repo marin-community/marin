@@ -936,12 +936,9 @@ class CoreweavePlatform:
             merged.update(labels)
         return self._list_slices_by_labels(merged)
 
-    def list_all_slices(self, labels: dict[str, str] | None = None) -> list[CoreweaveSliceHandle]:
-        """List all iris-managed worker Pods, optionally filtered by labels."""
-        merged = {self._iris_labels.iris_managed: "true"}
-        if labels:
-            merged.update(labels)
-        return self._list_slices_by_labels(merged)
+    def list_all_slices(self) -> list[CoreweaveSliceHandle]:
+        """List all iris-managed worker Pods."""
+        return self._list_slices_by_labels({self._iris_labels.iris_managed: "true"})
 
     def _list_slices_by_labels(self, labels: dict[str, str] | None) -> list[CoreweaveSliceHandle]:
         """Query worker Pods by label selector and return slice handles.

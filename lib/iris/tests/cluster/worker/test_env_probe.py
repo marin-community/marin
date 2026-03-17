@@ -363,6 +363,9 @@ def test_host_metrics_collector_network_delta(monkeypatch):
     assert snapshot2.net_sent_bps == 2000
 
 
+# --- Network metrics ---
+
+
 def test_host_metrics_collector_network_graceful_on_non_linux(monkeypatch):
     """Network collection silently returns 0 on systems without /proc/net/dev."""
     monkeypatch.setattr(env_probe, "_read_net_dev_bytes", lambda: (_ for _ in ()).throw(OSError("no /proc/net/dev")))

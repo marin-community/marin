@@ -40,7 +40,6 @@ from iris.cluster.controller.db import (
     JOBS,
     RESERVATION_CLAIMS,
     TASKS,
-    TERMINAL_TASK_STATES,
     WORKERS,
     ControllerDB,
     Join,
@@ -287,10 +286,12 @@ def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, J
 
 
 def _schedulable_tasks(queries: ControllerDB) -> list[Task]:
+    # Only PENDING tasks can pass can_be_scheduled(); no need to fetch ASSIGNED/BUILDING/RUNNING.
+    SCHEDULABLE_STATES = (cluster_pb2.TASK_STATE_PENDING,)
     with queries.snapshot() as snapshot:
         tasks = snapshot.select(
             TASKS,
-            where=TASKS.c.state.not_null() & ~TASKS.c.state.in_(list(TERMINAL_TASK_STATES)),
+            where=TASKS.c.state.in_(list(SCHEDULABLE_STATES)),
             order_by=(
                 TASKS.c.priority_neg_depth.asc(),
                 TASKS.c.priority_root_submitted_ms.asc(),
@@ -320,30 +321,27 @@ def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -
 
 
 def _building_counts(queries: ControllerDB, workers: list[Worker]) -> dict[WorkerId, int]:
+    """Count tasks in BUILDING or ASSIGNED state per worker, excluding reservation-holder jobs."""
     if not workers:
         return {}
-    running_by_worker = running_tasks_by_worker(queries, {worker.worker_id for worker in workers})
-    running_task_ids = {task_id for task_ids in running_by_worker.values() for task_id in task_ids}
-    if not running_task_ids:
-        return {}
-    tasks = _tasks_by_ids_with_attempts(queries, running_task_ids)
-    jobs = _jobs_by_id(queries, {task.job_id for task in tasks.values()})
-    counts: dict[WorkerId, int] = {}
-    for worker_id, task_ids in running_by_worker.items():
-        count = 0
-        for task_id in task_ids:
-            task = tasks.get(task_id)
-            if task is None:
-                continue
-            if task.state not in (cluster_pb2.TASK_STATE_BUILDING, cluster_pb2.TASK_STATE_ASSIGNED):
-                continue
-            job = jobs.get(task.job_id)
-            if job is None or job.is_reservation_holder:
-                continue
-            count += 1
-        if count > 0:
-            counts[worker_id] = count
-    return counts
+    worker_ids = [str(w.worker_id) for w in workers]
+    placeholders = ",".join("?" for _ in worker_ids)
+    sql = (
+        "SELECT a.worker_id, COUNT(*) as cnt FROM tasks t "
+        "JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
+        "JOIN jobs j ON t.job_id = j.job_id "
+        f"WHERE a.worker_id IN ({placeholders}) "
+        "AND t.state IN (?, ?) "
+        "AND j.is_reservation_holder = 0 "
+        "GROUP BY a.worker_id"
+    )
+    with queries.snapshot() as q:
+        rows = q.raw(
+            sql,
+            (*worker_ids, cluster_pb2.TASK_STATE_BUILDING, cluster_pb2.TASK_STATE_ASSIGNED),
+            decoders={"worker_id": WorkerId, "cnt": int},
+        )
+    return {row.worker_id: row.cnt for row in rows}
 
 
 def _workers_by_id(queries: ControllerDB, worker_ids: set[WorkerId]) -> dict[WorkerId, Worker]:
