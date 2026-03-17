@@ -195,7 +195,9 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
 
 
 def test_resolve_moe_implementation_uses_ep_heuristic():
-    assert resolve_moe_implementation(None, _make_abstract_moe_mesh(data=2, expert=8, model=1)) == MoeImplementation.ring
+    assert (
+        resolve_moe_implementation(None, _make_abstract_moe_mesh(data=2, expert=8, model=1)) == MoeImplementation.ring
+    )
     assert (
         resolve_moe_implementation(None, _make_abstract_moe_mesh(data=2, expert=16, model=1))
         == MoeImplementation.ragged_all_to_all
