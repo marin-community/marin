@@ -22,19 +22,3 @@ uv run python experiments/grug/modular_opt/launch.py
 Default optimizer class:
 
 - `GrugParamGroupAdamConfig` in `experiments/grug/modular_opt/launch.py`
-
-## `array_stacked` (`issue #3714`)
-
-`experiments/grug/array_stacked/` is the base-template variant that swaps the
-transformer block container from a Python tuple loop to
-`haliax.nn.ArrayStacked`.
-
-- `model.py`: uses `ArrayStacked.fold_via(...)` for block execution.
-- `train.py`: mirrors base train-loop wiring with variant-local model import.
-- `launch.py`: runnable trial entrypoint for this variant.
-
-Launch it with:
-
-```bash
-uv run python experiments/grug/array_stacked/launch.py
-```

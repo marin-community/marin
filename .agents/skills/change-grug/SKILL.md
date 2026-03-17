@@ -22,6 +22,8 @@ This skill describes the workflow for:
   - copy from `base` and modify locally (for example MoE).
 - **One-off speedruns:** `experiments/speedrun/...`
   - useful for exploration, not canonical.
+- **Reference branch for array-stacked grug variant wiring:**
+  - https://github.com/marin-community/marin/tree/codex/array-stacked-grug-variant-pointer
 
 ## Workflow
 

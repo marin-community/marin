@@ -6,7 +6,3 @@
 This package contains lightweight array-first building blocks shared across
 grug templates (for example attention/loss/sharding helpers).
 """
-
-from .checkpointing import restore_grug_state_from_checkpoint
-
-__all__ = ["restore_grug_state_from_checkpoint"]

@@ -87,8 +87,7 @@ Useful flags:
 
 - Checkpoints are written to `<output_path>/checkpoints` by default in `base/launch.py`.
 - `run_grug` restores from `trainer.load_checkpoint_path` when set, otherwise tries the run checkpoint path.
-- On restore, grug now tries checkpoint candidates in descending step order and falls back to older candidates if a newer one is missing/incomplete.
-- If `trainer.load_checkpoint=True` and no checkpoint candidate can be loaded, startup fails; otherwise it starts from scratch.
+- If `trainer.load_checkpoint=True` and no checkpoint is found, startup fails; otherwise it starts from scratch.
 
 ## Environment variables you will likely use
 

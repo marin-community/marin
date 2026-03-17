@@ -110,6 +110,8 @@ In Haliax scanned modules, nested checkpointing is available as a policy option.
 For non-named stack containers, [`haliax.nn.ArrayStacked`](https://github.com/marin-community/marin/blob/main/lib/haliax/docs/array-stacked.md) is another practical
 lever: keeping layer execution as a scan rather than a Python-unrolled loop can reduce compile-time memory pressure and
 often lowers compile time.
+For Grug-specific array-stacked variant wiring, see the reference branch:
+https://github.com/marin-community/marin/tree/codex/array-stacked-grug-variant-pointer
 
 ## 6) Reduce Per-Device Batch (and Sequence Length)
 
