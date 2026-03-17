@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from iris.cluster.bundle import BundleStore
+from iris.cluster.bundle import BundleStore, write_workdir_files
 from iris.cluster.runtime.env import build_device_env_vars
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
@@ -870,7 +870,7 @@ class DockerRuntime:
         """Stage bundle and workdir files on worker-local filesystem."""
         if bundle_id:
             bundle_store.extract_bundle_to(bundle_id, workdir)
-        bundle_store.write_workdir_files(workdir, workdir_files)
+        write_workdir_files(workdir, workdir_files)
 
     def track_container(self, container_id: str) -> None:
         """Track a container ID for cleanup."""

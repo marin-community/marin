@@ -150,9 +150,9 @@ class E2ECluster:
         )
 
         bundle_store = BundleStore(
-            storage_dir=cache_path / "bundles",
+            storage_dir=str(cache_path / "bundles"),
             controller_address=f"http://127.0.0.1:{self._controller_port}",
-            max_items=10,
+            max_cache_items=10,
         )
         self._container_runtime = DockerRuntime(cache_dir=cache_path)
         container_runtime = self._container_runtime

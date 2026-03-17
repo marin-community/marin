@@ -52,7 +52,7 @@ def _make_service(db, auth=None):
         state,
         db,
         controller=controller_mock,
-        bundle_store=BundleStore(storage_dir=db.db_path.parent / "bundles"),
+        bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
         log_store=log_store,
         auth=auth or ControllerAuth(),
     )

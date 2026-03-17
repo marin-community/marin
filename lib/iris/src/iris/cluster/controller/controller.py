@@ -767,7 +767,7 @@ class Controller:
         )
         self._scheduler = Scheduler()
 
-        self._bundle_store = BundleStore(storage_dir=config.local_state_dir / "bundles")
+        self._bundle_store = BundleStore(storage_dir=str(config.local_state_dir / "bundles"))
 
         self._service = ControllerServiceImpl(
             self._transitions,

@@ -1,12 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bundle ID utilities and a flat-file BundleStore with in-memory LRU cache.
+"""Bundle ID utilities and a BundleStore with fsspec persistence and in-memory LRU cache.
 
-Bundles are stored as individual zip files on disk at ``{storage_dir}/{bundle_id}.zip``.
-An in-memory index tracks known bundles and their sizes for LRU eviction. The index
-is rebuilt by scanning the storage directory on startup, so no checkpoint/restore is
-needed — the store survives restarts as long as the storage directory is durable.
+Bundles are stored as ``{storage_dir}/{bundle_id}.zip`` using fsspec (supporting
+local paths and GCS URIs). An in-memory LRU cache avoids repeated reads from
+storage. The cache is populated lazily — no startup scan is performed.
 """
 
 from __future__ import annotations
@@ -16,12 +15,15 @@ import io
 import logging
 import os
 import posixpath
+import sqlite3
 import threading
 import time
 import zipfile
 from collections import OrderedDict
 from pathlib import Path
 from urllib.request import urlopen
+
+import fsspec.core
 
 logger = logging.getLogger(__name__)
 
@@ -44,81 +46,101 @@ def normalize_workdir_relative_path(path: str) -> str:
     return normalized
 
 
+def write_workdir_files(dest: Path, files: dict[str, bytes]) -> None:
+    """Write workdir files under ``dest`` with path validation."""
+    for name, data in files.items():
+        normalized = normalize_workdir_relative_path(name)
+        path = dest / normalized
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+
 class BundleStore:
-    """Flat-file bundle store with in-memory LRU index.
+    """Bundle store with fsspec persistence and in-memory LRU cache.
 
-    Bundles are persisted as ``{storage_dir}/{bundle_id}.zip``. On init the
-    directory is scanned to rebuild the in-memory index, so the store survives
-    process restarts without any explicit checkpoint/restore step.
+    Bundles are persisted as ``{storage_dir}/{bundle_id}.zip`` via fsspec, supporting
+    both local paths and remote URIs (e.g. ``gs://bucket/path/bundles``).
 
-    Workers can lazily fetch missing bundles from the controller and cache
-    them locally.
+    The in-memory cache is populated lazily: ``get_zip`` checks in-memory cache first,
+    then falls back to fsspec storage, then (on workers) fetches from the controller.
+    Eviction from the in-memory cache does NOT delete from fsspec storage.
     """
 
     def __init__(
         self,
-        storage_dir: Path,
+        storage_dir: str,
         controller_address: str | None = None,
-        max_total_bytes: int = 1_000_000_000,
-        max_items: int = 1000,
+        max_cache_items: int = 1000,
+        max_cache_bytes: int = 1_000_000_000,
     ):
         self._storage_dir = storage_dir
         self._controller_address = controller_address.rstrip("/") if controller_address else ""
-        self._max_total_bytes = max_total_bytes
-        self._max_items = max_items
+        self._max_cache_items = max_cache_items
+        self._max_cache_bytes = max_cache_bytes
         self._lock = threading.RLock()
 
-        self._storage_dir.mkdir(parents=True, exist_ok=True)
+        self._fs, self._fs_path = fsspec.core.url_to_fs(storage_dir)
+        self._fs.mkdirs(self._fs_path, exist_ok=True)
 
-        # OrderedDict mapping bundle_id -> size_bytes, ordered by access time
+        # OrderedDict mapping bundle_id -> blob bytes, ordered by access time
         # (most recently accessed at end).
-        self._index: OrderedDict[str, int] = OrderedDict()
-        self._total_bytes = 0
-        self._rebuild_index()
+        self._cache: OrderedDict[str, bytes] = OrderedDict()
+        self._cache_bytes = 0
 
-    def _rebuild_index(self) -> None:
-        """Scan storage directory and populate in-memory index, ordered by mtime."""
-        entries: list[tuple[float, str, int]] = []
-        for entry in self._storage_dir.iterdir():
-            if entry.suffix == ".zip" and entry.is_file():
-                bundle_id = entry.stem
-                stat = entry.stat()
-                entries.append((stat.st_mtime, bundle_id, stat.st_size))
+        self._maybe_migrate_sqlite()
 
-        entries.sort(key=lambda e: e[0])
-        self._index.clear()
-        self._total_bytes = 0
-        for _mtime, bundle_id, size in entries:
-            self._index[bundle_id] = size
-            self._total_bytes += size
+    def _bundle_fs_path(self, bundle_id: str) -> str:
+        return f"{self._fs_path}/{bundle_id}.zip"
 
-    def _bundle_path(self, bundle_id: str) -> Path:
-        return self._storage_dir / f"{bundle_id}.zip"
+    def _exists_in_storage(self, bundle_id: str) -> bool:
+        return self._fs.exists(self._bundle_fs_path(bundle_id))
+
+    def _read_from_storage(self, bundle_id: str) -> bytes:
+        with self._fs.open(self._bundle_fs_path(bundle_id), "rb") as f:
+            return f.read()
+
+    def _write_to_storage(self, bundle_id: str, blob: bytes) -> None:
+        with self._fs.open(self._bundle_fs_path(bundle_id), "wb") as f:
+            f.write(blob)
+
+    def _cache_put(self, bundle_id: str, blob: bytes) -> None:
+        """Insert into in-memory cache and evict if needed. Caller must hold _lock."""
+        if bundle_id in self._cache:
+            self._cache.move_to_end(bundle_id)
+            return
+        self._cache[bundle_id] = blob
+        self._cache_bytes += len(blob)
+        self._evict_if_needed_locked()
 
     def write_zip(self, blob: bytes) -> str:
         """Write zip bytes if absent and return canonical bundle id."""
         bundle_id = bundle_id_for_zip(blob)
         with self._lock:
-            if bundle_id in self._index:
-                self._index.move_to_end(bundle_id)
+            if bundle_id in self._cache:
+                self._cache.move_to_end(bundle_id)
                 return bundle_id
 
-            path = self._bundle_path(bundle_id)
-            path.write_bytes(blob)
-            self._index[bundle_id] = len(blob)
-            self._total_bytes += len(blob)
-            self._evict_if_needed_locked()
+            self._write_to_storage(bundle_id, blob)
+            self._cache_put(bundle_id, blob)
         return bundle_id
 
     def get_zip(self, bundle_id: str) -> bytes:
-        """Read zip bytes by bundle id."""
-        with self._lock:
-            if bundle_id not in self._index:
-                raise FileNotFoundError(f"Bundle not found: {bundle_id}")
-            self._index.move_to_end(bundle_id)
+        """Read zip bytes by bundle id.
 
-        path = self._bundle_path(bundle_id)
-        return path.read_bytes()
+        Checks in-memory cache, then fsspec storage. Raises FileNotFoundError
+        if the bundle is not found in either location.
+        """
+        with self._lock:
+            if bundle_id in self._cache:
+                self._cache.move_to_end(bundle_id)
+                return self._cache[bundle_id]
+
+            if not self._exists_in_storage(bundle_id):
+                raise FileNotFoundError(f"Bundle not found: {bundle_id}")
+
+            blob = self._read_from_storage(bundle_id)
+            self._cache_put(bundle_id, blob)
+            return blob
 
     def _fetch_from_controller(self, bundle_id: str) -> None:
         """Fetch a bundle from the controller HTTP endpoint and store it locally.
@@ -148,7 +170,7 @@ class BundleStore:
     def extract_bundle_to(self, bundle_id: str, dest: Path) -> None:
         """Extract a bundle zip into ``dest`` with zip-slip protection.
 
-        If the bundle is not in the local cache and a controller address is
+        If the bundle is not in the local cache/storage and a controller address is
         configured, it is fetched on demand before extraction.
         """
         try:
@@ -168,43 +190,67 @@ class BundleStore:
                     raise ValueError(f"Zip slip detected: {member} attempts to write outside extract path")
             zf.extractall(dest)
 
-    def write_workdir_files(self, dest: Path, files: dict[str, bytes]) -> None:
-        """Write workdir files under ``dest`` with path validation."""
-        for name, data in files.items():
-            normalized = normalize_workdir_relative_path(name)
-            path = dest / normalized
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-
     def _evict_if_needed_locked(self) -> None:
-        if self._max_items <= 0 and self._max_total_bytes <= 0:
+        """Evict oldest entries from in-memory cache. Caller must hold _lock."""
+        if self._max_cache_items <= 0 and self._max_cache_bytes <= 0:
             return
 
-        count = len(self._index)
-        evict_for_items = max(0, count - self._max_items) if self._max_items > 0 else 0
+        count = len(self._cache)
+        evict_for_items = max(0, count - self._max_cache_items) if self._max_cache_items > 0 else 0
         n_to_evict = evict_for_items
 
-        if self._max_total_bytes > 0 and self._total_bytes > self._max_total_bytes:
-            # Walk LRU order (front = oldest) until under budget.
+        if self._max_cache_bytes > 0 and self._cache_bytes > self._max_cache_bytes:
             freed = 0
-            for i, (_bid, sz) in enumerate(self._index.items()):
-                if i >= n_to_evict and self._total_bytes - freed <= self._max_total_bytes:
+            for i, (_bid, blob) in enumerate(self._cache.items()):
+                if i >= n_to_evict and self._cache_bytes - freed <= self._max_cache_bytes:
                     break
-                freed += sz
+                freed += len(blob)
                 n_to_evict = i + 1
 
         if n_to_evict <= 0:
             return
 
-        # Pop from front (LRU end) of the OrderedDict.
         for _ in range(n_to_evict):
-            bundle_id, size = self._index.popitem(last=False)
-            self._total_bytes -= size
-            path = self._bundle_path(bundle_id)
-            try:
-                os.remove(path)
-            except FileNotFoundError:
-                pass
+            _bid, blob = self._cache.popitem(last=False)
+            self._cache_bytes -= len(blob)
+
+    def _maybe_migrate_sqlite(self) -> None:
+        """Check for legacy sqlite bundle store and migrate in a background thread."""
+        # Only attempt migration for local filesystems
+        if not isinstance(self._fs, fsspec.implementations.local.LocalFileSystem):
+            return
+
+        storage_path = Path(self._fs_path)
+        sqlite_path = storage_path.parent / "bundles.sqlite3"
+        if not sqlite_path.exists():
+            return
+
+        logger.info("Found legacy SQLite bundle store at %s, starting background migration", sqlite_path)
+        thread = threading.Thread(
+            target=self._migrate_sqlite,
+            args=(sqlite_path,),
+            daemon=True,
+        )
+        thread.start()
+
+    def _migrate_sqlite(self, sqlite_path: Path) -> None:
+        """Read bundles from legacy SQLite store and write them to fsspec storage."""
+        migrated_path = sqlite_path.with_suffix(".sqlite3.migrated")
+        try:
+            conn = sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True)
+            cursor = conn.execute("SELECT bundle_id, zip_bytes FROM bundles")
+            count = 0
+            for bundle_id, zip_bytes in cursor:
+                if not self._exists_in_storage(bundle_id):
+                    self._write_to_storage(bundle_id, bytes(zip_bytes))
+                count += 1
+                if count % 100 == 0:
+                    logger.info("Migrated %d bundles from SQLite", count)
+            conn.close()
+            logger.info("SQLite migration complete: %d bundles migrated", count)
+            os.rename(sqlite_path, migrated_path)
+        except Exception:
+            logger.exception("Failed to migrate SQLite bundle store at %s", sqlite_path)
 
     def close(self) -> None:
         pass

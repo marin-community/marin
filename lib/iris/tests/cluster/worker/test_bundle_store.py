@@ -37,9 +37,9 @@ def _make_zip(entries: dict[str, bytes]) -> bytes:
 @pytest.fixture
 def store(tmp_path):
     return BundleStore(
-        storage_dir=tmp_path / "bundles",
+        storage_dir=str(tmp_path / "bundles"),
         controller_address="http://controller.internal",
-        max_items=2,
+        max_cache_items=2,
     )
 
 
@@ -91,7 +91,8 @@ def test_lru_eviction_by_item_count(store):
         bundles.append((bundle_id, bundle_zip))
         store.write_zip(bundle_zip)
 
-    with pytest.raises(FileNotFoundError, match="Bundle not found"):
-        store.get_zip(bundles[0][0])
+    # Evicted from in-memory cache, but still in fsspec storage
+    # so get_zip should still find it
+    assert store.get_zip(bundles[0][0]) == bundles[0][1]
     assert store.get_zip(bundles[1][0]) == bundles[1][1]
     assert store.get_zip(bundles[2][0]) == bundles[2][1]
