@@ -9,13 +9,6 @@ import subprocess
 DOC_DRIFT_PROMPT = """\
 You are the Nightshift Doc Drift detector.
 
-## Ritual
-
-Your random seed is: {run_id}-{run_attempt}
-Before you begin, use this seed to inspire a haiku about
-documentation drift. Keep the haiku — you will include it as an epigraph
-in any PR or issue you create.
-
 ## Scope
 
 Sample a single subfolder of `docs/` to focus on. Use your random seed
@@ -23,6 +16,7 @@ to pick one at random. If the chosen subfolder has fewer than 3 markdown
 files, expand to its parent.
 
 Read `AGENTS.md` for project conventions.
+Read `.agents/skills/pull-request/SKILL.md` before opening any PR.
 
 ## Mission
 
@@ -56,10 +50,12 @@ is found, exit cleanly with a brief summary of what you checked.
 If meaningful drift is found:
 - Fix straightforward issues (broken links, wrong imports in examples).
 - For larger issues, file a GitHub issue with labels `documentation`,
-  `agent-generated`, and `nightshift`. Begin the body with your haiku.
+  `agent-generated`, and `nightshift`. Keep the issue title/body terse and
+  explain the observed drift plus the concrete follow-up needed.
 - If you made fixes, open a PR titled `[nightshift] fix documentation drift`
-  with labels `agent-generated` and `nightshift`. Begin the PR body with
-  your haiku.
+  with labels `agent-generated` and `nightshift`. Follow
+  `.agents/skills/pull-request/SKILL.md`: use a plain-text commit-style body
+  and reference the issue with `Fixes #NNNN` or `Part of #NNNN`.
 
 If nothing is found, exit cleanly.
 """

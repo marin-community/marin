@@ -4,17 +4,12 @@
 """Nightshift cleanup: single agent picks a subproject, finds something meaty, opens a PR."""
 
 import datetime
-import secrets
 import subprocess
 
 SUBPROJECTS = ["lib/marin/src/marin", "lib/iris/src/iris", "lib/zephyr/src/zephyr", "lib/levanter/src/levanter"]
 
 CLEANUP_PROMPT = """\
 You are the Nightshift Cleanup Agent.
-
-Your random seed is: {haiku_seed}
-Use this seed to compose a haiku about code maintenance. Include it
-as the epigraph of your PR description.
 
 ## Your Mission
 
@@ -35,6 +30,7 @@ lint, not renaming, but a genuine code quality win. Look for things like:
   internal functions
 
 Read `AGENTS.md` for project conventions.
+Read `.agents/skills/pull-request/SKILL.md` before opening any PR.
 
 ## Rules of Engagement
 
@@ -45,13 +41,16 @@ Read `AGENTS.md` for project conventions.
   that test modules you changed.
 - If you find issues but the fix is non-trivial, file a GitHub issue instead
   of making a risky change.
+- If you open a PR, follow `.agents/skills/pull-request/SKILL.md`: plain-text
+  commit-style title/body, reference an issue with `Fixes #NNNN` or
+  `Part of #NNNN`, and add the `agent-generated` and `nightshift` labels.
 - Keep the PR focused: one coherent improvement.
 
 ## Output
 
 Create a branch named `nightshift/cleanup-{date}` and open a PR with:
-- Title: `[nightshift] <concise description>`
-- Body: your haiku, then a summary of what was cleaned and why
+- A concise `[nightshift] ...` title that matches the pull-request skill
+- A plain-text body that follows the pull-request skill and links the issue
 - Labels: `agent-generated`, `nightshift`
 
 If you find nothing worth changing, exit cleanly — no branch, no PR.
@@ -61,7 +60,6 @@ If you find nothing worth changing, exit cleanly — no branch, no PR.
 def main() -> None:
     date = datetime.date.today().strftime("%Y%m%d")
     prompt = CLEANUP_PROMPT.format(
-        haiku_seed=secrets.token_hex(4),
         subprojects=", ".join(SUBPROJECTS),
         date=date,
     )
