@@ -131,9 +131,13 @@ def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):
     mock_bundle_store.write_workdir_files.assert_called_once_with(workdir, {})
 
 
-def test_tpu_create_uses_privileged_without_hardening_flags(monkeypatch, runtime, tmp_path):
+def test_tpu_create_adds_accel_devices_and_keeps_hardening(monkeypatch, runtime, tmp_path):
     handle = _make_handle(runtime, tmp_path, _tpu_resources())
     monkeypatch.setattr(runtime, "ensure_image", lambda _image: None)
+    monkeypatch.setattr(
+        "iris.cluster.runtime.docker._discover_tpu_device_mappings",
+        lambda: ["/dev/vfio:/dev/vfio", "/dev/accel0:/dev/accel0", "/dev/accel1:/dev/accel1"],
+    )
     calls: list[list[str]] = []
 
     def fake_run(cmd, **_kwargs):
@@ -147,10 +151,16 @@ def test_tpu_create_uses_privileged_without_hardening_flags(monkeypatch, runtime
     assert container_id == "container-id"
     assert calls
     cmd = calls[0]
-    assert "--privileged" in cmd
-    assert "--cap-drop" not in cmd
-    assert "--security-opt" not in cmd
+    assert "--privileged" not in cmd
+    assert "--security-opt" in cmd
+    assert "no-new-privileges" in cmd
+    assert "--cap-drop" in cmd
+    assert "ALL" in cmd
     assert "--cap-add=SYS_RESOURCE" in cmd
+    assert cmd.count("--device") == 3
+    assert "/dev/vfio:/dev/vfio" in cmd
+    assert "/dev/accel0:/dev/accel0" in cmd
+    assert "/dev/accel1:/dev/accel1" in cmd
 
 
 def test_non_tpu_create_keeps_hardening_flags(monkeypatch, runtime, tmp_path):
