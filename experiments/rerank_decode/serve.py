@@ -16,6 +16,7 @@
 
 import logging
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -55,7 +56,7 @@ def launch_vllm_server(
     ]
 
     logger.info("Launching vLLM server: model=%s port=%d gpus=%s", model, port, gpu_ids)
-    proc = subprocess.Popen(cmd, env=env)
+    proc = subprocess.Popen(cmd, env=env, start_new_session=True)
     return proc
 
 
@@ -108,10 +109,10 @@ def launch_vllm_servers(
 
 
 def shutdown_servers(*procs: subprocess.Popen) -> None:
-    """Terminate the given server processes."""
+    """Terminate the given server processes and all their children."""
     for proc in procs:
         try:
-            proc.kill()
+            os.kill(-proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
     for proc in procs:
