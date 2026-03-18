@@ -378,6 +378,26 @@ message AuthConfig {
 }
 
 // ============================================================================
+// PROVIDER CONFIGURATION
+// ============================================================================
+
+// Configuration for WorkerProvider: RPC-based worker daemons managed by the autoscaler.
+// No fields needed — all configuration is in defaults.worker and scale_groups.
+message WorkerProviderConfig {}
+
+// Configuration for KubernetesProvider: direct Pod dispatch without worker daemons.
+message KubernetesProviderConfig {
+  string namespace = 1;    // Kubernetes namespace for task pods (default: "iris")
+  string kubeconfig = 2;   // Path to kubeconfig file; empty string uses in-cluster auth
+  string default_image = 3; // Default container image for task pods
+  // Topology key for pod affinity on multi-VM gang-scheduled jobs.
+  // When set, sibling task pods for the same job prefer scheduling on nodes
+  // sharing this topology (e.g. "coreweave.cloud/spine" for IB colocation).
+  // Leave empty to disable. Default: "coreweave.cloud/spine".
+  string colocation_topology_key = 4;
+}
+
+// ============================================================================
 // ROOT CLUSTER CONFIGURATION
 // ============================================================================
 
@@ -399,4 +419,10 @@ message IrisClusterConfig {
 
   // Authentication (optional — when absent, no auth is required)
   AuthConfig auth = 60;
+
+  // Task provider — required. Exactly one must be set.
+  oneof provider {
+    KubernetesProviderConfig kubernetes_provider = 70;
+    WorkerProviderConfig worker_provider = 71;
+  }
 }

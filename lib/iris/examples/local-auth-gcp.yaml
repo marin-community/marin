@@ -9,6 +9,8 @@ controller:
   local:
     port: 0  # auto-assign
 
+worker_provider: {}
+
 auth:
   gcp:
     project_id: hai-gcp-models  # GCP project ID — users must have access to log in

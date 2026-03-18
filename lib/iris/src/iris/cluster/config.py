@@ -25,6 +25,8 @@ import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller.kubernetes_provider import KubernetesProvider
+from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.types import parse_memory_string
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
@@ -301,8 +303,8 @@ def _validate_worker_defaults(config: config_pb2.IrisClusterConfig) -> None:
         raise ValueError("defaults.worker.docker_image is required for non-local platforms (gcp/manual/coreweave).")
 
     runtime = config.defaults.worker.runtime.strip()
-    if runtime and runtime not in {"docker", "kubernetes"}:
-        raise ValueError(f"defaults.worker.runtime must be one of docker/kubernetes, got {runtime!r}.")
+    if runtime and runtime != "docker":
+        raise ValueError(f"defaults.worker.runtime must be docker, got {runtime!r}.")
 
 
 def _scale_groups_to_config(scale_groups: dict[str, config_pb2.ScaleGroupConfig]) -> config_pb2.IrisClusterConfig:
@@ -1091,4 +1093,38 @@ def create_autoscaler(
         platform=platform,
         base_worker_config=base_worker_config,
         db=db,
+    )
+
+
+def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvider | KubernetesProvider:
+    """Create a TaskProvider from cluster configuration.
+
+    Returns a KubernetesProvider when `kubernetes_provider` is configured,
+    or a WorkerProvider when `worker_provider` is configured.
+    Raises ValueError if no provider is set.
+    """
+    which = cluster_config.WhichOneof("provider")
+    if which == "kubernetes_provider":
+        from iris.cluster.k8s.kubectl import Kubectl
+
+        kp = cluster_config.kubernetes_provider
+        namespace = kp.namespace or "iris"
+        return KubernetesProvider(
+            kubectl=Kubectl(namespace=namespace, kubeconfig_path=kp.kubeconfig or None),
+            namespace=namespace,
+            default_image=kp.default_image,
+            colocation_topology_key=kp.colocation_topology_key or "coreweave.cloud/spine",
+        )
+    if which == "worker_provider":
+        from iris.cluster.controller.worker_provider import RpcWorkerStubFactory
+
+        return WorkerProvider(stub_factory=RpcWorkerStubFactory())
+    raise ValueError(
+        "IrisClusterConfig.provider must be set. Add either:\n"
+        "  worker_provider: {}\n"
+        "or:\n"
+        "  kubernetes_provider:\n"
+        "    namespace: iris\n"
+        "    default_image: ...\n"
+        "to your cluster config."
     )

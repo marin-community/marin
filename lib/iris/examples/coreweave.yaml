@@ -1,10 +1,10 @@
 # Iris configuration for CoreWeave CKS clusters.
 #
-# Architecture: Shared NodePool model. `iris cluster start` creates one
-# NodePool per scale group (plus a controller pool) with CoreWeave autoscaling
-# enabled. Iris manages only Pods; CoreWeave manages node provisioning.
-# NodePool names are derived from this config: {label_prefix}-{scale_group_name}.
-# When Pods are deleted, NodePools scale to zero automatically.
+# Architecture: KubernetesProvider dispatches task pods directly to the k8s API.
+# No worker daemons are needed. CoreWeave NodePool autoscaling provisions nodes
+# on demand; when pods are deleted, NodePools scale to zero automatically.
+# Multi-VM gang-scheduled jobs use pod affinity to co-locate sibling tasks on
+# the same spine switch for InfiniBand connectivity.
 #
 # Workflow:
 #
@@ -40,6 +40,11 @@ platform:
 storage:
   remote_state_dir: s3://marin-na/iris/state
 
+kubernetes_provider:
+  namespace: iris
+  default_image: ghcr.io/marin-community/iris-task:latest
+  # colocation_topology_key defaults to coreweave.cloud/spine — no need to set explicitly
+
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   coreweave:
@@ -61,7 +66,7 @@ defaults:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001
     cache_dir: /mnt/local/iris-cache
-    runtime: kubernetes
+    runtime: docker
     default_task_image: ghcr.io/marin-community/iris-task:latest
 
 scale_groups:

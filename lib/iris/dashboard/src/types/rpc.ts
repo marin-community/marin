@@ -322,6 +322,27 @@ export interface GetAutoscalerStatusResponse {
   status: AutoscalerStatus
 }
 
+// -- Kubernetes Cluster Status --
+
+export interface KubernetesPodStatus {
+  podName: string
+  taskId: string
+  phase: string
+  reason: string
+  message: string
+  lastTransition?: ProtoTimestamp
+}
+
+export interface GetKubernetesClusterStatusResponse {
+  namespace?: string
+  totalNodes?: number
+  schedulableNodes?: number
+  allocatableCpu?: string
+  allocatableMemory?: string
+  podStatuses?: KubernetesPodStatus[]
+  providerVersion?: string
+}
+
 // -- Users --
 
 export interface UserSummary {
