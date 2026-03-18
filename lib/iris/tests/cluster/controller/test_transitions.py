@@ -63,7 +63,7 @@ def _make_state(**kwargs) -> ControllerTransitions:
     tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
     db_path = tmp / "controller.sqlite3"
     db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
+    log_store = LogStore(log_dir=tmp / "logs")
     return ControllerTransitions(db=db, log_store=log_store, **kwargs)
 
 
@@ -3189,7 +3189,7 @@ def test_snapshot_round_trip_preserves_reservation_holder():
         checkpoint_path = Path(tmpdir) / "checkpoint.sqlite3"
         state._db.backup_to(checkpoint_path)
         restored_db = ControllerDB(db_path=checkpoint_path)
-        restored_log_store = LogStore(db_path=checkpoint_path)
+        restored_log_store = LogStore(log_dir=Path(tmpdir) / "logs")
         restored_state = ControllerTransitions(db=restored_db, log_store=restored_log_store)
 
         restored_holder = _query_job(restored_state, holder_job_id)
