@@ -44,6 +44,7 @@ Kernel = Literal[
     "deepep_transport_first_ragged_dot_probe",
     "deepep_transport_gate_probe",
     "deepep_transport_second_ragged_dot_probe",
+    "deepep_transport_local_compute_only_probe",
     "deepep_transport",
     "deepep_transport_prewarmed",
     "deepep_transport_capped",
@@ -1782,42 +1783,45 @@ def _moe_mlp_ep_deepep_transport_dispatch_pack_local(
     ep_size = num_experts // local_experts
     expert_start = shard_id * local_experts
 
-    num_tokens_per_rank, num_tokens_per_expert, is_token_in_rank = deepep_get_dispatch_layout(
-        selected_experts_local,
-        num_ranks=ep_size,
-        num_experts=num_experts,
-    )
-    (
-        recv_x,
-        recv_topk_idx,
-        recv_topk_weights,
-        recv_src_idx,
-        rank_prefix_matrix,
-        channel_prefix_matrix,
-        recv_channel_prefix_matrix,
-        send_head,
-        _local_expert_counts,
-        num_recv_tokens,
-    ) = deepep_dispatch_intranode(
-        x_local,
-        selected_experts_local,
-        combine_weights_local,
-        num_tokens_per_rank,
-        num_tokens_per_expert,
-        is_token_in_rank,
-        num_experts=num_experts,
-        max_recv_tokens=max_recv_tokens,
-    )
+    with jax.named_scope("dispatch_layout"):
+        num_tokens_per_rank, num_tokens_per_expert, is_token_in_rank = deepep_get_dispatch_layout(
+            selected_experts_local,
+            num_ranks=ep_size,
+            num_experts=num_experts,
+        )
+    with jax.named_scope("dispatch_intranode"):
+        (
+            recv_x,
+            recv_topk_idx,
+            recv_topk_weights,
+            recv_src_idx,
+            rank_prefix_matrix,
+            channel_prefix_matrix,
+            recv_channel_prefix_matrix,
+            send_head,
+            _local_expert_counts,
+            num_recv_tokens,
+        ) = deepep_dispatch_intranode(
+            x_local,
+            selected_experts_local,
+            combine_weights_local,
+            num_tokens_per_rank,
+            num_tokens_per_expert,
+            is_token_in_rank,
+            num_experts=num_experts,
+            max_recv_tokens=max_recv_tokens,
+        )
     num_recv_tokens_scalar = jnp.squeeze(num_recv_tokens, axis=0)
-    x_dispatch, assignment_weights, recv_token_indices, local_group_sizes = _pack_deepep_local_assignments(
-        recv_x,
-        recv_topk_idx,
-        recv_topk_weights,
-        expert_start=expert_start,
-        local_experts=local_experts,
-        num_recv_tokens=num_recv_tokens_scalar,
-        max_local_assignments=max_local_assignments,
-    )
+    with jax.named_scope("pack_local_assignments"):
+        x_dispatch, assignment_weights, recv_token_indices, local_group_sizes = _pack_deepep_local_assignments(
+            recv_x,
+            recv_topk_idx,
+            recv_topk_weights,
+            expert_start=expert_start,
+            local_experts=local_experts,
+            num_recv_tokens=num_recv_tokens_scalar,
+            max_local_assignments=max_local_assignments,
+        )
     return (
         x_dispatch,
         assignment_weights,
@@ -1912,10 +1916,15 @@ def _moe_mlp_ep_deepep_transport_local_compute_local(
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
 ) -> jax.Array:
-    w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
+    with jax.named_scope("w13_ragged_dot"):
+        w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
     moe_dim = moe_w2_local.shape[1]
-    gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-    return ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
+    with jax.named_scope("gate_up_split"):
+        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+    with jax.named_scope("gate_activation"):
+        gate_up = activation_fn(gate) * up
+    with jax.named_scope("w2_ragged_dot"):
+        return ragged_dot(gate_up, moe_w2_local, local_group_sizes)
 
 
 def _moe_mlp_deepep_transport_local_compute(
@@ -1962,24 +1971,26 @@ def _moe_mlp_ep_deepep_transport_collapse_combine_local(
     is_token_in_rank: jax.Array,
 ) -> jax.Array:
     num_recv_tokens_scalar = jnp.squeeze(num_recv_tokens, axis=0)
-    recv_out = _collapse_deepep_local_assignments(
-        out_dispatch,
-        assignment_weights,
-        recv_token_indices,
-        recv_capacity=recv_topk_weights.shape[0],
-        num_recv_tokens=num_recv_tokens_scalar,
-    )
-    out_local, _ = deepep_combine_intranode(
-        recv_out,
-        recv_topk_weights,
-        recv_src_idx,
-        rank_prefix_matrix,
-        channel_prefix_matrix,
-        recv_channel_prefix_matrix,
-        send_head,
-        num_recv_tokens,
-        is_token_in_rank,
-    )
+    with jax.named_scope("collapse_local_assignments"):
+        recv_out = _collapse_deepep_local_assignments(
+            out_dispatch,
+            assignment_weights,
+            recv_token_indices,
+            recv_capacity=recv_topk_weights.shape[0],
+            num_recv_tokens=num_recv_tokens_scalar,
+        )
+    with jax.named_scope("combine_intranode"):
+        out_local, _ = deepep_combine_intranode(
+            recv_out,
+            recv_topk_weights,
+            recv_src_idx,
+            rank_prefix_matrix,
+            channel_prefix_matrix,
+            recv_channel_prefix_matrix,
+            send_head,
+            num_recv_tokens,
+            is_token_in_rank,
+        )
     return out_local
 
 
@@ -2692,6 +2703,49 @@ def _moe_mlp_deepep_transport_second_ragged_dot_probe(
         return out
 
     return x
+
+
+def _forward_deepep_transport_local_compute_only_probe(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    max_recv_tokens: int,
+    max_local_assignments: int,
+) -> jax.Array:
+    mesh = x.sharding.mesh
+    num_experts = int(w_up_gate.shape[0])
+    (
+        x_dispatch,
+        _assignment_weights,
+        _recv_token_indices,
+        local_group_sizes,
+        _recv_topk_weights,
+        _recv_src_idx,
+        _rank_prefix_matrix,
+        _channel_prefix_matrix,
+        _recv_channel_prefix_matrix,
+        _send_head,
+        _num_recv_tokens,
+        _is_token_in_rank,
+    ) = _moe_mlp_deepep_transport_dispatch_pack(
+        x,
+        selected_experts,
+        combine_weights,
+        mesh=mesh,
+        num_experts=num_experts,
+        max_recv_tokens=max_recv_tokens,
+        max_local_assignments=max_local_assignments,
+    )
+    return _moe_mlp_deepep_transport_local_compute(
+        x_dispatch,
+        local_group_sizes,
+        w_up_gate,
+        w_down,
+        mesh=mesh,
+    )
 
 
 def _moe_mlp_ep_ring_local_prefix_counts(
@@ -3953,6 +4007,23 @@ def _forward(
             w_up_gate,
             w_down,
         )
+    elif kernel == "deepep_transport_local_compute_only_probe":
+        mesh = x.sharding.mesh
+        num_experts = int(w_up_gate.shape[0])
+        max_recv_tokens, max_local_assignments = _deepep_transport_exact_caps(
+            selected_experts,
+            mesh=mesh,
+            num_experts=num_experts,
+        )
+        routed = _forward_deepep_transport_local_compute_only_probe(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            max_recv_tokens=max_recv_tokens,
+            max_local_assignments=max_local_assignments,
+        )
     elif kernel == "deepep_transport":
         routed = _moe_mlp_deepep_transport(
             x,
@@ -4090,6 +4161,7 @@ def _forward(
         "deepep_transport_first_ragged_dot_probe",
         "deepep_transport_gate_probe",
         "deepep_transport_second_ragged_dot_probe",
+        "deepep_transport_local_compute_only_probe",
     }:
         return routed
     return routed + _shared_mlp(x, shared_w13, shared_w2)
@@ -4239,6 +4311,63 @@ def _forward_deepep_transport_capped(
     return routed + _shared_mlp(x, shared_w13, shared_w2)
 
 
+def _make_deepep_transport_probe_forward_fn(
+    probe_kernel: Kernel,
+    x: jax.Array,
+    selected_experts: jax.Array,
+    w_up_gate: jax.Array,
+) -> Callable[[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array], jax.Array]:
+    mesh = x.sharding.mesh
+    num_experts = int(w_up_gate.shape[0])
+    max_recv_tokens, max_local_assignments = _deepep_transport_exact_caps(
+        selected_experts,
+        mesh=mesh,
+        num_experts=num_experts,
+    )
+
+    if probe_kernel == "deepep_transport_identity":
+        return partial(
+            _moe_mlp_deepep_transport_identity,
+            mesh=mesh,
+            max_recv_tokens=max_recv_tokens,
+        )
+    if probe_kernel == "deepep_transport_assignments_identity":
+        return partial(
+            _moe_mlp_deepep_transport_assignments_identity,
+            mesh=mesh,
+            max_recv_tokens=max_recv_tokens,
+            max_local_assignments=max_local_assignments,
+        )
+    if probe_kernel == "deepep_transport_first_ragged_dot_probe":
+        return partial(
+            _moe_mlp_deepep_transport_first_ragged_dot_probe,
+            mesh=mesh,
+            max_recv_tokens=max_recv_tokens,
+            max_local_assignments=max_local_assignments,
+        )
+    if probe_kernel == "deepep_transport_gate_probe":
+        return partial(
+            _moe_mlp_deepep_transport_gate_probe,
+            mesh=mesh,
+            max_recv_tokens=max_recv_tokens,
+            max_local_assignments=max_local_assignments,
+        )
+    if probe_kernel == "deepep_transport_second_ragged_dot_probe":
+        return partial(
+            _moe_mlp_deepep_transport_second_ragged_dot_probe,
+            mesh=mesh,
+            max_recv_tokens=max_recv_tokens,
+            max_local_assignments=max_local_assignments,
+        )
+    if probe_kernel == "deepep_transport_local_compute_only_probe":
+        return partial(
+            _forward_deepep_transport_local_compute_only_probe,
+            max_recv_tokens=max_recv_tokens,
+            max_local_assignments=max_local_assignments,
+        )
+    raise ValueError(f"Unsupported DeepEP probe kernel for exact-cap timing: {probe_kernel}")
+
+
 def _time_deepep_transport_probe_forward(
     probe_kernel: Kernel,
     x: jax.Array,
@@ -4250,50 +4379,7 @@ def _time_deepep_transport_probe_forward(
     warmup: int,
     iters: int,
 ) -> float:
-    mesh = x.sharding.mesh
-    num_experts = int(w_up_gate.shape[0])
-    max_recv_tokens, max_local_assignments = _deepep_transport_exact_caps(
-        selected_experts,
-        mesh=mesh,
-        num_experts=num_experts,
-    )
-
-    if probe_kernel == "deepep_transport_identity":
-        probe_fn = partial(
-            _moe_mlp_deepep_transport_identity,
-            mesh=mesh,
-            max_recv_tokens=max_recv_tokens,
-        )
-    elif probe_kernel == "deepep_transport_assignments_identity":
-        probe_fn = partial(
-            _moe_mlp_deepep_transport_assignments_identity,
-            mesh=mesh,
-            max_recv_tokens=max_recv_tokens,
-            max_local_assignments=max_local_assignments,
-        )
-    elif probe_kernel == "deepep_transport_first_ragged_dot_probe":
-        probe_fn = partial(
-            _moe_mlp_deepep_transport_first_ragged_dot_probe,
-            mesh=mesh,
-            max_recv_tokens=max_recv_tokens,
-            max_local_assignments=max_local_assignments,
-        )
-    elif probe_kernel == "deepep_transport_gate_probe":
-        probe_fn = partial(
-            _moe_mlp_deepep_transport_gate_probe,
-            mesh=mesh,
-            max_recv_tokens=max_recv_tokens,
-            max_local_assignments=max_local_assignments,
-        )
-    elif probe_kernel == "deepep_transport_second_ragged_dot_probe":
-        probe_fn = partial(
-            _moe_mlp_deepep_transport_second_ragged_dot_probe,
-            mesh=mesh,
-            max_recv_tokens=max_recv_tokens,
-            max_local_assignments=max_local_assignments,
-        )
-    else:
-        raise ValueError(f"Unsupported DeepEP probe kernel for exact-cap timing: {probe_kernel}")
+    probe_fn = _make_deepep_transport_probe_forward_fn(probe_kernel, x, selected_experts, w_up_gate)
 
     return _time_fn(
         probe_fn,
@@ -4304,6 +4390,34 @@ def _time_deepep_transport_probe_forward(
         w_down,
         warmup=warmup,
         iters=iters,
+    )
+
+
+def _profile_deepep_transport_probe_forward(
+    probe_kernel: Kernel,
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    warmup: int,
+    iters: int,
+    profile_dir: Path,
+    profile_name: str,
+) -> float:
+    probe_fn = _make_deepep_transport_probe_forward_fn(probe_kernel, x, selected_experts, w_up_gate)
+    return _profile_fn(
+        probe_fn,
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        warmup=warmup,
+        iters=iters,
+        profile_dir=profile_dir,
+        profile_name=profile_name,
     )
 
 
@@ -4377,6 +4491,56 @@ def _time_deepep_transport_forward_capped_prewarmed(
         shared_w2,
         warmup=warmup,
         iters=iters,
+    )
+
+
+def _profile_deepep_transport_forward_capped_prewarmed(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    shared_w13: jax.Array,
+    shared_w2: jax.Array,
+    *,
+    warmup: int,
+    iters: int,
+    profile_dir: Path,
+    profile_name: str,
+) -> float:
+    mesh = x.sharding.mesh
+    num_experts = int(w_up_gate.shape[0])
+    max_recv_tokens, max_local_assignments = _deepep_transport_exact_caps(
+        selected_experts,
+        mesh=mesh,
+        num_experts=num_experts,
+    )
+    _prewarm_deepep_transport_local_compute(
+        x,
+        selected_experts,
+        w_up_gate,
+        w_down,
+        shared_w13,
+        shared_w2,
+        max_local_assignments=max_local_assignments,
+    )
+    return _profile_fn(
+        partial(
+            _forward_deepep_transport_capped,
+            max_recv_tokens=max_recv_tokens,
+            max_local_assignments=max_local_assignments,
+        ),
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        shared_w13,
+        shared_w2,
+        warmup=warmup,
+        iters=iters,
+        profile_dir=profile_dir,
+        profile_name=profile_name,
     )
 
 
@@ -4512,6 +4676,7 @@ def main() -> None:
             "deepep_transport_first_ragged_dot_probe",
             "deepep_transport_gate_probe",
             "deepep_transport_second_ragged_dot_probe",
+            "deepep_transport_local_compute_only_probe",
             "deepep_transport",
             "deepep_transport_prewarmed",
             "deepep_transport_capped",
@@ -4659,19 +4824,32 @@ def main() -> None:
                         "deepep_transport_first_ragged_dot_probe",
                         "deepep_transport_gate_probe",
                         "deepep_transport_second_ragged_dot_probe",
+                        "deepep_transport_local_compute_only_probe",
                     }:
                         if args.profile_root is not None:
-                            raise ValueError(f"{kernel} does not yet support --profile-root")
-                        dt = _time_deepep_transport_probe_forward(
-                            kernel,
-                            x_sharded,
-                            selected_sharded,
-                            weights_sharded,
-                            w13_sharded,
-                            w2_sharded,
-                            warmup=args.warmup,
-                            iters=args.iters,
-                        )
+                            dt = _profile_deepep_transport_probe_forward(
+                                kernel,
+                                x_sharded,
+                                selected_sharded,
+                                weights_sharded,
+                                w13_sharded,
+                                w2_sharded,
+                                warmup=args.warmup,
+                                iters=args.iters,
+                                profile_dir=args.profile_root,
+                                profile_name=profile_name,
+                            )
+                        else:
+                            dt = _time_deepep_transport_probe_forward(
+                                kernel,
+                                x_sharded,
+                                selected_sharded,
+                                weights_sharded,
+                                w13_sharded,
+                                w2_sharded,
+                                warmup=args.warmup,
+                                iters=args.iters,
+                            )
                     elif kernel == "deepep_transport_prewarmed":
                         if args.profile_root is not None:
                             raise ValueError("deepep_transport_prewarmed does not yet support --profile-root")
@@ -4702,18 +4880,31 @@ def main() -> None:
                         )
                     elif kernel == "deepep_transport_capped_prewarmed":
                         if args.profile_root is not None:
-                            raise ValueError("deepep_transport_capped_prewarmed does not yet support --profile-root")
-                        dt = _time_deepep_transport_forward_capped_prewarmed(
-                            x_sharded,
-                            selected_sharded,
-                            weights_sharded,
-                            w13_sharded,
-                            w2_sharded,
-                            shared_w13_sharded,
-                            shared_w2_sharded,
-                            warmup=args.warmup,
-                            iters=args.iters,
-                        )
+                            dt = _profile_deepep_transport_forward_capped_prewarmed(
+                                x_sharded,
+                                selected_sharded,
+                                weights_sharded,
+                                w13_sharded,
+                                w2_sharded,
+                                shared_w13_sharded,
+                                shared_w2_sharded,
+                                warmup=args.warmup,
+                                iters=args.iters,
+                                profile_dir=args.profile_root,
+                                profile_name=profile_name,
+                            )
+                        else:
+                            dt = _time_deepep_transport_forward_capped_prewarmed(
+                                x_sharded,
+                                selected_sharded,
+                                weights_sharded,
+                                w13_sharded,
+                                w2_sharded,
+                                shared_w13_sharded,
+                                shared_w2_sharded,
+                                warmup=args.warmup,
+                                iters=args.iters,
+                            )
                     elif kernel == "deepep_transport_staged":
                         if args.profile_root is not None:
                             raise ValueError("deepep_transport_staged does not yet support --profile-root")
