@@ -923,6 +923,9 @@ class ZephyrCoordinator:
                 self.shutdown()
             finally:
                 if failed:
+                    # Remove this coordinator from the endpoint registry so a
+                    # replacement can be created at the same name without
+                    # colliding with the stale entry.
                     current_actor().terminate()
                 with self._lock:
                     self._pipeline_running = False

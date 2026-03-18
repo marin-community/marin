@@ -62,6 +62,8 @@ from fray.v2.types import (
 
 logger = logging.getLogger(__name__)
 
+# Delay before issuing the termination RPC so that the requesting actor call
+# has time to return its result to the caller before the process is killed.
 _ACTOR_TERMINATION_DELAY = 2.0
 
 

@@ -756,7 +756,7 @@ def test_execute_cleans_up_original_coordinator_after_same_endpoint_replacement(
         assert ctx._coordinator is not None
 
         endpoint = ctx._coordinator._endpoint
-        old_coordinator = _local_actor_registry[endpoint]
+        old_coordinator = _local_actor_registry[endpoint].instance
         assert old_coordinator._coordinator_thread is not None
         assert old_coordinator._coordinator_thread.is_alive()
 
@@ -768,7 +768,7 @@ def test_execute_cleans_up_original_coordinator_after_same_endpoint_replacement(
             actor_config=ActorConfig(max_concurrency=100),
         )
         replacement_group.wait_ready()
-        assert _local_actor_registry[endpoint] is not old_coordinator
+        assert _local_actor_registry[endpoint].instance is not old_coordinator
 
         old_coordinator.abort("test: replaced coordinator")
         release_task.set()
