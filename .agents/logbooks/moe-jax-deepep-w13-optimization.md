@@ -644,3 +644,66 @@ KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_k
   - the next validation step is now mandatory: wire the same candidate into the actual capped/prewarmed forward path and measure `deepep_transport_capped_prewarmed`
 - Next action:
   - extend the opt-in expert-padded `w13` path into the actual capped/prewarmed DeepEP forward, commit and push, then run `deepep_transport_capped_prewarmed` on the same fresh H100 lane.
+
+### 2026-03-18 23:37 UTC - The expert-padded `w13` candidate survives rung 3 and materially improves the authoritative exact-cap forward path
+- Experiment ID: `W13-OPT-013`
+- Hypothesis:
+  - the `w13` FC1 gain is not just a probe/local-compute artifact; once carried into the actual capped/prewarmed DeepEP forward, it should still produce a meaningful exact-cap end-to-end win on the authoritative cell.
+- Commands:
+
+```bash
+# First capped/prewarmed launch failed operationally before benchmarking because
+# I passed an incorrect full repo SHA; the pod 404'ed while downloading the tarball.
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl -n iris-3821-jax delete pod iris-task-23c2efa97627 --wait=false
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref e21bcd8a5d4515e37fad14927e092f3bee7b6814 \
+  --task-id w13opt-expertpadded-cappedprewarmed-pinned-t262144-20260318-233417 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - failed operational pod: `iris-task-23c2efa97627`
+    - failure mode: `urllib.error.HTTPError: HTTP Error 404: Not Found` while downloading the repo archive
+    - cause: I passed the wrong full repo SHA to the launcher; there was no benchmark result from that attempt
+  - successful pod: `iris-task-1cde04ece586`
+  - node: `g11ed54`
+  - node label: `iris-i3821jax-scale-group=h100-8x`
+  - code ref used by the successful pod: `e21bcd8a5d4515e37fad14927e092f3bee7b6814`
+  - exact-cap metadata printed by the run:
+    - `max_recv_tokens=61952`
+    - `max_local_assignments=65920`
+    - `max_local_expert_assignments=4352`
+  - sealed baseline for comparison: `12,085,257.93 tok/s` (`21.691 ms`)
+- Result:
+  - `deepep_transport_capped_prewarmed`: `21,763,265.78 tok/s` (`12.045 ms`)
+  - delta vs sealed baseline:
+    - throughput: `+80.08%`
+    - time: `-44.47%`
+  - the successful task reached `BENCH_END` and the wrapper returned `EXIT_CODE=0`
+  - the same noisy shutdown failures still appeared after the result line:
+    - `DeepEP timeout check failed: rank = 0, thread = 0..7`
+    - many `CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure` teardown lines from XLA/CUDA cleanup
+- Interpretation:
+  - the candidate is now clearly validated through the authoritative exact-cap forward rung
+  - the `w13` FC1 lowering change propagates far enough that the exact-cap prewarmed path drops by almost half, which is much stronger than a stage-local-only win
+  - the remaining gap to the sealed exact-cap prewarmed path (`12.045 ms`) is now much smaller, and the next question is whether enough of that gain can survive all the way into `current`
+- Next action:
+  - post this as a major milestone on issue `#3821`, then decide whether to integrate the same expert-padded FC1 idea into the actual `current` path for the final rung.

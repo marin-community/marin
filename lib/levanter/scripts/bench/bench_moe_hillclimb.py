@@ -10,6 +10,7 @@ timing reflects kernel/collective work rather than router noise.
 """
 
 import argparse
+import math
 import os
 import time
 from collections.abc import Callable
@@ -1276,6 +1277,45 @@ def _deepep_transport_exact_cap_metadata(
         f"assign_factor={((selected_experts.shape[0] / expert_axis_size) * expert_axis_size * selected_experts.shape[1]) / max_local_assignments:.6f}"
     )
     return max_recv_tokens, max_local_assignments, max_local_expert_assignments
+
+
+def _current_ring_w13_cap_metadata(
+    selected_experts: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh,
+    num_experts: int,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+    capacity_multiple: int = 128,
+) -> int:
+    expert_axis_size = grug_moe_lib._mesh_axis_size(mesh, "expert")
+    if expert_axis_size <= 1:
+        return _round_up_capacity(int(selected_experts.shape[0] * selected_experts.shape[1]), multiple=capacity_multiple)
+    if num_experts % expert_axis_size != 0:
+        raise ValueError(
+            f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size} for current ring metadata"
+        )
+
+    selected_experts_host = np.asarray(jax.device_get(selected_experts), dtype=np.int32)
+    local_experts = num_experts // expert_axis_size
+    assignments = selected_experts_host.shape[0] * selected_experts_host.shape[1]
+    local_capacity = max(local_experts, int(math.ceil(capacity_factor * assignments / expert_axis_size)))
+    expert_counts = np.bincount(selected_experts_host.reshape(-1), minlength=num_experts).reshape(expert_axis_size, local_experts)
+
+    max_local_expert_assignments = 0
+    for counts in expert_counts:
+        remaining = local_capacity
+        for count in counts:
+            take = min(int(count), remaining)
+            max_local_expert_assignments = max(max_local_expert_assignments, take)
+            remaining = max(remaining - take, 0)
+
+    max_local_expert_assignments = _round_up_capacity(max_local_expert_assignments, multiple=capacity_multiple)
+    _print0(
+        "CURRENT_RING_W13_CAPS "
+        f"local_capacity={local_capacity} "
+        f"max_local_expert_assignments={max_local_expert_assignments}"
+    )
+    return max_local_expert_assignments
 
 
 def _fit_probe_output_to_hidden(probe_out: jax.Array, *, hidden_dim: int) -> jax.Array:
@@ -5171,6 +5211,91 @@ def _profile_deepep_transport_probe_forward(
     )
 
 
+def _forward_current_w13_expert_padded(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    shared_w13: jax.Array,
+    shared_w2: jax.Array,
+    *,
+    w13_local_expert_capacity: int,
+) -> jax.Array:
+    routed = grug_moe_lib.moe_mlp(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        activation=ActivationFunctionEnum.silu,
+        w13_local_expert_capacity=w13_local_expert_capacity,
+    )
+    return routed + _shared_mlp(x, shared_w13, shared_w2)
+
+
+def _time_current_forward_w13_expert_padded(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    shared_w13: jax.Array,
+    shared_w2: jax.Array,
+    *,
+    warmup: int,
+    iters: int,
+) -> float:
+    mesh = x.sharding.mesh
+    num_experts = int(w_up_gate.shape[0])
+    w13_local_expert_capacity = _current_ring_w13_cap_metadata(selected_experts, mesh=mesh, num_experts=num_experts)
+    return _time_fn(
+        partial(_forward_current_w13_expert_padded, w13_local_expert_capacity=w13_local_expert_capacity),
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        shared_w13,
+        shared_w2,
+        warmup=warmup,
+        iters=iters,
+    )
+
+
+def _profile_current_forward_w13_expert_padded(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    shared_w13: jax.Array,
+    shared_w2: jax.Array,
+    *,
+    warmup: int,
+    iters: int,
+    profile_dir: Path,
+    profile_name: str,
+) -> float:
+    mesh = x.sharding.mesh
+    num_experts = int(w_up_gate.shape[0])
+    w13_local_expert_capacity = _current_ring_w13_cap_metadata(selected_experts, mesh=mesh, num_experts=num_experts)
+    return _profile_fn(
+        partial(_forward_current_w13_expert_padded, w13_local_expert_capacity=w13_local_expert_capacity),
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        shared_w13,
+        shared_w2,
+        warmup=warmup,
+        iters=iters,
+        profile_dir=profile_dir,
+        profile_name=profile_name,
+    )
+
+
 def _time_deepep_transport_forward_prewarmed(
     x: jax.Array,
     selected_experts: jax.Array,
@@ -5588,7 +5713,34 @@ def main() -> None:
                 grad_fn = partial(_loss_and_grads, kernel)
                 profile_name = f"moe_{kernel}_ep{ep_size}_{args.bench_pass}"
                 if args.bench_pass == "forward":
-                    if kernel in {
+                    if kernel == "current" and args.w13_expert_padded:
+                        if args.profile_root is not None:
+                            dt = _profile_current_forward_w13_expert_padded(
+                                x_sharded,
+                                selected_sharded,
+                                weights_sharded,
+                                w13_sharded,
+                                w2_sharded,
+                                shared_w13_sharded,
+                                shared_w2_sharded,
+                                warmup=args.warmup,
+                                iters=args.iters,
+                                profile_dir=args.profile_root,
+                                profile_name=profile_name,
+                            )
+                        else:
+                            dt = _time_current_forward_w13_expert_padded(
+                                x_sharded,
+                                selected_sharded,
+                                weights_sharded,
+                                w13_sharded,
+                                w2_sharded,
+                                shared_w13_sharded,
+                                shared_w2_sharded,
+                                warmup=args.warmup,
+                                iters=args.iters,
+                            )
+                    elif kernel in {
                         "deepep_transport_identity",
                         "deepep_transport_assignments_identity",
                         "deepep_transport_first_ragged_dot_probe",
