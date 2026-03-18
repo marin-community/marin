@@ -32,7 +32,6 @@ import fsspec
 from iris.marin_fs import url_to_fs
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.execution import unwrap_versioned_value
-from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
 from zephyr import Dataset, ZephyrContext, load_jsonl, write_jsonl_file
 
 from .adapters import TransformAdapter
@@ -308,6 +307,64 @@ def get_dataset_tasks(cfg: TransformSFTDatasetConfig):
                 )
 
 
+def _load_hf_parquet_direct(
+    repo_id: str,
+    subset: str | None,
+    split: str,
+    revision: str | None,
+    num_shards: int,
+    shard_idx: int,
+) -> datasets.Dataset:
+    """Load an HF dataset by reading parquet files directly with pyarrow.parquet.
+
+    Bypasses the Arrow dataset scanner which fails on nested types (list[struct]).
+    """
+    import pyarrow.parquet as pq
+    from huggingface_hub import HfFileSystem
+
+    hf_fs = HfFileSystem()
+    base = f"datasets/{repo_id}"
+    # Try multiple common HF Hub parquet layouts
+    candidate_patterns = []
+    if subset and subset != "default":
+        candidate_patterns += [
+            f"{base}/{subset}/{split}-*.parquet",  # {subset}/{split}-00000.parquet
+            f"{base}/{subset}/*.parquet",  # {subset}/code.parquet (non-standard)
+            f"{base}/data/{subset}-{split}-*.parquet",  # data/{subset}-train-00000.parquet
+            f"{base}/data/{subset}/{split}-*.parquet",  # data/{subset}/train-00000.parquet
+        ]
+    else:
+        candidate_patterns += [
+            f"{base}/data/{split}-*.parquet",
+            f"{base}/data/*.parquet",
+        ]
+
+    files: list[str] = []
+    for pattern in candidate_patterns:
+        files = [f for f in hf_fs.glob(pattern) if f.endswith(".parquet")]
+        if files:
+            break
+
+    if not files:
+        raise FileNotFoundError(
+            f"No parquet files found for {repo_id} subset={subset} split={split}. "
+            f"Tried patterns: {candidate_patterns}"
+        )
+
+    logging.info(f"Direct parquet reading: found {len(files)} files for {repo_id} subset={subset}")
+    all_rows: list[dict] = []
+    for f in sorted(files):
+        with hf_fs.open(f, "rb") as fobj:
+            # Read in small batches to avoid PyArrow's chunked-array bug with nested types.
+            # iter_batches converts each batch independently, sidestepping the issue.
+            pf = pq.ParquetFile(fobj)
+            for batch in pf.iter_batches(batch_size=1024):
+                all_rows.extend(batch.to_pylist())
+    logging.info(f"Direct parquet reading: loaded {len(all_rows)} rows for {repo_id} subset={subset}")
+    ds = datasets.Dataset.from_list(all_rows)
+    return ds.shard(num_shards=num_shards, index=shard_idx)
+
+
 def process_shard_task(task: ShardTask) -> dict:
     """Process a single shard of a dataset subset/split.
 
@@ -345,21 +402,38 @@ def process_shard_task(task: ShardTask) -> dict:
     if task.subset not in (None, "default"):
         dataset_kwargs["name"] = task.subset
 
-    dataset = load_dataset_with_backoff(
-        context=f"{task.source} subset={subset_name} split={task.split} shard={task.shard_idx}",
-        logger=logger,
-        **dataset_kwargs,
-    )
-    shard_dataset = dataset.shard(num_shards=task.num_shards, index=task.shard_idx)
+    load_context = f"{task.source} subset={subset_name} split={task.split} shard={task.shard_idx}"
 
-    def transform_records():
+    def transform_records(ds):
         """Generator that yields transformed records."""
-        for raw_row in shard_dataset:
+        for raw_row in ds:
             transformed_row = transform_row(raw_row, task.cfg, adapter)
             if transformed_row is not None:
                 yield transformed_row.model_dump()
 
-    result = write_jsonl_file(transform_records(), output_filename)
+    try:
+        dataset = load_dataset_with_backoff(context=load_context, logger=logger, **dataset_kwargs)
+        shard_dataset = dataset.shard(num_shards=task.num_shards, index=task.shard_idx)
+        result = write_jsonl_file(transform_records(shard_dataset), output_filename)
+    except NotImplementedError as e:
+        if "Nested data conversions" not in str(e):
+            raise
+        # PyArrow's dataset scanner can't handle nested types (list[struct]) in parquet.
+        # Bypass it by reading parquet files directly with pyarrow.parquet.read_table.
+        logging.warning(f"Arrow scanner failed for {load_context}, falling back to direct parquet reading")
+        # Clean up partial output
+        fs_clean, _ = url_to_fs(output_filename)
+        if fs_clean.exists(output_filename):
+            fs_clean.rm(output_filename)
+        shard_dataset = _load_hf_parquet_direct(
+            repo_id=task.source,
+            subset=task.subset,
+            split=task.split,
+            revision=task.revision,
+            num_shards=task.num_shards,
+            shard_idx=task.shard_idx,
+        )
+        result = write_jsonl_file(transform_records(shard_dataset), output_filename)
 
     logging.info(
         f"Wrote {result['count']} rows to {result['path']} "
