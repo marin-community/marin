@@ -55,7 +55,7 @@ If objective is ambiguous, ask before editing.
 - Always follow the **babysit-job** skill until the run reaches a terminal state (`SUCCEEDED`/`FAILED`/`STOPPED`); do not stop early.
 - Expect full ferry monitoring to often take 4-5 hours.
 - Never restart/recreate/mutate cluster without explicit human consent in-thread.
-- Keep cluster mutation guardrails exactly aligned with **babysit-job** skill, including the **tpu-recovery** exception path.
+- Keep cluster mutation guardrails exactly aligned with **babysit-job** skill, including the **debug-tpu** exception path.
 - Use major-event updates (not spam): launch, first eval, major incident, terminal state.
 - Seal each completed daily run with a pushed git tag that points to the exact launch commit.
 - Canonical run-closure PR labels:

@@ -1,5 +1,5 @@
 ---
-name: tpu-recovery
+name: debug-tpu
 description: Identify and replace bad TPU nodes causing job failures. Use when logs show "No accelerator found", "FAILED_PRECONDITION", or "Device or resource busy".
 ---
 
@@ -40,7 +40,7 @@ The cluster will automatically provision a replacement node.
 
 ### 4. Return to monitoring
 
-After the bad node is deleted, return to the active babysit loop (**babysit-job** or **zephyr-babysit**) and proceed with the RECOVER step (stop the job, resubmit).
+After the bad node is deleted, return to the active babysit loop (**babysit-job** or **babysit-zephyr**) and proceed with the RECOVER step (stop the job, resubmit).
 
 ## Guardrails
 
@@ -52,4 +52,4 @@ After the bad node is deleted, return to the active babysit loop (**babysit-job*
 ## See Also
 
 - **babysit-job** — generic job monitoring loop
-- **zephyr-babysit** — Zephyr pipeline monitoring
+- **babysit-zephyr** — Zephyr pipeline monitoring

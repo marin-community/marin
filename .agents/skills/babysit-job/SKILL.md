@@ -1,6 +1,6 @@
 ---
 name: babysit-job
-description: Monitor a Ray or Iris job continuously and recover on failure. Use when asked to babysit, monitor, or watch a training job (not Zephyr pipelines — use zephyr-babysit for those).
+description: Monitor a Ray or Iris job continuously and recover on failure. Use when asked to babysit, monitor, or watch a training job (not Zephyr pipelines — use babysit-zephyr for those).
 ---
 
 # Skill: Babysit Job
@@ -10,8 +10,8 @@ Monitor a job continuously and recover on failure. Recovery is stop then resubmi
 - **ray**: Ray Jobs API (`scripts/ray/cluster.py`, `ray_run.py`)
 - **iris**: Iris Jobs API (`uv run iris ... job ...`)
 
-For Zephyr pipeline jobs, use **zephyr-babysit** instead.
-For TPU bad-node errors, escalate to **tpu-recovery**.
+For Zephyr pipeline jobs, use **babysit-zephyr** instead.
+For TPU bad-node errors, escalate to **debug-tpu**.
 
 Cluster-level actions are out of scope. Do not restart, recreate, or otherwise mutate the cluster unless the user gives explicit consent in the current thread.
 
@@ -153,7 +153,7 @@ Use one shared loop and branch commands/status handling by `track`.
 
 7. RECOVER (STOP -> RESUBMIT)
    - Recover only the job (never mutate cluster without explicit consent).
-   - For TPU bad-node errors, invoke **tpu-recovery** skill first, then continue here.
+   - For TPU bad-node errors, invoke **debug-tpu** skill first, then continue here.
    - If current job is still non-terminal, stop it first:
      - if track=ray:
        uv run scripts/ray/cluster.py --cluster <CLUSTER> stop-job <JOB_ID>
@@ -222,6 +222,6 @@ Complex examples:
 
 ## When to Escalate
 
-- Zephyr pipeline issues -> **zephyr-debugger**
-- Controller issues (RPCs timing out, stuck scheduling) -> **iris-controller-debug**
-- TPU bad-node errors -> **tpu-recovery**
+- Zephyr pipeline issues -> **debug-zephyr**
+- Controller issues (RPCs timing out, stuck scheduling) -> **debug-iris-controller**
+- TPU bad-node errors -> **debug-tpu**
