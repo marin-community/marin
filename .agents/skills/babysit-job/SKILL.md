@@ -1,15 +1,21 @@
-# Job Monitoring Loop
+---
+name: babysit-job
+description: Monitor a Ray or Iris job continuously and recover on failure. Use when asked to babysit, monitor, or watch a training job (not Zephyr pipelines — use zephyr-babysit for those).
+---
 
-Monitor a job continuously and recover on failure. For active jobs, recovery is stop then submit again. This playbook now has two tracks:
+# Skill: Babysit Job
 
-- `ray` track: Ray Jobs API (`scripts/ray/cluster.py`, `ray_run.py`)
-- `iris` track: Iris Jobs API (`uv run iris ... job ...`)
+Monitor a job continuously and recover on failure. Recovery is stop then resubmit. Supports two tracks:
 
-Cluster-level actions are out of scope for this loop. Do not restart, recreate, or otherwise mutate the cluster (including head-node restart) unless the user gives explicit consent in the current thread, except for the TPU bad-node recovery flow documented below.
+- **ray**: Ray Jobs API (`scripts/ray/cluster.py`, `ray_run.py`)
+- **iris**: Iris Jobs API (`uv run iris ... job ...`)
+
+For Zephyr pipeline jobs, use **zephyr-babysit** instead.
+For TPU bad-node errors, escalate to **tpu-recovery**.
+
+Cluster-level actions are out of scope. Do not restart, recreate, or otherwise mutate the cluster unless the user gives explicit consent in the current thread.
 
 ## Before Starting
-
-When the user asks to start monitoring, first choose a track and gather required info.
 
 ### Track Selection
 
@@ -19,15 +25,15 @@ Ask:
 
 ### Required Info: Ray Track
 
-1. `job_id` - Ray job ID (e.g., `ray-run-held-isoflop_sweep-20260131-051716`)
-2. `cluster` - cluster name/alias for `scripts/ray/cluster.py` (e.g., `us-east5-a`, `us-central2`)
-3. `experiment` - script path used for resubmission (e.g., `experiments/isoflop_sweep.py`)
+1. `job_id` — Ray job ID (e.g., `ray-run-held-isoflop_sweep-20260131-051716`)
+2. `cluster` — cluster name/alias for `scripts/ray/cluster.py` (e.g., `us-east5-a`, `us-central2`)
+3. `experiment` — script path used for resubmission (e.g., `experiments/isoflop_sweep.py`)
 
 ### Required Info: Iris Track
 
-1. `job_id` - Iris job ID in canonical format `/<user>/<job>` (e.g., `/dlwh/iris-run-train_tiny_model_tpu-20260302-185630`)
-2. `config` - Iris config path (e.g., `lib/iris/examples/marin.yaml`)
-3. `resubmit_command` - exact Iris submit command for resubmission; must include `--no-wait`
+1. `job_id` — Iris job ID in canonical format `/<user>/<job>` (e.g., `/dlwh/iris-run-train_tiny_model_tpu-20260302-185630`)
+2. `config` — Iris config path (e.g., `lib/iris/examples/marin.yaml`)
+3. `resubmit_command` — exact Iris submit command for resubmission; must include `--no-wait`
 4. For Marin TPU training jobs, use `--extra marin:tpu` (not `--extra marin:cpu`)
 5. For TPU jobs, the resubmit command must request TPU resources with `--tpu <variant>`.
    `--reserve <variant>` only holds capacity; it does not attach TPU devices to the task container.
@@ -91,7 +97,7 @@ Write to `monitoring_state.json` in scratchpad/workspace.
 }
 ```
 
-## Loop (Interleaved By Track)
+## Loop
 
 Use one shared loop and branch commands/status handling by `track`.
 
@@ -117,13 +123,13 @@ Use one shared loop and branch commands/status handling by `track`.
      - terminal success: `JOB_STATE_SUCCEEDED`
      - terminal non-success: `JOB_STATE_FAILED`, `JOB_STATE_KILLED`, `JOB_STATE_WORKER_FAILED`, `JOB_STATE_UNSCHEDULABLE`
      - non-terminal: `JOB_STATE_PENDING`, `JOB_STATE_BUILDING`, `JOB_STATE_RUNNING`
-     - if `pending_reason` indicates worker scale-up/capacity wait, treat it as scheduler capacity wait:
+     - if `pending_reason` indicates worker scale-up/capacity wait, treat as scheduler capacity wait:
        - do not run cluster update/recreate/restart actions
        - continue waiting on cadence, or stop+resubmit only if user explicitly asks
    - In both tracks, treat `RUNNING` as controller-level signal only; confirm allocation via expected W&B run when possible.
 
 4. PRINT W&B RUN IDS/LINKS
-   - Inspect logs for W&B URL/ID (`wandb: 🚀 View run`, `/runs/<RUN_ID>`).
+   - Inspect logs for W&B URL/ID (`wandb: View run`, `/runs/<RUN_ID>`).
    - Print run id(s) and full link(s) once per training run.
    - If resubmission creates a new run, print new id/link once.
 
@@ -146,7 +152,8 @@ Use one shared loop and branch commands/status handling by `track`.
    - If no output and status non-terminal -> go to step 1.
 
 7. RECOVER (STOP -> RESUBMIT)
-   - Recover only the job (never mutate cluster without explicit consent, except TPU bad-node flow below).
+   - Recover only the job (never mutate cluster without explicit consent).
+   - For TPU bad-node errors, invoke **tpu-recovery** skill first, then continue here.
    - If current job is still non-terminal, stop it first:
      - if track=ray:
        uv run scripts/ray/cluster.py --cluster <CLUSTER> stop-job <JOB_ID>
@@ -167,11 +174,6 @@ Use one shared loop and branch commands/status handling by `track`.
    - Update state file: `job_id=<NEW_JOB_ID>`, `restart_count += 1`.
    - Go to step 1.
 ```
-
-## Cluster Mutation Guardrail
-
-- Default rule: never restart, recreate, or otherwise mutate the cluster without explicit human consent in this thread.
-- This includes "cluster update" style actions; do not use them in Iris monitoring by default.
 
 ## Fixing Small Bugs
 
@@ -201,21 +203,6 @@ Complex examples:
 - data loading issues
 - unclear stack traces spanning multiple files
 
-## TPU Bad-Node Recovery
-
-For TPU-related errors such as:
-- `RuntimeError: No accelerator found. Please run on a TPU or GPU.`
-- `Failed to cleanup driver after error: INTERNAL: FAILED_PRECONDITION`
-- `Device or resource busy`
-
-Treat as bad TPU node:
-
-1. Identify bad TPU worker IP from logs.
-2. Find TPU VM name for that IP.
-3. Delete bad TPU VM and let cluster replace it.
-   - `gcloud compute tpus tpu-vm delete <TPU_VM_NAME> --zone <ZONE> --quiet`
-4. Recover the job (stop then resubmit) using the active track.
-
 ## Notes
 
 - Sleep must be foreground (max ~10 min due to tool timeout).
@@ -227,19 +214,14 @@ Treat as bad TPU node:
   - Iris: `JOB_STATE_PENDING`, `JOB_STATE_BUILDING`, `JOB_STATE_RUNNING`, `JOB_STATE_SUCCEEDED`, `JOB_STATE_FAILED`, `JOB_STATE_KILLED`, `JOB_STATE_WORKER_FAILED`, `JOB_STATE_UNSCHEDULABLE`
   - Practical mapping:
     - Ray `STOPPED` ~= Iris `JOB_STATE_KILLED`
-    - Iris `JOB_STATE_WORKER_FAILED` and `JOB_STATE_UNSCHEDULABLE` have no direct Ray `JobStatus` equivalent and should be treated as terminal failures.
+    - Iris `JOB_STATE_WORKER_FAILED` and `JOB_STATE_UNSCHEDULABLE` have no direct Ray equivalent and should be treated as terminal failures.
 - Iris `job list --prefix` requires canonical job names (`/<user>/<job>`), not short names.
 - Iris monitoring is job-level; cluster updates are not part of normal recovery.
 - Loop duration can be hours to days.
 - If same error repeats after one fix attempt, do not retry blindly; report to user.
 
-## Optional Todo Pattern
+## When to Escalate
 
-If the agent supports todos:
-
-- [ ] sleep 570
-- [ ] check logs for active track (`scripts/ray/cluster.py job-logs` or `iris job logs`)
-- [ ] check status for active track (`ray list jobs` via helper or `iris job list --json --prefix`)
-- [ ] print relevant logs/status (progress and W&B links)
-- [ ] evaluate and take action
-- [ ] recreate todo list if loop continues
+- Zephyr pipeline issues -> **zephyr-debugger**
+- Controller issues (RPCs timing out, stuck scheduling) -> **iris-controller-debug**
+- TPU bad-node errors -> **tpu-recovery**

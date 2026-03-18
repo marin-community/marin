@@ -27,7 +27,9 @@ Key skills and their triggers:
 | Adding a HF dataset | `add-dataset` |
 | Profiling JAX training | `agent-profiling` |
 | Running / monitoring ferries | `ferries` |
+| Babysitting any Ray/Iris job | `babysit-job` |
 | Babysitting Zephyr jobs | `zephyr-babysit` |
+| TPU bad-node recovery | `tpu-recovery` |
 
 For the full list, see `.agents/skills/`. Each skill has a `SKILL.md` with
 detailed workflow steps — read it after invoking for procedural guidance.
