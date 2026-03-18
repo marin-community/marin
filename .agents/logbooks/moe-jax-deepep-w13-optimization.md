@@ -338,3 +338,67 @@ KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run iris \
   - this materially raises confidence that the full current Iris flow is the right way to recreate the lane, rather than manually applying the H100 NodePool first
 - Next action:
   - once the controller pod binds and becomes healthy, continue with the normal `w13` validation ladder on the restarted `iris-3821-jax` lane.
+
+### 2026-03-18 22:45 UTC - First restarted `w13_only` launch bound to a shared H100 node; add explicit node selection before the pinned rerun
+- Experiment ID: `W13-OPT-007`
+- Hypothesis:
+  - the raw `KubernetesRuntime` wrapper needs an explicit node-placement knob; otherwise even a fresh `iris-3821-jax` lane can leak onto unrelated H100 nodes when a shared 8-GPU slot becomes free.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl patch nodepool i3821jax-h100-8x \
+  --type merge -p '{"spec":{"targetNodes":1}}'
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref dbf62c30646a9407af07a1757ba4d76a0649ab93 \
+  --task-id w13opt-outfirst-w13only-t262144-20260318-2241 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-out-first
+
+uv run pytest lib/iris/tests/cluster/runtime/test_kubernetes_runtime.py -q
+uv run python -m py_compile \
+  lib/iris/src/iris/cluster/runtime/types.py \
+  lib/iris/src/iris/cluster/runtime/kubernetes.py \
+  .agents/scripts/deepep_jax_krt_bench.py
+uv run python .agents/scripts/deepep_jax_krt_bench.py --help | rg 'node-selector|w13-out-first'
+```
+
+- Config:
+  - fresh H100 pool: `i3821jax-h100-8x`, `targetNodes=1`
+  - assigned fresh H100 node: `g11ed54` (still booting; not yet visible in `kubectl get nodes` when the task was launched)
+  - restarted `w13_only` task pod: `iris-task-436f138f98b4`
+  - unexpected bound node: `gd92f4a`
+  - shared-node label on the bound node: `iris-iris-canary-mh-scale-group=h100-16x`
+- Result:
+  - the first restarted `w13_only` pod did not wait for the fresh `i3821jax` node; as soon as a shared H100x8 slot opened, Kubernetes scheduled the pod onto `gd92f4a`
+  - this is because `.agents/scripts/deepep_jax_krt_bench.py` uses `KubernetesRuntime`, and the runtime-generated Pod spec had GPU requests and tolerations but no `nodeSelector` / placement constraint
+  - I added a minimal placement path for future reruns:
+    - `ContainerConfig.node_selector`
+    - `KubernetesRuntime` propagation to `spec.nodeSelector`
+    - repeatable `--node-selector KEY=VALUE` support in `.agents/scripts/deepep_jax_krt_bench.py`
+    - a unit test covering node-selector manifest generation
+  - local verification passed:
+    - `lib/iris/tests/cluster/runtime/test_kubernetes_runtime.py`: `22 passed`
+    - `py_compile` on the changed runtime / wrapper files: passed
+    - `.agents/scripts/deepep_jax_krt_bench.py --help` now exposes `--node-selector`
+  - I am letting `iris-task-436f138f98b4` continue as an exploratory shared-node datapoint since it already reached the actual `deepep_transport_w13_only_probe` bench command
+- Interpretation:
+  - without explicit placement, the fresh-lane restart is not enough to guarantee that the benchmark actually executes on the fresh `i3821jax-h100-8x` pool
+  - this does not invalidate the shared-node run as exploratory performance evidence, but it does mean the clean fresh-lane confirmation must be rerun with an explicit node selector once `g11ed54` is ready
+- Next action:
+  - commit and push the placement patch, then rerun `deepep_transport_w13_only_probe` with `--node-selector iris-i3821jax-scale-group=h100-8x` as soon as the fresh H100 node is schedulable.

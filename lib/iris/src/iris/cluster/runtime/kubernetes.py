@@ -366,6 +366,9 @@ class KubernetesContainerHandle:
         if tolerations:
             spec["tolerations"] = tolerations
 
+        if self.config.node_selector:
+            spec["nodeSelector"] = dict(self.config.node_selector)
+
         metadata: dict[str, object] = {
             "name": self._pod_name,
             "namespace": self.kubectl.namespace,

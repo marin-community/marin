@@ -86,6 +86,7 @@ class ContainerConfig:
     attempt_id: int | None = None
     job_id: str | None = None
     worker_metadata: cluster_pb2.WorkerMetadata | None = None
+    node_selector: dict[str, str] = field(default_factory=dict)
 
     def get_cpu_millicores(self) -> int | None:
         if not self.resources or not self.resources.cpu_millicores:

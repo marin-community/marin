@@ -255,7 +255,22 @@ def _make_container_config(args: argparse.Namespace) -> ContainerConfig:
         task_id=args.task_id,
         resources=resources,
         timeout_seconds=args.timeout_seconds,
+        node_selector=_parse_node_selectors(args.node_selector),
     )
+
+
+def _parse_node_selectors(raw_selectors: list[str]) -> dict[str, str]:
+    selectors: dict[str, str] = {}
+    for item in raw_selectors:
+        if "=" not in item:
+            raise ValueError(f"node selector must be KEY=VALUE, got: {item}")
+        key, value = item.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or not value:
+            raise ValueError(f"node selector must be KEY=VALUE, got: {item}")
+        selectors[key] = value
+    return selectors
 
 
 def _parse_args() -> argparse.Namespace:
@@ -298,6 +313,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--profile-root", default=None)
     parser.add_argument("--post-bench-sleep-seconds", type=int, default=0)
     parser.add_argument("--w13-out-first", action="store_true")
+    parser.add_argument(
+        "--node-selector",
+        action="append",
+        default=[],
+        help="Repeatable Kubernetes node selector in KEY=VALUE form.",
+    )
     parser.add_argument("--skip-cleanup", action="store_true")
     return parser.parse_args()
 

@@ -207,6 +207,18 @@ def test_service_account_name(monkeypatch):
     assert _pod_manifest(manifests)["spec"]["serviceAccountName"] == "iris-controller"
 
 
+def test_node_selector(monkeypatch):
+    manifests = _capture_manifest(monkeypatch)
+
+    config = _make_config(gpu_count=8, gpu_name="H100")
+    config.node_selector = {"iris-i3821jax-scale-group": "h100-8x"}
+    runtime = KubernetesRuntime(namespace="iris")
+    handle = runtime.create_container(config)
+    handle.run()
+
+    assert _pod_manifest(manifests)["spec"]["nodeSelector"] == {"iris-i3821jax-scale-group": "h100-8x"}
+
+
 def test_no_service_account_when_unset(monkeypatch):
     manifests = _capture_manifest(monkeypatch)
 
