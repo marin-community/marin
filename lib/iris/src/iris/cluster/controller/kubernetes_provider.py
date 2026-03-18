@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import logging
 import re
 import shlex
@@ -20,14 +19,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from google.protobuf import json_format
-
-from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
 from iris.cluster.controller.direct_provider import ClusterCapacity, DirectProviderSyncResult, SchedulingEvent
 from iris.cluster.controller.transitions import DirectProviderBatch, RunningTaskEntry, TaskUpdate
 from iris.cluster.k8s.constants import CW_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.k8s.kubectl import Kubectl, KubectlLogLine
-from iris.cluster.runtime.env import normalize_workdir_relative_path
+from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
 from iris.cluster.types import JobName, get_gpu_count
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.time_utils import Timestamp
@@ -200,61 +196,22 @@ def _build_volumes_and_mounts(
     return volumes, mounts
 
 
-def _build_iris_env(
-    run_req: cluster_pb2.Worker.RunTaskRequest,
-    controller_address: str | None,
-) -> dict[str, str]:
-    """Build Iris system env vars for a directly-managed pod.
+@dataclass(frozen=True)
+class PodConfig:
+    """Non-request parameters for pod manifest construction.
 
-    Mirrors build_iris_env() from task_attempt.py without the worker context,
-    since KubernetesProvider has no worker daemon.
+    Bundles the cluster-level settings that _build_pod_manifest needs beyond
+    the RunTaskRequest itself, avoiding a long positional parameter list.
     """
-    env: dict[str, str] = {}
-    # Include attempt_id suffix so tasks see the correct attempt via JobInfo.
-    # The worker path uses task.task_attempt.to_wire() which includes ":attempt_id".
-    task_id_wire = run_req.task_id
-    if run_req.attempt_id:
-        task_id_wire = f"{run_req.task_id}:{run_req.attempt_id}"
-    env["IRIS_TASK_ID"] = task_id_wire
-    env["IRIS_NUM_TASKS"] = str(run_req.num_tasks)
-    env["IRIS_BUNDLE_ID"] = run_req.bundle_id
-    if controller_address:
-        env["IRIS_CONTROLLER_ADDRESS"] = controller_address
-        env["IRIS_CONTROLLER_URL"] = controller_address
-    env["IRIS_BIND_HOST"] = "0.0.0.0"
-    env["IRIS_WORKDIR"] = "/app"
-    env["IRIS_PYTHON"] = "python"
-    env["UV_PYTHON_INSTALL_DIR"] = "/uv/cache/python"
-    env["CARGO_TARGET_DIR"] = "/root/.cargo/target"
 
-    extras = list(run_req.environment.extras)
-    if extras:
-        env["IRIS_JOB_EXTRAS"] = json.dumps(extras)
-    pip_packages = list(run_req.environment.pip_packages)
-    if pip_packages:
-        env["IRIS_JOB_PIP_PACKAGES"] = json.dumps(pip_packages)
-    user_env_vars = dict(run_req.environment.env_vars)
-    if user_env_vars:
-        env["IRIS_JOB_ENV"] = json.dumps(user_env_vars)
-
-    inheritable = [c for c in run_req.constraints if c.key in INHERITED_CONSTRAINT_KEYS]
-    if inheritable:
-        env["IRIS_JOB_CONSTRAINTS"] = json.dumps(
-            [json_format.MessageToDict(c, preserving_proto_field_name=True) for c in inheritable]
-        )
-
-    for port_name in run_req.ports:
-        env[f"IRIS_PORT_{port_name.upper()}"] = "0"
-
-    # Device env vars (TPU)
-    if run_req.HasField("resources") and run_req.resources.HasField("device"):
-        dev = run_req.resources.device
-        if dev.HasField("tpu"):
-            env["JAX_PLATFORMS"] = "tpu,cpu"
-            env["PJRT_DEVICE"] = "TPU"
-            env["JAX_FORCE_TPU_INIT"] = "1"
-
-    return env
+    namespace: str
+    default_image: str
+    colocation_topology_key: str = ""
+    cache_dir: str = "/cache"
+    service_account: str = ""
+    host_network: bool = False
+    controller_address: str | None = None
+    managed_label: str = ""
 
 
 def _build_task_script(run_req: cluster_pb2.Worker.RunTaskRequest) -> str:
@@ -339,22 +296,33 @@ def _build_init_container_spec(
 
 def _build_pod_manifest(
     run_req: cluster_pb2.Worker.RunTaskRequest,
-    namespace: str,
-    default_image: str,
-    colocation_topology_key: str = "",
-    cache_dir: str = "/cache",
-    service_account: str = "",
-    host_network: bool = False,
-    controller_address: str | None = None,
-    managed_label: str = "",
+    config: PodConfig,
 ) -> dict:
-    """Build a Pod manifest dict from a RunTaskRequest."""
+    """Build a Pod manifest dict from a RunTaskRequest and cluster config."""
     task_id = JobName.from_wire(run_req.task_id)
     attempt_id = run_req.attempt_id
     pod_name = _pod_name(task_id, attempt_id)
 
+    namespace = config.namespace
+    default_image = config.default_image
+    colocation_topology_key = config.colocation_topology_key
+    cache_dir = config.cache_dir
+    service_account = config.service_account
+    host_network = config.host_network
+    managed_label = config.managed_label
+
     # User env vars as base, then iris system env vars override.
-    iris_env = _build_iris_env(run_req, controller_address)
+    iris_env = build_common_iris_env(
+        task_id=run_req.task_id,
+        attempt_id=run_req.attempt_id,
+        num_tasks=run_req.num_tasks,
+        bundle_id=run_req.bundle_id,
+        controller_address=config.controller_address,
+        environment=run_req.environment,
+        constraints=run_req.constraints,
+        ports=run_req.ports,
+        resources=run_req.resources if run_req.HasField("resources") else None,
+    )
     combined = {**dict(run_req.environment.env_vars), **iris_env}
     env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]
     # Pod IP via downward API — not expressible as a static value.
@@ -911,19 +879,23 @@ class KubernetesProvider:
     # Internal helpers
     # -------------------------------------------------------------------------
 
-    def _apply_pod(self, run_req: cluster_pb2.Worker.RunTaskRequest) -> None:
-        """Create or update the Pod for a task attempt."""
-        manifest = _build_pod_manifest(
-            run_req,
-            self.namespace,
-            self.default_image,
-            self.colocation_topology_key,
+    @property
+    def pod_config(self) -> PodConfig:
+        """Build PodConfig from provider fields."""
+        return PodConfig(
+            namespace=self.namespace,
+            default_image=self.default_image,
+            colocation_topology_key=self.colocation_topology_key,
             cache_dir=self.cache_dir,
             service_account=self.service_account,
             host_network=self.host_network,
             controller_address=self.controller_address,
             managed_label=self.managed_label,
         )
+
+    def _apply_pod(self, run_req: cluster_pb2.Worker.RunTaskRequest) -> None:
+        """Create or update the Pod for a task attempt."""
+        manifest = _build_pod_manifest(run_req, self.pod_config)
 
         task_id_name = JobName.from_wire(run_req.task_id)
         pod_name = _pod_name(task_id_name, run_req.attempt_id)

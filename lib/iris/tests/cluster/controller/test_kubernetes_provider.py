@@ -16,8 +16,8 @@ from iris.cluster.controller.kubernetes_provider import (
     _LABEL_TASK_HASH,
     _POD_NOT_FOUND_GRACE_CYCLES,
     KubernetesProvider,
+    PodConfig,
     _build_init_container_spec,
-    _build_iris_env,
     _build_pod_manifest,
     _build_task_script,
     _build_volumes_and_mounts,
@@ -30,6 +30,7 @@ from iris.cluster.controller.kubernetes_provider import (
     _task_hash,
     _task_update_from_pod,
 )
+from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.controller.transitions import DirectProviderBatch, RunningTaskEntry
 from iris.cluster.k8s.kubectl import KubectlLogLine, KubectlLogResult
 from iris.cluster.types import JobName
@@ -58,6 +59,14 @@ def provider(mock_kubectl):
         default_image="myrepo/iris:latest",
         cache_dir="/cache",
     )
+
+
+def _pod_config(
+    namespace: str = "iris",
+    default_image: str = "myrepo/iris:latest",
+    **kwargs,
+) -> PodConfig:
+    return PodConfig(namespace=namespace, default_image=default_image, **kwargs)
 
 
 def _make_run_req(task_id: str, attempt_id: int = 0, cpu_mc: int = 1000) -> cluster_pb2.Worker.RunTaskRequest:
@@ -159,7 +168,7 @@ def test_pod_name_different_tasks_never_collide():
 
 def test_build_pod_manifest_fields():
     req = _make_run_req("/test-job/0", attempt_id=2)
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
 
     assert manifest["kind"] == "Pod"
     assert manifest["metadata"]["namespace"] == "iris"
@@ -180,7 +189,7 @@ def test_build_pod_manifest_fields():
 def test_build_pod_manifest_env_vars():
     req = _make_run_req("/test-job/0")
     req.environment.env_vars["MY_VAR"] = "hello"
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
     env_names = {e["name"] for e in manifest["spec"]["containers"][0]["env"]}
     # User vars are present
     assert "MY_VAR" in env_names
@@ -197,20 +206,20 @@ def test_build_pod_manifest_env_vars():
 def test_build_pod_manifest_gpu():
     req = _make_run_req("/test-job/0")
     req.resources.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="A100", count=4))
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
     limits = manifest["spec"]["containers"][0]["resources"]["limits"]
     assert limits["nvidia.com/gpu"] == "4"
 
 
 def test_build_pod_manifest_runtime_label():
     req = _make_run_req("/test-job/0")
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
     assert manifest["metadata"]["labels"]["iris.runtime"] == "iris-kubernetes"
 
 
 def test_build_pod_manifest_task_hash_label():
     req = _make_run_req("/test-job/0")
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
     labels = manifest["metadata"]["labels"]
     assert _LABEL_TASK_HASH in labels
     assert labels[_LABEL_TASK_HASH] == _task_hash("/test-job/0")
@@ -861,7 +870,7 @@ def test_constraints_to_node_selector_pool():
     req = _make_run_req("/my-job/task-0", attempt_id=1)
     _add_eq_constraint(req, "pool", "h100-8x")
 
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
     assert manifest["spec"]["nodeSelector"] == {"iris.pool": "h100-8x"}
 
 
@@ -869,7 +878,7 @@ def test_constraints_to_node_selector_region():
     req = _make_run_req("/my-job/task-0")
     _add_eq_constraint(req, "region", "US-WEST-04A")
 
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
     assert manifest["spec"]["nodeSelector"] == {"iris.region": "US-WEST-04A"}
 
 
@@ -878,7 +887,7 @@ def test_constraints_to_node_selector_multiple():
     _add_eq_constraint(req, "pool", "h100-8x")
     _add_eq_constraint(req, "region", "US-WEST-04A")
 
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
     assert manifest["spec"]["nodeSelector"] == {
         "iris.pool": "h100-8x",
         "iris.region": "US-WEST-04A",
@@ -889,7 +898,7 @@ def test_constraints_unknown_key_ignored():
     req = _make_run_req("/my-job/task-0")
     _add_eq_constraint(req, "custom_key", "foo")
 
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
     assert "nodeSelector" not in manifest["spec"]
 
 
@@ -900,7 +909,7 @@ def test_constraints_non_eq_op_ignored():
     c.op = cluster_pb2.CONSTRAINT_OP_NE
     c.value.string_value = "h100-8x"
 
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
     assert "nodeSelector" not in manifest["spec"]
 
 
@@ -924,7 +933,7 @@ def test_build_pod_manifest_gpu_adds_cw_toleration():
     req = _make_run_req("/my-job/task-0")
     req.resources.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="A100", count=4))
 
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
     tolerations = manifest["spec"].get("tolerations", [])
     assert any(t.get("key") == "qos.coreweave.cloud/interruptable" for t in tolerations)
 
@@ -932,7 +941,7 @@ def test_build_pod_manifest_gpu_adds_cw_toleration():
 def test_build_pod_manifest_no_gpu_no_toleration():
     req = _make_run_req("/my-job/task-0")
 
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
     assert "tolerations" not in manifest["spec"]
 
 
@@ -948,7 +957,7 @@ def test_coreweave_constraints_end_to_end():
     _add_eq_constraint(req, "pool", "h100-8x")
     _add_eq_constraint(req, "region", "US-WEST-04A")
 
-    manifest = _build_pod_manifest(req, "iris", "ghcr.io/marin-community/iris-task:latest")
+    manifest = _build_pod_manifest(req, _pod_config(default_image="ghcr.io/marin-community/iris-task:latest"))
     spec = manifest["spec"]
 
     assert spec["nodeSelector"]["iris.pool"] == "h100-8x"
@@ -966,7 +975,9 @@ def test_build_pod_manifest_single_task_no_affinity():
     """Single-task jobs get no podAffinity (no IB colocation needed)."""
     req = _make_run_req("/my-job/task-0", attempt_id=1)
     req.num_tasks = 1
-    manifest = _build_pod_manifest(req, "iris", "img:latest", colocation_topology_key="coreweave.cloud/spine")
+    manifest = _build_pod_manifest(
+        req, _pod_config(default_image="img:latest", colocation_topology_key="coreweave.cloud/spine")
+    )
     assert "affinity" not in manifest["spec"]
 
 
@@ -974,7 +985,9 @@ def test_build_pod_manifest_multi_task_adds_pod_affinity():
     """Multi-task jobs get podAffinity for IB colocation on same spine."""
     req = _make_run_req("/my-job/task-0", attempt_id=1)
     req.num_tasks = 2
-    manifest = _build_pod_manifest(req, "iris", "img:latest", colocation_topology_key="coreweave.cloud/spine")
+    manifest = _build_pod_manifest(
+        req, _pod_config(default_image="img:latest", colocation_topology_key="coreweave.cloud/spine")
+    )
     affinity = manifest["spec"]["affinity"]
     pod_affinity = affinity["podAffinity"]
     terms = pod_affinity["preferredDuringSchedulingIgnoredDuringExecution"]
@@ -990,14 +1003,14 @@ def test_build_pod_manifest_multi_task_no_topology_key_no_affinity():
     """Empty colocation_topology_key disables affinity even for multi-task jobs."""
     req = _make_run_req("/my-job/task-0", attempt_id=1)
     req.num_tasks = 2
-    manifest = _build_pod_manifest(req, "iris", "img:latest", colocation_topology_key="")
+    manifest = _build_pod_manifest(req, _pod_config(default_image="img:latest", colocation_topology_key=""))
     assert "affinity" not in manifest["spec"]
 
 
 def test_job_id_label_on_pod():
     """Pod metadata includes iris.job_id label."""
     req = _make_run_req("/my-job/task-0", attempt_id=1)
-    manifest = _build_pod_manifest(req, "iris", "img:latest")
+    manifest = _build_pod_manifest(req, _pod_config(default_image="img:latest"))
     assert _LABEL_JOB_ID in manifest["metadata"]["labels"]
 
 
@@ -1024,27 +1037,27 @@ def test_job_id_shared_across_sibling_tasks():
 def test_timeout_sets_active_deadline_seconds():
     req = _make_run_req("/my-job/task-0")
     req.timeout.milliseconds = 3600_000  # 1 hour
-    manifest = _build_pod_manifest(req, "iris", "img:latest")
+    manifest = _build_pod_manifest(req, _pod_config(default_image="img:latest"))
     assert manifest["spec"]["activeDeadlineSeconds"] == 3600
 
 
 def test_timeout_rounds_down_to_at_least_one_second():
     req = _make_run_req("/my-job/task-0")
     req.timeout.milliseconds = 500  # sub-second
-    manifest = _build_pod_manifest(req, "iris", "img:latest")
+    manifest = _build_pod_manifest(req, _pod_config(default_image="img:latest"))
     assert manifest["spec"]["activeDeadlineSeconds"] == 1
 
 
 def test_no_timeout_no_deadline():
     req = _make_run_req("/my-job/task-0")
-    manifest = _build_pod_manifest(req, "iris", "img:latest")
+    manifest = _build_pod_manifest(req, _pod_config(default_image="img:latest"))
     assert "activeDeadlineSeconds" not in manifest["spec"]
 
 
 def test_zero_timeout_no_deadline():
     req = _make_run_req("/my-job/task-0")
     req.timeout.milliseconds = 0
-    manifest = _build_pod_manifest(req, "iris", "img:latest")
+    manifest = _build_pod_manifest(req, _pod_config(default_image="img:latest"))
     assert "activeDeadlineSeconds" not in manifest["spec"]
 
 
@@ -1056,7 +1069,7 @@ def test_zero_timeout_no_deadline():
 def test_build_pod_manifest_includes_standard_volumes():
     """Pod manifest includes all 5 standard volumes plus dshm (6 total)."""
     req = _make_run_req("/test-job/0", attempt_id=1)
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
 
     spec = manifest["spec"]
     container = spec["containers"][0]
@@ -1080,7 +1093,7 @@ def test_build_pod_manifest_shm_size_limit_with_gpu():
     """dshm volume gets sizeLimit=100Gi when GPU resources are requested."""
     req = _make_run_req("/test-job/0")
     req.resources.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="A100", count=4))
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
 
     dshm_volumes = [v for v in manifest["spec"]["volumes"] if v["name"] == "dshm"]
     assert len(dshm_volumes) == 1
@@ -1091,7 +1104,7 @@ def test_build_pod_manifest_shm_size_limit_with_gpu():
 def test_build_pod_manifest_shm_no_size_limit_without_gpu():
     """dshm volume has no sizeLimit when no GPU is requested."""
     req = _make_run_req("/test-job/0")
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
 
     dshm_volumes = [v for v in manifest["spec"]["volumes"] if v["name"] == "dshm"]
     assert len(dshm_volumes) == 1
@@ -1103,7 +1116,7 @@ def test_build_pod_manifest_shm_size_limit_with_tpu():
     """dshm volume gets sizeLimit=100Gi when TPU resources are requested."""
     req = _make_run_req("/test-job/0")
     req.resources.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v4", count=4))
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
 
     dshm_volumes = [v for v in manifest["spec"]["volumes"] if v["name"] == "dshm"]
     assert len(dshm_volumes) == 1
@@ -1114,7 +1127,7 @@ def test_tpu_adds_sys_resource_capability():
     """TPU pods get SYS_RESOURCE capability for memlock ulimits."""
     req = _make_run_req("/test-job/0")
     req.resources.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v4", count=4))
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
 
     caps = manifest["spec"]["containers"][0]["securityContext"]["capabilities"]["add"]
     assert "SYS_PTRACE" in caps
@@ -1141,7 +1154,7 @@ def test_nvidia_gpu_toleration_added():
     req = _make_run_req("/my-job/task-0")
     req.resources.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="A100", count=4))
 
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
     tolerations = manifest["spec"].get("tolerations", [])
     toleration_keys = {t.get("key") for t in tolerations}
     assert "nvidia.com/gpu" in toleration_keys
@@ -1156,7 +1169,7 @@ def test_nvidia_gpu_toleration_added():
 def test_sys_ptrace_capability():
     """Container gets SYS_PTRACE capability for profiling."""
     req = _make_run_req("/my-job/task-0")
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
     container = manifest["spec"]["containers"][0]
     assert "SYS_PTRACE" in container["securityContext"]["capabilities"]["add"]
 
@@ -1169,14 +1182,14 @@ def test_sys_ptrace_capability():
 def test_service_account_set():
     """serviceAccountName is set in spec when service_account is provided."""
     req = _make_run_req("/my-job/task-0")
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest", service_account="my-sa")
+    manifest = _build_pod_manifest(req, _pod_config(service_account="my-sa"))
     assert manifest["spec"]["serviceAccountName"] == "my-sa"
 
 
 def test_service_account_omitted_when_empty():
     """serviceAccountName is absent from spec when service_account is empty."""
     req = _make_run_req("/my-job/task-0")
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest", service_account="")
+    manifest = _build_pod_manifest(req, _pod_config(service_account=""))
     assert "serviceAccountName" not in manifest["spec"]
 
 
@@ -1188,7 +1201,7 @@ def test_service_account_omitted_when_empty():
 def test_host_network_mode():
     """hostNetwork and dnsPolicy are set when host_network is enabled."""
     req = _make_run_req("/my-job/task-0")
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest", host_network=True)
+    manifest = _build_pod_manifest(req, _pod_config(host_network=True))
     assert manifest["spec"]["hostNetwork"] is True
     assert manifest["spec"]["dnsPolicy"] == "ClusterFirstWithHostNet"
 
@@ -1196,7 +1209,7 @@ def test_host_network_mode():
 def test_host_network_omitted_when_disabled():
     """hostNetwork and dnsPolicy are absent when host_network is False."""
     req = _make_run_req("/my-job/task-0")
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest", host_network=False)
+    manifest = _build_pod_manifest(req, _pod_config(host_network=False))
     assert "hostNetwork" not in manifest["spec"]
     assert "dnsPolicy" not in manifest["spec"]
 
@@ -1211,7 +1224,7 @@ def test_iris_env_vars_injected():
     req = _make_run_req("/test-job/0")
     req.num_tasks = 4
     req.bundle_id = "bundle-abc"
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest", controller_address="http://ctrl:8080")
+    manifest = _build_pod_manifest(req, _pod_config(controller_address="http://ctrl:8080"))
 
     env_by_name = {e["name"]: e for e in manifest["spec"]["containers"][0]["env"]}
     # attempt_id=0 omits the suffix (matches task_attempt.py wire format)
@@ -1230,7 +1243,7 @@ def test_iris_env_vars_injected():
 def test_advertise_host_uses_downward_api():
     """IRIS_ADVERTISE_HOST is populated via the k8s downward API (status.podIP)."""
     req = _make_run_req("/test-job/0")
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
 
     env_by_name = {e["name"]: e for e in manifest["spec"]["containers"][0]["env"]}
     adv = env_by_name["IRIS_ADVERTISE_HOST"]
@@ -1242,7 +1255,7 @@ def test_device_env_vars_tpu():
     """TPU device resources inject JAX_PLATFORMS, PJRT_DEVICE, JAX_FORCE_TPU_INIT."""
     req = _make_run_req("/test-job/0")
     req.resources.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v4-8", count=4))
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
 
     env_by_name = {e["name"]: e.get("value") for e in manifest["spec"]["containers"][0]["env"]}
     assert env_by_name["JAX_PLATFORMS"] == "tpu,cpu"
@@ -1255,7 +1268,7 @@ def test_iris_env_overrides_user_env():
     req = _make_run_req("/test-job/0")
     # User sets IRIS_TASK_ID to something wrong; iris env should override
     req.environment.env_vars["IRIS_TASK_ID"] = "wrong-value"
-    manifest = _build_pod_manifest(req, "iris", "myrepo/iris:latest")
+    manifest = _build_pod_manifest(req, _pod_config())
 
     env_by_name = {e["name"]: e.get("value") for e in manifest["spec"]["containers"][0]["env"]}
     assert env_by_name["IRIS_TASK_ID"] == "/test-job/0"
@@ -1284,36 +1297,54 @@ def test_task_script_exec_run_command():
     assert lines[-1] == "exec python train.py"
 
 
-def test_build_iris_env_no_controller_address():
+def _common_env_from_req(
+    req: cluster_pb2.Worker.RunTaskRequest,
+    controller_address: str | None = None,
+) -> dict[str, str]:
+    """Helper: call build_common_iris_env with fields extracted from a RunTaskRequest."""
+    return build_common_iris_env(
+        task_id=req.task_id,
+        attempt_id=req.attempt_id,
+        num_tasks=req.num_tasks,
+        bundle_id=req.bundle_id,
+        controller_address=controller_address,
+        environment=req.environment,
+        constraints=req.constraints,
+        ports=req.ports,
+        resources=req.resources if req.HasField("resources") else None,
+    )
+
+
+def test_build_common_iris_env_no_controller_address():
     """Controller address env vars are omitted when controller_address is None."""
     req = _make_run_req("/test-job/0")
-    env = _build_iris_env(req, controller_address=None)
+    env = _common_env_from_req(req, controller_address=None)
     assert "IRIS_CONTROLLER_ADDRESS" not in env
     assert "IRIS_CONTROLLER_URL" not in env
     assert "IRIS_TASK_ID" in env
 
 
-def test_build_iris_env_serializes_user_env_as_iris_job_env():
+def test_build_common_iris_env_serializes_user_env_as_iris_job_env():
     """User env vars are serialized into IRIS_JOB_ENV for child job inheritance."""
     req = _make_run_req("/test-job/0")
-    env = _build_iris_env(req, controller_address=None)
+    env = _common_env_from_req(req, controller_address=None)
     import json
 
     job_env = json.loads(env["IRIS_JOB_ENV"])
     assert job_env["IRIS_JOB_ID"] == "test-job"
 
 
-def test_build_iris_env_includes_attempt_suffix_on_retry():
+def test_build_common_iris_env_includes_attempt_suffix_on_retry():
     """IRIS_TASK_ID includes :attempt_id suffix for retried tasks."""
     req = _make_run_req("/test-job/0", attempt_id=3)
-    env = _build_iris_env(req, controller_address=None)
+    env = _common_env_from_req(req, controller_address=None)
     assert env["IRIS_TASK_ID"] == "/test-job/0:3"
 
 
-def test_build_iris_env_no_attempt_suffix_for_first_attempt():
+def test_build_common_iris_env_no_attempt_suffix_for_first_attempt():
     """IRIS_TASK_ID has no suffix when attempt_id is 0."""
     req = _make_run_req("/test-job/0", attempt_id=0)
-    env = _build_iris_env(req, controller_address=None)
+    env = _common_env_from_req(req, controller_address=None)
     assert env["IRIS_TASK_ID"] == "/test-job/0"
 
 
