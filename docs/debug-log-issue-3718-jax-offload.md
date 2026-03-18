@@ -279,3 +279,53 @@ The repro should be framed directly as a gradient mismatch, not as a training in
 - Final script result:
   - `result=grads_not_allclose`
 - Current conclusion: this is a cleaner issue artifact than the NaN-based framing. The observed problem is now directly stated as a backward inconsistency under checkpoint offload.
+
+## Hypothesis 10
+
+The reproducer can be simplified further than the original gradient-mismatch version: fixed input-dependent routing should be enough, the expert path can be linear, and a second layer or learned router weights may not be required.
+
+## Changes to make
+
+- Test targeted ablations on TPU:
+  - random routing
+  - linear expert instead of gated MLP
+  - drop `w2` as a parameter
+  - fixed input-dependent routing instead of learned router weights
+  - one layer instead of two
+
+## Results
+
+- Verified on TPU `v5p-8` with:
+  - `jax==0.9.1`
+  - `jaxlib==0.9.1`
+  - `libtpu==0.0.37`
+- Observed matrix:
+  - baseline gradient repro: `result=grads_not_allclose`
+  - `REPRO_RANDOM_ROUTING=1`: `result=grads_allclose`
+  - `REPRO_LINEAR_EXPERT=1`: `result=grads_not_allclose`
+  - `REPRO_RANDOM_ROUTING=1 REPRO_LINEAR_EXPERT=1`: `result=grads_allclose`
+  - `REPRO_LINEAR_EXPERT=1 REPRO_DROP_W2_PARAM=1`: `result=grads_not_allclose`
+  - `REPRO_FIXED_ROUTING=1 REPRO_LINEAR_EXPERT=1 REPRO_DROP_W2_PARAM=1`: `result=grads_not_allclose`
+  - `REPRO_NUM_LAYERS=1`: `result=grads_allclose`
+- A fully stripped one-layer file with:
+  - fixed input-dependent routing
+  - linear expert
+  - no `w2`
+  - no combine-weight path
+  - no extra dummy `w2` argument
+  - unexpectedly became `result=grads_allclose`
+- Restoring the mathematically-unused `combine_weights` path and a dummy sharded `w2` argument brought the mismatch back in the one-layer simplified file:
+  - `loss_offload_0=1.8217421770095825`
+  - `loss_offload_1=1.8217421770095825`
+  - `grad_leaf=0/rms finite=True allclose=False max_abs_diff=0.06031022220849991 max_rel_diff=1.6602920293807983`
+  - `grad_leaf=0/w_linear finite=True allclose=True max_abs_diff=0.0 max_rel_diff=0.0`
+  - `result=grads_not_allclose`
+- Current conclusion: the sharpest known repro is now:
+  - one layer
+  - fixed input-dependent routing
+  - linear expert
+  - no learned router weights
+  - no `w2` parameter
+  - but still with the extra `combine_weights` path and dummy sharded `w2` argument preserved inside the `shard_map` call
+
+This suggests the bug is sensitive not just to the visible math, but also to the structure of the `shard_map` inputs and/or the resulting lowered program.

@@ -3,17 +3,18 @@
 
 """JAX-only TPU repro for issue #3718.
 
-This is intentionally stripped to the smallest interaction we have confirmed:
+This is the smallest variant currently verified on TPU:
+- one checkpointed block
 - RMSNorm
-- router/top-k expert selection
+- fixed input-dependent routing
 - ragged_all_to_all expert dispatch
-- checkpointed block input
+- per-expert linear projection
 
-Attention is intentionally omitted because it is not required to reproduce.
-This version frames the bug in terms of backward inconsistency:
-- compute the same step-0 loss and gradients with checkpoint offload disabled
-- compute them again with checkpoint offload enabled
-- check whether the two gradient pytrees are allclose
+The script compares step-0 gradients from the same params and inputs under:
+- checkpoint offload disabled
+- checkpoint offload enabled
+
+It reports whether the two gradient pytrees are allclose.
 """
 
 from __future__ import annotations
@@ -27,30 +28,42 @@ from jax import shard_map
 from jax.ad_checkpoint import checkpoint_name
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P, reshard
 
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw not in {"0", "false", "False", "no", "NO"}
+
+
 BATCH = int(os.environ.get("REPRO_BATCH", "2"))
 SEQ_LEN = int(os.environ.get("REPRO_SEQ_LEN", "128"))
 HIDDEN = int(os.environ.get("REPRO_HIDDEN", "2"))
-NUM_LAYERS = int(os.environ.get("REPRO_NUM_LAYERS", "2"))
 NUM_EXPERTS = int(os.environ.get("REPRO_NUM_EXPERTS", "4"))
-TOP_K = int(os.environ.get("REPRO_TOPK", "1"))
-MLP_DIM = int(os.environ.get("REPRO_MLP_DIM", "1"))
 INIT_STD = float(os.environ.get("REPRO_INIT_STD", "0.02"))
 SEED = int(os.environ.get("REPRO_SEED", "0"))
 ATOL = float(os.environ.get("REPRO_ATOL", "1e-6"))
 RTOL = float(os.environ.get("REPRO_RTOL", "1e-2"))
+INCLUDE_COMBINE_PATH = _env_bool("REPRO_INCLUDE_COMBINE_PATH", True)
+APPLY_COMBINE_AT_OUTPUT = _env_bool("REPRO_APPLY_COMBINE_AT_OUTPUT", True)
+INCLUDE_DUMMY_W2_ARG = _env_bool("REPRO_INCLUDE_DUMMY_W2_ARG", True)
+BARRIER_DUMMY_W2 = _env_bool("REPRO_BARRIER_DUMMY_W2", True)
 
+NUM_LAYERS = 1
+TOP_K = 1
+UNUSED_W2_ROWS = 1
 CAPACITY_FACTOR = 1.25
 EXPERT_AXIS = 2
 MODEL_AXIS = 2
 
-if TOP_K > NUM_EXPERTS:
-    raise ValueError("TOP_K must be <= NUM_EXPERTS")
-if any(v <= 0 for v in (BATCH, SEQ_LEN, HIDDEN, NUM_LAYERS, NUM_EXPERTS, TOP_K, MLP_DIM)):
+if any(v <= 0 for v in (BATCH, SEQ_LEN, HIDDEN, NUM_EXPERTS)):
     raise ValueError("all integer config values must be > 0")
 if CAPACITY_FACTOR <= 0.0:
     raise ValueError("CAPACITY_FACTOR must be > 0")
 if ATOL < 0.0 or RTOL < 0.0:
     raise ValueError("REPRO_ATOL and REPRO_RTOL must be >= 0")
+if APPLY_COMBINE_AT_OUTPUT and not INCLUDE_COMBINE_PATH:
+    raise ValueError("REPRO_APPLY_COMBINE_AT_OUTPUT requires REPRO_INCLUDE_COMBINE_PATH=1")
 
 
 def _make_mesh() -> Mesh:
@@ -99,6 +112,15 @@ def _offload_policy():
     )
 
 
+def _fixed_router_matrix() -> jax.Array:
+    hidden_ids = jnp.arange(HIDDEN, dtype=jnp.int32)[:, None]
+    expert_ids = jnp.arange(NUM_EXPERTS, dtype=jnp.int32)[None, :]
+    bits = jnp.bitwise_and(jnp.right_shift(expert_ids, hidden_ids), 1)
+    signs = jnp.where(bits == 0, -1.0, 1.0)
+    scales = 1.0 + hidden_ids.astype(jnp.float32)
+    return (signs * scales).astype(jnp.float32)
+
+
 def _rms_norm(x: jax.Array, weight: jax.Array) -> jax.Array:
     x32 = x.astype(jnp.float32)
     var = jnp.mean(jnp.square(x32), axis=-1, keepdims=True)
@@ -107,23 +129,17 @@ def _rms_norm(x: jax.Array, weight: jax.Array) -> jax.Array:
 
 
 def _init_params(key: jax.Array) -> tuple[dict[str, jax.Array], ...]:
-    # Preserve the original key positions from the larger repro so the tiny
-    # failing initialization remains aligned even though attention is deleted.
-    keys = jax.random.split(key, NUM_LAYERS * 7)
-
-    def layer_params(i: int) -> dict[str, jax.Array]:
-        k = keys[7 * i : 7 * i + 7]
-        return {
+    # Preserve the original key slot used by the remaining expert weight so the
+    # tiny failing initialization stays aligned with the earlier repro.
+    keys = jax.random.split(key, 7)
+    return (
+        {
             "rms": jnp.ones((HIDDEN,), dtype=jnp.float32),
-            "router": INIT_STD * jax.random.truncated_normal(k[4], -3, 3, (HIDDEN, NUM_EXPERTS), dtype=jnp.float32),
-            "w_up_gate": (
-                INIT_STD
-                * jax.random.truncated_normal(k[5], -3, 3, (NUM_EXPERTS, HIDDEN, 2 * MLP_DIM), dtype=jnp.float32)
+            "w_linear": (
+                INIT_STD * jax.random.truncated_normal(keys[5], -3, 3, (NUM_EXPERTS, HIDDEN, HIDDEN), dtype=jnp.float32)
             ),
-            "w2": INIT_STD * jax.random.truncated_normal(k[6], -3, 3, (NUM_EXPERTS, MLP_DIM, HIDDEN), dtype=jnp.float32),
-        }
-
-    return tuple(layer_params(i) for i in range(NUM_LAYERS))
+        },
+    )
 
 
 def _prefix_offsets(sizes: jax.Array) -> jax.Array:
@@ -148,18 +164,13 @@ def _permute_activations_bwd(residuals: jax.Array, grads: jax.Array) -> tuple[ja
 _permute_activations.defvjp(_permute_activations_fwd, _permute_activations_bwd)
 
 
-def _expert_ffn_for_assignments(
+def _expert_linear_for_assignments(
     x_rows: jax.Array,
     local_expert_ids: jax.Array,
-    w_up_gate_local: jax.Array,
-    w2_local: jax.Array,
+    w_linear_local: jax.Array,
 ) -> jax.Array:
-    w_up_gate_take = jnp.take(w_up_gate_local, local_expert_ids, axis=0)
-    w2_take = jnp.take(w2_local, local_expert_ids, axis=0)
-    up_gate = jnp.einsum("td,tdm->tm", x_rows, w_up_gate_take)
-    gate, up = jnp.split(up_gate, [MLP_DIM], axis=-1)
-    hidden = jax.nn.silu(gate.astype(jnp.float32)).astype(x_rows.dtype) * up
-    return jnp.einsum("tm,tmd->td", hidden, w2_take)
+    w_linear_take = jnp.take(w_linear_local, local_expert_ids, axis=0)
+    return jnp.einsum("td,tdh->th", x_rows, w_linear_take)
 
 
 def _moe_ragged_all_to_all(
@@ -167,14 +178,31 @@ def _moe_ragged_all_to_all(
     x_flat: jax.Array,
     selected_experts: jax.Array,
     combine_weights: jax.Array,
-    w_up_gate: jax.Array,
-    w2: jax.Array,
+    w_linear: jax.Array,
+    w2_dummy: jax.Array,
 ) -> jax.Array:
-    w_up_gate = jax.lax.optimization_barrier(reshard(w_up_gate, _expert_weight_sharding(mesh)))
-    w2 = jax.lax.optimization_barrier(reshard(w2, _expert_weight_sharding(mesh)))
+    w_linear = jax.lax.optimization_barrier(reshard(w_linear, _expert_weight_sharding(mesh)))
+    if INCLUDE_DUMMY_W2_ARG:
+        w2_dummy = reshard(w2_dummy, _expert_weight_sharding(mesh))
+        if BARRIER_DUMMY_W2:
+            w2_dummy = jax.lax.optimization_barrier(w2_dummy)
 
-    def _local(x_local, selected_local, combine_local, w_up_gate_local, w2_local):
-        local_experts = w_up_gate_local.shape[0]
+    def _with_combine_and_dummy(x_local, selected_local, combine_local, w_linear_local, w2_dummy_local):
+        return _local_impl(x_local, selected_local, combine_local, w_linear_local)
+
+    def _with_combine_no_dummy(x_local, selected_local, combine_local, w_linear_local):
+        return _local_impl(x_local, selected_local, combine_local, w_linear_local)
+
+    def _no_combine_with_dummy(x_local, selected_local, w_linear_local, w2_dummy_local):
+        combine_local = jnp.ones((x_local.shape[0], TOP_K), dtype=x_local.dtype)
+        return _local_impl(x_local, selected_local, combine_local, w_linear_local)
+
+    def _no_combine_no_dummy(x_local, selected_local, w_linear_local):
+        combine_local = jnp.ones((x_local.shape[0], TOP_K), dtype=x_local.dtype)
+        return _local_impl(x_local, selected_local, combine_local, w_linear_local)
+
+    def _local_impl(x_local, selected_local, combine_local, w_linear_local):
+        local_experts = w_linear_local.shape[0]
         num_experts = local_experts * jax.lax.psum(1, "expert")
         ep_size = num_experts // local_experts
 
@@ -185,7 +213,7 @@ def _moe_ragged_all_to_all(
 
         expert_flat = selected_local.reshape(assignments_local)
         weight_flat = combine_local.reshape(assignments_local).astype(x_local.dtype)
-        token_local = jnp.floor_divide(jnp.arange(assignments_local, dtype=jnp.int32), TOP_K)
+        token_local = jnp.arange(assignments_local, dtype=jnp.int32)
 
         dest_shard = jnp.floor_divide(expert_flat, local_experts)
         local_expert = expert_flat - dest_shard * local_experts
@@ -195,7 +223,6 @@ def _moe_ragged_all_to_all(
 
         dest_sorted = jnp.take(dest_shard, sort_idx, axis=0)
         local_expert_sorted = jnp.take(local_expert, sort_idx, axis=0)
-        weight_sorted = jnp.take(weight_flat, sort_idx, axis=0)
         token_sorted = jnp.take(token_local, sort_idx, axis=0)
         x_send = jnp.take(x_local, token_sorted, axis=0)
 
@@ -251,9 +278,7 @@ def _moe_ragged_all_to_all(
         x_dispatch = _permute_activations(x_recv, local_perm)
         expert_dispatch = jnp.take(local_expert_recv, local_perm, axis=0)
 
-        out_dispatch = _expert_ffn_for_assignments(
-            x_dispatch.astype(x_local.dtype), expert_dispatch, w_up_gate_local, w2_local
-        )
+        out_dispatch = _expert_linear_for_assignments(x_dispatch.astype(x_local.dtype), expert_dispatch, w_linear_local)
         inv_local_perm = jnp.argsort(local_perm, axis=0)
         out_recv = _permute_activations(out_dispatch.astype(jnp.float32), inv_local_perm)
 
@@ -267,39 +292,58 @@ def _moe_ragged_all_to_all(
             axis_name="expert",
         )
         out_sorted = jnp.where(keep_mask[:, None], out_sorted, jnp.zeros_like(out_sorted)).astype(x_local.dtype)
-        return (
-            jnp.zeros_like(x_local)
-            .at[token_sorted]
-            .add(out_sorted * weight_sorted[:, None].astype(x_local.dtype), mode="drop")
-        )
+        if APPLY_COMBINE_AT_OUTPUT:
+            out_sorted = out_sorted * weight_flat[:, None]
+        return jnp.zeros_like(x_local).at[token_sorted].add(out_sorted, mode="drop")
 
+    if INCLUDE_COMBINE_PATH and INCLUDE_DUMMY_W2_ARG:
+        fn = shard_map(
+            _with_combine_and_dummy,
+            mesh=mesh,
+            in_specs=(_token_spec(), _token_spec(), _token_spec(), P("expert", None, None), P("expert", None, None)),
+            out_specs=_token_spec(),
+        )
+        return fn(x_flat, selected_experts, combine_weights, w_linear, w2_dummy)
+    if INCLUDE_COMBINE_PATH and not INCLUDE_DUMMY_W2_ARG:
+        fn = shard_map(
+            _with_combine_no_dummy,
+            mesh=mesh,
+            in_specs=(_token_spec(), _token_spec(), _token_spec(), P("expert", None, None)),
+            out_specs=_token_spec(),
+        )
+        return fn(x_flat, selected_experts, combine_weights, w_linear)
+    if not INCLUDE_COMBINE_PATH and INCLUDE_DUMMY_W2_ARG:
+        fn = shard_map(
+            _no_combine_with_dummy,
+            mesh=mesh,
+            in_specs=(_token_spec(), _token_spec(), P("expert", None, None), P("expert", None, None)),
+            out_specs=_token_spec(),
+        )
+        return fn(x_flat, selected_experts, w_linear, w2_dummy)
     fn = shard_map(
-        _local,
+        _no_combine_no_dummy,
         mesh=mesh,
-        in_specs=(_token_spec(), _token_spec(), _token_spec(), P("expert", None, None), P("expert", None, None)),
+        in_specs=(_token_spec(), _token_spec(), P("expert", None, None)),
         out_specs=_token_spec(),
     )
-    return fn(x_flat, selected_experts, combine_weights, w_up_gate, w2)
+    return fn(x_flat, selected_experts, w_linear)
 
 
 def _moe(layer: dict[str, jax.Array], x: jax.Array, mesh: Mesh) -> jax.Array:
     x_flat = reshard(jnp.reshape(x, (BATCH * SEQ_LEN, HIDDEN)), _token_sharding(mesh))
     x_for_router = reshard(x_flat, _replicated_2d_sharding(mesh))
-
-    router = reshard(layer["router"], _replicated_2d_sharding(mesh)).astype(x_flat.dtype)
-    logits = jnp.einsum("td,de->te", x_for_router, router)
+    logits = jnp.einsum("td,de->te", x_for_router, _fixed_router_matrix())
     logits = reshard(logits, _token_sharding(mesh))
-
     topk_logits, selected_experts = jax.lax.top_k(logits, TOP_K)
     combine_weights = jax.nn.softmax(topk_logits.astype(jnp.float32), axis=-1).astype(x_flat.dtype)
-
+    w2_dummy = jnp.zeros((NUM_EXPERTS, UNUSED_W2_ROWS, HIDDEN), dtype=layer["w_linear"].dtype)
     routed = _moe_ragged_all_to_all(
         mesh,
         x_flat,
         selected_experts.astype(jnp.int32),
         combine_weights,
-        layer["w_up_gate"],
-        layer["w2"],
+        layer["w_linear"],
+        w2_dummy,
     )
     return reshard(jnp.reshape(routed, (BATCH, SEQ_LEN, HIDDEN)), _batch_sharding(mesh))
 
@@ -389,10 +433,14 @@ def main() -> None:
     print(
         "config: "
         f"batch={BATCH} seq={SEQ_LEN} hidden={HIDDEN} "
-        f"layers={NUM_LAYERS} experts={NUM_EXPERTS} topk={TOP_K} mlp={MLP_DIM} "
+        f"layers={NUM_LAYERS} experts={NUM_EXPERTS} "
         f"init_std={INIT_STD} seed={SEED} "
         f"mesh={mesh.shape} cap_factor={CAPACITY_FACTOR} "
-        f"atol={ATOL} rtol={RTOL}",
+        f"atol={ATOL} rtol={RTOL} "
+        f"include_combine_path={INCLUDE_COMBINE_PATH} "
+        f"apply_combine_at_output={APPLY_COMBINE_AT_OUTPUT} "
+        f"include_dummy_w2_arg={INCLUDE_DUMMY_W2_ARG} "
+        f"barrier_dummy_w2={BARRIER_DUMMY_W2}",
         flush=True,
     )
 
