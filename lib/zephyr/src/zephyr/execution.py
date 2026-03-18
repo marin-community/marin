@@ -913,13 +913,13 @@ class ZephyrCoordinator:
                 for chunk in shard.chunks:
                     flat_result.extend(list(chunk))
 
-            # Signal workers to shut down now that all stages are complete.
-            self.shutdown()
-
             return flat_result
         finally:
-            with self._lock:
-                self._pipeline_running = False
+            try:
+                self.shutdown()
+            finally:
+                with self._lock:
+                    self._pipeline_running = False
 
     def _compute_join_aux(
         self,

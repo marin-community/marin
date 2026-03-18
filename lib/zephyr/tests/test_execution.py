@@ -6,14 +6,16 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from pathlib import Path
 
 import pytest
-from fray.v2 import ResourceConfig
+from fray.v2 import ActorConfig, ResourceConfig
+from fray.v2.local_backend import LocalClient, _local_actor_registry
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext, zephyr_worker_ctx
+from zephyr.execution import ZephyrContext, ZephyrCoordinator, ZephyrWorkerError, zephyr_worker_ctx
 
 
 def test_simple_map(zephyr_ctx):
@@ -712,6 +714,82 @@ def test_execute_retries_on_coordinator_death(tmp_path):
 
     ctx.shutdown()
     client.shutdown(wait=True)
+
+
+def test_execute_cleans_up_original_coordinator_after_same_endpoint_replacement(tmp_path):
+    """Replacing a coordinator at the same endpoint must not leak the original coordinator."""
+    client = LocalClient()
+    chunk_prefix = str(tmp_path / "chunks")
+
+    task_started = threading.Event()
+    release_task = threading.Event()
+    execution_error: list[Exception] = []
+    old_coordinator = None
+    replacement_group = None
+
+    def blocking_map(x):
+        task_started.set()
+        if not release_task.wait(timeout=5.0):
+            raise RuntimeError("release timed out")
+        return x + 1
+
+    ctx = ZephyrContext(
+        client=client,
+        max_workers=1,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=chunk_prefix,
+        no_workers_timeout=0.2,
+        max_execution_retries=0,
+        name=f"test-execution-{uuid.uuid4().hex[:8]}",
+    )
+
+    def run_failing_execute():
+        try:
+            list(ctx.execute(Dataset.from_list([1]).map(blocking_map)))
+        except Exception as exc:
+            execution_error.append(exc)
+
+    execution_thread = threading.Thread(target=run_failing_execute, daemon=True)
+
+    try:
+        execution_thread.start()
+        assert task_started.wait(timeout=5.0)
+        assert ctx._coordinator is not None
+
+        endpoint = ctx._coordinator._endpoint
+        old_coordinator = _local_actor_registry[endpoint]
+        assert old_coordinator._coordinator_thread is not None
+        assert old_coordinator._coordinator_thread.is_alive()
+
+        replacement_group = client.create_actor_group(
+            ZephyrCoordinator,
+            name=f"zephyr-{ctx.name}-p{ctx._pipeline_id}-a0-coord",
+            count=1,
+            resources=ResourceConfig(cpu=1, ram="5g"),
+            actor_config=ActorConfig(max_concurrency=100),
+        )
+        replacement_group.wait_ready()
+        assert _local_actor_registry[endpoint] is not old_coordinator
+
+        old_coordinator.check_heartbeats(timeout=0.0)
+        release_task.set()
+
+        execution_thread.join(timeout=10.0)
+        assert not execution_thread.is_alive()
+        assert len(execution_error) == 1
+        assert isinstance(execution_error[0], ZephyrWorkerError)
+
+        results = list(ctx.execute(Dataset.from_list([10]).map(lambda x: x + 1)))
+        assert results == [11]
+        assert not old_coordinator._coordinator_thread.is_alive()
+    finally:
+        release_task.set()
+        execution_thread.join(timeout=10.0)
+        if old_coordinator is not None:
+            old_coordinator.shutdown()
+        if replacement_group is not None:
+            replacement_group.shutdown()
+        client.shutdown(wait=True)
 
 
 def test_execute_does_not_retry_worker_errors(fray_client, tmp_path):
