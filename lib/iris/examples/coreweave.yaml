@@ -61,7 +61,7 @@ defaults:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001
     cache_dir: /mnt/local/iris-cache
-    runtime: kubernetes
+    runtime: docker
     default_task_image: ghcr.io/marin-community/iris-task:latest
 
 scale_groups:

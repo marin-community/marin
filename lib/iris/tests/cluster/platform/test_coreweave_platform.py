@@ -70,7 +70,7 @@ def _make_worker_config() -> config_pb2.WorkerConfig:
         docker_image="ghcr.io/marin-community/iris-worker:latest",
         port=10001,
         cache_dir="/var/cache/iris",
-        runtime="kubernetes",
+        runtime="docker",
     )
 
 
@@ -1358,21 +1358,6 @@ def test_worker_pod_has_gpu_resource_limits_with_docker_runtime(fake_kubectl: Fa
     platform.shutdown()
 
 
-def test_worker_pod_no_gpu_limits_with_kubernetes_runtime(fake_kubectl: FakeKubectl):
-    """With kubernetes runtime, worker Pods must not request GPU resources (task Pods claim them)."""
-    platform = _make_platform()
-    config = _make_slice_config(gpu_count=8)
-    bootstrap = _make_worker_config()  # runtime="kubernetes"
-
-    handle = platform.create_slice(config, bootstrap)
-    _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
-
-    pod_name = f"iris-worker-{handle.slice_id}-vm0"
-    container = fake_kubectl._pods[pod_name]["spec"]["containers"][0]
-    assert "nvidia.com/gpu" not in container.get("resources", {}).get("limits", {})
-    platform.shutdown()
-
-
 def test_worker_pod_no_gpu_limits_when_zero(fake_kubectl: FakeKubectl):
     """Worker Pods omit nvidia.com/gpu when gpu_count is 0 (CPU-only)."""
     platform = _make_platform()
@@ -1708,7 +1693,7 @@ def _make_cluster_config_with_workers(
             docker_image=worker_image,
             port=10001,
             cache_dir="/var/cache/iris",
-            runtime="kubernetes",
+            runtime="docker",
         )
     )
     sg = config.scale_groups[scale_group_name]

@@ -9,7 +9,7 @@ Distributed job orchestration replacing Ray with simpler primitives. Start with 
 - `TESTING.md` — testing policy, markers, and commands
 - `docs/autoscaler-fix.md` — autoscaler design + terminology
 - `docs/task-states.md` — task state machine + retry semantics
-- `docs/coreweave.md` — CoreWeave platform + `runtime=kubernetes` behavior
+- `docs/coreweave.md` — CoreWeave platform integration
 - `docs/image-push.md` — multi-region image push/pull architecture
 - `docs/constraints.md` — constraint system design
 - `docs/users.md` — user/auth system design

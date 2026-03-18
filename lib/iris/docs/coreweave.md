@@ -7,8 +7,8 @@
 Iris runs on CoreWeave CKS (bare-metal Kubernetes) using a shared NodePool model.
 Each Iris scale group maps to one CoreWeave NodePool with autoscaling enabled.
 CoreWeave manages node provisioning and deprovisioning; Iris manages only Pods.
-Tasks execute as independent Kubernetes Pods via `KubernetesRuntime` (Pod-per-task),
-which replaced an originally-planned containerd/crictl approach during implementation.
+Tasks execute as independent Kubernetes Pods via the platform's `DirectTaskProvider`,
+which replaced an earlier `KubernetesRuntime` approach.
 
 Example config: `lib/iris/examples/coreweave.yaml`
 
@@ -58,10 +58,10 @@ Key architectural properties:
   `{label_prefix}-{scale_group_name}`. NodePools scale to zero when idle.
 - **Controller as K8s Deployment**: Created by `start_controller()`, discovered by
   workers via in-cluster DNS (`iris-controller-svc.iris.svc.cluster.local:10000`).
-- **KubernetesRuntime (Pod-per-task)**: Task Pods claim GPU/RDMA resources directly
-  from the kubelet device plugin. Worker Pods are "light" (no GPU/RDMA requests).
-  Task Pods request `nvidia.com/gpu: N` and optionally `rdma/ib: 1`. They also
-  receive tolerations for the `nvidia.com/gpu` NoSchedule taint on GPU nodes.
+- **Pod-per-task execution**: Task Pods claim GPU/RDMA resources directly
+  from the kubelet device plugin. Task Pods request `nvidia.com/gpu: N` and
+  optionally `rdma/ib: 1`. They also receive tolerations for the `nvidia.com/gpu`
+  NoSchedule taint on GPU nodes.
 - **hostNetwork**: Both worker and task Pods use `hostNetwork: true` for RDMA/GPU
   performance and flat-network endpoint registration. `dnsPolicy` is set to
   `ClusterFirstWithHostNet` to preserve in-cluster DNS resolution.
@@ -220,7 +220,7 @@ in `CoreweavePlatform`):
 | `docker_image` | string | — | Worker image |
 | `worker_port` | int | — | Worker listening port |
 | `cache_dir` | string | — | **Must point to NVMe** (see warning below) |
-| `runtime` | string | — | Set to `kubernetes` for CoreWeave (enables Pod-per-task) |
+| `runtime` | string | — | Set to `docker` |
 
 > **Warning — Disk layout**: CoreWeave bare-metal nodes have a **15 GB RAM disk**
 > as the root filesystem and multi-TB NVMe at `/mnt/local`. The `cache_dir` must
@@ -290,10 +290,10 @@ On failure, the platform cleans up its own resources (deletes the worker Pod) an
 marks the handle as `FAILED`. The autoscaler calls `handle.terminate()` as a
 safety net.
 
-### KubernetesRuntime for task execution (Pod-per-task)
+### Pod-per-task execution
 
-Each task attempt is a separate Kubernetes Pod created by `KubernetesRuntime`.
-Task Pods:
+Each task attempt is a separate Kubernetes Pod created by the platform's task
+provider. Task Pods:
 - Claim GPU/RDMA resources from the kubelet device plugin (`nvidia.com/gpu: N`,
   `rdma/ib: 1` when `infiniband: true`)
 - Receive tolerations for `nvidia.com/gpu` NoSchedule taints automatically
@@ -302,9 +302,6 @@ Task Pods:
 - Use `emptyDir` for `/app` (workdir) so tasks can run on any node
 - Materialize code bundles in-pod via fsspec
 - Have `ownerReferences` pointing to the worker Pod for GC
-
-The worker Pod intentionally does **not** request GPU/RDMA resources when
-`runtime: kubernetes` is configured, so task Pods can claim them instead.
 
 ### Reconcile-driven recovery
 
@@ -341,7 +338,7 @@ The platform detects fatal errors before the full timeout expires:
 | `IRIS_POD_NAMESPACE` | Downward API (`metadata.namespace`) | Pod's namespace |
 | `IRIS_POD_NAME` | Downward API (`metadata.name`) | Pod's name |
 | `IRIS_POD_UID` | Downward API (`metadata.uid`) | Pod's UID |
-| `IRIS_SERVICE_ACCOUNT_NAME` | Platform | ServiceAccount for task Pods (set when `runtime: kubernetes`) |
+| `IRIS_SERVICE_ACCOUNT_NAME` | Platform | ServiceAccount for task Pods |
 | `IRIS_S3_SECRET_NAME` | Platform | K8s Secret name for S3 credentials |
 | `AWS_ACCESS_KEY_ID` | Secret ref | From `iris-s3-credentials` Secret |
 | `AWS_SECRET_ACCESS_KEY` | Secret ref | From `iris-s3-credentials` Secret |
@@ -390,18 +387,16 @@ See `lib/iris/src/iris/cluster/platform/coreweave.py`.
 
 ### Worker registration
 
-Worker Pod runs `iris.cluster.worker.main serve --runtime=kubernetes`. It:
+Worker Pod runs `iris.cluster.worker.main serve`. It:
 1. Reads config from ConfigMap mount (`/etc/iris/config.json`)
 2. Discovers controller via `iris-controller-svc.iris.svc.cluster.local:10000`
-3. Creates `KubernetesRuntime` (reads `IRIS_SERVICE_ACCOUNT_NAME`,
-   `IRIS_S3_SECRET_NAME` from environment)
+3. Creates `DockerRuntime` for container execution
 4. Registers with controller, enters heartbeat loop
 
 ### Task execution
 
-Standard Iris flow. Controller assigns task via heartbeat RPC. Worker calls
-`KubernetesRuntime.create_container()` which creates a task Pod. See
-`lib/iris/src/iris/cluster/runtime/kubernetes.py`.
+Standard Iris flow. Controller assigns task via heartbeat RPC. Worker executes
+the task via its container runtime.
 
 ### Scale-down
 
@@ -574,7 +569,7 @@ instantly. Fix in config and redeploy.
 | File | Description |
 |------|-------------|
 | `lib/iris/src/iris/cluster/platform/coreweave.py` | CoreWeave platform implementation (includes `ensure_rbac()`) |
-| `lib/iris/src/iris/cluster/runtime/kubernetes.py` | KubernetesRuntime (Pod-per-task) |
+| `lib/iris/src/iris/cluster/runtime/docker.py` | DockerRuntime (container execution) |
 | `lib/iris/src/iris/cluster/k8s/kubectl.py` | Kubectl CLI wrapper |
 | `lib/iris/examples/coreweave.yaml` | Example cluster config |
 | `lib/iris/AGENTS.md` | CoreWeave integration notes for agents |

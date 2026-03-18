@@ -184,7 +184,4 @@ uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url http
 # Cloud mode: full lifecycle
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-config examples/smoke.yaml --iris-mode full -o "addopts="
 
-# K8s runtime tests (requires a running cluster — kind, k3d, minikube, etc.)
-uv run pytest lib/iris/tests/e2e/test_coreweave_live_kubernetes_runtime.py \
-  -m slow -k lifecycle -v
 ```

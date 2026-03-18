@@ -18,7 +18,6 @@ import os
 import shutil
 import subprocess
 import time
-import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,7 +26,6 @@ import pytest
 from iris.chaos import reset_chaos
 from iris.client.client import IrisClient, Job
 from iris.cluster.config import connect_cluster, load_config, make_local_config
-from iris.cluster.runtime.kubernetes import KubernetesRuntime
 from iris.cluster.constraints import Constraint, WellKnownAttribute
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -574,37 +572,4 @@ def k8s_cluster():
             ["kind", "delete", "cluster", "--name", KIND_CLUSTER_NAME],
             capture_output=True,
             timeout=60,
-        )
-
-
-@pytest.fixture
-def k8s_runtime(k8s_cluster):
-    """KubernetesRuntime with an ephemeral namespace, torn down after each test."""
-    namespace = f"iris-test-{uuid.uuid4().hex[:8]}"
-    subprocess.run(
-        ["kubectl", "create", "namespace", namespace],
-        check=True,
-        capture_output=True,
-    )
-    # Wait for K8s to provision the default ServiceAccount in the new namespace.
-    # Without this, pod creation fails with "serviceaccount default not found".
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        result = subprocess.run(
-            ["kubectl", "-n", namespace, "get", "serviceaccount", "default"],
-            capture_output=True,
-        )
-        if result.returncode == 0:
-            break
-        time.sleep(0.5)
-    else:
-        pytest.skip(f"default ServiceAccount not ready in namespace {namespace} after 30s")
-    runtime = KubernetesRuntime(namespace=namespace)
-    try:
-        yield runtime
-    finally:
-        runtime.cleanup()
-        subprocess.run(
-            ["kubectl", "delete", "namespace", namespace, "--ignore-not-found"],
-            capture_output=True,
         )

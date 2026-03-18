@@ -11,12 +11,7 @@ When the callable completes, the generated runner script (`CALLABLE_RUNNER` in
 directory. The worker's `TaskAttempt._monitor()` then reads this file into
 `self.result`.
 
-With `KubernetesRuntime` on CoreWeave, this is broken by design. The task Pod runs
-in an isolated Pod with an `emptyDir`-backed `/app`. The worker runs in a *different*
-Pod. When the task writes `_result.pkl` inside its Pod, the worker cannot read it --
-the file never leaves the task Pod's filesystem. Callable tasks silently return `None`.
-
-Beyond the K8s incompatibility, the feature is also broken end-to-end even on Docker:
+Beyond the design issues, the feature is also broken end-to-end even on Docker:
 
 1. `TaskAttempt` reads `_result.pkl` into `self.result` (bytes) at line 633 of
    `task_attempt.py`.

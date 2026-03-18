@@ -750,22 +750,9 @@ class CoreweavePlatform:
         if not cache_dir:
             raise PlatformError("worker_config.cache_dir must be non-empty")
 
-        runtime = worker_config.runtime
-        if not runtime:
-            raise PlatformError("worker_config.runtime must be set (docker/kubernetes)")
-
         worker_image = worker_config.docker_image.strip()
         if not worker_image:
             raise PlatformError("worker_config.docker_image must be non-empty")
-
-        # When using the kubernetes runtime, task containers are separate Pods
-        # that claim GPU/RDMA resources directly from the device plugin. Pass
-        # the service account name and S3 secret name so the KubernetesRuntime
-        # can include them in the task Pod spec.
-        if runtime == "kubernetes":
-            env_vars.append({"name": "IRIS_SERVICE_ACCOUNT_NAME", "value": "iris-controller"})
-            if self._s3_enabled:
-                env_vars.append({"name": "IRIS_S3_SECRET_NAME", "value": _S3_SECRET_NAME})
 
         # All Pods in the slice share a single ConfigMap containing the
         # WorkerConfig proto. Create it once on the first VM.
@@ -824,17 +811,11 @@ class CoreweavePlatform:
             "seccompProfile": {"type": "RuntimeDefault"},
         }
 
-        # When runtime is "kubernetes", task Pods claim GPU/RDMA resources
-        # directly. The worker Pod must not also request them (the device
-        # plugin would double-count and the task Pod would get nothing).
-        # CPU/memory requests are always set so the worker gets Burstable QoS
-        # and isn't starved by task Pods on the same node.
         resource_limits: dict = {}
-        if runtime != "kubernetes":
-            if config.gpu_count > 0:
-                resource_limits["nvidia.com/gpu"] = str(config.gpu_count)
-            if cw.infiniband:
-                resource_limits["rdma/ib"] = "1"
+        if config.gpu_count > 0:
+            resource_limits["nvidia.com/gpu"] = str(config.gpu_count)
+        if cw.infiniband:
+            resource_limits["rdma/ib"] = "1"
         resources: dict = {"requests": {"cpu": "2", "memory": "4Gi"}}
         if resource_limits:
             resources["limits"] = resource_limits

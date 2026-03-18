@@ -242,7 +242,7 @@ message WorkerConfig {
   // Task defaults
   string default_task_image = 9;
   map<string, string> default_task_env = 10;
-  string runtime = 11;                       // "docker" or "kubernetes"
+  string runtime = 11;                       // "docker"
 
   // Accelerator (from scale group resources, not env vars)
   AcceleratorType accelerator_type = 20;

@@ -301,8 +301,8 @@ def _validate_worker_defaults(config: config_pb2.IrisClusterConfig) -> None:
         raise ValueError("defaults.worker.docker_image is required for non-local platforms (gcp/manual/coreweave).")
 
     runtime = config.defaults.worker.runtime.strip()
-    if runtime and runtime not in {"docker", "kubernetes"}:
-        raise ValueError(f"defaults.worker.runtime must be one of docker/kubernetes, got {runtime!r}.")
+    if runtime and runtime != "docker":
+        raise ValueError(f"defaults.worker.runtime must be 'docker', got {runtime!r}.")
 
 
 def _scale_groups_to_config(scale_groups: dict[str, config_pb2.ScaleGroupConfig]) -> config_pb2.IrisClusterConfig:
