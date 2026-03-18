@@ -44,6 +44,7 @@ from iris.cluster.controller.transitions import (
     ControllerTransitions,
     HEARTBEAT_FAILURE_THRESHOLD,
     HeartbeatApplyRequest,
+    PruneResult,
     TaskUpdate,
 )
 from iris.cluster.constraints import WellKnownAttribute, constraints_from_resources
@@ -3381,3 +3382,152 @@ def test_task_update_worker_failed_cascades_children(job_request, worker_metadat
 
     child_job = _query_job(state, JobName.from_string("/test-user/parent/child"))
     assert child_job.state == cluster_pb2.JOB_STATE_KILLED
+
+
+# =============================================================================
+# Pruning Tests
+# =============================================================================
+
+
+def test_prune_old_terminal_jobs(job_request, worker_metadata):
+    """Terminal jobs older than retention are pruned; recent and active jobs are kept."""
+    state = _make_state()
+    wid = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    # Submit two jobs and complete them
+    old_req = job_request("old-job")
+    old_tasks = submit_job(state, "old-job", old_req)
+    dispatch_task(state, old_tasks[0], wid)
+    transition_task(state, old_tasks[0].task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
+
+    recent_req = job_request("recent-job")
+    recent_tasks = submit_job(state, "recent-job", recent_req)
+    dispatch_task(state, recent_tasks[0], wid)
+    transition_task(state, recent_tasks[0].task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
+
+    # Also submit an active (non-terminal) job
+    active_req = job_request("active-job")
+    submit_job(state, "active-job", active_req)
+
+    old_job_id = JobName.root("test-user", "old-job")
+    recent_job_id = JobName.root("test-user", "recent-job")
+    active_job_id = JobName.root("test-user", "active-job")
+
+    # Backdate old-job's finished_at_ms to epoch so it falls outside retention
+    state._db.execute(
+        "UPDATE jobs SET finished_at_ms = 1000 WHERE job_id = ?",
+        (old_job_id.to_wire(),),
+    )
+
+    # All three jobs exist
+    assert _query_job(state, old_job_id) is not None
+    assert _query_job(state, recent_job_id) is not None
+    assert _query_job(state, active_job_id) is not None
+
+    # Prune with a 1-day retention — old-job finished at ~epoch, recent-job finished just now
+    result = state.prune_old_data(
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        log_retention=Duration.from_seconds(86400),
+        txn_action_retention=Duration.from_seconds(86400),
+    )
+
+    assert result.jobs_deleted == 1
+    assert _query_job(state, old_job_id) is None  # pruned
+    assert _query_job(state, recent_job_id) is not None  # kept (recent)
+    assert _query_job(state, active_job_id) is not None  # kept (non-terminal)
+
+    # Tasks for old job should also be gone (CASCADE)
+    assert _query_task(state, old_tasks[0].task_id) is None
+
+
+def test_prune_old_inactive_workers(worker_metadata):
+    """Inactive workers with stale heartbeats are pruned; active workers are kept."""
+    state = _make_state()
+
+    # Register two workers: one healthy, one that we'll make inactive
+    active_wid = register_worker(state, "active-w", "host:8080", worker_metadata())
+    stale_wid = register_worker(state, "stale-w", "host:8081", worker_metadata())
+
+    # Mark the stale worker as unhealthy with an old heartbeat
+    state._db.execute(
+        "UPDATE workers SET healthy = 0, last_heartbeat_ms = ? WHERE worker_id = ?",
+        (1000, str(stale_wid)),
+    )
+
+    assert _query_worker(state, active_wid) is not None
+    assert _query_worker(state, stale_wid) is not None
+
+    result = state.prune_old_data(
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        log_retention=Duration.from_seconds(86400),
+        txn_action_retention=Duration.from_seconds(86400),
+    )
+
+    assert result.workers_deleted == 1
+    assert _query_worker(state, active_wid) is not None  # kept (healthy+active)
+    assert _query_worker(state, stale_wid) is None  # pruned
+
+
+def test_prune_old_logs_and_txn_actions(job_request, worker_metadata):
+    """Old logs and txn_actions are pruned by their respective retentions."""
+    state = _make_state()
+    register_worker(state, "w1", "host:8080", worker_metadata())
+
+    # Insert old logs directly
+    state._db.execute(
+        "INSERT INTO logs(key, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?)",
+        ("test-key", "test", "old log", 1000, 0),
+    )
+    state._db.execute(
+        "INSERT INTO logs(key, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?)",
+        ("test-key", "test", "recent log", Timestamp.now().epoch_ms(), 0),
+    )
+
+    # Submit a job to generate txn_actions, then backdate some
+    req = job_request("txn-test")
+    submit_job(state, "txn-test", req)
+
+    # Backdate all existing txn_actions to epoch
+    state._db.execute("UPDATE txn_actions SET created_at_ms = 1000")
+
+    old_txn_count = state._db.fetchone("SELECT COUNT(*) as c FROM txn_actions")["c"]
+    old_log_count = state._db.fetchone("SELECT COUNT(*) as c FROM logs")["c"]
+
+    assert old_txn_count > 0
+    assert old_log_count == 2
+
+    result = state.prune_old_data(
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        log_retention=Duration.from_seconds(86400),
+        txn_action_retention=Duration.from_seconds(86400),
+    )
+
+    assert result.logs_deleted == 1  # old log pruned, recent kept
+    assert result.txn_actions_deleted == old_txn_count
+
+    remaining_logs = state._db.fetchone("SELECT COUNT(*) as c FROM logs")["c"]
+    remaining_txn_actions = state._db.fetchone("SELECT COUNT(*) as c FROM txn_actions")["c"]
+
+    assert remaining_logs == 1  # only the recent log
+    # The prune itself records a new transaction with actions for the deletions
+    # it performed (logs_pruned + txn_actions_pruned). The old backdated actions
+    # are gone; only the 2 new prune-generated action rows remain.
+    assert remaining_txn_actions == 2
+
+
+def test_prune_noop_when_nothing_old():
+    """Pruning with no old data returns zero counts."""
+    state = _make_state()
+
+    result = state.prune_old_data(
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        log_retention=Duration.from_seconds(86400),
+        txn_action_retention=Duration.from_seconds(86400),
+    )
+
+    assert result == PruneResult()
+    assert result.total == 0
