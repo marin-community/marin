@@ -70,3 +70,37 @@
   - the first inner-loop choice is still open: `layout/transpose first` is plausible, but it needs a stage-local `w13_only` win before assuming it is the right micro-branch.
 - Next action:
   - inspect the exact `w13` code path and baseline profile artifacts, choose one narrow candidate change, and only then run the required validation ladder on the authoritative cell.
+
+### 2026-03-18 16:38 UTC - First candidate: opt-in `w13` out-first weight layout
+- Experiment ID: `W13-OPT-002`
+- Hypothesis:
+  - the large pure-`w13_only` `loop_transpose_fusion` may be partly caused by the current `w_up_gate` storage order (`[E, D, 2M]`), and an out-first layout (`[E, 2M, D]`) may let XLA lower the `w13` ragged dot with less transpose/materialization work.
+- Command:
+
+```bash
+uv run pytest lib/haliax/tests/test_ragged_dot_dispatch.py
+uv run python -m py_compile \
+  lib/haliax/src/haliax/nn/ragged_dot.py \
+  lib/levanter/src/levanter/grug/grug_moe.py \
+  lib/levanter/scripts/bench/bench_moe_hillclimb.py \
+  .agents/scripts/deepep_jax_krt_bench.py
+uv run python lib/levanter/scripts/bench/bench_moe_hillclimb.py --help | rg 'w13-out-first'
+```
+
+- Config:
+  - code change is opt-in only via `--w13-out-first`
+  - `ragged_dot` now supports contracting against either rhs axis `1` or rhs axis `2`
+  - benchmark harness can now synthesize `w_up_gate` as either `[E, D, 2M]` or `[E, 2M, D]`
+- Result:
+  - added contract-axis support to `haliax.nn.ragged_dot`
+  - added a targeted unit test for out-first rhs layout
+  - added `--w13-out-first` to both the benchmark script and the CoreWeave wrapper
+  - local verification passed:
+    - `lib/haliax/tests/test_ragged_dot_dispatch.py`: `2 passed`
+    - `py_compile` on all changed Python files: passed
+    - `bench_moe_hillclimb.py --help` shows `--w13-out-first`
+- Interpretation:
+  - this is a narrow layout/materialization hypothesis test inside `w13`, not a default behavioral change
+  - the candidate is now ready for cluster validation using the required ladder order on the authoritative cell
+- Next action:
+  - commit and push the benchmark candidate, then run `deepep_transport_w13_only_probe` first with `--w13-out-first` before spending any pods on broader follow-up kernels.

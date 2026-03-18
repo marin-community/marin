@@ -5319,6 +5319,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--check-equivalence", action="store_true")
     parser.add_argument("--profile-root", type=Path, default=None)
+    parser.add_argument("--w13-out-first", action="store_true")
     args = parser.parse_args()
 
     if args.coordinator_address is not None or args.num_processes is not None or args.process_id is not None:
@@ -5359,7 +5360,12 @@ def main() -> None:
     selected_experts, combine_weights = _route_topk(router_logits, topk=args.topk)
     combine_weights = combine_weights.astype(dtype)
 
-    w_up_gate = jax.random.normal(key_w13, (args.experts, args.hidden, 2 * args.mlp_dim), dtype=dtype)
+    w13_shape = (
+        (args.experts, 2 * args.mlp_dim, args.hidden)
+        if args.w13_out_first
+        else (args.experts, args.hidden, 2 * args.mlp_dim)
+    )
+    w_up_gate = jax.random.normal(key_w13, w13_shape, dtype=dtype)
     w_down = jax.random.normal(key_w2, (args.experts, args.mlp_dim, args.hidden), dtype=dtype)
     shared_w13 = jax.random.normal(key_sw13, (args.hidden, 2 * args.shared_expert_dim), dtype=dtype)
     shared_w2 = jax.random.normal(key_sw2, (args.shared_expert_dim, args.hidden), dtype=dtype)
@@ -5369,7 +5375,8 @@ def main() -> None:
         "shape "
         f"tokens={args.tokens} hidden={args.hidden} mlp_dim={args.mlp_dim} experts={args.experts} "
         f"topk={args.topk} shared_expert_dim={args.shared_expert_dim} dtype={dtype} "
-        f"distribution={args.distribution} bench_pass={args.bench_pass} capacity_factor={args.capacity_factor}"
+        f"distribution={args.distribution} bench_pass={args.bench_pass} capacity_factor={args.capacity_factor} "
+        f"w13_out_first={args.w13_out_first}"
     )
 
     for ep_size in eps:

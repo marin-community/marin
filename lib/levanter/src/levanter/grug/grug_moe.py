@@ -118,7 +118,7 @@ def _moe_mlp_local(
     x_dispatch = tree_checkpoint_name(x_dispatch, "grug_moe_dispatch_input")
 
     with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), "grug_moe_expert_hidden")
+        w13_out = tree_checkpoint_name(_w13_ragged_dot(x_dispatch, moe_w13, group_sizes), "grug_moe_expert_hidden")
         moe_dim = moe_w2.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = tree_checkpoint_name(
@@ -242,6 +242,22 @@ def _local_permute_from_counts(
     return sorted_inputs, sorted_indices, group_sizes
 
 
+def _w13_ragged_dot(
+    x_dispatch: jax.Array,
+    moe_w13_local: jax.Array,
+    group_sizes: jax.Array,
+) -> jax.Array:
+    hidden = x_dispatch.shape[-1]
+    if moe_w13_local.shape[1] == hidden:
+        rhs_contract_axis = 1
+    elif moe_w13_local.shape[2] == hidden:
+        rhs_contract_axis = 2
+    else:
+        raise ValueError(
+            "w13 weight layout must contract against the hidden dimension of x_dispatch; "
+            f"got x_dispatch.shape={x_dispatch.shape}, moe_w13_local.shape={moe_w13_local.shape}"
+        )
+    return ragged_dot(x_dispatch, moe_w13_local, group_sizes, rhs_contract_axis=rhs_contract_axis)
 def _moe_mlp_ep_ring_local(
     x_local: Float[Array, "TL D"],
     selected_experts_local: Int[Array, "TL K"],
@@ -320,7 +336,9 @@ def _moe_mlp_ep_ring_local(
     group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
 
     with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), "grug_moe_expert_hidden")
+        w13_out = tree_checkpoint_name(
+            _w13_ragged_dot(x_dispatch, moe_w13_local, group_sizes), "grug_moe_expert_hidden"
+        )
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = tree_checkpoint_name(

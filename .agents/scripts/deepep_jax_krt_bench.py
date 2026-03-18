@@ -129,6 +129,7 @@ def _bench_block(args: argparse.Namespace) -> str:
     distributions = " ".join(args.distributions.split(","))
     topk_values = " ".join(args.topk_list.split(","))
     profile_flag = f" \\\n        --profile-root {args.profile_root}" if args.profile_root else ""
+    w13_layout_flag = " \\\n        --w13-out-first" if args.w13_out_first else ""
     timeout_prefix = ""
     timeout_suffix = ""
     if args.per_bench_timeout_seconds is not None:
@@ -159,7 +160,7 @@ for distribution in {distributions}; do
         --kernel "$kernel" \\
         --ep-list {args.ep_list} \\
         --warmup {args.warmup} \\
-        --iters {args.iters}{profile_flag}
+        --iters {args.iters}{profile_flag}{w13_layout_flag}
 {timeout_suffix}
       echo "BENCH_END kernel=$kernel distribution=$distribution topk=$topk"
     done
@@ -296,6 +297,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--load-as-python-module", action="store_true")
     parser.add_argument("--profile-root", default=None)
     parser.add_argument("--post-bench-sleep-seconds", type=int, default=0)
+    parser.add_argument("--w13-out-first", action="store_true")
     parser.add_argument("--skip-cleanup", action="store_true")
     return parser.parse_args()
 
