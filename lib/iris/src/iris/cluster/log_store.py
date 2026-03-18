@@ -1,21 +1,28 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Log store backed by in-memory buffer + rotating Parquet segments + DuckDB reads.
+"""Log store backed by rotating RAM buffers + Parquet segments + DuckDB reads.
 
-Stores log entries keyed by an arbitrary string, suitable for task attempt logs,
-process logs, autoscaler logs, or any other log stream.
+Lifecycle of a log entry:
 
-Write path: Python list buffer -> Parquet segment (ZSTD) -> optional GCS offload.
-Read path: DuckDB read_parquet() over local segments UNION ALL in-memory buffer.
+    1. Appended to the *head* RAM buffer (a plain Python list).
+    2. When the head buffer exceeds ``SEGMENT_TARGET_BYTES`` or
+       ``flush_interval_sec`` elapses, it is *sealed*: moved to a deque of
+       sealed RAM buffers and a background thread flushes it to a local
+       Parquet file.
+    3. When the background thread finishes writing the Parquet file it:
+       a. Registers the file in ``_local_segments`` (a deque).
+       b. Removes the corresponding sealed RAM buffer (readers no longer need it).
+       c. Kicks off a GCS copy of the new file.
+       d. Runs the GC cycle: drops the oldest local Parquet segment if
+          ``len(_local_segments) > max_local_segments`` or total local bytes
+          exceed ``max_local_bytes``.
 
-Local parquet file list is maintained in RAM (updated on flush and archival)
-rather than listing the filesystem on every query. The background offload thread
-handles GCS upload, local budget enforcement, and metadata updates atomically.
+Read path: DuckDB ``read_parquet()`` over the snapshot of local Parquet files
+UNION ALL in-memory pyarrow tables for each RAM buffer (head + sealed).
+All snapshots are taken atomically under ``_lock``.
 
-Also provides LogStoreHandler, a logging.Handler that bridges Python's logging
-framework into the LogStore so process-level logs (controller, worker) are
-queryable through the same FetchLogs RPC as task logs.
+The design keeps exactly one lock for all shared state so ordering is trivial.
 """
 
 from __future__ import annotations
@@ -23,8 +30,9 @@ from __future__ import annotations
 import logging
 import tempfile
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
 
@@ -52,6 +60,25 @@ _PARQUET_SCHEMA = pa.schema(
     ]
 )
 
+# ---------------------------------------------------------------------------
+# Heuristic thresholds
+# ---------------------------------------------------------------------------
+
+# Target size for a single Parquet segment. We estimate RAM row size at ~256
+# bytes; a buffer is flushed when its estimated size exceeds this threshold.
+SEGMENT_TARGET_BYTES = 100 * 1024 * 1024  # 100 MB
+
+# If the head buffer has data but hasn't reached SEGMENT_TARGET_BYTES, flush
+# after this many seconds anyway so logs are durable on disk.
+DEFAULT_FLUSH_INTERVAL_SEC = 60.0
+
+# Estimated bytes per buffered row (used to decide when to flush).
+_EST_BYTES_PER_ROW = 256
+
+# Default caps for local Parquet retention.
+DEFAULT_MAX_LOCAL_SEGMENTS = 50
+DEFAULT_MAX_LOCAL_BYTES = 5 * 1024**3  # 5 GB
+
 
 def _escape_like(s: str) -> str:
     """Escape SQL LIKE wildcards so the string matches literally."""
@@ -77,7 +104,7 @@ def _recover_max_seq(log_dir: Path) -> int:
     """Parse the max sequence number from existing Parquet segment filenames.
 
     Filenames are ``logs_{min_seq:019d}_{max_seq:019d}.parquet``.
-    Returns max_seq + 1 so the counter can resume, or 0 if no files exist.
+    Returns max_seq + 1 so the counter can resume, or 1 if no files exist.
     """
     max_seen = -1
     for p in log_dir.glob("logs_*_*.parquet"):
@@ -88,11 +115,6 @@ def _recover_max_seq(log_dir: Path) -> int:
             except ValueError:
                 continue
     return max_seen + 1 if max_seen >= 0 else 1
-
-
-def _discover_parquet_files(log_dir: Path) -> list[str]:
-    """List existing parquet segment paths on disk, sorted by name."""
-    return sorted(str(p) for p in log_dir.glob("logs_*_*.parquet"))
 
 
 def _build_buffer_table(buffer: list[tuple]) -> pa.Table:
@@ -114,6 +136,30 @@ def _build_buffer_table(buffer: list[tuple]) -> pa.Table:
     return pa.table(arrays, schema=_PARQUET_SCHEMA)
 
 
+# ---------------------------------------------------------------------------
+# Internal data structures
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _SealedBuffer:
+    """A RAM buffer that has been sealed (no more writes) and is pending flush."""
+
+    rows: list[tuple]
+    # Set once the Parquet file is written and registered.
+    flushed: bool = False
+
+
+@dataclass
+class _LocalSegment:
+    """Metadata for a Parquet file on local disk."""
+
+    path: str
+    size_bytes: int
+    min_seq: int = 0
+    max_seq: int = 0
+
+
 class _SequenceCounter:
     """Thread-safe monotonically increasing counter."""
 
@@ -131,23 +177,15 @@ class _SequenceCounter:
 
 @dataclass
 class LogReadResult:
-    entries: list[logging_pb2.LogEntry]
-    cursor: int  # max seq seen
+    entries: list[logging_pb2.LogEntry] = field(default_factory=list)
+    cursor: int = 0  # max seq seen
 
 
 class LogStore:
-    """Log store backed by in-memory buffer + rotating Parquet segments.
+    """Log store backed by rotating RAM buffers + Parquet segments.
 
-    Thread-safe: writers append to a buffer protected by a lock, readers
-    query via DuckDB over local Parquet files and the current buffer.
-
-    The in-memory list of local parquet files is maintained under ``_write_lock``
-    and updated only on flush (add) or archival (remove). No filesystem listing
-    happens during reads.
-
-    The background offload thread handles GCS upload and local budget enforcement.
-    Files are only deleted after successful upload (or when no remote dir is
-    configured), preventing data loss from premature eviction.
+    Thread-safe. One lock protects all mutable state: the head buffer,
+    the sealed-buffer deque, and the local-segment deque.
     """
 
     def __init__(
@@ -155,9 +193,10 @@ class LogStore:
         log_dir: Path | None = None,
         *,
         remote_log_dir: str = "",
-        local_budget_bytes: int = 5 * 1024**3,
-        flush_row_threshold: int = 1_000_000,
-        flush_time_threshold: float = 60.0,
+        max_local_segments: int = DEFAULT_MAX_LOCAL_SEGMENTS,
+        max_local_bytes: int = DEFAULT_MAX_LOCAL_BYTES,
+        flush_interval_sec: float = DEFAULT_FLUSH_INTERVAL_SEC,
+        segment_target_bytes: int = SEGMENT_TARGET_BYTES,
     ):
         self._temp_dir: tempfile.TemporaryDirectory[str] | None = None
         if log_dir is not None:
@@ -165,31 +204,46 @@ class LogStore:
         else:
             self._temp_dir = tempfile.TemporaryDirectory(prefix="iris_controller_logs_")
             self._log_dir = Path(self._temp_dir.name) / "parquet_logs"
-
         self._log_dir.mkdir(parents=True, exist_ok=True)
 
         self._remote_log_dir = remote_log_dir
-        self._local_budget_bytes = local_budget_bytes
-        self._flush_row_threshold = flush_row_threshold
-        self._flush_time_threshold = flush_time_threshold
+        self._max_local_segments = max_local_segments
+        self._max_local_bytes = max_local_bytes
+        self._flush_interval_sec = flush_interval_sec
+        self._segment_target_bytes = segment_target_bytes
 
         self._seq = _SequenceCounter(start=_recover_max_seq(self._log_dir))
-        self._buffer: list[tuple] = []
-        # Protects _buffer and _parquet_files.
-        self._write_lock = Lock()
-        self._parquet_files: list[str] = _discover_parquet_files(self._log_dir)
+
+        # ---- shared mutable state (all guarded by _lock) ----
+        self._lock = Lock()
+        self._head: list[tuple] = []  # current write buffer
+        self._sealed: deque[_SealedBuffer] = deque()  # sealed, pending flush
+        self._local_segments: deque[_LocalSegment] = deque()  # flushed parquet files
         self._last_flush_time = time.monotonic()
 
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_gcs_offload")
+        # Discover pre-existing Parquet files from a previous run.
+        for p in sorted(self._log_dir.glob("logs_*_*.parquet")):
+            parts = p.stem.split("_")
+            min_seq = int(parts[1]) if len(parts) >= 3 else 0
+            max_seq = int(parts[2]) if len(parts) >= 3 else 0
+            self._local_segments.append(
+                _LocalSegment(path=str(p), size_bytes=p.stat().st_size, min_seq=min_seq, max_seq=max_seq)
+            )
+
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
+
+    # ------------------------------------------------------------------
+    # Write API
+    # ------------------------------------------------------------------
 
     def append(self, key: str, entries: list) -> None:
         if not entries:
             return
         first_seq = self._seq.next_batch(len(entries))
         rows = [(first_seq + i, key, e.source, e.data, e.timestamp.epoch_ms, e.level) for i, e in enumerate(entries)]
-        with self._write_lock:
-            self._buffer.extend(rows)
-        self._maybe_flush()
+        with self._lock:
+            self._head.extend(rows)
+        self._maybe_seal()
 
     def append_batch(self, items: list[tuple[str, list]]) -> None:
         """Write log entries from multiple keys in a single operation."""
@@ -203,9 +257,13 @@ class LogStore:
             )
         if not all_rows:
             return
-        with self._write_lock:
-            self._buffer.extend(all_rows)
-        self._maybe_flush()
+        with self._lock:
+            self._head.extend(all_rows)
+        self._maybe_seal()
+
+    # ------------------------------------------------------------------
+    # Read API
+    # ------------------------------------------------------------------
 
     def get_logs(
         self,
@@ -225,14 +283,7 @@ class LogStore:
         params: dict = {"key": key, "cursor": cursor}
         _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
 
-        return self._execute_read(
-            where_parts,
-            params,
-            max_lines,
-            tail,
-            cursor,
-            include_key_in_select=False,
-        )
+        return self._execute_read(where_parts, params, max_lines, tail, cursor, include_key_in_select=False)
 
     def get_logs_by_prefix(
         self,
@@ -256,14 +307,7 @@ class LogStore:
             params["shallow_exclude"] = _escape_like(prefix) + "%/%"
         _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
 
-        return self._execute_read(
-            where_parts,
-            params,
-            max_lines,
-            tail,
-            cursor,
-            include_key_in_select=True,
-        )
+        return self._execute_read(where_parts, params, max_lines, tail, cursor, include_key_in_select=True)
 
     def has_logs(self, key: str) -> bool:
         """Check whether any log entries exist for the given key."""
@@ -274,90 +318,121 @@ class LogStore:
         """Return a stateful cursor for incremental reads on *key*."""
         return LogCursor(self, key)
 
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
     def close(self) -> None:
         """Flush remaining buffer, shut down background executor, clean up temp dir."""
-        self._flush_to_parquet()
+        self._seal_head()
         self._executor.shutdown(wait=True)
+        # Flush any sealed buffers that didn't get submitted (edge case).
+        with self._lock:
+            remaining = list(self._sealed)
+        for sb in remaining:
+            if not sb.flushed:
+                self._flush_sealed_buffer(sb)
         if self._temp_dir is not None:
             self._temp_dir.cleanup()
 
-    def _maybe_flush(self) -> None:
-        with self._write_lock:
-            buf_len = len(self._buffer)
-        elapsed = time.monotonic() - self._last_flush_time
-        if buf_len >= self._flush_row_threshold or (buf_len > 0 and elapsed >= self._flush_time_threshold):
-            self._flush_to_parquet()
+    # ------------------------------------------------------------------
+    # Internal: seal and flush
+    # ------------------------------------------------------------------
 
-    def _flush_to_parquet(self) -> None:
-        with self._write_lock:
-            if not self._buffer:
+    def _maybe_seal(self) -> None:
+        """Seal the head buffer if it's big enough or old enough."""
+        with self._lock:
+            est_size = len(self._head) * _EST_BYTES_PER_ROW
+            elapsed = time.monotonic() - self._last_flush_time
+            should_seal = est_size >= self._segment_target_bytes or (
+                len(self._head) > 0 and elapsed >= self._flush_interval_sec
+            )
+        if should_seal:
+            self._seal_head()
+
+    def _seal_head(self) -> None:
+        """Move the head buffer to the sealed deque and submit a flush task."""
+        with self._lock:
+            if not self._head:
                 return
-            snapshot = self._buffer
-            self._buffer = []
+            sealed = _SealedBuffer(rows=self._head)
+            self._head = []
+            self._sealed.append(sealed)
+            self._last_flush_time = time.monotonic()
+        self._executor.submit(self._flush_sealed_buffer, sealed)
 
-        self._last_flush_time = time.monotonic()
+    def _flush_sealed_buffer(self, sealed: _SealedBuffer) -> None:
+        """Write a sealed buffer to Parquet, register it, GCS-copy, and GC.
 
-        table = _build_buffer_table(snapshot)
-        min_seq = snapshot[0][0]
-        max_seq = snapshot[-1][0]
+        Runs on the background executor thread.
+        """
+        rows = sealed.rows
+        if not rows:
+            return
+
+        table = _build_buffer_table(rows)
+        min_seq = rows[0][0]
+        max_seq = rows[-1][0]
         filename = f"logs_{min_seq:019d}_{max_seq:019d}.parquet"
         filepath = self._log_dir / filename
 
-        pq.write_table(table, filepath, compression="zstd")
+        try:
+            pq.write_table(table, filepath, compression="zstd")
+        except Exception:
+            logger.warning("Failed to write Parquet segment %s", filepath, exc_info=True)
+            # Leave the sealed buffer in the deque so reads still see the data.
+            return
 
-        # Add to in-memory file list under lock so readers see it immediately.
-        with self._write_lock:
-            self._parquet_files.append(str(filepath))
+        seg = _LocalSegment(
+            path=str(filepath),
+            size_bytes=filepath.stat().st_size,
+            min_seq=min_seq,
+            max_seq=max_seq,
+        )
 
-        # Background thread handles GCS offload + local budget enforcement.
-        self._executor.submit(self._offload_and_enforce_budget, filepath)
+        with self._lock:
+            self._local_segments.append(seg)
+            # Remove the sealed buffer — data is now in the Parquet file.
+            try:
+                self._sealed.remove(sealed)
+            except ValueError:
+                pass
+            sealed.flushed = True
 
-    def _offload_and_enforce_budget(self, filepath: Path) -> None:
-        """Upload to GCS, then enforce local disk budget.
-
-        Runs on the single-worker executor so offloads are serialized.
-        Files are only deleted after successful upload (or when no remote is configured).
-        """
+        # Copy to GCS (best-effort).
         if self._remote_log_dir:
-            remote_path = f"{self._remote_log_dir.rstrip('/')}/{filepath.name}"
+            remote_path = f"{self._remote_log_dir.rstrip('/')}/{filename}"
             try:
                 _fsspec_copy(str(filepath), remote_path)
             except Exception:
                 logger.warning("Failed to offload %s to GCS", filepath, exc_info=True)
-                # Don't evict files that failed to upload.
-                return
 
-        self._enforce_local_budget()
+        # GC: drop oldest segments if over budget.
+        self._gc_local_segments()
 
-    def _enforce_local_budget(self) -> None:
-        """Delete oldest local segments past the disk budget.
+    def _gc_local_segments(self) -> None:
+        """Drop oldest local Parquet segments if count or size exceeds limits."""
+        with self._lock:
+            total_bytes = sum(s.size_bytes for s in self._local_segments)
+            to_delete: list[str] = []
 
-        Updates the in-memory file list under ``_write_lock`` so readers
-        never see a stale path.
-        """
-        with self._write_lock:
-            files = list(self._parquet_files)
+            while self._local_segments and (
+                len(self._local_segments) > self._max_local_segments or total_bytes > self._max_local_bytes
+            ):
+                oldest = self._local_segments.popleft()
+                total_bytes -= oldest.size_bytes
+                to_delete.append(oldest.path)
 
-        # Compute sizes for local files that still exist.
-        file_sizes: list[tuple[str, int]] = []
-        for f in files:
-            p = Path(f)
+        # Delete files outside the lock.
+        for path in to_delete:
             try:
-                file_sizes.append((f, p.stat().st_size))
-            except FileNotFoundError:
-                continue
+                Path(path).unlink(missing_ok=True)
+            except Exception:
+                logger.warning("Failed to delete old segment %s", path, exc_info=True)
 
-        total = sum(s for _, s in file_sizes)
-        to_remove: set[str] = set()
-        while total > self._local_budget_bytes and file_sizes:
-            oldest_path, oldest_size = file_sizes.pop(0)
-            total -= oldest_size
-            Path(oldest_path).unlink(missing_ok=True)
-            to_remove.add(oldest_path)
-
-        if to_remove:
-            with self._write_lock:
-                self._parquet_files = [f for f in self._parquet_files if f not in to_remove]
+    # ------------------------------------------------------------------
+    # Internal: read
+    # ------------------------------------------------------------------
 
     def _execute_read(
         self,
@@ -368,15 +443,19 @@ class LogStore:
         default_cursor: int,
         include_key_in_select: bool,
     ) -> LogReadResult:
-        # Snapshot both file list and buffer atomically under the lock.
-        with self._write_lock:
-            parquet_files = list(self._parquet_files)
-            buffer_snapshot = list(self._buffer)
+        # Snapshot all state atomically.
+        with self._lock:
+            parquet_files = [s.path for s in self._local_segments]
+            # Collect all RAM data: sealed buffers + head.
+            ram_rows: list[tuple] = []
+            for sb in self._sealed:
+                ram_rows.extend(sb.rows)
+            ram_rows.extend(self._head)
 
-        buf_table = _build_buffer_table(buffer_snapshot)
+        ram_table = _build_buffer_table(ram_rows)
         conn = duckdb.connect()
         try:
-            conn.register("write_buffer", buf_table)
+            conn.register("ram_buffer", ram_table)
             source = _build_union_source(parquet_files)
             where_clause = " AND ".join(where_parts)
 
@@ -421,6 +500,11 @@ class LogStore:
         return LogReadResult(entries=entries, cursor=max_seq)
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
 def _add_common_filters(
     where_parts: list[str],
     params: dict,
@@ -441,17 +525,22 @@ def _add_common_filters(
 
 
 def _build_union_source(parquet_files: list[str]) -> str:
-    """Build a SQL source expression that unions parquet files with the write_buffer table.
+    """Build a SQL source expression: local Parquet files UNION ALL ram_buffer.
 
-    Always includes write_buffer. Only includes read_parquet when files exist.
-    File paths are self-generated (``logs_{seq}_{seq}.parquet``) so no SQL injection risk.
+    File paths are self-generated (``logs_{seq}_{seq}.parquet``) so no SQL
+    injection risk from the f-string embedding.
     """
     parts: list[str] = []
     if parquet_files:
         file_list = ", ".join(f"'{f}'" for f in parquet_files)
         parts.append(f"SELECT * FROM read_parquet([{file_list}])")
-    parts.append("SELECT * FROM write_buffer")
+    parts.append("SELECT * FROM ram_buffer")
     return " UNION ALL ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Cursor helper
+# ---------------------------------------------------------------------------
 
 
 class LogCursor:
@@ -471,6 +560,11 @@ class LogCursor:
         result = self._store.get_logs(self._key, cursor=self._cursor, max_lines=max_entries)
         self._cursor = result.cursor
         return result.entries
+
+
+# ---------------------------------------------------------------------------
+# Logging handler bridge
+# ---------------------------------------------------------------------------
 
 
 class LogStoreHandler(logging.Handler):

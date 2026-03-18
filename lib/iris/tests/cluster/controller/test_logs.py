@@ -1,14 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for LogStore (Parquet + DuckDB backed)."""
+"""Tests for LogStore (rotating RAM buffers + Parquet + DuckDB)."""
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
-from iris.cluster.log_store import LogStore, task_log_key
+from iris.cluster.log_store import LogStore, _EST_BYTES_PER_ROW, task_log_key
 from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import logging_pb2
 
@@ -329,35 +330,68 @@ def test_cursor_with_since_ms(log_store: LogStore):
 
 
 # =============================================================================
-# Local budget enforcement
+# Segment GC tests
 # =============================================================================
 
 
-def test_local_budget_deletes_oldest_segments(tmp_path: Path):
-    """When local parquet files exceed the budget, oldest segments are removed."""
+def test_gc_drops_oldest_segments_by_count(tmp_path: Path):
+    """When local segments exceed max_local_segments, oldest are removed."""
     log_dir = tmp_path / "logs"
+    # Use a tiny segment target so each batch triggers a seal+flush.
     store = LogStore(
         log_dir=log_dir,
-        flush_row_threshold=5,
+        max_local_segments=2,
+        max_local_bytes=10 * 1024**3,  # effectively unlimited
+        segment_target_bytes=1,  # seal after every append
     )
     try:
-        # Flush several segments by appending batches above the threshold
         for batch in range(4):
             entries = [_make_entry(f"batch{batch}-{i}", epoch_ms=batch * 100 + i) for i in range(10)]
             store.append(KEY, entries)
+
+        # Wait for background flushes to complete.
+        store._executor.shutdown(wait=True)
+        store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
+
+        remaining_files = sorted(store._log_dir.glob("logs_*_*.parquet"))
+        assert len(remaining_files) <= 2
+
+        # The most recent data should still be readable.
+        result = store.get_logs(KEY, max_lines=10, tail=True)
+        assert len(result.entries) > 0
+        assert all("batch3" in e.data for e in result.entries)
+    finally:
+        store.close()
+
+
+def test_gc_drops_oldest_segments_by_bytes(tmp_path: Path):
+    """When local parquet bytes exceed max_local_bytes, oldest are removed."""
+    log_dir = tmp_path / "logs"
+    store = LogStore(
+        log_dir=log_dir,
+        max_local_segments=100,  # effectively unlimited
+        segment_target_bytes=1,  # seal after every append
+    )
+    try:
+        for batch in range(4):
+            entries = [_make_entry(f"batch{batch}-{i}", epoch_ms=batch * 100 + i) for i in range(10)]
+            store.append(KEY, entries)
+
+        store._executor.shutdown(wait=True)
+        store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
 
         parquet_files = sorted(store._log_dir.glob("logs_*_*.parquet"))
         assert len(parquet_files) == 4
         one_file_size = parquet_files[0].stat().st_size
 
-        # Set budget to allow only 2 files, then trigger enforcement
-        store._local_budget_bytes = one_file_size * 2
-        store._enforce_local_budget()
+        # Set budget to allow only 2 files, then trigger GC.
+        store._max_local_bytes = one_file_size * 2
+        store._gc_local_segments()
 
         remaining = sorted(store._log_dir.glob("logs_*_*.parquet"))
         assert len(remaining) <= 2
 
-        # The most recent data should still be readable from the surviving files
+        # The most recent data should still be readable.
         result = store.get_logs(KEY, max_lines=10, tail=True)
         assert len(result.entries) > 0
         assert all("batch3" in e.data for e in result.entries)
@@ -371,12 +405,15 @@ def test_local_budget_deletes_oldest_segments(tmp_path: Path):
 
 
 def test_flush_creates_parquet_segment(tmp_path: Path):
-    """Verify that flushing the buffer writes a Parquet file."""
+    """Verify that sealing the buffer writes a Parquet file."""
     log_dir = tmp_path / "logs"
-    store = LogStore(log_dir=log_dir, flush_row_threshold=5)
+    store = LogStore(log_dir=log_dir, segment_target_bytes=1)
     try:
         entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(10)]
         store.append(KEY, entries)
+        # Wait for background flush.
+        store._executor.shutdown(wait=True)
+        store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
         parquet_files = list(log_dir.glob("logs_*_*.parquet"))
         assert len(parquet_files) >= 1
     finally:
@@ -386,17 +423,17 @@ def test_flush_creates_parquet_segment(tmp_path: Path):
 def test_cursor_continuity_across_flush(tmp_path: Path):
     """Cursor from pre-flush read correctly filters post-flush entries."""
     log_dir = tmp_path / "logs"
-    store = LogStore(log_dir=log_dir, flush_row_threshold=5)
+    store = LogStore(log_dir=log_dir, segment_target_bytes=1)
     try:
-        # Append enough to trigger flush
         entries1 = [_make_entry(f"batch1-{i}", epoch_ms=i) for i in range(10)]
         store.append(KEY, entries1)
+        store._executor.shutdown(wait=True)
+        store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
 
         result1 = store.get_logs(KEY)
         assert len(result1.entries) == 10
         cursor = result1.cursor
 
-        # Append more (may or may not flush again)
         entries2 = [_make_entry(f"batch2-{i}", epoch_ms=100 + i) for i in range(5)]
         store.append(KEY, entries2)
 
@@ -410,14 +447,14 @@ def test_cursor_continuity_across_flush(tmp_path: Path):
 def test_seq_recovery_on_restart(tmp_path: Path):
     """After close and reopen, sequence numbers don't collide."""
     log_dir = tmp_path / "logs"
-    store1 = LogStore(log_dir=log_dir, flush_row_threshold=5)
+    store1 = LogStore(log_dir=log_dir, segment_target_bytes=1)
     entries1 = [_make_entry(f"s1-{i}", epoch_ms=i) for i in range(10)]
     store1.append(KEY, entries1)
     result1 = store1.get_logs(KEY)
     cursor1 = result1.cursor
     store1.close()
 
-    store2 = LogStore(log_dir=log_dir, flush_row_threshold=5)
+    store2 = LogStore(log_dir=log_dir, segment_target_bytes=1)
     entries2 = [_make_entry(f"s2-{i}", epoch_ms=100 + i) for i in range(5)]
     store2.append(KEY, entries2)
 
@@ -435,7 +472,7 @@ def test_seq_recovery_on_restart(tmp_path: Path):
 def test_concurrent_read_write(tmp_path: Path):
     """Concurrent appends and reads don't crash or corrupt data."""
     log_dir = tmp_path / "logs"
-    store = LogStore(log_dir=log_dir, flush_row_threshold=50)
+    store = LogStore(log_dir=log_dir, segment_target_bytes=50 * _EST_BYTES_PER_ROW)
     errors: list[Exception] = []
 
     def writer():
@@ -464,4 +501,28 @@ def test_concurrent_read_write(tmp_path: Path):
     # All 200 entries should be present
     result = store.get_logs(KEY)
     assert len(result.entries) == 200
+    store.close()
+
+
+def test_sealed_buffers_readable_before_flush(tmp_path: Path):
+    """Data in sealed buffers is still readable even before Parquet flush completes."""
+    log_dir = tmp_path / "logs"
+    # Use a large flush interval so time-based sealing won't trigger.
+    store = LogStore(log_dir=log_dir, segment_target_bytes=10 * 1024 * 1024, flush_interval_sec=9999)
+
+    entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(10)]
+    # Append to head buffer only (segment_target_bytes is large, won't seal).
+    store.append(KEY, entries)
+
+    # Data should be readable from the head buffer.
+    result = store.get_logs(KEY)
+    assert len(result.entries) == 10
+    assert [e.data for e in result.entries] == [f"line-{i}" for i in range(10)]
+
+    # Now seal manually and verify sealed buffer is still readable.
+    store._seal_head()
+    # Data is in the sealed deque (flush is async, might not have completed).
+    result2 = store.get_logs(KEY)
+    assert len(result2.entries) == 10
+
     store.close()
