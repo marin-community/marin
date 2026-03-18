@@ -262,8 +262,14 @@ def teardown_cluster(config_path: str, namespace: str, label_prefix: str) -> Non
         platform.shutdown()
 
     managed_label = f"iris-{label_prefix}-managed=true"
-    _kubectl(namespace, "delete", "nodepool", "-l", managed_label, "--ignore-not-found", check=False)
-    click.echo("Teardown complete")
+    # NodePools are cluster-scoped — use kubectl without -n namespace.
+    subprocess.run(
+        ["kubectl", "--kubeconfig", _kubeconfig_path(), "delete", "nodepool", "-l", managed_label, "--ignore-not-found"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    click.echo("Teardown complete (including nodepools)")
 
 
 # ---------------------------------------------------------------------------
