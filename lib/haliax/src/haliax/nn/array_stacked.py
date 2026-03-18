@@ -10,10 +10,10 @@ import jax
 import jax.numpy as jnp
 
 from .._src.scan import ScanCheckpointPolicy, ScanCheckpointSpec, find_closest_divisible_int_to_sqrt
-from .._src.state_dict import ModuleWithStateDictSerialization
+from .._src.state_dict import ModuleWithStateDictSerialization, StateDict
 from ..jax_utils import is_jax_array_like, multilevel_scan, tree_checkpoint_name
 from ..util import is_named_array
-from .scan import ModuleInit
+from .scan import ModuleInit, _stack_state_dict, _unstack_state_dict
 
 M = TypeVar("M", bound=eqx.Module)
 CarryT = TypeVar("CarryT")
@@ -95,6 +95,7 @@ class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
                 layer_args, layer_kwargs = jax.tree.map(
                     lambda x: _slice_layer(x, i, num_layers),
                     (args, kwargs),
+                    is_leaf=is_named_array,
                 )
                 layers.append(module.init(*layer_args, **layer_kwargs))
 
@@ -268,6 +269,14 @@ class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
 
     def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"stacked": None}
+
+    def to_state_dict(self, prefix: str | None = None) -> StateDict:
+        state_dict: StateDict = super().to_state_dict(prefix)
+        return _unstack_state_dict(state_dict, prefix)
+
+    def from_state_dict(self: M, state_dict: StateDict, prefix: str | None = None) -> M:
+        stacked = _stack_state_dict(state_dict, prefix=prefix)
+        return super().from_state_dict(stacked, prefix=prefix)  # type: ignore
 
 
 def _normalize_axis(axis: int, ndim: int) -> int:

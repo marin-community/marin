@@ -244,3 +244,45 @@ def test_array_stacked_scan_tags_carry_and_inputs_for_checkpoint_policy(monkeypa
 
     assert stacked._carry_ckpt_name in names
     assert stacked._input_ckpt_name in names
+
+
+def test_array_stacked_init_treats_named_array_inputs_as_leaves():
+    class Module(eqx.Module):
+        weight: jax.Array
+
+        @staticmethod
+        def init(weight, template):
+            assert isinstance(template, hax.NamedArray)
+            return Module(weight=weight + template.array.sum())
+
+    num_layers = 2
+    width = 3
+    weights = jax.random.normal(jax.random.PRNGKey(0), (num_layers, width))
+    TemplateBatch = hax.Axis("TemplateBatch", num_layers)
+    TemplateHidden = hax.Axis("TemplateHidden", width)
+    template = hax.random.normal(jax.random.PRNGKey(1), (TemplateBatch, TemplateHidden))
+
+    stacked = ArrayStacked.init(num_layers, Module)(weight=weights, template=template)
+    assert stacked.stacked.weight.shape == (num_layers, width)
+
+
+def test_array_stacked_state_dict_is_devectorized_for_export():
+    class Module(eqx.Module):
+        weight: jax.Array
+
+        @staticmethod
+        def init(weight):
+            return Module(weight=weight)
+
+    num_layers = 2
+    width = 3
+    weights = jax.random.normal(jax.random.PRNGKey(0), (num_layers, width))
+    stacked = ArrayStacked.init(num_layers, Module)(weight=weights)
+
+    state_dict = stacked.to_state_dict("layers")
+    assert "layers.0.weight" in state_dict
+    assert "layers.1.weight" in state_dict
+    assert "layers.weight" not in state_dict
+
+    reloaded = stacked.from_state_dict(state_dict, "layers")
+    assert jnp.allclose(reloaded.stacked.weight, stacked.stacked.weight)
