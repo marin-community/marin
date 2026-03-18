@@ -6,17 +6,19 @@
 Lifecycle of a log entry:
 
     1. Appended to the *head* RAM buffer (a plain Python list).
-    2. When the head buffer exceeds ``SEGMENT_TARGET_BYTES`` or
-       ``flush_interval_sec`` elapses, it is *sealed*: moved to a deque of
-       sealed RAM buffers and a background thread flushes it to a local
-       Parquet file.
-    3. When the background thread finishes writing the Parquet file it:
-       a. Registers the file in ``_local_segments`` (a deque).
-       b. Removes the corresponding sealed RAM buffer (readers no longer need it).
-       c. Kicks off a GCS copy of the new file.
-       d. Runs the GC cycle: drops the oldest local Parquet segment if
-          ``len(_local_segments) > max_local_segments`` or total local bytes
-          exceed ``max_local_bytes``.
+    2. Every ``flush_interval_sec`` (default 10 min), the head buffer is
+       *sealed* and a background thread flushes it to a local Parquet file.
+       If the head buffer exceeds ``SEGMENT_TARGET_BYTES`` it is sealed
+       immediately.
+    3. When the background thread flushes a sealed buffer:
+       a. If the newest local Parquet segment is small enough, it reads it,
+          concatenates the new rows, and writes a replacement file. This
+          keeps the file count low (no thousands of tiny files).
+       b. If the newest segment is already large (>= ``SEGMENT_TARGET_BYTES``),
+          a new Parquet file is created.
+       c. The sealed RAM buffer is removed (readers no longer need it).
+       d. The new/updated file is copied to GCS (best-effort).
+       e. GC drops oldest local segments past count/byte limits.
 
 Read path: DuckDB ``read_parquet()`` over the snapshot of local Parquet files
 UNION ALL in-memory pyarrow tables for each RAM buffer (head + sealed).
@@ -64,15 +66,14 @@ _PARQUET_SCHEMA = pa.schema(
 # Heuristic thresholds
 # ---------------------------------------------------------------------------
 
-# Target size for a single Parquet segment. We estimate RAM row size at ~256
-# bytes; a buffer is flushed when its estimated size exceeds this threshold.
+# Target size for a single Parquet segment on disk. New data is concatenated
+# onto the latest segment until it reaches this size, then a new file starts.
 SEGMENT_TARGET_BYTES = 100 * 1024 * 1024  # 100 MB
 
-# If the head buffer has data but hasn't reached SEGMENT_TARGET_BYTES, flush
-# after this many seconds anyway so logs are durable on disk.
-DEFAULT_FLUSH_INTERVAL_SEC = 60.0
+# Seal the head buffer after this many seconds (even if small).
+DEFAULT_FLUSH_INTERVAL_SEC = 600.0  # 10 minutes
 
-# Estimated bytes per buffered row (used to decide when to flush).
+# Estimated bytes per buffered row (used to decide when to force-seal).
 _EST_BYTES_PER_ROW = 256
 
 # Default caps for local Parquet retention.
@@ -362,22 +363,90 @@ class LogStore:
         self._executor.submit(self._flush_sealed_buffer, sealed)
 
     def _flush_sealed_buffer(self, sealed: _SealedBuffer) -> None:
-        """Write a sealed buffer to Parquet, register it, GCS-copy, and GC.
+        """Write a sealed buffer to Parquet, possibly consolidating with the
+        latest segment if it's small. Runs on the background executor thread.
 
-        Runs on the background executor thread.
+        Consolidation heuristic: if the newest local segment is smaller than
+        ``_segment_target_bytes``, read it, concatenate the new rows, and
+        write a replacement file. This avoids accumulating thousands of tiny
+        Parquet files when log volume is low.
         """
         rows = sealed.rows
         if not rows:
             return
 
-        table = _build_buffer_table(rows)
-        min_seq = rows[0][0]
-        max_seq = rows[-1][0]
-        filename = f"logs_{min_seq:019d}_{max_seq:019d}.parquet"
+        new_table = _build_buffer_table(rows)
+        new_min_seq = rows[0][0]
+        new_max_seq = rows[-1][0]
+
+        # Decide whether to consolidate with the latest segment.
+        with self._lock:
+            latest = self._local_segments[-1] if self._local_segments else None
+            can_consolidate = latest is not None and latest.size_bytes < self._segment_target_bytes
+
+        if can_consolidate:
+            assert latest is not None
+            try:
+                existing_table = pq.read_table(latest.path)
+                combined = pa.concat_tables([existing_table, new_table])
+                combined_min_seq = latest.min_seq
+                combined_max_seq = new_max_seq
+                filename = f"logs_{combined_min_seq:019d}_{combined_max_seq:019d}.parquet"
+                filepath = self._log_dir / filename
+
+                # Write to a temp file first, then rename for atomicity.
+                tmp_path = filepath.with_suffix(".parquet.tmp")
+                pq.write_table(combined, tmp_path, compression="zstd")
+                tmp_path.rename(filepath)
+
+                seg = _LocalSegment(
+                    path=str(filepath),
+                    size_bytes=filepath.stat().st_size,
+                    min_seq=combined_min_seq,
+                    max_seq=combined_max_seq,
+                )
+
+                with self._lock:
+                    # Replace the old segment with the consolidated one.
+                    try:
+                        # Find and remove the old segment from the deque.
+                        for i, s in enumerate(self._local_segments):
+                            if s.path == latest.path:
+                                del self._local_segments[i]
+                                break
+                    except (ValueError, IndexError):
+                        pass
+                    self._local_segments.append(seg)
+                    try:
+                        self._sealed.remove(sealed)
+                    except ValueError:
+                        pass
+                    sealed.flushed = True
+
+                # Delete the old segment file (now replaced).
+                if str(filepath) != latest.path:
+                    try:
+                        Path(latest.path).unlink(missing_ok=True)
+                    except Exception:
+                        logger.warning("Failed to delete old segment %s", latest.path, exc_info=True)
+
+                # GCS offload for the consolidated file.
+                self._offload_to_gcs(filename, filepath)
+                self._gc_local_segments()
+                return
+
+            except Exception:
+                logger.warning("Consolidation failed, writing as new segment", exc_info=True)
+                # Fall through to write as a new standalone segment.
+
+        # Write as a new standalone segment.
+        filename = f"logs_{new_min_seq:019d}_{new_max_seq:019d}.parquet"
         filepath = self._log_dir / filename
 
         try:
-            pq.write_table(table, filepath, compression="zstd")
+            tmp_path = filepath.with_suffix(".parquet.tmp")
+            pq.write_table(new_table, tmp_path, compression="zstd")
+            tmp_path.rename(filepath)
         except Exception:
             logger.warning("Failed to write Parquet segment %s", filepath, exc_info=True)
             # Leave the sealed buffer in the deque so reads still see the data.
@@ -386,29 +455,30 @@ class LogStore:
         seg = _LocalSegment(
             path=str(filepath),
             size_bytes=filepath.stat().st_size,
-            min_seq=min_seq,
-            max_seq=max_seq,
+            min_seq=new_min_seq,
+            max_seq=new_max_seq,
         )
 
         with self._lock:
             self._local_segments.append(seg)
-            # Remove the sealed buffer — data is now in the Parquet file.
             try:
                 self._sealed.remove(sealed)
             except ValueError:
                 pass
             sealed.flushed = True
 
-        # Copy to GCS (best-effort).
-        if self._remote_log_dir:
-            remote_path = f"{self._remote_log_dir.rstrip('/')}/{filename}"
-            try:
-                _fsspec_copy(str(filepath), remote_path)
-            except Exception:
-                logger.warning("Failed to offload %s to GCS", filepath, exc_info=True)
-
-        # GC: drop oldest segments if over budget.
+        self._offload_to_gcs(filename, filepath)
         self._gc_local_segments()
+
+    def _offload_to_gcs(self, filename: str, filepath: Path) -> None:
+        """Copy a Parquet file to GCS (best-effort)."""
+        if not self._remote_log_dir:
+            return
+        remote_path = f"{self._remote_log_dir.rstrip('/')}/{filename}"
+        try:
+            _fsspec_copy(str(filepath), remote_path)
+        except Exception:
+            logger.warning("Failed to offload %s to GCS", filepath, exc_info=True)
 
     def _gc_local_segments(self) -> None:
         """Drop oldest local Parquet segments if count or size exceeds limits."""

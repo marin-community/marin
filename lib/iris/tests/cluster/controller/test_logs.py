@@ -337,7 +337,8 @@ def test_cursor_with_since_ms(log_store: LogStore):
 def test_gc_drops_oldest_segments_by_count(tmp_path: Path):
     """When local segments exceed max_local_segments, oldest are removed."""
     log_dir = tmp_path / "logs"
-    # Use a tiny segment target so each batch triggers a seal+flush.
+    # segment_target_bytes=1 means every parquet file is bigger than the target,
+    # so consolidation is skipped and each seal creates a new file.
     store = LogStore(
         log_dir=log_dir,
         max_local_segments=2,
@@ -502,6 +503,68 @@ def test_concurrent_read_write(tmp_path: Path):
     result = store.get_logs(KEY)
     assert len(result.entries) == 200
     store.close()
+
+
+def test_small_segments_are_consolidated(tmp_path: Path):
+    """Multiple small flushes consolidate into a single parquet file."""
+    log_dir = tmp_path / "logs"
+    # Large segment target means all small files are below the threshold
+    # and will be consolidated into one file.
+    store = LogStore(
+        log_dir=log_dir,
+        segment_target_bytes=100 * 1024 * 1024,  # 100MB — way bigger than our test data
+        flush_interval_sec=0,  # seal on every append (time threshold always satisfied)
+    )
+    try:
+        for batch in range(5):
+            entries = [_make_entry(f"batch{batch}-{i}", epoch_ms=batch * 100 + i) for i in range(10)]
+            store.append(KEY, entries)
+            # Wait for flush to complete before next append so consolidation runs.
+            store._executor.shutdown(wait=True)
+            store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
+
+        parquet_files = list(log_dir.glob("logs_*_*.parquet"))
+        # All 5 batches should be consolidated into a single parquet file.
+        assert len(parquet_files) == 1, f"Expected 1 consolidated file, got {len(parquet_files)}"
+
+        # All data should still be readable.
+        result = store.get_logs(KEY)
+        assert len(result.entries) == 50
+        assert result.entries[0].data == "batch0-0"
+        assert result.entries[-1].data == "batch4-9"
+    finally:
+        store.close()
+
+
+def test_consolidation_preserves_cursor_continuity(tmp_path: Path):
+    """Cursors from before consolidation still work after consolidation."""
+    log_dir = tmp_path / "logs"
+    store = LogStore(
+        log_dir=log_dir,
+        segment_target_bytes=100 * 1024 * 1024,
+        flush_interval_sec=0,
+    )
+    try:
+        entries1 = [_make_entry(f"batch1-{i}", epoch_ms=i) for i in range(10)]
+        store.append(KEY, entries1)
+        store._executor.shutdown(wait=True)
+        store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
+
+        result1 = store.get_logs(KEY)
+        cursor = result1.cursor
+
+        # Second batch will consolidate with the first.
+        entries2 = [_make_entry(f"batch2-{i}", epoch_ms=100 + i) for i in range(5)]
+        store.append(KEY, entries2)
+        store._executor.shutdown(wait=True)
+        store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
+
+        # Cursor from before consolidation should still return only new entries.
+        result2 = store.get_logs(KEY, cursor=cursor)
+        assert len(result2.entries) == 5
+        assert all("batch2" in e.data for e in result2.entries)
+    finally:
+        store.close()
 
 
 def test_sealed_buffers_readable_before_flush(tmp_path: Path):
