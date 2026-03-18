@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.env import normalize_workdir_relative_path
+from iris.cluster.runtime.env import build_device_env_vars, normalize_workdir_relative_path
 from iris.cluster.k8s.kubectl import Kubectl, KubectlLogLine
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
@@ -147,19 +147,30 @@ class KubernetesLogReader:
         return [_kubectl_log_line_to_log_line(kll) for kll in result.lines]
 
 
-@dataclass
-class KubernetesContainerHandle:
-    """ContainerHandle backed by a single Kubernetes Pod."""
+@dataclass(frozen=True)
+class PodConfig:
+    """Kubernetes-specific configuration for task Pods.
 
-    config: ContainerConfig
-    kubectl: Kubectl
-    cache_dir: Path | None = None
+    Groups the K8s backend fields that ``KubernetesContainerHandle`` needs
+    beyond the runtime-agnostic ``ContainerConfig``.
+    """
+
     service_account_name: str = ""
     s3_secret_name: str = ""
     s3_endpoint_url: str = ""
     fsspec_s3_conf: str = ""
     owner_pod_name: str = ""
     owner_pod_uid: str = ""
+    cache_dir: Path | None = None
+
+
+@dataclass
+class KubernetesContainerHandle:
+    """ContainerHandle backed by a single Kubernetes Pod."""
+
+    config: ContainerConfig
+    kubectl: Kubectl
+    pod_config: PodConfig = field(default_factory=PodConfig)
     _pod_name: str = field(default="", repr=False)
     _workdir_configmap_name: str | None = field(default=None, repr=False)
     _started: bool = field(default=False, repr=False)
@@ -186,29 +197,32 @@ class KubernetesContainerHandle:
         self._workdir_configmap_name = None
         task_script = _build_task_script(self.config)
 
-        env_list: list[dict] = [
-            {"name": k, "value": v} for k, v in self.config.env.items() if k != "IRIS_ADVERTISE_HOST"
-        ]
+        # Merge device env vars (TPU/JAX) the same way Docker and process runtimes do.
+        combined_env = {**build_device_env_vars(self.config), **self.config.env}
+
+        env_list: list[dict] = [{"name": k, "value": v} for k, v in combined_env.items() if k != "IRIS_ADVERTISE_HOST"]
 
         # The worker sets IRIS_ADVERTISE_HOST to its own host IP, but in the
         # kubernetes runtime task pods can be scheduled on any node. Use the
         # downward API to inject the actual node IP where the pod is running.
         env_list.append({"name": "IRIS_ADVERTISE_HOST", "valueFrom": {"fieldRef": {"fieldPath": "status.hostIP"}}})
 
+        pc = self.pod_config
+
         # Pull S3 credentials from the K8s Secret so task containers can
         # access S3 object storage (e.g. for training data).
-        if self.s3_secret_name:
+        if pc.s3_secret_name:
             for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"):
                 env_list.append(
                     {
                         "name": key,
-                        "valueFrom": {"secretKeyRef": {"name": self.s3_secret_name, "key": key}},
+                        "valueFrom": {"secretKeyRef": {"name": pc.s3_secret_name, "key": key}},
                     }
                 )
-        if self.s3_endpoint_url and not any(e.get("name") == "AWS_ENDPOINT_URL" for e in env_list):
-            env_list.append({"name": "AWS_ENDPOINT_URL", "value": self.s3_endpoint_url})
-        if self.fsspec_s3_conf and not any(e.get("name") == "FSSPEC_S3" for e in env_list):
-            env_list.append({"name": "FSSPEC_S3", "value": self.fsspec_s3_conf})
+        if pc.s3_endpoint_url and not any(e.get("name") == "AWS_ENDPOINT_URL" for e in env_list):
+            env_list.append({"name": "AWS_ENDPOINT_URL", "value": pc.s3_endpoint_url})
+        if pc.fsspec_s3_conf and not any(e.get("name") == "FSSPEC_S3" for e in env_list):
+            env_list.append({"name": "FSSPEC_S3", "value": pc.fsspec_s3_conf})
 
         container: dict[str, object] = {
             "name": "task",
@@ -241,8 +255,8 @@ class KubernetesContainerHandle:
                     }
                 )
             elif mount.kind == MountKind.CACHE:
-                if self.cache_dir is not None:
-                    host_path = str(self.cache_dir / mount.container_path.strip("/").replace("/", "-"))
+                if pc.cache_dir is not None:
+                    host_path = str(pc.cache_dir / mount.container_path.strip("/").replace("/", "-"))
                 else:
                     host_path = mount.container_path
                 mounts.append(
@@ -359,8 +373,8 @@ class KubernetesContainerHandle:
             spec["hostNetwork"] = True
             spec["dnsPolicy"] = "ClusterFirstWithHostNet"
 
-        if self.service_account_name:
-            spec["serviceAccountName"] = self.service_account_name
+        if pc.service_account_name:
+            spec["serviceAccountName"] = pc.service_account_name
 
         tolerations = _build_tolerations(self.config)
         if tolerations:
@@ -375,13 +389,13 @@ class KubernetesContainerHandle:
                 "iris.task_id": _sanitize_label_value(self.config.task_id or "unknown"),
             },
         }
-        if self.owner_pod_name and self.owner_pod_uid:
+        if pc.owner_pod_name and pc.owner_pod_uid:
             metadata["ownerReferences"] = [
                 {
                     "apiVersion": "v1",
                     "kind": "Pod",
-                    "name": self.owner_pod_name,
-                    "uid": self.owner_pod_uid,
+                    "name": pc.owner_pod_name,
+                    "uid": pc.owner_pod_uid,
                     "blockOwnerDeletion": False,
                 }
             ]
@@ -638,30 +652,26 @@ class KubernetesRuntime:
         cache_dir: Path | None = None,
     ) -> None:
         resolved_namespace = namespace or os.environ.get("IRIS_POD_NAMESPACE") or "iris"
-        self._service_account_name = service_account_name or os.environ.get("IRIS_SERVICE_ACCOUNT_NAME") or ""
-        self._s3_secret_name = s3_secret_name or os.environ.get("IRIS_S3_SECRET_NAME") or ""
-        self._s3_endpoint_url = os.environ.get("AWS_ENDPOINT_URL", "")
-        self._fsspec_s3_conf = os.environ.get("FSSPEC_S3", "")
-        self._owner_pod_name = os.environ.get("IRIS_POD_NAME", "")
-        self._owner_pod_uid = os.environ.get("IRIS_POD_UID", "")
+        self._pod_config = PodConfig(
+            service_account_name=service_account_name or os.environ.get("IRIS_SERVICE_ACCOUNT_NAME") or "",
+            s3_secret_name=s3_secret_name or os.environ.get("IRIS_S3_SECRET_NAME") or "",
+            s3_endpoint_url=os.environ.get("AWS_ENDPOINT_URL", ""),
+            fsspec_s3_conf=os.environ.get("FSSPEC_S3", ""),
+            owner_pod_name=os.environ.get("IRIS_POD_NAME", ""),
+            owner_pod_uid=os.environ.get("IRIS_POD_UID", ""),
+            cache_dir=cache_dir,
+        )
         # TODO(marin): ownerReferences only trigger GC when the worker Pod object
         # is deleted. If worker containers crash-loop in-place, task Pods remain.
         # Consider restartPolicy=Never for worker Pods or explicit stale-task cleanup.
         self._kubectl = Kubectl(namespace=resolved_namespace)
-        self._cache_dir = cache_dir
         self._handles: list[KubernetesContainerHandle] = []
 
     def create_container(self, config: ContainerConfig) -> KubernetesContainerHandle:
         handle = KubernetesContainerHandle(
             config=config,
             kubectl=self._kubectl,
-            cache_dir=self._cache_dir,
-            service_account_name=self._service_account_name,
-            s3_secret_name=self._s3_secret_name,
-            s3_endpoint_url=self._s3_endpoint_url,
-            fsspec_s3_conf=self._fsspec_s3_conf,
-            owner_pod_name=self._owner_pod_name,
-            owner_pod_uid=self._owner_pod_uid,
+            pod_config=self._pod_config,
         )
         self._handles.append(handle)
         return handle
