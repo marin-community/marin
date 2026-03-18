@@ -14,6 +14,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -55,11 +56,13 @@ from fray.v2.types import (
 
 logger = logging.getLogger(__name__)
 
+_ACTOR_TERMINATION_DELAY = 2.0
+
 
 class _ActorContextProxy:
     """Wrap actor methods so current_actor() is available during method calls."""
 
-    def __init__(self, instance: Any, actor_ctx: ActorContext, on_terminate: Callable[[], None]):
+    def __init__(self, instance: Any, actor_ctx: ActorContext, on_terminate: Callable[[bool], None]):
         self._instance = instance
         self._actor_ctx = actor_ctx
         self._on_terminate = on_terminate
@@ -73,14 +76,38 @@ class _ActorContextProxy:
             return attr
 
         def _wrapped(*args: Any, **kwargs: Any) -> Any:
-            token = _set_current_actor(self._actor_ctx)
+            terminate_requested = False
+
+            def request_termination() -> None:
+                nonlocal terminate_requested
+                terminate_requested = True
+
+            actor_ctx = replace(self._actor_ctx, _terminate=request_termination)
+            token = _set_current_actor(actor_ctx)
             try:
                 return attr(*args, **kwargs)
             finally:
                 _reset_current_actor(token)
-                self._on_terminate()
+                self._on_terminate(terminate_requested)
 
         return _wrapped
+
+
+def _start_requested_actor_termination(
+    *,
+    requested: bool,
+    replica_count: int,
+    thread_name: str,
+    terminate_job: Callable[[], None],
+    terminate_replica: Callable[[], None],
+) -> None:
+    """Run the correct Iris actor termination path for the requesting call."""
+    if not requested:
+        return
+
+    target = terminate_job if replica_count == 1 else terminate_replica
+    thread = threading.Thread(target=target, daemon=True, name=thread_name)
+    thread.start()
 
 
 def _convert_device(device: DeviceConfig) -> cluster_pb2.DeviceConfig | None:
@@ -208,7 +235,7 @@ class IrisJobHandle:
         self._job.terminate()
 
 
-def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) -> None:
+def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str, replica_count: int) -> None:
     """Entrypoint for actor-hosting Iris jobs.
 
     Instantiates the actor class, creates an ActorServer, registers the
@@ -231,39 +258,40 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     # Create handle BEFORE instance so actor can access it during __init__
     handle = IrisActorHandle(actor_name)
     assert ctx.client is not None
-    terminate_requested = threading.Event()
+    shutdown_requested = threading.Event()
 
-    def _terminate_job_if_requested() -> None:
-        if not terminate_requested.is_set():
-            return
-        terminate_requested.clear()
+    def _terminate_job() -> None:
+        time.sleep(_ACTOR_TERMINATION_DELAY)
+        try:
+            ctx.client.terminate(ctx.job_id)
+        except Exception:
+            logger.warning("Failed to terminate actor job %s", ctx.job_id, exc_info=True)
 
-        def _terminate_job() -> None:
-            time.sleep(2.0)
-            try:
-                ctx.client.terminate(ctx.job_id)
-            except Exception:
-                logger.warning("Failed to terminate actor job %s", ctx.job_id, exc_info=True)
-
-        thread = threading.Thread(
-            target=_terminate_job,
-            daemon=True,
-            name=f"terminate-{name_prefix}-{job_info.task_index}",
-        )
-        thread.start()
+    def _terminate_replica() -> None:
+        time.sleep(_ACTOR_TERMINATION_DELAY)
+        shutdown_requested.set()
 
     actor_ctx = ActorContext(
         handle=handle,
         index=job_info.task_index,
         group_name=name_prefix,
-        _terminate=terminate_requested.set,
     )
     token = _set_current_actor(actor_ctx)
     try:
         instance = actor_class(*args, **kwargs)
     finally:
         _reset_current_actor(token)
-    instance = _ActorContextProxy(instance, actor_ctx, on_terminate=_terminate_job_if_requested)
+    instance = _ActorContextProxy(
+        instance,
+        actor_ctx,
+        on_terminate=lambda requested: _start_requested_actor_termination(
+            requested=requested,
+            replica_count=replica_count,
+            thread_name=f"terminate-{name_prefix}-{job_info.task_index}",
+            terminate_job=_terminate_job,
+            terminate_replica=_terminate_replica,
+        ),
+    )
 
     server = ActorServer(host="0.0.0.0", port=ctx.get_port("actor"))
     server.register(actor_name, instance)
@@ -273,11 +301,20 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     # XXX: this should be handled by the actor server?
     address = f"http://{advertise_host}:{actual_port}"
     logger.info(f"Registering endpoint: {actor_name} -> {address}")
-    ctx.registry.register(actor_name, address)
+    endpoint_id = ctx.registry.register(actor_name, address)
     logger.info(f"Actor {actor_name} ready and listening")
 
-    # Block forever — job termination kills the process
-    threading.Event().wait()
+    if replica_count == 1:
+        # Single-replica coordinators keep using controller termination so the
+        # old actor job reaches a terminal controller state.
+        threading.Event().wait()
+        return
+
+    shutdown_requested.wait()
+    try:
+        ctx.registry.unregister(endpoint_id)
+    finally:
+        server.stop()
 
 
 class IrisActorHandle:
@@ -614,7 +651,7 @@ class FrayIrisClient:
 
         # Create a single job with N replicas
         # Each replica will run _host_actor with a unique task-based actor name
-        entrypoint = IrisEntrypoint.from_callable(_host_actor, actor_class, args, kwargs, name)
+        entrypoint = IrisEntrypoint.from_callable(_host_actor, actor_class, args, kwargs, name, count)
 
         retry_kwargs: dict[str, Any] = {}
         if actor_config.max_task_retries is not None:

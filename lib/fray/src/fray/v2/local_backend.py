@@ -10,6 +10,7 @@ import subprocess
 import threading
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import replace
 from typing import Any, cast
 
 from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
@@ -183,10 +184,9 @@ class LocalClient:
             # Create endpoint-based handle BEFORE instance so actor can access it
             endpoint = f"local/{name}-{i}"
             handle = LocalActorHandle(endpoint)
-            terminate_requested = threading.Event()
 
             # Set actor context with handle so actor can pass it to other actors
-            ctx = ActorContext(handle=handle, index=i, group_name=name, _terminate=terminate_requested.set)
+            ctx = ActorContext(handle=handle, index=i, group_name=name)
             token = _set_current_actor(ctx)
             try:
                 instance = actor_class(*args, **kwargs)
@@ -195,7 +195,6 @@ class LocalClient:
 
             instance._fray_actor_ctx = ctx
             instance._fray_actor_endpoint = endpoint
-            instance._fray_terminate_requested = terminate_requested
             instance._fray_actor_terminated = threading.Event()
             handle._bind_instance(instance)
 
@@ -275,7 +274,16 @@ class LocalActorMethod:
 
     def _invoke(self, *args: Any, **kwargs: Any) -> Any:
         instance = getattr(self._method, "__self__", None)
-        actor_ctx = getattr(instance, "_fray_actor_ctx", None)
+        base_actor_ctx = getattr(instance, "_fray_actor_ctx", None)
+        terminate_requested = False
+        actor_ctx = None
+        if base_actor_ctx is not None:
+
+            def request_termination() -> None:
+                nonlocal terminate_requested
+                terminate_requested = True
+
+            actor_ctx = replace(base_actor_ctx, _terminate=request_termination)
         token = _set_current_actor(actor_ctx) if actor_ctx is not None else None
 
         try:
@@ -284,11 +292,8 @@ class LocalActorMethod:
             if actor_ctx is not None:
                 _reset_current_actor(token)
 
-            if instance is not None:
-                terminate_requested = getattr(instance, "_fray_terminate_requested", None)
-                if terminate_requested is not None and terminate_requested.is_set():
-                    terminate_requested.clear()
-                    _shutdown_local_actor(instance)
+            if instance is not None and terminate_requested:
+                _shutdown_local_actor(instance)
 
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
         """Spawn a dedicated thread for this call, returning a future.

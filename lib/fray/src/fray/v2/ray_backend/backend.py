@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import logging
 import os
-import threading
 import time
 import uuid
+from dataclasses import replace
 from typing import Any, cast
 
 import humanfriendly
@@ -474,12 +474,10 @@ class _RayActorHostBase:
         # Create handle by name - will resolve via ray.get_actor() when used
         handle = RayActorHandle(actor_name)
         self._actor_name = actor_name
-        self._terminate_requested = threading.Event()
         self._actor_ctx = ActorContext(
             handle=handle,
             index=actor_index,
             group_name=group_name,
-            _terminate=self._terminate_requested.set,
         )
         token = _set_current_actor(self._actor_ctx)
         try:
@@ -489,13 +487,19 @@ class _RayActorHostBase:
 
     def _proxy_call(self, method_name: str, args: tuple, kwargs: dict) -> Any:
         """Proxy method calls to the wrapped actor instance."""
-        token = _set_current_actor(self._actor_ctx)
+        terminate_requested = False
+
+        def request_termination() -> None:
+            nonlocal terminate_requested
+            terminate_requested = True
+
+        actor_ctx = replace(self._actor_ctx, _terminate=request_termination)
+        token = _set_current_actor(actor_ctx)
         try:
             return getattr(self._instance, method_name)(*args, **kwargs)
         finally:
             _reset_current_actor(token)
-            if self._terminate_requested.is_set():
-                self._terminate_requested.clear()
+            if terminate_requested:
                 _kill_named_actor.remote(self._actor_name)
 
 

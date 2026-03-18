@@ -37,6 +37,25 @@ class SelfAwareActor:
         return "terminating"
 
 
+class ConcurrentTerminateActor:
+    def __init__(self):
+        self._terminate_requested = threading.Event()
+        self._allow_finish = threading.Event()
+
+    def request_terminate(self) -> str:
+        current_actor().terminate()
+        self._terminate_requested.set()
+        assert self._allow_finish.wait(timeout=5.0)
+        return "terminating"
+
+    def ping(self) -> str:
+        assert self._terminate_requested.wait(timeout=5.0)
+        return "pong"
+
+    def allow_finish(self) -> None:
+        self._allow_finish.set()
+
+
 class ProbeActor:
     def ping(self) -> str:
         return "pong"
@@ -137,6 +156,18 @@ def test_actor_can_request_backend_termination(client: LocalClient):
     assert actor.terminate.remote().result() == "terminating"
     with pytest.raises(RuntimeError, match="Actor not found"):
         actor.actor_identity.remote()
+
+
+def test_actor_termination_is_owned_by_requesting_call(client: LocalClient):
+    actor = client.create_actor(ConcurrentTerminateActor, name="self-aware")
+    future = actor.request_terminate.remote()
+
+    assert actor.ping() == "pong"
+    actor.allow_finish()
+
+    assert future.result() == "terminating"
+    with pytest.raises(RuntimeError, match="Actor not found"):
+        actor.ping.remote()
 
 
 def test_stale_group_shutdown_does_not_kill_same_endpoint_replacement(client: LocalClient):
