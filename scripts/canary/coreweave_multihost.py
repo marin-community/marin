@@ -62,6 +62,13 @@ CANARY_ENV_DEFAULTS = {
     "WANDB_ENTITY": "marin-community",
     "WANDB_PROJECT": "marin",
     "MARIN_PREFIX": "s3://marin-na/marin/",
+    # NCCL debug — propagates through executor → Fray → child GPU pods.
+    "NCCL_DEBUG": "INFO",
+    "NCCL_DEBUG_SUBSYS": "INIT,NET",
+    "NCCL_IB_DISABLE": "0",
+    "NCCL_NET_GDR_LEVEL": "5",
+    # JAX compilation logging
+    "JAX_LOG_COMPILES": "1",
 }
 
 REQUIRED_ENV_VARS = ["R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "WANDB_API_KEY"]
@@ -503,7 +510,7 @@ def run_gpu_phase(verbose: bool = False) -> int:
     exit_code = submit_and_monitor(
         config_path=GPU_CONFIG,
         job_name=f"multihost-canary-{run_id}",
-        command=["python", "-m", "experiments.ferries.canary_ferry"],
+        command=["python", "-m", "experiments.tutorials.train_tiny_model_gpu_multihost"],
         env_vars=env_vars,
         cpu=1,
         memory="16GB",

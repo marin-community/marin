@@ -114,12 +114,20 @@ namespace could interfere.
 Fix: add `managed_label` to pod and configmap labels in `_build_pod_manifest`
 and `_apply_pod`.
 
+### Debugging: NCCL hang at broadcast_one_to_all
+
+RDMA/IB devices now visible in container (`/dev/infiniband/uverbs0-8`), but
+`broadcast_one_to_all` still hangs (0% GPU util, 61GB VRAM allocated, 25+ min).
+Switching to tiny model (`llama_nano`, 10 steps) to isolate, and adding:
+- `NCCL_DEBUG=INFO`, `NCCL_DEBUG_SUBSYS=INIT,NET`
+- `NCCL_IB_DISABLE=0`, `NCCL_NET_GDR_LEVEL=5`
+- `JAX_LOG_COMPILES=1`
+
 ### Current status
 
 - CPU canary PASSED
 - H100 nodepool provisioned (2/2 nodes: gd927de, gd94886)
-- Executor_main correctly submitted child job `grug-train-mh` with 2 replicas
-- All fixes applied (disk, JAX backoff, RDMA/IB, managed labels) — retrying
+- Switching to tiny model for faster iteration on NCCL hang
 
 ### Known risks
 
