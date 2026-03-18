@@ -211,7 +211,9 @@ def _load_batches(file_path: str, columns: list[str] | None = None, **parquet_kw
             parquet_file = pq.ParquetFile(f)
             yield from parquet_file.iter_batches(**parquet_kwargs)
         else:
-            yield from pa_json.read_json(f).to_batches()
+            # TODO (rav): apparently this is needed because there's some massive json rows!?
+            read_options = pa_json.ReadOptions(block_size=256 * 1024 * 1024)  # 256 MB
+            yield from pa_json.read_json(f, read_options=read_options).to_batches()
 
 
 def _find_base_path(input_path: str | list[str], input_files: list[str]) -> str:
