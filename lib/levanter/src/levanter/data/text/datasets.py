@@ -832,7 +832,7 @@ class LmDataConfig:
 
         if isinstance(component, HierarchicalMixtureDatasetComponent):
 
-            def build_nested_dataset() -> AsyncDataset[GrugLmExample]:
+            def build_child_datasets() -> dict[str, AsyncDataset[GrugLmExample]]:
                 child_datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
                 for child_name, child_component in component.components.items():
                     dataset = self._build_token_dataset_for_component(
@@ -845,7 +845,11 @@ class LmDataConfig:
                     if dataset is None:
                         continue
                     child_datasets[child_name] = dataset
+                return child_datasets
 
+            def build_hierarchical_mixture(
+                child_datasets: Mapping[str, AsyncDataset[GrugLmExample]],
+            ) -> AsyncDataset[GrugLmExample]:
                 if split == "train" and not child_datasets:
                     raise ValueError(f"No child datasets available for hierarchical component {name}")
                 if not child_datasets:
@@ -867,10 +871,25 @@ class LmDataConfig:
                     block_size=self.mixture_block_size,
                 )
 
+            def build_nested_dataset() -> AsyncDataset[GrugLmExample]:
+                return build_hierarchical_mixture(build_child_datasets())
+
             finite_length = _finite_length_for_hierarchical_component(
                 component,
                 seq_len=Pos.size,
             )
+            if split != "train":
+                child_datasets = build_child_datasets()
+                if not child_datasets:
+                    logger.warning(
+                        "No datasets available for hierarchical component %s in %s split, skipping", name, split
+                    )
+                    return None
+                finite_length = sum(len(dataset.as_sync_dataset()) for dataset in child_datasets.values())
+                return LazyAsyncDataset(
+                    lambda: build_hierarchical_mixture(child_datasets),
+                    finite_length=finite_length,
+                )
             return LazyAsyncDataset(build_nested_dataset, finite_length=finite_length)
 
         raise ValueError(f"Unsupported component type for {name}: {type(component)}")

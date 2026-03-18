@@ -368,6 +368,80 @@ def test_hierarchical_component_uses_metadata_length_when_tiny_child_weight_roun
     assert len(train_sets["group"].as_sync_dataset()) == 5000
 
 
+def test_hierarchical_component_skips_empty_validation_split(tmp_path):
+    train_path = tmp_path / "train.jsonl"
+    with train_path.open("w") as f:
+        f.write(json.dumps({"input_ids": [1, 2, 3, 4]}) + "\n")
+
+    hierarchical = HierarchicalMixtureDatasetComponent(
+        components={
+            "left": DatasetComponent(
+                source=UrlDatasetSourceConfig(train_urls=[str(train_path)], validation_urls=[]),
+                format=PrebuiltLmDatasetFormat(),
+                cache_dir=str(tmp_path / "cache_left"),
+            ),
+            "right": DatasetComponent(
+                source=UrlDatasetSourceConfig(train_urls=[str(train_path)], validation_urls=[]),
+                format=PrebuiltLmDatasetFormat(),
+                cache_dir=str(tmp_path / "cache_right"),
+            ),
+        },
+        train_weights={"left": 0.5, "right": 0.5},
+    )
+
+    config = LmDataConfig(
+        components={"group": hierarchical},
+        train_weights={"group": 1.0},
+        tokenizer="passthrough",
+        vocab_size=16,
+        shuffle=False,
+    )
+    Pos = hax.Axis("position", 4)
+
+    assert config.validation_sets(Pos) == {}
+
+
+def test_hierarchical_component_validation_uses_available_children_only(tmp_path):
+    train_path = tmp_path / "train.jsonl"
+    validation_path = tmp_path / "validation.jsonl"
+    with train_path.open("w") as f:
+        f.write(json.dumps({"input_ids": [1, 2, 3, 4]}) + "\n")
+    with validation_path.open("w") as f:
+        f.write(json.dumps({"input_ids": [5, 6, 7, 8]}) + "\n")
+
+    hierarchical = HierarchicalMixtureDatasetComponent(
+        components={
+            "left": DatasetComponent(
+                source=UrlDatasetSourceConfig(train_urls=[str(train_path)], validation_urls=[]),
+                format=PrebuiltLmDatasetFormat(),
+                cache_dir=str(tmp_path / "cache_left"),
+            ),
+            "right": DatasetComponent(
+                source=UrlDatasetSourceConfig(train_urls=[str(train_path)], validation_urls=[str(validation_path)]),
+                format=PrebuiltLmDatasetFormat(),
+                cache_dir=str(tmp_path / "cache_right"),
+            ),
+        },
+        train_weights={"left": 0.5, "right": 0.5},
+    )
+
+    config = LmDataConfig(
+        components={"group": hierarchical},
+        train_weights={"group": 1.0},
+        tokenizer="passthrough",
+        vocab_size=16,
+        shuffle=False,
+    )
+
+    validation_sets = config.validation_grug_sets(seq_len=4)
+
+    assert set(validation_sets) == {"group"}
+    dataset = validation_sets["group"]
+    assert dataset.is_finite()
+    assert len(dataset.as_sync_dataset()) == 1
+    assert isinstance(dataset.as_sync_dataset()[0], GrugLmExample)
+
+
 def test_dataset_for_component_rejects_preference_format():
     component = DatasetComponent(format=PreferenceChatLmDatasetFormat())
     Pos = hax.Axis("position", 8)

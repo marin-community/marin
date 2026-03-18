@@ -146,3 +146,38 @@ Not confirmed. As of March 16, 2026:
 - The latest visible checkpoint metadata timestamps are around `2026-03-16T11:30Z` to `2026-03-16T11:31Z` (about `4:30 AM PDT`).
 
 So the evidence says both baseline jobs are still alive and had progressed well into training. The cluster does show substantial Ray worker churn and OOM-related raylet warnings, but those are currently cluster-wide symptoms during the concurrent merged-cache prep jobs, not proof that either TPU training run has failed.
+
+## Hypothesis 7
+
+The hierarchical runtime-loading path is crashing during tagged evaluation setup because a grouped domain can have zero available child datasets in the `validation` split even though it has valid `train` children. The new lazy hierarchical loader currently raises when a non-train split ends up empty instead of skipping that grouped domain.
+
+## Changes to make
+
+- Inspect the hierarchical branch in `lib/levanter/src/levanter/data/text/datasets.py`.
+- Keep train-split laziness intact, but make non-train splits resolve child availability early enough to:
+  - skip empty grouped validation domains, and
+  - compute a finite validation length from the surviving child datasets.
+- Add regressions for:
+  - fully empty hierarchical validation groups,
+  - partially available hierarchical validation groups.
+
+## Future Work
+
+- [ ] If eval startup becomes noticeable, consider a lighter-weight cached split-availability map for hierarchical components so validation does not need to probe every child cache at evaluator construction time.
+- [ ] Consider whether hierarchical non-train mixtures should eventually use a finite stop strategy instead of restart-plus-explicit-length.
+
+## Results
+
+Confirmed. The failed `us-east5-a` canary ended in:
+
+- `ValueError: No datasets available for hierarchical component dolma3_cc/art_and_design_high`
+
+The immediate cause was that all child validation caches under that grouped domain were absent on east5, so child-level validation components were individually skipped, but the parent `HierarchicalMixtureDatasetComponent` still returned a lazy dataset factory that only raised once the evaluator touched the first example.
+
+Patched `lib/levanter/src/levanter/data/text/datasets.py` so non-train hierarchical splits:
+
+- build child datasets eagerly enough to know whether anything exists,
+- return `None` (skip the domain) when no validation/test children exist,
+- compute the finite non-train length from the actually available child datasets.
+
+Added two regressions in `lib/levanter/tests/test_text.py` covering empty and partial hierarchical validation availability.
