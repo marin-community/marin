@@ -22,7 +22,11 @@ from experiments.evals.task_configs import EvalTaskConfig, CORE_TASKS
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from marin.processing.tokenize.data_configs import TokenizedMixtureGroup, lm_varying_mixture_data_config
+from marin.processing.tokenize.data_configs import (
+    TokenizedMixtureGroup,
+    TokenizerConfigLike,
+    lm_varying_mixture_data_config,
+)
 
 from experiments.domain_phase_mix.config import (
     ExperimentConfig,
@@ -224,7 +228,7 @@ class MixtureExperiment:
         # which converts step indices to sequence indices using the batch schedule.
         # The step indices must be chosen so that step * batch_size is a multiple of mixture_block_size.
         if self.hierarchical_runtime_domains:
-            runtime_components: dict[str, ExecutorStep | TokenizedMixtureGroup] = {}
+            runtime_components: dict[str, TokenizerConfigLike | TokenizedMixtureGroup] = {}
             for domain in self.domains:
                 if len(domain.components) == 1:
                     runtime_components[domain.name] = domain.components[0].get_step()

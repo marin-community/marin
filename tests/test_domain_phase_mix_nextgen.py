@@ -57,6 +57,7 @@ from experiments.domain_phase_mix.nextgen.model_registry import _propose_top1_ca
 from experiments.domain_phase_mix.nextgen.state_store import write_loop_state
 from experiments.domain_phase_mix.dolma3_dolmino_top_level_domains import REMOVED_DOLMA3_CC_TOPICS
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
+    MERGED_CC_DOMAIN_NAMES,
     MIN_RECOMMENDED_SAMPLED_RUNS,
     MIN_RECOMMENDED_SWARM_RUNS,
     PHASE_BOUNDARIES,
@@ -289,13 +290,19 @@ def test_top_level_experiment_uses_hierarchical_runtime_domains():
     assert isinstance(mixture.components["dolma3_finemath_3plus"], LmDatasetComponent)
     assert isinstance(mixture.components["dolma3_wikipedia"], LmDatasetComponent)
     assert isinstance(mixture.components["dolmino_synth_code"], LmDatasetComponent)
-    assert isinstance(mixture.components["dolma3_cc/art_and_design_high"], HierarchicalMixtureDatasetComponent)
-    assert isinstance(mixture.components["dolma3_stack_edu"], HierarchicalMixtureDatasetComponent)
+    assert isinstance(mixture.components["dolma3_cc/art_and_design_high"], LmDatasetComponent)
+    assert isinstance(mixture.components["dolma3_stack_edu"], LmDatasetComponent)
+    assert isinstance(mixture.components["dolmino_stem_heavy_crawl"], LmDatasetComponent)
+    assert isinstance(mixture.components["dolmino_common_crawl_hq"], HierarchicalMixtureDatasetComponent)
+    assert isinstance(mixture.components["dolmino_stack_edu_fim"], HierarchicalMixtureDatasetComponent)
 
 
-def test_build_top_level_domain_steps_is_empty_for_hierarchical_runtime_loading():
+def test_build_top_level_domain_steps_only_materializes_cc_split_domains():
     steps = build_top_level_domain_steps()
-    assert steps == {}
+    assert set(steps) == set(MERGED_CC_DOMAIN_NAMES)
+    assert len(steps) == 26
+    assert "dolma3_stack_edu" not in steps
+    assert "dolmino_common_crawl_hq" not in steps
 
 
 def test_top_level_experiment_uses_linear_80_20_wsd():

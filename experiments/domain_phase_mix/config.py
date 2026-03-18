@@ -1,19 +1,5 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """Configuration classes for n-domain, n-phase mixture experiments.
 
@@ -27,6 +13,9 @@ from dataclasses import dataclass
 from collections.abc import Callable
 
 from marin.execution.executor import ExecutorStep
+from marin.processing.tokenize.tokenize import TokenizeConfigBase
+
+RuntimeDatasetComponent = ExecutorStep | TokenizeConfigBase
 
 
 @dataclass
@@ -35,17 +24,17 @@ class DatasetComponent:
 
     Attributes:
         name: Unique identifier for the component.
-        step_fn: Callable that returns the ExecutorStep for this dataset.
+        step_fn: Callable that returns the runtime source for this dataset.
             Using a callable allows lazy initialization.
         weight: Relative weight within the domain (will be normalized).
     """
 
     name: str
-    step_fn: Callable[[], ExecutorStep]
+    step_fn: Callable[[], RuntimeDatasetComponent]
     weight: float = 1.0
 
-    def get_step(self) -> ExecutorStep:
-        """Get the ExecutorStep for this component."""
+    def get_step(self) -> RuntimeDatasetComponent:
+        """Get the runtime source for this component."""
         return self.step_fn()
 
 
@@ -88,11 +77,11 @@ class Domain:
             return {c.name: 1.0 / n for c in self.components}
         return {c.name: c.weight / total for c in self.components}
 
-    def get_all_steps(self) -> dict[str, ExecutorStep]:
-        """Get all ExecutorSteps for this domain.
+    def get_all_steps(self) -> dict[str, RuntimeDatasetComponent]:
+        """Get all runtime sources for this domain.
 
         Returns:
-            Dictionary mapping component names to their ExecutorSteps.
+            Dictionary mapping component names to their runtime sources.
         """
         return {c.name: c.get_step() for c in self.components}
 
@@ -371,7 +360,7 @@ class ExperimentConfig:
             return {d.name: 1.0 / n for d in self.domains}
         return {d.name: get_domain_weight(d) / total for d in self.domains}
 
-    def get_all_components(self) -> dict[str, ExecutorStep]:
+    def get_all_components(self) -> dict[str, RuntimeDatasetComponent]:
         """Get all dataset components across all domains."""
         components = {}
         for domain in self.domains:

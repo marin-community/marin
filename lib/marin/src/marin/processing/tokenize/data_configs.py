@@ -15,7 +15,10 @@ from levanter.data.text import (
     DatasetComponent,
     HierarchicalMixtureDatasetComponent,
     LmDataConfig,
+    LmDatasetFormatBase,
     LmDatasetSourceConfigBase,
+    TextLmDatasetFormat,
+    UrlDatasetSourceConfig,
 )
 
 from marin.execution import unwrap_versioned_value
@@ -50,6 +53,27 @@ class TokenizedMixtureGroup:
     @property
     def tokenizer(self) -> str:
         return _verify_tokenizers_same(self.components)
+
+
+@dataclass(frozen=True)
+class ExistingTokenizedCacheConfig(TokenizeConfigBase):
+    """Reference an already-finished tokenized cache without rebuilding it."""
+
+    cache_path: str
+    tokenizer: str
+    tags: list[str] = dataclasses.field(default_factory=list)
+    format: LmDatasetFormatBase = dataclasses.field(default_factory=TextLmDatasetFormat)
+
+    def as_lm_dataset_source_config(
+        self, actual_output_path: str | InputName | None, *, include_raw_paths: bool = True
+    ) -> LmDatasetSourceConfigBase:
+        return UrlDatasetSourceConfig(
+            tags=self.tags,
+            train_urls=[],
+            validation_urls=[],
+            cache_dir=actual_output_path,
+            format=self.format,
+        )
 
 
 def step_to_lm_dataset_source_config(

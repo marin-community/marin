@@ -51,14 +51,23 @@ def main() -> None:
 
     selected_domains = _selected_domain_names(args.domains)
     step_by_domain = build_top_level_domain_steps()
-    if not step_by_domain:
-        logger.info("Hierarchical top-level runtime loading does not require cache prep steps.")
+    prep_domains = [domain_name for domain_name in selected_domains if domain_name in step_by_domain]
+    skipped_domains = [domain_name for domain_name in selected_domains if domain_name not in step_by_domain]
+
+    if not prep_domains:
+        if skipped_domains:
+            logger.info("Selected domains already use direct or existing merged caches; no new prep steps are required.")
+        else:
+            logger.info("No top-level runtime cache prep steps are required.")
         return
-    steps = [step_by_domain[domain_name] for domain_name in selected_domains]
+
+    steps = [step_by_domain[domain_name] for domain_name in prep_domains]
 
     logger.info("Preparing %d top-level runtime caches", len(steps))
-    for domain_name in selected_domains:
+    for domain_name in prep_domains:
         logger.info("  %s", domain_name)
+    for domain_name in skipped_domains:
+        logger.info("  %s (reused)", domain_name)
 
     executor_main(
         steps=steps,

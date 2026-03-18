@@ -5,8 +5,9 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, replace
-from functools import partial
+from functools import cache, partial
 
 from levanter.optim import MuonHConfig
 from fray.cluster import ResourceConfig
@@ -35,6 +36,8 @@ from experiments.evals.task_configs import MMLU_5_SHOT, MMLU_PRO_5_SHOT
 from experiments.marin_models import marin_tokenizer
 from experiments.pretraining_datasets.dolma3_dolmino_pool import tokenize_dolmino_pool_subset
 from experiments.pretraining_datasets.dolma3_pool import tokenize_dolma3_pool_subset
+from marin.processing.tokenize.data_configs import ExistingTokenizedCacheConfig
+from marin.processing.tokenize.merge_tokenized_caches import merge_tokenized_caches
 
 NAME = "pinlin_calvin_xu/data_mixture/two_phase_dolma3_dolmino_top_level"
 EXPERIMENT_BUDGET = 1_200_000_000
@@ -52,6 +55,13 @@ EVAL_DATASETS_CACHE_PATH: str | None = None
 INITIAL_BASELINE_RUNS = 2
 MIN_RECOMMENDED_SWARM_RUNS = 6 * len(DOMAIN_NAMES)
 MIN_RECOMMENDED_SAMPLED_RUNS = MIN_RECOMMENDED_SWARM_RUNS - INITIAL_BASELINE_RUNS
+MERGED_CC_DOMAIN_NAMES = tuple(name for name in DOMAIN_NAMES if name.startswith("dolma3_cc/"))
+EXISTING_MERGED_RUNTIME_CACHE_PATHS = {
+    "dolma3_stack_edu": "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_stack_edu-a7297b",
+    "dolmino_stem_heavy_crawl": (
+        "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolmino_stem_heavy_crawl-e1ec3b"
+    ),
+}
 
 SAMPLING_PARAMS = DirichletSamplingParams(
     strategy=SamplingStrategy.DIRICHLET,
@@ -66,6 +76,7 @@ WSD_BOUNDARY_ALIGNED_WARMUP = 0.01
 WSD_BOUNDARY_ALIGNED_REWARMUP = 0.0
 
 assert len(DOMAIN_NAMES) == 39, f"Expected 39 top-level domains, got {len(DOMAIN_NAMES)}"
+assert len(MERGED_CC_DOMAIN_NAMES) == 26, f"Expected 26 merged CC domains, got {len(MERGED_CC_DOMAIN_NAMES)}"
 assert TARGET_BUDGET == 6_325_183_647_689, TARGET_BUDGET
 assert TOP_LEVEL_TOTAL_AVAILABLE_TOKENS == 6_986_431_605_135, TOP_LEVEL_TOTAL_AVAILABLE_TOKENS
 assert REALIZED_EXPERIMENT_BUDGET == 1_199_833_088, REALIZED_EXPERIMENT_BUDGET
@@ -95,11 +106,95 @@ def _partition_step_fn(partition_name: str):
     return partial(tokenize_dolmino_pool_subset, partition_name, tokenizer=marin_tokenizer)
 
 
+@cache
+def _existing_merged_runtime_cache_config(domain_name: str) -> ExistingTokenizedCacheConfig:
+    cache_path = EXISTING_MERGED_RUNTIME_CACHE_PATHS[domain_name]
+    return ExistingTokenizedCacheConfig(
+        cache_path=cache_path,
+        tokenizer=marin_tokenizer,
+        tags=[domain_name, "top_level_runtime_cache"],
+    )
+
+
+@cache
+def _merged_top_level_domain_step(domain_name: str):
+    partition_counts = top_level_domain_partition_counts(domain_name)
+    input_steps = {
+        partition_name: _partition_step_fn(partition_name)()
+        for partition_name in TOP_LEVEL_DOMAIN_PARTITIONS[domain_name]
+    }
+    return merge_tokenized_caches(
+        output_cache_path_name=os.path.join("dolma3_dolmino_top_level", domain_name),
+        input_steps=input_steps,
+        tokenizer=marin_tokenizer,
+        tags=[domain_name, *partition_counts],
+    )
+
+
 def build_top_level_domains() -> list[Domain]:
-    """Build top-level domains from their real partition caches."""
+    """Build top-level domains with hybrid runtime loading.
+
+    The runtime uses:
+    - shared merged caches for the 26 Dolma 3 CC high/low domains,
+    - already-finished east5 merged caches for Stack-Edu and Dolmino STEM crawl,
+    - direct single-partition caches for singleton domains,
+    - hierarchical loading for the remaining multi-partition Dolmino domains.
+    """
     domains: list[Domain] = []
     for domain_name in DOMAIN_NAMES:
         partition_counts = top_level_domain_partition_counts(domain_name)
+        if domain_name in MERGED_CC_DOMAIN_NAMES:
+            domains.append(
+                Domain(
+                    name=domain_name,
+                    components=[
+                        DatasetComponent(
+                            name=domain_name,
+                            step_fn=partial(_merged_top_level_domain_step, domain_name),
+                            weight=TOP_LEVEL_DOMAIN_TOKEN_COUNTS[domain_name],
+                        )
+                    ],
+                    description=(
+                        "Top-level domain backed by a shared merged cache over "
+                        f"{len(TOP_LEVEL_DOMAIN_PARTITIONS[domain_name])} source partition caches."
+                    ),
+                )
+            )
+            continue
+
+        if domain_name in EXISTING_MERGED_RUNTIME_CACHE_PATHS:
+            domains.append(
+                Domain(
+                    name=domain_name,
+                    components=[
+                        DatasetComponent(
+                            name=domain_name,
+                            step_fn=partial(_existing_merged_runtime_cache_config, domain_name),
+                            weight=TOP_LEVEL_DOMAIN_TOKEN_COUNTS[domain_name],
+                        )
+                    ],
+                    description="Top-level domain reusing an existing finished east5 merged cache.",
+                )
+            )
+            continue
+
+        if len(partition_counts) == 1:
+            partition_name = next(iter(partition_counts))
+            domains.append(
+                Domain(
+                    name=domain_name,
+                    components=[
+                        DatasetComponent(
+                            name=partition_name,
+                            step_fn=_partition_step_fn(partition_name),
+                            weight=partition_counts[partition_name],
+                        )
+                    ],
+                    description="Top-level singleton domain backed directly by its original tokenized cache.",
+                )
+            )
+            continue
+
         components = [
             DatasetComponent(
                 name=partition_name,
@@ -122,8 +217,8 @@ def build_top_level_domains() -> list[Domain]:
 
 
 def build_top_level_domain_steps() -> dict[str, object]:
-    """Hierarchical runtime loading does not require separate top-level prep steps."""
-    return {}
+    """Build the shared prep steps for domains that should be physically merged."""
+    return {domain_name: _merged_top_level_domain_step(domain_name) for domain_name in MERGED_CC_DOMAIN_NAMES}
 
 
 def _constant_phase_weights(domain_weights: dict[str, float]) -> dict[str, dict[str, float]]:
