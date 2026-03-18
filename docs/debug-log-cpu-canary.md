@@ -144,11 +144,21 @@ https://wandb.ai/marin-community/marin/runs/mh-canary-20260318-195805
 
 Next: switch back to Grug MoE canary for full validation.
 
+### Grug MoE attempt: HF gated repo 401
+
+MoE training pods scheduled and ran successfully on 2x H100 nodes.
+JAX distributed init + NCCL communication worked. Training failed at
+tokenizer download: `meta-llama/Meta-Llama-3.1-8B` is a gated repo and
+the `HF_TOKEN` in the environment doesn't have access approved.
+
+This is a credential/permission issue, not an infrastructure bug.
+
 ### Current status
 
 - CPU canary PASSED
-- Tiny multi-host GPU canary PASSED (2x H100, llama_nano, 10 steps)
-- Switching to Grug MoE canary for full validation
+- Multi-host GPU infra WORKING (2x H100, 16 GPUs, NCCL over Ethernet)
+- Tiny model canary PASSED (llama_nano, 10 steps, 2m30s)
+- Grug MoE blocked on HF_TOKEN gated model access for meta-llama/Meta-Llama-3.1-8B
 
 ### Known risks
 
