@@ -12,7 +12,7 @@ from fray.v2.types import ResourceConfig
 from iris.marin_fs import MARIN_CROSS_REGION_OVERRIDE_ENV
 
 from marin.execution.artifact import Artifact, PathMetadata
-from marin.execution.executor import ExecutorStep, resolve_executor_step
+from marin.execution.executor import _dag_tpu_regions, ExecutorStep, resolve_executor_step
 from marin.execution.remote import RemoteCallable, remote
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_runner import StepRunner
@@ -540,6 +540,163 @@ def test_resolve_executor_step_allows_cross_region_with_override_env(monkeypatch
 
     assert isinstance(resolved.fn, RemoteCallable)
     assert resolved.fn.resources.regions == ["us-central2", "us-east1"]
+
+
+def test_resolve_executor_step_uses_dag_tpu_regions_without_gcs_inputs():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"local_only": "/tmp/foo"},
+            output_path="/out/test-abc",
+            dag_tpu_regions=["us-west4", "us-central2"],
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions == ["us-central2", "us-west4"]
+
+
+def test_resolve_executor_step_intersects_gcs_and_dag_tpu_regions():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"input_path": "gs://marin-us-central2/data/input"},
+            output_path="/out/test-abc",
+            dag_tpu_regions=["us-west4", "us-central2"],
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions == ["us-central2"]
+
+
+def test_resolve_executor_step_raises_on_disjoint_gcs_and_dag_tpu_regions():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        with pytest.raises(ValueError, match="no overlap between GCS regions"):
+            resolve_executor_step(
+                step,
+                config={"input_path": "gs://marin-us-east1/data/input"},
+                output_path="/out/test-abc",
+                dag_tpu_regions=["us-central2"],
+            )
+
+
+def test_resolve_executor_step_allows_disjoint_gcs_and_dag_tpu_regions_with_override_env(monkeypatch):
+    @remote
+    def my_fn(config):
+        pass
+
+    monkeypatch.setenv(MARIN_CROSS_REGION_OVERRIDE_ENV, "1")
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"input_path": "gs://marin-us-east1/data/input"},
+            output_path="/out/test-abc",
+            dag_tpu_regions=["us-central2"],
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions == ["us-central2", "us-east1"]
+
+
+def test_dag_tpu_regions_intersects_explicit_regions():
+    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-central2", "us-west4"]))
+    def first(_config):
+        pass
+
+    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-central2", "us-east1"]))
+    def second(_config):
+        pass
+
+    steps = [
+        ExecutorStep(name="first", fn=first, config=None),
+        ExecutorStep(name="second", fn=second, config=None),
+    ]
+
+    assert _dag_tpu_regions(steps) == ["us-central2"]
+
+
+def test_dag_tpu_regions_raises_on_disjoint_explicit_regions():
+    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-west4"]))
+    def first(_config):
+        pass
+
+    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-central2"]))
+    def second(_config):
+        pass
+
+    steps = [
+        ExecutorStep(name="first", fn=first, config=None),
+        ExecutorStep(name="second", fn=second, config=None),
+    ]
+
+    with pytest.raises(ValueError, match="No common region satisfies all TPU steps"):
+        _dag_tpu_regions(steps)
+
+
+def test_dag_tpu_regions_allows_disjoint_explicit_regions_with_override_env(monkeypatch):
+    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-west4"]))
+    def first(_config):
+        pass
+
+    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-central2"]))
+    def second(_config):
+        pass
+
+    monkeypatch.setenv(MARIN_CROSS_REGION_OVERRIDE_ENV, "1")
+    steps = [
+        ExecutorStep(name="first", fn=first, config=None),
+        ExecutorStep(name="second", fn=second, config=None),
+    ]
+
+    assert _dag_tpu_regions(steps) == ["us-central2", "us-west4"]
+
+
+def test_dag_tpu_regions_uses_iris_variant_regions_when_not_pinned():
+    @remote(resources=ResourceConfig.with_tpu("v5p-8"))
+    def first(_config):
+        pass
+
+    @remote(resources=ResourceConfig.with_tpu("v5p-8"))
+    def second(_config):
+        pass
+
+    steps = [
+        ExecutorStep(name="first", fn=first, config=None),
+        ExecutorStep(name="second", fn=second, config=None),
+    ]
+
+    with patch(
+        "marin.execution.executor._regions_for_tpu_variant_from_iris",
+        return_value={"us-central2", "us-west4"},
+    ):
+        assert _dag_tpu_regions(steps) == ["us-central2", "us-west4"]
 
 
 def test_step_without_remote_is_plain_fn():

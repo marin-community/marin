@@ -98,13 +98,16 @@ import draccus
 import levanter.utils.fsspec_utils as fsspec_utils
 from fray.v2.client import current_client
 from fray.v2.iris_backend import FrayIrisClient
+from fray.v2.types import TpuConfig
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.constraints import WellKnownAttribute
 from iris.marin_fs import MARIN_CROSS_REGION_OVERRIDE_ENV
 from iris.marin_fs import collect_gcs_paths
 from iris.marin_fs import get_bucket_location, open_url
 from iris.marin_fs import marin_prefix
 from iris.marin_fs import region_from_prefix
 from iris.marin_fs import split_gcs_path
+from iris.rpc import config_pb2
 
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_runner import StepRunner, worker_id
@@ -189,6 +192,7 @@ def _infer_gcs_regions(
     config: Any,
     output_path: str,
     deps: list[StepSpec] | None,
+    dag_tpu_regions: list[str] | None = None,
 ) -> list[str] | None:
     """Return inferred GCS regions referenced by config/deps/output, or None if no GCS paths."""
     # label -> path evidence for useful error messages
@@ -208,35 +212,144 @@ def _infer_gcs_regions(
     if output_path.startswith("gs://"):
         add_path("output_path", output_path)
 
-    if not path_to_labels:
-        return None
-
-    bucket_region_cache: dict[str, str] = {}
+    gcs_regions: set[str] | None = None
     region_to_evidence: dict[str, list[str]] = {}
-    for path, labels in path_to_labels.items():
-        region = _region_for_gcs_path(path, step_name=step_name, bucket_region_cache=bucket_region_cache)
-        region_to_evidence.setdefault(region, []).extend(f"{label}={path}" for label in labels)
+    if path_to_labels:
+        bucket_region_cache: dict[str, str] = {}
+        for path, labels in path_to_labels.items():
+            region = _region_for_gcs_path(path, step_name=step_name, bucket_region_cache=bucket_region_cache)
+            region_to_evidence.setdefault(region, []).extend(f"{label}={path}" for label in labels)
+        gcs_regions = set(region_to_evidence)
 
-    if len(region_to_evidence) > 1:
-        regions = sorted(region_to_evidence)
-        if os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
+        if len(gcs_regions) > 1 and not os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
+            detail = "; ".join(
+                f"{region}: {', '.join(sorted(evidence)[:3])}" for region, evidence in sorted(region_to_evidence.items())
+            )
+            raise ValueError(
+                f"Executor step {step_name!r} has cross-region GCS dependencies. "
+                f"Found regions {{{', '.join(sorted(region_to_evidence))}}}. {detail}"
+            )
+        if len(gcs_regions) > 1:
             logger.warning(
                 "Cross-region GCS dependencies for step %s allowed by %s: %s",
                 step_name,
                 MARIN_CROSS_REGION_OVERRIDE_ENV,
-                regions,
+                sorted(gcs_regions),
             )
-            return regions
 
-        detail = "; ".join(
-            f"{region}: {', '.join(sorted(evidence)[:3])}" for region, evidence in sorted(region_to_evidence.items())
-        )
-        raise ValueError(
-            f"Executor step {step_name!r} has cross-region GCS dependencies. "
-            f"Found regions {{{', '.join(sorted(region_to_evidence))}}}. {detail}"
-        )
+    if dag_tpu_regions:
+        tpu_region_set = {r.lower() for r in dag_tpu_regions}
+        if gcs_regions is None:
+            gcs_regions = tpu_region_set
+        else:
+            intersection = gcs_regions & tpu_region_set
+            if intersection:
+                gcs_regions = intersection
+            elif os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
+                union_regions = gcs_regions | tpu_region_set
+                logger.warning(
+                    "Step %s has no overlap between GCS regions %s and DAG TPU regions %s; "
+                    "allowing union due to %s: %s",
+                    step_name,
+                    sorted(gcs_regions),
+                    sorted(tpu_region_set),
+                    MARIN_CROSS_REGION_OVERRIDE_ENV,
+                    sorted(union_regions),
+                )
+                gcs_regions = union_regions
+            else:
+                raise ValueError(
+                    f"Executor step {step_name!r} has no overlap between GCS regions {sorted(gcs_regions)} "
+                    f"and TPU-capable DAG regions {sorted(tpu_region_set)}."
+                )
 
-    return [next(iter(region_to_evidence))]
+    if gcs_regions is None:
+        return None
+    return sorted(gcs_regions)
+
+
+def _regions_for_tpu_variant_from_iris(variant: str) -> set[str] | None:
+    try:
+        client = current_client()
+    except Exception:
+        return None
+    if not isinstance(client, FrayIrisClient):
+        return None
+
+    variant = variant.lower()
+    try:
+        autoscaler_status = client._iris._cluster_client.get_autoscaler_status()
+    except Exception:
+        logger.warning("Could not query Iris autoscaler status for TPU region inference", exc_info=True)
+        return None
+
+    regions: set[str] = set()
+    for group in autoscaler_status.status.groups:
+        resources = group.config.resources
+        if resources.device_type != config_pb2.ACCELERATOR_TYPE_TPU:
+            continue
+        group_variant = resources.device_variant.lower().strip()
+        if group_variant and group_variant != variant:
+            continue
+
+        attrs = group.config.worker.attributes
+        region = attrs.get(WellKnownAttribute.REGION, "").strip().lower()
+        if region:
+            regions.add(region)
+            continue
+
+        zone = attrs.get(WellKnownAttribute.ZONE, "").strip().lower()
+        if zone and "-" in zone:
+            regions.add(zone.rsplit("-", 1)[0])
+
+    return regions or None
+
+
+def _dag_tpu_regions(steps: list["ExecutorStep"]) -> list[str] | None:
+    """Infer allowed regions for TPU steps in this DAG, if any."""
+    tpu_region_intersection: set[str] | None = None
+    tpu_region_union: set[str] = set()
+    tpu_variant_region_cache: dict[str, set[str] | None] = {}
+
+    for step in steps:
+        step_fn = step.fn
+        if not isinstance(step_fn, RemoteCallable):
+            continue
+        if not isinstance(step_fn.resources.device, TpuConfig):
+            continue
+
+        if step_fn.resources.regions:
+            step_regions = {r.lower() for r in step_fn.resources.regions}
+        else:
+            variant = step_fn.resources.device.variant.lower()
+            if variant not in tpu_variant_region_cache:
+                tpu_variant_region_cache[variant] = _regions_for_tpu_variant_from_iris(variant)
+            cached = tpu_variant_region_cache[variant]
+            if not cached:
+                continue
+            step_regions = cached
+
+        tpu_region_union |= step_regions
+        if tpu_region_intersection is None:
+            tpu_region_intersection = set(step_regions)
+        else:
+            tpu_region_intersection &= step_regions
+
+        if not tpu_region_intersection:
+            if os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
+                logger.warning(
+                    "TPU steps in DAG have no common region; allowing cross-region TPU scheduling due to %s: %s",
+                    MARIN_CROSS_REGION_OVERRIDE_ENV,
+                    sorted(tpu_region_union),
+                )
+                tpu_region_intersection = set(tpu_region_union)
+            else:
+                raise ValueError(
+                    "No common region satisfies all TPU steps in this DAG. "
+                    f"Set {MARIN_CROSS_REGION_OVERRIDE_ENV} to allow cross-region scheduling."
+                )
+
+    return sorted(tpu_region_intersection) if tpu_region_intersection else None
 
 
 def _iris_backend_is_active() -> bool:
@@ -261,6 +374,7 @@ def _maybe_attach_inferred_region_constraint(
     config: Any,
     output_path: str,
     deps: list[StepSpec] | None,
+    dag_tpu_regions: list[str] | None = None,
 ) -> RemoteCallable:
     if remote_fn.resources.regions:
         return remote_fn
@@ -276,6 +390,7 @@ def _maybe_attach_inferred_region_constraint(
         config=config,
         output_path=output_path,
         deps=deps,
+        dag_tpu_regions=dag_tpu_regions,
     )
     if inferred_regions is None:
         return remote_fn
@@ -319,6 +434,7 @@ def resolve_executor_step(
     config: Any,
     output_path: str,
     deps: list[StepSpec] | None = None,
+    dag_tpu_regions: list[str] | None = None,
 ) -> StepSpec:
     """Convert an ExecutorStep into a StepSpec.
 
@@ -336,6 +452,7 @@ def resolve_executor_step(
             config=config,
             output_path=output_path,
             deps=deps,
+            dag_tpu_regions=dag_tpu_regions,
         )
 
     step_fn = remote_callable.fn if remote_callable is not None else step.fn
@@ -853,6 +970,7 @@ class Executor:
 
     def _resolve_steps(self, steps: list[ExecutorStep]) -> list[StepSpec]:
         """Convert computed ExecutorStep state into a flat list of StepSpec."""
+        dag_tpu_regions = _dag_tpu_regions(steps)
         # First pass: create StepSpecs without deps so we have a mapping
         spec_by_step: dict[ExecutorStep, StepSpec] = {}
         for step in steps:
@@ -860,6 +978,7 @@ class Executor:
                 step=step,
                 config=self.configs[step],
                 output_path=self.output_paths[step],
+                dag_tpu_regions=dag_tpu_regions,
             )
         # Second pass: rebuild with deps pointing to resolved StepSpecs
         result = []
