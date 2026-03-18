@@ -79,16 +79,59 @@ Matching Marin's `exp2039_rl_math500.py` inference config:
 
 **Note**: These are NOT directly comparable to vLLM — different workload (max_tokens=2048 vs 1024), different hardware, and wall clock includes container overhead. The benchmark below will establish a proper comparison.
 
+## Fairness Checklist
+
+Differences between vLLM and Levanter benchmarks that must be controlled:
+
+| Factor | vLLM | Levanter | Status |
+|--------|------|----------|--------|
+| Chat template | Yes (`/v1/chat/completions` applies Llama 3.1 chat template) | Yes — `apply_chat_template: true` in config | FIXED |
+| Batching | Continuous (freed slots immediately reused) | Static (all seqs run in lock-step) | Inherent architectural difference — this is what we're measuring |
+| n_generations | 16 independent HTTP requests per prompt | KV cache cloning (prefill once, clone 15x) | Levanter is more efficient here |
+| Sampling | Per-request PRNG from server | Per-clone PRNG via `jax.random.fold_in` | Equivalent |
+| max_tokens | 1024 | 1024 | Matched |
+| temperature | 1.0 | 1.0 | Matched |
+| Model | Llama 3.1 8B Instruct | Same (from GCS) | Matched |
+| Prompts | First 64 from Hendrycks MATH (seed=42 JSONL) | Same | Matched |
+
+### Chat Template Fix (pre-requisite for LVB-001)
+
+`sample_lm_multihost.py` line 685 raw-tokenizes prompts:
+```python
+prompt_ids = tokenizer(prompts, add_special_tokens=False)["input_ids"]
+```
+
+vLLM's `/v1/chat/completions` applies the Llama 3.1 Instruct chat template, wrapping each prompt in:
+```
+<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n{prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n
+```
+
+**Fix**: Add `apply_chat_template: bool` to `SampleLmMultihostConfig` and use `tokenizer.apply_chat_template()` in `_broadcast_prompt_payload` when enabled. The infrastructure already exists:
+- `lib/levanter/src/levanter/inference/openai.py:572` does exactly this
+- `lib/levanter/src/levanter/data/text/formats.py` has `ChatProcessor`
+- HuggingFace tokenizer for Llama 3.1 Instruct has a built-in chat template
+
+~10 lines of code. Must be done before running LVB-001.
+
 ## Experiment Plan
 
 | Run | Config | Hypothesis |
 |-----|--------|------------|
-| LVB-001 | Levanter v5p-8, 64 prompts × 16 gen, max_tokens=1024, temp=1.0 | Establish single-host Levanter baseline for GRPO workload |
+| LVB-000 | Implement `apply_chat_template` in `sample_lm_multihost.py` | Pre-requisite for fair comparison |
+| LVB-001 | Levanter v5p-8, 64 prompts × 16 gen, max_tokens=1024, temp=1.0, chat template ON | Establish single-host Levanter baseline for GRPO workload |
 | LVB-002 | Same but sweep max_seqs (64, 128, 256) | Find optimal batch size for v5p-8 |
 | LVB-003 | Levanter v5p-16, host-data-parallel, same workload | Compare multi-host scaling |
 | LVB-004 | Levanter v5p-16, global mesh, same workload | Compare global mesh vs host-DP |
 
 ## Experiment Log
+
+### 2026-03-18 — LVB-000: Add `apply_chat_template` to `sample_lm_multihost.py`
+
+- **Motivation**: vLLM benchmark uses `/v1/chat/completions` which applies Llama 3.1 Instruct chat template. Levanter raw-tokenizes prompts. Without this fix, prompt tokenization differs and output distributions won't match.
+- **Change**: Add `apply_chat_template: bool = False` to `SampleLmMultihostConfig`. When enabled, `_broadcast_prompt_payload` wraps each prompt as `[{"role": "user", "content": prompt}]` and calls `tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)`.
+- **Files**: `lib/levanter/src/levanter/main/sample_lm_multihost.py`
+- **Status**: DONE
+- **Result**: Added `apply_chat_template: bool` to `SampleLmMultihostConfig`, `_tokenize_prompts()` helper, updated both multihost and single-host tokenization paths. Benchmark config updated with `apply_chat_template: true`.
 
 ### 2026-03-18 — LVB-001: Levanter v5p-8 GRPO Baseline
 

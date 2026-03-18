@@ -132,6 +132,9 @@ class SampleLmMultihostConfig:
     temperature: float = 0.7
     seed: int = 2
 
+    apply_chat_template: bool = False
+    """Wrap each prompt as a user message and apply the tokenizer's chat template before tokenizing."""
+
     n_generations: int = 1
     n_rounds: int = 1
     inference_mode: InferenceMode = "global_mesh"
@@ -670,6 +673,16 @@ class _PromptPayload(TypedDict, total=False):
     error: str
 
 
+def _tokenize_prompts(tokenizer, prompts: list[str], *, apply_chat_template: bool) -> list[list[int]]:
+    """Tokenize prompts, optionally applying the tokenizer's chat template."""
+    if apply_chat_template:
+        return [
+            tokenizer.apply_chat_template([{"role": "user", "content": p}], tokenize=True, add_generation_prompt=True)
+            for p in prompts
+        ]
+    return tokenizer(prompts, add_special_tokens=False)["input_ids"]
+
+
 def _broadcast_prompt_payload(
     tokenizer,
     prompts: list[str],
@@ -677,12 +690,13 @@ def _broadcast_prompt_payload(
     base_seed: int,
     *,
     is_leader: bool,
+    apply_chat_template: bool = False,
 ) -> tuple[list[list[int]], list[int] | None, int]:
     """Tokenize prompts on the leader and broadcast token IDs to all hosts."""
 
     if is_leader:
         try:
-            prompt_ids = tokenizer(prompts, add_special_tokens=False)["input_ids"]
+            prompt_ids = _tokenize_prompts(tokenizer, prompts, apply_chat_template=apply_chat_template)
             if stop_sequence is None:
                 stop_ids = None
             else:
@@ -1072,9 +1086,10 @@ def main(config: SampleLmMultihostConfig):
             config.stop_sequence,
             int(config.engine.seed),
             is_leader=is_leader,
+            apply_chat_template=config.apply_chat_template,
         )
     else:
-        prompt_ids = tokenizer(prompts, add_special_tokens=False)["input_ids"]
+        prompt_ids = _tokenize_prompts(tokenizer, prompts, apply_chat_template=config.apply_chat_template)
         if config.stop_sequence is None:
             stop_ids = None
         else:
