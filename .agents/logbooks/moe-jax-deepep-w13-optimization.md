@@ -149,3 +149,46 @@ KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_k
   - the validation order remains unchanged; the next real run should still be `deepep_transport_w13_only_probe`
 - Next action:
   - rerun the same pinned `w13_only` command once an H100x8 lane is schedulable, then continue to `local_compute_only` only if `w13_only` moves materially.
+
+### 2026-03-18 18:29 UTC - Rebase the research branch onto current `main` before redeploying a fresh lane
+- Experiment ID: `W13-OPT-004`
+- Hypothesis:
+  - before spending more cluster time, replay the sealed root-cause + `w13` experiment stack onto current `origin/main` so any fresh-lane rerun tests the candidate on an updated branch base rather than on the older sealed-base branch.
+- Command:
+
+```bash
+git fetch origin main
+git branch backup/w13opt-pre-main-rebase-20260318-1825
+git rebase --rebase-merges --onto origin/main 69d30f1c11fcb3ad3349f594f59766b7081370b0
+uv run pytest lib/haliax/tests/test_ragged_dot_dispatch.py
+uv run python -m py_compile \
+  lib/haliax/src/haliax/nn/ragged_dot.py \
+  lib/levanter/src/levanter/grug/grug_moe.py \
+  lib/levanter/scripts/bench/bench_moe_hillclimb.py \
+  .agents/scripts/deepep_jax_krt_bench.py
+uv run python lib/levanter/scripts/bench/bench_moe_hillclimb.py --help | rg 'w13-out-first'
+```
+
+- Config:
+  - requested by the user after confirming the previous branch base was not recent
+  - previous merge-base against `origin/main`: `69d30f1c11fcb3ad3349f594f59766b7081370b0`
+  - new merge-base against `origin/main`: `1ec601a29e2d3fb2101f6d3934cd8e1e75ad538f`
+  - backup ref before rewriting history: `backup/w13opt-pre-main-rebase-20260318-1825`
+  - one non-code conflict was resolved by keeping the sealed root-cause research logbook in-branch
+  - one code conflict in `lib/levanter/src/levanter/grug/grug_moe.py` was resolved by merging the `_w13_ragged_dot(...)` helper into the newer mainline file
+- Result:
+  - the research branch now sits directly on current `origin/main`
+  - local verification passed again after the rebase:
+    - `lib/haliax/tests/test_ragged_dot_dispatch.py`: `2 passed`
+    - `py_compile` on the changed Python files: passed
+    - `bench_moe_hillclimb.py --help` still exposes `--w13-out-first`
+  - I also cleaned up the partial fresh-lane artifacts created before the user redirected to the rebase:
+    - deleted the old `i3677jax-cpu-erapids` / `i3677jax-h100-8x` node pools
+    - deleted `iris-3677-jax`
+    - deleted the aborted partial `iris-3821-jax` namespace / RBAC before recreating it from the rebased branch
+- Interpretation:
+  - the `w13` candidate survives replay onto current main and is still locally runnable
+  - the next fresh-lane rerun should use the rebased branch tip, not the sealed-base tip
+  - the numerical validation ladder is unchanged: `w13_only` first, then `local_compute_only`, then `capped_prewarmed`, then `current` only if warranted
+- Next action:
+  - commit the fresh `#3821` CoreWeave lane config, push the rebased branch, redeploy a fresh H100x8 node pool on that branch base, and rerun `deepep_transport_w13_only_probe`.
