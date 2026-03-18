@@ -305,8 +305,13 @@ def _apply_combiner(buffer: list, key_fn: Callable, combiner_fn: Callable) -> li
 
 
 def _scatter_meta_path(parquet_path: str) -> str:
-    """Return the sidecar metadata path for a scatter Parquet file."""
-    return parquet_path + _SCATTER_META_SUFFIX
+    """Return the sidecar metadata path for a scatter Parquet file.
+
+    Replaces the ``.parquet`` extension: ``shard-0000-seg0000.parquet`` →
+    ``shard-0000-seg0000.scatter_meta``.
+    """
+    stem, _ = os.path.splitext(parquet_path)
+    return stem + _SCATTER_META_SUFFIX
 
 
 def _write_scatter_meta(
