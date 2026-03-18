@@ -738,7 +738,6 @@ def test_execute_cleans_up_original_coordinator_after_same_endpoint_replacement(
         max_workers=1,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
-        no_workers_timeout=0.2,
         max_execution_retries=0,
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
     )
@@ -771,7 +770,7 @@ def test_execute_cleans_up_original_coordinator_after_same_endpoint_replacement(
         replacement_group.wait_ready()
         assert _local_actor_registry[endpoint] is not old_coordinator
 
-        old_coordinator.check_heartbeats(timeout=0.0)
+        old_coordinator.abort("test: replaced coordinator")
         release_task.set()
 
         execution_thread.join(timeout=10.0)

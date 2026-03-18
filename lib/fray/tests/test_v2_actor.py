@@ -7,7 +7,7 @@ import threading
 
 import pytest
 
-from fray.v2 import LocalClient
+from fray.v2 import LocalClient, current_actor
 
 
 class Counter:
@@ -25,6 +25,16 @@ class Counter:
 class Adder:
     def add(self, a: int, b: int) -> int:
         return a + b
+
+
+class SelfAwareActor:
+    def actor_identity(self) -> tuple[int, str]:
+        ctx = current_actor()
+        return (ctx.index, ctx.group_name)
+
+    def terminate(self) -> str:
+        current_actor().terminate()
+        return "terminating"
 
 
 @pytest.fixture
@@ -107,3 +117,15 @@ def test_actor_method_with_kwargs(client: LocalClient):
     actor = client.create_actor(Adder, name="adder")
     assert actor.add.remote(a=3, b=4).result() == 7
     assert actor.add(a=10, b=20) == 30
+
+
+def test_actor_methods_run_with_current_actor_context(client: LocalClient):
+    actor = client.create_actor(SelfAwareActor, name="self-aware")
+    assert actor.actor_identity.remote().result() == (0, "self-aware")
+
+
+def test_actor_can_request_backend_termination(client: LocalClient):
+    actor = client.create_actor(SelfAwareActor, name="self-aware")
+    assert actor.terminate.remote().result() == "terminating"
+    with pytest.raises(RuntimeError, match="Actor not found"):
+        actor.actor_identity.remote()

@@ -10,8 +10,9 @@ holds a set of actor handles with lifecycle tied to underlying jobs.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 
@@ -33,6 +34,13 @@ class ActorContext:
 
     group_name: str
     """The name of the actor group this actor belongs to."""
+
+    _terminate: Callable[[], None] = field(default=lambda: None, repr=False, compare=False)
+    """Backend-owned termination hook."""
+
+    def terminate(self) -> None:
+        """Request that the backend terminate this actor host."""
+        self._terminate()
 
 
 _current_actor_ctx: ContextVar[ActorContext | None] = ContextVar("actor_context", default=None)
