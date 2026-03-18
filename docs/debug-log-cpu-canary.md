@@ -75,10 +75,19 @@ Confirmed locally — every s3fs operation (ls, HEAD) returned 403.
 
 Fix: load fresh credentials from `~/.env` at script startup via `os.environ.setdefault`.
 
+### Fix 8: UV cache on ramdisk — No space left on device
+
+GPU task pods failed with `No space left on device` installing torch+CUDA (~15GB).
+The hostPath `/cache` mapped to `/dev/ram0` (15GB ramdisk) on CoreWeave GPU nodes.
+Meanwhile the NVMe RAID at `/dev/md127` has 28TB.
+
+Fix: set `cache_dir: /var/iris-cache` in `kubernetes_provider` config so the
+hostPath lands on the NVMe overlay instead of the ramdisk.
+
 ### Current status
 
 - CPU canary PASSED
-- GPU canary: retrying with fresh R2 keys
+- GPU canary: retrying with NVMe-backed cache dir
 
 ### Known risks
 

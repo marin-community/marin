@@ -18,6 +18,7 @@ kubernetes_provider:
   namespace: iris-canary-mh
   default_image: ghcr.io/marin-community/iris-task:latest
   host_network: true              # Required for NCCL/IB multi-host traffic
+  cache_dir: /var/iris-cache      # NVMe-backed; default /cache maps to 15GB ramdisk on GPU nodes
   controller_address: http://iris-controller-mh-svc.iris-canary-mh.svc.cluster.local:10000
 
 controller:
