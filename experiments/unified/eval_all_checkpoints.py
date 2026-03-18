@@ -321,6 +321,7 @@ def main():
         eval_benchmarks=eval_benchmarks,
         text_eval_benchmarks=text_eval_benchmarks,
         w_visual=args.w_visual,
+        include_text_data=False,
         **cache_paths,
     )
 

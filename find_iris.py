@@ -18,16 +18,21 @@ def run_iris_cmd(args: list[str], timeout: int = 30) -> str:
     return result.stdout
 
 
-def list_and_stop_jobs(keyword: str, state: str = "running", dry_run: bool = False):
+def list_and_stop_jobs(keyword: str, states: list[str] | None = None, dry_run: bool = False):
     """List and optionally stop Iris jobs matching a keyword."""
-    stdout = run_iris_cmd(["job", "list", "--state", state, "--json"])
+    if states is None:
+        states = ["running"]
 
-    # Parse JSON (skip log lines before the JSON array)
-    json_start = stdout.find("[")
-    if json_start == -1:
-        print("No jobs found.")
-        return
-    jobs = json.loads(stdout[json_start:])
+    # Fetch jobs from all requested states
+    all_jobs: list[dict] = []
+    for state in states:
+        stdout = run_iris_cmd(["job", "list", "--state", state, "--json"])
+        json_start = stdout.find("[")
+        if json_start != -1:
+            all_jobs.extend(json.loads(stdout[json_start:]))
+    jobs = all_jobs
+
+    state_label = "+".join(states)
 
     # Filter by keyword (case-insensitive)
     keyword_upper = keyword.upper()
@@ -38,10 +43,10 @@ def list_and_stop_jobs(keyword: str, state: str = "running", dry_run: bool = Fal
     ]
 
     if not matched:
-        print(f"No {state} jobs matching '{keyword}'.")
+        print(f"No {state_label} jobs matching '{keyword}'.")
         return
 
-    print(f"Found {len(matched)} {state} job(s) matching '{keyword}':\n")
+    print(f"Found {len(matched)} {state_label} job(s) matching '{keyword}':\n")
     for job in matched:
         job_id = job.get("job_id", "N/A")
         job_state = job.get("state", "N/A")
@@ -84,11 +89,12 @@ def list_and_stop_jobs(keyword: str, state: str = "running", dry_run: bool = Fal
 def main():
     parser = argparse.ArgumentParser(description="List and stop Iris jobs by keyword")
     parser.add_argument("keyword", nargs="?", default="unified", help="Keyword to filter jobs (default: 'unified')")
-    parser.add_argument("--state", default="running", help="Job state filter (default: 'running')")
+    parser.add_argument("--state", default="running,pending", help="Comma-separated job states (default: 'running,pending')")
     parser.add_argument("--dry-run", action="store_true", help="Only list, don't stop")
     args = parser.parse_args()
 
-    list_and_stop_jobs(args.keyword, state=args.state, dry_run=args.dry_run)
+    states = [s.strip() for s in args.state.split(",")]
+    list_and_stop_jobs(args.keyword, states=states, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

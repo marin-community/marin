@@ -314,6 +314,7 @@ def unified_data_config(
     text_eval_benchmarks: list[str] | None = None,
     text_eval_cache_path: str = TEXT_EVAL_CACHE_PATH,
     ablation_mode: str = "",
+    include_text_data: bool = True,
 ) -> LmDataConfig:
     """Build data mixture with Nemotron text + multimodal cache for unified model training.
 
@@ -338,9 +339,6 @@ def unified_data_config(
     if ablation_mode and ablation_mode not in VALID_ABLATION_MODES:
         raise ValueError(f"Unknown ablation_mode={ablation_mode!r}. Valid: {VALID_ABLATION_MODES}")
 
-    # Text: only hq_actual from Nemotron-CC
-    nemotron_steps = tokenize_nemotron()
-    hq_key = "nemotron_cc/hq_actual"
     # Mixing weights derived from step counts.
     total_steps = TEXT_STEPS + UND_STEPS + GEN_STEPS + VIS_STEPS
     text_w = TEXT_STEPS / total_steps if total_steps > 0 else 1.0
@@ -348,8 +346,15 @@ def unified_data_config(
     gen_w = GEN_STEPS / total_steps if total_steps > 0 else 0.0
     vis_w = VIS_STEPS / total_steps if total_steps > 0 else 0.0
 
-    text_components = {hq_key: step_to_lm_mixture_component(nemotron_steps[hq_key], include_raw_paths=True)}
-    text_weights = {hq_key: text_w}
+    # Text: only hq_actual from Nemotron-CC
+    if include_text_data:
+        nemotron_steps = tokenize_nemotron()
+        hq_key = "nemotron_cc/hq_actual"
+        text_components = {hq_key: step_to_lm_mixture_component(nemotron_steps[hq_key], include_raw_paths=True)}
+        text_weights = {hq_key: text_w}
+    else:
+        text_components = {}
+        text_weights = {}
 
     # Multimodal: pre-built cache with per-token loss weights.
     # pack=True to avoid wasting compute padding short sequences (~600 tokens) to 4096.
