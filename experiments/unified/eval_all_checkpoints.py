@@ -235,7 +235,13 @@ def main():
     model_config = MODEL_CONFIGS[args.model_size]
 
     # --- Set up TrainerConfig with wandb ---
-    folder_basename = os.path.basename(args.checkpoint_folder.rstrip("/"))
+    # Parse a meaningful run name from the checkpoint folder path.
+    # e.g. "gs://bucket/checkpoints/unified-qwen3-1.7b-...-cb843a/hf" → "unified-qwen3-1.7b-...-cb843a"
+    folder_parts = args.checkpoint_folder.rstrip("/").split("/")
+    folder_basename = next(
+        (p for p in reversed(folder_parts) if p not in ("hf", "checkpoints", "")),
+        folder_parts[-1],
+    )
     wandb_name = args.wandb_name or f"eval-{folder_basename}"
 
     if args.no_wandb:
