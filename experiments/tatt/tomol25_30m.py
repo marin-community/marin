@@ -4,13 +4,17 @@
 """Tomol25: Qwen3 ~30M pretraining on tokenized molecular data (WillHeld/Tomol25).
 
 Trains to 1B tokens on v5p-8 with AdamH.
+
+Run with Iris::
+
+    uv run iris --config lib/iris/examples/marin.yaml job run --extra marin:tpu --tpu v5p-8 -- python experiments/tatt/tomol25_30m.py
 """
 
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamHConfig
 
-from experiments.defaults import default_tokenize, default_train
+from experiments.defaults import default_download, default_tokenize, default_train
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
@@ -56,13 +60,29 @@ train_config = SimpleTrainConfig(
     steps_per_eval=500,
 )
 
+tomol_download = default_download(
+    name="raw/tomol25",
+    hf_dataset_id="WillHeld/Tomol25",
+    revision="2087cc0ebe8379ab9962d52f9177c197d819c1c5",
+)
+
 tomol_tokenized = default_tokenize(
     name="tomol25",
-    dataset="WillHeld/Tomol25",
+    dataset=tomol_download / "data/train-*.parquet",
     tokenizer=TOKENIZER,
 )
 
-tomol_data = lm_data_config(tomol_tokenized)
+tomol_val_tokenized = default_tokenize(
+    name="tomol25-val",
+    dataset=tomol_download / "data/validation-*.parquet",
+    tokenizer=TOKENIZER,
+    is_validation=True,
+)
+
+tomol_data = lm_data_config(
+    tomol_tokenized,
+    validation_sets={"tomol25-val": tomol_val_tokenized},
+)
 
 training_step = default_train(
     name="tomol25-30m",

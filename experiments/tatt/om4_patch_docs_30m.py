@@ -4,6 +4,10 @@
 """OM4 patch docs: Qwen3 ~30M pretraining on pre-tokenized ocean grid data (ocean-tokens/om4-patch-docs).
 
 Trains to 1B tokens on v5p-8 with AdamH. Dataset is already tokenized (vocab_size=1027).
+
+Run with Iris::
+
+    uv run iris --config lib/iris/examples/marin.yaml job run --extra marin:tpu --tpu v5p-8 -- python experiments/tatt/om4_patch_docs_30m.py
 """
 
 from levanter.data.text import PrebuiltLmDatasetFormat

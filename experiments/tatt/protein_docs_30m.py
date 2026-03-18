@@ -4,6 +4,10 @@
 """Protein docs: Qwen3 ~30M pretraining on tokenized protein contact docs (timodonnell/protein-docs).
 
 Trains to 1B tokens on v5p-8 with AdamH.
+
+Run with Iris::
+
+    uv run iris --config lib/iris/examples/marin.yaml job run --extra marin:tpu --tpu v5p-8 -- python experiments/tatt/protein_docs_30m.py
 """
 
 from levanter.data.text import TextLmDatasetFormat
@@ -70,7 +74,18 @@ protein_docs_tokenized = default_tokenize(
     format=TextLmDatasetFormat(text_key="document"),
 )
 
-protein_docs_data = lm_data_config(protein_docs_tokenized)
+protein_docs_val_tokenized = default_tokenize(
+    name="protein-docs-val",
+    dataset=protein_docs_download / "deterministic-positives-only/val",
+    tokenizer=TOKENIZER,
+    format=TextLmDatasetFormat(text_key="document"),
+    is_validation=True,
+)
+
+protein_docs_data = lm_data_config(
+    protein_docs_tokenized,
+    validation_sets={"protein-docs-val": protein_docs_val_tokenized},
+)
 
 training_step = default_train(
     name="protein-docs-30m",
