@@ -95,7 +95,7 @@ After upstreaming:
 Run the relevant checks:
 
 ```bash
-uv run python infra/pre-commit.py --all-files
+./infra/pre-commit.py --all-files
 uv run pytest tests/test_grug_variant_contracts.py
 ```
 

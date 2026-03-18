@@ -12,6 +12,7 @@ import warnings
 import jax
 from jax import core as jax_core
 import jax.numpy as jnp
+from jax.sharding import NamedSharding
 from jaxtyping import Array, Float, Int
 
 from levanter.kernels.pallas import autotune_cache_utils
@@ -111,6 +112,59 @@ def _warn_pallas_fallback_once(exc: Exception) -> None:
 def _is_tpu_vmem_compile_error(exc: Exception) -> bool:
     message = str(exc).lower()
     return "resource_exhausted" in message and "vmem" in message
+
+
+def _sharding_of(value: jax.Array):
+    sharding = None
+    try:
+        sharding = value.sharding  # type: ignore[attr-defined]
+    except Exception:
+        sharding = None
+    if sharding is not None:
+        return sharding
+
+    aval = getattr(value, "aval", None)
+    if aval is None:
+        return None
+    return getattr(aval, "sharding", None)
+
+
+def _named_sharding_of(value: jax.Array) -> NamedSharding | None:
+    sharding = _sharding_of(value)
+    if isinstance(sharding, NamedSharding):
+        return sharding
+    return None
+
+
+def _shape_dtype_struct_with_sharding(value: jax.Array) -> jax.ShapeDtypeStruct:
+    sharding = _sharding_of(value)
+    if sharding is None:
+        return jax.ShapeDtypeStruct(value.shape, value.dtype)
+    return jax.ShapeDtypeStruct(value.shape, value.dtype, sharding=sharding)
+
+
+def _maybe_wrap_loss_in_shard_map_for_benchmark(
+    fn: Callable[[jax.Array, jax.Array, jax.Array], jax.Array],
+    *,
+    x: jax.Array,
+    labels: jax.Array,
+    w: jax.Array,
+) -> Callable[[jax.Array, jax.Array, jax.Array], jax.Array]:
+    x_sharding = _named_sharding_of(x)
+    labels_sharding = _named_sharding_of(labels)
+    w_sharding = _named_sharding_of(w)
+    if x_sharding is None or labels_sharding is None or w_sharding is None:
+        return fn
+    if x_sharding.mesh != labels_sharding.mesh or x_sharding.mesh != w_sharding.mesh:
+        return fn
+
+    return jax.shard_map(
+        fn,
+        mesh=x_sharding.mesh,
+        in_specs=(x_sharding.spec, labels_sharding.spec, w_sharding.spec),
+        out_specs=labels_sharding.spec,
+        check_vma=False,
+    )
 
 
 def _warn_vmem_compile_fallback_once(exc: Exception, *, impl_name: str) -> None:
@@ -356,12 +410,18 @@ def _benchmark_block_sizes_candidate(
         out = fn(x_value, labels_value, w_value, **kwargs)
         return out[0]
 
-    jitted = jax.jit(_loss_only)
+    benchmark_fn = _maybe_wrap_loss_in_shard_map_for_benchmark(
+        _loss_only,
+        x=x,
+        labels=labels,
+        w=w,
+    )
+    jitted = jax.jit(benchmark_fn)
 
     abstract_args = (
-        jax.ShapeDtypeStruct(x.shape, x.dtype),
-        jax.ShapeDtypeStruct(labels.shape, labels.dtype),
-        jax.ShapeDtypeStruct(w.shape, w.dtype),
+        _shape_dtype_struct_with_sharding(x),
+        _shape_dtype_struct_with_sharding(labels),
+        _shape_dtype_struct_with_sharding(w),
     )
     start = time.perf_counter()
     lowered = jitted.lower(*abstract_args)

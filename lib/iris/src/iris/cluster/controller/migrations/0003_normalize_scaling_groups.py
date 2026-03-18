@@ -1,7 +1,12 @@
--- Normalize scaling_groups: replace snapshot_proto blob with proper columns.
--- Add a dedicated slices table for per-slice state.
--- Idempotent: drop any leftover temp table before starting (safe to rerun after
--- a crash between CREATE TABLE scaling_groups_new and the final RENAME).
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import sqlite3
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
 DROP TABLE IF EXISTS scaling_groups_new;
 
 CREATE TABLE scaling_groups_new (
@@ -30,3 +35,5 @@ CREATE TABLE IF NOT EXISTS slices (
 );
 
 CREATE INDEX IF NOT EXISTS idx_slices_scale_group ON slices(scale_group);
+"""
+    )

@@ -369,35 +369,36 @@ class IrisActorGroup:
         Returns only the handles discovered during this call (not previously
         known ones). Call repeatedly to pick up workers as they come online.
 
+        Uses a single prefix-match RPC to discover all actors whose endpoint
+        names start with ``{job_id}/{name}-``.
+
         Args:
             target: Stop probing once this many total actors are discovered.
                 If None, probes all indices.
         """
         client = self._get_client()
-        resolver = client.resolver_for_job(self._job_id)
+        # Single RPC: prefix match all actors for this group
+        # _host_actor registers endpoints as "{job_id}/{name}-{task_index}"
+        prefix = f"{self._job_id}/{self._name}-"
+        endpoints = client._cluster_client.list_endpoints(prefix=prefix, exact=False)
 
         newly_discovered: list[ActorHandle] = []
-        for i in range(self._count):
+        for ep in endpoints:
             if target is not None and len(self._discovered_names) >= target:
                 break
-            # Absolute endpoint name matches what _host_actor registers
-            endpoint_name = f"{self._job_id}/{self._name}-{i}"
-            if endpoint_name in self._discovered_names:
+            if ep.name in self._discovered_names:
                 continue
-            result = resolver.resolve(endpoint_name)
-
-            if not result.is_empty:
-                self._discovered_names.add(endpoint_name)
-                handle = IrisActorHandle(endpoint_name)
-                self._handles.append(handle)
-                newly_discovered.append(handle)
-                logger.info(
-                    "discover_new: found actor=%s job_id=%s (%d/%d ready)",
-                    endpoint_name,
-                    self._job_id,
-                    len(self._discovered_names),
-                    self._count,
-                )
+            self._discovered_names.add(ep.name)
+            handle = IrisActorHandle(ep.name)
+            self._handles.append(handle)
+            newly_discovered.append(handle)
+            logger.info(
+                "discover_new: found actor=%s job_id=%s (%d/%d ready)",
+                ep.name,
+                self._job_id,
+                len(self._discovered_names),
+                self._count,
+            )
 
         return newly_discovered
 

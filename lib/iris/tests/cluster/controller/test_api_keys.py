@@ -38,7 +38,7 @@ def db(tmp_path):
 
 def _make_service(db, auth=None):
     """Create a ControllerServiceImpl with minimal dependencies for API key tests."""
-    log_store = LogStore(db_path=db.db_path)
+    log_store = LogStore(log_dir=db.db_path.parent / "logs")
     state = ControllerTransitions(db=db, log_store=log_store)
 
     controller_mock = Mock()
@@ -52,7 +52,7 @@ def _make_service(db, auth=None):
         state,
         db,
         controller=controller_mock,
-        bundle_store=BundleStore(db_path=db.db_path.parent / "bundles.sqlite3"),
+        bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
         log_store=log_store,
         auth=auth or ControllerAuth(),
     )

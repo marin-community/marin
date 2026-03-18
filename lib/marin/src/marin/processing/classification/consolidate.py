@@ -345,7 +345,7 @@ def consolidate(config: ConsolidateConfig):
     results = ctx.execute(
         Dataset.from_list(input_paths)
         .map_shard(
-            lambda shard: process_file_shard(
+            lambda shard, _: process_file_shard(
                 shard=shard, filters=filters, input_base=config.input_path, filetype=config.filetype
             )
         )

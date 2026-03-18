@@ -44,6 +44,7 @@ from iris.cluster.controller.transitions import (
     ControllerTransitions,
     HEARTBEAT_FAILURE_THRESHOLD,
     HeartbeatApplyRequest,
+    PruneResult,
     TaskUpdate,
 )
 from iris.cluster.constraints import WellKnownAttribute, constraints_from_resources
@@ -62,7 +63,7 @@ def _make_state(**kwargs) -> ControllerTransitions:
     tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
     db_path = tmp / "controller.sqlite3"
     db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
+    log_store = LogStore(log_dir=tmp / "logs")
     return ControllerTransitions(db=db, log_store=log_store, **kwargs)
 
 
@@ -599,6 +600,50 @@ def test_cancel_job_releases_committed_worker_resources(job_request, worker_meta
     assert len(_worker_running_tasks(state, w2)) == 0
 
 
+def test_cancel_job_removes_endpoints_for_job_tree(job_request, worker_metadata):
+    state = _make_state()
+
+    parent_worker = register_worker(state, "w1", "host1:8080", worker_metadata())
+    child_worker = register_worker(state, "w2", "host2:8080", worker_metadata())
+
+    parent_tasks = submit_job(state, "parent", job_request("parent"))
+    child_req = job_request("child")
+    child_req.name = JobName.from_string("/test-user/parent/child").to_wire()
+    child_tasks = submit_job(state, "/test-user/parent/child", child_req)
+
+    dispatch_task(state, parent_tasks[0], parent_worker)
+    dispatch_task(state, child_tasks[0], child_worker)
+
+    state.add_endpoint(
+        Endpoint(
+            endpoint_id="parent-ep",
+            name="parent/actor",
+            address="host1:9000",
+            job_id=JobName.root("test-user", "parent"),
+            metadata={},
+            registered_at=Timestamp.now(),
+        ),
+        task_id=parent_tasks[0].task_id,
+    )
+    state.add_endpoint(
+        Endpoint(
+            endpoint_id="child-ep",
+            name="parent/child/actor",
+            address="host2:9000",
+            job_id=JobName.from_string("/test-user/parent/child"),
+            metadata={},
+            registered_at=Timestamp.now(),
+        ),
+        task_id=child_tasks[0].task_id,
+    )
+
+    assert len(_endpoints(state, EndpointQuery())) == 2
+
+    state.cancel_job(JobName.root("test-user", "parent"), reason="User cancelled")
+
+    assert _endpoints(state, EndpointQuery()) == []
+
+
 def test_cancelled_job_tasks_excluded_from_demand(job_request, worker_metadata):
     """Regression test for issue #2777: Killed tasks with no attempts should not appear in demand entries."""
     state = _make_state()
@@ -895,8 +940,7 @@ def test_terminal_states_clean_up_endpoints(job_request, worker_metadata):
 
 
 def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
-    """Endpoints are visible for all non-terminal job states (PENDING, RUNNING, BUILDING)
-    and hidden once the job reaches a terminal state."""
+    """Endpoints associated with a task are deleted when the task reaches a terminal state."""
     state = _make_state()
 
     worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
@@ -914,9 +958,9 @@ def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
         metadata={},
         registered_at=Timestamp.now(),
     )
-    state.add_endpoint(ep)
+    state.add_endpoint(ep, task_id=task.task_id)
 
-    # Visible while pending (task may be executing before job state updates)
+    # Visible while pending
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
     # Still visible after transition to running
@@ -924,10 +968,130 @@ def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
     assert _query_job(state, job.job_id).state == cluster_pb2.JOB_STATE_RUNNING
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
-    # Not visible after completion (terminal state)
+    # Deleted when task reaches terminal state
     transition_task(state, task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
     assert _query_job(state, job.job_id).state == cluster_pb2.JOB_STATE_SUCCEEDED
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 0
+
+
+def test_endpoint_deleted_on_task_failure_with_retry(job_request, worker_metadata):
+    """Endpoints are cleaned up when a task fails even if it retries back to PENDING."""
+    state = _make_state()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("test")
+    req.max_retries_failure = 1
+    tasks = submit_job(state, "ns-1", req)
+    task = tasks[0]
+
+    dispatch_task(state, task, worker_id)
+
+    ep = Endpoint(
+        endpoint_id="ep-1",
+        name="ns-1/actor",
+        address="10.0.0.1:8080",
+        job_id=JobName.root("test-user", "ns-1"),
+        metadata={},
+        registered_at=Timestamp.now(),
+    )
+    state.add_endpoint(ep, task_id=task.task_id)
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
+
+    # Task fails but retries (goes back to PENDING)
+    transition_task(state, task.task_id, cluster_pb2.TASK_STATE_FAILED, error="crash")
+    assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_PENDING
+
+    # Stale endpoints should be deleted even though the task retried
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 0
+
+
+def test_endpoint_deleted_on_worker_failure(job_request, worker_metadata):
+    """Endpoints are cleaned up when the worker dies, even if the task retries."""
+    state = _make_state()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("test")
+    req.max_retries_preemption = 1
+    tasks = submit_job(state, "ns-1", req)
+    task = tasks[0]
+
+    dispatch_task(state, task, worker_id)
+
+    ep = Endpoint(
+        endpoint_id="ep-1",
+        name="ns-1/actor",
+        address="10.0.0.1:8080",
+        job_id=JobName.root("test-user", "ns-1"),
+        metadata={},
+        registered_at=Timestamp.now(),
+    )
+    state.add_endpoint(ep, task_id=task.task_id)
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
+
+    # Worker fails -> task retries to PENDING
+    fail_worker(state, worker_id, "Connection lost")
+    assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_PENDING
+
+    # Endpoints should be cleaned up because the worker is dead
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 0
+
+
+def test_endpoint_survives_building_state(job_request, worker_metadata):
+    """Endpoints registered during BUILDING are not deleted by subsequent BUILDING updates."""
+    state = _make_state()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("test")
+    tasks = submit_job(state, "ns-1", req)
+    task = tasks[0]
+
+    # Assign task and transition to BUILDING
+    state.queue_assignments([Assignment(task_id=task.task_id, worker_id=worker_id)])
+    task = _query_task(state, task.task_id)
+    state.apply_task_updates(
+        HeartbeatApplyRequest(
+            worker_id=worker_id,
+            worker_resource_snapshot=None,
+            updates=[
+                TaskUpdate(
+                    task_id=task.task_id,
+                    attempt_id=task.current_attempt_id,
+                    new_state=cluster_pb2.TASK_STATE_BUILDING,
+                )
+            ],
+        )
+    )
+
+    # Register endpoint during BUILDING (e.g. jax_init.py pre-registration)
+    ep = Endpoint(
+        endpoint_id="ep-1",
+        name="ns-1/actor",
+        address="10.0.0.1:8080",
+        job_id=JobName.root("test-user", "ns-1"),
+        metadata={},
+        registered_at=Timestamp.now(),
+    )
+    state.add_endpoint(ep, task_id=task.task_id)
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
+
+    # Transition to RUNNING — endpoint should survive
+    state.apply_task_updates(
+        HeartbeatApplyRequest(
+            worker_id=worker_id,
+            worker_resource_snapshot=None,
+            updates=[
+                TaskUpdate(
+                    task_id=task.task_id,
+                    attempt_id=_query_task(state, task.task_id).current_attempt_id,
+                    new_state=cluster_pb2.TASK_STATE_RUNNING,
+                )
+            ],
+        )
+    )
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
 
 def test_namespace_isolation(job_request, worker_metadata):
@@ -3069,7 +3233,7 @@ def test_snapshot_round_trip_preserves_reservation_holder():
         checkpoint_path = Path(tmpdir) / "checkpoint.sqlite3"
         state._db.backup_to(checkpoint_path)
         restored_db = ControllerDB(db_path=checkpoint_path)
-        restored_log_store = LogStore(db_path=checkpoint_path)
+        restored_log_store = LogStore(log_dir=Path(tmpdir) / "logs")
         restored_state = ControllerTransitions(db=restored_db, log_store=restored_log_store)
 
         restored_holder = _query_job(restored_state, holder_job_id)
@@ -3256,9 +3420,200 @@ def test_task_update_worker_failed_cascades_children(job_request, worker_metadat
     parent_job = _query_job(state, JobName.root("test-user", "parent"))
     assert parent_job.state == cluster_pb2.JOB_STATE_WORKER_FAILED
 
-    # Child should be killed via cascade
+    # Child should be killed via cascade — last occurrence in file
     child_task = _query_task(state, child_tasks[0].task_id)
     assert child_task.state == cluster_pb2.TASK_STATE_KILLED
 
     child_job = _query_job(state, JobName.from_string("/test-user/parent/child"))
     assert child_job.state == cluster_pb2.JOB_STATE_KILLED
+
+
+def test_endpoint_registered_after_task_terminal_is_orphaned(job_request, worker_metadata):
+    """Reproduce endpoint leak: register_endpoint succeeds for already-terminal tasks.
+
+    When a task completes, apply_task_updates deletes its endpoints. But
+    register_endpoint doesn't check task state — only attempt_id. So a slow
+    register_endpoint call arriving after the task is terminal inserts an
+    orphaned endpoint that is never cleaned up.
+    """
+    state = _make_state()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("leak")
+    tasks = submit_job(state, "leak", req)
+    task = tasks[0]
+
+    dispatch_task(state, task, worker_id)
+
+    # Task succeeds — any existing endpoints would be cleaned up here.
+    transition_task(state, task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
+    task_after = _query_task(state, task.task_id)
+    assert task_after.state == cluster_pb2.TASK_STATE_SUCCEEDED
+
+    # Now a slow register_endpoint arrives AFTER the task is terminal.
+    # This simulates the task process still alive briefly after the
+    # controller processed the terminal heartbeat.
+    ep = Endpoint(
+        endpoint_id="orphan-ep",
+        name="leak/actor",
+        address="a:1",
+        job_id=JobName.root("test-user", "leak"),
+        metadata={},
+        registered_at=Timestamp.now(),
+    )
+    state.add_endpoint(ep, task_id=task.task_id)
+
+    # BUG: The endpoint is now orphaned — the task is terminal so no
+    # future transition will clean it up.
+    leaked = _endpoints(state, EndpointQuery(exact_name="leak/actor"))
+    assert leaked == [], (
+        f"Expected no endpoints for terminal task, but found {len(leaked)}. "
+        "register_endpoint/add_endpoint must reject inserts for terminal tasks."
+    )
+
+
+# =============================================================================
+# Pruning Tests
+# =============================================================================
+def test_prune_old_terminal_jobs(job_request, worker_metadata):
+    """Terminal jobs older than retention are pruned; recent and active jobs are kept."""
+    state = _make_state()
+    wid = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    # Submit two jobs and complete them
+    old_req = job_request("old-job")
+    old_tasks = submit_job(state, "old-job", old_req)
+    dispatch_task(state, old_tasks[0], wid)
+    transition_task(state, old_tasks[0].task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
+
+    recent_req = job_request("recent-job")
+    recent_tasks = submit_job(state, "recent-job", recent_req)
+    dispatch_task(state, recent_tasks[0], wid)
+    transition_task(state, recent_tasks[0].task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
+
+    # Also submit an active (non-terminal) job
+    active_req = job_request("active-job")
+    submit_job(state, "active-job", active_req)
+
+    old_job_id = JobName.root("test-user", "old-job")
+    recent_job_id = JobName.root("test-user", "recent-job")
+    active_job_id = JobName.root("test-user", "active-job")
+
+    # Backdate old-job's finished_at_ms to epoch so it falls outside retention
+    state._db.execute(
+        "UPDATE jobs SET finished_at_ms = 1000 WHERE job_id = ?",
+        (old_job_id.to_wire(),),
+    )
+
+    # All three jobs exist
+    assert _query_job(state, old_job_id) is not None
+    assert _query_job(state, recent_job_id) is not None
+    assert _query_job(state, active_job_id) is not None
+
+    # Prune with a 1-day retention — old-job finished at ~epoch, recent-job finished just now
+    result = state.prune_old_data(
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        log_retention=Duration.from_seconds(86400),
+        txn_action_retention=Duration.from_seconds(86400),
+    )
+
+    assert result.jobs_deleted == 1
+    assert _query_job(state, old_job_id) is None  # pruned
+    assert _query_job(state, recent_job_id) is not None  # kept (recent)
+    assert _query_job(state, active_job_id) is not None  # kept (non-terminal)
+
+    # Tasks for old job should also be gone (CASCADE)
+    assert _query_task(state, old_tasks[0].task_id) is None
+
+
+def test_prune_old_inactive_workers(worker_metadata):
+    """Inactive workers with stale heartbeats are pruned; active workers are kept."""
+    state = _make_state()
+
+    # Register two workers: one healthy, one that we'll make inactive
+    active_wid = register_worker(state, "active-w", "host:8080", worker_metadata())
+    stale_wid = register_worker(state, "stale-w", "host:8081", worker_metadata())
+
+    # Mark the stale worker as unhealthy with an old heartbeat
+    state._db.execute(
+        "UPDATE workers SET healthy = 0, last_heartbeat_ms = ? WHERE worker_id = ?",
+        (1000, str(stale_wid)),
+    )
+
+    assert _query_worker(state, active_wid) is not None
+    assert _query_worker(state, stale_wid) is not None
+
+    result = state.prune_old_data(
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        log_retention=Duration.from_seconds(86400),
+        txn_action_retention=Duration.from_seconds(86400),
+    )
+
+    assert result.workers_deleted == 1
+    assert _query_worker(state, active_wid) is not None  # kept (healthy+active)
+    assert _query_worker(state, stale_wid) is None  # pruned
+
+
+def test_prune_old_logs_and_txn_actions(job_request, worker_metadata):
+    """Old logs and txn_actions are pruned by their respective retentions."""
+    state = _make_state()
+    register_worker(state, "w1", "host:8080", worker_metadata())
+
+    # Insert old logs directly
+    state._db.execute(
+        "INSERT INTO logs(key, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?)",
+        ("test-key", "test", "old log", 1000, 0),
+    )
+    state._db.execute(
+        "INSERT INTO logs(key, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?)",
+        ("test-key", "test", "recent log", Timestamp.now().epoch_ms(), 0),
+    )
+
+    # Submit a job to generate txn_actions, then backdate some
+    req = job_request("txn-test")
+    submit_job(state, "txn-test", req)
+
+    # Backdate all existing txn_actions to epoch
+    state._db.execute("UPDATE txn_actions SET created_at_ms = 1000")
+
+    old_txn_count = state._db.fetchone("SELECT COUNT(*) as c FROM txn_actions")["c"]
+    old_log_count = state._db.fetchone("SELECT COUNT(*) as c FROM logs")["c"]
+
+    assert old_txn_count > 0
+    assert old_log_count == 2
+
+    result = state.prune_old_data(
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        log_retention=Duration.from_seconds(86400),
+        txn_action_retention=Duration.from_seconds(86400),
+    )
+
+    assert result.logs_deleted == 1  # old log pruned, recent kept
+    assert result.txn_actions_deleted == old_txn_count
+
+    remaining_logs = state._db.fetchone("SELECT COUNT(*) as c FROM logs")["c"]
+    remaining_txn_actions = state._db.fetchone("SELECT COUNT(*) as c FROM txn_actions")["c"]
+
+    assert remaining_logs == 1  # only the recent log
+    # The prune itself records a new transaction with actions for the deletions
+    # it performed (logs_pruned + txn_actions_pruned). The old backdated actions
+    # are gone; only the 2 new prune-generated action rows remain.
+    assert remaining_txn_actions == 2
+
+
+def test_prune_noop_when_nothing_old():
+    """Pruning with no old data returns zero counts."""
+    state = _make_state()
+
+    result = state.prune_old_data(
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        log_retention=Duration.from_seconds(86400),
+        txn_action_retention=Duration.from_seconds(86400),
+    )
+
+    assert result == PruneResult()
+    assert result.total == 0

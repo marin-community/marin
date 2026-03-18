@@ -138,11 +138,11 @@ class Worker:
 
         # Use overrides if provided, otherwise create defaults
         self._bundle_store = bundle_store or BundleStore(
-            db_path=self._cache_dir / "bundles.sqlite3",
+            storage_dir=str(self._cache_dir / "bundles"),
             controller_address=config.controller_address,
-            max_items=100,
+            max_cache_items=100,
         )
-        self._runtime = container_runtime or DockerRuntime()
+        self._runtime = container_runtime or DockerRuntime(cache_dir=self._cache_dir)
         self._port_allocator = port_allocator or PortAllocator(config.port_range)
 
         # Resolve worker metadata: explicit > environment_provider > hardware probe

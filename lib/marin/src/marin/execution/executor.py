@@ -1186,8 +1186,6 @@ class Executor:
         """Output JSON files (one for the entire execution, one for each step)."""
 
         # Set executor_info_path based on hash and caller path name (e.g., 72_baselines-8c2f3a.json)
-        # import pdb; pdb.set_trace()
-
         # we pre-compute the asdict as it can be expensive.
         executor_info_dict = asdict_without_description(self.executor_info)
         step_infos = executor_info_dict["steps"]

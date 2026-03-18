@@ -147,6 +147,7 @@ Issue comment style:
 - Mostly append-only.
 - Do not rewrite historical comments.
 - It is fine (and preferred) to edit a comment to fix formatting/escaping/errors.
+- In issue bodies and comments, leave GitHub issue references like #1234 as plain text; do not wrap them in backticks, so GitHub cross-links them.
 - Keep claims scoped and falsifiable.
 
 ### 3) Maintain the Issue Body

@@ -381,12 +381,13 @@ def default_train(
             ),
             model_averaging=model_averaging,
             mesh=MeshConfig(
+                axes={"replica": 1, "data": -1, "model": train_config.tensor_parallel_size},
                 # Special axes for MoEs
                 # TODO: this is actually bad and we should remove, but keeping for now
                 compute_mapping={
                     "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
                     "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
-                }
+                },
             ),
             allow_partial_checkpoint=train_config.allow_partial_checkpoint,
             per_device_eval_parallelism=per_device_eval_parallelism,
@@ -447,6 +448,7 @@ def default_train(
         train_config=inner_config,
         resources=pod_config,
         output_path=this_output_path(),
+        env_vars=train_config.env_vars,
     )
 
     model_config = unwrap_versioned_value(model_config)

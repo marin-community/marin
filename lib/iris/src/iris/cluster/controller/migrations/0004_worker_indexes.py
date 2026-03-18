@@ -1,4 +1,12 @@
--- Optimize txn_log retention trigger: threshold-based cleanup instead of per-insert NOT IN scan.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import sqlite3
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
 DROP TRIGGER IF EXISTS trg_txn_log_retention;
 CREATE TRIGGER IF NOT EXISTS trg_txn_log_retention
 AFTER INSERT ON txn_log
@@ -9,5 +17,6 @@ BEGIN
   );
 END;
 
--- Index for healthy_active_workers_with_attributes() to avoid full table scan.
 CREATE INDEX IF NOT EXISTS idx_workers_healthy_active ON workers(healthy, active);
+"""
+    )
