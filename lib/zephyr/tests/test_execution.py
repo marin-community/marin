@@ -154,7 +154,6 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
     task = ShardTask(
         shard_idx=0,
         total_shards=1,
-        chunk_size=100,
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test",
@@ -221,7 +220,6 @@ def test_no_duplicate_results_on_heartbeat_timeout(actor_context, tmp_path):
     task = ShardTask(
         shard_idx=0,
         total_shards=1,
-        chunk_size=100,
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test",
@@ -290,7 +288,6 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
     task = ShardTask(
         shard_idx=0,
         total_shards=1,
-        chunk_size=100,
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test",
@@ -382,7 +379,6 @@ def test_wait_for_stage_fails_when_all_workers_die(actor_context, tmp_path):
     task = ShardTask(
         shard_idx=0,
         total_shards=1,
-        chunk_size=100,
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test",
@@ -422,7 +418,6 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
     task = ShardTask(
         shard_idx=0,
         total_shards=1,
-        chunk_size=100,
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test",
@@ -581,7 +576,6 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
     task = ShardTask(
         shard_idx=0,
         total_shards=1,
-        chunk_size=100,
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test",
@@ -602,7 +596,6 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
     task2 = ShardTask(
         shard_idx=0,
         total_shards=1,
-        chunk_size=100,
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test-last",

@@ -47,9 +47,6 @@ from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
-# Default number of items per output chunk during streaming
-DEFAULT_CHUNK_SIZE = 100_000
-
 
 @dataclass
 class SourceItem:
@@ -305,14 +302,9 @@ class PhysicalPlan:
 
 @dataclass(frozen=True)
 class ExecutionHint:
-    """Hints for pipeline execution.
+    """Hints for pipeline execution."""
 
-    Attributes:
-        chunk_size: Number of items per output chunk during streaming. Use -1 for
-            1 chunk per shard.
-    """
-
-    chunk_size: int = DEFAULT_CHUNK_SIZE
+    pass
 
 
 @dataclass
@@ -672,14 +664,12 @@ class StageContext:
         shard: The shard data to process
         shard_idx: Index of this shard
         total_shards: Total number of shards
-        chunk_size: Number of items per output chunk
         aux_shards: Auxiliary shards for joins, keyed by op index
     """
 
     shard: Iterable[Any]
     shard_idx: int
     total_shards: int
-    chunk_size: int
     aux_shards: dict[int, Iterable[Any]] = field(default_factory=dict)
 
     def get_right_shard(self, op_index: int) -> Iterable[Any]:

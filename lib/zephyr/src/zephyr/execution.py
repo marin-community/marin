@@ -371,7 +371,6 @@ def _write_parquet_scatter(
     parquet_path: str,
     key_fn: Callable,
     num_output_shards: int,
-    chunk_size: int,
     sort_fn: Callable | None = None,
     combiner_fn: Callable | None = None,
     pickled: bool = False,
@@ -395,6 +394,9 @@ def _write_parquet_scatter(
 
     else:
         _sort_key = key_fn
+
+    # TODO: make chunk_size configurable per writer
+    chunk_size = 100_000
 
     # Per-segment per-shard chunk counts
     seg_shard_counts: dict[int, dict[int, int]] = defaultdict(lambda: defaultdict(int))
@@ -507,13 +509,13 @@ def _write_pickle_chunks(
     items: Iterator,
     source_shard: int,
     chunk_path_fn: Callable[[int], str],
-    chunk_size: int,
 ) -> ListShard:
     """Batch a plain item stream into pickle chunk files.
 
-    Items are accumulated up to ``chunk_size`` before being flushed to disk.
     Returns a ListShard containing PickleDiskChunk references.
     """
+    # TODO: make chunk_size configurable per writer
+    chunk_size = 100_000
     chunks: list[Iterable] = []
     batch: list = []
     pidx = 0
@@ -545,7 +547,6 @@ def _write_stage_output(
     stage_dir: str,
     shard_idx: int,
     scatter_op: Scatter | None,
-    chunk_size: int,
     total_shards: int,
 ) -> TaskResult:
     """Write stage output to disk.
@@ -585,7 +586,6 @@ def _write_stage_output(
             parquet_path,
             key_fn=scatter_op.key_fn,
             num_output_shards=num_output_shards,
-            chunk_size=chunk_size,
             sort_fn=scatter_op.sort_fn,
             combiner_fn=scatter_op.combiner_fn,
             pickled=use_pickle_envelope,
@@ -595,7 +595,7 @@ def _write_stage_output(
     def chunk_path_fn(idx: int) -> str:
         return f"{stage_dir}/shard-{shard_idx:04d}/chunk-{idx:04d}.pkl"
 
-    return TaskResult(shard=_write_pickle_chunks(stage_gen, source_shard, chunk_path_fn, chunk_size))
+    return TaskResult(shard=_write_pickle_chunks(stage_gen, source_shard, chunk_path_fn))
 
 
 class WorkerState(enum.Enum):
@@ -612,7 +612,6 @@ class ShardTask:
 
     shard_idx: int
     total_shards: int
-    chunk_size: int
     shard: Shard
     operations: list[PhysicalOp]
     stage_name: str = "output"
@@ -1397,7 +1396,6 @@ class ZephyrWorker:
             shard=task.shard,
             shard_idx=task.shard_idx,
             total_shards=task.total_shards,
-            chunk_size=task.chunk_size,
             aux_shards=task.aux_shards,
         )
 
@@ -1410,7 +1408,6 @@ class ZephyrWorker:
             stage_dir=stage_dir,
             shard_idx=task.shard_idx,
             scatter_op=scatter_op,
-            chunk_size=task.chunk_size,
             total_shards=task.total_shards,
         )
         logger.info("[shard %d] Complete: %d refs produced", task.shard_idx, len(result.shard.refs))
@@ -1854,7 +1851,6 @@ def _compute_tasks_from_shards(
             ShardTask(
                 shard_idx=i,
                 total_shards=total,
-                chunk_size=hints.chunk_size,
                 shard=shard,
                 operations=stage.operations,
                 stage_name=output_stage_name,
