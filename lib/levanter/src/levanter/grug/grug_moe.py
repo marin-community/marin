@@ -18,7 +18,7 @@ import math
 
 from collections.abc import Callable
 from functools import partial
-from typing import TypeAlias
+from typing import Literal, TypeAlias, cast, get_args
 
 import jax
 import jax.numpy as jnp
@@ -34,6 +34,8 @@ _DEFAULT_EP_CAPACITY_FACTOR = 1.25
 # #2710 used 1.25 as the practical EP ring default to avoid over/under-packing.
 
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
+MoeImplementation: TypeAlias = Literal["ring", "ragged_all_to_all"]
+_VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 
 
 def _mesh_has_axis(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> bool:
@@ -52,6 +54,19 @@ def _batch_spec(mesh: jax.sharding.AbstractMesh | None) -> P:
     if _mesh_has_axis(mesh, "expert"):
         return P(("data", "expert"))
     return P(("data",))
+
+
+def resolve_moe_implementation(
+    implementation: MoeImplementation | str | None,
+    mesh: jax.sharding.AbstractMesh | None,
+) -> MoeImplementation:
+    if implementation is not None:
+        if implementation not in _VALID_MOE_IMPLEMENTATIONS:
+            valid = ", ".join(repr(choice) for choice in _VALID_MOE_IMPLEMENTATIONS)
+            raise ValueError(f"implementation must be one of {valid} or None, got {implementation!r}")
+        return cast(MoeImplementation, implementation)
+
+    return "ring"
 
 
 @named_call
@@ -124,6 +139,29 @@ def _batch_spec_from_x(x: jax.Array, mesh: jax.sharding.AbstractMesh | None) -> 
     return _batch_spec(mesh)
 
 
+def _sort_activations(inputs: jax.Array, sort_indices: jax.Array) -> jax.Array:
+    if inputs.shape[0] != sort_indices.shape[0]:
+        raise ValueError(f"Expected matching leading dims, got {inputs.shape[0]} and {sort_indices.shape[0]}")
+    return _sort_activations_custom(inputs, sort_indices)
+
+
+@jax.custom_vjp
+def _sort_activations_custom(inputs: jax.Array, sort_indices: jax.Array) -> jax.Array:
+    return inputs[sort_indices, ...]
+
+
+def _sort_activations_custom_fwd(inputs: jax.Array, sort_indices: jax.Array) -> tuple[jax.Array, jax.Array]:
+    return _sort_activations_custom(inputs, sort_indices), sort_indices
+
+
+def _sort_activations_custom_bwd(residuals: jax.Array, grads: jax.Array) -> tuple[jax.Array, None]:
+    sort_indices = residuals
+    return _sort_activations_custom(grads, jnp.argsort(sort_indices)), None
+
+
+_sort_activations_custom.defvjp(_sort_activations_custom_fwd, _sort_activations_custom_bwd)
+
+
 def _prefix_cap_counts(counts: Int[Array, "E"], *, capacity: int) -> Int[Array, "E"]:
     accepted = []
     remaining = jnp.array(capacity, dtype=jnp.int32)
@@ -132,6 +170,76 @@ def _prefix_cap_counts(counts: Int[Array, "E"], *, capacity: int) -> Int[Array, 
         accepted.append(take)
         remaining = jnp.maximum(remaining - take, 0)
     return jnp.stack(accepted, axis=0)
+
+
+def _permute_by_global_expert(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    *,
+    num_experts: int,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    topk = selected_experts_local.shape[1]
+    flat_selected = selected_experts_local.reshape(-1)
+    sorted_indices = jnp.argsort(flat_selected)
+    repeated_x = jnp.repeat(x_local, topk, axis=0)
+    sorted_x = _sort_activations(repeated_x, sorted_indices)
+    group_sizes = jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32)
+    return sorted_x, sorted_indices, group_sizes
+
+
+def _unpermute_from_global_expert(
+    intermediate: jax.Array,
+    sorted_indices: jax.Array,
+    combine_weights_local: jax.Array,
+    *,
+    tokens_per_shard: int,
+    topk: int,
+) -> jax.Array:
+    unsorted = _sort_activations(intermediate, jnp.argsort(sorted_indices))
+    reshaped = unsorted.reshape(tokens_per_shard, topk, -1)
+    return jnp.einsum(
+        "tkd,tk->td", reshaped, combine_weights_local.astype(reshaped.dtype), preferred_element_type=jnp.float32
+    )
+
+
+def _shard_a2a_params(
+    shard_counts: jax.Array,
+    shard_id: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    row = shard_counts[shard_id]
+    input_offsets = jnp.cumsum(jnp.concatenate((jnp.array([0], dtype=row.dtype), row[:-1])))
+    send_sizes = row
+
+    recv_sizes = shard_counts[:, shard_id]
+    output_offsets = jnp.cumsum(jnp.concatenate((jnp.array([0], dtype=recv_sizes.dtype), recv_sizes[:-1])))
+    return input_offsets, send_sizes, output_offsets, recv_sizes
+
+
+def _local_permute_from_counts(
+    inputs: jax.Array,
+    global_group_sizes: jax.Array,
+    *,
+    local_expert_size: int,
+    shard_index: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    all_shard_local_sizes = jax.lax.dynamic_slice_in_dim(
+        global_group_sizes,
+        start_index=shard_index * local_expert_size,
+        slice_size=local_expert_size,
+        axis=1,
+    )
+    local_group_sizes = jnp.sum(all_shard_local_sizes, axis=0)
+    local_sizes = all_shard_local_sizes.reshape(-1)
+    total_valid = jnp.sum(local_sizes, dtype=jnp.int32)
+    segment_ends = jnp.cumsum(local_sizes, dtype=jnp.int32)
+    positions = jnp.arange(inputs.shape[0], dtype=jnp.int32)
+    segment_index = jnp.searchsorted(segment_ends, positions, side="right")
+    local_expert_ids = jnp.where(positions < total_valid, segment_index % local_expert_size, local_expert_size)
+    sorted_indices = jnp.argsort(local_expert_ids)
+    sorted_inputs = _sort_activations(inputs, sorted_indices)
+    sorted_inputs = jnp.where((positions < total_valid)[:, None], sorted_inputs, 0)
+    group_sizes = local_group_sizes.at[-1].add(inputs.shape[0] - total_valid)
+    return sorted_inputs, sorted_indices, group_sizes
 
 
 def _moe_mlp_ep_ring_local(
@@ -229,6 +337,90 @@ def _moe_mlp_ep_ring_local(
     return out_local, dropped_total
 
 
+def _moe_mlp_ep_ragged_a2a_local(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    local_experts = moe_w13_local.shape[0]
+    if num_experts % local_experts != 0:
+        raise ValueError(
+            f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
+        )
+
+    shard_id = jax.lax.axis_index("expert")
+    ep_size = num_experts // local_experts
+    tokens_per_shard = x_local.shape[0]
+    topk = selected_experts_local.shape[1]
+    assignments_per_shard = tokens_per_shard * topk
+    # Ragged A2A does not clip overloaded receivers, so size the receive buffer
+    # for the worst case where every shard routes every assignment here.
+    recv_capacity = max(local_experts, assignments_per_shard * ep_size)
+
+    with jax.named_scope("dispatch"):
+        sorted_x, sorted_indices, group_sizes = _permute_by_global_expert(
+            x_local,
+            selected_experts_local,
+            num_experts=num_experts,
+        )
+        shard_counts = jnp.sum(group_sizes.reshape(ep_size, local_experts), axis=1).astype(jnp.int32)
+        all_shard_counts = jax.lax.all_gather(shard_counts, "expert")
+        input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(all_shard_counts, shard_id)
+        dispatch_out_shape = jnp.zeros((recv_capacity, x_local.shape[1]), dtype=x_local.dtype)
+        x_dispatched = jax.lax.ragged_all_to_all(
+            sorted_x,
+            dispatch_out_shape,
+            input_offsets,
+            send_sizes,
+            output_offsets,
+            recv_sizes,
+            axis_name="expert",
+        )
+        global_group_sizes = jax.lax.all_gather(group_sizes.astype(jnp.int32), "expert")
+        x_dispatch, local_sorted_indices, local_group_sizes = _local_permute_from_counts(
+            x_dispatched,
+            global_group_sizes,
+            local_expert_size=local_experts,
+            shard_index=shard_id,
+        )
+
+    with jax.named_scope("moe_up_down"):
+        w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
+        moe_dim = moe_w2_local.shape[1]
+        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
+
+    with jax.named_scope("combine"):
+        local_output = _sort_activations(out_dispatch, jnp.argsort(local_sorted_indices))
+        return_out_shape = jnp.zeros((assignments_per_shard, x_local.shape[1]), dtype=local_output.dtype)
+        return_input_offsets, return_send_sizes, return_output_offsets, return_recv_sizes = _shard_a2a_params(
+            all_shard_counts.T, shard_id
+        )
+        returned = jax.lax.ragged_all_to_all(
+            local_output,
+            return_out_shape,
+            return_input_offsets,
+            return_send_sizes,
+            return_output_offsets,
+            return_recv_sizes,
+            axis_name="expert",
+        )
+        out_local = _unpermute_from_global_expert(
+            returned,
+            sorted_indices,
+            combine_weights_local,
+            tokens_per_shard=tokens_per_shard,
+            topk=topk,
+        ).astype(x_local.dtype)
+    return out_local, jnp.array(0, dtype=jnp.int32)
+
+
 @named_call
 def moe_mlp(
     x: Float[Array, "T D"],
@@ -238,6 +430,7 @@ def moe_mlp(
     w_down: Float[Array, "E I D"],
     *,
     activation: MoeActivation = ActivationFunctionEnum.silu,
+    implementation: MoeImplementation | str | None = None,
     mesh: jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
@@ -282,6 +475,7 @@ def moe_mlp(
 
     has_expert_axis = _mesh_has_axis(mesh, "expert")
     expert_axis_size = _mesh_axis_size(mesh, "expert")
+    resolved_implementation = resolve_moe_implementation(implementation, mesh)
 
     if mesh is None or mesh.empty:
         out, dropped = _moe_mlp_local(
@@ -304,10 +498,16 @@ def moe_mlp(
         if num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
 
-        # #2710: prefer ring EP collectives when a real expert mesh is present.
+        if resolved_implementation == "ring":
+            shard_local_fn = _moe_mlp_ep_ring_local
+        elif resolved_implementation == "ragged_all_to_all":
+            shard_local_fn = _moe_mlp_ep_ragged_a2a_local
+        else:
+            raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
+
         shard_fn = shard_map(
             partial(
-                _moe_mlp_ep_ring_local,
+                shard_local_fn,
                 activation_fn=activation_fn,
                 num_experts=num_experts,
                 capacity_factor=capacity_factor,
@@ -355,5 +555,7 @@ def moe_mlp(
 
 __all__ = [
     "MoeActivation",
+    "MoeImplementation",
     "moe_mlp",
+    "resolve_moe_implementation",
 ]

@@ -79,6 +79,20 @@ WORKER_RESOURCE_HISTORY_RETENTION = 500
 """Maximum worker_resource_history rows retained per worker."""
 
 
+@dataclass(frozen=True)
+class PruneResult:
+    """Counts of rows deleted by prune_old_data."""
+
+    jobs_deleted: int = 0
+    workers_deleted: int = 0
+    logs_deleted: int = 0
+    txn_actions_deleted: int = 0
+
+    @property
+    def total(self) -> int:
+        return self.jobs_deleted + self.workers_deleted + self.logs_deleted + self.txn_actions_deleted
+
+
 class HeartbeatAction(enum.Enum):
     """Result of processing a single heartbeat response."""
 
@@ -1408,6 +1422,98 @@ class ControllerTransitions:
             cur.execute("DELETE FROM workers WHERE worker_id = ?", (str(worker_id),))
             self._record_transaction(cur, "remove_worker", [("worker_removed", str(worker_id), {})])
             return self._db.decode_worker(row)
+
+    def prune_old_data(
+        self,
+        *,
+        job_retention: Duration,
+        worker_retention: Duration,
+        log_retention: Duration,
+        txn_action_retention: Duration,
+    ) -> PruneResult:
+        """Delete old terminal jobs, stale workers, old logs, and old txn_actions.
+
+        Uses the CASCADE foreign keys on jobs (→ tasks → attempts, endpoints)
+        and workers (→ attributes, task_history, resource_history) so child rows
+        are cleaned up automatically.
+
+        Args:
+            job_retention: Delete terminal jobs whose finished_at is older than this.
+            worker_retention: Delete inactive/unhealthy workers whose last heartbeat is older than this.
+            log_retention: Delete log rows older than this.
+            txn_action_retention: Delete txn_actions older than this.
+
+        Returns:
+            PruneResult with counts of deleted rows per category.
+        """
+        now_ms = Timestamp.now().epoch_ms()
+        job_cutoff_ms = now_ms - job_retention.to_ms()
+        worker_cutoff_ms = now_ms - worker_retention.to_ms()
+        log_cutoff_ms = now_ms - log_retention.to_ms()
+        txn_cutoff_ms = now_ms - txn_action_retention.to_ms()
+
+        terminal_states = tuple(TERMINAL_JOB_STATES)
+        actions: list[tuple[str, str, dict[str, object]]] = []
+
+        with self._db.transaction() as cur:
+            # 1. Terminal jobs finished before the cutoff
+            placeholders = ",".join("?" * len(terminal_states))
+            job_rows = cur.execute(
+                f"SELECT job_id FROM jobs WHERE state IN ({placeholders})"
+                " AND finished_at_ms IS NOT NULL AND finished_at_ms < ?",
+                (*terminal_states, job_cutoff_ms),
+            ).fetchall()
+            job_ids = [row["job_id"] for row in job_rows]
+            if job_ids:
+                cur.execute(
+                    "DELETE FROM jobs WHERE job_id IN ({})".format(",".join("?" * len(job_ids))),
+                    tuple(job_ids),
+                )
+                actions.append(("jobs_pruned", str(len(job_ids)), {"cutoff_ms": job_cutoff_ms}))
+
+            # 2. Inactive or unhealthy workers with stale heartbeats
+            worker_rows = cur.execute(
+                "SELECT worker_id FROM workers WHERE (active = 0 OR healthy = 0) AND last_heartbeat_ms < ?",
+                (worker_cutoff_ms,),
+            ).fetchall()
+            worker_ids = [row["worker_id"] for row in worker_rows]
+            if worker_ids:
+                cur.execute(
+                    "DELETE FROM workers WHERE worker_id IN ({})".format(",".join("?" * len(worker_ids))),
+                    tuple(worker_ids),
+                )
+                actions.append(("workers_pruned", str(len(worker_ids)), {"cutoff_ms": worker_cutoff_ms}))
+
+            # 3. Old logs
+            logs_cursor = cur.execute("DELETE FROM logs WHERE epoch_ms < ?", (log_cutoff_ms,))
+            logs_deleted = logs_cursor.rowcount
+            if logs_deleted:
+                actions.append(("logs_pruned", str(logs_deleted), {"cutoff_ms": log_cutoff_ms}))
+
+            # 4. Old txn_actions (parent txn_log rows auto-pruned by trigger)
+            txn_cursor = cur.execute("DELETE FROM txn_actions WHERE created_at_ms < ?", (txn_cutoff_ms,))
+            txn_actions_deleted = txn_cursor.rowcount
+            if txn_actions_deleted:
+                actions.append(("txn_actions_pruned", str(txn_actions_deleted), {"cutoff_ms": txn_cutoff_ms}))
+
+            if actions:
+                self._record_transaction(cur, "prune_old_data", actions)
+
+        result = PruneResult(
+            jobs_deleted=len(job_ids),
+            workers_deleted=len(worker_ids),
+            logs_deleted=logs_deleted,
+            txn_actions_deleted=txn_actions_deleted,
+        )
+        if result.total > 0:
+            logger.info(
+                "Pruned old data: %d jobs, %d workers, %d logs, %d txn_actions",
+                result.jobs_deleted,
+                result.workers_deleted,
+                result.logs_deleted,
+                result.txn_actions_deleted,
+            )
+        return result
 
     # =========================================================================
     # Heartbeat Dispatch API

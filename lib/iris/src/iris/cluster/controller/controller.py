@@ -689,6 +689,21 @@ class ControllerConfig:
     profile_duration: int = 10
     """Duration in seconds for each py-spy profile capture."""
 
+    prune_interval: Duration = field(default_factory=lambda: Duration.from_seconds(3600))
+    """How often to run the data pruning sweep (default: 1 hour)."""
+
+    job_retention: Duration = field(default_factory=lambda: Duration.from_seconds(7 * 86400))
+    """Delete terminal jobs older than this (default: 7 days)."""
+
+    worker_retention: Duration = field(default_factory=lambda: Duration.from_seconds(86400))
+    """Delete inactive/unhealthy workers whose last heartbeat exceeds this (default: 24 hours)."""
+
+    log_retention: Duration = field(default_factory=lambda: Duration.from_seconds(7 * 86400))
+    """Delete controller logs older than this (default: 7 days)."""
+
+    txn_action_retention: Duration = field(default_factory=lambda: Duration.from_seconds(3 * 86400))
+    """Delete txn_actions older than this (default: 3 days)."""
+
     profile_concurrency: int = 8
     """Maximum parallel profile RPCs to workers."""
 
@@ -841,6 +856,9 @@ class Controller:
             else None
         )
 
+        # Rate-limits periodic data pruning sweeps.
+        self._prune_limiter = RateLimiter(interval_seconds=config.prune_interval.to_seconds())
+
     def wake(self) -> None:
         """Signal the controller loop to run immediately.
 
@@ -957,6 +975,21 @@ class Controller:
                 continue
 
             self._run_scheduling()
+            self._maybe_prune()
+
+    def _maybe_prune(self) -> None:
+        """Run a data pruning sweep if the rate limiter allows."""
+        if not self._prune_limiter.should_run():
+            return
+        try:
+            self._transitions.prune_old_data(
+                job_retention=self._config.job_retention,
+                worker_retention=self._config.worker_retention,
+                log_retention=self._config.log_retention,
+                txn_action_retention=self._config.txn_action_retention,
+            )
+        except Exception:
+            logger.exception("Data pruning failed")
 
     def _run_autoscaler_loop(self, stop_event: threading.Event) -> None:
         """Autoscaler loop: runs on its own thread so blocking cloud API calls
