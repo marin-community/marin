@@ -30,6 +30,7 @@ class RayClusterConfig:
     config_file: str  # Path to the YAML file
 
     # Provider fields
+    provider_type: str
     region: str
     zone: str
     project_id: str
@@ -50,6 +51,7 @@ class RayClusterConfig:
         return cls(
             cluster_name=data["cluster_name"],
             config_file=config_path,
+            provider_type=provider.get("type", ""),
             region=provider["region"],
             zone=provider["availability_zone"],
             project_id=provider["project_id"],

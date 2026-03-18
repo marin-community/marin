@@ -6,7 +6,6 @@
 from enum import StrEnum
 from collections.abc import Callable
 
-from iris.cluster.platform.gcp import ensure_gcp_restart_permissions
 from iris.rpc import config_pb2
 
 
@@ -23,8 +22,16 @@ class RestartScope(StrEnum):
 
 RestartPermissionChecker = Callable[[config_pb2.IrisClusterConfig, RestartScope], None]
 
+
+def _ensure_gcp_restart_permissions(config: config_pb2.IrisClusterConfig, scope: RestartScope) -> None:
+    """Lazily load the GCP checker to keep this module platform-agnostic at import time."""
+    from iris.cluster.platform.gcp import ensure_gcp_restart_permissions
+
+    ensure_gcp_restart_permissions(config, scope)
+
+
 _RESTART_PERMISSION_CHECKERS: dict[str, RestartPermissionChecker] = {
-    "gcp": ensure_gcp_restart_permissions,
+    "gcp": _ensure_gcp_restart_permissions,
 }
 
 
@@ -52,6 +59,7 @@ def ensure_restart_permissions(
     try:
         checker(config, scope)
     except RestartPermissionError:
+        # Preserve existing wrappers from provider-specific checkers.
         raise
     except RuntimeError as e:
         raise RestartPermissionError(str(e)) from e

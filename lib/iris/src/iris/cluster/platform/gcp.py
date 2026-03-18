@@ -68,6 +68,7 @@ from iris.cluster.platform.bootstrap import (
     zone_to_multi_region,
 )
 from iris.cluster.platform.debug import wait_for_port
+from iris.cluster.platform.restart_permissions import RestartScope
 from iris.cluster.platform.remote_exec import (
     GceRemoteExec,
     GcloudRemoteExec,
@@ -105,8 +106,8 @@ _GCE_VM_SLICE_SSH_USER = "iris"
 # identical args share a single subprocess invocation via per-key locking.
 _GCLOUD_CACHE_TTL_SECS = 5.0
 
-_GCP_REQUIRED_PERMISSIONS_BY_SCOPE: dict[str, tuple[str, ...]] = {
-    "cluster": (
+_GCP_REQUIRED_PERMISSIONS_BY_SCOPE: dict[RestartScope, tuple[str, ...]] = {
+    RestartScope.CLUSTER: (
         "compute.instances.create",
         "compute.instances.delete",
         "compute.instances.get",
@@ -118,7 +119,7 @@ _GCP_REQUIRED_PERMISSIONS_BY_SCOPE: dict[str, tuple[str, ...]] = {
         "tpu.nodes.get",
         "tpu.nodes.list",
     ),
-    "controller": (
+    RestartScope.CONTROLLER: (
         "compute.instances.get",
         "compute.instances.list",
     ),
@@ -161,7 +162,7 @@ def _missing_project_permissions_for_restart(project_id: str, permissions: tuple
     return [permission for permission in permissions if permission not in granted]
 
 
-def ensure_gcp_restart_permissions(config: config_pb2.IrisClusterConfig, scope: str) -> None:
+def ensure_gcp_restart_permissions(config: config_pb2.IrisClusterConfig, scope: RestartScope | str) -> None:
     """Ensure active gcloud identity can perform restart operations for a given scope."""
     platform_kind = config.platform.WhichOneof("platform")
     if platform_kind != "gcp":
@@ -175,11 +176,13 @@ def ensure_gcp_restart_permissions(config: config_pb2.IrisClusterConfig, scope: 
     if not account:
         raise RuntimeError("No active gcloud account found. Run `gcloud auth login` and retry.")
 
-    required_permissions = _GCP_REQUIRED_PERMISSIONS_BY_SCOPE.get(scope)
-    if required_permissions is None:
-        supported_scopes = ", ".join(sorted(_GCP_REQUIRED_PERMISSIONS_BY_SCOPE))
-        raise RuntimeError(f"Unknown restart permission scope '{scope}'. Supported scopes: {supported_scopes}")
+    try:
+        restart_scope = RestartScope(scope)
+    except ValueError as e:
+        supported_scopes = ", ".join(sorted(s.value for s in _GCP_REQUIRED_PERMISSIONS_BY_SCOPE))
+        raise RuntimeError(f"Unknown restart permission scope '{scope}'. Supported scopes: {supported_scopes}") from e
 
+    required_permissions = _GCP_REQUIRED_PERMISSIONS_BY_SCOPE[restart_scope]
     missing_permissions = _missing_project_permissions_for_restart(project_id, required_permissions)
     if missing_permissions:
         raise RuntimeError(
