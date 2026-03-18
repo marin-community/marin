@@ -44,6 +44,8 @@ Kernel = Literal[
     "deepep_transport_first_ragged_dot_probe",
     "deepep_transport_gate_probe",
     "deepep_transport_second_ragged_dot_probe",
+    "deepep_transport_w13_only_probe",
+    "deepep_transport_w2_only_probe",
     "deepep_transport_local_compute_only_probe",
     "deepep_transport_collapse_only_probe",
     "deepep_transport_combine_only_probe",
@@ -1929,6 +1931,119 @@ def _moe_mlp_ep_deepep_transport_local_compute_local(
         return ragged_dot(gate_up, moe_w2_local, local_group_sizes)
 
 
+def _moe_mlp_ep_deepep_transport_w13_only_local(
+    x_dispatch: jax.Array,
+    local_group_sizes: jax.Array,
+    moe_w13_local: jax.Array,
+) -> jax.Array:
+    with jax.named_scope("w13_ragged_dot"):
+        return ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
+
+
+def _moe_mlp_deepep_transport_w13_only(
+    x_dispatch: jax.Array,
+    local_group_sizes: jax.Array,
+    w_up_gate: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+) -> jax.Array:
+    if mesh is None:
+        mesh = get_abstract_mesh()
+
+    shard_fn = shard_map(
+        _moe_mlp_ep_deepep_transport_w13_only_local,
+        mesh=mesh,
+        in_specs=(
+            P("expert", None),
+            P("expert"),
+            P("expert", None, None),
+        ),
+        out_specs=P("expert", None),
+        check_vma=False,
+    )
+    return shard_fn(x_dispatch, local_group_sizes, w_up_gate)
+
+
+def _moe_mlp_ep_deepep_transport_gate_up_only_local(
+    x_dispatch: jax.Array,
+    local_group_sizes: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> jax.Array:
+    with jax.named_scope("w13_ragged_dot"):
+        w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
+    moe_dim = moe_w2_local.shape[1]
+    with jax.named_scope("gate_up_split"):
+        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+    with jax.named_scope("gate_activation"):
+        return activation_fn(gate) * up
+
+
+def _moe_mlp_deepep_transport_gate_up_only(
+    x_dispatch: jax.Array,
+    local_group_sizes: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+) -> jax.Array:
+    if mesh is None:
+        mesh = get_abstract_mesh()
+
+    activation_fn = ActivationFunctionEnum.silu.to_jax_fn()
+    shard_fn = shard_map(
+        partial(
+            _moe_mlp_ep_deepep_transport_gate_up_only_local,
+            activation_fn=activation_fn,
+        ),
+        mesh=mesh,
+        in_specs=(
+            P("expert", None),
+            P("expert"),
+            P("expert", None, None),
+            P("expert", None, None),
+        ),
+        out_specs=P("expert", None),
+        check_vma=False,
+    )
+    return shard_fn(x_dispatch, local_group_sizes, w_up_gate, w_down)
+
+
+def _moe_mlp_ep_deepep_transport_w2_only_local(
+    gate_up: jax.Array,
+    local_group_sizes: jax.Array,
+    moe_w2_local: jax.Array,
+) -> jax.Array:
+    with jax.named_scope("w2_ragged_dot"):
+        return ragged_dot(gate_up, moe_w2_local, local_group_sizes)
+
+
+def _moe_mlp_deepep_transport_w2_only(
+    gate_up: jax.Array,
+    local_group_sizes: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+) -> jax.Array:
+    if mesh is None:
+        mesh = get_abstract_mesh()
+
+    shard_fn = shard_map(
+        _moe_mlp_ep_deepep_transport_w2_only_local,
+        mesh=mesh,
+        in_specs=(
+            P("expert", None),
+            P("expert"),
+            P("expert", None, None),
+        ),
+        out_specs=P("expert", None),
+        check_vma=False,
+    )
+    return shard_fn(gate_up, local_group_sizes, w_down)
+
+
 def _moe_mlp_deepep_transport_local_compute(
     x_dispatch: jax.Array,
     local_group_sizes: jax.Array,
@@ -2862,6 +2977,102 @@ def _forward_deepep_transport_local_compute_only_probe(
         x_dispatch,
         local_group_sizes,
         w_up_gate,
+        w_down,
+        mesh=mesh,
+    )
+
+
+def _forward_deepep_transport_w13_only_probe(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    max_recv_tokens: int,
+    max_local_assignments: int,
+) -> jax.Array:
+    if mesh is None:
+        mesh = get_abstract_mesh()
+    num_experts = int(w_up_gate.shape[0])
+    (
+        x_dispatch,
+        _assignment_weights,
+        _recv_token_indices,
+        local_group_sizes,
+        _recv_topk_weights,
+        _recv_src_idx,
+        _rank_prefix_matrix,
+        _channel_prefix_matrix,
+        _recv_channel_prefix_matrix,
+        _send_head,
+        _num_recv_tokens,
+        _is_token_in_rank,
+    ) = _moe_mlp_deepep_transport_dispatch_pack(
+        x,
+        selected_experts,
+        combine_weights,
+        mesh=mesh,
+        num_experts=num_experts,
+        max_recv_tokens=max_recv_tokens,
+        max_local_assignments=max_local_assignments,
+    )
+    del w_down
+    return _moe_mlp_deepep_transport_w13_only(
+        x_dispatch,
+        local_group_sizes,
+        w_up_gate,
+        mesh=mesh,
+    )
+
+
+def _forward_deepep_transport_w2_only_probe(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    max_recv_tokens: int,
+    max_local_assignments: int,
+) -> jax.Array:
+    if mesh is None:
+        mesh = get_abstract_mesh()
+    num_experts = int(w_up_gate.shape[0])
+    (
+        x_dispatch,
+        _assignment_weights,
+        _recv_token_indices,
+        local_group_sizes,
+        _recv_topk_weights,
+        _recv_src_idx,
+        _rank_prefix_matrix,
+        _channel_prefix_matrix,
+        _recv_channel_prefix_matrix,
+        _send_head,
+        _num_recv_tokens,
+        _is_token_in_rank,
+    ) = _moe_mlp_deepep_transport_dispatch_pack(
+        x,
+        selected_experts,
+        combine_weights,
+        mesh=mesh,
+        num_experts=num_experts,
+        max_recv_tokens=max_recv_tokens,
+        max_local_assignments=max_local_assignments,
+    )
+    gate_up = _moe_mlp_deepep_transport_gate_up_only(
+        x_dispatch,
+        local_group_sizes,
+        w_up_gate,
+        w_down,
+        mesh=mesh,
+    )
+    return _moe_mlp_deepep_transport_w2_only(
+        gate_up,
+        local_group_sizes,
         w_down,
         mesh=mesh,
     )
@@ -4179,6 +4390,42 @@ def _forward(
             w_up_gate,
             w_down,
         )
+    elif kernel == "deepep_transport_w13_only_probe":
+        mesh = get_abstract_mesh()
+        num_experts = int(w_up_gate.shape[0])
+        max_recv_tokens, max_local_assignments = _deepep_transport_exact_caps(
+            selected_experts,
+            mesh=mesh,
+            num_experts=num_experts,
+        )
+        routed = _forward_deepep_transport_w13_only_probe(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            mesh=mesh,
+            max_recv_tokens=max_recv_tokens,
+            max_local_assignments=max_local_assignments,
+        )
+    elif kernel == "deepep_transport_w2_only_probe":
+        mesh = get_abstract_mesh()
+        num_experts = int(w_up_gate.shape[0])
+        max_recv_tokens, max_local_assignments = _deepep_transport_exact_caps(
+            selected_experts,
+            mesh=mesh,
+            num_experts=num_experts,
+        )
+        routed = _forward_deepep_transport_w2_only_probe(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            mesh=mesh,
+            max_recv_tokens=max_recv_tokens,
+            max_local_assignments=max_local_assignments,
+        )
     elif kernel == "deepep_transport_local_compute_only_probe":
         mesh = get_abstract_mesh()
         num_experts = int(w_up_gate.shape[0])
@@ -4352,6 +4599,8 @@ def _forward(
         "deepep_transport_first_ragged_dot_probe",
         "deepep_transport_gate_probe",
         "deepep_transport_second_ragged_dot_probe",
+        "deepep_transport_w13_only_probe",
+        "deepep_transport_w2_only_probe",
         "deepep_transport_local_compute_only_probe",
     }:
         return routed
@@ -4566,6 +4815,66 @@ def _make_deepep_transport_probe_forward_runner(
                 max_local_assignments=max_local_assignments,
             ),
             (x, selected_experts, combine_weights, w_up_gate, w_down),
+        )
+    if probe_kernel == "deepep_transport_w13_only_probe":
+        dispatch_pack = jax.jit(
+            partial(
+                _moe_mlp_deepep_transport_dispatch_pack,
+                mesh=mesh,
+                num_experts=num_experts,
+                max_recv_tokens=max_recv_tokens,
+                max_local_assignments=max_local_assignments,
+            )
+        )
+        (
+            x_dispatch,
+            _assignment_weights,
+            _recv_token_indices,
+            local_group_sizes,
+            _recv_topk_weights,
+            _recv_src_idx,
+            _rank_prefix_matrix,
+            _channel_prefix_matrix,
+            _recv_channel_prefix_matrix,
+            _send_head,
+            _num_recv_tokens,
+            _is_token_in_rank,
+        ) = dispatch_pack(x, selected_experts, combine_weights)
+        jax.block_until_ready(x_dispatch)
+        return (
+            partial(_moe_mlp_deepep_transport_w13_only, mesh=mesh),
+            (x_dispatch, local_group_sizes, w_up_gate),
+        )
+    if probe_kernel == "deepep_transport_w2_only_probe":
+        dispatch_pack = jax.jit(
+            partial(
+                _moe_mlp_deepep_transport_dispatch_pack,
+                mesh=mesh,
+                num_experts=num_experts,
+                max_recv_tokens=max_recv_tokens,
+                max_local_assignments=max_local_assignments,
+            )
+        )
+        gate_up_only = jax.jit(partial(_moe_mlp_deepep_transport_gate_up_only, mesh=mesh))
+        (
+            x_dispatch,
+            _assignment_weights,
+            _recv_token_indices,
+            local_group_sizes,
+            _recv_topk_weights,
+            _recv_src_idx,
+            _rank_prefix_matrix,
+            _channel_prefix_matrix,
+            _recv_channel_prefix_matrix,
+            _send_head,
+            _num_recv_tokens,
+            _is_token_in_rank,
+        ) = dispatch_pack(x, selected_experts, combine_weights)
+        gate_up = gate_up_only(x_dispatch, local_group_sizes, w_up_gate, w_down)
+        jax.block_until_ready(gate_up)
+        return (
+            partial(_moe_mlp_deepep_transport_w2_only, mesh=mesh),
+            (gate_up, local_group_sizes, w_down),
         )
     if probe_kernel == "deepep_transport_local_compute_only_probe":
         return (
@@ -4974,6 +5283,8 @@ def main() -> None:
             "deepep_transport_first_ragged_dot_probe",
             "deepep_transport_gate_probe",
             "deepep_transport_second_ragged_dot_probe",
+            "deepep_transport_w13_only_probe",
+            "deepep_transport_w2_only_probe",
             "deepep_transport_local_compute_only_probe",
             "deepep_transport_collapse_only_probe",
             "deepep_transport_combine_only_probe",
@@ -5124,6 +5435,8 @@ def main() -> None:
                         "deepep_transport_first_ragged_dot_probe",
                         "deepep_transport_gate_probe",
                         "deepep_transport_second_ragged_dot_probe",
+                        "deepep_transport_w13_only_probe",
+                        "deepep_transport_w2_only_probe",
                         "deepep_transport_local_compute_only_probe",
                         "deepep_transport_collapse_only_probe",
                         "deepep_transport_combine_only_probe",
