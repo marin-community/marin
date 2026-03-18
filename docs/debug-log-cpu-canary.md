@@ -153,12 +153,17 @@ the `HF_TOKEN` in the environment doesn't have access approved.
 
 This is a credential/permission issue, not an infrastructure bug.
 
-### Current status
+### Result: Grug MoE PASSED on 2x H100 nodes
 
-- CPU canary PASSED
-- Multi-host GPU infra WORKING (2x H100, 16 GPUs, NCCL over Ethernet)
-- Tiny model canary PASSED (llama_nano, 10 steps, 2m30s)
-- Grug MoE blocked on HF_TOKEN gated model access for meta-llama/Meta-Llama-3.1-8B
+Grug MoE canary (50 steps) completed in 6m13s on gd927de + gd94886.
+Both tasks ran 50/50 steps at ~2 it/s. Final loss ~8.0.
+W&B: https://wandb.ai/marin-community/marin/runs/mh-canary-20260318-201505
+
+### Final status — ALL PHASES PASSED
+
+- Phase 1 (CPU): PASSED
+- Phase 2 (GPU tiny model): PASSED — llama_nano, 10 steps, 2m30s
+- Phase 2 (GPU Grug MoE): PASSED — 50 steps, 6m13s, 16 GPUs across 2 VMs
 
 ### Known risks
 
