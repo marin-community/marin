@@ -162,27 +162,43 @@ T_co = TypeVar("T_co", covariant=True)
 ExecutorFunction = Callable | None
 
 
-_MULTI_REGION_BUCKET_LOCATIONS = {"us", "eu", "asia"}
+_NON_REGIONAL_BUCKET_LOCATIONS = {"us", "eu", "asia", "nam4", "eur4", "asia1"}
+_GCP_REGION_PATTERN = re.compile(r"^[a-z]+-[a-z0-9]+[0-9]$")
 
 
 def _normalize_region(region: str, *, step_name: str, path: str) -> str:
     normalized = region.lower()
-    if normalized in _MULTI_REGION_BUCKET_LOCATIONS:
+    if normalized in _NON_REGIONAL_BUCKET_LOCATIONS or "+" in normalized or not _GCP_REGION_PATTERN.match(normalized):
         raise ValueError(
-            f"Executor step {step_name!r} references {path!r} in a multi-region bucket "
+            f"Executor step {step_name!r} references {path!r} in a non-regional bucket location "
             f"({normalized!r}); cannot infer a single region pin."
         )
     return normalized
 
 
-def _region_for_gcs_path(path: str, *, step_name: str, bucket_region_cache: dict[str, str]) -> str:
+def _is_bucket_location_permission_error(exc: Exception) -> bool:
+    return isinstance(exc, PermissionError) or exc.__class__.__name__ in {"Forbidden", "PermissionDenied"}
+
+
+def _region_for_gcs_path(path: str, *, step_name: str, bucket_region_cache: dict[str, str]) -> str | None:
     region = region_from_prefix(path)
     if region is not None:
         return _normalize_region(region, step_name=step_name, path=path)
 
     bucket, _ = split_gcs_path(path)
     if bucket not in bucket_region_cache:
-        bucket_region_cache[bucket] = get_bucket_location(path)
+        try:
+            bucket_region_cache[bucket] = get_bucket_location(path)
+        except Exception as e:
+            if _is_bucket_location_permission_error(e):
+                logger.warning(
+                    "Could not infer bucket location for %s due to permission error; "
+                    "skipping this path for region inference.",
+                    path,
+                    exc_info=True,
+                )
+                return None
+            raise
     return _normalize_region(bucket_region_cache[bucket], step_name=step_name, path=path)
 
 
@@ -218,10 +234,13 @@ def _infer_gcs_regions(
         bucket_region_cache: dict[str, str] = {}
         for path, labels in path_to_labels.items():
             region = _region_for_gcs_path(path, step_name=step_name, bucket_region_cache=bucket_region_cache)
+            if region is None:
+                continue
             region_to_evidence.setdefault(region, []).extend(f"{label}={path}" for label in labels)
-        gcs_regions = set(region_to_evidence)
+        if region_to_evidence:
+            gcs_regions = set(region_to_evidence)
 
-        if len(gcs_regions) > 1 and not os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
+        if gcs_regions is not None and len(gcs_regions) > 1 and not os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
             detail = "; ".join(
                 f"{region}: {', '.join(sorted(evidence)[:3])}" for region, evidence in sorted(region_to_evidence.items())
             )
@@ -229,7 +248,7 @@ def _infer_gcs_regions(
                 f"Executor step {step_name!r} has cross-region GCS dependencies. "
                 f"Found regions {{{', '.join(sorted(region_to_evidence))}}}. {detail}"
             )
-        if len(gcs_regions) > 1:
+        if gcs_regions is not None and len(gcs_regions) > 1:
             logger.warning(
                 "Cross-region GCS dependencies for step %s allowed by %s: %s",
                 step_name,
@@ -376,14 +395,13 @@ def _maybe_attach_inferred_region_constraint(
     deps: list[StepSpec] | None,
     dag_tpu_regions: list[str] | None = None,
 ) -> RemoteCallable:
-    if remote_fn.resources.regions:
+    if remote_fn.resources.regions is not None:
         return remote_fn
 
     if not _iris_backend_is_active():
         return remote_fn
 
-    if _iris_worker_region_pin() is not None:
-        return remote_fn
+    inherited_region_pin = _iris_worker_region_pin()
 
     inferred_regions = _infer_gcs_regions(
         step_name=step_name,
@@ -393,6 +411,23 @@ def _maybe_attach_inferred_region_constraint(
         dag_tpu_regions=dag_tpu_regions,
     )
     if inferred_regions is None:
+        return remote_fn
+
+    if inherited_region_pin is not None:
+        pinned_region = inherited_region_pin.lower()
+        if pinned_region not in inferred_regions:
+            message = (
+                f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
+                f"but inferred regions are {sorted(inferred_regions)}."
+            )
+            if os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
+                logger.warning(
+                    "%s Allowing because %s is set.",
+                    message,
+                    MARIN_CROSS_REGION_OVERRIDE_ENV,
+                )
+                return remote_fn
+            raise ValueError(message)
         return remote_fn
 
     logger.info(

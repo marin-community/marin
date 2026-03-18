@@ -461,6 +461,26 @@ def test_resolve_executor_step_infers_region_for_iris_without_pin():
     assert resolved.fn.resources.regions == ["us-central2"]
 
 
+def test_resolve_executor_step_preserves_explicit_empty_regions():
+    @remote(resources=ResourceConfig.with_cpu(regions=[]))
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"input_path": "gs://marin-us-central2/data/input"},
+            output_path="/out/test-abc",
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions == []
+
+
 def test_resolve_executor_step_infers_region_from_dependencies():
     @remote
     def my_fn(config):
@@ -495,7 +515,46 @@ def test_resolve_executor_step_skips_inference_when_iris_already_pinned():
     ):
         resolved = resolve_executor_step(
             step,
-            config={"input_path": "gs://marin-us-east5/data/input"},
+            config={"input_path": "gs://marin-us-central2/data/input"},
+            output_path="/out/test-abc",
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions is None
+
+
+def test_resolve_executor_step_raises_when_inherited_pin_conflicts_with_gcs_region():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value="us-central2"),
+    ):
+        with pytest.raises(ValueError, match="pinned to inherited Iris region"):
+            resolve_executor_step(
+                step,
+                config={"input_path": "gs://marin-us-east1/data/input"},
+                output_path="/out/test-abc",
+            )
+
+
+def test_resolve_executor_step_allows_inherited_pin_conflict_with_override_env(monkeypatch):
+    @remote
+    def my_fn(config):
+        pass
+
+    monkeypatch.setenv(MARIN_CROSS_REGION_OVERRIDE_ENV, "1")
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value="us-central2"),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"input_path": "gs://marin-us-east1/data/input"},
             output_path="/out/test-abc",
         )
 
@@ -623,6 +682,49 @@ def test_resolve_executor_step_allows_disjoint_gcs_and_dag_tpu_regions_with_over
 
     assert isinstance(resolved.fn, RemoteCallable)
     assert resolved.fn.resources.regions == ["us-central2", "us-east1"]
+
+
+def test_resolve_executor_step_raises_for_dual_region_bucket_location():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+        patch("marin.execution.executor.get_bucket_location", return_value="NAM4"),
+    ):
+        with pytest.raises(ValueError, match="non-regional bucket location"):
+            resolve_executor_step(
+                step,
+                config={"input_path": "gs://external-bucket/path/to/data"},
+                output_path="/out/test-abc",
+            )
+
+
+def test_resolve_executor_step_skips_bucket_location_permission_failures():
+    class Forbidden(Exception):
+        pass
+
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+        patch("marin.execution.executor.get_bucket_location", side_effect=Forbidden("no bucket metadata access")),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"input_path": "gs://external-bucket/path/to/data"},
+            output_path="/out/test-abc",
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions is None
 
 
 def test_dag_tpu_regions_intersects_explicit_regions():
