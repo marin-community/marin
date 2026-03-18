@@ -416,12 +416,13 @@ def _write_parquet_scatter(
     pending_cnt: int = 0
 
     def _flush_pending():
-        nonlocal n_chunks_flushed
+        nonlocal n_chunks_flushed, pending_chunk
         if pending_chunk is None:
             return
         writer.write_batch(pending_chunk)
         seg_shard_counts[seg_idx][pending_target] = seg_shard_counts[seg_idx].get(pending_target, 0) + 1
         n_chunks_flushed += 1
+        pending_chunk = None
         if n_chunks_flushed % 10 == 0:
             logger.info(
                 "[shard %d segment %d] Wrote %d parquet chunks so far (latest chunk size: %d items)",
@@ -431,31 +432,29 @@ def _write_parquet_scatter(
                 pending_cnt,
             )
 
-    def _write_buffer(target_shard: int, buf: list) -> None:
-        """Sort a buffer and write it as a Parquet row group."""
-        nonlocal schema, writer, seg_file, seg_idx, pending_chunk, pending_target, pending_cnt
-
+    def _prepare_batch(target_shard: int, buf: list) -> list[dict]:
+        """Apply combiner, sort, envelope a buffer. Returns enveloped rows."""
         if combiner_fn is not None:
             buf = _apply_combiner(buf, key_fn, combiner_fn)
         buf.sort(key=_sort_key)
-
         shard_chunk_idx = per_shard_chunk_cnt[target_shard]
         per_shard_chunk_cnt[target_shard] += 1
         envelope_fn = _make_pickle_envelope if pickled else _make_envelope
-        envelope = envelope_fn(buf, target_shard, shard_chunk_idx)
-        chunk_arrow = pa.RecordBatch.from_pylist(envelope)
+        return envelope_fn(buf, target_shard, shard_chunk_idx)
 
+    def _ensure_writer(chunk_schema: pa.Schema) -> pa.Schema:
+        """Ensure Parquet writer is open and compatible. Returns the active write schema."""
+        nonlocal schema, writer, seg_file, seg_idx
         if schema is None:
-            schema = chunk_arrow.schema
+            schema = chunk_schema
             seg_file = _segment_path(parquet_path, seg_idx)
             seg_paths.append(seg_file)
             ensure_parent_dir(seg_file)
             writer = pq.ParquetWriter(seg_file, schema)
-        elif chunk_arrow.schema != schema:
+        elif chunk_schema != schema:
             _flush_pending()
             writer.close()
-
-            schema = pa.unify_schemas([schema, chunk_arrow.schema])
+            schema = pa.unify_schemas([schema, chunk_schema])
             seg_idx += 1
             seg_file = _segment_path(parquet_path, seg_idx)
             seg_paths.append(seg_file)
@@ -467,10 +466,18 @@ def _write_parquet_scatter(
                 n_chunks_flushed,
                 seg_idx,
             )
-            chunk_arrow = chunk_arrow.cast(schema)
         else:
             _flush_pending()
+        return schema
 
+    def _write_buffer(target_shard: int, buf: list) -> None:
+        """Sort a buffer and write it as a Parquet row group."""
+        nonlocal pending_chunk, pending_target, pending_cnt
+        enveloped = _prepare_batch(target_shard, buf)
+        chunk_arrow = pa.RecordBatch.from_pylist(enveloped)
+        write_schema = _ensure_writer(chunk_arrow.schema)
+        if chunk_arrow.schema != write_schema:
+            chunk_arrow = chunk_arrow.cast(write_schema)
         pending_chunk = chunk_arrow
         pending_target = target_shard
         pending_cnt = len(buf)
@@ -484,13 +491,26 @@ def _write_parquet_scatter(
             _write_buffer(target, buffers[target])
             buffers[target] = []
 
-    # Flush remaining buffers
+    # Flush remaining buffers — concat into a single row group to avoid many tiny writes
     with log_time(f"Flushing remaining buffers for {parquet_path}"):
-        for target, buf in sorted(buffers.items()):
-            if buf:
-                _write_buffer(target, buf)
-
         _flush_pending()
+
+        enveloped_rows: list[dict] = []
+        shard_counts: dict[int, int] = {}
+        for target, buf in sorted(buffers.items()):
+            if not buf:
+                continue
+            enveloped_rows.extend(_prepare_batch(target, buf))
+            shard_counts[target] = shard_counts.get(target, 0) + 1
+
+        if enveloped_rows:
+            combined = pa.RecordBatch.from_pylist(enveloped_rows)
+            write_schema = _ensure_writer(combined.schema)
+            if combined.schema != write_schema:
+                combined = combined.cast(write_schema)
+            writer.write_batch(combined)
+            for target, count in shard_counts.items():
+                seg_shard_counts[seg_idx][target] = seg_shard_counts[seg_idx].get(target, 0) + count
 
     if writer is not None:
         writer.close()
