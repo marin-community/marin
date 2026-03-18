@@ -104,12 +104,22 @@ missing). NCCL fell back to TCP and hung.
 Node has `rdma/ib: 64`. Fix: request `rdma/ib: <gpu_count>` in pod resource
 limits when `host_network=true` and GPUs are present.
 
+### Fix 11: cluster-specific managed_label missing from pod/configmap labels
+
+Pods only had generic `iris.managed=true` label, not the cluster-specific
+`iris-iris-canary-mh-managed=true`. This meant warm_reboot couldn't clean up
+old pods (label selector didn't match), and different clusters in the same
+namespace could interfere.
+
+Fix: add `managed_label` to pod and configmap labels in `_build_pod_manifest`
+and `_apply_pod`.
+
 ### Current status
 
 - CPU canary PASSED
 - H100 nodepool provisioned (2/2 nodes: gd927de, gd94886)
 - Executor_main correctly submitted child job `grug-train-mh` with 2 replicas
-- Disk fix, JAX backoff fix, RDMA/IB fix applied — retrying
+- All fixes applied (disk, JAX backoff, RDMA/IB, managed labels) — retrying
 
 ### Known risks
 

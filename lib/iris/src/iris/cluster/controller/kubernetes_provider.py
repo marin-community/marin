@@ -414,17 +414,20 @@ def _build_pod_manifest(
         container["resources"] = resources
 
     job_id = _job_id_from_task(task_id)
+    labels = {
+        _LABEL_MANAGED: "true",
+        _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+        _LABEL_TASK_ID: _sanitize_label_value(run_req.task_id),
+        _LABEL_ATTEMPT_ID: str(attempt_id),
+        _LABEL_TASK_HASH: _task_hash(run_req.task_id),
+        _LABEL_JOB_ID: job_id,
+    }
+    if managed_label:
+        labels[managed_label] = "true"
     metadata = {
         "name": pod_name,
         "namespace": namespace,
-        "labels": {
-            _LABEL_MANAGED: "true",
-            _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
-            _LABEL_TASK_ID: _sanitize_label_value(run_req.task_id),
-            _LABEL_ATTEMPT_ID: str(attempt_id),
-            _LABEL_TASK_HASH: _task_hash(run_req.task_id),
-            _LABEL_JOB_ID: job_id,
-        },
+        "labels": labels,
     }
 
     spec: dict = {
@@ -944,6 +947,7 @@ class KubernetesProvider:
                         _LABEL_MANAGED: "true",
                         _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
                         _LABEL_TASK_HASH: _task_hash(run_req.task_id),
+                        **(({self.managed_label: "true"}) if self.managed_label else {}),
                     },
                 },
                 "binaryData": {
