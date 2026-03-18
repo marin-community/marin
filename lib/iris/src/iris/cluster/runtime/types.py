@@ -45,7 +45,7 @@ class ContainerErrorKind(StrEnum):
 class ContainerPhase(StrEnum):
     """Lifecycle phase of a container from the runtime's perspective.
 
-    PENDING: container created but not yet executing (K8s pod scheduling, image pull).
+    PENDING: container created but not yet executing (image pull, setup).
     RUNNING: container is executing the main command.
     STOPPED: container has exited (check exit_code/error for details).
     """
@@ -56,8 +56,8 @@ class ContainerPhase(StrEnum):
 
 
 class MountKind(StrEnum):
-    WORKDIR = "workdir"  # task working directory (/app); tmpfs on Docker, emptyDir on K8s
-    TMPFS = "tmpfs"  # volatile fast storage; tmpfs on Docker, emptyDir on K8s
+    WORKDIR = "workdir"  # task working directory (/app); tmpfs on Docker, regular dir for process
+    TMPFS = "tmpfs"  # volatile fast storage; tmpfs on Docker, regular dir for process
     CACHE = "cache"  # persistent cross-task cache (uv, cargo); hostPath bind mount
 
 
@@ -66,7 +66,7 @@ class MountSpec:
     container_path: str
     kind: MountKind = MountKind.CACHE
     read_only: bool = False
-    size_bytes: int = 0  # 0 = no limit; tmpfs size / emptyDir sizeLimit
+    size_bytes: int = 0  # 0 = no limit; tmpfs size limit
 
 
 @dataclass
@@ -224,11 +224,7 @@ class ContainerHandle(Protocol):
         ...
 
     def disk_usage_mb(self) -> int:
-        """Return disk usage in MB for this container's workdir.
-
-        Docker/Process: shutil.disk_usage on the host workdir path.
-        K8s: 0 (workdir lives inside the pod, not on the worker node).
-        """
+        """Return disk usage in MB for this container's workdir."""
         ...
 
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
@@ -270,7 +266,7 @@ class ContainerRuntime(Protocol):
         """Prepare the task workdir before bundle staging.
 
         Docker: mounts a per-task tmpfs for quota enforcement.
-        Process/K8s: no-op.
+        Process: no-op.
         """
         ...
 
@@ -285,8 +281,7 @@ class ContainerRuntime(Protocol):
         """Materialize task bundle/workdir files for this runtime.
 
         Runtimes that execute from worker-local paths (docker/process)
-        stage the bundle into ``workdir`` directly. Kubernetes runtime may no-op
-        and materialize inside the task Pod instead.
+        stage the bundle into ``workdir`` directly.
         """
         ...
 
