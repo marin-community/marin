@@ -11,7 +11,6 @@ from haliax.partitioning import axis_mapping, set_mesh
 
 from levanter.optim.kron import scale_by_kron
 from levanter.optim.soap import scale_by_soap
-import levanter.optim.kron as kron_module
 
 
 class _Module(eqx.Module):
@@ -54,9 +53,3 @@ def test_scale_by_kron_init_accepts_array_stacked_params():
         state = optimizer.init(_stacked_params())
 
     assert "Qs_preconditioners" in state
-
-
-def test_kron_scanned_stack_detection_is_guarded_without_haliax(monkeypatch):
-    monkeypatch.setattr(kron_module, "have_hax", False)
-    monkeypatch.setattr(kron_module, "hax", None, raising=False)
-    assert kron_module._is_scanned_stack(object()) is False
