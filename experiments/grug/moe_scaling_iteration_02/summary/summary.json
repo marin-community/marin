@@ -4,24 +4,24 @@
   "metric": "eval/uncheatable_eval/macro_loss",
   "predictions": {
     "1e18": {
-      "optimal_tokens": 1106833698.552457,
-      "optimal_model_params": 298036876.4796922,
-      "predicted_loss": 3.494547048798573
+      "optimal_tokens": 1122449848.1366374,
+      "optimal_model_params": 292913315.86200154,
+      "predicted_loss": 3.4867468700154802
     },
     "1e19": {
-      "optimal_tokens": 4621244570.81328,
-      "optimal_model_params": 1158673385.0032816,
-      "predicted_loss": 2.88718004876144
+      "optimal_tokens": 4302307979.136358,
+      "optimal_model_params": 1265904406.4398203,
+      "predicted_loss": 2.927473165583603
     },
     "1e20": {
-      "optimal_tokens": 19294589070.789013,
-      "optimal_model_params": 4504556714.499188,
-      "predicted_loss": 2.279813048724307
+      "optimal_tokens": 16490584392.7621,
+      "optimal_model_params": 5470949524.871548,
+      "predicted_loss": 2.3681994611517307
     },
     "1e21": {
-      "optimal_tokens": 80558637766.51276,
-      "optimal_model_params": 17512295921.151386,
-      "predicted_loss": 1.6724460486871742
+      "optimal_tokens": 63207788687.73594,
+      "optimal_model_params": 23644193472.609474,
+      "predicted_loss": 1.8089257567198533
     }
   },
   "best_1e19_run": {

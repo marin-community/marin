@@ -309,8 +309,7 @@ def _histogram_from_expert_counts(expert_counts: jax.Array) -> Histogram:
 class MoEMLP(eqx.Module):
     router: jax.Array
     router_bias: jax.Array
-    w_gate: jax.Array
-    w_up: jax.Array
+    w_gate_up: jax.Array  # merged gate+up: (E, D, 2*I)
     w_down: jax.Array
     cfg: GrugModelConfig = eqx.field(static=True)
 
@@ -329,11 +328,14 @@ class MoEMLP(eqx.Module):
             cfg.intermediate_dim,
         )
 
+        w_gate = _init_weight(k_gate, (e, d, i), cfg.initializer_std)
+        w_up = _init_weight(k_up, (e, d, i), cfg.initializer_std)
+        w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)  # (E, D, 2*I)
+
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
-            w_gate=reshard(_init_weight(k_gate, (e, d, i), cfg.initializer_std), P("expert", "data", "model")),
-            w_up=reshard(_init_weight(k_up, (e, d, i), cfg.initializer_std), P("expert", "data", "model")),
+            w_gate_up=reshard(w_gate_up, P("expert", "data", "model")),
             w_down=reshard(_init_weight(k_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
             cfg=cfg,
         )
@@ -352,7 +354,7 @@ class MoEMLP(eqx.Module):
         _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token)
         # Combine weights use unbiased logits with softmax over selected experts
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights = jax.nn.sigmoid(unbiased_topk).astype(x.dtype)
+        combine_weights = jax.nn.softmax(unbiased_topk, axis=-1).astype(x.dtype)
         router_stats = _routing_stats(
             selected_experts,
             router_probs,
@@ -361,12 +363,11 @@ class MoEMLP(eqx.Module):
             num_experts_per_token=self.cfg.num_experts_per_token,
         )
 
-        w_up_gate = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
         routed_flat = moe_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
-            w_up_gate,
+            self.w_gate_up,
             self.w_down,
             activation=ActivationFunctionEnum.silu,
             mesh=get_abstract_mesh(),

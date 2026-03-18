@@ -74,7 +74,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
-        mesh=MeshConfig(axes={"expert": 1}),
+        mesh=MeshConfig(axes={"expert": 4}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         checkpointer=CheckpointerConfig(
@@ -262,11 +262,113 @@ def create_moe_isoflop_steps() -> list[ExecutorStep]:
 
 moe_isoflop_steps = create_moe_isoflop_steps()
 
-moe_1e19_rerun_steps = [s for s in moe_isoflop_steps if "1e+19" in s.name]
+
+# ============================================================
+# 1e21 run: d=2304, 24 layers, batch=512, ~35.8k steps on v4-256
+# ============================================================
+
+
+def create_1e21_run() -> list[ExecutorStep]:
+    hidden_dim = 2304
+    budget = 1e21
+    num_layers = _compute_num_layers(hidden_dim) + 1  # 24 layers (23 + 1)
+
+    num_heads = hidden_dim // 128
+    model_cfg = GrugModelConfig(
+        vocab_size=VOCAB_SIZE,
+        hidden_dim=hidden_dim,
+        intermediate_dim=hidden_dim // 2,
+        shared_expert_intermediate_dim=hidden_dim,
+        num_experts=64,
+        num_experts_per_token=4,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        num_kv_heads=num_heads,
+        max_seq_len=SEQ_LEN,
+        num_dense_layers=2,
+        dense_intermediate_dim=3 * hidden_dim,
+        bias_update_rate=0.01,
+        load_balancing_loss_coef=0.001,
+        sliding_window=4096,
+        initializer_std=0.5 / math.sqrt(hidden_dim),
+        qk_mult=1.3,
+    )
+
+    fpt = _compute_flops_per_token(model_cfg)
+    tokens = budget / (3 * fpt)
+    target_steps = 2**16
+    batch_exact = tokens / (target_steps * SEQ_LEN)
+    batch_size = max(MIN_BATCH_SIZE, _round_to_power_of_two(batch_exact))
+    train_steps = max(1, round(tokens / (batch_size * SEQ_LEN)))
+
+    effective_bs = batch_size * SEQ_LEN / 4096
+    lr = min(0.01, (0.33 * math.sqrt(effective_bs)) / hidden_dim)
+    beta2 = max(0.95, 0.98 ** (effective_bs / 128))
+
+    run_id = "moe-d2304-1e21"
+
+    config = GrugMoeLaunchConfig(
+        model=versioned(model_cfg),
+        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+        output_path=this_output_path(),
+        run_id=run_id,
+        resources=versioned(ResourceConfig.with_tpu("v4-256")),
+        steps=versioned(train_steps),
+        batch_size=versioned(batch_size),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=WandbConfig(
+            project="dial_moe",
+            tags=["grug", "moe-core", "d2304", "1e21"],
+            group="moe-1e21",
+            name=run_id,
+        ),
+        optimizer=versioned(
+            AdamConfig(
+                learning_rate=lr,
+                beta1=0.96,
+                beta2=beta2,
+                epsilon=1e-15,
+                weight_decay=0.1,
+                lr_schedule="linear",
+                decay=0.2,
+                min_lr_ratio=0.0,
+                warmup=0.1,
+                max_grad_norm=1,
+            )
+        ),
+        grug_trainer=versioned(
+            GrugTrainerConfig(
+                z_loss_weight=1e-4,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            GrugEvalConfig(
+                eval_batch_size=512,
+                steps_per_eval=1000,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+            )
+        ),
+    )
+
+    return [
+        ExecutorStep(
+            name="grug/moe-d2304-1e21",
+            fn=run_grug_moe_trial,
+            config=config,
+        )
+    ]
+
+
+e21_run_steps = create_1e21_run()
 
 
 if __name__ == "__main__":
     executor_main(
-        steps=moe_1e19_rerun_steps,
-        description="MoE isoflop sweep v3 - 1e19 reruns",
+        steps=e21_run_steps,
+        description="MoE d=2304, 1e21 FLOPs",
     )
