@@ -600,6 +600,50 @@ def test_cancel_job_releases_committed_worker_resources(job_request, worker_meta
     assert len(_worker_running_tasks(state, w2)) == 0
 
 
+def test_cancel_job_removes_endpoints_for_job_tree(job_request, worker_metadata):
+    state = _make_state()
+
+    parent_worker = register_worker(state, "w1", "host1:8080", worker_metadata())
+    child_worker = register_worker(state, "w2", "host2:8080", worker_metadata())
+
+    parent_tasks = submit_job(state, "parent", job_request("parent"))
+    child_req = job_request("child")
+    child_req.name = JobName.from_string("/test-user/parent/child").to_wire()
+    child_tasks = submit_job(state, "/test-user/parent/child", child_req)
+
+    dispatch_task(state, parent_tasks[0], parent_worker)
+    dispatch_task(state, child_tasks[0], child_worker)
+
+    state.add_endpoint(
+        Endpoint(
+            endpoint_id="parent-ep",
+            name="parent/actor",
+            address="host1:9000",
+            job_id=JobName.root("test-user", "parent"),
+            metadata={},
+            registered_at=Timestamp.now(),
+        ),
+        task_id=parent_tasks[0].task_id,
+    )
+    state.add_endpoint(
+        Endpoint(
+            endpoint_id="child-ep",
+            name="parent/child/actor",
+            address="host2:9000",
+            job_id=JobName.from_string("/test-user/parent/child"),
+            metadata={},
+            registered_at=Timestamp.now(),
+        ),
+        task_id=child_tasks[0].task_id,
+    )
+
+    assert len(_endpoints(state, EndpointQuery())) == 2
+
+    state.cancel_job(JobName.root("test-user", "parent"), reason="User cancelled")
+
+    assert _endpoints(state, EndpointQuery()) == []
+
+
 def test_cancelled_job_tasks_excluded_from_demand(job_request, worker_metadata):
     """Regression test for issue #2777: Killed tasks with no attempts should not appear in demand entries."""
     state = _make_state()

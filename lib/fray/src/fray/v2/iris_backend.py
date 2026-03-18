@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -53,6 +54,33 @@ from fray.v2.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _ActorContextProxy:
+    """Wrap actor methods so current_actor() is available during method calls."""
+
+    def __init__(self, instance: Any, actor_ctx: ActorContext, on_terminate: Callable[[], None]):
+        self._instance = instance
+        self._actor_ctx = actor_ctx
+        self._on_terminate = on_terminate
+
+    def __dir__(self) -> list[str]:
+        return dir(self._instance)
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._instance, name)
+        if name.startswith("_") or not callable(attr):
+            return attr
+
+        def _wrapped(*args: Any, **kwargs: Any) -> Any:
+            token = _set_current_actor(self._actor_ctx)
+            try:
+                return attr(*args, **kwargs)
+            finally:
+                _reset_current_actor(token)
+                self._on_terminate()
+
+        return _wrapped
 
 
 def _convert_device(device: DeviceConfig) -> cluster_pb2.DeviceConfig | None:
@@ -202,12 +230,40 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
 
     # Create handle BEFORE instance so actor can access it during __init__
     handle = IrisActorHandle(actor_name)
-    actor_ctx = ActorContext(handle=handle, index=job_info.task_index, group_name=name_prefix)
+    assert ctx.client is not None
+    terminate_requested = threading.Event()
+
+    def _terminate_job_if_requested() -> None:
+        if not terminate_requested.is_set():
+            return
+        terminate_requested.clear()
+
+        def _terminate_job() -> None:
+            time.sleep(2.0)
+            try:
+                ctx.client.terminate(ctx.job_id)
+            except Exception:
+                logger.warning("Failed to terminate actor job %s", ctx.job_id, exc_info=True)
+
+        thread = threading.Thread(
+            target=_terminate_job,
+            daemon=True,
+            name=f"terminate-{name_prefix}-{job_info.task_index}",
+        )
+        thread.start()
+
+    actor_ctx = ActorContext(
+        handle=handle,
+        index=job_info.task_index,
+        group_name=name_prefix,
+        _terminate=terminate_requested.set,
+    )
     token = _set_current_actor(actor_ctx)
     try:
         instance = actor_class(*args, **kwargs)
     finally:
         _reset_current_actor(token)
+    instance = _ActorContextProxy(instance, actor_ctx, on_terminate=_terminate_job_if_requested)
 
     server = ActorServer(host="0.0.0.0", port=ctx.get_port("actor"))
     server.register(actor_name, instance)

@@ -28,6 +28,29 @@ logger = logging.getLogger(__name__)
 _local_actor_registry: dict[str, Any] = {}
 
 
+def _remove_local_actor(instance: Any) -> None:
+    endpoint = getattr(instance, "_fray_actor_endpoint", None)
+    if endpoint is not None and _local_actor_registry.get(endpoint) is instance:
+        _local_actor_registry.pop(endpoint, None)
+
+
+def _shutdown_local_actor(instance: Any) -> None:
+    terminated = getattr(instance, "_fray_actor_terminated", None)
+    if terminated is not None and terminated.is_set():
+        _remove_local_actor(instance)
+        return
+
+    if terminated is not None:
+        terminated.set()
+
+    try:
+        shutdown = getattr(instance, "shutdown", None)
+        if shutdown is not None:
+            shutdown()
+    finally:
+        _remove_local_actor(instance)
+
+
 class LocalJobHandle:
     """Job handle backed by a concurrent.futures.Future."""
 
@@ -160,14 +183,21 @@ class LocalClient:
             # Create endpoint-based handle BEFORE instance so actor can access it
             endpoint = f"local/{name}-{i}"
             handle = LocalActorHandle(endpoint)
+            terminate_requested = threading.Event()
 
             # Set actor context with handle so actor can pass it to other actors
-            ctx = ActorContext(handle=handle, index=i, group_name=name)
+            ctx = ActorContext(handle=handle, index=i, group_name=name, _terminate=terminate_requested.set)
             token = _set_current_actor(ctx)
             try:
                 instance = actor_class(*args, **kwargs)
             finally:
                 _reset_current_actor(token)
+
+            instance._fray_actor_ctx = ctx
+            instance._fray_actor_endpoint = endpoint
+            instance._fray_terminate_requested = terminate_requested
+            instance._fray_actor_terminated = threading.Event()
+            handle._bind_instance(instance)
 
             # Register instance so handle can resolve it
             _local_actor_registry[endpoint] = instance
@@ -198,6 +228,10 @@ class LocalActorHandle:
 
     def __init__(self, endpoint: str):
         self._endpoint = endpoint
+        self._instance: Any | None = None
+
+    def _bind_instance(self, instance: Any) -> None:
+        self._instance = instance
 
     def _resolve(self) -> Any:
         """Look up the actor instance from the global registry."""
@@ -217,9 +251,11 @@ class LocalActorHandle:
 
     def shutdown(self) -> None:
         """Shutdown the actor instance."""
-        instance = _local_actor_registry.get(self._endpoint)
+        instance = self._instance
+        if instance is None:
+            instance = _local_actor_registry.get(self._endpoint)
         if instance is not None:
-            instance.shutdown()
+            _shutdown_local_actor(instance)
 
     def __getstate__(self) -> dict:
         """Serialize to just the endpoint name."""
@@ -228,6 +264,7 @@ class LocalActorHandle:
     def __setstate__(self, state: dict) -> None:
         """Deserialize from endpoint name."""
         self._endpoint = state["endpoint"]
+        self._instance = None
 
 
 class LocalActorMethod:
@@ -235,6 +272,23 @@ class LocalActorMethod:
 
     def __init__(self, method: Any):
         self._method = method
+
+    def _invoke(self, *args: Any, **kwargs: Any) -> Any:
+        instance = getattr(self._method, "__self__", None)
+        actor_ctx = getattr(instance, "_fray_actor_ctx", None)
+        token = _set_current_actor(actor_ctx) if actor_ctx is not None else None
+
+        try:
+            return self._method(*args, **kwargs)
+        finally:
+            if actor_ctx is not None:
+                _reset_current_actor(token)
+
+            if instance is not None:
+                terminate_requested = getattr(instance, "_fray_terminate_requested", None)
+                if terminate_requested is not None and terminate_requested.is_set():
+                    terminate_requested.clear()
+                    _shutdown_local_actor(instance)
 
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
         """Spawn a dedicated thread for this call, returning a future.
@@ -247,7 +301,7 @@ class LocalActorMethod:
 
         def run():
             try:
-                result = self._method(*args, **kwargs)
+                result = self._invoke(*args, **kwargs)
                 future.set_result(result)
             except Exception as e:
                 logger.warning("Actor method %r failed: %s", method_name, e, exc_info=True)
@@ -259,7 +313,7 @@ class LocalActorMethod:
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Call method synchronously."""
-        return self._method(*args, **kwargs)
+        return self._invoke(*args, **kwargs)
 
 
 class LocalActorGroup:
@@ -302,4 +356,3 @@ class LocalActorGroup:
                 handle.shutdown()
             except Exception as e:
                 logger.warning("Error shutting down actor %s: %s", handle._endpoint, e)
-            _local_actor_registry.pop(handle._endpoint, None)
