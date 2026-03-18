@@ -71,7 +71,7 @@ If any required field is missing, ask for it before proceeding.
 
 ## State File
 
-Write to `monitoring_state.json` in scratchpad/workspace.
+Write to `scratch/<create_timestamp>_monitoring_state.json`, create the `scratch` directory if needed. `<create_timestamp>` should have format `YYYYMMDD-HHMM`.
 
 ### Ray State File
 
