@@ -134,7 +134,7 @@ def _run_gcloud_restart_permission_command(cmd: list[str]) -> subprocess.Complet
     return result
 
 
-def _active_gcloud_account_for_restart_permissions() -> str | None:
+def _active_gcloud_account_for_restart() -> str | None:
     result = _run_gcloud_restart_permission_command(
         ["gcloud", "auth", "list", "--filter=status:ACTIVE", "--format=value(account)"]
     )
@@ -142,7 +142,7 @@ def _active_gcloud_account_for_restart_permissions() -> str | None:
     return account or None
 
 
-def _missing_project_permissions_for_restart(project_id: str, permissions: tuple[str, ...]) -> list[str]:
+def _missing_project_permissions(project_id: str, permissions: tuple[str, ...]) -> list[str]:
     result = _run_gcloud_restart_permission_command(
         [
             "gcloud",
@@ -172,7 +172,7 @@ def ensure_gcp_restart_permissions(config: config_pb2.IrisClusterConfig, scope: 
     if not project_id:
         raise RuntimeError("platform.gcp.project_id is required for GCP restarts.")
 
-    account = _active_gcloud_account_for_restart_permissions()
+    account = _active_gcloud_account_for_restart()
     if not account:
         raise RuntimeError("No active gcloud account found. Run `gcloud auth login` and retry.")
 
@@ -183,7 +183,7 @@ def ensure_gcp_restart_permissions(config: config_pb2.IrisClusterConfig, scope: 
         raise RuntimeError(f"Unknown restart permission scope '{scope}'. Supported scopes: {supported_scopes}") from e
 
     required_permissions = _GCP_REQUIRED_PERMISSIONS_BY_SCOPE[restart_scope]
-    missing_permissions = _missing_project_permissions_for_restart(project_id, required_permissions)
+    missing_permissions = _missing_project_permissions(project_id, required_permissions)
     if missing_permissions:
         raise RuntimeError(
             f"Active gcloud account '{account}' is missing required IAM permissions for restart "

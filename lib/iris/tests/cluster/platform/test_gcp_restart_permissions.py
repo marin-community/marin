@@ -28,7 +28,7 @@ def test_missing_project_permissions_returns_ungranted_subset(monkeypatch):
     )
     required = ("compute.instances.list", "compute.instances.delete")
 
-    missing = gcp._missing_project_permissions_for_restart("test-project", required)
+    missing = gcp._missing_project_permissions("test-project", required)
 
     assert missing == ["compute.instances.delete"]
 
