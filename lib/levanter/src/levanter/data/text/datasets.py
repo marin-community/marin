@@ -395,17 +395,21 @@ class LazyAsyncDataset(AsyncDataset[T_co]):
         factory: Callable[[], AsyncDataset[T_co]],
         *,
         finite_length: int | None = None,
+        assume_finite: bool = False,
     ):
+        if finite_length is not None and not assume_finite:
+            assume_finite = True
         self._factory = factory
         self._dataset: AsyncDataset[T_co] | None = None
         self._finite_length = finite_length
+        self._assume_finite = assume_finite
         self._init_lock = asyncio.Lock()
 
     async def _dataset_async(self) -> AsyncDataset[T_co]:
         if self._dataset is None:
             async with self._init_lock:
                 if self._dataset is None:
-                    self._dataset = self._factory()
+                    self._dataset = await asyncio.to_thread(self._factory)
         return self._dataset
 
     async def async_len(self) -> int:
@@ -415,7 +419,7 @@ class LazyAsyncDataset(AsyncDataset[T_co]):
         return await dataset.async_len()
 
     def is_finite(self) -> bool:
-        if self._finite_length is not None:
+        if self._finite_length is not None or self._assume_finite:
             return True
         if self._dataset is not None:
             return self._dataset.is_finite()
@@ -582,6 +586,13 @@ def dataset_for_component(
 def _stable_dataset_key(name: str, split: str) -> PRNGKeyArray:
     seed = zlib.crc32(f"{name}:{split}".encode("utf-8")) & 0xFFFFFFFF
     return jax.random.PRNGKey(seed)
+
+
+def _stable_child_order(name: str, split: str, child_names: Sequence[str]) -> list[str]:
+    return sorted(
+        child_names,
+        key=lambda child_name: zlib.crc32(f"{name}:{split}:{child_name}".encode("utf-8")) & 0xFFFFFFFF,
+    )
 
 
 def _sequence_count_from_token_count(component: DatasetComponent, token_count: int, seq_len: int) -> int | None:
@@ -831,10 +842,12 @@ class LmDataConfig:
             )
 
         if isinstance(component, HierarchicalMixtureDatasetComponent):
+            ordered_child_names = _stable_child_order(name, split, list(component.components))
 
             def build_child_datasets() -> dict[str, AsyncDataset[GrugLmExample]]:
                 child_datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
-                for child_name, child_component in component.components.items():
+                for child_name in ordered_child_names:
+                    child_component = component.components[child_name]
                     dataset = self._build_token_dataset_for_component(
                         f"{name}/{child_name}",
                         child_component,
@@ -847,6 +860,44 @@ class LmDataConfig:
                     child_datasets[child_name] = dataset
                 return child_datasets
 
+            def build_lazy_train_child_datasets() -> dict[str, AsyncDataset[GrugLmExample]]:
+                child_datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
+                for child_name in ordered_child_names:
+                    child_component = component.components[child_name]
+                    if component.train_weights.get(child_name, 0.0) <= 0:
+                        continue
+
+                    child_finite_length = None
+                    if component.token_counts is not None:
+                        child_finite_length = _sequence_count_from_token_count(
+                            child_component,
+                            component.token_counts[child_name],
+                            Pos.size,
+                        )
+
+                    def build_child_dataset(
+                        child_name: str = child_name,
+                        child_component: DatasetComponentBase = child_component,
+                    ) -> AsyncDataset[GrugLmExample]:
+                        dataset = self._build_token_dataset_for_component(
+                            f"{name}/{child_name}",
+                            child_component,
+                            Pos,
+                            split=split,
+                            caches=None,
+                        )
+                        if dataset is None:
+                            raise ValueError(f"No dataset available for hierarchical child {name}/{child_name}")
+                        return dataset
+
+                    child_datasets[child_name] = LazyAsyncDataset(
+                        build_child_dataset,
+                        finite_length=child_finite_length,
+                        assume_finite=True,
+                    )
+
+                return child_datasets
+
             def build_hierarchical_mixture(
                 child_datasets: Mapping[str, AsyncDataset[GrugLmExample]],
             ) -> AsyncDataset[GrugLmExample]:
@@ -857,7 +908,8 @@ class LmDataConfig:
 
                 child_weights = {
                     child_name: weight
-                    for child_name, weight in component.train_weights.items()
+                    for child_name in ordered_child_names
+                    for weight in [component.train_weights.get(child_name, 0.0)]
                     if child_name in child_datasets and weight > 0
                 }
                 # Hierarchical domains use metadata-derived finite lengths, so the
@@ -869,10 +921,11 @@ class LmDataConfig:
                     stop_strategy=StopStrategy.RESTART_STRATEGY,
                     key=_stable_dataset_key(name, split),
                     block_size=self.mixture_block_size,
+                    randomize_blocks=False,
                 )
 
             def build_nested_dataset() -> AsyncDataset[GrugLmExample]:
-                return build_hierarchical_mixture(build_child_datasets())
+                return build_hierarchical_mixture(build_lazy_train_child_datasets())
 
             finite_length = _finite_length_for_hierarchical_component(
                 component,

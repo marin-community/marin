@@ -13,7 +13,7 @@ from haliax import Axis
 from haliax.partitioning import ResourceAxis
 
 from levanter.data.dataset import AsyncDataset, ListAsyncDataset
-from levanter.data.loader import DataLoader, check_sharded_consistency
+from levanter.data.loader import DataLoader, DataLoaderIterator, check_sharded_consistency
 from levanter.schedule import ScheduleStep
 
 from .test_utils import skip_if_not_enough_devices, use_test_mesh
@@ -61,6 +61,34 @@ def test_loader_rejects_empty_finite_dataset():
         dataset = ListAsyncDataset([])
         with pytest.raises(ValueError, match="finite but has length 0"):
             DataLoader(dataset, 1, max_buffered_batches=0, mesh=mesh, axis_resources=None)
+
+
+def test_loader_prefetches_single_batch_initially(monkeypatch):
+    recorded_batch_group_sizes: list[int] = []
+    original_retrieve = DataLoaderIterator._do_retrieve_batch_of_batches
+
+    async def tracked_retrieve(self, batch_specs):
+        recorded_batch_group_sizes.append(len(batch_specs))
+        return await original_retrieve(self, batch_specs)
+
+    monkeypatch.setattr("levanter.data.loader.DataLoaderIterator._do_retrieve_batch_of_batches", tracked_retrieve)
+
+    with use_test_mesh(tensor_parallelism=1) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
+        dataset = _small_dataset(seq_len=8, num_sequences=32)
+        loader = DataLoader(
+            dataset,
+            2,
+            max_buffered_batches=0,
+            mesh=mesh,
+            axis_resources=None,
+            prefetch_size=4,
+        )
+
+        iterator = iter(loader)
+        next(iterator)
+        next(iterator)
+
+    assert recorded_batch_group_sizes[:2] == [1, 4]
 
 
 class StructuredDataset(AsyncDataset):

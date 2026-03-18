@@ -302,7 +302,71 @@ def test_hierarchical_component_defers_child_cache_loads_until_first_batch(tmp_p
     assert cache_calls == []
     first = train_sets["group"].as_sync_dataset()[0]
     assert isinstance(first, GrugLmExample)
-    assert len(cache_calls) == 2
+    assert len(cache_calls) == 1
+
+
+def test_hierarchical_component_first_few_examples_stay_on_one_child_cache(tmp_path, monkeypatch):
+    child_paths = []
+    for index, tokens in enumerate(([1, 2, 3, 4], [5, 6, 7, 8])):
+        data_path = tmp_path / f"clustered_{index}.jsonl"
+        with data_path.open("w") as f:
+            f.write(json.dumps({"input_ids": tokens}) + "\n")
+        child_paths.append(data_path)
+
+    hierarchical = HierarchicalMixtureDatasetComponent(
+        components={
+            "left": DatasetComponent(
+                source=UrlDatasetSourceConfig(train_urls=[str(child_paths[0])], validation_urls=[]),
+                format=PrebuiltLmDatasetFormat(),
+                cache_dir=str(tmp_path / "clustered_cache_left"),
+            ),
+            "right": DatasetComponent(
+                source=UrlDatasetSourceConfig(train_urls=[str(child_paths[1])], validation_urls=[]),
+                format=PrebuiltLmDatasetFormat(),
+                cache_dir=str(tmp_path / "clustered_cache_right"),
+            ),
+        },
+        train_weights={"left": 0.5, "right": 0.5},
+    )
+
+    for child_component in hierarchical.components.values():
+        source = child_component.source
+        assert source is not None
+        shard_source = source.get_shard_source("train")
+        assert shard_source is not None
+        build_lm_dataset_cache(
+            os.path.join(child_component.cache_dir, "train"),
+            shard_source,
+            child_component.format,
+            text_datasets.PassthroughTokenizer(16),
+        )
+
+    cache_calls: list[str] = []
+    original_build_or_load = text_datasets.build_lm_dataset_cache
+
+    def tracked_build_or_load(*args, **kwargs):
+        cache_calls.append(args[0])
+        return original_build_or_load(*args, **kwargs)
+
+    monkeypatch.setattr("levanter.data.text.datasets.build_lm_dataset_cache", tracked_build_or_load)
+
+    config = LmDataConfig(
+        components={"group": hierarchical},
+        train_weights={"group": 1.0},
+        tokenizer="passthrough",
+        vocab_size=16,
+        shuffle=False,
+    )
+    Pos = hax.Axis("position", 4)
+
+    train_sets = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))
+    sync_dataset = train_sets["group"].as_sync_dataset()
+
+    for index in range(8):
+        example = sync_dataset[index]
+        assert isinstance(example, GrugLmExample)
+
+    assert len(cache_calls) == 1
 
 
 def test_hierarchical_component_uses_token_counts_for_simulated_epoching_without_loading_children(monkeypatch):

@@ -181,3 +181,94 @@ Patched `lib/levanter/src/levanter/data/text/datasets.py` so non-train hierarchi
 - compute the finite non-train length from the actually available child datasets.
 
 Added two regressions in `lib/levanter/tests/test_text.py` covering empty and partial hierarchical validation availability.
+
+## Hypothesis 8
+
+The new hierarchical runtime path fixed the W&B/control-plane startup issue, but it did not actually reduce time-to-first-batch. The first training batch may still force the loader to open nearly every child cache across the grouped domains, so the cost merely moved from "trainer startup before W&B" into "data loader waiting for the first batch."
+
+## Changes to make
+
+- Inspect the live `us-east5-a` fix4 canary logs for:
+  - first-batch timing,
+  - train-step timing after the first batch,
+  - data-loader stall messages.
+- Compare that against the hierarchical loader structure in `lib/levanter/src/levanter/data/text/datasets.py`.
+
+## Future Work
+
+- [ ] Consider a true lazy hierarchical mixture dataset that opens child caches only when the sampled block actually touches them, instead of constructing a child `MixtureDataset` over all children on first access.
+- [ ] Consider parallelizing cache-ledger loads for hierarchical children if we keep the current `MixtureDataset` shape.
+- [ ] Consider a lightweight per-domain manifest/ledger cache so first-batch latency is metadata-only rather than hundreds of GCS ledger opens.
+
+## Results
+
+Confirmed. The current `fix4` canary did not regress steady-state TPU throughput; it regressed time-to-first-batch.
+
+From the live east5a logs:
+
+- `baseline_proportional` first batch loaded in `2155.9s` (~35.9 minutes).
+- `baseline_unimax` first batch loaded in `2265.5s` (~37.8 minutes).
+- After that, training is normal:
+  - first train step took `33.8s` including initial compile/eval,
+  - later progress is around `1.4-1.7 it/s`, with remaining time on the order of `40-50` minutes.
+
+The logs also show repeated:
+
+- `Data loader stalled ... queue_size=0`
+- `Data loading is taking a long time: 10-20 seconds. Waiting for 4096 items.`
+- many `Loading cache from gs://.../train` lines for child Dolma3/Dolmino caches before the first batch completes.
+
+So the hierarchical loader is the reason these runs *look* excruciatingly slow at the start. It avoided duplicating data, but the first top-level batch still forces initialization of many nested child datasets and GCS cache-ledger opens. In other words, the startup cost was shifted, not removed.
+
+## Hypothesis 9
+
+The remaining first-batch stall comes from fully permuting child partitions within each hierarchical domain block. Even with lazy child datasets and smaller initial prefetch, the first real batch still touches too many child caches because grouped domains spray examples across many children inside the first block.
+
+## Changes to make
+
+- Keep the lazy hierarchical runtime path.
+- Change hierarchical child mixtures to preserve child proportions but disable within-block permutation, so the first few examples for a grouped domain stay on one child cache instead of many.
+- Keep a stable randomized child order per grouped domain to avoid always privileging the same child shard.
+- Add a regression that the first few hierarchical examples only trigger one child cache load.
+
+## Future Work
+
+- [ ] If this still is not enough, switch back to duplicated merged caches for the swarm topology.
+- [ ] If we keep the non-duplicating path, consider a dedicated hierarchical mixture primitive that randomizes chunk order per block while keeping chunk locality.
+
+## Results
+
+Local validation passed:
+
+- `uv run pytest lib/levanter/tests/test_text.py -k 'hierarchical_component_defers_child_cache_loads_until_first_batch or hierarchical_component_first_few_examples_stay_on_one_child_cache or hierarchical_component_uses_token_counts_for_simulated_epoching_without_loading_children or hierarchical_component_uses_metadata_length_when_tiny_child_weight_rounds_to_zero or hierarchical_component_skips_empty_validation_split or hierarchical_component_validation_uses_available_children_only'`
+- `uv run pytest lib/levanter/tests/test_new_loader.py -k 'loader_prefetches_single_batch_initially'`
+
+I then stopped the slow `fix5` east5a canary and launched `ray-run-calvinxu-nextgen-east5a-hier-baselines-fix6-20260317-202402` to measure whether clustered child access brings startup back into an acceptable range.
+
+## Hypothesis 10
+
+The hierarchical child-loader still initializes caches too serially because `LazyAsyncDataset` runs its blocking factory inline on the async path. Even when multiple child datasets are requested, they effectively initialize one-by-one inside the event loop.
+
+## Changes to make
+
+- Run `LazyAsyncDataset` factory initialization in `asyncio.to_thread(...)` so child cache opens can overlap.
+- Re-canary on east5a with the lazy child loader, clustered child access, and threaded child initialization all enabled together.
+
+## Future Work
+
+- [ ] If startup still trends above ~20 minutes, stop trying to preserve zero duplication and go back to duplicated merged caches for the swarm topology.
+- [ ] If we keep the hierarchical path, remove the per-run dependency walk over hundreds of already-built tokenized partition steps, since that is still a few extra minutes of control-plane overhead.
+
+## Results
+
+Local focused tests stayed green after the threaded-init change.
+
+The east5a `fix7` canary (`ray-run-calvinxu-nextgen-east5a-hier-baselines-fix7-20260317-203155`) showed:
+
+- submission at about `20:32:08`
+- training steps entered `marin.training.training` by about `20:33:32`
+- `Overriding data seed` by about `20:34:48/20:34:49`
+- first eval task load by about `20:35:56`
+- cache loading had already progressed through Dolma 3 CC, Stack-Edu, and Dolmino components by about `20:45`
+
+That is still not cheap, but it is no longer the old `35-38 minute` time-to-first-batch regime. The current canary points to an estimated startup of roughly `18-22 minutes`, which keeps the total run comfortably under the user's `~1.5 hour` target without duplicating caches.
