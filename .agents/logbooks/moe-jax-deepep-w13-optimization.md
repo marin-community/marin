@@ -402,3 +402,133 @@ uv run python .agents/scripts/deepep_jax_krt_bench.py --help | rg 'node-selector
   - this does not invalidate the shared-node run as exploratory performance evidence, but it does mean the clean fresh-lane confirmation must be rerun with an explicit node selector once `g11ed54` is ready
 - Next action:
   - commit and push the placement patch, then rerun `deepep_transport_w13_only_probe` with `--node-selector iris-i3821jax-scale-group=h100-8x` as soon as the fresh H100 node is schedulable.
+
+### 2026-03-18 22:48 UTC - Exploratory shared-node `w13_only` result is slower than the sealed baseline and exits with noisy DeepEP/CUDA teardown
+- Experiment ID: `W13-OPT-008`
+- Hypothesis:
+  - even though the first restarted launch landed on the wrong H100 node, its result can still provide a directional sanity check on whether `--w13-out-first` is obviously promising before the clean pinned rerun.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref dbf62c30646a9407af07a1757ba4d76a0649ab93 \
+  --task-id w13opt-outfirst-w13only-t262144-20260318-2241 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-out-first
+```
+
+- Config:
+  - pod: `iris-task-436f138f98b4`
+  - node: `gd92f4a`
+  - node label: `iris-iris-canary-mh-scale-group=h100-16x`
+  - code ref used by the pod: `dbf62c30646a9407af07a1757ba4d76a0649ab93` (pre-node-selector commit)
+  - sealed baseline for comparison: `26,051,875.76 tok/s` (`10.062 ms`)
+- Result:
+  - `deepep_transport_w13_only_probe`: `24,832,377.50 tok/s` (`10.557 ms`)
+  - delta vs sealed baseline:
+    - throughput: `-4.68%`
+    - time: `+4.92%`
+  - the task still reached `BENCH_END` and the wrapper returned `EXIT_CODE=0`
+  - immediately after the `RESULT` line, the logs emitted noisy shutdown failures:
+    - `DeepEP timeout check failed: rank = 0, thread = 0..7`
+    - many `CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure` teardown lines from XLA/CUDA cleanup
+- Interpretation:
+  - this shared-node run does not support the `w13-out-first` hypothesis; directionally it is worse than the sealed `w13_only` baseline
+  - because the pod ran on the wrong node and ended with noisy DeepEP/CUDA teardown, this is not a clean acceptance/rejection datapoint for the fresh-lane experiment thread
+  - the main value is negative triage: there is no sign here of an obvious large `w13_only` win worth broadening before the pinned rerun
+- Next action:
+  - wait for `g11ed54` to join `i3821jax-h100-8x`, then rerun the same `w13_only` command from commit `1e24699c6` with `--node-selector iris-i3821jax-scale-group=h100-8x`.
+
+### 2026-03-18 23:04 UTC - Clean fresh-node pinned `w13_only` rerun rules down the first `w13-out-first` layout candidate
+- Experiment ID: `W13-OPT-009`
+- Hypothesis:
+  - the exploratory shared-node slowdown was not just a placement artifact; a clean rerun pinned to the fresh `i3821jax-h100-8x` lane should confirm whether `--w13-out-first` helps the isolated `w13` stage on the authoritative exact-cap cell.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 1e24699c6 \
+  --task-id w13opt-outfirst-w13only-pinned-t262144-20260318-225850 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-out-first \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - pod: `iris-task-a0b32440d47c`
+  - node: `g11ed54`
+  - node label: `iris-i3821jax-scale-group=h100-8x`
+  - code ref used by the pod: `1e24699c6`
+  - exact-cap metadata printed by the run: `max_recv_tokens=61952`, `max_local_assignments=65920`
+  - sealed baseline for comparison: `26,051,875.76 tok/s` (`10.062 ms`)
+- Result:
+  - `deepep_transport_w13_only_probe`: `24,266,057.38 tok/s` (`10.803 ms`)
+  - delta vs sealed baseline:
+    - throughput: `-6.85%`
+    - time: `+7.36%`
+  - the task reached `BENCH_END` and the wrapper returned `EXIT_CODE=0`
+  - the same noisy shutdown failures appeared after the result line:
+    - `DeepEP timeout check failed: rank = 0, thread = 0..7`
+    - many `CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure` teardown lines from XLA/CUDA cleanup
+- Interpretation:
+  - the first `w13` layout/storage-order micro-branch is cleanly ruled down on the authoritative rung-1 check
+  - because the pinned fresh-node rerun is slower by a material margin, do not advance this candidate to `local_compute_only`, `capped_prewarmed`, or `current`
+  - the repeated teardown noise looks operationally annoying but not numerically decisive here, because both negative runs reached `RESULT`, `BENCH_END`, and `EXIT_CODE=0`
+- Next action:
+  - pivot away from layout-first and try a narrower `w13` lowering / kernel-path candidate, still validated on `deepep_transport_w13_only_probe` first.
+
+### 2026-03-18 23:19 UTC - Implement an opt-in expert-padded `w13` FC1 kernel-path candidate for the next rung-1 test
+- Experiment ID: `W13-OPT-010`
+- Hypothesis:
+  - the first local expert FC1 is paying for the current XLA ragged lowering on the compact `[assignments, hidden]` pack, and using a static exact-cap per-expert buffer with an explicit batched expert GEMM may beat the current `ragged_dot` lowering even if the storage-order tweak did not.
+- Code changes:
+  - extend the exact-cap metadata helper to compute and print `max_local_expert_assignments`
+  - add `_ragged_dot_expert_padded_batched(...)` to the bench harness:
+    - scatter the compact expert-major rows into a static `[local_experts, local_expert_capacity, hidden]` buffer
+    - run a batched expert GEMM with `jax.lax.dot_general`
+    - gather the outputs back to the original compact row order
+  - wire the helper behind a new opt-in `--w13-expert-padded` flag for:
+    - `deepep_transport_w13_only_probe`
+    - `deepep_transport_local_compute_only_probe` (the `w13` stage only)
+  - plumb the new flag through `.agents/scripts/deepep_jax_krt_bench.py`
+- Local validation:
+  - `uv run python -m py_compile lib/levanter/scripts/bench/bench_moe_hillclimb.py .agents/scripts/deepep_jax_krt_bench.py`
+  - toy numerical equivalence check against `haliax.nn.ragged_dot.ragged_dot`:
+    - compact weight layout `[E, H, O]`: `max_abs=0.0`
+    - out-first weight layout `[E, O, H]`: `max_abs=0.0`
+  - `.agents/scripts/deepep_jax_krt_bench.py --help` now exposes `--w13-expert-padded`
+- Interpretation:
+  - this is the first real post-layout pivot inside the `w13` branch: not another transpose tweak, but an alternate FC1 lowering that keeps the rest of the probe structure intact
+  - the candidate is still narrow enough to test cleanly on `w13_only` before deciding whether it deserves the broader validation ladder
+- Next action:
+  - commit and push the expert-padded FC1 candidate, then rerun `deepep_transport_w13_only_probe` on the fresh `iris-i3821jax-scale-group=h100-8x` node with `--w13-expert-padded`.
