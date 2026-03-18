@@ -15,7 +15,6 @@ import inspect
 import logging
 import os
 import zlib
-from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
@@ -578,110 +577,6 @@ def make_windows(
         yield window
 
 
-@dataclass
-class StageResultChunk:
-    source_shard: int
-    target_shard: int
-    chunk: Iterable[Any]
-
-
-def _stream_chunks(items: Iterator, shard_idx: int, chunk_size: int) -> Iterator[StageResultChunk]:
-    """Stream chunks from an iterator, breaking at chunk_size boundaries."""
-    chunk: list = []
-    for item in items:
-        chunk.append(item)
-        if chunk_size > 0 and len(chunk) >= chunk_size:
-            yield StageResultChunk(source_shard=shard_idx, target_shard=shard_idx, chunk=iter(chunk))
-            chunk = []
-
-    # Yield final partial chunk
-    if chunk:
-        yield StageResultChunk(source_shard=shard_idx, target_shard=shard_idx, chunk=iter(chunk))
-
-
-def _apply_combiner(buffer: list, key_fn: Callable, combiner_fn: Callable) -> list:
-    """Apply combiner to a buffer, grouping by key and reducing locally."""
-    by_key: dict[object, list] = defaultdict(list)
-    for item in buffer:
-        by_key[key_fn(item)].append(item)
-    combined: list = []
-    for key, items in by_key.items():
-        combined.extend(combiner_fn(key, iter(items)))
-    return combined
-
-
-def _scatter_items(
-    items: Iterable,
-    key_fn: Callable,
-    num_output_shards: int,
-    chunk_size: int,
-    sort_fn: Callable | None,
-    source_shard: int,
-    combiner_fn: Callable | None = None,
-) -> Iterator[StageResultChunk]:
-    """Scatter items by key hash into sorted chunks per target shard.
-
-    Pure data routing — no I/O. Each yielded chunk contains a sorted list
-    of items destined for a single target shard. Chunks are yielded lazily
-    as per-shard buffers fill up to ``chunk_size``.
-
-    Each chunk is pre-sorted by ``(key_fn, sort_fn)`` so the k-way merge in
-    the Reduce phase can operate correctly.
-
-    When a combiner is provided, it is applied to each buffer before yielding,
-    reducing items locally per key (like a MapReduce combiner).
-
-    Args:
-        items: Input items to scatter
-        key_fn: Function to extract grouping key from item
-        num_output_shards: Number of output shards to distribute across
-        chunk_size: Maximum items per chunk (per target shard)
-        sort_fn: Optional secondary sort key within each group
-        source_shard: Index of the source shard
-        combiner_fn: Optional (key, Iterator[T]) -> Iterator[T] applied locally per key
-
-    Yields:
-        One StageResultChunk per chunk, with ``chunk`` being a sorted list of items.
-    """
-    if sort_fn is not None:
-        captured_sort_fn = sort_fn
-
-        def _sort_key(item):
-            return (key_fn(item), captured_sort_fn(item))
-
-    else:
-        _sort_key = key_fn
-
-    buffers: dict[int, list] = defaultdict(list)
-
-    for item in items:
-        key = key_fn(item)
-        target = deterministic_hash(key) % num_output_shards
-        buffers[target].append(item)
-        if chunk_size > 0 and len(buffers[target]) >= chunk_size:
-            buf = buffers[target]
-            if combiner_fn is not None:
-                buf = _apply_combiner(buf, key_fn, combiner_fn)
-            buf.sort(key=_sort_key)
-            yield StageResultChunk(
-                source_shard=source_shard,
-                target_shard=target,
-                chunk=buf,
-            )
-            buffers[target] = []
-
-    for target, buffer in sorted(buffers.items()):
-        if buffer:
-            if combiner_fn is not None:
-                buffer = _apply_combiner(buffer, key_fn, combiner_fn)
-            buffer.sort(key=_sort_key)
-            yield StageResultChunk(
-                source_shard=source_shard,
-                target_shard=target,
-                chunk=buffer,
-            )
-
-
 def _merge_sorted_chunks(shard, key_fn: Callable, sort_fn: Callable | None = None) -> Iterator[tuple[object, Iterator]]:
     """Merge sorted chunks using k-way merge, yielding (key, items_iterator) groups.
 
@@ -805,21 +700,21 @@ def run_stage(
     ctx: StageContext,
     ops: list[PhysicalOp],
 ) -> Iterator:
-    """Execute a stage's physical ops in a single pass.
+    """Execute a stage's physical ops in a single pass, yielding plain items.
 
     This is the single worker function that backends call to execute physical ops.
     It only knows about physical op types (Map, Write, etc.) - not logical ops.
 
-    For non-scatter stages, yields plain items. For scatter stages, yields
-    StageResultChunk objects (sorted chunks tagged with target shard).
-    Chunking/batching for IO is handled by the caller.
+    All chunking, batching, and scatter routing is handled by the IO layer
+    (the caller). For scatter stages, this yields the pre-scatter item stream;
+    the caller extracts the Scatter op and passes its params to the writer.
 
     Args:
         ctx: Stage execution context providing shard data and metadata
         ops: List of physical operations to execute in sequence
 
     Yields:
-        Plain items for non-scatter stages, StageResultChunk for scatter stages.
+        Pipeline items. The caller handles IO batching and scatter routing.
     """
 
     configure_logging(level=logging.INFO)
@@ -874,16 +769,10 @@ def run_stage(
             return
 
         elif isinstance(op, Scatter):
-            num_output_shards = op.num_output_shards if op.num_output_shards > 0 else ctx.total_shards
-            yield from _scatter_items(
-                stream,
-                op.key_fn,
-                num_output_shards,
-                ctx.chunk_size,
-                sort_fn=op.sort_fn,
-                source_shard=ctx.shard_idx,
-                combiner_fn=op.combiner_fn,
-            )
+            # Scatter routing is handled by the IO writer, not run_stage.
+            # Yield the pre-scatter item stream; the caller extracts the
+            # Scatter op and passes its params to the writer.
+            yield from stream
             return
 
         elif isinstance(op, Reduce):

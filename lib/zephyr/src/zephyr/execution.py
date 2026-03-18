@@ -13,7 +13,6 @@ bugs where orphaned coordinators and workers consume resources indefinitely.
 
 from __future__ import annotations
 
-import dataclasses
 import enum
 import itertools
 import logging
@@ -51,9 +50,9 @@ from zephyr.plan import (
     Scatter,
     SourceItem,
     StageContext,
-    StageResultChunk,
     StageType,
     compute_plan,
+    deterministic_hash,
     run_stage,
 )
 from zephyr.writers import ensure_parent_dir
@@ -264,13 +263,33 @@ class _ChunkMetadata(NamedTuple):
     cnt: int
 
 
+def _apply_combiner(buffer: list, key_fn: Callable, combiner_fn: Callable) -> list:
+    """Apply combiner to a buffer, grouping by key and reducing locally."""
+    by_key: dict[object, list] = defaultdict(list)
+    for item in buffer:
+        by_key[key_fn(item)].append(item)
+    combined: list = []
+    for key, items in by_key.items():
+        combined.extend(combiner_fn(key, iter(items)))
+    return combined
+
+
 def _write_parquet_scatter(
-    stage_gen: Iterator[StageResultChunk],
+    items: Iterator,
     source_shard: int,
     parquet_path: str,
+    key_fn: Callable,
+    num_output_shards: int,
+    chunk_size: int,
+    sort_fn: Callable | None = None,
+    combiner_fn: Callable | None = None,
     pickled: bool = False,
 ) -> list[ResultChunk]:
-    """Stream scatter chunks into Parquet files as row groups.
+    """Route items to target shards, buffer, sort, and write as Parquet row groups.
+
+    Handles the full scatter pipeline: hash-routing each item to a target shard,
+    buffering per-shard, applying an optional combiner, sorting each buffer, and
+    writing sorted chunks as Parquet row groups with envelope wrapping.
 
     Writes batches to a Parquet file until a schema mismatch is detected
     (e.g. a field evolves from null to a concrete type). On mismatch the
@@ -280,8 +299,18 @@ def _write_parquet_scatter(
     When ``pickled=True``, items are serialized via pickle into a binary
     ``pickled`` column instead of being stored natively in the ``item`` column.
     """
+    if sort_fn is not None:
+        captured_sort_fn = sort_fn
+
+        def _sort_key(item):
+            return (key_fn(item), captured_sort_fn(item))
+
+    else:
+        _sort_key = key_fn
+
     chunk_results: list[_ChunkMetadata] = []
     per_shard_chunk_cnt: dict[int, int] = defaultdict(int)
+    buffers: dict[int, list] = defaultdict(list)
     n_chunks_flushed = 0
     seg_idx = 0
     schema: pa.Schema | None = None
@@ -307,23 +336,26 @@ def _write_parquet_scatter(
                 pending_chunk_metadata.cnt,
             )
 
-    for result in stage_gen:
-        chunk_items = list(result.chunk)
-        target_shard = result.target_shard
+    def _write_buffer(target_shard: int, buf: list) -> None:
+        """Sort a buffer and write it as a Parquet row group."""
+        nonlocal schema, writer, seg_file, seg_idx, pending_chunk, pending_chunk_metadata
+
+        if combiner_fn is not None:
+            buf = _apply_combiner(buf, key_fn, combiner_fn)
+        buf.sort(key=_sort_key)
+
         shard_chunk_idx = per_shard_chunk_cnt[target_shard]
         per_shard_chunk_cnt[target_shard] += 1
         envelope_fn = _make_pickle_envelope if pickled else _make_envelope
-        envelope = envelope_fn(chunk_items, target_shard, shard_chunk_idx)
+        envelope = envelope_fn(buf, target_shard, shard_chunk_idx)
         chunk_arrow = pa.RecordBatch.from_pylist(envelope)
 
         if schema is None:
-            # First batch — initialize writer
             schema = chunk_arrow.schema
             seg_file = _segment_path(parquet_path, seg_idx)
             ensure_parent_dir(seg_file)
             writer = pq.ParquetWriter(seg_file, schema)
         elif chunk_arrow.schema != schema:
-            # Schema evolved — flush pending, start new segment
             _flush_pending()
             writer.close()
 
@@ -344,8 +376,22 @@ def _write_parquet_scatter(
 
         pending_chunk = chunk_arrow
         pending_chunk_metadata = _ChunkMetadata(
-            path=seg_file, target_shard=target_shard, chunk_idx=shard_chunk_idx, cnt=len(chunk_items)
+            path=seg_file, target_shard=target_shard, chunk_idx=shard_chunk_idx, cnt=len(buf)
         )
+
+    # Route items to target shards, flush buffers at chunk_size
+    for item in items:
+        key = key_fn(item)
+        target = deterministic_hash(key) % num_output_shards
+        buffers[target].append(item)
+        if chunk_size > 0 and len(buffers[target]) >= chunk_size:
+            _write_buffer(target, buffers[target])
+            buffers[target] = []
+
+    # Flush remaining buffers
+    for target, buf in sorted(buffers.items()):
+        if buf:
+            _write_buffer(target, buf)
 
     _flush_pending()
     if writer is not None:
@@ -409,42 +455,43 @@ def _write_stage_output(
     source_shard: int,
     stage_dir: str,
     shard_idx: int,
-    is_scatter: bool,
+    scatter_op: Scatter | None,
     chunk_size: int,
+    total_shards: int,
 ) -> list[ResultChunk]:
     """Write stage output to disk.
 
-    For scatter stages, ``stage_gen`` yields ``StageResultChunk`` objects
-    (sorted chunks tagged with target shard). Attempts Parquet with envelope
-    wrapping; falls back to pickle envelope if Arrow conversion fails.
+    For scatter stages (``scatter_op`` is set), ``stage_gen`` yields plain
+    pre-scatter items. This function handles routing, buffering, sorting,
+    and writing as Parquet row groups. Falls back to pickle envelope if
+    Arrow conversion fails on the first batch.
 
     For non-scatter stages, ``stage_gen`` yields plain items. Items are
     batched into pickle chunk files according to ``chunk_size``.
 
     Args:
-        stage_gen: Output from run_stage — StageResultChunk for scatter, plain items otherwise
+        stage_gen: Plain item stream from run_stage
         source_shard: Source shard index
         stage_dir: Directory for this stage's output
         shard_idx: Shard index (used to derive file paths)
-        is_scatter: Whether this stage contains a scatter operation
-        chunk_size: Maximum items per pickle chunk (non-scatter only)
+        scatter_op: The Scatter operation if this is a scatter stage, None otherwise
+        chunk_size: Maximum items per chunk
+        total_shards: Total number of input shards (used as default num_output_shards)
 
     Returns:
         List of ResultChunks with ParquetDiskChunk or PickleDiskChunk data
     """
-    if is_scatter:
-        first_result = next(stage_gen, None)
-        if first_result is None:
+    if scatter_op is not None:
+        # Peek first item to test Arrow serializability
+        first_item = next(stage_gen, None)
+        if first_item is None:
             return []
 
-        first_items = list(first_result.chunk)
-        first_with_materialized_chunk = dataclasses.replace(first_result, chunk=first_items)
-        full_gen = itertools.chain([first_with_materialized_chunk], stage_gen)
+        full_gen = itertools.chain([first_item], stage_gen)
 
-        # Test Arrow serializability on the first chunk to decide native vs pickle envelope
         use_pickle_envelope = False
         try:
-            test_envelope = _make_envelope(first_items, 0, 0)
+            test_envelope = _make_envelope([first_item], 0, 0)
             pa.RecordBatch.from_pylist(test_envelope)
             logger.info("Using Parquet for scatter serialization for shard %d", source_shard)
         except Exception:
@@ -454,8 +501,19 @@ def _write_stage_output(
                 source_shard,
             )
 
+        num_output_shards = scatter_op.num_output_shards if scatter_op.num_output_shards > 0 else total_shards
         parquet_path = f"{stage_dir}/shard-{shard_idx:04d}.parquet"
-        return _write_parquet_scatter(full_gen, source_shard, parquet_path, pickled=use_pickle_envelope)
+        return _write_parquet_scatter(
+            full_gen,
+            source_shard,
+            parquet_path,
+            key_fn=scatter_op.key_fn,
+            num_output_shards=num_output_shards,
+            chunk_size=chunk_size,
+            sort_fn=scatter_op.sort_fn,
+            combiner_fn=scatter_op.combiner_fn,
+            pickled=use_pickle_envelope,
+        )
 
     def chunk_path_fn(idx: int) -> str:
         return f"{stage_dir}/shard-{shard_idx:04d}/chunk-{idx:04d}.pkl"
@@ -1266,15 +1324,16 @@ class ZephyrWorker:
         )
 
         stage_dir = f"{self._chunk_prefix}/{self._execution_id}/{task.stage_name}"
-        is_scatter = any(isinstance(op, Scatter) for op in task.operations)
+        scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
 
         results = _write_stage_output(
             run_stage(stage_ctx, task.operations),
             source_shard=task.shard_idx,
             stage_dir=stage_dir,
             shard_idx=task.shard_idx,
-            is_scatter=is_scatter,
+            scatter_op=scatter_op,
             chunk_size=task.chunk_size,
+            total_shards=task.total_shards,
         )
         logger.info("[shard %d] Complete: %d chunks produced", task.shard_idx, len(results))
         return TaskResult(chunks=results)
