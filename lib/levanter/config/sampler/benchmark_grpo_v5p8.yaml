@@ -1,7 +1,7 @@
 # Benchmark config: GRPO-equivalent workload on v5p-8 (single host)
 # 64 prompts × 16 generations = 1024 completions, temp=1.0, max_tokens=1024
 # Matches vLLM benchmark_grpo_stress.py parameters
-hf_checkpoint: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f
+hf_checkpoint: gs://marin-us-east5/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f
 stop_sequence: null
 max_new_tokens: 1024
 temperature: 1.0

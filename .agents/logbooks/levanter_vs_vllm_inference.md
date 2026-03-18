@@ -137,26 +137,19 @@ vLLM's `/v1/chat/completions` applies the Llama 3.1 Instruct chat template, wrap
 
 - **Hypothesis**: Establish Levanter throughput for 1 GRPO mini-batch (64 prompts × 16 gen = 1024 completions, max_tokens=1024, temp=1.0) on v5p-8. Direct comparison to vLLM v5p-8 baseline (4,749 tok/s at c=64, 7,940 tok/s at c=256).
 - **Config**: `lib/levanter/config/sampler/benchmark_grpo_v5p8.yaml`
-  - Model: `meta-llama/Llama-3.1-8B-Instruct` from GCS
-  - TPU: v5p-8, us-central1, 1 host, 4 chips, TP=4
+  - Model: `meta-llama/Llama-3.1-8B-Instruct` from GCS (us-east5 bucket)
+  - TPU: v5p-8, us-east5-a, 1 host, 4 chips, TP=4
   - Engine: max_seq_len=1536, max_pages=4608, page_size=128, max_seqs=128, ragged paged attn ON (q32/kv16)
   - Prompts: 64 Hendrycks MATH problems (deterministic, first 64 from seed=42 JSONL)
-  - n_generations=16, n_rounds=1
+  - n_generations=16, n_rounds=1, apply_chat_template=true
 - **Command**:
   ```bash
-  # From marin repo root on the multihost-inference branch
-  uv run lib/marin/src/marin/run/ray_run.py --no_wait \
-    --env_vars WANDB_API_KEY=${WANDB_API_KEY} \
-    -- python lib/levanter/src/levanter/main/sample_lm_multihost.py \
-    --config_path lib/levanter/config/sampler/benchmark_grpo_v5p8.yaml
-  ```
-  Or direct TPU launch:
-  ```bash
-  python infra/launch.py --foreground --zone us-central1-a \
-    --tpu_name tunix-grpo --tpu_type v5p-8 --capacity_type on-demand \
+  python infra/launch.py --foreground --zone us-east5-a \
+    --tpu_name lvb-bench-v5p8 --tpu_type v5p-8 --capacity_type best-effort \
     -- uv run lib/levanter/src/levanter/main/sample_lm_multihost.py \
     --config_path lib/levanter/config/sampler/benchmark_grpo_v5p8.yaml
   ```
 - **Expected**: Given M8 results (~275 tok/s for 10×2048 on v5p-16 global mesh), and the GRPO workload being larger (1024 completions × 1024 tokens), Levanter will likely be significantly slower than vLLM (expected ~500-2000 tok/s vs vLLM's 4,749-7,940 tok/s). The gap comes from vLLM having continuous batching and optimized scheduling.
-- **Status**: PLANNED
+- **Status**: LAUNCHING
 - **Result**: (pending)
+- **TPU**: `lvb-bench-v5p8`, v5p-8, us-east5-a, best-effort
