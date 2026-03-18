@@ -104,3 +104,48 @@ uv run python lib/levanter/scripts/bench/bench_moe_hillclimb.py --help | rg 'w13
   - the candidate is now ready for cluster validation using the required ladder order on the authoritative cell
 - Next action:
   - commit and push the benchmark candidate, then run `deepep_transport_w13_only_probe` first with `--w13-out-first` before spending any pods on broader follow-up kernels.
+
+### 2026-03-18 17:40 UTC - First `w13_only` launch blocked by H100x8 scheduling
+- Experiment ID: `W13-OPT-003`
+- Hypothesis:
+  - the opt-in `--w13-out-first` candidate should be validated on `deepep_transport_w13_only_probe` before any broader rung.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3677.yaml \
+  --repo-ref 85df6509d996b1b49a06ee8e525d44960d414531 \
+  --task-id w13opt-outfirst-w13only-t262144-20260318-174013 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-out-first
+```
+
+- Config:
+  - candidate commit: `85df6509d996b1b49a06ee8e525d44960d414531`
+  - namespace: `iris-3677-jax`
+  - initial pod: `iris-task-ffe1a7c9aca0`
+- Result:
+  - the launch reached pod creation, but no benchmark execution started
+  - the pod stayed `Pending` for about 10 minutes with repeated scheduler events:
+    - `Insufficient nvidia.com/gpu`
+    - one transient event mentioning an untolerated taint on a newly appearing node
+  - after waiting for autoscaler progress and confirming there was still no runnable 8-GPU slot, I deleted the pending pod and interrupted the local wrapper so the queued job would not start later unattended
+- Interpretation:
+  - this is an operational capacity blocker on the CoreWeave H100x8 lane, not a numerical result and not evidence for or against the out-first `w13` candidate
+  - the validation order remains unchanged; the next real run should still be `deepep_transport_w13_only_probe`
+- Next action:
+  - rerun the same pinned `w13_only` command once an H100x8 lane is schedulable, then continue to `local_compute_only` only if `w13_only` moves materially.
