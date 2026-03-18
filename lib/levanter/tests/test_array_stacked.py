@@ -4,6 +4,7 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import pytest
 
 import haliax as hax
 from haliax.nn import ArrayStacked
@@ -114,3 +115,55 @@ def test_scan_aware_tree_map_updates_array_stacked_leaves():
     assert isinstance(mapped, ArrayStacked)
     assert jnp.allclose(mapped.get_layer(0).weight, stacked.get_layer(0).weight + 1)
     assert jnp.allclose(mapped.get_layer(1).bias, stacked.get_layer(1).bias + 1)
+
+
+def test_array_stacked_rejects_named_array_module_leaves():
+    class Module(eqx.Module):
+        weight: hax.NamedArray
+
+        @staticmethod
+        def init(weight):
+            return Module(weight=weight)
+
+    Layers = hax.Axis("Layers", 2)
+    Hidden = hax.Axis("Hidden", 3)
+    weight = hax.random.normal(jax.random.PRNGKey(0), (Layers, Hidden))
+
+    with pytest.raises(TypeError, match="does not support NamedArray leaves"):
+        ArrayStacked.init(Layers.size, Module)(weight=weight)
+
+
+def test_array_stacked_vmap_via_out_axes_none_matches_vmap_semantics():
+    class Module(eqx.Module):
+        weight: jax.Array
+
+        @staticmethod
+        def init(weight):
+            return Module(weight=weight)
+
+    num_layers = 3
+    width = 4
+    weights = jax.random.normal(jax.random.PRNGKey(0), (num_layers, width))
+    stacked = ArrayStacked.init(num_layers, Module)(weight=weights)
+    x = jax.random.normal(jax.random.PRNGKey(1), (width,))
+
+    with pytest.raises(ValueError):
+        stacked.vmap_via(lambda layer, arg: layer.weight + arg, in_axes=(None,), out_axes=None)(x)
+
+
+def test_array_stacked_vmap_via_maps_layers_with_out_axes_0():
+    class Module(eqx.Module):
+        weight: jax.Array
+
+        @staticmethod
+        def init(weight):
+            return Module(weight=weight)
+
+    num_layers = 3
+    width = 4
+    weights = jax.random.normal(jax.random.PRNGKey(0), (num_layers, width))
+    stacked = ArrayStacked.init(num_layers, Module)(weight=weights)
+    x = jax.random.normal(jax.random.PRNGKey(1), (width,))
+
+    out = stacked.vmap_via(lambda layer, arg: layer.weight + arg, in_axes=(None,), out_axes=0)(x)
+    assert jnp.allclose(out, weights + x)

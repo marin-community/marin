@@ -11,6 +11,7 @@ import jax.numpy as jnp
 
 from .._src.scan import ScanCheckpointPolicy, ScanCheckpointSpec
 from .._src.state_dict import ModuleWithStateDictSerialization
+from ..util import is_named_array
 from .scan import ModuleInit
 
 M = TypeVar("M", bound=eqx.Module)
@@ -49,11 +50,16 @@ def _stack_layers(layers: Sequence[Any], num_layers: int, axis: int = 0) -> Any:
     if num_layers == 0:
         raise ValueError("num_layers must be >= 1.")
 
-    leaves0, structure = jax.tree_util.tree_flatten(layers[0])
-    all_leaves = [jax.tree_util.tree_leaves(layer) for layer in layers]
+    leaves0, structure = jax.tree_util.tree_flatten(layers[0], is_leaf=is_named_array)
+    all_leaves = [jax.tree_util.tree_leaves(layer, is_leaf=is_named_array) for layer in layers]
     stacked_leaves = []
     for leaf_index, first_leaf in enumerate(leaves0):
         layer_leaves = [layer[leaf_index] for layer in all_leaves]
+        if is_named_array(first_leaf):
+            raise TypeError(
+                "ArrayStacked does not support NamedArray leaves. "
+                "Use haliax.nn.Stacked for modules with named-array parameters."
+            )
         if isinstance(first_leaf, jax.Array):
             stacked_leaves.append(jnp.stack(layer_leaves, axis=axis))
         else:
@@ -219,23 +225,17 @@ class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
     ) -> Callable[..., OutputT_co]:
         def do_vmap(*args, **kwargs) -> OutputT_co:
             args_axes, kwargs_axes = _resolve_in_axes(in_axes, args, kwargs)
-            outputs = []
-            for i in range(self.num_layers):
-                layer_args = tuple(
-                    _slice_with_axis(arg, axis, i, self.num_layers, context="vmap_via")
-                    for arg, axis in zip(args, args_axes, strict=True)
-                )
-                layer_kwargs = {
-                    key: _slice_with_axis(kwargs[key], axis, i, self.num_layers, context=f"vmap_via[{key}]")
-                    for key, axis in kwargs_axes.items()
-                }
-                outputs.append(fn(self.get_layer(i), *layer_args, **layer_kwargs))
-
-            if out_axes is None:
-                return outputs[0]
-            if not isinstance(out_axes, int):
+            if out_axes is not None and not isinstance(out_axes, int):
                 raise TypeError(f"out_axes must be int or None, got {type(out_axes)}.")
-            return _stack_layers(outputs, self.num_layers, axis=out_axes)
+
+            def mapped(layer, mapped_args, mapped_kwargs):
+                return fn(layer, *mapped_args, **mapped_kwargs)
+
+            return jax.vmap(
+                mapped,
+                in_axes=(_layer_in_axes(self.stacked, self.num_layers), args_axes, kwargs_axes),
+                out_axes=out_axes,
+            )(self.stacked, args, kwargs)
 
         return do_vmap
 
@@ -285,6 +285,14 @@ def _slice_with_axis(x: Any, axis: AxisSpec, layer_index: int, num_layers: int, 
             f"{context}: in_axes={axis} expects size {num_layers} on axis {resolved_axis}, got shape {x.shape}."
         )
     return jnp.take(x, layer_index, axis=resolved_axis)
+
+
+def _layer_in_axes(tree: Any, num_layers: int) -> Any:
+    return jax.tree.map(
+        lambda leaf: 0 if _is_layer_batched_leaf(leaf, num_layers) else None,
+        tree,
+        is_leaf=is_named_array,
+    )
 
 
 def _resolve_in_axes(

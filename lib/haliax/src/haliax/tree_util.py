@@ -5,8 +5,6 @@
 import dataclasses
 import functools
 
-# Removed unused import
-
 import equinox as eqx
 import jax
 import jax.tree_util as jtu

@@ -34,6 +34,8 @@ UpdateProbSchedule = Union[float, Callable[[int], float]]
 
 
 def _is_scanned_stack(x: object) -> bool:
+    if not have_hax:
+        return False
     return isinstance(x, (hax.nn.Stacked, hax.nn.ArrayStacked))
 
 
