@@ -13,6 +13,7 @@ bugs where orphaned coordinators and workers consume resources indefinitely.
 
 from __future__ import annotations
 
+import json
 import enum
 import itertools
 import logging
@@ -75,7 +76,6 @@ class Shard(Protocol):
 
     def __iter__(self) -> Iterator: ...
     def get_iterators(self) -> Iterator[Iterator]: ...
-    def combine(self, other: Shard) -> Shard: ...
 
 
 @dataclass(frozen=True)
@@ -142,11 +142,6 @@ class ListShard:
     def get_iterators(self) -> Iterator[Iterator]:
         for ref in self.refs:
             yield iter(ref)
-
-    def combine(self, other: Shard) -> ListShard:
-        if not isinstance(other, ListShard):
-            raise TypeError(f"Cannot combine ListShard with {type(other).__name__}")
-        return ListShard(refs=self.refs + other.refs)
 
 
 # ---------------------------------------------------------------------------
@@ -218,11 +213,6 @@ class ScatterShard:
     def get_iterators(self) -> Iterator[Iterator]:
         for it in self.iterators:
             yield from it.get_chunk_iterators()
-
-    def combine(self, other: Shard) -> ScatterShard:
-        if not isinstance(other, ScatterShard):
-            raise TypeError(f"Cannot combine ScatterShard with {type(other).__name__}")
-        return ScatterShard(iterators=self.iterators + other.iterators)
 
 
 # ---------------------------------------------------------------------------
@@ -323,8 +313,6 @@ def _write_scatter_meta(
     parquet_path: str, chunk_counts: dict[int, int], chunk_offsets: dict[int, int], is_pickled: bool
 ) -> None:
     """Write a ``.scatter_meta`` sidecar alongside a scatter Parquet file."""
-    import json
-
     meta_path = _scatter_meta_path(parquet_path)
     payload = json.dumps(
         {
@@ -343,8 +331,6 @@ _scatter_meta_cache: dict[str, dict] = {}
 
 def _read_scatter_meta(parquet_path: str) -> dict:
     """Read a ``.scatter_meta`` sidecar, cached per-worker."""
-    import json
-
     meta_path = _scatter_meta_path(parquet_path)
     if meta_path not in _scatter_meta_cache:
         with open_url(meta_path, "r") as f:
