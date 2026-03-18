@@ -368,62 +368,79 @@ def _write_parquet_scatter(
 
 
 def _write_pickle_chunks(
-    stage_gen: Iterator[StageResultChunk],
+    items: Iterator,
     source_shard: int,
     chunk_path_fn: Callable[[int], str],
+    chunk_size: int,
 ) -> list[ResultChunk]:
-    """Write stage output chunks as pickle files."""
+    """Batch a plain item stream into pickle chunk files.
+
+    Items are accumulated up to ``chunk_size`` before being flushed to disk.
+    Each batch becomes one PickleDiskChunk.
+    """
     results: list[ResultChunk] = []
-    for pidx, result in enumerate(stage_gen):
-        items = list(result.chunk)
-        chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), items)
-        results.append(ResultChunk(source_shard=source_shard, target_shard=result.target_shard, data=chunk_ref))
-        if (pidx + 1) % 10 == 0:
-            logger.info(
-                "[shard %d] Wrote %d chunks so far (latest: %d items)",
-                source_shard,
-                pidx + 1,
-                chunk_ref.count,
-            )
+    batch: list = []
+    pidx = 0
+
+    for item in items:
+        batch.append(item)
+        if chunk_size > 0 and len(batch) >= chunk_size:
+            chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), batch)
+            results.append(ResultChunk(source_shard=source_shard, target_shard=source_shard, data=chunk_ref))
+            pidx += 1
+            batch = []
+            if pidx % 10 == 0:
+                logger.info(
+                    "[shard %d] Wrote %d pickle chunks so far (latest: %d items)",
+                    source_shard,
+                    pidx,
+                    chunk_ref.count,
+                )
+
+    if batch:
+        chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), batch)
+        results.append(ResultChunk(source_shard=source_shard, target_shard=source_shard, data=chunk_ref))
+
     return results
 
 
-def _write_stage_chunks(
-    stage_gen: Iterator[StageResultChunk],
+def _write_stage_output(
+    stage_gen: Iterator,
     source_shard: int,
     stage_dir: str,
     shard_idx: int,
     is_scatter: bool,
+    chunk_size: int,
 ) -> list[ResultChunk]:
-    """Write stage output chunks to disk.
+    """Write stage output to disk.
 
-    For scatter stages, attempts to stream all chunks into Parquet files
-    with envelope wrapping. Falls back to pickle if Arrow conversion fails
-    on the first chunk.
+    For scatter stages, ``stage_gen`` yields ``StageResultChunk`` objects
+    (sorted chunks tagged with target shard). Attempts Parquet with envelope
+    wrapping; falls back to pickle envelope if Arrow conversion fails.
 
-    For non-scatter stages, writes each chunk as a PickleDiskChunk.
+    For non-scatter stages, ``stage_gen`` yields plain items. Items are
+    batched into pickle chunk files according to ``chunk_size``.
 
     Args:
-        stage_gen: Generator of StageResultChunks from run_stage
+        stage_gen: Output from run_stage — StageResultChunk for scatter, plain items otherwise
         source_shard: Source shard index
-        stage_dir: Directory for this stage's output (``{prefix}/{execution_id}/{stage_name}``)
+        stage_dir: Directory for this stage's output
         shard_idx: Shard index (used to derive file paths)
         is_scatter: Whether this stage contains a scatter operation
+        chunk_size: Maximum items per pickle chunk (non-scatter only)
 
     Returns:
         List of ResultChunks with ParquetDiskChunk or PickleDiskChunk data
     """
-    first_result = next(stage_gen, None)
-    if first_result is None:
-        return []
-
-    first_items = list(first_result.chunk)
-
-    # Prepend the already-consumed first result back into the stream
-    first_with_materialized_chunk = dataclasses.replace(first_result, chunk=first_items)
-    full_gen = itertools.chain([first_with_materialized_chunk], stage_gen)
-
     if is_scatter:
+        first_result = next(stage_gen, None)
+        if first_result is None:
+            return []
+
+        first_items = list(first_result.chunk)
+        first_with_materialized_chunk = dataclasses.replace(first_result, chunk=first_items)
+        full_gen = itertools.chain([first_with_materialized_chunk], stage_gen)
+
         # Test Arrow serializability on the first chunk to decide native vs pickle envelope
         use_pickle_envelope = False
         try:
@@ -443,7 +460,7 @@ def _write_stage_chunks(
     def chunk_path_fn(idx: int) -> str:
         return f"{stage_dir}/shard-{shard_idx:04d}/chunk-{idx:04d}.pkl"
 
-    return _write_pickle_chunks(full_gen, source_shard, chunk_path_fn)
+    return _write_pickle_chunks(stage_gen, source_shard, chunk_path_fn, chunk_size)
 
 
 class WorkerState(enum.Enum):
@@ -1251,12 +1268,13 @@ class ZephyrWorker:
         stage_dir = f"{self._chunk_prefix}/{self._execution_id}/{task.stage_name}"
         is_scatter = any(isinstance(op, Scatter) for op in task.operations)
 
-        results = _write_stage_chunks(
+        results = _write_stage_output(
             run_stage(stage_ctx, task.operations),
             source_shard=task.shard_idx,
             stage_dir=stage_dir,
             shard_idx=task.shard_idx,
             is_scatter=is_scatter,
+            chunk_size=task.chunk_size,
         )
         logger.info("[shard %d] Complete: %d chunks produced", task.shard_idx, len(results))
         return TaskResult(chunks=results)

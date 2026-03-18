@@ -804,18 +804,22 @@ class StageContext:
 def run_stage(
     ctx: StageContext,
     ops: list[PhysicalOp],
-) -> Iterator[StageResultChunk]:
+) -> Iterator:
     """Execute a stage's physical ops in a single pass.
 
     This is the single worker function that backends call to execute physical ops.
     It only knows about physical op types (Map, Write, etc.) - not logical ops.
+
+    For non-scatter stages, yields plain items. For scatter stages, yields
+    StageResultChunk objects (sorted chunks tagged with target shard).
+    Chunking/batching for IO is handled by the caller.
 
     Args:
         ctx: Stage execution context providing shard data and metadata
         ops: List of physical operations to execute in sequence
 
     Yields:
-        ChunkHeader followed by list of items for each chunk produced
+        Plain items for non-scatter stages, StageResultChunk for scatter stages.
     """
 
     configure_logging(level=logging.INFO)
@@ -846,7 +850,7 @@ def run_stage(
 
                 if fs.exists(test_path):
                     logger.info(f"Skipping write, output exists: {output_path}")
-                    yield from _stream_chunks(iter([output_path]), ctx.shard_idx, ctx.chunk_size)
+                    yield output_path
                     return
 
             # Write based on type
@@ -866,7 +870,7 @@ def run_stage(
             else:
                 raise ValueError(f"Unknown writer_type: {op.writer_type}")
 
-            yield from _stream_chunks(iter([result]), ctx.shard_idx, ctx.chunk_size)
+            yield result
             return
 
         elif isinstance(op, Scatter):
@@ -902,5 +906,5 @@ def run_stage(
             stream = op.fn(stream, iter(right_shard))
             op_index += 1
 
-    # Yield remaining items as chunks
-    yield from _stream_chunks(stream, ctx.shard_idx, ctx.chunk_size)
+    # Yield remaining items directly — caller handles batching for IO
+    yield from stream
