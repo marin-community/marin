@@ -333,12 +333,13 @@ def build_eval_data_config(
     weights["val_understanding_wo_visual"] = 0.0
 
     # wo_language: mask text → compute VISUAL loss (unconditional on text context)
+    # After swap: fractional=visual, 1.0=text. _only_fractional keeps visual.
     components["val_generation_wo_language"] = DatasetComponent(
         cache_dir=gen_val_cache,
         format=PrebuiltLmDatasetFormat(
             input_ids_key="input_ids",
             loss_weights_key="loss_weights",
-            loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, _zero_fractional_transform),
+            loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, _only_fractional_transform),
             input_ids_transform=_replace_text_with_eos,
         ),
         pack=True,
@@ -500,7 +501,16 @@ def main():
         action="store_true",
         help="Disable wandb logging (dry run)",
     )
+    parser.add_argument(
+        "--val_only",
+        action="store_true",
+        help="Only compute val_understanding/val_generation and their breakdowns (skip all eval benchmarks)",
+    )
     args = parser.parse_args()
+
+    if args.val_only:
+        args.no_eval_benchmarks = True
+        args.no_text_eval_benchmarks = True
 
     model_config = MODEL_CONFIGS[args.model_size]
 

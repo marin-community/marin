@@ -539,7 +539,7 @@ def unified_data_config(
     fmt_gen_wo_language = PrebuiltLmDatasetFormat(
         input_ids_key="input_ids",
         loss_weights_key="loss_weights",
-        loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, _zero_fractional_transform),
+        loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, _only_fractional_transform),
         input_ids_transform=_replace_text_with_eos,
     )
 
