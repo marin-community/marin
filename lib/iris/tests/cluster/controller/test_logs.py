@@ -174,18 +174,6 @@ def test_has_logs_no_known_attempts(tmp_path: Path):
     store2.close()
 
 
-def test_clear_removes_logs(log_store: LogStore):
-    entries = [_make_entry(f"line-{i}") for i in range(5)]
-    log_store.append(KEY, entries)
-    assert log_store.has_logs(KEY)
-
-    log_store.clear(KEY)
-    assert not log_store.has_logs(KEY)
-    result = log_store.get_logs(KEY)
-    assert result.entries == []
-    assert result.cursor == 0
-
-
 # =============================================================================
 # Prefix-based query tests
 # =============================================================================

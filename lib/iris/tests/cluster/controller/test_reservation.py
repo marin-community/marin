@@ -75,7 +75,7 @@ def _make_state(**kwargs) -> ControllerTransitions:
     tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
     db_path = tmp / "controller.sqlite3"
     db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
+    log_store = LogStore(log_dir=tmp / "logs")
     return ControllerTransitions(db=db, log_store=log_store, **kwargs)
 
 
