@@ -37,11 +37,32 @@ def test_inprocess_eligibility_rejects_unsupported_extra_args(monkeypatch) -> No
     eligibility = vllm_inprocess.evaluate_inprocess_eligibility(
         model=_model(),
         model_name_or_path="gs://bucket/model",
-        extra_cli_args=["--served-model-name", "foo"],
+        extra_cli_args=["--some-unsupported-flag", "value"],
     )
 
     assert not eligibility.eligible
     assert "unsupported CLI args" in eligibility.reason
+
+
+def test_inprocess_eligibility_accepts_served_model_name(monkeypatch) -> None:
+    monkeypatch.setattr(
+        vllm_inprocess,
+        "_resolve_mapping_model_name",
+        lambda model, model_name_or_path: model.name,
+    )
+    monkeypatch.setattr(
+        vllm_inprocess,
+        "_can_stage_bootstrap_metadata_from_model_path",
+        lambda model_path: True,
+    )
+
+    eligibility = vllm_inprocess.evaluate_inprocess_eligibility(
+        model=_model(),
+        model_name_or_path="gs://bucket/model",
+        extra_cli_args=["--served-model-name", "my-model"],
+    )
+
+    assert eligibility.eligible
 
 
 def test_inprocess_eligibility_accepts_supported_engine_cli_flags(monkeypatch) -> None:

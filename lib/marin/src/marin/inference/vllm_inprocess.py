@@ -280,8 +280,11 @@ def start_inprocess_vllm_server(
         )
         gen_thread.start()
 
+        # Use --served-model-name if provided, otherwise fall back to model path.
+        served_name = _extract_served_model_name(extra_cli_args) or model_name_or_path
+
         # Build a minimal OpenAI-compatible API that enqueues requests.
-        app = _create_inprocess_openai_app(request_queue, model_name_or_path, bootstrap_model_source)
+        app = _create_inprocess_openai_app(request_queue, served_name, bootstrap_model_source)
 
         server = uvicorn_module.Server(
             uvicorn_module.Config(
@@ -493,6 +496,9 @@ def _is_object_store_path(path: str) -> bool:
     return scheme in {"gs", "s3"}
 
 
+_SUPPORTED_EXTRA_CLI_FLAGS: set[str] = {"--served-model-name"}
+
+
 def _unsupported_extra_cli_args(extra_cli_args: list[str] | None) -> list[str]:
     """Return any extra CLI args that the in-process path cannot apply.
 
@@ -500,12 +506,25 @@ def _unsupported_extra_cli_args(extra_cli_args: list[str] | None) -> list[str]:
     (via ``_llm_kwargs``).  Raw CLI flags passed through ``extra_args`` are NOT
     applied to the ``LLM()`` constructor, so any such flags trigger fallback to
     the subprocess backend where ``vllm serve`` handles them natively.
+
+    ``--served-model-name`` is whitelisted — it is handled by the in-process
+    FastAPI app directly.
     """
     if not extra_cli_args:
         return []
 
-    # All raw extra_args are unsupported — engine_kwargs are handled separately.
-    unsupported = [arg for arg in extra_cli_args if arg.startswith("-")]
+    unsupported = []
+    i = 0
+    while i < len(extra_cli_args):
+        arg = extra_cli_args[i]
+        if arg.startswith("-"):
+            if arg in _SUPPORTED_EXTRA_CLI_FLAGS:
+                # Skip the flag and its value
+                i += 2
+                continue
+            unsupported.append(arg)
+        i += 1
+
     if unsupported:
         logger.warning(
             "In-process vLLM does not support extra CLI args (use engine_kwargs instead); "
@@ -513,6 +532,16 @@ def _unsupported_extra_cli_args(extra_cli_args: list[str] | None) -> list[str]:
             unsupported,
         )
     return unsupported
+
+
+def _extract_served_model_name(extra_cli_args: list[str] | None) -> str | None:
+    """Extract ``--served-model-name`` from extra CLI args, if present."""
+    if not extra_cli_args:
+        return None
+    for i, arg in enumerate(extra_cli_args):
+        if arg == "--served-model-name" and i + 1 < len(extra_cli_args):
+            return extra_cli_args[i + 1]
+    return None
 
 
 def _discover_safetensor_shards(fs: AbstractFileSystem, remote_path: str) -> list[str]:
