@@ -1586,22 +1586,32 @@ class ControllerTransitions:
 
     # --- Endpoint Management ---
 
-    def add_endpoint(self, endpoint: Endpoint, task_id: JobName | None = None) -> None:
-        """Add an endpoint row to the DB, optionally associated with a task."""
-        self._db.execute(
-            "INSERT OR REPLACE INTO endpoints("
-            "endpoint_id, name, address, job_id, task_id, metadata_json, registered_at_ms"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                endpoint.endpoint_id,
-                endpoint.name,
-                endpoint.address,
-                endpoint.job_id.to_wire(),
-                task_id.to_wire() if task_id else None,
-                json.dumps(endpoint.metadata),
-                endpoint.registered_at.epoch_ms(),
-            ),
-        )
+    def add_endpoint(self, endpoint: Endpoint, task_id: JobName | None = None) -> bool:
+        """Add an endpoint row to the DB, associated with a non-terminal task.
+
+        Returns True if the endpoint was inserted, False if the task is already
+        terminal (to prevent orphaned endpoints that would never be cleaned up).
+        """
+        with self._db.transaction() as cur:
+            if task_id is not None:
+                row = cur.execute("SELECT state FROM tasks WHERE task_id = ?", (task_id.to_wire(),)).fetchone()
+                if row is not None and int(row["state"]) in TERMINAL_TASK_STATES:
+                    return False
+            cur.execute(
+                "INSERT OR REPLACE INTO endpoints("
+                "endpoint_id, name, address, job_id, task_id, metadata_json, registered_at_ms"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    endpoint.endpoint_id,
+                    endpoint.name,
+                    endpoint.address,
+                    endpoint.job_id.to_wire(),
+                    task_id.to_wire() if task_id else None,
+                    json.dumps(endpoint.metadata),
+                    endpoint.registered_at.epoch_ms(),
+                ),
+            )
+            return True
 
     def remove_endpoint(self, endpoint_id: str) -> Endpoint | None:
         return self._db.delete_endpoint(endpoint_id)

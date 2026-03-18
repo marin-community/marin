@@ -3375,9 +3375,53 @@ def test_task_update_worker_failed_cascades_children(job_request, worker_metadat
     parent_job = _query_job(state, JobName.root("test-user", "parent"))
     assert parent_job.state == cluster_pb2.JOB_STATE_WORKER_FAILED
 
-    # Child should be killed via cascade
+    # Child should be killed via cascade — last occurrence in file
     child_task = _query_task(state, child_tasks[0].task_id)
     assert child_task.state == cluster_pb2.TASK_STATE_KILLED
 
     child_job = _query_job(state, JobName.from_string("/test-user/parent/child"))
     assert child_job.state == cluster_pb2.JOB_STATE_KILLED
+
+
+def test_endpoint_registered_after_task_terminal_is_orphaned(job_request, worker_metadata):
+    """Reproduce endpoint leak: register_endpoint succeeds for already-terminal tasks.
+
+    When a task completes, apply_task_updates deletes its endpoints. But
+    register_endpoint doesn't check task state — only attempt_id. So a slow
+    register_endpoint call arriving after the task is terminal inserts an
+    orphaned endpoint that is never cleaned up.
+    """
+    state = _make_state()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("leak")
+    tasks = submit_job(state, "leak", req)
+    task = tasks[0]
+
+    dispatch_task(state, task, worker_id)
+
+    # Task succeeds — any existing endpoints would be cleaned up here.
+    transition_task(state, task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
+    task_after = _query_task(state, task.task_id)
+    assert task_after.state == cluster_pb2.TASK_STATE_SUCCEEDED
+
+    # Now a slow register_endpoint arrives AFTER the task is terminal.
+    # This simulates the task process still alive briefly after the
+    # controller processed the terminal heartbeat.
+    ep = Endpoint(
+        endpoint_id="orphan-ep",
+        name="leak/actor",
+        address="a:1",
+        job_id=JobName.root("test-user", "leak"),
+        metadata={},
+        registered_at=Timestamp.now(),
+    )
+    state.add_endpoint(ep, task_id=task.task_id)
+
+    # BUG: The endpoint is now orphaned — the task is terminal so no
+    # future transition will clean it up.
+    leaked = _endpoints(state, EndpointQuery(exact_name="leak/actor"))
+    assert leaked == [], (
+        f"Expected no endpoints for terminal task, but found {len(leaked)}. "
+        "register_endpoint/add_endpoint must reject inserts for terminal tasks."
+    )
