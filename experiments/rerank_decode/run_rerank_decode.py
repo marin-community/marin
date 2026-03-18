@@ -114,13 +114,12 @@ if __name__ == "__main__":
     from marin.execution.executor import executor_main, this_output_path
 
     step_config = RerankDecodeConfig(
-        proposal_model_path="meta-llama/Llama-3.1-8B",
-        scoring_model_path="meta-llama/Llama-3.1-8B",
+        proposal_model_path="meta-llama/Llama-3.2-1B",
+        scoring_model_path="meta-llama/Llama-3.2-1B",
         output_path=this_output_path(),
         prompts_path="prompts.jsonl",
     )
 
-    from fray.cluster import ResourceConfig
     from marin.execution.executor import ExecutorStep
 
     rerank_decode_step = ExecutorStep(
