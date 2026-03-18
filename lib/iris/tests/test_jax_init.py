@@ -71,12 +71,12 @@ def test_initialize_jax_single_task(
     mock_jax_init: MagicMock,
     mock_atexit: MagicMock,
 ) -> None:
-    """Single-task jobs skip jax.distributed.initialize() entirely."""
+    """Single-task jobs call jax.distributed.initialize with explicit args."""
     mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=1)
 
     initialize_jax()
 
-    mock_jax_init.assert_not_called()
+    mock_jax_init.assert_called_once_with("10.0.0.1:8476", num_processes=1, process_id=0)
     mock_iris_ctx.assert_not_called()
 
 
