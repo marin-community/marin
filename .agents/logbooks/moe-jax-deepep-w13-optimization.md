@@ -295,3 +295,46 @@ KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl delete nodepool i3821jax-h1
   - this blocks the `w13_only` rerun before any benchmark pod can be scheduled, so there is still no new numerical result for or against `--w13-out-first`
 - Next action:
   - treat fresh-pool creation as the current blocker for the rebased branch and only continue after an infra workaround or operator-side retry path is chosen.
+
+### 2026-03-18 22:20 UTC - Rebase again onto newer `main`, clear `iris-3821-jax`, and restart via full `iris cluster start`
+- Experiment ID: `W13-OPT-006`
+- Hypothesis:
+  - the cleanest way to rule out ad hoc pool-creation drift is to rebase onto the latest `origin/main`, fully clear the `iris-3821-jax` namespace, and let current Iris recreate the namespace, RBAC, secrets, controller, and both NodePools from the checked-in config.
+- Command:
+
+```bash
+git fetch origin main
+git branch backup/w13opt-pre-main-rebase-20260318-2118
+GIT_EDITOR=true git rebase --rebase-merges --onto origin/main 1ec601a29e2d3fb2101f6d3934cd8e1e75ad538f
+git push --force-with-lease origin research/moe-jax-deepep-w13-optimization
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl delete namespace iris-3821-jax --wait=false
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl delete clusterrolebinding iris-controller-iris-3821-jax --ignore-not-found
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl delete clusterrole iris-controller-iris-3821-jax --ignore-not-found
+
+. /home/ubuntu/.config/yoblin/env
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run iris \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  cluster start
+```
+
+- Config:
+  - `origin/main` moved again before restart; new base is `43ca35177a7898f2d08526e0d7907fe04445d4c8`
+  - new branch tip after the rebase: `7d7672f0c21a3cd82ed41de2d5f3ac01e49e8f3f`
+  - restart needed `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`; on this box they come from `. /home/ubuntu/.config/yoblin/env`
+  - cluster config used: `lib/iris/examples/coreweave-moe-jax-3821.yaml`
+- Result:
+  - there is no `origin/master` in this repo; only `main`, so the rebase target was current `origin/main`
+  - the rebase onto `43ca35177a7898f2d08526e0d7907fe04445d4c8` completed cleanly and the branch was force-pushed
+  - the first `cluster start` attempt failed only because the shell lacked exported R2 env vars; after sourcing `~/.config/yoblin/env`, the second attempt recreated the lane successfully up to controller wait
+  - current post-restart cluster state:
+    - `i3821jax-h100-8x`: `Validated=True`, `Target=0`, `Current=0`, `Capacity=Sufficient`, `Quota=Under`
+    - `i3821jax-cpu-erapids`: `Validated=True`, `Target=1`, `InProgress=1`, `Current=0`
+    - controller pods were recreated in `iris-3821-jax` and are currently `Pending` only because the fresh CPU node has not finished coming online yet
+  - importantly, the H100 pool no longer shows `NodeConfigInternalError` when created by the current full Iris restart path
+- Interpretation:
+  - the earlier manual fresh-pool failure was not reproduced by the current full restart path on newer `main`
+  - the cluster is restarted at the resource layer; the remaining wait is controller scheduling on the fresh CPU pool
+  - this materially raises confidence that the full current Iris flow is the right way to recreate the lane, rather than manually applying the H100 NodePool first
+- Next action:
+  - once the controller pod binds and becomes healthy, continue with the normal `w13` validation ladder on the restarted `iris-3821-jax` lane.
