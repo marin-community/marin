@@ -381,6 +381,9 @@ def _build_pod_manifest(
             has_tpu = res.device.HasField("tpu")
             if gpu_count > 0:
                 limits["nvidia.com/gpu"] = str(gpu_count)
+                if host_network:
+                    # Request RDMA/IB devices for multi-host NCCL over InfiniBand.
+                    limits["rdma/ib"] = str(gpu_count)
         if limits:
             resources["limits"] = limits
         if res.disk_bytes:

@@ -94,13 +94,22 @@ ValueError: maximum must be >= initial
 
 Fix: pass `maximum=max(poll_interval, 30.0)` to ExponentialBackoff in `_poll_for_coordinator`.
 
+### Fix 10: NCCL hang — missing RDMA/IB device resources
+
+Multi-host training stuck at `broadcast_one_to_all` for 25+ min. GPUs had
+61GB VRAM allocated but 0% utilization. Root cause: pods didn't request
+`rdma/ib` resources, so no InfiniBand devices were exposed (`/dev/infiniband/`
+missing). NCCL fell back to TCP and hung.
+
+Node has `rdma/ib: 64`. Fix: request `rdma/ib: <gpu_count>` in pod resource
+limits when `host_network=true` and GPUs are present.
+
 ### Current status
 
 - CPU canary PASSED
 - H100 nodepool provisioned (2/2 nodes: gd927de, gd94886)
 - Executor_main correctly submitted child job `grug-train-mh` with 2 replicas
-- Disk space fix verified (pods get past `syncing deps`)
-- JAX backoff fix applied, retrying
+- Disk fix, JAX backoff fix, RDMA/IB fix applied — retrying
 
 ### Known risks
 
