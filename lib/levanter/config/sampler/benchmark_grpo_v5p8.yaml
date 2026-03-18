@@ -7,7 +7,7 @@ max_new_tokens: 1024
 temperature: 1.0
 apply_chat_template: true
 n_rounds: 1
-n_generations: 16
+n_generations: 1
 defer_tracker_logs_until_end: true
 skip_samples_table: false
 trainer:
@@ -24,17 +24,17 @@ trainer:
 model:
   type: llama
   use_tpu_ragged_paged_attention: true
-  ragged_paged_q_block_size: 32
-  ragged_paged_kv_block_pages: 16
+  ragged_paged_q_block_size: 16
+  ragged_paged_kv_block_pages: 8
 engine:
-  max_seq_len: 1536
-  max_pages: 4608
+  max_seq_len: 2048
+  max_pages: 1024
   page_size: 128
-  max_seqs: 128
-  max_seqs_in_prefill: 128
-  max_prefill_size: 4096
-  max_queued_tokens: 128
-  max_tokens_per_round: 128
+  max_seqs: 64
+  max_seqs_in_prefill: 64
+  max_prefill_size: 8192
+  max_queued_tokens: 64
+  max_tokens_per_round: 64
   max_rounds: 64
   debug_stats_every_n: 10
   reset_mode: physical

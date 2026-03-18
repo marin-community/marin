@@ -150,6 +150,40 @@ vLLM's `/v1/chat/completions` applies the Llama 3.1 Instruct chat template, wrap
     --config_path lib/levanter/config/sampler/benchmark_grpo_v5p8.yaml
   ```
 - **Expected**: Given M8 results (~275 tok/s for 10×2048 on v5p-16 global mesh), and the GRPO workload being larger (1024 completions × 1024 tokens), Levanter will likely be significantly slower than vLLM (expected ~500-2000 tok/s vs vLLM's 4,749-7,940 tok/s). The gap comes from vLLM having continuous batching and optimized scheduling.
-- **Status**: LAUNCHING
-- **Result**: (pending)
+- **Status**: DONE (after 6 iterations fixing config/code issues)
 - **TPU**: `lvb-bench-v5p8`, v5p-8, us-east5-a, best-effort
+- **W&B run**: https://wandb.ai/marin-community/levanter-multihost-inference/runs/io53vmrs (helpful-meadow-16)
+- **Issues fixed during launch**:
+  1. Docker path: commands must be relative to WORKDIR `/opt/marin/lib/levanter`
+  2. `max_seqs` too small (128 for 1024 seqs) — reduced to 64 prompts × 1 gen for v5p-8
+  3. `max_seq_len` too small (1536) — bumped to 2048 for chat template overhead
+  4. `max_prefill_size` too small (4096) — bumped to 8192 for 64 prompts with chat template
+  5. VMEM OOM in ragged paged attention kernel — reduced block sizes to q16/kv8
+  6. `TracerBoolConversionError`: merge from main set `static_argnums=(3, 4)` but `cleanup_each_step` (arg 5) also needs to be static → fixed to `(3, 4, 5)`
+  7. `--provisioning-model=SPOT` flag not supported by local gcloud → removed
+- **Result (64 prompts × 1 gen × 1024 max_tokens, temp=1.0, chat template ON)**:
+
+  | Metric | Value |
+  |---|---|
+  | Total tokens generated | 65,536 |
+  | Round wall time | 86.0s |
+  | **Round tok/s** | **762** |
+  | Decode-only tok/s | 1,475 |
+  | Decode time | 44.4s |
+  | Prefill time | 41.6s |
+  | First decode iter (XLA compile) | 25.3s |
+  | Decode iter p50 | 1.13s |
+  | Decode iter p90 | 2.01s |
+  | Device compute p50 | 0.26ms |
+
+- **Comparison to vLLM v5p-8**:
+
+  | System | Config | tok/s | Batch time |
+  |---|---|---:|---:|
+  | **Levanter** | 64 prompts × 1 gen | **762** | 86.0s |
+  | vLLM (c=64) | 64 prompts × 16 gen | 4,749 | 89.2s |
+  | vLLM (c=256) | 64 prompts × 16 gen | 7,940 | 52.9s |
+
+  **Levanter is 6.2-10.4x slower than vLLM** on the same hardware. The decode kernel is fast (device compute <1ms) but prefill is slow (41.6s = 48% of wall time) and the static batching means no continuous batching benefits.
+
+- **Note**: This is 64 sequences, not the full 1024 GRPO batch. v5p-8 OOMs at max_seqs=1024 (16K pages needed). The full GRPO comparison requires either multi-host (v5p-16+) or running 16 sequential rounds of 64 seqs.

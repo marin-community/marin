@@ -788,7 +788,7 @@ def _handle_clones(
     return gen_state, outputs
 
 
-@functools.partial(jax.jit, static_argnums=(3, 4), donate_argnames=("gen_state",))
+@functools.partial(jax.jit, static_argnums=(3, 4, 5), donate_argnames=("gen_state",))
 def _run_generation_loop(
     gen_state: GenState,
     model: LmHeadModel,
