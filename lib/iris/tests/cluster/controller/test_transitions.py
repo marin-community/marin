@@ -3426,7 +3426,8 @@ def test_endpoint_registered_after_task_terminal_is_orphaned(job_request, worker
         f"Expected no endpoints for terminal task, but found {len(leaked)}. "
         "register_endpoint/add_endpoint must reject inserts for terminal tasks."
     )
-    
+
+
 # =============================================================================
 # Pruning Tests
 # =============================================================================
