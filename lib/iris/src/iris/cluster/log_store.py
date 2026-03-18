@@ -36,10 +36,13 @@ Locking:
 from __future__ import annotations
 
 import logging
+import queue
 import tempfile
 import time
 from collections import deque
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Condition, Lock
@@ -85,6 +88,8 @@ _EST_BYTES_PER_ROW = 256
 # Default caps for local Parquet retention.
 DEFAULT_MAX_LOCAL_SEGMENTS = 50
 DEFAULT_MAX_LOCAL_BYTES = 5 * 1024**3  # 5 GB
+
+_ROW_GROUP_SIZE = 16_384
 
 
 def _escape_like(s: str) -> str:
@@ -204,6 +209,36 @@ class _RWLock:
             self._cond.notify_all()
 
 
+class _ConnectionPool:
+    """Pool of reusable DuckDB connections.
+
+    Each connection is checked out by exactly one thread at a time.
+    The buffer table is registered per-use since it changes on every read.
+    """
+
+    def __init__(self, size: int = 8):
+        self._pool: queue.SimpleQueue[duckdb.DuckDBPyConnection] = queue.SimpleQueue()
+        for _ in range(size):
+            self._pool.put(duckdb.connect())
+
+    @contextmanager
+    def checkout(self, buffer_table: pa.Table) -> Iterator[duckdb.DuckDBPyConnection]:
+        conn = self._pool.get()
+        try:
+            conn.register("ram_buffer", buffer_table)
+            yield conn
+        finally:
+            conn.unregister("ram_buffer")
+            self._pool.put(conn)
+
+    def close(self) -> None:
+        while not self._pool.empty():
+            try:
+                self._pool.get_nowait().close()
+            except queue.Empty:
+                break
+
+
 @dataclass
 class LogReadResult:
     entries: list[logging_pb2.LogEntry] = field(default_factory=list)
@@ -226,6 +261,7 @@ class LogStore:
         max_local_bytes: int = DEFAULT_MAX_LOCAL_BYTES,
         flush_interval_sec: float = DEFAULT_FLUSH_INTERVAL_SEC,
         segment_target_bytes: int = SEGMENT_TARGET_BYTES,
+        pool_size: int = 8,
     ):
         self._temp_dir: tempfile.TemporaryDirectory[str] | None = None
         if log_dir is not None:
@@ -262,6 +298,7 @@ class LogStore:
                 _LocalSegment(path=str(p), size_bytes=p.stat().st_size, min_seq=min_seq, max_seq=max_seq)
             )
 
+        self._pool = _ConnectionPool(size=pool_size)
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
 
     # ------------------------------------------------------------------
@@ -366,6 +403,7 @@ class LogStore:
         for sb in remaining:
             if not sb.flushed:
                 self._flush_sealed_buffer(sb)
+        self._pool.close()
         if self._temp_dir is not None:
             self._temp_dir.cleanup()
 
@@ -408,9 +446,12 @@ class LogStore:
         if not rows:
             return
 
+        # Sort by (key, seq) so row-group statistics on `key` are tight,
+        # enabling DuckDB to skip row groups that don't contain the target key.
+        new_min_seq = min(r[0] for r in rows)
+        new_max_seq = max(r[0] for r in rows)
+        rows = sorted(rows, key=lambda r: (r[1], r[0]))
         new_table = _build_buffer_table(rows)
-        new_min_seq = rows[0][0]
-        new_max_seq = rows[-1][0]
 
         # Decide whether to consolidate with the latest segment.
         with self._lock:
@@ -422,6 +463,7 @@ class LogStore:
             try:
                 existing_table = pq.read_table(latest.path)
                 combined = pa.concat_tables([existing_table, new_table])
+                combined = combined.sort_by([("key", "ascending"), ("seq", "ascending")])
                 combined_min_seq = latest.min_seq
                 combined_max_seq = new_max_seq
                 filename = f"logs_{combined_min_seq:019d}_{combined_max_seq:019d}.parquet"
@@ -429,7 +471,9 @@ class LogStore:
 
                 # Write to a temp file first, then rename for atomicity.
                 tmp_path = filepath.with_suffix(".parquet.tmp")
-                pq.write_table(combined, tmp_path, compression="zstd")
+                pq.write_table(
+                    combined, tmp_path, compression="zstd", row_group_size=_ROW_GROUP_SIZE, write_page_index=True
+                )
                 tmp_path.rename(filepath)
 
                 seg = _LocalSegment(
@@ -482,7 +526,9 @@ class LogStore:
 
         try:
             tmp_path = filepath.with_suffix(".parquet.tmp")
-            pq.write_table(new_table, tmp_path, compression="zstd")
+            pq.write_table(
+                new_table, tmp_path, compression="zstd", row_group_size=_ROW_GROUP_SIZE, write_page_index=True
+            )
             tmp_path.rename(filepath)
         except Exception:
             logger.warning("Failed to write Parquet segment %s", filepath, exc_info=True)
@@ -578,24 +624,20 @@ class LogStore:
         # GC (which takes the write lock) cannot delete them mid-query.
         self._segments_rwlock.read_acquire()
         try:
-            conn = duckdb.connect()
-            try:
-                conn.register("ram_buffer", ram_table)
-                source = _build_union_source(parquet_files)
-                where_clause = " AND ".join(where_parts)
+            source = _build_union_source(parquet_files)
+            where_clause = " AND ".join(where_parts)
 
-                if include_key_in_select:
-                    select_cols = "seq, key, source, data, epoch_ms, level"
-                else:
-                    select_cols = "seq, source, data, epoch_ms, level"
+            if include_key_in_select:
+                select_cols = "seq, key, source, data, epoch_ms, level"
+            else:
+                select_cols = "seq, source, data, epoch_ms, level"
 
-                order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
-                limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
+            order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
+            limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
 
-                sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
+            sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
+            with self._pool.checkout(ram_table) as conn:
                 rows = conn.execute(sql, params).fetchall()
-            finally:
-                conn.close()
         finally:
             self._segments_rwlock.read_release()
 

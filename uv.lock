@@ -3674,7 +3674,7 @@ requires-dist = [
     { name = "grpcio", specifier = ">=1.76.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "humanfriendly", specifier = ">=10.0" },
-    { name = "pyarrow", specifier = ">=11.0.0" },
+    { name = "pyarrow", specifier = ">=19.0.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyjwt", specifier = ">=2.8.0" },
     { name = "pyyaml", specifier = ">=6.0" },
