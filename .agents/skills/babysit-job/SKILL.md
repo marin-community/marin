@@ -77,6 +77,7 @@ Write to `scratch/<create_timestamp>_monitoring_state.json`, create the `scratch
 
 ```json
 {
+  "ts": <timestamp_ms>,
   "track": "ray",
   "job_id": "<JOB_ID>",
   "cluster": "<CLUSTER>",
@@ -89,6 +90,7 @@ Write to `scratch/<create_timestamp>_monitoring_state.json`, create the `scratch
 
 ```json
 {
+  "ts": <timestamp_ms>,
   "track": "iris",
   "job_id": "<JOB_ID>",
   "config": "<IRIS_CONFIG_PATH>",
