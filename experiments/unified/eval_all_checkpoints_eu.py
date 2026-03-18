@@ -292,7 +292,7 @@ def build_eval_data_config(
         format=PrebuiltLmDatasetFormat(
             input_ids_key="input_ids",
             loss_weights_key="loss_weights",
-            loss_weight_transform=_only_fractional_transform,
+            loss_weight_transform=_zero_fractional_transform,
             input_ids_transform=_replace_visual_with_eos,
         ),
         pack=True,
@@ -305,7 +305,7 @@ def build_eval_data_config(
         format=PrebuiltLmDatasetFormat(
             input_ids_key="input_ids",
             loss_weights_key="loss_weights",
-            loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, _only_fractional_transform),
+            loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, _zero_fractional_transform),
             input_ids_transform=_replace_text_with_eos,
         ),
         pack=True,
@@ -612,6 +612,10 @@ def main():
                 model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
 
             log_dict = eval_model(evaluator, model, prefix="eval")
+
+            # Log to wandb (and any other active trackers)
+            tracker = levanter.tracker.current_tracker()
+            logger.info("Logging %d metrics to tracker %s at step %d", len(log_dict), type(tracker).__name__, step)
             levanter.tracker.log(log_dict, step=step)
 
             loss = log_dict.get("eval/loss", float("nan"))
