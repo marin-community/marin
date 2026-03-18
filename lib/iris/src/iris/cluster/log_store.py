@@ -6,8 +6,8 @@
 Stores log entries keyed by an arbitrary string, suitable for task attempt logs,
 process logs, autoscaler logs, or any other log stream.
 
-Write path: Python list buffer → Parquet segment (ZSTD) → optional GCS offload.
-Read path: DuckDB read_parquet() over local segments UNION ALL in-memory buffer.
+Write path: Python list buffer → Parquet segment (ZSTD, sorted by key) → optional GCS offload.
+Read path: DuckDB connection pool over local segments UNION ALL in-memory buffer.
 
 Also provides LogStoreHandler, a logging.Handler that bridges Python's logging
 framework into the LogStore so process-level logs (controller, worker) are
@@ -17,12 +17,15 @@ queryable through the same FetchLogs RPC as task logs.
 from __future__ import annotations
 
 import logging
+import queue
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
+from collections.abc import Iterator
 
 import duckdb
 import fsspec.core
@@ -36,6 +39,8 @@ from iris.rpc import logging_pb2
 logger = logging.getLogger(__name__)
 
 _LIKE_ESCAPE_TABLE = str.maketrans({"%": "\\%", "_": "\\_", "\\": "\\\\"})
+
+_ROW_GROUP_SIZE = 16_384
 
 _PARQUET_SCHEMA = pa.schema(
     [
@@ -120,6 +125,36 @@ class _SequenceCounter:
             return first
 
 
+class _ConnectionPool:
+    """Pool of reusable DuckDB connections.
+
+    Each connection is checked out by exactly one thread at a time.
+    The buffer table is registered per-use since it changes on every read.
+    """
+
+    def __init__(self, size: int = 8):
+        self._pool: queue.SimpleQueue[duckdb.DuckDBPyConnection] = queue.SimpleQueue()
+        for _ in range(size):
+            self._pool.put(duckdb.connect())
+
+    @contextmanager
+    def checkout(self, buffer_table: pa.Table) -> Iterator[duckdb.DuckDBPyConnection]:
+        conn = self._pool.get()
+        try:
+            conn.register("write_buffer", buffer_table)
+            yield conn
+        finally:
+            conn.unregister("write_buffer")
+            self._pool.put(conn)
+
+    def close(self) -> None:
+        while not self._pool.empty():
+            try:
+                self._pool.get_nowait().close()
+            except queue.Empty:
+                break
+
+
 @dataclass
 class LogReadResult:
     entries: list[logging_pb2.LogEntry]
@@ -130,7 +165,8 @@ class LogStore:
     """Log store backed by in-memory buffer + rotating Parquet segments.
 
     Thread-safe: writers append to a buffer protected by a lock, readers
-    query via DuckDB over local Parquet files and the current buffer.
+    query via a pool of DuckDB connections over local Parquet files and
+    the current buffer.
     """
 
     def __init__(
@@ -142,7 +178,8 @@ class LogStore:
         remote_log_dir: str = "",
         local_budget_bytes: int = 5 * 1024**3,
         flush_row_threshold: int = 1_000_000,
-        flush_time_threshold: float = 60.0,
+        flush_time_threshold: float = 5.0,
+        pool_size: int = 8,
     ):
         self._temp_dir: tempfile.TemporaryDirectory[str] | None = None
         if db_path is not None:
@@ -165,6 +202,11 @@ class LogStore:
         self._write_lock = Lock()
         self._last_flush_time = time.monotonic()
 
+        # Cached file list, updated on flush. Avoids filesystem glob per read.
+        self._parquet_files: list[str] = sorted(str(p) for p in self._log_dir.glob("logs_*_*.parquet"))
+        self._files_lock = Lock()
+
+        self._pool = _ConnectionPool(size=pool_size)
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_gcs_offload")
 
     def append(self, key: str, entries: list) -> None:
@@ -251,22 +293,19 @@ class LogStore:
         )
 
     def has_logs(self, key: str) -> bool:
-        parquet_files = self._list_parquet_files()
+        with self._files_lock:
+            parquet_files = list(self._parquet_files)
         with self._write_lock:
             buffer_snapshot = list(self._buffer)
 
         buf_table = _build_buffer_table(buffer_snapshot)
-        conn = duckdb.connect()
-        try:
-            conn.register("write_buffer", buf_table)
-            source = _build_union_source(parquet_files)
+        source = _build_union_source(parquet_files)
+        with self._pool.checkout(buf_table) as conn:
             row = conn.execute(
                 f"SELECT 1 FROM ({source}) WHERE key = $key LIMIT 1",
                 {"key": key},
             ).fetchone()
-            return row is not None
-        finally:
-            conn.close()
+        return row is not None
 
     def clear(self, key: str) -> None:
         """Remove matching entries from the in-memory buffer only."""
@@ -281,6 +320,7 @@ class LogStore:
         """Flush remaining buffer, shut down background executor, clean up temp dir."""
         self._flush_to_parquet()
         self._executor.shutdown(wait=True)
+        self._pool.close()
         if self._temp_dir is not None:
             self._temp_dir.cleanup()
 
@@ -300,12 +340,27 @@ class LogStore:
 
         self._last_flush_time = time.monotonic()
 
+        # Sort by (key, seq) so row-group statistics on `key` are tight,
+        # enabling DuckDB to skip row groups that don't contain the target key.
+        snapshot.sort(key=lambda row: (row[1], row[0]))
+
         table = _build_buffer_table(snapshot)
-        min_seq = snapshot[0][0]
-        max_seq = snapshot[-1][0]
+        min_seq = min(row[0] for row in snapshot)
+        max_seq = max(row[0] for row in snapshot)
         filename = f"logs_{min_seq:019d}_{max_seq:019d}.parquet"
         filepath = self._log_dir / filename
-        pq.write_table(table, filepath, compression="zstd")
+        pq.write_table(
+            table,
+            filepath,
+            compression="zstd",
+            row_group_size=_ROW_GROUP_SIZE,
+            write_page_index=True,
+        )
+
+        # Update cached file list
+        with self._files_lock:
+            self._parquet_files.append(str(filepath))
+            self._parquet_files.sort()
 
         self._executor.submit(self._offload_to_gcs, filepath)
         self._enforce_local_budget()
@@ -320,15 +375,20 @@ class LogStore:
             logger.warning("Failed to offload %s to GCS", filepath, exc_info=True)
 
     def _enforce_local_budget(self) -> None:
-        files = sorted(self._log_dir.glob("logs_*_*.parquet"))
-        total = sum(f.stat().st_size for f in files)
+        with self._files_lock:
+            files = list(self._parquet_files)
+
+        total = sum(Path(f).stat().st_size for f in files)
+        removed: list[str] = []
         while total > self._local_budget_bytes and files:
             oldest = files.pop(0)
-            total -= oldest.stat().st_size
-            oldest.unlink(missing_ok=True)
+            total -= Path(oldest).stat().st_size
+            Path(oldest).unlink(missing_ok=True)
+            removed.append(oldest)
 
-    def _list_parquet_files(self) -> list[str]:
-        return sorted(str(p) for p in self._log_dir.glob("logs_*_*.parquet"))
+        if removed:
+            with self._files_lock:
+                self._parquet_files = [f for f in self._parquet_files if f not in removed]
 
     def _execute_read(
         self,
@@ -339,30 +399,28 @@ class LogStore:
         default_cursor: int,
         include_key_in_select: bool,
     ) -> LogReadResult:
-        parquet_files = self._list_parquet_files()
+        with self._files_lock:
+            parquet_files = list(self._parquet_files)
 
         with self._write_lock:
             buffer_snapshot = list(self._buffer)
 
         buf_table = _build_buffer_table(buffer_snapshot)
-        conn = duckdb.connect()
-        try:
-            conn.register("write_buffer", buf_table)
-            source = _build_union_source(parquet_files)
-            where_clause = " AND ".join(where_parts)
+        source = _build_union_source(parquet_files)
+        where_clause = " AND ".join(where_parts)
 
-            if include_key_in_select:
-                select_cols = "seq, key, source, data, epoch_ms, level"
-            else:
-                select_cols = "seq, source, data, epoch_ms, level"
+        if include_key_in_select:
+            select_cols = "seq, key, source, data, epoch_ms, level"
+        else:
+            select_cols = "seq, source, data, epoch_ms, level"
 
-            order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
-            limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
+        order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
+        limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
 
-            sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
+        sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
+
+        with self._pool.checkout(buf_table) as conn:
             rows = conn.execute(sql, params).fetchall()
-        finally:
-            conn.close()
 
         if tail and max_lines > 0:
             rows.reverse()

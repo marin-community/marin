@@ -10,7 +10,7 @@ license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
     # workspaces
-    "iris",
+    "iris[logs]",
     "fray",
     "haliax",
     "levanter",

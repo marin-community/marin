@@ -3624,13 +3624,11 @@ dependencies = [
     { name = "click" },
     { name = "cloudpickle" },
     { name = "connect-python" },
-    { name = "duckdb" },
     { name = "fsspec" },
     { name = "gcsfs" },
     { name = "grpcio" },
     { name = "httpx" },
     { name = "humanfriendly" },
-    { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pyjwt" },
     { name = "pyyaml" },
@@ -3639,6 +3637,12 @@ dependencies = [
     { name = "tabulate" },
     { name = "typing-extensions" },
     { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.optional-dependencies]
+logs = [
+    { name = "duckdb" },
+    { name = "pyarrow" },
 ]
 
 [package.dev-dependencies]
@@ -3668,13 +3672,13 @@ requires-dist = [
     { name = "click", specifier = ">=8.3.1" },
     { name = "cloudpickle", specifier = ">=3.1.2" },
     { name = "connect-python", specifier = ">=0.8.1" },
-    { name = "duckdb", specifier = ">=1.0.0" },
+    { name = "duckdb", marker = "extra == 'logs'", specifier = ">=1.0.0" },
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "gcsfs", specifier = ">=2024.0.0" },
     { name = "grpcio", specifier = ">=1.76.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "humanfriendly", specifier = ">=10.0" },
-    { name = "pyarrow", specifier = ">=11.0.0" },
+    { name = "pyarrow", marker = "extra == 'logs'", specifier = ">=19.0.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyjwt", specifier = ">=2.8.0" },
     { name = "pyyaml", specifier = ">=6.0" },
@@ -3684,6 +3688,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
 ]
+provides-extras = ["logs"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -5425,7 +5430,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fray" },
     { name = "haliax" },
-    { name = "iris" },
+    { name = "iris", extra = ["logs"] },
     { name = "levanter" },
     { name = "marin" },
     { name = "watchdog" },
@@ -5436,7 +5441,7 @@ dependencies = [
 requires-dist = [
     { name = "fray", editable = "lib/fray" },
     { name = "haliax", editable = "lib/haliax" },
-    { name = "iris", editable = "lib/iris" },
+    { name = "iris", extras = ["logs"], editable = "lib/iris" },
     { name = "levanter", editable = "lib/levanter" },
     { name = "marin", editable = "lib/marin" },
     { name = "watchdog" },
