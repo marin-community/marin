@@ -541,7 +541,7 @@ def test_resolve_executor_step_raises_when_inherited_pin_conflicts_with_gcs_regi
             )
 
 
-def test_resolve_executor_step_allows_inherited_pin_conflict_with_override_env(monkeypatch):
+def test_resolve_executor_step_raises_on_inherited_pin_conflict_even_with_override_env(monkeypatch):
     @remote
     def my_fn(config):
         pass
@@ -552,14 +552,12 @@ def test_resolve_executor_step_allows_inherited_pin_conflict_with_override_env(m
         patch("marin.execution.executor._iris_backend_is_active", return_value=True),
         patch("marin.execution.executor._iris_worker_region_pin", return_value="us-central2"),
     ):
-        resolved = resolve_executor_step(
-            step,
-            config={"input_path": "gs://marin-us-east1/data/input"},
-            output_path="/out/test-abc",
-        )
-
-    assert isinstance(resolved.fn, RemoteCallable)
-    assert resolved.fn.resources.regions is None
+        with pytest.raises(ValueError, match="pinned to inherited Iris region"):
+            resolve_executor_step(
+                step,
+                config={"input_path": "gs://marin-us-east1/data/input"},
+                output_path="/out/test-abc",
+            )
 
 
 def test_resolve_executor_step_raises_on_cross_region_inputs_without_pin():
@@ -580,7 +578,7 @@ def test_resolve_executor_step_raises_on_cross_region_inputs_without_pin():
             )
 
 
-def test_resolve_executor_step_allows_cross_region_with_override_env(monkeypatch):
+def test_resolve_executor_step_raises_on_cross_region_even_with_override_env(monkeypatch):
     @remote
     def my_fn(config):
         pass
@@ -591,14 +589,12 @@ def test_resolve_executor_step_allows_cross_region_with_override_env(monkeypatch
         patch("marin.execution.executor._iris_backend_is_active", return_value=True),
         patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
     ):
-        resolved = resolve_executor_step(
-            step,
-            config={"input_path": "gs://marin-us-central2/data/input"},
-            output_path="gs://marin-us-east1/data/output",
-        )
-
-    assert isinstance(resolved.fn, RemoteCallable)
-    assert resolved.fn.resources.regions == ["us-central2", "us-east1"]
+        with pytest.raises(ValueError, match="cross-region GCS dependencies"):
+            resolve_executor_step(
+                step,
+                config={"input_path": "gs://marin-us-central2/data/input"},
+                output_path="gs://marin-us-east1/data/output",
+            )
 
 
 def test_resolve_executor_step_uses_dag_tpu_regions_without_gcs_inputs():
@@ -662,7 +658,7 @@ def test_resolve_executor_step_raises_on_disjoint_gcs_and_dag_tpu_regions():
             )
 
 
-def test_resolve_executor_step_allows_disjoint_gcs_and_dag_tpu_regions_with_override_env(monkeypatch):
+def test_resolve_executor_step_raises_on_disjoint_gcs_and_dag_tpu_regions_even_with_override_env(monkeypatch):
     @remote
     def my_fn(config):
         pass
@@ -673,15 +669,13 @@ def test_resolve_executor_step_allows_disjoint_gcs_and_dag_tpu_regions_with_over
         patch("marin.execution.executor._iris_backend_is_active", return_value=True),
         patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
     ):
-        resolved = resolve_executor_step(
-            step,
-            config={"input_path": "gs://marin-us-east1/data/input"},
-            output_path="/out/test-abc",
-            dag_tpu_regions=["us-central2"],
-        )
-
-    assert isinstance(resolved.fn, RemoteCallable)
-    assert resolved.fn.resources.regions == ["us-central2", "us-east1"]
+        with pytest.raises(ValueError, match="no overlap between GCS regions"):
+            resolve_executor_step(
+                step,
+                config={"input_path": "gs://marin-us-east1/data/input"},
+                output_path="/out/test-abc",
+                dag_tpu_regions=["us-central2"],
+            )
 
 
 def test_resolve_executor_step_raises_for_dual_region_bucket_location():
@@ -762,7 +756,7 @@ def test_dag_tpu_regions_raises_on_disjoint_explicit_regions():
         _dag_tpu_regions(steps)
 
 
-def test_dag_tpu_regions_allows_disjoint_explicit_regions_with_override_env(monkeypatch):
+def test_dag_tpu_regions_raises_on_disjoint_explicit_regions_even_with_override_env(monkeypatch):
     @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-west4"]))
     def first(_config):
         pass
@@ -777,7 +771,8 @@ def test_dag_tpu_regions_allows_disjoint_explicit_regions_with_override_env(monk
         ExecutorStep(name="second", fn=second, config=None),
     ]
 
-    assert _dag_tpu_regions(steps) == ["us-central2", "us-west4"]
+    with pytest.raises(ValueError, match="No common region satisfies all TPU steps"):
+        _dag_tpu_regions(steps)
 
 
 def test_dag_tpu_regions_uses_iris_variant_regions_when_not_pinned():

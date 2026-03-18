@@ -101,7 +101,6 @@ from fray.v2.iris_backend import FrayIrisClient
 from fray.v2.types import TpuConfig
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import WellKnownAttribute
-from iris.marin_fs import MARIN_CROSS_REGION_OVERRIDE_ENV
 from iris.marin_fs import collect_gcs_paths
 from iris.marin_fs import get_bucket_location, open_url
 from iris.marin_fs import marin_prefix
@@ -240,20 +239,13 @@ def _infer_gcs_regions(
         if region_to_evidence:
             gcs_regions = set(region_to_evidence)
 
-        if gcs_regions is not None and len(gcs_regions) > 1 and not os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
+        if gcs_regions is not None and len(gcs_regions) > 1:
             detail = "; ".join(
                 f"{region}: {', '.join(sorted(evidence)[:3])}" for region, evidence in sorted(region_to_evidence.items())
             )
             raise ValueError(
                 f"Executor step {step_name!r} has cross-region GCS dependencies. "
                 f"Found regions {{{', '.join(sorted(region_to_evidence))}}}. {detail}"
-            )
-        if gcs_regions is not None and len(gcs_regions) > 1:
-            logger.warning(
-                "Cross-region GCS dependencies for step %s allowed by %s: %s",
-                step_name,
-                MARIN_CROSS_REGION_OVERRIDE_ENV,
-                sorted(gcs_regions),
             )
 
     if dag_tpu_regions:
@@ -264,18 +256,6 @@ def _infer_gcs_regions(
             intersection = gcs_regions & tpu_region_set
             if intersection:
                 gcs_regions = intersection
-            elif os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
-                union_regions = gcs_regions | tpu_region_set
-                logger.warning(
-                    "Step %s has no overlap between GCS regions %s and DAG TPU regions %s; "
-                    "allowing union due to %s: %s",
-                    step_name,
-                    sorted(gcs_regions),
-                    sorted(tpu_region_set),
-                    MARIN_CROSS_REGION_OVERRIDE_ENV,
-                    sorted(union_regions),
-                )
-                gcs_regions = union_regions
             else:
                 raise ValueError(
                     f"Executor step {step_name!r} has no overlap between GCS regions {sorted(gcs_regions)} "
@@ -327,7 +307,6 @@ def _regions_for_tpu_variant_from_iris(variant: str) -> set[str] | None:
 def _dag_tpu_regions(steps: list["ExecutorStep"]) -> list[str] | None:
     """Infer allowed regions for TPU steps in this DAG, if any."""
     tpu_region_intersection: set[str] | None = None
-    tpu_region_union: set[str] = set()
     tpu_variant_region_cache: dict[str, set[str] | None] = {}
 
     for step in steps:
@@ -348,25 +327,13 @@ def _dag_tpu_regions(steps: list["ExecutorStep"]) -> list[str] | None:
                 continue
             step_regions = cached
 
-        tpu_region_union |= step_regions
         if tpu_region_intersection is None:
             tpu_region_intersection = set(step_regions)
         else:
             tpu_region_intersection &= step_regions
 
         if not tpu_region_intersection:
-            if os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
-                logger.warning(
-                    "TPU steps in DAG have no common region; allowing cross-region TPU scheduling due to %s: %s",
-                    MARIN_CROSS_REGION_OVERRIDE_ENV,
-                    sorted(tpu_region_union),
-                )
-                tpu_region_intersection = set(tpu_region_union)
-            else:
-                raise ValueError(
-                    "No common region satisfies all TPU steps in this DAG. "
-                    f"Set {MARIN_CROSS_REGION_OVERRIDE_ENV} to allow cross-region scheduling."
-                )
+            raise ValueError("No common region satisfies all TPU steps in this DAG.")
 
     return sorted(tpu_region_intersection) if tpu_region_intersection else None
 
@@ -416,18 +383,10 @@ def _maybe_attach_inferred_region_constraint(
     if inherited_region_pin is not None:
         pinned_region = inherited_region_pin.lower()
         if pinned_region not in inferred_regions:
-            message = (
+            raise ValueError(
                 f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
                 f"but inferred regions are {sorted(inferred_regions)}."
             )
-            if os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
-                logger.warning(
-                    "%s Allowing because %s is set.",
-                    message,
-                    MARIN_CROSS_REGION_OVERRIDE_ENV,
-                )
-                return remote_fn
-            raise ValueError(message)
         return remote_fn
 
     logger.info(
