@@ -87,7 +87,7 @@ def _poll_for_coordinator(
             return True
         return False
 
-    backoff = ExponentialBackoff(initial=poll_interval)
+    backoff = ExponentialBackoff(initial=poll_interval, maximum=max(poll_interval, 30.0))
     backoff.wait_until_or_raise(
         _check,
         timeout=Duration.from_seconds(timeout),

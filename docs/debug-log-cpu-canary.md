@@ -84,13 +84,23 @@ Meanwhile the NVMe RAID at `/dev/md127` has 28TB.
 Fix: set `cache_dir: /mnt/local/iris-cache` in `kubernetes_provider` config so the
 hostPath lands on the multi-TB NVMe at `/mnt/local` instead of the 15GB ramdisk.
 
+### Fix 9: ExponentialBackoff crash in JAX coordinator polling
+
+Task 1 (non-coordinator) crashed immediately:
+```
+ExponentialBackoff(initial=poll_interval)  # poll_interval=2.0, maximum defaults to 1.0
+ValueError: maximum must be >= initial
+```
+
+Fix: pass `maximum=max(poll_interval, 30.0)` to ExponentialBackoff in `_poll_for_coordinator`.
+
 ### Current status
 
 - CPU canary PASSED
-- GPU canary: retrying with `/mnt/local` NVMe cache dir
 - H100 nodepool provisioned (2/2 nodes: gd927de, gd94886)
 - Executor_main correctly submitted child job `grug-train-mh` with 2 replicas
-- Task pods pending/failing due to disk space, now fixed
+- Disk space fix verified (pods get past `syncing deps`)
+- JAX backoff fix applied, retrying
 
 ### Known risks
 
