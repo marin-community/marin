@@ -10,18 +10,9 @@ import subprocess
 import threading
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass, field
 from typing import Any, cast
 
-from fray.v2.actor import (
-    ActorContext,
-    ActorFuture,
-    ActorGroup,
-    ActorHandle,
-    _actor_call_scope,
-    _reset_current_actor,
-    _set_current_actor,
-)
+from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
 from fray.v2.types import (
     ActorConfig,
     BinaryEntrypoint,
@@ -33,42 +24,8 @@ from fray.v2.types import (
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class _LocalActorEntry:
-    """Typed wrapper holding an actor instance alongside its fray metadata.
-
-    Keeps backend bookkeeping off the user's actor object.
-    """
-
-    instance: Any
-    ctx: ActorContext
-    endpoint: str
-    terminated: threading.Event = field(default_factory=threading.Event)
-
-
-# Global registry mapping endpoint names to actor entries for LocalActorHandle resolution
-_local_actor_registry: dict[str, _LocalActorEntry] = {}
-
-
-def _remove_local_actor(entry: _LocalActorEntry) -> None:
-    if _local_actor_registry.get(entry.endpoint) is entry:
-        _local_actor_registry.pop(entry.endpoint, None)
-
-
-def _shutdown_local_actor(entry: _LocalActorEntry) -> None:
-    if entry.terminated.is_set():
-        _remove_local_actor(entry)
-        return
-
-    entry.terminated.set()
-
-    try:
-        shutdown = getattr(entry.instance, "shutdown", None)
-        if shutdown is not None:
-            shutdown()
-    finally:
-        _remove_local_actor(entry)
+# Global registry mapping endpoint names to actor instances for LocalActorHandle resolution
+_local_actor_registry: dict[str, Any] = {}
 
 
 class LocalJobHandle:
@@ -212,11 +169,8 @@ class LocalClient:
             finally:
                 _reset_current_actor(token)
 
-            entry = _LocalActorEntry(instance=instance, ctx=ctx, endpoint=endpoint)
-            handle._bind_entry(entry)
-
-            # Register entry so handle can resolve it
-            _local_actor_registry[endpoint] = entry
+            # Register instance so handle can resolve it
+            _local_actor_registry[endpoint] = instance
             handles.append(handle)
 
             # Create a synthetic job handle that is immediately succeeded
@@ -244,34 +198,28 @@ class LocalActorHandle:
 
     def __init__(self, endpoint: str):
         self._endpoint = endpoint
-        self._entry: _LocalActorEntry | None = None
 
-    def _bind_entry(self, entry: _LocalActorEntry) -> None:
-        self._entry = entry
-
-    def _resolve_entry(self) -> _LocalActorEntry:
-        """Look up the actor entry from the global registry."""
-        entry = _local_actor_registry.get(self._endpoint)
-        if entry is None:
+    def _resolve(self) -> Any:
+        """Look up the actor instance from the global registry."""
+        instance = _local_actor_registry.get(self._endpoint)
+        if instance is None:
             raise RuntimeError(f"Actor not found in registry: {self._endpoint}")
-        return entry
+        return instance
 
     def __getattr__(self, method_name: str) -> LocalActorMethod:
         if method_name.startswith("_"):
             raise AttributeError(method_name)
-        entry = self._resolve_entry()
-        method = getattr(entry.instance, method_name)
+        instance = self._resolve()
+        method = getattr(instance, method_name)
         if not callable(method):
-            raise AttributeError(f"{method_name} is not callable on {type(entry.instance).__name__}")
-        return LocalActorMethod(method, entry)
+            raise AttributeError(f"{method_name} is not callable on {type(instance).__name__}")
+        return LocalActorMethod(method)
 
     def shutdown(self) -> None:
         """Shutdown the actor instance."""
-        entry = self._entry
-        if entry is None:
-            entry = _local_actor_registry.get(self._endpoint)
-        if entry is not None:
-            _shutdown_local_actor(entry)
+        instance = _local_actor_registry.get(self._endpoint)
+        if instance is not None:
+            instance.shutdown()
 
     def __getstate__(self) -> dict:
         """Serialize to just the endpoint name."""
@@ -280,23 +228,13 @@ class LocalActorHandle:
     def __setstate__(self, state: dict) -> None:
         """Deserialize from endpoint name."""
         self._endpoint = state["endpoint"]
-        self._entry = None
 
 
 class LocalActorMethod:
     """Wraps a method on a local actor."""
 
-    def __init__(self, method: Any, entry: _LocalActorEntry):
+    def __init__(self, method: Any):
         self._method = method
-        self._entry = entry
-
-    def _invoke(self, *args: Any, **kwargs: Any) -> Any:
-        with _actor_call_scope(self._entry.ctx) as call:
-            try:
-                return self._method(*args, **kwargs)
-            finally:
-                if call.terminate_requested:
-                    _shutdown_local_actor(self._entry)
 
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
         """Spawn a dedicated thread for this call, returning a future.
@@ -309,7 +247,7 @@ class LocalActorMethod:
 
         def run():
             try:
-                result = self._invoke(*args, **kwargs)
+                result = self._method(*args, **kwargs)
                 future.set_result(result)
             except Exception as e:
                 logger.warning("Actor method %r failed: %s", method_name, e, exc_info=True)
@@ -321,7 +259,7 @@ class LocalActorMethod:
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Call method synchronously."""
-        return self._invoke(*args, **kwargs)
+        return self._method(*args, **kwargs)
 
 
 class LocalActorGroup:
@@ -364,3 +302,4 @@ class LocalActorGroup:
                 handle.shutdown()
             except Exception as e:
                 logger.warning("Error shutting down actor %s: %s", handle._endpoint, e)
+            _local_actor_registry.pop(handle._endpoint, None)

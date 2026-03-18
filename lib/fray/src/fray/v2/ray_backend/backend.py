@@ -16,15 +16,7 @@ import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
 
-from fray.v2.actor import (
-    ActorContext,
-    ActorFuture,
-    ActorGroup,
-    ActorHandle,
-    _actor_call_scope,
-    _reset_current_actor,
-    _set_current_actor,
-)
+from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
 from fray.v2.ray_backend.deps import build_python_path, build_runtime_env_for_packages
 from fray.v2.ray_backend.tpu import run_on_pod_ray
 from fray.v2.types import (
@@ -40,15 +32,6 @@ from fray.v2.types import (
 from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
-
-
-@ray.remote(enable_task_events=False)
-def _kill_named_actor(actor_name: str) -> None:
-    try:
-        actor = ray.get_actor(actor_name)
-    except ValueError:
-        return
-    ray.kill(actor)
 
 
 def _convert_ray_status(ray_status: RayJobStatus) -> JobStatus:
@@ -480,13 +463,8 @@ class _RayActorHostBase:
 
         # Create handle by name - will resolve via ray.get_actor() when used
         handle = RayActorHandle(actor_name)
-        self._actor_name = actor_name
-        self._actor_ctx = ActorContext(
-            handle=handle,
-            index=actor_index,
-            group_name=group_name,
-        )
-        token = _set_current_actor(self._actor_ctx)
+        ctx = ActorContext(handle=handle, index=actor_index, group_name=group_name)
+        token = _set_current_actor(ctx)
         try:
             self._instance = actor_class(*args, **kwargs)
         finally:
@@ -494,12 +472,7 @@ class _RayActorHostBase:
 
     def _proxy_call(self, method_name: str, args: tuple, kwargs: dict) -> Any:
         """Proxy method calls to the wrapped actor instance."""
-        with _actor_call_scope(self._actor_ctx) as call:
-            try:
-                return getattr(self._instance, method_name)(*args, **kwargs)
-            finally:
-                if call.terminate_requested:
-                    _kill_named_actor.remote(self._actor_name)
+        return getattr(self._instance, method_name)(*args, **kwargs)
 
 
 _named_actor_host_cache: dict[str, type] = {}

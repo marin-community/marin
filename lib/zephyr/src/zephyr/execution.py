@@ -34,7 +34,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from iris.marin_fs import open_url, url_to_fs
-from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig, current_actor
+from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from iris.marin_fs import marin_temp_bucket
 from iris.time_utils import ExponentialBackoff
 
@@ -864,7 +864,6 @@ class ZephyrCoordinator:
         hints: ExecutionHint,
     ) -> list:
         """Run complete pipeline, blocking until done. Returns flattened results."""
-        failed = False
         with self._lock:
             if self._pipeline_running:
                 self._fatal_error = "run_pipeline called while another pipeline is already running"
@@ -914,21 +913,13 @@ class ZephyrCoordinator:
                 for chunk in shard.chunks:
                     flat_result.extend(list(chunk))
 
+            # Signal workers to shut down now that all stages are complete.
+            self.shutdown()
+
             return flat_result
-        except Exception:
-            failed = True
-            raise
         finally:
-            try:
-                self.shutdown()
-            finally:
-                if failed:
-                    # Remove this coordinator from the endpoint registry so a
-                    # replacement can be created at the same name without
-                    # colliding with the stale entry.
-                    current_actor().terminate()
-                with self._lock:
-                    self._pipeline_running = False
+            with self._lock:
+                self._pipeline_running = False
 
     def _compute_join_aux(
         self,

@@ -7,7 +7,7 @@ import threading
 
 import pytest
 
-from fray.v2 import LocalClient, current_actor
+from fray.v2 import LocalClient
 
 
 class Counter:
@@ -25,43 +25,6 @@ class Counter:
 class Adder:
     def add(self, a: int, b: int) -> int:
         return a + b
-
-
-class SelfAwareActor:
-    def actor_identity(self) -> tuple[int, str]:
-        ctx = current_actor()
-        return (ctx.index, ctx.group_name)
-
-    def terminate(self) -> str:
-        current_actor().terminate()
-        return "terminating"
-
-
-class ConcurrentTerminateActor:
-    def __init__(self):
-        self._terminate_requested = threading.Event()
-        self._allow_finish = threading.Event()
-
-    def request_terminate(self) -> str:
-        current_actor().terminate()
-        self._terminate_requested.set()
-        assert self._allow_finish.wait(timeout=5.0)
-        return "terminating"
-
-    def ping(self) -> str:
-        assert self._terminate_requested.wait(timeout=5.0)
-        return "pong"
-
-    def allow_finish(self) -> None:
-        self._allow_finish.set()
-
-
-class ProbeActor:
-    def ping(self) -> str:
-        return "pong"
-
-    def shutdown(self) -> None:
-        pass
 
 
 @pytest.fixture
@@ -144,39 +107,3 @@ def test_actor_method_with_kwargs(client: LocalClient):
     actor = client.create_actor(Adder, name="adder")
     assert actor.add.remote(a=3, b=4).result() == 7
     assert actor.add(a=10, b=20) == 30
-
-
-def test_actor_methods_run_with_current_actor_context(client: LocalClient):
-    actor = client.create_actor(SelfAwareActor, name="self-aware")
-    assert actor.actor_identity.remote().result() == (0, "self-aware")
-
-
-def test_actor_can_request_backend_termination(client: LocalClient):
-    actor = client.create_actor(SelfAwareActor, name="self-aware")
-    assert actor.terminate.remote().result() == "terminating"
-    with pytest.raises(RuntimeError, match="Actor not found"):
-        actor.actor_identity.remote()
-
-
-def test_actor_termination_is_owned_by_requesting_call(client: LocalClient):
-    actor = client.create_actor(ConcurrentTerminateActor, name="self-aware")
-    future = actor.request_terminate.remote()
-
-    assert actor.ping() == "pong"
-    actor.allow_finish()
-
-    assert future.result() == "terminating"
-    with pytest.raises(RuntimeError, match="Actor not found"):
-        actor.ping.remote()
-
-
-def test_stale_group_shutdown_does_not_kill_same_endpoint_replacement(client: LocalClient):
-    original_group = client.create_actor_group(ProbeActor, name="probe", count=1)
-    original_group.wait_ready()
-
-    replacement_group = client.create_actor_group(ProbeActor, name="probe", count=1)
-    replacement = replacement_group.wait_ready()[0]
-
-    original_group.shutdown()
-
-    assert replacement.ping.remote().result() == "pong"
