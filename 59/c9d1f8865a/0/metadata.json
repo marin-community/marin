@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "59c9d1f8865a",
+  "session_id": "951bbfd9-a05f-49d7-af58-85149e06d580",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-12T06:52:22.77341366Z",
+  "branch": "kevin/harbor",
+  "checkpoints_count": 15,
+  "files_touched": [
+    "lib/marin/src/marin/evaluation/evaluators/harbor_evaluator.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "202a94226f8a",
+  "token_usage": {
+    "input_tokens": 189,
+    "cache_creation_tokens": 148339,
+    "cache_read_tokens": 12254233,
+    "output_tokens": 36691,
+    "api_call_count": 127
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-12T06:52:22.226296798Z",
+    "agent_lines": 25,
+    "human_added": 4,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 29,
+    "agent_percentage": 86.20689655172413
+  },
+  "transcript_path": ".claude/projects/-home-kevin-marin-harbor/951bbfd9-a05f-49d7-af58-85149e06d580.jsonl"
+}
