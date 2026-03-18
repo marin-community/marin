@@ -421,7 +421,7 @@ def unified_data_config(
             loss_weights_key="loss_weights",
         )
         components["visual_only"] = DatasetComponent(
-            cache_dir=f"{visual_only_cache_path}/train",
+            cache_dir=visual_only_cache_path,
             format=vis_format,
             pack=True,
             tags=["visual"],
@@ -429,7 +429,7 @@ def unified_data_config(
         weights["visual_only"] = vis_w
 
         components["val_visual_only"] = DatasetComponent(
-            cache_dir=f"{visual_only_cache_path}/validation",
+            cache_dir=visual_only_cache_path,
             format=vis_format,
             pack=True,
             tags=["visual"],
@@ -526,13 +526,13 @@ def unified_data_config(
     fmt_und_wo_visual = PrebuiltLmDatasetFormat(
         input_ids_key="input_ids",
         loss_weights_key="loss_weights",
-        loss_weight_transform=_zero_fractional_transform,
+        loss_weight_transform=_only_fractional_transform,
         input_ids_transform=_replace_visual_with_eos,
     )
     fmt_gen_wo_language = PrebuiltLmDatasetFormat(
         input_ids_key="input_ids",
         loss_weights_key="loss_weights",
-        loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, _zero_fractional_transform),
+        loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, _only_fractional_transform),
         input_ids_transform=_replace_text_with_eos,
     )
 

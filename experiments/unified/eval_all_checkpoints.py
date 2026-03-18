@@ -82,12 +82,14 @@ from experiments.unified.unified_pretrain_demo import (
     UNIFIED_CACHE_PATH,
     UNIFIED_EVAL_CACHE_PATH,
     TEXT_EVAL_CACHE_PATH,
+    VISUAL_ONLY_CACHE_PATH,
     unified_data_config,
 )
 from experiments.unified.unified_pretrain_demo_eu import (
     UNIFIED_CACHE_PATH as EU_UNIFIED_CACHE_PATH,
     UNIFIED_EVAL_CACHE_PATH as EU_UNIFIED_EVAL_CACHE_PATH,
     TEXT_EVAL_CACHE_PATH as EU_TEXT_EVAL_CACHE_PATH,
+    VISUAL_ONLY_CACHE_PATH as EU_VISUAL_ONLY_CACHE_PATH,
 )
 from marin.evaluation.utils import discover_hf_checkpoints, discover_levanter_checkpoints
 
@@ -102,11 +104,13 @@ MODEL_CONFIGS = {
 REGION_CACHE_PATHS = {
     "us": {
         "multimodal_cache_path": UNIFIED_CACHE_PATH,
+        "visual_only_cache_path": VISUAL_ONLY_CACHE_PATH,
         "eval_cache_path": UNIFIED_EVAL_CACHE_PATH,
         "text_eval_cache_path": TEXT_EVAL_CACHE_PATH,
     },
     "eu": {
         "multimodal_cache_path": EU_UNIFIED_CACHE_PATH,
+        "visual_only_cache_path": EU_VISUAL_ONLY_CACHE_PATH,
         "eval_cache_path": EU_UNIFIED_EVAL_CACHE_PATH,
         "text_eval_cache_path": EU_TEXT_EVAL_CACHE_PATH,
     },
@@ -216,6 +220,12 @@ def main():
         help="Resume a previous wandb run by ID, skipping already-evaluated steps",
     )
     parser.add_argument(
+        "--w_visual",
+        type=float,
+        default=1.0,
+        help="Visual token loss weight (default: 1.0). Must match the value used during training.",
+    )
+    parser.add_argument(
         "--no_wandb",
         action="store_true",
         help="Disable wandb logging (dry run)",
@@ -304,7 +314,7 @@ def main():
     data_config = unified_data_config(
         eval_benchmarks=eval_benchmarks,
         text_eval_benchmarks=text_eval_benchmarks,
-        include_text_data=False,
+        w_visual=args.w_visual,
         **cache_paths,
     )
 
