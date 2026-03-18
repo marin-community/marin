@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for LogStore (SQLite-backed)."""
+"""Tests for LogStore (Parquet + DuckDB backed)."""
 
 import threading
 from pathlib import Path
@@ -341,29 +341,139 @@ def test_cursor_with_since_ms(log_store: LogStore):
 
 
 # =============================================================================
-# Eviction
+# Local budget enforcement
 # =============================================================================
 
 
-def test_eviction_caps_total_rows():
-    """Appending beyond max_records triggers eviction down to max_records // 2."""
-    max_records = 50
-    store = LogStore(max_records=max_records)
+def test_local_budget_deletes_oldest_segments(tmp_path: Path):
+    """When local parquet files exceed the budget, oldest segments are removed."""
+    log_dir = tmp_path / "logs"
+    store = LogStore(
+        log_dir=log_dir,
+        flush_row_threshold=5,
+    )
     try:
-        # Append max_records entries in one shot to trigger eviction check
-        entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(max_records)]
-        store.append(KEY, entries)
+        # Flush several segments by appending batches above the threshold
+        for batch in range(4):
+            entries = [_make_entry(f"batch{batch}-{i}", epoch_ms=batch * 100 + i) for i in range(10)]
+            store.append(KEY, entries)
 
-        # Not yet over max_records, so no eviction.
-        total = store._write_conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
-        assert total == max_records
+        parquet_files = sorted(store._log_dir.glob("logs_*_*.parquet"))
+        assert len(parquet_files) == 4
+        one_file_size = parquet_files[0].stat().st_size
 
-        # Append another max_records entries to go over the limit and trigger eviction.
-        entries2 = [_make_entry(f"line2-{i}", epoch_ms=100 + i) for i in range(max_records)]
-        store.append(KEY, entries2)
+        # Set budget to allow only 2 files, then trigger enforcement
+        store._local_budget_bytes = one_file_size * 2
+        store._enforce_local_budget()
 
-        total = store._write_conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
-        # Should have been evicted down to max_records // 2 = 25
-        assert total <= max_records // 2 + 1
+        remaining = sorted(store._log_dir.glob("logs_*_*.parquet"))
+        assert len(remaining) <= 2
+
+        # The most recent data should still be readable from the surviving files
+        result = store.get_logs(KEY, max_lines=10, tail=True)
+        assert len(result.entries) > 0
+        assert all("batch3" in e.data for e in result.entries)
     finally:
         store.close()
+
+
+# =============================================================================
+# Parquet-specific tests
+# =============================================================================
+
+
+def test_flush_creates_parquet_segment(tmp_path: Path):
+    """Verify that flushing the buffer writes a Parquet file."""
+    log_dir = tmp_path / "logs"
+    store = LogStore(log_dir=log_dir, flush_row_threshold=5)
+    try:
+        entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(10)]
+        store.append(KEY, entries)
+        parquet_files = list(log_dir.glob("logs_*_*.parquet"))
+        assert len(parquet_files) >= 1
+    finally:
+        store.close()
+
+
+def test_cursor_continuity_across_flush(tmp_path: Path):
+    """Cursor from pre-flush read correctly filters post-flush entries."""
+    log_dir = tmp_path / "logs"
+    store = LogStore(log_dir=log_dir, flush_row_threshold=5)
+    try:
+        # Append enough to trigger flush
+        entries1 = [_make_entry(f"batch1-{i}", epoch_ms=i) for i in range(10)]
+        store.append(KEY, entries1)
+
+        result1 = store.get_logs(KEY)
+        assert len(result1.entries) == 10
+        cursor = result1.cursor
+
+        # Append more (may or may not flush again)
+        entries2 = [_make_entry(f"batch2-{i}", epoch_ms=100 + i) for i in range(5)]
+        store.append(KEY, entries2)
+
+        result2 = store.get_logs(KEY, cursor=cursor)
+        assert len(result2.entries) == 5
+        assert all("batch2" in e.data for e in result2.entries)
+    finally:
+        store.close()
+
+
+def test_seq_recovery_on_restart(tmp_path: Path):
+    """After close and reopen, sequence numbers don't collide."""
+    log_dir = tmp_path / "logs"
+    store1 = LogStore(log_dir=log_dir, flush_row_threshold=5)
+    entries1 = [_make_entry(f"s1-{i}", epoch_ms=i) for i in range(10)]
+    store1.append(KEY, entries1)
+    result1 = store1.get_logs(KEY)
+    cursor1 = result1.cursor
+    store1.close()
+
+    store2 = LogStore(log_dir=log_dir, flush_row_threshold=5)
+    entries2 = [_make_entry(f"s2-{i}", epoch_ms=100 + i) for i in range(5)]
+    store2.append(KEY, entries2)
+
+    # All entries from both sessions should be readable
+    result_all = store2.get_logs(KEY)
+    assert len(result_all.entries) == 15
+
+    # Cursor from session 1 should still work to get only session 2 entries
+    result_new = store2.get_logs(KEY, cursor=cursor1)
+    assert len(result_new.entries) == 5
+    assert all("s2" in e.data for e in result_new.entries)
+    store2.close()
+
+
+def test_concurrent_read_write(tmp_path: Path):
+    """Concurrent appends and reads don't crash or corrupt data."""
+    log_dir = tmp_path / "logs"
+    store = LogStore(log_dir=log_dir, flush_row_threshold=50)
+    errors: list[Exception] = []
+
+    def writer():
+        for i in range(200):
+            store.append(KEY, [_make_entry(f"line-{i}", epoch_ms=i)])
+
+    def reader():
+        for _ in range(200):
+            try:
+                store.get_logs(KEY, max_lines=10)
+            except Exception as e:
+                errors.append(e)
+
+    threads = [
+        threading.Thread(target=writer),
+        threading.Thread(target=reader),
+        threading.Thread(target=reader),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == [], f"Concurrent access raised: {errors}"
+
+    # All 200 entries should be present
+    result = store.get_logs(KEY)
+    assert len(result.entries) == 200
+    store.close()

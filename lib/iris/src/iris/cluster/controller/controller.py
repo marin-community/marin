@@ -775,7 +775,10 @@ class Controller:
             self._db = db
         else:
             self._db = ControllerDB(db_path=config.local_state_dir / "controller.sqlite3")
-        self._log_store = LogStore(db_path=config.local_state_dir / "logs.sqlite3")
+        self._log_store = LogStore(
+            log_dir=config.local_state_dir / "logs",
+            remote_log_dir=f"{config.remote_state_dir.rstrip('/')}/logs",
+        )
         self._transitions = ControllerTransitions(
             db=self._db,
             log_store=self._log_store,

@@ -1,11 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SQLite-backed log store with string keys.
+"""Log store backed by in-memory buffer + rotating Parquet segments + DuckDB reads.
 
 Stores log entries keyed by an arbitrary string, suitable for task attempt logs,
-process logs, autoscaler logs, or any other log stream. Uses WAL mode for
-concurrent reader/writer access.
+process logs, autoscaler logs, or any other log stream.
+
+Write path: Python list buffer → Parquet segment (ZSTD) → optional GCS offload.
+Read path: DuckDB read_parquet() over local segments UNION ALL in-memory buffer.
 
 Also provides LogStoreHandler, a logging.Handler that bridges Python's logging
 framework into the LogStore so process-level logs (controller, worker) are
@@ -15,31 +17,36 @@ queryable through the same FetchLogs RPC as task logs.
 from __future__ import annotations
 
 import logging
-import sqlite3
 import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
+
+import duckdb
+import fsspec.core
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from iris.cluster.types import TaskAttempt
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
 
-_SCHEMA = """\
-CREATE TABLE IF NOT EXISTS logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    key TEXT NOT NULL,
-    source TEXT NOT NULL,
-    data TEXT NOT NULL,
-    epoch_ms INTEGER NOT NULL,
-    level INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_key ON logs(key, id);
-"""
-
-_MAX_RECORDS = 5_000_000
+logger = logging.getLogger(__name__)
 
 _LIKE_ESCAPE_TABLE = str.maketrans({"%": "\\%", "_": "\\_", "\\": "\\\\"})
+
+_PARQUET_SCHEMA = pa.schema(
+    [
+        ("seq", pa.int64()),
+        ("key", pa.string()),
+        ("source", pa.string()),
+        ("data", pa.string()),
+        ("epoch_ms", pa.int64()),
+        ("level", pa.int32()),
+    ]
+)
 
 
 def _escape_like(s: str) -> str:
@@ -56,17 +63,74 @@ def task_log_key(task_attempt: TaskAttempt) -> str:
     return task_attempt.to_wire()
 
 
+def _fsspec_copy(src: str, dst: str) -> None:
+    """Copy a file using fsspec so either path can be remote (e.g. GCS)."""
+    with fsspec.core.open(src, "rb") as f_src, fsspec.core.open(dst, "wb") as f_dst:
+        f_dst.write(f_src.read())
+
+
+def _recover_max_seq(log_dir: Path) -> int:
+    """Parse the max sequence number from existing Parquet segment filenames.
+
+    Filenames are ``logs_{min_seq:019d}_{max_seq:019d}.parquet``.
+    Returns max_seq + 1 so the counter can resume, or 0 if no files exist.
+    """
+    max_seen = -1
+    for p in log_dir.glob("logs_*_*.parquet"):
+        parts = p.stem.split("_")
+        if len(parts) >= 3:
+            try:
+                max_seen = max(max_seen, int(parts[2]))
+            except ValueError:
+                continue
+    return max_seen + 1 if max_seen >= 0 else 1
+
+
+def _build_buffer_table(buffer: list[tuple]) -> pa.Table:
+    """Convert a list of row tuples into a pyarrow Table with the log schema."""
+    if not buffer:
+        return _PARQUET_SCHEMA.empty_table()
+    cols: list[list] = [[] for _ in range(6)]
+    for row in buffer:
+        for i, val in enumerate(row):
+            cols[i].append(val)
+    arrays = [
+        pa.array(cols[0], type=pa.int64()),
+        pa.array(cols[1], type=pa.string()),
+        pa.array(cols[2], type=pa.string()),
+        pa.array(cols[3], type=pa.string()),
+        pa.array(cols[4], type=pa.int64()),
+        pa.array(cols[5], type=pa.int32()),
+    ]
+    return pa.table(arrays, schema=_PARQUET_SCHEMA)
+
+
+class _SequenceCounter:
+    """Thread-safe monotonically increasing counter."""
+
+    def __init__(self, start: int = 1):
+        self._value = start
+        self._lock = Lock()
+
+    def next_batch(self, count: int) -> int:
+        """Return the first seq of a batch of ``count`` consecutive numbers."""
+        with self._lock:
+            first = self._value
+            self._value += count
+            return first
+
+
 @dataclass
 class LogReadResult:
     entries: list[logging_pb2.LogEntry]
-    cursor: int  # max autoincrement id seen
+    cursor: int  # max seq seen
 
 
 class LogStore:
-    """SQLite-backed log store keyed by arbitrary strings.
+    """Log store backed by in-memory buffer + rotating Parquet segments.
 
-    Thread-safe: writers and RPC readers may run concurrently. WAL mode
-    allows readers to proceed without blocking the writer.
+    Thread-safe: writers append to a buffer protected by a lock, readers
+    query via DuckDB over local Parquet files and the current buffer.
     """
 
     def __init__(
@@ -74,80 +138,59 @@ class LogStore:
         log_dir: Path | None = None,
         *,
         db_path: Path | None = None,
-        max_records: int = _MAX_RECORDS,
+        max_records: int = 0,
+        remote_log_dir: str = "",
+        local_budget_bytes: int = 5 * 1024**3,
+        flush_row_threshold: int = 1_000_000,
+        flush_time_threshold: float = 60.0,
     ):
         self._temp_dir: tempfile.TemporaryDirectory[str] | None = None
         if db_path is not None:
-            db_path.parent.mkdir(parents=True, exist_ok=True)
-            db_path_str = str(db_path)
+            self._log_dir = db_path.parent / "parquet_logs"
         elif log_dir is not None:
-            log_dir.mkdir(parents=True, exist_ok=True)
-            db_path_str = str(log_dir / "logs.db")
+            self._log_dir = log_dir
         else:
             self._temp_dir = tempfile.TemporaryDirectory(prefix="iris_controller_logs_")
-            db_path_str = str(Path(self._temp_dir.name) / "logs.db")
+            self._log_dir = Path(self._temp_dir.name) / "parquet_logs"
 
-        # Separate connections for writers and readers so WAL concurrency
-        # actually works: readers never block the writer and vice-versa.
-        self._write_conn = self._make_conn(db_path_str)
-        self._write_conn.executescript(_SCHEMA)
-        self._write_conn.commit()
+        self._log_dir.mkdir(parents=True, exist_ok=True)
 
-        self._read_conn = self._make_conn(db_path_str)
+        self._remote_log_dir = remote_log_dir
+        self._local_budget_bytes = local_budget_bytes
+        self._flush_row_threshold = flush_row_threshold
+        self._flush_time_threshold = flush_time_threshold
 
+        self._seq = _SequenceCounter(start=_recover_max_seq(self._log_dir))
+        self._buffer: list[tuple] = []
         self._write_lock = Lock()
-        self._read_lock = Lock()
-        self._max_records = max_records
-        self._rows_since_eviction_check = 0
-        self._eviction_check_interval = max_records // 10
+        self._last_flush_time = time.monotonic()
 
-    @staticmethod
-    def _make_conn(db_path: str) -> sqlite3.Connection:
-        conn = sqlite3.connect(db_path, check_same_thread=False)
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA synchronous = NORMAL")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        return conn
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_gcs_offload")
 
     def append(self, key: str, entries: list) -> None:
         if not entries:
             return
-
-        rows = [(key, e.source, e.data, e.timestamp.epoch_ms, e.level) for e in entries]
+        first_seq = self._seq.next_batch(len(entries))
+        rows = [(first_seq + i, key, e.source, e.data, e.timestamp.epoch_ms, e.level) for i, e in enumerate(entries)]
         with self._write_lock:
-            self._write_conn.executemany(
-                "INSERT INTO logs (key, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?)",
-                rows,
-            )
-            self._write_conn.commit()
-            self._post_write_maintenance(len(rows))
+            self._buffer.extend(rows)
+        self._maybe_flush()
 
     def append_batch(self, items: list[tuple[str, list]]) -> None:
-        """Write log entries from multiple keys in a single transaction.
-
-        Each item is (key, entries). All rows are inserted with a single
-        executemany + commit, avoiding per-key commit overhead and allowing
-        callers to release other locks before flushing logs.
-        """
-        all_rows = []
+        """Write log entries from multiple keys in a single operation."""
+        all_rows: list[tuple] = []
         for key, entries in items:
-            all_rows.extend((key, e.source, e.data, e.timestamp.epoch_ms, e.level) for e in entries)
+            if not entries:
+                continue
+            first_seq = self._seq.next_batch(len(entries))
+            all_rows.extend(
+                (first_seq + i, key, e.source, e.data, e.timestamp.epoch_ms, e.level) for i, e in enumerate(entries)
+            )
         if not all_rows:
             return
         with self._write_lock:
-            self._write_conn.executemany(
-                "INSERT INTO logs (key, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?)",
-                all_rows,
-            )
-            self._write_conn.commit()
-            self._post_write_maintenance(len(all_rows))
-
-    def _post_write_maintenance(self, rows_written: int) -> None:
-        """Run eviction as needed. Must hold self._write_lock."""
-        self._rows_since_eviction_check += rows_written
-        if self._rows_since_eviction_check >= self._eviction_check_interval:
-            self._evict_if_needed()
-            self._rows_since_eviction_check = 0
+            self._buffer.extend(all_rows)
+        self._maybe_flush()
 
     def get_logs(
         self,
@@ -160,52 +203,21 @@ class LogStore:
         tail: bool = False,
         min_level: str = "",
     ) -> LogReadResult:
-        """Fetch logs for a single key.
-
-        All filtering (substring, min_level, since_ms) is pushed into SQL so
-        that LIMIT works correctly and we never fetch millions of rows into Python.
-        """
+        """Fetch logs for a single key."""
         min_level_enum = str_to_log_level(min_level) if min_level else 0
 
-        params: list = [key, cursor]
-        where_extra = ""
-        if since_ms > 0:
-            where_extra += " AND epoch_ms > ?"
-            params.append(since_ms)
-        if substring_filter:
-            where_extra += " AND data LIKE ? ESCAPE '\\'"
-            params.append(f"%{_escape_like(substring_filter)}%")
-        if min_level_enum > 0:
-            where_extra += " AND (level = 0 OR level >= ?)"
-            params.append(min_level_enum)
+        where_parts = ["key = $key", "seq > $cursor"]
+        params: dict = {"key": key, "cursor": cursor}
+        _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
 
-        if tail and max_lines > 0:
-            params.append(max_lines)
-            with self._read_lock:
-                rows = self._read_conn.execute(
-                    f"SELECT id, source, data, epoch_ms, level FROM logs "
-                    f"WHERE key = ? AND id > ?{where_extra} ORDER BY id DESC LIMIT ?",
-                    params,
-                ).fetchall()
-            rows.reverse()
-        else:
-            limit_clause = ""
-            if max_lines > 0:
-                limit_clause = " LIMIT ?"
-                params.append(max_lines)
-            with self._read_lock:
-                rows = self._read_conn.execute(
-                    f"SELECT id, source, data, epoch_ms, level FROM logs "
-                    f"WHERE key = ? AND id > ?{where_extra} ORDER BY id{limit_clause}",
-                    params,
-                ).fetchall()
-
-        if not rows:
-            return LogReadResult(entries=[], cursor=cursor)
-
-        max_id = max(r[0] for r in rows)
-        entries = [self._row_to_entry(r) for r in rows]
-        return LogReadResult(entries=entries, cursor=max_id)
+        return self._execute_read(
+            where_parts,
+            params,
+            max_lines,
+            tail,
+            cursor,
+            include_key_in_select=False,
+        )
 
     def get_logs_by_prefix(
         self,
@@ -219,134 +231,204 @@ class LogStore:
         min_level: str = "",
         shallow: bool = False,
     ) -> LogReadResult:
-        """Fetch logs for all keys matching prefix, ordered by autoincrement id.
-
-        All filtering is pushed into SQL so LIMIT works correctly.
-
-        Args:
-            tail: If True and max_lines > 0, return the *last* N entries instead
-                  of the first N (uses DESC ordering then reverses).
-            shallow: If True, only match keys one level deep (no nested '/' after prefix).
-                     This excludes child job logs when fetching by job prefix.
-        """
+        """Fetch logs for all keys matching prefix, ordered by seq."""
         min_level_enum = str_to_log_level(min_level) if min_level else 0
 
-        params: list = [prefix + "%", cursor]
-        where = "WHERE key LIKE ? AND id > ?"
+        where_parts = ["key LIKE $prefix ESCAPE '\\'", "seq > $cursor"]
+        params: dict = {"prefix": _escape_like(prefix) + "%", "cursor": cursor}
         if shallow:
-            where += " AND key NOT LIKE ?"
-            params.append(prefix + "%/%")
-        if since_ms > 0:
-            where += " AND epoch_ms > ?"
-            params.append(since_ms)
-        if substring_filter:
-            where += " AND data LIKE ? ESCAPE '\\'"
-            params.append(f"%{_escape_like(substring_filter)}%")
-        if min_level_enum > 0:
-            where += " AND (level = 0 OR level >= ?)"
-            params.append(min_level_enum)
+            where_parts.append("key NOT LIKE $shallow_exclude ESCAPE '\\'")
+            params["shallow_exclude"] = _escape_like(prefix) + "%/%"
+        _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
 
-        if tail and max_lines > 0:
-            params.append(max_lines)
-            with self._read_lock:
-                rows = self._read_conn.execute(
-                    f"SELECT id, key, source, data, epoch_ms, level FROM logs {where} ORDER BY id DESC LIMIT ?",
-                    params,
-                ).fetchall()
-            rows.reverse()
-        else:
-            limit_clause = ""
-            if max_lines > 0:
-                limit_clause = " LIMIT ?"
-                params.append(max_lines)
-
-            with self._read_lock:
-                rows = self._read_conn.execute(
-                    f"SELECT id, key, source, data, epoch_ms, level FROM logs {where} ORDER BY id{limit_clause}",
-                    params,
-                ).fetchall()
-
-        max_id = max((r[0] for r in rows), default=cursor)
-        entries = []
-        for r in rows:
-            # Parse attempt_id from key using TaskAttempt wire format: "/user/job/0:attempt_id"
-            key = r[1]
-            parsed = TaskAttempt.from_wire(key)
-            entry = logging_pb2.LogEntry(source=r[2], data=r[3], level=r[5])
-            entry.timestamp.epoch_ms = r[4]
-            entry.attempt_id = parsed.attempt_id if parsed.attempt_id is not None else 0
-            entries.append(entry)
-
-        return LogReadResult(entries=entries, cursor=max_id)
+        return self._execute_read(
+            where_parts,
+            params,
+            max_lines,
+            tail,
+            cursor,
+            include_key_in_select=True,
+        )
 
     def has_logs(self, key: str) -> bool:
-        with self._read_lock:
-            row = self._read_conn.execute(
-                "SELECT 1 FROM logs WHERE key = ? LIMIT 1",
-                (key,),
+        parquet_files = self._list_parquet_files()
+        with self._write_lock:
+            buffer_snapshot = list(self._buffer)
+
+        buf_table = _build_buffer_table(buffer_snapshot)
+        conn = duckdb.connect()
+        try:
+            conn.register("write_buffer", buf_table)
+            source = _build_union_source(parquet_files)
+            row = conn.execute(
+                f"SELECT 1 FROM ({source}) WHERE key = $key LIMIT 1",
+                {"key": key},
             ).fetchone()
-        return row is not None
+            return row is not None
+        finally:
+            conn.close()
 
     def clear(self, key: str) -> None:
+        """Remove matching entries from the in-memory buffer only."""
         with self._write_lock:
-            self._write_conn.execute("DELETE FROM logs WHERE key = ?", (key,))
-            self._write_conn.commit()
-
-    def close(self) -> None:
-        """Close database connections and clean up temp dir if applicable."""
-        self._read_conn.close()
-        self._write_conn.close()
-        if self._temp_dir is not None:
-            self._temp_dir.cleanup()
-
-    @staticmethod
-    def _row_to_entry(row: tuple) -> logging_pb2.LogEntry:
-        # row: (id, source, data, epoch_ms, level)
-        entry = logging_pb2.LogEntry(source=row[1], data=row[2], level=row[4])
-        entry.timestamp.epoch_ms = row[3]
-        return entry
+            self._buffer = [row for row in self._buffer if row[1] != key]
 
     def cursor(self, key: str) -> LogCursor:
         """Return a stateful cursor for incremental reads on *key*."""
         return LogCursor(self, key)
 
-    def _evict_if_needed(self) -> None:
-        """Delete oldest rows when the total count exceeds the cap. Must hold self._write_lock.
+    def close(self) -> None:
+        """Flush remaining buffer, shut down background executor, clean up temp dir."""
+        self._flush_to_parquet()
+        self._executor.shutdown(wait=True)
+        if self._temp_dir is not None:
+            self._temp_dir.cleanup()
 
-        Uses MAX(id) - MIN(id) as a cheap approximation of row count (autoincrement
-        IDs are nearly contiguous since we only delete from the bottom). Evicts down
-        to max_records // 2 so we don't pay eviction cost on every subsequent append.
+    def _maybe_flush(self) -> None:
+        with self._write_lock:
+            buf_len = len(self._buffer)
+        elapsed = time.monotonic() - self._last_flush_time
+        if buf_len >= self._flush_row_threshold or (buf_len > 0 and elapsed >= self._flush_time_threshold):
+            self._flush_to_parquet()
 
-        After bulk deletion we truncate the WAL to prevent it from growing unboundedly.
-        Without this, the DELETE pages accumulate in the WAL and the next automatic
-        checkpoint stalls the writer while flushing gigabytes of data.
-        """
-        row = self._write_conn.execute("SELECT MIN(id), MAX(id) FROM logs").fetchone()
-        min_id, max_id = row
-        if min_id is None:
+    def _flush_to_parquet(self) -> None:
+        with self._write_lock:
+            if not self._buffer:
+                return
+            snapshot = self._buffer
+            self._buffer = []
+
+        self._last_flush_time = time.monotonic()
+
+        table = _build_buffer_table(snapshot)
+        min_seq = snapshot[0][0]
+        max_seq = snapshot[-1][0]
+        filename = f"logs_{min_seq:019d}_{max_seq:019d}.parquet"
+        filepath = self._log_dir / filename
+        pq.write_table(table, filepath, compression="zstd")
+
+        self._executor.submit(self._offload_to_gcs, filepath)
+        self._enforce_local_budget()
+
+    def _offload_to_gcs(self, filepath: Path) -> None:
+        if not self._remote_log_dir:
             return
-        approx_count = max_id - min_id + 1
-        if approx_count <= self._max_records:
-            return
-        # Keep the most recent max_records // 2 rows. Delete in batches to
-        # avoid a single enormous transaction that bloats the WAL.
-        target_cutoff = max_id - (self._max_records // 2)
-        batch_size = 100_000
-        cursor = min_id - 1
-        while cursor < target_cutoff:
-            batch_end = min(cursor + batch_size, target_cutoff)
-            self._write_conn.execute("DELETE FROM logs WHERE id > ? AND id <= ?", (cursor, batch_end))
-            self._write_conn.commit()
-            self._write_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            cursor = batch_end
+        remote_path = f"{self._remote_log_dir.rstrip('/')}/{filepath.name}"
+        try:
+            _fsspec_copy(str(filepath), remote_path)
+        except Exception:
+            logger.warning("Failed to offload %s to GCS", filepath, exc_info=True)
+
+    def _enforce_local_budget(self) -> None:
+        files = sorted(self._log_dir.glob("logs_*_*.parquet"))
+        total = sum(f.stat().st_size for f in files)
+        while total > self._local_budget_bytes and files:
+            oldest = files.pop(0)
+            total -= oldest.stat().st_size
+            oldest.unlink(missing_ok=True)
+
+    def _list_parquet_files(self) -> list[str]:
+        return sorted(str(p) for p in self._log_dir.glob("logs_*_*.parquet"))
+
+    def _execute_read(
+        self,
+        where_parts: list[str],
+        params: dict,
+        max_lines: int,
+        tail: bool,
+        default_cursor: int,
+        include_key_in_select: bool,
+    ) -> LogReadResult:
+        parquet_files = self._list_parquet_files()
+
+        with self._write_lock:
+            buffer_snapshot = list(self._buffer)
+
+        buf_table = _build_buffer_table(buffer_snapshot)
+        conn = duckdb.connect()
+        try:
+            conn.register("write_buffer", buf_table)
+            source = _build_union_source(parquet_files)
+            where_clause = " AND ".join(where_parts)
+
+            if include_key_in_select:
+                select_cols = "seq, key, source, data, epoch_ms, level"
+            else:
+                select_cols = "seq, source, data, epoch_ms, level"
+
+            order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
+            limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
+
+            sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
+            rows = conn.execute(sql, params).fetchall()
+        finally:
+            conn.close()
+
+        if tail and max_lines > 0:
+            rows.reverse()
+
+        if not rows:
+            return LogReadResult(entries=[], cursor=default_cursor)
+
+        max_seq = max(r[0] for r in rows)
+
+        if include_key_in_select:
+            entries = []
+            for r in rows:
+                # r: (seq, key, source, data, epoch_ms, level)
+                parsed = TaskAttempt.from_wire(r[1])
+                entry = logging_pb2.LogEntry(source=r[2], data=r[3], level=r[5])
+                entry.timestamp.epoch_ms = r[4]
+                entry.attempt_id = parsed.attempt_id if parsed.attempt_id is not None else 0
+                entries.append(entry)
+        else:
+            entries = []
+            for r in rows:
+                # r: (seq, source, data, epoch_ms, level)
+                entry = logging_pb2.LogEntry(source=r[1], data=r[2], level=r[4])
+                entry.timestamp.epoch_ms = r[3]
+                entries.append(entry)
+
+        return LogReadResult(entries=entries, cursor=max_seq)
+
+
+def _add_common_filters(
+    where_parts: list[str],
+    params: dict,
+    since_ms: int,
+    substring_filter: str,
+    min_level_enum: int,
+) -> None:
+    """Append shared WHERE clauses for since_ms, substring, and min_level."""
+    if since_ms > 0:
+        where_parts.append("epoch_ms > $since_ms")
+        params["since_ms"] = since_ms
+    if substring_filter:
+        where_parts.append("data LIKE $substring ESCAPE '\\'")
+        params["substring"] = f"%{_escape_like(substring_filter)}%"
+    if min_level_enum > 0:
+        where_parts.append("(level = 0 OR level >= $min_level)")
+        params["min_level"] = min_level_enum
+
+
+def _build_union_source(parquet_files: list[str]) -> str:
+    """Build a SQL source expression that unions parquet files with the write_buffer table.
+
+    Always includes write_buffer. Only includes read_parquet when files exist.
+    """
+    parts: list[str] = []
+    if parquet_files:
+        file_list = ", ".join(f"'{f}'" for f in parquet_files)
+        parts.append(f"SELECT * FROM read_parquet([{file_list}])")
+    parts.append("SELECT * FROM write_buffer")
+    return " UNION ALL ".join(parts)
 
 
 class LogCursor:
     """Stateful incremental reader for a single LogStore key.
 
-    Tracks an autoincrement id cursor across calls to read() so callers don't
-    need to manage cursor bookkeeping. Useful for streaming new log entries
-    incrementally (e.g. heartbeat log forwarding).
+    Tracks a seq cursor across calls to read() so callers don't need to
+    manage cursor bookkeeping.
     """
 
     def __init__(self, store: LogStore, key: str) -> None:
@@ -362,11 +444,7 @@ class LogCursor:
 
 
 class LogStoreHandler(logging.Handler):
-    """Logging handler that writes formatted records directly into a LogStore.
-
-    Each log record is written to SQLite immediately. WAL mode handles
-    concurrent writes without contention on low-volume process logs.
-    """
+    """Logging handler that writes formatted records directly into a LogStore."""
 
     def __init__(self, log_store: LogStore, key: str = PROCESS_LOG_KEY):
         super().__init__()
