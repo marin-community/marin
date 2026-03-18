@@ -81,13 +81,16 @@ GPU task pods failed with `No space left on device` installing torch+CUDA (~15GB
 The hostPath `/cache` mapped to `/dev/ram0` (15GB ramdisk) on CoreWeave GPU nodes.
 Meanwhile the NVMe RAID at `/dev/md127` has 28TB.
 
-Fix: set `cache_dir: /var/iris-cache` in `kubernetes_provider` config so the
-hostPath lands on the NVMe overlay instead of the ramdisk.
+Fix: set `cache_dir: /mnt/local/iris-cache` in `kubernetes_provider` config so the
+hostPath lands on the multi-TB NVMe at `/mnt/local` instead of the 15GB ramdisk.
 
 ### Current status
 
 - CPU canary PASSED
-- GPU canary: retrying with NVMe-backed cache dir
+- GPU canary: retrying with `/mnt/local` NVMe cache dir
+- H100 nodepool provisioned (2/2 nodes: gd927de, gd94886)
+- Executor_main correctly submitted child job `grug-train-mh` with 2 replicas
+- Task pods pending/failing due to disk space, now fixed
 
 ### Known risks
 

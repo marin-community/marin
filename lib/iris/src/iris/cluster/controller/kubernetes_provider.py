@@ -169,6 +169,10 @@ def _build_volumes_and_mounts(
     Workdir and tmpfs use emptyDir; cache mounts use hostPath so they persist
     across pod restarts on the same node. /dev/shm is memory-backed with a
     generous limit for GPU/TPU multi-process communication.
+
+    NOTE: On CoreWeave bare-metal GPU nodes the root filesystem is a 15GB
+    ramdisk. Set cache_dir to a path on the NVMe (e.g. /mnt/local/iris-cache)
+    to avoid running out of space installing torch+CUDA.
     """
     volumes: list[dict] = []
     mounts: list[dict] = []
