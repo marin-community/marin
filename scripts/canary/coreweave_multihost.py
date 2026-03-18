@@ -67,6 +67,10 @@ CANARY_ENV_DEFAULTS = {
     "NCCL_DEBUG_SUBSYS": "INIT,NET",
     "NCCL_IB_DISABLE": "0",
     "NCCL_NET_GDR_LEVEL": "5",
+    # IB Socket interfaces use link-local IPv6 and don't route cross-host.
+    # Fall back to the main Ethernet interface for NCCL socket transport
+    # until libibverbs is in the task image for native IB/RDMA.
+    "NCCL_SOCKET_IFNAME": "enp157s0np0",
     # JAX compilation logging
     "JAX_LOG_COMPILES": "1",
 }
@@ -515,7 +519,7 @@ def run_gpu_phase(verbose: bool = False) -> int:
         cpu=1,
         memory="16GB",
         disk="16GB",
-        timeout_seconds=7200,
+        timeout_seconds=1200,  # 20 min — short for debugging, increase later
         extras=["cpu"],
         phase_label="GPU",
     )

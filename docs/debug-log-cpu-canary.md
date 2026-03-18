@@ -123,11 +123,23 @@ Switching to tiny model (`llama_nano`, 10 steps) to isolate, and adding:
 - `NCCL_IB_DISABLE=0`, `NCCL_NET_GDR_LEVEL=5`
 - `JAX_LOG_COMPILES=1`
 
+### Fix 12: NCCL falling back to Socket over IB link-local — missing libibverbs
+
+NCCL debug revealed: `Failed to open libibverbs.so[.1]` → falls back to Socket
+transport. Socket uses IB interfaces (`ibs0-7`) with link-local IPv6 (`fe80::`)
+which don't route cross-host → hang.
+
+Root cause: task image (`python:3.12-slim`) doesn't include `libibverbs1`.
+
+Fix (both):
+1. Add `libibverbs1 ibverbs-providers` to task image Dockerfile
+2. Set `NCCL_SOCKET_IFNAME=enp157s0np0` as fallback (routable Ethernet)
+
 ### Current status
 
 - CPU canary PASSED
 - H100 nodepool provisioned (2/2 nodes: gd927de, gd94886)
-- Switching to tiny model for faster iteration on NCCL hang
+- Tiny model for faster iteration, libibverbs + NCCL_SOCKET_IFNAME fix applied
 
 ### Known risks
 
