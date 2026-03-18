@@ -135,11 +135,20 @@ Fix (both):
 1. Add `libibverbs1 ibverbs-providers` to task image Dockerfile
 2. Set `NCCL_SOCKET_IFNAME=enp157s0np0` as fallback (routable Ethernet)
 
+### Result: tiny model PASSED on 2x H100 nodes
+
+Tiny model (`llama_nano`, 10 steps) completed in 2m30s on gd927de + gd94886.
+Both tasks logged matching loss (`eval/loss 11.98489`). NCCL used Socket over
+Ethernet (`enp157s0np0`) — not ideal but functional. W&B run:
+https://wandb.ai/marin-community/marin/runs/mh-canary-20260318-195805
+
+Next: switch back to Grug MoE canary for full validation.
+
 ### Current status
 
 - CPU canary PASSED
-- H100 nodepool provisioned (2/2 nodes: gd927de, gd94886)
-- Tiny model for faster iteration, libibverbs + NCCL_SOCKET_IFNAME fix applied
+- Tiny multi-host GPU canary PASSED (2x H100, llama_nano, 10 steps)
+- Switching to Grug MoE canary for full validation
 
 ### Known risks
 

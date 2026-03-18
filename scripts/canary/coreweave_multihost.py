@@ -514,12 +514,12 @@ def run_gpu_phase(verbose: bool = False) -> int:
     exit_code = submit_and_monitor(
         config_path=GPU_CONFIG,
         job_name=f"multihost-canary-{run_id}",
-        command=["python", "-m", "experiments.tutorials.train_tiny_model_gpu_multihost"],
+        command=["python", "-m", "experiments.ferries.canary_ferry"],
         env_vars=env_vars,
         cpu=1,
         memory="16GB",
         disk="16GB",
-        timeout_seconds=1200,  # 20 min — short for debugging, increase later
+        timeout_seconds=7200,
         extras=["cpu"],
         phase_label="GPU",
     )
