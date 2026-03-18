@@ -107,6 +107,7 @@ def connected_components(
 
     def _dedup_combiner(bucket: str, items: Iterator[CCInput]) -> Iterator[CCInput]:
         """Local pre-aggregation: deduplicate items by record_id within each scatter buffer."""
+        # TODO (rav): replace this with bloom filter? Reduce mem overhead.
         seen: set[str] = set()
         for item in items:
             norm = _internal_orderable_id(item["id"])
