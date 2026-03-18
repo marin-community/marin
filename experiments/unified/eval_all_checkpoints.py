@@ -536,7 +536,7 @@ def main():
         (p for p in reversed(folder_parts) if p not in ("hf", "checkpoints", "")),
         folder_parts[-1],
     )
-    wandb_name = args.wandb_name or f"eval-{folder_basename}"
+    wandb_name = args.wandb_name or f"eval2-{folder_basename}"
 
     if args.no_wandb:
         tracker_config: WandbConfig | tuple = ()
