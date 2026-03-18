@@ -604,9 +604,7 @@ def _merge_sorted_chunks(shard, key_fn: Callable, sort_fn: Callable | None = Non
     else:
         merge_key = key_fn
 
-    chunk_iterators = []
-    for chunk_data in shard.iter_chunks():
-        chunk_iterators.append(iter(chunk_data))
+    chunk_iterators = list(shard.get_iterators())
 
     logger.info(f"Merging {len(chunk_iterators):,} sorted chunk iterators")
 
@@ -776,8 +774,16 @@ def run_stage(
             return
 
         elif isinstance(op, Reduce):
-            # Merge sorted chunks and reduce per key
-            stream = _reduce_gen(ctx.shard, op.key_fn, op.reducer_fn, sort_fn=op.sort_fn)
+            # Build ScatterShard from scatter file paths if needed,
+            # then merge sorted chunks and reduce per key.
+            from zephyr.execution import ScatterShard, _build_scatter_shard
+
+            shard = ctx.shard
+            if not isinstance(shard, ScatterShard):
+                # Shard contains scatter file paths — build ScatterShard lazily
+                paths = list(shard)
+                shard = _build_scatter_shard(paths, ctx.shard_idx)
+            stream = _reduce_gen(shard, op.key_fn, op.reducer_fn, sort_fn=op.sort_fn)
             op_index += 1
 
         elif isinstance(op, Fold):
