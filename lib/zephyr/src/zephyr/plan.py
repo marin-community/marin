@@ -713,6 +713,8 @@ def _merge_sorted_chunks(shard, key_fn: Callable, sort_fn: Callable | None = Non
     for chunk_data in shard.iter_chunks():
         chunk_iterators.append(iter(chunk_data))
 
+    logger.info(f"Merging {len(chunk_iterators):,} sorted chunk iterators")
+
     merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
     yield from groupby(merged_stream, key=key_fn)
 
