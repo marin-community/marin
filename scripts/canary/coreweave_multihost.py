@@ -562,6 +562,20 @@ def cli(ctx, verbose: bool):
     ctx.ensure_object(dict)
     ctx.obj["verbose"] = verbose
 
+    # Load ~/.env for fresh credentials (R2 keys, WANDB, etc.)
+    dotenv_path = Path.home() / ".env"
+    if dotenv_path.is_file():
+        with open(dotenv_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                val = val.strip().strip("'\"")
+                if key:
+                    os.environ[key] = val
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     if verbose:
         logging.getLogger("iris").setLevel(logging.DEBUG)

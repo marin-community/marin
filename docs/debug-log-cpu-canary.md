@@ -65,10 +65,20 @@ JAX distributed init (`jax_init.py`) coordinates across tasks via endpoint regis
 - `backend.coreweave.cloud/superpod: same-slice` — pod affinity on same spine switch
 - `controller_address` set to in-cluster service URL
 
+### Fix 7: R2 credentials expired / controller CrashLoopBackOff
+
+Controller pod crash-looped on startup: `PermissionError: Forbidden` when
+`download_checkpoint_to_local` called `fs.exists()` on the S3 state path.
+
+Root cause: R2 API keys (`94763782...`) in the environment were expired/revoked.
+Confirmed locally — every s3fs operation (ls, HEAD) returned 403.
+
+Fix: load fresh credentials from `~/.env` at script startup via `os.environ.setdefault`.
+
 ### Current status
 
 - CPU canary PASSED
-- GPU canary: first run starting
+- GPU canary: retrying with fresh R2 keys
 
 ### Known risks
 
