@@ -22,9 +22,15 @@ Lifecycle of a log entry:
 
 Read path: DuckDB ``read_parquet()`` over the snapshot of local Parquet files
 UNION ALL in-memory pyarrow tables for each RAM buffer (head + sealed).
-All snapshots are taken atomically under ``_lock``.
 
-The design keeps exactly one lock for all shared state so ordering is trivial.
+Locking:
+    ``_lock``  --protects all mutable state (head buffer, sealed deque, local
+    segments list, and the sequence counter). Held briefly for snapshots.
+
+    ``_segments_rwlock`` --readers hold a *shared* read lock while DuckDB has
+    parquet files open; GC holds the *exclusive* write lock before unlinking
+    files. This prevents GC from deleting a file that an in-progress query
+    still references.
 """
 
 from __future__ import annotations
@@ -36,7 +42,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from threading import Lock
+from threading import Condition, Lock
 
 import duckdb
 import fsspec.core
@@ -161,19 +167,41 @@ class _LocalSegment:
     max_seq: int = 0
 
 
-class _SequenceCounter:
-    """Thread-safe monotonically increasing counter."""
+class _RWLock:
+    """Simple readers-writer lock.
 
-    def __init__(self, start: int = 1):
-        self._value = start
-        self._lock = Lock()
+    Multiple readers can hold the lock concurrently. A writer must wait for
+    all readers to release before acquiring exclusive access. Used to prevent
+    GC from unlinking parquet files while DuckDB reads are in flight.
+    """
 
-    def next_batch(self, count: int) -> int:
-        """Return the first seq of a batch of ``count`` consecutive numbers."""
-        with self._lock:
-            first = self._value
-            self._value += count
-            return first
+    def __init__(self):
+        self._cond = Condition(Lock())
+        self._readers = 0
+        self._writer = False
+
+    def read_acquire(self) -> None:
+        with self._cond:
+            while self._writer:
+                self._cond.wait()
+            self._readers += 1
+
+    def read_release(self) -> None:
+        with self._cond:
+            self._readers -= 1
+            if self._readers == 0:
+                self._cond.notify_all()
+
+    def write_acquire(self) -> None:
+        with self._cond:
+            while self._writer or self._readers > 0:
+                self._cond.wait()
+            self._writer = True
+
+    def write_release(self) -> None:
+        with self._cond:
+            self._writer = False
+            self._cond.notify_all()
 
 
 @dataclass
@@ -213,14 +241,17 @@ class LogStore:
         self._flush_interval_sec = flush_interval_sec
         self._segment_target_bytes = segment_target_bytes
 
-        self._seq = _SequenceCounter(start=_recover_max_seq(self._log_dir))
-
         # ---- shared mutable state (all guarded by _lock) ----
         self._lock = Lock()
+        self._next_seq = _recover_max_seq(self._log_dir)  # guarded by _lock
         self._head: list[tuple] = []  # current write buffer
         self._sealed: deque[_SealedBuffer] = deque()  # sealed, pending flush
         self._local_segments: deque[_LocalSegment] = deque()  # flushed parquet files
         self._last_flush_time = time.monotonic()
+
+        # RWLock: readers hold shared lock during DuckDB queries;
+        # GC holds exclusive lock before unlinking files.
+        self._segments_rwlock = _RWLock()
 
         # Discover pre-existing Parquet files from a previous run.
         for p in sorted(self._log_dir.glob("logs_*_*.parquet")):
@@ -240,25 +271,27 @@ class LogStore:
     def append(self, key: str, entries: list) -> None:
         if not entries:
             return
-        first_seq = self._seq.next_batch(len(entries))
-        rows = [(first_seq + i, key, e.source, e.data, e.timestamp.epoch_ms, e.level) for i, e in enumerate(entries)]
         with self._lock:
+            first_seq = self._next_seq
+            self._next_seq += len(entries)
+            rows = [(first_seq + i, key, e.source, e.data, e.timestamp.epoch_ms, e.level) for i, e in enumerate(entries)]
             self._head.extend(rows)
         self._maybe_seal()
 
     def append_batch(self, items: list[tuple[str, list]]) -> None:
         """Write log entries from multiple keys in a single operation."""
-        all_rows: list[tuple] = []
-        for key, entries in items:
-            if not entries:
-                continue
-            first_seq = self._seq.next_batch(len(entries))
-            all_rows.extend(
-                (first_seq + i, key, e.source, e.data, e.timestamp.epoch_ms, e.level) for i, e in enumerate(entries)
-            )
-        if not all_rows:
-            return
         with self._lock:
+            all_rows: list[tuple] = []
+            for key, entries in items:
+                if not entries:
+                    continue
+                first_seq = self._next_seq
+                self._next_seq += len(entries)
+                all_rows.extend(
+                    (first_seq + i, key, e.source, e.data, e.timestamp.epoch_ms, e.level) for i, e in enumerate(entries)
+                )
+            if not all_rows:
+                return
             self._head.extend(all_rows)
         self._maybe_seal()
 
@@ -423,12 +456,16 @@ class LogStore:
                         pass
                     sealed.flushed = True
 
-                # Delete the old segment file (now replaced).
+                # Delete the old segment file (now replaced). Hold the write lock
+                # so concurrent reads that snapshotted the old path finish first.
                 if str(filepath) != latest.path:
+                    self._segments_rwlock.write_acquire()
                     try:
                         Path(latest.path).unlink(missing_ok=True)
                     except Exception:
                         logger.warning("Failed to delete old segment %s", latest.path, exc_info=True)
+                    finally:
+                        self._segments_rwlock.write_release()
 
                 # GCS offload for the consolidated file.
                 self._offload_to_gcs(filename, filepath)
@@ -481,7 +518,12 @@ class LogStore:
             logger.warning("Failed to offload %s to GCS", filepath, exc_info=True)
 
     def _gc_local_segments(self) -> None:
-        """Drop oldest local Parquet segments if count or size exceeds limits."""
+        """Drop oldest local Parquet segments if count or size exceeds limits.
+
+        Takes the _segments_rwlock exclusively before unlinking files so that
+        in-progress DuckDB reads (which hold the shared read lock) are not
+        disrupted by file deletion.
+        """
         with self._lock:
             total_bytes = sum(s.size_bytes for s in self._local_segments)
             to_delete: list[str] = []
@@ -493,12 +535,20 @@ class LogStore:
                 total_bytes -= oldest.size_bytes
                 to_delete.append(oldest.path)
 
-        # Delete files outside the lock.
-        for path in to_delete:
-            try:
-                Path(path).unlink(missing_ok=True)
-            except Exception:
-                logger.warning("Failed to delete old segment %s", path, exc_info=True)
+        if not to_delete:
+            return
+
+        # Hold the write lock while deleting files so concurrent reads
+        # (which hold the read lock) finish before we unlink anything.
+        self._segments_rwlock.write_acquire()
+        try:
+            for path in to_delete:
+                try:
+                    Path(path).unlink(missing_ok=True)
+                except Exception:
+                    logger.warning("Failed to delete old segment %s", path, exc_info=True)
+        finally:
+            self._segments_rwlock.write_release()
 
     # ------------------------------------------------------------------
     # Internal: read
@@ -523,24 +573,31 @@ class LogStore:
             ram_rows.extend(self._head)
 
         ram_table = _build_buffer_table(ram_rows)
-        conn = duckdb.connect()
+
+        # Hold the segments read lock while DuckDB has files open so that
+        # GC (which takes the write lock) cannot delete them mid-query.
+        self._segments_rwlock.read_acquire()
         try:
-            conn.register("ram_buffer", ram_table)
-            source = _build_union_source(parquet_files)
-            where_clause = " AND ".join(where_parts)
+            conn = duckdb.connect()
+            try:
+                conn.register("ram_buffer", ram_table)
+                source = _build_union_source(parquet_files)
+                where_clause = " AND ".join(where_parts)
 
-            if include_key_in_select:
-                select_cols = "seq, key, source, data, epoch_ms, level"
-            else:
-                select_cols = "seq, source, data, epoch_ms, level"
+                if include_key_in_select:
+                    select_cols = "seq, key, source, data, epoch_ms, level"
+                else:
+                    select_cols = "seq, source, data, epoch_ms, level"
 
-            order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
-            limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
+                order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
+                limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
 
-            sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
-            rows = conn.execute(sql, params).fetchall()
+                sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
+                rows = conn.execute(sql, params).fetchall()
+            finally:
+                conn.close()
         finally:
-            conn.close()
+            self._segments_rwlock.read_release()
 
         if tail and max_lines > 0:
             rows.reverse()
