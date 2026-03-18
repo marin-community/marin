@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import atexit
 import logging
+import os
 
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
@@ -20,6 +21,41 @@ from iris.cluster.client.job_info import get_job_info
 from iris.time_utils import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
+
+_JAX_ENV_KEYS = (
+    "IRIS_TASK_ID",
+    "IRIS_NUM_TASKS",
+    "IRIS_PORT_jax",
+    "JAX_COORDINATOR_ADDRESS",
+    "JAX_COORDINATOR_BIND_ADDRESS",
+    "JAX_LOCAL_DEVICE_IDS",
+    "JAX_PROCESS_COUNT",
+    "JAX_PROCESS_INDEX",
+)
+
+
+def _log_jax_bootstrap_inputs(job_info, *, port: int, endpoint_name: str) -> None:
+    env_snapshot = {key: os.environ.get(key, "") for key in _JAX_ENV_KEYS if key in os.environ}
+    if job_info is None:
+        logger.info(
+            "initialize_jax bootstrap inputs: job_info=None endpoint_name=%s port=%s env=%s",
+            endpoint_name,
+            port,
+            env_snapshot or "none",
+        )
+        return
+
+    logger.info(
+        "initialize_jax bootstrap inputs: task_index=%s num_tasks=%s advertise_host=%s ports=%s endpoint_name=%s "
+        "requested_port=%s env=%s",
+        job_info.task_index,
+        job_info.num_tasks,
+        job_info.advertise_host,
+        dict(job_info.ports),
+        endpoint_name,
+        port,
+        env_snapshot or "none",
+    )
 
 
 def _poll_for_coordinator(
@@ -86,6 +122,7 @@ def initialize_jax(
     import jax
 
     job_info = get_job_info()
+    _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
     if job_info is None or job_info.num_tasks <= 1:
         jax.distributed.initialize()
         return

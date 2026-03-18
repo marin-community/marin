@@ -65,6 +65,12 @@ _ACCELERATOR_TYPE_MAP = {
     "tpu": "ACCELERATOR_TYPE_TPU",
 }
 
+_COREWEAVE_TOPOLOGY_LABEL_PREFIXES = (
+    "backend.coreweave.cloud/",
+    "ib.coreweave.cloud/",
+    "node.coreweave.cloud/",
+)
+
 
 def _normalize_accelerator_type_field(d: dict) -> None:
     """Normalize a single accelerator_type field from lowercase to proto enum format."""
@@ -232,6 +238,23 @@ def _validate_worker_settings(config: config_pb2.IrisClusterConfig) -> None:
                 raise ValueError(
                     f"Scale group '{name}': worker.attributes.region={region!r} must match "
                     f"slice_template.gcp.zone region {zone_region!r}."
+                )
+
+        if (
+            template.HasField("coreweave")
+            and sg_config.resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU
+            and sg_config.num_vms > 1
+        ):
+            topology_attrs = {
+                key: value
+                for key, value in attributes.items()
+                if any(key.startswith(prefix) for prefix in _COREWEAVE_TOPOLOGY_LABEL_PREFIXES)
+            }
+            if not topology_attrs:
+                raise ValueError(
+                    f"Scale group '{name}': CoreWeave GPU groups with num_vms>1 must set at least one "
+                    "topology label in worker.attributes (for example "
+                    "'backend.coreweave.cloud/superpod: same-slice')."
                 )
 
 

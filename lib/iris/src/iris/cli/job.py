@@ -367,27 +367,31 @@ def generate_job_name(command: list[str]) -> str:
     return f"iris-run-{script_name}-{timestamp}"
 
 
-def resolve_multinode_tpu_defaults(
+def resolve_multinode_defaults(
     tpu: str | None,
+    gpu: str | None,
     replicas: int | None,
 ) -> tuple[int, CoschedulingConfig | None]:
-    """Auto-detect multinode TPU topology and set replicas/coscheduling.
+    """Auto-detect multinode topology and set replicas/coscheduling.
 
-    When a multinode TPU (vm_count > 1) is requested and the caller did not
-    explicitly set replicas, this function sets replicas to the topology's
-    vm_count and enables coscheduling by ``tpu-name`` so that all tasks land
-    on workers in the same TPU slice.
+    For TPUs with vm_count > 1, infers replicas from the topology and enables
+    coscheduling by ``tpu-name`` so that all tasks land on workers in the same
+    TPU slice. For GPUs with replicas > 1, enables coscheduling by ``pool`` so
+    that all replicas are scheduled together.
 
     Args:
         tpu: TPU type string (e.g. ``"v6e-32"``), or ``None``.
+        gpu: GPU type string (e.g. ``"H100"``), or ``None``.
         replicas: Explicit replica count from the caller, or ``None`` if not
             specified (meaning the default should be inferred).
 
     Returns:
         A ``(replicas, coscheduling)`` tuple.  ``coscheduling`` is ``None``
-        for single-host TPUs or non-TPU jobs.
+        for single-host or non-multinode jobs.
     """
     if not tpu:
+        if gpu and replicas is not None and replicas > 1:
+            return replicas, CoschedulingConfig(group_by="pool")
         return replicas or 1, None
 
     try:
@@ -456,7 +460,7 @@ def run_iris_job(
     job_name = job_name or generate_job_name(command)
     extras = extras or []
 
-    replicas, coscheduling = resolve_multinode_tpu_defaults(tpu, replicas)
+    replicas, coscheduling = resolve_multinode_defaults(tpu, gpu, replicas)
 
     constraints: list[Constraint] = []
     if regions:

@@ -65,6 +65,7 @@ class FakeKubectl:
         self._cluster_roles: dict[str, dict] = {}
         self._cluster_role_bindings: dict[str, dict] = {}
         self._nodepools: dict[str, dict] = {}
+        self._nodes: dict[str, dict] = {}
         self._pods: dict[str, dict] = {}
         self._failures: dict[str, str] = {}
         self._pod_logs: dict[str, str] = {}
@@ -117,6 +118,8 @@ class FakeKubectl:
             return self._handle_get_nodepool(clean_args)
         if "get" in clean_args and "nodepools" in clean_args:
             return self._handle_list_nodepools(clean_args)
+        if "get" in clean_args and "node" in clean_args and "nodes" not in clean_args:
+            return self._handle_get_node(clean_args)
         if "get" in clean_args and "pods" in clean_args:
             return self._handle_get_pods(clean_args, namespace)
         if "delete" in clean_args and "nodepool" in clean_args:
@@ -269,6 +272,15 @@ class FakeKubectl:
                 items = self._filter_by_selector(items, selector)
 
         return _completed(stdout=json.dumps({"items": items}))
+
+    def _handle_get_node(self, args: list[str]) -> subprocess.CompletedProcess:
+        idx = args.index("node") + 1
+        if idx >= len(args):
+            return _completed(returncode=1, stderr="missing node name")
+        name = args[idx]
+        if name not in self._nodes:
+            return _completed(returncode=1, stderr=f"node {name} not found")
+        return _completed(stdout=json.dumps(self._nodes[name]))
 
     def _handle_delete_generic(
         self, args: list[str], resource_type: str, store: dict[str, dict]
@@ -966,6 +978,56 @@ def test_start_controller_skips_s3_for_gs_storage(fake_kubectl: FakeKubectl, mon
     assert "AWS_SECRET_ACCESS_KEY" not in env_names
 
     t.join(timeout=5)
+    platform.shutdown()
+
+
+def test_ensure_nodepools_scales_multihost_groups_by_num_vms(fake_kubectl: FakeKubectl):
+    """NodePool capacity is counted in nodes, so multihost groups scale by num_vms per slice."""
+    platform = _make_platform()
+    cluster_config = _make_cluster_config()
+    sg = cluster_config.scale_groups["h100-16x"]
+    sg.min_slices = 0
+    sg.max_slices = 1
+    sg.slice_template.CopyFrom(
+        config_pb2.SliceConfig(
+            name_prefix="h100-16x",
+            num_vms=2,
+            coreweave=config_pb2.CoreweaveSliceConfig(instance_type="gd-8xh100ib-i128"),
+        )
+    )
+
+    platform.ensure_nodepools(cluster_config)
+
+    h100_pool = fake_kubectl._nodepools["iris-h100-16x"]
+    assert h100_pool["spec"]["minNodes"] == 0
+    assert h100_pool["spec"]["maxNodes"] == 2
+    platform.shutdown()
+
+
+def test_ensure_nodepools_keeps_one_multihost_slice_warm(fake_kubectl: FakeKubectl):
+    """Existing multihost pools keep one full slice worth of desired nodes."""
+    platform = _make_platform()
+    cluster_config = _make_cluster_config()
+    sg = cluster_config.scale_groups["h100-16x"]
+    sg.min_slices = 0
+    sg.max_slices = 1
+    sg.slice_template.CopyFrom(
+        config_pb2.SliceConfig(
+            name_prefix="h100-16x",
+            num_vms=2,
+            coreweave=config_pb2.CoreweaveSliceConfig(instance_type="gd-8xh100ib-i128"),
+        )
+    )
+
+    fake_kubectl._nodepools["iris-h100-16x"] = {
+        "metadata": {"name": "iris-h100-16x", "labels": {}},
+        "spec": {"instanceType": "gd-8xh100ib-i128", "minNodes": 0, "maxNodes": 1, "targetNodes": 1},
+        "status": {"readyNodes": 1, "currentNodes": 1, "conditions": []},
+    }
+
+    platform.ensure_nodepools(cluster_config)
+
+    assert fake_kubectl._nodepools["iris-h100-16x"]["spec"]["targetNodes"] == 2
     platform.shutdown()
 
 

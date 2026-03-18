@@ -86,12 +86,40 @@ def _needs_virtual_host_addressing(endpoint_url: str) -> bool:
     return any(hostname == domain or hostname.endswith("." + domain) for domain in _VIRTUAL_HOST_ONLY_S3_DOMAINS)
 
 
+_COREWEAVE_TOPOLOGY_LABEL_PREFIXES = (
+    "backend.coreweave.cloud/",
+    "ib.coreweave.cloud/",
+    "node.coreweave.cloud/",
+)
+_COREWEAVE_TOPOLOGY_DISCOVERY_VALUE = "same-slice"
+
+
 def _classify_kubectl_error(stderr: str) -> PlatformError:
     """Classify a kubectl error into a specific PlatformError subclass."""
     lower = stderr.lower()
     if "quota" in lower or "insufficient" in lower or "capacity" in lower:
         return QuotaExhaustedError(stderr)
     return PlatformError(stderr)
+
+
+def split_coreweave_topology_selector(worker_attributes: dict[str, str]) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Split worker attributes into static topology selectors and keys needing discovery.
+
+    Keys with known CoreWeave topology prefixes and a concrete value become static
+    nodeSelector entries. Keys with the sentinel value "same-slice" are returned as
+    discovered_keys — the provider should read the leader pod's node labels to fill
+    these in at runtime.
+    """
+    static_selector: dict[str, str] = {}
+    discovered_keys: list[str] = []
+    for key, value in worker_attributes.items():
+        if not any(key.startswith(prefix) for prefix in _COREWEAVE_TOPOLOGY_LABEL_PREFIXES):
+            continue
+        if value == _COREWEAVE_TOPOLOGY_DISCOVERY_VALUE:
+            discovered_keys.append(key)
+        else:
+            static_selector[key] = value
+    return static_selector, tuple(discovered_keys)
 
 
 # ============================================================================
@@ -237,8 +265,9 @@ class CoreweavePlatform:
                 continue
             pool_name = self._nodepool_name(name)
             expected_names.add(pool_name)
-            min_nodes = sg.min_slices
-            max_nodes = sg.max_slices
+            num_vms = max(1, sg.slice_template.num_vms)
+            min_nodes = sg.min_slices * num_vms
+            max_nodes = sg.max_slices * num_vms
             futures.append(
                 self._executor.submit(
                     self._ensure_one_nodepool,
@@ -247,6 +276,7 @@ class CoreweavePlatform:
                     name,
                     min_nodes=min_nodes,
                     max_nodes=max_nodes,
+                    warm_nodes=num_vms,
                 )
             )
         for f in futures:
@@ -279,19 +309,19 @@ class CoreweavePlatform:
         *,
         min_nodes: int,
         max_nodes: int,
+        warm_nodes: int,
     ) -> None:
         """Create or reconcile a single NodePool.
 
         Always applies the manifest so that spec fields (minNodes, maxNodes)
-        are reconciled on every cluster start. Clamps targetNodes to
-        min(currentNodes, 1) to prevent runaway scaling from system pods
-        (e.g. konnectivity-agent) while keeping an existing node warm.
+        are reconciled on every cluster start. Existing pools keep one full
+        slice worth of nodes warm so a transient pod deletion does not collapse
+        multihost desired capacity back to a single node.
         """
         target_nodes = 0
         existing = self._kubectl.get_json("nodepool", pool_name, cluster_scoped=True)
         if existing is not None:
-            current_nodes = existing.get("status", {}).get("currentNodes", 0)
-            target_nodes = min(current_nodes, 1)
+            target_nodes = max(min_nodes, min(max_nodes, warm_nodes))
 
         manifest = {
             "apiVersion": "compute.coreweave.com/v1alpha1",

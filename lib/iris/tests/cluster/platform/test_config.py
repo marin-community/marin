@@ -1411,3 +1411,37 @@ scale_groups:
         p.write_text(content)
         with pytest.raises(ValueError, match="preemptible must be true or false"):
             load_config(p)
+
+
+def _config_with_coreweave_gpu_sg(topology_attrs: dict[str, str] | None = None) -> config_pb2.IrisClusterConfig:
+    """Build a minimal IrisClusterConfig with a multi-VM CoreWeave GPU scale group."""
+    config = config_pb2.IrisClusterConfig()
+    sg = config.scale_groups["h100-16x"]
+    sg.num_vms = 2
+    sg.resources.cpu_millicores = 128_000
+    sg.resources.memory_bytes = 2048 * 1024**3
+    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_GPU
+    sg.resources.device_variant = "H100"
+    sg.resources.device_count = 8
+    sg.min_slices = 0
+    sg.max_slices = 1
+    sg.slice_template.num_vms = 2
+    sg.slice_template.coreweave.region = "US-WEST-04A"
+    sg.slice_template.coreweave.instance_type = "gd-8xh100ib-i128"
+    sg.worker.attributes["region"] = "US-WEST-04A"
+    sg.worker.attributes["pool"] = "h100-16x"
+    if topology_attrs:
+        for k, v in topology_attrs.items():
+            sg.worker.attributes[k] = v
+    return config
+
+
+def test_coreweave_gpu_multivm_requires_topology_label():
+    config = _config_with_coreweave_gpu_sg()
+    with pytest.raises(ValueError, match="topology label"):
+        validate_config(config)
+
+
+def test_coreweave_gpu_multivm_accepts_topology_label():
+    config = _config_with_coreweave_gpu_sg({"backend.coreweave.cloud/superpod": "same-slice"})
+    validate_config(config)
