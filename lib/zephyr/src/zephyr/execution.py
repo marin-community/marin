@@ -28,7 +28,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 
 import cloudpickle
 import pyarrow as pa
@@ -112,49 +112,45 @@ class PickleDiskChunk:
 
 
 @dataclass(frozen=True)
-class ParquetMeta:
-    """Metadata for one scatter file's sorted chunks for a target shard."""
+class ParquetDiskChunk:
+    """Slice of a shared Parquet scatter file, filtered by target shard and chunk.
 
-    chunk_count: int  # number of sorted chunks for this shard in this file
-    chunk_offset: int  # starting chunk_idx (cumulative across segments from same source)
-    is_pickled: bool
+    Multiple ParquetDiskChunk instances share the same file path but filter
+    for different (shard_idx, chunk_idx) pairs. Each chunk is pre-sorted
+    by key, preserving the invariant needed for k-way merge in Reduce.
 
+    Items are stored in one of two envelope formats:
 
-@dataclass(frozen=True)
-class ParquetChunks:
-    """All sorted chunks for one target shard across scatter files.
+    * **Native** (``is_pickled=False``): ``{"shard_idx", "chunk_idx", "item": <data>}``
+    * **Pickle** (``is_pickled=True``): ``{"shard_idx", "chunk_idx", "pickled": <bytes>}``
 
-    Built by the coordinator from compact scatter metadata. Each entry
-    in ``refs`` maps a Parquet file path to its chunk metadata for this
-    shard. Reading is done lazily via predicate pushdown on
-    ``(shard_idx, chunk_idx)`` envelope columns.
+    The pickle envelope is used when items are not Arrow-serializable.
     """
 
+    path: str
     filter_shard: int
-    refs: dict[str, ParquetMeta]  # path → meta
+    filter_chunk: int
+    count: int
+    is_pickled: bool = False
 
-    def iter_chunks(self) -> Iterator[list]:
-        """Yield each sorted chunk as a materialized list."""
-        for path, meta in self.refs.items():
-            for i in range(meta.chunk_count):
-                yield _read_parquet_chunk(path, self.filter_shard, meta.chunk_offset + i, meta.is_pickled)
+    def __iter__(self) -> Iterator:
+        return iter(self.read())
 
-
-def _read_parquet_chunk(path: str, filter_shard: int, chunk_idx: int, is_pickled: bool) -> list:
-    """Read a single sorted chunk from a Parquet scatter file via predicate pushdown."""
-    col = _ZEPHYR_SHUFFLE_PICKLED_COL if is_pickled else _ZEPHYR_SHUFFLE_ITEM_COL
-    table = pq.read_table(
-        path,
-        columns=[col],
-        filters=(
-            (pc.field(_ZEPHYR_SHUFFLE_SHARD_IDX_COL) == filter_shard)
-            & (pc.field(_ZEPHYR_SHUFFLE_CHUNK_IDX_COL) == chunk_idx)
-        ),
-    )
-    items = table.column(col).to_pylist()
-    if is_pickled:
-        return [pickle.loads(b) for b in items]
-    return items
+    def read(self) -> list:
+        """Load filtered chunk data from a Parquet file, unwrapping envelope."""
+        col = _ZEPHYR_SHUFFLE_PICKLED_COL if self.is_pickled else _ZEPHYR_SHUFFLE_ITEM_COL
+        table = pq.read_table(
+            self.path,
+            columns=[col],
+            filters=(
+                (pc.field(_ZEPHYR_SHUFFLE_SHARD_IDX_COL) == self.filter_shard)
+                & (pc.field(_ZEPHYR_SHUFFLE_CHUNK_IDX_COL) == self.filter_chunk)
+            ),
+        )
+        items = table.column(col).to_pylist()
+        if self.is_pickled:
+            return [pickle.loads(b) for b in items]
+        return items
 
 
 @dataclass
@@ -167,45 +163,21 @@ class MemChunk:
         return iter(self.items)
 
 
-class Shard(Protocol):
-    """Protocol for a shard of data assigned to a single worker.
-
-    Two concrete implementations:
-    - ListShard: backed by a list of Chunk objects (non-scatter stages)
-    - ScatterShard: backed by ParquetChunks from scatter output
-    """
-
-    def __iter__(self) -> Iterator: ...
-    def iter_chunks(self) -> Iterator[list]: ...
-
-
 @dataclass
-class ListShard:
-    """Shard backed by a list of Chunk objects."""
+class Shard:
+    """An ordered sequence of chunks assigned to a single worker."""
 
     chunks: list[Chunk]
 
     def __iter__(self) -> Iterator:
+        """Flatten iteration over all items, loading chunks as needed."""
         for chunk in self.chunks:
             yield from chunk
 
     def iter_chunks(self) -> Iterator[list]:
+        """Yield each chunk as a materialized list. Used by k-way merge in Reduce."""
         for chunk in self.chunks:
             yield list(chunk)
-
-
-@dataclass
-class ScatterShard:
-    """Shard backed by ParquetChunks from a scatter stage."""
-
-    parquet: ParquetChunks
-
-    def __iter__(self) -> Iterator:
-        for chunk_data in self.parquet.iter_chunks():
-            yield from chunk_data
-
-    def iter_chunks(self) -> Iterator[list]:
-        yield from self.parquet.iter_chunks()
 
 
 @dataclass
@@ -219,17 +191,9 @@ class ResultChunk:
 
 @dataclass
 class TaskResult:
-    """Result of a single task.
-
-    For non-scatter stages, ``chunks`` holds per-chunk ResultChunk refs.
-    For scatter stages, ``scatter_segments`` holds compact per-file metadata
-    instead — one entry per Parquet segment with per-target-shard chunk counts.
-    """
+    """Result of a single task."""
 
     chunks: list[ResultChunk]
-    # Compact scatter metadata: list of (segment_path, {target_shard: num_chunks})
-    scatter_segments: list[tuple[str, dict[int, int]]] | None = None
-    scatter_pickled: bool = False
 
 
 def _generate_execution_id() -> str:
@@ -292,6 +256,13 @@ def _segment_path(base_path: str, seg_idx: int) -> str:
     return f"{stem}-seg{seg_idx:04d}{ext}"
 
 
+class _ChunkMetadata(NamedTuple):
+    path: str
+    target_shard: int
+    chunk_idx: int
+    cnt: int
+
+
 def _apply_combiner(buffer: list, key_fn: Callable, combiner_fn: Callable) -> list:
     """Apply combiner to a buffer, grouping by key and reducing locally."""
     by_key: dict[object, list] = defaultdict(list)
@@ -313,7 +284,7 @@ def _write_parquet_scatter(
     sort_fn: Callable | None = None,
     combiner_fn: Callable | None = None,
     pickled: bool = False,
-) -> list[tuple[str, dict[int, int]]]:
+) -> list[ResultChunk]:
     """Route items to target shards, buffer, sort, and write as Parquet row groups.
 
     Handles the full scatter pipeline: hash-routing each item to a target shard,
@@ -327,10 +298,6 @@ def _write_parquet_scatter(
 
     When ``pickled=True``, items are serialized via pickle into a binary
     ``pickled`` column instead of being stored natively in the ``item`` column.
-
-    Returns:
-        List of ``(segment_path, {target_shard: num_chunks})`` tuples — compact
-        metadata for each Parquet segment file produced.
     """
     if sort_fn is not None:
         captured_sort_fn = sort_fn
@@ -341,27 +308,24 @@ def _write_parquet_scatter(
     else:
         _sort_key = key_fn
 
-    # Per-segment per-shard chunk counts: seg_idx → {target_shard → count}
-    seg_shard_counts: dict[int, dict[int, int]] = defaultdict(lambda: defaultdict(int))
+    chunk_results: list[_ChunkMetadata] = []
     per_shard_chunk_cnt: dict[int, int] = defaultdict(int)
     buffers: dict[int, list] = defaultdict(list)
     n_chunks_flushed = 0
     seg_idx = 0
-    seg_paths: list[str] = []
     schema: pa.Schema | None = None
     writer: pq.ParquetWriter | None = None
     seg_file = ""
 
     pending_chunk: pa.RecordBatch | None = None
-    pending_target: int = -1
-    pending_cnt: int = 0
+    pending_chunk_metadata: _ChunkMetadata | None = None
 
     def _flush_pending():
         nonlocal n_chunks_flushed
         if pending_chunk is None:
             return
         writer.write_batch(pending_chunk)
-        seg_shard_counts[seg_idx][pending_target] = seg_shard_counts[seg_idx].get(pending_target, 0) + 1
+        chunk_results.append(pending_chunk_metadata)
         n_chunks_flushed += 1
         if n_chunks_flushed % 10 == 0:
             logger.info(
@@ -369,12 +333,12 @@ def _write_parquet_scatter(
                 source_shard,
                 seg_idx,
                 n_chunks_flushed,
-                pending_cnt,
+                pending_chunk_metadata.cnt,
             )
 
     def _write_buffer(target_shard: int, buf: list) -> None:
         """Sort a buffer and write it as a Parquet row group."""
-        nonlocal schema, writer, seg_file, seg_idx, pending_chunk, pending_target, pending_cnt
+        nonlocal schema, writer, seg_file, seg_idx, pending_chunk, pending_chunk_metadata
 
         if combiner_fn is not None:
             buf = _apply_combiner(buf, key_fn, combiner_fn)
@@ -389,7 +353,6 @@ def _write_parquet_scatter(
         if schema is None:
             schema = chunk_arrow.schema
             seg_file = _segment_path(parquet_path, seg_idx)
-            seg_paths.append(seg_file)
             ensure_parent_dir(seg_file)
             writer = pq.ParquetWriter(seg_file, schema)
         elif chunk_arrow.schema != schema:
@@ -399,7 +362,6 @@ def _write_parquet_scatter(
             schema = pa.unify_schemas([schema, chunk_arrow.schema])
             seg_idx += 1
             seg_file = _segment_path(parquet_path, seg_idx)
-            seg_paths.append(seg_file)
             ensure_parent_dir(seg_file)
             writer = pq.ParquetWriter(seg_file, schema)
             logger.info(
@@ -413,8 +375,9 @@ def _write_parquet_scatter(
             _flush_pending()
 
         pending_chunk = chunk_arrow
-        pending_target = target_shard
-        pending_cnt = len(buf)
+        pending_chunk_metadata = _ChunkMetadata(
+            path=seg_file, target_shard=target_shard, chunk_idx=shard_chunk_idx, cnt=len(buf)
+        )
 
     # Route items to target shards, flush buffers at chunk_size
     for item in items:
@@ -434,8 +397,20 @@ def _write_parquet_scatter(
     if writer is not None:
         writer.close()
 
-    # Return compact per-segment metadata
-    return [(path, dict(seg_shard_counts.get(i, {}))) for i, path in enumerate(seg_paths)]
+    return [
+        ResultChunk(
+            source_shard=source_shard,
+            target_shard=rec.target_shard,
+            data=ParquetDiskChunk(
+                path=rec.path,
+                filter_shard=rec.target_shard,
+                filter_chunk=rec.chunk_idx,
+                count=rec.cnt,
+                is_pickled=pickled,
+            ),
+        )
+        for rec in chunk_results
+    ]
 
 
 def _write_pickle_chunks(
@@ -483,13 +458,13 @@ def _write_stage_output(
     scatter_op: Scatter | None,
     chunk_size: int,
     total_shards: int,
-) -> TaskResult:
+) -> list[ResultChunk]:
     """Write stage output to disk.
 
     For scatter stages (``scatter_op`` is set), ``stage_gen`` yields plain
     pre-scatter items. This function handles routing, buffering, sorting,
-    and writing as Parquet row groups. Returns a TaskResult with compact
-    scatter metadata (segment paths + per-shard chunk counts).
+    and writing as Parquet row groups. Falls back to pickle envelope if
+    Arrow conversion fails on the first batch.
 
     For non-scatter stages, ``stage_gen`` yields plain items. Items are
     batched into pickle chunk files according to ``chunk_size``.
@@ -502,12 +477,15 @@ def _write_stage_output(
         scatter_op: The Scatter operation if this is a scatter stage, None otherwise
         chunk_size: Maximum items per chunk
         total_shards: Total number of input shards (used as default num_output_shards)
+
+    Returns:
+        List of ResultChunks with ParquetDiskChunk or PickleDiskChunk data
     """
     if scatter_op is not None:
         # Peek first item to test Arrow serializability
         first_item = next(stage_gen, None)
         if first_item is None:
-            return TaskResult(chunks=[], scatter_segments=[], scatter_pickled=False)
+            return []
 
         full_gen = itertools.chain([first_item], stage_gen)
 
@@ -525,7 +503,7 @@ def _write_stage_output(
 
         num_output_shards = scatter_op.num_output_shards if scatter_op.num_output_shards > 0 else total_shards
         parquet_path = f"{stage_dir}/shard-{shard_idx:04d}.parquet"
-        segments = _write_parquet_scatter(
+        return _write_parquet_scatter(
             full_gen,
             source_shard,
             parquet_path,
@@ -536,12 +514,11 @@ def _write_stage_output(
             combiner_fn=scatter_op.combiner_fn,
             pickled=use_pickle_envelope,
         )
-        return TaskResult(chunks=[], scatter_segments=segments, scatter_pickled=use_pickle_envelope)
 
     def chunk_path_fn(idx: int) -> str:
         return f"{stage_dir}/shard-{shard_idx:04d}/chunk-{idx:04d}.pkl"
 
-    return TaskResult(chunks=_write_pickle_chunks(stage_gen, source_shard, chunk_path_fn, chunk_size))
+    return _write_pickle_chunks(stage_gen, source_shard, chunk_path_fn, chunk_size)
 
 
 class WorkerState(enum.Enum):
@@ -1329,11 +1306,12 @@ class ZephyrWorker:
         _worker_ctx_var.set(self)
 
         logger.info(
-            "[%s] [shard %d/%d] Starting stage=%s, %d ops",
+            "[%s] [shard %d/%d] Starting stage=%s, %d input chunks, %d ops",
             self._execution_id,
             task.shard_idx,
             task.total_shards,
             task.stage_name,
+            len(task.shard.chunks),
             len(task.operations),
         )
 
@@ -1348,7 +1326,7 @@ class ZephyrWorker:
         stage_dir = f"{self._chunk_prefix}/{self._execution_id}/{task.stage_name}"
         scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
 
-        result = _write_stage_output(
+        results = _write_stage_output(
             run_stage(stage_ctx, task.operations),
             source_shard=task.shard_idx,
             stage_dir=stage_dir,
@@ -1357,11 +1335,8 @@ class ZephyrWorker:
             chunk_size=task.chunk_size,
             total_shards=task.total_shards,
         )
-        n_chunks = len(result.chunks)
-        if result.scatter_segments:
-            n_chunks = sum(sum(counts.values()) for _, counts in result.scatter_segments)
-        logger.info("[shard %d] Complete: %d chunks produced", task.shard_idx, n_chunks)
-        return result
+        logger.info("[shard %d] Complete: %d chunks produced", task.shard_idx, len(results))
+        return TaskResult(chunks=results)
 
     def __repr__(self) -> str:
         return f"ZephyrWorker(id={self._worker_id})"
@@ -1378,21 +1353,7 @@ def _regroup_result_refs(
     input_shard_count: int,
     output_shard_count: int | None = None,
 ) -> list[Shard]:
-    """Regroup worker output refs by output shard index without loading data.
-
-    For scatter stages (TaskResult has scatter_segments), builds one
-    ParquetChunks per target shard from compact metadata — O(num_reducers)
-    objects instead of O(num_sources * num_targets).
-
-    For non-scatter stages, regroups ResultChunk refs as before.
-    """
-    # Detect scatter vs non-scatter from first result
-    first_result = next(iter(result_refs.values()), None)
-    is_scatter = first_result is not None and first_result.scatter_segments is not None
-
-    if is_scatter:
-        return _regroup_scatter_refs(result_refs, input_shard_count, output_shard_count)
-
+    """Regroup worker output refs by output shard index without loading data."""
     output_by_shard: dict[int, list[Chunk]] = defaultdict(list)
 
     for _input_idx, result in result_refs.items():
@@ -1402,54 +1363,7 @@ def _regroup_result_refs(
     num_output = max(max(output_by_shard.keys(), default=0) + 1, input_shard_count)
     if output_shard_count is not None:
         num_output = max(num_output, output_shard_count)
-    return [ListShard(chunks=output_by_shard.get(idx, [])) for idx in range(num_output)]
-
-
-def _regroup_scatter_refs(
-    result_refs: dict[int, TaskResult],
-    input_shard_count: int,
-    output_shard_count: int | None = None,
-) -> list[Shard]:
-    """Build ParquetChunks per target shard from compact scatter metadata.
-
-    For each target shard, collects (path, chunk_count, chunk_offset) from
-    all source workers' scatter segments. Each source may have multiple
-    segments (due to schema evolution) with a cumulative chunk_offset.
-    """
-    # Collect per-target refs: target_shard → dict[path, ParquetMeta]
-    target_refs: dict[int, dict[str, ParquetMeta]] = defaultdict(dict)
-    all_targets: set[int] = set()
-
-    for _input_idx, result in result_refs.items():
-        if result.scatter_segments is None:
-            continue
-        is_pickled = result.scatter_pickled
-        # Per-source cumulative offset (chunk_idx is cumulative across segments)
-        shard_offsets: dict[int, int] = defaultdict(int)
-        for seg_path, seg_counts in result.scatter_segments:
-            for target_shard, count in seg_counts.items():
-                if count > 0:
-                    offset = shard_offsets[target_shard]
-                    target_refs[target_shard][seg_path] = ParquetMeta(
-                        chunk_count=count,
-                        chunk_offset=offset,
-                        is_pickled=is_pickled,
-                    )
-                    shard_offsets[target_shard] += count
-                    all_targets.add(target_shard)
-
-    num_output = max(max(all_targets, default=0) + 1, input_shard_count)
-    if output_shard_count is not None:
-        num_output = max(num_output, output_shard_count)
-
-    shards: list[Shard] = []
-    for idx in range(num_output):
-        refs = target_refs.get(idx)
-        if refs:
-            shards.append(ScatterShard(parquet=ParquetChunks(filter_shard=idx, refs=refs)))
-        else:
-            shards.append(ListShard(chunks=[]))
-    return shards
+    return [Shard(chunks=output_by_shard.get(idx, [])) for idx in range(num_output)]
 
 
 # ---------------------------------------------------------------------------
@@ -1802,7 +1716,7 @@ def _reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
         for chunk in shard.chunks:
             output_by_shard[output_idx].append(chunk)
             output_idx = (output_idx + 1) % num_shards
-    return [ListShard(chunks=output_by_shard.get(idx, [])) for idx in range(num_shards)]
+    return [Shard(chunks=output_by_shard.get(idx, [])) for idx in range(num_shards)]
 
 
 def _build_source_shards(source_items: list[SourceItem]) -> list[Shard]:
@@ -1817,7 +1731,7 @@ def _build_source_shards(source_items: list[SourceItem]) -> list[Shard]:
     num_shards = max(items_by_shard.keys()) + 1 if items_by_shard else 0
     shards = []
     for i in range(num_shards):
-        shards.append(ListShard(chunks=[MemChunk(items=items_by_shard.get(i, []))]))
+        shards.append(Shard(chunks=[MemChunk(items=items_by_shard.get(i, []))]))
 
     return shards
 

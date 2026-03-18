@@ -146,7 +146,7 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
     """
     from unittest.mock import MagicMock
 
-    from zephyr.execution import ListShard, ShardTask, ZephyrCoordinator
+    from zephyr.execution import Shard, ShardTask, ZephyrCoordinator
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
@@ -155,7 +155,7 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
         shard_idx=0,
         total_shards=1,
         chunk_size=100,
-        shard=ListShard(chunks=[]),
+        shard=Shard(chunks=[]),
         operations=[],
         stage_name="test",
     )
@@ -213,7 +213,7 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
 def test_no_duplicate_results_on_heartbeat_timeout(actor_context, tmp_path):
     """When a task is requeued after heartbeat timeout, the original worker's
     stale result (from a previous attempt) is rejected by the coordinator."""
-    from zephyr.execution import ListShard, ShardTask, TaskResult, ZephyrCoordinator
+    from zephyr.execution import Shard, ShardTask, TaskResult, ZephyrCoordinator
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
@@ -222,7 +222,7 @@ def test_no_duplicate_results_on_heartbeat_timeout(actor_context, tmp_path):
         shard_idx=0,
         total_shards=1,
         chunk_size=100,
-        shard=ListShard(chunks=[]),
+        shard=Shard(chunks=[]),
         operations=[],
         stage_name="test",
     )
@@ -282,7 +282,7 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
 
     Stale chunk files are left for context-dir cleanup (no per-chunk deletion).
     """
-    from zephyr.execution import ListShard, PickleDiskChunk, ResultChunk, ShardTask, TaskResult, ZephyrCoordinator
+    from zephyr.execution import PickleDiskChunk, ResultChunk, Shard, ShardTask, TaskResult, ZephyrCoordinator
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
@@ -291,7 +291,7 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
         shard_idx=0,
         total_shards=1,
         chunk_size=100,
-        shard=ListShard(chunks=[]),
+        shard=Shard(chunks=[]),
         operations=[],
         stage_name="test",
     )
@@ -344,7 +344,7 @@ def test_chunk_streaming_low_memory(tmp_path):
 
     Verifies iter_chunks yields data lazily and flat iteration works.
     """
-    from zephyr.execution import ListShard, PickleDiskChunk
+    from zephyr.execution import PickleDiskChunk, Shard
 
     # Write 3 chunks to disk (directly readable, no finalize needed)
     refs = []
@@ -353,7 +353,7 @@ def test_chunk_streaming_low_memory(tmp_path):
         chunk = PickleDiskChunk.write(path, [i * 10 + j for j in range(5)])
         refs.append(chunk)
 
-    shard = ListShard(chunks=refs)
+    shard = Shard(chunks=refs)
 
     # iter_chunks yields correct data
     chunks = list(shard.iter_chunks())
@@ -373,7 +373,7 @@ def test_wait_for_stage_fails_when_all_workers_die(actor_context, tmp_path):
     after the no_workers_timeout instead of waiting forever."""
     from unittest.mock import MagicMock
 
-    from zephyr.execution import ListShard, ShardTask, WorkerState, ZephyrCoordinator, ZephyrWorkerError
+    from zephyr.execution import Shard, ShardTask, WorkerState, ZephyrCoordinator, ZephyrWorkerError
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
@@ -383,7 +383,7 @@ def test_wait_for_stage_fails_when_all_workers_die(actor_context, tmp_path):
         shard_idx=0,
         total_shards=1,
         chunk_size=100,
-        shard=ListShard(chunks=[]),
+        shard=Shard(chunks=[]),
         operations=[],
         stage_name="test",
     )
@@ -413,7 +413,7 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
 
     from unittest.mock import MagicMock
 
-    from zephyr.execution import ListShard, ShardTask, TaskResult, WorkerState, ZephyrCoordinator
+    from zephyr.execution import Shard, ShardTask, TaskResult, WorkerState, ZephyrCoordinator
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
@@ -423,7 +423,7 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
         shard_idx=0,
         total_shards=1,
         chunk_size=100,
-        shard=ListShard(chunks=[]),
+        shard=Shard(chunks=[]),
         operations=[],
         stage_name="test",
     )
@@ -573,7 +573,7 @@ def test_pipeline_id_increments(local_client, tmp_path):
 
 def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp_path):
     """When the last stage's tasks are all in-flight or done, pull_task returns SHUTDOWN."""
-    from zephyr.execution import ListShard, ShardTask, TaskResult, ZephyrCoordinator
+    from zephyr.execution import Shard, ShardTask, TaskResult, ZephyrCoordinator
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
@@ -582,7 +582,7 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
         shard_idx=0,
         total_shards=1,
         chunk_size=100,
-        shard=ListShard(chunks=[]),
+        shard=Shard(chunks=[]),
         operations=[],
         stage_name="test",
     )
@@ -603,7 +603,7 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
         shard_idx=0,
         total_shards=1,
         chunk_size=100,
-        shard=ListShard(chunks=[]),
+        shard=Shard(chunks=[]),
         operations=[],
         stage_name="test-last",
     )

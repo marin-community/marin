@@ -361,13 +361,12 @@ def test_group_by_non_vortex_serializable(zephyr_ctx):
     assert results[1] == {"key": "b", "value": frozenset([2])}
 
 
-def test_parquet_chunks_pickle_roundtrip(tmp_path):
-    """ParquetChunks with is_pickled=True round-trips non-Arrow-serializable items."""
+def test_parquet_disk_chunk_pickle_roundtrip(tmp_path):
+    """ParquetDiskChunk with is_pickled=True round-trips non-Arrow-serializable items."""
     import pyarrow.parquet as pq
 
     from zephyr.execution import (
-        ParquetChunks,
-        ParquetMeta,
+        ParquetDiskChunk,
         _make_pickle_envelope,
     )
 
@@ -378,13 +377,9 @@ def test_parquet_chunks_pickle_roundtrip(tmp_path):
     path = str(tmp_path / "test.parquet")
     pq.write_table(pa.Table.from_batches([batch]), path)
 
-    chunks = ParquetChunks(
-        filter_shard=0,
-        refs={path: ParquetMeta(chunk_count=1, chunk_offset=0, is_pickled=True)},
-    )
-    result = list(chunks.iter_chunks())
-    assert len(result) == 1
-    assert result[0] == items
+    chunk = ParquetDiskChunk(path=path, filter_shard=0, filter_chunk=0, count=2, is_pickled=True)
+    result = chunk.read()
+    assert result == items
 
 
 def test_group_by_schema_evolution(zephyr_ctx):

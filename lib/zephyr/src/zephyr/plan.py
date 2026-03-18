@@ -585,7 +585,7 @@ def _merge_sorted_chunks(shard, key_fn: Callable, sort_fn: Callable | None = Non
     items with the same key.
 
     Args:
-        shard: Shard providing sorted chunks via iter_chunks()
+        shard: Shard containing sorted chunks (iterable of chunk lists)
         key_fn: Function to extract grouping key from item
         sort_fn: Optional secondary sort key. When provided, the merge uses
             (key_fn, sort_fn) for ordering but still groups by key_fn alone.
