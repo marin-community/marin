@@ -1158,7 +1158,11 @@ class ControllerServiceImpl:
             registered_at=Timestamp.now(),
         )
 
-        self._transitions.add_endpoint(endpoint, task_id=task_id)
+        if not self._transitions.add_endpoint(endpoint, task_id=task_id):
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Task {request.task_id} is already terminal; endpoint not registered",
+            )
 
         return cluster_pb2.Controller.RegisterEndpointResponse(endpoint_id=endpoint_id)
 
