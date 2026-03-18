@@ -1146,7 +1146,10 @@ class ZephyrCoordinator:
                 self._start_stage(join_stage_label, right_tasks)
                 self._wait_for_stage()
                 raw = self._collect_results()
-                right_refs = _regroup_result_refs(raw, len(right_refs), output_shard_count=right_stage.output_shards)
+                right_is_scatter = any(isinstance(op, Scatter) for op in right_stage.operations)
+                right_refs = _regroup_result_refs(
+                    raw, len(right_refs), output_shard_count=right_stage.output_shards, is_scatter=right_is_scatter
+                )
 
             if len(shard_refs) != len(right_refs):
                 raise ValueError(
