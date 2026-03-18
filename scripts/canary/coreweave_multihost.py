@@ -62,17 +62,9 @@ CANARY_ENV_DEFAULTS = {
     "WANDB_ENTITY": "marin-community",
     "WANDB_PROJECT": "marin",
     "MARIN_PREFIX": "s3://marin-na/marin/",
-    # NCCL debug — propagates through executor → Fray → child GPU pods.
-    "NCCL_DEBUG": "INFO",
-    "NCCL_DEBUG_SUBSYS": "INIT,NET",
-    "NCCL_IB_DISABLE": "0",
-    "NCCL_NET_GDR_LEVEL": "5",
     # IB Socket interfaces use link-local IPv6 and don't route cross-host.
-    # Fall back to the main Ethernet interface for NCCL socket transport
-    # until libibverbs is in the task image for native IB/RDMA.
+    # Use the main Ethernet interface for NCCL socket transport.
     "NCCL_SOCKET_IFNAME": "enp157s0np0",
-    # JAX compilation logging
-    "JAX_LOG_COMPILES": "1",
 }
 
 REQUIRED_ENV_VARS = ["R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "WANDB_API_KEY"]

@@ -80,6 +80,23 @@ def test_initialize_jax_single_task(
     mock_iris_ctx.assert_not_called()
 
 
+@pytest.mark.parametrize("env_key,env_val", [("PJRT_DEVICE", "TPU"), ("JAX_PLATFORMS", "tpu")])
+@patch("jax.distributed.initialize")
+@patch("iris.runtime.jax_init.get_job_info")
+def test_initialize_jax_tpu_is_noop(
+    mock_get_job_info: MagicMock,
+    mock_jax_init: MagicMock,
+    env_key: str,
+    env_val: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On TPU, initialize_jax is a no-op — TPU runtime handles distributed init."""
+    monkeypatch.setenv(env_key, env_val)
+    initialize_jax()
+    mock_jax_init.assert_not_called()
+    mock_get_job_info.assert_not_called()
+
+
 @patch("iris.runtime.jax_init.atexit")
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")

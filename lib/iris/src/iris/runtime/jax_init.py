@@ -104,13 +104,16 @@ def initialize_jax(
 ) -> None:
     """Initialize JAX distributed runtime using Iris endpoint discovery.
 
-    For multi-task jobs, task 0 registers its coordinator address via the Iris
-    endpoint registry, and tasks 1..N-1 poll until they discover it. All tasks
-    then call jax.distributed.initialize with the coordinator address.
+    For multi-task GPU jobs, task 0 registers its coordinator address via the
+    Iris endpoint registry, and tasks 1..N-1 poll until they discover it. All
+    tasks then call jax.distributed.initialize with the coordinator address.
 
     For single-task jobs (or when not running inside an Iris job),
     initialization is skipped — JAX works correctly without distributed
     init when there is only one process.
+
+    On TPU, JAX handles distributed init natively via the TPU runtime —
+    calling jax.distributed.initialize would conflict, so this is a no-op.
 
     Args:
         port: Coordinator port. Overridden by IRIS_PORT_jax if allocated.
@@ -121,6 +124,12 @@ def initialize_jax(
         poll_interval: Initial backoff delay for polling (seconds).
     """
     import jax
+
+    # TPU has its own distributed init via the TPU runtime; skip the
+    # coordinator dance entirely to avoid conflicts.
+    if os.environ.get("PJRT_DEVICE", "").upper() == "TPU" or os.environ.get("JAX_PLATFORMS", "") == "tpu":
+        logger.info("TPU detected; skipping Iris JAX distributed init (TPU runtime handles it)")
+        return
 
     job_info = get_job_info()
     _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
