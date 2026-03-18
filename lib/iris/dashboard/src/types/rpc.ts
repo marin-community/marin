@@ -331,6 +331,22 @@ export interface KubernetesPodStatus {
   reason: string
   message: string
   lastTransition?: ProtoTimestamp
+  nodeName?: string
+}
+
+export interface NodePoolStatus {
+  name: string
+  instanceType: string
+  scaleGroup: string
+  targetNodes: number
+  currentNodes: number
+  queuedNodes: number
+  inProgressNodes: number
+  autoscaling: boolean
+  minNodes: number
+  maxNodes: number
+  capacity: string
+  quota: string
 }
 
 export interface GetKubernetesClusterStatusResponse {
@@ -341,6 +357,7 @@ export interface GetKubernetesClusterStatusResponse {
   allocatableMemory?: string
   podStatuses?: KubernetesPodStatus[]
   providerVersion?: string
+  nodePools?: NodePoolStatus[]
 }
 
 // -- Users --

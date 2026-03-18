@@ -920,6 +920,22 @@ message Controller {
     string reason = 4;
     string message = 5;
     iris.time.Timestamp last_transition = 6;
+    string node_name = 7;
+  }
+
+  message NodePoolStatus {
+    string name = 1;
+    string instance_type = 2;
+    string scale_group = 3;
+    int32 target_nodes = 4;
+    int32 current_nodes = 5;
+    int32 queued_nodes = 6;
+    int32 in_progress_nodes = 7;
+    bool autoscaling = 8;
+    int32 min_nodes = 9;
+    int32 max_nodes = 10;
+    string capacity = 11;
+    string quota = 12;
   }
 
   message GetKubernetesClusterStatusResponse {
@@ -930,6 +946,7 @@ message Controller {
     string allocatable_memory = 5;
     repeated KubernetesPodStatus pod_statuses = 6;
     string provider_version = 7;
+    repeated NodePoolStatus node_pools = 8;
   }
 
 }

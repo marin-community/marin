@@ -742,6 +742,7 @@ class KubernetesProvider:
                 pod_name = meta.get("name", "")
                 labels = meta.get("labels", {})
                 task_id = labels.get(_LABEL_TASK_ID, "")
+                node_name = pod.get("spec", {}).get("nodeName", "")
                 phase = pod.get("status", {}).get("phase", "Unknown")
                 reason = ""
                 message = ""
@@ -776,11 +777,45 @@ class KubernetesProvider:
                     phase=phase,
                     reason=reason,
                     message=message,
+                    node_name=node_name,
                 )
                 ps.last_transition.CopyFrom(last_ts.to_proto())
                 pod_statuses.append(ps)
         except Exception as e:
             logger.warning("Failed to query pod statuses: %s", e)
+
+        node_pools: list[cluster_pb2.Controller.NodePoolStatus] = []
+        try:
+            np_labels = {self.managed_label: "true"} if self.managed_label else None
+            pools = self.kubectl.list_json("nodepools", labels=np_labels, cluster_scoped=True)
+            for pool in pools:
+                meta = pool.get("metadata", {})
+                pool_labels = meta.get("labels", {})
+                spec = pool.get("spec", {})
+                status = pool.get("status", {})
+                scale_group = ""
+                for lk, lv in pool_labels.items():
+                    if "scale-group" in lk:
+                        scale_group = lv
+                        break
+                node_pools.append(
+                    cluster_pb2.Controller.NodePoolStatus(
+                        name=meta.get("name", ""),
+                        instance_type=spec.get("instanceType", ""),
+                        scale_group=scale_group,
+                        target_nodes=spec.get("targetNodes", 0),
+                        current_nodes=status.get("currentNodes", 0),
+                        queued_nodes=status.get("queuedNodes", 0),
+                        in_progress_nodes=status.get("inProgressNodes", 0),
+                        autoscaling=spec.get("autoscaling", False),
+                        min_nodes=spec.get("minNodes", 0),
+                        max_nodes=spec.get("maxNodes", 0),
+                        capacity=status.get("capacity", ""),
+                        quota=status.get("quota", ""),
+                    )
+                )
+        except Exception as e:
+            logger.warning("Failed to query nodepools: %s", e)
 
         return cluster_pb2.Controller.GetKubernetesClusterStatusResponse(
             namespace=self.namespace,
@@ -790,6 +825,7 @@ class KubernetesProvider:
             allocatable_memory=allocatable_memory,
             pod_statuses=pod_statuses,
             provider_version="iris-kubernetes/v1",
+            node_pools=node_pools,
         )
 
     # -------------------------------------------------------------------------
