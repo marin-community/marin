@@ -57,10 +57,12 @@ def test_inprocess_eligibility_accepts_supported_engine_cli_flags(monkeypatch) -
     )
 
     model = _model(engine_kwargs={"max_model_len": 4096})
+    # In production, only raw extra_args are passed here — engine_kwargs
+    # like max_model_len are handled by _llm_kwargs(), not via CLI args.
     eligibility = vllm_inprocess.evaluate_inprocess_eligibility(
         model=model,
         model_name_or_path="gs://bucket/model",
-        extra_cli_args=["--max-model-len", "4096"],
+        extra_cli_args=None,
     )
 
     assert eligibility.eligible

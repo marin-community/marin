@@ -19,16 +19,32 @@ Usage (via Iris):
 import argparse
 import json
 import logging
+import os
 import random
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 
 import requests
+
+from iris.marin_fs import marin_prefix, open_url
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.vllm_server import VllmEnvironment
 
 logger = logging.getLogger(__name__)
+
+# Duplicate raw stdout fd for Iris-visible logging — immune to JAX/vLLM
+# redirecting sys.stdout.  See _iris_emit in vllm_inprocess.py.
+_IRIS_LOG_FD = os.dup(1)
+
+
+def _iris_log(message: str) -> None:
+    """Write directly to container stdout fd so Iris dashboard captures it."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d %H:%M:%S")
+    line = f"I{ts} 0 vllm.stress {message}\n"
+    os.write(_IRIS_LOG_FD, line.encode())
+
 
 # Diverse prompt templates for realistic workload
 PROMPT_TEMPLATES = [
@@ -102,7 +118,7 @@ def generate_prompts(n: int) -> list[str]:
     return prompts
 
 
-def send_request(server_url: str, model_id: str, prompt: str, max_tokens: int) -> dict:
+def send_request(server_url: str, model_id: str, prompt: str, max_tokens: int, request_id: int) -> dict:
     """Send a single completion request and return timing info."""
     start = time.time()
     resp = requests.post(
@@ -119,10 +135,15 @@ def send_request(server_url: str, model_id: str, prompt: str, max_tokens: int) -
     resp.raise_for_status()
     data = resp.json()
     tokens_generated = data["usage"]["completion_tokens"]
+    response_text = data["choices"][0]["text"]
+    logger.info("[%04d] completed in %.3fs", request_id, elapsed)
+    logger.info("[%04d] prompt: %s", request_id, prompt)
+    logger.info("[%04d] response (%d tokens): %s", request_id, tokens_generated, response_text)
     return {
         "elapsed": elapsed,
         "tokens_generated": tokens_generated,
         "tokens_per_sec": tokens_generated / elapsed if elapsed > 0 else 0,
+        "response": response_text,
     }
 
 
@@ -159,13 +180,10 @@ def run_stress_test(
 
     with env:
         prompts = generate_prompts(num_prompts)
-        print(f"\n{'='*60}")
-        print("vLLM Stress Test")
-        print(f"Model: {model_name_or_path}")
-        print(f"Prompts: {num_prompts}")
-        print(f"Max concurrent: {max_concurrent}")
-        print(f"Max tokens per response: {max_tokens}")
-        print(f"{'='*60}\n")
+        _iris_log(
+            f"Stress test: prompts={num_prompts} concurrent={max_concurrent} "
+            f"max_tokens={max_tokens} model={model_name_or_path}"
+        )
 
         results = []
         errors = 0
@@ -173,7 +191,7 @@ def run_stress_test(
 
         with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
             futures = {
-                executor.submit(send_request, env.server_url, env.model_id, p, max_tokens): i
+                executor.submit(send_request, env.server_url, env.model_id, p, max_tokens, i): i
                 for i, p in enumerate(prompts)
             }
 
@@ -188,10 +206,10 @@ def run_stress_test(
                     if errors <= 5:
                         logger.warning(f"Request failed: {e}")
 
-                if completed % 100 == 0 or completed == num_prompts:
+                if completed % 10 == 0 or completed == num_prompts:
                     elapsed = time.time() - total_start
                     rps = completed / elapsed if elapsed > 0 else 0
-                    print(f"  [{completed}/{num_prompts}] {elapsed:.1f}s elapsed, {rps:.1f} req/s, {errors} errors")
+                    _iris_log(f"[{completed}/{num_prompts}] {elapsed:.1f}s elapsed, {rps:.1f} req/s, {errors} errors")
 
         total_elapsed = time.time() - total_start
 
@@ -222,15 +240,61 @@ def run_stress_test(
         else:
             stats = {"total_prompts": num_prompts, "successful": 0, "errors": errors}
 
-        print(f"\n{'='*60}")
-        print("RESULTS")
-        print(f"{'='*60}")
+        _iris_log("=== RESULTS ===")
         for k, v in stats.items():
-            print(f"  {k}: {v}")
-        print(f"{'='*60}\n")
-        print(json.dumps(stats, indent=2))
+            _iris_log(f"  {k}: {v}")
+
+        # Write results to GCS
+        _save_results_to_gcs(
+            model_name_or_path=model_name_or_path,
+            stats=stats,
+            results=results,
+            prompts=prompts,
+        )
 
         return stats
+
+
+def _save_results_to_gcs(
+    *,
+    model_name_or_path: str,
+    stats: dict,
+    results: list[dict],
+    prompts: list[str],
+) -> None:
+    """Save stress test results and samples to GCS."""
+    # Derive a clean model name for the path
+    model_name = model_name_or_path.rstrip("/").split("/")[-1]
+    timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    output_dir = f"{marin_prefix()}/inference/{model_name}/stress_test"
+
+    # Write aggregate results
+    results_path = f"{output_dir}/results_{timestamp}.json"
+    with open_url(results_path, "w") as f:
+        json.dump(
+            {
+                "model": model_name_or_path,
+                "timestamp": timestamp,
+                "stats": stats,
+            },
+            f,
+            indent=2,
+        )
+    _iris_log(f"Results saved to {results_path}")
+
+    # Write per-sample results as JSONL
+    samples_path = f"{output_dir}/samples_{timestamp}.jsonl"
+    with open_url(samples_path, "w") as f:
+        for i, result in enumerate(results):
+            sample = {
+                "prompt": prompts[i] if i < len(prompts) else "",
+                "response": result.get("response", ""),
+                "elapsed_sec": result.get("elapsed"),
+                "tokens_generated": result.get("tokens_generated"),
+                "tokens_per_sec": result.get("tokens_per_sec"),
+            }
+            f.write(json.dumps(sample, ensure_ascii=False) + "\n")
+    _iris_log(f"Samples ({len(results)} rows) saved to {samples_path}")
 
 
 def main(argv: list[str] | None = None) -> int:

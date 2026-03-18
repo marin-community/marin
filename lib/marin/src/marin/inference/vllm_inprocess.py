@@ -6,11 +6,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import shutil
-import sys
 import tempfile
 import threading
 import time
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
@@ -26,9 +27,11 @@ from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 
-# Save real stdout — vLLM may wrap sys.stdout with rank-prefixed streams,
-# making print() invisible to Iris's container log collector.
-_REAL_STDOUT = sys.stdout
+# Duplicate raw stdout fd (fd 1) for Iris-visible logging.  This is immune to
+# both Python-level redirection (JAX/vLLM replacing sys.stdout) and OS-level
+# redirection (os.dup2 on fd 1).  Writes via os.write(_IRIS_LOG_FD, ...) go
+# directly to the container stdout that Iris's log collector watches.
+_IRIS_LOG_FD = os.dup(1)
 
 # Must be set before LLM() is called — vLLM reads this to decide whether to
 # spawn child processes for EngineCore.
@@ -56,18 +59,79 @@ _BOOTSTRAP_METADATA_FILENAMES: tuple[str, ...] = (
 )
 
 
-def _iris_emit(level_char: str, source: str, message: str) -> None:
-    """Emit a log line to the real stdout in Iris-compatible format.
+@dataclass
+class GenerationRequest:
+    """A request queued for the generation worker thread."""
 
-    Uses ``_REAL_STDOUT`` (saved before vLLM import) because vLLM may wrap
-    ``sys.stdout`` with rank-prefixed streams that Iris doesn't capture.
+    prompts: list[str]
+    sampling_params: Any  # vllm.SamplingParams
+    future: Future
+
+
+def _generation_worker(
+    llm: Any,
+    request_queue: queue.Queue,
+    shutdown_event: threading.Event,
+    max_batch_wait_sec: float = 0.05,
+    max_batch_size: int = 32,
+) -> None:
+    """Drain the request queue and call llm.generate() from a single thread.
+
+    Groups requests by SamplingParams so each generate() call has uniform params.
+    """
+    while not shutdown_event.is_set():
+        batch: list[GenerationRequest] = []
+        try:
+            first = request_queue.get(timeout=max_batch_wait_sec)
+            batch.append(first)
+        except queue.Empty:
+            continue
+
+        # Grab more if available (no wait)
+        while len(batch) < max_batch_size:
+            try:
+                batch.append(request_queue.get_nowait())
+            except queue.Empty:
+                break
+
+        # Group by sampling_params for efficient batching.
+        # Use a stringified repr as a grouping key since SamplingParams isn't hashable.
+        groups: dict[str, list[GenerationRequest]] = {}
+        for req in batch:
+            key = repr(req.sampling_params)
+            groups.setdefault(key, []).append(req)
+
+        for group_reqs in groups.values():
+            all_prompts: list[str] = []
+            for req in group_reqs:
+                all_prompts.extend(req.prompts)
+
+            try:
+                outputs = llm.generate(all_prompts, group_reqs[0].sampling_params)
+                idx = 0
+                for req in group_reqs:
+                    n = len(req.prompts)
+                    req.future.set_result(outputs[idx : idx + n])
+                    idx += n
+            except Exception as exc:
+                for req in group_reqs:
+                    if not req.future.done():
+                        req.future.set_exception(exc)
+
+
+def _iris_emit(level_char: str, source: str, message: str) -> None:
+    """Emit a log line to Iris via raw fd write.
+
+    Uses ``os.write(_IRIS_LOG_FD, ...)`` to bypass Python's ``sys.stdout``
+    entirely.  This is immune to JAX/vLLM redirecting ``sys.stdout`` — the
+    duplicated fd always points to the container stdout that Iris watches.
     """
     from datetime import datetime, timezone
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%d %H:%M:%S")
     tid = threading.current_thread().ident or 0
-    _REAL_STDOUT.write(f"{level_char}{ts} {tid} {source} {message}\n")
-    _REAL_STDOUT.flush()
+    line = f"{level_char}{ts} {tid} {source} {message}\n"
+    os.write(_IRIS_LOG_FD, line.encode())
 
 
 class InProcessVllmUnsupportedError(RuntimeError):
@@ -92,6 +156,8 @@ class InProcessVllmRuntime:
     model_id: str | None = None
     bootstrap_local_dir: str | None = None
     events: list[str] = field(default_factory=list)
+    gen_thread: threading.Thread | None = None
+    shutdown_event: threading.Event | None = None
 
     def logs_tail(self, *, max_lines: int = 200) -> str:
         if not self.events:
@@ -156,11 +222,13 @@ def start_inprocess_vllm_server(
     timeout_seconds: int,
     extra_cli_args: list[str] | None,
 ) -> InProcessVllmRuntime:
-    """Start in-process vLLM with dummy load, inject weights, and serve OpenAI API."""
+    """Start in-process vLLM with dummy load, inject weights, and serve OpenAI API.
 
-    unsupported_args = _unsupported_extra_cli_args(extra_cli_args)
-    if unsupported_args:
-        raise InProcessVllmUnsupportedError(f"unsupported CLI args for in-process vLLM startup: {unsupported_args}")
+    Note: ``extra_cli_args`` may include flags derived from ``engine_kwargs``
+    (e.g. ``--max-model-len``) which are already handled by ``_llm_kwargs()``.
+    Eligibility checking for truly unsupported raw extra args happens earlier
+    in ``evaluate_inprocess_eligibility`` using only the raw ``extra_args``.
+    """
 
     if model.path is None:
         raise InProcessVllmUnsupportedError("in-process startup requires model.path for object-store checkpoint loading")
@@ -168,6 +236,8 @@ def start_inprocess_vllm_server(
     llm = None
     server = None
     serve_thread: threading.Thread | None = None
+    gen_thread: threading.Thread | None = None
+    shutdown_event: threading.Event | None = None
     bootstrap_local_dir: str | None = None
 
     try:
@@ -197,10 +267,21 @@ def start_inprocess_vllm_server(
         )
         _record_event(events, f"Injected weights via sync_weights using mapping key {mapping_model_name!r}")
 
-        # Build a minimal OpenAI-compatible API around LLM.generate().
-        # We avoid vLLM's build_app() because it spawns child processes that
-        # fail with "TPU already in use by pid 1" on TPU.
-        app = _create_inprocess_openai_app(llm, model_name_or_path, bootstrap_model_source)
+        # Route all generation through a single worker thread via a queue.
+        # vLLM's LLM class isn't thread-safe for concurrent access from
+        # uvicorn's threadpool, so the queue serializes all generate() calls.
+        request_queue: queue.Queue = queue.Queue()
+        shutdown_event = threading.Event()
+        gen_thread = threading.Thread(
+            target=_generation_worker,
+            args=(llm, request_queue, shutdown_event),
+            daemon=True,
+            name="vllm-gen-worker",
+        )
+        gen_thread.start()
+
+        # Build a minimal OpenAI-compatible API that enqueues requests.
+        app = _create_inprocess_openai_app(request_queue, model_name_or_path, bootstrap_model_source)
 
         server = uvicorn_module.Server(
             uvicorn_module.Config(
@@ -227,8 +308,14 @@ def start_inprocess_vllm_server(
             model_id=model_id,
             bootstrap_local_dir=bootstrap_local_dir,
             events=events,
+            gen_thread=gen_thread,
+            shutdown_event=shutdown_event,
         )
     except Exception:
+        if shutdown_event is not None:
+            shutdown_event.set()
+        if gen_thread is not None:
+            gen_thread.join(timeout=10)
         if server is not None:
             server_for_shutdown: Any = server
             server_for_shutdown.should_exit = True
@@ -241,11 +328,15 @@ def start_inprocess_vllm_server(
 
 
 def stop_inprocess_vllm_server(runtime: InProcessVllmRuntime) -> None:
-    """Stop the in-process HTTP server and vLLM engine."""
+    """Stop the in-process HTTP server, generation worker, and vLLM engine."""
 
     server_for_shutdown: Any = runtime.server
     server_for_shutdown.should_exit = True
     runtime.serve_thread.join(timeout=15)
+    if runtime.shutdown_event is not None:
+        runtime.shutdown_event.set()
+    if runtime.gen_thread is not None:
+        runtime.gen_thread.join(timeout=10)
     _shutdown_llm(runtime.llm)
     _cleanup_local_bootstrap_dir(runtime.bootstrap_local_dir)
 
@@ -682,12 +773,12 @@ def _import_inprocess_vllm_symbols() -> tuple[Any, Any]:
     return LLM, uvicorn
 
 
-def _create_inprocess_openai_app(llm: Any, model_name: str, bootstrap_model_source: str) -> Any:
-    """Create a minimal OpenAI-compatible API around LLM.generate().
+def _create_inprocess_openai_app(request_queue: queue.Queue, model_name: str, bootstrap_model_source: str) -> Any:
+    """Create a minimal OpenAI-compatible API that enqueues generation requests.
 
-    This avoids vLLM's build_app() which spawns child processes that fail
-    on TPU with "TPU already in use by pid 1". Instead we wrap LLM.generate()
-    in a simple FastAPI app running in the same process.
+    HTTP handler threads put requests onto a shared queue; a single generation
+    worker thread drains the queue and calls llm.generate(). This avoids
+    concurrent access to vLLM's non-thread-safe LLM class.
 
     Exposes /v1/models, /v1/completions, and /v1/chat/completions.
     """
@@ -699,6 +790,8 @@ def _create_inprocess_openai_app(llm: Any, model_name: str, bootstrap_model_sour
     app = FastAPI()
     tokenizer = AutoTokenizer.from_pretrained(bootstrap_model_source)
 
+    _GENERATION_TIMEOUT_SEC = 300
+
     def _sampling_params_from_request(request: dict) -> SamplingParams:
         return SamplingParams(
             max_tokens=request.get("max_tokens", 128),
@@ -707,6 +800,11 @@ def _create_inprocess_openai_app(llm: Any, model_name: str, bootstrap_model_sour
             n=request.get("n", 1),
             logprobs=request.get("logprobs"),
         )
+
+    def _enqueue_and_wait(prompts: list[str], params: SamplingParams) -> list[Any]:
+        future: Future = Future()
+        request_queue.put(GenerationRequest(prompts=prompts, sampling_params=params, future=future))
+        return future.result(timeout=_GENERATION_TIMEOUT_SEC)
 
     @app.get("/v1/models")
     def list_models():
@@ -722,7 +820,7 @@ def _create_inprocess_openai_app(llm: Any, model_name: str, bootstrap_model_sour
         params = _sampling_params_from_request(request)
 
         try:
-            outputs = llm.generate([prompt], params)
+            outputs = _enqueue_and_wait([prompt], params)
         except Exception as exc:
             return JSONResponse(
                 status_code=500,
@@ -771,7 +869,7 @@ def _create_inprocess_openai_app(llm: Any, model_name: str, bootstrap_model_sour
         prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
         try:
-            outputs = llm.generate([prompt], params)
+            outputs = _enqueue_and_wait([prompt], params)
         except Exception as exc:
             return JSONResponse(
                 status_code=500,

@@ -227,6 +227,58 @@ def load_and_inject_streaming(model_path, llm, mapping_model_name, model_config)
 
 ---
 
+### 2026-03-17 — Stress test debugging and Iris logging fix (Claude Opus session)
+
+#### Bugs found and fixed
+
+1. **`_unsupported_extra_cli_args` too strict** — the other agent's commit `4dbaefaa3`
+   rejected ALL raw CLI flags including `--max-model-len`, which comes from `engine_kwargs`
+   and is already handled by `_llm_kwargs()`. This caused the stress test to fall back to
+   subprocess (slow path). **Fixed:** removed the redundant guard from
+   `start_inprocess_vllm_server` — eligibility checking already handles this correctly
+   using only true `extra_args` (not engine_kwargs-derived flags).
+
+2. **Iris dashboard showing 0 log lines** — ALL in-process runs (including `vllm-70b-stream-final`,
+   `vllm-70b-stream-24g`) had zero visible logs in the Iris dashboard.
+   - **Root cause:** `_iris_emit` wrote to `_REAL_STDOUT = sys.stdout`, but `sys.stdout` was
+     captured AFTER `import jax` which redirects stdout on TPU (libtpu load).
+   - **Attempted fixes:** moving `_REAL_STDOUT` before imports (worked for direct script
+     `exp_vllm_inprocess_direct.py` but fragile — import order dependent).
+   - **Final fix:** `os.dup(1)` to duplicate the raw stdout file descriptor at import time,
+     then `os.write(_IRIS_LOG_FD, line.encode())` for all log output. This bypasses Python's
+     `sys.stdout` entirely — immune to any JAX/vLLM stdout redirection. Applied to
+     `vllm_inprocess.py`, `exp_vllm_stress_test.py`, and `exp_vllm_inprocess_direct.py`.
+   - **Validated:** `vllm-stress-8b-v4` shows shard injection logs and timing in dashboard.
+
+3. **Qwen3 235B model downloaded** — `Qwen/Qwen3-235B-A22B-Thinking-2507` (revision `6cbffae`)
+   downloaded to both `gs://marin-us-east1/` and `gs://marin-eu-west4/`. 118 safetensors
+   shards, 470 GB. Added to `experiments/models.py`.
+
+#### Current blocker: HTTP serving via FastAPI fails
+
+- **Symptom:** `vllm-stress-8b-v4` — weight loading and injection succeed (shard streaming
+  works, 125.6s for 15 GiB at 122 MiB/s), FastAPI server starts, but ALL HTTP requests
+  to `/v1/completions` return 500 Internal Server Error.
+- **Root cause (hypothesis):** `llm.generate()` called from uvicorn's background thread
+  is not thread-safe on TPU, or vLLM's engine requires main-thread execution. The
+  `exp_vllm_inprocess_direct.py` script works because it calls `llm.generate()` from
+  the main thread — no HTTP server, no threading.
+- **Evidence:** vLLM dumps scheduler output (ERROR level) right before each 500, suggesting
+  the engine itself crashes during inference, not our FastAPI handler.
+- **Impact:** `VllmEnvironment` in-process path can load weights but cannot serve HTTP
+  requests. The stress test and evaluators (which use HTTP) are broken. Only the direct
+  `LLM.generate()` path works.
+
+#### What works vs what doesn't
+
+| Path | Weight Loading | Inference | HTTP Serving |
+|------|---------------|-----------|--------------|
+| `exp_vllm_inprocess_direct.py` (main thread) | ✅ | ✅ | N/A (no HTTP) |
+| `VllmEnvironment` → in-process → FastAPI | ✅ | ❌ (500 errors) | ❌ |
+| `VllmEnvironment` → subprocess fallback | ✅ (slow, runai_streamer) | ✅ | ✅ |
+
+---
+
 ## Known Constraints
 
 - **Supported architectures:** Llama and Qwen only (MODEL_MAPPINGS coverage)
@@ -234,12 +286,18 @@ def load_and_inject_streaming(model_path, llm, mapping_model_name, model_config)
 - **vLLM version:** tested on `vllm-tpu==0.13.2.post6`
 - **`sync_weights` stability:** vLLM extension, not guaranteed stable across upgrades
 - **70B requires TP=4:** single v5p chip (95.7 GiB) cannot hold 131 GiB model skeleton
-- **Iris memory:** 400GB cgroups limit needed until shard-streaming is implemented
 - **`enforce_eager=True`:** used to avoid XLA compilation overhead during testing;
   production runs may want to remove this for better inference throughput
+- **HTTP serving broken:** `llm.generate()` from uvicorn thread returns 500 errors on TPU.
+  Only direct `LLM.generate()` from main thread works. This blocks evaluators and stress
+  tests that use the HTTP API via `VllmEnvironment`.
 
-## Future Work (beyond streaming)
+## Future Work
 
+- **Fix HTTP serving:** Investigate why `llm.generate()` fails from uvicorn thread.
+  Options: (a) run uvicorn in main thread and generate in worker thread, (b) use
+  `asyncio` bridge like RL code's `SyncVLLMWrapper`, (c) queue requests from HTTP
+  handler to main thread for generation.
 - Expand model family mapping inference to generic Llama/Qwen in `vllm_utils.py`
 - `--served-model-name` support for Harbor evaluator compatibility
 - Performance regression tests (load MB/s, time-to-first-token) in CI
