@@ -7,6 +7,7 @@ import jax.numpy as jnp
 import pytest
 
 import haliax as hax
+import haliax.nn.array_stacked as array_stacked_module
 from haliax.nn import ArrayStacked
 
 
@@ -167,3 +168,79 @@ def test_array_stacked_vmap_via_maps_layers_with_out_axes_0():
 
     out = stacked.vmap_via(lambda layer, arg: layer.weight + arg, in_axes=(None,), out_axes=0)(x)
     assert jnp.allclose(out, weights + x)
+
+
+def test_array_stacked_init_slices_layer_batched_inputs_under_eval_shape():
+    class Module(eqx.Module):
+        value: jax.Array
+
+        @staticmethod
+        def init(value):
+            return Module(value=value)
+
+    num_layers = 3
+    width = 2
+    value_shape = jax.ShapeDtypeStruct((num_layers, width), jnp.float32)
+
+    stacked_shape = eqx.filter_eval_shape(ArrayStacked.init(num_layers, Module), value=value_shape)
+    assert stacked_shape.stacked.value.shape == (num_layers, width)
+
+
+def test_array_stacked_nested_checkpointing_uses_multilevel_scan(monkeypatch):
+    class Module(eqx.Module):
+        weight: jax.Array
+
+        @staticmethod
+        def init(weight):
+            return Module(weight=weight)
+
+        def step(self, carry: jax.Array) -> jax.Array:
+            return carry + self.weight
+
+    num_layers = 4
+    width = 2
+    weights = jax.random.normal(jax.random.PRNGKey(0), (num_layers, width))
+    stacked = ArrayStacked.init(num_layers, Module, gradient_checkpointing="nested")(weight=weights)
+
+    call_count = 0
+    original = array_stacked_module.multilevel_scan
+
+    def wrapped_multilevel_scan(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(array_stacked_module, "multilevel_scan", wrapped_multilevel_scan)
+    _ = stacked.fold_via(Module.step)(jnp.zeros((width,), dtype=jnp.float32))
+    assert call_count == 1
+
+
+def test_array_stacked_scan_tags_carry_and_inputs_for_checkpoint_policy(monkeypatch):
+    class Module(eqx.Module):
+        weight: jax.Array
+
+        @staticmethod
+        def init(weight):
+            return Module(weight=weight)
+
+        def step(self, carry: jax.Array, scale: jax.Array) -> jax.Array:
+            return carry + self.weight * scale
+
+    num_layers = 2
+    width = 3
+    weights = jax.random.normal(jax.random.PRNGKey(0), (num_layers, width))
+    scale = jnp.array([1.0, 2.0], dtype=jnp.float32)
+    stacked = ArrayStacked.init(num_layers, Module, gradient_checkpointing=False)(weight=weights)
+
+    names: list[str] = []
+    original = array_stacked_module.tree_checkpoint_name
+
+    def wrapped_tree_checkpoint_name(x, name):
+        names.append(name)
+        return original(x, name)
+
+    monkeypatch.setattr(array_stacked_module, "tree_checkpoint_name", wrapped_tree_checkpoint_name)
+    _ = stacked.fold_via(Module.step, in_axes=(0,))(jnp.zeros((width,), dtype=jnp.float32), scale)
+
+    assert stacked._carry_ckpt_name in names
+    assert stacked._input_ckpt_name in names

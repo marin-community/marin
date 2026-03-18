@@ -9,8 +9,9 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 
-from .._src.scan import ScanCheckpointPolicy, ScanCheckpointSpec
+from .._src.scan import ScanCheckpointPolicy, ScanCheckpointSpec, find_closest_divisible_int_to_sqrt
 from .._src.state_dict import ModuleWithStateDictSerialization
+from ..jax_utils import is_jax_array_like, multilevel_scan, tree_checkpoint_name
 from ..util import is_named_array
 from .scan import ModuleInit
 
@@ -35,7 +36,7 @@ def _normalize_unroll(unroll: int | bool | None, num_layers: int) -> int | bool:
 
 
 def _is_layer_batched_leaf(x: Any, num_layers: int) -> bool:
-    return isinstance(x, jax.Array) and x.ndim > 0 and x.shape[0] == num_layers
+    return is_jax_array_like(x) and not is_named_array(x) and x.ndim > 0 and x.shape[0] == num_layers
 
 
 def _slice_layer(x: Any, index: int, num_layers: int) -> Any:
@@ -60,7 +61,7 @@ def _stack_layers(layers: Sequence[Any], num_layers: int, axis: int = 0) -> Any:
                 "ArrayStacked does not support NamedArray leaves. "
                 "Use haliax.nn.Stacked for modules with named-array parameters."
             )
-        if isinstance(first_leaf, jax.Array):
+        if is_jax_array_like(first_leaf):
             stacked_leaves.append(jnp.stack(layer_leaves, axis=axis))
         else:
             stacked_leaves.append(first_leaf)
@@ -158,6 +159,8 @@ class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
                     key: _slice_with_axis(kwargs[key], axis, layer_index, self.num_layers, context=f"fold_via[{key}]")
                     for key, axis in kwargs_axes.items()
                 }
+                carry = tree_checkpoint_name(carry, self._carry_ckpt_name)
+                layer_args, layer_kwargs = tree_checkpoint_name((layer_args, layer_kwargs), self._input_ckpt_name)
                 carry = fn(layer, carry, *layer_args, **layer_kwargs)
                 return carry, None
 
@@ -166,11 +169,12 @@ class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
                 self._input_ckpt_name,
                 body,
             )
-            carry, _ = jax.lax.scan(
+            carry, _ = _scan_layers(
                 checkpointed_body,
                 init,
-                jnp.arange(self.num_layers),
+                num_layers=self.num_layers,
                 unroll=resolved_unroll,
+                nested=self.gradient_checkpointing.nested,
             )
             return carry
 
@@ -198,6 +202,8 @@ class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
                     key: _slice_with_axis(kwargs[key], axis, layer_index, self.num_layers, context=f"scan_via[{key}]")
                     for key, axis in kwargs_axes.items()
                 }
+                carry = tree_checkpoint_name(carry, self._carry_ckpt_name)
+                layer_args, layer_kwargs = tree_checkpoint_name((layer_args, layer_kwargs), self._input_ckpt_name)
                 carry, out = fn(layer, carry, *layer_args, **layer_kwargs)
                 return carry, out
 
@@ -206,11 +212,12 @@ class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
                 self._input_ckpt_name,
                 body,
             )
-            carry, out = jax.lax.scan(
+            carry, out = _scan_layers(
                 checkpointed_body,
                 init,
-                jnp.arange(self.num_layers),
+                num_layers=self.num_layers,
                 unroll=resolved_unroll,
+                nested=self.gradient_checkpointing.nested,
             )
             return carry, out
 
@@ -276,8 +283,8 @@ def _slice_with_axis(x: Any, axis: AxisSpec, layer_index: int, num_layers: int, 
         return x
     if not isinstance(axis, int):
         raise TypeError(f"{context}: in_axes leaves must be int or None, got {type(axis)}.")
-    if not isinstance(x, jax.Array):
-        raise TypeError(f"{context}: in_axes={axis} requires a jax.Array input, got {type(x)}.")
+    if not is_jax_array_like(x):
+        raise TypeError(f"{context}: in_axes={axis} requires an array-like input, got {type(x)}.")
 
     resolved_axis = _normalize_axis(axis, x.ndim)
     if x.shape[resolved_axis] != num_layers:
@@ -293,6 +300,31 @@ def _layer_in_axes(tree: Any, num_layers: int) -> Any:
         tree,
         is_leaf=is_named_array,
     )
+
+
+def _scan_layers(
+    fn: Callable[[CarryT, jax.Array], tuple[CarryT, OutputT_co]],
+    init: CarryT,
+    *,
+    num_layers: int,
+    unroll: int | bool,
+    nested: bool | int,
+) -> tuple[CarryT, OutputT_co]:
+    indices = jnp.arange(num_layers)
+    outer_block_size = _nested_scan_outer_block_size(nested, num_layers)
+    if outer_block_size is None:
+        return jax.lax.scan(fn, init, indices, unroll=unroll)
+    return multilevel_scan(fn, init, indices, outer_block_size, length=num_layers, unroll=unroll)
+
+
+def _nested_scan_outer_block_size(nested: bool | int, num_layers: int) -> int | None:
+    if nested is True:
+        return find_closest_divisible_int_to_sqrt(num_layers)
+    if nested is False:
+        return None
+    if nested < 1:
+        raise ValueError(f"nested checkpointing block size must be >= 1, got {nested}.")
+    return nested
 
 
 def _resolve_in_axes(
