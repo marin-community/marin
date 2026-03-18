@@ -127,7 +127,7 @@ def send_request(server_url: str, model_id: str, prompt: str, max_tokens: int, r
             "model": model_id,
             "prompt": prompt,
             "max_tokens": max_tokens,
-            "temperature": 0.7,
+            "temperature": 0.0,
         },
         timeout=300,
     )
