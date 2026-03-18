@@ -13,19 +13,21 @@ uv run zephyr --backend=ray --max-parallelism=100 --memory=4GB \
 import json
 import logging
 import os
+import tempfile
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 
 import requests
 import zstandard
-from iris.marin_fs import open_url
+from fray.cluster import ResourceConfig
+from iris.marin_fs import open_url, url_to_fs
 from marin.execution import THIS_OUTPUT_PATH
 from marin.utils import fsspec_exists
-from fray.cluster import ResourceConfig
 from requests.adapters import HTTPAdapter
+from urllib3.exceptions import ProtocolError
 from urllib3.util import Retry
 from zephyr import Dataset, ZephyrContext
-from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +56,31 @@ def _iter_jsonl_from_zstd_stream(raw_stream) -> Iterator[dict]:
                 yield json.loads(line_bytes)
 
 
+_DOWNLOAD_MAX_RETRIES = 3
+_DOWNLOAD_BACKOFF = 30.0
+
+
 def download_single_nemotron_path(input_file_path: str, output_file_path: str) -> dict:
     """Fetches content from a Common Crawl path, streaming records to zstd output."""
     cc_url = f"https://data.commoncrawl.org/{input_file_path}"
+
+    for attempt in range(_DOWNLOAD_MAX_RETRIES):
+        try:
+            return _download_and_upload(input_file_path, output_file_path, cc_url)
+        except (requests.exceptions.ConnectionError, ProtocolError) as e:
+            if attempt == _DOWNLOAD_MAX_RETRIES - 1:
+                raise
+            wait = _DOWNLOAD_BACKOFF * (attempt + 1)
+            logger.warning(f"Download failed (attempt {attempt + 1}): {e}, retrying in {wait}s")
+            time.sleep(wait)
+    raise RuntimeError("unreachable")
+
+
+def _download_and_upload(input_file_path: str, output_file_path: str, cc_url: str) -> dict:
     logger.info(f"Downloading Nemotron CC file {cc_url} to {output_file_path}")
 
     session = requests.Session()
-    retries = Retry(total=5, backoff_factor=1.0, status_forcelist=[500, 502, 503, 504], allowed_methods=["GET"])
+    retries = Retry(total=10, backoff_factor=2.0, status_forcelist=[500, 502, 503, 504], allowed_methods=["GET"])
     adapter = HTTPAdapter(max_retries=retries)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
@@ -69,8 +89,10 @@ def download_single_nemotron_path(input_file_path: str, output_file_path: str) -
     response.raise_for_status()
 
     num_records = 0
-    with atomic_rename(output_file_path) as temp_path:
-        with open_url(temp_path, "w", compression="zstd") as out:
+    # Write locally then fs.put() — R2 rejects streaming multipart with unequal part sizes.
+    with tempfile.NamedTemporaryFile(suffix=".jsonl.zst", delete=True) as local_tmp:
+        cctx = zstandard.ZstdCompressor(level=2, threads=1)
+        with cctx.stream_writer(local_tmp, closefd=False) as zst:
             for record in _iter_jsonl_from_zstd_stream(response.raw):
                 dolma_record = {
                     "id": record["warc_record_id"],
@@ -79,8 +101,13 @@ def download_single_nemotron_path(input_file_path: str, output_file_path: str) -
                     "format": "text",
                     "metadata": {f"nemotron_{k}": v for k, v in record.items() if k not in ("warc_record_id", "text")},
                 }
-                print(json.dumps(dolma_record), file=out)
+                zst.write(json.dumps(dolma_record).encode() + b"\n")
                 num_records += 1
+        local_tmp.flush()
+
+        fs, resolved_path = url_to_fs(output_file_path)
+        fs.mkdirs(os.path.dirname(resolved_path), exist_ok=True)
+        fs.put(local_tmp.name, resolved_path)
 
     return {"input_file": input_file_path, "output_file": output_file_path, "num_records": num_records}
 
