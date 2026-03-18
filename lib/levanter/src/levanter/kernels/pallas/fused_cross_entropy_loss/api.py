@@ -12,12 +12,18 @@ import warnings
 import jax
 from jax import core as jax_core
 import jax.numpy as jnp
+from jax.sharding import NamedSharding
 from jaxtyping import Array, Float, Int
 
 from levanter.kernels.pallas import autotune_cache_utils
 
 from .config import BlockSizes
-from .tuned_block_sizes import infer_block_sizes, infer_block_sizes_with_tuned_match
+from .tuned_block_sizes import (
+    infer_block_sizes,
+    infer_block_sizes_with_tuned_match,
+    shape_bucket_name,
+    widest_dtype_name,
+)
 from .reference import linear_softmax_cross_entropy_loss_reference
 from .xla import linear_softmax_cross_entropy_loss_xla
 
@@ -48,8 +54,10 @@ _AUTOTUNE_CACHE_FILENAME = "block_sizes_v1.json"
 _AUTOTUNE_BLOCK_SIZE_CACHE: dict[str, BlockSizes] = {}
 _AUTOTUNE_CACHE_LOADED = False
 _AUTOTUNE_COMPILE_HIT_THRESHOLD_S = 0.20
+_VMEM_COMPILE_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 
 logger = logging.getLogger(__name__)
+_CANONICAL_PALLAS_IMPLEMENTATIONS: dict[str, ArrayImpl] = {}
 
 try:
     from .pallas_tpu import (
@@ -58,6 +66,7 @@ try:
     )
 
     IMPLEMENTATIONS["pallas_tpu"] = linear_softmax_cross_entropy_loss_pallas
+    _CANONICAL_PALLAS_IMPLEMENTATIONS["pallas_tpu"] = linear_softmax_cross_entropy_loss_pallas
 except ImportError:
     PallasUnsupportedError = NotImplementedError  # type: ignore[assignment]
 
@@ -65,6 +74,7 @@ try:
     from .pallas_gpu import PallasUnsupportedError, linear_softmax_cross_entropy_loss_pallas_gpu
 
     IMPLEMENTATIONS["pallas_gpu"] = linear_softmax_cross_entropy_loss_pallas_gpu
+    _CANONICAL_PALLAS_IMPLEMENTATIONS["pallas_gpu"] = linear_softmax_cross_entropy_loss_pallas_gpu
 except ImportError:
     pass
 
@@ -97,6 +107,90 @@ def _warn_pallas_fallback_once(exc: Exception) -> None:
         f"Pallas fused cross-entropy unavailable, falling back to XLA: {message}",
         RuntimeWarning,
     )
+
+
+def _is_tpu_vmem_compile_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "resource_exhausted" in message and "vmem" in message
+
+
+def _sharding_of(value: jax.Array):
+    sharding = None
+    try:
+        sharding = value.sharding  # type: ignore[attr-defined]
+    except Exception:
+        sharding = None
+    if sharding is not None:
+        return sharding
+
+    aval = getattr(value, "aval", None)
+    if aval is None:
+        return None
+    return getattr(aval, "sharding", None)
+
+
+def _named_sharding_of(value: jax.Array) -> NamedSharding | None:
+    sharding = _sharding_of(value)
+    if isinstance(sharding, NamedSharding):
+        return sharding
+    return None
+
+
+def _shape_dtype_struct_with_sharding(value: jax.Array) -> jax.ShapeDtypeStruct:
+    sharding = _sharding_of(value)
+    if sharding is None:
+        return jax.ShapeDtypeStruct(value.shape, value.dtype)
+    return jax.ShapeDtypeStruct(value.shape, value.dtype, sharding=sharding)
+
+
+def _maybe_wrap_loss_in_shard_map_for_benchmark(
+    fn: Callable[[jax.Array, jax.Array, jax.Array], jax.Array],
+    *,
+    x: jax.Array,
+    labels: jax.Array,
+    w: jax.Array,
+) -> Callable[[jax.Array, jax.Array, jax.Array], jax.Array]:
+    x_sharding = _named_sharding_of(x)
+    labels_sharding = _named_sharding_of(labels)
+    w_sharding = _named_sharding_of(w)
+    if x_sharding is None or labels_sharding is None or w_sharding is None:
+        return fn
+    if x_sharding.mesh != labels_sharding.mesh or x_sharding.mesh != w_sharding.mesh:
+        return fn
+
+    return jax.shard_map(
+        fn,
+        mesh=x_sharding.mesh,
+        in_specs=(x_sharding.spec, labels_sharding.spec, w_sharding.spec),
+        out_specs=labels_sharding.spec,
+        check_vma=False,
+    )
+
+
+def _warn_vmem_compile_fallback_once(exc: Exception, *, impl_name: str) -> None:
+    message = str(exc)
+    key = f"{impl_name}|{message}"
+    if key in _VMEM_COMPILE_FALLBACK_WARNINGS_EMITTED:
+        return
+    _VMEM_COMPILE_FALLBACK_WARNINGS_EMITTED.add(key)
+    warnings.warn(
+        f"Pallas fused cross-entropy hit TPU vmem compile OOM in {impl_name}; "
+        f"trying the next implementation. Error: {message}",
+        RuntimeWarning,
+    )
+
+
+def _pallas_impl_matches_current_backend(impl_name: str, *, fn: ArrayImpl | None = None) -> bool:
+    canonical_impl = _CANONICAL_PALLAS_IMPLEMENTATIONS.get(impl_name)
+    if canonical_impl is None:
+        return True
+    if fn is None:
+        fn = IMPLEMENTATIONS.get(impl_name)
+    if fn is not canonical_impl:
+        return True
+
+    backend = jax.default_backend()
+    return (impl_name == "pallas_tpu" and backend == "tpu") or (impl_name == "pallas_gpu" and backend == "gpu")
 
 
 def _autotune_enabled() -> bool:
@@ -231,17 +325,43 @@ def _autotune_cache_key(
     )
 
 
-def _candidate_block_sizes(impl_name: str, inferred: BlockSizes) -> list[BlockSizes]:
+def _candidate_block_sizes(
+    impl_name: str,
+    inferred: BlockSizes,
+    *,
+    x: jax.Array,
+    w: jax.Array,
+    dtype: Optional[jnp.dtype],
+) -> list[BlockSizes]:
     candidates: list[BlockSizes] = [inferred]
     if impl_name == "pallas_tpu":
-        for v_block in (256, 512, 1024, 2048, 4096):
-            candidates.append(
-                BlockSizes(
-                    b_block_size=inferred.b_block_size,
-                    h_block_size=inferred.h_block_size,
-                    v_block_size=v_block,
+        bucket = shape_bucket_name(x.shape[0], x.shape[1], w.shape[1])
+        if bucket == "large-batch-medium-h":
+            for h_block in (256, 512, 1024, 2048):
+                if x.shape[1] % h_block != 0:
+                    continue
+                for v_block in (128, 256, 512, 768, 1024):
+                    candidates.append(
+                        BlockSizes(
+                            b_block_size=1024,
+                            h_block_size=h_block,
+                            v_block_size=v_block,
+                        )
+                    )
+        else:
+            widest_dtype = widest_dtype_name(dtype=dtype, x_dtype=x.dtype, w_dtype=w.dtype)
+            if widest_dtype == jnp.dtype(jnp.float32).name:
+                v_blocks = (256, 512, 768, 1024)
+            else:
+                v_blocks = (256, 512, 1024, 2048, 4096)
+            for v_block in v_blocks:
+                candidates.append(
+                    BlockSizes(
+                        b_block_size=inferred.b_block_size,
+                        h_block_size=inferred.h_block_size,
+                        v_block_size=v_block,
+                    )
                 )
-            )
     elif impl_name == "pallas_gpu":
         for v_block in (64, 128, 256, 512, 1024, 2048, 4096):
             candidates.append(
@@ -290,12 +410,18 @@ def _benchmark_block_sizes_candidate(
         out = fn(x_value, labels_value, w_value, **kwargs)
         return out[0]
 
-    jitted = jax.jit(_loss_only)
+    benchmark_fn = _maybe_wrap_loss_in_shard_map_for_benchmark(
+        _loss_only,
+        x=x,
+        labels=labels,
+        w=w,
+    )
+    jitted = jax.jit(benchmark_fn)
 
     abstract_args = (
-        jax.ShapeDtypeStruct(x.shape, x.dtype),
-        jax.ShapeDtypeStruct(labels.shape, labels.dtype),
-        jax.ShapeDtypeStruct(w.shape, w.dtype),
+        _shape_dtype_struct_with_sharding(x),
+        _shape_dtype_struct_with_sharding(labels),
+        _shape_dtype_struct_with_sharding(w),
     )
     start = time.perf_counter()
     lowered = jitted.lower(*abstract_args)
@@ -351,14 +477,15 @@ def _autotune_block_sizes_on_miss(
         logger.info("Fused CE autotune cache hit for %s. Using cached block sizes %s.", impl_name, cached)
         return cached
 
-    candidates = _candidate_block_sizes(impl_name, inferred)
+    candidates = _candidate_block_sizes(impl_name, inferred, x=x, w=w, dtype=dtype)
     logger.info(
         "Fused CE autotune miss for %s. Sweeping %d block-size candidates.",
         impl_name,
         len(candidates),
     )
-    best = inferred
+    best: BlockSizes | None = None
     best_score = float("inf")
+    errors: list[Exception] = []
     for candidate in candidates:
         try:
             score = _benchmark_block_sizes_candidate(
@@ -372,11 +499,18 @@ def _autotune_block_sizes_on_miss(
                 precision=precision,
                 return_argmax=return_argmax,
             )
-        except Exception:
+        except Exception as exc:
+            errors.append(exc)
             continue
         if score < best_score:
             best_score = score
             best = candidate
+
+    if best is None:
+        raise ExceptionGroup(
+            f"Fused CE autotune found no viable block-size candidates for {impl_name}",
+            errors or [RuntimeError(f"No candidates generated for {impl_name}.")],
+        )
 
     _AUTOTUNE_BLOCK_SIZE_CACHE[cache_key] = best
     _persist_autotune_cache()
@@ -409,7 +543,7 @@ def _resolve_block_sizes(
 ) -> BlockSizes:
     if block_sizes is None:
         if block_size is None:
-            return infer_block_sizes(x.shape[0], x.shape[1], w.shape[1], dtype=dtype)
+            return infer_block_sizes(x.shape[0], x.shape[1], w.shape[1], dtype=dtype, x_dtype=x.dtype, w_dtype=w.dtype)
         return BlockSizes(v_block_size=block_size)
     if block_size is not None and block_size != block_sizes.v_block_size:
         raise ValueError(
@@ -520,35 +654,41 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     if implementation is None:
         impls = cast(Sequence[Implementation | ArrayImpl], _default_implementations())
         explicit = False
+        user_requested_impls = False
     elif isinstance(implementation, Sequence) and not isinstance(implementation, (str, bytes)):
         impls = cast(Sequence[Implementation | ArrayImpl], implementation)
         explicit = len(impls) == 1
+        user_requested_impls = True
     else:
         impls = (cast(Implementation, implementation),)
         explicit = True
+        user_requested_impls = True
 
     errors: list[Exception] = []
     for impl in impls:
+        impl_for_call = impl
         if explicit_block_sizes:
             block_sizes_for_impl = resolved_block_sizes
-        elif impl in ("xla", "reference"):
+        elif impl_for_call in ("xla", "reference"):
             block_sizes_for_impl = None
-        elif isinstance(impl, str) and impl in ("pallas_tpu", "pallas_gpu"):
+        elif isinstance(impl_for_call, str) and impl_for_call in ("pallas_tpu", "pallas_gpu"):
             inferred, has_tuned_match = infer_block_sizes_with_tuned_match(
                 x.shape[0],
                 x.shape[1],
                 w.shape[1],
                 dtype=dtype,
+                x_dtype=x.dtype,
+                w_dtype=w.dtype,
             )
-            if has_tuned_match:
+            fn = IMPLEMENTATIONS.get(impl_for_call)
+            if fn is None or not _pallas_impl_matches_current_backend(impl_for_call, fn=fn):
+                block_sizes_for_impl = inferred
+            elif has_tuned_match:
                 block_sizes_for_impl = inferred
             else:
-                fn = IMPLEMENTATIONS.get(impl)
-                if fn is None:
-                    block_sizes_for_impl = inferred
-                else:
+                try:
                     block_sizes_for_impl = _autotune_block_sizes_on_miss(
-                        impl_name=impl,
+                        impl_name=impl_for_call,
                         fn=fn,
                         x=x,
                         labels=labels,
@@ -559,9 +699,22 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                         precision=precision,
                         return_argmax=return_argmax,
                     )
+                except Exception as exc:
+                    if explicit:
+                        raise
+                    _warn_pallas_fallback_once(exc)
+                    errors.append(exc)
+                    continue
         else:
-            block_sizes_for_impl = infer_block_sizes(x.shape[0], x.shape[1], w.shape[1], dtype=dtype)
-        if callable(impl):
+            block_sizes_for_impl = infer_block_sizes(
+                x.shape[0],
+                x.shape[1],
+                w.shape[1],
+                dtype=dtype,
+                x_dtype=x.dtype,
+                w_dtype=w.dtype,
+            )
+        if callable(impl_for_call):
             try:
                 kwargs = dict(
                     block_sizes=block_sizes_for_impl,
@@ -571,7 +724,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                 )
                 if return_argmax:
                     kwargs["return_argmax"] = True
-                result = impl(x, labels, w, **kwargs)
+                result = impl_for_call(x, labels, w, **kwargs)
             except PallasUnsupportedError as e:
                 if explicit:
                     raise
@@ -585,9 +738,9 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                 errors.append(e)
                 continue
         else:
-            fn = IMPLEMENTATIONS.get(impl)
+            fn = IMPLEMENTATIONS.get(impl_for_call)
             if fn is None:
-                raise ValueError(f"Unsupported implementation: {impl}")
+                raise ValueError(f"Unsupported implementation: {impl_for_call}")
             try:
                 kwargs = dict(
                     block_sizes=block_sizes_for_impl,
@@ -610,8 +763,23 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                 _warn_pallas_fallback_once(e)
                 errors.append(e)
                 continue
+            except Exception as e:
+                should_try_next_impl = (
+                    not explicit
+                    and isinstance(impl_for_call, str)
+                    and impl_for_call in ("pallas_tpu", "pallas_gpu")
+                    and _is_tpu_vmem_compile_error(e)
+                )
+                if should_try_next_impl:
+                    _warn_vmem_compile_fallback_once(e, impl_name=impl_for_call)
+                    errors.append(e)
+                    continue
+                if explicit or user_requested_impls:
+                    raise
+                errors.append(e)
+                continue
 
-        selected = str(impl)
+        selected = str(impl_for_call)
         if selected not in _SELECTED_IMPL_LOGGED:
             _SELECTED_IMPL_LOGGED.add(selected)
             logger.info("Fused cross-entropy selected implementation: %s", selected)

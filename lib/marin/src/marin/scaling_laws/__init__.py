@@ -12,12 +12,13 @@ from marin.scaling_laws.isoflop_analysis import (
     ModelConfiguration,
     QuadraticFitCoeffs,
     ScalingFit,
-    ScalingRecipe,
+    ScalingHeuristic,
     fit_scaling_laws,
     predict_optimal_config,
     round_flops_to_bucket,
 )
 from marin.scaling_laws.tpu_utils import (
+    pick_v4_type,
     pick_v5p_type,
 )
 from marin.scaling_laws.scaling_plots import (
@@ -40,11 +41,12 @@ __all__ = [
     "ModelConfiguration",
     "QuadraticFitCoeffs",
     "ScalingFit",
-    "ScalingRecipe",
+    "ScalingHeuristic",
     # Functions
     "create_isoflop_plot",
     "create_scaling_plot",
     "fit_scaling_laws",
+    "pick_v4_type",
     "pick_v5p_type",
     "predict_optimal_config",
     "round_flops_to_bucket",

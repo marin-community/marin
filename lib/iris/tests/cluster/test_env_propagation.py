@@ -17,11 +17,8 @@ import pytest
 
 from iris.client import IrisClient, IrisContext, LocalClientConfig, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo
+from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.types import (
-    PREEMPTIBLE_ATTRIBUTE_KEY,
-    REGION_ATTRIBUTE_KEY,
-    Constraint,
-    ConstraintOp,
     Entrypoint,
     EnvironmentSpec,
     JobName,
@@ -49,11 +46,16 @@ def parent_context(local_client):
     )
 
 
-def _parent_job_info(env: dict[str, str], constraints: list[Constraint] | None = None) -> JobInfo:
+def _parent_job_info(
+    env: dict[str, str],
+    constraints: list[Constraint] | None = None,
+    worker_region: str | None = None,
+) -> JobInfo:
     return JobInfo(
         task_id=JobName.from_wire("/parent-job/0"),
         env=env,
         constraints=constraints or [],
+        worker_region=worker_region,
     )
 
 
@@ -161,8 +163,8 @@ def test_child_job_inherits_parent_constraints(local_client, parent_context):
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
     parent_constraints = [
-        Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value="us-west4"),
-        Constraint(key=PREEMPTIBLE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value="true"),
+        Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4"),
+        Constraint(key=WellKnownAttribute.PREEMPTIBLE, op=ConstraintOp.EQ, value="true"),
     ]
 
     captured_constraints = []
@@ -182,15 +184,15 @@ def test_child_job_inherits_parent_constraints(local_client, parent_context):
         finally:
             local_client._cluster_client.submit_job = original_submit
 
-    assert any(c.key == REGION_ATTRIBUTE_KEY and c.value.string_value == "us-west4" for c in captured_constraints)
-    assert any(c.key == PREEMPTIBLE_ATTRIBUTE_KEY and c.value.string_value == "true" for c in captured_constraints)
+    assert any(c.key == WellKnownAttribute.REGION and c.value.string_value == "us-west4" for c in captured_constraints)
+    assert any(c.key == WellKnownAttribute.PREEMPTIBLE and c.value.string_value == "true" for c in captured_constraints)
 
 
 def test_child_explicit_constraints_override_parent(local_client, parent_context):
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
-    parent_constraints = [Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value="us-west4")]
-    child_constraints = [Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value="europe-west4")]
+    parent_constraints = [Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4")]
+    child_constraints = [Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="europe-west4")]
 
     captured_constraints = []
     original_submit = local_client._cluster_client.submit_job
@@ -209,8 +211,12 @@ def test_child_explicit_constraints_override_parent(local_client, parent_context
         finally:
             local_client._cluster_client.submit_job = original_submit
 
-    assert any(c.key == REGION_ATTRIBUTE_KEY and c.value.string_value == "europe-west4" for c in captured_constraints)
-    assert not any(c.key == REGION_ATTRIBUTE_KEY and c.value.string_value == "us-west4" for c in captured_constraints)
+    assert any(
+        c.key == WellKnownAttribute.REGION and c.value.string_value == "europe-west4" for c in captured_constraints
+    )
+    assert not any(
+        c.key == WellKnownAttribute.REGION and c.value.string_value == "us-west4" for c in captured_constraints
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -310,3 +316,103 @@ def test_env_propagates_through_job_chain(tmp_path):
 
     # C was launched by B with extras=["extra-from-b"], which overrides parent extras
     assert state_c["extras"] == ["extra-from-b"]
+
+
+def test_child_inherits_worker_region_constraint(local_client, parent_context):
+    """When the parent has a worker_region and the child has no region constraint,
+    the child should get an implicit region constraint from the parent's worker."""
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+
+    captured_constraints = []
+    original_submit = local_client._cluster_client.submit_job
+
+    def capturing_submit(*, constraints=None, **kwargs):
+        captured_constraints.extend(list(constraints or []))
+        return original_submit(constraints=constraints, **kwargs)
+
+    with (
+        iris_ctx_scope(parent_context),
+        patch(
+            "iris.client.client.get_job_info",
+            return_value=_parent_job_info({}, worker_region="us-central1"),
+        ),
+    ):
+        local_client._cluster_client.submit_job = capturing_submit
+        try:
+            local_client.submit(entrypoint, "child-region-inherit", resources)
+        finally:
+            local_client._cluster_client.submit_job = original_submit
+
+    assert any(
+        c.key == WellKnownAttribute.REGION and c.value.string_value == "us-central1" for c in captured_constraints
+    )
+
+
+def test_child_explicit_region_not_overridden_by_worker_region(local_client, parent_context):
+    """When the child already has a region constraint, the parent's worker_region
+    should NOT override it."""
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+    child_constraints = [Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="europe-west4")]
+
+    captured_constraints = []
+    original_submit = local_client._cluster_client.submit_job
+
+    def capturing_submit(*, constraints=None, **kwargs):
+        captured_constraints.extend(list(constraints or []))
+        return original_submit(constraints=constraints, **kwargs)
+
+    with (
+        iris_ctx_scope(parent_context),
+        patch(
+            "iris.client.client.get_job_info",
+            return_value=_parent_job_info({}, worker_region="us-central1"),
+        ),
+    ):
+        local_client._cluster_client.submit_job = capturing_submit
+        try:
+            local_client.submit(entrypoint, "child-explicit-region", resources, constraints=child_constraints)
+        finally:
+            local_client._cluster_client.submit_job = original_submit
+
+    # Should have the child's explicit region, not the parent's worker region
+    assert any(
+        c.key == WellKnownAttribute.REGION and c.value.string_value == "europe-west4" for c in captured_constraints
+    )
+    assert not any(
+        c.key == WellKnownAttribute.REGION and c.value.string_value == "us-central1" for c in captured_constraints
+    )
+
+
+def test_parent_region_constraint_not_overridden_by_worker_region(local_client, parent_context):
+    """When the parent already has a region constraint in its stored constraints,
+    the worker_region should NOT add a duplicate."""
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+    parent_constraints = [Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4")]
+
+    captured_constraints = []
+    original_submit = local_client._cluster_client.submit_job
+
+    def capturing_submit(*, constraints=None, **kwargs):
+        captured_constraints.extend(list(constraints or []))
+        return original_submit(constraints=constraints, **kwargs)
+
+    with (
+        iris_ctx_scope(parent_context),
+        patch(
+            "iris.client.client.get_job_info",
+            return_value=_parent_job_info({}, constraints=parent_constraints, worker_region="us-central1"),
+        ),
+    ):
+        local_client._cluster_client.submit_job = capturing_submit
+        try:
+            local_client.submit(entrypoint, "child-parent-region", resources)
+        finally:
+            local_client._cluster_client.submit_job = original_submit
+
+    # Should have the parent's explicit region constraint, not the worker region
+    region_constraints = [c for c in captured_constraints if c.key == WellKnownAttribute.REGION]
+    assert len(region_constraints) == 1
+    assert region_constraints[0].value.string_value == "us-west4"

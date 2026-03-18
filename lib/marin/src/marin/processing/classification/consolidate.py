@@ -42,7 +42,7 @@ class FilterType(StrEnum):
     REMOVE_DOC = "remove_docs"
 
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -72,6 +72,12 @@ class FilterConfig:
 
     reverse: bool = False
     """Reverse the filter."""
+
+    attribute_filetype: str | None = None
+    """File extension for attribute files (e.g. 'jsonl.gz', 'vortex'). If None, uses the input filetype."""
+
+    keep_if_missing: bool = False
+    """If True, keep docs that have no attribute entry. If False (default), reject them."""
 
 
 @dataclass(frozen=True)
@@ -132,7 +138,8 @@ def _remove_spans_from_doc(doc: dict, filt: FilterConfig, attributes: dict) -> d
         """
         # Sort spans in reverse order to avoid index shifting
         sorted_spans = sorted(spans, key=lambda x: x[1], reverse=True)
-        for start, end, _ in sorted_spans:
+        for span in sorted_spans:
+            start, end = span[0], span[1]
             text = text[:start] + text[end:]
 
         return text
@@ -237,7 +244,13 @@ def calculate_percentile_thresholds(config: ConsolidateConfig) -> list[FilterCon
             continue
 
         # Build list of attribute file paths
-        attr_paths = [rebase_file_path(config.input_path, inp, filt.attribute_path) for inp in input_paths]
+        rebase_kwargs = {}
+        if filt.attribute_filetype:
+            rebase_kwargs["new_extension"] = f".{filt.attribute_filetype}"
+            rebase_kwargs["old_extension"] = f".{config.filetype}"
+        attr_paths = [
+            rebase_file_path(config.input_path, inp, filt.attribute_path, **rebase_kwargs) for inp in input_paths
+        ]
 
         # Compute threshold using reduction
         threshold = _compute_percentile_threshold(attr_paths, filt.name, filt.label, filt.keep_fraction)
@@ -256,7 +269,11 @@ def process_file_shard(*, shard, filters: list[FilterConfig], input_base: str, f
     # Load all attribute files for this input file and build mapping
     attr_file_paths = {
         filt.name: rebase_file_path(
-            input_base, input_path, filt.attribute_path, new_extension=".jsonl.gz", old_extension=f".{filetype}"
+            input_base,
+            input_path,
+            filt.attribute_path,
+            new_extension=f".{filt.attribute_filetype}" if filt.attribute_filetype else f".{filetype}",
+            old_extension=f".{filetype}",
         )
         for filt in filters
     }
@@ -293,8 +310,10 @@ def process_file_shard(*, shard, filters: list[FilterConfig], input_base: str, f
                 # NOTE: if at any point the doc is rejected, stop processing further filters
                 break
 
-            filt_attrs = filter_to_doc_attrs.get(filt.name, {}).get(doc_id)
+            filt_attrs: dict[str, Any] | None = filter_to_doc_attrs.get(filt.name, {}).get(doc_id)
             if not filt_attrs:
+                if filt.keep_if_missing:
+                    continue
                 keep = False
                 break
 
@@ -326,7 +345,7 @@ def consolidate(config: ConsolidateConfig):
     results = ctx.execute(
         Dataset.from_list(input_paths)
         .map_shard(
-            lambda shard: process_file_shard(
+            lambda shard, _: process_file_shard(
                 shard=shard, filters=filters, input_base=config.input_path, filetype=config.filetype
             )
         )

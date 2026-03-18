@@ -105,6 +105,14 @@ class ActorGroup(Protocol):
         """
         ...
 
+    def is_done(self) -> bool:
+        """Return True if the underlying job has permanently terminated.
+
+        When True, no new actors will ever come online — the group is dead.
+        Local backends always return False (in-process actors don't independently fail).
+        """
+        ...
+
     def shutdown(self) -> None:
         """Terminate all actor jobs."""
         ...

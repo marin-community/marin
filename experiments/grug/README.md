@@ -23,6 +23,11 @@
 2. Make model/training changes in that variant, not in shared trainer libraries.
 3. Set run knobs in `<variant>/launch.py` (run id, data mix, optimizer, TPU type).
 4. Launch from the variant's `launch.py` entrypoint.
+5. Add or update variant-specific notes in `experiments/grug/variants.md`.
+
+## Variant notes
+
+Variant-specific guidance (including modular-opt notes) lives in `experiments/grug/variants.md`.
 
 ## Quickstart launch
 
@@ -153,7 +158,8 @@ enforces these minimum interfaces:
 ## Further guidance
 
 - Grug principles: [`/.agents/projects/grugformer.md`](../../.agents/projects/grugformer.md)
-- Change workflow: [`/docs/recipes/change_grug.md`](../../docs/recipes/change_grug.md)
+- Change workflow: [`.agents/skills/change-grug/`](../../.agents/skills/change-grug/SKILL.md)
+- HBM/OOM tuning guide: [`/docs/references/hbm-optimization.md`](../../docs/references/hbm-optimization.md)
 - Executor mechanics: [`/docs/explanations/executor.md`](../../docs/explanations/executor.md)
 - Executor tutorial: [`/docs/tutorials/executor-101.md`](../../docs/tutorials/executor-101.md)
 - TPU debug workflow: [`/docs/dev-guide/dev_tpu.md`](../../docs/dev-guide/dev_tpu.md)

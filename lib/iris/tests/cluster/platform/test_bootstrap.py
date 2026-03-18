@@ -198,6 +198,13 @@ def test_gcp_platform_resolve_image_passthrough_non_ghcr() -> None:
     )
 
 
+def test_worker_bootstrap_tunes_network_sysctls() -> None:
+    """Worker bootstrap configures sysctl for expanded port range and TIME_WAIT reuse."""
+    script = build_worker_bootstrap_script(_worker_config())
+    assert 'sysctl -w net.ipv4.ip_local_port_range="1024 65535"' in script
+    assert "sysctl -w net.ipv4.tcp_tw_reuse=1" in script
+
+
 def test_gcp_platform_resolve_image_requires_zone_for_ghcr() -> None:
     """GcpPlatform.resolve_image() raises when zone is missing for GHCR images."""
     from iris.cluster.platform.gcp import GcpPlatform

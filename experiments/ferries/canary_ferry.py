@@ -1,110 +1,150 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Canary ferry: Qwen3 ~30M (hid512) daily pretraining canary.
+"""Canary ferry: Grug MoE daily pretraining canary.
 
-Trains to 1B tokens on v5p-8 with AdamH. Designed to run daily to catch infra
-and pretraining regressions early. See #2873 for the proposal.
+Supports TPU (v5p-8, Nemotron, ~1B tokens) and GPU (8x H100, SlimPajama, ~50 steps).
+Config is driven by env vars set in the GH Actions workflow env: block and forwarded
+to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
 
-Each run embeds today's date in the step name so the executor sees a fresh
-output path and actually trains (instead of skipping on prior SUCCESS status).
-Override via CANARY_DATE env var for testing or reruns.
-
-Optimal hyperparameters from mega-sweep-bs64-1b-hid512-v3 (trial 26, macro_loss=3.754):
-  lr=0.00864, beta1=0.894, adam_lr=0.000502, beta2=0.999, eps=2.32e-07,
-  max_grad_norm=0.1, z_loss_weight=1.10e-05
-
-Usage:
-    # Default: TPU v5p-8
-    python -m experiments.ferries.canary_ferry
-
-    # GPU (8x H100): set CANARY_ACCELERATOR=gpu
-    CANARY_ACCELERATOR=gpu python -m experiments.ferries.canary_ferry
+    CANARY_ACCELERATOR   tpu | gpu
+    CANARY_BATCH_SIZE    per-device batch size
+    CANARY_TARGET_TOKENS total training tokens
+    RUN_ID               unique run identifier
 """
 
+import dataclasses
 import datetime
 import os
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
-from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
-from levanter.models.qwen import Qwen3Config
-from levanter.optim import AdamHConfig
-from marin.execution.executor import executor_main
+from levanter.data.text import BlockShuffleConfig, TextLmDatasetFormat
+from levanter.optim import AdamConfig
+from levanter.tracker.wandb import WandbConfig
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.processing.tokenize.data_configs import lm_data_config
 
-from experiments.defaults import default_train
-from experiments.simple_train_config import SimpleTrainConfig
-from experiments.tootsie.exp1295_32b import nemotron_mix
+from experiments.defaults import default_tokenize
+from experiments.grug.moe.launch import (
+    GRUG_MOE_TRIAL_MODEL,
+    NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+    GrugMoeLaunchConfig,
+    run_grug_moe,
+)
+from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
+from experiments.llama import llama3_tokenizer
 
-CANARY_DATE = os.environ.get("CANARY_DATE", datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"))
-
-# --- Model: Qwen3 ~30M (hidden_dim=512) ---
-model = Qwen3Config(
-    max_seq_len=4096,
-    hidden_dim=512,
-    intermediate_dim=2048,
-    num_heads=4,
-    num_kv_heads=4,
-    num_layers=6,
-    rope=Llama3RotaryEmbeddingsConfig(),
+CANARY_OPTIMIZER = AdamConfig(
+    learning_rate=3e-3,
+    weight_decay=0.1,
+    lr_schedule="cosine",
+    decay=0.2,
+    min_lr_ratio=0.1,
+    warmup=48,
 )
 
-# --- Training: 1B tokens, bs64, seq_len=4096 ---
-BATCH_SIZE = 64
-SEQ_LEN = 4096
-TARGET_TOKENS = 1_000_000_000
-NUM_STEPS = TARGET_TOKENS // (BATCH_SIZE * SEQ_LEN)
+CANARY_TRAINER = GrugTrainerConfig(
+    z_loss_weight=1e-4,
+    ema_beta=None,
+    log_every=1,
+)
 
 
-def _resources(accelerator: str) -> ResourceConfig:
-    if accelerator == "gpu":
-        return ResourceConfig.with_gpu("H100", count=8, cpu=128, ram="256g", disk="256g")
-    elif accelerator == "tpu":
-        return ResourceConfig.with_tpu("v5p-8")
+def _env_int(key: str, default: int) -> int:
+    raw = os.environ.get(key, "")
+    return int(raw) if raw else default
+
+
+def _build_step_from_env() -> ExecutorStep:
+    accelerator = os.environ.get("CANARY_ACCELERATOR", "tpu")
+    if accelerator not in ("tpu", "gpu"):
+        raise ValueError(f"Unknown CANARY_ACCELERATOR={accelerator!r}, expected 'tpu' or 'gpu'")
+
+    run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+    if accelerator == "tpu":
+        batch_size = _env_int("CANARY_BATCH_SIZE", 512)
+        target_tokens = _env_int("CANARY_TARGET_TOKENS", 1_000_000_000)
+        name = "canary-ferry-moe"
+        data = NEMOTRON_MIX_WITH_DEFAULT_VALIDATION
+        resources = ResourceConfig.with_tpu("v5p-8")
+        eval_config: GrugEvalConfig | None = GrugEvalConfig(
+            eval_batch_size=batch_size,
+            steps_per_eval=240,
+            max_eval_batches=8,
+            eval_current=True,
+            eval_ema=False,
+        )
+        wandb_group = "canary-ferry-moe"
+        wandb_tags = ["canary", "ferry", "grug", "moe"]
     else:
-        raise ValueError(f"Unknown accelerator: {accelerator!r}. Expected 'tpu' or 'gpu'.")
+        batch_size = _env_int("CANARY_BATCH_SIZE", 32)
+        target_tokens = _env_int("CANARY_TARGET_TOKENS", batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len * 50)
+        name = "canary-ferry-cw"
+        # SlimPajama-6B with block-shuffle — small dataset, re-tokenized on first run.
+        tokenize_step = default_tokenize(
+            name="slimpajama-6b-cw",
+            dataset="DKYoon/SlimPajama-6B",
+            tokenizer=llama3_tokenizer,
+            format=TextLmDatasetFormat(),
+        )
+        tokenize_step = dataclasses.replace(
+            tokenize_step,
+            config=dataclasses.replace(
+                tokenize_step.config,
+                # SlimPajama-6B tokenization OOMs at the default 10g worker_resources.
+                worker_resources=ResourceConfig(ram="64g", disk="64g"),
+            ),
+        )
+        data = lm_data_config(
+            training_set=tokenize_step,
+            shuffle=BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel"),
+        )
+        resources = ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="256g", disk="256g")
+        eval_config = None
+        wandb_group = "canary-ferry-moe-gpu"
+        wandb_tags = ["canary", "ferry", "grug", "moe", "gpu"]
 
+    num_steps = target_tokens // (batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len)
+    if num_steps <= 0:
+        raise ValueError(
+            f"CANARY_TARGET_TOKENS={target_tokens} too small for batch_size={batch_size} "
+            f"x seq_len={GRUG_MOE_TRIAL_MODEL.max_seq_len} -- would produce 0 steps"
+        )
 
-def make_training_step(accelerator: str = "tpu"):
-    """Create the canary ferry training step for the given accelerator."""
-    train_config = SimpleTrainConfig(
-        resources=_resources(accelerator),
-        train_batch_size=BATCH_SIZE,
-        num_train_steps=NUM_STEPS,
-        learning_rate=0.00864,
-        train_seq_len=SEQ_LEN,
-        z_loss_weight=1.10e-05,
-        optimizer_config=AdamHConfig(
-            learning_rate=0.00864,
-            adam_lr=0.000502,
-            min_lr_ratio=0.0,
-            warmup=0.1,
-            decay=0.2,
-            lr_schedule="linear",
-            beta1=0.894,
-            beta2=0.999,
-            epsilon=2.32e-07,
-            max_grad_norm=0.1,
-            nesterov=False,
+    return ExecutorStep(
+        name=f"{name}-{run_id}",
+        fn=run_grug_moe,
+        config=GrugMoeLaunchConfig(
+            model=versioned(GRUG_MOE_TRIAL_MODEL),
+            data=data,
+            output_path=this_output_path(),
+            run_id=run_id,
+            resources=versioned(resources),
+            steps=versioned(num_steps),
+            batch_size=versioned(batch_size),
+            seed=versioned(0),
+            mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+            tracker=WandbConfig(
+                project="marin",
+                tags=wandb_tags,
+                group=wandb_group,
+                name=None,
+            ),
+            optimizer=versioned(CANARY_OPTIMIZER),
+            grug_trainer=versioned(CANARY_TRAINER),
+            eval=versioned(eval_config) if eval_config is not None else None,
+            profiler=ProfilerConfig(enabled=True),
         ),
-        steps_per_eval=500,
-        profiler=ProfilerConfig(enabled=True),
     )
 
-    return default_train(
-        name=f"canary-ferry-{CANARY_DATE}",
-        tokenized=nemotron_mix,
-        model_config=model,
-        train_config=train_config,
-        tags=["canary", "ferry", "qwen3", "adamh", "hid512", "1b"],
-        eval_harness_tasks=[],
-    )
+
+canary_moe_step = _build_step_from_env()
 
 
 def main():
-    accelerator = os.environ.get("CANARY_ACCELERATOR", "tpu")
-    training_step = make_training_step(accelerator)
-    executor_main(steps=[training_step])
+    executor_main(steps=[canary_moe_step])
 
 
 if __name__ == "__main__":

@@ -5,8 +5,8 @@
 
 import logging
 
-from zephyr.dataset import Dataset
-from zephyr.execution import DiskChunk, WorkerContext, ZephyrContext, zephyr_worker_ctx
+from zephyr.dataset import Dataset, ShardInfo
+from zephyr.execution import WorkerContext, ZephyrContext, zephyr_worker_ctx
 from zephyr.expr import Expr, col, lit
 from zephyr.plan import ExecutionHint, compute_plan
 from zephyr.readers import InputFileSpec, load_file, load_jsonl, load_parquet, load_vortex, load_zip_members
@@ -20,6 +20,7 @@ __all__ = [
     "ExecutionHint",
     "Expr",
     "InputFileSpec",
+    "ShardInfo",
     "WorkerContext",
     "ZephyrContext",
     "atomic_rename",

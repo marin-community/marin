@@ -17,15 +17,14 @@ import uuid
 import pytest
 from iris.chaos import enable_chaos, reset_chaos
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-from iris.cluster.config import load_config, make_local_config
-from iris.cluster.manager import connect_cluster
+from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.client.client import IrisClient
 from iris.rpc import cluster_pb2
 
 from pathlib import Path
 
 IRIS_ROOT = Path(__file__).resolve().parents[2]  # lib/iris
-DEFAULT_CONFIG = IRIS_ROOT / "examples" / "demo.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 
 def _fail_then_succeed(attempt_marker: str):
@@ -252,10 +251,16 @@ class TestAttemptLogs:
         # Should have 2 attempts: attempt 0 (failed) and attempt 1 (succeeded)
         assert len(task_status.attempts) >= 2, f"Expected at least 2 attempts, got {len(task_status.attempts)}"
 
-        # First attempt should have failed
+        # First attempt should have failed. Depending on heartbeat timing, the
+        # controller may record either TASK_STATE_FAILED (task reported its own
+        # failure) or TASK_STATE_WORKER_FAILED (worker reported "task not found"
+        # before the task's failure was processed).
         attempt_0 = task_status.attempts[0]
         assert attempt_0.attempt_id == 0
-        assert attempt_0.state == cluster_pb2.TASK_STATE_FAILED
+        assert attempt_0.state in (
+            cluster_pb2.TASK_STATE_FAILED,
+            cluster_pb2.TASK_STATE_WORKER_FAILED,
+        ), f"Expected failed state, got {attempt_0.state}"
 
         # Last attempt should have succeeded (may not be attempts[1] if
         # transient worker failures caused extra retry cycles)

@@ -1,138 +1,65 @@
 # Iris Agent Notes
 
-- Use Connect/RPC for APIs and dashboards. Do not use `httpx` or raw HTTP.
-- After changing `.proto` files, regenerate via `scripts/generate_protos.py`.
-- Prefer shallow, functional code that returns control quickly; avoid callback-heavy or inheritance-driven designs.
+Distributed job orchestration replacing Ray with simpler primitives. Start with the shared instructions in `/AGENTS.md`; only Iris-specific conventions are below.
 
-The Iris testing policy lives in `TESTING.md`.
-
-## Docs
-
-Read the docs for the area you are changing. If docs disagree with code, update the docs (or add a task) in the same PR.
-
-Key docs (kept intentionally short):
+## Key Docs
 
 - `README.md` — overview + quick start
 - `OPS.md` — operating / troubleshooting a live cluster
-- `docs/autoscaler-v2.md` — autoscaler design + terminology
-- `docs/controller-flow.md`, `docs/worker-flow.md` — controller/worker lifecycle
+- `TESTING.md` — testing policy, markers, and commands
+- `docs/autoscaler-fix.md` — autoscaler design + terminology
 - `docs/task-states.md` — task state machine + retry semantics
 - `docs/coreweave.md` — CoreWeave platform + `runtime=kubernetes` behavior
+- `docs/image-push.md` — multi-region image push/pull architecture
+- `docs/constraints.md` — constraint system design
+- `docs/users.md` — user/auth system design
 
-Resource model note: CPU demand is fungible and can route to any group; GPU/TPU demand is non-fungible and must match device type (and optionally variant). Priority configuration determines whether CPU spillover lands on accelerator groups.
+## Source Layout
 
-## Imports
+- `src/iris/cli/` — CLI entry point (`main.py` has all commands including `login`, `submit`, `status`)
+- `src/iris/cluster/controller/` — controller server: `service.py` (RPC handlers), `controller.py` (main loop), `auth_setup.py` (auth config), `dashboard.py` (dashboard serving), `db.py` (SQLite), `migrations/` (schema)
+- `src/iris/cluster/worker/` — worker agent
+- `src/iris/rpc/` — protobuf definitions (`.proto`), generated code (`_pb2.py`), and RPC client helpers (`cluster_connect.py`, `auth.py`)
+- `dashboard/` — Vue 3 frontend (Vite + Tailwind)
 
-Avoid `TYPE_CHECKING`. Use real imports. If you hit a cycle:
+## Development
 
-- Prefer refactoring when sensible.
-- Otherwise use a `Protocol` at the boundary.
-
-## RPC / API Accessibility
-
-Any functionality exposed by the worker or controller dashboards must also be available via RPC.
-Dashboards should be a thin UI over the RPC API, not a second implementation path.
-
-## Concurrency Model
-
-Platform operations (`terminate`, `create_slice`, etc.) shell out via `subprocess.run` and are thread-safe.
-For concurrent independent platform operations, use `concurrent.futures.ThreadPoolExecutor` (not asyncio) and apply hard timeouts so the CLI cannot hang indefinitely.
-
-## Planning
-
-Prefer spiral plans over linear plans: each stage should be independently testable (proto → server stub → client wiring → end-to-end test), then iterate.
-
-### Light Worker Mode (CoreWeave + runtime=kubernetes)
-
-When `runtime: kubernetes` is configured, worker Pods are intentionally "light":
-- Worker Pod must not request `nvidia.com/gpu` or `rdma/ib`.
-- Task Pods created by `src/iris/cluster/runtime/kubernetes.py` request accelerators per task.
-- Worker Pod still uses the scale-group `nodeSelector` and `hostNetwork: true`.
-- Worker Pod passes control-plane env needed for task-pod creation (for example
-  `IRIS_SERVICE_ACCOUNT_NAME`, and `IRIS_S3_SECRET_NAME` when S3 is enabled).
-
-Quick verification:
-- Worker create log shows `resource_limits=none`.
-- `kubectl get pod <worker> -o jsonpath='{.spec.containers[0].resources}'` is empty.
-- Task pod specs include GPU limits when task resources request GPUs.
-
-**Disk layout**: CoreWeave bare-metal nodes have a 15 GB RAM disk (`/dev/ram0`) as the root
-filesystem and a multi-TB NVMe RAID (`/dev/md127`) mounted at `/mnt/local`. Bind mounts expose
-it as `/var/lib/containerd`, `/var/lib/kubelet`, `/opt`, etc. The `cache_dir` must point to the
-NVMe (e.g. `/mnt/local/iris-cache`) — the default `/var/cache/iris` lands on the tiny RAM disk
-and will fill up immediately when installing CUDA packages.
-
-All K8s resources (RBAC, ConfigMap, shared NodePools, Deployment, Service) are created
-automatically by `iris cluster start` via `CoreweavePlatform.start_controller()`. RBAC
-manifests (Namespace, ServiceAccount, ClusterRole, ClusterRoleBinding) are defined in
-`CoreweavePlatform.ensure_rbac()` — no separate YAML files needed.
-
-## Key Modules
-
-### Time Utilities
-
-Use `iris.time_utils` for all time-related operations instead of raw `datetime` or `time`:
-
-| Class | Purpose |
-|-------|---------|
-| `Timestamp` | Point in time (epoch-based). Use for created_at, timestamps in logs, etc. |
-| `Duration` | Time interval. Use for timeouts, intervals, configuration values. |
-| `Deadline` | Monotonic deadline for timeout checks. Use in polling loops. |
-| `Timer` | Elapsed time measurement. Use for performance tracking. |
-| `ExponentialBackoff` | Retry/polling with backoff. Use `wait_until()` for condition polling. |
-
-Example:
-```python
-from iris.time_utils import Timestamp, Duration, Deadline
-
-created_at = Timestamp.now()
-timeout = Duration.from_seconds(30.0)
-deadline = Deadline.from_now(timeout)
-deadline.wait_for(condition)
-
-while not deadline.expired():
-    if condition():
-        break
-    time.sleep(0.1)
+```bash
+# Unit tests
+uv run pytest lib/iris/tests/ -m "not e2e" -o "addopts="
 ```
 
-### Deployment Topology
+See `TESTING.md` for the complete testing policy, E2E test commands, and markers.
 
-The controller is a plain GCE VM with no zone affinity to workers — it can run
-in any zone and serve workers across all regions.
+### Dashboard
 
-**When changing the controller zone**, update in `examples/marin.yaml`:
-- `controller.gcp.zone` — the GCE zone
-- Image tags use `ghcr.io/marin-community/...` format. The controller and
-  autoscaler automatically rewrite these to AR remote repos for the VM's
-  continent at boot time.
+The Vue 3 dashboard lives in `dashboard/`. To type-check and build:
 
-**Docker registries**: Bootstrap scripts in `src/iris/cluster/platform/bootstrap.py` auto-detect
-AR image tags and configure `gcloud auth configure-docker`. AR remote repos
-proxy GHCR — see `docs/image-push.md` for setup.
+```bash
+cd lib/iris/dashboard && npm run build:check   # vue-tsc + rsbuild
+```
 
-### Multi-Region Image Push/Pull
+Or use the Iris CLI which handles `npm ci` automatically:
 
-Images are pushed only to **GHCR** (`ghcr.io/marin-community/`). GCP VMs pull
-from **Artifact Registry remote repositories** that act as pull-through caches
-for GHCR. See `docs/image-push.md` for full details.
+```bash
+uv run iris build dashboard
+```
 
-**Push**: `iris build push` and `iris cluster start` push to GHCR only.
+Always run `build:check` after editing `.vue` or `.ts` files to catch type errors before committing.
 
-**Pull**: The autoscaler and controller bootstrap automatically rewrite GHCR
-image tags to the AR remote repo for the VM's continent:
-- `ghcr.io/org/image:v1` → `us-docker.pkg.dev/project/ghcr-mirror/org/image:v1`
+## Code Conventions
 
-Set `defaults.worker.docker_image` to a `ghcr.io/...` tag. Non-GHCR tags
-(`docker.io`, existing AR tags) pass through unchanged.
+- Use Connect/RPC for APIs and dashboards. Do not use `httpx` or raw HTTP.
+- After changing `.proto` files, regenerate from the repo root with `uv run python lib/iris/scripts/generate_protos.py`.
+- Prefer shallow, functional code that returns control quickly; avoid callback-heavy or inheritance-driven designs.
+- Dashboards must be a thin UI over the RPC API, not a second implementation path.
+- Use `iris.time_utils` for all time-related operations (`Timestamp`, `Duration`, `Deadline`, `Timer`, `ExponentialBackoff`) instead of raw `datetime` or `time`.
+- Use `concurrent.futures.ThreadPoolExecutor` (not asyncio) for concurrent platform operations, with hard timeouts.
+- Avoid `TYPE_CHECKING`. Use real imports. If you hit a cycle, prefer refactoring or use a `Protocol` at the boundary.
+- Prefer spiral plans: each stage should be independently testable (proto → server stub → client wiring → end-to-end test).
 
-**Bundle storage** (`controller.bundle_prefix`) is a GCS URI with no zone
-affinity — globally accessible.
+## Architecture Notes
 
-**Zone validation**: `src/iris/cluster/config.py` validates that every scale group zone
-appears in `platform.gcp.zones`. Multi-zone scale groups are auto-expanded by
-`_expand_multi_zone_groups()`.
+Resource model: CPU demand is fungible and can route to any group; GPU/TPU demand is non-fungible and must match device type (and optionally variant).
 
-## Testing
-
-See `TESTING.md` for the testing policy and commands.
+The controller is a plain GCE VM (or K8s Deployment on CoreWeave) with no zone affinity to workers. See `docs/coreweave.md` for CoreWeave-specific deployment topology and `docs/image-push.md` for the GHCR → AR remote repo image pipeline.

@@ -10,8 +10,7 @@ import pytest
 import yaml
 
 from iris.client import IrisClient
-from iris.cluster.config import IrisConfig, make_local_config, load_config
-from iris.cluster.manager import connect_cluster
+from iris.cluster.config import IrisConfig, connect_cluster, make_local_config, load_config
 from iris.cli.job import (
     build_resources,
     load_env_vars,
@@ -19,7 +18,7 @@ from iris.cli.job import (
     parse_reservation_spec,
     run_iris_job,
 )
-from iris.cluster.types import ConstraintOp
+from iris.cluster.constraints import ConstraintOp, WellKnownAttribute
 
 # Unit tests for error handling and edge cases (not trivial assertions)
 
@@ -133,9 +132,9 @@ def test_build_resources_gpu():
 def local_cluster_and_config(tmp_path):
     """Start local cluster and create config file for it."""
     iris_root = Path(__file__).resolve().parents[1]
-    demo_config_path = iris_root / "examples" / "demo.yaml"
+    test_config_path = iris_root / "examples" / "test.yaml"
 
-    config = load_config(demo_config_path)
+    config = load_config(test_config_path)
     config = make_local_config(config)
 
     with connect_cluster(config) as url:
@@ -153,15 +152,13 @@ def local_cluster_and_config(tmp_path):
                         "local-cpu": {
                             "min_slices": 1,
                             "max_slices": 1,
-                            "accelerator_type": "cpu",
-                            "vm_type": "local_vm",
                             "num_vms": 1,
                             "resources": {
                                 "cpu": 1,
                                 "ram": "1GB",
                                 "disk": 0,
-                                "gpu_count": 0,
-                                "tpu_count": 0,
+                                "device_type": "cpu",
+                                "device_count": 0,
                             },
                         }
                     },
@@ -261,7 +258,7 @@ def test_run_iris_job_adds_zone_constraint(monkeypatch):
     constraints = captured["constraints"]
     assert constraints is not None
     assert len(constraints) == 1
-    assert constraints[0].key == "zone"
+    assert constraints[0].key == WellKnownAttribute.ZONE
     assert constraints[0].op == ConstraintOp.EQ
     assert constraints[0].value == "us-central2-b"
 
@@ -317,12 +314,38 @@ def test_run_iris_job_adds_region_and_zone_constraints(monkeypatch):
     assert constraints is not None
     assert len(constraints) == 2
 
-    region_constraints = [c for c in constraints if c.key == "region"]
+    region_constraints = [c for c in constraints if c.key == WellKnownAttribute.REGION]
     assert len(region_constraints) == 1
     assert region_constraints[0].op == ConstraintOp.EQ
     assert region_constraints[0].value == "us-central2"
 
-    zone_constraints = [c for c in constraints if c.key == "zone"]
+    zone_constraints = [c for c in constraints if c.key == WellKnownAttribute.ZONE]
     assert len(zone_constraints) == 1
     assert zone_constraints[0].op == ConstraintOp.EQ
     assert zone_constraints[0].value == "us-central2-b"
+
+
+def test_no_wait_prints_job_id(monkeypatch):
+    """--no-wait prints the job ID to stdout."""
+    from click.testing import CliRunner
+    from iris.cli.job import run as run_cmd
+    from iris.cluster.types import JobName
+
+    class FakeJob:
+        job_id = JobName.from_wire("/test-user/test-job")
+
+    class FakeClient:
+        def submit(self, **kwargs):
+            return FakeJob()
+
+    monkeypatch.setattr("iris.cli.job.IrisClient.remote", lambda *a, **kw: FakeClient())
+
+    runner = CliRunner()
+    result = runner.invoke(
+        run_cmd,
+        ["--no-wait", "--", "echo", "hi"],
+        catch_exceptions=False,
+        obj={"controller_url": "http://fake:10000"},
+    )
+    assert result.exit_code == 0
+    assert result.output.strip() == "/test-user/test-job"

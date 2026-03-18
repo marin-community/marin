@@ -11,24 +11,18 @@ from pathlib import Path
 
 import click
 
+from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
-from iris.cluster.controller.snapshot import read_snapshot_from_path
-from iris.cluster.controller.state import HEARTBEAT_FAILURE_THRESHOLD
-from iris.cluster.task_logging import ProcessLogSink
-from iris.logging import configure_logging, get_global_buffer
-from iris.marin_fs import marin_temp_bucket
+from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD
+from iris.logging import configure_logging
+from iris.rpc import config_pb2
 from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
 
 
-def default_bundle_prefix() -> str:
-    """Return a region-local temp bucket path for bundle storage.
-
-    Uses the same marin_temp_bucket API that log_prefix uses, with a 7-day TTL
-    since bundles are ephemeral and regenerated on each job submission.
-    """
-    return marin_temp_bucket(ttl_days=7, prefix="iris/bundles")
+LOCAL_STATE_DIR_DEFAULT = Path("/var/cache/iris/controller")
+HOURLY_CHECKPOINT_SECONDS = 3600.0
 
 
 @click.group()
@@ -40,16 +34,13 @@ def cli():
 @cli.command()
 @click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=10000, type=int, help="Bind port")
-@click.option(
-    "--bundle-prefix", default=None, help="URI prefix for job bundles (e.g., gs://bucket/path or file:///path)"
-)
 @click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
-@click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config for autoscaling")
+@click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config (required)")
 @click.option("--log-level", default="INFO", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]), help="Log level")
 @click.option(
-    "--snapshot-path",
+    "--checkpoint-path",
     default=None,
-    help="Restore from this specific snapshot file instead of the default latest.json",
+    help="Restore from this specific checkpoint DB copy instead of latest.sqlite3",
 )
 @click.option(
     "--checkpoint-interval",
@@ -60,11 +51,10 @@ def cli():
 def serve(
     host: str,
     port: int,
-    bundle_prefix: str | None,
     scheduler_interval: float,
     config_file: str | None,
     log_level: str,
-    snapshot_path: str | None,
+    checkpoint_path: str | None,
     checkpoint_interval: float | None,
 ):
     """Start the Iris controller service.
@@ -73,81 +63,117 @@ def serve(
     that provisions/terminates VM slices based on pending task demand.
     """
     from iris.cluster.controller.autoscaler import Autoscaler
+    from iris.cluster.controller.checkpoint import download_checkpoint_to_local
+    from iris.cluster.controller.db import ControllerDB
     from iris.cluster.config import load_config, create_autoscaler
     from iris.cluster.platform.factory import create_platform
-    from iris.rpc import config_pb2
 
     configure_logging(level=getattr(logging, log_level))
 
     logger.info("Initializing Iris controller (git_hash=%s)", os.environ.get("IRIS_GIT_HASH", "unknown"))
 
-    # Load cluster config first to extract bundle_prefix if not provided via CLI
-    autoscaler: Autoscaler | None = None
-    cluster_config = None
-    if config_file:
-        logger.info("Loading cluster config from %s", config_file)
-        try:
-            cluster_config = load_config(Path(config_file))
-            logger.info("Cluster config loaded: %d scale groups defined", len(cluster_config.scale_groups))
-        except Exception as e:
-            logger.exception("Failed to load cluster config from %s", config_file)
-            raise click.ClickException(f"Failed to load cluster config: {e}") from e
+    if not config_file:
+        raise click.ClickException("--config is required. Provide a cluster config YAML with storage.remote_state_dir.")
 
-        # Extract bundle_prefix from config if not provided via CLI
-        if bundle_prefix is None and cluster_config.storage.bundle_prefix:
-            bundle_prefix = cluster_config.storage.bundle_prefix
-            logger.info("Using bundle_prefix from config: %s", bundle_prefix)
+    # --- Load cluster config ---
+    logger.info("Loading cluster config from %s", config_file)
+    try:
+        cluster_config = load_config(Path(config_file))
+        logger.info("Cluster config loaded: %d scale groups defined", len(cluster_config.scale_groups))
+    except Exception as e:
+        logger.exception("Failed to load cluster config from %s", config_file)
+        raise click.ClickException(f"Failed to load cluster config: {e}") from e
 
-        try:
-            platform = create_platform(
-                platform_config=cluster_config.platform,
-                ssh_config=cluster_config.defaults.ssh,
-            )
-            logger.info("Platform created")
+    remote_state_dir = cluster_config.storage.remote_state_dir
+    if not remote_state_dir:
+        raise click.ClickException(
+            "storage.remote_state_dir is required in the cluster config. "
+            "Example: storage: { remote_state_dir: 'gs://my-bucket/iris/state' }"
+        )
+    logger.info("Using remote_state_dir from config: %s", remote_state_dir)
 
-            base_worker_config = None
-            if cluster_config.defaults.worker.docker_image:
-                base_worker_config = config_pb2.WorkerConfig()
-                base_worker_config.CopyFrom(cluster_config.defaults.worker)
-                if not base_worker_config.controller_address:
-                    base_worker_config.controller_address = platform.discover_controller(cluster_config.controller)
-                if cluster_config.storage.log_prefix:
-                    base_worker_config.log_prefix = cluster_config.storage.log_prefix
-                base_worker_config.platform.CopyFrom(cluster_config.platform)
-
-            autoscaler = create_autoscaler(
-                platform=platform,
-                autoscaler_config=cluster_config.defaults.autoscaler,
-                scale_groups=cluster_config.scale_groups,
-                label_prefix=cluster_config.platform.label_prefix or "iris",
-                base_worker_config=base_worker_config,
-            )
-            logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
-        except Exception as e:
-            logger.exception("Failed to create autoscaler from config")
-            raise click.ClickException(f"Failed to create autoscaler: {e}") from e
-    else:
-        logger.info("No cluster config provided, autoscaler disabled")
-
-    heartbeat_failure_threshold = (
-        cluster_config.controller.heartbeat_failure_threshold if cluster_config else HEARTBEAT_FAILURE_THRESHOLD
+    local_state_dir = (
+        Path(cluster_config.storage.local_state_dir)
+        if cluster_config.storage.local_state_dir
+        else LOCAL_STATE_DIR_DEFAULT
     )
 
-    if bundle_prefix is None:
-        bundle_prefix = default_bundle_prefix()
-        logger.info("Using auto-detected bundle_prefix: %s", bundle_prefix)
+    heartbeat_failure_threshold = cluster_config.controller.heartbeat_failure_threshold or HEARTBEAT_FAILURE_THRESHOLD
 
-    logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
+    # --- Restore or reuse local DB ---
+    local_state_dir.mkdir(parents=True, exist_ok=True)
+    db_path = local_state_dir / "controller.sqlite3"
+    if db_path.exists():
+        logger.info("Local DB exists at %s, skipping remote restore", db_path)
+    else:
+        restored = download_checkpoint_to_local(remote_state_dir, db_path, checkpoint_path)
+        if checkpoint_path and not restored:
+            raise click.ClickException(f"Checkpoint DB not found: {checkpoint_path}")
+
+    db = ControllerDB(db_path=db_path)
+
+    # --- Create autoscaler (needs db) ---
+    autoscaler: Autoscaler | None = None
+    base_worker_config = None
+    try:
+        platform = create_platform(
+            platform_config=cluster_config.platform,
+            ssh_config=cluster_config.defaults.ssh,
+        )
+        logger.info("Platform created")
+
+        if cluster_config.defaults.worker.docker_image:
+            base_worker_config = config_pb2.WorkerConfig()
+            base_worker_config.CopyFrom(cluster_config.defaults.worker)
+            if not base_worker_config.controller_address:
+                base_worker_config.controller_address = platform.discover_controller(cluster_config.controller)
+            base_worker_config.platform.CopyFrom(cluster_config.platform)
+
+        autoscaler = create_autoscaler(
+            platform=platform,
+            autoscaler_config=cluster_config.defaults.autoscaler,
+            scale_groups=cluster_config.scale_groups,
+            label_prefix=cluster_config.platform.label_prefix or "iris",
+            base_worker_config=base_worker_config,
+            db=db,
+        )
+        logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
+
+        # Restore autoscaler state (tracked slices/workers/backoff) from the DB
+        # so restarted controllers don't lose cloud resource tracking and
+        # scale up duplicates.
+        autoscaler.restore_from_db(db, platform)
+        logger.info("Autoscaler state restored from DB")
+    except Exception as e:
+        logger.exception("Failed to create autoscaler from config")
+        raise click.ClickException(f"Failed to create autoscaler: {e}") from e
+
+    # Workers need the resolved remote_state_dir to upload task artifacts (profiles).
+    if base_worker_config is not None:
+        base_worker_config.storage_prefix = remote_state_dir
+
+    if checkpoint_interval is None:
+        checkpoint_interval = HOURLY_CHECKPOINT_SECONDS
+        logger.info("Defaulting to hourly checkpointing")
+
+    logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)
     logger.info("Configuration: scheduler_interval=%.2fs", scheduler_interval)
+
+    auth = create_controller_auth(cluster_config.auth, db=db) if cluster_config else ControllerAuth()
+    if auth.worker_token and base_worker_config is not None:
+        base_worker_config.auth_token = auth.worker_token
 
     config = ControllerConfig(
         host=host,
         port=port,
-        bundle_prefix=bundle_prefix,
+        remote_state_dir=remote_state_dir,
         scheduler_interval=Duration.from_seconds(scheduler_interval),
         heartbeat_failure_threshold=heartbeat_failure_threshold,
         checkpoint_interval=Duration.from_seconds(checkpoint_interval) if checkpoint_interval else None,
-        log_dir=Path("/tmp/iris/controller-logs"),
+        local_state_dir=local_state_dir,
+        auth_verifier=auth.verifier,
+        auth_provider=auth.provider,
+        auth=auth,
     )
 
     try:
@@ -155,26 +181,12 @@ def serve(
             config=config,
             worker_stub_factory=RpcWorkerStubFactory(),
             autoscaler=autoscaler,
+            db=db,
         )
         logger.info("Controller instance created")
     except Exception as e:
         logger.exception("Failed to create controller")
         raise click.ClickException(f"Failed to create controller: {e}") from e
-
-    # Restore from a specific snapshot file if requested; otherwise fall back to latest.json.
-    if snapshot_path:
-        logger.info("Restoring from explicit snapshot: %s", snapshot_path)
-        try:
-            proto = read_snapshot_from_path(snapshot_path)
-            if proto is None:
-                raise click.ClickException(f"Snapshot not found: {snapshot_path}")
-            controller.restore_from_snapshot(proto)
-            logger.info("Snapshot restored from %s", snapshot_path)
-        except Exception as e:
-            logger.exception("Failed to restore snapshot from %s", snapshot_path)
-            raise click.ClickException(f"Failed to restore snapshot: {e}") from e
-    else:
-        controller.restore_from_snapshot()
 
     try:
         controller.start()
@@ -185,21 +197,22 @@ def serve(
 
     logger.info("Controller is ready to accept connections")
 
-    log_prefix = (cluster_config.storage.log_prefix if cluster_config else None) or marin_temp_bucket(
-        ttl_days=30, prefix="iris-logs"
-    )
-    process_log_sink = ProcessLogSink(
-        prefix=log_prefix,
-        process_name="controller",
-        log_buffer=get_global_buffer(),
-    )
-    logger.info("Controller process log sink enabled: %s", process_log_sink.log_path)
-
     stop_event = threading.Event()
 
     def handle_shutdown(_signum, _frame):
-        logger.info("Shutdown signal received, stopping controller...")
-        process_log_sink.close()
+        logger.info("Shutdown signal received, writing final checkpoint...")
+        try:
+            path, result = controller.begin_checkpoint()
+            logger.info(
+                "Final checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
+                path,
+                result.job_count,
+                result.task_count,
+                result.worker_count,
+            )
+        except Exception:
+            logger.exception("Final checkpoint on shutdown failed")
+        logger.info("Stopping controller...")
         controller.stop()
         logger.info("Controller stopped")
         stop_event.set()

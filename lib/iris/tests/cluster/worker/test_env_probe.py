@@ -6,19 +6,42 @@
 import time
 
 import iris.cluster.worker.env_probe as env_probe
+from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.worker.env_probe import (
     DefaultEnvironmentProvider,
     HardwareProbe,
     HostMetricsCollector,
     _read_net_dev_bytes,
     build_worker_metadata,
+    check_worker_health,
+    construct_worker_id,
 )
 from iris.rpc import config_pb2
 
 
+def _make_hardware(**overrides) -> HardwareProbe:
+    """Create a HardwareProbe with sensible defaults, overridable per field."""
+    defaults = dict(
+        hostname="test-host",
+        ip_address="10.0.0.1",
+        cpu_count=4,
+        memory_bytes=16 * 1024**3,
+        disk_bytes=100 * 1024**3,
+        gpu_count=0,
+        gpu_name="",
+        gpu_memory_mb=0,
+        tpu_name="",
+        tpu_type="",
+        tpu_worker_hostnames="",
+        tpu_worker_id="",
+        tpu_chips_per_host_bounds="",
+    )
+    defaults.update(overrides)
+    return HardwareProbe(**defaults)
+
+
 def test_environment_provider_basic_probe(monkeypatch):
     """Test that DefaultEnvironmentProvider produces valid WorkerMetadata."""
-    # Clear TPU environment variables to ensure CPU-only probing
     monkeypatch.delenv("TPU_NAME", raising=False)
     monkeypatch.delenv("TPU_TYPE", raising=False)
     monkeypatch.delenv("TPU_WORKER_HOSTNAMES", raising=False)
@@ -28,23 +51,22 @@ def test_environment_provider_basic_probe(monkeypatch):
     provider = DefaultEnvironmentProvider()
     metadata = provider.probe()
 
-    # Verify basic fields are populated
     assert metadata.hostname
     assert metadata.ip_address
     assert metadata.cpu_count > 0
     assert metadata.memory_bytes > 0
     assert metadata.disk_bytes > 0
-
-    # CPU-only device should be set
     assert metadata.device.HasField("cpu")
 
-    # Preemptible attribute should be present and default to false on non-GCP
-    assert "preemptible" in metadata.attributes
-    assert metadata.attributes["preemptible"].string_value == "false"
+    # Attributes come from config defaults (no config = CPU, not preemptible)
+    assert WellKnownAttribute.PREEMPTIBLE in metadata.attributes
+    assert metadata.attributes[WellKnownAttribute.PREEMPTIBLE].string_value == "false"
+    assert WellKnownAttribute.DEVICE_TYPE in metadata.attributes
+    assert metadata.attributes[WellKnownAttribute.DEVICE_TYPE].string_value == "cpu"
 
 
 def test_environment_provider_probes_tpu_metadata(monkeypatch):
-    """Provider should resolve TPU metadata from GCP metadata service."""
+    """Provider should resolve TPU diagnostic metadata from GCP metadata service."""
     monkeypatch.delenv("TPU_NAME", raising=False)
     monkeypatch.delenv("TPU_TYPE", raising=False)
     monkeypatch.delenv("TPU_WORKER_HOSTNAMES", raising=False)
@@ -65,6 +87,7 @@ def test_environment_provider_probes_tpu_metadata(monkeypatch):
 
     metadata = DefaultEnvironmentProvider().probe()
 
+    # Diagnostic TPU fields are populated from probes
     assert metadata.tpu_name == "test-slice"
     assert metadata.tpu_worker_id == "3"
     assert metadata.tpu_worker_hostnames == "10.0.0.11,10.0.0.12"
@@ -92,58 +115,136 @@ def test_environment_provider_ignores_tpu_env_vars_without_metadata(monkeypatch)
     assert metadata.device.HasField("cpu")
 
 
-def test_log_prefix_uses_region_bucket_mapping(monkeypatch):
-    """europe-west4 must map to marin-tmp-eu-west4 bucket naming."""
-    import iris.marin_fs as marin_fs_mod
-
-    monkeypatch.setattr(marin_fs_mod, "region_from_metadata", lambda: "europe-west4")
-    monkeypatch.delenv("MARIN_PREFIX", raising=False)
-    monkeypatch.delenv("IRIS_LOG_PREFIX", raising=False)
-
-    assert DefaultEnvironmentProvider().log_prefix() == "gs://marin-tmp-eu-west4/ttl=30d/iris-logs"
+# --- Scheduling attributes from config ---
 
 
-def test_log_prefix_unknown_region_falls_back(monkeypatch):
-    """Unknown regions fall back to the marin prefix tmp path."""
-    import iris.marin_fs as marin_fs_mod
+def test_gpu_worker_attributes_from_config():
+    """Scheduling attributes (device-type, device-variant, preemptible) come from config, not probes."""
+    hardware = _make_hardware()
 
-    monkeypatch.setattr(marin_fs_mod, "region_from_metadata", lambda: None)
-    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-antarctica-south1/scratch")
-    monkeypatch.delenv("IRIS_LOG_PREFIX", raising=False)
-
-    assert DefaultEnvironmentProvider().log_prefix() == "gs://marin-antarctica-south1/scratch/tmp/iris-logs"
-
-
-def test_log_prefix_prefers_env_override(monkeypatch):
-    """IRIS_LOG_PREFIX overrides inferred values."""
-    monkeypatch.setenv("IRIS_LOG_PREFIX", "gs://custom/ttl=30d/iris-logs")
-    monkeypatch.setattr(env_probe, "_is_gcp_vm", lambda: True)
-    monkeypatch.setattr(
-        env_probe,
-        "_get_gcp_metadata",
-        lambda key: "projects/hai-gcp-models/zones/europe-west4-b" if key == "zone" else None,
+    metadata = build_worker_metadata(
+        hardware=hardware,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+        accelerator_variant="H100",
+        gpu_count_override=8,
+        preemptible=True,
     )
 
-    assert DefaultEnvironmentProvider().log_prefix() == "gs://custom/ttl=30d/iris-logs"
+    # Device config for capacity accounting
+    assert metadata.device.HasField("gpu")
+    assert metadata.device.gpu.variant == "H100"
+    assert metadata.device.gpu.count == 8
+
+    # Scheduling attributes from config
+    attrs = metadata.attributes
+    assert attrs[WellKnownAttribute.DEVICE_TYPE].string_value == "gpu"
+    assert attrs[WellKnownAttribute.DEVICE_VARIANT].string_value == "h100"
+    assert attrs[WellKnownAttribute.PREEMPTIBLE].string_value == "true"
 
 
-def test_build_worker_metadata_gpu_override():
-    """build_worker_metadata should use accelerator_type/variant from config over hardware probe."""
-    hardware = HardwareProbe(
-        hostname="test-host",
-        ip_address="10.0.0.1",
-        cpu_count=4,
-        memory_bytes=16 * 1024**3,
-        disk_bytes=100 * 1024**3,
-        gpu_count=0,
-        gpu_name="",
-        gpu_memory_mb=0,
-        tpu_name="",
-        tpu_type="",
-        tpu_worker_hostnames="",
-        tpu_worker_id="",
-        tpu_chips_per_host_bounds="",
+def test_tpu_worker_attributes_from_config():
+    """TPU scheduling attributes come from config; diagnostic fields from probes."""
+    hardware = _make_hardware(
+        tpu_name="my-tpu-slice",
+        tpu_type="v5litepod-16",
+        tpu_worker_hostnames="10.0.0.1,10.0.0.2",
+        tpu_worker_id="2",
+        tpu_chips_per_host_bounds="2,2,1",
     )
+
+    metadata = build_worker_metadata(
+        hardware=hardware,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5litepod-16",
+        preemptible=True,
+    )
+
+    attrs = metadata.attributes
+
+    # Scheduling attributes from config
+    assert attrs[WellKnownAttribute.DEVICE_TYPE].string_value == "tpu"
+    assert attrs[WellKnownAttribute.DEVICE_VARIANT].string_value == "v5litepod-16"
+    assert attrs[WellKnownAttribute.PREEMPTIBLE].string_value == "true"
+
+    # TPU multi-host identity from probes (not config)
+    assert attrs[WellKnownAttribute.TPU_NAME].string_value == "my-tpu-slice"
+    assert attrs[WellKnownAttribute.TPU_WORKER_ID].int_value == 2
+
+    # TPU topology derived from config variant
+    assert attrs[WellKnownAttribute.TPU_TOPOLOGY].string_value == "v5litepod-16"
+
+    # Diagnostic fields on WorkerMetadata from probes
+    assert metadata.tpu_name == "my-tpu-slice"
+    assert metadata.tpu_worker_id == "2"
+    assert metadata.tpu_worker_hostnames == "10.0.0.1,10.0.0.2"
+
+
+def test_cpu_worker_attributes_from_config():
+    """CPU workers get device-type=cpu from config, no device-variant."""
+    hardware = _make_hardware()
+
+    metadata = build_worker_metadata(
+        hardware=hardware,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        preemptible=False,
+    )
+
+    attrs = metadata.attributes
+    assert attrs[WellKnownAttribute.DEVICE_TYPE].string_value == "cpu"
+    assert WellKnownAttribute.DEVICE_VARIANT not in attrs
+    assert attrs[WellKnownAttribute.PREEMPTIBLE].string_value == "false"
+
+
+def test_cpu_fallback_when_no_config():
+    """When no accelerator_type is specified and no hardware detected, defaults to CPU."""
+    hardware = _make_hardware()
+    metadata = build_worker_metadata(hardware=hardware)
+
+    assert metadata.device.HasField("cpu")
+    attrs = metadata.attributes
+    assert attrs[WellKnownAttribute.DEVICE_TYPE].string_value == "cpu"
+    assert attrs[WellKnownAttribute.PREEMPTIBLE].string_value == "false"
+
+
+def test_custom_worker_attributes_merged():
+    """Custom user attributes from YAML worker.attributes are merged into the attributes map."""
+    hardware = _make_hardware()
+
+    metadata = build_worker_metadata(
+        hardware=hardware,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+        accelerator_variant="H100",
+        gpu_count_override=8,
+        worker_attributes={"pool": "large-jobs", "custom-key": "custom-value"},
+    )
+
+    attrs = metadata.attributes
+    assert attrs["pool"].string_value == "large-jobs"
+    assert attrs["custom-key"].string_value == "custom-value"
+    # Config-derived attributes still present
+    assert attrs[WellKnownAttribute.DEVICE_TYPE].string_value == "gpu"
+
+
+def test_preemptible_not_from_gcp_metadata():
+    """Preemptible attribute comes from config, not GCP metadata probing."""
+    hardware = _make_hardware()
+
+    # Config says not preemptible -- even if GCP metadata would say TRUE,
+    # the attribute should reflect config
+    metadata = build_worker_metadata(
+        hardware=hardware,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+        accelerator_variant="H100",
+        gpu_count_override=8,
+        preemptible=False,
+    )
+
+    assert metadata.attributes[WellKnownAttribute.PREEMPTIBLE].string_value == "false"
+
+
+def test_build_worker_metadata_gpu_diagnostic_fields():
+    """GPU diagnostic fields (gpu_count, gpu_name) are still populated on WorkerMetadata."""
+    hardware = _make_hardware()
 
     metadata = build_worker_metadata(
         hardware=hardware,
@@ -152,36 +253,66 @@ def test_build_worker_metadata_gpu_override():
         gpu_count_override=8,
     )
 
-    assert metadata.device.HasField("gpu")
-    assert metadata.device.gpu.variant == "H100"
-    assert metadata.device.gpu.count == 8
     assert metadata.gpu_count == 8
     assert metadata.gpu_name == "H100"
 
 
-def test_build_worker_metadata_cpu_fallback():
-    """build_worker_metadata should fall back to CPU when no accelerator is specified."""
-    hardware = HardwareProbe(
-        hostname="test-host",
-        ip_address="10.0.0.1",
-        cpu_count=4,
-        memory_bytes=16 * 1024**3,
-        disk_bytes=100 * 1024**3,
-        gpu_count=0,
-        gpu_name="",
-        gpu_memory_mb=0,
-        tpu_name="",
-        tpu_type="",
-        tpu_worker_hostnames="",
-        tpu_worker_id="",
-        tpu_chips_per_host_bounds="",
+# --- Worker ID resolution ---
+
+
+def test_construct_worker_id_format():
+    """construct_worker_id produces the expected '{slice_id}-worker-{index}' format."""
+    assert construct_worker_id("marin-tpu_v6e_4-europe-west4-a-xxxx", 2) == (
+        "marin-tpu_v6e_4-europe-west4-a-xxxx-worker-2"
     )
+    assert construct_worker_id("my-slice", 0) == "my-slice-worker-0"
 
-    metadata = build_worker_metadata(hardware=hardware)
 
-    assert metadata.device.HasField("cpu")
-    assert metadata.hostname == "test-host"
-    assert metadata.ip_address == "10.0.0.1"
+def test_worker_id_from_slice_id_and_tpu_worker_index(tmp_path, monkeypatch):
+    """When WorkerConfig.slice_id is set and hardware reports a TPU worker index,
+    the Worker resolves worker_id as construct_worker_id(slice_id, tpu_worker_index).
+
+    This is the slice_id resolution path (priority 2), which takes precedence over
+    GCP metadata inference but not an explicit config.worker_id.
+    """
+    from iris.cluster.worker import worker as worker_mod
+    from iris.cluster.worker.worker import Worker, WorkerConfig
+
+    hardware = _make_hardware(tpu_worker_id="2", tpu_name="some-tpu-slice")
+
+    monkeypatch.setattr(worker_mod, "probe_hardware", lambda: hardware)
+
+    config = WorkerConfig(
+        cache_dir=tmp_path / "cache",
+        slice_id="marin-tpu_v6e_4-europe-west4-a-xxxx",
+        worker_id=None,
+        default_task_image="mock-image",
+    )
+    worker = Worker(config, container_runtime=None)
+
+    assert worker._worker_id == "marin-tpu_v6e_4-europe-west4-a-xxxx-worker-2"
+
+
+def test_worker_id_explicit_config_overrides_slice_id(tmp_path, monkeypatch):
+    """An explicit config.worker_id (priority 1) takes precedence over slice_id resolution."""
+    from iris.cluster.worker import worker as worker_mod
+    from iris.cluster.worker.worker import Worker, WorkerConfig
+
+    hardware = _make_hardware(tpu_worker_id="2", tpu_name="some-tpu-slice")
+    monkeypatch.setattr(worker_mod, "probe_hardware", lambda: hardware)
+
+    config = WorkerConfig(
+        cache_dir=tmp_path / "cache",
+        slice_id="marin-tpu_v6e_4-europe-west4-a-xxxx",
+        worker_id="my-explicit-id",
+        default_task_image="mock-image",
+    )
+    worker = Worker(config, container_runtime=None)
+
+    assert worker._worker_id == "my-explicit-id"
+
+
+# --- Network metrics ---
 
 
 def test_read_net_dev_bytes_returns_nonzero_on_linux():
@@ -191,7 +322,6 @@ def test_read_net_dev_bytes_returns_nonzero_on_linux():
         assert recv >= 0
         assert sent >= 0
     except OSError:
-        # Non-Linux systems won't have /proc/net/dev
         pass
 
 
@@ -199,7 +329,6 @@ def test_host_metrics_collector_network_first_call_returns_zero():
     """First network collection establishes baseline and reports 0 B/s."""
     collector = HostMetricsCollector()
     snapshot = collector.collect()
-    # First call should report 0 since there's no previous measurement to delta against
     assert snapshot.net_recv_bps == 0
     assert snapshot.net_sent_bps == 0
 
@@ -209,11 +338,10 @@ def test_host_metrics_collector_network_delta(monkeypatch):
     fake_time = [100.0]
     monkeypatch.setattr(time, "monotonic", lambda: fake_time[0])
 
-    # Simulate /proc/net/dev with known values
     call_count = [0]
     net_values = [
-        (1000, 2000),  # First call: baseline
-        (6000, 12000),  # Second call: 5000 recv, 10000 sent over 5s
+        (1000, 2000),
+        (6000, 12000),
     ]
 
     def fake_read_net():
@@ -225,18 +353,43 @@ def test_host_metrics_collector_network_delta(monkeypatch):
 
     collector = HostMetricsCollector()
 
-    # First collect: establishes baseline
     snapshot1 = collector.collect()
     assert snapshot1.net_recv_bps == 0
     assert snapshot1.net_sent_bps == 0
 
-    # Advance time by 5 seconds
     fake_time[0] = 105.0
 
-    # Second collect: should compute rates
     snapshot2 = collector.collect()
-    assert snapshot2.net_recv_bps == 1000  # (6000-1000) / 5 = 1000 B/s
-    assert snapshot2.net_sent_bps == 2000  # (12000-2000) / 5 = 2000 B/s
+    assert snapshot2.net_recv_bps == 1000
+    assert snapshot2.net_sent_bps == 2000
+
+
+# --- Network metrics ---
+
+
+# --- Health check ---
+
+
+def test_health_check_nonexistent_path():
+    """Health check skips gracefully when disk_path does not exist."""
+    result = check_worker_health(disk_path="/nonexistent/path/that/does/not/exist")
+    assert result.healthy
+
+
+def test_health_check_file_not_dir(tmp_path):
+    """Health check skips gracefully when disk_path is a file, not a directory."""
+    file_path = tmp_path / "not_a_dir"
+    file_path.write_text("hello")
+    result = check_worker_health(disk_path=str(file_path))
+    assert result.healthy
+
+
+def test_health_check_writable_dir(tmp_path):
+    """Health check succeeds on a writable directory."""
+    result = check_worker_health(disk_path=str(tmp_path))
+    assert result.healthy
+    # Probe file should be cleaned up
+    assert not (tmp_path / ".iris_health_probe").exists()
 
 
 def test_host_metrics_collector_network_graceful_on_non_linux(monkeypatch):

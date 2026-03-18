@@ -5,7 +5,7 @@
 
 from typing import Protocol
 
-from iris.cluster.types import Entrypoint, JobName
+from iris.cluster.types import Entrypoint, JobName, TaskAttempt
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration
 
@@ -52,6 +52,9 @@ class ClusterClient(Protocol):
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
+        reservation: cluster_pb2.ReservationConfig | None = None,
+        preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
+        existing_job_policy: cluster_pb2.ExistingJobPolicy = cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
     ) -> None: ...
 
     def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus: ...
@@ -72,6 +75,7 @@ class ClusterClient(Protocol):
         include_children: bool,
         since_ms: int = 0,
         state_logger: TaskStateLogger | None = None,
+        min_level: str = "",
     ) -> cluster_pb2.JobStatus: ...
 
     def terminate_job(self, job_id: JobName) -> None: ...
@@ -80,13 +84,13 @@ class ClusterClient(Protocol):
         self,
         name: str,
         address: str,
-        job_id: JobName,
+        task_attempt: TaskAttempt,
         metadata: dict[str, str] | None = None,
     ) -> str: ...
 
     def unregister_endpoint(self, endpoint_id: str) -> None: ...
 
-    def list_endpoints(self, prefix: str) -> list[cluster_pb2.Controller.Endpoint]: ...
+    def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[cluster_pb2.Controller.Endpoint]: ...
 
     def list_workers(self) -> list[cluster_pb2.Controller.WorkerHealthStatus]: ...
 
@@ -103,8 +107,10 @@ class ClusterClient(Protocol):
         include_children: bool = False,
         since_ms: int = 0,
         max_total_lines: int = 0,
-        regex: str | None = None,
+        substring: str | None = None,
         attempt_id: int = -1,
+        cursor: int = 0,
+        min_level: str = "",
     ) -> cluster_pb2.Controller.GetTaskLogsResponse: ...
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse: ...

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import os
 import posixpath
 import time
@@ -102,23 +103,25 @@ def _bundle_access_env(config) -> dict[str, str]:
     return env
 
 
-def _upload_test_bundle(bundle_prefix: str, run_id: str) -> tuple[str, object, str]:
+def _upload_test_bundle(remote_state_dir: str, run_id: str) -> tuple[str, object, str]:
     """Upload a tiny zip bundle for live runtime extraction checks."""
-    if not bundle_prefix:
-        raise ValueError("storage.bundle_prefix is required")
+    del run_id
+    if not remote_state_dir:
+        raise ValueError("storage.remote_state_dir is required")
 
     zip_bytes = io.BytesIO()
     with zipfile.ZipFile(zip_bytes, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("hello.txt", "hello-from-bundle\n")
         zf.writestr("sub/nested.txt", "nested-from-bundle\n")
-    bundle_url = f"{bundle_prefix.rstrip('/')}/live-runtime/{run_id}/bundle.zip"
-    fs, path = fsspec.core.url_to_fs(bundle_url)
+    bundle_id = hashlib.sha256(zip_bytes.getvalue()).hexdigest()
+    bundle_uri = f"{remote_state_dir.rstrip('/')}/bundles/{bundle_id}.zip"
+    fs, path = fsspec.core.url_to_fs(bundle_uri)
     parent = posixpath.dirname(path)
     if parent:
         fs.mkdirs(parent, exist_ok=True)
     with fs.open(path, "wb") as f:
         f.write(zip_bytes.getvalue())
-    return bundle_url, fs, path
+    return bundle_id, fs, path
 
 
 @contextmanager
@@ -190,14 +193,18 @@ def test_kubernetes_runtime_lifecycle(k8s_runtime: KubernetesRuntime):
 @pytest.mark.timeout(1800)
 def test_coreweave_kubernetes_runtime_cpu_job_live(coreweave_runtime: KubernetesRuntime):
     """CPU pod should extract bundle and complete successfully via KubernetesRuntime."""
+    controller_url = os.environ.get("IRIS_TEST_CONTROLLER_BUNDLE_URL", "")
+    if not controller_url:
+        pytest.skip("IRIS_TEST_CONTROLLER_BUNDLE_URL is required for bundle_id-based staging")
+
     config = load_config(Path(__file__).resolve().parents[2] / "examples" / "coreweave.yaml")
     image = config.defaults.worker.default_task_image
     run_id = uuid.uuid4().hex[:8]
-    bundle_url = ""
+    bundle_id = ""
     bundle_fs = None
     bundle_path = ""
     with _coreweave_upload_env(config):
-        bundle_url, bundle_fs, bundle_path = _upload_test_bundle(config.storage.bundle_prefix, run_id)
+        bundle_id, bundle_fs, bundle_path = _upload_test_bundle(config.storage.remote_state_dir, run_id)
 
     try:
         cpu_config = ContainerConfig(
@@ -219,7 +226,8 @@ def test_coreweave_kubernetes_runtime_cpu_job_live(coreweave_runtime: Kubernetes
                 ]
             ),
             env={
-                "IRIS_BUNDLE_GCS_PATH": bundle_url,
+                "IRIS_BUNDLE_ID": bundle_id,
+                "IRIS_CONTROLLER_URL": controller_url.rstrip("/"),
                 **_bundle_access_env(config),
             },
             workdir="/app",
@@ -377,7 +385,7 @@ def test_tensorstore_s3_roundtrip():
     os.environ.setdefault("AWS_SECRET_ACCESS_KEY", r2_secret)
 
     # Derive bucket from config
-    bucket = config.storage.bundle_prefix.removeprefix("s3://").split("/")[0]
+    bucket = config.storage.remote_state_dir.removeprefix("s3://").split("/")[0]
     run_id = uuid.uuid4().hex[:8]
     test_path = f"s3://{bucket}/iris/test-tensorstore/{run_id}/data"
 

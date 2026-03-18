@@ -10,7 +10,16 @@ import pyarrow.parquet as pq
 import pytest
 import vortex
 
-from zephyr.writers import atomic_rename, unique_temp_path, write_levanter_cache, write_parquet_file, write_vortex_file
+import pyarrow as pa
+
+from zephyr.writers import (
+    atomic_rename,
+    infer_arrow_schema,
+    unique_temp_path,
+    write_levanter_cache,
+    write_parquet_file,
+    write_vortex_file,
+)
 
 
 def test_unique_temp_path_produces_distinct_paths():
@@ -175,3 +184,55 @@ def test_write_levanter_cache_end_to_end():
         assert len(store) == len(records)
         assert store[0]["input_ids"].tolist() == records[0]["input_ids"]
         assert store[len(records) - 1]["input_ids"].tolist() == records[len(records) - 1]["input_ids"]
+
+
+def test_infer_arrow_schema_basic():
+    """Test schema inference with basic Python types."""
+    records = [{"id": 1, "name": "Alice", "score": 95.5, "active": True}]
+    schema = infer_arrow_schema(records)
+    assert schema.field("id").type == pa.int64()
+    assert schema.field("score").type == pa.float64()
+    assert schema.field("active").type == pa.bool_()
+    assert len(schema) == 4
+
+
+def test_infer_arrow_schema_none_in_first_row():
+    """Schema inference resolves None from non-None values in later rows."""
+    records = [
+        {"id": 1, "name": "Alice", "score": None},
+        {"id": 2, "name": "Bob", "score": 95.5},
+    ]
+    schema = infer_arrow_schema(records)
+    assert schema.field("score").type == pa.float64()
+
+
+def test_infer_arrow_schema_all_none():
+    """When all values for a field are None, the type is null."""
+    records = [
+        {"id": 1, "value": None},
+        {"id": 2, "value": None},
+    ]
+    schema = infer_arrow_schema(records)
+    assert schema.field("value").type == pa.null()
+
+
+def test_infer_arrow_schema_nested_dict():
+    """Schema inference handles nested dicts."""
+    records = [{"id": 1, "meta": {"key": "val", "count": 3}}]
+    schema = infer_arrow_schema(records)
+    meta_type = schema.field("meta").type
+    assert isinstance(meta_type, pa.StructType)
+    assert meta_type.get_field_index("key") >= 0
+    assert meta_type.get_field_index("count") >= 0
+
+
+def test_infer_arrow_schema_mixed_types_fails():
+    """Schema inference fails when a column has incompatible types (float then string)."""
+    records = [
+        {"id": 1, "foo": None},
+        {"id": 2, "foo": 1.5},
+        {"id": 3, "foo": 2.5},
+        {"id": 4, "foo": "bar"},
+    ]
+    with pytest.raises(pa.lib.ArrowInvalid):
+        infer_arrow_schema(records)

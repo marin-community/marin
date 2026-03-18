@@ -13,9 +13,10 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, cast
+
+import cloudpickle
 
 from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
@@ -24,7 +25,13 @@ from iris.client.client import Job as IrisJob
 from iris.client.client import JobAlreadyExists as IrisJobAlreadyExists
 from iris.client.client import get_iris_ctx, iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.types import Constraint, EnvironmentSpec, ResourceSpec
+from iris.cluster.constraints import (
+    Constraint,
+    device_variant_constraint,
+    preemptible_constraint,
+    region_constraint,
+)
+from iris.cluster.types import EnvironmentSpec, ResourceSpec, is_job_finished
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import cluster_pb2
 
@@ -46,16 +53,6 @@ from fray.v2.types import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Shared thread pool for async actor RPC calls
-_shared_executor: ThreadPoolExecutor | None = None
-
-
-def _get_shared_executor() -> ThreadPoolExecutor:
-    global _shared_executor
-    if _shared_executor is None:
-        _shared_executor = ThreadPoolExecutor(max_workers=32)
-    return _shared_executor
 
 
 def _convert_device(device: DeviceConfig) -> cluster_pb2.DeviceConfig | None:
@@ -95,13 +92,15 @@ def convert_resources(resources: ResourceConfig) -> ResourceSpec:
 
 def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
     """Build Iris scheduling constraints from fray v2 ResourceConfig."""
-    from iris.cluster.types import preemptible_constraint, region_constraint
-
     constraints: list[Constraint] = []
     if not resources.preemptible:
         constraints.append(preemptible_constraint(False))
     if resources.regions:
         constraints.append(region_constraint(resources.regions))
+    if resources.device_alternatives:
+        if isinstance(resources.device, (TpuConfig, GpuConfig)):
+            all_variants = [resources.device.variant, *resources.device_alternatives]
+            constraints.append(device_variant_constraint(all_variants))
     return constraints
 
 
@@ -258,8 +257,53 @@ class IrisActorHandle:
         return _IrisActorMethod(self, method_name)
 
 
+class OperationFuture:
+    """Polling-based future backed by an Iris long-running operation.
+
+    Satisfies the ``ActorFuture`` protocol. Each call to ``result()`` polls
+    the server via short ``GetOperation`` RPCs until the operation completes,
+    fails, or the caller's timeout expires.
+    """
+
+    def __init__(self, client: ActorClient, operation_id: str, poll_interval: float = 1.0):
+        self._client = client
+        self._op_id = operation_id
+        self._poll_interval = poll_interval
+
+    def result(self, timeout: float | None = None) -> Any:
+        from iris.rpc import actor_pb2
+
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            op = self._client.poll_operation_status(self._op_id)
+
+            if op.state == actor_pb2.Operation.SUCCEEDED:
+                return cloudpickle.loads(op.serialized_result)
+
+            if op.state == actor_pb2.Operation.FAILED:
+                if op.error.serialized_exception:
+                    raise cloudpickle.loads(op.error.serialized_exception)
+                raise RuntimeError(f"{op.error.error_type}: {op.error.message}")
+
+            if op.state == actor_pb2.Operation.CANCELLED:
+                raise RuntimeError(f"Operation {self._op_id} was cancelled")
+
+            if deadline is not None and time.monotonic() >= deadline:
+                self._client.cancel_operation(self._op_id)
+                raise TimeoutError(f"Operation {self._op_id} timed out after {timeout}s")
+
+            time.sleep(self._poll_interval)
+
+
 class _IrisActorMethod:
-    """Wraps a method on an Iris actor. remote() dispatches via thread pool."""
+    """Wraps a method on an Iris actor.
+
+    ``remote()`` uses long-running operations: a fast ``StartOperation`` RPC
+    returns an operation ID, and ``OperationFuture.result()`` polls via
+    ``GetOperation``. No client-side thread pool is needed.
+
+    ``__call__()`` uses the existing blocking ``Call`` RPC for simplicity.
+    """
 
     def __init__(self, handle: IrisActorHandle, method_name: str):
         self._handle = handle
@@ -267,9 +311,8 @@ class _IrisActorMethod:
 
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
         client = self._handle._resolve()
-        executor = _get_shared_executor()
-        future = executor.submit(lambda: getattr(client, self._method)(*args, **kwargs))
-        return future
+        op_id = client.start_operation(self._method, *args, **kwargs)
+        return OperationFuture(client, op_id)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         client = self._handle._resolve()
@@ -320,35 +363,42 @@ class IrisActorGroup:
         """Number of actors that are available for RPC."""
         return len(self._handles)
 
-    def discover_new(self) -> list[ActorHandle]:
+    def discover_new(self, target: int | None = None) -> list[ActorHandle]:
         """Probe for newly available actors without blocking.
 
         Returns only the handles discovered during this call (not previously
         known ones). Call repeatedly to pick up workers as they come online.
+
+        Uses a single prefix-match RPC to discover all actors whose endpoint
+        names start with ``{job_id}/{name}-``.
+
+        Args:
+            target: Stop probing once this many total actors are discovered.
+                If None, probes all indices.
         """
         client = self._get_client()
-        resolver = client.resolver_for_job(self._job_id)
+        # Single RPC: prefix match all actors for this group
+        # _host_actor registers endpoints as "{job_id}/{name}-{task_index}"
+        prefix = f"{self._job_id}/{self._name}-"
+        endpoints = client._cluster_client.list_endpoints(prefix=prefix, exact=False)
 
         newly_discovered: list[ActorHandle] = []
-        for i in range(self._count):
-            # Absolute endpoint name matches what _host_actor registers
-            endpoint_name = f"{self._job_id}/{self._name}-{i}"
-            if endpoint_name in self._discovered_names:
+        for ep in endpoints:
+            if target is not None and len(self._discovered_names) >= target:
+                break
+            if ep.name in self._discovered_names:
                 continue
-            result = resolver.resolve(endpoint_name)
-
-            if not result.is_empty:
-                self._discovered_names.add(endpoint_name)
-                handle = IrisActorHandle(endpoint_name)
-                self._handles.append(handle)
-                newly_discovered.append(handle)
-                logger.info(
-                    "discover_new: found actor=%s job_id=%s (%d/%d ready)",
-                    endpoint_name,
-                    self._job_id,
-                    len(self._discovered_names),
-                    self._count,
-                )
+            self._discovered_names.add(ep.name)
+            handle = IrisActorHandle(ep.name)
+            self._handles.append(handle)
+            newly_discovered.append(handle)
+            logger.info(
+                "discover_new: found actor=%s job_id=%s (%d/%d ready)",
+                ep.name,
+                self._job_id,
+                len(self._discovered_names),
+                self._count,
+            )
 
         return newly_discovered
 
@@ -359,14 +409,12 @@ class IrisActorGroup:
         allowing the caller to start work immediately and discover more
         workers later via discover_new().
         """
-        from iris.cluster.types import is_job_finished
-
         target = count if count is not None else self._count
         start = time.monotonic()
         sleep_secs = 0.5
 
         while True:
-            self.discover_new()
+            self.discover_new(target=target)
 
             if len(self._discovered_names) >= target:
                 return list(self._handles[:target])
@@ -390,6 +438,12 @@ class IrisActorGroup:
 
             time.sleep(sleep_secs)
 
+    def is_done(self) -> bool:
+        """Return True if the Iris worker job has permanently terminated."""
+        client = self._get_client()
+        job_status = client.status(self._job_id)
+        return is_job_finished(job_status.state)
+
     def shutdown(self) -> None:
         """Terminate the actor job."""
         client = self._get_client()
@@ -408,15 +462,15 @@ class FrayIrisClient:
         self,
         controller_address: str,
         workspace: Path | None = None,
-        bundle_gcs_path: str | None = None,
+        bundle_id: str | None = None,
     ):
         logger.info(
-            "FrayIrisClient connecting to %s (workspace=%s, bundle_gcs_path=%s)",
+            "FrayIrisClient connecting to %s (workspace=%s, bundle_id=%s)",
             controller_address,
             workspace,
-            bundle_gcs_path,
+            bundle_id,
         )
-        self._iris = IrisClientLib.remote(controller_address, workspace=workspace, bundle_gcs_path=bundle_gcs_path)
+        self._iris = IrisClientLib.remote(controller_address, workspace=workspace, bundle_id=bundle_id)
 
     @staticmethod
     def from_iris_client(iris_client: IrisClientLib) -> FrayIrisClient:

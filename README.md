@@ -113,6 +113,6 @@ With slight modifications, you can extend this to train a [larger model on a lar
 a [mixture of datasets](docs/tutorials/train-an-lm.md#mixture-of-sources), even scaling to very large TPU pods
 (or multislice TPU, and, soon, multi-node GPUs!).
 
-## Agent-Friendly Recipes
+## Agent Skills
 
-- New: See `docs/recipes/add_dataset.md` for a step-by-step guide to adding new datasets, designed for both humans and coding agents.
+- See `.agents/skills/` (also `.claude/skills/`) for loadable agent skills. For example, `.agents/skills/add-dataset/` has a step-by-step guide to adding new datasets.
