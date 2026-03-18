@@ -46,7 +46,7 @@ jobs:
         env:
           PYTHONASYNCIODEBUG: "1"
         run: |
-          cd lib/iris && uv run --group dev python -m pytest -n4 --durations=5 --tb=short -m 'not slow and not docker and not e2e' tests/
+          cd lib/iris && uv run --group dev python -m pytest -n2 --durations=5 --tb=short -m 'not slow and not docker and not e2e' tests/
 
   e2e-smoke-test:
     runs-on: ubuntu-latest
