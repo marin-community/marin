@@ -19,6 +19,7 @@ picks the best by scoring model log-likelihood, and saves results.
 Compatible with Marin's executor framework.
 """
 
+import atexit
 import json
 import logging
 from dataclasses import dataclass
@@ -71,6 +72,7 @@ def run_rerank_decode(config: RerankDecodeConfig):
         proposal_port=config.proposal_port,
         scoring_port=config.scoring_port,
     )
+    atexit.register(shutdown_servers, proc_a, proc_b)
 
     try:
         proposal_client = openai.Client(
