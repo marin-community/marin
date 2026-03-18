@@ -712,6 +712,10 @@ class ControllerTransitions:
                     *cancel_guard_states,
                 ),
             )
+            cur.execute(
+                f"DELETE FROM endpoints WHERE job_id IN ({placeholders})",
+                tuple(subtree_ids),
+            )
             self._record_transaction(cur, "cancel_job", [("job_cancelled", job_id.to_wire(), {"reason": reason})])
             return TxResult(tasks_to_kill=tasks_to_kill)
 
