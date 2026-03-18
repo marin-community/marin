@@ -721,6 +721,8 @@ def _llm_kwargs(*, bootstrap_model_source: str, model: ModelConfig) -> dict[str,
         "max_model_len",
         "gpu_memory_utilization",
         "model_loader_extra_config",
+        "tensor_parallel_size",
+        "enforce_eager",
     ):
         value = model.engine_kwargs.get(key)
         if value is not None:

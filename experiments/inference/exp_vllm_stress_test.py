@@ -155,19 +155,27 @@ def run_stress_test(
     max_tokens: int,
     max_model_len: int,
     mode: str | None,
+    tensor_parallel_size: int | None = None,
+    enforce_eager: bool = False,
 ) -> dict:
+    engine_kwargs: dict = {"max_model_len": max_model_len}
+    if tensor_parallel_size is not None:
+        engine_kwargs["tensor_parallel_size"] = tensor_parallel_size
+    if enforce_eager:
+        engine_kwargs["enforce_eager"] = True
+
     is_gcs = model_name_or_path.startswith("gs://")
     if is_gcs:
         model = ModelConfig(
             name="stress-test-model",
             path=model_name_or_path,
-            engine_kwargs={"max_model_len": max_model_len},
+            engine_kwargs=engine_kwargs,
         )
     else:
         model = ModelConfig(
             name=model_name_or_path,
             path=None,
-            engine_kwargs={"max_model_len": max_model_len},
+            engine_kwargs=engine_kwargs,
         )
 
     env = VllmEnvironment(
@@ -307,6 +315,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-tokens", type=int, default=128, help="Max tokens per response (default: 128)")
     parser.add_argument("--max-model-len", type=int, default=4096, help="Max model sequence length (default: 4096)")
     parser.add_argument("--mode", choices=["docker", "native"], default=None, help="vLLM mode")
+    parser.add_argument("--tensor-parallel-size", type=int, default=None, help="Tensor parallel size (e.g. 4 for 70B)")
+    parser.add_argument("--enforce-eager", action="store_true", help="Disable XLA compilation (faster startup)")
     args = parser.parse_args(argv)
 
     run_stress_test(
@@ -316,6 +326,8 @@ def main(argv: list[str] | None = None) -> int:
         max_tokens=args.max_tokens,
         max_model_len=args.max_model_len,
         mode=args.mode,
+        tensor_parallel_size=args.tensor_parallel_size,
+        enforce_eager=args.enforce_eager,
     )
     return 0
 
