@@ -6,48 +6,49 @@
 
 """Evaluate validation loss for every checkpoint in a folder.
 
+Self-contained eval script with no Marin pipeline dependencies.
 Discovers all Levanter (or HuggingFace) checkpoints under a GCS (or local)
 directory, evaluates each on the unified validation datasets, and logs
 per-step results to a new wandb run.
 
 Usage:
-    # Full eval on all Levanter checkpoints
+    # Full eval on all Levanter checkpoints (US)
     uv run experiments/unified/eval_all_checkpoints.py \
-        --checkpoint_folder gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-demo6-cb843a \
+        --checkpoint_folder gs://marin-us-central2/checkpoints/unified-qwen3-1.7b-...-cb843a \
         --model_size 1.7b \
         --wandb_project marin \
-        --wandb_name "eval-demo6-all-ckpts"
+        --wandb_name "eval-all-ckpts"
 
     # Eval HuggingFace checkpoints
     uv run experiments/unified/eval_all_checkpoints.py \
-        --checkpoint_folder gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-demo6-cb843a/hf \
+        --checkpoint_folder gs://marin-us-central2/checkpoints/unified-qwen3-1.7b-...-cb843a/hf \
         --model_size 1.7b \
         --checkpoint_is_hf
 
     # Use EU data caches (gs://marin-vlm-eu)
     uv run experiments/unified/eval_all_checkpoints.py \
-        --checkpoint_folder gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-demo6-cb843a/hf \
+        --checkpoint_folder gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-...-cb843a/hf \
         --model_size 1.7b \
         --checkpoint_is_hf \
         --region eu
 
     # Quick smoke test (2 batches per dataset)
     uv run experiments/unified/eval_all_checkpoints.py \
-        --checkpoint_folder gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-demo6-cb843a \
+        --checkpoint_folder gs://marin-us-central2/checkpoints/unified-qwen3-1.7b-...-cb843a \
         --model_size 1.7b \
         --max_eval_batches 2
 
     # Skip text-only eval benchmarks to speed up
     uv run experiments/unified/eval_all_checkpoints.py \
-        --checkpoint_folder gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-demo6-cb843a \
+        --checkpoint_folder gs://marin-us-central2/checkpoints/unified-qwen3-1.7b-...-cb843a \
         --model_size 1.7b \
         --no_text_eval_benchmarks
 
     # Resume a previous run (skips already-evaluated steps)
     uv run experiments/unified/eval_all_checkpoints.py \
-        --checkpoint_folder gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-demo6-cb843a/hf \
+        --checkpoint_folder gs://marin-us-central2/checkpoints/unified-qwen3-1.7b-...-cb843a/hf \
         --model_size 1.7b \
-        --checkpoint_is_hf --region eu \
+        --checkpoint_is_hf \
         --resume_wandb_run <wandb_run_id>
 """
 
@@ -56,11 +57,13 @@ import json
 import logging
 import os
 import re
+from typing import Callable
 
 import equinox as eqx
 import fsspec
 import jax
 import jmp
+import numpy as np
 
 import haliax as hax
 from haliax import Axis
@@ -69,6 +72,8 @@ from haliax.partitioning import round_axis_for_partitioning
 import levanter
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.data.text.datasets import DatasetComponent, LmDataConfig
+from levanter.data.text.formats import PrebuiltLmDatasetFormat
 from levanter.eval import TaggedEvaluator, eval_model
 from levanter.distributed import RayConfig
 from levanter.trainer import TrainerConfig
@@ -76,24 +81,48 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.utils.jax_utils import use_cpu_device
 
 from experiments.qwen3 import qwen3_0_6b, qwen3_1_7b, qwen3_4b
-from experiments.unified.unified_pretrain_demo import (
-    DEFAULT_EVAL_BENCHMARKS,
-    DEFAULT_TEXT_EVAL_BENCHMARKS,
-    UNIFIED_CACHE_PATH,
-    UNIFIED_EVAL_CACHE_PATH,
-    TEXT_EVAL_CACHE_PATH,
-    VISUAL_ONLY_CACHE_PATH,
-    unified_data_config,
-)
-from experiments.unified.unified_pretrain_demo_eu import (
-    UNIFIED_CACHE_PATH as EU_UNIFIED_CACHE_PATH,
-    UNIFIED_EVAL_CACHE_PATH as EU_UNIFIED_EVAL_CACHE_PATH,
-    TEXT_EVAL_CACHE_PATH as EU_TEXT_EVAL_CACHE_PATH,
-    VISUAL_ONLY_CACHE_PATH as EU_VISUAL_ONLY_CACHE_PATH,
-)
 from marin.evaluation.utils import discover_hf_checkpoints, discover_levanter_checkpoints
 
 logger = logging.getLogger(__name__)
+
+# --- US Cache Paths (no Marin pipeline dependencies) ---
+US_UNIFIED_TOKENIZER_PATH = "gs://marin-us-central2/tokenizers/llama3-unified-144k"
+US_UNIFIED_CACHE_PATH = "gs://marin-vlm/hf_85m_levanter_cache_v2"
+US_VISUAL_ONLY_CACHE_PATH = "gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only"
+US_UNIFIED_EVAL_CACHE_PATH = "gs://marin-vlm/unified_eval_cache"
+US_TEXT_EVAL_CACHE_PATH = "gs://marin-vlm/text_eval_cache"
+
+# --- EU Cache Paths ---
+EU_UNIFIED_TOKENIZER_PATH = "gs://marin-eu-west4/tokenizers/llama3-unified-144k"
+EU_UNIFIED_CACHE_PATH = "gs://marin-vlm-eu/hf_85m_levanter_cache_v2"
+EU_VISUAL_ONLY_CACHE_PATH = "gs://marin-vlm-eu/hf_85m_levanter_cache_v2/visual_only"
+EU_UNIFIED_EVAL_CACHE_PATH = "gs://marin-vlm-eu/unified_eval_cache"
+EU_TEXT_EVAL_CACHE_PATH = "gs://marin-vlm-eu/text_eval_cache"
+
+LLAMA3_VOCAB_SIZE = 128_256
+VISION_START_ID = 128_004
+VISION_END_ID = 128_005
+ENDOFTEXT_ID = 128_001
+VISUAL_TOKEN_OFFSET = 128_256
+
+DEFAULT_EVAL_BENCHMARKS = [
+    "textvqa",
+    "chartqa",
+    "ai2d",
+    "mmmu",
+    "cifar10_small",
+]
+
+DEFAULT_TEXT_EVAL_BENCHMARKS = [
+    "hellaswag",
+    "winogrande",
+    "arc_easy",
+    "arc_challenge",
+    "mmlu",
+]
+
+UNDERSTANDING_BENCHMARKS = {"textvqa", "chartqa", "ai2d", "mmmu"}
+GENERATION_BENCHMARKS = {"cifar10_small"}
 
 MODEL_CONFIGS = {
     "0.6b": qwen3_0_6b,
@@ -103,18 +132,263 @@ MODEL_CONFIGS = {
 
 REGION_CACHE_PATHS = {
     "us": {
-        "multimodal_cache_path": UNIFIED_CACHE_PATH,
-        "visual_only_cache_path": VISUAL_ONLY_CACHE_PATH,
-        "eval_cache_path": UNIFIED_EVAL_CACHE_PATH,
-        "text_eval_cache_path": TEXT_EVAL_CACHE_PATH,
+        "tokenizer_path": US_UNIFIED_TOKENIZER_PATH,
+        "multimodal_cache_path": US_UNIFIED_CACHE_PATH,
+        "eval_cache_path": US_UNIFIED_EVAL_CACHE_PATH,
+        "text_eval_cache_path": US_TEXT_EVAL_CACHE_PATH,
     },
     "eu": {
+        "tokenizer_path": EU_UNIFIED_TOKENIZER_PATH,
         "multimodal_cache_path": EU_UNIFIED_CACHE_PATH,
-        "visual_only_cache_path": EU_VISUAL_ONLY_CACHE_PATH,
         "eval_cache_path": EU_UNIFIED_EVAL_CACHE_PATH,
         "text_eval_cache_path": EU_TEXT_EVAL_CACHE_PATH,
     },
 }
+
+
+# --- Loss weight transforms ---
+
+
+def _zero_fractional_transform(weights: np.ndarray) -> np.ndarray:
+    mask = (weights > 0) & (weights < 1.0)
+    if not mask.any():
+        return weights
+    result = weights.copy()
+    result[mask] = 0.0
+    return result
+
+
+def _only_fractional_transform(weights: np.ndarray) -> np.ndarray:
+    result = np.zeros_like(weights)
+    mask = (weights > 0) & (weights < 1.0)
+    result[mask] = 1.0
+    return result
+
+
+def _swap_primary_secondary_transform(weights: np.ndarray) -> np.ndarray:
+    result = weights.copy()
+    fractional_mask = (weights > 0) & (weights < 1.0)
+    primary_mask = weights == 1.0
+    if fractional_mask.any():
+        frac_val = weights[fractional_mask][0]
+        result[fractional_mask] = 1.0
+        result[primary_mask] = frac_val
+    return result
+
+
+def _make_visual_weight_transform(w_visual: float) -> Callable[[np.ndarray], np.ndarray]:
+    def transform(weights: np.ndarray) -> np.ndarray:
+        result = weights.copy()
+        mask = (weights > 0) & (weights < 1.0)
+        result[mask] = w_visual
+        return result
+
+    return transform
+
+
+def _compose_transforms(
+    *transforms: Callable[[np.ndarray], np.ndarray] | None,
+) -> Callable[[np.ndarray], np.ndarray] | None:
+    active = [t for t in transforms if t is not None]
+    if not active:
+        return None
+    if len(active) == 1:
+        return active[0]
+
+    def composed(weights: np.ndarray) -> np.ndarray:
+        for t in active:
+            weights = t(weights)
+        return weights
+
+    return composed
+
+
+def _replace_visual_with_eos(input_ids: np.ndarray) -> np.ndarray:
+    result = input_ids.copy()
+    visual_mask = (result >= VISUAL_TOKEN_OFFSET) | (result == VISION_START_ID) | (result == VISION_END_ID)
+    result[visual_mask] = ENDOFTEXT_ID
+    return result
+
+
+def _replace_text_with_eos(input_ids: np.ndarray) -> np.ndarray:
+    result = input_ids.copy()
+    text_mask = (
+        (result > 0)
+        & (result < VISUAL_TOKEN_OFFSET)
+        & (result != VISION_START_ID)
+        & (result != VISION_END_ID)
+        & (result != ENDOFTEXT_ID)
+    )
+    result[text_mask] = ENDOFTEXT_ID
+    return result
+
+
+def build_eval_data_config(
+    tokenizer_path: str = US_UNIFIED_TOKENIZER_PATH,
+    multimodal_cache_path: str = US_UNIFIED_CACHE_PATH,
+    eval_cache_path: str = US_UNIFIED_EVAL_CACHE_PATH,
+    text_eval_cache_path: str = US_TEXT_EVAL_CACHE_PATH,
+    w_visual: float | None = 1.0,
+    eval_benchmarks: list[str] | None = None,
+    text_eval_benchmarks: list[str] | None = None,
+) -> LmDataConfig:
+    """Build eval-only data config with no Marin pipeline dependencies."""
+    w_visual_transform = _make_visual_weight_transform(w_visual) if w_visual is not None else None
+
+    # Validation formats
+    und_val_format = PrebuiltLmDatasetFormat(
+        input_ids_key="input_ids",
+        loss_weights_key="loss_weights",
+        loss_weight_transform=w_visual_transform,
+    )
+    gen_val_format = PrebuiltLmDatasetFormat(
+        input_ids_key="input_ids",
+        loss_weights_key="loss_weights",
+        loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, w_visual_transform),
+    )
+
+    und_val_cache = f"{multimodal_cache_path}/understanding/val_understanding"
+    gen_val_cache = f"{multimodal_cache_path}/generation/val_generation"
+
+    components: dict[str, DatasetComponent] = {}
+    weights: dict[str, float] = {}
+
+    # --- Multimodal validation ---
+    components["val_understanding"] = DatasetComponent(
+        cache_dir=und_val_cache,
+        format=und_val_format,
+        pack=True,
+        tags=["multimodal", "understanding"],
+    )
+    weights["val_understanding"] = 0.0
+
+    components["val_generation"] = DatasetComponent(
+        cache_dir=gen_val_cache,
+        format=gen_val_format,
+        pack=True,
+        tags=["multimodal", "generation"],
+    )
+    weights["val_generation"] = 0.0
+
+    # --- Per-modality breakdown ---
+    components["val_understanding_text_only"] = DatasetComponent(
+        cache_dir=und_val_cache,
+        format=PrebuiltLmDatasetFormat(
+            input_ids_key="input_ids",
+            loss_weights_key="loss_weights",
+            loss_weight_transform=_zero_fractional_transform,
+        ),
+        pack=True,
+        tags=["multimodal", "understanding"],
+    )
+    components["val_understanding_visual_only"] = DatasetComponent(
+        cache_dir=und_val_cache,
+        format=PrebuiltLmDatasetFormat(
+            input_ids_key="input_ids",
+            loss_weights_key="loss_weights",
+            loss_weight_transform=_only_fractional_transform,
+        ),
+        pack=True,
+        tags=["multimodal", "understanding"],
+    )
+    weights["val_understanding_text_only"] = 0.0
+    weights["val_understanding_visual_only"] = 0.0
+
+    components["val_generation_text_only"] = DatasetComponent(
+        cache_dir=gen_val_cache,
+        format=PrebuiltLmDatasetFormat(
+            input_ids_key="input_ids",
+            loss_weights_key="loss_weights",
+            loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, _zero_fractional_transform),
+        ),
+        pack=True,
+        tags=["multimodal", "generation"],
+    )
+    components["val_generation_visual_only"] = DatasetComponent(
+        cache_dir=gen_val_cache,
+        format=PrebuiltLmDatasetFormat(
+            input_ids_key="input_ids",
+            loss_weights_key="loss_weights",
+            loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, _only_fractional_transform),
+        ),
+        pack=True,
+        tags=["multimodal", "generation"],
+    )
+    weights["val_generation_text_only"] = 0.0
+    weights["val_generation_visual_only"] = 0.0
+
+    # --- Ablation val: wo_visual / wo_language ---
+    # wo_visual: mask visual → compute TEXT loss (unconditional on visual context)
+    components["val_understanding_wo_visual"] = DatasetComponent(
+        cache_dir=und_val_cache,
+        format=PrebuiltLmDatasetFormat(
+            input_ids_key="input_ids",
+            loss_weights_key="loss_weights",
+            loss_weight_transform=_zero_fractional_transform,
+            input_ids_transform=_replace_visual_with_eos,
+        ),
+        pack=True,
+        tags=["multimodal", "understanding"],
+    )
+    weights["val_understanding_wo_visual"] = 0.0
+
+    # wo_language: mask text → compute VISUAL loss (unconditional on text context)
+    components["val_generation_wo_language"] = DatasetComponent(
+        cache_dir=gen_val_cache,
+        format=PrebuiltLmDatasetFormat(
+            input_ids_key="input_ids",
+            loss_weights_key="loss_weights",
+            loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, _zero_fractional_transform),
+            input_ids_transform=_replace_text_with_eos,
+        ),
+        pack=True,
+        tags=["multimodal", "generation"],
+    )
+    weights["val_generation_wo_language"] = 0.0
+
+    # --- VLM eval benchmarks ---
+    if eval_benchmarks is not None:
+        for bench in eval_benchmarks:
+            tags = ["eval"]
+            if bench in UNDERSTANDING_BENCHMARKS:
+                tags.append("understanding")
+                eval_fmt = und_val_format
+            elif bench in GENERATION_BENCHMARKS:
+                tags.append("generation")
+                eval_fmt = gen_val_format
+            else:
+                eval_fmt = und_val_format
+
+            components[f"eval_{bench}"] = DatasetComponent(
+                cache_dir=f"{eval_cache_path}/{bench}",
+                format=eval_fmt,
+                pack=True,
+                tags=tags,
+            )
+            weights[f"eval_{bench}"] = 0.0
+
+    # --- Text eval benchmarks ---
+    if text_eval_benchmarks is not None:
+        text_prebuilt_format = PrebuiltLmDatasetFormat(
+            input_ids_key="input_ids",
+            loss_weights_key="loss_weights",
+        )
+        for bench in text_eval_benchmarks:
+            components[f"text_eval_{bench}"] = DatasetComponent(
+                cache_dir=f"{text_eval_cache_path}/{bench}",
+                format=text_prebuilt_format,
+                pack=True,
+                tags=["eval", "text"],
+            )
+            weights[f"text_eval_{bench}"] = 0.0
+
+    return LmDataConfig(
+        tokenizer=tokenizer_path,
+        components=components,
+        train_weights=weights,
+        shuffle=False,
+        block_cross_document_attention=True,
+    )
 
 
 def _get_evaluated_steps(wandb_project: str, run_id: str) -> set[int]:
@@ -139,11 +413,7 @@ def _load_levanter_checkpoint_step(ckpt_path: str) -> int:
 
 
 def _parse_step_from_path(ckpt_path: str) -> int:
-    """Parse the training step from a checkpoint path like '.../step-6000/'.
-
-    HF checkpoints don't have metadata.json, so we extract the step number
-    from the directory name.
-    """
+    """Parse the training step from a checkpoint path like '.../step-6000/'."""
     parts = ckpt_path.rstrip("/").split("/")
     for part in reversed(parts):
         m = re.match(r"step[-_](\d+)$", part)
@@ -235,8 +505,6 @@ def main():
     model_config = MODEL_CONFIGS[args.model_size]
 
     # --- Set up TrainerConfig with wandb ---
-    # Parse a meaningful run name from the checkpoint folder path.
-    # e.g. "gs://bucket/checkpoints/unified-qwen3-1.7b-...-cb843a/hf" → "unified-qwen3-1.7b-...-cb843a"
     folder_parts = args.checkpoint_folder.rstrip("/").split("/")
     folder_basename = next(
         (p for p in reversed(folder_parts) if p not in ("hf", "checkpoints", "")),
@@ -312,16 +580,15 @@ def main():
             logger.info("All checkpoints already evaluated. Nothing to do.")
             return
 
-    # --- Build data config ---
+    # --- Build data config (eval-only, no pipeline deps) ---
     eval_benchmarks = None if args.no_eval_benchmarks else DEFAULT_EVAL_BENCHMARKS
     text_eval_benchmarks = None if args.no_text_eval_benchmarks else DEFAULT_TEXT_EVAL_BENCHMARKS
 
     cache_paths = REGION_CACHE_PATHS[args.region]
-    data_config = unified_data_config(
+    data_config = build_eval_data_config(
+        w_visual=args.w_visual,
         eval_benchmarks=eval_benchmarks,
         text_eval_benchmarks=text_eval_benchmarks,
-        w_visual=args.w_visual,
-        include_text_data=False,
         **cache_paths,
     )
 
@@ -366,7 +633,6 @@ def main():
             logger.info("Rounded vocab size from %d to %d for partitioning", vocab_size, Vocab.size)
 
         if not args.checkpoint_is_hf:
-            # Build model shape once for Levanter checkpoints (no actual weights allocated)
             with use_cpu_device():
                 model_shape = eqx.filter_eval_shape(model_config.build, Vocab, key=key)
 
@@ -388,12 +654,15 @@ def main():
                 model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
 
             log_dict = eval_model(evaluator, model, prefix="eval")
+
+            # Log to wandb (and any other active trackers)
+            tracker = levanter.tracker.current_tracker()
+            logger.info("Logging %d metrics to tracker %s at step %d", len(log_dict), type(tracker).__name__, step)
             levanter.tracker.log(log_dict, step=step)
 
             loss = log_dict.get("eval/loss", float("nan"))
             logger.info("Step %d: eval/loss = %.4f", step, loss)
 
-            # Print per-dataset losses
             for key_name in sorted(log_dict.keys()):
                 if key_name.endswith("/loss") and key_name != "eval/loss":
                     logger.info("  %s = %.4f", key_name, log_dict[key_name])
