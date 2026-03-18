@@ -4,12 +4,19 @@
 import dataclasses
 import logging
 import os
+from dataclasses import dataclass
 from functools import lru_cache
 
 import numpy
 
 import transformers
-from levanter.data.text import BlockShuffleConfig, DatasetComponent, LmDataConfig, LmDatasetSourceConfigBase
+from levanter.data.text import (
+    BlockShuffleConfig,
+    DatasetComponent,
+    HierarchicalMixtureDatasetComponent,
+    LmDataConfig,
+    LmDatasetSourceConfigBase,
+)
 
 from marin.execution import unwrap_versioned_value
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
@@ -32,6 +39,19 @@ _KNOWN_VOCAB_SIZES: dict[str, int] = {
 }
 
 
+@dataclass(frozen=True)
+class TokenizedMixtureGroup:
+    """Logical runtime component backed by a weighted group of tokenized child caches."""
+
+    components: dict[str, TokenizerConfigLike]
+    weights: dict[str, float]
+    token_counts: dict[str, int] | None = None
+
+    @property
+    def tokenizer(self) -> str:
+        return _verify_tokenizers_same(self.components)
+
+
 def step_to_lm_dataset_source_config(
     step: TokenizerConfigLike,
     *,
@@ -44,11 +64,28 @@ def step_to_lm_dataset_source_config(
     return step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
 
 
-def step_to_lm_mixture_component(step: TokenizerConfigLike, include_raw_paths: bool) -> DatasetComponent:
+def step_to_lm_mixture_component(
+    step: TokenizerConfigLike | TokenizedMixtureGroup,
+    include_raw_paths: bool,
+) -> DatasetComponent | HierarchicalMixtureDatasetComponent:
     """
     Converts a tokenizer step to a Levanter dataset component. This is useful for creating
     data mixture configs.
     """
+    if isinstance(step, TokenizedMixtureGroup):
+        child_components = {
+            name: step_to_lm_mixture_component(child, include_raw_paths=include_raw_paths)
+            for name, child in step.components.items()
+        }
+        if not all(isinstance(component, DatasetComponent) for component in child_components.values()):
+            raise ValueError("TokenizedMixtureGroup only supports cache-backed child components.")
+
+        return HierarchicalMixtureDatasetComponent(
+            components=child_components,  # type: ignore[arg-type]
+            train_weights=step.weights,
+            token_counts=step.token_counts,
+        )
+
     source = step_to_lm_dataset_source_config(step, include_raw_paths=include_raw_paths)
 
     return DatasetComponent(
@@ -106,7 +143,7 @@ def lm_data_config(
 
 
 def lm_mixture_data_config(
-    components: dict[str, TokenizerConfigLike],
+    components: dict[str, TokenizerConfigLike | TokenizedMixtureGroup],
     weights: dict[str, float],
     *,
     shuffle: bool | int | BlockShuffleConfig = True,
@@ -201,7 +238,7 @@ def interpolate_mixture_weights(mixture_weights: list[dict[str, float]], weights
 
 
 def lm_varying_mixture_data_config(
-    components: dict[str, TokenizerConfigLike],
+    components: dict[str, TokenizerConfigLike | TokenizedMixtureGroup],
     weights_list: list[tuple[int, dict[str, float]]],
     *,
     shuffle: bool | int | BlockShuffleConfig = True,
@@ -398,11 +435,17 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
     return True
 
 
-def _verify_tokenizers_same(components: dict[str, TokenizerConfigLike]):
+def _component_tokenizer(component: TokenizerConfigLike | TokenizedMixtureGroup) -> str:
+    if isinstance(component, TokenizedMixtureGroup):
+        return component.tokenizer
+    return component.config.tokenizer if isinstance(component, ExecutorStep) else component.tokenizer
+
+
+def _verify_tokenizers_same(components: dict[str, TokenizerConfigLike | TokenizedMixtureGroup]):
     first_name, first_step = next(iter(components.items()))
-    tokenizer = first_step.config.tokenizer if isinstance(first_step, ExecutorStep) else first_step.tokenizer
+    tokenizer = _component_tokenizer(first_step)
     for name, step in components.items():
-        step_tokenizer = step.config.tokenizer if isinstance(step, ExecutorStep) else step.tokenizer
+        step_tokenizer = _component_tokenizer(step)
         if step_tokenizer != tokenizer:
             if not _are_tokenizers_equivalent(step_tokenizer, tokenizer):
                 raise ValueError(

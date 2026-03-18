@@ -22,7 +22,7 @@ from experiments.evals.task_configs import EvalTaskConfig, CORE_TASKS
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
+from marin.processing.tokenize.data_configs import TokenizedMixtureGroup, lm_varying_mixture_data_config
 
 from experiments.domain_phase_mix.config import (
     ExperimentConfig,
@@ -131,6 +131,7 @@ class MixtureExperiment:
         optimizer_config: MuonHConfig | None = None,
         eval_datasets_cache_path: str | None = None,
         initial_fixed_weight_configs: Sequence[InitialFixedWeightConfig] | None = None,
+        hierarchical_runtime_domains: bool = False,
     ):
         """Initialize the experiment.
 
@@ -156,6 +157,8 @@ class MixtureExperiment:
                 If provided, datasets will be synced from GCS to avoid HuggingFace rate limiting.
             initial_fixed_weight_configs: Fixed schedules to prepend when a nextgen
                 loop starts from empty state.
+            hierarchical_runtime_domains: Keep domains as runtime mixture units by
+                emitting grouped tokenized components instead of flattening to leaf caches.
         """
         self.name = name
         self.domains = domains
@@ -172,6 +175,7 @@ class MixtureExperiment:
         self.optimizer_config = optimizer_config or DEFAULT_MUON_CONFIG
         self.eval_datasets_cache_path = eval_datasets_cache_path
         self.initial_fixed_weight_configs = tuple(initial_fixed_weight_configs or ())
+        self.hierarchical_runtime_domains = hierarchical_runtime_domains
 
         # Compute training steps and budget
         self.tokens_per_step = batch_size * seq_len
@@ -214,21 +218,35 @@ class MixtureExperiment:
         Returns:
             LMMixtureDatasetConfig with time-varying weights.
         """
-        # Get all dataset components
-        all_components = self.experiment_config.get_all_components()
-
         # Build weights list for each phase transition
         # NOTE: weights_list uses step indices, not sequence indices!
         # LMMixtureDatasetConfig.train_set() calls rescale_mixture_schedule_for_batch_schedule()
         # which converts step indices to sequence indices using the batch schedule.
         # The step indices must be chosen so that step * batch_size is a multiple of mixture_block_size.
+        if self.hierarchical_runtime_domains:
+            runtime_components: dict[str, ExecutorStep | TokenizedMixtureGroup] = {}
+            for domain in self.domains:
+                if len(domain.components) == 1:
+                    runtime_components[domain.name] = domain.components[0].get_step()
+                    continue
+
+                runtime_components[domain.name] = TokenizedMixtureGroup(
+                    components={component.name: component.get_step() for component in domain.components},
+                    weights=domain.get_component_weights(),
+                    token_counts={component.name: int(component.weight) for component in domain.components},
+                )
+        else:
+            runtime_components = self.experiment_config.get_all_components()
+
         weights_list = []
         for phase in self.phase_schedule.phases:
             # Get domain weights for this phase
             domain_weights = weight_config.get_weights_for_phase(phase.name)
 
-            # Expand to component weights
-            component_weights = self.experiment_config.expand_domain_weights(domain_weights)
+            if self.hierarchical_runtime_domains:
+                component_weights = domain_weights
+            else:
+                component_weights = self.experiment_config.expand_domain_weights(domain_weights)
 
             # Get step index for phase start (aligned for block_size constraints)
             start_step = phase.get_start_step_aligned(self.num_train_steps, self.batch_size, self.mixture_block_size)
@@ -236,7 +254,7 @@ class MixtureExperiment:
             weights_list.append((start_step, component_weights))
 
         return lm_varying_mixture_data_config(
-            components=all_components,
+            components=runtime_components,
             weights_list=weights_list,
             shuffle=True,
             mixture_block_size=self.mixture_block_size,

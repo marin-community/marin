@@ -7,6 +7,8 @@ from dataclasses import asdict
 
 import numpy as np
 import pandas as pd
+from levanter.data.text import DatasetComponent as LmDatasetComponent
+from levanter.data.text import HierarchicalMixtureDatasetComponent
 
 import experiments.domain_phase_mix.nextgen_experiment as nextgen_experiment
 from experiments.domain_phase_mix.config import WeightConfig
@@ -53,10 +55,15 @@ from experiments.domain_phase_mix.nextgen.collect import (
 )
 from experiments.domain_phase_mix.nextgen.model_registry import _propose_top1_candidate
 from experiments.domain_phase_mix.nextgen.state_store import write_loop_state
+from experiments.domain_phase_mix.dolma3_dolmino_top_level_domains import REMOVED_DOLMA3_CC_TOPICS
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
+    MIN_RECOMMENDED_SAMPLED_RUNS,
+    MIN_RECOMMENDED_SWARM_RUNS,
+    PHASE_BOUNDARIES,
     build_top_level_domains,
     build_top_level_domain_steps,
     create_two_phase_dolma3_dolmino_top_level_experiment,
+    resolve_two_phase_wsd_boundary_schedule,
 )
 from experiments.domain_phase_mix.nextgen.validation import (
     CollectValidationConfig,
@@ -258,29 +265,87 @@ def test_collect_new_backfills_objective_from_trajectory(tmp_path, monkeypatch):
     assert traj_df.iloc[0]["run_name"] == "baseline_proportional"
 
 
-def test_top_level_experiment_uses_merged_domain_caches():
+def test_top_level_experiment_uses_hierarchical_runtime_domains():
     domains = build_top_level_domains()
-    assert len(domains) == 31
-    assert sum(len(domain.components) for domain in domains) == 31
+    domain_names = {domain.name for domain in domains}
+
+    assert len(domains) == 39
+    assert sum(len(domain.components) for domain in domains) > 39
+    assert "dolma3_cc/art_and_design_high" in domain_names
+    assert "dolma3_cc/art_and_design_low" in domain_names
+    assert "dolma3_cc/science_math_and_technology_high" in domain_names
+    assert "dolma3_cc/science_math_and_technology_low" in domain_names
     assert all(
-        domain.components[0].get_step().name.startswith("tokenized/merged/dolma3_dolmino_top_level/")
-        for domain in domains
+        not any(name.startswith(f"dolma3_cc/{topic}") for name in domain_names) for topic in REMOVED_DOLMA3_CC_TOPICS
     )
 
     experiment = create_two_phase_dolma3_dolmino_top_level_experiment()
     baseline = experiment.initial_fixed_weight_configs[0].weight_config
     mixture = experiment.create_mixture_config(baseline)
 
-    assert len(mixture.components) == 31
-    assert set(mixture.components) == {domain.name for domain in domains}
+    assert len(mixture.components) == 39
+    assert set(mixture.components) == domain_names
+    assert isinstance(mixture.components["dolma3_arxiv"], LmDatasetComponent)
+    assert isinstance(mixture.components["dolma3_finemath_3plus"], LmDatasetComponent)
+    assert isinstance(mixture.components["dolma3_wikipedia"], LmDatasetComponent)
+    assert isinstance(mixture.components["dolmino_synth_code"], LmDatasetComponent)
+    assert isinstance(mixture.components["dolma3_cc/art_and_design_high"], HierarchicalMixtureDatasetComponent)
+    assert isinstance(mixture.components["dolma3_stack_edu"], HierarchicalMixtureDatasetComponent)
 
 
-def test_build_top_level_domain_steps_returns_one_merged_step_per_domain():
+def test_build_top_level_domain_steps_is_empty_for_hierarchical_runtime_loading():
     steps = build_top_level_domain_steps()
+    assert steps == {}
 
-    assert len(steps) == 31
-    assert set(steps) == {domain.name for domain in build_top_level_domains()}
-    assert all(step.name.startswith("tokenized/merged/dolma3_dolmino_top_level/") for step in steps.values())
+
+def test_top_level_experiment_uses_linear_80_20_wsd():
+    experiment = create_two_phase_dolma3_dolmino_top_level_experiment()
+    schedule = resolve_two_phase_wsd_boundary_schedule(phase_schedule=experiment.phase_schedule)
+
+    assert PHASE_BOUNDARIES == [0.8]
+    assert MIN_RECOMMENDED_SWARM_RUNS == 234
+    assert MIN_RECOMMENDED_SAMPLED_RUNS == 232
+    assert schedule.total_steps == 4577
+    assert schedule.boundary_step == 3648
+    assert schedule.warmup_steps == 45
+    assert schedule.decay_steps == 929
+    assert experiment.optimizer_config.warmup == 45
+    assert experiment.optimizer_config.decay == 929
+    assert experiment.optimizer_config.lr_schedule == "linear"
+
+
+def test_top_level_baseline_steps_keep_distinct_checkpoint_names_under_wandb_truncation():
+    experiment = create_two_phase_dolma3_dolmino_top_level_experiment()
+    name_prefix = "pinlin_calvin_xu/data_mixture/ngd3dm2_hier_canary_fix_with_extra_length"
+
+    proportional_step = experiment.create_training_step(
+        experiment.initial_fixed_weight_configs[0].weight_config,
+        name_prefix=name_prefix,
+        run_name="baseline_proportional",
+    )
+    unimax_step = experiment.create_training_step(
+        experiment.initial_fixed_weight_configs[1].weight_config,
+        name_prefix=name_prefix,
+        run_name="baseline_unimax",
+    )
+
+    assert proportional_step.name.endswith("/baseline_proportional")
+    assert unimax_step.name.endswith("/baseline_unimax")
+    assert proportional_step.name != unimax_step.name
+
+    proportional_wandb_name = proportional_step.config.train_config.trainer.tracker.name
+    unimax_wandb_name = unimax_step.config.train_config.trainer.tracker.name
+    proportional_wandb_tags = proportional_step.config.train_config.trainer.tracker.tags
+    unimax_wandb_tags = unimax_step.config.train_config.trainer.tracker.tags
+    assert proportional_wandb_name is not None
+    assert unimax_wandb_name is not None
+    assert len(proportional_wandb_name) <= 64
+    assert len(unimax_wandb_name) <= 64
+    assert proportional_wandb_name != unimax_wandb_name
+    assert proportional_wandb_name.endswith("/baseline_proportional")
+    assert unimax_wandb_name.endswith("/baseline_unimax")
+    assert all(len(tag) <= 64 for tag in proportional_wandb_tags)
+    assert all(len(tag) <= 64 for tag in unimax_wandb_tags)
 
 
 def test_model_resubmit_validation_plan_reuses_prior_candidate(tmp_path):

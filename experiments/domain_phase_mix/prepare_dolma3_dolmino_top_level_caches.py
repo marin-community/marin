@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prepare merged top-level tokenized caches for the Dolma 3 + Dolmino swarm."""
+"""Prepare top-level tokenized runtime caches for the Dolma 3 + Dolmino swarm."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ logger = logging.getLogger("ray")
 
 
 def _parse_args() -> tuple[argparse.Namespace, list[str]]:
-    parser = argparse.ArgumentParser(description="Prepare merged top-level Dolma 3 + Dolmino caches")
+    parser = argparse.ArgumentParser(description="Prepare top-level Dolma 3 + Dolmino runtime caches")
     parser.add_argument(
         "--domains",
         type=str,
@@ -51,15 +51,18 @@ def main() -> None:
 
     selected_domains = _selected_domain_names(args.domains)
     step_by_domain = build_top_level_domain_steps()
+    if not step_by_domain:
+        logger.info("Hierarchical top-level runtime loading does not require cache prep steps.")
+        return
     steps = [step_by_domain[domain_name] for domain_name in selected_domains]
 
-    logger.info("Preparing %d merged top-level caches", len(steps))
+    logger.info("Preparing %d top-level runtime caches", len(steps))
     for domain_name in selected_domains:
         logger.info("  %s", domain_name)
 
     executor_main(
         steps=steps,
-        description="Prepare merged Dolma 3 + Dolmino top-level caches",
+        description="Prepare Dolma 3 + Dolmino top-level runtime caches",
     )
 
 

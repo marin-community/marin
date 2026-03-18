@@ -29,6 +29,7 @@ from experiments.domain_phase_mix.nextgen.model_registry import available_model_
 from experiments.domain_phase_mix.nextgen.pipeline import create_nextgen_steps, summarize_step_names
 from experiments.domain_phase_mix.three_phase_starcoder_experiment import create_three_phase_experiment
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
+    MIN_RECOMMENDED_SWARM_RUNS,
     create_two_phase_dolma3_dolmino_top_level_experiment,
 )
 from experiments.domain_phase_mix.two_phase_starcoder_experiment import create_two_phase_experiment
@@ -177,6 +178,15 @@ def main() -> None:
         return
 
     experiment = _build_experiment(args)
+    if args.experiment == "two_phase_dolma3_dolmino_top_level":
+        total_requested_runs = args.n_new_runs + len(experiment.initial_fixed_weight_configs)
+        if args.n_new_runs > 0 and total_requested_runs < MIN_RECOMMENDED_SWARM_RUNS:
+            logger.warning(
+                "Requested %d total runs for %d domains; recommend at least %d total runs (6x domains).",
+                total_requested_runs,
+                len(experiment.domains),
+                MIN_RECOMMENDED_SWARM_RUNS,
+            )
     loop = _build_loop_config(args, experiment)
 
     steps = create_nextgen_steps(

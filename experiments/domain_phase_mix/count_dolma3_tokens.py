@@ -20,6 +20,8 @@ import sys
 
 from google.cloud import storage
 
+from experiments.domain_phase_mix.dolma3_dolmino_top_level_domains import TOP_LEVEL_DOMAIN_TOKEN_COUNTS
+
 GCS_BUCKET = "marin-us-central1"
 GCS_PREFIX = "tokenized/dolma3_pool/"
 EXTERNAL_CACHE_COUNTS = {
@@ -183,10 +185,14 @@ def main():
         count, total = topic_totals[topic]
         print(f"#   {topic}: {count} tiers, {total:,} tokens ({total / 1e9:.2f}B)")
 
-    print("\n# Top-level Dolma 3 domains:")
-    for topic in sorted(topic_totals.keys()):
-        _, total = topic_totals[topic]
-        print(f'#   "dolma3_cc/{topic}": {total:,} tokens ({total / 1e9:.2f}B)')
+    print("\n# Nextgen Dolma 3 CC domains:")
+    nextgen_cc_domains = {
+        domain_name: tokens
+        for domain_name, tokens in TOP_LEVEL_DOMAIN_TOKEN_COUNTS.items()
+        if domain_name.startswith("dolma3_cc/")
+    }
+    for domain_name, total in nextgen_cc_domains.items():
+        print(f'#   "{domain_name}": {total:,} tokens ({total / 1e9:.2f}B)')
 
     # olmOCR
     olmocr_partitions = {k: v for k, v in partition_counts.items() if k.startswith("olmocr_pdfs/")}

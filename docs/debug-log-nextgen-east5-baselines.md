@@ -119,3 +119,30 @@ Evidence from the live east5 logs:
 The topology-level root cause is real: the supposed 31-domain experiment still expands to 441 underlying `DatasetComponent`s at training time because we preserve exact within-domain proportional allocation. That means each training run performs hundreds of remote cache-ledger loads before it reaches `parameter_count` logging or the first training step, which explains why W&B shows only the system panel for a long time.
 
 Conclusion: this is a startup performance bug / architectural mismatch in the job setup, not a W&B logging failure and not yet evidence of a correctness failure in training.
+
+## Hypothesis 6
+
+Both east5 baseline runs later crashed while the merged-cache prep jobs were running, and the `.executor_status` files are stale.
+
+## Changes to make
+
+- Check the live checkpoint status markers for both baseline runs on `us-east5-a`.
+- Inspect checkpoint artifacts (`eval_metrics.jsonl`, `checkpoints/step-*`) to verify whether training progressed after startup.
+- Compare that against the cluster-wide Ray/OOM noise to separate baseline health from unrelated prep-job churn.
+
+## Future Work
+
+- [ ] Avoid overlapping high-memory cache-merge jobs with long-running TPU training on the same east5 cluster if the cluster remains memory-fragile.
+- [ ] Add a lighter-weight per-run liveness view that does not require reading full Ray job logs.
+
+## Results
+
+Not confirmed. As of March 16, 2026:
+
+- `gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_baselines_fix4/baseline_pr-b9d895/.executor_status` is `RUNNING`.
+- `gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_baselines_fix4/baseline_un-4e9566/.executor_status` is `RUNNING`.
+- Both runs have written `checkpoints/eval_metrics.jsonl`.
+- Both runs have written `checkpoints/step-3424/`.
+- The latest visible checkpoint metadata timestamps are around `2026-03-16T11:30Z` to `2026-03-16T11:31Z` (about `4:30 AM PDT`).
+
+So the evidence says both baseline jobs are still alive and had progressed well into training. The cluster does show substantial Ray worker churn and OOM-related raylet warnings, but those are currently cluster-wide symptoms during the concurrent merged-cache prep jobs, not proof that either TPU training run has failed.

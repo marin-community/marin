@@ -6,6 +6,7 @@ This file represents the best practices for each stage of the pipeline.
 """
 
 import dataclasses
+import hashlib
 import logging
 import os
 from collections.abc import Sequence
@@ -87,21 +88,36 @@ DEFAULT_NEW_RUN_DATA_SHUFFLE = BlockShuffleConfig(
 
 
 def _truncate_wandb_name(name: str) -> str:
-    """Truncate a run name to fit WANDB's 64-character limit, preserving the trailing suffix."""
+    """Truncate a run name to fit WANDB's 64-character limit while preserving uniqueness."""
     if len(name) <= 64:
         return name
-    old_name = name
-    if "-" not in name:
-        name = name[:64]
+
+    suffix = name.rsplit("/", 1)[-1]
+    digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
+    reserved = len(digest) + 2
+
+    if len(suffix) + reserved >= 64:
+        suffix_budget = 64 - reserved
+        truncated = f"{digest}/{suffix[-suffix_budget:]}"
     else:
-        prefix, suffix = name.rsplit("-", 1)
-        if len(suffix) >= 64:
-            suffix = suffix[:64]
-            name = suffix
-        else:
-            name = prefix[: 63 - len(suffix)] + "-" + suffix
-    logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
-    return name
+        prefix_budget = 64 - len(suffix) - reserved
+        truncated = f"{name[:prefix_budget]}~{digest}/{suffix}"
+
+    logger.warning(f"Truncated name from {name} to {truncated} to fit within WANDB limits.")
+    return truncated
+
+
+def _truncate_wandb_tags(tags: Sequence[str]) -> list[str]:
+    """Truncate W&B tags to fit the 64-character limit while preserving order."""
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for tag in tags:
+        truncated = _truncate_wandb_name(tag)
+        if truncated in seen:
+            continue
+        seen.add(truncated)
+        deduped.append(truncated)
+    return deduped
 
 
 def _resolve_hf_export_steps(steps_per_hf_export: int | None, steps_per_export: int) -> int | None:
@@ -352,7 +368,9 @@ def default_train(
     if wandb_group is None:
         wandb_group = os.environ.get("WANDB_GROUP")
 
-    name = _truncate_wandb_name(name)
+    wandb_display_name = _truncate_wandb_name(wandb_name or name)
+
+    wandb_tags = _truncate_wandb_tags(tags)
 
     if eval_harness_tasks:
         harness_config = LmEvalHarnessConfig(
@@ -391,8 +409,8 @@ def default_train(
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project="marin",
-                name=wandb_name,
-                tags=[*tags],
+                name=wandb_display_name,
+                tags=wandb_tags,
                 group=wandb_group,
                 replicate_path=this_output_path(),
             ),
@@ -604,7 +622,9 @@ def default_dpo(
     preference_data = dataclasses.replace(preference_data, permutation_type="feistel")
     vocab_size = _get_vocab_size(preference_data)
 
-    name = _truncate_wandb_name(name)
+    wandb_display_name = _truncate_wandb_name(name)
+
+    wandb_tags = _truncate_wandb_tags(tags)
 
     steps_per_export = dpo_config.steps_per_checkpoint
     steps_per_export_hf = _resolve_hf_export_steps(dpo_config.steps_per_hf_export, steps_per_export)
@@ -623,7 +643,8 @@ def default_dpo(
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project=dpo_config.wandb_project or "marin",
-                tags=[*tags],
+                name=wandb_display_name,
+                tags=wandb_tags,
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=dpo_config.train_batch_size,

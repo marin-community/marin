@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .data_configs import (
+    TokenizedMixtureGroup,
     TokenizerStep,
     add_validation_sets_to_mixture,
     get_vocab_size_for_tokenizer,

@@ -6,8 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from functools import cache, partial
-import os
+from functools import partial
 
 from levanter.optim import MuonHConfig
 from fray.cluster import ResourceConfig
@@ -19,6 +18,7 @@ from experiments.domain_phase_mix.dolma3_dolmino_top_level_domains import (
     TOP_LEVEL_DOMAIN_TOKEN_COUNTS,
     TOP_LEVEL_TOTAL_AVAILABLE_TOKENS,
     all_top_level_domain_names,
+    top_level_domain_partition_counts,
 )
 from experiments.domain_phase_mix.experiment import (
     DEFAULT_MUON_CONFIG,
@@ -35,7 +35,6 @@ from experiments.evals.task_configs import MMLU_5_SHOT, MMLU_PRO_5_SHOT
 from experiments.marin_models import marin_tokenizer
 from experiments.pretraining_datasets.dolma3_dolmino_pool import tokenize_dolmino_pool_subset
 from experiments.pretraining_datasets.dolma3_pool import tokenize_dolma3_pool_subset
-from marin.processing.tokenize import merge_tokenized_caches
 
 NAME = "pinlin_calvin_xu/data_mixture/two_phase_dolma3_dolmino_top_level"
 EXPERIMENT_BUDGET = 1_200_000_000
@@ -45,11 +44,14 @@ SEQ_LEN = 2048
 TOKENS_PER_STEP = BATCH_SIZE * SEQ_LEN
 NUM_TRAIN_STEPS = EXPERIMENT_BUDGET // TOKENS_PER_STEP
 REALIZED_EXPERIMENT_BUDGET = NUM_TRAIN_STEPS * TOKENS_PER_STEP
-PHASE_BOUNDARIES = [0.5]
+PHASE_BOUNDARIES = [0.8]
 PHASE_NAMES = ("phase_0", "phase_1")
 DOMAIN_NAMES = tuple(all_top_level_domain_names())
 EVAL_TASKS = (MMLU_5_SHOT, MMLU_PRO_5_SHOT)
 EVAL_DATASETS_CACHE_PATH: str | None = None
+INITIAL_BASELINE_RUNS = 2
+MIN_RECOMMENDED_SWARM_RUNS = 6 * len(DOMAIN_NAMES)
+MIN_RECOMMENDED_SAMPLED_RUNS = MIN_RECOMMENDED_SWARM_RUNS - INITIAL_BASELINE_RUNS
 
 SAMPLING_PARAMS = DirichletSamplingParams(
     strategy=SamplingStrategy.DIRICHLET,
@@ -63,10 +65,12 @@ SAMPLING_PARAMS = DirichletSamplingParams(
 WSD_BOUNDARY_ALIGNED_WARMUP = 0.01
 WSD_BOUNDARY_ALIGNED_REWARMUP = 0.0
 
-assert len(DOMAIN_NAMES) == 31, f"Expected 31 top-level domains, got {len(DOMAIN_NAMES)}"
+assert len(DOMAIN_NAMES) == 39, f"Expected 39 top-level domains, got {len(DOMAIN_NAMES)}"
 assert TARGET_BUDGET == 6_325_183_647_689, TARGET_BUDGET
-assert TOP_LEVEL_TOTAL_AVAILABLE_TOKENS == 8_813_462_126_096, TOP_LEVEL_TOTAL_AVAILABLE_TOKENS
+assert TOP_LEVEL_TOTAL_AVAILABLE_TOKENS == 6_986_431_605_135, TOP_LEVEL_TOTAL_AVAILABLE_TOKENS
 assert REALIZED_EXPERIMENT_BUDGET == 1_199_833_088, REALIZED_EXPERIMENT_BUDGET
+assert MIN_RECOMMENDED_SWARM_RUNS == 234, MIN_RECOMMENDED_SWARM_RUNS
+assert MIN_RECOMMENDED_SAMPLED_RUNS == 232, MIN_RECOMMENDED_SAMPLED_RUNS
 
 
 @dataclass(frozen=True)
@@ -91,41 +95,26 @@ def _partition_step_fn(partition_name: str):
     return partial(tokenize_dolmino_pool_subset, partition_name, tokenizer=marin_tokenizer)
 
 
-@cache
-def _top_level_domain_step(domain_name: str):
-    if domain_name not in TOP_LEVEL_DOMAIN_PARTITIONS:
-        raise ValueError(f"Unknown top-level domain {domain_name}")
-
-    input_steps = {
-        partition_name: _partition_step_fn(partition_name)()
-        for partition_name in TOP_LEVEL_DOMAIN_PARTITIONS[domain_name]
-    }
-    return merge_tokenized_caches(
-        os.path.join("dolma3_dolmino_top_level", domain_name),
-        input_steps,
-        tokenizer=marin_tokenizer,
-        tags=["top_level_domain", domain_name],
-    )
-
-
 def build_top_level_domains() -> list[Domain]:
-    """Build the 31 top-level domains as one merged cache each."""
+    """Build top-level domains from their real partition caches."""
     domains: list[Domain] = []
     for domain_name in DOMAIN_NAMES:
+        partition_counts = top_level_domain_partition_counts(domain_name)
         components = [
             DatasetComponent(
-                name=domain_name,
-                step_fn=partial(_top_level_domain_step, domain_name),
-                weight=TOP_LEVEL_DOMAIN_TOKEN_COUNTS[domain_name],
+                name=partition_name,
+                step_fn=_partition_step_fn(partition_name),
+                weight=partition_counts[partition_name],
             )
+            for partition_name in TOP_LEVEL_DOMAIN_PARTITIONS[domain_name]
         ]
         domains.append(
             Domain(
                 name=domain_name,
                 components=components,
                 description=(
-                    "Top-level domain backed by one merged tokenized cache assembled from "
-                    f"{len(TOP_LEVEL_DOMAIN_PARTITIONS[domain_name])} partition caches."
+                    "Top-level domain with runtime hierarchical loading over "
+                    f"{len(TOP_LEVEL_DOMAIN_PARTITIONS[domain_name])} source partition cache(s)."
                 ),
             )
         )
@@ -133,8 +122,8 @@ def build_top_level_domains() -> list[Domain]:
 
 
 def build_top_level_domain_steps() -> dict[str, object]:
-    """Return one merged-cache preparation step per top-level domain."""
-    return {domain_name: _top_level_domain_step(domain_name) for domain_name in DOMAIN_NAMES}
+    """Hierarchical runtime loading does not require separate top-level prep steps."""
+    return {}
 
 
 def _constant_phase_weights(domain_weights: dict[str, float]) -> dict[str, dict[str, float]]:
@@ -218,7 +207,7 @@ def create_two_phase_dolma3_dolmino_top_level_optimizer_config(
         warmup=schedule.warmup_steps,
         decay=schedule.decay_steps,
         rewarmup=WSD_BOUNDARY_ALIGNED_REWARMUP,
-        lr_schedule="cosine",
+        lr_schedule="linear",
         cycles=None,
         cycle_length=None,
         haps=None,
@@ -261,4 +250,5 @@ def create_two_phase_dolma3_dolmino_top_level_experiment(
         optimizer_config=optimizer_config,
         eval_datasets_cache_path=eval_datasets_cache_path,
         initial_fixed_weight_configs=create_initial_fixed_weight_configs(),
+        hierarchical_runtime_domains=True,
     )
