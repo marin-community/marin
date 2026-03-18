@@ -192,3 +192,106 @@ uv run python lib/levanter/scripts/bench/bench_moe_hillclimb.py --help | rg 'w13
   - the numerical validation ladder is unchanged: `w13_only` first, then `local_compute_only`, then `capped_prewarmed`, then `current` only if warranted
 - Next action:
   - commit the fresh `#3821` CoreWeave lane config, push the rebased branch, redeploy a fresh H100x8 node pool on that branch base, and rerun `deepep_transport_w13_only_probe`.
+
+### 2026-03-18 18:31 UTC - Fresh rebased H100 pool creation is blocked by repeated `NodeConfigInternalError`
+- Experiment ID: `W13-OPT-005`
+- Hypothesis:
+  - after rebasing onto current main and deleting the old 3677 lane, a newly created isolated H100x8 pool should either validate and provision normally or reveal whether the stale-lane problem reproduces on a fresh pool.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl create namespace iris-3821-jax --dry-run=client -o yaml | kubectl apply -f -
+
+# attempt 1: prewarm target=1
+cat <<'EOF' | KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl apply -f -
+apiVersion: compute.coreweave.com/v1alpha1
+kind: NodePool
+metadata:
+  name: i3821jax-h100-8x
+  labels:
+    iris-i3821jax-managed: "true"
+    iris-i3821jax-scale-group: h100-8x
+spec:
+  computeClass: default
+  instanceType: gd-8xh100ib-i128
+  autoscaling: true
+  minNodes: 0
+  maxNodes: 1
+  targetNodes: 1
+  nodeLabels:
+    iris-i3821jax-managed: "true"
+    iris-i3821jax-scale-group: h100-8x
+EOF
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl describe nodepool i3821jax-h100-8x
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl delete nodepool i3821jax-h100-8x --wait=false
+
+# attempt 2: clean recreate, same target=1
+cat <<'EOF' | KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl apply -f -
+apiVersion: compute.coreweave.com/v1alpha1
+kind: NodePool
+metadata:
+  name: i3821jax-h100-8x
+  labels:
+    iris-i3821jax-managed: "true"
+    iris-i3821jax-scale-group: h100-8x
+spec:
+  computeClass: default
+  instanceType: gd-8xh100ib-i128
+  autoscaling: true
+  minNodes: 0
+  maxNodes: 1
+  targetNodes: 1
+  nodeLabels:
+    iris-i3821jax-managed: "true"
+    iris-i3821jax-scale-group: h100-8x
+EOF
+
+# attempt 3: create the way Iris normally does first, target=0
+cat <<'EOF' | KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl apply -f -
+apiVersion: compute.coreweave.com/v1alpha1
+kind: NodePool
+metadata:
+  name: i3821jax-h100-8x
+  labels:
+    iris-i3821jax-managed: "true"
+    iris-i3821jax-scale-group: h100-8x
+spec:
+  computeClass: default
+  instanceType: gd-8xh100ib-i128
+  autoscaling: true
+  minNodes: 0
+  maxNodes: 1
+  targetNodes: 0
+  nodeLabels:
+    iris-i3821jax-managed: "true"
+    iris-i3821jax-scale-group: h100-8x
+EOF
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl get nodepools --all-namespaces
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl get nodepool iris-canary-mh-h100-16x -o yaml
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl delete nodepool i3821jax-h100-8x --wait=false
+```
+
+- Config:
+  - fresh lane namespace: `iris-3821-jax`
+  - fresh lane label prefix / pool name: `i3821jax-h100-8x`
+  - branch tip used for this redeploy: `dd50748e8`
+  - reference healthy comparison pool on the same cluster: `iris-canary-mh-h100-16x`
+- Result:
+  - all three fresh creates of `i3821jax-h100-8x` failed within seconds with the same condition and events:
+    - `status.conditions[type=Validated].status=False`
+    - `reason=NodeConfigInternalError`
+    - message: `failed to generate node configuration due to internal error`
+    - repeating event reason: `CWNodeConfigInternalError`
+  - the failure reproduced both when the pool was created with `targetNodes=1` and when it was created with `targetNodes=0`
+  - no node ever appeared for the fresh pool: `currentNodes=0`, `queuedNodes=0`, `inProgress=0`
+  - another H100 pool on the same cluster was healthy at the same time:
+    - `iris-canary-mh-h100-16x`: `Validated=True`, `Capacity=Sufficient`, `currentNodes=1`, `inProgress=1`
+  - I deleted the failing fresh pool after the third reproduce so the cluster was not left with a broken dangling NodePool object
+- Interpretation:
+  - the fresh-lane retry did not reproduce the old stale-pool symptom; it hit a different earlier control-plane failure during node-configuration generation
+  - because another H100 pool with the same instance type is healthy, this does not look like a blanket H100 outage
+  - this blocks the `w13_only` rerun before any benchmark pod can be scheduled, so there is still no new numerical result for or against `--w13-out-first`
+- Next action:
+  - treat fresh-pool creation as the current blocker for the rebased branch and only continue after an infra workaround or operator-side retry path is chosen.
