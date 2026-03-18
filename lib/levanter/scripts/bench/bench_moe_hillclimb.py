@@ -1550,6 +1550,7 @@ def _moe_mlp_ep_deepep_transport_local(
     num_experts: int,
     max_recv_tokens: int | None = None,
     max_local_assignments: int | None = None,
+    w13_local_expert_capacity: int | None = None,
 ) -> tuple[jax.Array, jax.Array]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -1602,7 +1603,15 @@ def _moe_mlp_ep_deepep_transport_local(
         )
 
     with jax.named_scope("moe_up_down"):
-        w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
+        if w13_local_expert_capacity is None:
+            w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
+        else:
+            w13_out = _ragged_dot_expert_padded_batched(
+                x_dispatch,
+                moe_w13_local,
+                local_group_sizes,
+                local_expert_capacity=w13_local_expert_capacity,
+            )
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
@@ -1716,6 +1725,7 @@ def _moe_mlp_deepep_transport(
     mesh: jax.sharding.AbstractMesh | None = None,
     max_recv_tokens: int | None = None,
     max_local_assignments: int | None = None,
+    w13_local_expert_capacity: int | None = None,
 ) -> jax.Array:
     if mesh is None:
         mesh = get_abstract_mesh()
@@ -1753,6 +1763,7 @@ def _moe_mlp_deepep_transport(
                 num_experts=num_experts,
                 max_recv_tokens=max_recv_tokens,
                 max_local_assignments=max_local_assignments,
+                w13_local_expert_capacity=w13_local_expert_capacity,
             ),
             mesh=mesh,
             in_specs=(
@@ -4814,6 +4825,7 @@ def _prewarm_deepep_transport_local_compute(
     shared_w2: jax.Array,
     *,
     max_local_assignments: int | None = None,
+    w13_local_expert_capacity: int | None = None,
 ) -> None:
     mesh = x.sharding.mesh
     num_experts = int(w_up_gate.shape[0])
@@ -4821,7 +4833,13 @@ def _prewarm_deepep_transport_local_compute(
     local_assignments = (
         x.shape[0] * selected_experts.shape[1] if max_local_assignments is None else max_local_assignments
     )
-    local_compute = jax.jit(partial(_moe_mlp_deepep_transport_local_compute, mesh=mesh))
+    local_compute = jax.jit(
+        partial(
+            _moe_mlp_deepep_transport_local_compute,
+            mesh=mesh,
+            w13_local_expert_capacity=w13_local_expert_capacity,
+        )
+    )
     shared_mlp = jax.jit(_shared_mlp)
     dispatch_spec = jax.ShapeDtypeStruct(
         (expert_axis_size * local_assignments, x.shape[1]),
@@ -4849,6 +4867,7 @@ def _forward_deepep_transport_capped(
     *,
     max_recv_tokens: int,
     max_local_assignments: int,
+    w13_local_expert_capacity: int | None = None,
 ) -> jax.Array:
     routed = _moe_mlp_deepep_transport(
         x,
@@ -4858,6 +4877,7 @@ def _forward_deepep_transport_capped(
         w_down,
         max_recv_tokens=max_recv_tokens,
         max_local_assignments=max_local_assignments,
+        w13_local_expert_capacity=w13_local_expert_capacity,
     )
     return routed + _shared_mlp(x, shared_w13, shared_w2)
 
@@ -5189,14 +5209,16 @@ def _time_deepep_transport_forward_capped_prewarmed(
     *,
     warmup: int,
     iters: int,
+    w13_expert_padded: bool = False,
 ) -> float:
     mesh = x.sharding.mesh
     num_experts = int(w_up_gate.shape[0])
-    max_recv_tokens, max_local_assignments = _deepep_transport_exact_caps(
+    max_recv_tokens, max_local_assignments, max_local_expert_assignments = _deepep_transport_exact_cap_metadata(
         selected_experts,
         mesh=mesh,
         num_experts=num_experts,
     )
+    w13_local_expert_capacity = max_local_expert_assignments if w13_expert_padded else None
     _prewarm_deepep_transport_local_compute(
         x,
         selected_experts,
@@ -5205,12 +5227,14 @@ def _time_deepep_transport_forward_capped_prewarmed(
         shared_w13,
         shared_w2,
         max_local_assignments=max_local_assignments,
+        w13_local_expert_capacity=w13_local_expert_capacity,
     )
     return _time_fn(
         partial(
             _forward_deepep_transport_capped,
             max_recv_tokens=max_recv_tokens,
             max_local_assignments=max_local_assignments,
+            w13_local_expert_capacity=w13_local_expert_capacity,
         ),
         x,
         selected_experts,
@@ -5237,14 +5261,16 @@ def _profile_deepep_transport_forward_capped_prewarmed(
     iters: int,
     profile_dir: Path,
     profile_name: str,
+    w13_expert_padded: bool = False,
 ) -> float:
     mesh = x.sharding.mesh
     num_experts = int(w_up_gate.shape[0])
-    max_recv_tokens, max_local_assignments = _deepep_transport_exact_caps(
+    max_recv_tokens, max_local_assignments, max_local_expert_assignments = _deepep_transport_exact_cap_metadata(
         selected_experts,
         mesh=mesh,
         num_experts=num_experts,
     )
+    w13_local_expert_capacity = max_local_expert_assignments if w13_expert_padded else None
     _prewarm_deepep_transport_local_compute(
         x,
         selected_experts,
@@ -5253,12 +5279,14 @@ def _profile_deepep_transport_forward_capped_prewarmed(
         shared_w13,
         shared_w2,
         max_local_assignments=max_local_assignments,
+        w13_local_expert_capacity=w13_local_expert_capacity,
     )
     return _profile_fn(
         partial(
             _forward_deepep_transport_capped,
             max_recv_tokens=max_recv_tokens,
             max_local_assignments=max_local_assignments,
+            w13_local_expert_capacity=w13_local_expert_capacity,
         ),
         x,
         selected_experts,
@@ -5640,6 +5668,7 @@ def main() -> None:
                                 iters=args.iters,
                                 profile_dir=args.profile_root,
                                 profile_name=profile_name,
+                                w13_expert_padded=args.w13_expert_padded,
                             )
                         else:
                             dt = _time_deepep_transport_forward_capped_prewarmed(
@@ -5652,6 +5681,7 @@ def main() -> None:
                                 shared_w2_sharded,
                                 warmup=args.warmup,
                                 iters=args.iters,
+                                w13_expert_padded=args.w13_expert_padded,
                             )
                     elif kernel == "deepep_transport_staged":
                         if args.profile_root is not None:

@@ -532,3 +532,115 @@ KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_k
   - the candidate is still narrow enough to test cleanly on `w13_only` before deciding whether it deserves the broader validation ladder
 - Next action:
   - commit and push the expert-padded FC1 candidate, then rerun `deepep_transport_w13_only_probe` on the fresh `iris-i3821jax-scale-group=h100-8x` node with `--w13-expert-padded`.
+
+### 2026-03-18 23:25 UTC - Expert-padded FC1 candidate produces a major rung-1 `w13_only` win on the fresh H100 lane
+- Experiment ID: `W13-OPT-011`
+- Hypothesis:
+  - the compact `ragged_dot` lowering is the main FC1 problem inside `w13`, and an explicit expert-padded batched FC1 can beat it materially on the authoritative exact-cap cell.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref f9734d0b32bb761c2cc7f89b9048544294554e03 \
+  --task-id w13opt-expertpadded-w13only-pinned-t262144-20260318-232052 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - pod: `iris-task-e17654400523`
+  - node: `g11ed54`
+  - node label: `iris-i3821jax-scale-group=h100-8x`
+  - code ref used by the pod: `f9734d0b32bb761c2cc7f89b9048544294554e03`
+  - exact-cap metadata printed by the run:
+    - `max_recv_tokens=61952`
+    - `max_local_assignments=65920`
+    - `max_local_expert_assignments=4352`
+  - sealed baseline for comparison: `26,051,875.76 tok/s` (`10.062 ms`)
+- Result:
+  - `deepep_transport_w13_only_probe`: `107,976,854.82 tok/s` (`2.428 ms`)
+  - delta vs sealed baseline:
+    - throughput: `+314.47%`
+    - time: `-75.87%`
+  - the task reached `BENCH_END` and the wrapper returned `EXIT_CODE=0`
+  - the same noisy shutdown failures still appeared after the result line:
+    - `DeepEP timeout check failed: rank = 0, thread = 0..7`
+    - many `CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure` teardown lines from XLA/CUDA cleanup
+- Interpretation:
+  - this is the first major positive result in the new `w13` optimization thread
+  - the stage-local `w13` budget is highly sensitive to the FC1 lowering / packing choice; the compact `ragged_dot` lowering appears to be the wrong shape for this cell
+  - because the win is very large and was measured on the fresh pinned lane, the candidate must now be validated immediately on `deepep_transport_local_compute_only_probe`
+- Next action:
+  - run the same fresh-lane pinned benchmark with `--w13-expert-padded` on `deepep_transport_local_compute_only_probe`.
+
+### 2026-03-18 23:31 UTC - The expert-padded `w13` candidate survives rung 2 and cuts `local_compute_only` almost in half
+- Experiment ID: `W13-OPT-012`
+- Hypothesis:
+  - the large rung-1 `w13_only` win is real enough to survive reintegrating `gate -> w2` inside the isolated local-compute probe, rather than disappearing once the rest of local expert compute is restored.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref f9734d0b32bb761c2cc7f89b9048544294554e03 \
+  --task-id w13opt-expertpadded-localcompute-pinned-t262144-20260318-232636 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_local_compute_only_probe \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - pod: `iris-task-df3aa4531e70`
+  - node: `g11ed54`
+  - node label: `iris-i3821jax-scale-group=h100-8x`
+  - code ref used by the pod: `f9734d0b32bb761c2cc7f89b9048544294554e03`
+  - exact-cap metadata printed by the run:
+    - `max_recv_tokens=61952`
+    - `max_local_assignments=65920`
+    - `max_local_expert_assignments=4352`
+  - sealed baseline for comparison: `15,625,801.24 tok/s` (`16.776 ms`)
+- Result:
+  - `deepep_transport_local_compute_only_probe`: `29,461,265.86 tok/s` (`8.898 ms`)
+  - delta vs sealed baseline:
+    - throughput: `+88.54%`
+    - time: `-46.96%`
+  - the task reached `BENCH_END` and the wrapper returned `EXIT_CODE=0`
+  - the same noisy shutdown failures still appeared after the result line:
+    - `DeepEP timeout check failed: rank = 0, thread = 0..7`
+    - many `CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure` teardown lines from XLA/CUDA cleanup
+- Interpretation:
+  - the FC1 candidate is not just a probe-only artifact; a large fraction of the rung-1 `w13` gain survives once the rest of local expert compute is restored
+  - the remaining `local_compute_only` time (`8.898 ms`) is now close enough to the sealed full matched Megatron forward (`7.921 ms`) that this branch is clearly worth carrying into the exact-cap integrated path
+  - the next validation step is now mandatory: wire the same candidate into the actual capped/prewarmed forward path and measure `deepep_transport_capped_prewarmed`
+- Next action:
+  - extend the opt-in expert-padded `w13` path into the actual capped/prewarmed DeepEP forward, commit and push, then run `deepep_transport_capped_prewarmed` on the same fresh H100 lane.
