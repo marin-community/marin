@@ -159,11 +159,17 @@ Grug MoE canary (50 steps) completed in 6m13s on gd927de + gd94886.
 Both tasks ran 50/50 steps at ~2 it/s. Final loss ~8.0.
 W&B: https://wandb.ai/marin-community/marin/runs/mh-canary-20260318-201505
 
+### Performance run: 10k steps PASSED
+
+10,000 steps of Grug MoE on 2x H100 (16 GPUs) completed in 95 min.
+Sustained ~2.1 it/s, 10+ checkpoints saved, loss 7.6 → 6.1.
+
 ### Final status — ALL PHASES PASSED
 
 - Phase 1 (CPU): PASSED
 - Phase 2 (GPU tiny model): PASSED — llama_nano, 10 steps, 2m30s
 - Phase 2 (GPU Grug MoE): PASSED — 50 steps, 6m13s, 16 GPUs across 2 VMs
+- Phase 2 (GPU Grug MoE 10k): PASSED — 10k steps, 95 min, 2.1 it/s
 
 ### Known risks
 
