@@ -44,7 +44,6 @@ from iris.time_utils import ExponentialBackoff
 
 from zephyr.dataset import Dataset
 from zephyr.plan import (
-    ExecutionHint,
     Join,
     PhysicalOp,
     PhysicalPlan,
@@ -1035,7 +1034,6 @@ class ZephyrCoordinator:
         self,
         plan: PhysicalPlan,
         execution_id: str,
-        hints: ExecutionHint,
     ) -> list:
         """Run complete pipeline, blocking until done. Returns flattened results."""
         with self._lock:
@@ -1067,10 +1065,10 @@ class ZephyrCoordinator:
                     continue
 
                 # Compute aux data for joins
-                aux_per_shard = self._compute_join_aux(stage.operations, shards, hints, stage_idx)
+                aux_per_shard = self._compute_join_aux(stage.operations, shards, stage_idx)
 
                 # Build and submit tasks
-                tasks = _compute_tasks_from_shards(shards, stage, hints, aux_per_shard, stage_name=stage_label)
+                tasks = _compute_tasks_from_shards(shards, stage, aux_per_shard, stage_name=stage_label)
                 logger.info("[%s] Starting stage %s with %d tasks", self._execution_id, stage_label, len(tasks))
                 self._start_stage(stage_label, tasks, is_last_stage=(stage_idx == last_worker_stage_idx))
 
@@ -1101,7 +1099,6 @@ class ZephyrCoordinator:
         self,
         operations: list[PhysicalOp],
         shard_refs: list[Shard],
-        hints: ExecutionHint,
         parent_stage_idx: int,
     ) -> list[dict[int, Shard]] | None:
         """Execute right sub-plans for join operations, returning aux refs per shard."""
@@ -1119,7 +1116,7 @@ class ZephyrCoordinator:
                     continue
 
                 join_stage_label = f"join-right-{parent_stage_idx}-{i}-stage{stage_idx}"
-                right_tasks = _compute_tasks_from_shards(right_refs, right_stage, hints, stage_name=join_stage_label)
+                right_tasks = _compute_tasks_from_shards(right_refs, right_stage, stage_name=join_stage_label)
                 self._start_stage(join_stage_label, right_tasks)
                 self._wait_for_stage()
                 raw = self._collect_results()
@@ -1464,7 +1461,6 @@ class _CoordinatorJobConfig:
 
     plan: PhysicalPlan
     execution_id: str
-    hints: ExecutionHint
     chunk_storage_prefix: str
     no_workers_timeout: float
     max_workers: int
@@ -1527,7 +1523,7 @@ def _run_coordinator_job(config: _CoordinatorJobConfig, result_path: str) -> Non
         coordinator.set_worker_group.remote(worker_group).result()
 
     try:
-        results = coordinator.run_pipeline.remote(config.plan, config.execution_id, config.hints).result()
+        results = coordinator.run_pipeline.remote(config.plan, config.execution_id).result()
 
         ensure_parent_dir(result_path)
         with open_url(result_path, "wb") as f:
@@ -1673,7 +1669,6 @@ class ZephyrContext:
     def execute(
         self,
         dataset: Dataset,
-        hints: ExecutionHint = ExecutionHint(),
         verbose: bool = False,
         dry_run: bool = False,
     ) -> Sequence:
@@ -1685,7 +1680,7 @@ class ZephyrContext:
         pipeline is retried up to ``max_execution_retries`` times.
         Application errors (``ZephyrWorkerError``) are never retried.
         """
-        plan = compute_plan(dataset, hints)
+        plan = compute_plan(dataset)
         if verbose or dry_run:
             _print_plan(dataset.operations, plan)
         if dry_run:
@@ -1711,7 +1706,6 @@ class ZephyrContext:
                 config = _CoordinatorJobConfig(
                     plan=plan,
                     execution_id=execution_id,
-                    hints=hints,
                     chunk_storage_prefix=self.chunk_storage_prefix,
                     no_workers_timeout=self.no_workers_timeout,
                     max_workers=self.max_workers,
@@ -1831,7 +1825,6 @@ def _build_source_shards(source_items: list[SourceItem]) -> list[Shard]:
 def _compute_tasks_from_shards(
     shard_refs: list[Shard],
     stage,
-    hints: ExecutionHint,
     aux_per_shard: list[dict[int, Shard]] | None = None,
     stage_name: str | None = None,
 ) -> list[ShardTask]:

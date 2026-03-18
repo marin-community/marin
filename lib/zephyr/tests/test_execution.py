@@ -641,7 +641,7 @@ def test_run_pipeline_rejects_concurrent_calls(actor_context, tmp_path):
     from unittest.mock import MagicMock
 
     from zephyr.execution import ZephyrCoordinator
-    from zephyr.plan import ExecutionHint, compute_plan
+    from zephyr.plan import compute_plan
 
     coord = ZephyrCoordinator()
     coord.initialize(str(tmp_path / "chunks"), MagicMock())
@@ -649,8 +649,6 @@ def test_run_pipeline_rejects_concurrent_calls(actor_context, tmp_path):
     gate = threading.Event()
     ds = Dataset.from_list([42]).map(lambda x: gate.wait(timeout=5) or x)
     plan = compute_plan(ds)
-    hints = ExecutionHint()
-
     # First call blocks because the map waits on `gate` (no workers to run it
     # anyway). We patch _wait_for_stage to signal when it's entered.
     first_entered = threading.Event()
@@ -667,13 +665,13 @@ def test_run_pipeline_rejects_concurrent_calls(actor_context, tmp_path):
 
     coord._wait_for_stage = blocking_wait
 
-    t = threading.Thread(target=lambda: coord.run_pipeline(plan, "exec-1", hints), daemon=True)
+    t = threading.Thread(target=lambda: coord.run_pipeline(plan, "exec-1"), daemon=True)
     t.start()
     first_entered.wait(timeout=5.0)
 
     # Second call should fail immediately
     with pytest.raises(RuntimeError, match="already running"):
-        coord.run_pipeline(plan, "exec-2", hints)
+        coord.run_pipeline(plan, "exec-2")
 
     t.join(timeout=10.0)
     coord.shutdown()

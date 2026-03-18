@@ -300,13 +300,6 @@ class PhysicalPlan:
         return len(self.source_items)
 
 
-@dataclass(frozen=True)
-class ExecutionHint:
-    """Hints for pipeline execution."""
-
-    pass
-
-
 @dataclass
 class FusionState:
     """Incremental state for fusing logical operations into physical stages."""
@@ -372,7 +365,7 @@ class FusionState:
         return self.stages
 
 
-def _fuse_operations(operations: list, hints: ExecutionHint | None = None) -> list[PhysicalStage]:
+def _fuse_operations(operations: list) -> list[PhysicalStage]:
     """Fuse logical operations into physical stages.
 
     Transforms logical ops into physical ops:
@@ -385,16 +378,12 @@ def _fuse_operations(operations: list, hints: ExecutionHint | None = None) -> li
 
     Args:
         operations: List of logical operations
-        hints: Execution hints (used for pre-computing join right plans)
 
     Returns:
         List of PhysicalStages with physical operations and execution metadata
     """
     if not operations:
         return []
-
-    if hints is None:
-        hints = ExecutionHint()
 
     state = FusionState()
 
@@ -437,7 +426,7 @@ def _fuse_operations(operations: list, hints: ExecutionHint | None = None) -> li
             state.end_stage()
 
         elif isinstance(op, JoinOp):
-            right_plan = compute_plan(op.right_dataset, hints)
+            right_plan = compute_plan(op.right_dataset)
             state.add_op(
                 Join(
                     fn=compose_join(op.left_key_fn, op.right_key_fn, op.combiner_fn, op.join_type),
@@ -508,7 +497,7 @@ def _compute_file_pushdown(
     return source_items, final_ops
 
 
-def compute_plan(dataset: Dataset, hints: ExecutionHint = ExecutionHint()) -> PhysicalPlan:
+def compute_plan(dataset: Dataset) -> PhysicalPlan:
     """Compute physical execution plan from logical dataset."""
     operations = list(dataset.operations)
 
@@ -522,7 +511,7 @@ def compute_plan(dataset: Dataset, hints: ExecutionHint = ExecutionHint()) -> Ph
         source_list = list(dataset.source)
         source_items = [SourceItem(shard_idx=i, data=item) for i, item in enumerate(source_list)]
 
-    stages = _fuse_operations(operations, hints)
+    stages = _fuse_operations(operations)
     return PhysicalPlan(source_items=source_items, stages=stages)
 
 
