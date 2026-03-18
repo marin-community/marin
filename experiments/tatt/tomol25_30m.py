@@ -7,7 +7,9 @@ Trains to 1B tokens on v5p-8 with AdamH.
 
 Run with Iris::
 
-    uv run iris --config lib/iris/examples/marin.yaml job run --extra marin:tpu --tpu v5p-8 -- python experiments/tatt/tomol25_30m.py
+    uv run iris --config lib/iris/examples/marin.yaml job run \
+        --extra marin:tpu --tpu v5p-8 -- \
+        python experiments/tatt/tomol25_30m.py
 """
 
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig

@@ -7,7 +7,9 @@ Trains to 1B tokens on v5p-8 with AdamH. Dataset is already tokenized (vocab_siz
 
 Run with Iris::
 
-    uv run iris --config lib/iris/examples/marin.yaml job run --extra marin:tpu --tpu v5p-8 -- python experiments/tatt/om4_patch_docs_30m.py
+    uv run iris --config lib/iris/examples/marin.yaml job run \
+        --extra marin:tpu --tpu v5p-8 -- \
+        python experiments/tatt/om4_patch_docs_30m.py
 """
 
 from levanter.data.text import PrebuiltLmDatasetFormat
