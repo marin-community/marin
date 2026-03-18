@@ -200,8 +200,14 @@ def build_eval_data_config(
     w_visual: float | None = 1.0,
     eval_benchmarks: list[str] | None = None,
     text_eval_benchmarks: list[str] | None = None,
+    ablation_only: bool = False,
 ) -> LmDataConfig:
-    """Build eval-only data config with no Marin pipeline dependencies."""
+    """Build eval-only data config with no Marin pipeline dependencies.
+
+    If ablation_only=True, only include the 4 ablation metrics:
+      val_understanding_text_only, val_generation_visual_only,
+      val_understanding_wo_visual, val_generation_wo_language.
+    """
     w_visual_transform = _make_visual_weight_transform(w_visual) if w_visual is not None else None
 
     # Validation formats
@@ -222,22 +228,23 @@ def build_eval_data_config(
     components: dict[str, DatasetComponent] = {}
     weights: dict[str, float] = {}
 
-    # --- Multimodal validation ---
-    components["val_understanding"] = DatasetComponent(
-        cache_dir=und_val_cache,
-        format=und_val_format,
-        pack=True,
-        tags=["multimodal", "understanding"],
-    )
-    weights["val_understanding"] = 0.0
+    if not ablation_only:
+        # --- Multimodal validation ---
+        components["val_understanding"] = DatasetComponent(
+            cache_dir=und_val_cache,
+            format=und_val_format,
+            pack=True,
+            tags=["multimodal", "understanding"],
+        )
+        weights["val_understanding"] = 0.0
 
-    components["val_generation"] = DatasetComponent(
-        cache_dir=gen_val_cache,
-        format=gen_val_format,
-        pack=True,
-        tags=["multimodal", "generation"],
-    )
-    weights["val_generation"] = 0.0
+        components["val_generation"] = DatasetComponent(
+            cache_dir=gen_val_cache,
+            format=gen_val_format,
+            pack=True,
+            tags=["multimodal", "generation"],
+        )
+        weights["val_generation"] = 0.0
 
     # --- Per-modality breakdown ---
     components["val_understanding_text_only"] = DatasetComponent(
@@ -250,29 +257,33 @@ def build_eval_data_config(
         pack=True,
         tags=["multimodal", "understanding"],
     )
-    components["val_understanding_visual_only"] = DatasetComponent(
-        cache_dir=und_val_cache,
-        format=PrebuiltLmDatasetFormat(
-            input_ids_key="input_ids",
-            loss_weights_key="loss_weights",
-            loss_weight_transform=_only_fractional_transform,
-        ),
-        pack=True,
-        tags=["multimodal", "understanding"],
-    )
     weights["val_understanding_text_only"] = 0.0
-    weights["val_understanding_visual_only"] = 0.0
 
-    components["val_generation_text_only"] = DatasetComponent(
-        cache_dir=gen_val_cache,
-        format=PrebuiltLmDatasetFormat(
-            input_ids_key="input_ids",
-            loss_weights_key="loss_weights",
-            loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, _zero_fractional_transform),
-        ),
-        pack=True,
-        tags=["multimodal", "generation"],
-    )
+    if not ablation_only:
+        components["val_understanding_visual_only"] = DatasetComponent(
+            cache_dir=und_val_cache,
+            format=PrebuiltLmDatasetFormat(
+                input_ids_key="input_ids",
+                loss_weights_key="loss_weights",
+                loss_weight_transform=_only_fractional_transform,
+            ),
+            pack=True,
+            tags=["multimodal", "understanding"],
+        )
+        weights["val_understanding_visual_only"] = 0.0
+
+        components["val_generation_text_only"] = DatasetComponent(
+            cache_dir=gen_val_cache,
+            format=PrebuiltLmDatasetFormat(
+                input_ids_key="input_ids",
+                loss_weights_key="loss_weights",
+                loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, _zero_fractional_transform),
+            ),
+            pack=True,
+            tags=["multimodal", "generation"],
+        )
+        weights["val_generation_text_only"] = 0.0
+
     components["val_generation_visual_only"] = DatasetComponent(
         cache_dir=gen_val_cache,
         format=PrebuiltLmDatasetFormat(
@@ -283,7 +294,6 @@ def build_eval_data_config(
         pack=True,
         tags=["multimodal", "generation"],
     )
-    weights["val_generation_text_only"] = 0.0
     weights["val_generation_visual_only"] = 0.0
 
     # --- Ablation val: wo_visual / wo_language ---
@@ -467,9 +477,15 @@ def main():
         action="store_true",
         help="Only compute val_understanding/val_generation and their breakdowns (skip all eval benchmarks)",
     )
+    parser.add_argument(
+        "--ablation_only",
+        action="store_true",
+        help="Only compute 4 ablation metrics: val_understanding_text_only, val_generation_visual_only, "
+        "val_understanding_wo_visual, val_generation_wo_language",
+    )
     args = parser.parse_args()
 
-    if args.val_only:
+    if args.val_only or args.ablation_only:
         args.no_eval_benchmarks = True
         args.no_text_eval_benchmarks = True
 
@@ -559,6 +575,7 @@ def main():
         w_visual=args.w_visual,
         eval_benchmarks=eval_benchmarks,
         text_eval_benchmarks=text_eval_benchmarks,
+        ablation_only=args.ablation_only,
     )
 
     Pos = model_config.max_Pos
