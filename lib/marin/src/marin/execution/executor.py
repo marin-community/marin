@@ -96,8 +96,15 @@ from urllib.parse import urlparse
 
 import draccus
 import levanter.utils.fsspec_utils as fsspec_utils
-from iris.marin_fs import open_url
+from fray.v2.client import current_client
+from fray.v2.iris_backend import FrayIrisClient
+from iris.cluster.client.job_info import get_job_info
+from iris.marin_fs import MARIN_CROSS_REGION_OVERRIDE_ENV
+from iris.marin_fs import collect_gcs_paths
+from iris.marin_fs import get_bucket_location, open_url
 from iris.marin_fs import marin_prefix
+from iris.marin_fs import region_from_prefix
+from iris.marin_fs import split_gcs_path
 
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_runner import StepRunner, worker_id
@@ -152,6 +159,138 @@ T_co = TypeVar("T_co", covariant=True)
 ExecutorFunction = Callable | None
 
 
+_MULTI_REGION_BUCKET_LOCATIONS = {"us", "eu", "asia"}
+
+
+def _normalize_region(region: str, *, step_name: str, path: str) -> str:
+    normalized = region.lower()
+    if normalized in _MULTI_REGION_BUCKET_LOCATIONS:
+        raise ValueError(
+            f"Executor step {step_name!r} references {path!r} in a multi-region bucket "
+            f"({normalized!r}); cannot infer a single region pin."
+        )
+    return normalized
+
+
+def _region_for_gcs_path(path: str, *, step_name: str, bucket_region_cache: dict[str, str]) -> str:
+    region = region_from_prefix(path)
+    if region is not None:
+        return _normalize_region(region, step_name=step_name, path=path)
+
+    bucket, _ = split_gcs_path(path)
+    if bucket not in bucket_region_cache:
+        bucket_region_cache[bucket] = get_bucket_location(path)
+    return _normalize_region(bucket_region_cache[bucket], step_name=step_name, path=path)
+
+
+def _infer_gcs_regions(
+    *,
+    step_name: str,
+    config: Any,
+    output_path: str,
+    deps: list[StepSpec] | None,
+) -> list[str] | None:
+    """Return inferred GCS regions referenced by config/deps/output, or None if no GCS paths."""
+    # label -> path evidence for useful error messages
+    path_to_labels: dict[str, list[str]] = {}
+
+    def add_path(label: str, path: str):
+        path_to_labels.setdefault(path, []).append(label)
+
+    for label, path in collect_gcs_paths(config, path_prefix="config"):
+        add_path(label, path)
+
+    for i, dep in enumerate(deps or []):
+        dep_path = dep.output_path
+        if dep_path.startswith("gs://"):
+            add_path(f"dependency[{i}]", dep_path)
+
+    if output_path.startswith("gs://"):
+        add_path("output_path", output_path)
+
+    if not path_to_labels:
+        return None
+
+    bucket_region_cache: dict[str, str] = {}
+    region_to_evidence: dict[str, list[str]] = {}
+    for path, labels in path_to_labels.items():
+        region = _region_for_gcs_path(path, step_name=step_name, bucket_region_cache=bucket_region_cache)
+        region_to_evidence.setdefault(region, []).extend(f"{label}={path}" for label in labels)
+
+    if len(region_to_evidence) > 1:
+        regions = sorted(region_to_evidence)
+        if os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
+            logger.warning(
+                "Cross-region GCS dependencies for step %s allowed by %s: %s",
+                step_name,
+                MARIN_CROSS_REGION_OVERRIDE_ENV,
+                regions,
+            )
+            return regions
+
+        detail = "; ".join(
+            f"{region}: {', '.join(sorted(evidence)[:3])}" for region, evidence in sorted(region_to_evidence.items())
+        )
+        raise ValueError(
+            f"Executor step {step_name!r} has cross-region GCS dependencies. "
+            f"Found regions {{{', '.join(sorted(region_to_evidence))}}}. {detail}"
+        )
+
+    return [next(iter(region_to_evidence))]
+
+
+def _iris_backend_is_active() -> bool:
+    try:
+        client = current_client()
+    except Exception:
+        return False
+    return isinstance(client, FrayIrisClient)
+
+
+def _iris_worker_region_pin() -> str | None:
+    job_info = get_job_info()
+    if job_info is None:
+        return None
+    return job_info.worker_region
+
+
+def _maybe_attach_inferred_region_constraint(
+    *,
+    step_name: str,
+    remote_fn: RemoteCallable,
+    config: Any,
+    output_path: str,
+    deps: list[StepSpec] | None,
+) -> RemoteCallable:
+    if remote_fn.resources.regions:
+        return remote_fn
+
+    if not _iris_backend_is_active():
+        return remote_fn
+
+    if _iris_worker_region_pin() is not None:
+        return remote_fn
+
+    inferred_regions = _infer_gcs_regions(
+        step_name=step_name,
+        config=config,
+        output_path=output_path,
+        deps=deps,
+    )
+    if inferred_regions is None:
+        return remote_fn
+
+    logger.info(
+        "Inferred Iris region constraints %s for executor step %s from GCS path dependencies",
+        inferred_regions,
+        step_name,
+    )
+    return dataclasses.replace(
+        remote_fn,
+        resources=dataclasses.replace(remote_fn.resources, regions=inferred_regions),
+    )
+
+
 def asdict_without_description(obj: dataclass) -> dict[str, Any]:
     """Return the dict form of a dataclass, but remove the `description` field."""
 
@@ -189,14 +328,22 @@ def resolve_executor_step(
     """
     import ray
 
-    step_fn = step.fn
-    if isinstance(step_fn, RemoteCallable):
-        step_fn = step_fn.fn
+    remote_callable = step.fn if isinstance(step.fn, RemoteCallable) else None
+    if remote_callable is not None:
+        remote_callable = _maybe_attach_inferred_region_constraint(
+            step_name=step.name,
+            remote_fn=remote_callable,
+            config=config,
+            output_path=output_path,
+            deps=deps,
+        )
+
+    step_fn = remote_callable.fn if remote_callable is not None else step.fn
     if isinstance(step_fn, ray.remote_function.RemoteFunction):
-        remote_fn = step_fn
+        ray_remote_fn = step_fn
 
         def step_fn(*args, **kw):
-            return ray.get(remote_fn.remote(*args, **kw))
+            return ray.get(ray_remote_fn.remote(*args, **kw))
 
     assert step_fn is not None, f"Step {step.name} has no callable"
 
@@ -213,8 +360,8 @@ def resolve_executor_step(
     # RemoteCallable wrapper (with updated inner fn) so Fray dispatch
     # is preserved.  Plain functions run locally in-thread.
     final_fn: Callable = resolved_fn
-    if isinstance(step.fn, RemoteCallable):
-        final_fn = dataclasses.replace(step.fn, fn=resolved_fn)
+    if remote_callable is not None:
+        final_fn = dataclasses.replace(remote_callable, fn=resolved_fn)
 
     return StepSpec(
         name=step.name,

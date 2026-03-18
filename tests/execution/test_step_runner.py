@@ -3,12 +3,13 @@
 
 import json
 import os
-from pathlib import Path
-
 from dataclasses import dataclass
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fray.v2.types import ResourceConfig
+from iris.marin_fs import MARIN_CROSS_REGION_OVERRIDE_ENV
 
 from marin.execution.artifact import Artifact, PathMetadata
 from marin.execution.executor import ExecutorStep, resolve_executor_step
@@ -438,6 +439,107 @@ def test_remote_decorator_resources_are_preserved():
 
     assert isinstance(resolved.fn, RemoteCallable)
     assert resolved.fn.resources == custom
+
+
+def test_resolve_executor_step_infers_region_for_iris_without_pin():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"input_path": "gs://marin-us-central2/data/input"},
+            output_path="/out/test-abc",
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions == ["us-central2"]
+
+
+def test_resolve_executor_step_infers_region_from_dependencies():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    dep = StepSpec(name="dep", override_output_path="gs://marin-us-east1/dependency/output")
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"local_only": "/tmp/foo"},
+            output_path="/out/test-abc",
+            deps=[dep],
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions == ["us-east1"]
+
+
+def test_resolve_executor_step_skips_inference_when_iris_already_pinned():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value="us-central2"),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"input_path": "gs://marin-us-east5/data/input"},
+            output_path="/out/test-abc",
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions is None
+
+
+def test_resolve_executor_step_raises_on_cross_region_inputs_without_pin():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        with pytest.raises(ValueError, match="cross-region GCS dependencies"):
+            resolve_executor_step(
+                step,
+                config={"input_path": "gs://marin-us-central2/data/input"},
+                output_path="gs://marin-us-east1/data/output",
+            )
+
+
+def test_resolve_executor_step_allows_cross_region_with_override_env(monkeypatch):
+    @remote
+    def my_fn(config):
+        pass
+
+    monkeypatch.setenv(MARIN_CROSS_REGION_OVERRIDE_ENV, "1")
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"input_path": "gs://marin-us-central2/data/input"},
+            output_path="gs://marin-us-east1/data/output",
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions == ["us-central2", "us-east1"]
 
 
 def test_step_without_remote_is_plain_fn():
