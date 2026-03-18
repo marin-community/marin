@@ -1,0 +1,72 @@
+# JAX DeepEP `w13` Optimization: Research Logbook
+
+## Scope
+- Goal: reduce the JAX `w13` local expert path on the authoritative exact-cap H100x8 cell and determine how much of that win survives into `local_compute_only`, `deepep_transport_capped_prewarmed`, and `current`.
+- Primary metric(s): `time_s` / `tokens_per_s` for `deepep_transport_w13_only_probe`, `deepep_transport_local_compute_only_probe`, `deepep_transport_capped_prewarmed`, and `current`; profile deltas for the dominant `w13` kernels when needed.
+- Constraints:
+  - start from sealed root-cause evidence in #3752 / tag `moe-jax-megatron-gap-root-cause-seal-20260318`
+  - treat gate, early transport, capped warmup, isolated collapse, isolated combine, and `w2`-first as ruled down unless new evidence forces a reopen
+  - keep the first tranche stage-gated inside `w13`, not a broad rewrite
+  - commit and push any benchmark-code change before launching remote pods
+  - post to the GitHub issue only for major milestones / discoveries
+- GitHub issue: https://github.com/marin-community/marin/issues/3821
+- Prior sealed issue: https://github.com/marin-community/marin/issues/3752
+- Experiment ID prefix: `W13-OPT`
+
+## Baseline
+- Date: 2026-03-18
+- Code refs:
+  - `lib/levanter/scripts/bench/bench_moe_hillclimb.py`
+  - `lib/levanter/src/levanter/grug/grug_moe.py`
+  - `.agents/scripts/deepep_jax_krt_bench.py`
+- Fixed baseline case:
+  - hardware: H100x8 on CoreWeave
+  - `tokens=262144`
+  - `topk=2`
+  - `bench_pass=forward`
+  - `ep=8`
+  - `distribution=random`
+  - `shared_expert_dim=0`
+  - `warmup=5`
+  - `iters=20`
+- Sealed baseline numbers carried forward from #3752:
+  - `deepep_transport_w13_only_probe`: `26,051,875.76 tok/s` (`10.062 ms`)
+  - `deepep_transport_local_compute_only_probe`: `15,625,801.24 tok/s` (`16.776 ms`)
+  - `deepep_transport_capped_prewarmed`: `12,085,257.93 tok/s` (`21.691 ms`)
+  - `current`: `10,186,545.45 tok/s` (`25.735 ms`)
+  - matched Megatron exact-cap forward: `33,094,416.78 tok/s` (`7.921 ms`)
+- Trustworthy sealed facts:
+  - `w13_only` is already slower than full matched Megatron exact-cap forward on the authoritative cell.
+  - `w13_only + w2_only` almost reconstructs `local_compute_only`.
+  - the pure `w13_only` profile is dominated by `nvjet_tst_192x192_64x3_2x1_v_bz_coopB_NNN` plus `loop_transpose_fusion`.
+  - the four `gpt5p4_pro_next_*` reviews agree on `w13`-first ordering, but treat `layout/transpose first` as a hypothesis to test, not a settled sub-root-cause.
+- Initial stop / pivot criteria:
+  - stop the first micro-branch once one `w13`-targeted change produces a replicated `w13_only` win that propagates into `local_compute_only` and `deepep_transport_capped_prewarmed`.
+  - pivot away from `transpose/layout first` if two plausible `w13` sub-branches fail to move `w13_only` materially, or if `w13_only` moves but `deepep_transport_capped_prewarmed` does not.
+- First experiment matrix:
+  - `W13-OPT-002`: inspect the current `w13` implementation and existing `w13only-262144` / `localcompute-262144` profile summaries to choose one narrow `w13` candidate.
+  - `W13-OPT-003`: if the first candidate is a layout/materialization change, validate in order: `w13_only`, `local_compute_only`, `capped_prewarmed`, then `current` only if warranted.
+  - `W13-OPT-004`: if the first layout/materialization candidate does not move `w13_only`, pivot to a `ragged_dot` lowering / kernel-path hypothesis rather than iterating broadly on layout.
+
+## Experiment Log
+### 2026-03-18 16:05 UTC - Kickoff from the sealed root-cause state
+- Experiment ID: `W13-OPT-001`
+- Hypothesis:
+  - the highest-information next tranche is a narrow `w13` optimization loop on the authoritative `262144` exact-cap cell, with `w13_only` as the first post-change acceptance gate.
+- Command:
+  - admin/scaffolding only; no new benchmark command yet
+- Config:
+  - worktree: `/home/ubuntu/dev/marin-wt/moe-jax-megatron-gap-root-cause`
+  - branch: `research/moe-jax-deepep-w13-optimization`
+  - starting commit: `c258e9fca2f94ec03a6ec1611d033bb513707bfc`
+  - sealed tag at start: `moe-jax-megatron-gap-root-cause-seal-20260318`
+  - GitHub issue: `#3821`
+- Result:
+  - verified the local branch/worktree state matches the handoff: `HEAD` is the sealed commit and the untracked files are the expected research artifacts, not stray benchmark changes.
+  - read the handoff, the sealed logbook, the sealed issue, the plan-strength brief, the four `gpt5p4_pro_next_*` reviews, the earlier Pro answer batches, and the cautionary negative-result issue `#3665`.
+  - created a fresh experiment branch and a fresh GitHub issue rather than continuing the sealed root-cause issue.
+- Interpretation:
+  - the branch choice is already solved by sealed evidence: `w13` first is high-confidence.
+  - the first inner-loop choice is still open: `layout/transpose first` is plausible, but it needs a stage-local `w13_only` win before assuming it is the right micro-branch.
+- Next action:
+  - inspect the exact `w13` code path and baseline profile artifacts, choose one narrow candidate change, and only then run the required validation ladder on the authoritative cell.
