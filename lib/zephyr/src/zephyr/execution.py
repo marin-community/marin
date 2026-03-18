@@ -40,7 +40,7 @@ from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfi
 from fray.v2.client import JobHandle
 from fray.v2.types import Entrypoint, JobRequest
 from iris.marin_fs import marin_temp_bucket
-from iris.time_utils import ExponentialBackoff
+from iris.time_utils import ExponentialBackoff, log_time
 
 from zephyr.dataset import Dataset
 from zephyr.plan import (
@@ -295,11 +295,12 @@ def _segment_path(base_path: str, seg_idx: int) -> str:
 def _apply_combiner(buffer: list, key_fn: Callable, combiner_fn: Callable) -> list:
     """Apply combiner to a buffer, grouping by key and reducing locally."""
     by_key: dict[object, list] = defaultdict(list)
-    for item in buffer:
-        by_key[key_fn(item)].append(item)
-    combined: list = []
-    for key, items in by_key.items():
-        combined.extend(combiner_fn(key, iter(items)))
+    with log_time(f"Applying combiner to buffer of size {len(buffer)}", level=logging.DEBUG):
+        for item in buffer:
+            by_key[key_fn(item)].append(item)
+        combined: list = []
+        for key, items in by_key.items():
+            combined.extend(combiner_fn(key, iter(items)))
     return combined
 
 
@@ -325,8 +326,9 @@ def _write_scatter_meta(
             "is_pickled": is_pickled,
         }
     )
-    with open_url(meta_path, "w") as f:
-        f.write(payload)
+    with log_time(f"Writing scatter meta for {parquet_path} to {meta_path}", level=logging.DEBUG):
+        with open_url(meta_path, "w") as f:
+            f.write(payload)
 
 
 # Per-worker cache for scatter sidecar metadata (populated on first read, shared across tasks)
@@ -345,22 +347,23 @@ def _read_scatter_meta(parquet_path: str) -> dict:
 def _build_scatter_shard(paths: list[str], target_shard: int) -> ScatterShard:
     """Build a ScatterShard for one target shard from scatter file paths + sidecars."""
     iterators: list[ScatterParquetIterator] = []
-    for path in paths:
-        meta = _read_scatter_meta(path)
-        count = meta["chunk_counts"].get(str(target_shard), 0)
-        if count == 0:
-            continue
-        offset = meta["chunk_offsets"].get(str(target_shard), 0)
-        is_pickled = meta["is_pickled"]
-        iterators.append(
-            ScatterParquetIterator(
-                path=path,
-                shard_idx=target_shard,
-                chunk_count=count,
-                chunk_offset=offset,
-                is_pickled=is_pickled,
+    with log_time(f"Building ScatterShard for target shard {target_shard} from {len(paths)} files"):
+        for path in paths:
+            meta = _read_scatter_meta(path)
+            count = meta["chunk_counts"].get(str(target_shard), 0)
+            if count == 0:
+                continue
+            offset = meta["chunk_offsets"].get(str(target_shard), 0)
+            is_pickled = meta["is_pickled"]
+            iterators.append(
+                ScatterParquetIterator(
+                    path=path,
+                    shard_idx=target_shard,
+                    chunk_count=count,
+                    chunk_offset=offset,
+                    is_pickled=is_pickled,
+                )
             )
-        )
     return ScatterShard(iterators=iterators)
 
 
@@ -482,11 +485,13 @@ def _write_parquet_scatter(
             buffers[target] = []
 
     # Flush remaining buffers
-    for target, buf in sorted(buffers.items()):
-        if buf:
-            _write_buffer(target, buf)
+    with log_time(f"Flushing remaining buffers for {parquet_path}"):
+        for target, buf in sorted(buffers.items()):
+            if buf:
+                _write_buffer(target, buf)
 
-    _flush_pending()
+        _flush_pending()
+
     if writer is not None:
         writer.close()
 
@@ -494,12 +499,13 @@ def _write_parquet_scatter(
     # chunk_offsets track where each segment's chunks start in the global
     # chunk_idx space (cumulative across segments from this source shard).
     cumulative_offsets: dict[int, int] = defaultdict(int)
-    for i, path in enumerate(seg_paths):
-        counts = dict(seg_shard_counts.get(i, {}))
-        offsets = {shard: cumulative_offsets[shard] for shard in counts}
-        _write_scatter_meta(path, counts, offsets, pickled)
-        for shard, count in counts.items():
-            cumulative_offsets[shard] += count
+    with log_time(f"Writing scatter meta for {parquet_path}"):
+        for i, path in enumerate(seg_paths):
+            counts = dict(seg_shard_counts.get(i, {}))
+            offsets = {shard: cumulative_offsets[shard] for shard in counts}
+            _write_scatter_meta(path, counts, offsets, pickled)
+            for shard, count in counts.items():
+                cumulative_offsets[shard] += count
 
     return ListShard(refs=[MemChunk(items=seg_paths)])
 
