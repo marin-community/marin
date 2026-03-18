@@ -107,6 +107,26 @@ def _make_modality_segment_ids(input_ids: np.ndarray) -> np.ndarray:
     return np.clip(is_visual + is_sentinel, 0, 1)
 
 
+def _replace_visual_with_eos(input_ids: np.ndarray) -> np.ndarray:
+    result = input_ids.copy()
+    visual_mask = (result >= VISUAL_TOKEN_OFFSET) | (result == VISION_START_ID) | (result == VISION_END_ID)
+    result[visual_mask] = ENDOFTEXT_ID
+    return result
+
+
+def _replace_text_with_eos(input_ids: np.ndarray) -> np.ndarray:
+    result = input_ids.copy()
+    text_mask = (
+        (result > 0)
+        & (result < VISUAL_TOKEN_OFFSET)
+        & (result != VISION_START_ID)
+        & (result != VISION_END_ID)
+        & (result != ENDOFTEXT_ID)
+    )
+    result[text_mask] = ENDOFTEXT_ID
+    return result
+
+
 ALL_MODES = [
     "",
     "mask_und_visual",
@@ -115,6 +135,8 @@ ALL_MODES = [
     "mask_gen_text",
     "isolate_und_attn",
     "isolate_gen_attn",
+    "und_text_only",
+    "gen_visual_only",
 ]
 
 MODE_DESCRIPTIONS = {
@@ -125,17 +147,21 @@ MODE_DESCRIPTIONS = {
     "mask_gen_text": "generation: mask text loss → visual only",
     "isolate_und_attn": "understanding: isolate modality attention",
     "isolate_gen_attn": "generation: isolate modality attention",
+    "und_text_only": "understanding: replace visual with EOS, text loss only",
+    "gen_visual_only": "generation: replace text with EOS, visual loss only",
 }
 
 
 def _get_transforms(mode: str, w_visual: float):
-    """Return (und_loss_transform, gen_loss_transform, und_seg_transform, gen_seg_transform)."""
+    """Return (und_loss_transform, gen_loss_transform, und_seg_transform, gen_seg_transform, und_ids_transform, gen_ids_transform)."""
     w_visual_transform = _make_visual_weight_transform(w_visual)
 
     und_ablation = None
     gen_ablation = None
     und_seg = None
     gen_seg = None
+    und_ids = None
+    gen_ids = None
 
     if mode == "mask_und_visual":
         und_ablation = _zero_fractional_transform
@@ -149,11 +175,17 @@ def _get_transforms(mode: str, w_visual: float):
         und_seg = _make_modality_segment_ids
     elif mode == "isolate_gen_attn":
         gen_seg = _make_modality_segment_ids
+    elif mode == "und_text_only":
+        und_ablation = _zero_fractional_transform
+        und_ids = _replace_visual_with_eos
+    elif mode == "gen_visual_only":
+        gen_ablation = _only_fractional_transform
+        gen_ids = _replace_text_with_eos
 
     und_transform = _compose_transforms(und_ablation, w_visual_transform)
     gen_transform = _compose_transforms(_swap_primary_secondary_transform, gen_ablation, w_visual_transform)
 
-    return und_transform, gen_transform, und_seg, gen_seg
+    return und_transform, gen_transform, und_seg, gen_seg, und_ids, gen_ids
 
 
 def _classify_tokens(ids: np.ndarray):
@@ -302,7 +334,7 @@ def _print_attention_snippet(ids: np.ndarray, segment_ids: np.ndarray, window: i
 
 def inspect_mode(mode: str, und_records: list, gen_records: list, tok, w_visual: float):
     """Inspect a single ablation mode on the given records."""
-    und_transform, gen_transform, und_seg, gen_seg = _get_transforms(mode, w_visual)
+    und_transform, gen_transform, und_seg, gen_seg, und_ids, gen_ids = _get_transforms(mode, w_visual)
 
     print(f"\n{'=' * 70}")
     print(f"Mode: {mode or '(baseline)'} — {MODE_DESCRIPTIONS[mode]}")
@@ -312,6 +344,8 @@ def inspect_mode(mode: str, und_records: list, gen_records: list, tok, w_visual:
     print(f"\n  --- Understanding cache ({len(und_records)} records) ---")
     for i, record in enumerate(und_records):
         ids = record["input_ids"]
+        if und_ids is not None:
+            ids = und_ids(ids)
         raw_w = record["loss_weights"]
         tfm_w = und_transform(raw_w.copy()) if und_transform else raw_w.copy()
         seg = und_seg(ids) if und_seg else None
@@ -321,6 +355,8 @@ def inspect_mode(mode: str, und_records: list, gen_records: list, tok, w_visual:
     print(f"\n  --- Generation cache ({len(gen_records)} records) ---")
     for i, record in enumerate(gen_records):
         ids = record["input_ids"]
+        if gen_ids is not None:
+            ids = gen_ids(ids)
         raw_w = record["loss_weights"]
         tfm_w = gen_transform(raw_w.copy()) if gen_transform else raw_w.copy()
         seg = gen_seg(ids) if gen_seg else None

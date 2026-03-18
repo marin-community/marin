@@ -114,6 +114,8 @@ VALID_ABLATION_MODES = {
     "mask_gen_text",
     "isolate_und_attn",
     "isolate_gen_attn",
+    "und_text_only",
+    "gen_visual_only",
 }
 
 
@@ -333,7 +335,8 @@ def unified_data_config(
         text_eval_cache_path: GCS path to text eval benchmark Levanter caches.
         ablation_mode: Ablation mode for modality masking or attention isolation.
             One of: "", "mask_und_visual", "mask_und_text", "mask_gen_visual",
-            "mask_gen_text", "isolate_und_attn", "isolate_gen_attn".
+            "mask_gen_text", "isolate_und_attn", "isolate_gen_attn",
+            "und_text_only", "gen_visual_only".
     """
     if ablation_mode and ablation_mode not in VALID_ABLATION_MODES:
         raise ValueError(f"Unknown ablation_mode={ablation_mode!r}. Valid: {VALID_ABLATION_MODES}")
@@ -369,6 +372,8 @@ def unified_data_config(
     gen_ablation: Callable[[np.ndarray], np.ndarray] | None = None
     und_seg_transform: Callable[[np.ndarray], np.ndarray] | None = None
     gen_seg_transform: Callable[[np.ndarray], np.ndarray] | None = None
+    und_input_ids_transform: Callable[[np.ndarray], np.ndarray] | None = None
+    gen_input_ids_transform: Callable[[np.ndarray], np.ndarray] | None = None
 
     if ablation_mode == "mask_und_visual":
         und_ablation = _zero_fractional_transform
@@ -382,6 +387,12 @@ def unified_data_config(
         und_seg_transform = _make_modality_segment_ids
     elif ablation_mode == "isolate_gen_attn":
         gen_seg_transform = _make_modality_segment_ids
+    elif ablation_mode == "und_text_only":
+        und_ablation = _zero_fractional_transform
+        und_input_ids_transform = _replace_visual_with_eos
+    elif ablation_mode == "gen_visual_only":
+        gen_ablation = _only_fractional_transform
+        gen_input_ids_transform = _replace_text_with_eos
 
     # Compose transforms: ablation runs before w_visual (ablation needs to distinguish
     # fractional vs 1.0; w_visual replaces fractional values, destroying that signal).
@@ -391,12 +402,14 @@ def unified_data_config(
         loss_weights_key="loss_weights",
         loss_weight_transform=_compose_transforms(und_ablation, w_visual_transform),
         segment_ids_transform=und_seg_transform,
+        input_ids_transform=und_input_ids_transform,
     )
     gen_format = PrebuiltLmDatasetFormat(
         input_ids_key="input_ids",
         loss_weights_key="loss_weights",
         loss_weight_transform=_compose_transforms(_swap_primary_secondary_transform, gen_ablation, w_visual_transform),
         segment_ids_transform=gen_seg_transform,
+        input_ids_transform=gen_input_ids_transform,
     )
 
     components = {

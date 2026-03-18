@@ -57,7 +57,7 @@ import json
 import logging
 import os
 import re
-from typing import Callable
+from collections.abc import Callable
 
 import equinox as eqx
 import fsspec
