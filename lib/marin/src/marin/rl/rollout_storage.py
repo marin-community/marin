@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Queues for communicating rollout information between inference and training workers.
@@ -52,6 +41,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 import fsspec
+from iris.marin_fs import filesystem as marin_filesystem
 
 from .types import RolloutBatch
 
@@ -174,7 +164,7 @@ class FileRolloutReader(RolloutReader):
 
         # Create filesystem instance
         storage_options = fsspec.utils.infer_storage_options(path)  # type: ignore[attr-defined]
-        self.fs = fsspec.filesystem(storage_options["protocol"] or "file")
+        self.fs = marin_filesystem(storage_options["protocol"] or "file")
 
         # Track already-read files to avoid re-reading
         self._read_files: set[str] = set()
@@ -268,7 +258,7 @@ class FileRolloutWriter(RolloutWriter):
 
         # Create filesystem instance
         storage_options = fsspec.utils.infer_storage_options(path)  # type: ignore[attr-defined]
-        self.fs = fsspec.filesystem(storage_options["protocol"] or "file")
+        self.fs = marin_filesystem(storage_options["protocol"] or "file")
 
         # Create output directory structure
         self._ensure_directories()

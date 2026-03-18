@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Exp2166: Scaling Ladder Analysis for Nemotron.
 
@@ -43,11 +32,11 @@ from levanter.utils.mesh import MeshConfig
 from experiments.defaults import default_validation_sets
 from experiments.isoflop_sweep import (
     IsoFlopAnalysisConfig,
-    MARIN_2025_RECIPE,
     MARIN_SCALING_SUITES,
     nemotron_mix,
     run_isoflop_analysis_step,
 )
+from experiments.scaling_law_sweeps.c_adamc import c_adamc_heuristic
 from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.tokenize import step_to_lm_mixture_component
@@ -114,7 +103,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
         scaling_fits=scaling_fits,
         target_flops=config.target_budget,
         label=config.label,
-        recipe=MARIN_2025_RECIPE,
+        heuristic=c_adamc_heuristic,
         seq_len=SEQ_LEN,
     )
 
@@ -123,8 +112,8 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
             f"Could not find optimal config for budget {config.target_budget:.2e} and label '{config.label}'"
         )
 
-    params = candidate.model_config.total_trainable_params(MARIN_2025_RECIPE.vocab_size)
-    estimated_memory = MARIN_2025_RECIPE.estimate_memory_bytes(candidate)
+    params = candidate.model_config.total_trainable_params(c_adamc_heuristic.vocab_size)
+    estimated_memory = c_adamc_heuristic.estimate_memory_bytes(candidate)
 
     # Compute TPU type and gradient accumulation settings
     max_cores = int(MAX_TPU_TYPE.split("-")[1])
@@ -239,7 +228,6 @@ analysis_step = ExecutorStep(
     config=IsoFlopAnalysisConfig(
         training_runs=[r.as_input_name() for r in nemotron_training],
         output_path=this_output_path(),
-        recipe=MARIN_2025_RECIPE,
     ),
 )
 

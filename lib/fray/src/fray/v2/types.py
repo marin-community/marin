@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Type definitions for fray v2.
 
@@ -251,6 +240,9 @@ class CpuConfig:
     def device_flops(self, dtype: str = "bf16") -> float:
         raise NotImplementedError("CPU FLOPS not available")
 
+    def default_env_vars(self) -> dict[str, str]:
+        return {"JAX_PLATFORMS": "cpu"}
+
 
 @dataclass(frozen=True)
 class GpuConfig:
@@ -274,6 +266,9 @@ class GpuConfig:
     def total_flops(self, dtype: str = "bf16") -> float:
         return self.device_flops(dtype) * self.count
 
+    def default_env_vars(self) -> dict[str, str]:
+        return {"JAX_PLATFORMS": ""}
+
 
 @dataclass(frozen=True)
 class TpuConfig:
@@ -289,7 +284,8 @@ class TpuConfig:
     topology: str | None = None
 
     def chip_count(self) -> int:
-        return get_tpu_topology(self.variant).chip_count
+        """Return the number of chips per VM for this TPU type."""
+        return get_tpu_topology(self.variant).chips_per_vm
 
     def vm_count(self) -> int:
         return get_tpu_topology(self.variant).vm_count
@@ -305,6 +301,14 @@ class TpuConfig:
     def total_flops(self, dtype: str = "bf16") -> float:
         return self.device_flops(dtype) * self.chip_count()
 
+    def default_env_vars(self) -> dict[str, str]:
+        defaults: dict[str, str] = {"JAX_PLATFORMS": ""}
+        if self.variant.startswith(("v5litepod-", "v5e-", "v5p-")):
+            defaults["LIBTPU_INIT_ARGS"] = "--xla_tpu_scoped_vmem_limit_kib=50000"
+        elif self.variant.startswith("v6e-"):
+            defaults["LIBTPU_INIT_ARGS"] = "--xla_tpu_scoped_vmem_limit_kib=98304"
+        return defaults
+
 
 DeviceConfig = CpuConfig | GpuConfig | TpuConfig
 
@@ -319,22 +323,20 @@ class ResourceConfig:
     convenience builders like `with_tpu(..., slice_count=4)` can carry the
     replica count alongside the resource spec.
 
-    `max_concurrency` controls how many method calls can run in parallel on
-    the actor (Ray's max_concurrency). Use >1 for actors that need to handle
-    concurrent calls, e.g. coordinators that block while workers call back.
     """
 
-    cpu: int = 1
-    ram: str = "128m"
-    disk: str = "1g"
+    cpu: float = 1
+    ram: str = "4g"
+    disk: str = "16g"
     device: DeviceConfig = field(default_factory=CpuConfig)
     preemptible: bool = True
     regions: Sequence[str] | None = None
     replicas: int = 1
-    max_concurrency: int = 1
+    device_alternatives: Sequence[str] | None = None
 
     def chip_count(self) -> int:
-        return self.device.chip_count()
+        """Total accelerator chips across all replicas."""
+        return self.device.chip_count() * self.replicas
 
     def device_flops(self, dtype: str = "bf16") -> float:
         return self.device.device_flops(dtype)
@@ -345,18 +347,68 @@ class ResourceConfig:
         return self.device_flops(dtype) * self.chip_count()
 
     @staticmethod
-    def with_tpu(tpu_type: str, *, slice_count: int = 1, **kwargs: Any) -> ResourceConfig:
-        device = TpuConfig(variant=tpu_type)
-        return ResourceConfig(device=device, replicas=slice_count, **kwargs)
+    def with_tpu(tpu_type: str | Sequence[str], *, slice_count: int = 1, **kwargs: Any) -> ResourceConfig:
+        """Create a resource config for TPU(s).
+
+        When ``tpu_type`` is a list, the first entry is canonical (used for
+        chip_count, env_vars, resource sizing) and the rest are alternatives.
+        All types in a list must share the same ``vm_count``.
+        """
+        if isinstance(tpu_type, str):
+            tpu_types = [tpu_type]
+        else:
+            tpu_types = list(tpu_type)
+
+        if not tpu_types:
+            raise ValueError("tpu_type must be non-empty")
+
+        vm_counts = {t: get_tpu_topology(t).vm_count for t in tpu_types}
+        if len(set(vm_counts.values())) != 1:
+            raise ValueError(f"All TPU types must have the same vm_count for flexible scheduling. Got: {vm_counts}")
+
+        primary = tpu_types[0]
+        alternatives = list(tpu_types[1:]) or None
+        device = TpuConfig(variant=primary)
+        topo = get_tpu_topology(primary)
+        replicas = slice_count * topo.vm_count
+        kwargs = dict(kwargs)
+        kwargs.setdefault("cpu", 32)
+        kwargs.setdefault("ram", "128g")
+        kwargs.setdefault("disk", "50g")
+        return ResourceConfig(device=device, replicas=replicas, device_alternatives=alternatives, **kwargs)
 
     @staticmethod
-    def with_gpu(gpu_type: str = "auto", count: int = 1, **kwargs: Any) -> ResourceConfig:
+    def with_gpu(gpu_type: str, count: int = 1, **kwargs: Any) -> ResourceConfig:
         device = GpuConfig(variant=gpu_type, count=count)
         return ResourceConfig(device=device, **kwargs)
 
     @staticmethod
     def with_cpu(**kwargs: Any) -> ResourceConfig:
         return ResourceConfig(device=CpuConfig(), **kwargs)
+
+
+@dataclass
+class ActorConfig:
+    """Actor lifecycle and scheduling policy (not physical resources).
+
+    `max_concurrency` controls how many method calls can run in parallel on
+    the actor (Ray's max_concurrency). Use >1 for actors that need to handle
+    concurrent calls, e.g. coordinators that block while workers call back.
+
+    `max_restarts` overrides the backend default for automatic actor restarts.
+    Set to 0 for actors that must NOT auto-restart on preemption because they
+    require remote initialization beyond __init__.
+
+    `max_task_retries` controls how many times a failed task (or actor
+    initialisation) is retried before being marked as permanently failed.
+    Maps to Ray's ``max_task_retries`` and Iris's ``max_retries_failure``.
+    """
+
+    max_concurrency: int = 1
+    # TODO: max_restarts is conceptually a job-level property, revisit when we
+    # drop Ray support.
+    max_restarts: int | None = None
+    max_task_retries: int | None = None
 
 
 # ---------------------------------------------------------------------------

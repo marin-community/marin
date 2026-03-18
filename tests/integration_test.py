@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 import logging
@@ -18,8 +7,8 @@ import os
 import sys
 
 import draccus
-from fray.cluster import ResourceConfig, create_cluster, set_current_cluster
-import humanfriendly
+from fray import ResourceConfig, set_current_client
+from fray.v2.ray_backend.backend import RayClient
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
@@ -44,8 +33,39 @@ from marin.schemas.web.convert import ResiliparseConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+from iris.logging import configure_logging
+
+import threading
+
+configure_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _tee_fd(original_fd: int, log_file) -> None:
+    """Replace a file descriptor with a pipe that tees to both the original fd and a log file.
+
+    Works at the OS level so child processes (Ray workers) also get captured.
+    """
+    read_fd, write_fd = os.pipe()
+    saved_fd = os.dup(original_fd)
+    os.dup2(write_fd, original_fd)
+    os.close(write_fd)
+
+    def _pump():
+        with os.fdopen(read_fd, "r", errors="replace") as reader:
+            for line in reader:
+                os.write(saved_fd, line.encode())
+                log_file.write(line)
+                log_file.flush()
+
+    threading.Thread(target=_pump, daemon=True).start()
+
+
+def _setup_log_tee(log_path: str) -> None:
+    """Tee stdout and stderr to a log file at the given path."""
+    log_fh = open(log_path, "w")
+    _tee_fd(sys.stdout.fileno(), log_fh)
+    _tee_fd(sys.stderr.fileno(), log_fh)
 
 
 def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
@@ -142,8 +162,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             input_paths=transform_hq_data_step,
             output_path=this_output_path(),
             mode=DedupMode.EXACT_PARAGRAPH,
-            ray_memory=humanfriendly.parse_size("1GB", binary=True),
-            ray_num_cpus=1,
+            worker_resources=ResourceConfig(cpu=1, ram="1g"),
         ),
     )
     dedup_fuzzy_document_step = ExecutorStep(
@@ -153,8 +172,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             input_paths=transform_hq_data_step,
             output_path=this_output_path(),
             mode=DedupMode.FUZZY_DOCUMENT,
-            ray_memory=humanfriendly.parse_size("1GB", binary=True),
-            ray_num_cpus=1,
+            worker_resources=ResourceConfig(cpu=1, ram="1g"),
         ),
     )
 
@@ -169,10 +187,13 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             output_path=this_output_path(),
             # TODO (rav): add quality filters
             filters=[
+                # TODO: these 2 may collidate on canonical records, removing more data then necessary
                 FilterConfig(
                     type=FilterType.REMOVE_SPANS,
                     attribute_path=dedup_exact_paragraph_step.cd("data"),
-                    name=str(DedupMode.EXACT_PARAGRAPH),
+                    name="dup_spans",
+                    attribute_filetype="vortex",
+                    keep_if_missing=True,
                 ),
                 FilterConfig(
                     type=FilterType.REMOVE_DOC,
@@ -192,8 +213,6 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         validation_paths=[],
         cache_path=this_output_path(),
         tokenizer=tokenizer,
-        zephyr_num_cpus=1,
-        zephyr_memory=humanfriendly.parse_size("1MB", binary=True),
     )
 
     tokenize_step = ExecutorStep(
@@ -221,7 +240,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             resources=pod_config,
             env_vars=train_env_vars,
             train_config=TrainLmConfig(
-                data=lm_data_config(tokenize_step, permutation_type="linear"),
+                data=lm_data_config(tokenize_step),
                 hf_save_steps=1,
                 model=Gpt2Config(
                     num_layers=2,
@@ -263,10 +282,14 @@ def main(config: ExecutorMainConfig):
         else:
             bucket_prefix = "/tmp"  # Default to a temporary directory
 
+        _setup_log_tee("/tmp/integration_test.log")
+
         experiment_prefix = "quickstart-tests"
         config = dataclasses.replace(
             config, prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
         )
+
+        os.environ["MARIN_PREFIX"] = bucket_prefix
 
         # start Ray explicitly and set it as the current cluster
         # N.B. This script must not be launched via `uv run`, or Ray will prefer to use `uv` for all execution
@@ -275,18 +298,22 @@ def main(config: ExecutorMainConfig):
             raise RuntimeError("integration_test.py must not be launched via `uv run`. Please run it directly.")
         import ray
 
-        ray.init(resources={"head_node": 1}, runtime_env={"working_dir": None}, num_cpus=os.cpu_count())
-        set_current_cluster(create_cluster("ray"))
-
-        # path to synthetic test data
-        synth_data: str = "./tests/quickstart-data"
-        # delete all previous runs
-        if os.path.exists(os.path.join(bucket_prefix, experiment_prefix)):
-            os.system(f"rm -rf {os.path.join(bucket_prefix, experiment_prefix)}")
-        steps = create_steps(experiment_prefix, synth_data)
-        config = dataclasses.replace(config)
-        executor_main(config, steps=steps)
-        logger.info(f"Execution completed successfully. All outputs are in {bucket_prefix}/{experiment_prefix}")
+        ray.init(
+            resources={"head_node": 1},
+            runtime_env={"working_dir": None},
+            num_cpus=os.cpu_count(),
+            _memory=1024 * 1024 * 1024 * 1024,  # 1TB
+        )
+        with set_current_client(RayClient()):
+            # path to synthetic test data
+            synth_data: str = "./tests/quickstart-data"
+            # delete all previous runs
+            if os.path.exists(os.path.join(bucket_prefix, experiment_prefix)):
+                os.system(f"rm -rf {os.path.join(bucket_prefix, experiment_prefix)}")
+            steps = create_steps(experiment_prefix, synth_data)
+            config = dataclasses.replace(config)
+            executor_main(config, steps=steps)
+            logger.info(f"Execution completed successfully. All outputs are in {bucket_prefix}/{experiment_prefix}")
     except Exception as e:
         logger.error(f"Error in main execution: {e}")
         raise e

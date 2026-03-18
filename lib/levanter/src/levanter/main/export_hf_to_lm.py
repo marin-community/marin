@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -10,8 +10,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
-import fsspec
 import jax.numpy as jnp
+from iris.marin_fs import url_to_fs
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 
 import levanter
@@ -47,7 +47,8 @@ class ImportHfConfig:
     """Target dtype for the saved checkpoint (e.g., 'float32', 'bfloat16', 'float16')"""
 
     resize_vocab_to_match_tokenizer: bool = False
-    """If True, resize model vocab to match tokenizer vocab size"""
+    """If True, resize model vocab to match tokenizer vocab size. Defaults to False because many models
+    (e.g., Qwen) intentionally pad their embedding matrices beyond the tokenizer vocab size for hardware efficiency."""
 
 
 def _coerce_to_repo_ref(checkpoint: Union[str, RepoRef]) -> RepoRef:
@@ -93,7 +94,7 @@ def main(config: ImportHfConfig):
         )
 
     # use fsspec to make dir
-    fs, _ = fsspec.core.url_to_fs(config.output_path)
+    fs, _ = url_to_fs(config.output_path)
     if not fs.exists(config.output_path):
         fs.makedirs(config.output_path)
         logger.info(f"Created output directory: {config.output_path}")

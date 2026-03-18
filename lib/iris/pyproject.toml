@@ -9,24 +9,23 @@ requires-python = ">=3.11,<3.13"
 dependencies = [
     "click>=8.3.1",
     "cloudpickle>=3.1.2",
-    "connect-python @ git+https://github.com/connectrpc/connect-python.git@5342eacecef85e52717604ee5ac7e03a1e16c7ac",
+    "connect-python>=0.8.1",
     "fsspec>=2024.0.0",
     "gcsfs>=2024.0.0",
+    "s3fs>=2024.0.0",
     "grpcio>=1.76.0",
     "httpx>=0.28.1",
     "humanfriendly>=10.0",
     "pydantic>=2.12.5",
+    "PyJWT>=2.8.0",
     "pyyaml>=6.0",
     "starlette>=0.50.0",
+    "tabulate>=0.9.0",
     "typing-extensions>=4.0",
     "uvicorn[standard]>=0.23.0",
 ]
 
 [project.optional-dependencies]
-scripts = [
-    "pillow>=10.0.0",
-    "playwright>=1.49.0",
-]
 
 [project.scripts]
 iris = "iris.cli:iris"
@@ -54,22 +53,20 @@ dev = [
     "pytest>=8.3.2",
 ]
 
-[tool.hatch.metadata]
-allow-direct-references = true
+[tool.hatch.build.hooks.custom]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/iris"]
 
 [tool.pytest.ini_options]
 timeout = 30
-addopts = "-n auto --durations=10 -m 'not slow and not chaos'"
+addopts = "-n auto --durations=25 -m 'not slow and not docker' -v"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "docker: marks tests that use real Docker (run with --use-docker)",
-    "chaos: marks chaos/fault injection tests (deselect with '-m \"not chaos\"')",
+    "docker: marks tests requiring Docker runtime (slow, needs daemon)",
+    "e2e: end-to-end cluster tests (chaos, dashboard, scheduling)",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]
 log_level = "INFO"
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
-log_cli_level = "INFO"

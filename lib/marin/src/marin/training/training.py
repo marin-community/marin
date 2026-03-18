@@ -1,41 +1,32 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 import logging
 import os
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from pathlib import PurePath
+from typing import TypeVar
 
 import draccus
 import levanter.infra.cli_helpers
-from fray.cluster import (
+from fray.v2 import (
     CpuConfig,
     Entrypoint,
-    EnvironmentConfig,
+    GpuConfig,
     JobRequest,
     ResourceConfig,
     TpuConfig,
-    current_cluster,
+    create_environment,
+    current_client,
 )
-from google.api_core.exceptions import Forbidden as GcpForbiddenException
+from levanter.main import train_dpo
 from levanter.main import train_lm
+from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 
-from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
+from iris.marin_fs import check_gcs_paths_same_region, marin_temp_bucket
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +45,6 @@ class TrainLmOnPodConfig:
 
     Note that trainer.id and the RUN_ID env variable take precedence, in that order.
     """
-    allow_out_of_region: tuple[str, ...] = ()
-    """Tuple of JSON paths (e.g., 'data.cache_dir') that are allowed to be read from or written to different regions."""
     env_vars: dict[str, str] | None = None
     """Environment variables to pass to the training task (e.g., WANDB_MODE, WANDB_API_KEY)."""
     auto_build_caches: bool = False
@@ -67,11 +56,39 @@ class TrainLmOnPodConfig:
     """
 
 
+@dataclass(frozen=True)
+class TrainDpoOnPodConfig:
+    """Configuration for DPO training on a pod."""
+
+    train_config: TrainDpoConfig
+    resources: ResourceConfig
+    output_path: str | None = None
+    """Base output directory to be used for training, mainly for use with executor framework."""
+    impute_run_id_from_output_path: bool = True
+    """
+    If true and out_path is not None, the run id will be set to the basename of the out_path plus a random string.
+
+    Note that trainer.id and the RUN_ID env variable take precedence, in that order.
+    """
+    env_vars: dict[str, str] | None = None
+    """Environment variables to pass to the training task (e.g., WANDB_MODE, WANDB_API_KEY)."""
+    auto_build_caches: bool = False
+    """Whether to allow Levanter to build dataset caches on the fly.
+
+    Defaults to False so Marin jobs fail fast when a cache is missing instead of
+    spending time (and money) building it during training. Override to True if
+    you explicitly want cache construction.
+    """
+
+
+TrainConfigT = TypeVar("TrainConfigT", TrainLmConfig, TrainDpoConfig)
+TrainOnPodConfigT = TypeVar("TrainOnPodConfigT", TrainLmOnPodConfig, TrainDpoOnPodConfig)
+
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
 
 
-def _update_config_to_use_out_path(pod_config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
+def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodConfigT:
     """
     Update the config to use the out_path as the base output directory for training.
 
@@ -101,7 +118,7 @@ def _update_config_to_use_out_path(pod_config: TrainLmOnPodConfig) -> TrainLmOnP
     return replace(pod_config, train_config=config)
 
 
-def _suppress_ray_config(config: TrainLmConfig) -> TrainLmConfig:
+def _suppress_ray_config(config: TrainConfigT) -> TrainConfigT:
     """
     Levanter wants to auto-start the Ray cluster, but we're already in a Ray cluster. Disable that.
     """
@@ -123,7 +140,7 @@ def _suppress_ray_config(config: TrainLmConfig) -> TrainLmConfig:
     return config
 
 
-def _maybe_override_auto_build_caches(config: TrainLmConfig, auto_build: bool) -> TrainLmConfig:
+def _maybe_override_auto_build_caches(config: TrainConfigT, auto_build: bool) -> TrainConfigT:
     data = config.data
     if data.auto_build_caches != auto_build:
         logger.info("Overriding auto_build_caches to %s", auto_build)
@@ -132,7 +149,7 @@ def _maybe_override_auto_build_caches(config: TrainLmConfig, auto_build: bool) -
     return config
 
 
-def _enforce_run_id(config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
+def _enforce_run_id(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
     """
     Levanter will auto-generate a run ID if it's not set. We want to enforce that it's set, so that it resumes
     properly after preemption.
@@ -169,6 +186,38 @@ def _enforce_run_id(config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
     return replace(config, train_config=inner_config)
 
 
+def _normalize_jax_compilation_cache_dir(path: str) -> str:
+    """Normalize cache dir to a form accepted by JAX's compilation cache.
+
+    JAX's ``LRUCache`` delegates I/O to ``etils.epath.Path`` which supports
+    local paths, ``gs://`` (via gcsfs), and ``s3://`` (via s3fs/fsspec).
+    The only scheme that causes problems is ``file://`` which raises during
+    initialization.
+    """
+    if path.startswith("file://"):
+        return path.removeprefix("file://")
+    return path
+
+
+def _disable_xla_autotune_subcache(env: dict) -> None:
+    """Disable XLA's per-fusion autotune sub-cache for remote compilation caches.
+
+    JAX automatically places XLA sub-caches (autotune, kernel cache) as
+    subdirectories of the compilation cache dir.  The autotune cache uses
+    XLA's C++ ``tsl::Env`` which only supports local paths — it crashes on
+    ``gs://`` and ``s3://``.  Since the autotune cache is ephemeral (skipped
+    entirely on a JAX cache hit) and only saves minutes on cold compiles,
+    we disable it via the JAX config rather than trying to redirect it.
+    """
+    cache_dir = env.get("JAX_COMPILATION_CACHE_DIR", "")
+    if "://" not in cache_dir:
+        return
+    if "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES" in env:
+        return
+    env["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] = "none"
+    logger.info("XLA sub-caches disabled (compilation cache is remote: %s)", cache_dir)
+
+
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
     """
     Run the Levanter training main function on a Ray cluster.
@@ -184,7 +233,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     - The run ID is set, or sets a default if not.
     - WANDB_API_KEY is set.
     - It disables the auto-ray-start and auto-worker-start options since we're already in a Ray cluster.
-    - if allow_out_of_region is False, it checks that the data cache paths are in the same region as the VM.
+    - It checks that configured GCS paths are in the same region as the VM (except train/validation source URLs).
     """
     default_launch_config = levanter.infra.cli_helpers.load_config()
 
@@ -203,15 +252,24 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     env = _add_run_env_variables(env)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
-        marin_prefix = os.environ.get("MARIN_PREFIX")
-        if marin_prefix:
-            env["JAX_COMPILATION_CACHE_DIR"] = os.path.join(marin_prefix, "compilation-cache")
-            logger.info(f"JAX compilation cache enabled at: {env['JAX_COMPILATION_CACHE_DIR']}")
-        else:
-            logger.warning("MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured.")
+        env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(
+            marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
+        )
+        logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
+    _disable_xla_autotune_subcache(env)
 
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.train_config.trainer.id}")
+
+    model_config = config.train_config.model
+    logger.info(
+        "Model config: type=%s seq_len=%d hidden=%d batch=%s device=%s",
+        type(model_config).__name__,
+        model_config.max_seq_len,
+        model_config.Embed.size,
+        config.train_config.trainer.train_batch_size,
+        config.resources.device,
+    )
 
     train_config = config.train_config
     train_config = _suppress_ray_config(train_config)
@@ -222,108 +280,106 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         trainer = replace(train_config.trainer, require_accelerator=False)
         train_config = replace(train_config, trainer=trainer)
 
-    if not config.allow_out_of_region and not isinstance(config.resources.device, CpuConfig):
+    if not isinstance(config.resources.device, CpuConfig):
         _doublecheck_paths(config)
 
-    cluster = current_cluster()
+    client = current_client()
 
+    extras = []
+    if isinstance(config.resources.device, TpuConfig):
+        extras.append("tpu")
+    elif isinstance(config.resources.device, GpuConfig):
+        extras.append("gpu")
+
+    # Note: Using a constant job name allows restarts to adopt the existing job handle
+    # instead of raising a duplicate name error (adopt_existing=True is the default).
     job_request = JobRequest(
         name="train_lm",
         entrypoint=Entrypoint.from_callable(train_lm.main, args=[train_config]),
         resources=config.resources,
-        environment=EnvironmentConfig.create(env_vars=env),
+        environment=create_environment(env_vars=env, extras=extras),
         max_retries_failure=10,
     )
-    job_id = cluster.launch(job_request)
-    cluster.wait(job_id, raise_on_failure=True)
+    job = client.submit(job_request)
+    job.wait(raise_on_failure=True)
 
 
-def _doublecheck_paths(config: TrainLmOnPodConfig):
+def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
+    """
+    Run the Levanter DPO training main function on a Ray cluster.
+
+    This function is designed to be run on your machine or with sufficient variables in the env dict/os env.
+    It should also be run with a Ray cluster already running.
+    """
+    default_launch_config = levanter.infra.cli_helpers.load_config()
+
+    if config.output_path is not None:
+        logger.info(f"Using output path: {config.output_path}")
+        config = _update_config_to_use_out_path(config)
+
+    env = _add_default_env_variables(
+        config.env_vars or {},
+        default_launch_config.env_for_accel(config.resources.device.variant),
+    )
+    if isinstance(config.resources.device, TpuConfig):
+        _check_for_wandb_key(env)
+
+    env = _add_run_env_variables(env)
+
+    if "JAX_COMPILATION_CACHE_DIR" not in env:
+        env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(
+            marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
+        )
+        logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
+    _disable_xla_autotune_subcache(env)
+
+    config = _enforce_run_id(config)
+    logger.info(f"Using run ID: {config.train_config.trainer.id}")
+
+    train_config = config.train_config
+    train_config = _suppress_ray_config(train_config)
+    train_config = _maybe_override_auto_build_caches(train_config, config.auto_build_caches)
+
+    if config.resources.device.kind == "cpu":
+        trainer = replace(train_config.trainer, require_accelerator=False)
+        train_config = replace(train_config, trainer=trainer)
+
+    if not isinstance(config.resources.device, CpuConfig):
+        _doublecheck_paths(config)
+
+    client = current_client()
+
+    extras = []
+    if isinstance(config.resources.device, TpuConfig):
+        extras.append("tpu")
+    elif isinstance(config.resources.device, GpuConfig):
+        extras.append("gpu")
+
+    job_request = JobRequest(
+        name="train_dpo",
+        entrypoint=Entrypoint.from_callable(train_dpo.main, args=[train_config]),
+        resources=config.resources,
+        environment=create_environment(env_vars=env, extras=extras),
+        max_retries_failure=10,
+    )
+    job = client.submit(job_request)
+    job.wait(raise_on_failure=True)
+
+
+def _doublecheck_paths(config: TrainOnPodConfigT):
     """
     Double-check that we're not using local paths in some of the standard places that Levanter sets defaults.
     Also check that the paths are in the same region as the VM, to avoid performance issues and billing surprises.
 
     This function recursively examines all strings/paths in the config to identify GCS paths and checks their regions.
     """
-    # Determine if we're running locally or if path checks should be bypassed
-    allow_out_of_region = config.allow_out_of_region
-
     local_ok = not isinstance(config.resources.device, TpuConfig)
 
-    try:
-        region = get_vm_region()
-    except ValueError as e:
-        if local_ok:
-            logger.warning("Could not determine the region of the VM. This is fine if you're running locally.")
-            return
-        raise ValueError("Could not determine the region of the VM. This is required for path checks.") from e
-
-    # Recursively check all paths in the config
-    _check_paths_recursively(config.train_config, "", region, local_ok, allow_out_of_region)
-
+    check_gcs_paths_same_region(
+        config.train_config,
+        local_ok=local_ok,
+    )
     return config
-
-
-def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_region):
-    """
-    Check all strings in the config object that look like GCS paths appear to respect same-region constraints.
-
-    Args:
-        obj: The object to check (could be a dict, list, or other object)
-        path_prefix: The prefix for the current path (e.g., "config.trainer")
-        region: The region of the VM
-        local_ok: Whether local paths are allowed
-        allow_out_of_region: Tuple of paths that are allowed to be read from or written to different regions
-        must_save_checkpoints: Whether checkpoints must be saved
-    """
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            new_prefix = f"{path_prefix}.{key}" if path_prefix else key
-            _check_paths_recursively(value, new_prefix, region, local_ok, allow_out_of_region)
-    elif isinstance(obj, list | tuple):
-        for i, item in enumerate(obj):
-            new_prefix = f"{path_prefix}[{i}]"
-            _check_paths_recursively(item, new_prefix, region, local_ok, allow_out_of_region)
-    elif isinstance(obj, str | os.PathLike):
-        if isinstance(obj, os.PathLike):
-            path_str = os.fspath(obj)
-            if isinstance(obj, PurePath):
-                parts = obj.parts
-                if parts and parts[0] == "gs:" and not path_str.startswith("gs://"):
-                    remainder = "/".join(parts[1:])
-                    path_str = f"gs://{remainder}" if remainder else "gs://"
-        else:
-            path_str = obj
-
-        if path_str.startswith("gs://"):
-            # This is a GCS path, check if it's in the right region
-            is_allow_listed_path = any(path_prefix.startswith(p) for p in allow_out_of_region)
-            # whitelist train and validation urls because we are always cached
-            if "train_urls" in path_prefix or "validation_urls" in path_prefix:
-                is_allow_listed_path = True
-
-            # Determine if this path should be checked
-            if not is_allow_listed_path:
-                _check_path_in_region(
-                    path_prefix,
-                    path_str,
-                    region=region,
-                    local_ok=local_ok,
-                )
-    elif dataclasses.is_dataclass(obj):
-        for field in dataclasses.fields(obj):
-            new_prefix = f"{path_prefix}.{field.name}" if path_prefix else field.name
-            value = getattr(obj, field.name)
-            _check_paths_recursively(
-                value,
-                new_prefix,
-                region,
-                local_ok,
-                allow_out_of_region,
-            )
-    # allow primitives through, warn on other types
-    elif not isinstance(obj, str | int | float | bool | type(None)):
-        logger.warning(f"Found unexpected type {type(obj)} at {path_prefix}. Skipping.")
 
 
 def _add_default_env_variables(env: dict, default_env: dict | None):
@@ -342,6 +398,7 @@ def _add_run_env_variables(env: dict):
     Specifically:
     - GIT_COMMIT
     - HF_DATASETS_TRUST_REMOTE_CODE
+    - HF_ALLOW_CODE_EVAL (for code evaluation tasks like HumanEval)
     """
     env = deepcopy(env)
 
@@ -362,6 +419,10 @@ def _add_run_env_variables(env: dict):
     if "HF_DATASETS_TRUST_REMOTE_CODE" not in env:
         env["HF_DATASETS_TRUST_REMOTE_CODE"] = "1"
 
+    # required for code evaluation tasks like HumanEval
+    if "HF_ALLOW_CODE_EVAL" not in env:
+        env["HF_ALLOW_CODE_EVAL"] = "1"
+
     if "TOKENIZERS_PARALLELISM" not in env:
         env["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -369,6 +430,11 @@ def _add_run_env_variables(env: dict):
         env["TPU_MIN_LOG_LEVEL"] = "2"
     if "TPU_STDERR_LOG_LEVEL" not in env:
         env["TPU_STDERR_LOG_LEVEL"] = "2"
+
+    # Allow the caller (or iris -e) to override the compilation cache dir.
+    if "JAX_COMPILATION_CACHE_DIR" not in env:
+        if val := os.environ.get("JAX_COMPILATION_CACHE_DIR"):
+            env["JAX_COMPILATION_CACHE_DIR"] = val
 
     return env
 
@@ -385,25 +451,6 @@ def _check_for_wandb_key(env):
                     "WANDB_API_KEY must be set in the environment. Please add it to your .config, export "
                     "WANDB_API_KEY=..., or add it to the env dict."
                 )
-
-
-def _check_path_in_region(key, path, region, local_ok):
-
-    if not path.startswith("gs://"):
-        if local_ok:
-            logger.warning(f"{key} is not a GCS path: {path}. This is fine if you're running locally.")
-            return
-        else:
-            raise ValueError(f"{key} must be a GCS path, not {path}")
-    try:
-        bucket_region = get_bucket_location(path)
-        if region.lower() != bucket_region.lower():
-            raise ValueError(
-                f"{key} is not in the same region ({bucket_region}) as the VM ({region}). "
-                f"This can cause performance issues and billing surprises."
-            )
-    except GcpForbiddenException:
-        logger.warning(f"Could not check region for {key}. Be sure it's in the same region as the VM.", exc_info=True)
 
 
 if __name__ == "__main__":

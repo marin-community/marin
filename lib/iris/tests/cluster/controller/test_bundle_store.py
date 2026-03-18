@@ -1,109 +1,79 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
-"""Tests for bundle storage functionality."""
+"""Tests for controller-side BundleStore behavior."""
 
-import tempfile
-from pathlib import Path
+import hashlib
 
 import pytest
 
-from iris.cluster.controller.bundle_store import BundleStore
+from iris.cluster.bundle import BundleStore
 
 
 @pytest.fixture
-def temp_bundle_dir():
-    """Create a temporary directory for bundle storage testing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
+def store(tmp_path):
+    return BundleStore(storage_dir=str(tmp_path / "bundles"))
 
 
-def test_write_bundle_creates_parent_directories_for_local_path(temp_bundle_dir):
-    """Verify write_bundle creates parent directories for local file:// paths."""
-    bundle_prefix = f"file://{temp_bundle_dir}/bundles"
-    store = BundleStore(bundle_prefix)
-
-    job_id = "test-job-123"
+def test_write_zip_returns_content_hash_id(store):
     blob = b"test bundle content"
 
-    # Write bundle - should create parent directories automatically
-    bundle_path = store.write_bundle(job_id, blob)
-
-    # Verify the bundle was written
-    expected_path = temp_bundle_dir / "bundles" / job_id / "bundle.zip"
-    assert expected_path.exists()
-    assert expected_path.read_bytes() == blob
-    assert bundle_path == f"{bundle_prefix}/{job_id}/bundle.zip"
+    bundle_id = store.write_zip(blob)
+    assert bundle_id == hashlib.sha256(blob).hexdigest()
+    assert store.get_zip(bundle_id) == blob
 
 
-def test_write_bundle_to_existing_directory(temp_bundle_dir):
-    """Verify write_bundle works when parent directory already exists."""
-    bundle_prefix = f"file://{temp_bundle_dir}/bundles"
-    store = BundleStore(bundle_prefix)
+def test_write_zip_is_idempotent(store):
+    blob = b"same bytes"
 
-    job_id = "test-job-456"
-
-    # Pre-create the parent directory structure
-    parent_dir = temp_bundle_dir / "bundles" / job_id
-    parent_dir.mkdir(parents=True, exist_ok=True)
-
-    blob = b"test bundle content"
-
-    # Write bundle - should work with existing directory
-    bundle_path = store.write_bundle(job_id, blob)
-
-    # Verify the bundle was written
-    expected_path = parent_dir / "bundle.zip"
-    assert expected_path.exists()
-    assert expected_path.read_bytes() == blob
-    assert bundle_path == f"{bundle_prefix}/{job_id}/bundle.zip"
+    id1 = store.write_zip(blob)
+    id2 = store.write_zip(blob)
+    assert id1 == id2
 
 
-def test_write_multiple_bundles_different_jobs(temp_bundle_dir):
-    """Verify write_bundle handles multiple jobs correctly."""
-    bundle_prefix = f"file://{temp_bundle_dir}/bundles"
-    store = BundleStore(bundle_prefix)
+def test_get_zip_reads_stored_bytes(store):
+    blob = b"bundle data"
 
-    jobs = [
-        ("job-1", b"bundle content 1"),
-        ("job-2", b"bundle content 2"),
-        ("job-3", b"bundle content 3"),
-    ]
-
-    for job_id, blob in jobs:
-        store.write_bundle(job_id, blob)
-
-    # Verify all bundles were written
-    for job_id, blob in jobs:
-        expected_path = temp_bundle_dir / "bundles" / job_id / "bundle.zip"
-        assert expected_path.exists()
-        assert expected_path.read_bytes() == blob
+    bundle_id = store.write_zip(blob)
+    assert store.get_zip(bundle_id) == blob
 
 
-def test_write_bundle_overwrites_existing(temp_bundle_dir):
-    """Verify write_bundle overwrites existing bundle for same job."""
-    bundle_prefix = f"file://{temp_bundle_dir}/bundles"
-    store = BundleStore(bundle_prefix)
+def test_get_zip_missing_raises_not_found(store):
+    with pytest.raises(FileNotFoundError, match="Bundle not found"):
+        store.get_zip("a" * 64)
 
-    job_id = "overwrite-job"
 
-    # Write first version
-    store.write_bundle(job_id, b"original content")
+def test_store_survives_restart(tmp_path):
+    """Re-creating BundleStore from same directory recovers bundles via fsspec."""
+    storage_dir = str(tmp_path / "bundles")
+    store = BundleStore(storage_dir=storage_dir)
+    blob = b"persist me"
+    bundle_id = store.write_zip(blob)
+    store.close()
 
-    # Write second version (should overwrite)
-    store.write_bundle(job_id, b"updated content")
+    store2 = BundleStore(storage_dir=storage_dir)
+    assert store2.get_zip(bundle_id) == blob
 
-    # Verify only the updated content exists
-    expected_path = temp_bundle_dir / "bundles" / job_id / "bundle.zip"
-    assert expected_path.read_bytes() == b"updated content"
+
+def test_write_zip_skips_upload_when_already_in_storage(tmp_path):
+    """write_zip should not re-upload if bundle exists in storage but was evicted from cache."""
+    storage_dir = str(tmp_path / "bundles")
+    store = BundleStore(storage_dir=storage_dir, max_cache_items=1)
+
+    blob_a = b"bundle A"
+    blob_b = b"bundle B"
+    id_a = store.write_zip(blob_a)
+    store.write_zip(blob_b)  # evicts blob_a from in-memory cache
+
+    # blob_a should still be in storage; re-submitting should not call _write_to_storage
+    original_write = store._write_to_storage
+    write_calls = []
+
+    def tracking_write(bundle_id, blob):
+        write_calls.append(bundle_id)
+        return original_write(bundle_id, blob)
+
+    store._write_to_storage = tracking_write
+    id_a2 = store.write_zip(blob_a)
+    assert id_a2 == id_a
+    assert write_calls == [], "write_zip should not re-upload when bundle exists in storage"

@@ -3,15 +3,11 @@ on:
   push:
     branches:
       - main
-    paths:
-      - lib/zephyr/**
-      - uv.lock
-      - .github/workflows/zephyr-unit-tests.yaml
   pull_request:
-    branches:
-      - main
     paths:
       - lib/zephyr/**
+      # Iris is being actively developed, to avoid bugs sneaking into zephyr, we trigger zephyr tests on iris change
+      - lib/iris/**
       - uv.lock
       - .github/workflows/zephyr-unit-tests.yaml
 
@@ -34,6 +30,11 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6

@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Core Dataset API with lazy evaluation."""
 
@@ -20,14 +9,28 @@ import logging
 import re
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
-from typing import Any, Generic, Literal, TypeVar, cast
+from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 import fsspec
 from braceexpand import braceexpand
+from iris.marin_fs import url_to_fs
 
 from zephyr.expr import Expr
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ShardInfo:
+    """Metadata about the current shard passed to map_shard functions.
+
+    Attributes:
+        shard_idx: Zero-based index of this shard.
+        total_shards: Total number of shards in the dataset.
+    """
+
+    shard_idx: int
+    total_shards: int
 
 
 def format_shard_path(pattern: str, shard_idx: int, total: int) -> str:
@@ -159,9 +162,6 @@ class WriteOp:
     # Format-specific parameters (only used by relevant writer)
     levanter_metadata: dict[str, Any] | None = None
     schema: object | None = None  # For parquet (pyarrow.Schema)
-    batch_size: int = 1000  # For parquet
-    tokenizer_name: str | None = None  # For levanter_cache
-    format: object | None = None  # For levanter_cache (LmDatasetFormatBase)
     skip_existing: bool = False  # Skip writing if output file already exists
 
     def __repr__(self):
@@ -199,6 +199,9 @@ class MapShardOp:
 
     Use when you need to maintain state across all items in a shard, such as
     deduplication, reservoir sampling, or loading expensive resources once.
+
+    The function always receives a ShardInfo as the second argument:
+        fn(items: Iterator[T], shard_info: ShardInfo) -> Iterator[R]
     """
 
     fn: Callable
@@ -228,6 +231,8 @@ class GroupByOp:
     key_fn: Callable  # Function from item -> hashable key
     reducer_fn: Callable  # Function from (key, Iterator[items]) -> result
     num_output_shards: int | None = None  # None = auto-detect from current shard count
+    sort_fn: Callable | None = None  # Optional secondary sort within each group
+    combiner_fn: Callable | None = None  # Optional local pre-aggregation during scatter
 
     def __repr__(self):
         return f"GroupByOp(key={_get_fn_name(self.key_fn)})"
@@ -285,6 +290,8 @@ LogicalOp = (
 
 T = TypeVar("T")
 R = TypeVar("R")
+# NOTE/TODO: this could be bound to `Hashable` or similar constraint
+K = TypeVar("K")
 
 
 class Dataset(Generic[T]):
@@ -294,16 +301,15 @@ class Dataset(Generic[T]):
     operations. Operations are stored as dataclasses, making the pipeline
     inspectable and treating transformations as data.
 
-    Execution is handled by Backend classes via backend.execute(dataset).
+    Execution is handled by ZephyrContext via ctx.execute(dataset).
 
     Example:
-        >>> from zephyr import Backend
         >>> ds = (Dataset
         ...     .from_list([1, 2, 3, 4, 5])
         ...     .filter(lambda x: x % 2 == 0)
         ...     .map(lambda x: x * 2)
         ... )
-        >>> results = Backend.execute(ds, max_parallelism=10)
+        >>> results = ctx.execute(ds)
         [4, 8]
     """
 
@@ -348,18 +354,17 @@ class Dataset(Generic[T]):
             FileNotFoundError: If no files match the pattern and empty_glob_ok is False
 
         Example:
-            >>> from zephyr import Backend
             >>> ds = (Dataset
             ...     .from_files("/input/*.txt")
             ...     .map(lambda path: process_file(path))
             ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = Backend.execute(ds, max_parallelism=10)
+            >>> output_files = ctx.execute(ds)
         """
         # Normalize double slashes while preserving protocol (e.g., gs://, s3://, http://)
         pattern = re.sub(r"(?<!:)//+", "/", pattern)
 
-        fs, _ = fsspec.core.url_to_fs(pattern)
+        fs, _ = url_to_fs(pattern)
         protocol = fsspec.core.split_protocol(pattern)[0]
 
         files = []
@@ -386,9 +391,8 @@ class Dataset(Generic[T]):
             New dataset with map operation appended
 
         Example:
-            >>> from zephyr import Backend
             >>> ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
-            >>> Backend.execute(ds)
+            >>> ctx.execute(ds)
             [2, 4, 6]
         """
         return Dataset(self.source, [*self.operations, MapOp(fn)])
@@ -404,9 +408,8 @@ class Dataset(Generic[T]):
             New dataset with filter operation appended
 
         Example:
-            >>> from zephyr import Backend
             >>> ds = Dataset.from_list([1, 2, 3, 4]).filter(lambda x: x % 2 == 0)
-            >>> Backend.execute(ds)
+            >>> ctx.execute(ds)
             [2, 4]
             >>> # Using expression (enables pushdown)
             >>> from zephyr.expr import col
@@ -428,12 +431,11 @@ class Dataset(Generic[T]):
             New dataset with only the specified columns
 
         Example:
-            >>> from zephyr import Backend
             >>> ds = Dataset.from_list([
             ...     {"id": 1, "name": "alice", "score": 80},
             ...     {"id": 2, "name": "bob", "score": 60},
             ... ]).select("id", "name")
-            >>> Backend.execute(ds)
+            >>> ctx.execute(ds)
             [{"id": 1, "name": "alice"}, {"id": 2, "name": "bob"}]
         """
         return Dataset(self.source, [*self.operations, SelectOp(tuple(columns))])
@@ -453,9 +455,8 @@ class Dataset(Generic[T]):
             New dataset with take operation appended
 
         Example:
-            >>> from zephyr import Backend
             >>> ds = Dataset.from_list([1, 2, 3, 4, 5]).take_per_shard(3)
-            >>> Backend.execute(ds)
+            >>> ctx.execute(ds)
             [1, 2, 3]
         """
         return Dataset(self.source, [*self.operations, TakePerShardOp(n)])
@@ -470,9 +471,8 @@ class Dataset(Generic[T]):
             New dataset with window operation appended
 
         Example:
-            >>> from zephyr import Backend
             >>> ds = Dataset.from_list([1, 2, 3, 4, 5]).window(2)
-            >>> Backend.execute(ds)
+            >>> ctx.execute(ds)
             [[1, 2], [3, 4], [5]]
         """
 
@@ -498,7 +498,6 @@ class Dataset(Generic[T]):
             New dataset with window operation appended
 
         Example:
-            >>> from zephyr import Backend
             >>> # Window files by total size < 10GB
             >>> ds = (Dataset
             ...     .from_list([{"size": 5_000_000_000}, {"size": 6_000_000_000}, {"size": 3_000_000_000}])
@@ -520,14 +519,14 @@ class Dataset(Generic[T]):
             New dataset with flat_map operation appended
 
         Example:
-            >>> from zephyr import Backend, load_jsonl
+            >>> from zephyr.execution import load_jsonl
             >>> ds = (Dataset
             ...     .from_files("/input", "*.jsonl.gz")
             ...     .flat_map(load_jsonl)  # Each file yields many records
             ...     .filter(lambda r: r["score"] > 0.5)
             ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = Backend.execute(ds, max_parallelism=10)
+            >>> output_files = ctx.execute(ds)
         """
         return Dataset(self.source, [*self.operations, FlatMapOp(fn)])
 
@@ -541,14 +540,13 @@ class Dataset(Generic[T]):
             Dataset yielding records as dictionaries
 
         Example:
-            >>> from zephyr import Backend
             >>> ds = (Dataset
             ...     .from_files("data/*.parquet")
             ...     .load_file()
             ...     .filter(lambda r: r["score"] > 0.5)
             ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = Backend.execute(ds, max_parallelism=10)
+            >>> output_files = ctx.execute(ds)
         """
         return Dataset(self.source, [*self.operations, LoadFileOp("auto", columns)])
 
@@ -564,23 +562,28 @@ class Dataset(Generic[T]):
         """Load records from Vortex files."""
         return Dataset(self.source, [*self.operations, LoadFileOp("vortex", columns)])
 
-    def map_shard(self, fn: Callable[[Iterator[T]], Iterator[R]]) -> Dataset[R]:
+    def map_shard(
+        self,
+        fn: Callable[[Iterator[T], ShardInfo], Iterator[R]],
+    ) -> Dataset[R]:
         """Apply function to entire shard iterator.
 
-        The function receives an iterator of all items in the shard and returns
-        an iterator of results. This can be used to perform stateful
-        processing across a shard (deduplication, sampling, windowing, etc.).
+        The function receives an iterator of all items in the shard and a
+        ShardInfo dataclass, and returns an iterator of results. This can be
+        used to perform stateful processing across a shard (deduplication,
+        sampling, windowing, etc.).
 
         Args:
-            fn: Function from Iterator[items] -> Iterator[results]
+            fn: Function with signature fn(items: Iterator[T], shard_info: ShardInfo) -> Iterator[R]
 
         Returns:
             New dataset with map_shard operation appended
 
         Example:
-            >>> from zephyr import Backend, load_jsonl
+            >>> from zephyr.execution import load_jsonl
+            >>> from zephyr.dataset import ShardInfo
             >>> # Deduplicate items within each shard
-            >>> def deduplicate_shard(items: Iterator):
+            >>> def deduplicate_shard(items: Iterator, _: ShardInfo):
             ...     seen = set()
             ...     for item in items:
             ...         key = item["id"]
@@ -594,7 +597,7 @@ class Dataset(Generic[T]):
             ...     .map_shard(deduplicate_shard)
             ...     .write_jsonl("output/deduped-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = Backend.execute(ds, max_parallelism=10)
+            >>> output_files = ctx.execute(ds)
         """
         return Dataset(self.source, [*self.operations, MapShardOp(fn)])
 
@@ -613,7 +616,7 @@ class Dataset(Generic[T]):
             New dataset with reshard operation appended or self if num_shards is None
 
         Example:
-            >>> from zephyr import Backend, load_jsonl
+            >>> from zephyr.execution import load_jsonl
             >>> ds = (Dataset
             ...     .from_files("/input", "*.jsonl.gz")  # 3 files = 3 shards
             ...     .flat_map(load_jsonl)                 # Still 3 shards
@@ -621,7 +624,7 @@ class Dataset(Generic[T]):
             ...     .reshard(num_shards=20)              # Redistribute to 20 shards
             ...     .map(expensive_transform)            # Now uses up to 20 workers
             ... )
-            >>> output_files = Backend.execute(ds, max_parallelism=20)
+            >>> output_files = ctx.execute(ds)
         """
         if num_shards is not None and num_shards <= 0:
             raise ValueError(f"num_shards must be positive, got {num_shards}")
@@ -674,7 +677,6 @@ class Dataset(Generic[T]):
         self,
         output_pattern: str | Callable[[int, int], str],
         schema: object | None = None,
-        batch_size: int = 1000,
         skip_existing: bool = False,
     ) -> Dataset[str]:
         """Write records as Parquet files.
@@ -685,7 +687,6 @@ class Dataset(Generic[T]):
             output_pattern: Output path pattern (e.g., "dir/data-{shard:05d}.parquet")
                            or a callable that takes (shard_idx, total_shards) and returns the output path
             schema: PyArrow schema (optional, will be inferred if not provided)
-            batch_size: Number of records to batch before writing (default: 1000)
             skip_existing: If True, skip writing if output file already exists (for resuming pipelines)
         """
         return Dataset(
@@ -696,7 +697,6 @@ class Dataset(Generic[T]):
                     _normalize_output_pattern(output_pattern),
                     writer_type="parquet",
                     schema=schema,
-                    batch_size=batch_size,
                     skip_existing=skip_existing,
                 ),
             ],
@@ -705,6 +705,7 @@ class Dataset(Generic[T]):
     def write_vortex(
         self,
         output_pattern: str | Callable[[int, int], str],
+        schema: object | None = None,
         skip_existing: bool = False,
     ) -> Dataset[str]:
         """Write records as Vortex files."""
@@ -715,6 +716,7 @@ class Dataset(Generic[T]):
                 WriteOp(
                     _normalize_output_pattern(output_pattern),
                     writer_type="vortex",
+                    schema=schema,
                     skip_existing=skip_existing,
                 ),
             ],
@@ -746,26 +748,59 @@ class Dataset(Generic[T]):
             ],
         )
 
+    @overload
     def group_by(
         self,
-        key: Callable[[T], object],
-        reducer: Callable[[object, Iterator[T]], R],
+        key: Callable[[T], K],
+        *,
+        reducer: Callable[[K, Iterator[T]], Iterator[R]],
+        sort_by: Callable[[T], Any] | None = None,
         num_output_shards: int | None = None,
+        combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
+    ) -> Dataset[R]: ...
+
+    @overload
+    def group_by(
+        self,
+        key: Callable[[T], K],
+        *,
+        reducer: Callable[[K, Iterator[T]], R],
+        sort_by: Callable[[T], Any] | None = None,
+        num_output_shards: int | None = None,
+        combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
+    ) -> Dataset[R]: ...
+
+    def group_by(
+        self,
+        key: Callable[[T], K],
+        *,
+        reducer: Callable[[K, Iterator[T]], R | Iterator[R]],
+        sort_by: Callable[[T], Any] | None = None,
+        num_output_shards: int | None = None,
+        combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
     ) -> Dataset[R]:
         """Group items by key and apply reducer function.
 
-        The reducer receives (key, iterator_of_items) and returns a single result.
+        The reducer receives (key, iterator_of_items) and returns a single result or an iterator of
+        results for that group.
+
+        Incoming records are strongly encouraged to be Arrow-serializable (dicts, lists, scalars, etc.).
+        Custom dataclasses and arbitrary objects will have degraded performance (serde via pickle).
 
         Args:
             key: Function extracting grouping key from item (must be hashable)
             reducer: Function from (key, Iterator[items]) -> result
+            sort_by: Optional function extracting a sort key from each item. When provided,
+                items within each group are delivered to the reducer sorted by this key.
             num_output_shards: Number of output shards (None = auto-detect, uses current shard count)
+            combiner: Optional local pre-aggregation applied during scatter. Receives
+                (key, Iterator[items]) and yields reduced items of the same type. Must be
+                associative — partial results are combined with the full reducer on the reduce side.
 
         Returns:
             New dataset with group_by operation appended
 
         Example:
-            >>> from zephyr import Backend
             >>> # Count items by category
             >>> ds = (Dataset
             ...     .from_list([{"cat": "A", "val": 1}, {"cat": "A", "val": 2}, {"cat": "B", "val": 3}])
@@ -774,25 +809,37 @@ class Dataset(Generic[T]):
             ...         reducer=lambda key, items: {"cat": key, "count": sum(1 for _ in items)}
             ...     )
             ... )
-            >>> Backend.execute(ds, max_parallelism=10)
+            >>> ctx.execute(ds)
             [{"cat": "A", "count": 2}, {"cat": "B", "count": 1}]
+
+            >>> # Items within each group sorted by timestamp
+            >>> ds = (Dataset
+            ...     .from_list([{"user": "A", "ts": 3}, {"user": "A", "ts": 1}])
+            ...     .group_by(
+            ...         key=lambda x: x["user"],
+            ...         reducer=lambda key, items: {"user": key, "events": list(items)},
+            ...         sort_by=lambda x: x["ts"],
+            ...     )
+            ... )
         """
-        return Dataset(self.source, [*self.operations, GroupByOp(key, reducer, num_output_shards)])
+        return Dataset(
+            self.source,
+            [*self.operations, GroupByOp(key, reducer, num_output_shards, sort_fn=sort_by, combiner_fn=combiner)],
+        )
 
     def deduplicate(self, key: Callable[[T], object], num_output_shards: int | None = None) -> Dataset[T]:
         """Deduplicate items by key.
 
         Example:
-            >>> from zephyr import Backend
             >>> ds = (Dataset
             ...     .from_list([{"id": 1, "val": "a"}, {"id": 2, "val": "b"}, {"id": 1, "val": "c"}])
             ...     .deduplicate(key=lambda x: x["id"])
             ... )
-            >>> Backend.execute(ds, max_parallelism=10)
+            >>> ctx.execute(ds)
             [{"id": 1, "val": "a"}, {"id": 2, "val": "b"}]  # Or {"id": 1, "val": "c"}
         """
 
-        def streaming_dedup(items: Iterator[T]) -> Iterator[T]:
+        def streaming_dedup(items: Iterator[T], _: ShardInfo) -> Iterator[T]:
             """Deduplicate items within a shard."""
             seen = set()
             for item in items:
@@ -826,7 +873,7 @@ class Dataset(Generic[T]):
 
         Example:
             >>> ds = Dataset.from_list(range(100)).reduce(sum)
-            >>> result = list(Backend.execute(ds))[0]
+            >>> result = list(ctx.execute(ds))[0]
             4950
         """
         if global_reducer is None:
@@ -842,7 +889,7 @@ class Dataset(Generic[T]):
 
         Example:
             >>> ds = Dataset.from_list(range(100)).filter(lambda x: x % 2 == 0)
-            >>> count = list(Backend.execute(ds.count()))[0]
+            >>> count = list(ctx.execute(ds.count()))[0]
             50
         """
         return self.reduce(

@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """TPU hardware utilities for memory estimation and slice selection.
 
@@ -54,3 +43,38 @@ def pick_v5p_type(estimated_memory_bytes: int) -> str:
         raise ValueError(f"Model too large for available v5p slices (need {cores_req} cores).")
 
     return f"v5p-{min(valid)}"
+
+
+# ---------------- TPU v4 Hardware Constants ----------------
+
+V4_HBM_PER_CHIP_GIB = 32
+"""High-bandwidth memory per TPU v4 chip in GiB."""
+
+V4_CORES_PER_CHIP = 2
+"""Number of cores per TPU v4 chip."""
+
+V4_CORE_OPTIONS = [8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+"""Available TPU v4 core configurations (slice sizes)."""
+
+
+def pick_v4_type(estimated_memory_bytes: int) -> str:
+    """Select the smallest TPU v4 slice that fits the estimated memory.
+
+    Args:
+        estimated_memory_bytes: Estimated memory requirement in bytes.
+
+    Returns:
+        TPU slice name, e.g., "v4-8" or "v4-32".
+
+    Raises:
+        ValueError: If the model is too large for available v4 slices.
+    """
+    chip_bytes = V4_HBM_PER_CHIP_GIB * 1024**3
+    chips = math.ceil(estimated_memory_bytes / chip_bytes)
+    cores_req = chips * V4_CORES_PER_CHIP
+
+    valid = [c for c in V4_CORE_OPTIONS if c >= cores_req]
+    if not valid:
+        raise ValueError(f"Model too large for available v4 slices (need {cores_req} cores).")
+
+    return f"v4-{min(valid)}"

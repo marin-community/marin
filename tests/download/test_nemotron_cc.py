@@ -1,24 +1,18 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
-import gzip
 import json
 from io import BytesIO
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import Mock, patch
 
+import pytest
 import zstandard as zstd
+from iris.marin_fs import open_url as _real_open_url
 from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
+
+_OPEN_URL_TARGET = "marin.download.nemotron_cc.download_nemotron_cc.open_url"
+_REQUESTS_SESSION_TARGET = "marin.download.nemotron_cc.download_nemotron_cc.requests.Session"
 
 SAMPLE_NEMOTRON_RECORDS = [
     {
@@ -53,74 +47,91 @@ def create_zstd_compressed_jsonl(records: list[dict]) -> bytes:
 
 
 def create_paths_file(paths: list[str]) -> bytes:
+    import gzip
+
     content = "\n".join(paths) + "\n"
     return gzip.compress(content.encode("utf-8"))
 
 
-def test_download_nemotron_cc_pipeline(tmp_path, read_all_jsonl_gz):
-    """Test full Nemotron CC download pipeline with zephyr integration."""
+def read_all_jsonl_zst(directory: Path, pattern: str = "*.jsonl.zst") -> list[dict]:
+    records = []
+    dctx = zstd.ZstdDecompressor()
+    for file_path in sorted(directory.glob(pattern)):
+        with open(file_path, "rb") as f:
+            with dctx.stream_reader(f) as reader:
+                text = reader.read().decode("utf-8")
+                for line in text.splitlines():
+                    if line.strip():
+                        records.append(json.loads(line))
+    return records
+
+
+@pytest.fixture()
+def mock_paths_open(tmp_path):
+    """Patches open_url to serve a local paths file for commoncrawl URLs."""
+    paths_file = tmp_path / "data-jsonl.paths.gz"
+
+    def _make_mock(paths: list[str]):
+        paths_file.write_bytes(create_paths_file(paths))
+
+        def _mock_open_url(path, mode="r", **kwargs):
+            if "data.commoncrawl.org" in path and "data-jsonl.paths.gz" in path:
+                return paths_file.open("rb")
+            return _real_open_url(path, mode, **kwargs)
+
+        return _mock_open_url
+
+    return _make_mock
+
+
+def _mock_session_for(url_to_data: dict[str, bytes]):
+    """Build a mock requests.Session whose .get() dispatches on URL substrings."""
+    session = Mock()
+
+    def mock_get(url, **kwargs):
+        response = Mock()
+        response.raise_for_status = Mock()
+        for key, data in url_to_data.items():
+            if key in url:
+                response.raw = BytesIO(data)
+                return response
+        raise ValueError(f"Unexpected URL: {url}")
+
+    session.return_value.get = mock_get
+    session.return_value.mount = Mock()
+    return session
+
+
+def test_download_nemotron_cc_pipeline(tmp_path, mock_paths_open):
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
-    # Create real paths file in tmp_path to simulate remote download
     paths = ["contrib/Nemotron/file1.jsonl.zstd", "contrib/Nemotron/file2.jsonl.zstd"]
-    paths_file = tmp_path / "data-jsonl.paths.gz"
-    paths_file.write_bytes(create_paths_file(paths))
-
-    # Create mock compressed data for each file
     file1_data = create_zstd_compressed_jsonl([SAMPLE_NEMOTRON_RECORDS[0]])
     file2_data = create_zstd_compressed_jsonl(SAMPLE_NEMOTRON_RECORDS[1:])
 
-    def mock_requests_get(url, **kwargs):
-        from unittest.mock import Mock
-
-        response = Mock()
-        response.status_code = 200
-        if "file1" in url:
-            response.headers = {"content-length": str(len(file1_data))}
-            response.raw = BytesIO(file1_data)
-        else:
-            response.headers = {"content-length": str(len(file2_data))}
-            response.raw = BytesIO(file2_data)
-        return response
-
-    # Mock only the remote HTTP request to download paths file
-    import fsspec
-
-    original_open = fsspec.open
-
-    def mock_open_for_remote(path, mode="r", **kwargs):
-        # Intercept only the remote paths file download
-        if "data.commoncrawl.org" in path and "data-jsonl.paths.gz" in path:
-            return paths_file.open("rb")
-        return original_open(path, mode, **kwargs)
-
     with (
-        patch("marin.download.nemotron_cc.download_nemotron_cc.fsspec.open", side_effect=mock_open_for_remote),
-        patch("marin.download.nemotron_cc.download_nemotron_cc.requests.get", side_effect=mock_requests_get),
+        patch(_OPEN_URL_TARGET, side_effect=mock_paths_open(paths)),
+        patch(_REQUESTS_SESSION_TARGET, _mock_session_for({"file1": file1_data, "file2": file2_data})),
     ):
-        cfg = NemotronIngressConfig(output_path=str(output_dir), chunk_size=1024)
+        cfg = NemotronIngressConfig(output_path=str(output_dir))
         download_nemotron_cc(cfg)
 
-    # Verify output files were created
-    all_records = read_all_jsonl_gz(output_dir / "contrib" / "Nemotron", "*.jsonl.gz")
+    all_records = read_all_jsonl_zst(output_dir / "contrib" / "Nemotron")
 
     assert len(all_records) == 3
     assert all_records[0]["id"] == "record-001"
     assert all_records[1]["id"] == "record-002"
     assert all_records[2]["id"] == "record-003"
 
-    # Verify Dolma format
     for record in all_records:
         assert "id" in record
         assert "text" in record
-        assert "source" in record
         assert record["source"] == "nemotron"
         assert "metadata" in record
 
 
-def test_download_nemotron_cc_dolma_format(tmp_path, read_all_jsonl_gz):
-    """Test Dolma format conversion in full pipeline."""
+def test_download_nemotron_cc_dolma_format(tmp_path, mock_paths_open):
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -134,40 +145,17 @@ def test_download_nemotron_cc_dolma_format(tmp_path, read_all_jsonl_gz):
         "bucket": "high",
     }
 
-    # Create real paths file
     paths = ["contrib/Nemotron/test.jsonl.zstd"]
-    paths_file = tmp_path / "data-jsonl.paths.gz"
-    paths_file.write_bytes(create_paths_file(paths))
-
     compressed_data = create_zstd_compressed_jsonl([nemotron_record])
 
-    def mock_requests_get(url, **kwargs):
-        from unittest.mock import Mock
-
-        response = Mock()
-        response.status_code = 200
-        response.headers = {"content-length": str(len(compressed_data))}
-        response.raw = BytesIO(compressed_data)
-        return response
-
-    # Mock only the remote HTTP request to download paths file
-    import fsspec
-
-    original_open = fsspec.open
-
-    def mock_open_for_remote(path, mode="r", **kwargs):
-        if "data.commoncrawl.org" in path and "data-jsonl.paths.gz" in path:
-            return paths_file.open("rb")
-        return original_open(path, mode, **kwargs)
-
     with (
-        patch("marin.download.nemotron_cc.download_nemotron_cc.fsspec.open", side_effect=mock_open_for_remote),
-        patch("marin.download.nemotron_cc.download_nemotron_cc.requests.get", side_effect=mock_requests_get),
+        patch(_OPEN_URL_TARGET, side_effect=mock_paths_open(paths)),
+        patch(_REQUESTS_SESSION_TARGET, _mock_session_for({"test": compressed_data})),
     ):
         cfg = NemotronIngressConfig(output_path=str(output_dir))
         download_nemotron_cc(cfg)
 
-    records = read_all_jsonl_gz(output_dir / "contrib" / "Nemotron", "*.jsonl.gz")
+    records = read_all_jsonl_zst(output_dir / "contrib" / "Nemotron")
     assert len(records) == 1
 
     dolma_record = records[0]
@@ -186,40 +174,22 @@ def test_download_nemotron_cc_dolma_format(tmp_path, read_all_jsonl_gz):
     assert "nemotron_text" not in metadata
 
 
-def test_download_nemotron_cc_skips_existing(tmp_path):
-    """Test that pipeline skips files that already exist."""
+def test_download_nemotron_cc_skips_existing(tmp_path, mock_paths_open):
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
-    # Create real paths file
     paths = ["contrib/Nemotron/existing.jsonl.zstd"]
-    paths_file = tmp_path / "data-jsonl.paths.gz"
-    paths_file.write_bytes(create_paths_file(paths))
 
-    # Pre-create the output file
-    existing_output = output_dir / "contrib" / "Nemotron" / "existing.jsonl.gz"
+    existing_output = output_dir / "contrib" / "Nemotron" / "existing.jsonl.zst"
     existing_output.parent.mkdir(parents=True)
     existing_output.write_text("existing")
 
-    # Mock only the remote HTTP request to download paths file
-    import fsspec
-
-    original_open = fsspec.open
-
-    def mock_open_for_remote(path, mode="r", **kwargs):
-        if "data.commoncrawl.org" in path and "data-jsonl.paths.gz" in path:
-            return paths_file.open("rb")
-        return original_open(path, mode, **kwargs)
-
     with (
-        patch("marin.download.nemotron_cc.download_nemotron_cc.fsspec.open", side_effect=mock_open_for_remote),
-        patch("marin.download.nemotron_cc.download_nemotron_cc.requests.get") as mock_get,
+        patch(_OPEN_URL_TARGET, side_effect=mock_paths_open(paths)),
+        patch(_REQUESTS_SESSION_TARGET) as mock_session,
     ):
         cfg = NemotronIngressConfig(output_path=str(output_dir))
         download_nemotron_cc(cfg)
 
-    # Verify no HTTP requests were made (file was skipped)
-    mock_get.assert_not_called()
-
-    # Verify existing file was not modified
+    mock_session.return_value.get.assert_not_called()
     assert existing_output.read_text() == "existing"

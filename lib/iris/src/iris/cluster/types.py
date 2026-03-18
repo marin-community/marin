@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Core types for the iris cluster layer.
 
@@ -27,11 +16,13 @@ import os
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from enum import Enum, IntEnum
+from pathlib import Path
 from typing import Any, NewType
 
+import cloudpickle
 import humanfriendly
 
+from iris.cluster.constraints import Constraint
 from iris.rpc import cluster_pb2
 
 
@@ -39,21 +30,22 @@ from iris.rpc import cluster_pb2
 class JobName:
     """Structured hierarchical job name.
 
-    Canonical form: /namespace/parent/child
-    Tasks are job names with numeric suffix: /namespace/parent/child/0
+    Canonical form: /user/root-job/child
+    Tasks are job names with numeric suffix: /user/root-job/child/0
 
-    Job names form a tree rooted at the namespace:
-        /root-job
-        /root-job/child-1
-        /root-job/child-1/grandchild
-        /root-job/0
+    The first path component identifies the submitting user. Job hierarchy starts
+    at the second component:
+        /alice/root-job
+        /alice/root-job/child-1
+        /alice/root-job/child-1/grandchild
+        /alice/root-job/0
     """
 
     _parts: tuple[str, ...]
 
     def __post_init__(self):
-        if not self._parts:
-            raise ValueError("JobName cannot be empty")
+        if len(self._parts) < 2:
+            raise ValueError("JobName must use canonical '/<user>/<job>[...]' format")
         for part in self._parts:
             if "/" in part:
                 raise ValueError(f"JobName component cannot contain '/': {part}")
@@ -62,26 +54,28 @@ class JobName:
 
     @classmethod
     def from_string(cls, s: str) -> "JobName":
-        """Parse a job name string like '/root/child/grandchild'.
+        """Parse a job name string like '/user/root/child/grandchild'.
 
         Examples:
-            JobName.from_string("/my-job") -> JobName(("my-job",))
-            JobName.from_string("/parent/child") -> JobName(("parent", "child"))
-            JobName.from_string("/job/0") -> JobName(("job", "0"))
+            JobName.from_string("/alice/my-job") -> JobName(("alice", "my-job"))
+            JobName.from_string("/alice/parent/child") -> JobName(("alice", "parent", "child"))
+            JobName.from_string("/alice/job/0") -> JobName(("alice", "job", "0"))
         """
         if not s:
-            raise ValueError("Job name cannot be empty")
+            raise ValueError("Job name must use canonical '/<user>/<job>[...]' format")
         if not s.startswith("/"):
-            raise ValueError(f"Job name must start with '/': {s}")
+            raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
         parts = tuple(s[1:].split("/"))
+        if len(parts) < 2:
+            raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
         if any(not part or not part.strip() for part in parts):
             raise ValueError(f"Job name contains empty or whitespace-only component: {s}")
         return cls(parts)
 
     @classmethod
-    def root(cls, name: str) -> "JobName":
+    def root(cls, user: str, name: str) -> "JobName":
         """Create a root job name (no parent)."""
-        return cls((name,))
+        return cls((user, name))
 
     def child(self, name: str) -> "JobName":
         """Create a child job name."""
@@ -93,21 +87,31 @@ class JobName:
         Tasks are job names with a numeric suffix.
 
         Example:
-            JobName.from_string("/my-job").task(0) -> JobName(("my-job", "0"))
+            JobName.from_string("/alice/my-job").task(0) -> JobName(("alice", "my-job", "0"))
         """
         return JobName((*self._parts, str(index)))
 
     @property
     def parent(self) -> "JobName | None":
         """Get parent job name, or None if this is a root job."""
-        if len(self._parts) == 1:
+        if self.is_root:
             return None
         return JobName(self._parts[:-1])
 
     @property
-    def namespace(self) -> str:
-        """Get the namespace (root component) for actor isolation."""
+    def user(self) -> str:
+        """Get the submitting user."""
         return self._parts[0]
+
+    @property
+    def root_job(self) -> "JobName":
+        """Get the root job for this hierarchy."""
+        return JobName(self._parts[:2])
+
+    @property
+    def namespace(self) -> str:
+        """Get the actor namespace (user/root job) for actor isolation."""
+        return "/".join(self.root_job._parts)
 
     @property
     def name(self) -> str:
@@ -117,11 +121,13 @@ class JobName:
     @property
     def is_root(self) -> bool:
         """True if this is a root job (no parent)."""
-        return len(self._parts) == 1
+        return len(self._parts) == 2
 
     @property
     def task_index(self) -> int | None:
         """If this is a task (last component is numeric), return the index."""
+        if len(self._parts) < 3:
+            return None
         try:
             return int(self._parts[-1])
         except ValueError:
@@ -131,6 +137,24 @@ class JobName:
     def is_task(self) -> bool:
         """True if this is a task (last component is numeric)."""
         return self.task_index is not None
+
+    @property
+    def depth(self) -> int:
+        """Depth in the job hierarchy. Root jobs have depth 1.
+
+        Tasks inherit their parent job's depth (the task index
+        is not counted as a depth level).
+
+        Examples:
+            /alice/root -> 1
+            /alice/root/child -> 2
+            /alice/root/child/grandchild -> 3
+            /alice/root/0 (task) -> 1
+            /alice/root/child/0 (task) -> 2
+        """
+        if self.is_task:
+            return len(self._parts) - 2
+        return len(self._parts) - 1
 
     def is_ancestor_of(self, other: "JobName", *, include_self: bool = True) -> bool:
         """True if this job name is an ancestor of another job name."""
@@ -158,7 +182,7 @@ class JobName:
         return (self.parent, task_index)
 
     def __str__(self) -> str:
-        """Canonical wire format: '/root/child/grandchild'."""
+        """Canonical wire format: '/user/root/child/grandchild'."""
         return "/" + "/".join(self._parts)
 
     def __repr__(self) -> str:
@@ -174,41 +198,80 @@ class JobName:
         return cls.from_string(s)
 
 
-class DeviceType(Enum):
-    """Device type for demand routing."""
+@dataclass(frozen=True, slots=True)
+class TaskAttempt:
+    """A task identity combining a task-level JobName with an optional attempt qualifier.
 
-    CPU = "cpu"
-    GPU = "gpu"
-    TPU = "tpu"
+    Canonical wire format: /user/job/0:attempt_id
+    When attempt_id is None, the wire format omits the suffix: /user/job/0
 
+    The task_id must be a task-level JobName (last component numeric).
+    attempt_id is optional — when absent, semantics are per-operation but
+    typically "use the latest active attempt" is implied.
 
-def get_device_type_enum(device: cluster_pb2.DeviceConfig) -> DeviceType:
-    """Extract device type as enum from DeviceConfig."""
-    if device.HasField("gpu"):
-        return DeviceType.GPU
-    if device.HasField("tpu"):
-        return DeviceType.TPU
-    return DeviceType.CPU
+    Examples:
+        TaskAttempt.from_wire("/alice/job/0")     -> TaskAttempt(task_id=/alice/job/0, attempt_id=None)
+        TaskAttempt.from_wire("/alice/job/0:3")   -> TaskAttempt(task_id=/alice/job/0, attempt_id=3)
+    """
 
+    task_id: JobName
+    attempt_id: int | None = None
 
-def get_device_type(device: cluster_pb2.DeviceConfig) -> str:
-    """Extract device type from DeviceConfig."""
-    if device.HasField("cpu"):
-        return "cpu"
-    if device.HasField("gpu"):
-        return "gpu"
-    if device.HasField("tpu"):
-        return "tpu"
-    return "cpu"
+    @classmethod
+    def from_wire(cls, s: str) -> "TaskAttempt":
+        """Parse a wire-format string like '/user/job/0' or '/user/job/0:3'."""
+        if not s:
+            raise ValueError("TaskAttempt wire format must not be empty")
+        colon = s.rfind(":")
+        if colon >= 0:
+            task_part = s[:colon]
+            attempt_str = s[colon + 1 :]
+            try:
+                attempt_id = int(attempt_str)
+            except ValueError as exc:
+                raise ValueError(f"Invalid attempt ID in TaskAttempt '{s}': '{attempt_str}' is not an integer") from exc
+            return cls(task_id=JobName.from_wire(task_part), attempt_id=attempt_id)
+        return cls(task_id=JobName.from_wire(s))
 
+    def to_wire(self) -> str:
+        """Serialize to wire format: '/user/job/0' or '/user/job/0:3'."""
+        base = self.task_id.to_wire()
+        if self.attempt_id is not None:
+            return f"{base}:{self.attempt_id}"
+        return base
 
-def get_device_variant(device: cluster_pb2.DeviceConfig) -> str | None:
-    """Extract device variant (e.g., GPU model) from DeviceConfig."""
-    if device.HasField("gpu"):
-        return device.gpu.variant if device.gpu.variant else None
-    if device.HasField("tpu"):
-        return device.tpu.variant if device.tpu.variant else None
-    return None
+    def require_attempt(self) -> int:
+        """Return attempt_id or raise if absent."""
+        if self.attempt_id is None:
+            raise ValueError(f"TaskAttempt has no attempt_id: {self}")
+        return self.attempt_id
+
+    @property
+    def job_id(self) -> JobName:
+        """Get the parent job name (task_id without the task index)."""
+        parent = self.task_id.parent
+        if parent is None:
+            raise ValueError(f"TaskAttempt task_id has no parent job: {self.task_id}")
+        return parent
+
+    @property
+    def task_index(self) -> int:
+        """Get the task index from the task_id."""
+        return self.task_id.require_task()[1]
+
+    def with_attempt(self, attempt_id: int) -> "TaskAttempt":
+        """Return a new TaskAttempt with the given attempt_id."""
+        return TaskAttempt(task_id=self.task_id, attempt_id=attempt_id)
+
+    def without_attempt(self) -> "TaskAttempt":
+        """Return a new TaskAttempt with attempt_id=None."""
+        return TaskAttempt(task_id=self.task_id)
+
+    def __str__(self) -> str:
+        return self.to_wire()
+
+    def __repr__(self) -> str:
+        return f"TaskAttempt({self.to_wire()!r})"
 
 
 def get_gpu_count(device: cluster_pb2.DeviceConfig) -> int:
@@ -230,15 +293,10 @@ EndpointId = NewType("EndpointId", str)
 
 
 @dataclass(frozen=True)
-class VmWorkerStatus:
-    """Worker status keyed by VM address for autoscaler.
+class WorkerStatus:
+    """Worker status keyed by worker_id for autoscaler idle tracking."""
 
-    The VM address is the worker's identity. This enables the autoscaler
-    to look up worker status directly by VM address without needing
-    to correlate separate worker_id to VM.
-    """
-
-    vm_address: str
+    worker_id: str
     running_task_ids: frozenset[str]
 
     @property
@@ -246,111 +304,7 @@ class VmWorkerStatus:
         return len(self.running_task_ids) == 0
 
 
-# Map of VM address -> worker status, used by autoscaler for idle tracking
-VmWorkerStatusMap = dict[str, VmWorkerStatus]
-
-
-@dataclass(frozen=True)
-class AttributeValue:
-    """Typed attribute value for worker attributes and constraint matching.
-
-    Used for coscheduling and constraint-based worker filtering.
-    Values can be strings, integers, or floats.
-    """
-
-    value: str | int | float
-
-    def to_proto(self) -> cluster_pb2.AttributeValue:
-        """Convert to protobuf representation."""
-        proto = cluster_pb2.AttributeValue()
-        if isinstance(self.value, str):
-            proto.string_value = self.value
-        elif isinstance(self.value, int):
-            proto.int_value = self.value
-        elif isinstance(self.value, float):
-            proto.float_value = self.value
-        return proto
-
-    @staticmethod
-    def from_proto(proto: cluster_pb2.AttributeValue) -> "AttributeValue":
-        """Convert from protobuf representation."""
-        if proto.HasField("string_value"):
-            return AttributeValue(proto.string_value)
-        elif proto.HasField("int_value"):
-            return AttributeValue(proto.int_value)
-        elif proto.HasField("float_value"):
-            return AttributeValue(proto.float_value)
-        # Default to empty string if no value set
-        return AttributeValue("")
-
-
-class ConstraintOp(IntEnum):
-    """Constraint operators for worker attribute matching.
-
-    Used to define constraints that filter which workers can run a job.
-    Each operator compares a worker attribute against a constraint value.
-
-    Example:
-        >>> # Match workers where region equals "us-central1"
-        >>> Constraint(key="region", op=ConstraintOp.EQ, value="us-central1")
-        >>> # Match workers with memory > 32GB
-        >>> Constraint(key="memory_gb", op=ConstraintOp.GT, value=32)
-        >>> # Match workers that have the "gpu" attribute set
-        >>> Constraint(key="gpu", op=ConstraintOp.EXISTS)
-    """
-
-    EQ = 0
-    NE = 1
-    EXISTS = 2
-    NOT_EXISTS = 3
-    GT = 4
-    GE = 5
-    LT = 6
-    LE = 7
-
-    def to_proto(self) -> cluster_pb2.ConstraintOp:
-        """Convert to protobuf ConstraintOp enum value."""
-        mapping = {
-            ConstraintOp.EQ: cluster_pb2.CONSTRAINT_OP_EQ,
-            ConstraintOp.NE: cluster_pb2.CONSTRAINT_OP_NE,
-            ConstraintOp.EXISTS: cluster_pb2.CONSTRAINT_OP_EXISTS,
-            ConstraintOp.NOT_EXISTS: cluster_pb2.CONSTRAINT_OP_NOT_EXISTS,
-            ConstraintOp.GT: cluster_pb2.CONSTRAINT_OP_GT,
-            ConstraintOp.GE: cluster_pb2.CONSTRAINT_OP_GE,
-            ConstraintOp.LT: cluster_pb2.CONSTRAINT_OP_LT,
-            ConstraintOp.LE: cluster_pb2.CONSTRAINT_OP_LE,
-        }
-        return mapping[self]
-
-
-@dataclass(frozen=True)
-class Constraint:
-    """Worker constraint for job scheduling.
-
-    Constraints filter which workers are eligible to run a job based on
-    worker attributes. Workers must satisfy all constraints to be considered.
-
-    Example:
-        >>> # Require a specific TPU pod
-        >>> Constraint(key="tpu-name", op=ConstraintOp.EQ, value="my-tpu-pod")
-        >>> # Require workers in a specific zone
-        >>> Constraint(key="zone", op=ConstraintOp.EQ, value="us-central1-a")
-        >>> # Require workers with at least 64GB memory
-        >>> Constraint(key="memory_gb", op=ConstraintOp.GE, value=64)
-        >>> # Require workers that have a GPU
-        >>> Constraint(key="gpu", op=ConstraintOp.EXISTS)
-    """
-
-    key: str
-    op: ConstraintOp
-    value: str | int | float | None = None
-
-    def to_proto(self) -> cluster_pb2.Constraint:
-        """Convert to protobuf representation."""
-        proto = cluster_pb2.Constraint(key=self.key, op=self.op.to_proto())
-        if self.value is not None:
-            proto.value.CopyFrom(AttributeValue(self.value).to_proto())
-        return proto
+WorkerStatusMap = dict[str, WorkerStatus]
 
 
 @dataclass(frozen=True)
@@ -371,6 +325,30 @@ class CoschedulingConfig:
     def to_proto(self) -> cluster_pb2.CoschedulingConfig:
         """Convert to protobuf representation."""
         return cluster_pb2.CoschedulingConfig(group_by=self.group_by)
+
+
+@dataclass(frozen=True)
+class ReservationEntry:
+    """A single reservation entry describing one worker's worth of resources.
+
+    Used in the high-level client API. Each entry becomes a demand anchor
+    that the autoscaler provisions before the reserving job schedules.
+
+    Example:
+        >>> ReservationEntry(resources=ResourceSpec(cpu=2, memory="8g"))
+        >>> ReservationEntry(resources=ResourceSpec(cpu=2), constraints=[Constraint("region", value="us-central1")])
+    """
+
+    resources: "ResourceSpec"
+    constraints: list[Constraint] | None = None
+
+    def to_proto(self) -> cluster_pb2.ReservationEntry:
+        """Convert to protobuf representation."""
+        constraints_proto = [c.to_proto() for c in self.constraints or []]
+        return cluster_pb2.ReservationEntry(
+            resources=self.resources.to_proto(),
+            constraints=constraints_proto,
+        )
 
 
 def tpu_device(variant: str, count: int | None = None) -> cluster_pb2.DeviceConfig:
@@ -401,6 +379,24 @@ def tpu_device(variant: str, count: int | None = None) -> cluster_pb2.DeviceConf
         tpu=cluster_pb2.TpuDevice(
             variant=variant,
             count=chip_count,
+        )
+    )
+
+
+def gpu_device(variant: str, count: int = 1) -> cluster_pb2.DeviceConfig:
+    """Create a DeviceConfig for a GPU device.
+
+    Args:
+        variant: GPU variant string (e.g., "H100", "A100").
+        count: Number of GPUs per node.
+
+    Returns:
+        DeviceConfig with the gpu field set.
+    """
+    return cluster_pb2.DeviceConfig(
+        gpu=cluster_pb2.GpuDevice(
+            variant=variant,
+            count=count,
         )
     )
 
@@ -443,89 +439,66 @@ class ResourceSpec:
     Accepts human-readable memory/disk values (e.g., "8g", "512m").
     """
 
-    cpu: int = 0
+    cpu: float = 0.0
     memory: str | int = 0  # "8g" or bytes
     disk: str | int = 0
     device: cluster_pb2.DeviceConfig | None = None
-    regions: Sequence[str] | None = None
 
     def to_proto(self) -> cluster_pb2.ResourceSpecProto:
         """Convert to wire format."""
         memory_bytes = self.memory if isinstance(self.memory, int) else parse_memory_string(self.memory)
         disk_bytes = self.disk if isinstance(self.disk, int) else parse_memory_string(self.disk)
         spec = cluster_pb2.ResourceSpecProto(
-            cpu=self.cpu,
+            cpu_millicores=int(self.cpu * 1000),
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
-            regions=list(self.regions or []),
         )
         if self.device is not None:
             spec.device.CopyFrom(self.device)
         return spec
 
 
-DOCKERFILE_TEMPLATE = """FROM {base_image}
+CALLABLE_RUNNER = """\
+import cloudpickle
+import os
+import sys
+import traceback
+import logging
 
-RUN apt-get update && apt-get install -y git curl build-essential && rm -rf /var/lib/apt/lists/*
-COPY --from=ghcr.io/astral-sh/uv:0.7.12 /uv /usr/local/bin/uv
+# Reinitialize logging with the unified Iris format.
+# Uses single-letter level prefix: I=INFO, W=WARNING, E=ERROR, D=DEBUG, C=CRITICAL.
+# NOTE: This duplicates LevelPrefixFormatter and _LEVEL_PREFIX from iris.logging
+# because CALLABLE_RUNNER executes inside an isolated task container that may not
+# have the iris package installed (e.g. user-provided Docker images).
+_LEVEL_PREFIX = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
 
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
-ENV PATH="/root/.cargo/bin:$PATH"
+class _LevelPrefixFormatter(logging.Formatter):
+    def format(self, record):
+        record.levelprefix = _LEVEL_PREFIX.get(record.levelname, "?")
+        return super().format(record)
 
-ENV UV_CACHE_DIR=/opt/uv-cache
-ENV UV_LINK_MODE=copy
-ENV UV_PROJECT_ENVIRONMENT=/app/.venv
-WORKDIR /app
+_root = logging.getLogger()
+_root.handlers.clear()
+_handler = logging.StreamHandler(sys.stderr)
+_handler.setFormatter(_LevelPrefixFormatter(
+    fmt="%(levelprefix)s%(asctime)s %(name)s %(message)s",
+    datefmt="%Y%m%d %H:%M:%S",
+))
+_root.addHandler(_handler)
+_root.setLevel(logging.INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-COPY . .
+workdir = os.environ["IRIS_WORKDIR"]
 
-RUN --mount=type=cache,id=iris-uv-global,sharing=shared,target=/opt/uv-cache \\
-    --mount=type=cache,id=iris-cargo,sharing=shared,target=/root/.cargo/registry \\
-    --mount=type=cache,id=iris-cargo-git,sharing=shared,target=/root/.cargo/git \\
-    uv sync {extras_flags}
-
-ENV PATH="/app/.venv/bin:$PATH"
-
-RUN uv pip install cloudpickle
-{pip_install_step}"""
-
-
-def generate_dockerfile(
-    python_version: str,
-    extras: list[str] | None = None,
-    pip_packages: list[str] | None = None,
-) -> str:
-    """Generate a Dockerfile for an Iris job container.
-
-    Uses the full Python image when pip_packages are specified (native wheels
-    often depend on system libraries stripped from slim images).
-
-    Extras can be specified in two formats:
-    - "extra_name" -> "--extra extra_name"
-    - "package:extra_name" -> "--package package --extra extra_name"
-    """
-    base_image = f"python:{python_version}" if pip_packages else f"python:{python_version}-slim"
-
-    # Parse extras: support both "extra" and "package:extra" syntax
-    extras_parts = []
-    for e in extras or []:
-        if ":" in e:
-            package, extra = e.split(":", 1)
-            extras_parts.append(f"--package {package} --extra {extra}")
-        else:
-            extras_parts.append(f"--extra {e}")
-    extras_flags = " ".join(extras_parts)
-
-    pip_install_step = ""
-    if pip_packages:
-        packages_str = " ".join(f'"{pkg}"' for pkg in pip_packages)
-        pip_install_step = f"\nRUN uv pip install {packages_str}\n"
-
-    return DOCKERFILE_TEMPLATE.format(
-        base_image=base_image,
-        extras_flags=extras_flags,
-        pip_install_step=pip_install_step,
-    )
+try:
+    with open(os.path.join(workdir, "_callable.pkl"), "rb") as f:
+        fn, args, kwargs = cloudpickle.loads(f.read())
+    fn(*args, **kwargs)
+except Exception:
+    traceback.print_exc()
+    sys.exit(1)
+"""
 
 
 @dataclass
@@ -544,14 +517,9 @@ class EnvironmentSpec:
     pip_packages: Sequence[str] | None = None
     env_vars: dict[str, str] | None = None
     extras: Sequence[str] | None = None
-    dockerfile: str | None = None
 
     def to_proto(self) -> cluster_pb2.EnvironmentConfig:
-        """Convert to wire format with sensible defaults applied.
-
-        Generates the dockerfile on the client side so the worker can use it
-        directly without regenerating (which would lose extras like package:extra).
-        """
+        """Convert to wire format with sensible defaults applied."""
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
             "TOKENIZERS_PARALLELISM": "false",
@@ -563,21 +531,11 @@ class EnvironmentSpec:
 
         py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
 
-        if self.dockerfile is not None:
-            dockerfile = self.dockerfile
-        else:
-            dockerfile = generate_dockerfile(
-                python_version=py_version,
-                extras=list(self.extras or []),
-                pip_packages=list(self.pip_packages or []),
-            )
-
         return cluster_pb2.EnvironmentConfig(
             pip_packages=list(self.pip_packages or []),
             env_vars=merged_env_vars,
             extras=list(self.extras or []),
             python_version=py_version,
-            dockerfile=dockerfile,
         )
 
 
@@ -587,9 +545,9 @@ class Namespace(str):
     Namespaces provide isolation between different jobs/environments.
     Actors in one namespace cannot discover actors in another namespace.
 
-    The namespace is derived from the root job ID: all jobs in a hierarchy
-    share the same namespace. This ensures automatic isolation without
-    explicit configuration.
+    The namespace is derived from the user/root job pair: all jobs in a hierarchy
+    share the same namespace. This preserves actor isolation between unrelated
+    jobs from the same user.
     """
 
     def __repr__(self) -> str:
@@ -601,7 +559,7 @@ class Namespace(str):
 
         The namespace is the first component of the job ID hierarchy.
         For example:
-            JobName.from_string("/abc123/worker-0") -> Namespace("abc123")
+            JobName.from_string("/alice/abc123/worker-0") -> Namespace("alice/abc123")
 
         Args:
             job_id: Hierarchical job ID
@@ -613,14 +571,6 @@ class Namespace(str):
             ValueError: If job_id is empty
         """
         return cls(job_id.namespace)
-
-
-PREEMPTIBLE_ATTRIBUTE_KEY = "preemptible"
-
-
-def preemptible_constraint(preemptible: bool = True) -> Constraint:
-    """Constraint requiring workers to be preemptible (or not)."""
-    return Constraint(key=PREEMPTIBLE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=str(preemptible).lower())
 
 
 def is_job_finished(state: int) -> bool:
@@ -722,76 +672,102 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     raise ValueError(f"Unknown TPU type: {tpu_type}")
 
 
+def adjust_tpu_replicas(device: "cluster_pb2.DeviceConfig | None", replicas: int) -> int:
+    """Adjust replicas for multi-host TPU topologies.
+
+    Multi-host TPU topologies (e.g. v6e-32 with vm_count=8) require one task
+    per VM. When ``replicas`` is 1 (the default), this auto-scales to
+    ``vm_count`` so callers don't need to know the topology. For explicitly
+    set replicas (>1) that don't align, raises ``ValueError``.
+
+    Returns:
+        The (possibly adjusted) replica count.
+    """
+    if device is None or not device.HasField("tpu"):
+        return replicas
+
+    variant = device.tpu.variant
+    if not variant:
+        return replicas
+
+    try:
+        topo = get_tpu_topology(variant)
+    except ValueError:
+        return replicas
+
+    if topo.vm_count <= 1:
+        return replicas
+
+    if replicas == 1:
+        return topo.vm_count
+
+    if replicas % topo.vm_count != 0:
+        raise ValueError(
+            f"TPU type '{variant}' requires {topo.vm_count} VMs per slice, "
+            f"so replicas must be a multiple of {topo.vm_count} (got replicas={replicas}). "
+            f"For a single slice, use replicas={topo.vm_count}. "
+            f"For N slices, use replicas=N*{topo.vm_count}."
+        )
+
+    return replicas
+
+
 class Entrypoint:
     """Job entrypoint specification.
 
-    Supports two execution modes:
-    1. Callable: A Python function with args/kwargs (cloudpickled)
-    2. Command: A command-line invocation (e.g., ["python", "train.py", "--epochs", "10"])
-
-    Callable entrypoints are stored as cloudpickle bytes. The bytes are the
-    single source of truth — they pass from client to worker to task container
-    without deserialization, avoiding Python version mismatches between the
-    client and worker processes.
+    Every entrypoint has a command (what to run) and optional workdir_files
+    that the worker writes to $IRIS_WORKDIR/{name} before executing the command.
 
     Examples:
-        # Callable entrypoint
         entrypoint = Entrypoint.from_callable(my_func, arg1, arg2, key=val)
-
-        # Command entrypoint
         entrypoint = Entrypoint.from_command("python", "train.py", "--epochs", "10")
     """
 
     def __init__(
         self,
         *,
-        callable_bytes: bytes | None = None,
-        command: list[str] | None = None,
+        command: list[str],
+        workdir_files: dict[str, bytes] | None = None,
     ):
-        has_callable = callable_bytes is not None
-        has_command = command is not None
-        if has_callable == has_command:
-            raise ValueError("Exactly one of 'callable_bytes' or 'command' must be set")
-        self._callable_bytes = callable_bytes
+        if not command:
+            raise ValueError("Command must have at least one argument")
         self.command = command
-
-    @property
-    def callable_bytes(self) -> bytes | None:
-        return self._callable_bytes
-
-    @property
-    def is_callable(self) -> bool:
-        return self._callable_bytes is not None
-
-    @property
-    def is_command(self) -> bool:
-        return self.command is not None
+        self.workdir_files: dict[str, bytes] = workdir_files or {}
 
     def resolve(self) -> tuple[Callable[..., Any], tuple, dict[str, Any]]:
         """Deserialize the callable, args, kwargs from pickle bytes.
 
         Only call this when you need to actually invoke the function locally
-        (e.g. local_client). Avoid on the worker — use callable_bytes directly
+        (e.g. local_client). Avoid on the worker — use workdir_files directly
         to pass through to the task container without version-sensitive unpickling.
         """
-        if self._callable_bytes is None:
+        payload = self.workdir_files.get("_callable.pkl")
+        if payload is None:
             raise ValueError("Not a callable entrypoint")
-        import cloudpickle
 
-        return cloudpickle.loads(self._callable_bytes)
+        return cloudpickle.loads(payload)
 
     @classmethod
     def from_callable(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "Entrypoint":
-        import cloudpickle
-        import sys
-        from pathlib import Path
-
+        # mark any testing code as pickle_by_value so we can use it with cloudpickle
         module = sys.modules.get(fn.__module__)
         module_path = Path(module.__file__).parts if module and getattr(module, "__file__", None) else ()
         if module and (module.__package__ is None or module.__spec__ is None or "tests" in module_path):
             cloudpickle.register_pickle_by_value(module)
 
-        return cls(callable_bytes=cloudpickle.dumps((fn, args, kwargs)))
+        # We use bash -c so that $IRIS_WORKDIR and $IRIS_PYTHON are expanded
+        # at runtime from the container's environment.  ProcessContainerHandle
+        # remaps IRIS_WORKDIR to the host workdir and IRIS_PYTHON to
+        # sys.executable for local execution; in Docker containers these are
+        # set to "/app" and "python" respectively by task_attempt env setup.
+        # `exec` replaces bash with python to avoid an extra parent process.
+        return cls(
+            command=["bash", "-c", "exec $IRIS_PYTHON -u $IRIS_WORKDIR/_callable_runner.py"],
+            workdir_files={
+                "_callable.pkl": cloudpickle.dumps((fn, args, kwargs)),
+                "_callable_runner.py": CALLABLE_RUNNER.encode(),
+            },
+        )
 
     @classmethod
     def from_command(cls, *argv: str) -> "Entrypoint":
@@ -799,35 +775,26 @@ class Entrypoint:
 
         Args:
             *argv: Command and arguments (e.g., "python", "train.py", "--epochs", "10")
-
-        Returns:
-            Entrypoint configured for command execution
         """
         if not argv:
             raise ValueError("Command must have at least one argument")
-        return cls(command=list(argv))
+        return cls(command=list(argv), workdir_files={})
 
-    def to_proto(self) -> cluster_pb2.Entrypoint:
-        """Convert to protobuf representation."""
-        proto = cluster_pb2.Entrypoint()
-        if self._callable_bytes is not None:
-            proto.callable = self._callable_bytes
-        elif self.command is not None:
-            proto.command.argv[:] = self.command
+    def to_proto(self) -> cluster_pb2.RuntimeEntrypoint:
+        """Convert to protobuf representation.
+
+        Produces a RuntimeEntrypoint with no setup_commands (those are added
+        by build_runtime_entrypoint when submitting to the cluster).
+        """
+        proto = cluster_pb2.RuntimeEntrypoint()
+        proto.run_command.argv[:] = self.command
+        for name, data in self.workdir_files.items():
+            proto.workdir_files[name] = data
         return proto
 
     @classmethod
-    def from_proto(cls, proto: cluster_pb2.Entrypoint) -> "Entrypoint":
-        """Create from protobuf representation.
-
-        For callable entrypoints, stores the raw pickle bytes without
-        deserializing. This avoids Python version mismatches when the
-        worker runs a different Python than the client.
-        """
-        kind = proto.WhichOneof("kind")
-        if kind == "callable":
-            return cls(callable_bytes=proto.callable)
-        elif kind == "command":
-            return cls(command=list(proto.command.argv))
-        else:
-            raise ValueError(f"Unknown entrypoint kind: {kind}")
+    def from_proto(cls, proto: cluster_pb2.RuntimeEntrypoint) -> "Entrypoint":
+        """Create from protobuf representation."""
+        command = list(proto.run_command.argv)
+        workdir_files = dict(proto.workdir_files) if proto.workdir_files else None
+        return cls(command=command, workdir_files=workdir_files)

@@ -1,7 +1,6 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
-
 
 import numbers
 
@@ -41,6 +40,7 @@ from .activations import (
 from .conv import Conv, ConvTranspose
 from .dropout import Dropout, dropout
 from .embedding import Embedding
+from .ragged_dot import ragged_dot
 from .linear import Linear, MoELinear
 from .loss import binary_cross_entropy_loss, cross_entropy_loss, cross_entropy_loss_and_log_normalizers, reduce_loss
 from .mlp import MLP
@@ -102,6 +102,7 @@ __all__ = [
     "Linear",
     "MoELinear",
     "Embedding",
+    "ragged_dot",
     "RmsNorm",
     "Stacked",
     "BlockSeq",

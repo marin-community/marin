@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Generic RPC CLI infrastructure for Iris services.
 
@@ -28,7 +17,9 @@ from google.protobuf import json_format
 from google.protobuf.descriptor import FieldDescriptor
 from google.protobuf.message import Message
 
+from iris.cli.main import require_controller_url
 from iris.rpc import actor_connect, cluster_connect
+from iris.rpc.auth import AuthTokenInjector, TokenProvider
 
 PROTO_TYPE_TO_CLICK: dict[int, click.ParamType] = {
     FieldDescriptor.TYPE_STRING: click.STRING,
@@ -174,7 +165,13 @@ def build_request(method_info: MethodInfo, json_str: str | None, kwargs: dict[st
     return json_format.ParseDict(data, method_info.input_type())
 
 
-def call_rpc(service_name: str, method_name: str, url: str, request: Message) -> Message:
+def call_rpc(
+    service_name: str,
+    method_name: str,
+    url: str,
+    request: Message,
+    token_provider: TokenProvider | None = None,
+) -> Message:
     """Execute an RPC call and return the response."""
     register_services()
 
@@ -188,7 +185,8 @@ def call_rpc(service_name: str, method_name: str, url: str, request: Message) ->
         available = ", ".join(service.methods.keys())
         raise ValueError(f"Unknown method '{method_name}' on service '{service_name}'. Available: {available}")
 
-    client = service.client_class(url)
+    interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
+    client = service.client_class(url, interceptors=interceptors)
     method_fn = getattr(client, method.method_fn_name)
     return method_fn(request)
 
@@ -266,13 +264,11 @@ class ServiceCommands(click.MultiCommand):
     def __init__(self, service_name: str, **attrs):
         super().__init__(**attrs)
         self.service_name = service_name
-        self.available_methods = {}
 
     def list_commands(self, _ctx: click.Context) -> list[str]:
         svc = get_service(self.service_name)
         if not svc:
             return []
-        self.available_methods = svc.methods
         return [to_kebab_case(m) for m in sorted(svc.methods.keys())]
 
     def get_command(self, ctx: click.Context, name: str) -> click.Command | None:
@@ -284,28 +280,24 @@ class ServiceCommands(click.MultiCommand):
         if not method:
             return None
 
-        # Get controller_url from parent context (established in main.py)
-        controller_url = ctx.obj.get("controller_url")
-        if not controller_url:
-            raise click.ClickException(
-                f"Either --controller-url or --config is required for {self.service_name} RPC commands"
-            )
+        return self._build_command_for_method(method)
 
-        return self.build_command_from_method(controller_url, method, name)
-
-    def build_command_from_method(self, controller_url: str, method: MethodInfo, name: str) -> click.Command:
-        """Build a Click command for an RPC method with the controller URL already resolved."""
+    def _build_command_for_method(self, method: MethodInfo) -> click.Command:
+        """Build a Click command for an RPC method."""
         options: list[click.Parameter] = [
             click.Option(["--json", "json_str"], default=None, help="Full JSON request body"),
         ]
-
         options.extend(_build_options_from_proto(method.input_type))
+
+        service_name = self.service_name
 
         @click.pass_context
         def callback(ctx: click.Context, json_str: str | None, **kwargs):
+            controller_url = require_controller_url(ctx)
             field_values = {k: v for k, v in kwargs.items() if v is not None}
             request = build_request(method, json_str, field_values)
-            response = call_rpc(self.service_name, method.name, controller_url, request)
+            tp = ctx.obj.get("token_provider") if ctx.obj else None
+            response = call_rpc(service_name, method.name, controller_url, request, token_provider=tp)
             click.echo(format_response(response))
 
         return click.Command(
@@ -316,8 +308,17 @@ class ServiceCommands(click.MultiCommand):
         )
 
 
+@click.group()
+def rpc():
+    """Execute RPC calls against Iris services."""
+    pass
+
+
+rpc.add_command(ServiceCommands("controller", name="controller", help="Controller service RPC methods"))
+rpc.add_command(ServiceCommands("worker", name="worker", help="Worker service RPC methods"))
+rpc.add_command(ServiceCommands("actor", name="actor", help="Actor service RPC methods"))
+
+
 def register_rpc_commands(iris_group: click.Group) -> None:
-    """Register RPC service commands on the top-level iris group."""
-    iris_group.add_command(ServiceCommands("controller", name="controller-rpc", help="Controller service RPC methods"))
-    iris_group.add_command(ServiceCommands("worker", name="worker-rpc", help="Worker service RPC methods"))
-    iris_group.add_command(ServiceCommands("actor", name="actor-rpc", help="Actor service RPC methods"))
+    """Register the rpc command group on the top-level iris group."""
+    iris_group.add_command(rpc)

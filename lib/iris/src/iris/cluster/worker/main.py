@@ -1,27 +1,41 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Click-based CLI for the Iris worker daemon."""
 
+import json
 import logging
+import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import click
+from google.protobuf.json_format import ParseDict
 
-from iris.cluster.worker.worker import Worker, WorkerConfig
+from iris.cluster.platform.factory import create_platform
+from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.runtime.kubernetes import KubernetesRuntime
+from iris.cluster.worker.env_probe import detect_gcp_zone
+from iris.cluster.worker.worker import Worker, worker_config_from_proto
 from iris.logging import configure_logging
+from iris.rpc import config_pb2
+
+
+def _configure_docker_ar_auth(ar_host: str) -> None:
+    """Configure Docker to authenticate with the given Artifact Registry host."""
+    logger = logging.getLogger(__name__)
+    logger.info("Configuring Docker auth for %s", ar_host)
+    result = subprocess.run(
+        ["gcloud", "auth", "configure-docker", ar_host, "-q"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        logger.warning("gcloud auth configure-docker failed: %s", result.stderr)
+    else:
+        logger.info("Docker AR auth configured for %s", ar_host)
 
 
 @click.group()
@@ -31,56 +45,46 @@ def cli():
 
 
 @cli.command()
-@click.option("--host", default="0.0.0.0", help="Bind host")
-@click.option("--port", default=8080, type=int, help="Bind port")
-@click.option("--cache-dir", default="~/.cache/iris-worker", help="Cache directory")
-@click.option(
-    "--registry",
-    default="localhost:5000",
-    help="Docker registry for built images (optional for autoscaler-managed workers)",
-)
-@click.option("--port-range", default="30000-40000", help="Port range for job ports (start-end)")
-@click.option(
-    "--controller-address", default=None, help="Controller URL for auto-registration (e.g., http://controller:8080)"
-)
-@click.option("--worker-id", default=None, help="Worker ID (auto-generated if not provided)")
-def serve(
-    host: str,
-    port: int,
-    cache_dir: str,
-    registry: str,
-    port_range: str,
-    controller_address: str | None,
-    worker_id: str | None,
-):
+@click.option("--worker-config", type=click.Path(exists=True), required=True, help="Path to WorkerConfig JSON file")
+def serve(worker_config: str):
     """Start the Iris worker service."""
     configure_logging(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    logger.info("Iris worker starting (git_hash=%s)", os.environ.get("IRIS_GIT_HASH", "unknown"))
 
-    port_start, port_end = map(int, port_range.split("-"))
+    with open(worker_config) as f:
+        wc_proto = ParseDict(json.load(f), config_pb2.WorkerConfig())
 
-    config = WorkerConfig(
-        host=host,
-        port=port,
-        cache_dir=Path(cache_dir).expanduser(),
-        registry=registry,
-        port_range=(port_start, port_end),
-        controller_address=controller_address,
-        worker_id=worker_id,
-    )
+    platform = create_platform(platform_config=wc_proto.platform, ssh_config=config_pb2.SshConfig())
+    zone = detect_gcp_zone()
 
-    worker = Worker(config)
+    def resolve_image(image: str) -> str:
+        return platform.resolve_image(image, zone=zone)
 
-    click.echo(f"Starting Iris worker on {host}:{port}")
-    click.echo(f"  Registry: {registry}")
+    if wc_proto.default_task_image:
+        resolved = resolve_image(wc_proto.default_task_image)
+        if resolved != wc_proto.default_task_image and "-docker.pkg.dev/" in resolved:
+            _configure_docker_ar_auth(resolved.split("/")[0])
+
+    config = worker_config_from_proto(wc_proto, resolve_image=resolve_image)
+
+    if wc_proto.runtime == "kubernetes":
+        container_runtime = KubernetesRuntime(cache_dir=config.cache_dir)
+    else:
+        container_runtime = DockerRuntime(cache_dir=config.cache_dir)
+
+    worker = Worker(config, container_runtime=container_runtime)
+
+    click.echo(f"Starting Iris worker on {config.host}:{config.port}")
     click.echo(f"  Cache dir: {config.cache_dir}")
-    if controller_address:
-        click.echo(f"  Controller: {controller_address}")
+    click.echo(f"  Controller: {config.controller_address}")
+    click.echo(f"  Runtime: {wc_proto.runtime or 'docker'}")
     worker.start()
-    worker.wait()  # Block until worker is stopped
+    worker.wait()
 
 
 @cli.command()
-@click.option("--cache-dir", default="~/.cache/iris-worker", help="Cache directory")
+@click.option("--cache-dir", required=True, help="Cache directory")
 def cleanup(cache_dir: str):
     """Clean up cached bundles, venvs, and images."""
     cache_path = Path(cache_dir).expanduser()

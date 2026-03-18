@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Usage:
@@ -37,8 +26,8 @@ from typing import Any
 import click
 import yaml
 
-from fray.cluster.ray.auth import ray_auth_secret
-from fray.cluster.ray.dashboard import DashboardConfig, ray_dashboard
+from fray.v1.cluster.ray.auth import ray_auth_secret
+from fray.v1.cluster.ray.dashboard import DashboardConfig, ray_dashboard
 from marin.cluster import gcp
 from marin.cluster.config import (
     RayClusterConfig,
@@ -725,23 +714,27 @@ def cluster_update_configs(ctx):
 @cli.command("ssh-tpu")
 @click.argument("target")
 @click.option("--project", help="GCP project ID")
-@click.option("--zone", help="GCP zone")
+@click.option("--zone", help="GCP zone (searches all zones by default)")
 @click.argument("extra_args", nargs=-1)
 @click.pass_context
 def ssh_connect(ctx, target, project, zone, extra_args):
-    """SSH to TPU node by IP address."""
-    project = project or gcp.get_project_id()
-    zone = zone or gcp.get_default_zone()
+    """SSH to TPU node by IP address.
 
-    if not project or not zone:
-        print("Error: Could not determine project or zone", file=sys.stderr)
+    Searches all zones for the TPU matching the given internal IP.
+    """
+    project = project or gcp.get_project_id()
+
+    if not project:
+        print("Error: Could not determine project", file=sys.stderr)
         sys.exit(1)
 
-    # Find TPU by IP and SSH to it
+    # Search all zones by default (zone="-"), matching ssh_tpu behavior
+    zone = zone or "-"
+
     tpu_result = gcp.find_tpu_by_ip(target, project, zone)
     if tpu_result:
         tpu_name, tpu_zone, worker_id = tpu_result
-        print(f"Connecting to TPU {tpu_name} worker {worker_id} at IP {target}")
+        print(f"Found TPU: {tpu_name} in zone: {tpu_zone}")
         gcp.ssh_to_tpu(tpu_name, tpu_zone, project, list(extra_args) if extra_args else None, worker_id)
     else:
         print(f"Error: No TPU found with IP {target}", file=sys.stderr)

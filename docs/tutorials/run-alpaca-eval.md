@@ -9,7 +9,7 @@ This tutorial shows how to configure and launch the Alpaca evaluation pipeline i
 
 ## Required Imports
 
-The default evaluation script for alpaca is `experiments/evals/run_alpaca_eval.py`), if for some reason you want to make your own script import:
+Marin does not currently ship a dedicated `experiments/evals/run_alpaca_eval.py` entrypoint. To run Alpaca-only evals, create a small experiment script like the one below, or adapt the existing `experiments/evals/run_key_evals.py` example and keep only the Alpaca step.
 
 ```python
 from fray.cluster import ResourceConfig
@@ -78,10 +78,10 @@ if __name__ == "__main__":
 
 ## Launching the Eval
 
-From your workspace root, run:
+Save the example above as a script in the workspace root, for example `experiments/evals/run_alpaca_eval_local.py`, then run:
 
 ```bash
-python experiments/evals/run_alpaca_eval.py
+uv run python experiments/evals/run_alpaca_eval_local.py
 ```
 
 This will:

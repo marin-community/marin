@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -19,6 +19,7 @@ import levanter.callbacks
 import levanter.eval
 import levanter.eval_harness
 from levanter import callbacks
+from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, save_hf_checkpoint_callback
 from levanter.data.mixture import MixtureDataset
@@ -45,6 +46,10 @@ class TrainLmConfig:
     initialize_from_hf: bool | str = False
     """if provided, this will override the model config in the config. if true, use the default hf checkpoint for this model class"""
     use_hf_model_config: bool = False  # if true, replace the model config with the hf config from the checkpoint
+    pad_tokenizer_to_match_model: bool = False
+    """If True, pad the tokenizer's vocab to match the model's vocab size by adding dummy tokens.
+    Useful when the model checkpoint has a larger vocab than the tokenizer (e.g., Qwen models
+    pad their vocab to be divisible by 4 for TPU efficiency)."""
 
     # TODO: atm we don't support loading from a checkpoint that has a different tokenizer. this is a bit annoying
     # TODO: atm you have to at least specify a levanter model config with the same type as the hf checkpoint
@@ -88,6 +93,9 @@ def main(config: TrainLmConfig):
         else:
             converter = converter.replaced(tokenizer=tokenizer)
 
+        if config.pad_tokenizer_to_match_model:
+            converter = converter.with_tokenizer_padded_to_match_model()
+
         if config.use_hf_model_config:
             # TODO: log diff of old and new config
             # NB: gross mutability
@@ -95,6 +103,8 @@ def main(config: TrainLmConfig):
     elif isinstance(config.model, HFCompatConfig):
         converter = config.model.hf_checkpoint_converter()
         converter = converter.replaced(tokenizer=tokenizer)
+        if config.pad_tokenizer_to_match_model:
+            converter = converter.with_tokenizer_padded_to_match_model()
     else:
         converter = None
 
@@ -155,6 +165,7 @@ def main(config: TrainLmConfig):
             config.trainer.batch_schedule,
             key=data_key,
         )
+        install_tensorstore_metrics_hook_if_enabled(trainer)
 
         # Get the tagged evaluation datasets
         tagged_eval_datasets = config.data.tagged_eval_sets(Pos)
@@ -237,7 +248,6 @@ def main(config: TrainLmConfig):
                     last_stage = stage
 
             trainer.add_hook(log_mixture_weights, every=1)
-        # trainer.add_hook(callbacks.GradWatchCallback(include_histograms=True), every=5)
 
         if config.hf_save_path is not None and config.hf_save_steps is not None:
             # bit gross to reach this far into the config, but it's fine

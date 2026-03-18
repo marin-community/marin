@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Unit tests for the fray v2 Iris backend.
 
@@ -20,65 +9,16 @@ Integration tests that need a running cluster are marked with @pytest.mark.iris.
 
 import pickle
 
+import pytest
+
 from fray.v2.iris_backend import (
     IrisActorHandle,
     convert_constraints,
-    convert_entrypoint,
-    convert_resources,
-    map_iris_job_state,
 )
 from fray.v2.types import (
-    CpuConfig,
-    Entrypoint,
-    GpuConfig,
-    JobStatus,
     ResourceConfig,
     TpuConfig,
 )
-
-# ---------------------------------------------------------------------------
-# ResourceConfig → ResourceSpec conversion
-# ---------------------------------------------------------------------------
-
-
-class TestConvertResources:
-    def test_cpu_defaults(self):
-        resources = ResourceConfig()
-        spec = convert_resources(resources)
-        assert spec.cpu == 1
-        assert spec.memory == "128m"
-        assert spec.disk == "1g"
-        assert spec.device is None
-
-    def test_tpu_device(self):
-        resources = ResourceConfig(device=TpuConfig(variant="v5litepod-16"))
-        spec = convert_resources(resources)
-        assert spec.device is not None
-        assert spec.device.HasField("tpu")
-        assert spec.device.tpu.variant == "v5litepod-16"
-
-    def test_gpu_device(self):
-        resources = ResourceConfig(device=GpuConfig(variant="H100", count=8))
-        spec = convert_resources(resources)
-        assert spec.device is not None
-        assert spec.device.HasField("gpu")
-        assert spec.device.gpu.variant == "H100"
-        assert spec.device.gpu.count == 8
-
-    def test_cpu_device_produces_no_device(self):
-        resources = ResourceConfig(device=CpuConfig())
-        spec = convert_resources(resources)
-        assert spec.device is None
-
-    def test_regions_passed_through(self):
-        resources = ResourceConfig(regions=["us-central1", "us-east1"])
-        spec = convert_resources(resources)
-        assert list(spec.regions) == ["us-central1", "us-east1"]
-
-
-# ---------------------------------------------------------------------------
-# Constraints
-# ---------------------------------------------------------------------------
 
 
 class TestConvertConstraints:
@@ -95,74 +35,46 @@ class TestConvertConstraints:
         assert c.key == "preemptible"
         assert c.value == "false"
 
+    def test_single_region_produces_eq_constraint(self):
+        resources = ResourceConfig(regions=["us-central1"])
+        constraints = convert_constraints(resources)
+        region_constraints = [c for c in constraints if c.key == "region"]
+        assert len(region_constraints) == 1
+        c = region_constraints[0]
+        from iris.cluster.constraints import ConstraintOp
 
-# ---------------------------------------------------------------------------
-# Entrypoint conversion
-# ---------------------------------------------------------------------------
+        assert c.op == ConstraintOp.EQ
+        assert c.value == "us-central1"
 
+    def test_multiple_regions_produce_in_constraint(self):
+        resources = ResourceConfig(regions=["us-central1", "us-central2"])
+        constraints = convert_constraints(resources)
+        region_constraints = [c for c in constraints if c.key == "region"]
+        assert len(region_constraints) == 1
+        c = region_constraints[0]
+        from iris.cluster.constraints import ConstraintOp
 
-def _dummy_fn(x: int) -> int:
-    return x + 1
-
-
-class TestConvertEntrypoint:
-    def test_callable_entrypoint(self):
-        entry = Entrypoint.from_callable(_dummy_fn, args=(42,))
-        iris_entry = convert_entrypoint(entry)
-        assert iris_entry.is_callable
-
-    def test_binary_entrypoint(self):
-        entry = Entrypoint.from_binary("python", ["-c", "print('hi')"])
-        iris_entry = convert_entrypoint(entry)
-        assert iris_entry.is_command
-        assert iris_entry.command == ["python", "-c", "print('hi')"]
-
-
-# ---------------------------------------------------------------------------
-# JobStatus mapping
-# ---------------------------------------------------------------------------
+        assert c.op == ConstraintOp.IN
+        assert c.values == ("us-central1", "us-central2")
 
 
-class TestMapIrisJobState:
-    def test_succeeded(self):
-        from iris.rpc import cluster_pb2
+class TestConvertConstraintsDeviceAlternatives:
+    def test_no_alternatives_produces_no_device_constraint(self):
+        resources = ResourceConfig.with_tpu("v5p-8")
+        constraints = convert_constraints(resources)
+        device_constraints = [c for c in constraints if c.key == "device-variant"]
+        assert device_constraints == []
 
-        assert map_iris_job_state(cluster_pb2.JOB_STATE_SUCCEEDED) == JobStatus.SUCCEEDED
+    def test_alternatives_produce_in_constraint(self):
+        resources = ResourceConfig.with_tpu(["v4-8", "v5p-8"])
+        constraints = convert_constraints(resources)
+        device_constraints = [c for c in constraints if c.key == "device-variant"]
+        assert len(device_constraints) == 1
+        c = device_constraints[0]
+        from iris.cluster.constraints import ConstraintOp
 
-    def test_failed(self):
-        from iris.rpc import cluster_pb2
-
-        assert map_iris_job_state(cluster_pb2.JOB_STATE_FAILED) == JobStatus.FAILED
-
-    def test_killed_maps_to_stopped(self):
-        from iris.rpc import cluster_pb2
-
-        assert map_iris_job_state(cluster_pb2.JOB_STATE_KILLED) == JobStatus.STOPPED
-
-    def test_running(self):
-        from iris.rpc import cluster_pb2
-
-        assert map_iris_job_state(cluster_pb2.JOB_STATE_RUNNING) == JobStatus.RUNNING
-
-    def test_pending(self):
-        from iris.rpc import cluster_pb2
-
-        assert map_iris_job_state(cluster_pb2.JOB_STATE_PENDING) == JobStatus.PENDING
-
-    def test_worker_failed_maps_to_failed(self):
-        from iris.rpc import cluster_pb2
-
-        assert map_iris_job_state(cluster_pb2.JOB_STATE_WORKER_FAILED) == JobStatus.FAILED
-
-    def test_unschedulable_maps_to_failed(self):
-        from iris.rpc import cluster_pb2
-
-        assert map_iris_job_state(cluster_pb2.JOB_STATE_UNSCHEDULABLE) == JobStatus.FAILED
-
-
-# ---------------------------------------------------------------------------
-# IrisActorHandle pickle round-trip
-# ---------------------------------------------------------------------------
+        assert c.op == ConstraintOp.IN
+        assert set(c.values) == {"v4-8", "v5p-8"}
 
 
 class TestIrisActorHandlePickle:
@@ -181,3 +93,30 @@ class TestIrisActorHandlePickle:
         data = pickle.dumps(handle)
         restored = pickle.loads(data)
         assert restored._client is None
+
+
+class TestWithTpuFlexible:
+    def test_single_type_returns_standard_config(self):
+        rc = ResourceConfig.with_tpu(["v5p-8"])
+        assert isinstance(rc.device, TpuConfig)
+        assert rc.device.variant == "v5p-8"
+        assert rc.device_alternatives is None
+
+    def test_multiple_types_sets_alternatives(self):
+        rc = ResourceConfig.with_tpu(["v4-8", "v5p-8"])
+        assert rc.device.variant == "v4-8"
+        assert rc.device_alternatives == ["v5p-8"]
+        assert rc.replicas == 1  # both v4-8 and v5p-8 have vm_count=1
+
+    def test_mismatched_vm_count_raises(self):
+        with pytest.raises(ValueError, match="same vm_count"):
+            ResourceConfig.with_tpu(["v4-8", "v4-16"])
+
+    def test_empty_raises(self):
+        with pytest.raises(ValueError, match="non-empty"):
+            ResourceConfig.with_tpu([])
+
+    def test_slice_count_multiplies_replicas(self):
+        rc = ResourceConfig.with_tpu(["v5p-16", "v4-16"], slice_count=2)
+        # v5p-16 has vm_count=2, so replicas = 2 * 2 = 4
+        assert rc.replicas == 4

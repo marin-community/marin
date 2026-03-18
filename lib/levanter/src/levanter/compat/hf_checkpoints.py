@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
@@ -16,12 +16,12 @@ import urllib.parse
 import warnings
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Callable, Generic, Optional, Tuple, Type, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Callable, Generic, Optional, Tuple, Type, TypeVar, Union, cast
 
 import draccus
 import equinox as eqx
-import fsspec
 import haliax
+from iris.marin_fs import url_to_fs
 import huggingface_hub
 import humanfriendly
 import jax
@@ -65,17 +65,17 @@ from transformers import (  # noqa: E402  # noqa: E402
     AutoConfig,
     AutoModel,
     AutoModelForCausalLM,
-    AutoProcessor,
     AutoTokenizer,
-    FeatureExtractionMixin,
     PreTrainedTokenizer,
     PreTrainedTokenizerBase,
     PreTrainedTokenizerFast,
-    ProcessorMixin,
 )
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
 from transformers.dynamic_module_utils import get_class_from_dynamic_module  # noqa: E402
 from transformers.models.auto.auto_factory import _get_model_class  # noqa: E402
+
+if TYPE_CHECKING:
+    from transformers import FeatureExtractionMixin, ProcessorMixin
 
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
 
@@ -259,7 +259,7 @@ def _load_torch(path, dtype, fs: AbstractFileSystem | None = None):
 def _load_safe_tensors(path, dtype, fs: AbstractFileSystem | None = None):
     """Stream a safetensors shard from remote storage and return JAX arrays."""
     if fs is None:
-        fs, stripped = fsspec.core.url_to_fs(path, asynchronous=True)
+        fs, stripped = url_to_fs(path, asynchronous=True)
         path = stripped
     else:
         try:
@@ -340,7 +340,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
     tokenizer: PreTrainedTokenizerFast | PreTrainedTokenizer
     "The tokenizer to use. If None, will be inferred from the reference_checkpoint"
 
-    feature_extractor: Optional[FeatureExtractionMixin] = None
+    feature_extractor: Optional["FeatureExtractionMixin"] = None
     "The non-text preprocessor to use for multi-modality."
 
     config_overrides: Optional[dict] = None
@@ -359,7 +359,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         reference_checkpoint: Optional[Union[RepoRef, str]] = None,
         HfConfigClass: Optional[Union[str, Type]] = None,
         tokenizer: Optional[Union[str, PreTrainedTokenizer, PreTrainedTokenizerFast]] = None,
-        feature_extractor: Optional[FeatureExtractionMixin] = None,
+        feature_extractor: Optional["FeatureExtractionMixin"] = None,
         config_overrides: Optional[dict] = None,
         trust_remote_code: bool = False,
         ignore_prefix: Optional[str] = None,
@@ -410,7 +410,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         self,
         reference_checkpoint: Optional[Union[RepoRef, str]] = None,
         tokenizer: Optional[Union[str, PreTrainedTokenizerBase]] = None,
-        feature_extractor: Optional[FeatureExtractionMixin] = None,
+        feature_extractor: Optional["FeatureExtractionMixin"] = None,
         trust_remote_code: Optional[bool] = None,
     ) -> "HFCheckpointConverter":
         replacements: dict = {}
@@ -424,6 +424,49 @@ class HFCheckpointConverter(Generic[LevConfig]):
             replacements["trust_remote_code"] = trust_remote_code
 
         return dataclasses.replace(self, **replacements)  # type: ignore
+
+    def with_tokenizer_padded_to_match_model(
+        self, ref: Optional[Union[str, RepoRef]] = None
+    ) -> "HFCheckpointConverter":
+        """
+        Returns a new converter with the tokenizer padded to match the model's vocab size.
+
+        This is useful when the model checkpoint has a larger vocab than the tokenizer
+        (e.g., Qwen models pad their vocab to be divisible by 4 for TPU efficiency).
+        Padding the tokenizer ensures the Vocab axis matches the model's embedding size.
+
+        Args:
+            ref: The reference checkpoint to get the model vocab size from.
+                 If None, uses the converter's reference_checkpoint.
+
+        Returns:
+            A new HFCheckpointConverter with the tokenizer padded to match the model vocab.
+        """
+        hf_config = self.hf_config_from_hf_checkpoint(ref)
+        model_vocab_size = hf_config.vocab_size
+        tokenizer_vocab_size = len(self.tokenizer)
+
+        if tokenizer_vocab_size >= model_vocab_size:
+            logger.info(
+                f"Tokenizer vocab size ({tokenizer_vocab_size}) >= model vocab size ({model_vocab_size}). "
+                "No padding needed."
+            )
+            return self
+
+        num_to_add = model_vocab_size - tokenizer_vocab_size
+        logger.info(
+            f"Padding tokenizer vocab from {tokenizer_vocab_size} to {model_vocab_size} "
+            f"(adding {num_to_add} dummy tokens) to match model vocab size."
+        )
+
+        # Add dummy tokens to the tokenizer
+        dummy_tokens = [f"<|padding_{i}|>" for i in range(num_to_add)]
+        self.tokenizer.add_tokens(dummy_tokens)
+
+        # Return a new converter with the modified tokenizer
+        # Note: We modify self.tokenizer in place, but since the Vocab property is cached,
+        # we need to return a new converter to get a fresh Vocab
+        return dataclasses.replace(self, tokenizer=self.tokenizer)  # type: ignore
 
     def with_config_overrides(self, config_overrides: dict, merge: bool = True) -> "HFCheckpointConverter":
         if self.config_overrides is not None and merge:
@@ -631,7 +674,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         final_state_dict = {}
 
         fs: AbstractFileSystem
-        fs, path = fsspec.core.url_to_fs(url)
+        fs, path = url_to_fs(url)
 
         shard_files, loader = self._locate_shard_files(fs, path)
 
@@ -698,7 +741,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         ref: Optional[Union[str, RepoRef]] = None,
         config: Optional[HFCompatConfig] = None,
         axis_mapping: Optional[ResourceMapping] = None,
-        resize_vocab_to_match_tokenizer: bool = True,
+        resize_vocab_to_match_tokenizer: bool = False,
         dtype: Optional[jnp.dtype] = None,
     ) -> ModelWithHfSerializationMixin:
         """
@@ -708,6 +751,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
             config: The config to use to load the model class
             ref: The reference to load from. If None, will use the reference_checkpoint
             axis_mapping: The axis mapping to use for sharding. If None, will use the context axis mapping
+            resize_vocab_to_match_tokenizer: If True, resize the model's vocab to match the tokenizer's vocab size.
+                Defaults to False because some models (e.g., Qwen) intentionally pad their embedding matrices
+                beyond the tokenizer vocab size for hardware efficiency (e.g., divisibility by 4).
         """
 
         hf_config = self.hf_config_from_hf_checkpoint(ref)
@@ -741,15 +787,16 @@ class HFCheckpointConverter(Generic[LevConfig]):
             )
 
             if Vocab.size != tokenizer_Vocab.size:
+                logger.info(
+                    f"Model vocab size ({Vocab.size}) does not match tokenizer vocab size ({tokenizer_Vocab.size})."
+                )
                 if resize_vocab_to_match_tokenizer:
                     logger.info(
-                        f"Resizing model from {Vocab.size} to {tokenizer_Vocab.size} to match tokenizer vocab size"
+                        f"Resizing model from {Vocab.size} to {tokenizer_Vocab.size} to match tokenizer vocab size."
                     )
                     lev_model = lev_model.resize_vocab(tokenizer_Vocab.size)
                 else:
-                    logger.warning(
-                        f"Model vocab size ({Vocab.size}) does not match tokenizer vocab size ({tokenizer_Vocab.size})"
-                    )
+                    logger.info("Leaving model vocab size unchanged.")
 
             lev_model = haliax.shard_with_axis_mapping(lev_model, axis_mapping)
 
@@ -1188,8 +1235,12 @@ def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trus
         )
 
 
-def load_processor(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> ProcessorMixin:
+def load_processor(
+    model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True
+) -> "ProcessorMixin":
     """Like AutoProcessor.from_pretrained, but works with gs:// paths or anything on fsspec"""
+    from transformers import AutoProcessor
+
     with _patch_hf_hub_download():
         return _hf_hub_retry(
             lambda: AutoProcessor.from_pretrained(
@@ -1395,7 +1446,7 @@ def _patch_hf_hub_download():
                 revision = "main"
 
             if repo_id and filename and _is_url_like(repo_id):
-                fs, path = fsspec.core.url_to_fs(repo_id)
+                fs, path = url_to_fs(repo_id)
                 remote_path = os.path.join(path, filename)
                 # local_path = os.path.join(tmpdir, filename)
                 local_path = os.path.join(
