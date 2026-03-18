@@ -224,29 +224,8 @@ def run_inference(inference_config: InferenceConfig):
         )
         pending_refs[ref] = input_fp
 
-    for input_filepath in filepaths:
-        # Throttle submissions
-        while max_in_flight is not None and len(pending_refs) >= max_in_flight:
-            ready_refs, _ = ray.wait(list(pending_refs.keys()), num_returns=1)
-            ready_ref = ready_refs[0]
-            file_for_ref = pending_refs.pop(ready_ref)
-            try:
-                ray.get(ready_ref)
-                logger.info(f"Completed: {file_for_ref}")
-            except Exception as e:
-                # Log and resubmit up to max retries (tolerate spot preemptions)
-                count = attempt_count.get(file_for_ref, 0) + 1
-                attempt_count[file_for_ref] = count
-                logger.warning(f"Task failed for {file_for_ref} (attempt {count}): {e}")
-                if count < max_retries_per_file:
-                    submit(file_for_ref)
-                else:
-                    logger.error(f"Giving up after {count} attempts for {file_for_ref}")
-
-        submit(input_filepath)
-
-    # Drain remaining tasks
-    while len(pending_refs) > 0:
+    def drain_one_completed():
+        """Wait for one pending task, handle its result, and retry on failure."""
         ready_refs, _ = ray.wait(list(pending_refs.keys()), num_returns=1)
         ready_ref = ready_refs[0]
         file_for_ref = pending_refs.pop(ready_ref)
@@ -261,6 +240,17 @@ def run_inference(inference_config: InferenceConfig):
                 submit(file_for_ref)
             else:
                 logger.error(f"Giving up after {count} attempts for {file_for_ref}")
+
+    for input_filepath in filepaths:
+        # Throttle submissions
+        while max_in_flight is not None and len(pending_refs) >= max_in_flight:
+            drain_one_completed()
+
+        submit(input_filepath)
+
+    # Drain remaining tasks
+    while pending_refs:
+        drain_one_completed()
 
 
 @draccus.wrap()
