@@ -9,7 +9,6 @@ import functools
 
 import equinox as eqx
 import jax
-import jax.numpy as jnp
 import jax.tree_util as jtu
 from jaxtyping import PRNGKeyArray, PyTree
 
@@ -40,24 +39,11 @@ def _is_scan_stack_leaf(x) -> bool:
     return isinstance(x, (haliax.nn.Stacked, ArrayStacked))
 
 
-def _stack_scan_layers(layers, num_layers: int, block_axis=None):
-    if len(layers) != num_layers:
-        raise ValueError(f"Expected {num_layers} mapped layers, got {len(layers)}.")
-    leaves0, structure = jax.tree_util.tree_flatten(layers[0], is_leaf=is_named_array)
-    all_leaves = [jax.tree_util.tree_leaves(layer, is_leaf=is_named_array) for layer in layers]
-    stacked_leaves = []
-    for leaf_index, first_leaf in enumerate(leaves0):
-        layer_leaves = [layer[leaf_index] for layer in all_leaves]
-        if isinstance(first_leaf, NamedArray):
-            if block_axis is None:
-                raise TypeError("NamedArray leaves require a named block axis when stacking scan layers.")
-            stacked_leaves.append(haliax.stack(block_axis, layer_leaves))
-        elif isinstance(first_leaf, jax.Array):
-            stacked_leaves.append(jnp.stack(layer_leaves))
-        else:
-            stacked_leaves.append(first_leaf)
-
-    return jax.tree_util.tree_unflatten(structure, stacked_leaves)
+def _array_stacked_in_axes(tree, num_layers: int):
+    return jax.tree.map(
+        lambda leaf: 0 if isinstance(leaf, jax.Array) and leaf.ndim > 0 and leaf.shape[0] == num_layers else None,
+        tree,
+    )
 
 
 def scan_aware_tree_map(fn, tree, *rest, is_leaf=None):
@@ -78,19 +64,18 @@ def scan_aware_tree_map(fn, tree, *rest, is_leaf=None):
 
     def rec_fn(x, *rest):
         if isinstance(x, haliax.nn.Stacked):
-            num_layers = x.Block.size
-            block_axis = x.Block
-
-            mapped_layers = [mapped_fn(x.get_layer(i), *[r.get_layer(i) for r in rest]) for i in range(num_layers)]
-            new_inner = _stack_scan_layers(mapped_layers, num_layers, block_axis=block_axis)
+            new_inner = haliax.vmap(mapped_fn, x.Block)(x.stacked, *[r.stacked for r in rest])
             return dataclasses.replace(x, stacked=new_inner)  # type: ignore
 
         from haliax.nn.array_stacked import ArrayStacked
 
         if isinstance(x, ArrayStacked):
             num_layers = x.num_layers
-            mapped_layers = [mapped_fn(x.get_layer(i), *[r.get_layer(i) for r in rest]) for i in range(num_layers)]
-            new_inner = _stack_scan_layers(mapped_layers, num_layers, block_axis=None)
+            in_axes = (
+                _array_stacked_in_axes(x.stacked, num_layers),
+                *[_array_stacked_in_axes(r.stacked, num_layers) for r in rest],
+            )
+            new_inner = jax.vmap(mapped_fn, in_axes=in_axes)(x.stacked, *[r.stacked for r in rest])
             return dataclasses.replace(x, stacked=new_inner)  # type: ignore
 
         return fn(x, *rest)
