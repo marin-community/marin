@@ -2712,10 +2712,12 @@ def _forward_deepep_transport_local_compute_only_probe(
     w_up_gate: jax.Array,
     w_down: jax.Array,
     *,
+    mesh: jax.sharding.AbstractMesh | None = None,
     max_recv_tokens: int,
     max_local_assignments: int,
 ) -> jax.Array:
-    mesh = x.sharding.mesh
+    if mesh is None:
+        mesh = get_abstract_mesh()
     num_experts = int(w_up_gate.shape[0])
     (
         x_dispatch,
@@ -4008,7 +4010,7 @@ def _forward(
             w_down,
         )
     elif kernel == "deepep_transport_local_compute_only_probe":
-        mesh = x.sharding.mesh
+        mesh = get_abstract_mesh()
         num_experts = int(w_up_gate.shape[0])
         max_recv_tokens, max_local_assignments = _deepep_transport_exact_caps(
             selected_experts,
@@ -4021,6 +4023,7 @@ def _forward(
             combine_weights,
             w_up_gate,
             w_down,
+            mesh=mesh,
             max_recv_tokens=max_recv_tokens,
             max_local_assignments=max_local_assignments,
         )
@@ -4362,6 +4365,7 @@ def _make_deepep_transport_probe_forward_fn(
     if probe_kernel == "deepep_transport_local_compute_only_probe":
         return partial(
             _forward_deepep_transport_local_compute_only_probe,
+            mesh=mesh,
             max_recv_tokens=max_recv_tokens,
             max_local_assignments=max_local_assignments,
         )
