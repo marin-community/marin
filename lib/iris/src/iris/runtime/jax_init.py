@@ -4,7 +4,7 @@
 """JAX distributed initialization via Iris endpoint registry.
 
 Task 0 registers its coordinator address; tasks 1..N-1 poll for it.
-Single-task jobs skip coordination entirely.
+Single-task jobs skip distributed init entirely — JAX defaults suffice.
 
 JAX is imported at call time — iris does not depend on jax.
 """
@@ -109,7 +109,8 @@ def initialize_jax(
     then call jax.distributed.initialize with the coordinator address.
 
     For single-task jobs (or when not running inside an Iris job),
-    jax.distributed.initialize() is called with defaults.
+    initialization is skipped — JAX works correctly without distributed
+    init when there is only one process.
 
     Args:
         port: Coordinator port. Overridden by IRIS_PORT_jax if allocated.
@@ -123,8 +124,13 @@ def initialize_jax(
 
     job_info = get_job_info()
     _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
-    if job_info is None or job_info.num_tasks <= 1:
-        jax.distributed.initialize()
+    if job_info is None:
+        return
+
+    if job_info.num_tasks <= 1:
+        bound_port = job_info.ports.get("jax", port)
+        coordinator = f"{job_info.advertise_host}:{bound_port}"
+        jax.distributed.initialize(coordinator, num_processes=1, process_id=0)
         return
 
     ctx = iris_ctx()

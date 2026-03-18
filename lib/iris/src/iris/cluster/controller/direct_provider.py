@@ -6,7 +6,7 @@
 from typing import Protocol
 
 from iris.cluster.controller.transitions import DirectProviderBatch, DirectProviderSyncResult
-from iris.rpc import logging_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 
 # Re-export data classes so callers can import from this module.
 from iris.cluster.controller.transitions import (  # noqa: F401
@@ -40,6 +40,15 @@ class DirectTaskProvider(Protocol):
         max_lines: int,
     ) -> tuple[list[logging_pb2.LogEntry], int]:
         """Fetch live logs for a running task. Returns (entries, next_cursor)."""
+        ...
+
+    def profile_task(
+        self,
+        task_id: str,
+        attempt_id: int,
+        request: cluster_pb2.ProfileTaskRequest,
+    ) -> cluster_pb2.ProfileTaskResponse:
+        """Profile a running task via the execution backend."""
         ...
 
     def close(self) -> None:

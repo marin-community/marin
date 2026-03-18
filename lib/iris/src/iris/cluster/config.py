@@ -326,8 +326,8 @@ def _validate_worker_defaults(config: config_pb2.IrisClusterConfig) -> None:
         raise ValueError("defaults.worker.docker_image is required for non-local platforms (gcp/manual/coreweave).")
 
     runtime = config.defaults.worker.runtime.strip()
-    if runtime and runtime != "docker":
-        raise ValueError(f"defaults.worker.runtime must be docker, got {runtime!r}.")
+    if runtime and runtime not in ("docker", "kubernetes"):
+        raise ValueError(f"defaults.worker.runtime must be 'docker' or 'kubernetes', got {runtime!r}.")
 
 
 def _scale_groups_to_config(scale_groups: dict[str, config_pb2.ScaleGroupConfig]) -> config_pb2.IrisClusterConfig:
@@ -1132,11 +1132,18 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
 
         kp = cluster_config.kubernetes_provider
         namespace = kp.namespace or "iris"
+        label_prefix = cluster_config.platform.label_prefix
+        managed_label = f"iris-{label_prefix}-managed" if label_prefix else ""
         return KubernetesProvider(
             kubectl=Kubectl(namespace=namespace, kubeconfig_path=kp.kubeconfig or None),
             namespace=namespace,
             default_image=kp.default_image,
             colocation_topology_key=kp.colocation_topology_key or "coreweave.cloud/spine",
+            service_account=kp.service_account or "",
+            host_network=kp.host_network,
+            cache_dir=kp.cache_dir or "/cache",
+            controller_address=kp.controller_address or None,
+            managed_label=managed_label,
         )
     if which == "worker_provider":
         from iris.cluster.controller.worker_provider import RpcWorkerStubFactory

@@ -9,17 +9,25 @@ k8s API via kubectl, launching one Pod per task attempt.
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 import logging
 import re
+import shlex
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
+from google.protobuf import json_format
+
+from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
 from iris.cluster.controller.direct_provider import ClusterCapacity, DirectProviderSyncResult, SchedulingEvent
 from iris.cluster.controller.transitions import DirectProviderBatch, RunningTaskEntry, TaskUpdate
-from iris.cluster.k8s.constants import CW_INTERRUPTABLE_TOLERATION
+from iris.cluster.k8s.constants import CW_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.k8s.kubectl import Kubectl, KubectlLogLine
+from iris.cluster.runtime.env import normalize_workdir_relative_path
 from iris.cluster.types import JobName, get_gpu_count
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.time_utils import Timestamp
@@ -51,6 +59,17 @@ _CONSTRAINT_KEY_TO_NODE_LABEL: dict[str, str] = {
 
 # Kubernetes label values: max 63 chars, alphanumeric plus [-_.], must start/end alphanumeric.
 _K8S_LABEL_MAX_LEN = 63
+
+# Number of consecutive sync cycles where a pod is missing from the k8s API
+# before declaring FAILED. Avoids false positives from transient API misses.
+_POD_NOT_FOUND_GRACE_CYCLES = 3
+
+# Kubernetes terminated reasons that indicate infrastructure failure (not application error).
+# OOMKilled: container exceeded memory limits or node ran out of memory.
+# Evicted: kubelet evicted the pod due to resource pressure.
+# DeadlineExceeded: pod's activeDeadlineSeconds expired.
+# Preempting: scheduler preempted the pod for a higher-priority workload.
+_INFRASTRUCTURE_FAILURE_REASONS = frozenset({"OOMKilled", "Evicted", "DeadlineExceeded", "Preempting"})
 
 
 def _constraints_to_node_selector(
@@ -131,31 +150,221 @@ def _pod_name(task_id: JobName, attempt_id: int) -> str:
     return (prefix + suffix) if prefix else f"iris-task{suffix}"
 
 
+_STANDARD_MOUNTS = [
+    # (volume_name, container_path, kind)
+    ("workdir", "/app", "workdir"),
+    ("tmpfs", "/tmp", "tmpfs"),
+    ("uv-cache", "/uv/cache", "cache"),
+    ("cargo-registry", "/root/.cargo/registry", "cache"),
+    ("cargo-target", "/root/.cargo/target", "cache"),
+]
+
+
+def _build_volumes_and_mounts(
+    cache_dir: str,
+    has_accelerator: bool,
+) -> tuple[list[dict], list[dict]]:
+    """Build standard pod volumes and container volume mounts.
+
+    Workdir and tmpfs use emptyDir; cache mounts use hostPath so they persist
+    across pod restarts on the same node. /dev/shm is memory-backed with a
+    generous limit for GPU/TPU multi-process communication.
+    """
+    volumes: list[dict] = []
+    mounts: list[dict] = []
+    for name, path, kind in _STANDARD_MOUNTS:
+        if kind in ("workdir", "tmpfs"):
+            volumes.append({"name": name, "emptyDir": {}})
+        else:
+            volumes.append(
+                {
+                    "name": name,
+                    "hostPath": {
+                        "path": f"{cache_dir}/{path.strip('/').replace('/', '-')}",
+                        "type": "DirectoryOrCreate",
+                    },
+                }
+            )
+        mounts.append({"name": name, "mountPath": path})
+
+    shm_spec: dict = {"medium": "Memory"}
+    if has_accelerator:
+        shm_spec["sizeLimit"] = "100Gi"
+    volumes.append({"name": "dshm", "emptyDir": shm_spec})
+    mounts.append({"name": "dshm", "mountPath": "/dev/shm"})
+
+    return volumes, mounts
+
+
+def _build_iris_env(
+    run_req: cluster_pb2.Worker.RunTaskRequest,
+    controller_address: str | None,
+) -> dict[str, str]:
+    """Build Iris system env vars for a directly-managed pod.
+
+    Mirrors build_iris_env() from task_attempt.py without the worker context,
+    since KubernetesProvider has no worker daemon.
+    """
+    env: dict[str, str] = {}
+    # Include attempt_id suffix so tasks see the correct attempt via JobInfo.
+    # The worker path uses task.task_attempt.to_wire() which includes ":attempt_id".
+    task_id_wire = run_req.task_id
+    if run_req.attempt_id:
+        task_id_wire = f"{run_req.task_id}:{run_req.attempt_id}"
+    env["IRIS_TASK_ID"] = task_id_wire
+    env["IRIS_NUM_TASKS"] = str(run_req.num_tasks)
+    env["IRIS_BUNDLE_ID"] = run_req.bundle_id
+    if controller_address:
+        env["IRIS_CONTROLLER_ADDRESS"] = controller_address
+        env["IRIS_CONTROLLER_URL"] = controller_address
+    env["IRIS_BIND_HOST"] = "0.0.0.0"
+    env["IRIS_WORKDIR"] = "/app"
+    env["IRIS_PYTHON"] = "python"
+    env["UV_PYTHON_INSTALL_DIR"] = "/uv/cache/python"
+    env["CARGO_TARGET_DIR"] = "/root/.cargo/target"
+
+    extras = list(run_req.environment.extras)
+    if extras:
+        env["IRIS_JOB_EXTRAS"] = json.dumps(extras)
+    pip_packages = list(run_req.environment.pip_packages)
+    if pip_packages:
+        env["IRIS_JOB_PIP_PACKAGES"] = json.dumps(pip_packages)
+    user_env_vars = dict(run_req.environment.env_vars)
+    if user_env_vars:
+        env["IRIS_JOB_ENV"] = json.dumps(user_env_vars)
+
+    inheritable = [c for c in run_req.constraints if c.key in INHERITED_CONSTRAINT_KEYS]
+    if inheritable:
+        env["IRIS_JOB_CONSTRAINTS"] = json.dumps(
+            [json_format.MessageToDict(c, preserving_proto_field_name=True) for c in inheritable]
+        )
+
+    for port_name in run_req.ports:
+        env[f"IRIS_PORT_{port_name.upper()}"] = "0"
+
+    # Device env vars (TPU)
+    if run_req.HasField("resources") and run_req.resources.HasField("device"):
+        dev = run_req.resources.device
+        if dev.HasField("tpu"):
+            env["JAX_PLATFORMS"] = "tpu,cpu"
+            env["PJRT_DEVICE"] = "TPU"
+            env["JAX_FORCE_TPU_INIT"] = "1"
+
+    return env
+
+
+def _build_task_script(run_req: cluster_pb2.Worker.RunTaskRequest) -> str:
+    """Build a shell script that runs setup_commands then the run_command."""
+    lines = ["set -e", "ulimit -c 0", "mkdir -p /app", "cd /app"]
+    for cmd in run_req.entrypoint.setup_commands:
+        lines.append(cmd)
+    if run_req.entrypoint.run_command.argv:
+        lines.append("exec " + shlex.join(run_req.entrypoint.run_command.argv))
+    return "\n".join(lines)
+
+
+def _build_init_container_spec(
+    run_req: cluster_pb2.Worker.RunTaskRequest,
+    pod_name: str,
+    default_image: str,
+    controller_address: str | None,
+) -> tuple[list[dict], list[dict], str | None]:
+    """Build init containers for bundle fetch and workdir file staging.
+
+    Returns (init_containers, extra_volumes, configmap_name_or_None).
+    The init container runs a standalone Python script that downloads the
+    bundle zip from the controller and copies workdir files from a ConfigMap.
+    """
+    has_bundle = bool(run_req.bundle_id) and bool(controller_address)
+    workdir_files = dict(run_req.entrypoint.workdir_files)
+    if not has_bundle and not workdir_files:
+        return [], [], None
+
+    script_path = Path(__file__).with_name("kubernetes_bundle_fetch.py")
+    bundle_script = script_path.read_text()
+
+    init_env: list[dict] = [{"name": "IRIS_WORKDIR", "value": "/app"}]
+    init_mounts: list[dict] = [{"name": "workdir", "mountPath": "/app"}]
+    extra_volumes: list[dict] = []
+    configmap_name: str | None = None
+
+    if has_bundle:
+        init_env.extend(
+            [
+                {"name": "IRIS_BUNDLE_ID", "value": run_req.bundle_id},
+                {"name": "IRIS_CONTROLLER_URL", "value": controller_address},
+            ]
+        )
+
+    if workdir_files:
+        configmap_name = f"{pod_name}-wf"
+        extra_volumes.append(
+            {
+                "name": "workdir-files",
+                "configMap": {
+                    "name": configmap_name,
+                    "items": [
+                        {"key": f"f{i:04d}", "path": normalize_workdir_relative_path(name)}
+                        for i, name in enumerate(workdir_files)
+                    ],
+                },
+            }
+        )
+        init_mounts.append(
+            {
+                "name": "workdir-files",
+                "mountPath": "/iris/staged-workdir-files",
+                "readOnly": True,
+            }
+        )
+        init_env.append({"name": "IRIS_WORKDIR_FILES_SRC", "value": "/iris/staged-workdir-files"})
+
+    init_containers = [
+        {
+            "name": "stage-workdir",
+            "image": default_image,
+            "imagePullPolicy": "IfNotPresent",
+            "command": ["python", "-c", bundle_script],
+            "env": init_env,
+            "volumeMounts": init_mounts,
+        }
+    ]
+
+    return init_containers, extra_volumes, configmap_name
+
+
 def _build_pod_manifest(
     run_req: cluster_pb2.Worker.RunTaskRequest,
     namespace: str,
     default_image: str,
     colocation_topology_key: str = "",
+    cache_dir: str = "/cache",
+    service_account: str = "",
+    host_network: bool = False,
+    controller_address: str | None = None,
+    managed_label: str = "",
 ) -> dict:
     """Build a Pod manifest dict from a RunTaskRequest."""
     task_id = JobName.from_wire(run_req.task_id)
     attempt_id = run_req.attempt_id
     pod_name = _pod_name(task_id, attempt_id)
 
-    env_list = [{"name": k, "value": v} for k, v in run_req.environment.env_vars.items()]
+    # User env vars as base, then iris system env vars override.
+    iris_env = _build_iris_env(run_req, controller_address)
+    combined = {**dict(run_req.environment.env_vars), **iris_env}
+    env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]
+    # Pod IP via downward API — not expressible as a static value.
+    env_list.append(
+        {
+            "name": "IRIS_ADVERTISE_HOST",
+            "valueFrom": {"fieldRef": {"fieldPath": "status.podIP"}},
+        }
+    )
 
-    container: dict = {
-        "name": "task",
-        "image": default_image,
-        "imagePullPolicy": "IfNotPresent",
-        "env": env_list,
-    }
-
-    if run_req.entrypoint.run_command.argv:
-        container["command"] = list(run_req.entrypoint.run_command.argv)
-
+    # Parse resources first so device info is known before building volumes.
     resources: dict = {}
     gpu_count = 0
+    has_tpu = False
     if run_req.HasField("resources"):
         res = run_req.resources
         limits: dict[str, str] = {}
@@ -165,6 +374,7 @@ def _build_pod_manifest(
             limits["memory"] = str(res.memory_bytes)
         if res.HasField("device"):
             gpu_count = get_gpu_count(res.device)
+            has_tpu = res.device.HasField("tpu")
             if gpu_count > 0:
                 limits["nvidia.com/gpu"] = str(gpu_count)
         if limits:
@@ -173,6 +383,26 @@ def _build_pod_manifest(
             disk_gi = max(1, res.disk_bytes // (1024**3))
             resources.setdefault("requests", {})["ephemeral-storage"] = f"{disk_gi}Gi"
             resources.setdefault("limits", {})["ephemeral-storage"] = f"{disk_gi}Gi"
+
+    has_accelerator = gpu_count > 0 or has_tpu
+    volumes, vol_mounts = _build_volumes_and_mounts(cache_dir, has_accelerator=has_accelerator)
+
+    container: dict = {
+        "name": "task",
+        "image": default_image,
+        "imagePullPolicy": "IfNotPresent",
+        "env": env_list,
+        "workingDir": "/app",
+        "volumeMounts": vol_mounts,
+        "command": ["bash", "-lc", _build_task_script(run_req)],
+    }
+
+    # SYS_PTRACE for profiling; SYS_RESOURCE for TPU memlock ulimits.
+    capabilities = ["SYS_PTRACE"]
+    if has_tpu:
+        capabilities.append("SYS_RESOURCE")
+    container["securityContext"] = {"capabilities": {"add": capabilities}}
+
     if resources:
         container["resources"] = resources
 
@@ -193,14 +423,31 @@ def _build_pod_manifest(
     spec: dict = {
         "restartPolicy": "Never",
         "containers": [container],
+        "volumes": volumes,
     }
 
     node_selector = _constraints_to_node_selector(run_req.constraints)
+    if managed_label:
+        node_selector[managed_label] = "true"
     if node_selector:
         spec["nodeSelector"] = node_selector
 
     if gpu_count > 0:
-        spec.setdefault("tolerations", []).append(CW_INTERRUPTABLE_TOLERATION)
+        spec.setdefault("tolerations", []).extend(
+            [
+                CW_INTERRUPTABLE_TOLERATION,
+                NVIDIA_GPU_TOLERATION,
+            ]
+        )
+
+    if service_account:
+        spec["serviceAccountName"] = service_account
+    if host_network:
+        spec["hostNetwork"] = True
+        spec["dnsPolicy"] = "ClusterFirstWithHostNet"
+
+    if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0:
+        spec["activeDeadlineSeconds"] = max(1, run_req.timeout.milliseconds // 1000)
 
     # Prefer co-locating sibling task pods on the same network spine for IB connectivity.
     if run_req.num_tasks > 1 and colocation_topology_key:
@@ -236,8 +483,30 @@ def _kubectl_log_line_to_log_entry(kll: KubectlLogLine, attempt_id: int) -> logg
     return entry
 
 
+def _is_infrastructure_failure(pod: dict) -> bool:
+    """Check if the pod failure was caused by infrastructure (OOM, eviction, etc.).
+
+    Returns True when the terminated reason indicates the failure was NOT caused
+    by the application itself, so it should be classified as a worker/preemption
+    failure rather than an application failure.
+    """
+    statuses = pod.get("status", {}).get("containerStatuses", [])
+    if not statuses:
+        # Pod-level eviction: the pod status reason indicates infrastructure.
+        pod_reason = pod.get("status", {}).get("reason", "")
+        return pod_reason in _INFRASTRUCTURE_FAILURE_REASONS
+    terminated = statuses[0].get("state", {}).get("terminated", {})
+    return terminated.get("reason", "") in _INFRASTRUCTURE_FAILURE_REASONS
+
+
 def _task_update_from_pod(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
-    """Build a TaskUpdate from a Kubernetes Pod dict."""
+    """Build a TaskUpdate from a Kubernetes Pod dict.
+
+    Infrastructure failures (OOMKilled, eviction) are reported as WORKER_FAILED
+    so they count against max_retries_preemption (default: 100).
+    Application failures (non-zero exit code) are reported as FAILED so they
+    count against max_retries_failure (default: 0, no retries).
+    """
     phase = pod.get("status", {}).get("phase", "Unknown")
     task_id = entry.task_id
     attempt_id = entry.attempt_id
@@ -256,12 +525,16 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
             new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
         )
 
-    # Failed or Unknown
+    # Failed or Unknown — distinguish infrastructure vs application failure.
     exit_code = _extract_exit_code(pod)
+    if _is_infrastructure_failure(pod):
+        new_state = cluster_pb2.TASK_STATE_WORKER_FAILED
+    else:
+        new_state = cluster_pb2.TASK_STATE_FAILED
     return TaskUpdate(
         task_id=task_id,
         attempt_id=attempt_id,
-        new_state=cluster_pb2.TASK_STATE_FAILED,
+        new_state=new_state,
         exit_code=exit_code,
         error=_extract_error(pod),
     )
@@ -314,13 +587,13 @@ def _parse_k8s_quantity(value: str) -> int:
     si_suffixes = {"K": 10**3, "M": 10**6, "G": 10**9, "T": 10**12, "P": 10**15}
     for suffix, mult in binary_suffixes.items():
         if value.endswith(suffix):
-            return int(value[: -len(suffix)]) * mult
+            return int(float(value[: -len(suffix)]) * mult)
     for suffix, mult in si_suffixes.items():
         if value.endswith(suffix) and not value.endswith("i"):
-            return int(value[: -len(suffix)]) * mult
+            return int(float(value[: -len(suffix)]) * mult)
     if value.endswith("m"):
         return int(value[:-1])
-    return int(value)
+    return int(float(value))
 
 
 @dataclass
@@ -337,6 +610,13 @@ class KubernetesProvider:
     namespace: str
     default_image: str
     colocation_topology_key: str = "coreweave.cloud/spine"
+    cache_dir: str = "/cache"
+    service_account: str = ""
+    host_network: bool = False
+    controller_address: str | None = None
+    managed_label: str = ""
+    _log_cursors: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
 
     @property
     def is_direct_provider(self) -> bool:
@@ -344,18 +624,14 @@ class KubernetesProvider:
 
     def sync(self, batch: DirectProviderBatch) -> DirectProviderSyncResult:
         """Sync task state: apply new pods, delete killed pods, poll running pods."""
-        try:
-            for run_req in batch.tasks_to_run:
-                self._apply_pod(run_req)
-            for task_id in batch.tasks_to_kill:
-                self._delete_pods_by_task_id(task_id)
-            updates = self._poll_pods(batch.running_tasks)
-            capacity = self._query_capacity()
-            scheduling_events = self._fetch_scheduling_events()
-            return DirectProviderSyncResult(updates=updates, scheduling_events=scheduling_events, capacity=capacity)
-        except Exception as e:
-            logger.warning("KubernetesProvider sync failed: %s", e)
-            return DirectProviderSyncResult()
+        for run_req in batch.tasks_to_run:
+            self._apply_pod(run_req)
+        for task_id in batch.tasks_to_kill:
+            self._delete_pods_by_task_id(task_id)
+        updates = self._poll_pods(batch.running_tasks)
+        capacity = self._query_capacity()
+        scheduling_events = self._fetch_scheduling_events()
+        return DirectProviderSyncResult(updates=updates, scheduling_events=scheduling_events, capacity=capacity)
 
     def fetch_live_logs(
         self,
@@ -399,6 +675,29 @@ class KubernetesProvider:
             entries = entries[:max_lines]
 
         return entries, result.byte_offset
+
+    def profile_task(
+        self,
+        task_id: str,
+        attempt_id: int,
+        request: cluster_pb2.ProfileTaskRequest,
+    ) -> cluster_pb2.ProfileTaskResponse:
+        """Profile a running task pod via kubectl exec."""
+        pod_name = _pod_name(JobName.from_wire(task_id), attempt_id)
+        duration = request.duration_seconds or 10
+        profile_type = request.profile_type
+
+        try:
+            if profile_type.HasField("threads"):
+                return self._profile_threads(pod_name, profile_type.threads)
+            elif profile_type.HasField("cpu"):
+                return self._profile_cpu(pod_name, profile_type.cpu, duration)
+            elif profile_type.HasField("memory"):
+                return self._profile_memory(pod_name, profile_type.memory, duration)
+            else:
+                return cluster_pb2.ProfileTaskResponse(error="Unknown profile type")
+        except Exception as e:
+            return cluster_pb2.ProfileTaskResponse(error=str(e))
 
     def close(self) -> None:
         """No persistent resources to release."""
@@ -494,12 +793,127 @@ class KubernetesProvider:
         )
 
     # -------------------------------------------------------------------------
+    # Profiling helpers
+    # -------------------------------------------------------------------------
+
+    def _kubectl_exec_shell(self, pod_name: str, cmd: str, timeout: float | None = None) -> str:
+        """Execute a shell command in a task pod with venv activation.
+
+        Returns stdout. Raises RuntimeError on non-zero exit.
+        """
+        shell_cmd = ["bash", "-lc", f"source /app/.venv/bin/activate 2>/dev/null; {cmd}"]
+        result = self.kubectl.exec(pod_name, shell_cmd, container="task", timeout=timeout)
+        if result.returncode != 0:
+            raise RuntimeError(f"kubectl exec failed (exit {result.returncode}): {result.stderr}")
+        return result.stdout
+
+    def _profile_threads(
+        self, pod_name: str, threads_config: cluster_pb2.ThreadsProfile
+    ) -> cluster_pb2.ProfileTaskResponse:
+        """Get thread stacks via py-spy dump."""
+        from iris.cluster.runtime.profile import build_pyspy_dump_cmd
+
+        cmd = shlex.join(build_pyspy_dump_cmd("1", include_locals=threads_config.locals))
+        stdout = self._kubectl_exec_shell(pod_name, cmd, timeout=30)
+        return cluster_pb2.ProfileTaskResponse(profile_data=stdout.encode("utf-8"))
+
+    def _profile_cpu(
+        self, pod_name: str, cpu_config: cluster_pb2.CpuProfile, duration: int
+    ) -> cluster_pb2.ProfileTaskResponse:
+        """Record CPU profile via py-spy."""
+        from iris.cluster.runtime.profile import build_pyspy_cmd, resolve_cpu_spec
+
+        spec = resolve_cpu_spec(cpu_config, duration, pid="1")
+        output_path = f"/tmp/iris-profile.{spec.ext}"
+        cmd = shlex.join(build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path=output_path))
+        self._kubectl_exec_shell(pod_name, cmd, timeout=duration + 30)
+        data = self.kubectl.read_file(pod_name, output_path, container="task")
+        self.kubectl.rm_files(pod_name, [output_path], container="task")
+        return cluster_pb2.ProfileTaskResponse(profile_data=data)
+
+    def _profile_memory(
+        self, pod_name: str, memory_config: cluster_pb2.MemoryProfile, duration: int
+    ) -> cluster_pb2.ProfileTaskResponse:
+        """Record memory profile via memray."""
+        from iris.cluster.runtime.profile import (
+            build_memray_attach_cmd,
+            build_memray_transform_cmd,
+            resolve_memory_spec,
+        )
+
+        spec = resolve_memory_spec(memory_config, duration, pid="1")
+        trace_path = "/tmp/iris-memray.bin"
+        output_path = f"/tmp/iris-memray.{spec.ext}"
+
+        attach_cmd = shlex.join(build_memray_attach_cmd(spec, memray_bin="memray", trace_path=trace_path))
+        self._kubectl_exec_shell(pod_name, attach_cmd, timeout=duration + 30)
+
+        transform_cmd = shlex.join(
+            build_memray_transform_cmd(spec, memray_bin="memray", trace_path=trace_path, output_path=output_path)
+        )
+        transform_stdout = self._kubectl_exec_shell(pod_name, transform_cmd, timeout=30)
+
+        if spec.output_is_file:
+            data = self.kubectl.read_file(pod_name, output_path, container="task")
+        else:
+            data = transform_stdout.encode("utf-8")
+
+        self.kubectl.rm_files(pod_name, [trace_path, output_path], container="task")
+        return cluster_pb2.ProfileTaskResponse(profile_data=data)
+
+    # -------------------------------------------------------------------------
     # Internal helpers
     # -------------------------------------------------------------------------
 
     def _apply_pod(self, run_req: cluster_pb2.Worker.RunTaskRequest) -> None:
         """Create or update the Pod for a task attempt."""
-        manifest = _build_pod_manifest(run_req, self.namespace, self.default_image, self.colocation_topology_key)
+        manifest = _build_pod_manifest(
+            run_req,
+            self.namespace,
+            self.default_image,
+            self.colocation_topology_key,
+            cache_dir=self.cache_dir,
+            service_account=self.service_account,
+            host_network=self.host_network,
+            controller_address=self.controller_address,
+            managed_label=self.managed_label,
+        )
+
+        task_id_name = JobName.from_wire(run_req.task_id)
+        pod_name = _pod_name(task_id_name, run_req.attempt_id)
+
+        init_containers, extra_volumes, configmap_name = _build_init_container_spec(
+            run_req,
+            pod_name,
+            self.default_image,
+            self.controller_address,
+        )
+
+        if configmap_name:
+            workdir_files = dict(run_req.entrypoint.workdir_files)
+            cm = {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": configmap_name,
+                    "namespace": self.namespace,
+                    "labels": {
+                        _LABEL_MANAGED: "true",
+                        _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+                        _LABEL_TASK_HASH: _task_hash(run_req.task_id),
+                    },
+                },
+                "binaryData": {
+                    f"f{i:04d}": base64.b64encode(data).decode() for i, (_name, data) in enumerate(workdir_files.items())
+                },
+            }
+            self.kubectl.apply_json(cm)
+
+        if init_containers:
+            manifest["spec"]["initContainers"] = init_containers
+        if extra_volumes:
+            manifest["spec"]["volumes"].extend(extra_volumes)
+
         self.kubectl.apply_json(manifest)
         task_id = run_req.task_id
         logger.info(
@@ -527,8 +941,40 @@ class KubernetesProvider:
                 self.kubectl.delete("pod", pod_name)
                 logger.info("Deleted pod %s for task %s", pod_name, task_id)
 
+        # Clean up associated ConfigMaps (workdir files).
+        configmaps = self.kubectl.list_json(
+            "configmaps",
+            labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE, _LABEL_TASK_HASH: task_hash},
+        )
+        for cm in configmaps:
+            cm_name = cm.get("metadata", {}).get("name", "")
+            if cm_name:
+                self.kubectl.delete("configmap", cm_name)
+                logger.info("Deleted configmap %s for task %s", cm_name, task_id)
+
+    def _fetch_incremental_logs(
+        self,
+        pod_name: str,
+        attempt_id: int,
+        cursor_key: str,
+    ) -> list[logging_pb2.LogEntry]:
+        """Fetch logs from a pod starting at the last-seen byte offset."""
+        byte_offset = self._log_cursors.get(cursor_key, 0)
+        try:
+            result = self.kubectl.stream_logs(pod_name, container="task", byte_offset=byte_offset)
+            self._log_cursors[cursor_key] = result.byte_offset
+            return [_kubectl_log_line_to_log_entry(kll, attempt_id) for kll in result.lines]
+        except Exception as e:
+            logger.warning("Failed to fetch logs for pod %s: %s", pod_name, e)
+            return []
+
     def _poll_pods(self, running: list[RunningTaskEntry]) -> list[TaskUpdate]:
-        """Poll pod phases for all running tasks and build TaskUpdates."""
+        """Poll pod phases for all running tasks and build TaskUpdates.
+
+        Fetches incremental logs every sync cycle (running + terminal pods).
+        On terminal pods, a final full-log fetch ensures nothing is missed,
+        then the cursor is cleaned up.
+        """
         if not running:
             return []
 
@@ -541,35 +987,74 @@ class KubernetesProvider:
         updates: list[TaskUpdate] = []
         for entry in running:
             pod_name = _pod_name(entry.task_id, entry.attempt_id)
+            cursor_key = f"{entry.task_id.to_wire()}:{entry.attempt_id}"
             pod = pods_by_name.get(pod_name)
+
             if pod is None:
+                count = self._pod_not_found_counts.get(cursor_key, 0) + 1
+                self._pod_not_found_counts[cursor_key] = count
+                if count < _POD_NOT_FOUND_GRACE_CYCLES:
+                    updates.append(
+                        TaskUpdate(
+                            task_id=entry.task_id,
+                            attempt_id=entry.attempt_id,
+                            new_state=cluster_pb2.TASK_STATE_RUNNING,
+                        )
+                    )
+                    continue
+                # Grace exhausted — pod is truly gone. Treat as application
+                # failure (FAILED) rather than infrastructure (WORKER_FAILED)
+                # because we cannot determine the cause. Using FAILED ensures
+                # max_retries_failure (default: 0) applies instead of
+                # max_retries_preemption (default: 100), preventing runaway retries.
+                self._pod_not_found_counts.pop(cursor_key, None)
+                self._log_cursors.pop(cursor_key, None)
                 updates.append(
                     TaskUpdate(
                         task_id=entry.task_id,
                         attempt_id=entry.attempt_id,
-                        new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+                        new_state=cluster_pb2.TASK_STATE_FAILED,
                         error="Pod not found",
                     )
                 )
                 continue
 
-            update = _task_update_from_pod(entry, pod)
+            self._pod_not_found_counts.pop(cursor_key, None)
+            log_entries = self._fetch_incremental_logs(pod_name, entry.attempt_id, cursor_key)
 
-            # Eagerly fetch logs on terminal pod to prevent log loss on controller crash.
+            update = _task_update_from_pod(entry, pod)
             phase = pod.get("status", {}).get("phase", "")
+
+            resource_usage = None
+            if phase == "Running":
+                try:
+                    top_result = self.kubectl.top_pod(pod_name)
+                    if top_result is not None:
+                        cpu_mc, mem_bytes = top_result
+                        resource_usage = cluster_pb2.ResourceUsage(
+                            cpu_millicores=cpu_mc,
+                            memory_mb=mem_bytes // (1024 * 1024),
+                        )
+                except Exception as e:
+                    logger.debug("Failed to fetch resource stats for pod %s: %s", pod_name, e)
+
             if phase in ("Succeeded", "Failed"):
-                log_entries = self._fetch_completed_pod_logs(pod_name, entry.attempt_id)
-                update = TaskUpdate(
+                final_logs = self._fetch_completed_pod_logs(pod_name, entry.attempt_id)
+                if len(final_logs) > len(log_entries):
+                    log_entries = final_logs
+                self._log_cursors.pop(cursor_key, None)
+
+            updates.append(
+                TaskUpdate(
                     task_id=update.task_id,
                     attempt_id=update.attempt_id,
                     new_state=update.new_state,
                     error=update.error,
                     exit_code=update.exit_code,
-                    resource_usage=update.resource_usage,
+                    resource_usage=resource_usage or update.resource_usage,
                     log_entries=log_entries,
                 )
-
-            updates.append(update)
+            )
 
         return updates
 
@@ -646,28 +1131,49 @@ class KubernetesProvider:
         )
 
     def _fetch_scheduling_events(self) -> list[SchedulingEvent]:
-        """Fetch recent k8s events for iris-managed pods."""
+        """Fetch recent k8s events for iris-managed pods.
+
+        K8s Events don't carry pod labels, so we query all events in the
+        namespace and filter client-side by pod name prefix.
+        """
         try:
-            events = self.kubectl.list_json(
-                "events",
+            all_pods = self.kubectl.list_json(
+                "pods",
                 labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE},
             )
+            pod_names = {pod.get("metadata", {}).get("name", "") for pod in all_pods}
+            pod_labels = {
+                pod.get("metadata", {}).get("name", ""): pod.get("metadata", {}).get("labels", {}) for pod in all_pods
+            }
+        except Exception as e:
+            logger.warning("Failed to query pods for scheduling events: %s", e)
+            return []
+
+        if not pod_names:
+            return []
+
+        try:
+            events = self.kubectl.list_json("events")
         except Exception as e:
             logger.warning("Failed to fetch scheduling events: %s", e)
             return []
 
         result: list[SchedulingEvent] = []
         for ev in events:
-            metadata = ev.get("metadata", {})
-            labels = metadata.get("labels", {})
+            involved = ev.get("involvedObject", {})
+            if involved.get("kind") != "Pod":
+                continue
+            involved_name = involved.get("name", "")
+            if involved_name not in pod_names:
+                continue
+
+            labels = pod_labels.get(involved_name, {})
             task_id = labels.get(_LABEL_TASK_ID, "")
             attempt_str = labels.get(_LABEL_ATTEMPT_ID, "0")
             try:
                 attempt_id = int(attempt_str)
             except (ValueError, TypeError):
                 attempt_id = 0
-
-            ts = Timestamp.now()
 
             result.append(
                 SchedulingEvent(
@@ -676,7 +1182,7 @@ class KubernetesProvider:
                     event_type=ev.get("type", "Normal"),
                     reason=ev.get("reason", ""),
                     message=ev.get("message", ""),
-                    timestamp=ts,
+                    timestamp=Timestamp.now(),
                 )
             )
         return result

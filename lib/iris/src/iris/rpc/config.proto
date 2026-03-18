@@ -395,6 +395,10 @@ message KubernetesProviderConfig {
   // sharing this topology (e.g. "coreweave.cloud/spine" for IB colocation).
   // Leave empty to disable. Default: "coreweave.cloud/spine".
   string colocation_topology_key = 4;
+  string service_account = 5;    // K8s ServiceAccount for task pods (default: "")
+  bool host_network = 6;         // Run task pods with hostNetwork (for NCCL/IB)
+  string cache_dir = 7;          // hostPath base for cache mounts (default: "/cache")
+  string controller_address = 8; // Controller URL injected into task pods
 }
 
 // ============================================================================

@@ -10,3 +10,11 @@ CW_INTERRUPTABLE_TOLERATION: dict = {
     "operator": "Exists",
     "effect": "NoExecute",
 }
+
+# NVIDIA GPU nodes commonly carry this taint. Pods requesting GPUs must
+# tolerate it or they will remain Pending.
+NVIDIA_GPU_TOLERATION: dict = {
+    "key": "nvidia.com/gpu",
+    "operator": "Exists",
+    "effect": "NoSchedule",
+}

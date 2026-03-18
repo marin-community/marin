@@ -44,6 +44,10 @@ kubernetes_provider:
   namespace: iris
   default_image: ghcr.io/marin-community/iris-task:latest
   # colocation_topology_key defaults to coreweave.cloud/spine — no need to set explicitly
+  # service_account: ""           # K8s ServiceAccount for task pods
+  # host_network: false           # Enable for NCCL/IB multi-host traffic
+  # cache_dir: /cache             # hostPath base for cache volume mounts
+  # controller_address: ""        # Auto-discovered from controller config when empty
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest

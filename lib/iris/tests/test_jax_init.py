@@ -71,12 +71,12 @@ def test_initialize_jax_single_task(
     mock_jax_init: MagicMock,
     mock_atexit: MagicMock,
 ) -> None:
-    """Single-task jobs call jax.distributed.initialize() with defaults."""
+    """Single-task jobs skip jax.distributed.initialize() entirely."""
     mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=1)
 
     initialize_jax()
 
-    mock_jax_init.assert_called_once_with()
+    mock_jax_init.assert_not_called()
     mock_iris_ctx.assert_not_called()
 
 
@@ -90,12 +90,12 @@ def test_initialize_jax_no_job_info(
     mock_jax_init: MagicMock,
     mock_atexit: MagicMock,
 ) -> None:
-    """No job info means we're not in an Iris job — use JAX defaults."""
+    """No job info means we're not in an Iris job — skip distributed init."""
     mock_get_job_info.return_value = None
 
     initialize_jax()
 
-    mock_jax_init.assert_called_once_with()
+    mock_jax_init.assert_not_called()
     mock_iris_ctx.assert_not_called()
 
 

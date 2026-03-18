@@ -14,6 +14,12 @@ platform:
 storage:
   remote_state_dir: s3://marin-na/iris/state/canary-multihost
 
+kubernetes_provider:
+  namespace: iris-canary-mh
+  default_image: ghcr.io/marin-community/iris-task:latest
+  host_network: true              # Required for NCCL/IB multi-host traffic
+  controller_address: http://iris-controller-mh-svc.iris-canary-mh.svc.cluster.local:10000
+
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   coreweave:

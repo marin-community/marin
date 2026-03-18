@@ -1454,8 +1454,12 @@ class ControllerServiceImpl:
         task_worker_id = task.worker_id
         if not task_worker_id:
             if self._controller.has_direct_provider:
-                raise ConnectError(
-                    Code.UNIMPLEMENTED, f"Task {request.target} uses direct provider; profiling is not supported"
+                provider = self._controller.provider
+                attempt_id = target.attempt_id if target.attempt_id is not None else task.current_attempt_id
+                resp = provider.profile_task(task.task_id.to_wire(), attempt_id, request)
+                return cluster_pb2.ProfileTaskResponse(
+                    profile_data=resp.profile_data,
+                    error=resp.error,
                 )
             raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not yet assigned to a worker")
 
