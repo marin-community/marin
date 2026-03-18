@@ -5,7 +5,9 @@
   "branch": "kevin/sft",
   "checkpoints_count": 1,
   "files_touched": [
-    "experiments/posttrain/instruction_datasets.py"
+    "experiments/exp3490b_sft_nemotron_terminal_corpus_qwen3_8b.py",
+    "experiments/posttrain/instruction_datasets.py",
+    "lib/marin/src/marin/transform/conversation/transform_conversation.py"
   ],
   "sessions": [
     {
@@ -14,13 +16,20 @@
       "context": "/f5/3f670eed02/0/context.md",
       "content_hash": "/f5/3f670eed02/0/content_hash.txt",
       "prompt": "/f5/3f670eed02/0/prompt.txt"
+    },
+    {
+      "metadata": "/f5/3f670eed02/1/metadata.json",
+      "transcript": "/f5/3f670eed02/1/full.jsonl",
+      "context": "/f5/3f670eed02/1/context.md",
+      "content_hash": "/f5/3f670eed02/1/content_hash.txt",
+      "prompt": "/f5/3f670eed02/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 66,
-    "cache_creation_tokens": 216133,
-    "cache_read_tokens": 3013577,
-    "output_tokens": 21548,
-    "api_call_count": 49
+    "input_tokens": 131,
+    "cache_creation_tokens": 284157,
+    "cache_read_tokens": 5914741,
+    "output_tokens": 43324,
+    "api_call_count": 98
   }
 }
