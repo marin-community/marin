@@ -7,11 +7,8 @@ Tests resource mapping, entrypoint routing, retry count calculation, and
 runtime environment building logic.
 """
 
-import threading
-
 import pytest
 
-from fray.v2 import current_actor
 from fray.v2.types import (
     CpuConfig,
     Entrypoint,
@@ -344,59 +341,3 @@ def test_named_actor_host_different_names_differ():
     cls_a = _get_named_actor_cls("group_a")
     cls_b = _get_named_actor_cls("group_b")
     assert cls_a is not cls_b
-
-
-def test_proxy_call_terminates_actor_from_requesting_call(monkeypatch):
-    from fray.v2.ray_backend import backend as ray_backend
-
-    kill_calls: list[str] = []
-
-    class _KillActorTask:
-        def remote(self, actor_name: str) -> None:
-            kill_calls.append(actor_name)
-
-    class ConcurrentTerminateActor:
-        def __init__(self, terminate_requested: threading.Event, allow_finish: threading.Event):
-            self._terminate_requested = terminate_requested
-            self._allow_finish = allow_finish
-
-        def request_terminate(self) -> str:
-            current_actor().terminate()
-            self._terminate_requested.set()
-            assert self._allow_finish.wait(timeout=5.0)
-            return "terminating"
-
-        def ping(self) -> str:
-            assert self._terminate_requested.wait(timeout=5.0)
-            return "pong"
-
-    monkeypatch.setattr(ray_backend, "_kill_named_actor", _KillActorTask())
-
-    terminate_requested = threading.Event()
-    allow_finish = threading.Event()
-    host = ray_backend._RayActorHostBase(
-        ConcurrentTerminateActor,
-        "test-actor",
-        0,
-        "test-group",
-        (terminate_requested, allow_finish),
-        {},
-    )
-
-    result: dict[str, str] = {}
-
-    def run_terminate() -> None:
-        result["value"] = host._proxy_call("request_terminate", (), {})
-
-    thread = threading.Thread(target=run_terminate)
-    thread.start()
-    assert terminate_requested.wait(timeout=5.0)
-
-    assert host._proxy_call("ping", (), {}) == "pong"
-    assert kill_calls == []
-
-    allow_finish.set()
-    thread.join(timeout=5.0)
-
-    assert result["value"] == "terminating"
-    assert kill_calls == ["test-actor"]

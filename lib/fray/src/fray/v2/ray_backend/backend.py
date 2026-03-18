@@ -9,7 +9,6 @@ import logging
 import os
 import time
 import uuid
-from dataclasses import replace
 from typing import Any, cast
 
 import humanfriendly
@@ -17,7 +16,15 @@ import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
 
-from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.actor import (
+    ActorContext,
+    ActorFuture,
+    ActorGroup,
+    ActorHandle,
+    _actor_call_scope,
+    _reset_current_actor,
+    _set_current_actor,
+)
 from fray.v2.ray_backend.deps import build_python_path, build_runtime_env_for_packages
 from fray.v2.ray_backend.tpu import run_on_pod_ray
 from fray.v2.types import (
@@ -487,20 +494,12 @@ class _RayActorHostBase:
 
     def _proxy_call(self, method_name: str, args: tuple, kwargs: dict) -> Any:
         """Proxy method calls to the wrapped actor instance."""
-        terminate_requested = False
-
-        def request_termination() -> None:
-            nonlocal terminate_requested
-            terminate_requested = True
-
-        actor_ctx = replace(self._actor_ctx, _terminate=request_termination)
-        token = _set_current_actor(actor_ctx)
-        try:
-            return getattr(self._instance, method_name)(*args, **kwargs)
-        finally:
-            _reset_current_actor(token)
-            if terminate_requested:
-                _kill_named_actor.remote(self._actor_name)
+        with _actor_call_scope(self._actor_ctx) as call:
+            try:
+                return getattr(self._instance, method_name)(*args, **kwargs)
+            finally:
+                if call.terminate_requested:
+                    _kill_named_actor.remote(self._actor_name)
 
 
 _named_actor_host_cache: dict[str, type] = {}

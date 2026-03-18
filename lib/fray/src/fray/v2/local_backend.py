@@ -10,10 +10,17 @@ import subprocess
 import threading
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import replace
 from typing import Any, cast
 
-from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.actor import (
+    ActorContext,
+    ActorFuture,
+    ActorGroup,
+    ActorHandle,
+    _actor_call_scope,
+    _reset_current_actor,
+    _set_current_actor,
+)
 from fray.v2.types import (
     ActorConfig,
     BinaryEntrypoint,
@@ -274,26 +281,13 @@ class LocalActorMethod:
 
     def _invoke(self, *args: Any, **kwargs: Any) -> Any:
         instance = getattr(self._method, "__self__", None)
-        base_actor_ctx = getattr(instance, "_fray_actor_ctx", None)
-        terminate_requested = False
-        actor_ctx = None
-        if base_actor_ctx is not None:
-
-            def request_termination() -> None:
-                nonlocal terminate_requested
-                terminate_requested = True
-
-            actor_ctx = replace(base_actor_ctx, _terminate=request_termination)
-        token = _set_current_actor(actor_ctx) if actor_ctx is not None else None
-
-        try:
-            return self._method(*args, **kwargs)
-        finally:
-            if actor_ctx is not None:
-                _reset_current_actor(token)
-
-            if instance is not None and terminate_requested:
-                _shutdown_local_actor(instance)
+        actor_ctx = getattr(instance, "_fray_actor_ctx", None)
+        with _actor_call_scope(actor_ctx) as call:
+            try:
+                return self._method(*args, **kwargs)
+            finally:
+                if instance is not None and call.terminate_requested:
+                    _shutdown_local_actor(instance)
 
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
         """Spawn a dedicated thread for this call, returning a future.

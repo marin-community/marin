@@ -10,9 +10,10 @@ holds a set of actor handles with lifecycle tied to underlying jobs.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 
@@ -68,6 +69,29 @@ def _set_current_actor(ctx: ActorContext):
 def _reset_current_actor(token):
     """Reset the current actor context. Used by backends after actor creation."""
     _current_actor_ctx.reset(token)
+
+
+@dataclass
+class _ActorCall:
+    terminate_requested: bool = False
+
+    def request_termination(self) -> None:
+        self.terminate_requested = True
+
+
+@contextmanager
+def _actor_call_scope(actor_ctx: ActorContext | None) -> Iterator[_ActorCall]:
+    """Bind current_actor() for one actor call and track termination requests."""
+    call = _ActorCall()
+    if actor_ctx is None:
+        yield call
+        return
+
+    token = _set_current_actor(replace(actor_ctx, _terminate=call.request_termination))
+    try:
+        yield call
+    finally:
+        _reset_current_actor(token)
 
 
 class ActorFuture(Protocol):

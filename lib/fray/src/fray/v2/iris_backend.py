@@ -14,7 +14,6 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -37,7 +36,14 @@ from iris.cluster.types import EnvironmentSpec, ResourceSpec, is_job_finished
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import cluster_pb2
 
-from fray.v2.actor import ActorContext, ActorFuture, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.actor import (
+    ActorContext,
+    ActorFuture,
+    ActorHandle,
+    _actor_call_scope,
+    _reset_current_actor,
+    _set_current_actor,
+)
 from fray.v2.client import JobAlreadyExists as FrayJobAlreadyExists
 from fray.v2.types import (
     ActorConfig,
@@ -76,19 +82,11 @@ class _ActorContextProxy:
             return attr
 
         def _wrapped(*args: Any, **kwargs: Any) -> Any:
-            terminate_requested = False
-
-            def request_termination() -> None:
-                nonlocal terminate_requested
-                terminate_requested = True
-
-            actor_ctx = replace(self._actor_ctx, _terminate=request_termination)
-            token = _set_current_actor(actor_ctx)
-            try:
-                return attr(*args, **kwargs)
-            finally:
-                _reset_current_actor(token)
-                self._on_terminate(terminate_requested)
+            with _actor_call_scope(self._actor_ctx) as call:
+                try:
+                    return attr(*args, **kwargs)
+                finally:
+                    self._on_terminate(call.terminate_requested)
 
         return _wrapped
 

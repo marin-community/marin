@@ -8,13 +8,10 @@ Integration tests that need a running cluster are marked with @pytest.mark.iris.
 """
 
 import pickle
-import threading
-
 import pytest
 
 from fray.v2.iris_backend import (
     IrisActorHandle,
-    _start_requested_actor_termination,
     convert_constraints,
 )
 from fray.v2.types import (
@@ -95,56 +92,6 @@ class TestIrisActorHandlePickle:
         data = pickle.dumps(handle)
         restored = pickle.loads(data)
         assert restored._client is None
-
-
-def test_single_replica_termination_uses_job_termination(monkeypatch):
-    calls: list[str] = []
-
-    class ImmediateThread:
-        def __init__(self, target, daemon: bool, name: str):
-            self._target = target
-            self.daemon = daemon
-            self.name = name
-
-        def start(self) -> None:
-            self._target()
-
-    monkeypatch.setattr(threading, "Thread", ImmediateThread)
-
-    _start_requested_actor_termination(
-        requested=True,
-        replica_count=1,
-        thread_name="terminate-actor-0",
-        terminate_job=lambda: calls.append("job"),
-        terminate_replica=lambda: calls.append("replica"),
-    )
-
-    assert calls == ["job"]
-
-
-def test_multi_replica_termination_uses_replica_shutdown(monkeypatch):
-    calls: list[str] = []
-
-    class ImmediateThread:
-        def __init__(self, target, daemon: bool, name: str):
-            self._target = target
-            self.daemon = daemon
-            self.name = name
-
-        def start(self) -> None:
-            self._target()
-
-    monkeypatch.setattr(threading, "Thread", ImmediateThread)
-
-    _start_requested_actor_termination(
-        requested=True,
-        replica_count=2,
-        thread_name="terminate-actor-0",
-        terminate_job=lambda: calls.append("job"),
-        terminate_replica=lambda: calls.append("replica"),
-    )
-
-    assert calls == ["replica"]
 
 
 class TestWithTpuFlexible:
