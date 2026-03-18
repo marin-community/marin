@@ -208,10 +208,10 @@ def lm_varying_mixture_data_config(
 
     Args:
         components: dict from names of datasets to the steps that produced them.
-        weights_list: list of tuples of (start_seq_index, weights_dict)
+        weights_list: list of tuples of (start_batch_index, weights_dict)
             weights_dict maps dataset names to their weights.
-            The weights will change at each start_seq_index. start_seq_index's must be sorted in ascending order.
-            Note that start_seq_index should be the index of the sequence (not batch) where the transition should occur.
+            The weights will change at each start_batch_index. start_batch_index's must be sorted in ascending order.
+            Note that start_batch_index should be the index of the batch where the transition should occur.
         shuffle: shuffling policy. int means era shuffling (~shuffle buffer);
             `BlockShuffleConfig` enables hierarchical block shuffling.
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets

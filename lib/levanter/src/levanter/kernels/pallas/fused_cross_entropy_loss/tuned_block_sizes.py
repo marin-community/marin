@@ -224,13 +224,13 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ),
         ("bfloat16", "mid-h-large-vocab"): BlockSizes(
             b_block_size=1024,
-            h_block_size=1024,
+            h_block_size=256,
             v_block_size=256,
         ),
         ("bfloat16", "large-batch-small-h"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
-            v_block_size=1024,
+            v_block_size=256,
         ),
         ("bfloat16", "medium-batch-medium-h"): BlockSizes(
             b_block_size=1024,
@@ -249,13 +249,13 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ),
         ("float32", "mid-h-large-vocab"): BlockSizes(
             b_block_size=1024,
-            h_block_size=1024,
+            h_block_size=256,
             v_block_size=256,
         ),
         ("float32", "large-batch-small-h"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
-            v_block_size=1024,
+            v_block_size=256,
         ),
         ("float32", "medium-batch-medium-h"): BlockSizes(
             b_block_size=1024,
