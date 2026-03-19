@@ -2452,3 +2452,217 @@ KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_k
   - the next optimization should be guided by a matched profile of this new best config rather than by more blind backward rewrites.
 - Next action:
   - profile `262144/topk=8/shared2048/forward_backward` with `--shared-mlp-fast-accum` and no custom shared backward, compare it against the prior shared-2048 and shared-free profiles, and use that to choose the next code change.
+
+### 2026-03-19 19:48 UTC - Matched profile says the easy shared-MLP win is mostly harvested; the next cheap lever is the routed exact-cap tail
+- Experiment ID: `OVLP-RES-041`
+- Hypothesis:
+  - after the `--shared-mlp-fast-accum` and no-explicit-backward improvement, the remaining worst-row loss may no longer be dominated by shared-MLP compute; a matched profile should tell us whether to keep pushing shared-only math or pivot to the routed exact-cap tail / transport runtime.
+- Config:
+  - code ref: `6c216bd9a`
+  - profile launcher log: `scratch/3717-rerun/ovlpres-sharedfast-noexpbwd-fb-profile-t262144-topk8-20260319-1936.log`
+  - profile report: `scratch/profiles/ovlpres-sharedfast-noexpbwd-fb-262144-topk8-report.md`
+  - profile summary: `scratch/profiles/ovlpres-sharedfast-noexpbwd-fb-262144-topk8-summary.json`
+  - compare vs prior shared-2048 branch best: `scratch/profiles/ovlpres-bwdpad-vs-sharedfast-noexpbwd-262144-topk8.compare.txt`
+  - compare vs shared-free exact-cap reference: `scratch/profiles/ovlpres-shared0-vs-sharedfast-noexpbwd-262144-topk8.compare.txt`
+- Result:
+  - the new best `262144/topk=8/shared2048/forward_backward` trace is now dominated by host time rather than collective runtime:
+    - compute: `47.00%`
+    - communication: `1.24%`
+    - host: `51.66%`
+  - the largest single pre-gap is still before all-reduce:
+    - payload op: `ncclDevKernel_AllReduce_Sum_f32_RING_LL(...)`
+    - total pre-gap: `270350.399`
+    - average gap: `16896.900`
+  - versus the prior shared-2048 branch best, the profile confirms that the recent shared-branch work already removed a large amount of real work:
+    - collective family exclusive time: `30491.113 -> 17960.748` (`-41.1%`)
+    - `other` family exclusive time: `1102611.860 -> 685738.037` (`-37.8%`)
+    - major op drops include DeepEP dispatch/combine and the `input_scatter_fusion*` kernels
+  - versus the shared-free exact-cap reference, the shared-2048 path still carries extra host waiting and shared-side work even though some routed kernels are already smaller than before.
+- Interpretation:
+  - the shared-MLP fast-accum change was real, but the profile no longer points to another obvious high-ROI shared-backward rewrite.
+  - the next cheap hill-climbing lever should be a routed exact-cap / DeepEP runtime knob, especially something that can change the topk=`8` dispatch/combine tail without reopening the numerics tradeoff.
+- Next action:
+  - try transport runtime knobs before another shared-backward code branch.
+
+### 2026-03-19 20:06 UTC - `--combine-fast-accum` is valid but effectively flat on the decisive worst row
+- Experiment ID: `OVLP-RES-042`
+- Hypothesis:
+  - if the remaining exact-cap overhead is still partly in the combine accumulation path, allowing a lower-precision accumulation there may move the shared-2048 `topk=8` worst row without hurting the shared-free ladder.
+- Commands:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-combinefast-ladder-t262144-r2-20260319-1953 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe deepep_transport_local_compute_only_probe deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --shared-mlp-fast-accum \
+  --combine-fast-accum
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-combinefast-3717jax-fb-t262144-topk8-20260319-2002 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-combine-num-max-send-tokens 8 \
+  --combine-fast-accum \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `6b21aa68b`
+  - ladder log: `scratch/3717-rerun/ovlpres-combinefast-ladder-t262144-r2-20260319-1953.log`
+  - decisive rerun log: `scratch/3717-rerun/ovlpres-combinefast-3717jax-fb-t262144-topk8-20260319-2002.log`
+- Result:
+  - local equivalence check showed only small numerical drift:
+    - `combine_abs_diff 0.0064029693603515625`
+    - `combine_rel_diff 0.0027285029646009207`
+  - the required shared-free ladder stayed valid:
+    - `w13_only`: `244,206,268.14 tok/s`
+    - `local_compute_only`: `71,638,770.77 tok/s`
+    - `capped_prewarmed`: `39,964,722.00 tok/s`
+  - the decisive worst-row measurement was effectively flat:
+    - `262144, topk=8, shared=2048`: `5,941,530.22 tok/s` (`44.121 ms`)
+    - vs prior branch best `5,931,078.52 tok/s`: about `+0.18%`
+- Interpretation:
+  - lower-precision combine accumulation is not the next major lever.
+  - this candidate is valid but too small to matter for the JAX-vs-Megatron gap.
+- Next action:
+  - keep the simpler no-`--combine-fast-accum` path as the baseline and move to transport runtime tuning.
+
+### 2026-03-19 21:03 UTC - Raising DeepEP dispatch `num_max_send_tokens` to `32` is the new branch best and materially narrows the reduced-table gap
+- Experiment ID: `OVLP-RES-043`
+- Hypothesis:
+  - the hardest shared-2048 `topk=8` rows are now more sensitive to DeepEP dispatch runtime limits than to more shared-MLP surgery; in particular, topk=`8` may want a much larger `dispatch num_max_send_tokens` than the default `6`.
+- Commands:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-cfg-dispsend32-ladder-t262144-r2-20260319-2047 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe deepep_transport_local_compute_only_probe deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-cfg-dispsend32-sharedfast-fb-t262144-topk8-20260319-2036 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `6b21aa68b`
+  - routed-only signal log: `scratch/3717-rerun/ovlpres-cfg-dispsend8-shared0-fb-t262144-topk8-20260319-2014.log`
+  - sweep logs:
+    - `scratch/3717-rerun/ovlpres-cfg-dispsend8-sharedfast-fb-t262144-topk8-20260319-2016.log`
+    - `scratch/3717-rerun/ovlpres-cfg-dispsend12-sharedfast-fb-t262144-topk8-20260319-2022.log`
+    - `scratch/3717-rerun/ovlpres-cfg-dispsend16-sharedfast-fb-t262144-topk8-20260319-2027.log`
+    - `scratch/3717-rerun/ovlpres-cfg-dispsend24-sharedfast-fb-t262144-topk8-20260319-2031.log`
+    - `scratch/3717-rerun/ovlpres-cfg-dispsend32-sharedfast-fb-t262144-topk8-20260319-2036.log`
+  - broadened row logs:
+    - `scratch/3717-rerun/ovlpres-cfg-dispsend32-sharedfast-fb-t131072-topk8-20260319-2041.log`
+    - `scratch/3717-rerun/ovlpres-cfg-dispsend32-sharedfast-fb-t262144-topk2-20260319-2056.log`
+    - `scratch/3717-rerun/ovlpres-cfg-dispsend32-sharedfast-fb-t131072-topk2-20260319-2130.log`
+  - ladder log: `scratch/3717-rerun/ovlpres-cfg-dispsend32-ladder-t262144-r2-20260319-2047.log`
+- Result:
+  - the `262144/topk=8/shared2048` sweep improved monotonically as dispatch send cap rose:
+    - baseline prior branch best at implicit send=`6`: `5,931,078.52 tok/s`
+    - send=`8`: `6,013,235.48 tok/s`
+    - send=`12`: `6,113,189.62 tok/s`
+    - send=`16`: `6,140,991.03 tok/s`
+    - send=`24`: `6,175,082.35 tok/s`
+    - send=`32`: `6,190,854.83 tok/s`
+  - the routed-only shared-free probe already hinted at the same direction:
+    - `262144, topk=8, shared=0`: `6,522,904.03 -> 6,596,807.69 tok/s`
+  - the required validation ladder stayed clean and actually improved:
+    - `w13_only`: `244,050,089.76 tok/s`
+    - `local_compute_only`: `79,833,922.15 tok/s`
+    - `capped_prewarmed`: `42,213,013.84 tok/s`
+  - broadening to the four reduced-table rows shows the same config helps everywhere that matters:
+    - `131072, topk=2`: `11,239,581.66 -> 14,679,765.47 tok/s` (`+30.6%`)
+    - `131072, topk=8`: `5,875,089.84 -> 6,103,400.23 tok/s` (`+3.9%`)
+    - `262144, topk=2`: `12,042,936.22 -> 15,817,305.01 tok/s` (`+31.3%`)
+    - `262144, topk=8`: `5,931,078.52 -> 6,190,854.83 tok/s` (`+4.4%`)
+  - relative to the sealed Megatron anchors, the current reduced table now looks like:
+    - `131072, topk=2`: `14,679,765.47 / 12,712,097` -> about `115.5%` of Megatron
+    - `131072, topk=8`: `6,103,400.23 / 6,577,851` -> about `92.8%` of Megatron
+    - `262144, topk=2`: `15,817,305.01 / 15,828,862` -> about `99.9%` of Megatron
+    - `262144, topk=8`: `6,190,854.83 / 7,649,303` -> about `80.9%` of Megatron
+- Interpretation:
+  - a transport runtime knob, not another shared-MLP rewrite, produced the next real step toward parity.
+  - `dispatch num_max_send_tokens=32` is the new branch best and is no longer a `topk=8`-only curiosity; it materially improves both large `topk=2` rows as well.
+  - the remaining headline gap is now concentrated mostly in the largest `topk=8` row.
+- Next action:
+  - treat `dispatch num_max_send_tokens=32` as the new default candidate for this branch, post a milestone update, and then profile the new `262144/topk=8/shared2048` best config before doing another blind sweep.
