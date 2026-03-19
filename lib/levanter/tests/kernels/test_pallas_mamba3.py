@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import math
+
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from levanter.kernels.pallas.mamba3 import (
     HybridModeConfig,
@@ -20,6 +23,7 @@ from levanter.kernels.pallas.mamba3 import (
     mamba3_intra_chunk,
     mamba3_intra_chunk_reference_batched,
     mamba3_mimo_chunked_forward,
+    mamba3_mimo_direct_recurrence_reference_batched,
     mamba3_tpu_default_chunk_size,
     prepare_mamba3_chunked_scales,
     prepare_mamba3_scales,
@@ -32,6 +36,7 @@ from levanter.kernels.pallas.mamba3.reference import (
 )
 from levanter.kernels.pallas.mamba3.xla import mamba3_mimo_chunked_forward_ranked_xla_batched
 from levanter.kernels.pallas.ssd import intra_chunk_log_alpha_cumsum, local_log_alpha
+from tests.test_utils import skip_if_no_torch
 
 
 def _sample_inputs(
@@ -92,6 +97,122 @@ def _sample_mimo_chunked_inputs(
     w_z = jax.random.normal(keys[8], group_shape + (value_dim, rank), dtype=jnp.float32)
     w_o = jax.random.normal(keys[9], group_shape + (value_dim, rank), dtype=jnp.float32)
     return dt, lam, a, b, c, x_base, z_base, w_x, w_z, w_o
+
+
+def _torch_logit(x):
+    import torch
+
+    eps = torch.finfo(x.dtype).eps
+    x = x.clamp(min=eps, max=1 - eps)
+    return torch.log(x) - torch.log1p(-x)
+
+
+def _upstream_mamba3_siso_step_ref_torch(Q, K, V, ADT, DT, Trap, Q_bias, K_bias, Angles):
+    # Ported from state-spaces/mamba tests/ops/triton/test_mamba3_siso.py at a76afbd.
+    import torch
+    import torch.nn.functional as F
+
+    batch, seqlen, nheads, headdim_qk = Q.shape
+    headdim_v = V.shape[-1]
+    headdim_angles = Angles.shape[-1]
+    angle_state = torch.zeros((batch, nheads, headdim_angles), dtype=torch.float32, device=Q.device)
+    ssm_state = torch.zeros((batch, nheads, headdim_v, headdim_qk), dtype=torch.float32, device=Q.device)
+    k_state = torch.zeros((batch, nheads, headdim_qk), dtype=Q.dtype, device=Q.device)
+    v_state = torch.zeros((batch, nheads, headdim_v), dtype=V.dtype, device=V.device)
+    outputs = []
+
+    def apply_rotary_emb(tensor, cos, sin):
+        tensor_reshaped = tensor.view(*tensor.shape[:-1], -1, 2)
+        tensor_0 = tensor_reshaped[..., 0]
+        tensor_1 = tensor_reshaped[..., 1]
+        if cos.shape[-1] < tensor_0.shape[-1]:
+            pad_size = tensor_0.shape[-1] - cos.shape[-1]
+            cos = F.pad(cos, (0, pad_size), value=1.0)
+            sin = F.pad(sin, (0, pad_size), value=0.0)
+        rotated_0 = tensor_0 * cos - tensor_1 * sin
+        rotated_1 = tensor_0 * sin + tensor_1 * cos
+        return torch.stack([rotated_0, rotated_1], dim=-1).view_as(tensor)
+
+    for idx in range(seqlen):
+        q = Q[:, idx] + Q_bias.unsqueeze(0)
+        k = K[:, idx] + K_bias.unsqueeze(0)
+        v = V[:, idx]
+        angle_state = angle_state + torch.tanh(Angles[:, idx]) * DT[:, :, idx].unsqueeze(-1) * math.pi
+        cos_angles = torch.cos(angle_state)
+        sin_angles = torch.sin(angle_state)
+        q_rot = apply_rotary_emb(q, cos_angles, sin_angles)
+        k_rot = apply_rotary_emb(k, cos_angles, sin_angles)
+        trap = torch.sigmoid(Trap[:, :, idx])
+        alpha = torch.exp(ADT[:, :, idx])
+        beta = (1 - trap) * DT[:, :, idx] * alpha
+        gamma = trap * DT[:, :, idx]
+        ssm_state = alpha[..., None, None] * ssm_state
+        ssm_state = ssm_state + beta[..., None, None] * (k_state.unsqueeze(-2) * v_state.unsqueeze(-1))
+        ssm_state = ssm_state + gamma[..., None, None] * (k_rot.unsqueeze(-2) * v.unsqueeze(-1))
+        outputs.append(torch.einsum("bhdD,bhD->bhd", ssm_state, q_rot.to(ssm_state.dtype)))
+        k_state = k_rot
+        v_state = v
+
+    return torch.stack(outputs, dim=1), ssm_state
+
+
+def _upstream_mamba3_mimo_step_ref_torch(Q, K, V, ADT, DT, Trap, Q_bias, K_bias, Angles, MIMO_V, MIMO_O, Z, MIMO_Z):
+    # Ported from state-spaces/mamba tests/ops/tilelang/test_mamba3_mimo.py at a76afbd.
+    import torch
+    import torch.nn.functional as F
+
+    batch, seqlen, mimo_rank, nheads, headdim_qk = Q.shape
+    headdim_v = V.shape[-1]
+    headdim_angles = Angles.shape[-1]
+    angle_state = torch.zeros((batch, nheads, headdim_angles), dtype=torch.float32, device=Q.device)
+    ssm_state = torch.zeros((batch, nheads, headdim_v, headdim_qk), dtype=torch.float32, device=Q.device)
+    k_state = torch.zeros((batch, nheads, mimo_rank, headdim_qk), dtype=Q.dtype, device=Q.device)
+    v_state = torch.zeros((batch, nheads, mimo_rank, headdim_v), dtype=V.dtype, device=V.device)
+    outputs = []
+
+    def apply_rotary_emb(tensor, cos, sin):
+        tensor_reshaped = tensor.view(*tensor.shape[:-1], -1, 2)
+        tensor_0 = tensor_reshaped[..., 0]
+        tensor_1 = tensor_reshaped[..., 1]
+        if cos.shape[-1] < tensor_0.shape[-1]:
+            pad_size = tensor_0.shape[-1] - cos.shape[-1]
+            cos = F.pad(cos, (0, pad_size), value=1.0)
+            sin = F.pad(sin, (0, pad_size), value=0.0)
+        rotated_0 = tensor_0 * cos - tensor_1 * sin
+        rotated_1 = tensor_0 * sin + tensor_1 * cos
+        return torch.stack([rotated_0, rotated_1], dim=-1).view_as(tensor)
+
+    q_bias = Q_bias.permute(1, 0, 2)
+    k_bias = K_bias.permute(1, 0, 2)
+    v_proj = torch.einsum("bthd,hrd->btrhd", V, MIMO_V)
+    z_proj = torch.einsum("bthd,hrd->btrhd", Z, MIMO_Z)
+
+    for idx in range(seqlen):
+        q = (Q[:, idx] + q_bias.unsqueeze(0)).permute(0, 2, 1, 3)
+        k = (K[:, idx] + k_bias.unsqueeze(0)).permute(0, 2, 1, 3)
+        v = v_proj[:, idx].permute(0, 2, 1, 3)
+        z = z_proj[:, idx].permute(0, 2, 1, 3)
+        angle_state = angle_state + torch.tanh(Angles[:, idx]) * DT[:, :, idx].unsqueeze(-1) * math.pi
+        cos_angles = torch.cos(angle_state).unsqueeze(2)
+        sin_angles = torch.sin(angle_state).unsqueeze(2)
+        q_rot = apply_rotary_emb(q, cos_angles, sin_angles)
+        k_rot = apply_rotary_emb(k, cos_angles, sin_angles)
+        trap = torch.sigmoid(Trap[:, :, idx])
+        alpha = torch.exp(ADT[:, :, idx])
+        beta = (1 - trap) * DT[:, :, idx] * alpha
+        gamma = trap * DT[:, :, idx]
+        prev_kv = torch.einsum("bhrd,bhrp->bhpd", k_state, v_state)
+        curr_kv = torch.einsum("bhrd,bhrp->bhpd", k_rot, v)
+        ssm_state = alpha[..., None, None] * ssm_state
+        ssm_state = ssm_state + beta[..., None, None] * prev_kv
+        ssm_state = ssm_state + gamma[..., None, None] * curr_kv
+        out = torch.einsum("bhpd,bhrd->bhrp", ssm_state, q_rot.to(ssm_state.dtype))
+        out = out * z * torch.sigmoid(z)
+        outputs.append(torch.einsum("bhrp,hrp->bhp", out, MIMO_O))
+        k_state = k_rot
+        v_state = v
+
+    return torch.stack(outputs, dim=1), ssm_state
 
 
 def test_prepare_mamba3_scales_matches_shift_formula():
@@ -321,6 +442,65 @@ def test_mamba3_chunked_grad_matches_reference():
     g_ref = jax.grad(loss_ref)(x)
     g_xla = jax.grad(loss_xla)(x)
     assert jnp.allclose(g_ref, g_xla, atol=1e-5, rtol=1e-5)
+
+
+@skip_if_no_torch
+def test_mamba3_siso_reference_matches_upstream_torch_step_reference():
+    import torch
+
+    dt, lam, a, b, c, x = _sample_chunked_inputs(
+        leading_shape=(1,),
+        num_chunks=2,
+        chunk_size=4,
+        state_dim=6,
+        value_dim=5,
+    )
+    groups = dt.shape[0]
+    seq_len = dt.shape[1] * dt.shape[2]
+    dt_flat = dt.reshape(groups, seq_len)
+    lam_flat = lam.reshape(groups, seq_len)
+    a_flat = a.reshape(groups, seq_len)
+    b_flat = b.reshape(groups, seq_len, b.shape[-1])
+    c_flat = c.reshape(groups, seq_len, c.shape[-1])
+    x_flat = x.reshape(groups, seq_len, x.shape[-1])
+
+    y_ref, state_ref = mamba3_direct_recurrence_reference_batched(dt, lam, a, b, c, x)
+
+    dtype = torch.float32
+    q_t = torch.from_numpy(np.array(c_flat))[:, :, None, :].to(dtype)
+    k_t = torch.from_numpy(np.array(b_flat))[:, :, None, :].to(dtype)
+    v_t = torch.from_numpy(np.array(x_flat))[:, :, None, :].to(dtype)
+    adt_t = torch.from_numpy(np.array(local_log_alpha(dt_flat, a_flat)))[:, None, :].to(dtype)
+    dt_t = torch.from_numpy(np.array(dt_flat))[:, None, :].to(dtype)
+    trap_t = _torch_logit(torch.from_numpy(np.array(lam_flat))[:, None, :].to(dtype))
+    q_bias_t = torch.zeros((1, b.shape[-1]), dtype=dtype)
+    k_bias_t = torch.zeros((1, b.shape[-1]), dtype=dtype)
+    angles_t = torch.zeros((groups, seq_len, 1, b.shape[-1] // 2), dtype=dtype)
+
+    y_upstream, state_upstream = _upstream_mamba3_siso_step_ref_torch(
+        q_t,
+        k_t,
+        v_t,
+        adt_t,
+        dt_t,
+        trap_t,
+        q_bias_t,
+        k_bias_t,
+        angles_t,
+    )
+
+    np.testing.assert_allclose(
+        np.array(y_ref).reshape(groups, seq_len, x.shape[-1]),
+        y_upstream[:, :, 0, :].detach().cpu().numpy(),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(
+        np.array(state_ref),
+        state_upstream[:, 0, :, :].detach().cpu().numpy(),
+        rtol=1e-5,
+        atol=1e-5,
+    )
 
 
 def test_mamba3_xla_longer_stress_stays_finite():
@@ -630,6 +810,93 @@ def test_mamba3_mimo_grad_matches_reference():
     g_ref = jax.grad(loss_ref)(x_base)
     g_xla = jax.grad(loss_xla)(x_base)
     assert jnp.allclose(g_ref, g_xla, atol=1e-5, rtol=1e-5)
+
+
+@skip_if_no_torch
+def test_mamba3_mimo_reference_matches_upstream_torch_step_reference():
+    import torch
+
+    dt, lam, a, b, c, x_base, z_base, w_x, w_z, w_o = _sample_mimo_chunked_inputs(
+        leading_shape=(),
+        num_chunks=2,
+        chunk_size=4,
+        state_dim=6,
+        value_dim=5,
+        rank=4,
+    )
+    groups = 1
+    seq_len = dt.shape[0] * dt.shape[1]
+    dt_grouped = dt[None, ...]
+    lam_grouped = lam[None, ...]
+    a_grouped = a[None, ...]
+    b_grouped = b[None, ...]
+    c_grouped = c[None, ...]
+    x_base_grouped = x_base[None, ...]
+    z_base_grouped = z_base[None, ...]
+    dt_flat = dt_grouped.reshape(groups, seq_len)
+    lam_flat = lam_grouped.reshape(groups, seq_len)
+    a_flat = a_grouped.reshape(groups, seq_len)
+    b_flat = b_grouped.reshape(groups, seq_len, b.shape[-2], b.shape[-1])
+    c_flat = c_grouped.reshape(groups, seq_len, c.shape[-2], c.shape[-1])
+    x_base_flat = x_base_grouped.reshape(groups, seq_len, x_base.shape[-1])
+    z_base_flat = z_base_grouped.reshape(groups, seq_len, z_base.shape[-1])
+
+    y_ref, state_ref = mamba3_mimo_direct_recurrence_reference_batched(
+        dt_grouped,
+        lam_grouped,
+        a_grouped,
+        b_grouped,
+        c_grouped,
+        x_base_grouped,
+        z_base_grouped,
+        w_x,
+        w_z,
+        w_o,
+    )
+
+    dtype = torch.float32
+    q_t = torch.from_numpy(np.array(c_flat).transpose(0, 1, 3, 2))[:, :, :, None, :].to(dtype)
+    k_t = torch.from_numpy(np.array(b_flat).transpose(0, 1, 3, 2))[:, :, :, None, :].to(dtype)
+    v_t = torch.from_numpy(np.array(x_base_flat))[:, :, None, :].to(dtype)
+    z_t = torch.from_numpy(np.array(z_base_flat))[:, :, None, :].to(dtype)
+    adt_t = torch.from_numpy(np.array(local_log_alpha(dt_flat, a_flat)))[:, None, :].to(dtype)
+    dt_t = torch.from_numpy(np.array(dt_flat))[:, None, :].to(dtype)
+    trap_t = _torch_logit(torch.from_numpy(np.array(lam_flat))[:, None, :].to(dtype))
+    q_bias_t = torch.zeros((1, b.shape[-1], b.shape[-2]), dtype=dtype)
+    k_bias_t = torch.zeros((1, b.shape[-1], b.shape[-2]), dtype=dtype)
+    angles_t = torch.zeros((groups, seq_len, 1, b.shape[-2] // 2), dtype=dtype)
+    mimo_v_t = torch.from_numpy(np.array(w_x).transpose(1, 0))[None, :, :].to(dtype)
+    mimo_z_t = torch.from_numpy(np.array(w_z).transpose(1, 0))[None, :, :].to(dtype)
+    mimo_o_t = torch.from_numpy(np.array(w_o).transpose(1, 0))[None, :, :].to(dtype)
+
+    y_upstream, state_upstream = _upstream_mamba3_mimo_step_ref_torch(
+        q_t,
+        k_t,
+        v_t,
+        adt_t,
+        dt_t,
+        trap_t,
+        q_bias_t,
+        k_bias_t,
+        angles_t,
+        mimo_v_t,
+        mimo_o_t,
+        z_t,
+        mimo_z_t,
+    )
+
+    np.testing.assert_allclose(
+        np.array(y_ref).reshape(groups, seq_len, x_base.shape[-1]),
+        y_upstream[:, :, 0, :].detach().cpu().numpy(),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(
+        np.array(state_ref),
+        state_upstream[:, 0, :, :].detach().cpu().numpy(),
+        rtol=1e-5,
+        atol=1e-5,
+    )
 
 
 def test_mamba3_mimo_tpu_aligned_smoke_shape_compiles_under_jit():
