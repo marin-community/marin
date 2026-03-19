@@ -539,13 +539,7 @@ class TaskAttempt:
             env["IRIS_WORKER_REGION"] = region_attr.string_value
 
         env.update(self._default_task_env)
-        user_env = dict(self.request.environment.env_vars)
-        # When the controller has assigned a per-job SA, don't let job-supplied
-        # env vars override it — that would defeat the blast-radius control.
-        if self.request.service_account:
-            user_env.pop("GOOGLE_IMPERSONATE_SERVICE_ACCOUNT", None)
-            user_env.pop("IRIS_JOB_SERVICE_ACCOUNT", None)
-        env.update(user_env)
+        env.update(dict(self.request.environment.env_vars))
 
         # Get RuntimeEntrypoint proto directly
         rt_ep = self.request.entrypoint

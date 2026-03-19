@@ -169,11 +169,6 @@ def serve(
     if auth.worker_token and base_worker_config is not None:
         base_worker_config.auth_token = auth.worker_token
 
-    allowed_sas = (
-        frozenset(cluster_config.allowed_service_accounts)
-        if cluster_config and cluster_config.allowed_service_accounts
-        else None
-    )
     config = ControllerConfig(
         host=host,
         port=port,
@@ -185,7 +180,6 @@ def serve(
         auth_verifier=auth.verifier,
         auth_provider=auth.provider,
         auth=auth,
-        allowed_service_accounts=allowed_sas,
     )
 
     try:

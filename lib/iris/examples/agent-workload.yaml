@@ -23,14 +23,6 @@
 # Child jobs inherit the parent's service_account unless they set their own.
 # Omitting the field leaves behaviour unchanged (worker VM's default SA).
 #
-# Security note: without an allowlist any job can request any SA that the
-# worker SA has serviceAccountTokenCreator on.  Restrict the set of permitted
-# SAs via allowed_service_accounts (see below) so agents can only escalate to
-# a pre-approved narrow identity.
-#
-#   allowed_service_accounts:
-#     - narrow-agent-sa@your-gcp-project-id.iam.gserviceaccount.com
-#
 # This file shows a minimal GCP cluster config suitable for agent workloads.
 # Adjust project_id, zones, and scale_groups to match your deployment.
 

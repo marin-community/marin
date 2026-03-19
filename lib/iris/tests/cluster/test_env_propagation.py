@@ -509,40 +509,6 @@ def test_child_service_account_overrides_parent(local_client, parent_context):
     assert captured_sa == [child_sa]
 
 
-def test_user_env_cannot_override_controller_set_service_account():
-    """user-supplied env_vars must not override GOOGLE_IMPERSONATE_SERVICE_ACCOUNT
-    when service_account is set on the RunTaskRequest (Codex P1 fix)."""
-    from iris.cluster.runtime.env import build_common_iris_env
-    from iris.rpc import cluster_pb2
-
-    sa_email = "narrow-sa@project.iam.gserviceaccount.com"
-    # Attacker attempts to override SA via environment.env_vars
-    env_with_override = cluster_pb2.EnvironmentConfig(
-        env_vars={"GOOGLE_IMPERSONATE_SERVICE_ACCOUNT": "attacker@evil.iam.gserviceaccount.com"}
-    )
-    env = build_common_iris_env(
-        task_id="/test-user/job/task/0",
-        attempt_id=0,
-        num_tasks=1,
-        bundle_id="abc123",
-        controller_address=None,
-        environment=env_with_override,
-        constraints=[],
-        ports=[],
-        resources=None,
-        service_account=sa_email,
-    )
-    # build_common_iris_env sets SA vars before serialising user_env_vars into
-    # IRIS_JOB_ENV. The caller (task_attempt._create_container) is responsible
-    # for stripping the override keys from user env before applying them on top.
-    # Here we verify that the SA vars in the returned dict are correct and that
-    # the override is present in IRIS_JOB_ENV (so the test covers the boundary).
-    assert env["GOOGLE_IMPERSONATE_SERVICE_ACCOUNT"] == sa_email
-    assert env["IRIS_JOB_SERVICE_ACCOUNT"] == sa_email
-    # The attacker value must NOT appear in the authoritative SA var.
-    assert env["GOOGLE_IMPERSONATE_SERVICE_ACCOUNT"] != "attacker@evil.iam.gserviceaccount.com"
-
-
 def test_parent_region_constraint_not_overridden_by_worker_region(local_client, parent_context):
     """When the parent already has a region constraint in its stored constraints,
     the worker_region should NOT add a duplicate."""
