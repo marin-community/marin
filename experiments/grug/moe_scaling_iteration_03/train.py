@@ -506,7 +506,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 )
                 # Skip eval at step 0 — uninformative and slow.
                 state_callbacks.add_hook(
-                    lambda info, _inner=eval_cb: _inner.on_step(info) if info.step > 0 else None,
+                    lambda info, _inner=eval_cb: _inner(info) if info.step > 0 else None,
                     every=interval,
                 )
 
