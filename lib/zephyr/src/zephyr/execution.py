@@ -34,7 +34,6 @@ from typing import Any, Protocol
 
 import cloudpickle
 import fsspec
-import psutil
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
@@ -172,7 +171,9 @@ def _get_scatter_read_fs(num_files: int, sample_path: str, memory_fraction: floa
     if num_files <= 0:
         return default_fs
 
-    total_mem = psutil.virtual_memory().total
+    from iris.resource_utils import get_memory_limit
+
+    total_mem = get_memory_limit()
     budget = int(total_mem * memory_fraction)
     per_file = max(budget // num_files, 64 * 1024)  # floor at 64 KB
 
