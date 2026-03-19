@@ -1067,3 +1067,39 @@
 - Decision:
   - Keep the new hybrid API surface.
   - Use the tuned TPU chunk defaults above when building higher-level configs around the current XLA implementation.
+
+## 2026-03-19: upstream Mamba reference parity check
+
+- Goal:
+  - Verify that the current Levanter Mamba-3 reference recurrence matches the upstream `state-spaces/mamba` reference numerically, rather than only matching our own derived formulation.
+- Source of truth:
+  - Upstream commit:
+    - `a76afbd7dfdc1e8263a8c628a711d0d18802199c`
+  - Reference functions mirrored into Torch-gated tests from:
+    - `tests/ops/triton/test_mamba3_siso.py`
+    - `tests/ops/tilelang/test_mamba3_mimo.py`
+- Mapping used for the real-valued path:
+  - `Q <- C`
+  - `K <- B`
+  - `V <- X`
+  - `ADT <- dt * A`
+  - `DT <- dt`
+  - `sigmoid(Trap) <- lambda`
+  - zero angles
+  - zero `Q_bias` / `K_bias`
+  - for MIMO:
+    - `MIMO_V <- w_x`
+    - `MIMO_Z <- w_z`
+    - `MIMO_O <- w_o`
+    - `Z <- z_base`
+- Result:
+  - Added two Torch-gated tests in:
+    - [test_pallas_mamba3.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/tests/kernels/test_pallas_mamba3.py)
+    - `test_mamba3_siso_reference_matches_upstream_torch_step_reference`
+    - `test_mamba3_mimo_reference_matches_upstream_torch_step_reference`
+  - One-off execution with a temporary CPU Torch install:
+    - both tests passed
+  - Normal local test run without Torch still skips these cases cleanly
+- Decision:
+  - Keep the Torch-gated upstream parity checks in the test suite.
+  - Treat the current Levanter SISO and real-valued MIMO reference recurrences as numerically aligned with the upstream Mamba reference under the mapping above.
