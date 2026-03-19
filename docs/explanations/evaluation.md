@@ -4,7 +4,6 @@ This document explains how Marin evaluates models and where to find runnable wor
 
 For step-by-step usage, start with:
 - [Running LM Evaluations](../tutorials/run-lm-evals.md) for multiple-choice and key eval suites.
-- [Running Alpaca Eval](../tutorials/run-alpaca-eval.md) for generation-focused Alpaca evaluation.
 - [Harbor Framework Integration](../harbor-integration.md) for Harbor-backed agent and benchmark evaluation.
 
 ## Evaluation modes
@@ -53,7 +52,6 @@ Generation tasks (for example AlpacaEval, HumanEval, GSM8K, and MATH) use a fast
 
 - Task and suite definitions are in [`task_configs.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/task_configs.py).
 - A common entrypoint is [`run_key_evals.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/run_key_evals.py).
-- Alpaca-specific setup is documented in [Running Alpaca Eval](../tutorials/run-alpaca-eval.md).
 
 In current Marin workflows, generation evals are commonly run with `Dockerfile.vllm` or on a dedicated vLLM Ray cluster (for example [`marin-us-east5-b-vllm.yaml`](https://github.com/marin-community/marin/blob/main/infra/marin-us-east5-b-vllm.yaml)).
 
@@ -68,7 +66,6 @@ Harbor tasks use [`evaluate_harbor`](https://github.com/marin-community/marin/bl
 ## Where to go next
 
 - [Running LM Evaluations](../tutorials/run-lm-evals.md)
-- [Running Alpaca Eval](../tutorials/run-alpaca-eval.md)
 - [Harbor Framework Integration](../harbor-integration.md)
 - [`experiments/evals/evals.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/evals.py)
 - [`experiments/evals/task_configs.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/task_configs.py)
