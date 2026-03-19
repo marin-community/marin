@@ -324,10 +324,10 @@ class DockerContainerHandle:
         setup_script = self._generate_setup_script()
         self._write_setup_script(setup_script)
 
-        # Build containers get min(8 GB, task request) memory
+        # Build containers get max(8 GB, task request) memory
         task_memory_bytes = self.config.resources.memory_bytes if self.config.resources else 0
         build_memory_bytes = (
-            min(self._BUILD_MEMORY_LIMIT_BYTES, task_memory_bytes)
+            max(self._BUILD_MEMORY_LIMIT_BYTES, task_memory_bytes)
             if task_memory_bytes
             else self._BUILD_MEMORY_LIMIT_BYTES
         )
