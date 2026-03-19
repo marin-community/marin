@@ -242,17 +242,6 @@ command -v nvcc
 nvcc --version
 nvidia-smi --query-gpu=name --format=csv,noheader
 /opt/conda/bin/python -m pip install --no-cache-dir uv
-packages=()
-if ! command -v git >/dev/null 2>&1; then
-  packages+=(git)
-fi
-if ! command -v npx >/dev/null 2>&1; then
-  packages+=(nodejs npm)
-fi
-if [ ${{#packages[@]}} -gt 0 ]; then
-  apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${{packages[@]}}"
-fi
 {_download_unpack_block(repo_archive_url, "/app")}
 {_download_unpack_block(deepep_archive_url, "/tmp/DeepEP")}
 cd /app
