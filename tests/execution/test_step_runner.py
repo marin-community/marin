@@ -776,6 +776,65 @@ def test_executor_resolve_steps_uses_downstream_tpu_regions_for_upstream_steps()
     assert resolved_train.fn.resources.regions == ["us-central2"]
 
 
+def test_executor_resolve_steps_picks_one_region_for_multi_region_tpu_component():
+    @remote
+    def prep_fn(_config):
+        pass
+
+    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-west4", "us-central2"]))
+    def train_fn(_config):
+        pass
+
+    prep = ExecutorStep(name="prep", fn=prep_fn, config=None)
+    train = ExecutorStep(name="train", fn=train_fn, config=None)
+    executor = Executor(prefix="/tmp/executor", executor_info_base_path="/tmp/executor-info")
+    executor.configs = {prep: {"local_only": "/tmp/foo"}, train: {"local_only": "/tmp/bar"}}
+    executor.dependencies = {prep: [], train: [prep]}
+    executor.output_paths = {prep: "/tmp/prep-output", train: "/tmp/train-output"}
+
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved_prep, resolved_train = executor._resolve_steps([prep, train])
+
+    assert isinstance(resolved_prep.fn, RemoteCallable)
+    assert isinstance(resolved_train.fn, RemoteCallable)
+    assert resolved_prep.fn.resources.regions == ["us-central2"]
+    assert resolved_train.fn.resources.regions == ["us-central2"]
+
+
+def test_executor_resolve_steps_uses_component_gcs_region_to_pick_tpu_region():
+    @remote
+    def prep_fn(_config):
+        pass
+
+    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-west4", "us-central2"]))
+    def train_fn(_config):
+        pass
+
+    prep = ExecutorStep(name="prep", fn=prep_fn, config=None)
+    train = ExecutorStep(name="train", fn=train_fn, config=None)
+    executor = Executor(prefix="/tmp/executor", executor_info_base_path="/tmp/executor-info")
+    executor.configs = {
+        prep: {"input_path": "gs://marin-us-west4/data/input"},
+        train: {"local_only": "/tmp/bar"},
+    }
+    executor.dependencies = {prep: [], train: [prep]}
+    executor.output_paths = {prep: "/tmp/prep-output", train: "/tmp/train-output"}
+
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved_prep, resolved_train = executor._resolve_steps([prep, train])
+
+    assert isinstance(resolved_prep.fn, RemoteCallable)
+    assert isinstance(resolved_train.fn, RemoteCallable)
+    assert resolved_prep.fn.resources.regions == ["us-west4"]
+    assert resolved_train.fn.resources.regions == ["us-west4"]
+
+
 def test_executor_resolve_steps_does_not_apply_unrelated_tpu_regions():
     @remote
     def cpu_fn(_config):

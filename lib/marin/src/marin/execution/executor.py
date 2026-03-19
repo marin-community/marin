@@ -267,6 +267,45 @@ def _infer_gcs_regions(
     return sorted(gcs_regions)
 
 
+def _allowed_regions_for_step(
+    *,
+    step_name: str,
+    remote_fn: RemoteCallable | None,
+    config: Any,
+    output_path: str,
+    deps: list[StepSpec] | None,
+    dag_tpu_regions: list[str] | None = None,
+) -> set[str] | None:
+    """Return the allowed regional placements for a step after combining all constraints."""
+    allowed_regions = _infer_gcs_regions(
+        step_name=step_name,
+        config=config,
+        output_path=output_path,
+        deps=deps,
+        dag_tpu_regions=dag_tpu_regions,
+    )
+    allowed = set(allowed_regions) if allowed_regions is not None else None
+
+    if remote_fn is None or remote_fn.resources.regions is None:
+        return allowed
+
+    explicit_regions = {region.lower() for region in remote_fn.resources.regions}
+    if not explicit_regions:
+        return allowed
+
+    if allowed is None:
+        return explicit_regions
+
+    intersection = allowed & explicit_regions
+    if intersection:
+        return intersection
+
+    raise ValueError(
+        f"Executor step {step_name!r} has no overlap between explicit regions {sorted(explicit_regions)} "
+        f"and inferred regions {sorted(allowed)}."
+    )
+
+
 def _regions_for_tpu_variant_from_iris(variant: str) -> set[str] | None:
     try:
         client = current_client()
@@ -406,6 +445,87 @@ def _step_dag_tpu_regions(
     }
 
 
+def _component_tpu_pins(
+    steps: list["ExecutorStep"],
+    dependencies: dict["ExecutorStep", list["ExecutorStep"]],
+    *,
+    configs: dict["ExecutorStep", Any],
+    output_paths: dict["ExecutorStep", str],
+    dep_stubs_by_step: dict["ExecutorStep", list[StepSpec]],
+    dag_tpu_regions_by_step: dict["ExecutorStep", list[str] | None],
+) -> dict["ExecutorStep", str | None]:
+    relevant_steps = {step for step in steps if dag_tpu_regions_by_step[step] is not None}
+    if not relevant_steps:
+        return {step: None for step in steps}
+
+    adjacency: dict[ExecutorStep, set[ExecutorStep]] = {step: set() for step in relevant_steps}
+    for step in relevant_steps:
+        for dep in dependencies.get(step, []):
+            if dep in adjacency:
+                adjacency[step].add(dep)
+                adjacency[dep].add(step)
+
+    inherited_region_pin = _iris_worker_region_pin()
+    chosen_region_by_step: dict[ExecutorStep, str | None] = {step: None for step in steps}
+    visited: set[ExecutorStep] = set()
+
+    for step in relevant_steps:
+        if step in visited:
+            continue
+
+        stack = [step]
+        component: list[ExecutorStep] = []
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            component.append(current)
+            stack.extend(adjacency[current] - visited)
+
+        component_regions: set[str] | None = None
+        for component_step in component:
+            remote_fn = component_step.fn if isinstance(component_step.fn, RemoteCallable) else None
+            step_regions = _allowed_regions_for_step(
+                step_name=component_step.name,
+                remote_fn=remote_fn,
+                config=configs[component_step],
+                output_path=output_paths[component_step],
+                deps=dep_stubs_by_step[component_step],
+                dag_tpu_regions=dag_tpu_regions_by_step[component_step],
+            )
+            if step_regions is None:
+                continue
+            if component_regions is None:
+                component_regions = set(step_regions)
+            else:
+                component_regions &= step_regions
+            if not component_regions:
+                component_step_names = ", ".join(sorted(s.name for s in component))
+                raise ValueError(
+                    f"No common concrete region satisfies TPU-connected executor steps: {component_step_names}."
+                )
+
+        if not component_regions:
+            continue
+
+        if inherited_region_pin is not None:
+            chosen_region = inherited_region_pin.lower()
+            if chosen_region not in component_regions:
+                component_step_names = ", ".join(sorted(s.name for s in component))
+                raise ValueError(
+                    f"TPU-connected executor steps {component_step_names} require one of "
+                    f"{sorted(component_regions)}, but inherited Iris region is {chosen_region!r}."
+                )
+        else:
+            chosen_region = sorted(component_regions)[0]
+
+        for component_step in component:
+            chosen_region_by_step[component_step] = chosen_region
+
+    return chosen_region_by_step
+
+
 def _iris_backend_is_active() -> bool:
     try:
         client = current_client()
@@ -429,42 +549,68 @@ def _maybe_attach_inferred_region_constraint(
     output_path: str,
     deps: list[StepSpec] | None,
     dag_tpu_regions: list[str] | None = None,
+    forced_region: str | None = None,
 ) -> RemoteCallable:
-    if remote_fn.resources.regions is not None:
-        return remote_fn
-
     if not _iris_backend_is_active():
         return remote_fn
 
     inherited_region_pin = _iris_worker_region_pin()
 
-    inferred_regions = _infer_gcs_regions(
+    allowed_regions = _allowed_regions_for_step(
         step_name=step_name,
+        remote_fn=remote_fn,
         config=config,
         output_path=output_path,
         deps=deps,
         dag_tpu_regions=dag_tpu_regions,
     )
-    if inferred_regions is None:
+    if forced_region is not None:
+        pinned_region = forced_region.lower()
+        if allowed_regions is not None and pinned_region not in allowed_regions:
+            raise ValueError(
+                f"Executor step {step_name!r} cannot be pinned to {pinned_region!r}; "
+                f"allowed regions are {sorted(allowed_regions)}."
+            )
+        if inherited_region_pin is not None and inherited_region_pin.lower() != pinned_region:
+            raise ValueError(
+                f"Executor step {step_name!r} must run in {pinned_region!r}, "
+                f"but inherited Iris region is {inherited_region_pin.lower()!r}."
+            )
+        return dataclasses.replace(
+            remote_fn,
+            resources=dataclasses.replace(remote_fn.resources, regions=[pinned_region]),
+        )
+
+    if remote_fn.resources.regions is not None:
+        if inherited_region_pin is not None and allowed_regions is not None:
+            pinned_region = inherited_region_pin.lower()
+            if pinned_region not in allowed_regions:
+                raise ValueError(
+                    f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
+                    f"but inferred regions are {sorted(allowed_regions)}."
+                )
+        return remote_fn
+
+    if allowed_regions is None:
         return remote_fn
 
     if inherited_region_pin is not None:
         pinned_region = inherited_region_pin.lower()
-        if pinned_region not in inferred_regions:
+        if pinned_region not in allowed_regions:
             raise ValueError(
                 f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
-                f"but inferred regions are {sorted(inferred_regions)}."
+                f"but inferred regions are {sorted(allowed_regions)}."
             )
         return remote_fn
 
     logger.info(
         "Inferred Iris region constraints %s for executor step %s from GCS path dependencies",
-        inferred_regions,
+        allowed_regions,
         step_name,
     )
     return dataclasses.replace(
         remote_fn,
-        resources=dataclasses.replace(remote_fn.resources, regions=inferred_regions),
+        resources=dataclasses.replace(remote_fn.resources, regions=sorted(allowed_regions)),
     )
 
 
@@ -497,6 +643,7 @@ def resolve_executor_step(
     output_path: str,
     deps: list[StepSpec] | None = None,
     dag_tpu_regions: list[str] | None = None,
+    forced_region: str | None = None,
 ) -> StepSpec:
     """Convert an ExecutorStep into a StepSpec.
 
@@ -515,6 +662,7 @@ def resolve_executor_step(
             output_path=output_path,
             deps=deps,
             dag_tpu_regions=dag_tpu_regions,
+            forced_region=forced_region,
         )
 
     step_fn = remote_callable.fn if remote_callable is not None else step.fn
@@ -1033,20 +1181,32 @@ class Executor:
     def _resolve_steps(self, steps: list[ExecutorStep]) -> list[StepSpec]:
         """Convert computed ExecutorStep state into a flat list of StepSpec."""
         dag_tpu_regions_by_step = _step_dag_tpu_regions(steps, self.dependencies)
-        # First pass: create StepSpecs without deps so we have a mapping
-        spec_by_step: dict[ExecutorStep, StepSpec] = {}
-        for step in steps:
-            dep_stubs = [
+        dep_stubs_by_step = {
+            step: [
                 StepSpec(name=dep.name, override_output_path=self.output_paths[dep])
                 for dep in self.dependencies[step]
                 if dep in self.output_paths
             ]
+            for step in steps
+        }
+        forced_region_by_step = _component_tpu_pins(
+            steps,
+            self.dependencies,
+            configs=self.configs,
+            output_paths=self.output_paths,
+            dep_stubs_by_step=dep_stubs_by_step,
+            dag_tpu_regions_by_step=dag_tpu_regions_by_step,
+        )
+        # First pass: create StepSpecs without deps so we have a mapping
+        spec_by_step: dict[ExecutorStep, StepSpec] = {}
+        for step in steps:
             spec_by_step[step] = resolve_executor_step(
                 step=step,
                 config=self.configs[step],
                 output_path=self.output_paths[step],
-                deps=dep_stubs,
+                deps=dep_stubs_by_step[step],
                 dag_tpu_regions=dag_tpu_regions_by_step[step],
+                forced_region=forced_region_by_step[step],
             )
         # Second pass: rebuild with deps pointing to resolved StepSpecs
         result = []
