@@ -22,10 +22,8 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import logging
 import sqlite3
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -34,57 +32,12 @@ import click
 import fsspec.core
 
 from iris.cluster.bundle import BundleStore, bundle_id_for_zip
+from iris.cluster.config import load_config
+from iris.scripts.migrations.gcloud_helpers import discover_controller_vm, scp_from_controller
 
 logger = logging.getLogger("migrate-bundle-store")
 
 CONTROLLER_STATE_DIR = "/var/cache/iris/controller"
-
-
-def _run(
-    *args: str,
-    timeout: float = 120,
-    check: bool = True,
-) -> subprocess.CompletedProcess[str]:
-    cmd = list(args)
-    logger.debug("$ %s", " ".join(cmd))
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=check)
-
-
-def discover_controller_vm(project: str, label_prefix: str) -> tuple[str, str] | None:
-    """Find controller VM by its Iris label. Returns (vm_name, zone) or None."""
-    r = _run(
-        "gcloud", "compute", "instances", "list",
-        f"--project={project}",
-        f"--filter=labels.iris-{label_prefix}-controller=true",
-        "--format=json(name,zone)",
-        timeout=30,
-    )
-    instances = json.loads(r.stdout)
-    if not instances:
-        return None
-    vm = instances[0]
-    zone = vm["zone"].rsplit("/", 1)[-1]
-    return vm["name"], zone
-
-
-def scp_from_controller(vm: str, zone: str, project: str, remote_path: str, local_path: Path) -> None:
-    """SCP a file from the controller VM to a local path."""
-    _run(
-        "gcloud", "compute", "scp",
-        f"{vm}:{remote_path}", str(local_path),
-        f"--zone={zone}", f"--project={project}",
-        timeout=300,
-    )
-
-
-def scp_to_controller(local_path: Path, vm: str, zone: str, project: str, remote_path: str) -> None:
-    """SCP a local file to the controller VM."""
-    _run(
-        "gcloud", "compute", "scp",
-        str(local_path), f"{vm}:{remote_path}",
-        f"--zone={zone}", f"--project={project}",
-        timeout=300,
-    )
 
 
 def read_bundles_from_sqlite(db_path: Path) -> dict[str, bytes]:
@@ -143,10 +96,19 @@ def verify_bundles(bundles: dict[str, bytes], storage_dir: str) -> list[str]:
 
 @click.command()
 @click.option("--config", "config_path", required=True, type=click.Path(exists=True))
-@click.option("--local-db", "local_db_path", type=click.Path(), default=None,
-              help="Use local sqlite file instead of SCP from controller")
-@click.option("--storage-dir", "storage_dir_override", default=None,
-              help="Override destination (default: {remote_state_dir}/bundles)")
+@click.option(
+    "--local-db",
+    "local_db_path",
+    type=click.Path(),
+    default=None,
+    help="Use local sqlite file instead of SCP from controller",
+)
+@click.option(
+    "--storage-dir",
+    "storage_dir_override",
+    default=None,
+    help="Override destination (default: {remote_state_dir}/bundles)",
+)
 @click.option("--dry-run", is_flag=True, default=False)
 @click.option("--skip-verify", is_flag=True, default=False)
 @click.option("--project", default="hai-gcp-models")
@@ -165,8 +127,6 @@ def main(
         format="%(asctime)s %(name)s %(message)s",
         stream=sys.stderr,
     )
-
-    from iris.cluster.config import load_config
 
     cluster_config = load_config(Path(config_path))
     remote_state_dir = cluster_config.storage.remote_state_dir
@@ -192,9 +152,8 @@ def main(
         click.echo(f"  VM: {vm_name} ({zone})")
 
         remote_sqlite = f"{CONTROLLER_STATE_DIR}/bundles.sqlite3"
-        tmp = tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False)
-        db_path = Path(tmp.name)
-        tmp.close()
+        tmp_dir = tempfile.mkdtemp(prefix="iris_bundle_migration_")
+        db_path = Path(tmp_dir) / "bundles.sqlite3"
 
         if dry_run:
             click.echo("[dry-run] Would SCP bundles.sqlite3 — cannot proceed")

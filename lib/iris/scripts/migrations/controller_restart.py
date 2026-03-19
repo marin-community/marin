@@ -52,20 +52,12 @@ from pathlib import Path
 import click
 import fsspec.core
 
+from iris.cluster.config import load_config
+from iris.scripts.migrations.gcloud_helpers import discover_controller_vm, gcloud_ssh, run_cmd
+
 logger = logging.getLogger("controller-restart")
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
-
-
-def _run(
-    *args: str,
-    timeout: float = 120,
-    check: bool = True,
-    capture: bool = True,
-) -> subprocess.CompletedProcess[str]:
-    cmd = list(args)
-    logger.debug("$ %s", " ".join(cmd))
-    return subprocess.run(cmd, capture_output=capture, text=True, timeout=timeout, check=check)
 
 
 def _run_script(script_name: str, *args: str, timeout: float = 600) -> None:
@@ -76,33 +68,6 @@ def _run_script(script_name: str, *args: str, timeout: float = 600) -> None:
     subprocess.run(cmd, check=True, timeout=timeout)
 
 
-def discover_controller_vm(project: str, label_prefix: str) -> tuple[str, str] | None:
-    """Find controller VM by its Iris label. Returns (vm_name, zone) or None."""
-    r = _run(
-        "gcloud", "compute", "instances", "list",
-        f"--project={project}",
-        f"--filter=labels.iris-{label_prefix}-controller=true",
-        "--format=json(name,zone)",
-        timeout=30,
-    )
-    instances = json.loads(r.stdout)
-    if not instances:
-        return None
-    vm = instances[0]
-    zone = vm["zone"].rsplit("/", 1)[-1]
-    return vm["name"], zone
-
-
-def _gcloud_ssh(vm: str, zone: str, project: str, command: str, timeout: float = 30) -> str:
-    r = _run(
-        "gcloud", "compute", "ssh", vm,
-        f"--zone={zone}", f"--project={project}",
-        f"--command={command}",
-        timeout=timeout,
-    )
-    return r.stdout.strip()
-
-
 def _gcs_exists(path: str) -> bool:
     fs, fs_path = fsspec.core.url_to_fs(path)
     return fs.exists(fs_path)
@@ -110,8 +75,10 @@ def _gcs_exists(path: str) -> bool:
 
 def trigger_checkpoint(vm: str, zone: str, project: str, port: int) -> dict:
     """Call BeginCheckpoint RPC on the running controller."""
-    output = _gcloud_ssh(
-        vm, zone, project,
+    output = gcloud_ssh(
+        vm,
+        zone,
+        project,
         f"curl -sf http://localhost:{port}/iris.cluster.ControllerService/BeginCheckpoint "
         f"-H 'Content-Type: application/json' -d '{{}}'",
         timeout=60,
@@ -126,14 +93,16 @@ def verify_controller_health(vm: str, zone: str, project: str, port: int, timeou
     while time.monotonic() < deadline:
         attempt += 1
         try:
-            output = _gcloud_ssh(
-                vm, zone, project,
-                f"curl -sf http://localhost:{port}/iris.cluster.ControllerService/GetStatus "
+            output = gcloud_ssh(
+                vm,
+                zone,
+                project,
+                f"curl -sf http://localhost:{port}/iris.cluster.ControllerService/GetProcessStatus "
                 f"-H 'Content-Type: application/json' -d '{{}}'",
                 timeout=10,
             )
             status = json.loads(output)
-            click.echo(f"  Healthy: {status.get('jobCount', 0)} jobs, {status.get('workerCount', 0)} workers")
+            click.echo(f"  Healthy: process up, pid={status.get('pid', '?')}")
             return True
         except Exception:
             if attempt <= 3:
@@ -176,8 +145,6 @@ def main(
         stream=sys.stderr,
     )
 
-    from iris.cluster.config import load_config
-
     cluster_config = load_config(Path(config_path))
     remote_state_dir = cluster_config.storage.remote_state_dir
     label_prefix = cluster_config.platform.label_prefix or "iris"
@@ -213,8 +180,10 @@ def main(
     else:
         resp = trigger_checkpoint(vm_name, zone, project, port)
         click.echo(f"  Checkpoint: {resp.get('checkpointPath', '?')}")
-        click.echo(f"  Jobs: {resp.get('jobCount', 0)}, Tasks: {resp.get('taskCount', 0)}, "
-                    f"Workers: {resp.get('workerCount', 0)}")
+        click.echo(
+            f"  Jobs: {resp.get('jobCount', 0)}, Tasks: {resp.get('taskCount', 0)}, "
+            f"Workers: {resp.get('workerCount', 0)}"
+        )
 
         latest = f"{canonical_prefix}/latest.sqlite3"
         if _gcs_exists(latest):
@@ -263,7 +232,8 @@ def main(
         if dry_run:
             log_args.append("--dry-run")
         if skip_verify:
-            log_args.append("--skip-verify")
+            # log_store.py uses --skip-upload (no verification step)
+            log_args.append("--skip-upload")
         if verbose:
             log_args.append("-v")
         _run_script("log_store.py", *log_args, timeout=1200)
@@ -286,10 +256,17 @@ def main(
         return
 
     click.echo("  Workers on separate VMs survive the restart.")
-    _run(
-        "uv", "run", "iris", "--config", config_path,
-        "cluster", "controller", "restart",
-        timeout=600, capture=False,
+    run_cmd(
+        "uv",
+        "run",
+        "iris",
+        "--config",
+        config_path,
+        "cluster",
+        "controller",
+        "restart",
+        timeout=600,
+        capture=False,
     )
 
     # =========================================================================
@@ -307,8 +284,9 @@ def main(
             click.echo("  Controller is healthy!")
         else:
             click.echo("  WARNING: Controller did not respond within timeout", err=True)
-            click.echo(f"  Check logs: gcloud compute ssh {vm_name} --zone={zone} "
-                        "-- sudo docker logs iris-controller")
+            click.echo(
+                f"  Check logs: gcloud compute ssh {vm_name} --zone={zone} " "-- sudo docker logs iris-controller"
+            )
             sys.exit(1)
 
     click.echo()

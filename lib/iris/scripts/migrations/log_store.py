@@ -45,10 +45,8 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import logging
 import sqlite3
-import subprocess
 import sys
 import tempfile
 from collections import defaultdict
@@ -56,7 +54,17 @@ from pathlib import Path
 
 import click
 
+# DuckDB is a heavy optional dep; guarded to allow importing this module
+# in environments where duckdb is not installed.
+from iris.cluster.config import load_config
+from iris.cluster.log_store.duckdb_store import DuckDBLogStore
 from iris.rpc import logging_pb2
+from iris.scripts.migrations.gcloud_helpers import (
+    discover_controller_vm,
+    gcloud_ssh,
+    scp_from_controller,
+    scp_to_controller,
+)
 
 logger = logging.getLogger("migrate-log-store")
 
@@ -66,79 +74,6 @@ CONTROLLER_LOG_DIR = f"{CONTROLLER_STATE_DIR}/logs"
 # Batch size for feeding rows into the LogStore. Large enough for throughput,
 # small enough to avoid blowing up memory with proto objects.
 BATCH_SIZE = 50_000
-
-
-def _run(
-    *args: str,
-    timeout: float = 120,
-    check: bool = True,
-) -> subprocess.CompletedProcess[str]:
-    cmd = list(args)
-    logger.debug("$ %s", " ".join(cmd))
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=check)
-
-
-def discover_controller_vm(project: str, label_prefix: str) -> tuple[str, str] | None:
-    """Find controller VM by its Iris label. Returns (vm_name, zone) or None."""
-    r = _run(
-        "gcloud",
-        "compute",
-        "instances",
-        "list",
-        f"--project={project}",
-        f"--filter=labels.iris-{label_prefix}-controller=true",
-        "--format=json(name,zone)",
-        timeout=30,
-    )
-    instances = json.loads(r.stdout)
-    if not instances:
-        return None
-    vm = instances[0]
-    zone = vm["zone"].rsplit("/", 1)[-1]
-    return vm["name"], zone
-
-
-def scp_from_controller(vm: str, zone: str, project: str, remote_path: str, local_path: Path) -> None:
-    """SCP a file from the controller VM to a local path."""
-    _run(
-        "gcloud",
-        "compute",
-        "scp",
-        f"{vm}:{remote_path}",
-        str(local_path),
-        f"--zone={zone}",
-        f"--project={project}",
-        timeout=600,
-    )
-
-
-def scp_to_controller(local_path: Path, vm: str, zone: str, project: str, remote_path: str) -> None:
-    """SCP a local file to the controller VM."""
-    _run(
-        "gcloud",
-        "compute",
-        "scp",
-        str(local_path),
-        f"{vm}:{remote_path}",
-        f"--zone={zone}",
-        f"--project={project}",
-        timeout=600,
-    )
-
-
-def ssh_run(vm: str, zone: str, project: str, command: str, timeout: float = 30) -> str:
-    """Run a command on the controller VM via SSH."""
-    r = _run(
-        "gcloud",
-        "compute",
-        "ssh",
-        vm,
-        f"--zone={zone}",
-        f"--project={project}",
-        f"--command={command}",
-        timeout=timeout,
-    )
-    return r.stdout.strip()
 
 
 def read_log_count(db_path: Path) -> int:
@@ -160,8 +95,6 @@ def migrate_sqlite_to_log_store(
 
     Returns the number of rows migrated.
     """
-    from iris.cluster.log_store.duckdb_store import DuckDBLogStore
-
     store = DuckDBLogStore(
         log_dir=output_dir,
         # No remote offload — we just want local Parquet files.
@@ -173,10 +106,11 @@ def migrate_sqlite_to_log_store(
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
         if max_rows > 0:
-            query = f"SELECT key, source, data, epoch_ms, level FROM logs ORDER BY id DESC LIMIT {max_rows}"
+            query = "SELECT key, source, data, epoch_ms, level FROM logs ORDER BY id DESC LIMIT ?"
+            cursor = conn.execute(query, (max_rows,))
         else:
             query = "SELECT key, source, data, epoch_ms, level FROM logs ORDER BY id"
-        cursor = conn.execute(query)
+            cursor = conn.execute(query)
 
         total = 0
         batch: dict[str, list[logging_pb2.LogEntry]] = defaultdict(list)
@@ -239,8 +173,6 @@ def main(
         stream=sys.stderr,
     )
 
-    from iris.cluster.config import load_config
-
     cluster_config = load_config(Path(config_path))
     remote_state_dir = cluster_config.storage.remote_state_dir
     label_prefix = cluster_config.platform.label_prefix or "iris"
@@ -267,9 +199,8 @@ def main(
     else:
         assert vm_name and zone
         remote_sqlite = f"{CONTROLLER_LOG_DIR}/logs.db"
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        db_path = Path(tmp.name)
-        tmp.close()
+        tmp_dir = tempfile.mkdtemp(prefix="iris_log_migration_")
+        db_path = Path(tmp_dir) / "logs.db"
 
         if dry_run:
             click.echo("[dry-run] Would SCP logs.db — cannot proceed")
@@ -291,7 +222,7 @@ def main(
         click.echo(f"[dry-run] Would convert {total_rows} rows to Parquet via DuckDBLogStore")
         return
 
-    parquet_dir = Path(output_dir) if output_dir else Path(tempfile.mkdtemp(prefix="iris_log_migration_"))
+    parquet_dir = Path(output_dir) if output_dir else Path(tempfile.mkdtemp(prefix="iris_log_parquet_"))
     click.echo(f"Writing Parquet via DuckDBLogStore to {parquet_dir}")
 
     migrated = migrate_sqlite_to_log_store(db_path, parquet_dir, max_rows=max_rows)
@@ -304,12 +235,12 @@ def main(
     # --- SCP back to controller ---
     if not skip_upload and vm_name and zone:
         click.echo(f"Ensuring log directory on controller: {CONTROLLER_LOG_DIR}")
-        ssh_run(vm_name, zone, project, f"sudo mkdir -p {CONTROLLER_LOG_DIR}")
+        gcloud_ssh(vm_name, zone, project, f"sudo mkdir -p {CONTROLLER_LOG_DIR}")
 
         click.echo(f"Uploading {len(segments)} segments to controller...")
         for seg in segments:
             remote_dest = f"{CONTROLLER_LOG_DIR}/{seg.name}"
-            exists_check = ssh_run(
+            exists_check = gcloud_ssh(
                 vm_name,
                 zone,
                 project,
