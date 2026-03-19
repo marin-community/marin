@@ -5395,6 +5395,11 @@ dependencies = [
     { name = "zephyr" },
 ]
 
+[package.dev-dependencies]
+rust = [
+    { name = "dupekit" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "fray", editable = "lib/fray" },
@@ -5405,6 +5410,9 @@ requires-dist = [
     { name = "watchdog" },
     { name = "zephyr", editable = "lib/zephyr" },
 ]
+
+[package.metadata.requires-dev]
+rust = [{ name = "dupekit", editable = "rust/dupekit" }]
 
 [[package]]
 name = "markdown"
