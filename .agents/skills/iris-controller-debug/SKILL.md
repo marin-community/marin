@@ -57,7 +57,7 @@ uv run iris process profile cpu --duration 10 --output /tmp/profile.speedscope.j
 uv run iris process profile mem --duration 10 --output /tmp/profile.html
 
 # Target a specific worker instead of the controller
-uv run iris process profile threads --worker <WORKER_ID>
+uv run iris process profile threads --target /system/worker/<WORKER_ID>
 
 # Process status (host info, resource usage)
 uv run iris process status
