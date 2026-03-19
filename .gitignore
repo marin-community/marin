@@ -234,6 +234,7 @@ scr/*
 .agents/tmp/
 .codex
 .entire
+.rust-dev-mode
 
 # Generated protobuf and Connect RPC files (rebuilt by hatch build hook)
 lib/iris/src/iris/rpc/*_pb2.py
