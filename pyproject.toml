@@ -53,6 +53,9 @@ zephyr = { workspace = true }
 dupekit = { path = "rust/dupekit", editable = true }
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
 
+[dependency-groups]
+rust = ["dupekit"]
+
 [tool.black]
 line-length = 121
 target-version = ["py310"]

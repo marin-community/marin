@@ -1,0 +1,5 @@
+# Copy to uv.toml to enable Rust source builds:
+#   cp uv.toml.dev uv.toml && uv sync
+# Remove to disable:
+#   rm uv.toml && uv sync
+default-groups = ["dev", "rust"]

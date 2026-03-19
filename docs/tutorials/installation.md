@@ -9,8 +9,7 @@ Before you begin, ensure you have the following installed:
 - Python 3.11 or higher
 - uv (Python package manager)
 - Git
-- Rust toolchain via [rustup](https://rustup.rs) (needed for `rust/dupekit`, which is built with Maturin;
-  see [`rust/dupekit/README.md`](https://github.com/marin-community/marin/blob/main/rust/dupekit/README.md) for background)
+- Rust toolchain via [rustup](https://rustup.rs) (**only if building Rust crates from source**; see below)
     - Recommended: `rustup toolchain install 1.91.0 && rustup default 1.91.0` (matches the Docker pin)
     - If you hit an `edition2024` error from Cargo (e.g., when building Arrow), use nightly: `rustup default nightly`
 - On macOS, install additional build tools for SentencePiece: ```brew install cmake pkg-config coreutils```
@@ -117,6 +116,24 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
         # Install TPU-specific dependencies
         uv sync --all-packages --extra=tpu
         ```
+
+## Rust Crates (dupekit)
+
+Marin includes optional Rust crates (e.g., `dupekit`) built with Maturin. By default they are not installed. To build from source (requires Cargo):
+
+```bash
+make rust-dev   # copies uv.toml.dev → uv.toml
+uv sync
+```
+
+To switch back to user mode (no Cargo needed):
+
+```bash
+make rust-user   # removes uv.toml
+uv sync
+```
+
+Check current mode with `make rust-status`.
 
 ## Trying it Out
 

@@ -1,4 +1,4 @@
-.PHONY: help clean check fix cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit
+.PHONY: help clean check fix cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit rust-dev rust-user rust-status
 .DEFAULT: help
 
 
@@ -15,6 +15,12 @@ help:
 	@echo "    Run all tests"
 	@echo "make init"
 	@echo "    Init the repo for development"
+	@echo "make rust-dev"
+	@echo "    Build Rust crates from source (requires Cargo)"
+	@echo "make rust-user"
+	@echo "    Use pre-built Rust wheels (no Cargo needed)"
+	@echo "make rust-status"
+	@echo "    Show current Rust build mode"
 
 init:
 	conda install -c conda-forge pandoc
@@ -218,6 +224,21 @@ install_node:
 	else \
 		echo "Cannot auto-install Node.js. Please install manually: https://nodejs.org/"; \
 		exit 1; \
+	fi
+
+rust-dev: ## Build Rust crates from source (requires Cargo)
+	@cp uv.toml.dev uv.toml
+	@echo "Rust dev mode enabled. Run: uv sync"
+
+rust-user: ## Use pre-built Rust wheels (no Cargo needed)
+	@rm -f uv.toml
+	@echo "Rust user mode enabled. Run: uv sync"
+
+rust-status: ## Show current Rust build mode
+	@if [ -f uv.toml ] && grep -q '"rust"' uv.toml 2>/dev/null; then \
+		echo "rust: dev (source build)"; \
+	else \
+		echo "rust: user (pre-built or skipped)"; \
 	fi
 
 dev_setup: install_uv install_gcloud install_node get_secret_key get_ray_auth_token setup_pre_commit
