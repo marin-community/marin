@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
+import tempfile
 from datetime import datetime
 
 from iris.cluster.platform.base import PlatformError, QuotaExhaustedError, ResourceNotFoundError
@@ -334,8 +336,32 @@ class GcpServiceImpl:
         if request.subnetwork:
             cmd.append(f"--subnetwork={request.subnetwork}")
 
+        # Large metadata values (e.g. startup-script) are written to temp files
+        # to avoid shell-escaping issues with --metadata inline.
+        metadata_files: dict[str, str] = {}
+        inline_metadata: dict[str, str] = {}
+        for k, v in request.metadata.items():
+            if len(v) > 256:
+                f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
+                f.write(v)
+                f.close()
+                metadata_files[k] = f.name
+            else:
+                inline_metadata[k] = v
+
+        if inline_metadata:
+            metadata_str = ",".join(f"{k}={v}" for k, v in inline_metadata.items())
+            cmd.append(f"--metadata={metadata_str}")
+        if metadata_files:
+            file_str = ",".join(f"{k}={path}" for k, path in metadata_files.items())
+            cmd.append(f"--metadata-from-file={file_str}")
+
         logger.info("Creating TPU: %s (type=%s, zone=%s)", request.name, request.accelerator_type, request.zone)
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        finally:
+            for path in metadata_files.values():
+                os.unlink(path)
         if result.returncode != 0:
             raise _classify_gcloud_error(result.stderr.strip())
 
@@ -426,7 +452,11 @@ class GcpServiceImpl:
 
     def _tpu_list_cloud(self, zones: list[str], labels: dict[str, str] | None = None) -> list[TpuInfo]:
         results: list[TpuInfo] = []
-        for zone in zones:
+
+        # Empty zones = project-wide search using --zone=-
+        zone_list = zones if zones else ["-"]
+
+        for zone in zone_list:
             cmd = [
                 "gcloud",
                 "compute",
@@ -448,7 +478,14 @@ class GcpServiceImpl:
                 continue
 
             for tpu_data in json.loads(result.stdout):
-                results.append(_parse_tpu_info(tpu_data, zone))
+                # With --zone=-, name is a full resource path; extract zone from it
+                tpu_zone = zone
+                raw_name = tpu_data.get("name", "")
+                if zone == "-" and "/" in raw_name:
+                    parts = raw_name.split("/")
+                    if len(parts) >= 4:
+                        tpu_zone = parts[3]
+                results.append(_parse_tpu_info(tpu_data, tpu_zone))
 
         return results
 
@@ -488,6 +525,7 @@ class GcpServiceImpl:
             f"--zone={request.zone}",
             f"--machine-type={request.machine_type}",
             f"--boot-disk-size={request.disk_size_gb}GB",
+            f"--boot-disk-type={request.boot_disk_type}",
             f"--image-family={request.image_family}",
             f"--image-project={request.image_project}",
             "--scopes=cloud-platform",
@@ -496,16 +534,39 @@ class GcpServiceImpl:
 
         if request.labels:
             cmd.append(f"--labels={_format_labels(request.labels)}")
-        if request.metadata:
-            metadata_str = ",".join(f"{k}={v}" for k, v in request.metadata.items())
-            cmd.append(f"--metadata={metadata_str}")
+
+        # Large metadata values (e.g. startup-script) are written to temp files.
+        metadata_files: dict[str, str] = {}
+        all_metadata = dict(request.metadata)
         if request.startup_script:
-            cmd.append(f"--metadata=startup-script={request.startup_script}")
+            all_metadata["startup-script"] = request.startup_script
+
+        inline_metadata: dict[str, str] = {}
+        for k, v in all_metadata.items():
+            if len(v) > 256:
+                f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
+                f.write(v)
+                f.close()
+                metadata_files[k] = f.name
+            else:
+                inline_metadata[k] = v
+
+        if inline_metadata:
+            metadata_str = ",".join(f"{k}={v}" for k, v in inline_metadata.items())
+            cmd.append(f"--metadata={metadata_str}")
+        if metadata_files:
+            file_str = ",".join(f"{k}={path}" for k, path in metadata_files.items())
+            cmd.append(f"--metadata-from-file={file_str}")
+
         if request.service_account:
             cmd.append(f"--service-account={request.service_account}")
 
         logger.info("Creating VM: %s (zone=%s, type=%s)", request.name, request.zone, request.machine_type)
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        finally:
+            for path in metadata_files.values():
+                os.unlink(path)
         if result.returncode != 0:
             error_msg = result.stderr.strip()
             if "already exists" not in error_msg.lower():
@@ -541,6 +602,30 @@ class GcpServiceImpl:
             error = result.stderr.strip()
             if "not found" not in error.lower():
                 raise _classify_gcloud_error(error)
+
+    def vm_reset(self, name: str, zone: str) -> None:
+        self._check_injected_failure("vm_reset")
+
+        if self._mode == ServiceMode.CLOUD:
+            return self._vm_reset_cloud(name, zone)
+
+        # DRY_RUN / LOCAL: no-op (VM stays in same state)
+
+    def _vm_reset_cloud(self, name: str, zone: str) -> None:
+        cmd = [
+            "gcloud",
+            "compute",
+            "instances",
+            "reset",
+            name,
+            f"--project={self._project_id}",
+            f"--zone={zone}",
+            "--quiet",
+        ]
+        logger.info("Resetting VM: %s", name)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise _classify_gcloud_error(result.stderr.strip())
 
     def vm_describe(self, name: str, zone: str) -> VmInfo | None:
         self._check_injected_failure("vm_describe")
@@ -589,6 +674,29 @@ class GcpServiceImpl:
 
     def _vm_list_cloud(self, zones: list[str], labels: dict[str, str] | None = None) -> list[VmInfo]:
         results: list[VmInfo] = []
+
+        if not zones:
+            # Project-wide search (no --zones flag)
+            cmd = [
+                "gcloud",
+                "compute",
+                "instances",
+                "list",
+                f"--project={self._project_id}",
+                "--format=json",
+            ]
+            if labels:
+                cmd.append(f"--filter={_build_label_filter(labels)}")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.warning("Failed to list instances: %s", result.stderr.strip())
+                return []
+            if not result.stdout.strip():
+                return []
+            for vm_data in json.loads(result.stdout):
+                results.append(_parse_vm_info(vm_data))
+            return results
+
         for zone in zones:
             cmd = [
                 "gcloud",
