@@ -695,20 +695,30 @@ class LmDataConfig:
         *,
         key: PRNGKeyArray,
     ) -> AsyncDataset[LmExample]:
+        grug_dataset = self.train_grug_set(seq_len=Pos.size, batch_schedule=batch_schedule, key=key)
+        return NamedLmDataset(grug_dataset, Pos)
+
+    def train_grug_set(
+        self,
+        *,
+        seq_len: int,
+        batch_schedule: BatchSchedule,
+        key: PRNGKeyArray,
+    ) -> AsyncDataset[GrugLmExample]:
+        """Build the mixed training dataset in array-first `GrugLmExample` format."""
         mix_key, shuffle_key = jax.random.split(key)
         weights = self.train_weights
         if isinstance(weights, list):
             weights = rescale_mixture_schedule_for_batch_schedule(weights, batch_schedule)
         initial_batch_size = batch_schedule.batch_size_at_step(0)
-        datasets = self.train_sets(Pos, key=shuffle_key, initial_batch_size=initial_batch_size)
-        mixture = MixtureDataset(
+        datasets = self.train_grug_sets(seq_len=seq_len, key=shuffle_key, initial_batch_size=initial_batch_size)
+        return MixtureDataset(
             datasets=datasets,
             weights=weights,
             stop_strategy=self.stop_strategy,
             key=mix_key,
             block_size=self.mixture_block_size,
         )
-        return NamedLmDataset(mixture, Pos)
 
     def train_sets(
         self,
