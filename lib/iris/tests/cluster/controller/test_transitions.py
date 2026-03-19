@@ -10,22 +10,22 @@ They focus on:
 - Final state verification rather than intermediate steps
 """
 
-import tempfile
 import threading
-from pathlib import Path
 
 import pytest
+from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
 from iris.cluster.controller.autoscaler import DemandEntry
 from iris.cluster.controller.controller import compute_demand_entries
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     ATTEMPTS,
-    ControllerDB,
+    ENDPOINTS,
     JOBS,
     TASKS,
     TERMINAL_TASK_STATES,
-    WORKERS,
     WORKER_ATTRIBUTES,
+    WORKERS,
+    ControllerDB,
     Endpoint,
     EndpointQuery,
     Job,
@@ -34,37 +34,31 @@ from iris.cluster.controller.db import (
     _decode_attribute_rows,
     _tasks_with_attempts,
     endpoint_query_predicate,
-    ENDPOINTS,
 )
-from iris.cluster.log_store import LogStore
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.transitions import (
+    HEARTBEAT_FAILURE_THRESHOLD,
     MAX_REPLICAS_PER_JOB,
     Assignment,
     ControllerTransitions,
-    HEARTBEAT_FAILURE_THRESHOLD,
     HeartbeatApplyRequest,
     PruneResult,
     TaskUpdate,
 )
-from iris.cluster.constraints import WellKnownAttribute, constraints_from_resources
-from iris.cluster.constraints import DeviceType
+from iris.cluster.log_store import LogStore
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
 
+from .conftest import (
+    make_controller_state as _make_state,
+    make_test_entrypoint as _make_test_entrypoint,
+    query_task as _query_task,
+)
+
 # =============================================================================
 # Test Helpers
 # =============================================================================
-
-
-def _make_state(**kwargs) -> ControllerTransitions:
-    """Create a ControllerTransitions with a fresh temp DB and log store."""
-    tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
-    db_path = tmp / "controller.sqlite3"
-    db = ControllerDB(db_path=db_path)
-    log_store = LogStore(log_dir=tmp / "logs")
-    return ControllerTransitions(db=db, log_store=log_store, **kwargs)
 
 
 def _schedulable_tasks(state: ControllerTransitions):
@@ -269,13 +263,6 @@ def fail_worker(state: ControllerTransitions, worker_id: WorkerId, error: str) -
         state.record_heartbeat_failure(worker_id, error, batch)
 
 
-def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
-    """Create a minimal RuntimeEntrypoint proto for testing."""
-    entrypoint = cluster_pb2.RuntimeEntrypoint()
-    entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    return entrypoint
-
-
 @pytest.fixture
 def job_request():
     """Create a minimal LaunchJobRequest for testing."""
@@ -337,11 +324,6 @@ def register_worker(
 def _query_job(state: ControllerTransitions, job_id: JobName) -> Job | None:
     with state._db.snapshot() as q:
         return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
-
-
-def _query_task(state: ControllerTransitions, task_id: JobName) -> Task | None:
-    with state._db.snapshot() as q:
-        return q.one(TASKS, where=TASKS.c.task_id == task_id.to_wire())
 
 
 def _query_worker(state: ControllerTransitions, worker_id: WorkerId) -> Worker | None:
@@ -3617,3 +3599,275 @@ def test_prune_noop_when_nothing_old():
 
     assert result == PruneResult()
     assert result.total == 0
+
+
+# =============================================================================
+# Direct Provider Transition Tests
+# =============================================================================
+
+
+def _submit_job_direct(
+    state: ControllerTransitions,
+    job_id_str: str,
+    *,
+    replicas: int = 1,
+    max_retries_failure: int = 0,
+    max_retries_preemption: int = 0,
+) -> list[JobName]:
+    job_id = JobName.from_wire(job_id_str)
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name="test-job",
+        replicas=replicas,
+        max_retries_failure=max_retries_failure,
+        max_retries_preemption=max_retries_preemption,
+    )
+    result = state.submit_job(job_id, request, Timestamp.now())
+    return result.task_ids
+
+
+def _task_state_direct(state: ControllerTransitions, task_id: JobName) -> int:
+    with state._db.snapshot() as q:
+        tasks = q.select(TASKS, where=TASKS.c.task_id == task_id.to_wire())
+    assert len(tasks) == 1
+    return tasks[0].state
+
+
+def _task_row_direct(state: ControllerTransitions, task_id: JobName):
+    with state._db.snapshot() as q:
+        tasks = q.select(TASKS, where=TASKS.c.task_id == task_id.to_wire())
+    assert len(tasks) == 1
+    return tasks[0]
+
+
+def _run_direct_tasks(state: ControllerTransitions, task_ids: list[JobName]) -> None:
+    """Drain and transition tasks to RUNNING via direct provider."""
+    state.drain_for_direct_provider()
+    state.apply_direct_provider_updates(
+        [TaskUpdate(task_id=t, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING) for t in task_ids]
+    )
+
+
+def test_drain_pending_creates_attempt_rows():
+    """drain_for_direct_provider promotes PENDING tasks to ASSIGNED with NULL worker_id."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1")
+    task_id = task_ids[0]
+
+    batch = state.drain_for_direct_provider()
+
+    assert len(batch.tasks_to_run) == 1
+    assert batch.tasks_to_run[0].task_id == task_id.to_wire()
+    assert batch.tasks_to_run[0].attempt_id == 0
+    assert _task_state_direct(state, task_id) == cluster_pb2.TASK_STATE_ASSIGNED
+
+    # Verify attempt row was created with NULL worker_id.
+    row = state._db.fetchone(
+        "SELECT worker_id, state FROM task_attempts WHERE task_id = ? AND attempt_id = 0",
+        (task_id.to_wire(),),
+    )
+    assert row is not None
+    assert row["worker_id"] is None
+    assert int(row["state"]) == cluster_pb2.TASK_STATE_ASSIGNED
+
+
+def test_drain_skips_already_assigned():
+    """Already ASSIGNED tasks appear in running_tasks, not tasks_to_run."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1")
+    task_id = task_ids[0]
+
+    # First drain promotes to ASSIGNED.
+    batch1 = state.drain_for_direct_provider()
+    assert len(batch1.tasks_to_run) == 1
+
+    # Second drain: no new tasks to run, but task appears in running_tasks.
+    batch2 = state.drain_for_direct_provider()
+    assert len(batch2.tasks_to_run) == 0
+    assert len(batch2.running_tasks) == 1
+    assert batch2.running_tasks[0].task_id == task_id
+    assert batch2.running_tasks[0].attempt_id == 0
+
+
+def test_drain_kill_queue():
+    """Buffered kill entries are drained and deleted."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1")
+    task_id = task_ids[0]
+
+    state.buffer_direct_kill(task_id.to_wire())
+
+    batch = state.drain_for_direct_provider()
+    assert task_id.to_wire() in batch.tasks_to_kill
+
+    # Second drain should be empty (kills were consumed).
+    batch2 = state.drain_for_direct_provider()
+    assert len(batch2.tasks_to_kill) == 0
+
+
+def test_apply_running():
+    """Applying a RUNNING update transitions task from ASSIGNED to RUNNING."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1")
+    task_id = task_ids[0]
+    state.drain_for_direct_provider()
+
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING),
+        ]
+    )
+
+    assert _task_state_direct(state, task_id) == cluster_pb2.TASK_STATE_RUNNING
+
+
+def test_apply_succeeded():
+    """Applying SUCCEEDED transitions task to terminal state with exit_code=0."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1")
+    task_id = task_ids[0]
+    state.drain_for_direct_provider()
+
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING),
+        ]
+    )
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_SUCCEEDED),
+        ]
+    )
+
+    task = _task_row_direct(state, task_id)
+    assert task.state == cluster_pb2.TASK_STATE_SUCCEEDED
+    assert task.exit_code == 0
+    assert task.finished_at is not None
+
+
+def test_apply_failed_with_retry():
+    """FAILED with retries remaining returns task to PENDING."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1", max_retries_failure=1)
+    task_id = task_ids[0]
+    state.drain_for_direct_provider()
+
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING),
+        ]
+    )
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_FAILED, error="boom"),
+        ]
+    )
+
+    # Task should be PENDING again (1 failure <= 1 max_retries_failure).
+    assert _task_state_direct(state, task_id) == cluster_pb2.TASK_STATE_PENDING
+
+    # Draining again should promote it for a second attempt.
+    batch = state.drain_for_direct_provider()
+    assert len(batch.tasks_to_run) == 1
+    assert batch.tasks_to_run[0].attempt_id == 1
+
+
+def test_apply_failed_no_retry():
+    """FAILED with no retries remaining leaves task in FAILED terminal state."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1", max_retries_failure=0)
+    task_id = task_ids[0]
+    state.drain_for_direct_provider()
+
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING),
+        ]
+    )
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_FAILED, error="boom"),
+        ]
+    )
+
+    task = _task_row_direct(state, task_id)
+    assert task.state == cluster_pb2.TASK_STATE_FAILED
+    assert task.failure_count == 1
+    assert task.finished_at is not None
+
+
+def test_apply_worker_failed():
+    """WORKER_FAILED on a RUNNING task increments preemption_count and retries if allowed."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1", max_retries_preemption=1)
+    task_id = task_ids[0]
+    state.drain_for_direct_provider()
+
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING),
+        ]
+    )
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_WORKER_FAILED, error="node died"),
+        ]
+    )
+
+    # Should be retried (preemption_count=1 <= max_retries_preemption=1).
+    assert _task_state_direct(state, task_id) == cluster_pb2.TASK_STATE_PENDING
+    task = _task_row_direct(state, task_id)
+    assert task.preemption_count == 1
+
+
+def test_buffer_direct_kill():
+    """buffer_direct_kill inserts a NULL-worker_id kill entry in dispatch_queue."""
+    state = _make_state()
+    state.buffer_direct_kill("/user/job1:task-0")
+
+    row = state._db.fetchone(
+        "SELECT worker_id, kind, task_id FROM dispatch_queue WHERE task_id = ?",
+        ("/user/job1:task-0",),
+    )
+    assert row is not None
+    assert row["worker_id"] is None
+    assert row["kind"] == "kill"
+
+
+def test_cancel_job_kills_direct_provider_tasks():
+    """cancel_job includes NULL-worker_id (direct-provider) tasks in tasks_to_kill."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1", replicas=2)
+    _run_direct_tasks(state, task_ids)
+
+    result = state.cancel_job(JobName.from_wire("/user/job1"), reason="test cancel")
+
+    assert result.tasks_to_kill == set(task_ids)
+
+
+def test_kill_non_terminal_direct_provider_tasks():
+    """_kill_non_terminal_tasks includes NULL-worker_id tasks in tasks_to_kill."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1")
+    _run_direct_tasks(state, task_ids)
+
+    # Trigger via cancel_job which calls _kill_non_terminal_tasks indirectly through
+    # cascade, or call it via a job failure path. Use cancel_job for simplicity.
+    result = state.cancel_job(JobName.from_wire("/user/job1"), reason="test kill")
+
+    assert task_ids[0] in result.tasks_to_kill
+
+
+def test_max_failures_kills_direct_provider_tasks():
+    """When a task fails and triggers kill of siblings, direct-provider tasks appear in tasks_to_kill."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1", replicas=2, max_retries_failure=0)
+    _run_direct_tasks(state, task_ids)
+
+    # Fail one task — with max_task_failures=0 (default) this should kill the job,
+    # triggering _kill_non_terminal_tasks for the sibling.
+    result = state.apply_direct_provider_updates(
+        [TaskUpdate(task_id=task_ids[0], attempt_id=0, new_state=cluster_pb2.TASK_STATE_FAILED, error="boom")]
+    )
+
+    # The sibling task (task_ids[1]) should be in tasks_to_kill.
+    assert task_ids[1] in result.tasks_to_kill

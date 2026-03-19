@@ -178,7 +178,8 @@ class MockSchedulerWake:
         self.create_scheduling_context = Mock(return_value=Mock())
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.autoscaler = None
-        self.stub_factory = Mock()
+        self.provider = Mock()
+        self.has_direct_provider = False
 
 
 @pytest.fixture
