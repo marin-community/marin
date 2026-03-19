@@ -34,7 +34,8 @@ from iris.cluster.log_store import LogStore
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.constraints import Constraint, merge_constraints
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2, config_pb2
+from iris.cluster.controller.pending_diagnostics import PendingHint, build_job_pending_hints
+from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Timestamp
 
 from tests.cluster.conftest import eq_constraint, in_constraint
@@ -2121,3 +2122,64 @@ def test_device_variant_in_constraint_matches_probed_workers(scheduler, state, j
     assert len(result.assignments) == 1
     assigned_worker = result.assignments[0][1]
     assert assigned_worker in {WorkerId("w1"), WorkerId("w2")}
+
+
+# --- Pending diagnostics tests (merged from test_pending_diagnostics.py) ---
+
+
+def _pending_task(job: str, idx: int) -> str:
+    return JobName.root("test-user", job).task(idx).to_wire()
+
+
+def test_build_job_pending_hints_reports_scale_up_group() -> None:
+    routing = vm_pb2.RoutingDecision(
+        group_to_launch={"tpu_v5e_32": 1},
+        routed_entries={
+            "tpu_v5e_32": vm_pb2.DemandEntryStatusList(
+                entries=[vm_pb2.DemandEntryStatus(task_ids=[_pending_task("job-a", 0)])]
+            )
+        },
+    )
+
+    hints = build_job_pending_hints(routing)
+
+    assert hints[JobName.root("test-user", "job-a").to_wire()] == PendingHint(
+        message="Waiting for worker scale-up in scale group 'tpu_v5e_32' (1 slice(s) requested)",
+        is_scaling_up=True,
+    )
+
+
+def test_build_job_pending_hints_reports_waiting_ready_when_no_launch() -> None:
+    routing = vm_pb2.RoutingDecision(
+        group_to_launch={"tpu_v5e_32": 0},
+        routed_entries={
+            "tpu_v5e_32": vm_pb2.DemandEntryStatusList(
+                entries=[vm_pb2.DemandEntryStatus(task_ids=[_pending_task("job-b", 0), _pending_task("job-b", 1)])]
+            )
+        },
+    )
+
+    hints = build_job_pending_hints(routing)
+
+    assert hints[JobName.root("test-user", "job-b").to_wire()] == PendingHint(
+        message="Waiting for workers in scale group 'tpu_v5e_32' to become ready",
+        is_scaling_up=False,
+    )
+
+
+def test_build_job_pending_hints_reports_unmet_when_not_routed() -> None:
+    routing = vm_pb2.RoutingDecision(
+        unmet_entries=[
+            vm_pb2.UnmetDemand(
+                entry=vm_pb2.DemandEntryStatus(task_ids=[_pending_task("job-c", 0)]),
+                reason="no_matching_group: need device=tpu:v5p-8",
+            )
+        ]
+    )
+
+    hints = build_job_pending_hints(routing)
+
+    assert hints[JobName.root("test-user", "job-c").to_wire()] == PendingHint(
+        message="Unsatisfied autoscaler demand: no_matching_group: need device=tpu:v5p-8",
+        is_scaling_up=False,
+    )
