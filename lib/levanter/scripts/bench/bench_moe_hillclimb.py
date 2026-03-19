@@ -5475,14 +5475,16 @@ def _time_deepep_transport_forward_backward_capped_prewarmed(
     *,
     warmup: int,
     iters: int,
+    w13_expert_padded: bool = False,
 ) -> float:
     mesh = x.sharding.mesh
     num_experts = int(w_up_gate.shape[0])
-    max_recv_tokens, max_local_assignments = _deepep_transport_exact_caps(
+    max_recv_tokens, max_local_assignments, max_local_expert_assignments = _deepep_transport_exact_cap_metadata(
         selected_experts,
         mesh=mesh,
         num_experts=num_experts,
     )
+    w13_local_expert_capacity = max_local_expert_assignments if w13_expert_padded else None
     _prewarm_deepep_transport_local_compute(
         x,
         selected_experts,
@@ -5491,6 +5493,7 @@ def _time_deepep_transport_forward_backward_capped_prewarmed(
         shared_w13,
         shared_w2,
         max_local_assignments=max_local_assignments,
+        w13_local_expert_capacity=w13_local_expert_capacity,
     )
 
     def loss_fn(x_in, w_up_gate_in, w_down_in, shared_w13_in, shared_w2_in):
@@ -5504,6 +5507,7 @@ def _time_deepep_transport_forward_backward_capped_prewarmed(
             shared_w2_in,
             max_recv_tokens=max_recv_tokens,
             max_local_assignments=max_local_assignments,
+            w13_local_expert_capacity=w13_local_expert_capacity,
         )
         return jnp.mean(jnp.square(y.astype(jnp.float32)))
 
@@ -5893,6 +5897,7 @@ def main() -> None:
                             shared_w2_sharded,
                             warmup=args.warmup,
                             iters=args.iters,
+                            w13_expert_padded=args.w13_expert_padded,
                         )
                     elif args.profile_root is not None:
                         dt = _profile_fn(
