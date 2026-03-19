@@ -37,3 +37,18 @@ jobs:
       - name: Test dupekit
         run: |
           cd rust/dupekit && uv run --frozen --group test pytest tests/ -v
+
+  rust-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: cargo fmt
+        run: cargo fmt --manifest-path rust/dupekit/Cargo.toml -- --check
+      - name: cargo clippy
+        run: cargo clippy --manifest-path rust/dupekit/Cargo.toml -- -D warnings
+      - name: cargo test
+        run: cargo test --manifest-path rust/dupekit/Cargo.toml
