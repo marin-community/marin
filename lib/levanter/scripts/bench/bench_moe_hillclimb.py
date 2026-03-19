@@ -2201,12 +2201,21 @@ def _ragged_dot_expert_padded_batched(
 
     flat_capacity = local_experts * local_expert_capacity
     flat_indices = expert_ids * local_expert_capacity + within_expert
-    scatter_indices = jnp.where(valid, flat_indices, flat_capacity)
+    capacity_positions = jnp.arange(local_expert_capacity, dtype=jnp.int32)
 
     with jax.named_scope("expert_padded_pack"):
-        packed_lhs = jnp.zeros((flat_capacity, hidden), dtype=lhs.dtype)
-        packed_lhs = packed_lhs.at[scatter_indices].add(lhs, mode="drop")
-        packed_lhs = packed_lhs.reshape(local_experts, local_expert_capacity, hidden)
+        segment_starts = jnp.concatenate(
+            [jnp.zeros((1,), dtype=jnp.int32), segment_ends[:-1].astype(jnp.int32)],
+            axis=0,
+        )
+        gather_rows = segment_starts[:, None] + capacity_positions[None, :]
+        gather_valid = capacity_positions[None, :] < group_sizes[:, None]
+        lhs_with_zero = jnp.concatenate([lhs, jnp.zeros((1, hidden), dtype=lhs.dtype)], axis=0)
+        packed_lhs = jnp.take(
+            lhs_with_zero,
+            jnp.where(gather_valid, gather_rows, total_rows).reshape(-1),
+            axis=0,
+        ).reshape(local_experts, local_expert_capacity, hidden)
 
     with jax.named_scope("expert_padded_bmm"):
         packed_out = jax.lax.dot_general(
