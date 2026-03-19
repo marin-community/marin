@@ -345,29 +345,6 @@ def _read_scatter_meta(parquet_path: str) -> dict:
     return _scatter_meta_cache[meta_path]
 
 
-def _build_scatter_shard(paths: list[str], target_shard: int) -> ScatterShard:
-    """Build a ScatterShard for one target shard from scatter file paths + sidecars."""
-    iterators: list[ScatterParquetIterator] = []
-    with log_time(f"Building ScatterShard for target shard {target_shard} from {len(paths)} files"):
-        for path in paths:
-            meta = _read_scatter_meta(path)
-            count = meta["chunk_counts"].get(str(target_shard), 0)
-            if count == 0:
-                continue
-            offset = meta["chunk_offsets"].get(str(target_shard), 0)
-            is_pickled = meta["is_pickled"]
-            iterators.append(
-                ScatterParquetIterator(
-                    path=path,
-                    shard_idx=target_shard,
-                    chunk_count=count,
-                    chunk_offset=offset,
-                    is_pickled=is_pickled,
-                )
-            )
-    return ScatterShard(iterators=iterators)
-
-
 def _write_scatter_manifest(scatter_paths: list[str], output_path: str) -> None:
     """Write a consolidated scatter manifest combining all sidecar metadata.
 
@@ -1165,13 +1142,12 @@ class ZephyrCoordinator:
                 # Collect and regroup results for next stage
                 result_refs = self._collect_results()
                 stage_is_scatter = any(isinstance(op, Scatter) for op in stage.operations)
-                manifest_dir = f"{self._chunk_prefix}/{self._execution_id}/{stage_label}" if stage_is_scatter else None
                 shards = _regroup_result_refs(
                     result_refs,
                     len(shards),
                     output_shard_count=stage.output_shards,
                     is_scatter=stage_is_scatter,
-                    scatter_manifest_dir=manifest_dir,
+                    scatter_manifest_dir=f"{self._chunk_prefix}/{self._execution_id}/{stage_label}",
                 )
 
             # Flatten final results
@@ -1213,15 +1189,12 @@ class ZephyrCoordinator:
                 self._wait_for_stage()
                 raw = self._collect_results()
                 right_is_scatter = any(isinstance(op, Scatter) for op in right_stage.operations)
-                manifest_dir = (
-                    f"{self._chunk_prefix}/{self._execution_id}/{join_stage_label}" if right_is_scatter else None
-                )
                 right_refs = _regroup_result_refs(
                     raw,
                     len(right_refs),
                     output_shard_count=right_stage.output_shards,
                     is_scatter=right_is_scatter,
-                    scatter_manifest_dir=manifest_dir,
+                    scatter_manifest_dir=f"{self._chunk_prefix}/{self._execution_id}/{join_stage_label}",
                 )
 
             if len(shard_refs) != len(right_refs):
@@ -1527,7 +1500,7 @@ def _regroup_result_refs(
     input_shard_count: int,
     output_shard_count: int | None = None,
     is_scatter: bool = False,
-    scatter_manifest_dir: str | None = None,
+    scatter_manifest_dir: str = "",
 ) -> list[Shard]:
     """Regroup worker output refs by output shard index without loading data.
 
@@ -1546,13 +1519,10 @@ def _regroup_result_refs(
         for result in result_refs.values():
             all_paths.extend(result.shard)
 
-        if scatter_manifest_dir:
-            # Write consolidated manifest and point reducers at it
-            manifest_path = f"{scatter_manifest_dir}/{_SCATTER_MANIFEST_NAME}"
-            _write_scatter_manifest(all_paths, manifest_path)
-            shared_refs = MemChunk(items=[manifest_path])
-        else:
-            shared_refs = MemChunk(items=all_paths)
+        # Write consolidated manifest and point reducers at it
+        manifest_path = f"{scatter_manifest_dir}/{_SCATTER_MANIFEST_NAME}"
+        _write_scatter_manifest(all_paths, manifest_path)
+        shared_refs = MemChunk(items=[manifest_path])
 
         return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
 
