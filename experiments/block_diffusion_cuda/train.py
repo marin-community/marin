@@ -52,6 +52,7 @@ def parse_args() -> tuple[ModelConfig, DataConfig, TrainConfig]:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--compile", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--precision", choices=("auto", "fp32", "fp16", "bf16"))
     parser.add_argument("--ddp", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--wandb-project")
     parser.add_argument("--wandb-run-name")
@@ -66,6 +67,7 @@ def parse_args() -> tuple[ModelConfig, DataConfig, TrainConfig]:
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--attention-period", type=int, default=4)
     parser.add_argument("--gdn-heads", type=int, default=12)
+    parser.add_argument("--gdn-impl", choices=("auto", "naive", "fla"), default="auto")
     args = parser.parse_args()
 
     model = ModelConfig(
@@ -82,6 +84,7 @@ def parse_args() -> tuple[ModelConfig, DataConfig, TrainConfig]:
         variant=args.variant,
         attention_period=args.attention_period,
         gdn_heads=args.gdn_heads,
+        gdn_impl=args.gdn_impl,
     )
     data = DataConfig(
         dataset=args.dataset,
@@ -114,6 +117,7 @@ def parse_args() -> tuple[ModelConfig, DataConfig, TrainConfig]:
         device=args.device,
         compile=args.compile,
         bf16=args.bf16,
+        precision=args.precision or ("bf16" if args.bf16 else "fp32"),
         ddp=args.ddp,
         wandb_project=args.wandb_project,
         wandb_run_name=args.wandb_run_name,
@@ -157,6 +161,21 @@ def cosine_lr(step: int, *, base_lr: float, warmup_steps: int, total_steps: int)
     progress = (step - warmup_steps) / float(max(1, total_steps - warmup_steps))
     cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
     return base_lr * cosine
+
+
+def resolve_precision(train_config: TrainConfig, device: torch.device) -> tuple[bool, torch.dtype]:
+    precision = train_config.precision
+    if precision == "auto":
+        if device.type != "cuda":
+            return False, torch.float32
+        if torch.cuda.is_bf16_supported():
+            return True, torch.bfloat16
+        return True, torch.float16
+    if precision == "bf16":
+        return device.type == "cuda", torch.bfloat16
+    if precision == "fp16":
+        return device.type == "cuda", torch.float16
+    return False, torch.float32
 
 
 def maybe_init_wandb(train_config: TrainConfig, *, rank: int, config_payload: dict[str, object]):
@@ -262,8 +281,7 @@ def main() -> None:
         },
     )
 
-    autocast_enabled = device.type == "cuda" and train_config.bf16
-    autocast_dtype = torch.bfloat16 if autocast_enabled else torch.float32
+    autocast_enabled, autocast_dtype = resolve_precision(train_config, device)
     data_iter = iter(dataloader)
     started = time.time()
 

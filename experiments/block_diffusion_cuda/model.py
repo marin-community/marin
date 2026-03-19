@@ -35,7 +35,7 @@ class DenoiserLayer(nn.Module):
         if self.use_attention:
             self.mixer = AttentionMixer(config.d_model, config.n_heads, config.dropout)
         else:
-            self.mixer = HybridSequenceMixer(config.d_model, config.gdn_heads)
+            self.mixer = HybridSequenceMixer(config.d_model, config.gdn_heads, impl=config.gdn_impl)
 
     def forward(
         self,

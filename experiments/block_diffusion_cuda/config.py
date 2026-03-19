@@ -10,6 +10,8 @@ from typing import Literal
 
 Variant = Literal["baseline", "bigdn"]
 DatasetKind = Literal["toy", "text", "hf", "fineweb", "fineweb_edu"]
+GdnImpl = Literal["auto", "naive", "fla"]
+Precision = Literal["auto", "fp32", "fp16", "bf16"]
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,7 @@ class ModelConfig:
     variant: Variant = "baseline"
     attention_period: int = 4
     gdn_heads: int = 12
+    gdn_impl: GdnImpl = "auto"
     timestep_embed_dim: int = 256
 
     @property
@@ -74,6 +77,7 @@ class TrainConfig:
     device: str = "auto"
     compile: bool = True
     bf16: bool = True
+    precision: Precision = "auto"
     ddp: bool = True
     wandb_project: str | None = None
     wandb_run_name: str | None = None

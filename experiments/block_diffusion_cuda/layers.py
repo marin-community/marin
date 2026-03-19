@@ -4,10 +4,21 @@
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+_torch_compile = torch.compile
+if os.environ.get("BLOCK_DIFFUSION_DISABLE_FLA_COMPILE") == "1":
+    torch.compile = lambda fn=None, *args, **kwargs: (lambda wrapped: wrapped) if fn is None else fn
+try:
+    from fla.ops.gated_delta_rule import chunk_gated_delta_rule as flash_chunk_gated_delta_rule
+except ImportError:
+    flash_chunk_gated_delta_rule = None
+finally:
+    torch.compile = _torch_compile
 
 
 class RMSNorm(nn.Module):
@@ -153,8 +164,57 @@ class DeltaRuleMixer(nn.Module):
         return self.out_proj(y)
 
 
-class BidirectionalBlockGatedDeltaMixer(nn.Module):
+class FastDeltaRuleMixer(nn.Module):
     def __init__(self, d_model: int, n_heads: int):
+        super().__init__()
+        if flash_chunk_gated_delta_rule is None:
+            raise ImportError(
+                "GDN backend 'fla' requires flash-linear-attention. "
+                "Install it with `pip install git+https://github.com/fla-org/flash-linear-attention.git`."
+            )
+        if d_model % n_heads != 0:
+            raise ValueError(f"d_model={d_model} must be divisible by n_heads={n_heads}")
+        self.n_heads = n_heads
+        self.head_dim = d_model // n_heads
+        self.q_proj = nn.Linear(d_model, d_model, bias=False)
+        self.k_proj = nn.Linear(d_model, d_model, bias=False)
+        self.v_proj = nn.Linear(d_model, d_model, bias=False)
+        self.alpha_proj = nn.Linear(d_model, n_heads, bias=True)
+        self.beta_proj = nn.Linear(d_model, n_heads, bias=True)
+        self.gate_proj = nn.Linear(d_model, d_model, bias=False)
+        self.out_proj = nn.Linear(d_model, d_model, bias=False)
+        self.out_norm = RMSNorm(d_model)
+
+    def forward(self, x: torch.Tensor, *, reverse: bool = False) -> torch.Tensor:
+        if x.numel() == 0:
+            return x
+        residual_input = x
+        if reverse:
+            x = torch.flip(x, dims=(1,))
+        batch, seq_len, _ = x.shape
+        q = self.q_proj(x).view(batch, seq_len, self.n_heads, self.head_dim)
+        k = self.k_proj(x).view(batch, seq_len, self.n_heads, self.head_dim)
+        v = self.v_proj(x).view(batch, seq_len, self.n_heads, self.head_dim)
+        g = F.logsigmoid(self.alpha_proj(x)).to(q.dtype)
+        beta = torch.sigmoid(self.beta_proj(x)).to(q.dtype)
+        y, _ = flash_chunk_gated_delta_rule(
+            q=q,
+            k=k,
+            v=v,
+            g=g,
+            beta=beta,
+            use_qk_l2norm_in_kernel=True,
+        )
+        y = y.reshape(batch, seq_len, -1)
+        if reverse:
+            y = torch.flip(y, dims=(1,))
+        gate = F.silu(self.gate_proj(residual_input))
+        y = self.out_norm(y) * gate
+        return self.out_proj(y)
+
+
+class BidirectionalBlockGatedDeltaMixer(nn.Module):
+    def __init__(self, d_model: int, n_heads: int, *, impl: str):
         super().__init__()
         if d_model % 2 != 0:
             raise ValueError(f"d_model={d_model} must be even for bidirectional split GDN")
@@ -162,8 +222,9 @@ class BidirectionalBlockGatedDeltaMixer(nn.Module):
         half_heads = max(1, n_heads // 2)
         if half % half_heads != 0:
             raise ValueError(f"half width {half} must be divisible by half head count {half_heads}")
-        self.forward_mixer = DeltaRuleMixer(half, half_heads)
-        self.backward_mixer = DeltaRuleMixer(half, half_heads)
+        mixer_cls = FastDeltaRuleMixer if impl == "fla" else DeltaRuleMixer
+        self.forward_mixer = mixer_cls(half, half_heads)
+        self.backward_mixer = mixer_cls(half, half_heads)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         left, right = x.chunk(2, dim=-1)
@@ -174,10 +235,28 @@ class BidirectionalBlockGatedDeltaMixer(nn.Module):
 
 
 class HybridSequenceMixer(nn.Module):
-    def __init__(self, d_model: int, n_heads: int):
+    def __init__(self, d_model: int, n_heads: int, *, impl: str = "auto"):
         super().__init__()
-        self.context_mixer = DeltaRuleMixer(d_model, n_heads)
-        self.block_mixer = BidirectionalBlockGatedDeltaMixer(d_model, n_heads)
+        resolved_impl = self._resolve_impl(d_model=d_model, n_heads=n_heads, impl=impl)
+        mixer_cls = FastDeltaRuleMixer if resolved_impl == "fla" else DeltaRuleMixer
+        self.impl = resolved_impl
+        self.context_mixer = mixer_cls(d_model, n_heads)
+        self.block_mixer = BidirectionalBlockGatedDeltaMixer(d_model, n_heads, impl=resolved_impl)
+
+    @staticmethod
+    def _resolve_impl(*, d_model: int, n_heads: int, impl: str) -> str:
+        if impl == "naive":
+            return "naive"
+        if impl == "fla":
+            if flash_chunk_gated_delta_rule is None:
+                raise ImportError(
+                    "GDN backend 'fla' requires flash-linear-attention. "
+                    "Install it with `pip install git+https://github.com/fla-org/flash-linear-attention.git`."
+                )
+            return "fla"
+        if flash_chunk_gated_delta_rule is None:
+            return "naive"
+        return "fla"
 
     def forward(self, x: torch.Tensor, *, context_len: int) -> torch.Tensor:
         context = x[:, :context_len]
