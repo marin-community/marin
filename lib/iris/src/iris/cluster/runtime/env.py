@@ -120,24 +120,15 @@ def build_common_iris_env(
             env["JAX_FORCE_TPU_INIT"] = "1"
 
     # Expose the task's resource limits so user code can query them via
-    # iris.resource_utils without relying on cgroup introspection.
-    # Only non-zero fields are included so that resource_utils falls back
-    # to cgroups / host values for unspecified dimensions.
+    # iris.env_resources.TaskResources.from_environment() without relying
+    # solely on cgroup introspection.
+    # We serialize the proto directly; the reader deserializes it back.
+    # Zero-valued fields are omitted by proto3 JSON so env_resources falls
+    # back to cgroups / host values for unspecified dimensions.
     if resources is not None:
-        res_dict: dict[str, int] = {}
-        if resources.cpu_millicores:
-            res_dict["cpu_millicores"] = resources.cpu_millicores
-        if resources.memory_bytes:
-            res_dict["memory_bytes"] = resources.memory_bytes
-        if resources.disk_bytes:
-            res_dict["disk_bytes"] = resources.disk_bytes
-        if resources.HasField("device"):
-            dev = resources.device
-            if dev.HasField("gpu") and dev.gpu.count:
-                res_dict["gpu_count"] = dev.gpu.count
-            elif dev.HasField("tpu") and dev.tpu.count:
-                res_dict["tpu_count"] = dev.tpu.count
-        if res_dict:
-            env["IRIS_TASK_RESOURCES"] = json.dumps(res_dict)
+        resource_json = json_format.MessageToJson(resources, preserving_proto_field_name=True)
+        # proto3 JSON omits zero-valued fields, so an empty proto yields "{}".
+        if resource_json != "{}":
+            env["IRIS_TASK_RESOURCES"] = resource_json
 
     return env
