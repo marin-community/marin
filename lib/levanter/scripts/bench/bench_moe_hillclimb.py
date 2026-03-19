@@ -1687,6 +1687,7 @@ def _moe_mlp_ep_deepep_transport_local(
     max_recv_tokens: int | None = None,
     max_local_assignments: int | None = None,
     w13_local_expert_capacity: int | None = None,
+    w2_local_expert_capacity: int | None = None,
     collapse_impl: CollapseImpl = "segment_sum",
 ) -> tuple[jax.Array, jax.Array]:
     local_experts = moe_w13_local.shape[0]
@@ -1751,7 +1752,16 @@ def _moe_mlp_ep_deepep_transport_local(
             )
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
+        gate_up = activation_fn(gate) * up
+        if w2_local_expert_capacity is None:
+            out_dispatch = ragged_dot(gate_up, moe_w2_local, local_group_sizes)
+        else:
+            out_dispatch = _ragged_dot_expert_padded_batched(
+                gate_up,
+                moe_w2_local,
+                local_group_sizes,
+                local_expert_capacity=w2_local_expert_capacity,
+            )
 
     with jax.named_scope("combine"):
         recv_out = _collapse_deepep_local_assignments(
@@ -1864,6 +1874,7 @@ def _moe_mlp_deepep_transport(
     max_recv_tokens: int | None = None,
     max_local_assignments: int | None = None,
     w13_local_expert_capacity: int | None = None,
+    w2_local_expert_capacity: int | None = None,
     collapse_impl: CollapseImpl = "segment_sum",
 ) -> jax.Array:
     if mesh is None:
@@ -1903,6 +1914,7 @@ def _moe_mlp_deepep_transport(
                 max_recv_tokens=max_recv_tokens,
                 max_local_assignments=max_local_assignments,
                 w13_local_expert_capacity=w13_local_expert_capacity,
+                w2_local_expert_capacity=w2_local_expert_capacity,
                 collapse_impl=collapse_impl,
             ),
             mesh=mesh,
@@ -2089,6 +2101,7 @@ def _moe_mlp_ep_deepep_transport_local_compute_local(
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     w13_local_expert_capacity: int | None = None,
+    w2_local_expert_capacity: int | None = None,
 ) -> jax.Array:
     with jax.named_scope("w13_ragged_dot"):
         if w13_local_expert_capacity is None:
@@ -2106,7 +2119,14 @@ def _moe_mlp_ep_deepep_transport_local_compute_local(
     with jax.named_scope("gate_activation"):
         gate_up = activation_fn(gate) * up
     with jax.named_scope("w2_ragged_dot"):
-        return ragged_dot(gate_up, moe_w2_local, local_group_sizes)
+        if w2_local_expert_capacity is None:
+            return ragged_dot(gate_up, moe_w2_local, local_group_sizes)
+        return _ragged_dot_expert_padded_batched(
+            gate_up,
+            moe_w2_local,
+            local_group_sizes,
+            local_expert_capacity=w2_local_expert_capacity,
+        )
 
 
 def _moe_mlp_ep_deepep_transport_w13_only_local(
@@ -2271,9 +2291,18 @@ def _moe_mlp_ep_deepep_transport_w2_only_local(
     gate_up: jax.Array,
     local_group_sizes: jax.Array,
     moe_w2_local: jax.Array,
+    *,
+    w2_local_expert_capacity: int | None = None,
 ) -> jax.Array:
     with jax.named_scope("w2_ragged_dot"):
-        return ragged_dot(gate_up, moe_w2_local, local_group_sizes)
+        if w2_local_expert_capacity is None:
+            return ragged_dot(gate_up, moe_w2_local, local_group_sizes)
+        return _ragged_dot_expert_padded_batched(
+            gate_up,
+            moe_w2_local,
+            local_group_sizes,
+            local_expert_capacity=w2_local_expert_capacity,
+        )
 
 
 def _moe_mlp_deepep_transport_w2_only(
@@ -2282,12 +2311,16 @@ def _moe_mlp_deepep_transport_w2_only(
     w_down: jax.Array,
     *,
     mesh: jax.sharding.AbstractMesh | None = None,
+    w2_local_expert_capacity: int | None = None,
 ) -> jax.Array:
     if mesh is None:
         mesh = get_abstract_mesh()
 
     shard_fn = shard_map(
-        _moe_mlp_ep_deepep_transport_w2_only_local,
+        partial(
+            _moe_mlp_ep_deepep_transport_w2_only_local,
+            w2_local_expert_capacity=w2_local_expert_capacity,
+        ),
         mesh=mesh,
         in_specs=(
             P("expert", None),
@@ -2308,6 +2341,7 @@ def _moe_mlp_deepep_transport_local_compute(
     *,
     mesh: jax.sharding.AbstractMesh | None = None,
     w13_local_expert_capacity: int | None = None,
+    w2_local_expert_capacity: int | None = None,
 ) -> jax.Array:
     if mesh is None:
         mesh = get_abstract_mesh()
@@ -2318,6 +2352,7 @@ def _moe_mlp_deepep_transport_local_compute(
             _moe_mlp_ep_deepep_transport_local_compute_local,
             activation_fn=activation_fn,
             w13_local_expert_capacity=w13_local_expert_capacity,
+            w2_local_expert_capacity=w2_local_expert_capacity,
         ),
         mesh=mesh,
         in_specs=(
@@ -3206,6 +3241,7 @@ def _forward_deepep_transport_local_compute_only_probe(
     max_recv_tokens: int,
     max_local_assignments: int,
     w13_local_expert_capacity: int | None = None,
+    w2_local_expert_capacity: int | None = None,
 ) -> jax.Array:
     if mesh is None:
         mesh = get_abstract_mesh()
@@ -3239,6 +3275,7 @@ def _forward_deepep_transport_local_compute_only_probe(
         w_down,
         mesh=mesh,
         w13_local_expert_capacity=w13_local_expert_capacity,
+        w2_local_expert_capacity=w2_local_expert_capacity,
     )
 
 
@@ -3299,6 +3336,7 @@ def _forward_deepep_transport_w2_only_probe(
     mesh: jax.sharding.AbstractMesh | None = None,
     max_recv_tokens: int,
     max_local_assignments: int,
+    w2_local_expert_capacity: int | None = None,
 ) -> jax.Array:
     if mesh is None:
         mesh = get_abstract_mesh()
@@ -3337,6 +3375,7 @@ def _forward_deepep_transport_w2_only_probe(
         local_group_sizes,
         w_down,
         mesh=mesh,
+        w2_local_expert_capacity=w2_local_expert_capacity,
     )
 
 
@@ -4966,6 +5005,7 @@ def _prewarm_deepep_transport_local_compute(
     *,
     max_local_assignments: int | None = None,
     w13_local_expert_capacity: int | None = None,
+    w2_local_expert_capacity: int | None = None,
 ) -> None:
     mesh = x.sharding.mesh
     num_experts = int(w_up_gate.shape[0])
@@ -4978,6 +5018,7 @@ def _prewarm_deepep_transport_local_compute(
             _moe_mlp_deepep_transport_local_compute,
             mesh=mesh,
             w13_local_expert_capacity=w13_local_expert_capacity,
+            w2_local_expert_capacity=w2_local_expert_capacity,
         )
     )
     shared_mlp = jax.jit(_shared_mlp)
@@ -5008,6 +5049,7 @@ def _forward_deepep_transport_capped(
     max_recv_tokens: int,
     max_local_assignments: int,
     w13_local_expert_capacity: int | None = None,
+    w2_local_expert_capacity: int | None = None,
     collapse_impl: CollapseImpl = "segment_sum",
 ) -> jax.Array:
     routed = _moe_mlp_deepep_transport(
@@ -5019,6 +5061,7 @@ def _forward_deepep_transport_capped(
         max_recv_tokens=max_recv_tokens,
         max_local_assignments=max_local_assignments,
         w13_local_expert_capacity=w13_local_expert_capacity,
+        w2_local_expert_capacity=w2_local_expert_capacity,
         collapse_impl=collapse_impl,
     )
     return routed + _shared_mlp(x, shared_w13, shared_w2)
@@ -5033,6 +5076,7 @@ def _make_deepep_transport_probe_forward_runner(
     w_down: jax.Array,
     *,
     w13_expert_padded: bool = False,
+    w2_expert_padded: bool = False,
 ) -> tuple[Callable[..., jax.Array], tuple[jax.Array, ...]]:
     mesh = x.sharding.mesh
     num_experts = int(w_up_gate.shape[0])
@@ -5042,6 +5086,7 @@ def _make_deepep_transport_probe_forward_runner(
         num_experts=num_experts,
     )
     w13_local_expert_capacity = max_local_expert_assignments if w13_expert_padded else None
+    w2_local_expert_capacity = max_local_expert_assignments if w2_expert_padded else None
 
     if probe_kernel == "deepep_transport_identity":
         return (
@@ -5153,7 +5198,11 @@ def _make_deepep_transport_probe_forward_runner(
         gate_up = gate_up_only(x_dispatch, local_group_sizes, w_up_gate, w_down)
         jax.block_until_ready(gate_up)
         return (
-            partial(_moe_mlp_deepep_transport_w2_only, mesh=mesh),
+            partial(
+                _moe_mlp_deepep_transport_w2_only,
+                mesh=mesh,
+                w2_local_expert_capacity=w2_local_expert_capacity,
+            ),
             (gate_up, local_group_sizes, w_down),
         )
     if probe_kernel == "deepep_transport_local_compute_only_probe":
@@ -5164,6 +5213,7 @@ def _make_deepep_transport_probe_forward_runner(
                 max_recv_tokens=max_recv_tokens,
                 max_local_assignments=max_local_assignments,
                 w13_local_expert_capacity=w13_local_expert_capacity,
+                w2_local_expert_capacity=w2_local_expert_capacity,
             ),
             (x, selected_experts, combine_weights, w_up_gate, w_down),
         )
@@ -5261,6 +5311,7 @@ def _time_deepep_transport_probe_forward(
     warmup: int,
     iters: int,
     w13_expert_padded: bool = False,
+    w2_expert_padded: bool = False,
 ) -> float:
     probe_fn, probe_args = _make_deepep_transport_probe_forward_runner(
         probe_kernel,
@@ -5270,6 +5321,7 @@ def _time_deepep_transport_probe_forward(
         w_up_gate,
         w_down,
         w13_expert_padded=w13_expert_padded,
+        w2_expert_padded=w2_expert_padded,
     )
 
     return _time_fn(
@@ -5293,6 +5345,7 @@ def _profile_deepep_transport_probe_forward(
     profile_dir: Path,
     profile_name: str,
     w13_expert_padded: bool = False,
+    w2_expert_padded: bool = False,
 ) -> float:
     probe_fn, probe_args = _make_deepep_transport_probe_forward_runner(
         probe_kernel,
@@ -5302,6 +5355,7 @@ def _profile_deepep_transport_probe_forward(
         w_up_gate,
         w_down,
         w13_expert_padded=w13_expert_padded,
+        w2_expert_padded=w2_expert_padded,
     )
     return _profile_fn(
         probe_fn,
@@ -5322,6 +5376,7 @@ def _make_deepep_transport_probe_forward_backward_runner(
     w_down: jax.Array,
     *,
     w13_expert_padded: bool = False,
+    w2_expert_padded: bool = False,
 ) -> tuple[Callable[[], jax.Array], tuple[()]]:
     mesh = x.sharding.mesh
     num_experts = int(w_up_gate.shape[0])
@@ -5331,6 +5386,7 @@ def _make_deepep_transport_probe_forward_backward_runner(
         num_experts=num_experts,
     )
     w13_local_expert_capacity = max_local_expert_assignments if w13_expert_padded else None
+    w2_local_expert_capacity = max_local_expert_assignments if w2_expert_padded else None
 
     dispatch_pack = partial(
         _moe_mlp_deepep_transport_dispatch_pack,
@@ -5343,6 +5399,7 @@ def _make_deepep_transport_probe_forward_backward_runner(
         _moe_mlp_deepep_transport_local_compute,
         mesh=mesh,
         w13_local_expert_capacity=w13_local_expert_capacity,
+        w2_local_expert_capacity=w2_local_expert_capacity,
     )
     collapse_only = partial(_moe_mlp_deepep_transport_collapse_only, mesh=mesh)
     combine_only = partial(_moe_mlp_deepep_transport_combine_only, mesh=mesh)
@@ -5463,6 +5520,7 @@ def _make_deepep_transport_probe_forward_backward_runner(
                 local_group_sizes,
                 w_down_in,
                 mesh=mesh,
+                w2_local_expert_capacity=w2_local_expert_capacity,
             )
 
         out_dispatch, pullback = jax.vjp(w2_only_wrt, gate_up, w_down)
@@ -5584,6 +5642,7 @@ def _time_deepep_transport_probe_forward_backward(
     warmup: int,
     iters: int,
     w13_expert_padded: bool = False,
+    w2_expert_padded: bool = False,
 ) -> float:
     probe_fn, probe_args = _make_deepep_transport_probe_forward_backward_runner(
         probe_kernel,
@@ -5593,6 +5652,7 @@ def _time_deepep_transport_probe_forward_backward(
         w_up_gate,
         w_down,
         w13_expert_padded=w13_expert_padded,
+        w2_expert_padded=w2_expert_padded,
     )
     return _time_fn(
         probe_fn,
@@ -5615,6 +5675,7 @@ def _profile_deepep_transport_probe_forward_backward(
     profile_dir: Path,
     profile_name: str,
     w13_expert_padded: bool = False,
+    w2_expert_padded: bool = False,
 ) -> float:
     probe_fn, probe_args = _make_deepep_transport_probe_forward_backward_runner(
         probe_kernel,
@@ -5624,6 +5685,7 @@ def _profile_deepep_transport_probe_forward_backward(
         w_up_gate,
         w_down,
         w13_expert_padded=w13_expert_padded,
+        w2_expert_padded=w2_expert_padded,
     )
     return _profile_fn(
         probe_fn,
@@ -5847,6 +5909,7 @@ def _time_deepep_transport_forward_capped_prewarmed(
     warmup: int,
     iters: int,
     w13_expert_padded: bool = False,
+    w2_expert_padded: bool = False,
     collapse_impl: CollapseImpl = "segment_sum",
 ) -> float:
     mesh = x.sharding.mesh
@@ -5857,6 +5920,7 @@ def _time_deepep_transport_forward_capped_prewarmed(
         num_experts=num_experts,
     )
     w13_local_expert_capacity = max_local_expert_assignments if w13_expert_padded else None
+    w2_local_expert_capacity = max_local_expert_assignments if w2_expert_padded else None
     _prewarm_deepep_transport_local_compute(
         x,
         selected_experts,
@@ -5866,6 +5930,7 @@ def _time_deepep_transport_forward_capped_prewarmed(
         shared_w2,
         max_local_assignments=max_local_assignments,
         w13_local_expert_capacity=w13_local_expert_capacity,
+        w2_local_expert_capacity=w2_local_expert_capacity,
     )
     return _time_fn(
         partial(
@@ -5873,6 +5938,7 @@ def _time_deepep_transport_forward_capped_prewarmed(
             max_recv_tokens=max_recv_tokens,
             max_local_assignments=max_local_assignments,
             w13_local_expert_capacity=w13_local_expert_capacity,
+            w2_local_expert_capacity=w2_local_expert_capacity,
             collapse_impl=collapse_impl,
         ),
         x,
@@ -5901,6 +5967,7 @@ def _profile_deepep_transport_forward_capped_prewarmed(
     profile_dir: Path,
     profile_name: str,
     w13_expert_padded: bool = False,
+    w2_expert_padded: bool = False,
     collapse_impl: CollapseImpl = "segment_sum",
 ) -> float:
     mesh = x.sharding.mesh
@@ -5911,6 +5978,7 @@ def _profile_deepep_transport_forward_capped_prewarmed(
         num_experts=num_experts,
     )
     w13_local_expert_capacity = max_local_expert_assignments if w13_expert_padded else None
+    w2_local_expert_capacity = max_local_expert_assignments if w2_expert_padded else None
     _prewarm_deepep_transport_local_compute(
         x,
         selected_experts,
@@ -5920,6 +5988,7 @@ def _profile_deepep_transport_forward_capped_prewarmed(
         shared_w2,
         max_local_assignments=max_local_assignments,
         w13_local_expert_capacity=w13_local_expert_capacity,
+        w2_local_expert_capacity=w2_local_expert_capacity,
     )
     return _profile_fn(
         partial(
@@ -5927,6 +5996,7 @@ def _profile_deepep_transport_forward_capped_prewarmed(
             max_recv_tokens=max_recv_tokens,
             max_local_assignments=max_local_assignments,
             w13_local_expert_capacity=w13_local_expert_capacity,
+            w2_local_expert_capacity=w2_local_expert_capacity,
             collapse_impl=collapse_impl,
         ),
         x,
@@ -5992,6 +6062,7 @@ def _time_deepep_transport_forward_backward_capped_prewarmed(
     warmup: int,
     iters: int,
     w13_expert_padded: bool = False,
+    w2_expert_padded: bool = False,
     collapse_impl: CollapseImpl = "segment_sum",
 ) -> float:
     mesh = x.sharding.mesh
@@ -6002,6 +6073,7 @@ def _time_deepep_transport_forward_backward_capped_prewarmed(
         num_experts=num_experts,
     )
     w13_local_expert_capacity = max_local_expert_assignments if w13_expert_padded else None
+    w2_local_expert_capacity = max_local_expert_assignments if w2_expert_padded else None
     _prewarm_deepep_transport_local_compute(
         x,
         selected_experts,
@@ -6011,6 +6083,7 @@ def _time_deepep_transport_forward_backward_capped_prewarmed(
         shared_w2,
         max_local_assignments=max_local_assignments,
         w13_local_expert_capacity=w13_local_expert_capacity,
+        w2_local_expert_capacity=w2_local_expert_capacity,
     )
 
     def loss_fn(x_in, w_up_gate_in, w_down_in, shared_w13_in, shared_w2_in):
@@ -6025,6 +6098,7 @@ def _time_deepep_transport_forward_backward_capped_prewarmed(
             max_recv_tokens=max_recv_tokens,
             max_local_assignments=max_local_assignments,
             w13_local_expert_capacity=w13_local_expert_capacity,
+            w2_local_expert_capacity=w2_local_expert_capacity,
             collapse_impl=collapse_impl,
         )
         return jnp.mean(jnp.square(y.astype(jnp.float32)))
@@ -6056,6 +6130,7 @@ def _profile_deepep_transport_forward_backward_capped_prewarmed(
     profile_dir: Path,
     profile_name: str,
     w13_expert_padded: bool = False,
+    w2_expert_padded: bool = False,
     collapse_impl: CollapseImpl = "segment_sum",
 ) -> float:
     mesh = x.sharding.mesh
@@ -6066,6 +6141,7 @@ def _profile_deepep_transport_forward_backward_capped_prewarmed(
         num_experts=num_experts,
     )
     w13_local_expert_capacity = max_local_expert_assignments if w13_expert_padded else None
+    w2_local_expert_capacity = max_local_expert_assignments if w2_expert_padded else None
     _prewarm_deepep_transport_local_compute(
         x,
         selected_experts,
@@ -6075,6 +6151,7 @@ def _profile_deepep_transport_forward_backward_capped_prewarmed(
         shared_w2,
         max_local_assignments=max_local_assignments,
         w13_local_expert_capacity=w13_local_expert_capacity,
+        w2_local_expert_capacity=w2_local_expert_capacity,
     )
 
     def loss_fn(x_in, w_up_gate_in, w_down_in, shared_w13_in, shared_w2_in):
@@ -6089,6 +6166,7 @@ def _profile_deepep_transport_forward_backward_capped_prewarmed(
             max_recv_tokens=max_recv_tokens,
             max_local_assignments=max_local_assignments,
             w13_local_expert_capacity=w13_local_expert_capacity,
+            w2_local_expert_capacity=w2_local_expert_capacity,
             collapse_impl=collapse_impl,
         )
         return jnp.mean(jnp.square(y.astype(jnp.float32)))
@@ -6190,6 +6268,7 @@ def main() -> None:
     parser.add_argument("--profile-root", type=Path, default=None)
     parser.add_argument("--w13-out-first", action="store_true")
     parser.add_argument("--w13-expert-padded", action="store_true")
+    parser.add_argument("--w2-expert-padded", action="store_true")
     parser.add_argument("--deepep-dispatch-num-sms", type=int)
     parser.add_argument("--deepep-dispatch-num-max-send-tokens", type=int)
     parser.add_argument("--deepep-dispatch-num-max-recv-tokens", type=int)
@@ -6258,6 +6337,7 @@ def main() -> None:
         f"topk={args.topk} shared_expert_dim={args.shared_expert_dim} dtype={dtype} "
         f"distribution={args.distribution} bench_pass={args.bench_pass} capacity_factor={args.capacity_factor} "
         f"w13_out_first={args.w13_out_first} w13_expert_padded={args.w13_expert_padded} "
+        f"w2_expert_padded={args.w2_expert_padded} "
         f"deepep_collapse_impl={args.deepep_collapse_impl}"
     )
 
@@ -6388,6 +6468,7 @@ def main() -> None:
                                 profile_dir=args.profile_root,
                                 profile_name=profile_name,
                                 w13_expert_padded=args.w13_expert_padded,
+                                w2_expert_padded=args.w2_expert_padded,
                             )
                         else:
                             dt = _time_deepep_transport_probe_forward(
@@ -6400,6 +6481,7 @@ def main() -> None:
                                 warmup=args.warmup,
                                 iters=args.iters,
                                 w13_expert_padded=args.w13_expert_padded,
+                                w2_expert_padded=args.w2_expert_padded,
                             )
                     elif kernel == "deepep_transport_prewarmed":
                         if args.profile_root is not None:
@@ -6444,6 +6526,7 @@ def main() -> None:
                                 profile_dir=args.profile_root,
                                 profile_name=profile_name,
                                 w13_expert_padded=args.w13_expert_padded,
+                                w2_expert_padded=args.w2_expert_padded,
                                 collapse_impl=args.deepep_collapse_impl,
                             )
                         else:
@@ -6458,6 +6541,7 @@ def main() -> None:
                                 warmup=args.warmup,
                                 iters=args.iters,
                                 w13_expert_padded=args.w13_expert_padded,
+                                w2_expert_padded=args.w2_expert_padded,
                                 collapse_impl=args.deepep_collapse_impl,
                             )
                     elif kernel == "deepep_transport_staged":
@@ -6525,6 +6609,7 @@ def main() -> None:
                                 profile_dir=args.profile_root,
                                 profile_name=profile_name,
                                 w13_expert_padded=args.w13_expert_padded,
+                                w2_expert_padded=args.w2_expert_padded,
                             )
                         else:
                             dt = _time_deepep_transport_probe_forward_backward(
@@ -6537,6 +6622,7 @@ def main() -> None:
                                 warmup=args.warmup,
                                 iters=args.iters,
                                 w13_expert_padded=args.w13_expert_padded,
+                                w2_expert_padded=args.w2_expert_padded,
                             )
                     elif kernel == "current" and args.w13_expert_padded:
                         if args.profile_root is not None:
@@ -6580,6 +6666,7 @@ def main() -> None:
                                 profile_dir=args.profile_root,
                                 profile_name=profile_name,
                                 w13_expert_padded=args.w13_expert_padded,
+                                w2_expert_padded=args.w2_expert_padded,
                                 collapse_impl=args.deepep_collapse_impl,
                             )
                         else:
@@ -6594,6 +6681,7 @@ def main() -> None:
                                 warmup=args.warmup,
                                 iters=args.iters,
                                 w13_expert_padded=args.w13_expert_padded,
+                                w2_expert_padded=args.w2_expert_padded,
                                 collapse_impl=args.deepep_collapse_impl,
                             )
                     elif args.profile_root is not None:
