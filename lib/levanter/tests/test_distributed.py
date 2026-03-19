@@ -32,11 +32,15 @@ def test_square_brace_expand():
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.initialize_jax")
 @patch("iris.cluster.client.job_info.get_job_info")
+@patch("levanter.distributed.DistributedConfig._is_distributed", return_value=False)
 def test_distributed_config_initializes_via_iris_when_iris_job_present(
+    mock_is_distributed,
     mock_get_job_info,
     mock_initialize_iris_jax,
     mock_jax_initialize,
 ):
+    """When Iris job info is present and no other distributed env is detected,
+    DistributedConfig delegates to iris.runtime.jax_init.initialize_jax."""
     mock_get_job_info.return_value = object()
 
     DistributedConfig().initialize()
