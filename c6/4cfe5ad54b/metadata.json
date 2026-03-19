@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "c64cfe5ad54b",
+  "strategy": "manual-commit",
+  "branch": "kevin/harbor",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "experiments/exp3490_nemotron_terminal_8b_tb.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c6/4cfe5ad54b/0/metadata.json",
+      "transcript": "/c6/4cfe5ad54b/0/full.jsonl",
+      "context": "/c6/4cfe5ad54b/0/context.md",
+      "content_hash": "/c6/4cfe5ad54b/0/content_hash.txt",
+      "prompt": "/c6/4cfe5ad54b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 123,
+    "cache_creation_tokens": 299899,
+    "cache_read_tokens": 10476391,
+    "output_tokens": 34410,
+    "api_call_count": 105
+  }
+}
