@@ -22,7 +22,8 @@ from pathlib import Path
 from iris.cluster.controller.transitions import ClusterCapacity, DirectProviderSyncResult, SchedulingEvent
 from iris.cluster.controller.transitions import DirectProviderBatch, RunningTaskEntry, TaskUpdate
 from iris.cluster.k8s.constants import CW_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
-from iris.cluster.k8s.kubectl import Kubectl, KubectlLogLine
+from iris.cluster.k8s.k8s_service import K8sService
+from iris.cluster.k8s.kubectl import KubectlLogLine
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
 from iris.cluster.types import JobName, get_gpu_count
 from iris.rpc import cluster_pb2, logging_pb2
@@ -594,7 +595,7 @@ class KubernetesProvider:
     Pod naming: iris-{task_id_sanitized}-{attempt_id}
     """
 
-    kubectl: Kubectl
+    kubectl: K8sService
     namespace: str
     default_image: str
     colocation_topology_key: str = "coreweave.cloud/spine"
