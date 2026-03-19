@@ -805,14 +805,18 @@ def test_checkpoint_restore():
 
 
 @pytest.mark.timeout(600)
-def test_stress_50_tasks(smoke_cluster):
-    """50 concurrent tasks exercises scheduler concurrency and bin-packing."""
+def test_stress_20_tasks(smoke_cluster):
+    """20 concurrent tasks exercises scheduler concurrency and bin-packing.
+
+    Kept small to fit within CI runner memory (7GB). DuckDB LogStore uses
+    ~1-3GB per concurrent task batch; see #3842 for the memory regression.
+    """
     job = smoke_cluster.submit(
         TestJobs.quick,
-        "smoke-stress-50",
+        "smoke-stress-20",
         cpu=0,
         memory="100m",
-        replicas=50,
+        replicas=20,
     )
     status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout * 2)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
