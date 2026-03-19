@@ -902,3 +902,97 @@
 - Decision:
   - Revert the experimental Pallas plumbing and keep the tree on the working XLA MIMO path.
   - The current evidence does not justify spending more time on this specific local-output Pallas formulation without a different kernel shape or stronger upstream guidance on the TPU layout failure.
+
+## 2026-03-19: sharded MIMO XLA benchmarking and dump-driven follow-up
+
+- Goal:
+  - Measure the real slice-level XLA path for MIMO by explicitly sharding over `G`.
+  - Check whether a bounded XLA-only `local_output` rewrite can beat the current materialized `bc` formulation.
+  - Capture a fresh TPU profile and HLO dump for the sharded hot point before revisiting any further kernel work.
+- Tooling:
+  - Added a dedicated MIMO XLA benchmark harness in:
+    - [bench_mamba3_mimo_xla.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/scripts/bench/bench_mamba3_mimo_xla.py)
+  - The harness:
+    - benchmarks the current real-valued MIMO XLA path
+    - supports the three fixed `(state, value)` pairs:
+      - `128 x 512`
+      - `512 x 1024`
+      - `1024 x 512`
+    - can explicitly shard the leading `G` axis across the TPU slice with `NamedSharding`
+    - can capture forward or backward traces directly from the benchmark run
+- Explicit sharding result:
+  - On `v5p-8`, `bf16`, `seq_len=16384`, `groups=16`, `rank=4`, `chunk=256`, `128 x 512`:
+    - default placement:
+      - forward: `22.17M tok/s`, `139.96` estimated TFLOP/s
+      - backward: `11.00M tok/s`, `69.46`
+    - explicit `G`-axis sharding:
+      - forward: `79.11M tok/s`, `499.34` estimated TFLOP/s
+      - backward: `39.55M tok/s`, `249.66`
+  - Interpretation:
+    - the biggest real XLA-side win here was not a new local contraction variant
+    - it was making the benchmark actually run as a slice-parallel computation instead of relying on default placement
+- Sharded sweep on the three fixed shapes:
+  - Setup:
+    - `v5p-8`
+    - `bf16`
+    - `seq_len=16384`
+    - `groups=16`
+    - `rank=4`
+    - `chunk=256`
+    - explicit sharding on `G`
+  - `128 x 512`
+    - forward: `78.53M tok/s`, `495.67` estimated TFLOP/s
+    - backward: `39.73M tok/s`, `250.77`
+  - `512 x 1024`
+    - forward: `34.92M tok/s`, `734.08`
+    - backward: `15.86M tok/s`, `333.46`
+  - `1024 x 512`
+    - forward: `37.76M tok/s`, `793.65`
+    - backward: `22.70M tok/s`, `477.06`
+- XLA-only `local_output` rewrite that was tested and rejected:
+  - Tried a static-rank streamed formulation that avoids materializing the full `bc[..., t, s, u, v]` tensor by looping over input rank `u` and accumulating rank-by-rank source states.
+  - At the same sharded hot point (`128 x 512`, `chunk=256`):
+    - streamed-rank variant:
+      - forward: `4.20M tok/s`, `26.50` estimated TFLOP/s
+      - backward: `2.67M tok/s`, `16.85`
+  - Decision:
+    - do not keep or ship this local-output rewrite
+    - the current materialized `bc` formulation remains clearly better on TPU
+- Sharded backward profile at the throughput-oriented point:
+  - Profile capture:
+    - [mamba3-mimo-128x512-bc-sharded-bwd](/Users/dlwh/.codex/worktrees/03f9/marin/scratch/profiles/mamba3-mimo-128x512-bc-sharded-bwd)
+    - [mamba3-mimo-128x512-bc-sharded-bwd-summary.json](/Users/dlwh/.codex/worktrees/03f9/marin/scratch/profiles/mamba3-mimo-128x512-bc-sharded-bwd-summary.json)
+    - [mamba3-mimo-128x512-bc-sharded-bwd-report.md](/Users/dlwh/.codex/worktrees/03f9/marin/scratch/profiles/mamba3-mimo-128x512-bc-sharded-bwd-report.md)
+  - Hierarchical split:
+    - `local_output`: `61.50%`
+    - `prefix_emit`: `23.76%`
+    - `chunk_state`: the remaining SSD-core share after `local_output` and `prefix_emit`
+  - Notable subregions:
+    - `local_output/emit_local_output`: `28.03%`
+    - `local_output/diagonal_correction`: `20.10%`
+    - `prefix_emit/incoming_state_scan`: `11.52%`
+    - `prefix_emit/emit_prefix`: `12.22%`
+  - Interpretation:
+    - after real slice sharding, the bottleneck is still `local_output`
+    - but the important cost is no longer just the main emit contraction
+    - the diagonal correction and layout glue are also large enough to matter
+- Fresh HLO dump observations for the same sharded point:
+  - Dump directory:
+    - [mamba3_mimo_128x512_sharded_dump](/Users/dlwh/.codex/worktrees/03f9/marin/scratch/vliw/mamba3_mimo_128x512_sharded_dump)
+  - Representative module:
+    - `jit_backward_loss_1773946710167/module_0259.jit_backward_loss.cl_813921542.after_optimizations.txt`
+  - Key findings:
+    - `bc_contraction` still lowers with explicit layout copies on `b` and `c` before the convolution-style contraction
+    - `scale_x` still produces an explicit copy / bitcast path that also showed up in the profile
+    - `diagonal_correction` has its own explicit copy before the multiply/subtract path
+    - `prefix_emit` still has a copy in the emit path
+  - Interpretation:
+    - the strongest remaining XLA opportunities still look like layout/copy reduction around the current materialized formulation
+    - the streamed-rank reformulation did not help
+- Decision:
+  - Keep the materialized `bc` MIMO `local_output` path.
+  - Keep the new sharding-aware benchmark/profiling harness.
+  - Treat the sharded numbers as the new baseline for MIMO XLA work on TPU.
+  - If we keep pushing XLA before another kernel attempt, the most promising targets are:
+    - reducing layout copies around `bc_contraction`, `scale_x`, and `diagonal_correction`
+    - improving the current materialized lowering rather than replacing it with a streamed-rank decomposition
