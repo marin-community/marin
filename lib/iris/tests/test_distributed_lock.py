@@ -13,7 +13,6 @@ from iris.distributed_lock import (
     GcsLease,
     Lease,
     LeaseLostError,
-    S3Lease,
     create_lock,
 )
 
@@ -239,23 +238,3 @@ def test_gcs_release_noop_when_lock_gone(mock_read, mock_delete):
 
     lease.release()
     mock_delete.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# S3 mock tests — validate S3-specific conditional write handling
-# ---------------------------------------------------------------------------
-
-
-def test_create_lock_returns_s3_lease_for_s3_path():
-    lock = create_lock("s3://bucket/test.lock", worker_id="w")
-    assert isinstance(lock, S3Lease)
-
-
-@patch("iris.distributed_lock.S3Lease._read_with_generation")
-def test_s3_try_acquire_returns_false_on_precondition_failed(mock_read):
-    """try_acquire returns False when conditional write gets 412."""
-    lease = S3Lease("s3://bucket/test.lock", worker_id="worker-A")
-    mock_read.return_value = (0, None)
-
-    with patch.object(lease, "_write", side_effect=FileExistsError("lost race")):
-        assert not lease.try_acquire()
