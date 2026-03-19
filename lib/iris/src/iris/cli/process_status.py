@@ -5,7 +5,8 @@
 
 Provides ``iris process <status|logs|profile>`` with ``--worker=<id>`` to
 target a specific worker (proxied through the controller) or the controller
-itself (default).
+itself (default). The ``profile`` subcommand additionally accepts ``--task``
+to profile a running task container.
 """
 
 
@@ -15,6 +16,25 @@ import humanfriendly
 from iris.cli.main import require_controller_url
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+
+
+def _resolve_profile_target(worker: str | None, task: str | None) -> tuple[str, str]:
+    """Resolve --worker/--task options to (rpc_target, label).
+
+    Returns:
+        (target, label) where target is passed to ProfileTask and
+        label is used for display and default output filename.
+
+    Raises:
+        click.UsageError: if both --worker and --task are provided.
+    """
+    if worker and task:
+        raise click.UsageError("--worker and --task are mutually exclusive")
+    if task:
+        return task, f"task {task}"
+    if worker:
+        return f"/system/worker/{worker}", f"Worker {worker}"
+    return "/system/process", "Controller"
 
 
 def _print_status(resp: cluster_pb2.GetProcessStatusResponse, label: str) -> None:
@@ -106,13 +126,26 @@ def logs(ctx, worker: str | None, level: str, follow: bool, max_lines: int, subs
 
 @process_group.command()
 @click.option("--worker", "-w", default=None, help="Worker ID to target (default: controller)")
+@click.option("--task", "-t", default=None, help="Task ID to profile (e.g. /alice/my-job/0 or /alice/my-job/0:2)")
 @click.argument("profiler", type=click.Choice(["threads", "cpu", "mem"]))
 @click.option("--duration", "-d", default=10, help="Profiling duration in seconds")
 @click.option("--output", "-o", default=None, help="Output file path")
 @click.option("--locals", "include_locals", is_flag=True, help="Include local variables in thread dump")
 @click.pass_context
-def profile(ctx, worker: str | None, profiler: str, duration: int, output: str | None, include_locals: bool):
-    """Profile the process (threads, cpu, or mem)."""
+def profile(
+    ctx,
+    worker: str | None,
+    task: str | None,
+    profiler: str,
+    duration: int,
+    output: str | None,
+    include_locals: bool,
+):
+    """Profile the process (threads, cpu, or mem).
+
+    By default profiles the controller process. Use --worker to profile a
+    worker process, or --task to profile a running task container.
+    """
     url = require_controller_url(ctx)
     client = ControllerServiceClientSync(url)
 
@@ -128,9 +161,7 @@ def profile(ctx, worker: str | None, profiler: str, duration: int, output: str |
     else:
         raise click.ClickException(f"Unknown profiler type: {profiler}")
 
-    # Target: /system/worker/<id> for workers, /system/process for controller
-    target = f"/system/worker/{worker}" if worker else "/system/process"
-    label = f"Worker {worker}" if worker else "Controller"
+    target, label = _resolve_profile_target(worker=worker, task=task)
 
     click.echo(f"Profiling {label} ({profiler}, {duration}s)...")
     resp = client.profile_task(
@@ -152,7 +183,8 @@ def profile(ctx, worker: str | None, profiler: str, duration: int, output: str |
         click.echo(resp.profile_data.decode("utf-8"))
     else:
         ext = {"cpu": ".speedscope.json", "mem": ".html"}[profiler]
-        default_name = f"profile-{profiler}-{label.lower().replace(' ', '-')}{ext}"
+        safe_label = label.lower().replace(" ", "-").replace("/", "-").strip("-")
+        default_name = f"profile-{profiler}-{safe_label}{ext}"
         with open(default_name, "wb") as f:
             f.write(resp.profile_data)
         click.echo(f"Profile written to {default_name}")
