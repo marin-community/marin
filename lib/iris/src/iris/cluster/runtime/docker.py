@@ -151,6 +151,9 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
             [
                 "--privileged",
                 "--shm-size=100g",
+                "--cap-add=SYS_RESOURCE",
+                "--ulimit",
+                "memlock=68719476736:68719476736",
             ]
         )
         logger.info("TPU device flags: %s", flags)
