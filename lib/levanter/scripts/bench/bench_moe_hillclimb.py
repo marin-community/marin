@@ -85,6 +85,7 @@ Kernel = Literal[
 ]
 
 _USE_SHARED_MLP_EXPLICIT_BWD = False
+_USE_SHARED_MLP_FAST_ACCUM = False
 BenchPass = Literal["forward", "forward_backward"]
 CollapseImpl = Literal["segment_sum", "sorted_segment_sum", "scatter_add", "lax_scatter"]
 
@@ -314,6 +315,11 @@ def _set_shared_mlp_explicit_bwd(enabled: bool) -> None:
     _USE_SHARED_MLP_EXPLICIT_BWD = enabled
 
 
+def _set_shared_mlp_fast_accum(enabled: bool) -> None:
+    global _USE_SHARED_MLP_FAST_ACCUM
+    _USE_SHARED_MLP_FAST_ACCUM = enabled
+
+
 def _batch_axis_names(x: jax.Array) -> tuple[str, ...]:
     x_type = jax.typeof(x)
     sharding = getattr(x_type, "sharding", None)
@@ -343,6 +349,10 @@ def _silu_grad(x: jax.Array) -> jax.Array:
     return sigmoid * (1.0 + x * (1.0 - sigmoid))
 
 
+def _shared_mlp_preferred_element_type():
+    return None if _USE_SHARED_MLP_FAST_ACCUM else jnp.float32
+
+
 def _shared_mlp_reference(
     x: jax.Array,
     shared_w13: jax.Array,
@@ -353,15 +363,18 @@ def _shared_mlp_reference(
         return jnp.zeros_like(x)
 
     batch_spec = grug_moe_lib._batch_spec_from_x(x, get_abstract_mesh())
-    shared13 = jnp.einsum("td,dm->tm", x, shared_w13, out_sharding=batch_spec, preferred_element_type=jnp.float32)
+    preferred = _shared_mlp_preferred_element_type()
+    shared13 = jnp.einsum("td,dm->tm", x, shared_w13, out_sharding=batch_spec, preferred_element_type=preferred)
     gate, up = jnp.split(shared13, [shared_dim], axis=-1)
     shared_gated = jax.nn.silu(gate) * up
+    if _USE_SHARED_MLP_FAST_ACCUM:
+        shared_gated = shared_gated.astype(x.dtype)
     shared_out = jnp.einsum(
         "tm,md->td",
         shared_gated,
         shared_w2,
         out_sharding=batch_spec,
-        preferred_element_type=jnp.float32,
+        preferred_element_type=preferred,
     )
     return shared_out.astype(x.dtype)
 
@@ -385,17 +398,20 @@ def _shared_mlp_explicit_bwd_fwd(
         return jnp.zeros_like(x), (None, None, None, None, None)
 
     batch_spec = grug_moe_lib._batch_spec_from_x(x, get_abstract_mesh())
-    shared13 = jnp.einsum("td,dm->tm", x, shared_w13, out_sharding=batch_spec, preferred_element_type=jnp.float32)
+    preferred = _shared_mlp_preferred_element_type()
+    shared13 = jnp.einsum("td,dm->tm", x, shared_w13, out_sharding=batch_spec, preferred_element_type=preferred)
     gate, up = jnp.split(shared13, [shared_dim], axis=-1)
     gate_f32 = gate.astype(jnp.float32)
     up_f32 = up.astype(jnp.float32)
     shared_gated = jax.nn.silu(gate_f32) * up_f32
+    if _USE_SHARED_MLP_FAST_ACCUM:
+        shared_gated = shared_gated.astype(x.dtype)
     shared_out = jnp.einsum(
         "tm,md->td",
         shared_gated,
         shared_w2,
         out_sharding=batch_spec,
-        preferred_element_type=jnp.float32,
+        preferred_element_type=preferred,
     )
     residuals = (x, shared_w13, shared_w2, gate_f32, up_f32)
     return shared_out.astype(x.dtype), residuals
@@ -415,6 +431,7 @@ def _shared_mlp_explicit_bwd_bwd(
     g_f32 = g.astype(jnp.float32)
     mesh = get_abstract_mesh()
     reduction_axes = _mesh_reduction_axes(mesh)
+    preferred = _shared_mlp_preferred_element_type()
 
     def _shared_bwd_local(
         x_local: jax.Array,
@@ -425,35 +442,51 @@ def _shared_mlp_explicit_bwd_bwd(
         shared_w2_local: jax.Array,
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
         shared_gated_local = jax.nn.silu(gate_local) * up_local
+        if _USE_SHARED_MLP_FAST_ACCUM:
+            shared_gated_mat = shared_gated_local.astype(jnp.bfloat16)
+            g_mat = g_local.astype(jnp.bfloat16)
+            x_mat = x_local.astype(jnp.bfloat16)
+            shared_w13_mat = shared_w13_local.astype(jnp.bfloat16)
+            grad_shared13_dtype = shared_w13_local.dtype
+        else:
+            shared_gated_mat = shared_gated_local
+            g_mat = g_local
+            x_mat = x_local
+            shared_w13_mat = shared_w13_local
+            grad_shared13_dtype = shared_w13_local.dtype
         grad_shared_w2_local = jnp.einsum(
             "tm,td->md",
-            shared_gated_local,
-            g_local,
-            preferred_element_type=jnp.float32,
+            shared_gated_mat,
+            g_mat,
+            preferred_element_type=preferred,
         )
         grad_shared_gated_local = jnp.einsum(
             "td,md->tm",
-            g_local,
+            g_mat,
             shared_w2_local,
-            preferred_element_type=jnp.float32,
+            preferred_element_type=preferred,
         )
+        grad_shared_gated_local = grad_shared_gated_local.astype(jnp.float32)
         grad_gate_local = grad_shared_gated_local * up_local * _silu_grad(gate_local)
         grad_up_local = grad_shared_gated_local * jax.nn.silu(gate_local)
         grad_shared13_local = jnp.concatenate([grad_gate_local, grad_up_local], axis=-1)
+        grad_shared13_mat = (
+            grad_shared13_local.astype(grad_shared13_dtype) if _USE_SHARED_MLP_FAST_ACCUM else grad_shared13_local
+        )
         grad_shared_w13_local = jnp.einsum(
             "td,tm->dm",
-            x_local,
-            grad_shared13_local,
-            preferred_element_type=jnp.float32,
+            x_mat,
+            grad_shared13_mat,
+            preferred_element_type=preferred,
         )
         if reduction_axes:
             grad_shared_w13_local = jax.lax.psum(grad_shared_w13_local, reduction_axes)
             grad_shared_w2_local = jax.lax.psum(grad_shared_w2_local, reduction_axes)
         grad_x_local = jnp.einsum(
             "tm,dm->td",
-            grad_shared13_local,
-            shared_w13_local,
-            preferred_element_type=jnp.float32,
+            grad_shared13_mat,
+            shared_w13_mat,
+            preferred_element_type=preferred,
         )
         return grad_x_local, grad_shared_w13_local, grad_shared_w2_local
 
@@ -6418,6 +6451,7 @@ def main() -> None:
     parser.add_argument("--w13-expert-padded", action="store_true")
     parser.add_argument("--w2-expert-padded", action="store_true")
     parser.add_argument("--shared-mlp-explicit-bwd", action="store_true")
+    parser.add_argument("--shared-mlp-fast-accum", action="store_true")
     parser.add_argument("--deepep-dispatch-num-sms", type=int)
     parser.add_argument("--deepep-dispatch-num-max-send-tokens", type=int)
     parser.add_argument("--deepep-dispatch-num-max-recv-tokens", type=int)
@@ -6444,6 +6478,7 @@ def main() -> None:
 
     dtype = jnp.dtype(args.dtype)
     _set_shared_mlp_explicit_bwd(args.shared_mlp_explicit_bwd)
+    _set_shared_mlp_fast_accum(args.shared_mlp_fast_accum)
     eps = [int(tok.strip()) for tok in args.ep_list.split(",") if tok.strip()]
     kernels: list[Kernel] = ["legacy", "current"] if args.kernel == "both" else [args.kernel]
 
@@ -6495,6 +6530,7 @@ def main() -> None:
         f"w13_expert_padded={args.w13_expert_padded} "
         f"w2_expert_padded={args.w2_expert_padded} "
         f"shared_mlp_explicit_bwd={args.shared_mlp_explicit_bwd} "
+        f"shared_mlp_fast_accum={args.shared_mlp_fast_accum} "
         f"deepep_collapse_impl={args.deepep_collapse_impl}"
     )
 
