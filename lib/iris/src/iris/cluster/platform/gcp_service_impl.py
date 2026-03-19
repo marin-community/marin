@@ -1,20 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""CLOUD-mode implementation of GcpService.
+"""GcpService implementation supporting CLOUD, DRY_RUN, and LOCAL modes.
 
-Extracts all gcloud subprocess calls from GcpPlatform into typed service methods
-that return TpuInfo/VmInfo dataclasses. DRY_RUN and LOCAL modes are stubs for now.
+CLOUD mode shells out to gcloud CLI.
+DRY_RUN mode validates requests and returns synthetic responses with in-memory state.
+LOCAL mode validates, tracks in-memory state, and spawns real local worker threads.
+
+Validation runs in ALL modes — zone, accelerator type, label format, name length.
+Failure injection (inject_failure, set_zone_quota, set_tpu_type_unavailable) is
+supported in DRY_RUN and LOCAL modes for testing.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 from datetime import datetime
 
-from iris.cluster.platform.base import PlatformError, QuotaExhaustedError
+from iris.cluster.platform.base import PlatformError, QuotaExhaustedError, ResourceNotFoundError
 from iris.cluster.platform.gcp_service import (
     TpuCreateRequest,
     TpuInfo,
@@ -22,9 +28,42 @@ from iris.cluster.platform.gcp_service import (
     VmInfo,
 )
 from iris.cluster.platform.service_mode import ServiceMode
+from iris.cluster.types import TPU_TOPOLOGIES
 from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
+
+# GCP zones where TPUs are available
+KNOWN_GCP_ZONES: frozenset[str] = frozenset(
+    {
+        "us-central1-a",
+        "us-central1-b",
+        "us-central1-c",
+        "us-central1-f",
+        "us-central2-b",
+        "us-east1-d",
+        "us-east5-a",
+        "us-east5-b",
+        "us-east5-c",
+        "us-west1-c",
+        "us-west4-a",
+        "us-south1-a",
+        "europe-west4-a",
+        "europe-west4-b",
+        "asia-northeast1-b",
+    }
+)
+
+# Accelerator type names derived from the TPU_TOPOLOGIES registry
+KNOWN_TPU_TYPES: frozenset[str] = frozenset(t.name for t in TPU_TOPOLOGIES)
+
+# GCP label key/value constraints
+_LABEL_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
+_LABEL_VALUE_RE = re.compile(r"^[a-z0-9_-]{0,63}$")
+
+# GCP resource name constraints
+_RESOURCE_NAME_RE = re.compile(r"^[a-z]([a-z0-9-]*[a-z0-9])?$")
+MAX_RESOURCE_NAME_LENGTH = 63
 
 
 def _format_labels(labels: dict[str, str]) -> str:
@@ -131,13 +170,29 @@ def _parse_vm_info(vm_data: dict, fallback_zone: str = "") -> VmInfo:
 class GcpServiceImpl:
     """GcpService implementation driven by ServiceMode.
 
-    CLOUD mode shells out to gcloud CLI, faithfully extracted from GcpPlatform.
-    DRY_RUN and LOCAL modes raise NotImplementedError (added in later tasks).
+    Validation runs in ALL modes. The mode determines what happens after validation:
+    - CLOUD: shell out to gcloud CLI
+    - DRY_RUN: return synthetic response, maintain in-memory state
+    - LOCAL: return synthetic response, maintain in-memory state, spawn local workers
     """
 
-    def __init__(self, mode: ServiceMode, project_id: str) -> None:
+    DEFAULT_QUOTA = 100
+
+    def __init__(self, mode: ServiceMode, project_id: str = "") -> None:
         self._mode = mode
         self._project_id = project_id
+
+        # Mutable copies so tests can add/remove types
+        self._valid_zones: set[str] = set(KNOWN_GCP_ZONES)
+        self._valid_accelerator_types: set[str] = set(KNOWN_TPU_TYPES)
+
+        # In-memory state for DRY_RUN/LOCAL modes
+        self._tpus: dict[tuple[str, str], TpuInfo] = {}
+        self._vms: dict[tuple[str, str], VmInfo] = {}
+
+        # Failure injection (DRY_RUN/LOCAL only)
+        self._injected_failures: dict[str, PlatformError] = {}
+        self._zone_quotas: dict[str, int] = {}
 
     @property
     def mode(self) -> ServiceMode:
@@ -147,17 +202,113 @@ class GcpServiceImpl:
     def project_id(self) -> str:
         return self._project_id
 
-    def _require_cloud(self) -> None:
-        if self._mode != ServiceMode.CLOUD:
-            raise NotImplementedError(f"GcpServiceImpl does not yet support mode={self._mode}")
+    # ========================================================================
+    # Validation (shared across all modes)
+    # ========================================================================
+
+    def _validate_resource_name(self, name: str, resource_kind: str) -> None:
+        if len(name) > MAX_RESOURCE_NAME_LENGTH:
+            raise ValueError(f"{resource_kind} name exceeds {MAX_RESOURCE_NAME_LENGTH} chars: {name!r}")
+        if not _RESOURCE_NAME_RE.match(name):
+            raise ValueError(
+                f"Invalid {resource_kind} name (must be lowercase alphanumeric/hyphens, " f"start with letter): {name!r}"
+            )
+
+    def _validate_labels(self, labels: dict[str, str]) -> None:
+        for key, val in labels.items():
+            if not _LABEL_KEY_RE.match(key):
+                raise ValueError(f"Invalid label key: {key!r}")
+            if not _LABEL_VALUE_RE.match(val):
+                raise ValueError(f"Invalid label value for {key!r}: {val!r}")
+
+    def _validate_zone(self, zone: str) -> None:
+        if zone not in self._valid_zones:
+            raise PlatformError(f"Zone {zone!r} not available")
+
+    def _validate_tpu_create(self, request: TpuCreateRequest) -> None:
+        self._validate_resource_name(request.name, "TPU")
+        self._validate_zone(request.zone)
+        if request.accelerator_type not in self._valid_accelerator_types:
+            raise ResourceNotFoundError(f"Unknown accelerator type: {request.accelerator_type!r}")
+        if not request.runtime_version:
+            raise ValueError("runtime_version must be non-empty")
+        self._validate_labels(request.labels)
+
+    def _validate_vm_create(self, request: VmCreateRequest) -> None:
+        self._validate_resource_name(request.name, "VM")
+        self._validate_zone(request.zone)
+        if request.disk_size_gb <= 0:
+            raise ValueError(f"disk_size_gb must be positive, got {request.disk_size_gb}")
+        self._validate_labels(request.labels)
+
+    # ========================================================================
+    # Failure injection (DRY_RUN/LOCAL)
+    # ========================================================================
+
+    def inject_failure(self, operation: str, error: PlatformError) -> None:
+        """Make the next call to `operation` raise `error`, then auto-clear."""
+        self._injected_failures[operation] = error
+
+    def set_zone_quota(self, zone: str, max_tpus: int) -> None:
+        """Set TPU quota for a zone. Enforced in DRY_RUN/LOCAL modes."""
+        self._zone_quotas[zone] = max_tpus
+
+    def set_tpu_type_unavailable(self, accelerator_type: str) -> None:
+        """Remove an accelerator type from the valid set."""
+        self._valid_accelerator_types.discard(accelerator_type)
+
+    def add_tpu_type(self, accelerator_type: str) -> None:
+        """Add an accelerator type to the valid set."""
+        self._valid_accelerator_types.add(accelerator_type)
+
+    def _check_injected_failure(self, operation: str) -> None:
+        err = self._injected_failures.pop(operation, None)
+        if err is not None:
+            raise err
 
     # ========================================================================
     # TPU operations
     # ========================================================================
 
     def tpu_create(self, request: TpuCreateRequest) -> TpuInfo:
-        self._require_cloud()
+        self._check_injected_failure("tpu_create")
+        self._validate_tpu_create(request)
 
+        if self._mode == ServiceMode.CLOUD:
+            return self._tpu_create_cloud(request)
+
+        # DRY_RUN / LOCAL: check quota, then create in-memory
+        zone_count = sum(1 for (_, z) in self._tpus if z == request.zone)
+        max_quota = self._zone_quotas.get(request.zone, self.DEFAULT_QUOTA)
+        if zone_count >= max_quota:
+            raise QuotaExhaustedError(f"Quota exhausted in {request.zone}")
+
+        # Synthetic network endpoints based on TPU topology
+        from iris.cluster.types import get_tpu_topology
+
+        try:
+            topo = get_tpu_topology(request.accelerator_type)
+            vm_count = topo.vm_count
+        except ValueError:
+            vm_count = 1
+
+        seq = len(self._tpus)
+        endpoints = [f"10.0.{seq}.{i}" for i in range(vm_count)]
+
+        info = TpuInfo(
+            name=request.name,
+            state="READY",
+            accelerator_type=request.accelerator_type,
+            zone=request.zone,
+            labels=dict(request.labels),
+            metadata=dict(request.metadata),
+            network_endpoints=endpoints,
+            created_at=Timestamp.now(),
+        )
+        self._tpus[(request.name, request.zone)] = info
+        return info
+
+    def _tpu_create_cloud(self, request: TpuCreateRequest) -> TpuInfo:
         cmd = [
             "gcloud",
             "compute",
@@ -188,20 +339,25 @@ class GcpServiceImpl:
         if result.returncode != 0:
             raise _classify_gcloud_error(result.stderr.strip())
 
-        # gcloud tpu create returns JSON for the created resource
         if result.stdout.strip():
             tpu_data = json.loads(result.stdout)
             return _parse_tpu_info(tpu_data, request.zone)
 
-        # Fallback: describe the TPU we just created
         info = self.tpu_describe(request.name, request.zone)
         if info is None:
             raise PlatformError(f"TPU {request.name} created but could not be described")
         return info
 
     def tpu_delete(self, name: str, zone: str) -> None:
-        self._require_cloud()
+        self._check_injected_failure("tpu_delete")
 
+        if self._mode == ServiceMode.CLOUD:
+            return self._tpu_delete_cloud(name, zone)
+
+        # DRY_RUN / LOCAL: remove from in-memory state
+        self._tpus.pop((name, zone), None)
+
+    def _tpu_delete_cloud(self, name: str, zone: str) -> None:
         cmd = [
             "gcloud",
             "compute",
@@ -222,8 +378,14 @@ class GcpServiceImpl:
                 raise _classify_gcloud_error(error)
 
     def tpu_describe(self, name: str, zone: str) -> TpuInfo | None:
-        self._require_cloud()
+        self._check_injected_failure("tpu_describe")
 
+        if self._mode == ServiceMode.CLOUD:
+            return self._tpu_describe_cloud(name, zone)
+
+        return self._tpus.get((name, zone))
+
+    def _tpu_describe_cloud(self, name: str, zone: str) -> TpuInfo | None:
         cmd = [
             "gcloud",
             "compute",
@@ -247,8 +409,22 @@ class GcpServiceImpl:
         return _parse_tpu_info(tpu_data, zone)
 
     def tpu_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[TpuInfo]:
-        self._require_cloud()
+        self._check_injected_failure("tpu_list")
 
+        if self._mode == ServiceMode.CLOUD:
+            return self._tpu_list_cloud(zones, labels)
+
+        # DRY_RUN / LOCAL: filter in-memory state
+        results: list[TpuInfo] = []
+        for (_, z), info in self._tpus.items():
+            if zones and z not in zones:
+                continue
+            if labels and not all(info.labels.get(k) == v for k, v in labels.items()):
+                continue
+            results.append(info)
+        return results
+
+    def _tpu_list_cloud(self, zones: list[str], labels: dict[str, str] | None = None) -> list[TpuInfo]:
         results: list[TpuInfo] = []
         for zone in zones:
             cmd = [
@@ -281,8 +457,27 @@ class GcpServiceImpl:
     # ========================================================================
 
     def vm_create(self, request: VmCreateRequest) -> VmInfo:
-        self._require_cloud()
+        self._check_injected_failure("vm_create")
+        self._validate_vm_create(request)
 
+        if self._mode == ServiceMode.CLOUD:
+            return self._vm_create_cloud(request)
+
+        # DRY_RUN / LOCAL: create in-memory
+        seq = len(self._vms)
+        info = VmInfo(
+            name=request.name,
+            status="RUNNING",
+            zone=request.zone,
+            internal_ip=f"10.1.{seq}.1",
+            external_ip=None,
+            labels=dict(request.labels),
+            metadata=dict(request.metadata),
+        )
+        self._vms[(request.name, request.zone)] = info
+        return info
+
+    def _vm_create_cloud(self, request: VmCreateRequest) -> VmInfo:
         cmd = [
             "gcloud",
             "compute",
@@ -316,15 +511,20 @@ class GcpServiceImpl:
             if "already exists" not in error_msg.lower():
                 raise _classify_gcloud_error(error_msg)
 
-        # Describe to get full info (create output may be incomplete for "already exists")
         info = self.vm_describe(request.name, request.zone)
         if info is None:
             raise PlatformError(f"VM {request.name} created but could not be described")
         return info
 
     def vm_delete(self, name: str, zone: str) -> None:
-        self._require_cloud()
+        self._check_injected_failure("vm_delete")
 
+        if self._mode == ServiceMode.CLOUD:
+            return self._vm_delete_cloud(name, zone)
+
+        self._vms.pop((name, zone), None)
+
+    def _vm_delete_cloud(self, name: str, zone: str) -> None:
         cmd = [
             "gcloud",
             "compute",
@@ -343,8 +543,14 @@ class GcpServiceImpl:
                 raise _classify_gcloud_error(error)
 
     def vm_describe(self, name: str, zone: str) -> VmInfo | None:
-        self._require_cloud()
+        self._check_injected_failure("vm_describe")
 
+        if self._mode == ServiceMode.CLOUD:
+            return self._vm_describe_cloud(name, zone)
+
+        return self._vms.get((name, zone))
+
+    def _vm_describe_cloud(self, name: str, zone: str) -> VmInfo | None:
         cmd = [
             "gcloud",
             "compute",
@@ -367,8 +573,21 @@ class GcpServiceImpl:
         return _parse_vm_info(data, fallback_zone=zone)
 
     def vm_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[VmInfo]:
-        self._require_cloud()
+        self._check_injected_failure("vm_list")
 
+        if self._mode == ServiceMode.CLOUD:
+            return self._vm_list_cloud(zones, labels)
+
+        results: list[VmInfo] = []
+        for (_, z), info in self._vms.items():
+            if zones and z not in zones:
+                continue
+            if labels and not all(info.labels.get(k) == v for k, v in labels.items()):
+                continue
+            results.append(info)
+        return results
+
+    def _vm_list_cloud(self, zones: list[str], labels: dict[str, str] | None = None) -> list[VmInfo]:
         results: list[VmInfo] = []
         for zone in zones:
             cmd = [
@@ -396,8 +615,19 @@ class GcpServiceImpl:
         return results
 
     def vm_update_labels(self, name: str, zone: str, labels: dict[str, str]) -> None:
-        self._require_cloud()
+        self._check_injected_failure("vm_update_labels")
+        self._validate_labels(labels)
 
+        if self._mode == ServiceMode.CLOUD:
+            return self._vm_update_labels_cloud(name, zone, labels)
+
+        # DRY_RUN / LOCAL: update in-memory state
+        vm = self._vms.get((name, zone))
+        if vm is None:
+            raise PlatformError(f"VM {name!r} not found in zone {zone!r}")
+        vm.labels.update(labels)
+
+    def _vm_update_labels_cloud(self, name: str, zone: str, labels: dict[str, str]) -> None:
         cmd = [
             "gcloud",
             "compute",
@@ -414,8 +644,17 @@ class GcpServiceImpl:
             raise _classify_gcloud_error(result.stderr.strip())
 
     def vm_set_metadata(self, name: str, zone: str, metadata: dict[str, str]) -> None:
-        self._require_cloud()
+        self._check_injected_failure("vm_set_metadata")
 
+        if self._mode == ServiceMode.CLOUD:
+            return self._vm_set_metadata_cloud(name, zone, metadata)
+
+        vm = self._vms.get((name, zone))
+        if vm is None:
+            raise PlatformError(f"VM {name!r} not found in zone {zone!r}")
+        vm.metadata.update(metadata)
+
+    def _vm_set_metadata_cloud(self, name: str, zone: str, metadata: dict[str, str]) -> None:
         metadata_str = ",".join(f"{k}={v}" for k, v in metadata.items())
         cmd = [
             "gcloud",
@@ -433,8 +672,15 @@ class GcpServiceImpl:
             raise _classify_gcloud_error(result.stderr.strip())
 
     def vm_get_serial_port_output(self, name: str, zone: str, start: int = 0) -> str:
-        self._require_cloud()
+        self._check_injected_failure("vm_get_serial_port_output")
 
+        if self._mode == ServiceMode.CLOUD:
+            return self._vm_get_serial_port_output_cloud(name, zone, start)
+
+        # DRY_RUN / LOCAL: return empty string (no serial console)
+        return ""
+
+    def _vm_get_serial_port_output_cloud(self, name: str, zone: str, start: int = 0) -> str:
         cmd = [
             "gcloud",
             "compute",
