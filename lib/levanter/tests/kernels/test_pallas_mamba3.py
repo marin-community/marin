@@ -147,6 +147,14 @@ def test_chunked_xla_matches_direct_recurrence():
     assert jnp.allclose(final_state_xla, final_state_ref, atol=1e-5, rtol=1e-5)
 
 
+def test_chunked_xla_state_heavy_auto_path_matches_direct_recurrence():
+    inputs = _sample_chunked_inputs(leading_shape=(2,), num_chunks=3, chunk_size=8, state_dim=8, value_dim=3)
+    y_xla, final_state_xla = mamba3_chunked_forward(*inputs, implementation="xla")
+    y_ref, final_state_ref = mamba3_chunked_forward(*inputs, implementation="reference")
+    assert jnp.allclose(y_xla, y_ref, atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(final_state_xla, final_state_ref, atol=1e-5, rtol=1e-5)
+
+
 def test_transformed_chunked_reference_matches_sequential_rewrite():
     dt, lam, a, b, c, x = _sample_chunked_inputs(
         leading_shape=(2,),
