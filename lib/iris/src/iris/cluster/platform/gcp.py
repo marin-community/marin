@@ -51,6 +51,7 @@ from iris.cluster.platform.base import (
     CloudWorkerState,
     Labels,
     PlatformError,
+    SliceHandle,
     SliceStatus,
     WorkerStatus,
     default_stop_all,
@@ -616,12 +617,30 @@ class GcpPlatform:
         self,
         config: config_pb2.SliceConfig,
         worker_config: config_pb2.WorkerConfig | None = None,
-    ) -> GcpSliceHandle | GcpVmSliceHandle:
-        """Create a GCP-backed slice (TPU pod or single VM)."""
+    ) -> SliceHandle:
+        """Create a GCP-backed slice (TPU pod or single VM).
+
+        In LOCAL mode, delegates to GcpServiceImpl to spawn local worker threads
+        and returns a LocalSliceHandle.
+        """
+        if self._gcp.mode == ServiceMode.LOCAL:
+            return self._create_local_slice(config, worker_config)
         _validate_slice_config(config)
         if config.gcp.mode == config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM:
             return self._create_vm_slice(config, worker_config)
         return self._create_tpu_slice(config, worker_config)
+
+    def _create_local_slice(
+        self,
+        config: config_pb2.SliceConfig,
+        worker_config: config_pb2.WorkerConfig | None = None,
+    ) -> SliceHandle:
+        """Create a local slice via GcpServiceImpl(LOCAL)."""
+        from iris.cluster.platform.gcp_service_impl import GcpServiceImpl
+
+        slice_id = f"{config.name_prefix}-{generate_slice_suffix()}"
+        service = cast(GcpServiceImpl, self._gcp)
+        return service.create_local_slice(slice_id, config, worker_config)
 
     def _create_tpu_slice(
         self,
@@ -962,6 +981,12 @@ class GcpPlatform:
         labels: dict[str, str] | None = None,
     ) -> list[GcpSliceHandle | GcpVmSliceHandle]:
         """List TPU and VM slices across zones, optionally filtered by labels."""
+        if self._gcp.mode == ServiceMode.LOCAL:
+            from iris.cluster.platform.gcp_service_impl import GcpServiceImpl
+
+            service = cast(GcpServiceImpl, self._gcp)
+            return service.get_local_slices(labels)  # type: ignore[return-value]
+
         handles: list[GcpSliceHandle | GcpVmSliceHandle] = []
 
         tpu_infos = self._gcp.tpu_list(zones, labels)
@@ -1015,6 +1040,12 @@ class GcpPlatform:
         filtered by iris-{prefix}-managed=true.
         """
         managed_labels = {self._iris_labels.iris_managed: "true"}
+
+        if self._gcp.mode == ServiceMode.LOCAL:
+            from iris.cluster.platform.gcp_service_impl import GcpServiceImpl
+
+            service = cast(GcpServiceImpl, self._gcp)
+            return service.get_local_slices(managed_labels)  # type: ignore[return-value]
 
         tpu_infos = self._gcp.tpu_list(zones=[], labels=managed_labels)
         vm_infos = self._gcp.vm_list(zones=[], labels=managed_labels)
@@ -1108,7 +1139,7 @@ class GcpPlatform:
         )
 
     def shutdown(self) -> None:
-        pass
+        self._gcp.shutdown()
 
     def discover_controller(self, controller_config: config_pb2.ControllerVmConfig) -> str:
         """Discover controller by querying GCP for labeled controller VM.
