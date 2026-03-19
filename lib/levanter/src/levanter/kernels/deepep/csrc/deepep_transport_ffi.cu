@@ -775,6 +775,10 @@ ffi::Error DispatchIntranodeCached(
       return ffi::Error::InvalidArgument(
           "DeepEP intranode cached dispatch expects num_recv_tokens shape [1]");
     }
+    const auto x_dims = x.dimensions();
+    const int debug_num_tokens = x_dims.size() == 2 ? static_cast<int>(x_dims[0]) : -1;
+    const int debug_hidden = x_dims.size() == 2 ? static_cast<int>(x_dims[1]) : -1;
+    LogHostDispatchStage(runtime.rank, "cached_before_read_recv", debug_num_tokens, debug_hidden, 0, 0);
     int num_recv_tokens = -1;
     cudaError_t status = cudaSuccess;
     if (TrustRuntimeRecvCountEnabled() && runtime.last_num_recv_tokens >= 0) {
@@ -795,8 +799,8 @@ ffi::Error DispatchIntranodeCached(
       }
       runtime.last_num_recv_tokens = num_recv_tokens;
     }
+    LogHostDispatchStage(runtime.rank, "cached_after_read_recv", debug_num_tokens, debug_hidden, 0, 0, num_recv_tokens);
 
-    const auto x_dims = x.dimensions();
     const auto token_rank_dims = is_token_in_rank.dimensions();
     const auto rank_dims = rank_prefix_matrix.dimensions();
     const auto channel_dims = channel_prefix_matrix.dimensions();
@@ -844,6 +848,7 @@ ffi::Error DispatchIntranodeCached(
         runtime.rank,
         runtime.num_ranks,
         stream);
+    LogHostDispatchStage(runtime.rank, "cached_after_notify_dispatch", num_tokens, hidden, 0, 0, num_recv_tokens);
 
 #if defined(LEVANTER_DEEPEP_EXTENDED_INTRNODE_DISPATCH)
     deep_ep::intranode::dispatch(
@@ -911,6 +916,7 @@ ffi::Error DispatchIntranodeCached(
         runtime.dispatch_config.num_max_send_tokens,
         runtime.dispatch_config.num_max_recv_tokens);
 #endif
+    LogHostDispatchStage(runtime.rank, "cached_after_dispatch_launch", num_tokens, hidden, 0, 0, num_recv_tokens);
     return ffi::Error::Success();
   } catch (const std::exception& exc) {
     return ffi::Error::Internal(exc.what());
@@ -934,6 +940,16 @@ ffi::Error CombineIntranode(
     if (num_recv_tokens_buffer.dimensions().size() != 1 || num_recv_tokens_buffer.dimensions()[0] != 1) {
       return ffi::Error::InvalidArgument("DeepEP intranode combine expects num_recv_tokens shape [1]");
     }
+    const auto recv_x_dims = recv_x.dimensions();
+    const auto recv_topk_dims = recv_topk_weights.dimensions();
+    const auto src_dims = recv_src_idx.dimensions();
+    const auto rank_dims = rank_prefix_matrix.dimensions();
+    const auto channel_dims = channel_prefix_matrix.dimensions();
+    const auto send_head_dims = send_head.dimensions();
+    const int debug_combined_tokens = send_head_dims.size() == 2 ? static_cast<int>(send_head_dims[0]) : -1;
+    const int debug_hidden = recv_x_dims.size() == 2 ? static_cast<int>(recv_x_dims[1]) : -1;
+    const int debug_topk = recv_topk_dims.size() == 2 ? static_cast<int>(recv_topk_dims[1]) : -1;
+    LogHostDispatchStage(runtime.rank, "combine_before_read_recv", debug_combined_tokens, debug_hidden, 0, debug_topk);
     int num_recv_tokens = -1;
     cudaError_t status = cudaSuccess;
     if (TrustRuntimeRecvCountEnabled() && runtime.last_num_recv_tokens >= 0) {
@@ -954,13 +970,14 @@ ffi::Error CombineIntranode(
       }
       runtime.last_num_recv_tokens = num_recv_tokens;
     }
-
-    const auto recv_x_dims = recv_x.dimensions();
-    const auto recv_topk_dims = recv_topk_weights.dimensions();
-    const auto src_dims = recv_src_idx.dimensions();
-    const auto rank_dims = rank_prefix_matrix.dimensions();
-    const auto channel_dims = channel_prefix_matrix.dimensions();
-    const auto send_head_dims = send_head.dimensions();
+    LogHostDispatchStage(
+        runtime.rank,
+        "combine_after_read_recv",
+        debug_combined_tokens,
+        debug_hidden,
+        0,
+        debug_topk,
+        num_recv_tokens);
     if (recv_x_dims.size() != 2 || recv_topk_dims.size() != 2 || src_dims.size() != 1 ||
         rank_dims.size() != 2 || channel_dims.size() != 2 || send_head_dims.size() != 2) {
       return ffi::Error::InvalidArgument("DeepEP intranode combine expects rank-1/2 tensors");
@@ -1012,6 +1029,14 @@ ffi::Error CombineIntranode(
         runtime.rank,
         runtime.num_ranks,
         stream);
+    LogHostDispatchStage(
+        runtime.rank,
+        "combine_after_notify",
+        combined_tokens,
+        hidden,
+        0,
+        num_topk,
+        num_recv_tokens);
 
     deep_ep::intranode::combine(
         CUDA_R_16BF,
@@ -1036,6 +1061,14 @@ ffi::Error CombineIntranode(
         runtime.combine_config.num_sms,
         runtime.combine_config.num_max_send_tokens,
         runtime.combine_config.num_max_recv_tokens);
+    LogHostDispatchStage(
+        runtime.rank,
+        "combine_after_launch",
+        combined_tokens,
+        hidden,
+        0,
+        num_topk,
+        num_recv_tokens);
     return ffi::Error::Success();
   } catch (const std::exception& exc) {
     return ffi::Error::Internal(exc.what());
