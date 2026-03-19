@@ -9,7 +9,6 @@ grug copy-first workflow in `.agents/skills/change-grug/`.
 """
 
 import dataclasses
-import math
 
 from dataclasses import dataclass
 
@@ -77,6 +76,7 @@ class GrugModelConfig:
     head_dim: int | None = None
     max_seq_len: int = 4096
     layer_norm_eps: float = 1e-5
+    initializer_std: float = 0.02
     qk_mult: float = 1.0
     load_balancing_loss_coef: float | None = 0.01
     router_z_loss_coef: float | None = 0.001
@@ -137,10 +137,10 @@ class CausalSelfAttention(eqx.Module):
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d, n * h), d), P("data", "model")),
-            w_k=reshard(_init_weight(k_k, (d, m * h), d), P("data", "model")),
-            w_v=reshard(_init_weight(k_v, (d, m * h), d), P("data", "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), n * h), P("model", "data")),
+            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
+            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
+            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
+            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
             # Headwise attention gate: one scalar per head, zero-initialized.
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
             cfg=cfg,
@@ -195,15 +195,12 @@ class DenseMLP(eqx.Module):
     w_down: jax.Array
 
     @staticmethod
-    def init(hidden_dim: int, intermediate_dim: int, *, key: PRNGKeyArray) -> "DenseMLP":
+    def init(hidden_dim: int, intermediate_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "DenseMLP":
         k_gate, k_up, k_down = random.split(key, 3)
-        alpha_ffn = intermediate_dim / hidden_dim
         return DenseMLP(
-            w_gate=reshard(_init_weight(k_gate, (hidden_dim, intermediate_dim), hidden_dim), P("data", "model")),
-            w_up=reshard(_init_weight(k_up, (hidden_dim, intermediate_dim), hidden_dim), P("data", "model")),
-            w_down=reshard(
-                _init_down_proj(k_down, (intermediate_dim, hidden_dim), hidden_dim, alpha_ffn), P("model", "data")
-            ),
+            w_gate=reshard(_init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
+            w_up=reshard(_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
+            w_down=reshard(_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), P("model", "data")),
         )
 
     @named_call
@@ -330,15 +327,15 @@ class MoEMLP(eqx.Module):
             cfg.intermediate_dim,
         )
 
-        w_gate = _init_weight(k_gate, (e, d, i), d)
-        w_up = _init_weight(k_up, (e, d, i), d)
+        w_gate = _init_weight(k_gate, (e, d, i), cfg.initializer_std)
+        w_up = _init_weight(k_up, (e, d, i), cfg.initializer_std)
         w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)  # (E, D, 2*I)
 
         return MoEMLP(
-            router=reshard(_init_weight(k_router, (d, e), d), P(None, None)),
+            router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
             w_gate_up=reshard(w_gate_up, P("expert", "data", "model")),
-            w_down=reshard(_init_down_proj(k_down, (e, i, d), d, i / d), P("expert", "model", "data")),
+            w_down=reshard(_init_weight(k_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
             cfg=cfg,
         )
 
@@ -398,6 +395,7 @@ class Block(eqx.Module):
             dense_mlp = DenseMLP.init(
                 cfg.hidden_dim,
                 cfg.dense_intermediate_dim,
+                cfg.initializer_std,
                 key=dense_key,
             )
         else:
@@ -406,6 +404,7 @@ class Block(eqx.Module):
                 shared = DenseMLP.init(
                     cfg.hidden_dim,
                     cfg.shared_expert_intermediate_dim,
+                    cfg.initializer_std,
                     key=shared_key,
                 )
         return Block(
@@ -449,8 +448,8 @@ class Transformer(eqx.Module):
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Transformer":
         embed_key, out_key, *block_keys = random.split(key, cfg.num_layers + 2)
-        token_embed = reshard(_init_unit(embed_key, (cfg.vocab_size, cfg.hidden_dim)), Pvocab)
-        output_proj = reshard(_init_unit(out_key, (cfg.hidden_dim, cfg.vocab_size)), Pvocab)
+        token_embed = reshard(_init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pvocab)
+        output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Pvocab)
         blocks = tuple(
             Block.init(cfg, key=block_keys[i], dense_only=(i < cfg.num_dense_layers)) for i in range(cfg.num_layers)
         )
@@ -510,8 +509,7 @@ class Transformer(eqx.Module):
     ) -> Float[Array, "B S V"]:
         batch_spec = _batch_spec()
         hidden, _ = self(token_ids, mask=mask)
-        scale = 1.0 / self.config.hidden_dim
-        return scale * jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
+        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
 
     def next_token_loss(
         self,
@@ -527,11 +525,10 @@ class Transformer(eqx.Module):
         hidden, router_metrics = self(token_ids, mask=mask)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
-        scaled_output_proj = self.output_proj * (1.0 / self.config.hidden_dim)
 
         cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
-            scaled_output_proj,
+            self.output_proj,
             labels,
             weight=loss_weight,
             reduction=reduction,
@@ -558,25 +555,8 @@ class Transformer(eqx.Module):
         return loss
 
 
-def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], fan_in: int) -> Float[Array, "..."]:
-    """Initialize with variance 1/fan_in (truncated normal)."""
-    std = 1.0 / math.sqrt(fan_in)
+def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
     return std * random.truncated_normal(key, -3, 3, shape)
-
-
-def _init_down_proj(key: PRNGKeyArray, shape: tuple[int, ...], hidden_dim: int, alpha_ffn: float) -> Float[Array, "..."]:
-    """Initialize down-projection with std = 1/(alpha_ffn * sqrt(hidden_dim)).
-
-    Follows CompleteP for MoE (arxiv 2601.20205): treats alpha_ffn as intermediate
-    width in a mean-field two-layer MLP rather than using standard fan_in init.
-    """
-    std = 1.0 / (alpha_ffn * math.sqrt(hidden_dim))
-    return std * random.truncated_normal(key, -3, 3, shape)
-
-
-def _init_unit(key: PRNGKeyArray, shape: tuple[int, ...]) -> Float[Array, "..."]:
-    """Initialize with variance 1 (truncated normal)."""
-    return random.truncated_normal(key, -3, 3, shape)
 
 
 def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractMesh, P]:
