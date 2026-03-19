@@ -23,9 +23,7 @@ dependencies = [
 
 [tool.uv]
 fork-strategy = "fewest"
-# TODO: After first dupekit-v0.1.0 release, uncomment find-links and remove
-# the dupekit source in [tool.uv.sources] to switch default to pre-built wheels.
-# find-links = ["https://github.com/marin-community/marin/releases/expanded_assets/dupekit-v0.1.0"]
+find-links = ["https://github.com/marin-community/marin/releases/expanded_assets/dupekit-latest"]
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
     "antlr4-python3-runtime==4.11",
@@ -54,9 +52,6 @@ marin = { workspace = true }
 zephyr = { workspace = true }
 # NOTE: dupekit and harbor are optional dependencies (not workspace members).
 # harbor lives in marin-community/harbor as a pinned git dependency.
-# TODO: After first `dupekit-v0.1.0` release, remove this source line to switch
-# default to pre-built wheels from GitHub Releases (find-links above).
-dupekit = { path = "rust/dupekit", editable = true }
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
 
 [tool.black]
