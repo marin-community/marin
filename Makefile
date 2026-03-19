@@ -232,37 +232,35 @@ dev_setup: install_uv install_gcloud install_node get_secret_key get_ray_auth_to
 
 
 # Rust crate build mode (dupekit)
-# Dev mode (default): build from source via rust/dupekit (requires Cargo)
-# User mode: install pre-built wheels from GitHub Releases (no Cargo needed)
+# User mode (default): pre-built wheels resolved via find-links in pyproject.toml
+# Dev mode: editable install from rust/dupekit (requires Cargo)
 DUPEKIT_FIND_LINKS = https://github.com/marin-community/marin/releases/expanded_assets/dupekit-latest
 
 rust-dev:
-	@rm -f uv.toml
-	@touch .rust-dev-mode
-	@echo "Switched to dev mode (source build from rust/dupekit)."
-	@echo "Run 'uv sync --all-packages' to rebuild dupekit from source."
+	@echo "Building dupekit from source (requires Cargo)..."
+	uv pip install -e rust/dupekit
+	@echo "Switched to dev mode (editable source build)."
 
 rust-user:
-	@rm -f .rust-dev-mode
 	@echo "Installing dupekit from pre-built wheels..."
 	uv pip install dupekit --find-links "$(DUPEKIT_FIND_LINKS)" --force-reinstall
 	@echo "Switched to user mode (pre-built wheel)."
-	@echo "Note: 'uv sync' will revert to source build. Use 'make rust-user' again after syncing."
 
 rust-status:
 	@echo "=== Rust build mode ==="
-	@if [ -f .rust-dev-mode ]; then \
-		echo "Mode: dev (source build from rust/dupekit)"; \
+	@if uv pip show dupekit > /dev/null 2>&1; then \
+		VERSION=$$(uv pip show dupekit 2>/dev/null | grep "^Version" | cut -d' ' -f2); \
+		if uv pip show dupekit 2>/dev/null | grep -q "Editable project location"; then \
+			echo "Mode: dev (editable source build)"; \
+		else \
+			echo "Mode: user (pre-built wheel) [default]"; \
+		fi; \
+		echo "dupekit: $$VERSION"; \
 	else \
-		echo "Mode: user (pre-built wheel) or default"; \
+		echo "dupekit: not installed"; \
 	fi
 	@if command -v cargo > /dev/null 2>&1; then \
 		echo "Cargo: installed ($$(cargo --version))"; \
 	else \
-		echo "Cargo: not found (source builds will fail; use 'make rust-user')"; \
-	fi
-	@if uv pip show dupekit > /dev/null 2>&1; then \
-		echo "dupekit: $$(uv pip show dupekit 2>/dev/null | grep Version | cut -d' ' -f2)"; \
-	else \
-		echo "dupekit: not installed"; \
+		echo "Cargo: not found (source builds will fail)"; \
 	fi

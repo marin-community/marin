@@ -226,9 +226,6 @@ scr/*
 # Local host Marin config
 .marin.yaml
 
-# Rust build mode marker (dev vs user mode for dupekit)
-.rust-dev-mode
-
 /scratch
 
 .forge

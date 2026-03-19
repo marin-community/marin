@@ -22,8 +22,8 @@ try:
 except ImportError:
     _INSTALL_MSG = (
         "dupekit native extension is not installed. "
-        "Run 'uv sync' to build from source (requires Cargo), or install a pre-built wheel: "
-        "uv pip install dupekit --find-links https://github.com/marin-community/marin/releases/expanded_assets/dupekit-latest"
+        "Run 'uv sync --all-packages' to install the pre-built wheel. "
+        "For source builds (requires Cargo), run 'make rust-dev' first."
     )
 
     class _StubModule(types.ModuleType):

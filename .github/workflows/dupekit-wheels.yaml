@@ -82,14 +82,36 @@ jobs:
     needs: [build, sdist]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute release metadata
+        id: meta
+        run: |
+          VERSION=$(grep '^version' rust/dupekit/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "pinned_tag=dupekit-${VERSION}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+
+      # Rolling release (convenience alias)
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: dupekit-latest
           name: "dupekit (latest wheels)"
+          prerelease: true
+          make_latest: false
+          files: dist/*
+
+      # Commit-pinned release for reproducibility
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.pinned_tag }}
+          name: "dupekit ${{ steps.meta.outputs.version }} (${{ steps.meta.outputs.short_sha }})"
           prerelease: true
           make_latest: false
           files: dist/*
@@ -101,24 +123,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Update pyproject.toml with dupekit wheel references
+      - name: Update pyproject.toml with pinned dupekit release
         run: |
           set -euo pipefail
 
-          # Read version from Cargo.toml
           VERSION=$(grep '^version' rust/dupekit/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          echo "Dupekit version: $VERSION"
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          PINNED_TAG="dupekit-${VERSION}-${SHORT_SHA}"
+          echo "Dupekit version: $VERSION, tag: $PINNED_TAG"
 
-          FIND_LINKS_URL="https://github.com/marin-community/marin/releases/expanded_assets/dupekit-latest"
+          FIND_LINKS_URL="https://github.com/marin-community/marin/releases/expanded_assets/${PINNED_TAG}"
 
-          # Ensure find-links contains the rolling release URL (uncommented)
-          if grep -q "^#.*find-links.*dupekit-latest" pyproject.toml; then
-            # Uncomment the existing commented-out line
-            sed -i "s|^#.*find-links.*dupekit-latest.*|find-links = [\"${FIND_LINKS_URL}\"]|" pyproject.toml
-          elif ! grep -q "find-links.*dupekit-latest" pyproject.toml; then
-            # Add find-links after [tool.uv] section header
-            sed -i "/^\[tool\.uv\]/a find-links = [\"${FIND_LINKS_URL}\"]" pyproject.toml
-          fi
+          # Update find-links to point to the pinned release
+          sed -i "s|find-links = \[\"https://github.com/marin-community/marin/releases/expanded_assets/dupekit-[^\"]*\"\]|find-links = [\"${FIND_LINKS_URL}\"]|" pyproject.toml
 
           # Update dupekit version pin in dependencies
           sed -i 's|^\(\s*\)"dupekit[^"]*"|    "dupekit >= '"${VERSION}"'"|' pyproject.toml
@@ -127,6 +144,6 @@ jobs:
         with:
           branch: auto/update-dupekit-wheels
           title: "chore: update dupekit wheels"
-          body: "Auto-generated: updates pyproject.toml to use latest dupekit wheels from GitHub Releases."
+          body: "Auto-generated: updates pyproject.toml to pin dupekit wheels from commit ${{ github.sha }}."
           labels: agent-generated
-          commit-message: "chore: update dupekit wheel references in pyproject.toml"
+          commit-message: "chore: pin dupekit wheels to ${{ github.sha }}"
