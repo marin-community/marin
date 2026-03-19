@@ -14,7 +14,6 @@ from connectrpc.request import RequestContext
 
 from iris.rpc import cluster_pb2
 from iris.cluster.types import Entrypoint, JobName
-from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import (
     ContainerErrorKind,
@@ -85,14 +84,6 @@ def test_concurrent_allocations(allocator):
 # ============================================================================
 
 
-@pytest.fixture
-def mock_bundle_store(tmp_path):
-    """Create mock BundleStore with a real temp directory."""
-    cache = Mock(spec=BundleStore)
-    cache.extract_bundle_to = Mock()
-    return cache
-
-
 def create_mock_container_handle(
     status_sequence: list[ContainerStatus] | None = None,
     run_side_effect: Exception | None = None,
@@ -138,42 +129,6 @@ def create_mock_container_handle(
     handle.disk_usage_mb = Mock(return_value=0)
     handle.cleanup = Mock()
     return handle
-
-
-@pytest.fixture
-def mock_runtime():
-    """Create mock DockerRuntime.
-
-    By default, simulates a container that runs and completes successfully.
-    """
-    runtime = Mock(spec=DockerRuntime)
-
-    # Create a mock handle that will be returned by create_container
-    mock_handle = create_mock_container_handle()
-    runtime.create_container = Mock(return_value=mock_handle)
-    runtime.stage_bundle = Mock()
-
-    runtime.list_iris_containers = Mock(return_value=[])
-    runtime.remove_all_iris_containers = Mock(return_value=0)
-    runtime.cleanup = Mock()
-    return runtime
-
-
-@pytest.fixture
-def worker(mock_bundle_store, mock_runtime, tmp_path):
-    """Create Worker with mocked dependencies."""
-    config = WorkerConfig(
-        port=0,
-        port_range=(50000, 50100),
-        poll_interval=Duration.from_seconds(0.1),  # Fast polling for tests
-        cache_dir=tmp_path / "cache",
-        default_task_image="mock-image",
-    )
-    return Worker(
-        config,
-        bundle_store=mock_bundle_store,
-        container_runtime=mock_runtime,
-    )
 
 
 def create_test_entrypoint():
@@ -235,25 +190,25 @@ def create_run_task_request(
     return request
 
 
-def test_task_lifecycle_phases(worker):
+def test_task_lifecycle_phases(mock_worker):
     """Test task transitions through PENDING -> BUILDING -> RUNNING -> SUCCEEDED."""
     request = create_run_task_request()
-    task_id = worker.submit_task(request)
+    task_id = mock_worker.submit_task(request)
 
-    task = worker.get_task(task_id)
+    task = mock_worker.get_task(task_id)
     task.thread.join(timeout=15.0)
 
-    final_task = worker.get_task(task_id)
+    final_task = mock_worker.get_task(task_id)
     assert final_task.status == cluster_pb2.TASK_STATE_SUCCEEDED
     assert final_task.exit_code == 0
 
 
-def test_runtime_stage_bundle_receives_workdir_files(worker, mock_runtime):
+def test_runtime_stage_bundle_receives_workdir_files(mock_worker, mock_runtime):
     request = create_run_task_request()
     request.entrypoint.workdir_files["extra.txt"] = b"extra"
-    task_id = worker.submit_task(request)
+    task_id = mock_worker.submit_task(request)
 
-    task = worker.get_task(task_id)
+    task = mock_worker.get_task(task_id)
     task.thread.join(timeout=15.0)
 
     assert mock_runtime.stage_bundle.called
@@ -262,12 +217,12 @@ def test_runtime_stage_bundle_receives_workdir_files(worker, mock_runtime):
     assert kwargs["workdir_files"]["extra.txt"] == b"extra"
 
 
-def test_task_with_ports(worker):
+def test_task_with_ports(mock_worker):
     """Test task with port allocation."""
     request = create_run_task_request(ports=["http", "grpc"])
-    task_id = worker.submit_task(request)
+    task_id = mock_worker.submit_task(request)
 
-    task = worker.get_task(task_id)
+    task = mock_worker.get_task(task_id)
 
     # Ports are allocated in the task thread during setup, so wait for the
     # task to move past PENDING before checking.
@@ -281,7 +236,7 @@ def test_task_with_ports(worker):
     task.thread.join(timeout=15.0)
 
 
-def test_task_failure_on_nonzero_exit(worker, mock_runtime):
+def test_task_failure_on_nonzero_exit(mock_worker, mock_runtime):
     """Test task fails when container exits with non-zero code."""
     # Update the mock handle's status to return failure immediately
     mock_handle = create_mock_container_handle(
@@ -290,18 +245,18 @@ def test_task_failure_on_nonzero_exit(worker, mock_runtime):
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
     request = create_run_task_request()
-    task_id = worker.submit_task(request)
+    task_id = mock_worker.submit_task(request)
 
-    task = worker.get_task(task_id)
+    task = mock_worker.get_task(task_id)
     task.thread.join(timeout=15.0)
 
-    final_task = worker.get_task(task_id)
+    final_task = mock_worker.get_task(task_id)
     assert final_task.status == cluster_pb2.TASK_STATE_FAILED
     assert final_task.exit_code == 1
     assert "Exit code: 1" in final_task.error
 
 
-def test_task_failure_on_error(worker, mock_runtime):
+def test_task_failure_on_error(mock_worker, mock_runtime):
     """Test task fails when container returns error."""
     # Update the mock handle's status to return error after first poll
     mock_handle = create_mock_container_handle(
@@ -313,17 +268,17 @@ def test_task_failure_on_error(worker, mock_runtime):
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
     request = create_run_task_request()
-    task_id = worker.submit_task(request)
+    task_id = mock_worker.submit_task(request)
 
-    task = worker.get_task(task_id)
+    task = mock_worker.get_task(task_id)
     task.thread.join(timeout=10.0)
 
-    final_task = worker.get_task(task_id)
+    final_task = mock_worker.get_task(task_id)
     assert final_task.status == cluster_pb2.TASK_STATE_FAILED
     assert final_task.error == "Container crashed"
 
 
-def test_task_infra_not_found_error_maps_to_worker_failed(worker, mock_runtime):
+def test_task_infra_not_found_error_maps_to_worker_failed(mock_worker, mock_runtime):
     """Infrastructure disappearance should consume preemption budget, not failure budget."""
     mock_handle = create_mock_container_handle(
         status_sequence=[
@@ -338,17 +293,17 @@ def test_task_infra_not_found_error_maps_to_worker_failed(worker, mock_runtime):
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
     request = create_run_task_request()
-    task_id = worker.submit_task(request)
+    task_id = mock_worker.submit_task(request)
 
-    task = worker.get_task(task_id)
+    task = mock_worker.get_task(task_id)
     task.thread.join(timeout=10.0)
 
-    final_task = worker.get_task(task_id)
+    final_task = mock_worker.get_task(task_id)
     assert final_task.status == cluster_pb2.TASK_STATE_WORKER_FAILED
     assert "Task pod not found" in (final_task.error or "")
 
 
-def test_docker_create_infra_error_maps_to_worker_failed(worker, mock_runtime):
+def test_docker_create_infra_error_maps_to_worker_failed(mock_worker, mock_runtime):
     """ContainerInfraError during build() should transition to WORKER_FAILED (preemption budget)."""
     mock_handle = create_mock_container_handle()
     mock_handle.build = Mock(
@@ -360,62 +315,62 @@ def test_docker_create_infra_error_maps_to_worker_failed(worker, mock_runtime):
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
     request = create_run_task_request()
-    task_id = worker.submit_task(request)
+    task_id = mock_worker.submit_task(request)
 
-    task = worker.get_task(task_id)
+    task = mock_worker.get_task(task_id)
     task.thread.join(timeout=15.0)
 
-    final_task = worker.get_task(task_id)
+    final_task = mock_worker.get_task(task_id)
     assert final_task.status == cluster_pb2.TASK_STATE_WORKER_FAILED
     assert "error getting credentials" in (final_task.error or "")
 
 
-def test_docker_create_user_error_still_maps_to_failed(worker, mock_runtime):
+def test_docker_create_user_error_still_maps_to_failed(mock_worker, mock_runtime):
     """A plain RuntimeError during build() should still transition to TASK_STATE_FAILED."""
     mock_handle = create_mock_container_handle()
     mock_handle.build = Mock(side_effect=RuntimeError("Build failed with exit_code=1"))
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
     request = create_run_task_request()
-    task_id = worker.submit_task(request)
+    task_id = mock_worker.submit_task(request)
 
-    task = worker.get_task(task_id)
+    task = mock_worker.get_task(task_id)
     task.thread.join(timeout=15.0)
 
-    final_task = worker.get_task(task_id)
+    final_task = mock_worker.get_task(task_id)
     assert final_task.status == cluster_pb2.TASK_STATE_FAILED
     assert "Build failed" in (final_task.error or "")
 
 
-def test_task_exception_handling(worker):
+def test_task_exception_handling(mock_worker):
     """Test task handles exceptions during execution."""
-    worker._runtime.stage_bundle = Mock(side_effect=Exception("Bundle download failed"))
+    mock_worker._runtime.stage_bundle = Mock(side_effect=Exception("Bundle download failed"))
 
     request = create_run_task_request()
-    task_id = worker.submit_task(request)
+    task_id = mock_worker.submit_task(request)
 
-    task = worker.get_task(task_id)
+    task = mock_worker.get_task(task_id)
     task.thread.join(timeout=15.0)
 
-    final_task = worker.get_task(task_id)
+    final_task = mock_worker.get_task(task_id)
     assert final_task.status == cluster_pb2.TASK_STATE_FAILED
     assert "Bundle download failed" in final_task.error
 
 
-def test_list_tasks(worker):
+def test_list_tasks(mock_worker):
     """Test listing all tasks."""
     requests = [
         create_run_task_request(task_id=JobName.root("test-user", "test-job").task(i).to_wire()) for i in range(3)
     ]
 
     for request in requests:
-        worker.submit_task(request)
+        mock_worker.submit_task(request)
 
-    tasks = worker.list_tasks()
+    tasks = mock_worker.list_tasks()
     assert len(tasks) == 3
 
 
-def test_kill_running_task(worker, mock_runtime):
+def test_kill_running_task(mock_worker, mock_runtime):
     """Test killing a running task with graceful timeout."""
     # Create a handle that stays running until killed
     mock_handle = create_mock_container_handle(
@@ -424,13 +379,13 @@ def test_kill_running_task(worker, mock_runtime):
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
     request = create_run_task_request()
-    task_id = worker.submit_task(request)
+    task_id = mock_worker.submit_task(request)
 
     # Wait for task thread to reach RUNNING state
-    task = worker.get_task(task_id)
+    task = mock_worker.get_task(task_id)
     wait_for_condition(lambda: task.status == cluster_pb2.TASK_STATE_RUNNING and task.container_id)
 
-    result = worker.kill_task(task_id, term_timeout_ms=100)
+    result = mock_worker.kill_task(task_id, term_timeout_ms=100)
     assert result is True
 
     task.thread.join(timeout=15.0)
@@ -439,7 +394,7 @@ def test_kill_running_task(worker, mock_runtime):
     mock_handle.stop.assert_called_with(force=True)
 
 
-def test_new_attempt_supersedes_old(worker, mock_runtime):
+def test_new_attempt_supersedes_old(mock_worker, mock_runtime):
     """New attempt for same task_id kills the old attempt and starts a new one."""
     # Create a handle that stays running until killed
     mock_handle = create_mock_container_handle(
@@ -448,32 +403,32 @@ def test_new_attempt_supersedes_old(worker, mock_runtime):
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
     request_0 = create_run_task_request(task_id=JobName.root("test-user", "retry-task").task(0).to_wire(), attempt_id=0)
-    worker.submit_task(request_0)
+    mock_worker.submit_task(request_0)
 
     # Wait for attempt 0 to be running
     task_id = JobName.root("test-user", "retry-task").task(0).to_wire()
-    old_task = worker.get_task(task_id)
+    old_task = mock_worker.get_task(task_id)
     wait_for_condition(lambda: old_task.status == cluster_pb2.TASK_STATE_RUNNING and old_task.container_id)
     assert old_task.attempt_id == 0
 
     # Submit attempt 1 for the same task_id — should kill attempt 0
     request_1 = create_run_task_request(task_id=JobName.root("test-user", "retry-task").task(0).to_wire(), attempt_id=1)
-    worker.submit_task(request_1)
+    mock_worker.submit_task(request_1)
 
     # Old attempt should have been killed
     assert old_task.should_stop is True
 
     # The new attempt should now be tracked with the new attempt_id
-    new_task = worker.get_task(task_id)
+    new_task = mock_worker.get_task(task_id)
     assert new_task.attempt_id == 1
     assert new_task is not old_task
 
     # Clean up
-    worker.kill_task(task_id)
+    mock_worker.kill_task(task_id)
     new_task.thread.join(timeout=15.0)
 
 
-def test_duplicate_attempt_rejected(worker, mock_runtime):
+def test_duplicate_attempt_rejected(mock_worker, mock_runtime):
     """Same attempt_id for an existing non-terminal task is rejected."""
     # Create a handle that stays running until killed
     mock_handle = create_mock_container_handle(
@@ -482,23 +437,23 @@ def test_duplicate_attempt_rejected(worker, mock_runtime):
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
     request = create_run_task_request(task_id=JobName.root("test-user", "dup-task").task(0).to_wire(), attempt_id=0)
-    worker.submit_task(request)
+    mock_worker.submit_task(request)
 
     # Wait for it to be running
     task_id = JobName.root("test-user", "dup-task").task(0).to_wire()
-    task = worker.get_task(task_id)
+    task = mock_worker.get_task(task_id)
     wait_for_condition(lambda: task.status == cluster_pb2.TASK_STATE_RUNNING)
 
     # Submit same attempt_id again — should be rejected (task unchanged)
-    worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0))
-    assert worker.get_task(task_id) is task  # Same object, not replaced
+    mock_worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0))
+    assert mock_worker.get_task(task_id) is task  # Same object, not replaced
 
     # Clean up
-    worker.kill_task(task_id)
+    mock_worker.kill_task(task_id)
     task.thread.join(timeout=15.0)
 
 
-def test_heartbeat_kill_is_non_blocking(worker, mock_runtime):
+def test_heartbeat_kill_is_non_blocking(mock_worker, mock_runtime):
     """Heartbeat returns immediately when killing tasks, without waiting for container shutdown."""
     # Create a handle that stays running indefinitely and has a slow stop()
     mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000)
@@ -515,10 +470,10 @@ def test_heartbeat_kill_is_non_blocking(worker, mock_runtime):
 
     task_id_wire = JobName.root("test-user", "hb-kill-task").task(0).to_wire()
     request = create_run_task_request(task_id=task_id_wire)
-    worker.submit_task(request)
+    mock_worker.submit_task(request)
 
     # Wait for task to reach RUNNING
-    task = worker.get_task(task_id_wire)
+    task = mock_worker.get_task(task_id_wire)
     wait_for_condition(lambda: task.status == cluster_pb2.TASK_STATE_RUNNING)
 
     # Build a heartbeat that requests this task be killed.
@@ -532,7 +487,7 @@ def test_heartbeat_kill_is_non_blocking(worker, mock_runtime):
     )
 
     start = time.monotonic()
-    response = worker.handle_heartbeat(heartbeat_req)
+    response = mock_worker.handle_heartbeat(heartbeat_req)
     elapsed = time.monotonic() - start
 
     # The heartbeat should return well under the 2s slow_stop delay
@@ -549,7 +504,7 @@ def test_heartbeat_kill_is_non_blocking(worker, mock_runtime):
     assert task.status == cluster_pb2.TASK_STATE_KILLED
 
 
-def test_heartbeat_reconciliation_kill_is_non_blocking(worker, mock_runtime):
+def test_heartbeat_reconciliation_kill_is_non_blocking(mock_worker, mock_runtime):
     """Tasks not in expected_tasks are killed asynchronously during heartbeat reconciliation."""
     mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000)
 
@@ -564,9 +519,9 @@ def test_heartbeat_reconciliation_kill_is_non_blocking(worker, mock_runtime):
 
     task_id_wire = JobName.root("test-user", "reconcile-kill").task(0).to_wire()
     request = create_run_task_request(task_id=task_id_wire)
-    worker.submit_task(request)
+    mock_worker.submit_task(request)
 
-    task = worker.get_task(task_id_wire)
+    task = mock_worker.get_task(task_id_wire)
     wait_for_condition(lambda: task.status == cluster_pb2.TASK_STATE_RUNNING)
 
     # Send heartbeat with empty expected_tasks -- the worker should kill
@@ -574,7 +529,7 @@ def test_heartbeat_reconciliation_kill_is_non_blocking(worker, mock_runtime):
     heartbeat_req = cluster_pb2.HeartbeatRequest(expected_tasks=[])
 
     start = time.monotonic()
-    worker.handle_heartbeat(heartbeat_req)
+    mock_worker.handle_heartbeat(heartbeat_req)
     elapsed = time.monotonic() - start
 
     assert elapsed < 1.0, f"Heartbeat took {elapsed:.2f}s, expected < 1.0s (reconciliation kill should be async)"
@@ -584,18 +539,18 @@ def test_heartbeat_reconciliation_kill_is_non_blocking(worker, mock_runtime):
     assert task.status == cluster_pb2.TASK_STATE_KILLED
 
 
-def test_kill_nonexistent_task(worker):
+def test_kill_nonexistent_task(mock_worker):
     """Test killing a nonexistent task returns False."""
-    result = worker.kill_task(JobName.root("test-user", "nonexistent-task").task(0).to_wire())
+    result = mock_worker.kill_task(JobName.root("test-user", "nonexistent-task").task(0).to_wire())
     assert result is False
 
 
-def test_port_env_vars_set(worker, mock_runtime):
+def test_port_env_vars_set(mock_worker, mock_runtime):
     """Test that IRIS_PORT_* environment variables are set for requested ports."""
     request = create_run_task_request(ports=["web", "api", "metrics"])
-    task_id = worker.submit_task(request)
+    task_id = mock_worker.submit_task(request)
 
-    task = worker.get_task(task_id)
+    task = mock_worker.get_task(task_id)
     task.thread.join(timeout=15.0)
 
     assert mock_runtime.create_container.called
@@ -667,17 +622,17 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     assert "IRIS_TASK_ID" in env
 
 
-def test_task_failure_error_appears_in_logs(worker):
+def test_task_failure_error_appears_in_logs(mock_worker):
     """Test that task failure errors appear in logs."""
-    worker._runtime.stage_bundle = Mock(side_effect=Exception("Bundle download failed"))
+    mock_worker._runtime.stage_bundle = Mock(side_effect=Exception("Bundle download failed"))
 
     request = create_run_task_request()
-    task_id = worker.submit_task(request)
+    task_id = mock_worker.submit_task(request)
 
-    task = worker.get_task(task_id)
+    task = mock_worker.get_task(task_id)
     task.thread.join(timeout=15.0)
 
-    final_task = worker.get_task(task_id)
+    final_task = mock_worker.get_task(task_id)
     assert final_task.status == cluster_pb2.TASK_STATE_FAILED
     assert "Bundle download failed" in final_task.error
 

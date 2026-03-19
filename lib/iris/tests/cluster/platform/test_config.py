@@ -8,6 +8,7 @@ YAML, ensuring that vm_type and platform configuration are preserved correctly.
 """
 
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 import yaml
@@ -833,65 +834,36 @@ class TestConfigValidation:
 
         validate_config(config)  # Should not raise
 
-    def test_rejects_gcp_vm_mode_with_preemptible(self):
+    @pytest.mark.parametrize(
+        "num_vms,device_type,device_count,preemptible,error_match",
+        [
+            (1, config_pb2.ACCELERATOR_TYPE_CPU, 0, True, "do not support preemptible"),
+            (2, config_pb2.ACCELERATOR_TYPE_CPU, 0, False, "require num_vms=1"),
+            (1, config_pb2.ACCELERATOR_TYPE_GPU, 1, False, "require device_type=cpu"),
+        ],
+        ids=["preemptible", "multi_vm", "non_cpu"],
+    )
+    def test_rejects_invalid_gcp_vm_mode(self, num_vms, device_type, device_count, preemptible, error_match):
         config = config_pb2.IrisClusterConfig()
         sg = config_pb2.ScaleGroupConfig(
-            name="cpu-vm",
-            num_vms=1,
+            name="test-vm",
+            num_vms=num_vms,
             resources=config_pb2.ScaleGroupResources(
                 cpu_millicores=8000,
                 memory_bytes=16 * 1024**3,
-                device_type=config_pb2.ACCELERATOR_TYPE_CPU,
-                preemptible=True,
+                device_type=device_type,
+                device_count=device_count,
+                preemptible=preemptible,
             ),
         )
-        sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
-        sg.slice_template.preemptible = True
+        sg.slice_template.accelerator_type = device_type
+        sg.slice_template.preemptible = preemptible
         sg.slice_template.gcp.zone = "us-central1-a"
         sg.slice_template.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
         sg.slice_template.gcp.machine_type = "n2-standard-4"
-        config.scale_groups["cpu-vm"].CopyFrom(sg)
+        config.scale_groups["test-vm"].CopyFrom(sg)
 
-        with pytest.raises(ValueError, match="do not support preemptible"):
-            validate_config(config)
-
-    def test_rejects_gcp_vm_mode_with_num_vms_not_one(self):
-        config = config_pb2.IrisClusterConfig()
-        sg = config_pb2.ScaleGroupConfig(
-            name="cpu-vm",
-            num_vms=2,
-            resources=config_pb2.ScaleGroupResources(
-                cpu_millicores=8000, memory_bytes=16 * 1024**3, device_type=config_pb2.ACCELERATOR_TYPE_CPU
-            ),
-        )
-        sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
-        sg.slice_template.gcp.zone = "us-central1-a"
-        sg.slice_template.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
-        sg.slice_template.gcp.machine_type = "n2-standard-4"
-        config.scale_groups["cpu-vm"].CopyFrom(sg)
-
-        with pytest.raises(ValueError, match="require num_vms=1"):
-            validate_config(config)
-
-    def test_rejects_gcp_vm_mode_with_non_cpu_accelerator(self):
-        config = config_pb2.IrisClusterConfig()
-        sg = config_pb2.ScaleGroupConfig(
-            name="gpu-vm",
-            num_vms=1,
-            resources=config_pb2.ScaleGroupResources(
-                cpu_millicores=8000,
-                memory_bytes=16 * 1024**3,
-                device_count=1,
-                device_type=config_pb2.ACCELERATOR_TYPE_GPU,
-            ),
-        )
-        sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_GPU
-        sg.slice_template.gcp.zone = "us-central1-a"
-        sg.slice_template.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
-        sg.slice_template.gcp.machine_type = "n2-standard-4"
-        config.scale_groups["gpu-vm"].CopyFrom(sg)
-
-        with pytest.raises(ValueError, match="require device_type=cpu"):
+        with pytest.raises(ValueError, match=error_match):
             validate_config(config)
 
     def test_accepts_gcp_vm_mode_cpu_single_vm_non_preemptible(self):
@@ -974,9 +946,10 @@ class TestWorkerSettingsValidation:
         with pytest.raises(ValueError, match="must match"):
             validate_config(config)
 
-    def test_empty_region_attribute_rejected(self):
-        """worker.attributes.region set to empty string fails validation."""
-        config = _config_with_gcp_sg("us-west4-b", worker_attributes={WellKnownAttribute.REGION: ""})
+    @pytest.mark.parametrize("attr", [WellKnownAttribute.REGION, WellKnownAttribute.ZONE])
+    def test_empty_attribute_rejected(self, attr: str):
+        """worker.attributes set to empty string fails validation."""
+        config = _config_with_gcp_sg("us-west4-b", worker_attributes={attr: ""})
         with pytest.raises(ValueError, match="must be non-empty"):
             validate_config(config)
 
@@ -1017,12 +990,6 @@ class TestWorkerSettingsValidation:
         """worker.attributes.zone not matching slice_template.gcp.zone fails validation."""
         config = _config_with_gcp_sg("us-west4-b", worker_attributes={WellKnownAttribute.ZONE: "us-west4-a"})
         with pytest.raises(ValueError, match="must match"):
-            validate_config(config)
-
-    def test_empty_zone_attribute_rejected(self):
-        """worker.attributes.zone set to empty string fails validation."""
-        config = _config_with_gcp_sg("us-west4-b", worker_attributes={WellKnownAttribute.ZONE: ""})
-        with pytest.raises(ValueError, match="must be non-empty"):
             validate_config(config)
 
 
@@ -1242,31 +1209,39 @@ scale_groups:
         with pytest.raises(ValueError, match="non-empty string"):
             load_config(p)
 
-    def test_conflicting_gcp_zone_rejected(self, tmp_path: Path):
-        """User-provided slice_template.gcp.zone conflicts with zones expansion."""
-        config_content = """\
-platform:
-  gcp:
-    project_id: test
-
-scale_groups:
-  tpu_group:
-    zones: [us-west4-a]
-    num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
+    _ZONES_CONFLICT_CONFIGS: ClassVar[dict[str, str]] = {
+        "gcp_zone": (
+            """\
     slice_template:
       gcp:
         zone: europe-west4-b
+        runtime_version: v2-alpha-tpuv5-lite"""
+        ),
+        "worker_zone": (
+            """\
+    slice_template:
+      gcp:
         runtime_version: v2-alpha-tpuv5-lite
-"""
-        p = tmp_path / "config.yaml"
-        p.write_text(config_content)
-        with pytest.raises(ValueError, match="cannot set both"):
-            load_config(p)
+    worker:
+      attributes:
+        zone: "us-west4-a" """
+        ),
+        "worker_region": (
+            """\
+    slice_template:
+      gcp:
+        runtime_version: v2-alpha-tpuv5-lite
+    worker:
+      attributes:
+        region: "us-west4" """
+        ),
+    }
 
-    def test_conflicting_worker_zone_attr_rejected(self, tmp_path: Path):
-        """User-provided worker.attributes.zone conflicts with zones expansion."""
-        config_content = """\
+    @pytest.mark.parametrize("conflict_type", ["gcp_zone", "worker_zone", "worker_region"])
+    def test_conflicting_field_with_zones_rejected(self, tmp_path: Path, conflict_type: str):
+        """Fields that conflict with zones expansion are rejected."""
+        extra_yaml = self._ZONES_CONFLICT_CONFIGS[conflict_type]
+        config_content = f"""\
 platform:
   gcp:
     project_id: test
@@ -1275,37 +1250,8 @@ scale_groups:
   tpu_group:
     zones: [us-west4-a]
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
-    slice_template:
-      gcp:
-        runtime_version: v2-alpha-tpuv5-lite
-    worker:
-      attributes:
-        zone: "us-west4-a"
-"""
-        p = tmp_path / "config.yaml"
-        p.write_text(config_content)
-        with pytest.raises(ValueError, match="cannot set both"):
-            load_config(p)
-
-    def test_conflicting_worker_region_attr_rejected(self, tmp_path: Path):
-        """User-provided worker.attributes.region conflicts with zones expansion."""
-        config_content = """\
-platform:
-  gcp:
-    project_id: test
-
-scale_groups:
-  tpu_group:
-    zones: [us-west4-a]
-    num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
-    slice_template:
-      gcp:
-        runtime_version: v2-alpha-tpuv5-lite
-    worker:
-      attributes:
-        region: "us-west4"
+    resources: {{ cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }}
+{extra_yaml}
 """
         p = tmp_path / "config.yaml"
         p.write_text(config_content)
