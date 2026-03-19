@@ -1228,3 +1228,601 @@ KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_k
   - the improvement is larger on `topk=8` than on `topk=2`, but the absolute parity gap there remains especially large.
 - Next action:
   - post a milestone update to `#3841`, then start the next candidate branch. The most likely next local-compute candidate is a `w2` layout experiment (`out_first`) or another narrowing step that targets the remaining non-parity gap without reopening the already-flat `w13` guardrail.
+
+### 2026-03-19 05:51 UTC - `w2` `out_first` is a negative result on the exact-cap forward ladder
+- Experiment ID: `OVLP-RES-025`
+- Hypothesis:
+  - if the remaining exact-cap local-compute gap after `w2` expert padding is partly caused by the stored `w2` weight layout, then flipping `w2` to `out_first` should improve `local_compute_only` and maybe `capped_prewarmed` while leaving the `w13_only` guardrail flat.
+- Command:
+
+```bash
+git commit -m "bench: add w2 out-first benchmark flag"
+git push origin research/moe-jax-deepep-residual-overlap
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 923184132e6c87462de6204cb3204491725d8b60 \
+  --task-id ovlpres-w2of-ladder-t262144-r2-20260319-0544 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe,deepep_transport_local_compute_only_probe,deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --w2-out-first \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - commit: `923184132e6c87462de6204cb3204491725d8b60`
+  - files changed:
+    - `lib/levanter/scripts/bench/bench_moe_hillclimb.py`
+    - `.agents/scripts/deepep_jax_krt_bench.py`
+  - local verification:
+    - `python -m py_compile lib/levanter/scripts/bench/bench_moe_hillclimb.py .agents/scripts/deepep_jax_krt_bench.py`
+    - help output for both scripts shows `--w2-out-first`
+  - reference ladder from the `w2` expert-padded candidate:
+    - `w13_only`: `0.002426 s`
+    - `local_compute_only`: `0.005050 s`
+    - `capped_prewarmed`: `0.007973 s`
+- Result:
+  - `w13_only`: `0.002423 s` / `108,199,823.29 tok/s`
+  - `local_compute_only`: `0.005046 s` / `51,950,466.08 tok/s`
+  - `capped_prewarmed`: `0.007978 s` / `32,859,716.19 tok/s`
+  - the first launch used a mistyped full SHA and was deleted before it could consume the lane; the corrected launch ran on pod `iris-task-4ee10de390e1`
+- Interpretation:
+  - this is flat within noise on every rung that matters.
+  - `w2 out_first` is therefore not the next path to closing the JAX-vs-Megatron gap, at least when stacked on top of `w13` and `w2` expert padding in the exact-cap forward ladder.
+- Next action:
+  - stop spending rows on `w2 out_first` and re-profile the post-`w2` exact-cap `forward_backward` path to identify the next residual.
+
+### 2026-03-19 05:51 UTC - Post-`w2` exact-cap `forward_backward` profile is in flight on the shared-2048 row
+- Experiment ID: `OVLP-RES-026`
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 923184132e6c87462de6204cb3204491725d8b60 \
+  --task-id ovlpres-exactcap-fb-profile-w2pad-t131072-20260319-0555 \
+  --tokens 131072 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 2 \
+  --iters 3 \
+  --profile-root /tmp/ovlpres-exactcap-fb-131072-topk2-w2pad \
+  --post-bench-sleep-seconds 1800 \
+  --per-bench-timeout-seconds 1800 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - pod: `iris-task-1c98330fed6f`
+  - node selector: `iris-i3821jax-scale-group=h100-8x`
+- Result:
+  - timed result: `0.089530 s` / `1,464,006.24 tok/s`
+  - profile artifacts copied locally:
+    - `scratch/profiles/ovlpres-exactcap-fb-131072-topk2-w2pad`
+    - `scratch/profiles/ovlpres-exactcap-fb-131072-topk2-w2pad-summary.json`
+    - `scratch/profiles/ovlpres-exactcap-fb-131072-topk2-w2pad-report.md`
+  - direct profile deltas vs the pre-`w2` exact-cap shared-2048 profile (`scratch/profiles/ovlpres-exactcap-fb-131072-topk2-report.md`):
+    - compute share: `43.31% -> 42.58%`
+    - communication share: `1.53% -> 1.34%`
+    - host share: `55.03% -> 55.90%`
+    - all-reduce exclusive: `18,681.861 -> 12,872.026`
+    - pre-all-reduce idle gap: `565,816.590 -> 458,099.668`
+  - top-op mix changed materially:
+    - the old large `nvjet_tst_*` GEMM hotspots no longer dominate
+    - the new leaders are `input_scatter_fusion_4` (`63,757.272`), `input_scatter_fusion` (`60,565.861`), DeepEP dispatch (`37,006.390`), DeepEP combine (`34,550.040`), and `cached_notify_combine` (`32,619.284`)
+- Interpretation:
+  - the `w2` expert-padded change did remove a real local-compute bottleneck, but it did not convert the residual into a simple next GEMM-layout problem.
+  - the remaining shared-2048 `forward_backward` gap is now even more clearly dominated by host/glue overhead, pre-collective waiting, and dispatch/combine-side work.
+  - this makes another narrow local layout tweak low priority relative to attacking XLA glue or transport/combine synchronization.
+- Next action:
+  - delete the sleeping profile pod, then inspect the exact-cap `forward_backward` code around dispatch/combine and the HLO-driving glue to pick the next candidate branch.
+
+### 2026-03-19 06:15 UTC - Gather-based expert-padded pack is a strong positive result on the exact-cap forward ladder
+- Experiment ID: `OVLP-RES-027`
+- Hypothesis:
+  - the remaining top exact-cap local-compute hotspots (`input_scatter_fusion*`) come from the scatter-based expert-padded pack path; replacing that with a gather-based pack that exploits the already-grouped expert layout should materially improve `w13_only`, `local_compute_only`, and `capped_prewarmed`.
+- Code:
+  - commit: `52fb00bf02ba7375467ed4e58194b3a076ea47c6`
+  - commit message: `moe: gather-pack expert-padded ragged dots`
+  - files changed:
+    - `lib/levanter/src/levanter/grug/grug_moe.py`
+    - `lib/levanter/scripts/bench/bench_moe_hillclimb.py`
+  - local verification:
+    - `python -m py_compile lib/levanter/src/levanter/grug/grug_moe.py lib/levanter/scripts/bench/bench_moe_hillclimb.py`
+    - `uv run python` numerical equivalence check against the old scatter-based reference on multiple small cases; max abs diff `0.0`
+- Command:
+
+```bash
+git commit -m "moe: gather-pack expert-padded ragged dots"
+git push origin research/moe-jax-deepep-residual-overlap
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 52fb00bf02ba7375467ed4e58194b3a076ea47c6 \
+  --task-id ovlpres-gatherpack-ladder-t262144-r2-20260319-0613 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe,deepep_transport_local_compute_only_probe,deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - pinned lane: `iris-i3821jax-scale-group=h100-8x`
+  - pod: `iris-task-2a8726118710`
+  - authoritative pre-change reference from the previous `w2` expert-padded baseline:
+    - `w13_only`: `0.002426 s` / `108,047,212.04 tok/s`
+    - `local_compute_only`: `0.005050 s` / `51,911,860.65 tok/s`
+    - `capped_prewarmed`: `0.007973 s` / `32,880,566.00 tok/s`
+- Result:
+  - `w13_only`: `0.001080 s` / `242,704,374.67 tok/s`
+    - vs prior: `-55.5%` time / `+124.6%` throughput
+  - `local_compute_only`: `0.003675 s` / `71,327,106.63 tok/s`
+    - vs prior: `-27.2%` time / `+37.4%` throughput
+  - `capped_prewarmed`: `0.006578 s` / `39,852,597.50 tok/s`
+    - vs prior: `-17.5%` time / `+21.2%` throughput
+  - each kernel still ended with the known DeepEP/XLA teardown noise (`DeepEP timeout check failed`, `CUDA_ERROR_LAUNCH_FAILED`) but the wrapper completed successfully with `EXIT_CODE=0`
+- Interpretation:
+  - this confirms the expert-padded scatter pack itself was a real residual bottleneck after the earlier `w13` and `w2` layout fixes.
+  - the change is not just a local-compute micro-win: it moves the decision rung `capped_prewarmed` substantially on the authoritative exact-cap forward cell.
+  - the very large `w13_only` improvement means the old scatter-based pack was dominating more of the first ragged-dot path than the earlier profile decomposition made obvious.
+- Next action:
+  - rerun the reduced shared-2048 `forward_backward` JAX exact-cap rows (`131072` and `262144`, `topk=2,8`) on this commit to measure how much of the `#3717` JAX-vs-Megatron gap this closes.
+
+### 2026-03-19 06:22 UTC - Shared-2048 `forward_backward` rerun shows only modest uplift at `131072`
+- Experiment ID: `OVLP-RES-028`
+- Hypothesis:
+  - if the gather-based expert-padded pack fix closes a meaningful chunk of the remaining `#3717` gap, then the reduced shared-2048 `forward_backward` JAX rows should move materially, not just the exact-cap forward ladder.
+- Commands:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 52fb00bf02ba7375467ed4e58194b3a076ea47c6 \
+  --task-id ovlpres-3717jax-gatherpack-fb-t131072-20260319-0616 \
+  --tokens 131072 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 2,8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 52fb00bf02ba7375467ed4e58194b3a076ea47c6 \
+  --task-id ovlpres-3717jax-gatherpack-fb-t262144-20260319-0621 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 2,8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `52fb00bf02ba7375467ed4e58194b3a076ea47c6`
+  - `131072` pod: `iris-task-d87568544c07`
+  - `262144` pod in flight: `iris-task-dcc994e5d236`
+  - prior shared-2048 reference from the post-`w2` branch:
+    - `131072, topk=2`: `7,426,381.18 tok/s`
+    - `131072, topk=8`: `2,698,342.41 tok/s`
+    - `262144, topk=2`: `7,766,980.51 tok/s`
+    - `262144, topk=8`: `2,736,691.72 tok/s`
+- Result so far:
+  - `131072, topk=2`: `7,561,909.56 tok/s` (`17.333 ms`)
+    - vs prior JAX rerun: `+1.8%`
+    - vs sealed Megatron anchor `12,712,443`: still about `1.68x` slower
+  - `131072, topk=8`: `2,779,335.11 tok/s` (`47.159 ms`)
+    - vs prior JAX rerun: `+3.0%`
+    - vs sealed Megatron anchor `6,577,851`: still about `2.37x` slower
+  - `262144` is still running as of this checkpoint.
+- Interpretation:
+  - the gather-pack fix is real and valuable on the exact-cap forward ladder, but its benefit only partly carries into the shared-2048 `forward_backward` regime.
+  - this suggests the dominant residual for the `#3717` gap is now elsewhere again, likely in backward/shared-expert work, synchronization, or other transport/combine glue that the exact-cap forward ladder does not stress as directly.
+- Next action:
+  - wait for the `262144` companion row, then decide whether this branch is worth posting as a milestone or whether the next optimization thread should pivot back to the broader backward/shared-2048 residual.
+
+### 2026-03-19 15:36 UTC - Complete the gather-pack shared-2048 rerun and confirm it is only a partial win
+- Experiment ID: `OVLP-RES-029`
+- Hypothesis:
+  - if the gather-pack fix materially closes the broader `#3717` gap, the missing `262144` shared-2048 `forward_backward` row should show the same kind of step change as the exact-cap forward ladder rather than another marginal move.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 52fb00bf02ba7375467ed4e58194b3a076ea47c6 \
+  --task-id ovlpres-3717jax-gatherpack-fb-t262144-20260319-1503 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 2,8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `52fb00bf02ba7375467ed4e58194b3a076ea47c6`
+  - pod: `iris-task-c685fabfad01`
+  - prior shared-2048 reference from the post-`w2` branch:
+    - `262144, topk=2`: `7,766,980.51 tok/s`
+    - `262144, topk=8`: `2,736,691.72 tok/s`
+- Result:
+  - `262144, topk=2`: `7,905,937.49 tok/s` (`33.158 ms`)
+    - vs prior JAX rerun: `+1.8%`
+    - vs sealed Megatron anchor `15,830,593`: still about `2.00x` slower
+  - `262144, topk=8`: `2,820,152.95 tok/s` (`92.954 ms`)
+    - vs prior JAX rerun: `+3.0%`
+    - vs sealed Megatron anchor `7,649,303`: still about `2.71x` slower
+- Interpretation:
+  - the gather-pack fix is now fully measured across the reduced shared-2048 rerun and the answer is consistent: it is a real exact-cap win, but only a modest `forward_backward` win in the regime that matters for the remaining JAX-vs-Megatron gap.
+  - the next residual branch should focus on backward/shared-expert work rather than extending the forward gather-pack idea further.
+- Next action:
+  - implement one bounded backward-side candidate and validate it on the exact-cap forward guardrails before rerunning the shared-2048 row.
+
+### 2026-03-19 15:36 UTC - Add an explicit backward for expert-padded ragged dot
+- Experiment ID: `OVLP-RES-030`
+- Hypothesis:
+  - the gather-pack forward fix removed the pack bottleneck on the exact-cap forward ladder, but the remaining shared-2048 gap is now likely dominated by backward-side scatter/transposes and generic autodiff glue in the expert-padded batched-dot path.
+  - replacing that generic backward with an explicit custom VJP should reduce the isolated exact-cap backward probes enough to justify another shared-2048 rerun.
+- Commands:
+
+```bash
+python -m py_compile \
+  lib/levanter/src/levanter/grug/grug_moe.py \
+  lib/levanter/scripts/bench/bench_moe_hillclimb.py \
+  lib/levanter/tests/test_grug_moe.py
+
+uv run pytest lib/levanter/tests/test_grug_moe.py -q
+uv run pytest lib/haliax/tests/test_ragged_dot_dispatch.py -q
+
+git commit -m "moe: add explicit backward for expert-padded ragged dot"
+git push origin research/moe-jax-deepep-residual-overlap
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 25deb3ac940fde89bc1732acf76cfbb4ab30f2e9 \
+  --task-id ovlpres-bwdpad-ladder-t262144-20260319-1524 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe,deepep_transport_local_compute_only_probe,deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - commit: `25deb3ac940fde89bc1732acf76cfbb4ab30f2e9`
+  - files changed:
+    - `lib/levanter/src/levanter/grug/grug_moe.py`
+    - `lib/levanter/scripts/bench/bench_moe_hillclimb.py`
+    - `lib/levanter/tests/test_grug_moe.py`
+  - prior forward reference on the gather-pack branch:
+    - `w13_only`: `242,704,374.67 tok/s`
+    - `local_compute_only`: `71,327,106.63 tok/s`
+    - `capped_prewarmed`: `39,852,597.50 tok/s`
+- Result:
+  - local verification passed:
+    - `py_compile`
+    - `lib/levanter/tests/test_grug_moe.py`
+    - `lib/haliax/tests/test_ragged_dot_dispatch.py`
+  - forward validation ladder stayed clean:
+    - `w13_only`: `242,678,805.79 tok/s`
+    - `local_compute_only`: `71,669,032.68 tok/s`
+    - `capped_prewarmed`: `40,048,270.15 tok/s`
+- Interpretation:
+  - the explicit backward candidate does not regress the forward guardrails and is safe to promote to backward-focused validation.
+  - because the forward numbers are effectively flat to slightly better, any downstream improvement on the shared-2048 `forward_backward` row is likely attributable to the backward change rather than a new forward-side confounder.
+- Next action:
+  - run isolated exact-cap backward probes on the same commit to see whether the backward-side residual actually moved.
+
+### 2026-03-19 15:36 UTC - Isolated exact-cap backward probes show a large move on `w13` and `w2`
+- Experiment ID: `OVLP-RES-031`
+- Hypothesis:
+  - if the new explicit backward is addressing the right residual, the shared-0 exact-cap backward probes should move sharply on the `w13` and `w2` stages before we spend another shared-2048 rerun.
+- Commands:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 25deb3ac940fde89bc1732acf76cfbb4ab30f2e9 \
+  --task-id ovlpres-bwdpad-probes-fb131072-shared0-20260319-1528 \
+  --tokens 131072 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_bwd_probe,deepep_transport_w2_only_bwd_probe,deepep_transport_local_compute_bwd_probe \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl delete pod -n iris-3821-jax iris-task-a81021d98d1a --wait=true
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 25deb3ac940fde89bc1732acf76cfbb4ab30f2e9 \
+  --task-id ovlpres-bwdpad-3717jax-fb-t131072-20260319-1541 \
+  --tokens 131072 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 2,8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `25deb3ac940fde89bc1732acf76cfbb4ab30f2e9`
+  - backward probe pod: `iris-task-a81021d98d1a`
+  - new shared-2048 pod: `iris-task-d382380b074a`
+  - prior exact-cap backward probe reference:
+    - `w13_only_bwd_probe`: `38,179,646.02 tok/s`
+    - `w2_only_bwd_probe`: `40,321,856.23 tok/s`
+    - `local_compute_bwd_probe`: `19,987,362.12 tok/s`
+- Result so far:
+  - `w13_only_bwd_probe`: `195,195,904.08 tok/s`
+    - vs prior: about `5.1x` faster
+  - `w2_only_bwd_probe`: `249,467,080.75 tok/s`
+    - vs prior: about `6.2x` faster
+  - both isolated stages still ended with the known DeepEP/XLA teardown noise (`CUDA_ERROR_LAUNCH_FAILED`) but returned `bench_status=0`
+  - `local_compute_bwd_probe` was still compiling/running after more than two minutes on the pinned H100 lane, so I deleted the pod rather than blocking the shared-2048 promotion test behind a lower-signal diagnostic.
+- Interpretation:
+  - the isolated backward probes are strong enough to justify promotion: the new custom backward appears to remove a large exact-cap residual on both routed backward stages.
+  - the unresolved question is not whether the micro-probes moved, but whether that move survives into the actual shared-2048 `forward_backward` row that defines the JAX-vs-Megatron branch decision.
+- Next action:
+  - wait for `ovlpres-bwdpad-3717jax-fb-t131072-20260319-1541`, then compare it against the gather-pack shared-2048 reference before deciding whether to post a milestone update.
+
+### 2026-03-19 15:42 UTC - The custom backward carries into the first shared-2048 row
+- Experiment ID: `OVLP-RES-032`
+- Hypothesis:
+  - if the explicit backward is fixing a branch-level residual rather than just probe noise, the reduced shared-2048 `forward_backward` row should improve materially on both `topk=2` and `topk=8`.
+- Commands:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 25deb3ac940fde89bc1732acf76cfbb4ab30f2e9 \
+  --task-id ovlpres-bwdpad-3717jax-fb-t131072-20260319-1541 \
+  --tokens 131072 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 2,8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 25deb3ac940fde89bc1732acf76cfbb4ab30f2e9 \
+  --task-id ovlpres-bwdpad-3717jax-fb-t262144-20260319-1542 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 2,8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `25deb3ac940fde89bc1732acf76cfbb4ab30f2e9`
+  - completed `131072` pod: `iris-task-d382380b074a`
+  - in-flight `262144` pod: `iris-task-089991961ff8`
+  - prior gather-pack shared-2048 reference:
+    - `131072, topk=2`: `7,561,909.56 tok/s`
+    - `131072, topk=8`: `2,779,335.11 tok/s`
+- Result so far:
+  - `131072, topk=2`: `11,239,581.66 tok/s` (`11.662 ms`)
+    - vs gather-pack branch: `+48.6%`
+    - vs sealed Megatron anchor `12,712,443`: now only about `13.1%` slower
+  - `131072, topk=8`: `5,313,729.98 tok/s` (`24.667 ms`)
+    - vs gather-pack branch: `+91.2%`
+    - vs sealed Megatron anchor `6,577,851`: now only about `23.8%` slower
+  - `262144, topk=2`: `12,042,936.22 tok/s` (`21.767 ms`)
+    - vs gather-pack branch: `+52.4%`
+    - vs sealed Megatron anchor `15,830,593`: now about `1.31x` slower
+  - `262144, topk=8`: `5,402,725.41 tok/s` (`48.521 ms`)
+    - vs gather-pack branch: `+91.6%`
+    - vs sealed Megatron anchor `7,649,303`: now about `1.42x` slower
+- Interpretation:
+  - this is the first shared-2048 evidence that the residual-overlap branch is actually closing the JAX-vs-Megatron gap instead of just moving exact-cap forward microbenchmarks.
+  - the improvement now holds across all four rows in the reduced rerun, with the strongest relative gains on `topk=8`.
+  - the gap is no longer “much much slower” in the same way it was earlier in the night; JAX still trails Megatron on the large rows, but it is now within roughly `13%` to `42%` on these sealed anchors rather than `2x` to `4x`.
+- Next action:
+  - run one matched Megatron DeepEP rerun on the same fresh lane to validate the comparison against a current same-cluster reference before posting a milestone update.
+
+### 2026-03-19 16:02 UTC - Same-lane Megatron reruns are too noisy to replace the sealed anchors
+- Experiment ID: `OVLP-RES-033`
+- Hypothesis:
+  - if the remaining JAX-vs-Megatron comparison is mostly a stale-reference problem, a same-lane Megatron rerun should reproduce the older Megatron column closely enough to replace the sealed anchors.
+- Commands:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/megatron_deepep_qwen_runner.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 25deb3ac940fde89bc1732acf76cfbb4ab30f2e9 \
+  --task-id ovlpres-megatron-deepep-reduced-20260319-1550 \
+  --cases marin_3633_topk_2_mb4,marin_3633_topk_8_mb4,marin_3633_topk_2_mb8,marin_3633_topk_8_mb8 \
+  --dispatchers deepep \
+  --warmup-iters 1 \
+  --measure-iters 2 \
+  --dummy-gemm-size 8192 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/megatron_deepep_qwen_runner.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 25deb3ac940fde89bc1732acf76cfbb4ab30f2e9 \
+  --task-id ovlpres-megatron-topk2-stability-20260319-1600 \
+  --cases marin_3633_topk_2_mb4,marin_3633_topk_2_mb8 \
+  --dispatchers deepep \
+  --warmup-iters 1 \
+  --measure-iters 5 \
+  --dummy-gemm-size 8192 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `25deb3ac940fde89bc1732acf76cfbb4ab30f2e9`
+  - 4-case reduced rerun log: `scratch/3717-rerun/ovlpres-megatron-deepep-reduced-20260319-1550.log`
+  - topk=2 stability rerun log: `scratch/3717-rerun/ovlpres-megatron-topk2-stability-20260319-1600.log`
+  - sealed Megatron anchors still used for comparison:
+    - `131072, topk=2`: `12,712,443 tok/s`
+    - `131072, topk=8`: `6,577,851 tok/s`
+    - `262144, topk=2`: `15,830,593 tok/s`
+    - `262144, topk=8`: `7,649,303 tok/s`
+- Result:
+  - 4-case rerun (`measure-iters=2`):
+    - `131072, topk=2` (`marin_3633_topk_2_mb4`): `956,158.77 tok/s`, `forward_std_ms=82.974`, `backward_std_ms=23.458`
+    - `131072, topk=8` (`marin_3633_topk_8_mb4`): `4,380,088.15 tok/s`, `forward_std_ms=0.927`, `backward_std_ms=0.051`
+    - `262144, topk=2` (`marin_3633_topk_2_mb8`): `9,336,756.43 tok/s`, `forward_std_ms=2.632`, `backward_std_ms=7.304`
+    - `262144, topk=8` (`marin_3633_topk_8_mb8`): `6,906,325.29 tok/s`, `forward_std_ms=0.332`, `backward_std_ms=0.581`
+  - topk=2 stability rerun (`measure-iters=5`):
+    - `131072, topk=2`: `1,554,727.41 tok/s`, `forward_std_ms=67.135`, `backward_std_ms=23.392`
+    - `262144, topk=2`: `8,937,870.59 tok/s`, `forward_std_ms=8.112`, `backward_std_ms=4.871`
+- Interpretation:
+  - the same-lane Megatron reruns are not stable enough to replace the earlier sealed anchors, especially on `topk=2` where the variance is obviously pathological.
+  - the branch-level JAX conclusion does not depend on these noisy reruns: relative to the sealed Megatron anchors, the new explicit-backward branch has pulled JAX to within roughly `13%` to `42%` on the reduced high-token table.
+  - operationally, this means the right next step is to trust the sealed Megatron anchors as the comparison baseline and profile the remaining JAX residual, not to keep spending H100 time on more noisy Megatron reruns.
+- Next action:
+  - snapshot this milestone on the branch and start a fresh JAX `forward_backward` profile on the strongest remaining residual row (`262144`, shared `2048`, `topk=8`, exact-cap path).
