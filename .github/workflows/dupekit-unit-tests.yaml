@@ -5,10 +5,12 @@ on:
       - main
     paths:
       - rust/dupekit/**
+      - pyproject.toml
       - .github/workflows/dupekit-unit-tests.yaml
   pull_request:
     paths:
       - rust/dupekit/**
+      - pyproject.toml
       - .github/workflows/dupekit-unit-tests.yaml
 
 concurrency:
@@ -16,6 +18,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check-user-mode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Ensure pyproject.toml is in user mode
+        run: |
+          if grep -q 'dupekit = { path' pyproject.toml; then
+            echo "ERROR: pyproject.toml has dev-mode dupekit source. Run 'make rust-user' before committing."
+            exit 1
+          fi
+
   unit-test:
     runs-on: ubuntu-latest
     timeout-minutes: 10

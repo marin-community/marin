@@ -129,12 +129,17 @@ To switch to **source builds** (requires Cargo), use the Makefile targets:
 # Check current mode and Cargo availability
 make rust-status
 
-# Switch to dev mode: editable source build (requires Cargo)
+# Switch to dev mode: modifies pyproject.toml to build from source (requires Cargo)
 make rust-dev
 
-# Switch back to user mode: pre-built wheels (no Cargo needed)
+# Switch back to user mode: reverts pyproject.toml to pre-built wheels (no Cargo needed)
 make rust-user
 ```
+
+!!! warning
+    `make rust-dev` modifies `pyproject.toml` to add a local path source for dupekit.
+    **Do not commit `pyproject.toml` while in dev mode** — CI will reject it.
+    Run `make rust-user` before committing.
 
 ## Trying it Out
 
