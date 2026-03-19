@@ -123,11 +123,27 @@ Marin includes Rust crates (e.g., `dupekit`) that are built from source by
 default. This requires a Rust toolchain (Cargo). `uv sync` will automatically
 build dupekit from the `rust/dupekit` directory.
 
-If you don't have Cargo installed, you can install dupekit from pre-built wheels:
+You can switch between **dev mode** (source build) and **user mode** (pre-built
+wheels) using Makefile targets:
 
 ```bash
-uv pip install dupekit --find-links "https://github.com/marin-community/marin/releases/expanded_assets/dupekit-latest"
+# Check current mode and Cargo availability
+make rust-status
+
+# Dev mode (default): build from source (requires Cargo)
+make rust-dev
+
+# User mode: install pre-built wheel from GitHub Releases (no Cargo needed)
+make rust-user
 ```
+
+If you don't have Cargo and just want to get started quickly, run `make rust-user`
+after `uv sync` to replace the source-built dupekit with a pre-built wheel.
+
+!!! note
+    `uv sync` always resolves dupekit from the committed source path. Running
+    `make rust-user` after sync replaces the installed package with the pre-built
+    wheel. You'll need to re-run `make rust-user` after each `uv sync`.
 
 ## Trying it Out
 

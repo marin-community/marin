@@ -1,4 +1,4 @@
-.PHONY: help clean check fix cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit
+.PHONY: help clean check fix cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit rust-dev rust-user rust-status
 .DEFAULT: help
 
 
@@ -15,6 +15,12 @@ help:
 	@echo "    Run all tests"
 	@echo "make init"
 	@echo "    Init the repo for development"
+	@echo "make rust-dev"
+	@echo "    Switch to dev mode (build dupekit from source)"
+	@echo "make rust-user"
+	@echo "    Switch to user mode (install dupekit from pre-built wheel)"
+	@echo "make rust-status"
+	@echo "    Show current Rust build mode"
 
 init:
 	conda install -c conda-forge pandoc
@@ -223,3 +229,40 @@ install_node:
 
 dev_setup: install_uv install_gcloud install_node get_secret_key get_ray_auth_token setup_pre_commit
 	@echo "Dev setup complete."
+
+
+# Rust crate build mode (dupekit)
+# Dev mode (default): build from source via rust/dupekit (requires Cargo)
+# User mode: install pre-built wheels from GitHub Releases (no Cargo needed)
+DUPEKIT_FIND_LINKS = https://github.com/marin-community/marin/releases/expanded_assets/dupekit-latest
+
+rust-dev:
+	@rm -f uv.toml
+	@touch .rust-dev-mode
+	@echo "Switched to dev mode (source build from rust/dupekit)."
+	@echo "Run 'uv sync --all-packages' to rebuild dupekit from source."
+
+rust-user:
+	@rm -f .rust-dev-mode
+	@echo "Installing dupekit from pre-built wheels..."
+	uv pip install dupekit --find-links "$(DUPEKIT_FIND_LINKS)" --force-reinstall
+	@echo "Switched to user mode (pre-built wheel)."
+	@echo "Note: 'uv sync' will revert to source build. Use 'make rust-user' again after syncing."
+
+rust-status:
+	@echo "=== Rust build mode ==="
+	@if [ -f .rust-dev-mode ]; then \
+		echo "Mode: dev (source build from rust/dupekit)"; \
+	else \
+		echo "Mode: user (pre-built wheel) or default"; \
+	fi
+	@if command -v cargo > /dev/null 2>&1; then \
+		echo "Cargo: installed ($$(cargo --version))"; \
+	else \
+		echo "Cargo: not found (source builds will fail; use 'make rust-user')"; \
+	fi
+	@if uv pip show dupekit > /dev/null 2>&1; then \
+		echo "dupekit: $$(uv pip show dupekit 2>/dev/null | grep Version | cut -d' ' -f2)"; \
+	else \
+		echo "dupekit: not installed"; \
+	fi
