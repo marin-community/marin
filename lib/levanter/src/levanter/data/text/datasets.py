@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
@@ -680,6 +680,12 @@ class LmDataConfig:
 
         return datasets
 
+    @staticmethod
+    def _position_axis(seq_len: int) -> Axis:
+        if seq_len <= 0:
+            raise ValueError(f"seq_len must be positive, got {seq_len}")
+        return Axis("position", seq_len)
+
     def train_set(
         self,
         Pos: Axis,
@@ -779,7 +785,21 @@ class LmDataConfig:
 
         return datasets
 
-    def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
+    def train_grug_sets(
+        self,
+        *,
+        seq_len: int,
+        initial_batch_size: int | None = None,
+        key: PRNGKeyArray,
+    ) -> Mapping[str, AsyncDataset[GrugLmExample]]:
+        """Build train datasets that emit array-first [GrugLmExample][]."""
+        return self.train_sets(
+            self._position_axis(seq_len),
+            initial_batch_size=initial_batch_size,
+            key=key,
+        )
+
+    def _validation_datasets_unwrapped(self, Pos: Axis) -> dict[str, AsyncDataset[GrugLmExample]]:
         doc_caches = self.build_caches("validation")
         validation_datasets = self.build_token_datasets(doc_caches, Pos, split="validation")
 
@@ -793,7 +813,16 @@ class LmDataConfig:
                 )
                 validation_datasets[name] = val_ds
 
+        return validation_datasets
+
+    def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
+        validation_datasets = self._validation_datasets_unwrapped(Pos)
         return {name: NamedLmDataset(ds, Pos) for name, ds in validation_datasets.items()}
+
+    def validation_grug_sets(self, *, seq_len: int) -> Mapping[str, AsyncDataset[GrugLmExample]]:
+        """Build validation datasets that emit array-first [GrugLmExample][]."""
+        Pos = self._position_axis(seq_len)
+        return self._validation_datasets_unwrapped(Pos)
 
     def build_caches(self, split: str) -> dict[str, TreeCache[dict]]:
         caches: dict[str, TreeCache[dict]] = {}
@@ -866,8 +895,24 @@ class LmDataConfig:
             tagged.append((ds, tags))
         return tagged
 
+    def tagged_eval_grug_sets(self, *, seq_len: int) -> list[tuple[AsyncDataset[GrugLmExample], list[str]]]:
+        """Build tagged validation datasets for array-first evaluators."""
+        eval_sets = self.validation_grug_sets(seq_len=seq_len)
+        tagged = []
+        for name, ds in eval_sets.items():
+            tags = (self.components[name].tags or []) + [name]
+            tagged.append((ds, tags))
+        return tagged
+
 
 LMMixtureDatasetConfig: TypeAlias = LmDataConfig
+
+
+def _get_token_key_for_component(component: DatasetComponentBase) -> str:
+    """Get the appropriate token key based on component format."""
+    if isinstance(component, DatasetComponent):
+        return component.format.token_data_key
+    return "input_ids"
 
 
 def count_corpus_sizes(
@@ -890,10 +935,12 @@ def count_corpus_sizes(
 
     for name, cache in train_caches.items():
         metric_prefix = f"{prefix}train/{name}/"
-        stats[f"{metric_prefix}total_tokens"] = cache.store.tree["input_ids"].data_size
-        stats[f"{metric_prefix}total_docs"] = cache.store.tree["input_ids"].num_rows
+        component = config.components[name]
+        token_key = _get_token_key_for_component(component)
+        stats[f"{metric_prefix}total_tokens"] = cache.store.tree[token_key].data_size
+        stats[f"{metric_prefix}total_docs"] = cache.store.tree[token_key].num_rows
         train_set = dataset_for_component(
-            config.components[name],
+            component,
             Pos,
             cache,
             eos_id=None,
@@ -901,7 +948,7 @@ def count_corpus_sizes(
         )
         train_seqs = len(train_set.as_sync_dataset())
         stats[f"{metric_prefix}total_seqs"] = train_seqs
-        padding_fraction = 1 - (cache.store.tree["input_ids"].data_size / (train_seqs * seq_len))
+        padding_fraction = 1 - (cache.store.tree[token_key].data_size / (train_seqs * seq_len))
         if padding_fraction < 0:
             stats[f"{metric_prefix}truncation_fraction"] = -padding_fraction
         else:
@@ -915,10 +962,12 @@ def count_corpus_sizes(
     validation_caches = config.build_caches("validation")
     for name, cache in validation_caches.items():
         metric_prefix = f"{prefix}validation/{name}/"
-        stats[f"{metric_prefix}total_tokens"] = cache.store.tree["input_ids"].data_size
-        stats[f"{metric_prefix}total_docs"] = cache.store.tree["input_ids"].num_rows
+        component = config.components[name]
+        token_key = _get_token_key_for_component(component)
+        stats[f"{metric_prefix}total_tokens"] = cache.store.tree[token_key].data_size
+        stats[f"{metric_prefix}total_docs"] = cache.store.tree[token_key].num_rows
         validation_set = dataset_for_component(
-            config.components[name],
+            component,
             Pos,
             cache,
             eos_id=None,

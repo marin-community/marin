@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -9,7 +9,7 @@ from pathlib import Path
 # Todo(Percy, dlwh): Can we remove this jax dependency?
 from jax.numpy import bfloat16, float32
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 class CustomJsonEncoder(json.JSONEncoder):

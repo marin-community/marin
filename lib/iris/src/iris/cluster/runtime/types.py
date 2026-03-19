@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Container runtime protocols and data types.
@@ -16,13 +16,57 @@ tasks are in the BUILDING state per worker, preventing resource exhaustion from
 too many concurrent uv sync operations.
 """
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
+from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
+
+
+class ContainerInfraError(RuntimeError):
+    """Container operation failed due to infrastructure issues (expired credentials,
+    unreachable registry, docker daemon problems). Uses preemption retry budget."""
+
+    pass
+
+
+class ContainerErrorKind(StrEnum):
+    """Structured category for container/runtime errors."""
+
+    NONE = "none"
+    USER_CODE = "user_code"
+    INFRA_NOT_FOUND = "infra_not_found"
+    RUNTIME_ERROR = "runtime_error"
+
+
+class ContainerPhase(StrEnum):
+    """Lifecycle phase of a container from the runtime's perspective.
+
+    PENDING: container created but not yet executing (K8s pod scheduling, image pull).
+    RUNNING: container is executing the main command.
+    STOPPED: container has exited (check exit_code/error for details).
+    """
+
+    PENDING = "pending"
+    RUNNING = "running"
+    STOPPED = "stopped"
+
+
+class MountKind(StrEnum):
+    WORKDIR = "workdir"  # task working directory (/app); tmpfs on Docker, emptyDir on K8s
+    TMPFS = "tmpfs"  # volatile fast storage; tmpfs on Docker, emptyDir on K8s
+    CACHE = "cache"  # persistent cross-task cache (uv, cargo); hostPath bind mount
+
+
+@dataclass(frozen=True)
+class MountSpec:
+    container_path: str
+    kind: MountKind = MountKind.CACHE
+    read_only: bool = False
+    size_bytes: int = 0  # 0 = no limit; tmpfs size / emptyDir sizeLimit
 
 
 @dataclass
@@ -35,16 +79,18 @@ class ContainerConfig:
     workdir: str = "/app"
     resources: cluster_pb2.ResourceSpecProto | None = None
     timeout_seconds: int | None = None
-    mounts: list[tuple[str, str, str]] = field(default_factory=list)  # (host, container, mode)
+    mounts: list[MountSpec] = field(default_factory=list)
     network_mode: str = "host"  # e.g. "host" for --network=host
+    workdir_host_path: Path | None = None
     task_id: str | None = None
+    attempt_id: int | None = None
     job_id: str | None = None
     worker_metadata: cluster_pb2.WorkerMetadata | None = None
 
     def get_cpu_millicores(self) -> int | None:
-        if not self.resources or not self.resources.cpu:
+        if not self.resources or not self.resources.cpu_millicores:
             return None
-        return self.resources.cpu * 1000
+        return self.resources.cpu_millicores
 
     def get_memory_mb(self) -> int | None:
         if not self.resources or not self.resources.memory_bytes:
@@ -80,9 +126,10 @@ class ContainerStats:
 class ContainerStatus:
     """Container state from runtime inspection."""
 
-    running: bool
+    phase: ContainerPhase
     exit_code: int | None = None
     error: str | None = None
+    error_kind: ContainerErrorKind = ContainerErrorKind.NONE
     oom_killed: bool = False
 
 
@@ -176,12 +223,20 @@ class ContainerHandle(Protocol):
         """Get resource usage statistics."""
         ...
 
+    def disk_usage_mb(self) -> int:
+        """Return disk usage in MB for this container's workdir.
+
+        Docker/Process: shutil.disk_usage on the host workdir path.
+        K8s: 0 (workdir lives inside the pod, not on the worker node).
+        """
+        ...
+
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
-        """Profile the running process using py-spy (CPU) or memray (memory).
+        """Profile the running process using py-spy (CPU), memray (memory), or thread dump.
 
         Args:
-            duration_seconds: How long to sample
-            profile_type: ProfileType message with oneof cpu/memory profiler config
+            duration_seconds: How long to sample (ignored for threads)
+            profile_type: ProfileType message with oneof cpu/memory/threads profiler config
 
         Returns:
             Raw profile output (SVG/HTML/JSON/text depending on profiler and format)
@@ -211,13 +266,21 @@ class ContainerRuntime(Protocol):
         """
         ...
 
+    def prepare_workdir(self, workdir: Path, disk_bytes: int) -> None:
+        """Prepare the task workdir before bundle staging.
+
+        Docker: mounts a per-task tmpfs for quota enforcement.
+        Process/K8s: no-op.
+        """
+        ...
+
     def stage_bundle(
         self,
         *,
-        bundle_gcs_path: str,
+        bundle_id: str,
         workdir: Path,
         workdir_files: dict[str, bytes],
-        fetch_bundle: Callable[[str], Path],
+        bundle_store: BundleStore,
     ) -> None:
         """Materialize task bundle/workdir files for this runtime.
 
@@ -229,6 +292,10 @@ class ContainerRuntime(Protocol):
 
     def list_containers(self) -> list[ContainerHandle]:
         """List all managed containers."""
+        ...
+
+    def list_iris_containers(self, all_states: bool = True) -> list[str]:
+        """List IDs of all iris-managed containers/sandboxes."""
         ...
 
     def remove_all_iris_containers(self) -> int:

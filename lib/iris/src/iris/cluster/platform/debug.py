@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Debug utilities for log collection and VM cleanup."""
@@ -9,10 +9,9 @@ import socket
 import subprocess
 import threading
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 
+from iris.cluster.platform.base import Labels
 from iris.time_utils import Deadline
 
 logger = logging.getLogger(__name__)
@@ -127,14 +126,14 @@ def cleanup_iris_resources(
         List of resource names that were (or would be) deleted
     """
     deleted = []
+    labels = Labels(label_prefix)
 
     # Controller VMs are named "iris-controller-{label_prefix}"
     controller_vm = discover_controller_vm(zone, project, label_prefix)
     vms = [controller_vm] if controller_vm else []
 
-    # TPU slices are named "{label_prefix}-{scale_group}-{timestamp}"
-    # and are labeled with "{label_prefix}-managed=true"
-    tpu_label_filter = f"labels.{label_prefix}-managed=true"
+    # TPU slices are labeled with "iris-{label_prefix}-managed=true"
+    tpu_label_filter = f"labels.{labels.iris_managed}=true"
     try:
         result = subprocess.run(
             [
@@ -216,12 +215,13 @@ def list_iris_tpus(zone: str, project: str, label_prefix: str = "iris") -> list[
         zone: GCP zone
         project: GCP project
         label_prefix: Prefix used for resource naming (default: "iris").
-                     TPUs are filtered by the label "{label_prefix}-managed=true".
+                     TPUs are filtered by the label "iris-{label_prefix}-managed=true".
 
     Returns:
         List of TPU names matching the label filter
     """
-    label_filter = f"labels.{label_prefix}-managed=true"
+    labels = Labels(label_prefix)
+    label_filter = f"labels.{labels.iris_managed}=true"
     result = subprocess.run(
         [
             "gcloud",
@@ -301,88 +301,3 @@ def wait_for_port(port: int, host: str = "localhost", timeout: float = 30.0) -> 
         except (ConnectionRefusedError, OSError, TimeoutError):
             time.sleep(0.5)
     return False
-
-
-@contextmanager
-def controller_tunnel(
-    zone: str,
-    project: str,
-    local_port: int = 10000,
-    tunnel_logger: logging.Logger | None = None,
-    timeout: float = 60.0,
-    label_prefix: str = "iris",
-) -> Iterator[str]:
-    """Establish SSH tunnel to controller and yield the local URL.
-
-    Args:
-        zone: GCP zone
-        project: GCP project
-        local_port: Local port to forward to (default: 10000)
-        tunnel_logger: Optional logger for progress messages
-        timeout: Timeout in seconds for tunnel establishment (default: 60.0)
-        label_prefix: Prefix used for resource naming (default: "iris").
-
-    Yields:
-        Local controller URL (e.g., "http://localhost:10000")
-
-    Raises:
-        RuntimeError: If no controller VM found or tunnel fails to establish
-
-    Example:
-        with controller_tunnel("europe-west4-b", "hai-gcp-models") as url:
-            client = IrisClient.remote(url)
-            job = client.submit(...)
-    """
-    vm_name = discover_controller_vm(zone, project, label_prefix)
-    if not vm_name:
-        raise RuntimeError(f"No controller VM found in zone {zone}")
-
-    if tunnel_logger:
-        tunnel_logger.info("Establishing SSH tunnel to %s...", vm_name)
-
-    proc = subprocess.Popen(
-        [
-            "gcloud",
-            "compute",
-            "ssh",
-            vm_name,
-            f"--project={project}",
-            f"--zone={zone}",
-            "--",
-            "-L",
-            f"{local_port}:localhost:10000",
-            "-N",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "LogLevel=ERROR",
-            "-o",
-            "ServerAliveInterval=60",
-            "-o",
-            "ServerAliveCountMax=3",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
-
-    try:
-        if not wait_for_port(local_port, timeout=timeout):
-            stderr = proc.stderr.read().decode() if proc.stderr else ""
-            proc.terminate()
-            proc.wait()
-            raise RuntimeError(f"SSH tunnel failed to establish: {stderr}")
-
-        if tunnel_logger:
-            tunnel_logger.info("Tunnel ready: localhost:%d -> %s:10000", local_port, vm_name)
-
-        yield f"http://localhost:{local_port}"
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()

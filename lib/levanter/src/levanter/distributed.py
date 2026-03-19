@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import atexit
@@ -350,6 +350,14 @@ class DistributedConfig:
             logger.info("Skipping jax.distributed.initialize because initialize_jax_distributed=False.")
             return
 
+        from iris.cluster.client.job_info import get_job_info
+        from iris.runtime.jax_init import initialize_jax as initialize_iris_jax
+
+        if not self._is_distributed() and get_job_info() is not None:
+            logger.info("Detected Iris job context; initializing jax.distributed via iris.runtime.jax_init.")
+            initialize_iris_jax()
+            return
+
         if self._is_distributed():
             device_ids = self.local_device_ids
             coordinator_address = self.coordinator_address
@@ -391,7 +399,7 @@ class DistributedConfig:
 class RayConfig:
     address: Optional[str] = None
     start_workers: bool = True
-    auto_start_cluster: bool = True
+    auto_start_cluster: bool = False
 
     def initialize(self):
         if self.auto_start_cluster:

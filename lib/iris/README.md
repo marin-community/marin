@@ -42,6 +42,9 @@ job = client.submit(
 job.wait()
 ```
 
+For accelerator jobs, request the accelerator on the task itself with `--tpu ...` or `--gpu ...`.
+`--reserve ...` only holds capacity for scheduling and does not attach accelerator devices to the task container.
+
 ## Architecture
 
 ```
@@ -68,7 +71,7 @@ Actor Client
   │
   │ resolve(actor_name)
   v
-Resolver (ClusterResolver / GcsResolver / FixedResolver)
+Resolver (ClusterResolver / FixedResolver)
   │
   │ endpoints (url + actor_id)
   v
@@ -81,8 +84,6 @@ Worker VM
 Resolver options:
 - **ClusterResolver** (in `iris.client.resolver`): query the controller for
   namespace-aware actor endpoints (best for Iris clusters).
-- **GcsResolver**: discover endpoints via GCP VM metadata tags
-  (`iris_actor_<name>`).
 - **FixedResolver**: static endpoint mapping (tests or fixed deployments).
 
 The actor system also provides `ActorPool` for round-robin calls and broadcast
@@ -214,10 +215,10 @@ Jobs can include a `bundle_blob` containing workspace files. The controller stor
 
 ```yaml
 storage:
-  bundle_prefix: gs://my-bucket/iris/bundles  # shared storage for distributed workers
+  remote_state_dir: gs://my-bucket/iris/state  # remote storage for checkpoints and worker profiles
 ```
 
-The controller will **fail at startup** if `storage.bundle_prefix` is not configured.
+The controller will **fail at startup** if `storage.remote_state_dir` is not configured.
 
 ### Multi-Region Bundle Storage
 
@@ -242,7 +243,6 @@ iris --config=cluster.yaml cluster start
 iris --config=cluster.yaml cluster start --local   # Local cluster for testing
 iris --config=cluster.yaml cluster stop
 iris --config=cluster.yaml cluster restart
-iris --config=cluster.yaml cluster reload           # Rebuild images + redeploy on existing VMs
 iris --config=cluster.yaml cluster status
 ```
 
@@ -287,6 +287,7 @@ iris --config=... cluster dashboard --port 8080
 iris --config cluster.yaml job run -- python train.py
 iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 iris --config cluster.yaml job run --no-wait -- python long_job.py
+iris --config cluster.yaml job run --zone us-central2-b -- python train.py
 
 # Stream logs for a job (batch-fetches from all tasks in one RPC)
 iris --config cluster.yaml job logs /my-job
@@ -301,38 +302,22 @@ iris --config cluster.yaml job stop /my-job --no-include-children
 
 ## Smoke Test
 
-The smoke test validates end-to-end cluster functionality including autoscaling.
+The smoke test validates end-to-end cluster functionality including scheduling,
+dashboard rendering, log levels, profiling, and constraint routing.
 
 ```bash
-# Full smoke test (builds images, starts cluster, runs TPU jobs, cleans up)
-uv run python lib/iris/scripts/smoke-test.py --config lib/iris/examples/marin.yaml
+# Local mode (in-process cluster, default)
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e -o "addopts=" -v
 
-# Run tests and keep VMs running for debugging (manual cleanup required later)
-uv run python lib/iris/scripts/smoke-test.py --config ... --mode keep
+# Cloud mode: start cluster, run tests, stop cluster
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-config examples/smoke.yaml --iris-mode full -o "addopts="
 
-# Fast iteration: redeploy containers on existing VMs
-uv run python lib/iris/scripts/smoke-test.py --config ... --mode redeploy
+# Cloud mode: connect to existing cluster
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url http://localhost:8080 -o "addopts="
 
-# Custom job timeout
-uv run python lib/iris/scripts/smoke-test.py --config ... --job-timeout 900
-
-# Save logs to a custom directory
-uv run python lib/iris/scripts/smoke-test.py --config ... --log-dir /path/to/logs
-
-# Use a unique prefix (isolates resources from other smoke tests)
-uv run python lib/iris/scripts/smoke-test.py --config ... --prefix my-test
+# Screenshots saved to custom directory
+IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e -o "addopts="
 ```
-
-The smoke test:
-1. Builds and pushes controller + worker images
-2. Starts controller VM with autoscaler
-3. Submits 4 TPU jobs to exercise autoscaling:
-   - Simple TPU job (basic execution)
-   - Concurrent TPU jobs (parallel provisioning)
-   - Coscheduled multi-task job (distributed work)
-   - JAX TPU job (validates TPU initialization and computation)
-4. Collects logs on failure for debugging
-5. Cleans up all resources
 
 ## Configuration
 
@@ -345,13 +330,8 @@ platform:
     project_id: my-project
 
 defaults:
-  timeouts:
-    boot_timeout: { milliseconds: 300000 }
-    init_timeout: { milliseconds: 600000 }
-    ssh_poll_interval: { milliseconds: 5000 }
   autoscaler:
     evaluation_interval: { milliseconds: 10000 }
-    requesting_timeout: { milliseconds: 120000 }
     scale_up_delay: { milliseconds: 60000 }
     scale_down_delay: { milliseconds: 300000 }
   ssh:
@@ -364,7 +344,7 @@ defaults:
     controller_address: "10.0.0.1:10000"  # Or use env var: "${IRIS_CONTROLLER_ADDRESS}"
 
 storage:
-  bundle_prefix: gs://my-bucket/iris/bundles  # shared storage for distributed workers
+  remote_state_dir: gs://my-bucket/iris/state  # remote storage for checkpoints and worker profiles
 
 controller:
   image: us-central1-docker.pkg.dev/my-project/marin/iris-controller:latest
@@ -375,33 +355,32 @@ controller:
 
 scale_groups:
   tpu_v5e_4:
-    accelerator_type: tpu
-    accelerator_variant: v5litepod-4
-    num_vms: 4
+    zones: [us-central1-a, us-central1-b]
+    num_vms: 1
+    priority: 10
     resources:
       cpu: 64
       ram: 64GB
       disk: 500GB
-      tpu_count: 4
-      gpu_count: 0
+      device_type: tpu
+      device_variant: v5litepod-4
+      device_count: 4
+      preemptible: true
     min_slices: 0
     max_slices: 10
     slice_template:
-      preemptible: true
       gcp:
         zone: us-central1-a
-        zones: [us-central1-a, us-central1-b]
         runtime_version: v2-alpha-tpuv5-lite
 
   manual_hosts:
-    accelerator_type: cpu
     num_vms: 1
     resources:
       cpu: 16
       ram: 32GB
       disk: 100GB
-      tpu_count: 0
-      gpu_count: 0
+      device_type: cpu
+      preemptible: false
     min_slices: 0
     max_slices: 2
     slice_template:

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -17,8 +17,8 @@ import os
 import time
 from dataclasses import dataclass
 
-import fsspec
 import humanfriendly
+from iris.marin_fs import open_url
 from jax.random import PRNGKey
 from levanter.data.text import (
     HfDatasetSourceConfig,
@@ -31,11 +31,12 @@ from transformers import AutoTokenizer
 
 from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class SliceCacheConfig(TokenizeConfigBase):
     """Configuration for slicing a Levanter cache."""
 
@@ -146,7 +147,7 @@ def _create_readme(
     Create a README file for the cache.
     """
     readme_path = f"{output_path}/README.md"
-    with fsspec.open(readme_path, "w") as f:
+    with open_url(readme_path, "w") as f:
         f.write("# Marin/Levanter Subsampled Pretokenized Dataset\n\n")
         f.write("## Dataset\n\n")
         f.write(_short_desc_from_lm_config(input_config))
@@ -201,7 +202,8 @@ def _patch_source_config(
 
 
 def _slice_cache_in_ray(cfg: SliceCacheConfig):
-    logging.basicConfig(level=logging.INFO)
+
+    configure_logging(level=logging.INFO)
     logger.info(f"Starting slice cache with config: {cfg}")
     return _do_slice_cache(cfg)
 

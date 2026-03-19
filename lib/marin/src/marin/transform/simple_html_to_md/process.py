@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def _html_to_md(data: dict, extract_method: str, config: ExtractionConfig):
@@ -85,5 +85,5 @@ def html_to_md(cfg: SimpleHtmlToMdConfig):
         .map(lambda data: _html_to_md(data, cfg.extract_method, cfg.config))
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    with ZephyrContext(name="html-to-md") as ctx:
-        list(ctx.execute(pipeline))
+    ctx = ZephyrContext(name="html-to-md")
+    list(ctx.execute(pipeline))

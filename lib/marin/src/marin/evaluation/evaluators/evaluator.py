@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -12,6 +12,7 @@ from fray.v1.cluster.ray import get_scheduling_strategy
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.utils import remove_tpu_lockfile_on_exit
+from iris.logging import configure_logging as _init_logging
 
 
 @dataclass(frozen=True)
@@ -128,7 +129,7 @@ def launch_evaluate_with_ray(
         if configure_logging:
             import logging
 
-            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
+            _init_logging(level=logging.INFO)
         evaluator.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
 
     # Capture env_vars in the closure so they're available on the TPU worker.

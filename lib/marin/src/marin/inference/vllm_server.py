@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -18,6 +18,7 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 import requests
+from iris.marin_fs import marin_prefix
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 
@@ -773,10 +774,7 @@ def _vllm_jax_env() -> dict[str, str | Any]:
 
 
 def _default_jax_compilation_cache_dir() -> str:
-    marin_prefix = os.environ.get("MARIN_PREFIX")
-    if marin_prefix:
-        return os.path.join(marin_prefix, "compilation-cache")
-    return "/tmp/marin-jax-compilation-cache"
+    return f"{marin_prefix()}/compilation-cache"
 
 
 def _vllm_env() -> dict[str, str]:

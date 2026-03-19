@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -30,7 +30,7 @@ __all__ = [
     "submit_tpu_job_on_ray",
 ]
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def _run_command(*args, **kwargs):

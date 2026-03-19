@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -95,20 +95,21 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from urllib.parse import urlparse
 
 import draccus
-import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
-from fray.v2 import client as fray_client
-from fray.v2.types import ResourceConfig
+from iris.marin_fs import open_url
+from iris.marin_fs import marin_prefix
 
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_runner import StepRunner, worker_id
+from marin.execution.remote import RemoteCallable
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
 )
 from marin.utilities.json_encoder import CustomJsonEncoder
+from iris.logging import configure_logging
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 _LOCAL_DATA_BROWSER_PORT_RE = re.compile(r"^\s*port\s*:\s*(\d+)\s*(?:#.*)?$")
 _LOCAL_DATA_BROWSER_CONFIG_REL = Path("data_browser") / "conf" / "local.conf"
@@ -189,6 +190,8 @@ def resolve_executor_step(
     import ray
 
     step_fn = step.fn
+    if isinstance(step_fn, RemoteCallable):
+        step_fn = step_fn.fn
     if isinstance(step_fn, ray.remote_function.RemoteFunction):
         remote_fn = step_fn
 
@@ -206,14 +209,18 @@ def resolve_executor_step(
     def resolved_fn(output_path):
         return captured_fn(captured_config)
 
+    # If the original fn was decorated with @remote, propagate the
+    # RemoteCallable wrapper (with updated inner fn) so Fray dispatch
+    # is preserved.  Plain functions run locally in-thread.
+    final_fn: Callable = resolved_fn
+    if isinstance(step.fn, RemoteCallable):
+        final_fn = dataclasses.replace(step.fn, fn=resolved_fn)
+
     return StepSpec(
         name=step.name,
         deps=deps or [],
         override_output_path=output_path,
-        fn=resolved_fn,
-        resources=step.resources if step.resources is not None else ResourceConfig.with_cpu(),
-        env_vars=step.env_vars or {},
-        pip_dependency_groups=step.pip_dependency_groups or [],
+        fn=final_fn,
     )
 
 
@@ -252,15 +259,6 @@ class ExecutorStep(Generic[ConfigT]):
     override_output_path: str | None = None
     """Specifies the `output_path` that should be used.  Print warning if it
     doesn't match the automatically computed one."""
-
-    pip_dependency_groups: list[str] | None = None
-    """List of `extra` dependencies from pyproject.toml to include with this step."""
-
-    resources: ResourceConfig | None = None
-    """Resource requirements for this step (GPU, TPU, CPU). If None, defaults to CPU."""
-
-    env_vars: dict[str, str] | None = None
-    """Additional environment variables to set for this step."""
 
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
@@ -631,7 +629,6 @@ class Executor:
         executor_info_base_path: str,
         description: str | None = None,
     ):
-        self.client = fray_client.current_client()
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
         self.description = description
@@ -648,6 +645,7 @@ class Executor:
         self.steps: list[ExecutorStep] = []
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
+        self._depth_cache: dict[ExecutorStep, int] = {}
 
     def run(
         self,
@@ -699,7 +697,7 @@ class Executor:
             logger.info(f"### Max concurrent steps: {max_concurrent} ###")
 
         resolved_steps = self._resolve_steps(steps_to_run)
-        StepRunner(self.client).run(
+        StepRunner().run(
             resolved_steps,
             dry_run=dry_run,
             force_run_failed=force_run_failed,
@@ -805,15 +803,19 @@ class Executor:
         # The version specifies precisely all the information that uniquely
         # identifies this step.  Note that the fn name is not part of the
         # version.
+        #
+        # For deep dependency chains (depth > 4), we use output_paths (which
+        # already encode the version hash) instead of the full nested version
+        # dicts to avoid exponential blowup of the version structure.
         version = {
             "name": step.name,
             "config": computed_deps.version,
-            "dependencies": [self.versions[dep] for dep in computed_deps.dependencies],
+            "dependencies": [self._dep_version(dep) for dep in computed_deps.dependencies],
         }
 
         if computed_deps.pseudo_dependencies:
             # don't put this in the literal to avoid changing the hash for runs without pseudo-deps
-            version["pseudo_dependencies"] = [self.versions[dep] for dep in computed_deps.pseudo_dependencies]
+            version["pseudo_dependencies"] = [self._dep_version(dep) for dep in computed_deps.pseudo_dependencies]
 
         # Compute output path
         version_str = json.dumps(version, sort_keys=True, cls=CustomJsonEncoder)
@@ -856,6 +858,26 @@ class Executor:
         self.version_strs[step] = version_str
         self.output_paths[step] = output_path
         self.is_pseudo_dep[step] = is_pseudo_dep
+
+    _MAX_INLINE_DEPTH = 4
+
+    def _dep_depth(self, step: ExecutorStep) -> int:
+        """Return the maximum dependency chain depth for a step (cached)."""
+        if step in self._depth_cache:
+            return self._depth_cache[step]
+        deps = self.dependencies.get(step, [])
+        if not deps:
+            depth = 0
+        else:
+            depth = 1 + max(self._dep_depth(dep) for dep in deps)
+        self._depth_cache[step] = depth
+        return depth
+
+    def _dep_version(self, dep: ExecutorStep) -> dict[str, Any] | str:
+        """Full version dict for shallow deps, output path for deep ones."""
+        if self._dep_depth(dep) <= self._MAX_INLINE_DEPTH:
+            return self.versions[dep]
+        return self.output_paths[dep]
 
     def canonicalize(self, step: ExecutorStep) -> ExecutorStep:
         """Multiple instances of `ExecutorStep` might have the same version."""
@@ -904,8 +926,6 @@ class Executor:
         """Output JSON files (one for the entire execution, one for each step)."""
 
         # Set executor_info_path based on hash and caller path name (e.g., 72_baselines-8c2f3a.json)
-        # import pdb; pdb.set_trace()
-
         # we pre-compute the asdict as it can be expensive.
         executor_info_dict = asdict_without_description(self.executor_info)
         step_infos = executor_info_dict["steps"]
@@ -932,12 +952,12 @@ class Executor:
         for step, info in zip(self.steps, executor_info_dict["steps"], strict=True):
             info_path = _get_info_path(self.output_paths[step])
             fsspec_utils.mkdirs(os.path.dirname(info_path))
-            with fsspec.open(info_path, "w") as f:
+            with open_url(info_path, "w") as f:
                 print(json.dumps(info, indent=2, cls=CustomJsonEncoder), file=f)
 
         # Write out info for the entire execution
         fsspec_utils.mkdirs(os.path.dirname(self.executor_info_path))
-        with fsspec.open(self.executor_info_path, "w") as f:
+        with open_url(self.executor_info_path, "w") as f:
             print(json.dumps(executor_info_dict, indent=2, cls=CustomJsonEncoder), file=f)
 
 
@@ -995,24 +1015,11 @@ class ExecutorMainConfig:
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+    configure_logging(level=logging.INFO)
     time_in = time.time()
 
-    prefix = config.prefix
-    if prefix is None:
-        # infer from the environment
-        if "MARIN_PREFIX" in os.environ:
-            prefix = os.environ["MARIN_PREFIX"]
-        else:
-            raise ValueError("Must specify a prefix or set the MARIN_PREFIX environment variable")
-    elif "MARIN_PREFIX" in os.environ:
-        if prefix != os.environ["MARIN_PREFIX"]:
-            logger.warning(
-                f"MARIN_PREFIX environment variable ({os.environ['MARIN_PREFIX']}) is different from the "
-                f"specified prefix ({prefix})"
-            )
+    prefix = config.prefix or marin_prefix()
 
     executor_info_base_path = config.executor_info_base_path
     if executor_info_base_path is None:

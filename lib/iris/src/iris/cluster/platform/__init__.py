@@ -1,7 +1,7 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@ from iris.cluster.platform.base import (
     CloudSliceState,
     CloudWorkerState,
     CommandResult,
+    Labels,
     Platform,
     PlatformError,
     PlatformUnavailableError,
@@ -68,6 +69,7 @@ __all__ = [
     "GcpSliceHandle",
     "GcpStandaloneWorkerHandle",
     "GcpWorkerHandle",
+    "Labels",
     "LocalPlatform",
     "LocalSliceHandle",
     "ManualPlatform",

@@ -1,15 +1,15 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 import functools
 import inspect
 import math
 from dataclasses import dataclass
 
+import equinox as eqx
 import jax
 from jax import numpy as jnp
 from jax import shard_map
-from jax.sharding import NamedSharding, PartitionSpec as P
-from jax.tree_util import register_dataclass
+from jax.sharding import NamedSharding
 from jaxtyping import Array, Bool, Float, Int
 
 from haliax.jax_utils import named_call
@@ -28,9 +28,7 @@ class RotaryConfig:
     scaling_factor: float | None = None
 
 
-@functools.partial(register_dataclass, data_fields=["segment_ids"], meta_fields=["is_causal", "sliding_window"])
-@dataclass(frozen=True)
-class AttentionMask:
+class AttentionMask(eqx.Module):
     """Grug attention mask spec.
 
     This is deliberately simpler than `levanter.layers.attention.AttentionMask`:
@@ -38,9 +36,9 @@ class AttentionMask:
     - Supports causal masking, sliding windows, and segment IDs.
     """
 
-    is_causal: bool = False
+    is_causal: bool = eqx.field(default=False, static=True)
     segment_ids: tuple[jax.Array, jax.Array] | None = None
-    sliding_window: int | None = None
+    sliding_window: int | None = eqx.field(default=None, static=True)
 
     @classmethod
     def causal(cls, *, sliding_window: int | None = None) -> "AttentionMask":
@@ -364,13 +362,10 @@ def _tpu_splash_attention(
         q_seq_shards=q_seq_shards,
     )
 
-    kernel_sharding = NamedSharding(mesh, P(q_pspec[1], q_pspec[2]))
-    kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
-
     @functools.partial(
         shard_map,
         mesh=mesh,
-        in_specs=(q_pspec, k_pspec, v_pspec, segment_ids_axes, kernel_specs),
+        in_specs=(q_pspec, k_pspec, v_pspec, segment_ids_axes, None),
         out_specs=q_pspec,
         **_SHARD_MAP_CHECK_KWARGS,
     )

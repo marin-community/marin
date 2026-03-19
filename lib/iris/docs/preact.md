@@ -20,12 +20,11 @@ lib/iris/src/iris/cluster/static/
 ├── controller/
 │   ├── app.js               (main app: tab routing via hash, data fetching, refresh)
 │   ├── jobs-tab.js          (jobs table with progress bars, sorting, pagination)
-│   ├── workers-tab.js       (workers table with health indicators)
+│   ├── fleet-tab.js         (unified VM + worker table with health indicators)
 │   ├── endpoints-tab.js     (endpoints table)
-│   ├── vms-tab.js           (VMs table flattened from scale groups, pagination)
 │   ├── autoscaler-tab.js    (status, scale groups, actions log, logs)
 │   ├── job-detail.js        (job info cards, task logs viewer, tasks table)
-│   └── vm-detail.js         (VM info cards, bootstrap logs)
+│   └── worker-detail.js    (unified worker detail: identity, health, logs)
 ├── worker/
 │   ├── app.js               (stats bar + task table via workerRpc)
 │   └── task-detail.js       (task status, resources, build info, logs tabs)

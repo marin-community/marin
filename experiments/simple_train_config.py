@@ -1,10 +1,11 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 from dataclasses import dataclass
 
 from fray.cluster import ResourceConfig
+from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.optim import OptimizerConfig
 from levanter.schedule import IntSchedule
@@ -85,16 +86,18 @@ class SimpleTrainConfig:
     watch: WatchConfig = dataclasses.field(default_factory=WatchConfig)
     """Config for watching gradients, parameters, etc. Default is to log norms of gradients and parameters."""
 
-    # profiler-related configuration
-    profiler: bool = False
-    """Whether to run the JAX profiler during training."""
-    profiler_start_step: int = 5
-    """Which step to start profiling."""
-    profiler_num_steps: int = 25
-    """How many steps to profile for once started."""
+    profiler: ProfilerConfig = dataclasses.field(default_factory=ProfilerConfig)
+    """JAX profiler settings for training."""
 
     explicit_mesh_axes: bool = False
     """If True, build the device mesh with `AxisType.Explicit` axes.
 
     Required for models that call `jax.sharding.reshard(..., PartitionSpec(...))`.
     """
+
+    tensor_parallel_size: int = 1
+    """Size of the model (tensor parallel) axis. >1 shards model weights and activations
+    across multiple devices. Useful when batch_size < num_chips."""
+
+    env_vars: dict[str, str] | None = None
+    """Environment variables to pass to the training task."""

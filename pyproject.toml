@@ -28,6 +28,7 @@ override-dependencies = [
     "python-multipart>=0.0.22",
     "wheel>=0.46.2",
     "datasets>=3.1.0,<4.0.0",
+    "equinox>=0.11.10",  # Override vizier's pin for JAX 0.8 compatibility
 ]
 
 [tool.uv.workspace]
@@ -47,11 +48,10 @@ haliax = { workspace = true }
 levanter = { workspace = true }
 marin = { workspace = true }
 zephyr = { workspace = true }
-# NOTE: dupekit and harbor are optional dependencies. Declaring them as path
-# dependencies (not workspace members) avoids pulling their dev dependency
-# groups into workspace resolution.
+# NOTE: dupekit and harbor are optional dependencies (not workspace members).
+# harbor lives in marin-community/harbor as a pinned git dependency.
 dupekit = { path = "lib/dupekit", editable = true }
-harbor = { path = "lib/harbor", editable = true }
+harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
 
 [tool.black]
 line-length = 121
@@ -115,6 +115,10 @@ disable-search-path-heuristics = true
 # which would auto-detect workspace members as site packages and exclude them
 skip-interpreter-query = true
 use-ignore-files = false
+# Worktrees often live under hidden parent directories (e.g. `.codex/worktrees/*`).
+# Disable pyrefly's built-in exclude heuristics so hidden ancestors do not exclude
+# the entire project when running from those paths.
+disable-project-excludes-heuristics = true
 
 # Exclude non-production code from type checking
 project-excludes = [
@@ -124,9 +128,11 @@ project-excludes = [
     "examples/**",           # Example code doesn't need strict typing
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
     "lib/iris/src/iris/rpc/*_pb2*",  # Generated protobuf files
-    # Do not exclude all hidden-path ancestors; this repo is often checked out under
-    # directories such as `.codex/worktrees/...`, and pyrefly evaluates globs on
-    # absolute paths during project mode.
+    "lib/iris/src/iris/rpc/*_connect.py",  # Generated Connect RPC files
+    # Keep key excludes that pyrefly normally adds heuristically.
+    "**/node_modules",
+    "**/__pycache__",
+    "**/venv/**",
 ]
 
 # Disable specific error codes that are primarily noise from missing type stubs

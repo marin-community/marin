@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """LocalClient: in-process fray v2 backend for development and testing."""
@@ -288,6 +288,10 @@ class LocalActorGroup:
             return []
         self._yielded = True
         return self._handles
+
+    def is_done(self) -> bool:
+        """Local actors run in-process and don't independently fail."""
+        return False
 
     def shutdown(self) -> None:
         """Terminate all local actors and clean up registry."""

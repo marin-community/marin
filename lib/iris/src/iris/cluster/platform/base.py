@@ -1,7 +1,7 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,8 +28,13 @@ provider's view of resources, distinct from the Iris lifecycle states in vm.prot
 
 from __future__ import annotations
 
+import datetime
 import logging
+import os
+import socket
 import threading
+import uuid
+from pathlib import Path
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
@@ -40,6 +45,74 @@ from iris.rpc import config_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
+
+
+def generate_slice_suffix() -> str:
+    """Generate a human-readable, unique suffix for slice IDs.
+
+    Returns a string like ``20260307-1755-a3b1c9d2`` (date-HHMM-uuid8).
+    The 8-char UUID suffix guarantees uniqueness even when multiple slices
+    are created within the same minute.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc)
+    short_uuid = uuid.uuid4().hex[:8]
+    return f"{now.strftime('%Y%m%d-%H%M')}-{short_uuid}"
+
+
+# ============================================================================
+# Label Keys
+# ============================================================================
+
+
+class Labels:
+    """Label keys for Iris-managed cloud resources.
+
+    All keys follow the format ``iris-{prefix}-<suffix>`` so resources are
+    self-documenting and namespaced per cluster.
+    """
+
+    def __init__(self, prefix: str):
+        self.iris_managed = f"iris-{prefix}-managed"
+        self.iris_scale_group = f"iris-{prefix}-scale-group"
+        self.iris_controller = f"iris-{prefix}-controller"
+        self.iris_controller_address = f"iris-{prefix}-controller-address"
+        self.iris_slice_id = f"iris-{prefix}-slice-id"
+
+
+# ============================================================================
+# Port Utilities
+# ============================================================================
+
+
+def find_free_port(start: int = -1) -> int:
+    """Find an available port.
+
+    Args:
+        start: Starting port for sequential scan. Default of -1 lets the kernel
+            pick a random ephemeral port, which avoids collisions when multiple
+            processes search for ports concurrently (e.g. pytest-xdist).
+    """
+    if start == -1:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            return s.getsockname()[1]
+    for port in range(start, start + 1000):
+        lock = Path(f"/tmp/iris/port_{port}")
+        try:
+            os.kill(int(lock.read_text()), 0)
+            continue  # port locked by a live process
+        except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+            pass
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("", port))
+                lock.parent.mkdir(parents=True, exist_ok=True)
+                lock.write_text(str(os.getpid()))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(f"No free port found in range {start}-{start + 1000}")
+
 
 # ============================================================================
 # Exception Types
@@ -228,7 +301,7 @@ class SliceHandle(Protocol):
     def scale_group(self) -> str:
         """Name of the scale group this slice belongs to.
 
-        Extracted from labels (e.g., labels["{prefix}-scale-group"]).
+        Extracted from labels (e.g., labels["iris-{prefix}-scale-group"]).
         """
         ...
 
@@ -274,12 +347,12 @@ class Platform(Protocol):
     def create_slice(
         self,
         config: config_pb2.SliceConfig,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ) -> SliceHandle:
         """Create a slice of connected workers (e.g., TPU pod, IB GPU cluster).
 
         The slice is the atomic scaling unit -- it succeeds or fails as a whole.
-        When bootstrap_config is provided, the platform handles worker bootstrapping
+        When worker_config is provided, the platform handles worker bootstrapping
         internally (docker setup, worker container startup). describe() returns
         BOOTSTRAPPING while in progress, then READY or FAILED when complete.
         """
@@ -299,13 +372,11 @@ class Platform(Protocol):
         """
         ...
 
-    def list_all_slices(
-        self,
-        labels: dict[str, str] | None = None,
-    ) -> list[SliceHandle]:
-        """List all slices across all configured zones, filtered by labels.
+    def list_all_slices(self) -> list[SliceHandle]:
+        """List all slices managed by this cluster across all zones.
 
-        Use list_slices() when the zone is already known for a more targeted query.
+        Automatically filters by iris-{prefix}-managed=true. Use list_slices()
+        when additional label filtering or zone scoping is needed.
         """
         ...
 
@@ -333,6 +404,14 @@ class Platform(Protocol):
         """
         ...
 
+    def debug_report(self) -> None:
+        """Log diagnostic info about the controller after a failure.
+
+        Override to inspect platform-specific state (e.g. pod termination
+        reason, previous container logs). Default is a no-op.
+        """
+        ...
+
     def shutdown(self) -> None:
         """Release platform-owned resources (threads, connections, caches).
 
@@ -341,6 +420,23 @@ class Platform(Protocol):
 
         For LocalPlatform this stops worker threads managed by ThreadContainer.
         For GCP/Manual this is typically a no-op.
+        """
+        ...
+
+    def resolve_image(self, image: str, zone: str | None = None) -> str:
+        """Resolve a container image reference for this platform's registry.
+
+        On GCP, rewrites ``ghcr.io/`` images to the Artifact Registry remote
+        repo for the given zone's continent.  Other platforms return the image
+        unchanged.
+
+        Args:
+            image: Container image tag (e.g. ``ghcr.io/org/img:v1``).
+            zone: Cloud zone used to select the regional mirror.  Required on
+                GCP when the image starts with ``ghcr.io/``.
+
+        Returns:
+            Resolved image tag ready for ``docker pull``.
         """
         ...
 
@@ -357,22 +453,33 @@ class Platform(Protocol):
     def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
         """Start or discover existing controller. Returns address (host:port).
 
-        Each platform implements its own controller lifecycle:
+        Each remote platform implements its own controller lifecycle:
         - GCP: creates GCE VM, SSHes in, bootstraps container
         - Manual: SSHes to configured host, bootstraps container
         - CoreWeave: kubectl apply ConfigMap + NodePool + Deployment + Service
-        - Local: starts in-process LocalController
+
+        Local mode uses LocalCluster directly and does not go through Platform.
+        """
+        ...
+
+    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+        """Restart controller in-place without destroying underlying compute.
+
+        Re-runs the bootstrap script on the existing VM/pod to pull the latest
+        image and restart the container. Falls back to stop+start semantics on
+        platforms where in-place restart isn't meaningful (e.g. CoreWeave).
         """
         ...
 
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
         """Stop the controller.
 
-        Each platform tears down its own controller resources:
+        Each remote platform tears down its own controller resources:
         - GCP: terminates GCE VM
         - Manual: terminates bootstrap on host
         - CoreWeave: kubectl delete Deployment + Service + NodePool
-        - Local: stops in-process LocalController
+
+        Local mode uses LocalCluster.close() directly and does not go through Platform.
         """
         ...
 
@@ -391,19 +498,6 @@ class Platform(Protocol):
         - GCP/Manual: list_all_slices + terminate each + stop_controller (parallel)
         - CoreWeave: kubectl delete NodePools + controller resources
         - Local: terminate slices + stop controller
-        """
-        ...
-
-    def reload(self, config: config_pb2.IrisClusterConfig) -> str:
-        """Reload controller and workers with updated images/config.
-
-        Each platform implements its own reload strategy:
-        - GCP/Manual: full stop + start (terminate all worker slices, then controller)
-        - CoreWeave: update ConfigMap, reload worker Pods in parallel, then
-          rolling update controller Deployment
-        - Local: restart in-process controller
-
-        Returns the controller address after reload.
         """
         ...
 
@@ -428,10 +522,8 @@ def default_stop_all(
     with a hard timeout. Daemon threads are used instead of ThreadPoolExecutor so
     that timed-out threads don't block interpreter shutdown.
     """
-    prefix = label_prefix or config.platform.label_prefix or "iris"
-
     target_names: list[str] = ["controller"]
-    all_slices = platform.list_all_slices(labels={f"{prefix}-managed": "true"})
+    all_slices = platform.list_all_slices()
     for s in all_slices:
         logger.info("Found managed slice %s", s.slice_id)
         target_names.append(f"slice:{s.slice_id}")

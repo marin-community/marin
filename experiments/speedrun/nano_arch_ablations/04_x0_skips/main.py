@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -28,10 +28,11 @@ from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
+from levanter.callbacks.profiler import ProfilerConfig
 from haliax.jax_utils import named_call
 from levanter.grug.attention import AttentionMask, attention
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pbatch, Pvocab, unshard
+from levanter.grug.sharding import Pbatch, Pembed_vocab, Plm_head, unshard
 from levanter.optim import GrugMuonConfig
 from marin.execution.executor import executor_main
 from marin.speedrun.speedrun import Author
@@ -190,8 +191,10 @@ class Transformer(eqx.Module):
     @staticmethod
     def init(cfg: ModelConfig, *, key):
         embed_key, out_key, block_key = random.split(key, 3)
-        token_embed = reshard(_init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pvocab)
-        output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Pvocab)
+        token_embed = reshard(
+            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
+        )
+        output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
         blocks = tuple(Block.init(cfg, key=block_key) for _ in range(cfg.num_layers))
         resid_lambdas = tuple(jnp.ones((), dtype=jnp.float32) for _ in range(cfg.num_layers))
         x0_lambdas = tuple(jnp.zeros((), dtype=jnp.float32) for _ in range(cfg.num_layers))
@@ -318,7 +321,7 @@ def build_train_config(model_cfg: ModelConfig) -> SimpleTrainConfig:
         train_batch_size=batch_size,
         learning_rate=muon.learning_rate,
         explicit_mesh_axes=True,
-        profiler=True,
+        profiler=ProfilerConfig(enabled=True),
         train_seq_len=model_cfg.max_seq_len,
         num_train_steps=num_train_steps,
         steps_per_hf_export=-1,

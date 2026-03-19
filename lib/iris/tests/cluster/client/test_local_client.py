@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for local cluster client functionality."""
@@ -9,7 +9,6 @@ import time
 import pytest
 
 from iris.client.client import IrisClient, Job
-from iris.cluster.client.local_client import LocalClusterClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName
 from iris.rpc import cluster_pb2
 
@@ -24,21 +23,27 @@ def extract_log_text(response: cluster_pb2.Controller.GetTaskLogsResponse) -> st
 
 
 @pytest.fixture
-def client():
-    """Create a local cluster client for testing."""
-    client = LocalClusterClient.create()
+def iris_client():
+    """Create a local IrisClient for testing."""
+    client = IrisClient.local()
     yield client
     client.shutdown()
 
 
+@pytest.fixture
+def client(iris_client):
+    """Expose the underlying ClusterClient for tests that use low-level APIs."""
+    return iris_client._cluster_client
+
+
 def test_command_entrypoint_preserves_env_vars(client):
     """Verify command entrypoints receive Iris environment variables."""
-    job_id = JobName.root("test-env-vars")
+    job_id = JobName.root("test-user", "test-env-vars")
 
     # Create a command that echoes an environment variable
-    entrypoint = Entrypoint.from_command("sh", "-c", "echo IRIS_JOB_ID=$IRIS_JOB_ID")
+    entrypoint = Entrypoint.from_command("sh", "-c", "echo IRIS_TASK_ID=$IRIS_TASK_ID")
 
-    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
     client.submit_job(job_id=job_id, entrypoint=entrypoint, resources=resources)
 
@@ -47,20 +52,22 @@ def test_command_entrypoint_preserves_env_vars(client):
 
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
-    # Check logs contain the job ID
+    # For attempt 0, build_common_iris_env omits the :attempt_id suffix
+    # (only appended for retries), so expect just the task_id wire format.
+    expected = job_id.task(0).to_wire()
     response = client.fetch_task_logs(job_id.task(0))
     log_text = extract_log_text(response)
-    assert f"IRIS_JOB_ID={job_id.to_wire()}" in log_text
+    assert f"IRIS_TASK_ID={expected}" in log_text
 
 
 def test_log_streaming_captures_output_without_trailing_newline(client):
     """Verify log streaming captures output without trailing newline."""
-    job_id = JobName.root("test-no-newline")
+    job_id = JobName.root("test-user", "test-no-newline")
 
     # Use printf which doesn't add a newline
     entrypoint = Entrypoint.from_command("sh", "-c", "printf 'output without newline'")
 
-    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
     client.submit_job(job_id=job_id, entrypoint=entrypoint, resources=resources)
 
@@ -77,14 +84,14 @@ def test_log_streaming_captures_output_without_trailing_newline(client):
 
 def test_callable_entrypoint_succeeds(client):
     """Verify callable entrypoints execute and complete successfully."""
-    job_id = JobName.root("test-callable-success")
+    job_id = JobName.root("test-user", "test-callable-success")
 
     def task_func():
         print("hello from callable")
 
     entrypoint = Entrypoint.from_callable(task_func)
 
-    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
     client.submit_job(job_id=job_id, entrypoint=entrypoint, resources=resources)
 
@@ -95,12 +102,12 @@ def test_callable_entrypoint_succeeds(client):
 
 def test_command_entrypoint_with_custom_env_var(client):
     """Verify command entrypoints can access custom environment variables."""
-    job_id = JobName.root("test-custom-env")
+    job_id = JobName.root("test-user", "test-custom-env")
 
     # Create a command that uses a custom env var
     entrypoint = Entrypoint.from_command("sh", "-c", "echo CUSTOM_VAR=$CUSTOM_VAR")
 
-    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
     environment = EnvironmentSpec(env_vars={"CUSTOM_VAR": "custom_value"}).to_proto()
 
     client.submit_job(
@@ -121,13 +128,13 @@ def test_command_entrypoint_with_custom_env_var(client):
     assert "CUSTOM_VAR=custom_value" in log_text
 
 
-def test_job_wait_with_stream_logs(client, caplog):
+def test_job_wait_with_stream_logs(client, iris_client, caplog):
     """Verify Job.wait(stream_logs=True) fetches and streams logs."""
-    iris = IrisClient(client)
-    job_id = JobName.root("test-stream-logs")
+    iris = iris_client
+    job_id = JobName.root("test-user", "test-stream-logs")
 
     entrypoint = Entrypoint.from_command("sh", "-c", "echo 'hello from streaming'")
-    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
     client.submit_job(job_id=job_id, entrypoint=entrypoint, resources=resources)
     job = Job(iris, job_id)
@@ -197,10 +204,10 @@ def _parent_with_delayed_child():
 
 
 def test_child_job_logs_sorted_by_timestamp(client):
-    """Logs from multiple child jobs are sorted globally by timestamp and include worker_id."""
-    parent_id = JobName.root("test-child-logs")
+    """Logs from multiple child jobs are present in flattened prefix response."""
+    parent_id = JobName.root("test-user", "test-child-logs")
     entrypoint = Entrypoint.from_callable(_parent_with_two_children)
-    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
     client.submit_job(job_id=parent_id, entrypoint=entrypoint, resources=resources)
 
@@ -212,25 +219,19 @@ def test_child_job_logs_sorted_by_timestamp(client):
     all_entries = []
     for batch in response.task_logs:
         for entry in batch.logs:
-            all_entries.append((entry.timestamp.epoch_ms, batch.worker_id, batch.task_id, entry.data))
+            all_entries.append(entry.data)
 
-    log_text = " ".join(e[3] for e in all_entries)
+    log_text = " ".join(all_entries)
     assert "CHILD_A_LINE_1" in log_text, f"Missing child-a logs in: {log_text}"
     assert "CHILD_B_LINE_1" in log_text, f"Missing child-b logs in: {log_text}"
 
-    # Verify worker_id is populated in every batch that has logs
-    batches_with_logs = [b for b in response.task_logs if len(b.logs) > 0]
-    assert all(
-        b.worker_id for b in batches_with_logs
-    ), f"worker_id missing in batches: {[(b.task_id, b.worker_id) for b in batches_with_logs]}"
 
-
-def test_wait_stream_logs_discovers_child_tasks(client, caplog):
+def test_wait_stream_logs_discovers_child_tasks(client, iris_client, caplog):
     """Streaming discovers and emits logs for child tasks created after wait starts."""
-    iris = IrisClient(client)
-    parent_id = JobName.root("test-stream-child-discovery")
+    iris = iris_client
+    parent_id = JobName.root("test-user", "test-stream-child-discovery")
     entrypoint = Entrypoint.from_callable(_parent_with_delayed_child)
-    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
     client.submit_job(job_id=parent_id, entrypoint=entrypoint, resources=resources)
     job = Job(iris, parent_id)
@@ -241,3 +242,50 @@ def test_wait_stream_logs_discovers_child_tasks(client, caplog):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
     messages = [r.message for r in caplog.records]
     assert any("CHILD_DYNAMIC_LINE" in msg for msg in messages), messages
+
+
+def _parent_with_failing_child():
+    """Parent callable that submits a child that exits with an error."""
+    from iris.client.client import iris_ctx
+    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+
+    ctx = iris_ctx()
+    res = ResourceSpec(cpu=1, memory="1g")
+    env = EnvironmentSpec()
+
+    child = ctx.client.submit(
+        Entrypoint.from_command("sh", "-c", "echo 'about to fail'; exit 42"),
+        "failing-child",
+        res,
+        environment=env,
+    )
+    child.wait(timeout=30, raise_on_failure=False)
+    # Keep parent alive after child failure so the streaming loop has time to detect it.
+    time.sleep(2.0)
+
+
+def test_stream_logs_surfaces_child_failure(client, iris_client, caplog):
+    """Streaming logs surfaces a warning when a child job terminates with failure."""
+    iris = iris_client
+    parent_id = JobName.root("test-user", "test-child-failure-surfaced")
+    entrypoint = Entrypoint.from_callable(_parent_with_failing_child)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
+
+    client.submit_job(job_id=parent_id, entrypoint=entrypoint, resources=resources)
+    job = Job(iris, parent_id)
+
+    with caplog.at_level(logging.WARNING, logger="iris.client.client"):
+        status = job.wait(
+            stream_logs=True,
+            include_children=True,
+            timeout=30.0,
+            poll_interval=0.2,
+            raise_on_failure=False,
+        )
+
+    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+    warning_messages = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any(
+        "failing-child" in msg and "terminated" in msg for msg in warning_messages
+    ), f"Expected child failure warning in streamed logs, got: {warning_messages}"
