@@ -3,10 +3,10 @@
 
 """CLI commands for process status, logs, and profiling.
 
-Provides ``iris process <status|logs|profile>`` with ``--worker=<id>`` to
-target a specific worker (proxied through the controller) or the controller
-itself (default). The ``profile`` subcommand additionally accepts ``--task``
-to profile a running task container.
+Provides ``iris process <status|logs|profile>`` with ``--target`` to address
+a specific worker (plain worker ID like ``abc123`` maps to
+``/system/worker/abc123``) or a task container (full path like
+``/alice/job/0``). Omitting ``--target`` defaults to the controller itself.
 """
 
 
@@ -18,23 +18,22 @@ from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
 
-def _resolve_profile_target(worker: str | None, task: str | None) -> tuple[str, str]:
-    """Resolve --worker/--task options to (rpc_target, label).
+def _resolve_profile_target(target: str | None) -> tuple[str, str]:
+    """Resolve --target to (rpc_target, label).
+
+    - ``None`` → controller (``/system/process``)
+    - starts with ``/`` → raw path passed directly (task or system path)
+    - plain string → worker ID → ``/system/worker/<id>``
 
     Returns:
         (target, label) where target is passed to ProfileTask and
         label is used for display and default output filename.
-
-    Raises:
-        click.UsageError: if both --worker and --task are provided.
     """
-    if worker and task:
-        raise click.UsageError("--worker and --task are mutually exclusive")
-    if task:
-        return task, f"task {task}"
-    if worker:
-        return f"/system/worker/{worker}", f"Worker {worker}"
-    return "/system/process", "Controller"
+    if target is None:
+        return "/system/process", "Controller"
+    if target.startswith("/"):
+        return target, target
+    return f"/system/worker/{target}", f"Worker {target}"
 
 
 def _print_status(resp: cluster_pb2.GetProcessStatusResponse, label: str) -> None:
@@ -59,18 +58,19 @@ def process_group():
 
 
 @process_group.command()
-@click.option("--worker", "-w", default=None, help="Worker ID to target (default: controller)")
+@click.option("--target", "-t", default=None, help="Worker ID or task path (default: controller)")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
-def status(ctx, worker: str | None, as_json: bool):
+def status(ctx, target: str | None, as_json: bool):
     """Show process status (host info, resource usage)."""
     from google.protobuf import json_format
 
     url = require_controller_url(ctx)
     client = ControllerServiceClientSync(url)
-    target = f"/system/worker/{worker}" if worker else ""
-    resp = client.get_process_status(cluster_pb2.GetProcessStatusRequest(max_log_lines=0, target=target))
-    label = f"Worker {worker}" if worker else "Controller"
+    rpc_target, label = _resolve_profile_target(target)
+    # GetProcessStatus uses empty string for controller (not /system/process)
+    get_target = "" if target is None else rpc_target
+    resp = client.get_process_status(cluster_pb2.GetProcessStatusRequest(max_log_lines=0, target=get_target))
     if as_json:
         click.echo(json_format.MessageToJson(resp.process_info, preserving_proto_field_name=True, indent=2))
     else:
@@ -78,13 +78,13 @@ def status(ctx, worker: str | None, as_json: bool):
 
 
 @process_group.command()
-@click.option("--worker", "-w", default=None, help="Worker ID to target (default: controller)")
+@click.option("--target", "-t", default=None, help="Worker ID or task path (default: controller)")
 @click.option("--level", default="", help="Minimum log level (DEBUG/INFO/WARNING/ERROR/CRITICAL)")
 @click.option("--follow", "-f", is_flag=True, help="Stream logs continuously")
 @click.option("--max-lines", default=200, help="Max lines to show")
 @click.option("--substring", default="", help="Substring filter")
 @click.pass_context
-def logs(ctx, worker: str | None, level: str, follow: bool, max_lines: int, substring: str):
+def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, substring: str):
     """Show process logs."""
     import time
     from datetime import datetime, timezone
@@ -92,8 +92,7 @@ def logs(ctx, worker: str | None, level: str, follow: bool, max_lines: int, subs
     url = require_controller_url(ctx)
     client = ControllerServiceClientSync(url)
 
-    # Use /system/worker/<id> as the log source so the controller proxies to the worker
-    source = f"/system/worker/{worker}" if worker else "/system/process"
+    source, _ = _resolve_profile_target(target)
 
     cursor = 0
     first = True
@@ -125,8 +124,12 @@ def logs(ctx, worker: str | None, level: str, follow: bool, max_lines: int, subs
 
 
 @process_group.command()
-@click.option("--worker", "-w", default=None, help="Worker ID to target (default: controller)")
-@click.option("--task", "-t", default=None, help="Task ID to profile (e.g. /alice/my-job/0 or /alice/my-job/0:2)")
+@click.option(
+    "--target",
+    "-t",
+    default=None,
+    help="Worker ID, task path (e.g. /alice/job/0), or omit for controller",
+)
 @click.argument("profiler", type=click.Choice(["threads", "cpu", "mem"]))
 @click.option("--duration", "-d", default=10, help="Profiling duration in seconds")
 @click.option("--output", "-o", default=None, help="Output file path")
@@ -134,8 +137,7 @@ def logs(ctx, worker: str | None, level: str, follow: bool, max_lines: int, subs
 @click.pass_context
 def profile(
     ctx,
-    worker: str | None,
-    task: str | None,
+    target: str | None,
     profiler: str,
     duration: int,
     output: str | None,
@@ -143,8 +145,8 @@ def profile(
 ):
     """Profile the process (threads, cpu, or mem).
 
-    By default profiles the controller process. Use --worker to profile a
-    worker process, or --task to profile a running task container.
+    By default profiles the controller process. Use --target with a worker ID
+    to profile a worker, or a task path (e.g. /alice/job/0) for a task container.
     """
     url = require_controller_url(ctx)
     client = ControllerServiceClientSync(url)
@@ -161,12 +163,12 @@ def profile(
     else:
         raise click.ClickException(f"Unknown profiler type: {profiler}")
 
-    target, label = _resolve_profile_target(worker=worker, task=task)
+    rpc_target, label = _resolve_profile_target(target)
 
     click.echo(f"Profiling {label} ({profiler}, {duration}s)...")
     resp = client.profile_task(
         cluster_pb2.ProfileTaskRequest(
-            target=target,
+            target=rpc_target,
             duration_seconds=duration,
             profile_type=profile_type,
         )
