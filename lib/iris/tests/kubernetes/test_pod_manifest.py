@@ -154,7 +154,7 @@ def test_task_hash_distinct_for_sanitization_collisions():
 @pytest.mark.parametrize(
     "phase,expected_state",
     [
-        ("Pending", cluster_pb2.TASK_STATE_RUNNING),
+        ("Pending", cluster_pb2.TASK_STATE_BUILDING),
         ("Running", cluster_pb2.TASK_STATE_RUNNING),
         ("Succeeded", cluster_pb2.TASK_STATE_SUCCEEDED),
         ("Failed", cluster_pb2.TASK_STATE_FAILED),
@@ -278,15 +278,12 @@ def test_constraints_unknown_key_ignored():
     assert "nodeSelector" not in manifest["spec"]
 
 
-def test_constraints_non_eq_op_ignored():
-    req = make_run_req("/my-job/task-0")
-    c = req.constraints.add()
-    c.key = "pool"
-    c.op = cluster_pb2.CONSTRAINT_OP_NE
+def test_constraints_non_eq_op_raises():
+    c = cluster_pb2.Constraint(key="pool", op=cluster_pb2.CONSTRAINT_OP_NE)
     c.value.string_value = "h100-8x"
 
-    manifest = _build_pod_manifest(req, pod_config())
-    assert "nodeSelector" not in manifest["spec"]
+    with pytest.raises(ValueError, match=r"Unsupported constraint op.*pool.*CONSTRAINT_OP_EQ"):
+        _constraints_to_node_selector([c])
 
 
 def test_constraints_to_node_selector_function_directly():

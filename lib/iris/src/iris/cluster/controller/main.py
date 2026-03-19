@@ -65,6 +65,7 @@ def serve(
     from iris.cluster.controller.autoscaler import Autoscaler
     from iris.cluster.controller.checkpoint import download_checkpoint_to_local
     from iris.cluster.controller.db import ControllerDB
+    from iris.cluster.controller.kubernetes_provider import KubernetesProvider
     from iris.cluster.config import load_config, create_autoscaler, make_provider
     from iris.cluster.platform.factory import create_platform
 
@@ -119,7 +120,7 @@ def serve(
     # --- Create autoscaler (only for WorkerProvider; KubernetesProvider manages its own pods) ---
     autoscaler: Autoscaler | None = None
     base_worker_config = None
-    if not provider.is_direct_provider:
+    if not isinstance(provider, KubernetesProvider):
         try:
             platform = create_platform(
                 platform_config=cluster_config.platform,

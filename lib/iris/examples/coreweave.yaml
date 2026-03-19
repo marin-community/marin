@@ -1,4 +1,4 @@
-# Iris configuration for CoreWeave CKS clusters.
+# Iris reference configuration for CoreWeave CKS clusters.
 #
 # Architecture: KubernetesProvider dispatches task pods directly to the k8s API.
 # No worker daemons are needed. CoreWeave NodePool autoscaling provisions nodes
@@ -34,7 +34,7 @@ platform:
   coreweave:
     region: US-WEST-04A
     namespace: iris
-    kubeconfig_path: ~/.kube/coreweave-iris  # Set this to your local kubeconfig, or use KUBECONFIG env var
+    kubeconfig_path: ~/.kube/coreweave-iris
     object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
 
 storage:
@@ -43,11 +43,9 @@ storage:
 kubernetes_provider:
   namespace: iris
   default_image: ghcr.io/marin-community/iris-task:latest
-  # colocation_topology_key defaults to coreweave.cloud/spine — no need to set explicitly
-  # service_account: ""           # K8s ServiceAccount for task pods
-  # host_network: false           # Enable for NCCL/IB multi-host traffic
-  # cache_dir: /cache             # hostPath base for cache volume mounts
-  # controller_address: ""        # Auto-discovered from controller config when empty
+  host_network: true              # Required for NCCL/IB multi-host traffic
+  cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal GPU nodes
+  controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
@@ -70,11 +68,10 @@ defaults:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001
     cache_dir: /mnt/local/iris-cache
-    runtime: docker
+    runtime: kubernetes
     default_task_image: ghcr.io/marin-community/iris-task:latest
 
 scale_groups:
-  # CPU general-purpose — used for data processing, orchestration, etc.
   cpu-erapids:
     num_vms: 1
     resources:
@@ -87,7 +84,7 @@ scale_groups:
         region: US-WEST-04A
         pool: cpu-erapids
     min_slices: 0
-    max_slices: 1  # Cost-safe default; increase for production workloads
+    max_slices: 1
     priority: 50
     slice_template:
       num_vms: 1
@@ -95,7 +92,6 @@ scale_groups:
         region: US-WEST-04A
         instance_type: cd-gp-i64-erapids
 
-  # 8x H100 with InfiniBand — primary training workhorse
   h100-8x:
     num_vms: 1
     resources:
@@ -110,7 +106,7 @@ scale_groups:
         region: US-WEST-04A
         pool: h100-8x
     min_slices: 0
-    max_slices: 1  # Cost-safe default; increase for production workloads
+    max_slices: 1
     priority: 100
     slice_template:
       num_vms: 1
@@ -118,7 +114,6 @@ scale_groups:
         region: US-WEST-04A
         instance_type: gd-8xh100ib-i128
 
-  # 16x H100 (2-VM) with InfiniBand — multi-node training
   h100-16x:
     num_vms: 2
     resources:

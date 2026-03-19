@@ -227,7 +227,7 @@ class ClusterCapacity:
 
 @dataclass(frozen=True)
 class DirectProviderBatch:
-    """Work batch for a DirectTaskProvider sync cycle.
+    """Work batch for a KubernetesProvider sync cycle.
 
     Unlike DispatchBatch, there is no worker_id — tasks run without a registered
     worker daemon. task_attempts rows use NULL worker_id.
@@ -240,7 +240,7 @@ class DirectProviderBatch:
 
 @dataclass(frozen=True)
 class DirectProviderSyncResult:
-    """Result from a DirectTaskProvider sync cycle."""
+    """Result from a KubernetesProvider sync cycle."""
 
     updates: list[TaskUpdate] = field(default_factory=list)
     scheduling_events: list[SchedulingEvent] = field(default_factory=list)
@@ -1902,7 +1902,7 @@ class ControllerTransitions:
         )
 
     def apply_direct_provider_updates(self, updates: list[TaskUpdate]) -> TxResult:
-        """Apply a batch of task state updates from a DirectTaskProvider.
+        """Apply a batch of task state updates from a KubernetesProvider.
 
         Same state machine as apply_task_updates but without worker lookup,
         health updates, or resource decommit (no committed resources tracked).

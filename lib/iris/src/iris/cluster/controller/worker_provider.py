@@ -107,10 +107,6 @@ class WorkerProvider:
     parallelism: int = 32
     _pool: ThreadPoolExecutor = field(init=False)
 
-    @property
-    def is_direct_provider(self) -> bool:
-        return False
-
     def __post_init__(self) -> None:
         self._pool = ThreadPoolExecutor(max_workers=self.parallelism)
 

@@ -11,10 +11,6 @@ from iris.cluster.controller.provider import ProviderUnsupportedError
 class FakeProvider:
     """Minimal TaskProvider for tests that only exercise transitions, not RPCs."""
 
-    @property
-    def is_direct_provider(self) -> bool:
-        return False
-
     def sync(self, batches):
         return [(b, None, "no stub") for b in batches]
 

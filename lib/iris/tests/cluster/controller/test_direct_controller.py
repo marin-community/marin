@@ -1,14 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for DirectTaskProvider integration with controller and transitions."""
+"""Tests for KubernetesProvider integration with controller and transitions."""
 
 import tempfile
 from pathlib import Path
 
 
 from iris.cluster.controller.db import ATTEMPTS, TASKS, ControllerDB
-from iris.cluster.controller.direct_provider import DirectTaskProvider
 from iris.cluster.controller.transitions import (
     ControllerTransitions,
     DirectProviderBatch,
@@ -75,7 +74,7 @@ def _query_attempt(state: ControllerTransitions, task_id: JobName, attempt_id: i
 
 
 class FakeDirectProvider:
-    """Minimal DirectTaskProvider implementation for testing."""
+    """Minimal KubernetesProvider-like implementation for testing."""
 
     def __init__(self):
         self.sync_calls: list[DirectProviderBatch] = []
@@ -97,14 +96,6 @@ class FakeDirectProvider:
 
     def close(self) -> None:
         self.closed = True
-
-    @property
-    def is_direct_provider(self) -> bool:
-        return True
-
-
-# Verify the fake satisfies the protocol at type-check time.
-_: DirectTaskProvider = FakeDirectProvider()
 
 
 # =============================================================================

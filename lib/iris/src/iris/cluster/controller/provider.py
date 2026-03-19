@@ -32,11 +32,6 @@ class TaskProvider(Protocol):
     log streaming.
     """
 
-    @property
-    def is_direct_provider(self) -> bool:
-        """Whether this provider manages tasks directly (no worker DB rows)."""
-        return False
-
     def sync(
         self,
         batches: list[DispatchBatch],

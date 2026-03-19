@@ -1294,8 +1294,8 @@ class ControllerServiceImpl:
         if not self._controller.has_direct_provider:
             return cluster_pb2.Controller.GetKubernetesClusterStatusResponse()
 
-        # KubernetesProvider is the only DirectTaskProvider and exposes
-        # get_cluster_status(). Access via the provider after the guard.
+        # KubernetesProvider exposes get_cluster_status().
+        # Access via the provider after the guard.
         provider = self._controller.provider
         return provider.get_cluster_status()  # type: ignore[union-attr]
 

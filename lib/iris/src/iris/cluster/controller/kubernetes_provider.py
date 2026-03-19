@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""KubernetesProvider: DirectTaskProvider that executes tasks as Kubernetes Pods.
+"""KubernetesProvider: executes tasks as Kubernetes Pods.
 
 No worker daemon, no synthetic worker row. The controller talks directly to the
 k8s API via kubectl, launching one Pod per task attempt.
@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from iris.cluster.controller.direct_provider import ClusterCapacity, DirectProviderSyncResult, SchedulingEvent
+from iris.cluster.controller.transitions import ClusterCapacity, DirectProviderSyncResult, SchedulingEvent
 from iris.cluster.controller.transitions import DirectProviderBatch, RunningTaskEntry, TaskUpdate
 from iris.cluster.k8s.constants import CW_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.k8s.kubectl import Kubectl, KubectlLogLine
@@ -73,8 +73,8 @@ def _constraints_to_node_selector(
 ) -> dict[str, str]:
     """Map Iris constraints to k8s nodeSelector entries.
 
-    Only EQ constraints with known label keys are mapped. Other ops/keys
-    are silently skipped (affinity rules for complex constraints not yet implemented).
+    Only EQ constraints with known label keys are mapped. Unknown keys are
+    silently skipped. Known keys with non-EQ ops raise ValueError.
     """
     node_selector: dict[str, str] = {}
     for c in constraints:
@@ -84,7 +84,10 @@ def _constraints_to_node_selector(
         if c.op == cluster_pb2.CONSTRAINT_OP_EQ and c.HasField("value"):
             node_selector[label_key] = c.value.string_value
         else:
-            logger.warning("Unsupported constraint op=%s for key=%s; skipping nodeSelector", c.op, c.key)
+            raise ValueError(
+                f"Unsupported constraint op={c.op} for key={c.key!r}: "
+                f"only CONSTRAINT_OP_EQ is supported for nodeSelector mapping"
+            )
     return node_selector
 
 
@@ -489,7 +492,14 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
     task_id = entry.task_id
     attempt_id = entry.attempt_id
 
-    if phase in ("Pending", "Running"):
+    if phase == "Pending":
+        return TaskUpdate(
+            task_id=task_id,
+            attempt_id=attempt_id,
+            new_state=cluster_pb2.TASK_STATE_BUILDING,
+        )
+
+    if phase == "Running":
         return TaskUpdate(
             task_id=task_id,
             attempt_id=attempt_id,
@@ -576,7 +586,7 @@ def _parse_k8s_quantity(value: str) -> int:
 
 @dataclass
 class KubernetesProvider:
-    """DirectTaskProvider that executes tasks as Kubernetes Pods.
+    """Executes tasks as Kubernetes Pods without worker daemons.
 
     No worker daemon. Capacity is derived from node allocatable resources
     minus running pod resource requests, queried via kubectl each sync cycle.
@@ -595,10 +605,6 @@ class KubernetesProvider:
     managed_label: str = ""
     _log_cursors: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
-
-    @property
-    def is_direct_provider(self) -> bool:
-        return True
 
     def sync(self, batch: DirectProviderBatch) -> DirectProviderSyncResult:
         """Sync task state: apply new pods, delete killed pods, poll running pods."""

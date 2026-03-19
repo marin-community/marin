@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from iris.cluster.controller.direct_provider import ClusterCapacity, SchedulingEvent
+from iris.cluster.controller.transitions import ClusterCapacity, SchedulingEvent
 from iris.cluster.controller.kubernetes_provider import (
     _LABEL_MANAGED,
     _LABEL_TASK_HASH,
