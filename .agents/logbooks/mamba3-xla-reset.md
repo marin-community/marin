@@ -871,3 +871,34 @@
   - Keep the new XLA MIMO path.
   - Use `chunk=256` as the next default candidate for `R=4` exploration on TPU.
   - Do not start any Pallas work for MIMO at this stage.
+
+## 2026-03-19: bounded MIMO local-output Pallas revisit
+
+- Goal:
+  - Revisit Pallas only for MIMO `local_output`, because the `R=4`, `128 x 512`, `chunk=256` backward profile is now dominated by `local_output` at about `69%`, unlike the earlier SISO case.
+- Scope:
+  - Keep `chunk_state`, inter-chunk scan, `prefix_emit`, gating, and rank collapse in XLA.
+  - Only kernelize the ranked intra-chunk local block.
+- What was tried:
+  - Flat `(groups * chunks)` batching into one canonical `[G, C, ...]` Pallas call.
+  - Group-tiled kernel with `query_block=128`, `key_block=128`, `value_block=128`.
+  - Rewrote the failing `bx` contraction to avoid Mosaic's "up to 1 batch dim supported" `tpu.matmul` limitation by looping over rank inside the kernel and using only 2D or single-batch contractions.
+  - Moved the diagonal Mamba-3 correction back out of the kernel after it became clear it was not part of the core lowering problem.
+  - Probed `group_block_size in {8, 16}`; `4` is rejected earlier by Pallas TPU's block-shape constraint.
+- TPU outcomes on held `v5p-8` dev session:
+  - `group_block=8`:
+    - initial versions failed earlier on unsupported batched matmul and gather lowering
+    - after those were fixed, lowering still crashed in TPU layout code with:
+      - `layout.h:250 Check failed: rem == 0 (1024 vs. 0)`
+  - `group_block=16`:
+    - same late TPU layout crash:
+      - `layout.h:250 Check failed: rem == 0 (1024 vs. 0)`
+  - `group_block=4`:
+    - rejected earlier by Pallas TPU lowering because the block shape `(4, 128)` for the schedule operand violates the TPU block-shape rule.
+- Interpretation:
+  - This bounded kernel no longer fails for obvious high-level reasons like extra epilogue logic or multiple-batch matmuls.
+  - The remaining failure is a lower-level TPU layout/lowering issue inside Mosaic for this schedule/block structure.
+  - I did not obtain a successful TPU compile, parity run, or benchmark for the Pallas path.
+- Decision:
+  - Revert the experimental Pallas plumbing and keep the tree on the working XLA MIMO path.
+  - The current evidence does not justify spending more time on this specific local-output Pallas formulation without a different kernel shape or stronger upstream guidance on the TPU layout failure.
