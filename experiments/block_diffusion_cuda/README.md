@@ -49,7 +49,7 @@ outer training loop.
 - `layers.py`: RMSNorm, attention mixer, delta-rule mixers, AdaLN
 - `model.py`: baseline and Bi-GDN denoisers
 - `diffusion.py`: corruption schedule, loss, and block sampler
-- `data.py`: toy, text-file, and Hugging Face token datasets
+- `data.py`: toy, text-file, Hugging Face, and FineWeb streaming datasets
 - `train.py`: single-node training entrypoint with optional DDP
 
 ## Example Commands
@@ -92,6 +92,44 @@ uv run python -m experiments.block_diffusion_cuda.train \
   --wandb-project block-diffusion-bigdn
 ```
 
+Single-node FineWeb baseline:
+
+```bash
+torchrun --nproc_per_node=8 -m experiments.block_diffusion_cuda.train \
+  --dataset fineweb \
+  --tokenizer gpt2 \
+  --variant baseline \
+  --device cuda \
+  --batch-size 8 \
+  --block-size 128 \
+  --window-blocks 8 \
+  --d-model 1024 \
+  --n-heads 16 \
+  --gdn-heads 16 \
+  --n-layers 16 \
+  --streaming \
+  --wandb-project block-diffusion-bigdn
+```
+
+Single-node FineWeb Bi-GDN:
+
+```bash
+torchrun --nproc_per_node=8 -m experiments.block_diffusion_cuda.train \
+  --dataset fineweb \
+  --tokenizer gpt2 \
+  --variant bigdn \
+  --device cuda \
+  --batch-size 8 \
+  --block-size 128 \
+  --window-blocks 8 \
+  --d-model 1024 \
+  --n-heads 16 \
+  --gdn-heads 16 \
+  --n-layers 16 \
+  --streaming \
+  --wandb-project block-diffusion-bigdn
+```
+
 Multi-GPU DDP:
 
 ```bash
@@ -103,6 +141,14 @@ torchrun --nproc_per_node=8 -m experiments.block_diffusion_cuda.train \
   --variant baseline \
   --device cuda
 ```
+
+## Tokenizer Notes
+
+- Default tokenizer is `auto`.
+- For `fineweb` and `fineweb_edu`, `auto` resolves to `gpt2`.
+- If you want a different tokenizer family, pass `--tokenizer ...` explicitly.
+- If you choose a gated or proprietary tokenizer that requires auth, make sure the
+  new cluster has the right Hugging Face token configured before launching.
 
 ## Known Limitations
 

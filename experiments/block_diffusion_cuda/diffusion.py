@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -39,10 +42,17 @@ class BlockDiffusionObjective:
         self.config = config
         self.schedule = schedule or NoiseSchedule()
 
-    def _sample_target_block(self, tokens: torch.Tensor, *, generator: torch.Generator | None = None) -> tuple[torch.Tensor, torch.Tensor]:
-        batch, seq_len = tokens.shape
+    def _sample_target_block(
+        self,
+        tokens: torch.Tensor,
+        *,
+        generator: torch.Generator | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        _, seq_len = tokens.shape
         if seq_len % self.config.block_size != 0:
-            raise ValueError(f"training tokens length {seq_len} must be divisible by block_size {self.config.block_size}")
+            raise ValueError(
+                f"training tokens length {seq_len} must be divisible by block_size {self.config.block_size}"
+            )
         num_blocks = seq_len // self.config.block_size
         if num_blocks < 1:
             raise ValueError("need at least one block per training sample")

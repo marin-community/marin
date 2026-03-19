@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import argparse
@@ -22,14 +25,16 @@ from .model import BlockDiffusionDenoiser
 def parse_args() -> tuple[ModelConfig, DataConfig, TrainConfig]:
     parser = argparse.ArgumentParser(description="Train attention or Bi-GDN block diffusion models in PyTorch.")
     parser.add_argument("--variant", choices=("baseline", "bigdn"), default="baseline")
-    parser.add_argument("--dataset", choices=("toy", "text", "hf"), default="toy")
-    parser.add_argument("--tokenizer", default="gpt2")
+    parser.add_argument("--dataset", choices=("toy", "text", "hf", "fineweb", "fineweb_edu"), default="toy")
+    parser.add_argument("--tokenizer", default="auto")
     parser.add_argument("--text-file")
     parser.add_argument("--hf-dataset")
     parser.add_argument("--hf-dataset-config")
     parser.add_argument("--hf-split", default="train")
     parser.add_argument("--hf-text-field", default="text")
     parser.add_argument("--max-examples", type=int)
+    parser.add_argument("--streaming", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--shuffle-buffer", type=int, default=10_000)
     parser.add_argument("--toy-size", type=int, default=4096)
     parser.add_argument("--out-dir", type=Path, default=Path("runs/block_diffusion_cuda"))
     parser.add_argument("--steps", type=int, default=1000)
@@ -87,6 +92,8 @@ def parse_args() -> tuple[ModelConfig, DataConfig, TrainConfig]:
         hf_split=args.hf_split,
         hf_text_field=args.hf_text_field,
         max_examples=args.max_examples,
+        streaming=args.streaming,
+        shuffle_buffer=args.shuffle_buffer,
         toy_size=args.toy_size,
         seed=args.seed,
     )
@@ -218,13 +225,15 @@ def main() -> None:
                 indent=2,
             )
 
-    loaded = build_dataset(data_config, model_config)
-    sampler = DistributedSampler(loaded.dataset, num_replicas=world_size, rank=rank, shuffle=True) if distributed else None
+    loaded = build_dataset(data_config, model_config, rank=rank, world_size=world_size)
+    sampler = None
+    if distributed and not loaded.is_streaming:
+        sampler = DistributedSampler(loaded.dataset, num_replicas=world_size, rank=rank, shuffle=True)
     dataloader = DataLoader(
         loaded.dataset,
         batch_size=train_config.batch_size,
         sampler=sampler,
-        shuffle=sampler is None,
+        shuffle=sampler is None and not loaded.is_streaming,
         num_workers=train_config.num_workers,
         pin_memory=device.type == "cuda",
         drop_last=True,
@@ -283,7 +292,12 @@ def main() -> None:
                 masked_accum += float(stats["num_masked"].detach())
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), train_config.grad_clip)
-            lr = cosine_lr(step, base_lr=train_config.lr, warmup_steps=train_config.warmup_steps, total_steps=train_config.steps)
+            lr = cosine_lr(
+                step,
+                base_lr=train_config.lr,
+                warmup_steps=train_config.warmup_steps,
+                total_steps=train_config.steps,
+            )
             for group in optimizer.param_groups:
                 group["lr"] = lr
             optimizer.step()

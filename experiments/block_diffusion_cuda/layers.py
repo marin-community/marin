@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import math
@@ -32,11 +35,7 @@ class TimestepEmbedding(nn.Module):
     def forward(self, timesteps: torch.Tensor) -> torch.Tensor:
         half = self.hidden_dim // 2
         device = timesteps.device
-        freqs = torch.exp(
-            -math.log(10_000.0)
-            * torch.arange(half, device=device, dtype=torch.float32)
-            / max(half, 1)
-        )
+        freqs = torch.exp(-math.log(10_000.0) * torch.arange(half, device=device, dtype=torch.float32) / max(half, 1))
         args = timesteps.float().unsqueeze(-1) * freqs.unsqueeze(0)
         emb = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
         if emb.shape[-1] < self.hidden_dim:

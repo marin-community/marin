@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """PyTorch/CUDA block diffusion experiments."""
 
 from .config import DataConfig, ModelConfig, TrainConfig

@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,7 +9,7 @@ from typing import Literal
 
 
 Variant = Literal["baseline", "bigdn"]
-DatasetKind = Literal["toy", "text", "hf"]
+DatasetKind = Literal["toy", "text", "hf", "fineweb", "fineweb_edu"]
 
 
 @dataclass(frozen=True)
@@ -38,13 +41,15 @@ class ModelConfig:
 @dataclass(frozen=True)
 class DataConfig:
     dataset: DatasetKind = "toy"
-    tokenizer: str = "gpt2"
+    tokenizer: str = "auto"
     text_file: str | None = None
     hf_dataset: str | None = None
     hf_dataset_config: str | None = None
     hf_split: str = "train"
     hf_text_field: str = "text"
     max_examples: int | None = None
+    streaming: bool = True
+    shuffle_buffer: int = 10_000
     toy_size: int = 4096
     seed: int = 0
 
