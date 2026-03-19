@@ -233,10 +233,10 @@ class ScatterParquetIterator:
                     (pc.field(_ZEPHYR_SHUFFLE_SHARD_IDX_COL) == self.shard_idx)
                     & (pc.field(_ZEPHYR_SHUFFLE_CHUNK_IDX_COL) == chunk_idx)
                 ),
-                batch_size=...,
-                batch_readahead=...,
-                fragment_readahead=...,
+                batch_size=8192,
                 use_threads=False,
+                # batch_readahead=0,
+                # fragment_readahead=0,
             )
             yield self._iter_scanner(scanner, col)
 
