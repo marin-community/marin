@@ -7,21 +7,19 @@ These tests verify the RPC contract (input -> output) of the ControllerServiceIm
 State changes are verified via RPC calls rather than internal state inspection.
 """
 
-from unittest.mock import Mock
-
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
-from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.db import JOBS, TASKS, ATTEMPTS, ControllerDB, _tasks_with_attempts
-from iris.cluster.log_store import LogStore
+from iris.cluster.constraints import WellKnownAttribute, device_variant_constraint
+from iris.cluster.controller.db import JOBS, TASKS, ATTEMPTS, _tasks_with_attempts
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
-from iris.cluster.constraints import device_variant_constraint
 from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
+
+from .conftest import make_test_entrypoint
 
 
 def _query_job(state: ControllerTransitions, job_id: JobName):
@@ -46,13 +44,6 @@ def _query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName):
             order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
         )
     return _tasks_with_attempts(tasks, attempts)
-
-
-def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
-    """Create a minimal RuntimeEntrypoint proto for testing."""
-    entrypoint = cluster_pb2.RuntimeEntrypoint()
-    entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    return entrypoint
 
 
 # =============================================================================
@@ -122,7 +113,7 @@ def job_request():
         job_name = JobName.from_string(name) if name.startswith("/") else JobName.root("test-user", name)
         return cluster_pb2.Controller.LaunchJobRequest(
             name=job_name.to_wire(),
-            entrypoint=_make_test_entrypoint(),
+            entrypoint=make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
             environment=cluster_pb2.EnvironmentConfig(),
             max_retries_failure=max_retries_failure,
@@ -158,48 +149,9 @@ def worker_metadata():
 
 
 @pytest.fixture
-def state(tmp_path):
-    """Create a fresh ControllerTransitions for each test."""
-    db_path = tmp_path / "controller.sqlite3"
-    db = ControllerDB(db_path=db_path)
-    log_store = LogStore(log_dir=tmp_path / "logs")
-    s = ControllerTransitions(db=db, log_store=log_store)
-    yield s
-    log_store.close()
-    db.close()
-
-
-class MockSchedulerWake:
-    """Mock object that tracks controller protocol calls."""
-
-    def __init__(self):
-        self.wake = Mock()
-        self.kill_tasks_on_workers = Mock()
-        self.create_scheduling_context = Mock(return_value=Mock())
-        self.get_job_scheduling_diagnostics = Mock(return_value=None)
-        self.autoscaler = None
-        self.provider = Mock()
-        self.has_direct_provider = False
-
-
-@pytest.fixture
-def mock_scheduler():
-    """Create a mock scheduler with wake() method."""
-    return MockSchedulerWake()
-
-
-@pytest.fixture
-def service(state, mock_scheduler, tmp_path):
-    """Create a ControllerServiceImpl for testing."""
-    from iris.cluster.bundle import BundleStore
-
-    return ControllerServiceImpl(
-        state,
-        state._db,
-        controller=mock_scheduler,
-        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
-    )
+def service(controller_service):
+    """Alias for the shared controller_service fixture."""
+    return controller_service
 
 
 # =============================================================================
@@ -389,7 +341,7 @@ def test_launch_job_rejects_empty_name(service, state):
     """Verify launch_job rejects empty job names."""
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="",
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
     )
@@ -591,7 +543,7 @@ def test_terminate_job_allowed_by_owner(service, job_request):
     assert status.job.state == cluster_pb2.JOB_STATE_KILLED
 
 
-def test_terminate_job_rejected_for_non_owner(state, mock_scheduler, tmp_path, job_request):
+def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, job_request):
     """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
@@ -600,7 +552,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_scheduler, tmp_path, j
     auth_service = ControllerServiceImpl(
         state,
         state._db,
-        controller=mock_scheduler,
+        controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
         log_store=state._log_store,
         auth=ControllerAuth(provider="static"),
@@ -622,7 +574,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_scheduler, tmp_path, j
     assert status.job.state == cluster_pb2.JOB_STATE_PENDING
 
 
-def test_launch_child_job_rejected_for_non_owner(state, mock_scheduler, tmp_path, job_request):
+def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_path, job_request):
     """Cannot submit a child job under another user's hierarchy."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
@@ -631,7 +583,7 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_scheduler, tmp_path
     auth_service = ControllerServiceImpl(
         state,
         state._db,
-        controller=mock_scheduler,
+        controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
         log_store=state._log_store,
         auth=ControllerAuth(provider="static"),
@@ -957,7 +909,7 @@ def test_launch_job_injects_device_constraints_from_tpu_resource(service, state)
     """Job with TPU resource spec gets auto-injected device-type and device-variant constraints."""
     request = cluster_pb2.Controller.LaunchJobRequest(
         name=JobName.root("test-user", "tpu-job").to_wire(),
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
     )
@@ -983,7 +935,7 @@ def test_launch_job_user_constraints_override_auto(service, state):
 
     request = cluster_pb2.Controller.LaunchJobRequest(
         name=JobName.root("test-user", "multi-variant-job").to_wire(),
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
     )
@@ -1010,7 +962,7 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
     """CPU-only jobs get no auto-injected device constraints."""
     request = cluster_pb2.Controller.LaunchJobRequest(
         name=JobName.root("test-user", "cpu-job").to_wire(),
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
     )
@@ -1027,7 +979,7 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
 # =============================================================================
 
 
-def test_register_requires_worker_role(state, mock_scheduler, tmp_path, worker_metadata):
+def test_register_requires_worker_role(state, mock_controller, tmp_path, worker_metadata):
     """Non-worker user gets PERMISSION_DENIED on register()."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
@@ -1041,7 +993,7 @@ def test_register_requires_worker_role(state, mock_scheduler, tmp_path, worker_m
     service = ControllerServiceImpl(
         state,
         db,
-        controller=mock_scheduler,
+        controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
         auth=auth,
@@ -1063,7 +1015,7 @@ def test_register_requires_worker_role(state, mock_scheduler, tmp_path, worker_m
         _verified_identity.reset(token)
 
 
-def test_register_allows_worker_role(state, mock_scheduler, tmp_path, worker_metadata):
+def test_register_allows_worker_role(state, mock_controller, tmp_path, worker_metadata):
     """Worker-role user can call register()."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
@@ -1077,7 +1029,7 @@ def test_register_allows_worker_role(state, mock_scheduler, tmp_path, worker_met
     service = ControllerServiceImpl(
         state,
         db,
-        controller=mock_scheduler,
+        controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
         auth=auth,
