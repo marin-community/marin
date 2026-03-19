@@ -199,6 +199,7 @@ def ssd_chunked_from_local_blocks_xla_batched(
                 return next_carry, prefix_output_i
 
             final_state, prefix_output_tm = jax.lax.scan(step, carry_init, (decay_tm, chunk_state_tm, c_scaled_tm))
+            final_state = final_state.astype(chunk_state.dtype)
             prefix_output = jnp.swapaxes(prefix_output_tm, 0, 1).astype(c.dtype)
     else:
         with jax.named_scope("incoming_state_scan"):
