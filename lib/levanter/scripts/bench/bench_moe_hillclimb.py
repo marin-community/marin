@@ -74,6 +74,7 @@ Kernel = Literal[
     "narrow_meta",
 ]
 BenchPass = Literal["forward", "forward_backward"]
+CollapseImpl = Literal["segment_sum", "sorted_segment_sum", "scatter_add", "lax_scatter"]
 
 
 def _print0(*args, **kwargs) -> None:
@@ -1206,13 +1207,49 @@ def _collapse_deepep_local_assignments(
     *,
     recv_capacity: int,
     num_recv_tokens: jax.Array,
+    collapse_impl: CollapseImpl = "segment_sum",
 ) -> jax.Array:
-    recv_out = jax.ops.segment_sum(
-        out_dispatch * assignment_weights[:, None],
-        recv_token_indices,
-        num_segments=recv_capacity,
-        indices_are_sorted=False,
-    )
+    out_weighted = out_dispatch * assignment_weights[:, None]
+    if collapse_impl == "segment_sum":
+        recv_out = jax.ops.segment_sum(
+            out_weighted,
+            recv_token_indices,
+            num_segments=recv_capacity,
+            indices_are_sorted=False,
+        )
+    elif collapse_impl == "sorted_segment_sum":
+        sort_idx = jnp.argsort(recv_token_indices)
+        token_sorted = jnp.take(recv_token_indices, sort_idx, axis=0)
+        out_sorted = _sort_activations(out_weighted, sort_idx)
+        recv_out = jax.ops.segment_sum(
+            out_sorted,
+            token_sorted,
+            num_segments=recv_capacity,
+            indices_are_sorted=True,
+        )
+    elif collapse_impl == "scatter_add":
+        recv_out = jnp.zeros((recv_capacity, out_weighted.shape[1]), dtype=out_weighted.dtype).at[recv_token_indices].add(
+            out_weighted,
+            mode="drop",
+        )
+    elif collapse_impl == "lax_scatter":
+        indices = recv_token_indices[:, None]
+        dnums = jax.lax.ScatterDimensionNumbers(
+            update_window_dims=(1,),
+            inserted_window_dims=(0,),
+            scatter_dims_to_operand_dims=(0,),
+        )
+        init = jnp.zeros((recv_capacity, out_weighted.shape[1]), dtype=out_weighted.dtype)
+        recv_out = jax.lax.scatter_add(
+            init,
+            indices,
+            out_weighted,
+            dnums,
+            indices_are_sorted=False,
+            unique_indices=False,
+        )
+    else:
+        raise ValueError(f"Unsupported collapse_impl={collapse_impl}")
     recv_valid = jnp.arange(recv_capacity, dtype=jnp.int32) < num_recv_tokens
     return jnp.where(recv_valid[:, None], recv_out, 0)
 
@@ -1593,6 +1630,7 @@ def _moe_mlp_ep_deepep_transport_local(
     max_recv_tokens: int | None = None,
     max_local_assignments: int | None = None,
     w13_local_expert_capacity: int | None = None,
+    collapse_impl: CollapseImpl = "segment_sum",
 ) -> tuple[jax.Array, jax.Array]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -1665,6 +1703,7 @@ def _moe_mlp_ep_deepep_transport_local(
             recv_token_indices,
             recv_capacity=recv_x.shape[0],
             num_recv_tokens=num_recv_tokens_scalar,
+            collapse_impl=collapse_impl,
         )
         out_local, _ = deepep_combine_intranode(
             recv_out,
@@ -1768,6 +1807,7 @@ def _moe_mlp_deepep_transport(
     max_recv_tokens: int | None = None,
     max_local_assignments: int | None = None,
     w13_local_expert_capacity: int | None = None,
+    collapse_impl: CollapseImpl = "segment_sum",
 ) -> jax.Array:
     if mesh is None:
         mesh = get_abstract_mesh()
@@ -1806,6 +1846,7 @@ def _moe_mlp_deepep_transport(
                 max_recv_tokens=max_recv_tokens,
                 max_local_assignments=max_local_assignments,
                 w13_local_expert_capacity=w13_local_expert_capacity,
+                collapse_impl=collapse_impl,
             ),
             mesh=mesh,
             in_specs=(
@@ -4910,6 +4951,7 @@ def _forward_deepep_transport_capped(
     max_recv_tokens: int,
     max_local_assignments: int,
     w13_local_expert_capacity: int | None = None,
+    collapse_impl: CollapseImpl = "segment_sum",
 ) -> jax.Array:
     routed = _moe_mlp_deepep_transport(
         x,
@@ -4920,6 +4962,7 @@ def _forward_deepep_transport_capped(
         max_recv_tokens=max_recv_tokens,
         max_local_assignments=max_local_assignments,
         w13_local_expert_capacity=w13_local_expert_capacity,
+        collapse_impl=collapse_impl,
     )
     return routed + _shared_mlp(x, shared_w13, shared_w2)
 
@@ -5624,6 +5667,7 @@ def _time_deepep_transport_forward_capped_prewarmed(
     warmup: int,
     iters: int,
     w13_expert_padded: bool = False,
+    collapse_impl: CollapseImpl = "segment_sum",
 ) -> float:
     mesh = x.sharding.mesh
     num_experts = int(w_up_gate.shape[0])
@@ -5649,6 +5693,7 @@ def _time_deepep_transport_forward_capped_prewarmed(
             max_recv_tokens=max_recv_tokens,
             max_local_assignments=max_local_assignments,
             w13_local_expert_capacity=w13_local_expert_capacity,
+            collapse_impl=collapse_impl,
         ),
         x,
         selected_experts,
@@ -5676,6 +5721,7 @@ def _profile_deepep_transport_forward_capped_prewarmed(
     profile_dir: Path,
     profile_name: str,
     w13_expert_padded: bool = False,
+    collapse_impl: CollapseImpl = "segment_sum",
 ) -> float:
     mesh = x.sharding.mesh
     num_experts = int(w_up_gate.shape[0])
@@ -5701,6 +5747,7 @@ def _profile_deepep_transport_forward_capped_prewarmed(
             max_recv_tokens=max_recv_tokens,
             max_local_assignments=max_local_assignments,
             w13_local_expert_capacity=w13_local_expert_capacity,
+            collapse_impl=collapse_impl,
         ),
         x,
         selected_experts,
@@ -5765,6 +5812,7 @@ def _time_deepep_transport_forward_backward_capped_prewarmed(
     warmup: int,
     iters: int,
     w13_expert_padded: bool = False,
+    collapse_impl: CollapseImpl = "segment_sum",
 ) -> float:
     mesh = x.sharding.mesh
     num_experts = int(w_up_gate.shape[0])
@@ -5797,6 +5845,7 @@ def _time_deepep_transport_forward_backward_capped_prewarmed(
             max_recv_tokens=max_recv_tokens,
             max_local_assignments=max_local_assignments,
             w13_local_expert_capacity=w13_local_expert_capacity,
+            collapse_impl=collapse_impl,
         )
         return jnp.mean(jnp.square(y.astype(jnp.float32)))
 
@@ -5827,6 +5876,7 @@ def _profile_deepep_transport_forward_backward_capped_prewarmed(
     profile_dir: Path,
     profile_name: str,
     w13_expert_padded: bool = False,
+    collapse_impl: CollapseImpl = "segment_sum",
 ) -> float:
     mesh = x.sharding.mesh
     num_experts = int(w_up_gate.shape[0])
@@ -5859,6 +5909,7 @@ def _profile_deepep_transport_forward_backward_capped_prewarmed(
             max_recv_tokens=max_recv_tokens,
             max_local_assignments=max_local_assignments,
             w13_local_expert_capacity=w13_local_expert_capacity,
+            collapse_impl=collapse_impl,
         )
         return jnp.mean(jnp.square(y.astype(jnp.float32)))
 
@@ -5956,6 +6007,11 @@ def main() -> None:
     parser.add_argument("--profile-root", type=Path, default=None)
     parser.add_argument("--w13-out-first", action="store_true")
     parser.add_argument("--w13-expert-padded", action="store_true")
+    parser.add_argument(
+        "--deepep-collapse-impl",
+        choices=["segment_sum", "sorted_segment_sum", "scatter_add", "lax_scatter"],
+        default="segment_sum",
+    )
     args = parser.parse_args()
 
     if args.coordinator_address is not None or args.num_processes is not None or args.process_id is not None:
@@ -6012,7 +6068,8 @@ def main() -> None:
         f"tokens={args.tokens} hidden={args.hidden} mlp_dim={args.mlp_dim} experts={args.experts} "
         f"topk={args.topk} shared_expert_dim={args.shared_expert_dim} dtype={dtype} "
         f"distribution={args.distribution} bench_pass={args.bench_pass} capacity_factor={args.capacity_factor} "
-        f"w13_out_first={args.w13_out_first} w13_expert_padded={args.w13_expert_padded}"
+        f"w13_out_first={args.w13_out_first} w13_expert_padded={args.w13_expert_padded} "
+        f"deepep_collapse_impl={args.deepep_collapse_impl}"
     )
 
     for ep_size in eps:
@@ -6185,6 +6242,7 @@ def main() -> None:
                                 profile_dir=args.profile_root,
                                 profile_name=profile_name,
                                 w13_expert_padded=args.w13_expert_padded,
+                                collapse_impl=args.deepep_collapse_impl,
                             )
                         else:
                             dt = _time_deepep_transport_forward_capped_prewarmed(
@@ -6198,6 +6256,7 @@ def main() -> None:
                                 warmup=args.warmup,
                                 iters=args.iters,
                                 w13_expert_padded=args.w13_expert_padded,
+                                collapse_impl=args.deepep_collapse_impl,
                             )
                     elif kernel == "deepep_transport_staged":
                         if args.profile_root is not None:
@@ -6316,6 +6375,7 @@ def main() -> None:
                                 profile_dir=args.profile_root,
                                 profile_name=profile_name,
                                 w13_expert_padded=args.w13_expert_padded,
+                                collapse_impl=args.deepep_collapse_impl,
                             )
                         else:
                             dt = _time_deepep_transport_forward_backward_capped_prewarmed(
@@ -6329,6 +6389,7 @@ def main() -> None:
                                 warmup=args.warmup,
                                 iters=args.iters,
                                 w13_expert_padded=args.w13_expert_padded,
+                                collapse_impl=args.deepep_collapse_impl,
                             )
                     elif args.profile_root is not None:
                         dt = _profile_fn(

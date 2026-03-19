@@ -131,6 +131,11 @@ def _bench_block(args: argparse.Namespace) -> str:
     profile_flag = f" \\\n        --profile-root {args.profile_root}" if args.profile_root else ""
     w13_layout_flag = " \\\n        --w13-out-first" if args.w13_out_first else ""
     w13_expert_padded_flag = " \\\n        --w13-expert-padded" if args.w13_expert_padded else ""
+    collapse_impl_flag = (
+        ""
+        if args.deepep_collapse_impl == "segment_sum"
+        else f" \\\n        --deepep-collapse-impl {args.deepep_collapse_impl}"
+    )
     timeout_prefix = ""
     timeout_suffix = ""
     if args.per_bench_timeout_seconds is not None:
@@ -161,7 +166,7 @@ for distribution in {distributions}; do
         --kernel "$kernel" \\
         --ep-list {args.ep_list} \\
         --warmup {args.warmup} \\
-        --iters {args.iters}{profile_flag}{w13_layout_flag}{w13_expert_padded_flag}
+        --iters {args.iters}{profile_flag}{w13_layout_flag}{w13_expert_padded_flag}{collapse_impl_flag}
 {timeout_suffix}
       echo "BENCH_END kernel=$kernel distribution=$distribution topk=$topk"
     done
@@ -329,6 +334,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--post-bench-sleep-seconds", type=int, default=0)
     parser.add_argument("--w13-out-first", action="store_true")
     parser.add_argument("--w13-expert-padded", action="store_true")
+    parser.add_argument(
+        "--deepep-collapse-impl",
+        choices=("segment_sum", "sorted_segment_sum", "scatter_add", "lax_scatter"),
+        default="segment_sum",
+    )
     parser.add_argument("--deepep-trust-runtime-recv-count", action="store_true")
     parser.add_argument("--deepep-host-dispatch-debug", action="store_true")
     parser.add_argument(
