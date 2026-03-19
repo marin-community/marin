@@ -3,7 +3,6 @@
 
 import logging
 import os
-import typing
 from dataclasses import dataclass, field
 
 import equinox as eqx
@@ -18,10 +17,10 @@ import levanter
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data import DataLoader
-from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
+from levanter.data.text.examples import GrugLmExample
 from levanter.data.text import LmDataConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import ArrayLmHeadModel, LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.partitioning import named_jit, round_axis_for_partitioning
@@ -80,7 +79,7 @@ def main(config: VizLmConfig):
         # don't want to compute the mask w.r.t. the final token
 
         @named_jit(axis_resources=compute_axis_mapping)
-        def compute_log_probs(model: LmHeadModel, example: GrugLmExample):
+        def compute_log_probs(model: ArrayLmHeadModel, example: GrugLmExample):
             model = inference_mode(model, True)
             model = mp.cast_to_compute(model)
 
@@ -90,19 +89,14 @@ def main(config: VizLmConfig):
                 reduction=None,
                 reduction_axis=(),
             )
-
-            named_example = named_lm_example_from_grug(example, Pos=Pos, batch_axis=EvalBatch)
-            activations = model.activations(named_example.tokens, named_example.attn_mask, key=key)
-            if isinstance(activations, tuple):
-                activations = activations[0]
-            logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed).array
+            logits = model.logits_from_token_ids_array(example.tokens, batch_axis=EvalBatch, key=key)
 
             # Roll forward to align each prediction with its target token.
             logprobs = jnp.roll(-loss, 1, axis=-1)
             argmaxes = jnp.roll(jnp.argmax(logits, axis=-1), 1, axis=-1)
             return logprobs, argmaxes
 
-        model: LmHeadModel
+        model: ArrayLmHeadModel
 
         # initialize the model
         if config.checkpoint_is_hf:
@@ -121,7 +115,7 @@ def main(config: VizLmConfig):
                 model = load_checkpoint(model, config.checkpoint_path, subpath="model")
             model = hax.shard(model, parameter_axis_mapping)
 
-        model = typing.cast(LmHeadModel, inference_mode(model, True))
+        model = inference_mode(model, True)
 
         if config.comparison_model_path is not None:
             if config.comparison_is_hf:
@@ -139,7 +133,7 @@ def main(config: VizLmConfig):
                     comparison_model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
                     comparison_model = load_checkpoint(comparison_model, config.comparison_model_path, subpath="model")
                 comparison_model = hax.shard(comparison_model, parameter_axis_mapping)
-            comparison_model = typing.cast(LmHeadModel, inference_mode(comparison_model, True))
+            comparison_model = inference_mode(comparison_model, True)
         else:
             comparison_model = None
 

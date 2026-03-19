@@ -8,7 +8,6 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
-import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
 from haliax import Axis
@@ -22,12 +21,12 @@ from levanter import callbacks
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, save_hf_checkpoint_callback
-from levanter.data.text.examples import GrugLmExample
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import LmDataConfig
+from levanter.data.text.examples import GrugLmExample, LmLikeExample, token_ids_array_from_lm_example
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import ArrayLmHeadModel, LmConfig
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
@@ -112,7 +111,7 @@ def main(config: TrainLmConfig):
     levanter.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-    def loss_function(model: LmHeadModel, example: GrugLmExample, *, key=None):
+    def loss_function(model: ArrayLmHeadModel, example: GrugLmExample, *, key=None):
         return model.compute_next_token_loss_array(
             example,
             batch_axis=config.trainer.batch_axis_name,
@@ -287,16 +286,10 @@ def main(config: TrainLmConfig):
             )
 
         @named_jit(axis_resources=compute_axis_mapping)
-        def compute_logits(model: LmHeadModel, example: GrugLmExample):
+        def compute_logits(model: ArrayLmHeadModel, example: LmLikeExample):
             model = trainer.mp.cast_to_compute(model)
-            logits_array = model.logits_from_token_ids_array(example.tokens, batch_axis=EvalBatch, key=None)
-            if logits_array.ndim == 2:
-                return hax.named(logits_array, (Pos.resize(logits_array.shape[0]), model.Vocab))
-            if logits_array.ndim == 3:
-                batch_axis = Axis(EvalBatch.name, logits_array.shape[0])
-                pos_axis = Pos.resize(logits_array.shape[1])
-                return hax.named(logits_array, (batch_axis, pos_axis, model.Vocab))
-            raise ValueError(f"Unexpected logits rank for analysis callbacks: {logits_array.ndim}")
+            token_ids = token_ids_array_from_lm_example(example)
+            return model.logits_from_token_ids_array(token_ids, batch_axis=EvalBatch, key=None)
 
         if config.log_entropy:
             for name, dataset in config.data.validation_grug_sets(seq_len=Pos.size).items():

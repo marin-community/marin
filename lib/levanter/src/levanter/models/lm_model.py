@@ -3,7 +3,7 @@
 
 import abc
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, Optional, Type, TypeVar, cast
+from typing import Any, Generic, Optional, Protocol, Type, TypeVar, cast
 
 import draccus
 import equinox as eqx
@@ -12,7 +12,7 @@ import jax.numpy as jnp
 from jaxtyping import PRNGKeyArray
 
 import haliax as hax
-from haliax import Axis, NamedArray, NamedOrNumeric
+from haliax import Axis, NamedOrNumeric
 
 from levanter.layers.attention import AttentionMask
 from levanter.models.loss import maybe_fused_next_token_loss
@@ -21,14 +21,59 @@ from levanter.models.loss import maybe_fused_next_token_loss
 LmConfigT = TypeVar("LmConfigT", bound="LmConfig")
 LmT = TypeVar("LmT", bound="LmHeadModel")
 
-if TYPE_CHECKING:
-    from levanter.data.text.examples import GrugLmExample
+
+LmTensor = Any
+LmAttentionMask = AttentionMask | Any
+LmAuxData = Any
+
+
+class ArrayLmHeadModel(Protocol):
+    """Array-native LM interface used by training/eval surfaces."""
+
+    def compute_next_token_loss_array(
+        self,
+        example: Any,
+        *,
+        batch_axis: Axis | str | None = "batch",
+        key=None,
+        reduction: str | hax.ReductionFunction | None = "mean",
+        reduction_axis: Optional[hax.AxisSelection] = None,
+        logsumexp_weight: Optional[float] = None,
+        loss_dtype: Optional[jnp.dtype] = jnp.float32,
+        logit_soft_cap: Optional[float] = None,
+    ) -> jax.Array: ...
+
+    def logits_from_token_ids_array(
+        self,
+        input_ids: jax.Array,
+        *,
+        batch_axis: Axis | str | None = "batch",
+        key=None,
+    ) -> jax.Array: ...
+
+
+class ArrayLmHarnessModel(ArrayLmHeadModel, Protocol):
+    """Array-native model surface required by eval harness-style flows."""
+
+    @property
+    def Pos(self) -> Axis: ...
+
+    @property
+    def max_length(self) -> int: ...
+
+
+def _to_plain_jax_array(value: Any) -> jax.Array:
+    """Best-effort conversion from a model-native tensor/scalar to a plain JAX array."""
+    array_attr = getattr(value, "array", None)
+    if array_attr is not None:
+        return jnp.asarray(array_attr)
+    return jnp.asarray(value)
 
 
 class LmExample(eqx.Module):
     tokens: hax.NamedArray
     loss_weight: hax.NamedArray
-    attn_mask: AttentionMask | NamedArray = AttentionMask.causal()
+    attn_mask: AttentionMask | hax.NamedArray = AttentionMask.causal()
 
     @staticmethod
     def causal(
@@ -108,7 +153,7 @@ class LmExample(eqx.Module):
         return LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)
 
     @staticmethod
-    def causal_loss_mask(Pos: Axis, prompt_length: Optional[int] = None) -> NamedArray:
+    def causal_loss_mask(Pos: Axis, prompt_length: Optional[int] = None) -> hax.NamedArray:
         loss_weight = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
 
         if prompt_length is not None:
@@ -191,28 +236,25 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
 
     def __call__(
         self,
-        input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        input_ids: LmTensor,
+        attn_mask: Optional[LmAttentionMask] = None,
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+        pos_ids: LmTensor | None = None,
+    ) -> LmTensor:
         """
-        Compute the logits for the next token in a sequence.
+        Compute next-token logits for a model-native token tensor.
+
         Args:
-            input_ids: token IDs with shape [..., Pos]
-            attn_mask: attention mask with shape [..., Pos, KeyPos]
+            input_ids: model-native token tensor with shape [..., Pos]
+            attn_mask: model-native attention mask for the same sequence
             key: PRNGKeyArray for random number generation
 
         Returns:
-            NamedArray: logits with shape [..., Pos, Vocab]
+            Model-native logits tensor with shape [..., Pos, Vocab]
 
         """
-        try:
-            x = self.activations(input_ids, attn_mask, key=key, pos_ids=pos_ids)
-        except TypeError:
-            # For backward compatibility with models that don't yet support pos_ids
-            x = self.activations(input_ids, attn_mask, key=key)
+        x = self.activations(input_ids, attn_mask, key=key, pos_ids=pos_ids)
 
         lm_logits = hax.dot(x, self.get_lm_head(), axis=self.Embed)
 
@@ -260,27 +302,28 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
     @abc.abstractmethod
     def activations(
         self,
-        input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        input_ids: LmTensor,
+        attn_mask: Optional[LmAttentionMask] = None,
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray | tuple[NamedArray, NamedArray | float]:
+        pos_ids: LmTensor | None = None,
+    ) -> LmTensor | tuple[LmTensor, LmAuxData]:
         """
-        Compute the activations for the next token in a sequence.
+        Compute activations for a model-native token tensor.
+
         Args:
-            input_ids: token IDs with shape {Pos}
-            attn_mask: attention mask with shape {Pos, KeyPos}
+            input_ids: model-native token tensor with shape {Pos}
+            attn_mask: model-native attention mask with shape {Pos, KeyPos}
             key: PRNGKeyArray for random number generation
 
         Returns:
-            NamedArray: activations with shape {Pos, Embed}
+            Model-native activation tensor with shape {Pos, Embed}
 
         """
         pass
 
     @abc.abstractmethod
-    def get_lm_head(self) -> hax.NamedArray:
+    def get_lm_head(self) -> LmTensor:
         """
         The language modeling head of the model. Should have shape {Embed, Vocab}.
         """
@@ -298,7 +341,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
     def vocab_size(self) -> int:
         return self.Vocab.size
 
-    def compute_next_token_loss(
+    def _compute_next_token_loss_named(
         self,
         example: LmExample,
         *,
@@ -309,13 +352,11 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         loss_dtype: Optional[jnp.dtype] = jnp.float32,
         logit_soft_cap: Optional[float] = None,
         axis_mapping: hax.partitioning.ResourceMapping | None = None,
-    ) -> jnp.ndarray | NamedArray:
+    ) -> jnp.ndarray | LmTensor:
         """
-        Compute next-token cross-entropy for a language modeling example.
+        Compute next-token cross-entropy for a named example.
 
-        If `reduction` is not None, the loss is reduced across `reduction_axis` (`None` means all axes).
-        If `reduction` is None, the loss is returned unreduced as a `NamedArray` with axes
-        (*batch axes, sequence_length).
+        Internal helper used by the array-native public surface.
         """
         activations = self.activations(example.tokens, example.attn_mask, key=key)
 
@@ -343,11 +384,11 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
 
     def compute_next_token_loss_array(
         self,
-        example: "LmExample | GrugLmExample",
+        example: Any,
         *,
         batch_axis: Axis | str | None = "batch",
         key=None,
-        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
+        reduction: str | hax.ReductionFunction | None = "mean",
         reduction_axis: Optional[hax.AxisSelection] = None,
         logsumexp_weight: Optional[float] = None,
         loss_dtype: Optional[jnp.dtype] = jnp.float32,
@@ -359,26 +400,41 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         This bridges array-native batches (for example `GrugLmExample`) to the legacy
         named-tensor model interface during migration.
         """
-        named_example: LmExample
-        if isinstance(example, LmExample):
-            named_example = example
-        else:
-            from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
-
-            if not isinstance(example, GrugLmExample):
-                raise TypeError(f"Unsupported example type: {type(example)}")
-            named_example = named_lm_example_from_grug(example, Pos=self.Pos, batch_axis=batch_axis)
-
-        loss = self.compute_next_token_loss(
+        named_example = _as_named_lm_example(example, Pos=self.Pos, batch_axis=batch_axis)
+        loss = self._compute_next_token_loss_named(
             named_example,
             key=key,
-            reduction=reduction,
+            reduction=_normalize_reduction(reduction),
             reduction_axis=reduction_axis,
             logsumexp_weight=logsumexp_weight,
             loss_dtype=loss_dtype,
             logit_soft_cap=logit_soft_cap,
         )
 
-        if isinstance(loss, hax.NamedArray):
-            return loss.array
-        return jnp.asarray(loss)
+        return _to_plain_jax_array(loss)
+
+
+def _as_named_lm_example(example: Any, *, Pos: Axis, batch_axis: Axis | str | None = "batch") -> LmExample:
+    if isinstance(example, LmExample):
+        return example
+
+    from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
+
+    if isinstance(example, GrugLmExample):
+        return named_lm_example_from_grug(example, Pos=Pos, batch_axis=batch_axis)
+
+    raise TypeError(f"Unsupported example type: {type(example)}")
+
+
+def _normalize_reduction(
+    reduction: str | hax.ReductionFunction | None,
+) -> Optional[hax.ReductionFunction]:
+    if reduction is None:
+        return None
+    if reduction == "mean":
+        return cast(hax.ReductionFunction, hax.mean)
+    if reduction == "sum":
+        return cast(hax.ReductionFunction, hax.sum)
+    if callable(reduction):
+        return cast(hax.ReductionFunction, reduction)
+    raise ValueError(f"Unsupported reduction spec: {reduction!r}")

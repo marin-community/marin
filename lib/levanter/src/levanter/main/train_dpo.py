@@ -9,6 +9,7 @@ from typing import Any, Optional, Union, cast
 
 import equinox as eqx
 import haliax as hax
+import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 from haliax.partitioning import named_jit, round_axis_for_partitioning
@@ -27,7 +28,7 @@ from levanter.data.text import (
     dataset_for_preference_format,
 )
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import ArrayLmHeadModel, LmConfig, LmExample, LmHeadModel
 from levanter.metrics import Metric, ReductionType
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
@@ -49,26 +50,40 @@ def _policy_model_for_hf_save(model: DpoModel | LmHeadModel) -> LmHeadModel:
 
 
 def dpo_loss_from_logps(
-    delta_pi: hax.NamedArray,
-    delta_ref: hax.NamedArray,
+    delta_pi: jnp.ndarray | hax.NamedArray,
+    delta_ref: jnp.ndarray | hax.NamedArray,
     *,
     beta: float,
 ) -> tuple[jnp.ndarray, dict[str, Metric]]:
-    logits = (delta_pi - delta_ref) * beta
-    loss = hax.mean(hax.nn.softplus(-logits)).scalar()
+    delta_pi_array = _as_array(delta_pi)
+    delta_ref_array = _as_array(delta_ref)
+    logits = (delta_pi_array - delta_ref_array) * beta
+    loss = jnp.mean(jax.nn.softplus(-logits))
     metrics = {
         "dpo_loss": Metric.from_value(loss, ReductionType.MEAN),
-        "dpo_margin_policy": Metric.from_value(hax.mean(delta_pi).scalar(), ReductionType.MEAN),
-        "dpo_margin_ref": Metric.from_value(hax.mean(delta_ref).scalar(), ReductionType.MEAN),
-        "dpo_accuracy": Metric.from_value(hax.mean(logits > 0).scalar(), ReductionType.MEAN),
+        "dpo_margin_policy": Metric.from_value(jnp.mean(delta_pi_array), ReductionType.MEAN),
+        "dpo_margin_ref": Metric.from_value(jnp.mean(delta_ref_array), ReductionType.MEAN),
+        "dpo_accuracy": Metric.from_value(jnp.mean(logits > 0), ReductionType.MEAN),
     }
     return loss, metrics
 
 
-def _logp_sum(model: LmHeadModel, example, *, key=None, axis_mapping=None) -> hax.NamedArray:
-    nll = model.compute_next_token_loss(
-        example, reduction=hax.sum, reduction_axis="position", key=key, axis_mapping=axis_mapping
-    )
+def _as_array(value: jnp.ndarray | hax.NamedArray) -> jnp.ndarray:
+    if isinstance(value, hax.NamedArray):
+        return value.array
+    return jnp.asarray(value)
+
+
+def _logp_sum(model: ArrayLmHeadModel, example, *, key=None, axis_mapping=None):
+    if axis_mapping is not None:
+        with hax.axis_mapping(axis_mapping):
+            nll = model.compute_next_token_loss_array(example, reduction="sum", reduction_axis="position", key=key)
+    else:
+        nll = model.compute_next_token_loss_array(example, reduction="sum", reduction_axis="position", key=key)
+
+    if isinstance(example, LmExample) and not isinstance(nll, hax.NamedArray):
+        nll = hax.named(jnp.asarray(nll), ())
+
     return -nll
 
 
@@ -292,8 +307,8 @@ def main(config: TrainDpoConfig):
         loss, metrics = dpo_loss_from_logps(delta_pi, delta_ref, beta=config.beta)
         chosen_reward = (logp_pi_chosen - logp_ref_chosen) * config.beta
         rejected_reward = (logp_pi_rejected - logp_ref_rejected) * config.beta
-        metrics["dpo_chosen_reward"] = Metric.from_value(hax.mean(chosen_reward).scalar(), ReductionType.MEAN)
-        metrics["dpo_rejected_reward"] = Metric.from_value(hax.mean(rejected_reward).scalar(), ReductionType.MEAN)
+        metrics["dpo_chosen_reward"] = Metric.from_value(jnp.mean(chosen_reward), ReductionType.MEAN)
+        metrics["dpo_rejected_reward"] = Metric.from_value(jnp.mean(rejected_reward), ReductionType.MEAN)
         return loss, metrics
 
     with Trainer(config.trainer, optimizer, loss_function) as trainer:

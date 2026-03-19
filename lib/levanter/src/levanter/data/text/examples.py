@@ -107,6 +107,9 @@ class GrugLmExample:
         return loss_weight
 
 
+LmLikeExample = LmExample | GrugLmExample
+
+
 def grug_attention_mask_from_named(mask: AttentionMask) -> GrugAttentionMask:
     if mask.explicit_mask is not None:
         raise NotImplementedError("Explicit attention masks are not supported by GrugAttentionMask.")
@@ -226,3 +229,19 @@ def named_lm_example_from_grug(
         loss_weight=hax.named(example.loss_weight, token_axes),
         attn_mask=named_attention_mask_from_grug(example.attn_mask, Pos, batch_axis=resolved_batch_axis),
     )
+
+
+def token_ids_array_from_lm_example(example: LmLikeExample) -> jax.Array:
+    if isinstance(example, LmExample):
+        return example.tokens.array
+    return example.tokens
+
+
+def loss_weight_array_from_lm_example(example: LmLikeExample) -> jax.Array:
+    if isinstance(example, LmExample):
+        return example.loss_weight.array
+    return example.loss_weight
+
+
+def target_token_ids_array_from_lm_example(example: LmLikeExample) -> jax.Array:
+    return jnp.roll(token_ids_array_from_lm_example(example), -1, axis=-1)
