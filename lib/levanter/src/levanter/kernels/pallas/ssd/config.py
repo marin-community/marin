@@ -9,9 +9,9 @@ class BlockSizes:
     """Block sizes reserved for a future TPU Pallas SSD local-block kernel."""
 
     group_block_size: int = 1
-    query_block_size: int | None = 128
-    key_block_size: int | None = 128
-    value_block_size: int | None = 128
+    query_block_size: int | None = None
+    key_block_size: int | None = None
+    value_block_size: int | None = None
 
     @classmethod
     def get_default(cls) -> "BlockSizes":

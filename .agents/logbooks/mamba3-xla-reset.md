@@ -360,3 +360,31 @@
 - Interpretation:
   - The prototype is ready for a fair TPU comparison against the `chunk_size=512` XLA baseline.
   - The design stays within the planned scope: one kernel only, no attempt to Pallas-ize `chunk_state` or `prefix_emit`, and no change to default dispatch.
+
+### 2026-03-18 - Pallas `local_output` prototype rejected
+- Goal:
+  - Benchmark the single-kernel TPU Pallas `local_output` prototype against the current `chunk_size=512` XLA baseline on `v5p-8`.
+- Benchmark command:
+  - `uv run scripts/iris/dev_tpu.py --config lib/iris/examples/marin.yaml --tpu-name dlwh-mamba3-chunks-03f9 execute -e LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000 -- .venv/bin/python lib/levanter/scripts/bench/bench_mamba3_xla.py --seq-lens 16384 --batch-head-groups 16 --chunk-size 512 --state-dim 128 --value-dim 512 --steps 3 --warmup 1 --implementations xla,pallas_tpu --json`
+- Result:
+  - The explicit Pallas path did not complete the benchmark.
+  - Initial prototype failure:
+    - Mosaic rejected the block layout when the kernel was wrapped in an outer `vmap`.
+    - Fix attempted: flatten the explicit-Pallas path so the kernel sees `[G*K, C, ...]` directly rather than a batched rank-3 BlockSpec.
+  - Second prototype failure:
+    - Mosaic rejected singleton-ish block shapes on the flattened path.
+    - Fix attempted: batch the kernel over a real `group_block_size`.
+  - Final failure after both fixes:
+    - Forward compilation got far enough to enter the benchmark harness.
+    - Backward compilation failed inside JAX's `pallas_call` JVP path with an internal assertion:
+      - `AssertionError` in `jax._src.interpreters.ad._jvp_jaxpr`
+      - surfaced through `PallasUnsupportedError` during `mamba3_chunked_forward(..., implementation="pallas_tpu")`
+- Interpretation:
+  - This prototype does not satisfy the bar for the Mamba-3 training path on TPU:
+    - it is not benchmarkable end-to-end on the representative training shape,
+    - it is not backward-ready,
+    - it already required multiple layout-specific fixes before reaching the autodiff failure.
+  - Given the earlier profile evidence, the value of continuing to force this one kernel through JAX/Pallas internals is low relative to the already-strong XLA baseline.
+- Decision:
+  - Stop the Pallas branch here.
+  - Revert the experimental `local_output` Pallas path and keep XLA as the only maintained implementation.
