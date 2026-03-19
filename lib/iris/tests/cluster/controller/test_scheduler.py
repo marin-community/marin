@@ -37,6 +37,8 @@ from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2
 from iris.time_utils import Timestamp
 
+from tests.cluster.conftest import eq_constraint, in_constraint
+
 
 def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
     """Create a minimal RuntimeEntrypoint proto for testing."""
@@ -705,10 +707,7 @@ def test_constraint_filters_workers_by_attribute(scheduler, state, job_request, 
 
     # Job with constraint requiring tpu-name = "tpu-a"
     req = job_request()
-    constraint = req.constraints.add()
-    constraint.key = WellKnownAttribute.TPU_NAME
-    constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
-    constraint.value.string_value = "tpu-a"
+    req.constraints.append(eq_constraint(WellKnownAttribute.TPU_NAME, "tpu-a"))
     tasks = submit_job(state, "j1", req)
 
     context = _build_context(scheduler, state)
@@ -897,11 +896,7 @@ def test_constraint_in_operator_matches_any_value(scheduler, state, job_request,
 
     # Job with IN constraint: region IN (us-central1, us-central2)
     req = job_request()
-    constraint = req.constraints.add()
-    constraint.key = WellKnownAttribute.REGION
-    constraint.op = cluster_pb2.CONSTRAINT_OP_IN
-    constraint.values.append(cluster_pb2.AttributeValue(string_value="us-central1"))
-    constraint.values.append(cluster_pb2.AttributeValue(string_value="us-central2"))
+    req.constraints.append(in_constraint(WellKnownAttribute.REGION, ["us-central1", "us-central2"]))
 
     submit_job(state, "j1", req)
 
@@ -920,11 +915,7 @@ def test_constraint_in_operator_no_match(scheduler, state, job_request, worker_m
     register_worker(state, "w1", "addr1", meta)
 
     req = job_request()
-    constraint = req.constraints.add()
-    constraint.key = WellKnownAttribute.REGION
-    constraint.op = cluster_pb2.CONSTRAINT_OP_IN
-    constraint.values.append(cluster_pb2.AttributeValue(string_value="us-central1"))
-    constraint.values.append(cluster_pb2.AttributeValue(string_value="us-central2"))
+    req.constraints.append(in_constraint(WellKnownAttribute.REGION, ["us-central1", "us-central2"]))
     submit_job(state, "j1", req)
 
     context = _build_context(scheduler, state)
@@ -955,10 +946,7 @@ def test_multiple_constraints_all_must_match(scheduler, state, job_request, work
 
     # Job requiring tpu-name=tpu-a AND tpu-worker-id=0
     req = job_request()
-    c1 = req.constraints.add()
-    c1.key = WellKnownAttribute.TPU_NAME
-    c1.op = cluster_pb2.CONSTRAINT_OP_EQ
-    c1.value.string_value = "tpu-a"
+    req.constraints.append(eq_constraint(WellKnownAttribute.TPU_NAME, "tpu-a"))
     c2 = req.constraints.add()
     c2.key = WellKnownAttribute.TPU_WORKER_ID
     c2.op = cluster_pb2.CONSTRAINT_OP_EQ
@@ -981,10 +969,7 @@ def test_constraint_with_missing_attribute_fails(scheduler, state, job_request, 
 
     # Job requiring tpu-name = "tpu-a"
     req = job_request()
-    constraint = req.constraints.add()
-    constraint.key = WellKnownAttribute.TPU_NAME
-    constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
-    constraint.value.string_value = "tpu-a"
+    req.constraints.append(eq_constraint(WellKnownAttribute.TPU_NAME, "tpu-a"))
     submit_job(state, "j1", req)
 
     context = _build_context(scheduler, state)
@@ -1206,10 +1191,7 @@ def test_coscheduled_job_with_constraints(scheduler, state, worker_metadata):
         environment=cluster_pb2.EnvironmentConfig(),
     )
     req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
-    constraint = req.constraints.add()
-    constraint.key = WellKnownAttribute.REGION
-    constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
-    constraint.value.string_value = "us-east"
+    req.constraints.append(eq_constraint(WellKnownAttribute.REGION, "us-east"))
     submit_job(state, "j1", req)
 
     context = _build_context(scheduler, state)
@@ -1468,10 +1450,7 @@ def test_preemptible_constraint_routes_to_matching_worker(scheduler, state, job_
 
     # Job requiring non-preemptible worker
     req = job_request()
-    constraint = req.constraints.add()
-    constraint.key = WellKnownAttribute.PREEMPTIBLE
-    constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
-    constraint.value.string_value = "false"
+    req.constraints.append(eq_constraint(WellKnownAttribute.PREEMPTIBLE, "false"))
     tasks = submit_job(state, "j1", req)
 
     context = _build_context(scheduler, state)
@@ -2134,13 +2113,7 @@ def test_device_variant_in_constraint_matches_probed_workers(scheduler, state, j
     _register_worker_with_probed_attributes(state, "w3", "addr3", meta3)
 
     req = job_request()
-    constraint = cluster_pb2.Constraint(
-        key=WellKnownAttribute.DEVICE_VARIANT,
-        op=cluster_pb2.CONSTRAINT_OP_IN,
-    )
-    for v in ["v5litepod-8", "v4-8"]:
-        constraint.values.append(cluster_pb2.AttributeValue(string_value=v))
-    req.constraints.append(constraint)
+    req.constraints.append(in_constraint(WellKnownAttribute.DEVICE_VARIANT, ["v5litepod-8", "v4-8"]))
 
     submit_job(state, "flex-job", req)
     result = schedule_until_done(scheduler, state)

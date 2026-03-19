@@ -19,31 +19,17 @@ from iris.cluster.constraints import (
     extract_placement_requirements,
     routing_constraints,
 )
-from iris.rpc import cluster_pb2
 
-
-def _eq_constraint(key: str, value: str) -> cluster_pb2.Constraint:
-    c = cluster_pb2.Constraint(key=key, op=cluster_pb2.CONSTRAINT_OP_EQ)
-    c.value.string_value = value
-    return c
-
-
-def _in_constraint(key: str, values: list[str]) -> cluster_pb2.Constraint:
-    c = cluster_pb2.Constraint(key=key, op=cluster_pb2.CONSTRAINT_OP_IN)
-    for v in values:
-        av = c.values.add()
-        av.string_value = v
-    return c
-
+from .conftest import eq_constraint, in_constraint
 
 # --- is_cpu_device_type_constraint ---
 
 
 def test_is_cpu_device_type_constraint():
-    assert is_cpu_device_type_constraint(_eq_constraint("device-type", "cpu"))
-    assert is_cpu_device_type_constraint(_eq_constraint("device-type", "CPU"))
-    assert not is_cpu_device_type_constraint(_eq_constraint("device-type", "gpu"))
-    assert not is_cpu_device_type_constraint(_eq_constraint("device-variant", "cpu"))
+    assert is_cpu_device_type_constraint(eq_constraint("device-type", "cpu"))
+    assert is_cpu_device_type_constraint(eq_constraint("device-type", "CPU"))
+    assert not is_cpu_device_type_constraint(eq_constraint("device-type", "gpu"))
+    assert not is_cpu_device_type_constraint(eq_constraint("device-variant", "cpu"))
 
 
 # --- routing_constraints ---
@@ -51,9 +37,9 @@ def test_is_cpu_device_type_constraint():
 
 def test_routing_constraints_strips_cpu_and_non_routing():
     constraints = [
-        _eq_constraint("device-type", "cpu"),
-        _eq_constraint("region", "us-central1"),
-        _eq_constraint("tpu-name", "my-pod"),
+        eq_constraint("device-type", "cpu"),
+        eq_constraint("region", "us-central1"),
+        eq_constraint("tpu-name", "my-pod"),
     ]
     result = routing_constraints(constraints)
     assert len(result) == 1
@@ -62,8 +48,8 @@ def test_routing_constraints_strips_cpu_and_non_routing():
 
 def test_routing_constraints_keeps_gpu_device_type():
     constraints = [
-        _eq_constraint("device-type", "gpu"),
-        _eq_constraint("device-variant", "h100"),
+        eq_constraint("device-type", "gpu"),
+        eq_constraint("device-variant", "h100"),
     ]
     result = routing_constraints(constraints)
     assert len(result) == 2
@@ -74,14 +60,14 @@ def test_routing_constraints_keeps_gpu_device_type():
 
 def test_evaluate_constraint_eq():
     attr = AttributeValue("gpu")
-    c = _eq_constraint("device-type", "gpu")
+    c = eq_constraint("device-type", "gpu")
     assert evaluate_constraint(attr, c)
     assert not evaluate_constraint(AttributeValue("tpu"), c)
 
 
 def test_evaluate_constraint_in():
     attr = AttributeValue("us-central1")
-    c = _in_constraint("region", ["us-central1", "us-east1"])
+    c = in_constraint("region", ["us-central1", "us-east1"])
     assert evaluate_constraint(attr, c)
     assert not evaluate_constraint(AttributeValue("eu-west1"), c)
 
@@ -93,26 +79,26 @@ def test_evaluate_constraint_in():
     "constraints, expected",
     [
         (
-            [_eq_constraint("device-type", "gpu")],
+            [eq_constraint("device-type", "gpu")],
             PlacementRequirements(DeviceType.GPU, None, None, None, None),
         ),
         (
-            [_eq_constraint("preemptible", "true")],
+            [eq_constraint("preemptible", "true")],
             PlacementRequirements(None, None, True, None, None),
         ),
         (
-            [_eq_constraint("region", "us-central1")],
+            [eq_constraint("region", "us-central1")],
             PlacementRequirements(None, None, None, frozenset({"us-central1"}), None),
         ),
         (
-            [_in_constraint("zone", ["us-central1-a", "us-central1-b"])],
+            [in_constraint("zone", ["us-central1-a", "us-central1-b"])],
             PlacementRequirements(None, None, None, None, frozenset({"us-central1-a", "us-central1-b"})),
         ),
         (
             [
-                _eq_constraint("device-type", "tpu"),
-                _eq_constraint("device-variant", "v5litepod-16"),
-                _eq_constraint("preemptible", "false"),
+                eq_constraint("device-type", "tpu"),
+                eq_constraint("device-variant", "v5litepod-16"),
+                eq_constraint("preemptible", "false"),
             ],
             PlacementRequirements(DeviceType.TPU, frozenset({"v5litepod-16"}), False, None, None),
         ),
@@ -147,11 +133,11 @@ def test_merge_non_canonical_key_appends():
 def test_inherited_keys_strips_device_and_preemptible():
     """Parent H100 constraints must not leak into child job inheritance."""
     constraints = [
-        _eq_constraint(WellKnownAttribute.DEVICE_TYPE, "gpu"),
-        _eq_constraint(WellKnownAttribute.DEVICE_VARIANT, "h100"),
-        _eq_constraint(WellKnownAttribute.PREEMPTIBLE, "true"),
-        _eq_constraint(WellKnownAttribute.REGION, "us-central1"),
-        _eq_constraint(WellKnownAttribute.ZONE, "us-central1-a"),
+        eq_constraint(WellKnownAttribute.DEVICE_TYPE, "gpu"),
+        eq_constraint(WellKnownAttribute.DEVICE_VARIANT, "h100"),
+        eq_constraint(WellKnownAttribute.PREEMPTIBLE, "true"),
+        eq_constraint(WellKnownAttribute.REGION, "us-central1"),
+        eq_constraint(WellKnownAttribute.ZONE, "us-central1-a"),
     ]
 
     inherited = [c for c in constraints if c.key in INHERITED_CONSTRAINT_KEYS]
