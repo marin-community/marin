@@ -656,3 +656,102 @@
 - Decision:
   - Do not spend more time trying to algebraically share the prep glue between `chunk_state` and `prefix_emit`.
   - The next structural work should target the scan body and/or the main emit/state contractions directly.
+
+### 2026-03-19 - `local_output` lowering experiments in XLA
+- Goal:
+  - Treat `local_output` as a lowering problem rather than a Pallas problem, since prior dump analysis showed it was the nastiest lowered region but the bounded Pallas attempt was not viable.
+- Variants tested:
+  - `einsum`
+    - current path
+    - `cb = einsum(c, b)` followed by `einsum((cb * decay), x_scaled)`
+  - `matmul`
+    - same algebra as baseline, but force explicit batched matmuls:
+      - `cb = c @ b^T`
+      - `y = (cb * decay) @ x_scaled`
+  - `tril_scaled_einsum`
+    - rewrite the causal decay as:
+      - lower-triangular structure on `cb`
+      - source scaling by `exp(-a_log_cumsum) * src_scale`
+      - final row scaling by `exp(a_log_cumsum)`
+    - emit with `einsum`
+  - `tril_scaled_matmul`
+    - same rewrite, but emit with batched `matmul`
+- Correctness / stability checks:
+  - local exact parity on small shapes:
+    - `matmul`: exact match vs baseline
+    - `tril_scaled_*`: max output diff `1.4e-6`
+  - bf16 stress check on a longer shape with amplified `dt` remained finite for all variants
+- Benchmark sweep on `v5p-8` with fixed `seq_len=16384`, `batch_head_groups=16`, `chunk_size=512`:
+  - `128 x 512`
+    - `einsum`: forward `153.82` TFLOP/s; backward `79.63` TFLOP/s
+    - `matmul`: forward `154.29`; backward `79.39`
+    - `tril_scaled_einsum`: forward `150.12`; backward `75.89`
+    - `tril_scaled_matmul`: forward `149.91`; backward `75.83`
+  - `512 x 1024`
+    - `einsum`: forward `187.71`; backward `104.93`
+    - `matmul`: forward `187.18`; backward `105.04`
+    - `tril_scaled_einsum`: forward `189.03`; backward `102.88`
+    - `tril_scaled_matmul`: forward `189.50`; backward `103.05`
+  - `1024 x 512`
+    - `einsum`: forward `172.86`; backward `118.15`
+    - `matmul`: forward `174.04`; backward `118.08`
+    - `tril_scaled_einsum`: forward `211.98`; backward `115.61`
+    - `tril_scaled_matmul`: forward `213.09`; backward `115.47`
+- Remat-weighted combined rate:
+  - `128 x 512`
+    - `einsum`: `117.37`
+    - `matmul`: `117.38`
+    - `tril_scaled_matmul`: `113.08`
+  - `512 x 1024`
+    - `einsum`: `148.63`
+    - `matmul`: `148.48`
+    - `tril_scaled_matmul`: `148.09`
+  - `1024 x 512`
+    - `einsum`: `149.75`
+    - `matmul`: `150.30`
+    - `tril_scaled_matmul`: `166.24`
+- Kept heuristic:
+  - Add an internal `local_output_variant="auto"` selector.
+  - Use `tril_scaled_matmul` only for clearly state-heavy shapes:
+    - `state_dim >= 2 * value_dim`
+  - Otherwise keep the baseline `einsum` path.
+- Re-benchmark with the kept `auto` path:
+  - `128 x 512`
+    - `einsum`: forward `154.58`; backward `80.05`; remat-weighted `117.97`
+    - `auto`: forward `154.61`; backward `80.10`; remat-weighted `118.02`
+  - `512 x 1024`
+    - `einsum`: forward `187.37`; backward `104.37`; remat-weighted `148.11`
+    - `auto`: forward `189.67`; backward `104.94`; remat-weighted `149.45`
+    - note:
+      - `auto` does not intentionally change the local path here, so this is effectively noise / recompilation variation rather than evidence for a real new regime
+  - `1024 x 512`
+    - `einsum`: forward `172.87`; backward `118.38`; remat-weighted `149.87`
+    - `auto`: forward `209.84`; backward `115.42`; remat-weighted `164.88`
+- Profile comparison on `1024 x 512`:
+  - backward:
+    - `einsum`
+      - `local_output`: `26.54%`
+      - `chunk_state`: `21.42%`
+      - `prefix_emit`: `52.05%`
+    - `auto`
+      - `local_output`: `27.50%`
+      - `chunk_state`: `21.01%`
+      - `prefix_emit`: `51.49%`
+    - interpretation:
+      - the state-heavy heuristic is not a backward win
+      - backward remains roughly a wash, matching the benchmark table
+  - forward:
+    - `einsum`
+      - `local_output`: `29.08%`
+      - `chunk_state`: `19.08%`
+      - `prefix_emit`: `51.85%`
+    - `auto`
+      - `local_output`: `36.07%`
+      - `chunk_state`: `23.45%`
+      - `prefix_emit`: `40.48%`
+    - interpretation:
+      - the win is forward-side
+      - changing the `local_output` lowering also materially changes the end-to-end forward schedule, with `prefix_emit` getting much cheaper in the traced run
+- Decision:
+  - Keep the internal `local_output auto` heuristic as the new XLA default.
+  - Do not revisit Pallas for `local_output` unless future dump analysis shows a much clearer remaining compiler failure mode.

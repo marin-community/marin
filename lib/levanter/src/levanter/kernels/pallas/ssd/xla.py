@@ -18,8 +18,14 @@ PREFIX_EMIT_PRESCALED_EINSUM2 = "prescaled_einsum2"
 PREFIX_EMIT_PRESCALED_MATMUL = "prescaled_matmul"
 PREFIX_EMIT_SCAN_FUSED = "scan_fused"
 PREFIX_EMIT_AUTO = "auto"
+LOCAL_OUTPUT_EINSUM = "einsum"
+LOCAL_OUTPUT_MATMUL = "matmul"
+LOCAL_OUTPUT_TRIL_SCALED_EINSUM = "tril_scaled_einsum"
+LOCAL_OUTPUT_TRIL_SCALED_MATMUL = "tril_scaled_matmul"
+LOCAL_OUTPUT_AUTO = "auto"
 
 PrefixEmitVariant = str
+LocalOutputVariant = str
 
 
 def ssd_intra_chunk_xla_batched(
@@ -62,22 +68,72 @@ def ssd_intra_chunk_xla_chunked_batched(
     b: Float[Array, "groups chunks chunk state"],
     c: Float[Array, "groups chunks chunk state"],
     x: Float[Array, "groups chunks chunk value"],
+    *,
+    local_output_variant: LocalOutputVariant = LOCAL_OUTPUT_AUTO,
 ) -> Float[Array, "groups chunks chunk value"]:
     acc_dtype = jnp.float32
-    cb = jnp.einsum(
-        "gktn,gksn->gkts",
-        c.astype(acc_dtype),
-        b.astype(acc_dtype),
-        preferred_element_type=acc_dtype,
-    )
-    decay = _causal_decay_matrix_chunked(a_log_cumsum.astype(acc_dtype))
-    x_scaled = x.astype(acc_dtype) * src_scale.astype(acc_dtype)[..., None]
-    return jnp.einsum(
-        "gkts,gksp->gktp",
-        cb * decay,
-        x_scaled,
-        preferred_element_type=acc_dtype,
-    ).astype(x.dtype)
+    c_f32 = c.astype(acc_dtype)
+    b_f32 = b.astype(acc_dtype)
+    x_f32 = x.astype(acc_dtype)
+    src_scale_f32 = src_scale.astype(acc_dtype)
+    if local_output_variant == LOCAL_OUTPUT_AUTO:
+        local_output_variant = (
+            LOCAL_OUTPUT_TRIL_SCALED_MATMUL if b.shape[-1] >= 2 * x.shape[-1] else LOCAL_OUTPUT_EINSUM
+        )
+    if local_output_variant == LOCAL_OUTPUT_EINSUM:
+        cb = jnp.einsum(
+            "gktn,gksn->gkts",
+            c_f32,
+            b_f32,
+            preferred_element_type=acc_dtype,
+        )
+        decay = _causal_decay_matrix_chunked(a_log_cumsum.astype(acc_dtype))
+        x_scaled = x_f32 * src_scale_f32[..., None]
+        return jnp.einsum(
+            "gkts,gksp->gktp",
+            cb * decay,
+            x_scaled,
+            preferred_element_type=acc_dtype,
+        ).astype(x.dtype)
+    if local_output_variant == LOCAL_OUTPUT_MATMUL:
+        with jax.named_scope("cb_matmul"):
+            cb = jnp.matmul(
+                c_f32,
+                jnp.swapaxes(b_f32, -1, -2),
+                preferred_element_type=acc_dtype,
+            )
+        with jax.named_scope("apply_decay"):
+            weighted_cb = cb * _causal_decay_matrix_chunked(a_log_cumsum.astype(acc_dtype))
+        with jax.named_scope("scale_x"):
+            x_scaled = x_f32 * src_scale_f32[..., None]
+        with jax.named_scope("emit_matmul"):
+            return jnp.matmul(weighted_cb, x_scaled, preferred_element_type=acc_dtype).astype(x.dtype)
+    if local_output_variant in (LOCAL_OUTPUT_TRIL_SCALED_EINSUM, LOCAL_OUTPUT_TRIL_SCALED_MATMUL):
+        chunk_size = a_log_cumsum.shape[-1]
+        lower_mask = jnp.tril(jnp.ones((chunk_size, chunk_size), dtype=jnp.bool_))[None, None, :, :]
+        with jax.named_scope("cb_matmul"):
+            cb = jnp.matmul(
+                c_f32,
+                jnp.swapaxes(b_f32, -1, -2),
+                preferred_element_type=acc_dtype,
+            )
+        with jax.named_scope("apply_tril"):
+            masked_cb = jnp.where(lower_mask, cb, 0.0)
+        with jax.named_scope("scale_x"):
+            x_scaled = x_f32 * src_scale_f32[..., None] * jnp.exp(-a_log_cumsum.astype(acc_dtype))[..., None]
+        with jax.named_scope("emit_row_scaled"):
+            if local_output_variant == LOCAL_OUTPUT_TRIL_SCALED_EINSUM:
+                y = jnp.einsum(
+                    "gkts,gksp->gktp",
+                    masked_cb,
+                    x_scaled,
+                    preferred_element_type=acc_dtype,
+                )
+            else:
+                y = jnp.matmul(masked_cb, x_scaled, preferred_element_type=acc_dtype)
+            y = y * jnp.exp(a_log_cumsum.astype(acc_dtype))[..., None]
+        return y.astype(x.dtype)
+    raise ValueError(f"Unsupported local_output_variant: {local_output_variant}.")
 
 
 def ssd_chunk_state_xla_chunked_batched(
@@ -188,12 +244,20 @@ def ssd_chunked_forward_xla_batched(
     x: Float[Array, "groups chunks chunk value"],
     *,
     prefix_emit_variant: PrefixEmitVariant = PREFIX_EMIT_AUTO,
+    local_output_variant: LocalOutputVariant = LOCAL_OUTPUT_AUTO,
 ) -> tuple[Float[Array, "groups chunks chunk value"], Float[Array, "groups value state"]]:
     """Chunked SSD forward pass in plain JAX/XLA."""
 
     with jax.named_scope("ssd_chunked_forward"):
         with jax.named_scope("local_output"):
-            local_output = ssd_intra_chunk_xla_chunked_batched(a_log_cumsum, src_scale, b, c, x)
+            local_output = ssd_intra_chunk_xla_chunked_batched(
+                a_log_cumsum,
+                src_scale,
+                b,
+                c,
+                x,
+                local_output_variant=local_output_variant,
+            )
         with jax.named_scope("chunk_state"):
             chunk_state = ssd_chunk_state_xla_chunked_batched(a_log_cumsum, src_scale, b, x)
         with jax.named_scope("prefix_emit"):

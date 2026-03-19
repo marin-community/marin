@@ -12,6 +12,8 @@ from ..ssd.reference import (
     local_log_alpha,
 )
 from ..ssd.xla import (
+    LOCAL_OUTPUT_AUTO,
+    LocalOutputVariant,
     PREFIX_EMIT_AUTO,
     PrefixEmitVariant,
     ssd_chunk_state_xla_batched,
@@ -64,13 +66,21 @@ def mamba3_chunked_forward_xla_batched(
     x: Float[Array, "groups chunks chunk value"],
     *,
     prefix_emit_variant: PrefixEmitVariant = PREFIX_EMIT_AUTO,
+    local_output_variant: LocalOutputVariant = LOCAL_OUTPUT_AUTO,
 ) -> tuple[Float[Array, "groups chunks chunk value"], Float[Array, "groups value state"]]:
     """Chunked Mamba-3 forward pass in plain JAX/XLA."""
 
     with jax.named_scope("mamba3_chunked_forward"):
         with jax.named_scope("local_output"):
             acc_dtype = jnp.float32
-            y = ssd_intra_chunk_xla_chunked_batched(a_log_cumsum, src_scale, b, c, x).astype(acc_dtype)
+            y = ssd_intra_chunk_xla_chunked_batched(
+                a_log_cumsum,
+                src_scale,
+                b,
+                c,
+                x,
+                local_output_variant=local_output_variant,
+            ).astype(acc_dtype)
             diag_cb = jnp.sum(c.astype(acc_dtype) * b.astype(acc_dtype), axis=-1)
             correction = (out_correction.astype(acc_dtype) * diag_cb)[..., None] * x.astype(acc_dtype)
             local_output = (y - correction).astype(x.dtype)
