@@ -332,3 +332,31 @@
 - Decision:
   - Proceed with exactly one bounded Pallas prototype for `local_output`, while keeping `chunk_state` and `prefix_emit` in XLA.
   - If that prototype does not beat the current XLA baseline on the same `v5p-8` shape, delete or disable it and keep XLA.
+
+### 2026-03-18 - Single-kernel TPU Pallas prototype for `local_output`
+- Goal:
+  - Add exactly one TPU Pallas kernel for the SSD intra-chunk local block and leave the rest of the Mamba-3 pipeline on the current XLA path.
+- Change:
+  - Added [ssd/pallas_tpu.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/src/levanter/kernels/pallas/ssd/pallas_tpu.py) with a tiled `local_output` kernel:
+    - fixed output tile: `[query_block, value_block]`
+    - reduction axis: source-block grid axis, last in the grid
+    - accumulation: f32 scratch tile in VMEM
+    - prologue/epilogue kept out of the kernel except for the causal decay and local source scaling needed for the block contribution
+  - Wired [ssd/api.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/src/levanter/kernels/pallas/ssd/api.py) to call the optional TPU backend when explicitly requested.
+  - Wired [mamba3/api.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/src/levanter/kernels/pallas/mamba3/api.py) so `mamba3_intra_chunk_pallas` reuses the SSD Pallas core and still applies the Mamba-3 diagonal correction outside the kernel.
+  - Set explicit prototype defaults in [ssd/config.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/src/levanter/kernels/pallas/ssd/config.py): `query=128`, `key=128`, `value=128`, `group=1`.
+- Scope guardrails:
+  - `chunk_state` stays XLA.
+  - `prefix_emit` stays XLA.
+  - Default implementation order stays XLA-first; the Pallas path is opt-in only.
+  - The prototype currently requires:
+    - `group_block_size == 1`
+    - chunk/value dims divisible by the chosen tile sizes
+    - tile sizes that are multiples of `128` on real TPU runs
+- Local validation:
+  - `./infra/pre-commit.py lib/levanter/src/levanter/kernels/pallas/ssd/pallas_tpu.py lib/levanter/src/levanter/kernels/pallas/ssd/api.py lib/levanter/src/levanter/kernels/pallas/ssd/config.py lib/levanter/src/levanter/kernels/pallas/mamba3/api.py lib/levanter/tests/kernels/test_pallas_mamba3.py --fix`
+  - `uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_mamba3.py -q`
+  - Result: `12 passed`
+- Interpretation:
+  - The prototype is ready for a fair TPU comparison against the `chunk_size=512` XLA baseline.
+  - The design stays within the planned scope: one kernel only, no attempt to Pallas-ize `chunk_state` or `prefix_emit`, and no change to default dispatch.
