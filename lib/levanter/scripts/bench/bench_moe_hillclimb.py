@@ -50,6 +50,8 @@ Kernel = Literal[
     "deepep_transport_local_compute_only_probe",
     "deepep_transport_collapse_only_probe",
     "deepep_transport_combine_only_probe",
+    "deepep_transport_combine_bwd_cached_dispatch_probe",
+    "deepep_transport_dispatch_bwd_combine_probe",
     "deepep_transport",
     "deepep_transport_prewarmed",
     "deepep_transport_capped",
@@ -5211,6 +5213,205 @@ def _profile_deepep_transport_probe_forward(
     )
 
 
+def _make_deepep_transport_probe_forward_backward_runner(
+    probe_kernel: Kernel,
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    w13_expert_padded: bool = False,
+) -> tuple[Callable[[], jax.Array], tuple[()]]:
+    mesh = x.sharding.mesh
+    num_experts = int(w_up_gate.shape[0])
+    max_recv_tokens, max_local_assignments, max_local_expert_assignments = _deepep_transport_exact_cap_metadata(
+        selected_experts,
+        mesh=mesh,
+        num_experts=num_experts,
+    )
+    w13_local_expert_capacity = max_local_expert_assignments if w13_expert_padded else None
+
+    dispatch_pack = partial(
+        _moe_mlp_deepep_transport_dispatch_pack,
+        mesh=mesh,
+        num_experts=num_experts,
+        max_recv_tokens=max_recv_tokens,
+        max_local_assignments=max_local_assignments,
+    )
+    local_compute = partial(
+        _moe_mlp_deepep_transport_local_compute,
+        mesh=mesh,
+        w13_local_expert_capacity=w13_local_expert_capacity,
+    )
+    collapse_only = partial(_moe_mlp_deepep_transport_collapse_only, mesh=mesh)
+    combine_only = partial(_moe_mlp_deepep_transport_combine_only, mesh=mesh)
+
+    if probe_kernel == "deepep_transport_combine_bwd_cached_dispatch_probe":
+        (
+            x_dispatch,
+            assignment_weights,
+            recv_token_indices,
+            local_group_sizes,
+            recv_topk_weights,
+            recv_src_idx,
+            rank_prefix_matrix,
+            channel_prefix_matrix,
+            recv_channel_prefix_matrix,
+            send_head,
+            num_recv_tokens,
+            is_token_in_rank,
+        ) = dispatch_pack(x, selected_experts, combine_weights)
+        out_dispatch = local_compute(x_dispatch, local_group_sizes, w_up_gate, w_down)
+        recv_out = collapse_only(
+            out_dispatch,
+            assignment_weights,
+            recv_token_indices,
+            recv_topk_weights,
+            num_recv_tokens,
+        )
+        out_local, pullback = jax.vjp(
+            combine_only,
+            recv_out,
+            recv_topk_weights,
+            recv_src_idx,
+            rank_prefix_matrix,
+            channel_prefix_matrix,
+            recv_channel_prefix_matrix,
+            send_head,
+            num_recv_tokens,
+            is_token_in_rank,
+        )
+        cotangent = jnp.ones_like(out_local, dtype=out_local.dtype)
+        jax.block_until_ready(out_local)
+
+        def run() -> jax.Array:
+            with jax.named_scope("combine_bwd_cached_dispatch_probe"):
+                grad_recv_out, *_ = pullback(cotangent)
+                return grad_recv_out
+
+        return run, tuple()
+
+    if probe_kernel == "deepep_transport_dispatch_bwd_combine_probe":
+        def dispatch_pack_wrt(
+            x_in: jax.Array,
+            combine_weights_in: jax.Array,
+        ):
+            return dispatch_pack(x_in, selected_experts, combine_weights_in)
+
+        dispatch_outputs, dispatch_pullback = jax.vjp(dispatch_pack_wrt, x, combine_weights)
+
+        def downstream_from_dispatch(
+            x_dispatch: jax.Array,
+            assignment_weights: jax.Array,
+            recv_token_indices: jax.Array,
+            local_group_sizes: jax.Array,
+            recv_topk_weights: jax.Array,
+            recv_src_idx: jax.Array,
+            rank_prefix_matrix: jax.Array,
+            channel_prefix_matrix: jax.Array,
+            recv_channel_prefix_matrix: jax.Array,
+            send_head: jax.Array,
+            num_recv_tokens: jax.Array,
+            is_token_in_rank: jax.Array,
+        ) -> jax.Array:
+            out_dispatch = local_compute(x_dispatch, local_group_sizes, w_up_gate, w_down)
+            recv_out = collapse_only(
+                out_dispatch,
+                assignment_weights,
+                recv_token_indices,
+                recv_topk_weights,
+                num_recv_tokens,
+            )
+            return combine_only(
+                recv_out,
+                recv_topk_weights,
+                recv_src_idx,
+                rank_prefix_matrix,
+                channel_prefix_matrix,
+                recv_channel_prefix_matrix,
+                send_head,
+                num_recv_tokens,
+                is_token_in_rank,
+            )
+
+        out_local, downstream_pullback = jax.vjp(downstream_from_dispatch, *dispatch_outputs)
+        cotangent = jnp.ones_like(out_local, dtype=out_local.dtype)
+        dispatch_output_cotangents = downstream_pullback(cotangent)
+        jax.block_until_ready(out_local)
+
+        def run() -> jax.Array:
+            with jax.named_scope("dispatch_bwd_combine_probe"):
+                grad_x, _grad_combine_weights = dispatch_pullback(dispatch_output_cotangents)
+                return grad_x
+
+        return run, tuple()
+
+    raise ValueError(f"Unsupported DeepEP forward_backward probe kernel: {probe_kernel}")
+
+
+def _time_deepep_transport_probe_forward_backward(
+    probe_kernel: Kernel,
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    warmup: int,
+    iters: int,
+    w13_expert_padded: bool = False,
+) -> float:
+    probe_fn, probe_args = _make_deepep_transport_probe_forward_backward_runner(
+        probe_kernel,
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        w13_expert_padded=w13_expert_padded,
+    )
+    return _time_fn(
+        probe_fn,
+        *probe_args,
+        warmup=warmup,
+        iters=iters,
+    )
+
+
+def _profile_deepep_transport_probe_forward_backward(
+    probe_kernel: Kernel,
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    warmup: int,
+    iters: int,
+    profile_dir: Path,
+    profile_name: str,
+    w13_expert_padded: bool = False,
+) -> float:
+    probe_fn, probe_args = _make_deepep_transport_probe_forward_backward_runner(
+        probe_kernel,
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        w13_expert_padded=w13_expert_padded,
+    )
+    return _profile_fn(
+        probe_fn,
+        *probe_args,
+        warmup=warmup,
+        iters=iters,
+        profile_dir=profile_dir,
+        profile_name=profile_name,
+    )
+
+
 def _forward_current_w13_expert_padded(
     x: jax.Array,
     selected_experts: jax.Array,
@@ -5720,6 +5921,8 @@ def main() -> None:
             "deepep_transport_local_compute_only_probe",
             "deepep_transport_collapse_only_probe",
             "deepep_transport_combine_only_probe",
+            "deepep_transport_combine_bwd_cached_dispatch_probe",
+            "deepep_transport_dispatch_bwd_combine_probe",
             "deepep_transport",
             "deepep_transport_prewarmed",
             "deepep_transport_capped",
@@ -5865,6 +6068,11 @@ def main() -> None:
                 _print0(f"CHECK ep={ep_size} out_max_abs={out_max_abs:.6e} grad_max_abs={grad_max_abs:.6e}")
 
             for kernel in kernels:
+                if args.bench_pass == "forward" and kernel in {
+                    "deepep_transport_combine_bwd_cached_dispatch_probe",
+                    "deepep_transport_dispatch_bwd_combine_probe",
+                }:
+                    raise ValueError(f"{kernel} currently supports only --bench-pass=forward_backward")
                 forward_fn = partial(_forward, kernel)
                 grad_fn = partial(_loss_and_grads, kernel)
                 profile_name = f"moe_{kernel}_ep{ep_size}_{args.bench_pass}"
@@ -6036,7 +6244,37 @@ def main() -> None:
                 else:
                     if kernel in {"deepep_transport_prewarmed", "deepep_transport_capped", "deepep_transport_staged"}:
                         raise ValueError(f"{kernel} currently supports only --bench-pass=forward")
-                    if kernel == "current" and args.w13_expert_padded:
+                    if kernel in {
+                        "deepep_transport_combine_bwd_cached_dispatch_probe",
+                        "deepep_transport_dispatch_bwd_combine_probe",
+                    }:
+                        if args.profile_root is not None:
+                            dt = _profile_deepep_transport_probe_forward_backward(
+                                kernel,
+                                x_sharded,
+                                selected_sharded,
+                                weights_sharded,
+                                w13_sharded,
+                                w2_sharded,
+                                warmup=args.warmup,
+                                iters=args.iters,
+                                profile_dir=args.profile_root,
+                                profile_name=profile_name,
+                                w13_expert_padded=args.w13_expert_padded,
+                            )
+                        else:
+                            dt = _time_deepep_transport_probe_forward_backward(
+                                kernel,
+                                x_sharded,
+                                selected_sharded,
+                                weights_sharded,
+                                w13_sharded,
+                                w2_sharded,
+                                warmup=args.warmup,
+                                iters=args.iters,
+                                w13_expert_padded=args.w13_expert_padded,
+                            )
+                    elif kernel == "current" and args.w13_expert_padded:
                         if args.profile_root is not None:
                             dt = _profile_current_forward_backward_w13_expert_padded(
                                 x_sharded,
