@@ -228,17 +228,17 @@ install_node:
 
 rust-dev: ## Build Rust crates from source (requires Cargo)
 	@cp uv.toml.dev uv.toml
-	@echo "Rust dev mode enabled. Run: uv sync"
+	@echo "Rust dev mode enabled (source build). Run: uv sync"
 
-rust-user: ## Use pre-built Rust wheels (no Cargo needed)
+rust-user: ## Use pre-built Rust wheels from GitHub Releases (no Cargo needed)
 	@rm -f uv.toml
-	@echo "Rust user mode enabled. Run: uv sync"
+	@echo "Rust user mode enabled (pre-built wheels). Run: uv sync"
 
 rust-status: ## Show current Rust build mode
-	@if [ -f uv.toml ] && grep -q '"rust"' uv.toml 2>/dev/null; then \
-		echo "rust: dev (source build)"; \
+	@if [ -f uv.toml ] && grep -q 'dupekit' uv.toml 2>/dev/null; then \
+		echo "rust: dev (source build from rust/)"; \
 	else \
-		echo "rust: user (pre-built or skipped)"; \
+		echo "rust: user (pre-built wheels from GitHub Releases)"; \
 	fi
 
 dev_setup: install_uv install_gcloud install_node get_secret_key get_ray_auth_token setup_pre_commit

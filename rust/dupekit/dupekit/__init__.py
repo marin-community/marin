@@ -22,7 +22,8 @@ try:
 except ImportError:
     _INSTALL_MSG = (
         "dupekit native extension is not installed. "
-        "Build it with: cd rust/dupekit && uv sync && maturin develop --release"
+        "Ensure you have run 'uv sync' (wheels are fetched from GitHub Releases). "
+        "For source builds: make rust-dev && uv sync"
     )
 
     class _StubModule(types.ModuleType):
