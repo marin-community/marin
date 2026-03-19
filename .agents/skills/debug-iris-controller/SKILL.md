@@ -1,5 +1,5 @@
 ---
-name: iris-controller-debug
+name: debug-iris-controller
 description: Debug Iris controller state using offline checkpoint snapshots and the process RPC. Use when investigating stuck jobs, resource leaks, scheduling failures, or worker issues.
 ---
 

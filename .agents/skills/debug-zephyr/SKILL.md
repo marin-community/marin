@@ -1,5 +1,5 @@
 ---
-name: zephyr-debugger
+name: debug-zephyr
 description: Debug Zephyr pipeline execution issues (stuck stages, stragglers, idle workers). Use when zephyr workers are misbehaving or pipelines are slow.
 ---
 
@@ -142,7 +142,7 @@ If debugging reveals a need for capabilities not exposed by the existing API or 
 
 ## After a Fix
 
-When debugging leads to a code fix, use the **zephyr-babysit** skill to stop the current job, resubmit, and monitor the new run. Then spot-check the fix:
+When debugging leads to a code fix, use the **babysit-zephyr** skill to stop the current job, resubmit, and monitor the new run. Then spot-check the fix:
 
 - THR-sample active workers to confirm the hot function is no longer dominating the stack
 - Check memory distribution — are stragglers still present? How do they compare to the old run?
