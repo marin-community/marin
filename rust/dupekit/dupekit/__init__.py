@@ -22,7 +22,7 @@ try:
 except ImportError:
     _INSTALL_MSG = (
         "dupekit native extension is not installed. "
-        "Build it with: cd lib/dupekit && uv sync && maturin develop --release"
+        "Build it with: cd rust/dupekit && uv sync && maturin develop --release"
     )
 
     class _StubModule(types.ModuleType):

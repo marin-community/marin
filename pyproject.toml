@@ -50,7 +50,7 @@ marin = { workspace = true }
 zephyr = { workspace = true }
 # NOTE: dupekit and harbor are optional dependencies (not workspace members).
 # harbor lives in marin-community/harbor as a pinned git dependency.
-dupekit = { path = "lib/dupekit", editable = true }
+dupekit = { path = "rust/dupekit", editable = true }
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
 
 [tool.black]

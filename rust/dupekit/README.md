@@ -32,18 +32,18 @@ uv sync --all-packages --extra=benchmark --group dev
 
 Benchmark (Takes a few minutes):
 ```shell
-uv run pytest lib/dupekit/tests/bench/test_dedupe.py --run-benchmark --benchmark-min-rounds=20
-uv run pytest lib/dupekit/tests/bench/test_marshaling.py --run-benchmark
-uv run pytest lib/dupekit/tests/bench/test_batch_tuning.py --run-benchmark
-uv run pytest lib/dupekit/tests/bench/test_io.py --run-benchmark
-uv run pytest lib/dupekit/tests/bench/test_hashing.py --run-benchmark
-uv run pytest lib/dupekit/tests/bench/test_minhash.py --run-benchmark
+uv run pytest rust/dupekit/tests/bench/test_dedupe.py --run-benchmark --benchmark-min-rounds=20
+uv run pytest rust/dupekit/tests/bench/test_marshaling.py --run-benchmark
+uv run pytest rust/dupekit/tests/bench/test_batch_tuning.py --run-benchmark
+uv run pytest rust/dupekit/tests/bench/test_io.py --run-benchmark
+uv run pytest rust/dupekit/tests/bench/test_hashing.py --run-benchmark
+uv run pytest rust/dupekit/tests/bench/test_minhash.py --run-benchmark
 ```
 Note: Run separated by type of benchmark (otherwise results are mixed within one table)
 
 Footprint (Note: sampling the stack might taint the mem measurements, so we disable benchmarking):
 ```shell
-uv run pytest lib/dupekit/tests/bench/test_marshaling.py \
+uv run pytest rust/dupekit/tests/bench/test_marshaling.py \
   --run-benchmark \
   --benchmark-disable \
   --memray \
@@ -144,43 +144,43 @@ test_hash_python_blake2b          84.0109 (18.72)    84.1698 (17.02)    84.0611 
 
 Mem Footprin (sorted from high to low):
 ```shell
-Allocation results for lib/dupekit/tests/bench/test_marshaling.py::test_rust_structs at the high watermark
+Allocation results for rust/dupekit/tests/bench/test_marshaling.py::test_rust_structs at the high watermark
 
 	 📦 Total memory allocated: 4.3GiB
 	 📏 Total allocations: 21
 	 📊 Histogram of allocation sizes: | ▃█▁▃|
 
-Allocation results for lib/dupekit/tests/bench/test_marshaling.py::test_dicts_batch at the high watermark
+Allocation results for rust/dupekit/tests/bench/test_marshaling.py::test_dicts_batch at the high watermark
 
 	 📦 Total memory allocated: 3.3GiB
 	 📏 Total allocations: 20
 	 📊 Histogram of allocation sizes: |  ▁█▂|
 
-Allocation results for lib/dupekit/tests/bench/test_marshaling.py::test_dicts_loop at the high watermark
+Allocation results for rust/dupekit/tests/bench/test_marshaling.py::test_dicts_loop at the high watermark
 
 	 📦 Total memory allocated: 3.3GiB
 	 📏 Total allocations: 19
 	 📊 Histogram of allocation sizes: |  ▁█▂|
 
-Allocation results for lib/dupekit/tests/bench/test_marshaling.py::test_arrow_giant at the high watermark
+Allocation results for rust/dupekit/tests/bench/test_marshaling.py::test_arrow_giant at the high watermark
 
 	 📦 Total memory allocated: 64.9MiB
 	 📏 Total allocations: 36
 	 📊 Histogram of allocation sizes: |▅█   |
 
-Allocation results for lib/dupekit/tests/bench/test_marshaling.py::test_dicts_batched_stream at the high watermark
+Allocation results for rust/dupekit/tests/bench/test_marshaling.py::test_dicts_batched_stream at the high watermark
 
 	 📦 Total memory allocated: 28.1MiB
 	 📏 Total allocations: 7
 	 📊 Histogram of allocation sizes: |█▄▄▄▄|
 
-Allocation results for lib/dupekit/tests/bench/test_marshaling.py::test_arrow_tiny at the high watermark
+Allocation results for rust/dupekit/tests/bench/test_marshaling.py::test_arrow_tiny at the high watermark
 
 	 📦 Total memory allocated: 22.0MiB
 	 📏 Total allocations: 37
 	 📊 Histogram of allocation sizes: |█▇   |
 
-Allocation results for lib/dupekit/tests/bench/test_marshaling.py::test_arrow_small at the high watermark
+Allocation results for rust/dupekit/tests/bench/test_marshaling.py::test_arrow_small at the high watermark
 
 	 📦 Total memory allocated: 551.7KiB
 	 📏 Total allocations: 42
