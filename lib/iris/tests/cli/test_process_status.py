@@ -1,36 +1,56 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for iris.cli.process_status — profile target resolution."""
+"""Tests for iris.cli.process_status — --target option parsing."""
 
-from iris.cli.process_status import _resolve_profile_target
+from click.testing import CliRunner
 
-
-def test_resolve_profile_target_controller():
-    target, label = _resolve_profile_target(None)
-    assert target == "/system/process"
-    assert label == "Controller"
+from iris.cli.process_status import profile
 
 
-def test_resolve_profile_target_worker_id():
-    target, label = _resolve_profile_target("worker-abc")
-    assert target == "/system/worker/worker-abc"
-    assert "worker-abc" in label
+def test_profile_default_target_label(monkeypatch):
+    _calls = []
+
+    class _FakeClient:
+        def profile_task(self, req):
+            _calls.append(req.target)
+            raise RuntimeError("stop")
+
+    monkeypatch.setattr("iris.cli.process_status.require_controller_url", lambda ctx: "http://fake")
+    monkeypatch.setattr("iris.cli.process_status.ControllerServiceClientSync", lambda url: _FakeClient())
+
+    runner = CliRunner()
+    runner.invoke(profile, ["cpu"], obj={})
+    assert _calls == ["/system/process"]
 
 
-def test_resolve_profile_target_task_path():
-    target, label = _resolve_profile_target("/alice/my-job/0")
-    assert target == "/alice/my-job/0"
-    assert "/alice/my-job/0" in label
+def test_profile_task_target(monkeypatch):
+    _calls = []
+
+    class _FakeClient:
+        def profile_task(self, req):
+            _calls.append(req.target)
+            raise RuntimeError("stop")
+
+    monkeypatch.setattr("iris.cli.process_status.require_controller_url", lambda ctx: "http://fake")
+    monkeypatch.setattr("iris.cli.process_status.ControllerServiceClientSync", lambda url: _FakeClient())
+
+    runner = CliRunner()
+    runner.invoke(profile, ["cpu", "--target", "/alice/my-job/0"], obj={})
+    assert _calls == ["/alice/my-job/0"]
 
 
-def test_resolve_profile_target_task_path_with_attempt():
-    target, label = _resolve_profile_target("/alice/my-job/0:2")
-    assert target == "/alice/my-job/0:2"
-    assert "/alice/my-job/0:2" in label
+def test_profile_worker_target(monkeypatch):
+    _calls = []
 
+    class _FakeClient:
+        def profile_task(self, req):
+            _calls.append(req.target)
+            raise RuntimeError("stop")
 
-def test_resolve_profile_target_system_path():
-    # Full system paths (e.g. /system/worker/abc) pass through directly
-    target, _label = _resolve_profile_target("/system/worker/abc")
-    assert target == "/system/worker/abc"
+    monkeypatch.setattr("iris.cli.process_status.require_controller_url", lambda ctx: "http://fake")
+    monkeypatch.setattr("iris.cli.process_status.ControllerServiceClientSync", lambda url: _FakeClient())
+
+    runner = CliRunner()
+    runner.invoke(profile, ["cpu", "--target", "/system/worker/abc123"], obj={})
+    assert _calls == ["/system/worker/abc123"]

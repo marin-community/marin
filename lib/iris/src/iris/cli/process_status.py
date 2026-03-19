@@ -4,9 +4,9 @@
 """CLI commands for process status, logs, and profiling.
 
 Provides ``iris process <status|logs|profile>`` with ``--target`` to address
-a specific worker (plain worker ID like ``abc123`` maps to
-``/system/worker/abc123``) or a task container (full path like
-``/alice/job/0``). Omitting ``--target`` defaults to the controller itself.
+a specific process by its RPC path (e.g. ``/system/worker/<id>`` for a worker,
+``/alice/job/0`` for a task container). Omitting ``--target`` defaults to the
+controller itself.
 """
 
 
@@ -17,23 +17,7 @@ from iris.cli.main import require_controller_url
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
-
-def _resolve_profile_target(target: str | None) -> tuple[str, str]:
-    """Resolve --target to (rpc_target, label).
-
-    - ``None`` → controller (``/system/process``)
-    - starts with ``/`` → raw path passed directly (task or system path)
-    - plain string → worker ID → ``/system/worker/<id>``
-
-    Returns:
-        (target, label) where target is passed to ProfileTask and
-        label is used for display and default output filename.
-    """
-    if target is None:
-        return "/system/process", "Controller"
-    if target.startswith("/"):
-        return target, target
-    return f"/system/worker/{target}", f"Worker {target}"
+_CONTROLLER_TARGET = "/system/process"
 
 
 def _print_status(resp: cluster_pb2.GetProcessStatusResponse, label: str) -> None:
@@ -58,7 +42,12 @@ def process_group():
 
 
 @process_group.command()
-@click.option("--target", "-t", default=None, help="Worker ID or task path (default: controller)")
+@click.option(
+    "--target",
+    "-t",
+    default=None,
+    help="RPC target path, e.g. /system/worker/<id> or /alice/job/0 (default: controller)",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
 def status(ctx, target: str | None, as_json: bool):
@@ -67,10 +56,9 @@ def status(ctx, target: str | None, as_json: bool):
 
     url = require_controller_url(ctx)
     client = ControllerServiceClientSync(url)
-    rpc_target, label = _resolve_profile_target(target)
-    # GetProcessStatus uses empty string for controller (not /system/process)
-    get_target = "" if target is None else rpc_target
-    resp = client.get_process_status(cluster_pb2.GetProcessStatusRequest(max_log_lines=0, target=get_target))
+    label = target or "Controller"
+    # GetProcessStatus uses empty string for controller
+    resp = client.get_process_status(cluster_pb2.GetProcessStatusRequest(max_log_lines=0, target=target or ""))
     if as_json:
         click.echo(json_format.MessageToJson(resp.process_info, preserving_proto_field_name=True, indent=2))
     else:
@@ -78,7 +66,12 @@ def status(ctx, target: str | None, as_json: bool):
 
 
 @process_group.command()
-@click.option("--target", "-t", default=None, help="Worker ID or task path (default: controller)")
+@click.option(
+    "--target",
+    "-t",
+    default=None,
+    help="RPC target path, e.g. /system/worker/<id> (default: controller)",
+)
 @click.option("--level", default="", help="Minimum log level (DEBUG/INFO/WARNING/ERROR/CRITICAL)")
 @click.option("--follow", "-f", is_flag=True, help="Stream logs continuously")
 @click.option("--max-lines", default=200, help="Max lines to show")
@@ -91,8 +84,7 @@ def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, subs
 
     url = require_controller_url(ctx)
     client = ControllerServiceClientSync(url)
-
-    source, _ = _resolve_profile_target(target)
+    source = target or _CONTROLLER_TARGET
 
     cursor = 0
     first = True
@@ -128,7 +120,7 @@ def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, subs
     "--target",
     "-t",
     default=None,
-    help="Worker ID, task path (e.g. /alice/job/0), or omit for controller",
+    help="RPC target path, e.g. /system/worker/<id> or /alice/job/0 (default: controller)",
 )
 @click.argument("profiler", type=click.Choice(["threads", "cpu", "mem"]))
 @click.option("--duration", "-d", default=10, help="Profiling duration in seconds")
@@ -145,13 +137,14 @@ def profile(
 ):
     """Profile the process (threads, cpu, or mem).
 
-    By default profiles the controller process. Use --target with a worker ID
-    to profile a worker, or a task path (e.g. /alice/job/0) for a task container.
+    By default profiles the controller. Use --target with the full RPC path:
+    /system/worker/<id> for a worker, /alice/job/0 for a task container.
     """
     url = require_controller_url(ctx)
     client = ControllerServiceClientSync(url)
+    rpc_target = target or _CONTROLLER_TARGET
+    label = target or "Controller"
 
-    # Build profile type
     if profiler == "threads":
         profile_type = cluster_pb2.ProfileType(threads=cluster_pb2.ThreadsProfile(locals=include_locals))
     elif profiler == "cpu":
@@ -162,8 +155,6 @@ def profile(
         )
     else:
         raise click.ClickException(f"Unknown profiler type: {profiler}")
-
-    rpc_target, label = _resolve_profile_target(target)
 
     click.echo(f"Profiling {label} ({profiler}, {duration}s)...")
     resp = client.profile_task(
