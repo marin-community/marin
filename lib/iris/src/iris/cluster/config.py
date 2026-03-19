@@ -287,6 +287,21 @@ def _derive_slice_config_from_resources(config: config_pb2.IrisClusterConfig) ->
             template.disk_size_gb = resources.disk_bytes // (1024**3)
 
 
+def _validate_provider_platform_compat(config: config_pb2.IrisClusterConfig) -> None:
+    """Reject unsupported provider + platform combinations.
+
+    CoreweavePlatform no longer manages slices; configs that use
+    ``platform.coreweave`` must use ``kubernetes_provider``.
+    """
+    is_coreweave = config.platform.WhichOneof("platform") == "coreweave"
+    uses_worker_provider = config.WhichOneof("provider") == "worker_provider"
+    if is_coreweave and uses_worker_provider:
+        raise ValueError(
+            "CoreWeave platform does not support worker_provider (CoreweavePlatform no longer "
+            "manages slices). Use kubernetes_provider instead."
+        )
+
+
 def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     """Validate cluster config.
 
@@ -299,6 +314,7 @@ def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     Raises:
         ValueError: If any validation constraint is violated
     """
+    _validate_provider_platform_compat(config)
     _validate_accelerator_types(config)
     _validate_scale_group_resources(config)
     _validate_slice_templates(config)

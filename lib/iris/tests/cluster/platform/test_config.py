@@ -1445,3 +1445,17 @@ def test_coreweave_gpu_multivm_requires_topology_label():
 def test_coreweave_gpu_multivm_accepts_topology_label():
     config = _config_with_coreweave_gpu_sg({"backend.coreweave.cloud/superpod": "same-slice"})
     validate_config(config)
+
+
+def test_coreweave_worker_provider_rejected():
+    config = config_pb2.IrisClusterConfig()
+    config.platform.coreweave.region = "US-WEST-04A"
+    config.worker_provider.SetInParent()
+    sg = config.scale_groups["cpu-test"]
+    sg.num_vms = 1
+    sg.resources.cpu_millicores = 64_000
+    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
+    sg.slice_template.num_vms = 1
+    sg.slice_template.coreweave.region = "US-WEST-04A"
+    with pytest.raises(ValueError, match="does not support worker_provider"):
+        validate_config(config)
