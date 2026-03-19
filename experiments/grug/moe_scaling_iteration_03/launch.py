@@ -8,7 +8,6 @@ Reuses model and train loop from iteration_02. Default config: d=512, 1e18 budge
 """
 
 import dataclasses
-import math
 import os
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -131,7 +130,6 @@ TRIAL_MODEL = GrugModelConfig(
     dense_intermediate_dim=3 * HIDDEN_DIM,
     load_balancing_loss_coef=None,
     sliding_window=4096,
-    initializer_std=0.5 / math.sqrt(HIDDEN_DIM),
     qk_mult=1.3,
 )
 
@@ -147,7 +145,7 @@ KP = 0.05
 KI = 0.002
 KD = 0.02
 CLAMP = 50.0
-RUN_NAME = f"t1pid-kp{KP}-ki{KI}-kd{KD}-cl{CLAMP}-nolbl"
+RUN_NAME = f"t1pid-kp{KP}-ki{KI}-kd{KD}-cl{CLAMP}-nolbl-initfix-expertlr"
 RESOLVED_RUN_ID = _resolve_run_id(RUN_NAME)
 
 grug_moe_trial = ExecutorStep(

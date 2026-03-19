@@ -6,6 +6,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -263,6 +264,22 @@ def initial_state(
     )
 
 
+def _scale_expert_grads(grads: Transformer, scale: float) -> Transformer:
+    """Scale gradients for MoE expert weights (w_gate_up, w_down) by a constant factor."""
+    if scale == 1.0:
+        return grads
+    new_blocks = list(grads.blocks)
+    for i, block in enumerate(grads.blocks):
+        if block.mlp is not None:
+            new_mlp = eqx.tree_at(
+                lambda m: (m.w_gate_up, m.w_down),
+                block.mlp,
+                (block.mlp.w_gate_up * scale, block.mlp.w_down * scale),
+            )
+            new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
+    return eqx.tree_at(lambda t: t.blocks, grads, tuple(new_blocks))
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -274,6 +291,7 @@ def _make_train_step(
     pid_ki: float = 0.002,
     pid_kd: float = 0.02,
     integral_clamp: float = 50.0,
+    expert_lr_scale: float = 1.0,  # computed from model config
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -300,6 +318,9 @@ def _make_train_step(
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
         metrics = {"train/loss": loss, **summarized_metrics}
+        # Scale expert gradients by 1/sqrt(top_k/num_experts) to account for
+        # smaller effective batch size per expert.
+        grads = _scale_expert_grads(grads, expert_lr_scale)
         updates, opt_state = optimizer.update(grads, state.opt_state, state.params)
         params = optax.apply_updates(state.params, updates)
 
@@ -392,6 +413,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         pid_ki=config.trainer.pid_ki,
         pid_kd=config.trainer.pid_kd,
         integral_clamp=config.trainer.pid_integral_clamp,
+        expert_lr_scale=math.sqrt(config.model.num_experts_per_token / config.model.num_experts),
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
