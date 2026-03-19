@@ -28,7 +28,14 @@ from jax import shard_map
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P, get_abstract_mesh
 
 from levanter.grug import grug_moe as grug_moe_lib
-from levanter.kernels.deepep import deepep_combine_intranode, deepep_dispatch_intranode, deepep_get_dispatch_layout
+from levanter.kernels.deepep import (
+    IntranodeConfig,
+    deepep_combine_intranode,
+    deepep_dispatch_intranode,
+    deepep_get_dispatch_layout,
+    set_intranode_config_overrides,
+)
+from levanter.kernels.deepep import transport_ffi as deepep_transport_ffi
 from levanter.utils.activation import ActivationFunctionEnum
 
 Distribution = Literal["random", "runs"]
@@ -80,6 +87,53 @@ CollapseImpl = Literal["segment_sum", "sorted_segment_sum", "scatter_add", "lax_
 def _print0(*args, **kwargs) -> None:
     if jax.process_index() == 0:
         print(*args, **kwargs)
+
+
+def _deepep_config_payload(config: IntranodeConfig | None) -> str:
+    if config is None:
+        return "default"
+    return (
+        f"num_sms={config.num_sms} "
+        f"num_max_send_tokens={config.num_max_send_tokens} "
+        f"num_max_recv_tokens={config.num_max_recv_tokens}"
+    )
+
+
+def _deepep_dispatch_config_from_args(args: argparse.Namespace, ep_size: int) -> IntranodeConfig | None:
+    if (
+        args.deepep_dispatch_num_sms is None
+        and args.deepep_dispatch_num_max_send_tokens is None
+        and args.deepep_dispatch_num_max_recv_tokens is None
+    ):
+        return None
+
+    config = deepep_transport_ffi._DEFAULT_DISPATCH_CONFIGS[ep_size]
+    return IntranodeConfig(
+        num_sms=args.deepep_dispatch_num_sms or config.num_sms,
+        num_max_send_tokens=args.deepep_dispatch_num_max_send_tokens or config.num_max_send_tokens,
+        num_max_recv_tokens=args.deepep_dispatch_num_max_recv_tokens or config.num_max_recv_tokens,
+    )
+
+
+def _deepep_combine_config_from_args(args: argparse.Namespace, ep_size: int) -> IntranodeConfig | None:
+    if (
+        args.deepep_combine_num_sms is None
+        and args.deepep_combine_num_max_send_tokens is None
+        and args.deepep_combine_num_max_recv_tokens is None
+        and args.deepep_dispatch_num_sms is None
+    ):
+        return None
+
+    config = deepep_transport_ffi._DEFAULT_COMBINE_CONFIGS[ep_size]
+    if args.deepep_combine_num_sms is None and args.deepep_dispatch_num_sms is not None:
+        combine_num_sms = args.deepep_dispatch_num_sms
+    else:
+        combine_num_sms = args.deepep_combine_num_sms or config.num_sms
+    return IntranodeConfig(
+        num_sms=combine_num_sms,
+        num_max_send_tokens=args.deepep_combine_num_max_send_tokens or config.num_max_send_tokens,
+        num_max_recv_tokens=args.deepep_combine_num_max_recv_tokens or config.num_max_recv_tokens,
+    )
 
 
 def _round_up_capacity(value: int, *, multiple: int) -> int:
@@ -6007,6 +6061,12 @@ def main() -> None:
     parser.add_argument("--profile-root", type=Path, default=None)
     parser.add_argument("--w13-out-first", action="store_true")
     parser.add_argument("--w13-expert-padded", action="store_true")
+    parser.add_argument("--deepep-dispatch-num-sms", type=int)
+    parser.add_argument("--deepep-dispatch-num-max-send-tokens", type=int)
+    parser.add_argument("--deepep-dispatch-num-max-recv-tokens", type=int)
+    parser.add_argument("--deepep-combine-num-sms", type=int)
+    parser.add_argument("--deepep-combine-num-max-send-tokens", type=int)
+    parser.add_argument("--deepep-combine-num-max-recv-tokens", type=int)
     parser.add_argument(
         "--deepep-collapse-impl",
         choices=["segment_sum", "sorted_segment_sum", "scatter_add", "lax_scatter"],
@@ -6073,6 +6133,17 @@ def main() -> None:
     )
 
     for ep_size in eps:
+        deepep_dispatch_config = _deepep_dispatch_config_from_args(args, ep_size)
+        deepep_combine_config = _deepep_combine_config_from_args(args, ep_size)
+        set_intranode_config_overrides(
+            dispatch_config=deepep_dispatch_config,
+            combine_config=deepep_combine_config,
+        )
+        _print0(
+            "DEEPEP_TRANSPORT_CONFIG "
+            f"ep={ep_size} dispatch={_deepep_config_payload(deepep_dispatch_config)} "
+            f"combine={_deepep_config_payload(deepep_combine_config)}"
+        )
         mesh = _make_mesh(ep_size)
         with jax.set_mesh(mesh):
             x_sharded, selected_sharded, weights_sharded, w13_sharded, w2_sharded = _shard_inputs(
@@ -6427,6 +6498,8 @@ def main() -> None:
                 )
                 if args.profile_root is not None:
                     _print0(f"PROFILE kernel={kernel} ep={ep_size} dir={args.profile_root}")
+
+    set_intranode_config_overrides()
 
 
 if __name__ == "__main__":

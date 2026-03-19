@@ -136,6 +136,32 @@ def _bench_block(args: argparse.Namespace) -> str:
         if args.deepep_collapse_impl == "segment_sum"
         else f" \\\n        --deepep-collapse-impl {args.deepep_collapse_impl}"
     )
+    deepep_dispatch_num_sms_flag = (
+        "" if args.deepep_dispatch_num_sms is None else f" \\\n        --deepep-dispatch-num-sms {args.deepep_dispatch_num_sms}"
+    )
+    deepep_dispatch_num_max_send_tokens_flag = (
+        ""
+        if args.deepep_dispatch_num_max_send_tokens is None
+        else f" \\\n        --deepep-dispatch-num-max-send-tokens {args.deepep_dispatch_num_max_send_tokens}"
+    )
+    deepep_dispatch_num_max_recv_tokens_flag = (
+        ""
+        if args.deepep_dispatch_num_max_recv_tokens is None
+        else f" \\\n        --deepep-dispatch-num-max-recv-tokens {args.deepep_dispatch_num_max_recv_tokens}"
+    )
+    deepep_combine_num_sms_flag = (
+        "" if args.deepep_combine_num_sms is None else f" \\\n        --deepep-combine-num-sms {args.deepep_combine_num_sms}"
+    )
+    deepep_combine_num_max_send_tokens_flag = (
+        ""
+        if args.deepep_combine_num_max_send_tokens is None
+        else f" \\\n        --deepep-combine-num-max-send-tokens {args.deepep_combine_num_max_send_tokens}"
+    )
+    deepep_combine_num_max_recv_tokens_flag = (
+        ""
+        if args.deepep_combine_num_max_recv_tokens is None
+        else f" \\\n        --deepep-combine-num-max-recv-tokens {args.deepep_combine_num_max_recv_tokens}"
+    )
     timeout_prefix = ""
     timeout_suffix = ""
     if args.per_bench_timeout_seconds is not None:
@@ -166,7 +192,7 @@ for distribution in {distributions}; do
         --kernel "$kernel" \\
         --ep-list {args.ep_list} \\
         --warmup {args.warmup} \\
-        --iters {args.iters}{profile_flag}{w13_layout_flag}{w13_expert_padded_flag}{collapse_impl_flag}
+        --iters {args.iters}{profile_flag}{w13_layout_flag}{w13_expert_padded_flag}{collapse_impl_flag}{deepep_dispatch_num_sms_flag}{deepep_dispatch_num_max_send_tokens_flag}{deepep_dispatch_num_max_recv_tokens_flag}{deepep_combine_num_sms_flag}{deepep_combine_num_max_send_tokens_flag}{deepep_combine_num_max_recv_tokens_flag}
 {timeout_suffix}
       echo "BENCH_END kernel=$kernel distribution=$distribution topk=$topk"
     done
@@ -334,6 +360,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--post-bench-sleep-seconds", type=int, default=0)
     parser.add_argument("--w13-out-first", action="store_true")
     parser.add_argument("--w13-expert-padded", action="store_true")
+    parser.add_argument("--deepep-dispatch-num-sms", type=int, default=None)
+    parser.add_argument("--deepep-dispatch-num-max-send-tokens", type=int, default=None)
+    parser.add_argument("--deepep-dispatch-num-max-recv-tokens", type=int, default=None)
+    parser.add_argument("--deepep-combine-num-sms", type=int, default=None)
+    parser.add_argument("--deepep-combine-num-max-send-tokens", type=int, default=None)
+    parser.add_argument("--deepep-combine-num-max-recv-tokens", type=int, default=None)
     parser.add_argument(
         "--deepep-collapse-impl",
         choices=("segment_sum", "sorted_segment_sum", "scatter_add", "lax_scatter"),

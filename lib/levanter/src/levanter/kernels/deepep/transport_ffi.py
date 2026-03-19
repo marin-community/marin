@@ -68,6 +68,22 @@ _DEFAULT_COMBINE_CONFIGS = {
     8: IntranodeConfig(num_sms=20, num_max_send_tokens=4, num_max_recv_tokens=256),
 }
 
+_DISPATCH_CONFIG_OVERRIDE: IntranodeConfig | None = None
+_COMBINE_CONFIG_OVERRIDE: IntranodeConfig | None = None
+
+
+def set_intranode_config_overrides(
+    *,
+    dispatch_config: IntranodeConfig | None = None,
+    combine_config: IntranodeConfig | None = None,
+) -> None:
+    """Override the process-wide default intranode configs used by the JAX FFI bridge."""
+    global _DISPATCH_CONFIG_OVERRIDE, _COMBINE_CONFIG_OVERRIDE
+
+    _DISPATCH_CONFIG_OVERRIDE = dispatch_config
+    _COMBINE_CONFIG_OVERRIDE = combine_config
+    shutdown_intranode_runtime()
+
 
 def _jaxlib_include_dir() -> Path:
     return Path(jaxlib.__file__).resolve().parent / "include"
@@ -608,12 +624,16 @@ def _materialize_cotangent(
 
 
 def _default_dispatch_config(num_ranks: int) -> IntranodeConfig:
+    if _DISPATCH_CONFIG_OVERRIDE is not None:
+        return _DISPATCH_CONFIG_OVERRIDE
     if num_ranks not in _DEFAULT_DISPATCH_CONFIGS:
         raise ValueError(f"Unsupported DeepEP intranode dispatch rank count: {num_ranks}")
     return _DEFAULT_DISPATCH_CONFIGS[num_ranks]
 
 
 def _default_combine_config(num_ranks: int) -> IntranodeConfig:
+    if _COMBINE_CONFIG_OVERRIDE is not None:
+        return _COMBINE_CONFIG_OVERRIDE
     if num_ranks not in _DEFAULT_COMBINE_CONFIGS:
         raise ValueError(f"Unsupported DeepEP intranode combine rank count: {num_ranks}")
     return _DEFAULT_COMBINE_CONFIGS[num_ranks]
