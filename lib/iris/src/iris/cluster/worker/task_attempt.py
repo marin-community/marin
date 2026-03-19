@@ -6,6 +6,7 @@
 This module encapsulates the full lifecycle of a single task execution attempt:
 bundle download -> image build -> container run -> monitor -> cleanup.
 """
+import json
 
 import logging
 import shutil
@@ -167,8 +168,8 @@ def build_iris_env(
                 "memory_bytes": res.memory_bytes,
                 "cpu_millicores": res.cpu_millicores,
                 "disk_bytes": res.disk_bytes,
-                "gpu_count": res.gpu_count,
-                "tpu_count": res.tpu_count,
+                "gpu_count": res.device.gpu,
+                "tpu_count": res.device.tpu,
             }
         )
 
