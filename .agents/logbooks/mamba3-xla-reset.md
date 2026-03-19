@@ -397,3 +397,262 @@
 - Decision:
   - Stop the Pallas branch here.
   - Revert the experimental `local_output` Pallas path and keep XLA as the only maintained implementation.
+
+### 2026-03-19 - `state_dim` / `value_dim` sweep at fixed `chunk_size=512`
+- Goal:
+  - Measure how much additional dense-work headroom exists in the current XLA path as `state_dim` and `value_dim` grow, while keeping the winning chunk size fixed.
+- Benchmark setup:
+  - TPU: `v5p-8`
+  - Shape family: `seq_len=16384`, `batch_head_groups=16`, `chunk_size=512`, `dtype=bf16`
+  - Implementation: `xla`
+  - Method:
+    - main grid with `steps=6`, `warmup=2`
+    - edge probes with `steps=4`, `warmup=1`
+  - Important caveat:
+    - these runs still used default JAX placement rather than explicit mesh sharding, so they should be read as effectively per-device-ish numbers rather than validated full-slice throughput
+- Main grid:
+  - `state_dim=64`
+    - `value_dim=256`: forward `214.49M tok/s`, `84.34` TFLOP/s; backward `124.65M tok/s`, `49.01` TFLOP/s
+    - `value_dim=512`: forward `140.01M tok/s`, `100.93` TFLOP/s; backward `80.99M tok/s`, `58.39` TFLOP/s
+    - `value_dim=1024`: forward `75.47M tok/s`, `103.86` TFLOP/s; backward `48.95M tok/s`, `67.36` TFLOP/s
+  - `state_dim=128`
+    - `value_dim=256`: forward `210.38M tok/s`, `110.30` TFLOP/s; backward `123.22M tok/s`, `64.60` TFLOP/s
+    - `value_dim=512`: forward `141.96M tok/s`, `130.25` TFLOP/s; backward `85.34M tok/s`, `78.30` TFLOP/s
+    - `value_dim=1024`: forward `77.57M tok/s`, `132.17` TFLOP/s; backward `51.86M tok/s`, `88.37` TFLOP/s
+  - `state_dim=256`
+    - `value_dim=256`: forward `161.87M tok/s`, `127.30` TFLOP/s; backward `100.41M tok/s`, `78.97` TFLOP/s
+    - `value_dim=512`: forward `103.51M tok/s`, `135.68` TFLOP/s; backward `61.16M tok/s`, `80.17` TFLOP/s
+    - `value_dim=1024`: forward `62.59M tok/s`, `147.67` TFLOP/s; backward `41.98M tok/s`, `99.04` TFLOP/s
+  - `state_dim=512`
+    - `value_dim=256`: forward `123.09M tok/s`, `161.33` TFLOP/s; backward `75.59M tok/s`, `99.08` TFLOP/s
+    - `value_dim=512`: forward `85.55M tok/s`, `179.41` TFLOP/s; backward `46.83M tok/s`, `98.21` TFLOP/s
+    - `value_dim=1024`: forward `56.17M tok/s`, `206.14` TFLOP/s; backward `30.46M tok/s`, `111.80` TFLOP/s
+- Edge probes:
+  - `state_dim=256`, `value_dim=2048`
+    - forward `33.44M tok/s`, `149.02` TFLOP/s
+    - backward `22.87M tok/s`, `101.92` TFLOP/s
+  - `state_dim=512`, `value_dim=2048`
+    - forward `24.59M tok/s`, `167.57` TFLOP/s
+    - backward `13.04M tok/s`, `88.89` TFLOP/s
+  - `state_dim=1024`, `value_dim=512`
+    - forward `56.78M tok/s`, `208.37` TFLOP/s
+    - backward `32.21M tok/s`, `118.22` TFLOP/s
+- Remat-weighted training-side combined rate:
+  - Using `3 / (2 / fwd_tflops + 1 / bwd_tflops)`:
+    - `64 x 256`: `68.00` TFLOP/s
+    - `128 x 512`: `106.66` TFLOP/s
+    - `256 x 1024`: `126.90` TFLOP/s
+    - `512 x 1024`: `160.89` TFLOP/s
+    - `1024 x 512`: `167.45` TFLOP/s
+- Interpretation:
+  - There is real dense-compute headroom as `state_dim` grows:
+    - moving from `128 x 512` to `512 x 1024` raises forward estimated throughput from `130.25` to `206.14` TFLOP/s
+    - `1024 x 512` reaches a similar `208.37` TFLOP/s forward and the best measured backward point at `118.22` TFLOP/s
+  - But this is not “free” headroom:
+    - token throughput falls sharply as `state_dim` and `value_dim` increase
+    - the extra TFLOP/s mostly reflects denser work per token, not a sudden jump in kernel efficiency
+  - `value_dim` shows clear diminishing returns:
+    - at fixed `state_dim=256`, forward rises from `147.67` TFLOP/s at `value_dim=1024` to only `149.02` at `2048`, while token throughput nearly halves
+    - at fixed `state_dim=512`, `value_dim=2048` is worse than `1024` in both forward and backward estimated TFLOP/s
+  - `state_dim` is the cleaner scaling axis on this implementation:
+    - larger `state_dim` keeps raising both forward and backward estimated throughput more reliably than pushing `value_dim` beyond `1024`
+  - Practical takeaway:
+    - for this current XLA kernel family on `v5p`, there is still room to reach roughly `200+` estimated forward TFLOP/s on wider shapes
+    - but the speed-per-token winner remains the smaller-width part of the grid, so larger widths should be justified by model quality or by a desire to study compute-density ceilings rather than by an expectation of better token throughput
+
+### 2026-03-19 - `prefix_emit` formulation experiments
+- Goal:
+  - Reduce the largest remaining XLA region, `prefix_emit`, without reviving a Pallas path.
+- Strategies tested:
+  - `einsum3`:
+    - current baseline
+    - scan incoming chunk states first, then emit with `gkcn,gkpn,gkc->gkcp`
+  - `prescaled_einsum2`:
+    - pre-scale `c` by `exp(a_log_cumsum)` and reduce to `gkcn,gkpn->gkcp`
+  - `prescaled_matmul`:
+    - same pre-scaling, but force a plain batched matmul layout `[G,K,C,N] @ [G,K,N,P]`
+  - `scan_fused`:
+    - fuse prefix emission into the chunk scan so we no longer materialize the full `incoming_state[G,K,P,N]`
+- Correctness:
+  - Local parity check between `einsum3` and `scan_fused` on small random shapes:
+    - `max_y_diff = 0.0`
+    - `max_s_diff = 0.0`
+    - `max_grad_diff = 0.0`
+- Representative benchmark at `128 x 512`:
+  - Shape: `seq_len=16384`, `batch_head_groups=16`, `chunk_size=512`, `state_dim=128`, `value_dim=512`
+  - `einsum3`:
+    - forward: `139.81M tok/s`, `128.28` TFLOP/s
+    - backward: `87.12M tok/s`, `79.93` TFLOP/s
+  - `prescaled_einsum2`:
+    - forward: `139.22M tok/s`, `127.74` TFLOP/s
+    - backward: `87.02M tok/s`, `79.85` TFLOP/s
+  - `prescaled_matmul`:
+    - forward: `139.53M tok/s`, `128.02` TFLOP/s
+    - backward: `87.22M tok/s`, `80.03` TFLOP/s
+  - `scan_fused`:
+    - forward: `167.59M tok/s`, `153.76` TFLOP/s
+    - backward: `87.37M tok/s`, `80.16` TFLOP/s
+  - Interpretation:
+    - only `scan_fused` produced a real win
+    - the two “same scan, different contraction shape” variants were noise-level changes
+- Cross-shape follow-up on the chosen comparison set:
+  - `512 x 1024`
+    - `einsum3`:
+      - forward: `45.71M tok/s`, `167.77` TFLOP/s
+      - backward: `30.56M tok/s`, `112.16` TFLOP/s
+    - `scan_fused`:
+      - forward: `51.49M tok/s`, `188.96` TFLOP/s
+      - backward: `28.73M tok/s`, `105.43` TFLOP/s
+    - remat-weighted combined:
+      - `einsum3`: `143.98` TFLOP/s
+      - `scan_fused`: `149.48` TFLOP/s
+  - `1024 x 512`
+    - `einsum3`:
+      - forward: `47.00M tok/s`, `172.49` TFLOP/s
+      - backward: `32.14M tok/s`, `117.94` TFLOP/s
+    - `scan_fused`:
+      - forward: `45.23M tok/s`, `166.01` TFLOP/s
+      - backward: `29.15M tok/s`, `106.99` TFLOP/s
+    - remat-weighted combined:
+      - `einsum3`: `149.45` TFLOP/s
+      - `scan_fused`: `140.23` TFLOP/s
+- Profile evidence:
+  - `128 x 512` backward:
+    - baseline `prefix_emit`: `43.58%`
+    - `scan_fused` `prefix_emit`: `38.31%`
+    - baseline had a separate `incoming_state_scan` child at `20.48%`
+    - `scan_fused` removes that as a top-level child and folds the work into `prefix_emit=>scan_fused=>while=>body`
+  - `512 x 1024` backward:
+    - baseline `prefix_emit`: `50.52%`
+    - `scan_fused` `prefix_emit`: `54.87%`
+    - the fused `gcn,gpn->gcp` dot-general inside the scan body becomes the dominant inner op at `24.77%`
+  - Interpretation:
+    - `scan_fused` helps when avoiding `incoming_state` materialization is worth more than moving the emit matmul inside the sequential scan
+    - that tradeoff is favorable when `value_dim > state_dim`
+    - it becomes unfavorable in the state-heavy regime, where the per-step emit matmul inside the scan is too expensive
+- Experimental dispatch:
+  - Added internal `prefix_emit_variant="auto"`:
+    - choose `scan_fused` when `value_dim > state_dim`
+    - otherwise fall back to `einsum3`
+  - Switched the internal XLA default to `auto`
+- `auto` benchmark on the three chosen shapes:
+  - `128 x 512`
+    - baseline: forward `127.44` TFLOP/s, backward `79.53` TFLOP/s
+    - `auto`: forward `153.43` TFLOP/s, backward `79.65` TFLOP/s
+  - `512 x 1024`
+    - baseline: forward `167.12` TFLOP/s, backward `111.32` TFLOP/s
+    - `auto`: forward `189.68` TFLOP/s, backward `104.76` TFLOP/s
+  - `1024 x 512`
+    - baseline: forward `171.93` TFLOP/s, backward `117.87` TFLOP/s
+    - `auto`: forward `172.62` TFLOP/s, backward `118.00` TFLOP/s
+- Decision:
+  - Keep the shape-gated `auto` XLA path as the new default for `prefix_emit`.
+  - Do not use `scan_fused` unconditionally.
+
+### 2026-03-19 - `chunk_state` / `prefix_emit` paired summary-layout experiment
+- Goal:
+  - See whether the adjacent `chunk_state` and `prefix_emit` regions could both improve if the carried summary were stored in a different orientation.
+- Hypothesis:
+  - Current path stores chunk summaries in `[P, N]`, then `prefix_emit` effectively wants `[N, P]` for its dominant contraction.
+  - A layout-preserving rewrite to carry summaries internally as `[N, P]` might improve both:
+    - `chunk_state` would write the layout `prefix_emit` wants,
+    - `prefix_emit` could use a direct `[C, N] @ [N, P]` matmul,
+    - the scan would carry state in the same orientation consumed by the emit step.
+- Implementation:
+  - Added a temporary internal `summary_layout_variant` experiment:
+    - `pn`: existing `[P, N]`
+    - `np`: alternate `[N, P]`
+  - Benchmarked the current `prefix_emit_variant="auto"` logic on both summary layouts.
+  - Kept the external API shape unchanged by transposing the final state back to `[P, N]` at the boundary for the `np` experiment.
+- Benchmark on the three chosen shapes:
+  - `128 x 512`
+    - `pn`: forward `164.88M tok/s`, `151.28` TFLOP/s; backward `87.01M tok/s`, `79.83` TFLOP/s
+    - `np`: forward `167.74M tok/s`, `153.90` TFLOP/s; backward `83.71M tok/s`, `76.80` TFLOP/s
+    - remat-weighted combined:
+      - `pn`: `116.52` TFLOP/s
+      - `np`: `115.31` TFLOP/s
+  - `512 x 1024`
+    - `pn`: forward `51.43M tok/s`, `188.75` TFLOP/s; backward `28.45M tok/s`, `104.40` TFLOP/s
+    - `np`: forward `50.93M tok/s`, `186.93` TFLOP/s; backward `27.04M tok/s`, `99.22` TFLOP/s
+    - remat-weighted combined:
+      - `pn`: `148.70` TFLOP/s
+      - `np`: `144.39` TFLOP/s
+  - `1024 x 512`
+    - `pn`: forward `47.81M tok/s`, `175.45` TFLOP/s; backward `32.12M tok/s`, `117.89` TFLOP/s
+    - `np`: forward `46.67M tok/s`, `171.26` TFLOP/s; backward `32.81M tok/s`, `120.40` TFLOP/s
+    - remat-weighted combined:
+      - `pn`: `150.89` TFLOP/s
+      - `np`: `150.12` TFLOP/s
+- Interpretation:
+  - The paired layout rewrite did not produce a robust win.
+  - `np` occasionally improves forward or backward in isolation, but never enough to win clearly on the remat-weighted combined rate.
+  - The extra benefit from matching the emit contraction layout is offset by losses elsewhere, likely including the chunk-state contraction itself and/or the final transpose back to `[P, N]`.
+- Decision:
+  - Revert the temporary `summary_layout_variant` plumbing.
+  - Keep the simpler `[P, N]` carried summary layout.
+
+### 2026-03-19 - profile shared prep inside `chunk_state` and `prefix_emit`
+- Goal:
+  - Test whether the adjacent `chunk_state` and `prefix_emit` regions are leaving a meaningful amount of time in shared tokenwise prep, rather than in their main contractions.
+- Method:
+  - Add temporary named scopes around the obvious glue work:
+    - `chunk_state`
+      - `prepare_decay_to_end`
+      - `prepare_scaled_src`
+      - `emit_chunk_state`
+    - `prefix_emit`
+      - `prepare_chunk_decay`
+      - `prepare_prefix_decay`
+      - `prepare_c_scaled`
+  - Capture backward traces on the three fixed comparison shapes using the current kept XLA path on `v5p-8`.
+- Results:
+  - `128 x 512` (`auto` chooses `scan_fused`)
+    - top-level split:
+      - `local_output`: `41.24%`
+      - `chunk_state`: `20.45%`
+      - `prefix_emit`: `38.31%`
+    - notable children:
+      - `prefix_emit=>scan_fused`: `38.11%`
+      - `prefix_emit=>scan_fused=>while=>body=>closed_call=>gcn,gpn->gcp=>dot_general`: `20.32%`
+      - `chunk_state=>emit_chunk_state=>gkcn,gkc,gkcp->gkpn=>dot_general`: `20.41%`
+      - `prefix_emit=>scan_fused=>prepare_c_scaled`: `2.08%`
+      - `prefix_emit=>prepare_prefix_decay=>exp`: `0.14%`
+      - `prefix_emit=>prepare_chunk_decay=>dynamic_slice`: `0.05%`
+      - `chunk_state=>prepare_decay_to_end=>slice`: `0.04%`
+  - `512 x 1024` (`auto` chooses `scan_fused`)
+    - top-level split:
+      - `local_output`: `25.33%`
+      - `chunk_state`: `19.85%`
+      - `prefix_emit`: `54.82%`
+    - notable children:
+      - `prefix_emit=>scan_fused`: `54.76%`
+      - `prefix_emit=>scan_fused=>while=>body=>closed_call=>gcn,gpn->gcp=>dot_general`: `24.75%`
+      - `chunk_state=>emit_chunk_state=>gkcn,gkc,gkcp->gkpn=>dot_general`: `19.84%`
+      - `prefix_emit=>scan_fused=>prepare_c_scaled`: `2.49%`
+      - `prefix_emit=>prepare_prefix_decay=>exp`: `0.05%`
+      - `prefix_emit=>prepare_chunk_decay=>dynamic_slice`: `0.02%`
+      - `chunk_state=>prepare_decay_to_end=>slice`: `0.01%`
+  - `1024 x 512` (`auto` falls back to `einsum3`)
+    - top-level split:
+      - `local_output`: `25.61%`
+      - `chunk_state`: `21.69%`
+      - `prefix_emit`: `52.70%`
+    - notable children:
+      - `prefix_emit=>incoming_state_scan`: `29.53%`
+      - `prefix_emit=>einsum3=>gkcn,gkpn,gkc->gkcp=>dot_general`: `23.15%`
+      - `chunk_state=>emit_chunk_state=>gkcn,gkc,gkcp->gkpn=>dot_general`: `21.67%`
+      - `prefix_emit=>prepare_prefix_decay=>exp`: `0.02%`
+      - `prefix_emit=>prepare_chunk_decay=>dynamic_slice`: `0.01%`
+      - `chunk_state=>prepare_decay_to_end=>slice`: `0.02%`
+- Interpretation:
+  - The shared prep/scaling glue is not the next bottleneck.
+  - Across all three shapes, the new prep scopes are tiny:
+    - the `exp` / slice setup outside the main contractions is well under `1%`
+    - even `prepare_c_scaled` is only about `2%` to `2.5%` on the `scan_fused` shapes
+  - The real time is still in:
+    - the main `chunk_state` dot-general
+    - the `prefix_emit` scan body or incoming-state scan
+    - the `prefix_emit` emit dot-general
+- Decision:
+  - Do not spend more time trying to algebraically share the prep glue between `chunk_state` and `prefix_emit`.
+  - The next structural work should target the scan body and/or the main emit/state contractions directly.

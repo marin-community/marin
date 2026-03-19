@@ -12,6 +12,8 @@ from ..ssd.reference import (
     local_log_alpha,
 )
 from ..ssd.xla import (
+    PREFIX_EMIT_AUTO,
+    PrefixEmitVariant,
     ssd_chunk_state_xla_batched,
     ssd_chunk_state_xla_chunked_batched,
     ssd_chunked_from_local_blocks_xla_batched,
@@ -60,6 +62,8 @@ def mamba3_chunked_forward_xla_batched(
     b: Float[Array, "groups chunks chunk state"],
     c: Float[Array, "groups chunks chunk state"],
     x: Float[Array, "groups chunks chunk value"],
+    *,
+    prefix_emit_variant: PrefixEmitVariant = PREFIX_EMIT_AUTO,
 ) -> tuple[Float[Array, "groups chunks chunk value"], Float[Array, "groups value state"]]:
     """Chunked Mamba-3 forward pass in plain JAX/XLA."""
 
@@ -73,7 +77,13 @@ def mamba3_chunked_forward_xla_batched(
         with jax.named_scope("chunk_state"):
             chunk_state = ssd_chunk_state_xla_chunked_batched(a_log_cumsum, src_scale, b, x)
         with jax.named_scope("prefix_emit"):
-            return ssd_chunked_from_local_blocks_xla_batched(a_log_cumsum, c, local_output, chunk_state)
+            return ssd_chunked_from_local_blocks_xla_batched(
+                a_log_cumsum,
+                c,
+                local_output,
+                chunk_state,
+                prefix_emit_variant=prefix_emit_variant,
+            )
 
 
 def mamba3_chunked_forward_native_xla_batched(
