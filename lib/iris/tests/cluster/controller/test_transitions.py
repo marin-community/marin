@@ -3871,3 +3871,86 @@ def test_max_failures_kills_direct_provider_tasks():
 
     # The sibling task (task_ids[1]) should be in tasks_to_kill.
     assert task_ids[1] in result.tasks_to_kill
+
+
+# =============================================================================
+# Job state lifecycle tests (merged from test_job.py)
+# =============================================================================
+
+
+def test_job_becomes_succeeded_when_all_tasks_succeed(job_request, worker_metadata) -> None:
+    state = _make_state()
+    req = job_request("all-succeeded")
+    req.replicas = 2
+    tasks = submit_job(state, "all-succeeded", req)
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+    for task in tasks:
+        task_row = _query_task(state, task.task_id)
+        dispatch_task(state, task_row, worker_id)
+        transition_task(state, task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
+
+    job = _query_job(state, JobName.root("test-user", "all-succeeded"))
+    assert job is not None
+    assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+
+def test_job_failure_threshold_applies(job_request, worker_metadata) -> None:
+    state = _make_state()
+    req = job_request("fail-fast")
+    req.replicas = 2
+    req.max_task_failures = 0
+    tasks = submit_job(state, "fail-fast", req)
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+    first = tasks[0]
+    first_row = _query_task(state, first.task_id)
+    dispatch_task(state, first_row, worker_id)
+    transition_task(state, first.task_id, cluster_pb2.TASK_STATE_FAILED)
+
+    job = _query_job(state, JobName.root("test-user", "fail-fast"))
+    assert job is not None
+    assert job.state == cluster_pb2.JOB_STATE_FAILED
+
+
+def test_job_expands_to_replicas_and_retry_limits(job_request) -> None:
+    state = _make_state()
+    req = job_request("expand")
+    req.replicas = 3
+    req.max_retries_failure = 3
+    req.max_retries_preemption = 7
+    tasks = submit_job(state, "expand", req)
+
+    jid = JobName.root("test-user", "expand")
+    assert len(tasks) == 3
+    for idx, task in enumerate(tasks):
+        assert task.task_id == jid.task(idx)
+        task_row = _query_task(state, task.task_id)
+        assert task_row.max_retries_failure == 3
+        assert task_row.max_retries_preemption == 7
+
+
+def test_job_becomes_unschedulable_when_task_unschedulable(job_request) -> None:
+    state = _make_state()
+    req = job_request("unsched")
+    req.replicas = 2
+    tasks = submit_job(state, "unsched", req)
+
+    state.mark_task_unschedulable(tasks[0].task_id, reason="no capacity")
+
+    job = _query_job(state, JobName.root("test-user", "unsched"))
+    assert job is not None
+    assert job.state == cluster_pb2.JOB_STATE_UNSCHEDULABLE
+
+
+def test_job_cancel_marks_job_killed(job_request) -> None:
+    state = _make_state()
+    req = job_request("killed")
+    req.replicas = 2
+    submit_job(state, "killed", req)
+
+    jid = JobName.root("test-user", "killed")
+    state.cancel_job(jid, reason="manual")
+    job = _query_job(state, jid)
+    assert job is not None
+    assert job.state == cluster_pb2.JOB_STATE_KILLED
