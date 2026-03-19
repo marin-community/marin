@@ -82,3 +82,176 @@
 - Decision:
   - Keep XLA as the only shipping/default implementation in this reset.
   - Defer any new Pallas work until profiling isolates a dominant intra-chunk local block that is still worth attacking after this rewrite.
+
+### 2026-03-18 - Backward trace profiling on v5p-8
+- Command:
+  - Captured trace with:
+    `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000 .venv/bin/python lib/levanter/scripts/bench/bench_mamba3_xla.py --seq-lens 16384 --batch-head-groups 16 --chunk-size 128 --state-dim 128 --value-dim 512 --steps 2 --warmup 1 --implementations xla --profile-dir /tmp/mamba3-xla-bwd-16384 --profile-mode backward --profile-steps 8 --json`
+  - Pulled trace to:
+    `scratch/profiles/mamba3-xla-bwd-16384`
+  - Summarized with:
+    `uv run python lib/marin/tools/profile_summary.py summarize --profile-dir scratch/profiles/mamba3-xla-bwd-16384 --output scratch/profiles/mamba3-xla-bwd-16384-summary.json`
+- Result:
+  - Measured step time from the traced run:
+    - XLA forward steady-state: `0.003177 s`
+    - XLA backward steady-state: `0.005674 s`
+  - Hierarchical regions by inclusive share:
+    - `prefix_emit`: `62.49%`
+    - `chunk_state`: `19.98%`
+    - `local_output`: `17.31%`
+  - Largest exclusive compute regions:
+    - `chunk_state => ssd_chunk_state => gcn,gc,gcp->gpn => dot_general`: `19.87%`
+    - `prefix_emit => gcn,gpn,gc->gcp => dot_general`: `19.16%`
+    - `local_output => mamba3_intra_chunk`: `17.31%` inclusive
+  - Top ops by exclusive time confirm the same split:
+    - prefix-emit add fusions at [ssd/reference.py:168]
+    - chunk-state dot_general at [ssd/reference.py:109]
+    - prefix-emit dot_general at [ssd/reference.py:135]
+    - local-output dot_general at [ssd/reference.py:94]
+- Interpretation:
+  - The dominant work is not the intra-chunk local block alone.
+  - The most expensive compute is split across three structured XLA regions, with `prefix_emit` slightly ahead of `chunk_state`, and `local_output` only third.
+  - That weakens the case for immediately resurrecting a Pallas kernel for only the local block, because even a perfect local-block speedup would leave the two larger cross-chunk matmul-style regions untouched.
+  - The profile tool’s per-track category table reports high `host` share, but the named-scope hierarchical region view is the more actionable signal here; it cleanly attributes the compute work inside the JAX program.
+- Next action:
+  - Before any Pallas revival, look for algebraic or layout simplifications that reduce `prefix_emit` and `chunk_state`, or fuse/reformulate those regions in XLA.
+
+### 2026-03-18 - Scan rewrite experiment via Iris dev TPU
+- Goal:
+  - Test whether removing the explicit intra-chunk `[C, C]` local block materialization yields an easy TPU arithmetic-intensity win.
+- Change:
+  - Replaced the local XLA block with a chunk-local `lax.scan` over the carried `[P, N]` state and reused that same scan to produce `chunk_state`.
+  - Ran the experiment through the Iris workflow in [docs/dev-guide/dev_tpu_iris.md](/Users/dlwh/.codex/worktrees/03f9/marin/docs/dev-guide/dev_tpu_iris.md) because the earlier Ray-based dev TPU path was timing out.
+- Iris session notes:
+  - Session: `dlwh-mamba3-scan-03f9`
+  - Worker: `marin-tpu_v5p_8-us-central1-a-20260318-2339-e32cf780`
+  - Environment bootstrap needed one extra repair step:
+    `make install_node` on the remote worker, then `uv sync --all-packages --extra=tpu --python=3.11`
+- Benchmark command:
+  - `uv run scripts/iris/dev_tpu.py --config lib/iris/examples/marin.yaml --tpu-name dlwh-mamba3-scan-03f9 execute --no-sync -e LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000 -- .venv/bin/python lib/levanter/scripts/bench/bench_mamba3_xla.py --seq-lens 16384 --batch-head-groups 16 --chunk-size 128 --state-dim 128 --value-dim 512 --steps 5 --warmup 1 --implementations xla --json`
+- Result on `v5p-8`:
+  - XLA forward steady-state: `0.07948 s`, `3.30M tok/s`, `1.40` estimated TFLOP/s
+  - XLA backward steady-state: `0.15816 s`, `1.66M tok/s`, `0.71` estimated TFLOP/s
+- Interpretation:
+  - This is dramatically worse than the original XLA decomposition (`35.13` forward TFLOP/s and `19.64` backward TFLOP/s at the same shape).
+  - Removing the explicit `[C, C]` tensor did not help because the replacement formulation exposed a sequential scan in the hot local path and destroyed TPU parallelism.
+  - This is strong evidence that “remove `[C, C]` by switching to token-by-token scan” is the wrong abstraction level for this TPU implementation, even though it looks better from a naive arithmetic-intensity perspective.
+- Decision:
+  - Revert the scan rewrite.
+  - Keep the original XLA decomposition as the default.
+  - If we revisit this area, the next attempt should preserve chunk-local parallelism rather than replace the local block with a sequential recurrence.
+
+### 2026-03-18 - XLA chunk-size sweep on v5p-8
+- Goal:
+  - Test whether the current XLA formulation benefits from much larger materialized intra-chunk blocks, rather than trying to delete the chunk-local `C x C` structure.
+- Iris session:
+  - Session: `dlwh-mamba3-chunks-03f9`
+  - Worker: `marin-tpu_v5p_8-us-central1-a-20260318-2358-66b7da2c`
+  - Remote environment required the usual repair step:
+    `make install_node && uv sync --all-packages --extra=tpu --python=3.11`
+- Benchmark commands:
+  - Sweep `chunk_size in {128,256,512,1024}` at fixed `seq_len=16384`, `batch_head_groups=16`, `state_dim=128`, `value_dim=512`
+  - Extra point at `chunk_size=2048`
+  - All runs used:
+    `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`
+- Results:
+  - `chunk_size=128`
+    - forward: `0.003164 s`, `82.86M tok/s`, `35.30` estimated TFLOP/s
+    - backward: `0.005674 s`, `46.20M tok/s`, `19.68` estimated TFLOP/s
+  - `chunk_size=256`
+    - forward: `0.002339 s`, `112.06M tok/s`, `66.10` estimated TFLOP/s
+    - backward: `0.004183 s`, `62.67M tok/s`, `36.97` estimated TFLOP/s
+  - `chunk_size=512`
+    - forward: `0.002038 s`, `128.60M tok/s`, `117.99` estimated TFLOP/s
+    - backward: `0.003796 s`, `69.07M tok/s`, `63.37` estimated TFLOP/s
+  - `chunk_size=1024`
+    - forward: `0.002280 s`, `114.99M tok/s`, `180.86` estimated TFLOP/s
+    - backward: `0.004076 s`, `64.31M tok/s`, `101.15` estimated TFLOP/s
+  - `chunk_size=2048`
+    - forward: `0.002972 s`, `88.21M tok/s`, `254.36` estimated TFLOP/s
+    - backward: `0.005299 s`, `49.47M tok/s`, `142.64` estimated TFLOP/s
+- Interpretation:
+  - On this `v5p-8` shape, throughput measured in tokens/sec improves substantially from `128 -> 256 -> 512`, then gets worse at `1024` and worse again at `2048`.
+  - So the best point in this sweep is `chunk_size=512`, not the original `128`.
+  - This supports the claim that a materialized chunk-local block is not inherently a TPU problem; the original XLA decomposition simply wanted a much fatter chunk than we were giving it.
+  - The estimated TFLOP/s grows monotonically with chunk size because the FLOP model scales with the larger local block, but the more important operational metric here is tokens/sec. By that measure, `512` is the peak in this sweep.
+- Decision:
+  - The next default-candidate configuration on `v5p-8` should use a larger chunk, with `512` as the leading candidate from this sweep.
+  - If we do more profiling, profile the `chunk_size=512` case rather than continuing to optimize `128`.
+
+### 2026-03-18 - Batched-einsum XLA rewrite at `chunk_size=512`
+- Goal:
+  - Reduce the transpose/copy-heavy backward path visible in the `chunk_size=512` profile without changing the algorithm.
+- Change:
+  - Kept the same SSD decomposition and chunk-local materialization.
+  - Replaced the XLA backend's `vmap`-stacked local/state/prefix path with direct batched `[G, K, ...]` einsums:
+    - `local_output`: `gkts,gksp->gktp`
+    - `chunk_state`: `gkcn,gkc,gkcp->gkpn`
+    - `prefix_emit`: `gkcn,gkpn,gkc->gkcp`
+  - Kept the existing `lax.scan`-based chunk-prefix recurrence.
+- Local validation:
+  - `./infra/pre-commit.py lib/levanter/src/levanter/kernels/pallas/ssd/xla.py lib/levanter/src/levanter/kernels/pallas/mamba3/xla.py --fix`
+  - `uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_mamba3.py -q`
+  - Result: `11 passed`
+- TPU benchmark on `v5p-8`, `seq_len=16384`, `batch_head_groups=16`, `chunk_size=512`, `state_dim=128`, `value_dim=512`, `bf16`:
+  - Old XLA path:
+    - forward: `128.60M tok/s`, `117.99` estimated TFLOP/s
+    - backward: `69.07M tok/s`, `63.37` estimated TFLOP/s
+  - New batched-einsum XLA path:
+    - forward: `144.11M tok/s`, `132.22` estimated TFLOP/s
+    - backward: `85.20M tok/s`, `78.17` estimated TFLOP/s
+  - Gain:
+    - forward: `1.12x`
+    - backward: `1.23x`
+- Follow-up chunk checks with the same implementation:
+  - `chunk_size=1024`
+    - forward: `126.20M tok/s`
+    - backward: `75.75M tok/s`
+  - `chunk_size=2048`
+    - forward: `89.70M tok/s`
+    - backward: `55.65M tok/s`
+- Interpretation:
+  - The better XLA formulation lifts throughput across the curve, but `512` remains the best measured chunk size on `v5p-8`.
+  - The improvement came from changing staging/layout, not from changing the recurrence or deleting the local block.
+
+### 2026-03-18 - Profile comparison after batched-einsum rewrite
+- Trace:
+  - New backward trace pulled to:
+    `scratch/profiles/mamba3-xla-bwd-512-batched`
+  - Summary:
+    `scratch/profiles/mamba3-xla-bwd-512-batched-summary.json`
+- Step time:
+  - Old median steady-state step: `3795.08 us`
+  - New median steady-state step: `3062.88 us`
+- Region comparison:
+  - `prefix_emit` inclusive:
+    - old: `24627.94`
+    - new: `19207.15`
+  - `local_output` inclusive:
+    - old: `18361.15`
+    - new: `14493.11`
+  - `chunk_state` inclusive:
+    - old: `13188.61`
+    - new: `9420.49`
+- Notable HLO/profile differences:
+  - The old backward path had a prominent root `copy.68` tied to the transposed local-output/chunk-state fusion.
+  - In the new profile, that copy disappears from the top ops.
+  - The new top ops are still the same three structured regions, but they map directly to the new `ssd/xla.py` batched contractions rather than the older `vmap`-staged path.
+- Interpretation:
+  - The profile matches the performance change: the gain is broad-based across all three dominant regions, with the largest relative reduction in `chunk_state`.
+  - The previous bottleneck was partly the staging/layout induced by `vmap`, not just the raw arithmetic.
+
+### 2026-03-18 - Failed associative-scan experiment
+- Goal:
+  - Remove the remaining `while`-based chunk-prefix scan overhead in the XLA path.
+- Change:
+  - Replaced the chunk-prefix `lax.scan` in the XLA helper with an affine-summary `jax.lax.associative_scan`.
+- Result on `v5p-8`, same `chunk_size=512` benchmark:
+  - forward: `96.35M tok/s`
+  - backward: `44.38M tok/s`
+- Interpretation:
+  - This is dramatically worse than the batched-einsum + `lax.scan` version.
+  - Even though the remaining profile still shows scan-related work, the `associative_scan` formulation is the wrong TPU lowering here.
+- Decision:
+  - Revert the associative-scan attempt.
+  - Keep the batched-einsum rewrite with the original scan.

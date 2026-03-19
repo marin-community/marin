@@ -7,6 +7,7 @@ import argparse
 from dataclasses import asdict, dataclass
 import json
 import math
+from pathlib import Path
 import time
 
 import jax
@@ -102,6 +103,23 @@ def _time_jitted(fn, *args, steps: int, warmup: int) -> tuple[float, float]:
     return compile_s, steady_s
 
 
+def _capture_profile(
+    fn,
+    *args,
+    profile_dir: str,
+    profile_steps: int,
+) -> None:
+    output_dir = Path(profile_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    jax.profiler.start_trace(str(output_dir), create_perfetto_trace=True)
+    try:
+        for _ in range(profile_steps):
+            out = fn(*args)
+            jax.block_until_ready(out)
+    finally:
+        jax.profiler.stop_trace()
+
+
 def _benchmark(
     shape: Shape,
     *,
@@ -109,6 +127,9 @@ def _benchmark(
     implementation: str,
     steps: int,
     warmup: int,
+    profile_dir: str | None,
+    profile_mode: str,
+    profile_steps: int,
 ) -> list[BenchmarkResult]:
     inputs = _build_inputs(shape, dtype)
     num_chunks = math.ceil(shape.seq_len / shape.chunk_size)
@@ -128,6 +149,14 @@ def _benchmark(
 
     forward_compile, forward_steady = _time_jitted(forward_fn, *inputs, steps=steps, warmup=warmup)
     backward_compile, backward_steady = _time_jitted(backward_fn, *inputs, steps=steps, warmup=warmup)
+
+    if profile_dir is not None:
+        if profile_mode == "forward":
+            _capture_profile(forward_fn, *inputs, profile_dir=profile_dir, profile_steps=profile_steps)
+        elif profile_mode == "backward":
+            _capture_profile(backward_fn, *inputs, profile_dir=profile_dir, profile_steps=profile_steps)
+        else:
+            raise ValueError(f"Unsupported profile mode: {profile_mode}.")
 
     return [
         BenchmarkResult(
@@ -177,6 +206,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--state-dim", type=int, default=128)
     parser.add_argument("--value-dim", type=int, default=512)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--profile-dir", type=str, default="")
+    parser.add_argument("--profile-mode", type=str, default="backward")
+    parser.add_argument("--profile-steps", type=int, default=8)
     return parser.parse_args()
 
 
@@ -207,6 +239,9 @@ def main() -> None:
                     implementation=implementation,
                     steps=args.steps,
                     warmup=args.warmup,
+                    profile_dir=args.profile_dir or None,
+                    profile_mode=args.profile_mode,
+                    profile_steps=args.profile_steps,
                 )
             )
 
