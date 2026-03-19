@@ -424,6 +424,11 @@ message IrisClusterConfig {
   // Authentication (optional — when absent, no auth is required)
   AuthConfig auth = 60;
 
+  // When non-empty, job submissions that specify a service_account must use
+  // one of these values. Jobs without a service_account are unaffected.
+  // Leaves the check to the operator; when empty any SA is accepted.
+  repeated string allowed_service_accounts = 62;
+
   // Task provider — required. Exactly one must be set.
   oneof provider {
     KubernetesProviderConfig kubernetes_provider = 70;

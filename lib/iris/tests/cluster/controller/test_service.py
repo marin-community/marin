@@ -1146,3 +1146,58 @@ def test_register_allows_worker_role(state, mock_scheduler, tmp_path, worker_met
         assert resp.accepted
     finally:
         _verified_identity.reset(token)
+
+
+# =============================================================================
+# Allowlist validation tests
+# =============================================================================
+
+
+def _allowlist_service(state, mock_scheduler, tmp_path, allowed: frozenset[str] | None):
+    from iris.cluster.bundle import BundleStore
+
+    return ControllerServiceImpl(
+        state,
+        state._db,
+        controller=mock_scheduler,
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
+        log_store=state._log_store,
+        allowed_service_accounts=allowed,
+    )
+
+
+def test_allowed_service_account_accepted(state, mock_scheduler, tmp_path, job_request):
+    """A SA in the allowlist is accepted."""
+    allowed_sa = "allowed@project.iam.gserviceaccount.com"
+    svc = _allowlist_service(state, mock_scheduler, tmp_path, frozenset({allowed_sa}))
+    req = job_request("sa-allowed")
+    req.service_account = allowed_sa
+    resp = svc.launch_job(req, None)
+    assert resp.job_id
+
+
+def test_disallowed_service_account_rejected(state, mock_scheduler, tmp_path, job_request):
+    """A SA not in the allowlist is rejected with PERMISSION_DENIED."""
+    svc = _allowlist_service(state, mock_scheduler, tmp_path, frozenset({"allowed@project.iam.gserviceaccount.com"}))
+    req = job_request("sa-denied")
+    req.service_account = "evil@project.iam.gserviceaccount.com"
+    with pytest.raises(ConnectError) as exc_info:
+        svc.launch_job(req, None)
+    assert exc_info.value.code == Code.PERMISSION_DENIED
+
+
+def test_no_service_account_bypasses_allowlist(state, mock_scheduler, tmp_path, job_request):
+    """Jobs without a SA are accepted even when an allowlist is configured."""
+    svc = _allowlist_service(state, mock_scheduler, tmp_path, frozenset({"allowed@project.iam.gserviceaccount.com"}))
+    req = job_request("no-sa")
+    resp = svc.launch_job(req, None)
+    assert resp.job_id
+
+
+def test_no_allowlist_any_service_account_accepted(state, mock_scheduler, tmp_path, job_request):
+    """When allowed_service_accounts is None any SA is accepted."""
+    svc = _allowlist_service(state, mock_scheduler, tmp_path, allowed=None)
+    req = job_request("any-sa")
+    req.service_account = "any-sa@project.iam.gserviceaccount.com"
+    resp = svc.launch_job(req, None)
+    assert resp.job_id

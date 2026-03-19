@@ -678,6 +678,7 @@ class ControllerServiceImpl:
         bundle_store: BundleStore,
         log_store: LogStore,
         auth: ControllerAuth | None = None,
+        allowed_service_accounts: frozenset[str] | None = None,
     ):
         self._transitions = transitions
         self._db = db
@@ -686,6 +687,7 @@ class ControllerServiceImpl:
         self._log_store = log_store
         self._timer = Timer()
         self._auth = auth or ControllerAuth()
+        self._allowed_service_accounts = allowed_service_accounts
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get_zip(bundle_id)
@@ -721,6 +723,13 @@ class ControllerServiceImpl:
         """
         if not request.name:
             raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
+
+        if request.service_account and self._allowed_service_accounts is not None:
+            if request.service_account not in self._allowed_service_accounts:
+                raise ConnectError(
+                    Code.PERMISSION_DENIED,
+                    f"Service account {request.service_account!r} is not in the cluster allowlist",
+                )
 
         job_id = JobName.from_wire(request.name)
 

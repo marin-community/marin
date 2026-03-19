@@ -675,6 +675,10 @@ class ControllerConfig:
     auth: ControllerAuth | None = None
     """Full auth config passed to the service layer for login and API key management."""
 
+    allowed_service_accounts: frozenset[str] | None = None
+    """When set, job submissions that specify a service_account must use one of these values.
+    None means any service account is accepted (default). Empty frozenset blocks all SA requests."""
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
@@ -753,6 +757,7 @@ class Controller:
             bundle_store=self._bundle_store,
             log_store=self._log_store,
             auth=config.auth,
+            allowed_service_accounts=config.allowed_service_accounts,
         )
         self._dashboard = ControllerDashboard(
             self._service,
