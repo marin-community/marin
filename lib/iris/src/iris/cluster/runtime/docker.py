@@ -324,10 +324,19 @@ class DockerContainerHandle:
         setup_script = self._generate_setup_script()
         self._write_setup_script(setup_script)
 
-        # Create and run the build container
+        # Build containers get max(8 GB, task request) memory
+        task_memory_bytes = self.config.resources.memory_bytes if self.config.resources else 0
+        build_memory_bytes = (
+            max(self._BUILD_MEMORY_LIMIT_BYTES, task_memory_bytes)
+            if task_memory_bytes
+            else self._BUILD_MEMORY_LIMIT_BYTES
+        )
+        build_memory_mb = build_memory_bytes // (1024 * 1024)
+
         build_container_id = self._docker_create(
             command=["bash", "/app/_setup_env.sh"],
             label_suffix="_build",
+            memory_limit_mb=build_memory_mb,
         )
 
         build_logs: list[LogLine] = []
@@ -403,7 +412,7 @@ exec {quoted_cmd}
 
         self._run_container_id = self._docker_create(
             command=command,
-            include_resources=True,
+            include_devices=True,
         )
         self.runtime.track_container(self._run_container_id)
         self._docker_start(self._run_container_id)
@@ -561,13 +570,27 @@ exec {quoted_cmd}
     # Docker CLI helpers
     # -------------------------------------------------------------------------
 
+    _BUILD_MEMORY_LIMIT_BYTES = 8 * 1024**3
+
     def _docker_create(
         self,
         command: list[str],
         label_suffix: str = "",
-        include_resources: bool = False,
+        include_devices: bool = False,
+        memory_limit_mb: int | None = None,
     ) -> str:
-        """Create a Docker container. Returns container_id."""
+        """Create a Docker container. Returns container_id.
+
+        CPU and memory cgroup limits are always applied. Device passthrough
+        (TPU/GPU) is only enabled for run containers via include_devices.
+
+        Args:
+            command: Command to run in the container.
+            label_suffix: Suffix appended to the iris.task_id label.
+            include_devices: If True, also pass through accelerator devices.
+            memory_limit_mb: Override memory limit in MB. When None, uses
+                the task's requested memory from config.resources.
+        """
         config = self.config
         self.runtime.ensure_image(config.image)
 
@@ -601,7 +624,7 @@ exec {quoted_cmd}
         cmd.extend(["--cap-add", "SYS_PTRACE"])
 
         # Device flags (TPU passthrough etc) - only for run container
-        if include_resources:
+        if include_devices:
             cmd.extend(_build_device_flags(config))
 
         # Labels for discoverability
@@ -611,15 +634,14 @@ exec {quoted_cmd}
         if config.job_id:
             cmd.extend(["--label", f"iris.job_id={config.job_id}"])
 
-        # Resource limits (cgroups v2) - only for run container
-        if include_resources:
-            cpu_millicores = config.get_cpu_millicores()
-            if cpu_millicores:
-                cpus = cpu_millicores / 1000
-                cmd.extend(["--cpus", str(cpus)])
-            memory_mb = config.get_memory_mb()
-            if memory_mb:
-                cmd.extend(["--memory", f"{memory_mb}m"])
+        # Resource limits (cgroups v2) — always applied
+        cpu_millicores = config.get_cpu_millicores()
+        if cpu_millicores:
+            cpus = cpu_millicores / 1000
+            cmd.extend(["--cpus", str(cpus)])
+        effective_memory_mb = memory_limit_mb or config.get_memory_mb()
+        if effective_memory_mb:
+            cmd.extend(["--memory", f"{effective_memory_mb}m"])
 
         # Device env vars (TPU/GPU) are now included in config.env by
         # build_common_iris_env(), so no separate device_env merge needed.
