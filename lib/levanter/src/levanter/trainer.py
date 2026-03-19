@@ -59,6 +59,7 @@ from levanter.checkpoint import CheckpointerConfig, is_checkpoint_path, load_che
 from levanter.config import JsonAtom
 from levanter.data import AsyncDataset, DataLoader
 from levanter.data.loader import _round_to_nearest_multiple
+from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig, RayConfig
 from levanter.grad_accum import microbatched
 from levanter.metrics import Metric, auto_metric_from_name, unwrap_metrics
@@ -1115,7 +1116,11 @@ def _ensure_scalar(x: hax.types.Scalar | hax.NamedArray) -> hax.types.Scalar:
 
 def _resolve_axis_in_tree(tree, axis):
     """
-    Resolves an axis in a tree of NamedArrays. This is useful for finding the batch axis in a batch of data.
+    Resolves an axis in a batch pytree.
+
+    NamedArray batches carry axis metadata directly. Array-first grug batches do not, so we
+    recover the leading batch dimension from `GrugLmExample.tokens` when the trainer is given
+    batched grug examples.
     """
     for leaf in haliax.tree_util.tree_leaves(tree):
         if isinstance(leaf, haliax.NamedArray):
@@ -1124,28 +1129,16 @@ def _resolve_axis_in_tree(tree, axis):
             except ValueError:
                 pass
 
-    candidate_sizes: list[int] = []
-    for leaf in jax.tree_util.tree_leaves(tree):
-        shape = getattr(leaf, "shape", None)
-        if shape is None:
-            continue
-        if len(shape) >= 2:
-            candidate_sizes.append(int(shape[0]))
+    grug_batch_sizes: list[int] = []
+    for leaf in jax.tree_util.tree_leaves(tree, is_leaf=lambda x: isinstance(x, GrugLmExample)):
+        if isinstance(leaf, GrugLmExample) and leaf.tokens.ndim >= 2:
+            grug_batch_sizes.append(int(leaf.tokens.shape[0]))
 
-    if not candidate_sizes:
-        for leaf in jax.tree_util.tree_leaves(tree):
-            shape = getattr(leaf, "shape", None)
-            if shape is None or len(shape) == 0:
-                continue
-            if len(shape) == 1 and tuple(shape) == (2,):
-                continue
-            candidate_sizes.append(int(shape[0]))
-
-    if candidate_sizes:
-        batch_size = candidate_sizes[0]
-        for size in candidate_sizes[1:]:
+    if grug_batch_sizes:
+        batch_size = grug_batch_sizes[0]
+        for size in grug_batch_sizes[1:]:
             if size != batch_size:
-                raise ValueError(f"Inconsistent inferred batch sizes {candidate_sizes} in tree {tree}")
+                raise ValueError(f"Inconsistent inferred batch sizes {grug_batch_sizes} in tree {tree}")
         return hax.Axis(axis, batch_size)
 
     raise ValueError(f"Could not find axis {axis} in tree {tree}")

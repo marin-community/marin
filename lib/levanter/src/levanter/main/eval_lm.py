@@ -113,6 +113,7 @@ def main(config: EvalLmConfig):
             max_examples_per_dataset=max_examples,
         )
 
+        @named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: GrugLmExample):
             model = mp.cast_to_compute(model)
             with hax.axis_mapping(compute_axis_mapping):

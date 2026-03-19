@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Stable Levanter import surface for partitioning helpers."""
+
 from haliax.partitioning import (
     current_thread_local_mapping,
     infer_resource_partitions,

@@ -18,9 +18,10 @@ import levanter
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data import DataLoader
-from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from levanter.data.text import LmDataConfig
+from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from levanter.models.llama import LlamaConfig
+from levanter.models.loss import next_token_loss
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
@@ -84,22 +85,24 @@ def main(config: VizLmConfig):
             model = inference_mode(model, True)
             model = mp.cast_to_compute(model)
 
-            loss = model.compute_next_token_loss_array(
-                example,
-                batch_axis=EvalBatch,
-                reduction=None,
-                reduction_axis=(),
-            )
-
             named_example = named_lm_example_from_grug(example, Pos=Pos, batch_axis=EvalBatch)
             activations = model.activations(named_example.tokens, named_example.attn_mask, key=key)
             if isinstance(activations, tuple):
                 activations = activations[0]
-            logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed).array
+            logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed)
+            loss = next_token_loss(
+                model.Pos,
+                model.Vocab,
+                logits=logits,
+                true_ids=named_example.tokens,
+                loss_weight=named_example.loss_weight,
+                reduction=None,
+                reduction_axis=(),
+            )
 
             # Roll forward to align each prediction with its target token.
-            logprobs = jnp.roll(-loss, 1, axis=-1)
-            argmaxes = jnp.roll(jnp.argmax(logits, axis=-1), 1, axis=-1)
+            logprobs = jnp.roll(-loss.array, 1, axis=-1)
+            argmaxes = jnp.roll(hax.argmax(logits, axis=model.Vocab).array, 1, axis=-1)
             return logprobs, argmaxes
 
         model: LmHeadModel
