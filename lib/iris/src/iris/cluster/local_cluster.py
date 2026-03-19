@@ -29,8 +29,8 @@ from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.controller import (
     Controller,
     ControllerConfig,
-    RpcWorkerStubFactory,
 )
+from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.vm_lifecycle import ControllerStatus
 from iris.cluster.controller.scaling_group import (
@@ -206,7 +206,7 @@ class LocalCluster:
                 auth_provider=auth.provider,
                 auth=auth,
             ),
-            worker_stub_factory=RpcWorkerStubFactory(),
+            provider=WorkerProvider(stub_factory=RpcWorkerStubFactory()),
             autoscaler=self._autoscaler,
             threads=controller_threads,
             db=db,

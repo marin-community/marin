@@ -12,7 +12,7 @@ from pathlib import Path
 import click
 
 from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
-from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
+from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD
 from iris.logging import configure_logging
 from iris.rpc import config_pb2
@@ -65,7 +65,8 @@ def serve(
     from iris.cluster.controller.autoscaler import Autoscaler
     from iris.cluster.controller.checkpoint import download_checkpoint_to_local
     from iris.cluster.controller.db import ControllerDB
-    from iris.cluster.config import load_config, create_autoscaler
+    from iris.cluster.k8s.provider import KubernetesProvider
+    from iris.cluster.config import load_config, create_autoscaler, make_provider
     from iris.cluster.platform.factory import create_platform
 
     configure_logging(level=getattr(logging, log_level))
@@ -112,41 +113,46 @@ def serve(
 
     db = ControllerDB(db_path=db_path)
 
-    # --- Create autoscaler (needs db) ---
+    # --- Create provider ---
+    provider = make_provider(cluster_config)
+    logger.info("Provider created: %s", type(provider).__name__)
+
+    # --- Create autoscaler (only for WorkerProvider; KubernetesProvider manages its own pods) ---
     autoscaler: Autoscaler | None = None
     base_worker_config = None
-    try:
-        platform = create_platform(
-            platform_config=cluster_config.platform,
-            ssh_config=cluster_config.defaults.ssh,
-        )
-        logger.info("Platform created")
+    if not isinstance(provider, KubernetesProvider):
+        try:
+            platform = create_platform(
+                platform_config=cluster_config.platform,
+                ssh_config=cluster_config.defaults.ssh,
+            )
+            logger.info("Platform created")
 
-        if cluster_config.defaults.worker.docker_image:
-            base_worker_config = config_pb2.WorkerConfig()
-            base_worker_config.CopyFrom(cluster_config.defaults.worker)
-            if not base_worker_config.controller_address:
-                base_worker_config.controller_address = platform.discover_controller(cluster_config.controller)
-            base_worker_config.platform.CopyFrom(cluster_config.platform)
+            if cluster_config.defaults.worker.docker_image:
+                base_worker_config = config_pb2.WorkerConfig()
+                base_worker_config.CopyFrom(cluster_config.defaults.worker)
+                if not base_worker_config.controller_address:
+                    base_worker_config.controller_address = platform.discover_controller(cluster_config.controller)
+                base_worker_config.platform.CopyFrom(cluster_config.platform)
 
-        autoscaler = create_autoscaler(
-            platform=platform,
-            autoscaler_config=cluster_config.defaults.autoscaler,
-            scale_groups=cluster_config.scale_groups,
-            label_prefix=cluster_config.platform.label_prefix or "iris",
-            base_worker_config=base_worker_config,
-            db=db,
-        )
-        logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
+            autoscaler = create_autoscaler(
+                platform=platform,
+                autoscaler_config=cluster_config.defaults.autoscaler,
+                scale_groups=cluster_config.scale_groups,
+                label_prefix=cluster_config.platform.label_prefix or "iris",
+                base_worker_config=base_worker_config,
+                db=db,
+            )
+            logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
 
-        # Restore autoscaler state (tracked slices/workers/backoff) from the DB
-        # so restarted controllers don't lose cloud resource tracking and
-        # scale up duplicates.
-        autoscaler.restore_from_db(db, platform)
-        logger.info("Autoscaler state restored from DB")
-    except Exception as e:
-        logger.exception("Failed to create autoscaler from config")
-        raise click.ClickException(f"Failed to create autoscaler: {e}") from e
+            # Restore autoscaler state (tracked slices/workers/backoff) from the DB
+            # so restarted controllers don't lose cloud resource tracking and
+            # scale up duplicates.
+            autoscaler.restore_from_db(db, platform)
+            logger.info("Autoscaler state restored from DB")
+        except Exception as e:
+            logger.exception("Failed to create autoscaler from config")
+            raise click.ClickException(f"Failed to create autoscaler: {e}") from e
 
     # Workers need the resolved remote_state_dir to upload task artifacts (profiles).
     if base_worker_config is not None:
@@ -179,7 +185,7 @@ def serve(
     try:
         controller = Controller(
             config=config,
-            worker_stub_factory=RpcWorkerStubFactory(),
+            provider=provider,
             autoscaler=autoscaler,
             db=db,
         )
