@@ -39,7 +39,7 @@ from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_BUILDING_TASKS_PER_WORKER = 16
+DEFAULT_MAX_BUILDING_TASKS_PER_WORKER = 8
 """Default limit for concurrent BUILDING tasks per worker.
 
 When many tasks start simultaneously, their setup commands (uv sync, pip install)
