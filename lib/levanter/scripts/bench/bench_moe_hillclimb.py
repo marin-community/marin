@@ -409,52 +409,80 @@ def _shared_mlp_explicit_bwd_bwd(
     if x is None or shared_w13 is None or shared_w2 is None or gate_f32 is None or up_f32 is None:
         return jnp.zeros_like(g), jnp.zeros((g.shape[-1], 0), dtype=g.dtype), jnp.zeros((0, g.shape[-1]), dtype=g.dtype)
 
-    batch_spec = grug_moe_lib._batch_spec_from_x(x, get_abstract_mesh())
-    shared_param_spec = P(None, None)
-    reduction_axes = _mesh_reduction_axes(get_abstract_mesh())
     x_f32 = x.astype(jnp.float32)
     shared_w13_f32 = shared_w13.astype(jnp.float32)
     shared_w2_f32 = shared_w2.astype(jnp.float32)
     g_f32 = g.astype(jnp.float32)
-    shared_gated = jax.nn.silu(gate_f32) * up_f32
+    mesh = get_abstract_mesh()
+    reduction_axes = _mesh_reduction_axes(mesh)
 
-    grad_shared_w2_local = jnp.einsum(
-        "tm,td->md",
-        shared_gated,
-        g_f32,
-        out_sharding=shared_param_spec,
-        preferred_element_type=jnp.float32,
-    )
+    def _shared_bwd_local(
+        x_local: jax.Array,
+        gate_local: jax.Array,
+        up_local: jax.Array,
+        g_local: jax.Array,
+        shared_w13_local: jax.Array,
+        shared_w2_local: jax.Array,
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+        shared_gated_local = jax.nn.silu(gate_local) * up_local
+        grad_shared_w2_local = jnp.einsum(
+            "tm,td->md",
+            shared_gated_local,
+            g_local,
+            preferred_element_type=jnp.float32,
+        )
+        grad_shared_gated_local = jnp.einsum(
+            "td,md->tm",
+            g_local,
+            shared_w2_local,
+            preferred_element_type=jnp.float32,
+        )
+        grad_gate_local = grad_shared_gated_local * up_local * _silu_grad(gate_local)
+        grad_up_local = grad_shared_gated_local * jax.nn.silu(gate_local)
+        grad_shared13_local = jnp.concatenate([grad_gate_local, grad_up_local], axis=-1)
+        grad_shared_w13_local = jnp.einsum(
+            "td,tm->dm",
+            x_local,
+            grad_shared13_local,
+            preferred_element_type=jnp.float32,
+        )
+        if reduction_axes:
+            grad_shared_w13_local = jax.lax.psum(grad_shared_w13_local, reduction_axes)
+            grad_shared_w2_local = jax.lax.psum(grad_shared_w2_local, reduction_axes)
+        grad_x_local = jnp.einsum(
+            "tm,dm->td",
+            grad_shared13_local,
+            shared_w13_local,
+            preferred_element_type=jnp.float32,
+        )
+        return grad_x_local, grad_shared_w13_local, grad_shared_w2_local
 
-    grad_shared_gated = jnp.einsum(
-        "td,md->tm",
-        g_f32,
-        shared_w2_f32,
-        out_sharding=batch_spec,
-        preferred_element_type=jnp.float32,
-    )
-    grad_gate = grad_shared_gated * up_f32 * _silu_grad(gate_f32)
-    grad_up = grad_shared_gated * jax.nn.silu(gate_f32)
-    grad_shared13 = jnp.concatenate([grad_gate, grad_up], axis=-1)
-
-    grad_shared_w13_local = jnp.einsum(
-        "td,tm->dm",
-        x_f32,
-        grad_shared13,
-        out_sharding=shared_param_spec,
-        preferred_element_type=jnp.float32,
-    )
-    if reduction_axes:
-        grad_shared_w13_local = jax.lax.psum(grad_shared_w13_local, reduction_axes)
-        grad_shared_w2_local = jax.lax.psum(grad_shared_w2_local, reduction_axes)
-
-    grad_x = jnp.einsum(
-        "tm,dm->td",
-        grad_shared13,
-        shared_w13_f32,
-        out_sharding=batch_spec,
-        preferred_element_type=jnp.float32,
-    )
+    if mesh is not None and not mesh.empty:
+        batch_spec = grug_moe_lib._batch_spec_from_x(x, mesh)
+        shard_fn = shard_map(
+            _shared_bwd_local,
+            mesh=mesh,
+            in_specs=(batch_spec, batch_spec, batch_spec, batch_spec, P(None, None), P(None, None)),
+            out_specs=(batch_spec, P(None, None), P(None, None)),
+            check_vma=False,
+        )
+        grad_x, grad_shared_w13_local, grad_shared_w2_local = shard_fn(
+            x_f32,
+            gate_f32,
+            up_f32,
+            g_f32,
+            shared_w13_f32,
+            shared_w2_f32,
+        )
+    else:
+        grad_x, grad_shared_w13_local, grad_shared_w2_local = _shared_bwd_local(
+            x_f32,
+            gate_f32,
+            up_f32,
+            g_f32,
+            shared_w13_f32,
+            shared_w2_f32,
+        )
     return (
         grad_x.astype(x.dtype),
         grad_shared_w13_local.astype(shared_w13.dtype),
