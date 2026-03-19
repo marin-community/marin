@@ -5524,6 +5524,70 @@ def _time_deepep_transport_forward_backward_capped_prewarmed(
     )
 
 
+def _profile_deepep_transport_forward_backward_capped_prewarmed(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    shared_w13: jax.Array,
+    shared_w2: jax.Array,
+    *,
+    warmup: int,
+    iters: int,
+    profile_dir: Path,
+    profile_name: str,
+    w13_expert_padded: bool = False,
+) -> float:
+    mesh = x.sharding.mesh
+    num_experts = int(w_up_gate.shape[0])
+    max_recv_tokens, max_local_assignments, max_local_expert_assignments = _deepep_transport_exact_cap_metadata(
+        selected_experts,
+        mesh=mesh,
+        num_experts=num_experts,
+    )
+    w13_local_expert_capacity = max_local_expert_assignments if w13_expert_padded else None
+    _prewarm_deepep_transport_local_compute(
+        x,
+        selected_experts,
+        w_up_gate,
+        w_down,
+        shared_w13,
+        shared_w2,
+        max_local_assignments=max_local_assignments,
+        w13_local_expert_capacity=w13_local_expert_capacity,
+    )
+
+    def loss_fn(x_in, w_up_gate_in, w_down_in, shared_w13_in, shared_w2_in):
+        y = _forward_deepep_transport_capped(
+            x_in,
+            selected_experts,
+            combine_weights,
+            w_up_gate_in,
+            w_down_in,
+            shared_w13_in,
+            shared_w2_in,
+            max_recv_tokens=max_recv_tokens,
+            max_local_assignments=max_local_assignments,
+            w13_local_expert_capacity=w13_local_expert_capacity,
+        )
+        return jnp.mean(jnp.square(y.astype(jnp.float32)))
+
+    grad_fn = jax.value_and_grad(loss_fn, argnums=(0, 1, 2, 3, 4))
+    return _profile_fn(
+        grad_fn,
+        x,
+        w_up_gate,
+        w_down,
+        shared_w13,
+        shared_w2,
+        warmup=warmup,
+        iters=iters,
+        profile_dir=profile_dir,
+        profile_name=profile_name,
+    )
+
+
 def _flatten_tree_max_abs(tree_a, tree_b) -> float:
     leaves_a = jax.tree.leaves(tree_a)
     leaves_b = jax.tree.leaves(tree_b)
@@ -5886,19 +5950,33 @@ def main() -> None:
                         raise ValueError(f"{kernel} currently supports only --bench-pass=forward")
                     if kernel == "deepep_transport_capped_prewarmed":
                         if args.profile_root is not None:
-                            raise ValueError("deepep_transport_capped_prewarmed does not yet support --profile-root")
-                        dt = _time_deepep_transport_forward_backward_capped_prewarmed(
-                            x_sharded,
-                            selected_sharded,
-                            weights_sharded,
-                            w13_sharded,
-                            w2_sharded,
-                            shared_w13_sharded,
-                            shared_w2_sharded,
-                            warmup=args.warmup,
-                            iters=args.iters,
-                            w13_expert_padded=args.w13_expert_padded,
-                        )
+                            dt = _profile_deepep_transport_forward_backward_capped_prewarmed(
+                                x_sharded,
+                                selected_sharded,
+                                weights_sharded,
+                                w13_sharded,
+                                w2_sharded,
+                                shared_w13_sharded,
+                                shared_w2_sharded,
+                                warmup=args.warmup,
+                                iters=args.iters,
+                                profile_dir=args.profile_root,
+                                profile_name=profile_name,
+                                w13_expert_padded=args.w13_expert_padded,
+                            )
+                        else:
+                            dt = _time_deepep_transport_forward_backward_capped_prewarmed(
+                                x_sharded,
+                                selected_sharded,
+                                weights_sharded,
+                                w13_sharded,
+                                w2_sharded,
+                                shared_w13_sharded,
+                                shared_w2_sharded,
+                                warmup=args.warmup,
+                                iters=args.iters,
+                                w13_expert_padded=args.w13_expert_padded,
+                            )
                     elif args.profile_root is not None:
                         dt = _profile_fn(
                             grad_fn,
