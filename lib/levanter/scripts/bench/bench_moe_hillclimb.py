@@ -2170,66 +2170,20 @@ def _ragged_dot_expert_padded_batched(
 
     hidden = lhs.shape[-1]
     if rhs.shape[1] == hidden:
-        rhs_prepared = rhs
+        rhs_contract_axis = 1
     elif rhs.ndim > 2 and rhs.shape[2] == hidden:
-        rhs_prepared = jnp.swapaxes(rhs, 1, 2)
+        rhs_contract_axis = 2
     else:
         raise ValueError(
             f"ragged expert batched dot requires rhs to contract over hidden={hidden}, got rhs.shape={rhs.shape}"
         )
-
-    local_experts = rhs_prepared.shape[0]
-    if group_sizes.shape[0] != local_experts:
-        raise ValueError(
-            f"group_sizes.shape[0]={group_sizes.shape[0]} must match local_experts={local_experts} for padded batched dot"
-        )
-
-    total_rows = lhs.shape[0]
-    row_ids = jnp.arange(total_rows, dtype=jnp.int32)
-    segment_ends = jnp.cumsum(group_sizes, dtype=jnp.int32)
-    total_valid = jnp.sum(group_sizes, dtype=jnp.int32)
-    valid = row_ids < total_valid
-
-    expert_ids = jnp.searchsorted(segment_ends, row_ids, side="right").astype(jnp.int32)
-    segment_starts = jnp.concatenate(
-        [jnp.zeros((1,), dtype=jnp.int32), segment_ends[:-1].astype(jnp.int32)],
-        axis=0,
+    return grug_moe_lib._ragged_dot_expert_padded_batched(
+        lhs,
+        rhs,
+        group_sizes,
+        local_expert_capacity=local_expert_capacity,
+        rhs_contract_axis=rhs_contract_axis,
     )
-    expert_ids_clipped = jnp.clip(expert_ids, 0, max(0, local_experts - 1))
-    within_expert = row_ids - jnp.take(segment_starts, expert_ids_clipped, axis=0)
-    valid = valid & (expert_ids < local_experts) & (within_expert < local_expert_capacity)
-
-    flat_capacity = local_experts * local_expert_capacity
-    flat_indices = expert_ids * local_expert_capacity + within_expert
-    capacity_positions = jnp.arange(local_expert_capacity, dtype=jnp.int32)
-
-    with jax.named_scope("expert_padded_pack"):
-        segment_starts = jnp.concatenate(
-            [jnp.zeros((1,), dtype=jnp.int32), segment_ends[:-1].astype(jnp.int32)],
-            axis=0,
-        )
-        gather_rows = segment_starts[:, None] + capacity_positions[None, :]
-        gather_valid = capacity_positions[None, :] < group_sizes[:, None]
-        lhs_with_zero = jnp.concatenate([lhs, jnp.zeros((1, hidden), dtype=lhs.dtype)], axis=0)
-        packed_lhs = jnp.take(
-            lhs_with_zero,
-            jnp.where(gather_valid, gather_rows, total_rows).reshape(-1),
-            axis=0,
-        ).reshape(local_experts, local_expert_capacity, hidden)
-
-    with jax.named_scope("expert_padded_bmm"):
-        packed_out = jax.lax.dot_general(
-            packed_lhs,
-            rhs_prepared,
-            dimension_numbers=(((2,), (1,)), ((0,), (0,))),
-        )
-
-    out_dim = packed_out.shape[-1]
-    with jax.named_scope("expert_padded_unpack"):
-        packed_out_flat = packed_out.reshape(flat_capacity, out_dim)
-        gather_indices = jnp.where(valid, flat_indices, 0)
-        out = jnp.take(packed_out_flat, gather_indices, axis=0)
-        return jnp.where(valid[:, None], out, 0)
 
 
 def _moe_mlp_deepep_transport_w13_only(

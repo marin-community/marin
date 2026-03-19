@@ -251,6 +251,146 @@ def _local_permute_from_counts(
     return sorted_inputs, sorted_indices, group_sizes
 
 
+def _expert_padded_ragged_metadata(
+    total_rows: int,
+    group_sizes: jax.Array,
+    *,
+    local_experts: int,
+    local_expert_capacity: int,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    row_ids = jnp.arange(total_rows, dtype=jnp.int32)
+    segment_ends = jnp.cumsum(group_sizes, dtype=jnp.int32)
+    total_valid = jnp.sum(group_sizes, dtype=jnp.int32)
+    valid_rows = row_ids < total_valid
+
+    segment_starts = jnp.concatenate(
+        [jnp.zeros((1,), dtype=jnp.int32), segment_ends[:-1].astype(jnp.int32)],
+        axis=0,
+    )
+    expert_ids = jnp.searchsorted(segment_ends, row_ids, side="right").astype(jnp.int32)
+    expert_ids_clipped = jnp.clip(expert_ids, 0, max(0, local_experts - 1))
+    within_expert = row_ids - jnp.take(segment_starts, expert_ids_clipped, axis=0)
+    valid_rows = valid_rows & (expert_ids < local_experts) & (within_expert < local_expert_capacity)
+
+    capacity_positions = jnp.arange(local_expert_capacity, dtype=jnp.int32)
+    gather_rows = segment_starts[:, None] + capacity_positions[None, :]
+    gather_valid = capacity_positions[None, :] < group_sizes[:, None]
+    flat_indices = expert_ids * local_expert_capacity + within_expert
+    return valid_rows, flat_indices, gather_rows, gather_valid
+
+
+def _expert_padded_pack_rows(
+    rows: jax.Array,
+    *,
+    gather_rows: jax.Array,
+    gather_valid: jax.Array,
+) -> jax.Array:
+    rows_with_zero = jnp.concatenate([rows, jnp.zeros((1, rows.shape[-1]), dtype=rows.dtype)], axis=0)
+    packed_rows = jnp.take(
+        rows_with_zero,
+        jnp.where(gather_valid, gather_rows, rows.shape[0]).reshape(-1),
+        axis=0,
+    )
+    return packed_rows.reshape(gather_rows.shape[0], gather_rows.shape[1], rows.shape[-1])
+
+
+def _expert_padded_unpack_rows(
+    packed_rows: jax.Array,
+    *,
+    valid_rows: jax.Array,
+    flat_indices: jax.Array,
+) -> jax.Array:
+    packed_rows_flat = packed_rows.reshape(-1, packed_rows.shape[-1])
+    gather_indices = jnp.where(valid_rows, flat_indices, 0)
+    unpacked_rows = jnp.take(packed_rows_flat, gather_indices, axis=0)
+    return jnp.where(valid_rows[:, None], unpacked_rows, 0)
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(3,))
+def _ragged_dot_expert_padded_batched_prepared(
+    lhs: jax.Array,
+    rhs_prepared: jax.Array,
+    group_sizes: jax.Array,
+    local_expert_capacity: int,
+) -> jax.Array:
+    valid_rows, flat_indices, gather_rows, gather_valid = _expert_padded_ragged_metadata(
+        lhs.shape[0],
+        group_sizes,
+        local_experts=rhs_prepared.shape[0],
+        local_expert_capacity=local_expert_capacity,
+    )
+    packed_lhs = _expert_padded_pack_rows(lhs, gather_rows=gather_rows, gather_valid=gather_valid)
+    packed_out = jax.lax.dot_general(
+        packed_lhs,
+        rhs_prepared,
+        dimension_numbers=(((2,), (1,)), ((0,), (0,))),
+    )
+    return _expert_padded_unpack_rows(packed_out, valid_rows=valid_rows, flat_indices=flat_indices)
+
+
+def _ragged_dot_expert_padded_batched_prepared_fwd(
+    lhs: jax.Array,
+    rhs_prepared: jax.Array,
+    group_sizes: jax.Array,
+    local_expert_capacity: int,
+) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array]]:
+    valid_rows, flat_indices, gather_rows, gather_valid = _expert_padded_ragged_metadata(
+        lhs.shape[0],
+        group_sizes,
+        local_experts=rhs_prepared.shape[0],
+        local_expert_capacity=local_expert_capacity,
+    )
+    packed_lhs = _expert_padded_pack_rows(lhs, gather_rows=gather_rows, gather_valid=gather_valid)
+    packed_out = jax.lax.dot_general(
+        packed_lhs,
+        rhs_prepared,
+        dimension_numbers=(((2,), (1,)), ((0,), (0,))),
+    )
+    out = _expert_padded_unpack_rows(packed_out, valid_rows=valid_rows, flat_indices=flat_indices)
+    return out, (packed_lhs, rhs_prepared, group_sizes)
+
+
+def _ragged_dot_expert_padded_batched_prepared_bwd(
+    local_expert_capacity: int,
+    residuals: tuple[jax.Array, jax.Array, jax.Array],
+    out_cotangent: jax.Array,
+) -> tuple[jax.Array, jax.Array, None]:
+    packed_lhs, rhs_prepared, group_sizes = residuals
+    valid_rows, flat_indices, gather_rows, gather_valid = _expert_padded_ragged_metadata(
+        out_cotangent.shape[0],
+        group_sizes,
+        local_experts=rhs_prepared.shape[0],
+        local_expert_capacity=local_expert_capacity,
+    )
+    packed_out_cotangent = _expert_padded_pack_rows(
+        out_cotangent,
+        gather_rows=gather_rows,
+        gather_valid=gather_valid,
+    )
+    grad_packed_lhs = jax.lax.dot_general(
+        packed_out_cotangent,
+        rhs_prepared,
+        dimension_numbers=(((2,), (2,)), ((0,), (0,))),
+    )
+    grad_lhs = _expert_padded_unpack_rows(
+        grad_packed_lhs,
+        valid_rows=valid_rows,
+        flat_indices=flat_indices,
+    )
+    grad_rhs_prepared = jax.lax.dot_general(
+        packed_lhs,
+        packed_out_cotangent,
+        dimension_numbers=(((1,), (1,)), ((0,), (0,))),
+    )
+    return grad_lhs, grad_rhs_prepared, None
+
+
+_ragged_dot_expert_padded_batched_prepared.defvjp(
+    _ragged_dot_expert_padded_batched_prepared_fwd,
+    _ragged_dot_expert_padded_batched_prepared_bwd,
+)
+
+
 def _w13_ragged_dot(
     x_dispatch: jax.Array,
     moe_w13_local: jax.Array,
@@ -303,51 +443,13 @@ def _ragged_dot_expert_padded_batched(
             f"group_sizes.shape[0]={group_sizes.shape[0]} must match local_experts={local_experts} for padded batched dot"
         )
 
-    total_rows = lhs.shape[0]
-    row_ids = jnp.arange(total_rows, dtype=jnp.int32)
-    segment_ends = jnp.cumsum(group_sizes, dtype=jnp.int32)
-    total_valid = jnp.sum(group_sizes, dtype=jnp.int32)
-    valid = row_ids < total_valid
-
-    expert_ids = jnp.searchsorted(segment_ends, row_ids, side="right").astype(jnp.int32)
-    segment_starts = jnp.concatenate(
-        [jnp.zeros((1,), dtype=jnp.int32), segment_ends[:-1].astype(jnp.int32)],
-        axis=0,
-    )
-    expert_ids_clipped = jnp.clip(expert_ids, 0, max(0, local_experts - 1))
-    within_expert = row_ids - jnp.take(segment_starts, expert_ids_clipped, axis=0)
-    valid = valid & (expert_ids < local_experts) & (within_expert < local_expert_capacity)
-
-    flat_capacity = local_experts * local_expert_capacity
-    flat_indices = expert_ids * local_expert_capacity + within_expert
-    capacity_positions = jnp.arange(local_expert_capacity, dtype=jnp.int32)
-
-    with jax.named_scope("expert_padded_pack"):
-        segment_starts = jnp.concatenate(
-            [jnp.zeros((1,), dtype=jnp.int32), segment_ends[:-1].astype(jnp.int32)],
-            axis=0,
-        )
-        gather_rows = segment_starts[:, None] + capacity_positions[None, :]
-        gather_valid = capacity_positions[None, :] < group_sizes[:, None]
-        lhs_with_zero = jnp.concatenate([lhs, jnp.zeros((1, lhs.shape[-1]), dtype=lhs.dtype)], axis=0)
-        packed_lhs = jnp.take(
-            lhs_with_zero,
-            jnp.where(gather_valid, gather_rows, total_rows).reshape(-1),
-            axis=0,
-        ).reshape(local_experts, local_expert_capacity, lhs.shape[-1])
-
     with jax.named_scope("expert_padded_bmm"):
-        packed_out = jax.lax.dot_general(
-            packed_lhs,
+        return _ragged_dot_expert_padded_batched_prepared(
+            lhs,
             rhs_prepared,
-            dimension_numbers=(((2,), (1,)), ((0,), (0,))),
+            group_sizes,
+            local_expert_capacity,
         )
-
-    with jax.named_scope("expert_padded_unpack"):
-        packed_out_flat = packed_out.reshape(flat_capacity, packed_out.shape[-1])
-        gather_indices = jnp.where(valid, flat_indices, 0)
-        out = jnp.take(packed_out_flat, gather_indices, axis=0)
-        return jnp.where(valid[:, None], out, 0)
 def _moe_mlp_ep_ring_local(
     x_local: Float[Array, "TL D"],
     selected_experts_local: Int[Array, "TL K"],
