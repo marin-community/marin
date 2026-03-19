@@ -12,7 +12,7 @@ import time
 from collections.abc import Generator, Sequence
 from typing import Any, Protocol
 
-from fray.v2.actor import ActorGroup, ActorHandle
+from fray.v2.actor import ActorGroup, ActorHandle, HostedActor
 from fray.v2.types import ActorConfig, JobRequest, JobStatus, ResourceConfig
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,22 @@ class Client(Protocol):
             request: The job request to submit.
             adopt_existing: If True (default), return existing job handle when name conflicts.
                           If False, raise JobAlreadyExists on duplicate names.
+        """
+        ...
+
+    def host_actor(
+        self,
+        actor_class: type,
+        *args: Any,
+        name: str,
+        actor_config: ActorConfig = ActorConfig(),
+        **kwargs: Any,
+    ) -> HostedActor:
+        """Host an actor in the current process with RPC serving.
+
+        Unlike create_actor, this does not spawn a separate job/process.
+        The actor runs in the caller's process and is reachable via the
+        returned handle. Call shutdown() on the result to stop the server.
         """
         ...
 
