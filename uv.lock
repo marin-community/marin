@@ -5386,6 +5386,7 @@ name = "marin-root"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "dupekit" },
     { name = "fray" },
     { name = "haliax" },
     { name = "iris" },
@@ -5395,13 +5396,9 @@ dependencies = [
     { name = "zephyr" },
 ]
 
-[package.dev-dependencies]
-rust = [
-    { name = "dupekit" },
-]
-
 [package.metadata]
 requires-dist = [
+    { name = "dupekit", editable = "rust/dupekit" },
     { name = "fray", editable = "lib/fray" },
     { name = "haliax", editable = "lib/haliax" },
     { name = "iris", editable = "lib/iris" },
@@ -5410,9 +5407,6 @@ requires-dist = [
     { name = "watchdog" },
     { name = "zephyr", editable = "lib/zephyr" },
 ]
-
-[package.metadata.requires-dev]
-rust = [{ name = "dupekit", editable = "rust/dupekit" }]
 
 [[package]]
 name = "markdown"
