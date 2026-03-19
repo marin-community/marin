@@ -1646,7 +1646,7 @@ wheels = [
 [[package]]
 name = "dupekit"
 version = "0.1.0"
-source = { editable = "lib/dupekit" }
+source = { editable = "rust/dupekit" }
 
 [package.metadata]
 requires-dist = [
@@ -5247,7 +5247,7 @@ requires-dist = [
     { name = "ddsketch" },
     { name = "deepdiff" },
     { name = "draccus", specifier = ">=0.11.5" },
-    { name = "dupekit", marker = "extra == 'dedup'", editable = "lib/dupekit" },
+    { name = "dupekit", marker = "extra == 'dedup'", editable = "rust/dupekit" },
     { name = "fasteners", specifier = ">=0.19" },
     { name = "fire", marker = "extra == 'evalchemy'" },
     { name = "flask" },
