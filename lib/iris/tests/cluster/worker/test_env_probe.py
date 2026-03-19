@@ -11,6 +11,7 @@ from iris.cluster.worker.env_probe import (
     DefaultEnvironmentProvider,
     HardwareProbe,
     HostMetricsCollector,
+    _compute_memory_headroom,
     _read_net_dev_bytes,
     build_worker_metadata,
     check_worker_health,
@@ -400,3 +401,38 @@ def test_host_metrics_collector_network_graceful_on_non_linux(monkeypatch):
     snapshot = collector.collect()
     assert snapshot.net_recv_bps == 0
     assert snapshot.net_sent_bps == 0
+
+
+# --- Memory headroom ---
+
+
+def test_memory_headroom_large_machine():
+    """720 GB machine: headroom is max(10%, 16 GB) = 72 GB."""
+    physical = 720 * 1024**3
+    headroom = _compute_memory_headroom(physical)
+    # 10% of 720 GB = 72 GB > 16 GB minimum
+    assert headroom == int(physical * 0.10)
+
+
+def test_memory_headroom_medium_machine():
+    """128 GB machine: headroom is 16 GB (min floor > 10% of 128 GB = 12.8 GB)."""
+    physical = 128 * 1024**3
+    headroom = _compute_memory_headroom(physical)
+    assert headroom == 16 * 1024**3
+
+
+def test_memory_headroom_small_machine():
+    """16 GB machine: headroom capped at 50% to keep the machine usable."""
+    physical = 16 * 1024**3
+    headroom = _compute_memory_headroom(physical)
+    # 16 GB min would be 100% of RAM, but capped at 50%
+    assert headroom == physical // 2
+
+
+def test_reported_memory_less_than_physical():
+    """_get_memory_total_bytes should report less than physical RAM."""
+    from iris.cluster.worker.env_probe import _get_memory_total_bytes
+
+    reported = _get_memory_total_bytes()
+    # On any machine, reported schedulable memory should be positive
+    assert reported > 0

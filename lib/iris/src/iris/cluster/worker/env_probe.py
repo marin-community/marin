@@ -156,12 +156,37 @@ def _probe_gpu_info() -> tuple[int, str, int]:
         return 0, "", 0
 
 
+_MEMORY_HEADROOM_FRACTION = 0.10
+"""Reserve at least 10% of physical RAM for OS, Docker daemon, and worker agent."""
+
+_MEMORY_HEADROOM_MIN_BYTES = 16 * 1024**3
+"""Absolute minimum headroom on large machines: 16 GB."""
+
+
+def _compute_memory_headroom(physical_bytes: int) -> int:
+    """Compute memory headroom to reserve for OS, Docker daemon, and worker agent.
+
+    Uses max(10% of physical RAM, 16 GB), but never more than 50% of total so
+    small dev/CI machines still report usable memory.
+    """
+    headroom = max(int(physical_bytes * _MEMORY_HEADROOM_FRACTION), _MEMORY_HEADROOM_MIN_BYTES)
+    # Cap headroom at 50% so small machines remain usable
+    return min(headroom, physical_bytes // 2)
+
+
 def _get_memory_total_bytes() -> int:
+    """Return schedulable memory in bytes, with headroom subtracted.
+
+    Reserves headroom for the OS, Docker daemon, and worker agent so the
+    scheduler cannot commit 100% of a machine's memory.
+    """
     try:
         with open("/proc/meminfo") as f:
             for line in f:
                 if line.startswith("MemTotal:"):
-                    return int(line.split()[1]) * 1024  # kB to bytes
+                    physical = int(line.split()[1]) * 1024  # kB to bytes
+                    headroom = _compute_memory_headroom(physical)
+                    return physical - headroom
     except FileNotFoundError:
         pass
     # Fallback for non-Linux

@@ -324,10 +324,11 @@ class DockerContainerHandle:
         setup_script = self._generate_setup_script()
         self._write_setup_script(setup_script)
 
-        # Create and run the build container
+        # Create and run the build container with memory limits to prevent OOM
         build_container_id = self._docker_create(
             command=["bash", "/app/_setup_env.sh"],
             label_suffix="_build",
+            include_memory_limit=True,
         )
 
         build_logs: list[LogLine] = []
@@ -566,8 +567,17 @@ exec {quoted_cmd}
         command: list[str],
         label_suffix: str = "",
         include_resources: bool = False,
+        include_memory_limit: bool = False,
     ) -> str:
-        """Create a Docker container. Returns container_id."""
+        """Create a Docker container. Returns container_id.
+
+        Args:
+            command: Command to run in the container.
+            label_suffix: Suffix appended to the iris.task_id label.
+            include_resources: If True, apply full resource limits (CPU, memory, devices).
+            include_memory_limit: If True, apply only the --memory cgroup limit.
+                Used for BUILD containers to prevent OOM without device passthrough.
+        """
         config = self.config
         self.runtime.ensure_image(config.image)
 
@@ -611,12 +621,18 @@ exec {quoted_cmd}
         if config.job_id:
             cmd.extend(["--label", f"iris.job_id={config.job_id}"])
 
-        # Resource limits (cgroups v2) - only for run container
+        # Resource limits (cgroups v2)
+        # include_resources: full limits for RUN containers (CPU + memory + devices)
+        # include_memory_limit: memory-only limit for BUILD containers (prevent OOM)
         if include_resources:
             cpu_millicores = config.get_cpu_millicores()
             if cpu_millicores:
                 cpus = cpu_millicores / 1000
                 cmd.extend(["--cpus", str(cpus)])
+            memory_mb = config.get_memory_mb()
+            if memory_mb:
+                cmd.extend(["--memory", f"{memory_mb}m"])
+        elif include_memory_limit:
             memory_mb = config.get_memory_mb()
             if memory_mb:
                 cmd.extend(["--memory", f"{memory_mb}m"])

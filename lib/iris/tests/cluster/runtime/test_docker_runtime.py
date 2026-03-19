@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for DockerRuntime mount resolution and staging."""
+"""Tests for DockerRuntime mount resolution, staging, and container creation."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from unittest.mock import Mock
 import pytest
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.docker import DockerRuntime
-from iris.cluster.runtime.types import MountKind, MountSpec
+from iris.cluster.runtime.docker import DockerContainerHandle, DockerRuntime
+from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
 
 
 @pytest.fixture
@@ -104,3 +104,67 @@ def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):
     )
     assert len(calls) == 0
     mock_bundle_store.extract_bundle_to.assert_called_once_with("abc", workdir)
+
+
+def test_build_container_gets_memory_limit(monkeypatch, tmp_path, runtime):
+    """BUILD containers should have --memory cgroup limits to prevent worker OOM."""
+    from iris.rpc import cluster_pb2
+
+    docker_cmds: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        docker_cmds.append(cmd)
+        # docker image inspect (ensure_image) and docker create both go through here
+        if cmd[:3] == ["docker", "image", "inspect"]:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        if cmd[:2] == ["docker", "create"]:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="fake-container-id\n", stderr="")
+        if cmd[:2] == ["docker", "start"]:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        if cmd[:2] == ["docker", "inspect"]:
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0, stdout='{"Running": false, "ExitCode": 0}', stderr=""
+            )
+        if cmd[:2] == ["docker", "logs"]:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        if cmd[:2] == ["docker", "rm"]:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
+
+    workdir = tmp_path / "task-workdir"
+    workdir.mkdir()
+
+    resources = cluster_pb2.ResourceSpecProto(
+        cpu_millicores=4000,
+        memory_bytes=32 * 1024**3,  # 32 GB
+    )
+    entrypoint = cluster_pb2.RuntimeEntrypoint()
+    entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
+    entrypoint.setup_commands[:] = ["echo setup"]
+
+    config = ContainerConfig(
+        image="test-image:latest",
+        entrypoint=entrypoint,
+        env={},
+        resources=resources,
+        mounts=[MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=1024 * 1024 * 512)],
+        workdir_host_path=workdir,
+    )
+
+    resolved = runtime.resolve_mounts(config.mounts, workdir_host_path=workdir)
+    handle = DockerContainerHandle(config=config, runtime=runtime, _resolved_mounts=resolved)
+    handle.build()
+
+    # Find the docker create command
+    create_cmds = [cmd for cmd in docker_cmds if cmd[:2] == ["docker", "create"]]
+    assert len(create_cmds) == 1
+    create_cmd = create_cmds[0]
+
+    # Verify --memory flag is present on the build container
+    assert "--memory" in create_cmd, "BUILD container must have --memory cgroup limit"
+    memory_idx = create_cmd.index("--memory")
+    memory_value = create_cmd[memory_idx + 1]
+    expected_mb = (32 * 1024**3) // (1024 * 1024)
+    assert memory_value == f"{expected_mb}m"
