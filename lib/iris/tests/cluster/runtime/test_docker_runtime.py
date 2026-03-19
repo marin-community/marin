@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for DockerRuntime mount resolution and staging."""
+"""Tests for DockerRuntime mount resolution, staging, and container creation."""
 
 from __future__ import annotations
 

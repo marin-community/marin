@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, onMounted, computed, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { controllerRpcCall, workerRpcCall } from '@/composables/useRpc'
 import PageShell from '@/components/layout/PageShell.vue'
 
 const route = useRoute()
+const router = useRouter()
 
 // Derive the RPC target from route params/path.
 // Backend target conventions:
@@ -50,7 +51,11 @@ const threadDump = ref('')
 const loading = ref(false)
 const error = ref<string | null>(null)
 const lastFetched = ref<string | null>(null)
-const includeLocals = ref(false)
+const includeLocals = ref(route.query.locals === '1')
+
+watch(includeLocals, (val) => {
+  router.replace({ query: { ...route.query, locals: val ? '1' : undefined } })
+})
 
 async function fetchThreadDump() {
   const t = target.value

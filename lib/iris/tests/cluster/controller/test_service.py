@@ -162,7 +162,7 @@ def state(tmp_path):
     """Create a fresh ControllerTransitions for each test."""
     db_path = tmp_path / "controller.sqlite3"
     db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
+    log_store = LogStore(log_dir=tmp_path / "logs")
     s = ControllerTransitions(db=db, log_store=log_store)
     yield s
     log_store.close()
@@ -178,7 +178,8 @@ class MockSchedulerWake:
         self.create_scheduling_context = Mock(return_value=Mock())
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.autoscaler = None
-        self.stub_factory = Mock()
+        self.provider = Mock()
+        self.has_direct_provider = False
 
 
 @pytest.fixture

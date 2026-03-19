@@ -1,14 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+import logging
 import math
 import random
 import threading
 import time
-from collections.abc import Callable
-from datetime import datetime, timezone
+from collections.abc import Callable, Iterator
+from datetime import datetime, timedelta, timezone
 
 from iris.rpc import time_pb2
+
+logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def log_time(label: str, level: int = logging.INFO) -> Iterator[None]:
+    t_start = time.perf_counter()
+    yield
+    t_end = time.perf_counter()
+    logger.log(level, f"{label} took {timedelta(seconds=t_end - t_start)}")
 
 
 def _now_ms() -> int:
