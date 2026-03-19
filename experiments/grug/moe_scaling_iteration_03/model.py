@@ -16,7 +16,6 @@ from dataclasses import dataclass
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import jax.scipy as jsp
 from einops import rearrange
 from haliax.jax_utils import named_call
 from jax import random
@@ -78,8 +77,7 @@ class GrugModelConfig:
     max_seq_len: int = 4096
     layer_norm_eps: float = 1e-5
     qk_mult: float = 1.0
-    load_balancing_loss_coef: float | None = 0.01
-    router_z_loss_coef: float | None = 0.001
+    residual_t: float = 0.3  # Residual mixing: sqrt(1-t)*x + sqrt(t)*f(x)
     num_dense_layers: int = 2
     # Dense layer intermediate dim (3x hidden_dim).
     dense_intermediate_dim: int = 1536
@@ -102,10 +100,6 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
-        if self.load_balancing_loss_coef is not None and self.load_balancing_loss_coef < 0:
-            raise ValueError("load_balancing_loss_coef must be non-negative when set")
-        if self.router_z_loss_coef is not None and self.router_z_loss_coef < 0:
-            raise ValueError("router_z_loss_coef must be non-negative when set")
 
     @property
     def inferred_head_dim(self) -> int:
@@ -141,7 +135,6 @@ class CausalSelfAttention(eqx.Module):
             w_k=reshard(_init_weight(k_k, (d, m * h), d), P("data", "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), d), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), n * h), P("model", "data")),
-            # Headwise attention gate: one scalar per head, zero-initialized.
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
             cfg=cfg,
         )
@@ -163,8 +156,6 @@ class CausalSelfAttention(eqx.Module):
             q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask)
-        # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head,
-        # broadcast over head_dim.
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
@@ -228,58 +219,32 @@ class DenseMLP(eqx.Module):
 
 def _routing_stats(
     selected_experts: Int[Array, "T K"],
-    router_probs: Float[Array, "T E"],
-    router_logits: Float[Array, "T E"],
     *,
     num_experts: int,
-    num_experts_per_token: int,
 ) -> dict[str, jax.Array]:
-    router_probs_f = router_probs.astype(jnp.float32)
-    router_logits_f = router_logits.astype(jnp.float32)
     expert_counts = jnp.sum(jax.nn.one_hot(selected_experts, num_experts, dtype=jnp.float32), axis=(0, 1))
     total_assignments = jnp.maximum(jnp.sum(expert_counts), 1.0)
     assignment_fraction = expert_counts / total_assignments
     routing_entropy = -jnp.sum(assignment_fraction * jnp.log(assignment_fraction + 1e-6))
-    # Match the Switch/OLMoE-style scaling: E * sum_i(f_i * p_i), where
-    # f_i is token fraction for expert i (counts per token, not per assignment).
-    # assignment_fraction sums to 1 over assignments, so convert with top-k.
-    token_fraction = assignment_fraction * num_experts_per_token
-    p = jnp.mean(router_probs_f, axis=0)
-    load_balancing_loss = num_experts * jnp.sum(token_fraction * p)
-    z = jsp.special.logsumexp(router_logits_f, axis=-1)
-    router_z_loss = jnp.mean(z**2)
 
     return {
         "routing_counts": expert_counts,
         "routing_entropy": routing_entropy,
-        "load_balancing_loss": load_balancing_loss,
-        "router_z_loss": router_z_loss,
     }
 
 
 def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | Histogram]:
     routing_entropy = router_metrics["routing_entropy_per_layer"]
     routing_counts = router_metrics["routing_counts_per_layer"]
-    load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
-    router_z_loss = router_metrics["router_z_loss_per_layer"]
     num_layers = int(routing_entropy.shape[0])
-    aux_loss_per_layer = load_balancing_loss + router_z_loss
 
     out: dict[str, jax.Array | Histogram] = {
         "train/router/routing_entropy_mean": jnp.mean(routing_entropy),
-        # Match MaxText + Megatron/Nemotron practice: log layer-mean raw
-        # router terms for comparability across depth.
-        "train/router/load_balancing_loss": jnp.mean(load_balancing_loss),
-        "train/router/router_z_loss": jnp.mean(router_z_loss),
-        # Keep aux loss as a per-step aggregate while exposing mean terms above.
-        "train/router/aux_loss": jnp.sum(aux_loss_per_layer),
         # Raw routing counts for bias updates (not logged to tracker).
         "train/router/routing_counts_per_layer": routing_counts,
     }
     for i in range(num_layers):
         out[f"train/router/layer_{i}/routing_entropy"] = routing_entropy[i]
-        out[f"train/router/layer_{i}/load_balancing_loss"] = load_balancing_loss[i]
-        out[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
         out[f"train/router/layer_{i}/routing_hist"] = _histogram_from_expert_counts(routing_counts[i])
     return out
 
@@ -352,17 +317,14 @@ class MoEMLP(eqx.Module):
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None)))
         # Bias added for selection only (stop_gradient so it doesn't affect router training)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
-        router_probs = jax.nn.softmax(router_logits, axis=-1)
         _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token)
-        # Combine weights use unbiased logits with softmax over selected experts
+        # Combine weights: sigmoid on selected experts, normalized to sum to 1.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights = jax.nn.softmax(unbiased_topk, axis=-1).astype(x.dtype)
+        topk_weights = jax.nn.sigmoid(unbiased_topk)
+        combine_weights = (topk_weights / jnp.sum(topk_weights, axis=-1, keepdims=True)).astype(x.dtype)
         router_stats = _routing_stats(
             selected_experts,
-            router_probs,
-            router_logits,
             num_experts=self.cfg.num_experts,
-            num_experts_per_token=self.cfg.num_experts_per_token,
         )
 
         routed_flat = moe_mlp(
@@ -387,6 +349,7 @@ class Block(eqx.Module):
     mlp: MoEMLP | None
     shared: DenseMLP | None
     dense_mlp: DenseMLP | None
+    cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, dense_only: bool = False) -> "Block":
@@ -415,6 +378,7 @@ class Block(eqx.Module):
             mlp=moe,
             shared=shared,
             dense_mlp=dense_mlp,
+            cfg=cfg,
         )
 
     @named_call
@@ -424,7 +388,8 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         use_rope: bool = True,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        x = x + self.attn(self.rms_attn(x), mask, use_rope=use_rope)
+        t = jnp.array(self.cfg.residual_t, dtype=x.dtype)
+        x = jnp.sqrt(1.0 - t) * x + jnp.sqrt(t) * self.attn(self.rms_attn(x), mask, use_rope=use_rope)
         mlp_in = self.rms_mlp(x)
         if self.dense_mlp is not None:
             mlp_out = self.dense_mlp(mlp_in, activation=ActivationFunctionEnum.silu)
@@ -434,33 +399,35 @@ class Block(eqx.Module):
             mlp_out, router_stats = self.mlp(mlp_in)
             if self.shared is not None:
                 mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
-        x = x + mlp_out
+        x = jnp.sqrt(1.0 - t) * x + jnp.sqrt(t) * mlp_out
         return x, router_stats
 
 
 class Transformer(eqx.Module):
     token_embed: jax.Array
+    embed_gain: jax.Array
     output_proj: jax.Array
     blocks: tuple[Block, ...]
-    embed_norm: RMSNorm
     final_norm: RMSNorm
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Transformer":
         embed_key, out_key, *block_keys = random.split(key, cfg.num_layers + 2)
-        token_embed = reshard(_init_unit(embed_key, (cfg.vocab_size, cfg.hidden_dim)), Pvocab)
+        raw_embed = _init_unit(embed_key, (cfg.vocab_size, cfg.hidden_dim))
+        row_norms = jnp.sqrt(jnp.sum(jnp.square(raw_embed), axis=1, keepdims=True))
+        token_embed = reshard(raw_embed / row_norms * math.sqrt(cfg.hidden_dim), Pvocab)
+        embed_gain = jnp.array(1.0, dtype=jnp.float32)
         output_proj = reshard(_init_unit(out_key, (cfg.hidden_dim, cfg.vocab_size)), Pvocab)
         blocks = tuple(
             Block.init(cfg, key=block_keys[i], dense_only=(i < cfg.num_dense_layers)) for i in range(cfg.num_layers)
         )
-        embed_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
         final_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
         return Transformer(
             token_embed=token_embed,
+            embed_gain=embed_gain,
             output_proj=output_proj,
             blocks=blocks,
-            embed_norm=embed_norm,
             final_norm=final_norm,
             config=cfg,
         )
@@ -475,8 +442,7 @@ class Transformer(eqx.Module):
             mask = AttentionMask.causal()
 
         batch_spec = _batch_spec()
-        hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
-        hidden = self.embed_norm(hidden)
+        hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec) * self.embed_gain
 
         cfg = self.config
         if cfg.sliding_window is not None:
@@ -497,8 +463,6 @@ class Transformer(eqx.Module):
         router_metrics = {
             "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
             "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in moe_router_stats], axis=0),
-            "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in moe_router_stats], axis=0),
-            "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
         }
         return self.final_norm(hidden), router_metrics
 
@@ -510,8 +474,8 @@ class Transformer(eqx.Module):
     ) -> Float[Array, "B S V"]:
         batch_spec = _batch_spec()
         hidden, _ = self(token_ids, mask=mask)
-        scale = 1.0 / self.config.hidden_dim
-        return scale * jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
+        scaled_output_proj = self.output_proj * (0.5 / math.sqrt(self.config.hidden_dim))
+        return jnp.einsum("bsh,hd->bsd", hidden, scaled_output_proj, out_sharding=batch_spec)
 
     def next_token_loss(
         self,
@@ -527,7 +491,7 @@ class Transformer(eqx.Module):
         hidden, router_metrics = self(token_ids, mask=mask)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
-        scaled_output_proj = self.output_proj * (1.0 / self.config.hidden_dim)
+        scaled_output_proj = self.output_proj * (0.5 / math.sqrt(self.config.hidden_dim))
 
         cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
@@ -538,24 +502,11 @@ class Transformer(eqx.Module):
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
         )
-        # Keep router metrics raw and apply coefficients only at the final
-        # objective composition step (same separation as MaxText/Megatron).
-        load_balancing_loss_coef = (
-            0.0 if self.config.load_balancing_loss_coef is None else self.config.load_balancing_loss_coef
-        )
-        router_z_loss_coef = 0.0 if self.config.router_z_loss_coef is None else self.config.router_z_loss_coef
-        num_moe_layers = router_metrics["load_balancing_loss_per_layer"].shape[0]
-        lbl = jnp.sum(router_metrics["load_balancing_loss_per_layer"]) / num_moe_layers
-        rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
-        aux_loss = load_balancing_loss_coef * lbl + router_z_loss_coef * rzl
-        include_aux_in_loss = reduction != "none" and (load_balancing_loss_coef != 0.0 or router_z_loss_coef != 0.0)
-        loss = cross_entropy_loss + aux_loss if include_aux_in_loss else cross_entropy_loss
         if return_router_metrics:
             summarized_metrics = _summarize_router_metrics(router_metrics)
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
-            summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
-            return loss, summarized_metrics
-        return loss
+            return cross_entropy_loss, summarized_metrics
+        return cross_entropy_loss
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], fan_in: int) -> Float[Array, "..."]:

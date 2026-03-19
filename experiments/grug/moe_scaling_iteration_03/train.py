@@ -6,7 +6,6 @@ from __future__ import annotations
 import dataclasses
 import functools
 import logging
-import math
 import time
 from dataclasses import dataclass, field
 
@@ -50,6 +49,158 @@ from experiments.grug.moe_scaling_iteration_03.model import GrugModelConfig, Tra
 logger = logging.getLogger(__name__)
 
 
+def _scale_by_adamh(
+    b1: float = 0.9,
+    b2: float = 0.999,
+    eps: float = 1e-8,
+    learning_rate: float = 0.02,
+) -> optax.GradientTransformation:
+    """AdamH: scale-invariant Adam that keeps weight norms constant."""
+    from optax import tree_utils as otu
+
+    def init_fn(params):
+        mu = otu.tree_zeros_like(params)
+        nu = otu.tree_zeros_like(params)
+        return (jnp.zeros([], jnp.int32), mu, nu)
+
+    def update_fn(updates, state, params):
+        count, mu, nu = state
+        mu = otu.tree_update_moment(updates, mu, b1, 1)
+        nu = otu.tree_update_moment_per_elem_norm(updates, nu, b2, 2)
+        count_inc = optax.safe_increment(count)
+        mu_hat = otu.tree_bias_correction(mu, b1, count_inc)
+        nu_hat = otu.tree_bias_correction(nu, b2, count_inc)
+
+        adam_updates = jax.tree.map(
+            lambda m, v: m / (jnp.sqrt(v) + eps),
+            mu_hat,
+            nu_hat,
+        )
+
+        def scale_invariant_update(p, u):
+            if p.ndim == 2:
+                p_norm = jnp.linalg.norm(p)
+                u_norm = jnp.maximum(jnp.linalg.norm(u), 1e-10)
+                new_p = p - learning_rate * u * p_norm / u_norm
+                return new_p / jnp.linalg.norm(new_p) * p_norm - p
+            axes = tuple(range(1, p.ndim))
+            p_norm = jnp.sqrt(jnp.sum(jnp.square(p), axis=axes, keepdims=True))
+            u_norm = jnp.sqrt(jnp.sum(jnp.square(u), axis=axes, keepdims=True))
+            new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
+            new_p_norm = jnp.sqrt(jnp.sum(jnp.square(new_p), axis=axes, keepdims=True))
+            return new_p / jnp.maximum(new_p_norm, 1e-10) * p_norm - p
+
+        adamh_updates = jax.tree.map(scale_invariant_update, params, adam_updates)
+        return adamh_updates, (count_inc, mu, nu)
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
+def _scale_by_adamh_rowwise(
+    b1: float = 0.9,
+    b2: float = 0.999,
+    eps: float = 1e-8,
+    learning_rate: float = 0.02,
+) -> optax.GradientTransformation:
+    """AdamH with per-row scale-invariant updates for embedding tables."""
+    from optax import tree_utils as otu
+
+    def init_fn(params):
+        mu = otu.tree_zeros_like(params)
+        nu = otu.tree_zeros_like(params)
+        return (jnp.zeros([], jnp.int32), mu, nu)
+
+    def update_fn(updates, state, params):
+        count, mu, nu = state
+        mu = otu.tree_update_moment(updates, mu, b1, 1)
+        nu = otu.tree_update_moment_per_elem_norm(updates, nu, b2, 2)
+        count_inc = optax.safe_increment(count)
+        mu_hat = otu.tree_bias_correction(mu, b1, count_inc)
+        nu_hat = otu.tree_bias_correction(nu, b2, count_inc)
+
+        adam_updates = jax.tree.map(
+            lambda m, v: m / (jnp.sqrt(v) + eps),
+            mu_hat,
+            nu_hat,
+        )
+
+        def rowwise_update(p, u):
+            axes = tuple(range(1, p.ndim)) if p.ndim > 1 else ()
+            if not axes:
+                p_norm = jnp.linalg.norm(p)
+                u_norm = jnp.linalg.norm(u)
+                new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
+                return new_p / jnp.maximum(jnp.linalg.norm(new_p), 1e-10) * p_norm - p
+            p_norm = jnp.sqrt(jnp.sum(jnp.square(p), axis=axes, keepdims=True))
+            u_norm = jnp.sqrt(jnp.sum(jnp.square(u), axis=axes, keepdims=True))
+            new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
+            new_p_norm = jnp.sqrt(jnp.sum(jnp.square(new_p), axis=axes, keepdims=True))
+            return new_p / jnp.maximum(new_p_norm, 1e-10) * p_norm - p
+
+        final_updates = jax.tree.map(rowwise_update, params, adam_updates)
+        return final_updates, (count_inc, mu, nu)
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
+def _build_adamh_optimizer(
+    base_optimizer: optax.GradientTransformation,
+    embed_lr: float = 6e-3,
+    hidden_lr: float = 1e-2,
+    lm_head_lr: float = 5e-3,
+    beta1: float = 0.91,
+    beta2: float = 0.999,
+    eps: float = 1e-8,
+    max_grad_norm: float | None = 5.0,
+) -> optax.GradientTransformation:
+    """AdamH for weights, rowwise AdamH for embeddings, base Adam for norms.
+
+    Groups:
+      - embed:   token_embed (rowwise AdamH)
+      - lm_head: output_proj (AdamH)
+      - adamh:   all other weight matrices (AdamH)
+      - norm:    RMSNorm weights, embed_gain, router_bias, attn_gate (base Adam)
+    """
+    from levanter.utils.jax_utils import leaf_key_paths
+
+    embed_opt = _scale_by_adamh_rowwise(b1=beta1, b2=beta2, eps=eps, learning_rate=embed_lr)
+    adamh_opt = _scale_by_adamh(b1=beta1, b2=beta2, eps=eps, learning_rate=hidden_lr)
+    lm_head_opt = _scale_by_adamh(b1=beta1, b2=beta2, eps=eps, learning_rate=lm_head_lr)
+    transforms = {
+        "embed": embed_opt,
+        "lm_head": lm_head_opt,
+        "adamh": adamh_opt,
+        "norm": base_optimizer,
+    }
+
+    def label_fn(params):
+        paths = leaf_key_paths(params)
+
+        def _mask(_, path):
+            p = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+            p_lower = p.lower()
+            if "token_embed" in p_lower:
+                return "embed"
+            if "output_proj" in p_lower:
+                return "lm_head"
+            if (
+                "norm" in p_lower
+                or "rms_" in p_lower
+                or "embed_gain" in p_lower
+                or "router_bias" in p_lower
+                or "attn_gate" in p_lower
+            ):
+                return "norm"
+            return "adamh"
+
+        return jax.tree.map(_mask, params, paths)
+
+    grouped = optax.multi_transform(transforms, label_fn)
+    if max_grad_norm is None:
+        return grouped
+    return optax.chain(optax.clip_by_global_norm(max_grad_norm), grouped)
+
+
 @dataclass(frozen=True)
 class GrugTrainerConfig:
     """Runtime knobs for grug training."""
@@ -60,6 +211,12 @@ class GrugTrainerConfig:
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
+    embed_lr: float = 6e-3  # Rowwise AdamH learning rate for token_embed.
+    hidden_lr: float = 1e-2  # AdamH learning rate for weight matrices.
+    lm_head_lr: float = 5e-3  # AdamH learning rate for output_proj.
+    beta1: float = 0.96
+    beta2: float = 0.99
+    epsilon: float = 1e-15
     # PID bias controller. bias += Kp*error + Ki*integral + Kd*derivative each step.
     # PID output drives bias velocity (Type 1 system — bias integrates the control signal).
     pid_kp: float = 0.1
@@ -264,22 +421,6 @@ def initial_state(
     )
 
 
-def _scale_expert_grads(grads: Transformer, scale: float) -> Transformer:
-    """Scale gradients for MoE expert weights (w_gate_up, w_down) by a constant factor."""
-    if scale == 1.0:
-        return grads
-    new_blocks = list(grads.blocks)
-    for i, block in enumerate(grads.blocks):
-        if block.mlp is not None:
-            new_mlp = eqx.tree_at(
-                lambda m: (m.w_gate_up, m.w_down),
-                block.mlp,
-                (block.mlp.w_gate_up * scale, block.mlp.w_down * scale),
-            )
-            new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
-    return eqx.tree_at(lambda t: t.blocks, grads, tuple(new_blocks))
-
-
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -291,7 +432,6 @@ def _make_train_step(
     pid_ki: float = 0.002,
     pid_kd: float = 0.02,
     integral_clamp: float = 50.0,
-    expert_lr_scale: float = 1.0,  # computed from model config
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -318,9 +458,6 @@ def _make_train_step(
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
         metrics = {"train/loss": loss, **summarized_metrics}
-        # Scale expert gradients by 1/sqrt(top_k/num_experts) to account for
-        # smaller effective batch size per expert.
-        grads = _scale_expert_grads(grads, expert_lr_scale)
         updates, opt_state = optimizer.update(grads, state.opt_state, state.params)
         params = optax.apply_updates(state.params, updates)
 
@@ -401,7 +538,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     if run_id is None:
         raise ValueError("trainer.id was not initialized")
 
-    optimizer = config.optimizer.build(trainer.num_train_steps)
+    base_optimizer = config.optimizer.build(trainer.num_train_steps)
+    optimizer = _build_adamh_optimizer(
+        base_optimizer,
+        embed_lr=config.trainer.embed_lr,
+        hidden_lr=config.trainer.hidden_lr,
+        lm_head_lr=config.trainer.lm_head_lr,
+        beta1=config.trainer.beta1,
+        beta2=config.trainer.beta2,
+        eps=config.trainer.epsilon,
+    )
     watch_config = trainer.watch
     train_step = _make_train_step(
         optimizer,
@@ -413,7 +559,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         pid_ki=config.trainer.pid_ki,
         pid_kd=config.trainer.pid_kd,
         integral_clamp=config.trainer.pid_integral_clamp,
-        expert_lr_scale=math.sqrt(config.model.num_experts_per_token / config.model.num_experts),
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -550,6 +695,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
+                if jnp.isnan(metrics["train/loss"]):
+                    logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
+                    break
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):

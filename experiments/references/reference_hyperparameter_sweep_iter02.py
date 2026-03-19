@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""AdamH hyperparameter sweep for Grug MoE iter_03 on Nemotron mix.
+"""Adam hyperparameter sweep for Grug MoE iter_02 (baseline) on Nemotron mix.
 
-Sweeps over per-group AdamH learning rates (embed, hidden, lm_head) and
-momentum parameters (beta1, beta2) using Vizier.
+Sweeps over learning rate and momentum parameters (beta1, beta2) using Vizier.
+This is the baseline comparison for the iter_03 AdamH sweep.
 """
 
 import json
@@ -22,13 +22,13 @@ import fsspec
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 
-from experiments.grug.moe_scaling_iteration_03.launch import (
+from experiments.grug.moe_scaling_iteration_02.launch import (
     NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
     GrugMoeLaunchConfig,
     run_grug_moe_trial,
 )
-from experiments.grug.moe_scaling_iteration_03.model import GrugModelConfig
-from experiments.grug.moe_scaling_iteration_03.train import GrugEvalConfig, GrugTrainerConfig
+from experiments.grug.moe_scaling_iteration_02.model import GrugModelConfig
+from experiments.grug.moe_scaling_iteration_02.train import GrugEvalConfig, GrugTrainerConfig
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.execution.remote import remote
@@ -69,15 +69,14 @@ class SweepSettings:
 
 
 SWEEP = SweepSettings(
-    experiment_name="ref-sweep-moe-iter03-adamh-v4",
+    experiment_name="ref-sweep-moe-iter02-adam-v3",
     num_loops=20,
     suggestions_per_loop=8,
     search_space={
-        "embed_lr": (1e-4, 0.01),
-        "hidden_lr": (1e-4, 0.01),
-        "lm_head_lr": (1e-4, 0.01),
+        "learning_rate": (1e-4, 0.05),
         "beta1": (0.8, 0.99),
         "beta2": (0.9, 0.999),
+        "weight_decay": (0.01, 0.3),
     },
     fixed_batch_size=32,
     target_tokens=1_400_000_000,  # 3e18 FLOPs at d=1024
@@ -90,7 +89,7 @@ SWEEP = SweepSettings(
     lr_schedule="linear",
     warmup_fraction=0.1,
     decay_fraction=0.2,
-    base_train_tags=("sweep", "grug", "moe", "iter03", "adamh"),
+    base_train_tags=("sweep", "grug", "moe", "iter02", "adam"),
 )
 
 SUGGESTIONS_FILENAME = "vizier_suggestions.json"
@@ -116,7 +115,10 @@ SWEEP_MODEL = GrugModelConfig(
     num_dense_layers=2,
     dense_intermediate_dim=3 * HIDDEN_DIM,
     sliding_window=4096,
+    initializer_std=0.5 / math.sqrt(HIDDEN_DIM),
     qk_mult=1.3,
+    load_balancing_loss_coef=0.001,
+    bias_update_rate=0.01,
 )
 
 
@@ -265,7 +267,7 @@ def _metric_goal(mode: str) -> Any:
 
 def _extract_hparams(suggestion: dict[str, object]) -> dict[str, float]:
     parameters = suggestion["parameters"]
-    required = ("embed_lr", "hidden_lr", "lm_head_lr", "beta1", "beta2")
+    required = ("learning_rate", "beta1", "beta2", "weight_decay")
     return {name: float(parameters[name]) for name in required}
 
 
@@ -292,6 +294,9 @@ def _build_base_launch_config() -> GrugMoeLaunchConfig:
         ),
         optimizer=AdamConfig(
             learning_rate=1e-3,
+            beta1=0.96,
+            beta2=0.98,
+            epsilon=1e-15,
             weight_decay=0.1,
             lr_schedule=SWEEP.lr_schedule,
             decay=SWEEP.decay_fraction,
@@ -299,11 +304,13 @@ def _build_base_launch_config() -> GrugMoeLaunchConfig:
             warmup=SWEEP.warmup_fraction,
             max_grad_norm=1,
         ),
-        grug_trainer=GrugTrainerConfig(
-            z_loss_weight=0.0,
-        ),
+        grug_trainer=GrugTrainerConfig(z_loss_weight=1e-4, ema_beta=None, log_every=1),
         eval=GrugEvalConfig(
+            eval_batch_size=512,
             steps_per_eval=1000,
+            max_eval_batches=8,
+            eval_current=True,
+            eval_ema=False,
         ),
     )
 
@@ -366,25 +373,22 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
     new_tags = list(getattr(base.tracker, "tags", []) or [])
     new_tags.extend(
         [
-            f"embed_lr={hparams['embed_lr']:.4g}",
-            f"hidden_lr={hparams['hidden_lr']:.4g}",
-            f"lm_head_lr={hparams['lm_head_lr']:.4g}",
+            f"lr={hparams['learning_rate']:.4g}",
             f"beta1={hparams['beta1']:.3f}",
             f"beta2={hparams['beta2']:.3f}",
+            f"wd={hparams['weight_decay']:.3g}",
             f"trial={trial_id}",
             f"loop={config.loop_index}",
         ]
     )
 
     tracker = replace(base.tracker, tags=new_tags, name=f"trial-{trial_id}-loop-{config.loop_index}")
-    grug_trainer = replace(
-        base.grug_trainer,
-        embed_lr=hparams["embed_lr"],
-        hidden_lr=hparams["hidden_lr"],
-        lm_head_lr=hparams["lm_head_lr"],
+    optimizer = replace(
+        base.optimizer,
+        learning_rate=hparams["learning_rate"],
         beta1=hparams["beta1"],
         beta2=hparams["beta2"],
-        epsilon=FIXED_EPSILON,
+        weight_decay=hparams["weight_decay"],
     )
 
     launch_config = replace(
@@ -393,7 +397,7 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
         steps=num_steps,
         batch_size=batch_size,
         tracker=tracker,
-        grug_trainer=grug_trainer,
+        optimizer=optimizer,
     )
 
     run_grug_moe_trial(launch_config)

@@ -128,24 +128,21 @@ TRIAL_MODEL = GrugModelConfig(
     max_seq_len=SEQ_LEN,
     num_dense_layers=2,
     dense_intermediate_dim=3 * HIDDEN_DIM,
-    load_balancing_loss_coef=None,
     sliding_window=4096,
     qk_mult=1.3,
 )
 
 # doubled from iter_02's bs=32 → 64, halved steps to keep same 1e18 token budget
-# effective_bs = 64, lr = min(0.01, 0.33*sqrt(64)/512) = 0.00516
-# beta2 = max(0.95, 0.98^(64/128)) = 0.99
-BATCH_SIZE = 64
-TRAIN_STEPS = 5818
-LR = 0.00516
-BETA2 = 0.99
+BATCH_SIZE = 256
+TRAIN_STEPS = 4364
+LR = 0.01032  # 0.00516 * 2 (sqrt batch scaling 64→256)
+BETA2 = 0.96  # max(0.95, 0.98^(256/128))
 
 KP = 0.05
 KI = 0.002
 KD = 0.02
 CLAMP = 50.0
-RUN_NAME = f"t1pid-kp{KP}-ki{KI}-kd{KD}-cl{CLAMP}-nolbl-initfix-expertlr"
+RUN_NAME = f"t1pid-kp{KP}-ki{KI}-kd{KD}-cl{CLAMP}-auxfree-initfix-expertlr-full-adamh-sigmoid-3e18-bs256-updated-hypers"
 RESOLVED_RUN_ID = _resolve_run_id(RUN_NAME)
 
 grug_moe_trial = ExecutorStep(
@@ -183,9 +180,14 @@ grug_moe_trial = ExecutorStep(
         ),
         grug_trainer=versioned(
             GrugTrainerConfig(
-                z_loss_weight=1e-4,
+                z_loss_weight=0.0,
                 ema_beta=None,
                 log_every=1,
+                embed_lr=1.2e-2,  # 6e-3 * 2
+                hidden_lr=2e-2,  # 1e-2 * 2
+                beta1=0.96,
+                beta2=0.96,
+                epsilon=1e-15,
                 pid_kp=KP,
                 pid_ki=KI,
                 pid_kd=KD,

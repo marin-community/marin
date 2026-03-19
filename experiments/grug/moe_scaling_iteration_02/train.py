@@ -491,13 +491,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             interval = eval_cfg.steps_per_eval
             eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None
             if interval is not None and interval > 0 and (eval_cfg.eval_current or eval_ema):
+                eval_cb = cb_tagged_evaluate(
+                    evaluator,
+                    prefix=eval_cfg.prefix,
+                    eval_current=eval_cfg.eval_current,
+                    eval_ema=eval_ema,
+                )
+                # Skip eval at step 0 — uninformative and slow.
                 state_callbacks.add_hook(
-                    cb_tagged_evaluate(
-                        evaluator,
-                        prefix=eval_cfg.prefix,
-                        eval_current=eval_cfg.eval_current,
-                        eval_ema=eval_ema,
-                    ),
+                    lambda info, _inner=eval_cb: _inner(info) if info.step > 0 else None,
                     every=interval,
                 )
 
@@ -519,6 +521,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
+                if jnp.isnan(metrics["train/loss"]):
+                    logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
+                    break
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):
