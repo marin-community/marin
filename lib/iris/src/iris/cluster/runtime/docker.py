@@ -147,19 +147,12 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
     logger.info("Device flags check: has_device=%s, has_tpu=%s", has_device, has_tpu)
 
     if has_tpu:
-        for device_mapping in _discover_tpu_device_mappings():
-            flags.extend(["--device", device_mapping])
-
         flags.extend(
             [
+                "--privileged",
                 "--shm-size=100g",
-                "--cap-add=SYS_RESOURCE",
-                "--ulimit",
-                "memlock=68719476736:68719476736",
             ]
         )
-        if "--device" not in flags:
-            logger.warning("TPU resources requested, but no TPU device nodes were discovered on host")
         logger.info("TPU device flags: %s", flags)
 
     return flags
@@ -604,7 +597,10 @@ exec {quoted_cmd}
             "-w",
             config.workdir,
         ]
-        cmd.extend(["--security-opt", "no-new-privileges"])
+        is_tpu_run = include_devices and _has_tpu_device(config)
+
+        if not is_tpu_run:
+            cmd.extend(["--security-opt", "no-new-privileges"])
 
         # Run as the owner of bind-mounted directories
         user_flag = _detect_mount_user(self._resolved_mounts)
@@ -622,8 +618,9 @@ exec {quoted_cmd}
             for key, value in _NETWORK_SYSCTLS.items():
                 cmd.extend(["--sysctl", f"{key}={value}"])
 
-        cmd.extend(["--cap-drop", "ALL"])
-        cmd.extend(["--cap-add", "SYS_PTRACE"])
+        if not is_tpu_run:
+            cmd.extend(["--cap-drop", "ALL"])
+            cmd.extend(["--cap-add", "SYS_PTRACE"])
 
         # Device flags (TPU passthrough etc) - only for run container
         if include_devices:
