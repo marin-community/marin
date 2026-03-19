@@ -66,11 +66,13 @@ The dashboard CPU, MEM, and THR buttons trigger profiling via the `ProfileTask` 
 | **CPU** | `py-spy record` | Speedscope JSON flamegraph | 10s default |
 | **MEM** | `memray attach` | Flamegraph HTML | 10s default |
 
-The CLI supports profiling **worker processes** (not task containers):
+The CLI supports profiling worker processes and task containers:
 ```bash
-uv run iris process profile threads --worker <WORKER_ID>
-uv run iris process profile cpu --duration 10 --output /tmp/profile.speedscope.json --worker <WORKER_ID>
-uv run iris process profile mem --duration 10 --output /tmp/profile.html --worker <WORKER_ID>
+uv run iris process profile threads --target /system/worker/<WORKER_ID>
+uv run iris process profile cpu --duration 10 --output /tmp/profile.speedscope.json --target /system/worker/<WORKER_ID>
+uv run iris process profile mem --duration 10 --output /tmp/profile.html --target /system/worker/<WORKER_ID>
+# Task container:
+uv run iris process profile cpu --target /alice/my-job/0
 ```
 
 **Task-level profiling** (inside the task container) is not supported by the CLI scalar flags yet. Use the dashboard buttons or call the `ProfileTask` RPC via `--json`:
