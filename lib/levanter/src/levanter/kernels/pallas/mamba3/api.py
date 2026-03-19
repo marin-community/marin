@@ -11,7 +11,12 @@ import warnings
 import jax
 from jaxtyping import Array, Float
 
-from .config import BlockSizes
+from .config import (
+    BlockSizes,
+    HybridModeConfig,
+    Mamba3Mode,
+    mamba3_tpu_default_chunk_size,
+)
 from .reference import (
     intra_chunk_log_alpha_cumsum,
     local_log_alpha,
@@ -419,13 +424,136 @@ def mamba3_mimo_chunked_forward(
     )
 
 
+def mamba3_hybrid_chunked_forward_from_transformed(
+    a_log_cumsum: Float[Array, "... chunks chunk"],
+    src_scale: Float[Array, "... chunks chunk"],
+    out_correction: Float[Array, "... chunks chunk"],
+    b: Float[Array, "..."],
+    c: Float[Array, "..."],
+    x: Float[Array, "... chunks chunk value"],
+    *,
+    mode: Mamba3Mode = "siso",
+    z: Float[Array, "... chunks chunk value"] | None = None,
+    w_x: Float[Array, "... value rank"] | Float[Array, "value rank"] | None = None,
+    w_z: Float[Array, "... value rank"] | Float[Array, "value rank"] | None = None,
+    w_o: Float[Array, "... value rank"] | Float[Array, "value rank"] | None = None,
+    implementation: Implementation | Sequence[Implementation] | None = None,
+    block_sizes: BlockSizes | None = None,
+    interpret: bool = False,
+    backend: str | None = None,
+) -> tuple[Float[Array, "... chunks chunk value"], Float[Array, "... value state"]]:
+    """Dispatch transformed Mamba-3 inputs to the stable SISO or MIMO API."""
+
+    if mode == "siso":
+        if any(arg is not None for arg in (z, w_x, w_z, w_o)):
+            raise ValueError("SISO hybrid mode does not accept MIMO-only arguments `z`, `w_x`, `w_z`, or `w_o`.")
+        return mamba3_chunked_forward_from_transformed(
+            a_log_cumsum,
+            src_scale,
+            out_correction,
+            cast(Float[Array, "... chunks chunk state"], b),
+            cast(Float[Array, "... chunks chunk state"], c),
+            x,
+            implementation=implementation,
+            block_sizes=block_sizes,
+            interpret=interpret,
+            backend=backend,
+        )
+
+    if mode == "mimo":
+        if z is None or w_x is None or w_z is None or w_o is None:
+            raise ValueError("MIMO hybrid mode requires `z`, `w_x`, `w_z`, and `w_o`.")
+        return mamba3_mimo_chunked_forward_from_transformed(
+            a_log_cumsum,
+            src_scale,
+            out_correction,
+            cast(Float[Array, "... chunks chunk state rank"], b),
+            cast(Float[Array, "... chunks chunk state rank"], c),
+            x,
+            z,
+            w_x,
+            w_z,
+            w_o,
+            implementation=implementation,
+            block_sizes=block_sizes,
+            interpret=interpret,
+            backend=backend,
+        )
+
+    raise ValueError(f"Unsupported hybrid Mamba-3 mode: {mode}.")
+
+
+def mamba3_hybrid_chunked_forward(
+    dt: Float[Array, "... chunks chunk"],
+    lam: Float[Array, "... chunks chunk"],
+    a: Float[Array, "... chunks chunk"] | Float[Array, "... chunks"],
+    b: Float[Array, "..."],
+    c: Float[Array, "..."],
+    x: Float[Array, "... chunks chunk value"],
+    *,
+    mode: Mamba3Mode = "siso",
+    z: Float[Array, "... chunks chunk value"] | None = None,
+    w_x: Float[Array, "... value rank"] | Float[Array, "value rank"] | None = None,
+    w_z: Float[Array, "... value rank"] | Float[Array, "value rank"] | None = None,
+    w_o: Float[Array, "... value rank"] | Float[Array, "value rank"] | None = None,
+    implementation: Implementation | Sequence[Implementation] | None = None,
+    block_sizes: BlockSizes | None = None,
+    interpret: bool = False,
+    backend: str | None = None,
+) -> tuple[Float[Array, "... chunks chunk value"], Float[Array, "... value state"]]:
+    """Dispatch native Mamba-3 inputs to the stable SISO or MIMO API."""
+
+    if mode == "siso":
+        if any(arg is not None for arg in (z, w_x, w_z, w_o)):
+            raise ValueError("SISO hybrid mode does not accept MIMO-only arguments `z`, `w_x`, `w_z`, or `w_o`.")
+        return mamba3_chunked_forward(
+            dt,
+            lam,
+            a,
+            cast(Float[Array, "... chunks chunk state"], b),
+            cast(Float[Array, "... chunks chunk state"], c),
+            x,
+            implementation=implementation,
+            block_sizes=block_sizes,
+            interpret=interpret,
+            backend=backend,
+        )
+
+    if mode == "mimo":
+        if z is None or w_x is None or w_z is None or w_o is None:
+            raise ValueError("MIMO hybrid mode requires `z`, `w_x`, `w_z`, and `w_o`.")
+        return mamba3_mimo_chunked_forward(
+            dt,
+            lam,
+            a,
+            cast(Float[Array, "... chunks chunk state rank"], b),
+            cast(Float[Array, "... chunks chunk state rank"], c),
+            x,
+            z,
+            w_x,
+            w_z,
+            w_o,
+            implementation=implementation,
+            block_sizes=block_sizes,
+            interpret=interpret,
+            backend=backend,
+        )
+
+    raise ValueError(f"Unsupported hybrid Mamba-3 mode: {mode}.")
+
+
 __all__ = [
     "BlockSizes",
+    "HybridModeConfig",
     "IMPLEMENTATIONS",
     "Implementation",
+    "Mamba3Mode",
     "PallasUnsupportedError",
     "intra_chunk_log_alpha_cumsum",
     "local_log_alpha",
+    "mamba3_hybrid_chunked_forward",
+    "mamba3_hybrid_chunked_forward_from_transformed",
+    "mamba3_tpu_default_chunk_size",
     "mamba3_chunk_state",
     "mamba3_mimo_chunked_forward",
     "mamba3_mimo_chunked_forward_from_transformed",

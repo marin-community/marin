@@ -12,6 +12,8 @@ import time
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.kernels.pallas.mamba3 import mamba3_chunked_forward
 
@@ -36,6 +38,7 @@ class BenchmarkResult:
     state_dim: int
     value_dim: int
     dtype: str
+    sharded: bool
     mode: str
     compile_s: float
     steady_s: float
@@ -85,6 +88,23 @@ def _estimate_forward_flops(shape: Shape) -> float:
     return local_cb + local_emit + chunk_state + prefix_emit
 
 
+def _shard_spec(ndim: int, *, shard_groups: bool) -> P:
+    return P("data", *([None] * (ndim - 1))) if shard_groups else P(*([None] * ndim))
+
+
+def _maybe_shard_inputs(
+    inputs: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array], *, shard_groups: bool
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    if not shard_groups:
+        return inputs
+    mesh = Mesh(np.array(jax.devices()), ("data",))
+
+    def put(x: jax.Array) -> jax.Array:
+        return jax.device_put(x, NamedSharding(mesh, _shard_spec(x.ndim, shard_groups=True)))
+
+    return tuple(put(x) for x in inputs)
+
+
 def _time_jitted(fn, *args, steps: int, warmup: int) -> tuple[float, float]:
     start = time.perf_counter()
     out = fn(*args)
@@ -125,13 +145,14 @@ def _benchmark(
     *,
     dtype: jnp.dtype,
     implementation: str,
+    shard_groups: bool,
     steps: int,
     warmup: int,
     profile_dir: str | None,
     profile_mode: str,
     profile_steps: int,
 ) -> list[BenchmarkResult]:
-    inputs = _build_inputs(shape, dtype)
+    inputs = _maybe_shard_inputs(_build_inputs(shape, dtype), shard_groups=shard_groups)
     num_chunks = math.ceil(shape.seq_len / shape.chunk_size)
     groups = shape.batch_head_groups
     tokens = groups * shape.seq_len
@@ -169,6 +190,7 @@ def _benchmark(
             state_dim=shape.state_dim,
             value_dim=shape.value_dim,
             dtype=str(dtype),
+            sharded=shard_groups,
             mode="forward",
             compile_s=forward_compile,
             steady_s=forward_steady,
@@ -185,6 +207,7 @@ def _benchmark(
             state_dim=shape.state_dim,
             value_dim=shape.value_dim,
             dtype=str(dtype),
+            sharded=shard_groups,
             mode="backward",
             compile_s=backward_compile,
             steady_s=backward_steady,
@@ -205,6 +228,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--chunk-size", type=int, default=128)
     parser.add_argument("--state-dim", type=int, default=128)
     parser.add_argument("--value-dim", type=int, default=512)
+    parser.add_argument("--shard-groups", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--profile-dir", type=str, default="")
     parser.add_argument("--profile-mode", type=str, default="backward")
@@ -237,6 +261,7 @@ def main() -> None:
                     shape,
                     dtype=dtype,
                     implementation=implementation,
+                    shard_groups=args.shard_groups,
                     steps=args.steps,
                     warmup=args.warmup,
                     profile_dir=args.profile_dir or None,
@@ -246,10 +271,12 @@ def main() -> None:
             )
 
     print(f"backend={jax.default_backend()} device={jax.devices()[0].device_kind}")
+    print(f"devices={len(jax.devices())} shard_groups={args.shard_groups}")
     for row in rows:
         print(
             f"impl={row.implementation:9s} mode={row.mode:8s} seq={row.seq_len:5d} "
             f"groups={row.groups:3d} chunk={row.chunk_size:3d} state={row.state_dim:3d} value={row.value_dim:3d} "
+            f"sharded={str(row.sharded):5s} "
             f"compile_s={row.compile_s:.4f} steady_s={row.steady_s:.6f} "
             f"tokens_per_s={row.tokens_per_s:.2f} est_tflops={row.estimated_tflops:.2f}"
         )

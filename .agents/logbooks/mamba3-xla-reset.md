@@ -996,3 +996,74 @@
   - If we keep pushing XLA before another kernel attempt, the most promising targets are:
     - reducing layout copies around `bc_contraction`, `scale_x`, and `diagonal_correction`
     - improving the current materialized lowering rather than replacing it with a streamed-rank decomposition
+
+## 2026-03-19: hybrid-mode API defaults and slice-level comparison set
+
+- Goal:
+  - Add a stable public “hybrid mode” surface around the kept XLA paths rather than forcing callers to choose between unrelated SISO and MIMO entrypoints.
+  - Record the current TPU defaults and an apples-to-apples slice-level comparison table for the three canonical shapes.
+- Public API/config additions:
+  - Added stable mode/config helpers in:
+    - [mamba3/config.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/src/levanter/kernels/pallas/mamba3/config.py)
+    - `Mamba3Mode = {"siso", "mimo"}`
+    - `HybridModeConfig`
+    - `mamba3_tpu_default_chunk_size(...)`
+  - Added thin dispatchers in:
+    - [mamba3/api.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/src/levanter/kernels/pallas/mamba3/api.py)
+    - `mamba3_hybrid_chunked_forward(...)`
+    - `mamba3_hybrid_chunked_forward_from_transformed(...)`
+  - Preserved the existing low-level SISO and MIMO entrypoints unchanged.
+- Current TPU default chunk choices:
+  - `siso`: `chunk_size = 512`
+  - `mimo` with tuned `rank=4`: `chunk_size = 256`
+- Slice-level SISO benchmark basis:
+  - Added explicit `G`-axis sharding support to:
+    - [bench_mamba3_xla.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/scripts/bench/bench_mamba3_xla.py)
+  - Setup:
+    - `v5p-8`
+    - `bf16`
+    - `seq_len=16384`
+    - `groups=16`
+    - explicit sharding on `G`
+    - tuned SISO chunk: `512`
+  - Results:
+    - `128 x 512`
+      - forward: `341.20M tok/s`, `313.05` estimated TFLOP/s
+      - backward: `211.94M tok/s`, `194.46`
+    - `512 x 1024`
+      - forward: `152.60M tok/s`, `560.05`
+      - backward: `91.89M tok/s`, `337.23`
+    - `1024 x 512`
+      - forward: `171.88M tok/s`, `630.81`
+      - backward: `99.67M tok/s`, `365.79`
+- Hybrid comparison table on the three canonical shapes:
+  - Comparison uses the tuned TPU chunk for each mode:
+    - SISO: `chunk=512`
+    - MIMO `R=4`: `chunk=256`
+  - `128 x 512`
+    - SISO: `341.20M / 211.94M tok/s`
+    - MIMO `R=4`: `78.53M / 39.73M tok/s`
+    - MIMO relative to SISO:
+      - forward: `0.23x`
+      - backward: `0.19x`
+  - `512 x 1024`
+    - SISO: `152.60M / 91.89M tok/s`
+    - MIMO `R=4`: `34.92M / 15.86M tok/s`
+    - MIMO relative to SISO:
+      - forward: `0.23x`
+      - backward: `0.17x`
+  - `1024 x 512`
+    - SISO: `171.88M / 99.67M tok/s`
+    - MIMO `R=4`: `37.76M / 22.70M tok/s`
+    - MIMO relative to SISO:
+      - forward: `0.22x`
+      - backward: `0.23x`
+- Interpretation:
+  - The hybrid split is clean enough to expose publicly:
+    - SISO remains the throughput-oriented default path.
+    - MIMO `R=4` is now a real, explicit alternate mode with its own tuned chunk size.
+  - On the current TPU slice measurements, MIMO `R=4` runs at roughly `4.3x` to `5.8x` lower token throughput than SISO across the three comparison shapes.
+  - That slowdown is large but now measured honestly on the same slice-level basis rather than by mixing default-placement and sharded runs.
+- Decision:
+  - Keep the new hybrid API surface.
+  - Use the tuned TPU chunk defaults above when building higher-level configs around the current XLA implementation.
