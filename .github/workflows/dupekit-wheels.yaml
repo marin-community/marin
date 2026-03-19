@@ -1,6 +1,7 @@
 name: Dupekit - Build Wheels
 
 on:
+  workflow_dispatch: {}
   push:
     branches: [main]
     paths:
@@ -19,6 +20,7 @@ concurrency:
 
 permissions:
   contents: write  # for creating releases
+  pull-requests: write  # for create-pull-request
 
 jobs:
   build:
@@ -74,3 +76,60 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+
+  update-release:
+    if: github.ref == 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/')
+    needs: [build, sdist]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dupekit-latest
+          name: "dupekit (latest wheels)"
+          prerelease: true
+          make_latest: false
+          files: dist/*
+
+  update-pyproject:
+    if: github.ref == 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/')
+    needs: [update-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update pyproject.toml with dupekit wheel references
+        run: |
+          set -euo pipefail
+
+          # Read version from Cargo.toml
+          VERSION=$(grep '^version' rust/dupekit/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "Dupekit version: $VERSION"
+
+          FIND_LINKS_URL="https://github.com/marin-community/marin/releases/expanded_assets/dupekit-latest"
+
+          # Ensure find-links contains the rolling release URL (uncommented)
+          if grep -q "^#.*find-links.*dupekit-latest" pyproject.toml; then
+            # Uncomment the existing commented-out line
+            sed -i "s|^#.*find-links.*dupekit-latest.*|find-links = [\"${FIND_LINKS_URL}\"]|" pyproject.toml
+          elif ! grep -q "find-links.*dupekit-latest" pyproject.toml; then
+            # Add find-links after [tool.uv] section header
+            sed -i "/^\[tool\.uv\]/a find-links = [\"${FIND_LINKS_URL}\"]" pyproject.toml
+          fi
+
+          # Update dupekit version pin in dependencies
+          sed -i "s|\"dupekit[^\"]*\"|\"dupekit >= ${VERSION}\"|" pyproject.toml
+
+          # Remove dupekit from [tool.uv.sources] (path-based source)
+          sed -i '/^dupekit\s*=\s*{.*path.*/d' pyproject.toml
+
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: auto/update-dupekit-wheels
+          title: "chore: update dupekit wheels"
+          body: "Auto-generated: updates pyproject.toml to use latest dupekit wheels from GitHub Releases."
+          labels: agent-generated
+          commit-message: "chore: update dupekit wheel references in pyproject.toml"
