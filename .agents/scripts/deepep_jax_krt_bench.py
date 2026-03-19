@@ -193,6 +193,11 @@ sleep {args.post_bench_sleep_seconds}
 def _build_run_script(args: argparse.Namespace) -> str:
     repo_archive_url = f"https://codeload.github.com/marin-community/marin/tar.gz/{args.repo_ref}"
     deepep_archive_url = f"https://codeload.github.com/deepseek-ai/DeepEP/tar.gz/{args.deepep_ref}"
+    trust_runtime_recv_count_flag = (
+        f"\nexport LEVANTER_DEEPEP_TRUST_RUNTIME_RECV_COUNT={1 if args.deepep_trust_runtime_recv_count else 0}"
+        if args.deepep_trust_runtime_recv_count
+        else ""
+    )
     return f"""set -euxo pipefail
 echo HOSTNAME=$(hostname)
 echo PYTHON=$(/opt/conda/bin/python -c 'import sys; print(sys.executable)')
@@ -221,6 +226,7 @@ export DEEPEP_LOAD_AS_PYTHON_MODULE={1 if args.load_as_python_module else 0}
 export JAX_PLATFORMS=cuda
 export JAX_ENABLE_X64=1
 export PYTHONPATH=/opt/conda/lib/python3.11/site-packages${{PYTHONPATH:+:$PYTHONPATH}}
+{trust_runtime_recv_count_flag}
 uv sync --quiet --frozen --link-mode symlink --python 3.11 --package levanter --no-group dev --extra gpu
 .venv/bin/python - <<'PY'
 import jax
@@ -232,6 +238,7 @@ print("JAXLIB_VERSION", jaxlib.__version__)
 print("JAX_DEVICES", jax.devices())
 print("DEEPEP_BUILD_WITH_TORCH_EXTENSION", os.environ["DEEPEP_BUILD_WITH_TORCH_EXTENSION"])
 print("DEEPEP_LOAD_AS_PYTHON_MODULE", os.environ["DEEPEP_LOAD_AS_PYTHON_MODULE"])
+print("LEVANTER_DEEPEP_TRUST_RUNTIME_RECV_COUNT", os.environ.get("LEVANTER_DEEPEP_TRUST_RUNTIME_RECV_COUNT", "0"))
 print("TORCH_VERSION", torch.__version__)
 PY
 {_smoke_block(args)}
@@ -315,6 +322,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--post-bench-sleep-seconds", type=int, default=0)
     parser.add_argument("--w13-out-first", action="store_true")
     parser.add_argument("--w13-expert-padded", action="store_true")
+    parser.add_argument("--deepep-trust-runtime-recv-count", action="store_true")
     parser.add_argument(
         "--node-selector",
         action="append",

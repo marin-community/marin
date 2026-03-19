@@ -112,6 +112,14 @@ bool HostDispatchDebugEnabled() {
   return enabled;
 }
 
+bool TrustRuntimeRecvCountEnabled() {
+  static const bool enabled = []() {
+    const char* value = std::getenv("LEVANTER_DEEPEP_TRUST_RUNTIME_RECV_COUNT");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+  }();
+  return enabled;
+}
+
 void LogHostDispatchStage(
     int rank,
     const char* stage,
@@ -761,18 +769,24 @@ ffi::Error DispatchIntranodeCached(
           "DeepEP intranode cached dispatch expects num_recv_tokens shape [1]");
     }
     int num_recv_tokens = -1;
-    cudaError_t status = cudaMemcpyAsync(
-        &num_recv_tokens,
-        num_recv_tokens_buffer.typed_data(),
-        sizeof(int),
-        cudaMemcpyDeviceToHost,
-        stream);
-    if (status != cudaSuccess) {
-      return CudaError(status, "cudaMemcpyAsync(read num_recv_tokens)");
-    }
-    status = cudaStreamSynchronize(stream);
-    if (status != cudaSuccess) {
-      return CudaError(status, "cudaStreamSynchronize(read num_recv_tokens)");
+    cudaError_t status = cudaSuccess;
+    if (TrustRuntimeRecvCountEnabled() && runtime.last_num_recv_tokens >= 0) {
+      num_recv_tokens = runtime.last_num_recv_tokens;
+    } else {
+      status = cudaMemcpyAsync(
+          &num_recv_tokens,
+          num_recv_tokens_buffer.typed_data(),
+          sizeof(int),
+          cudaMemcpyDeviceToHost,
+          stream);
+      if (status != cudaSuccess) {
+        return CudaError(status, "cudaMemcpyAsync(read num_recv_tokens)");
+      }
+      status = cudaStreamSynchronize(stream);
+      if (status != cudaSuccess) {
+        return CudaError(status, "cudaStreamSynchronize(read num_recv_tokens)");
+      }
+      runtime.last_num_recv_tokens = num_recv_tokens;
     }
 
     const auto x_dims = x.dimensions();
@@ -914,18 +928,24 @@ ffi::Error CombineIntranode(
       return ffi::Error::InvalidArgument("DeepEP intranode combine expects num_recv_tokens shape [1]");
     }
     int num_recv_tokens = -1;
-    cudaError_t status = cudaMemcpyAsync(
-        &num_recv_tokens,
-        num_recv_tokens_buffer.typed_data(),
-        sizeof(int),
-        cudaMemcpyDeviceToHost,
-        stream);
-    if (status != cudaSuccess) {
-      return CudaError(status, "cudaMemcpyAsync(read num_recv_tokens)");
-    }
-    status = cudaStreamSynchronize(stream);
-    if (status != cudaSuccess) {
-      return CudaError(status, "cudaStreamSynchronize(read num_recv_tokens)");
+    cudaError_t status = cudaSuccess;
+    if (TrustRuntimeRecvCountEnabled() && runtime.last_num_recv_tokens >= 0) {
+      num_recv_tokens = runtime.last_num_recv_tokens;
+    } else {
+      status = cudaMemcpyAsync(
+          &num_recv_tokens,
+          num_recv_tokens_buffer.typed_data(),
+          sizeof(int),
+          cudaMemcpyDeviceToHost,
+          stream);
+      if (status != cudaSuccess) {
+        return CudaError(status, "cudaMemcpyAsync(read num_recv_tokens)");
+      }
+      status = cudaStreamSynchronize(stream);
+      if (status != cudaSuccess) {
+        return CudaError(status, "cudaStreamSynchronize(read num_recv_tokens)");
+      }
+      runtime.last_num_recv_tokens = num_recv_tokens;
     }
 
     const auto recv_x_dims = recv_x.dimensions();
