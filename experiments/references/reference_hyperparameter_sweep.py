@@ -563,7 +563,7 @@ def _build_train_step(
             "checkpoints",
             f"{SWEEP.client_id_prefix}-loop{loop_index}-trial{suggestion_index}",
         ),
-        fn=remote(run_vizier_train, resources=ResourceConfig.with_tpu("v4-8")),
+        fn=remote(run_vizier_train, resources=ResourceConfig.with_cpu()),
         config=VizierTrainConfig(
             suggestions_path=suggestions_path,
             suggestion_index=suggestion_index,
