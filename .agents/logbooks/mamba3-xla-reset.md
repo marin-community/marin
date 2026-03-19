@@ -237,6 +237,15 @@
   - The old backward path had a prominent root `copy.68` tied to the transposed local-output/chunk-state fusion.
   - In the new profile, that copy disappears from the top ops.
   - The new top ops are still the same three structured regions, but they map directly to the new `ssd/xla.py` batched contractions rather than the older `vmap`-staged path.
+- Current phase split for the winning `chunk_size=512` XLA backward path:
+  - `prefix_emit`: `44.54%`
+  - `local_output`: `33.61%`
+  - `chunk_state`: `21.85%`
+  - These percentages are computed from the `mamba3_chunked_forward` inclusive region in `scratch/profiles/mamba3-xla-bwd-512-batched-summary.json`:
+    - total `mamba3_chunked_forward` inclusive duration: `43120.75`
+    - `prefix_emit`: `19207.15`
+    - `local_output`: `14493.11`
+    - `chunk_state`: `9420.49`
 - Interpretation:
   - The profile matches the performance change: the gain is broad-based across all three dominant regions, with the largest relative reduction in `chunk_state`.
   - The previous bottleneck was partly the staging/layout induced by `vmap`, not just the raw arithmetic.
