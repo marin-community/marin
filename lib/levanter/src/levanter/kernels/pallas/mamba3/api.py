@@ -6,7 +6,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 import math
 from typing import Literal, TypeAlias, cast
-import warnings
 
 import jax
 from jaxtyping import Array, Float
@@ -38,44 +37,14 @@ from .xla import (
 )
 
 
-Implementation: TypeAlias = Literal["pallas_tpu", "xla", "reference"]
-
-
-class PallasUnsupportedError(NotImplementedError):
-    """Raised when the optional Pallas Mamba-3 backend is explicitly requested but unavailable."""
-
-
-def mamba3_intra_chunk_pallas(
-    a_log_cumsum: Float[Array, "groups chunk"],
-    src_scale: Float[Array, "groups chunk"],
-    out_correction: Float[Array, "groups chunk"],
-    b: Float[Array, "groups chunk state"],
-    c: Float[Array, "groups chunk state"],
-    x: Float[Array, "groups chunk value"],
-    *,
-    block_sizes: BlockSizes | None = None,
-    interpret: bool = False,
-    backend: str | None = None,
-) -> Float[Array, "groups chunk value"]:
-    del a_log_cumsum, src_scale, out_correction, b, c, x, block_sizes, interpret, backend
-    raise PallasUnsupportedError("Mamba-3 TPU Pallas kernel is intentionally absent; use the XLA path.")
+Implementation: TypeAlias = Literal["xla", "reference"]
 
 
 IMPLEMENTATIONS = {
     "reference": mamba3_intra_chunk_reference_batched,
     "xla": mamba3_intra_chunk_xla_batched,
-    "pallas_tpu": mamba3_intra_chunk_pallas,
 }
 _DEFAULT_IMPLEMENTATIONS: tuple[Implementation, ...] = ("xla",)
-_PALLAS_FALLBACK_WARNINGS_EMITTED: set[str] = set()
-
-
-def _warn_pallas_fallback_once(exc: Exception) -> None:
-    message = str(exc)
-    if message in _PALLAS_FALLBACK_WARNINGS_EMITTED:
-        return
-    _PALLAS_FALLBACK_WARNINGS_EMITTED.add(message)
-    warnings.warn(f"Mamba-3 Pallas kernel unavailable, falling back to XLA: {message}", RuntimeWarning)
 
 
 def _flatten_intra_chunk_inputs(
@@ -134,22 +103,14 @@ def mamba3_intra_chunk(
     else:
         impls = (cast(Implementation, implementation),)
 
-    errors: list[Exception] = []
     for impl in impls:
-        fn = IMPLEMENTATIONS[impl]
-        try:
-            if impl == "pallas_tpu":
-                y = fn(*flat_inputs, block_sizes=block_sizes, interpret=interpret, backend=backend)
-            else:
-                y = fn(*flat_inputs)
-            return y.reshape(leading_shape + y.shape[-2:])
-        except PallasUnsupportedError as exc:
-            errors.append(exc)
-            if len(impls) == 1:
-                raise
-            _warn_pallas_fallback_once(exc)
+        fn = IMPLEMENTATIONS.get(impl)
+        if fn is None:
+            raise ValueError(f"Unsupported Mamba-3 implementation: {impl}.")
+        y = fn(*flat_inputs)
+        return y.reshape(leading_shape + y.shape[-2:])
 
-    raise ExceptionGroup("all Mamba-3 intra-chunk implementations failed", errors)
+    raise ValueError("No Mamba-3 implementation was provided.")
 
 
 def mamba3_chunk_state(
@@ -196,6 +157,7 @@ def mamba3_chunked_forward_from_transformed(
 ) -> tuple[Float[Array, "... chunks chunk value"], Float[Array, "... value state"]]:
     """Chunked Mamba-3 forward pass on transformed inputs."""
 
+    del block_sizes, interpret, backend
     if a_log_cumsum.ndim < 2 or src_scale.shape != a_log_cumsum.shape or out_correction.shape != a_log_cumsum.shape:
         raise ValueError("Expected transformed inputs with shape `[..., chunks, chunk]`.")
     leading_shape = a_log_cumsum.shape[:-2]
@@ -208,6 +170,9 @@ def mamba3_chunked_forward_from_transformed(
     flat_c = c.reshape(groups, num_chunks, chunk_size, c.shape[-1])
     flat_x = x.reshape(groups, num_chunks, chunk_size, x.shape[-1])
 
+    if implementation not in (None, "xla", "reference"):
+        raise ValueError(f"Unsupported Mamba-3 implementation: {implementation}.")
+
     if implementation == "reference":
         y, final_state = mamba3_chunked_forward_reference_batched(
             flat_a_log_cumsum,
@@ -217,7 +182,7 @@ def mamba3_chunked_forward_from_transformed(
             flat_c,
             flat_x,
         )
-    elif implementation is None or implementation == "xla":
+    else:
         y, final_state = mamba3_chunked_forward_xla_batched(
             flat_a_log_cumsum,
             flat_src_scale,
@@ -225,34 +190,6 @@ def mamba3_chunked_forward_from_transformed(
             flat_b,
             flat_c,
             flat_x,
-        )
-    else:
-        local_output = jax.vmap(
-            lambda a_i, s_i, q_i, b_i, c_i, x_i: mamba3_intra_chunk(
-                a_i,
-                s_i,
-                q_i,
-                b_i,
-                c_i,
-                x_i,
-                implementation=implementation,
-                block_sizes=block_sizes,
-                interpret=interpret,
-                backend=backend,
-            ),
-            in_axes=(1, 1, 1, 1, 1, 1),
-            out_axes=1,
-        )(flat_a_log_cumsum, flat_src_scale, flat_out_correction, flat_b, flat_c, flat_x)
-        chunk_state = jax.vmap(mamba3_chunk_state_xla_batched, in_axes=(1, 1, 1, 1), out_axes=1)(
-            flat_a_log_cumsum,
-            flat_src_scale,
-            flat_b,
-            flat_x,
-        )
-        from ..ssd.reference import ssd_chunked_from_local_blocks_reference_batched
-
-        y, final_state = ssd_chunked_from_local_blocks_reference_batched(
-            flat_a_log_cumsum, flat_c, local_output, chunk_state
         )
 
     return y.reshape(leading_shape + y.shape[-3:]), final_state.reshape(leading_shape + final_state.shape[-2:])
@@ -548,7 +485,6 @@ __all__ = [
     "IMPLEMENTATIONS",
     "Implementation",
     "Mamba3Mode",
-    "PallasUnsupportedError",
     "intra_chunk_log_alpha_cumsum",
     "local_log_alpha",
     "mamba3_hybrid_chunked_forward",
@@ -566,7 +502,6 @@ __all__ = [
     "mamba3_chunked_sequential_reference_batched",
     "mamba3_direct_recurrence_reference_batched",
     "mamba3_intra_chunk",
-    "mamba3_intra_chunk_pallas",
     "mamba3_intra_chunk_reference_batched",
     "prepare_mamba3_chunked_scales",
     "prepare_mamba3_scales",
