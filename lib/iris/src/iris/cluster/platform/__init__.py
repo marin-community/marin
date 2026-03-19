@@ -50,7 +50,6 @@ from iris.cluster.platform.gcp import (
     GcpWorkerHandle,
 )
 from iris.cluster.platform.local import (
-    LocalPlatform,
     LocalSliceHandle,
 )
 from iris.cluster.platform.manual import (
@@ -70,7 +69,6 @@ __all__ = [
     "GcpStandaloneWorkerHandle",
     "GcpWorkerHandle",
     "Labels",
-    "LocalPlatform",
     "LocalSliceHandle",
     "ManualPlatform",
     "ManualSliceHandle",

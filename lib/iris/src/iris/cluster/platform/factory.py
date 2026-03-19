@@ -22,8 +22,9 @@ from typing import cast
 from iris.cluster.platform.base import Platform
 from iris.cluster.platform.coreweave import CoreweavePlatform
 from iris.cluster.platform.gcp import GcpPlatform
-from iris.cluster.platform.local import LocalPlatform
+from iris.cluster.platform.gcp_service_impl import GcpServiceImpl
 from iris.cluster.platform.manual import ManualPlatform
+from iris.cluster.platform.service_mode import ServiceMode
 from iris.rpc import config_pb2
 
 
@@ -71,7 +72,16 @@ def create_platform(
         )
 
     if which == "local":
-        return cast(Platform, LocalPlatform(label_prefix=label_prefix))
+        local_gcp_config = config_pb2.GcpPlatformConfig(project_id="local")
+        gcp_service = GcpServiceImpl(mode=ServiceMode.LOCAL, project_id="local", label_prefix=label_prefix)
+        return cast(
+            Platform,
+            GcpPlatform(
+                gcp_config=local_gcp_config,
+                label_prefix=label_prefix,
+                gcp_service=gcp_service,
+            ),
+        )
 
     if which == "coreweave":
         return cast(
