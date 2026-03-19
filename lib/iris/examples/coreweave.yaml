@@ -1,10 +1,10 @@
-# Iris configuration for CoreWeave CKS clusters.
+# Iris reference configuration for CoreWeave CKS clusters.
 #
-# Architecture: Shared NodePool model. `iris cluster start` creates one
-# NodePool per scale group (plus a controller pool) with CoreWeave autoscaling
-# enabled. Iris manages only Pods; CoreWeave manages node provisioning.
-# NodePool names are derived from this config: {label_prefix}-{scale_group_name}.
-# When Pods are deleted, NodePools scale to zero automatically.
+# Architecture: KubernetesProvider dispatches task pods directly to the k8s API.
+# No worker daemons are needed. CoreWeave NodePool autoscaling provisions nodes
+# on demand; when pods are deleted, NodePools scale to zero automatically.
+# Multi-VM gang-scheduled jobs use pod affinity to co-locate sibling tasks on
+# the same spine switch for InfiniBand connectivity.
 #
 # Workflow:
 #
@@ -34,11 +34,18 @@ platform:
   coreweave:
     region: US-WEST-04A
     namespace: iris
-    kubeconfig_path: ~/.kube/coreweave-iris  # Set this to your local kubeconfig, or use KUBECONFIG env var
+    kubeconfig_path: ~/.kube/coreweave-iris
     object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
 
 storage:
   remote_state_dir: s3://marin-na/iris/state
+
+kubernetes_provider:
+  namespace: iris
+  default_image: ghcr.io/marin-community/iris-task:latest
+  host_network: true              # Required for NCCL/IB multi-host traffic
+  cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal GPU nodes
+  controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
@@ -65,7 +72,6 @@ defaults:
     default_task_image: ghcr.io/marin-community/iris-task:latest
 
 scale_groups:
-  # CPU general-purpose — used for data processing, orchestration, etc.
   cpu-erapids:
     num_vms: 1
     resources:
@@ -78,7 +84,7 @@ scale_groups:
         region: US-WEST-04A
         pool: cpu-erapids
     min_slices: 0
-    max_slices: 1  # Cost-safe default; increase for production workloads
+    max_slices: 1
     priority: 50
     slice_template:
       num_vms: 1
@@ -86,7 +92,6 @@ scale_groups:
         region: US-WEST-04A
         instance_type: cd-gp-i64-erapids
 
-  # 8x H100 with InfiniBand — primary training workhorse
   h100-8x:
     num_vms: 1
     resources:
@@ -101,7 +106,7 @@ scale_groups:
         region: US-WEST-04A
         pool: h100-8x
     min_slices: 0
-    max_slices: 1  # Cost-safe default; increase for production workloads
+    max_slices: 1
     priority: 100
     slice_template:
       num_vms: 1
@@ -109,7 +114,6 @@ scale_groups:
         region: US-WEST-04A
         instance_type: gd-8xh100ib-i128
 
-  # 16x H100 (2-VM) with InfiniBand — multi-node training
   h100-16x:
     num_vms: 2
     resources:
@@ -123,6 +127,7 @@ scale_groups:
       attributes:
         region: US-WEST-04A
         pool: h100-16x
+        backend.coreweave.cloud/superpod: same-slice
     min_slices: 0
     max_slices: 1
     priority: 100

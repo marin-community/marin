@@ -1,27 +1,31 @@
-# Iris configuration for the CoreWeave GPU canary ferry (CI).
+# Iris configuration for the CoreWeave multi-host GPU canary ferry.
 #
-# Minimal config: only the scale groups the canary actually uses (cpu-erapids
-# for the controller, h100-8x for training). Uses a dedicated namespace so
-# CI teardown doesn't interfere with persistent clusters in "iris".
+# Separate namespace/label from the single-host canary so the two don't
+# interfere with each other during boot, teardown, or concurrent runs.
 
 platform:
-  label_prefix: iris-canary
+  label_prefix: iris-canary-mh
   coreweave:
     region: US-WEST-04A
-    namespace: iris-canary
+    namespace: iris-canary-mh
     kubeconfig_path: ~/.kube/coreweave-iris
     object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
 
 storage:
-  remote_state_dir: s3://marin-na/iris/state/canary
+  remote_state_dir: s3://marin-na/iris/state/canary-multihost
 
-worker_provider: {}
+kubernetes_provider:
+  namespace: iris-canary-mh
+  default_image: ghcr.io/marin-community/iris-task:latest
+  host_network: true              # Required for NCCL/IB multi-host traffic
+  cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal GPU nodes
+  controller_address: http://iris-controller-mh-svc.iris-canary-mh.svc.cluster.local:10000
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   coreweave:
     port: 10000
-    service_name: iris-controller-svc
+    service_name: iris-controller-mh-svc
     scale_group: cpu-erapids
 
 defaults:
@@ -38,7 +42,7 @@ defaults:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001
     cache_dir: /mnt/local/iris-cache
-    runtime: docker
+    runtime: kubernetes
     default_task_image: ghcr.io/marin-community/iris-task:latest
 
 scale_groups:
@@ -62,8 +66,8 @@ scale_groups:
         region: US-WEST-04A
         instance_type: cd-gp-i64-erapids
 
-  h100-8x:
-    num_vms: 1
+  h100-16x:
+    num_vms: 2
     resources:
       cpu: 128
       ram: 2048GB
@@ -74,12 +78,13 @@ scale_groups:
     worker:
       attributes:
         region: US-WEST-04A
-        pool: h100-8x
+        pool: h100-16x
+        backend.coreweave.cloud/superpod: same-slice
     min_slices: 0
     max_slices: 1
     priority: 100
     slice_template:
-      num_vms: 1
+      num_vms: 2
       coreweave:
         region: US-WEST-04A
         instance_type: gd-8xh100ib-i128

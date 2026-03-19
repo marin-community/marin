@@ -9,6 +9,7 @@ import pytest
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import TASKS, WORKERS, ControllerDB
 from iris.cluster.log_store import LogStore
+from tests.cluster.controller.conftest import FakeProvider
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -219,24 +220,13 @@ def test_unhealthy_worker_cascades_to_tasks(tmp_path):
     assert task.state == cluster_pb2.TASK_STATE_WORKER_FAILED
 
 
-class _FakeStubFactory:
-    def get_stub(self, address: str):
-        raise NotImplementedError
-
-    def evict(self, address: str) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
-
-
 def test_reap_stale_workers_removes_old_heartbeat(tmp_path, worker_metadata):
     """Workers restored from checkpoint with heartbeat older than the staleness
     threshold are failed immediately by the heartbeat loop's reap pass."""
     db = ControllerDB(db_path=tmp_path / "controller.sqlite3")
     log_store = LogStore(log_dir=tmp_path / "logs")
     config = ControllerConfig(remote_state_dir="file:///tmp/iris-test-state", local_state_dir=tmp_path)
-    controller = Controller(config=config, worker_stub_factory=_FakeStubFactory(), db=db)
+    controller = Controller(config=config, provider=FakeProvider(), db=db)
     state = controller.state
 
     # Register a worker with a timestamp well beyond the staleness threshold.
@@ -274,7 +264,7 @@ def test_reap_stale_workers_no_op_when_all_fresh(tmp_path, worker_metadata):
     db = ControllerDB(db_path=tmp_path / "controller.sqlite3")
     log_store = LogStore(log_dir=tmp_path / "logs")
     config = ControllerConfig(remote_state_dir="file:///tmp/iris-test-state", local_state_dir=tmp_path)
-    controller = Controller(config=config, worker_stub_factory=_FakeStubFactory(), db=db)
+    controller = Controller(config=config, provider=FakeProvider(), db=db)
 
     controller.state.register_or_refresh_worker(
         worker_id=WorkerId("worker1"),
