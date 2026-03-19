@@ -115,6 +115,10 @@ def connected_components(
                 seen.add(norm)
                 yield item
 
+    # Determine reduce shard count. Default to ctx max_workers to avoid
+    # I/O amplification.
+    num_reduce_shards = ctx.max_workers
+
     curr_it = ctx.execute(
         ds
         # Group nodes in buckets, deduplicate, and emit pairwise links
@@ -122,6 +126,7 @@ def connected_components(
             lambda x: x["bucket"],
             reducer=_reduce_bucket_to_links,
             combiner=_dedup_combiner,
+            num_output_shards=num_reduce_shards,
         )
         # Construct Node state, init with:
         #  * each node is its own component
@@ -129,6 +134,7 @@ def connected_components(
         .group_by(
             lambda x: x["source_id_norm"],
             reducer=_build_adjacency,
+            num_output_shards=num_reduce_shards,
         ).write_vortex(f"{output_dir}/it_0/part-{{shard:05d}}.vortex"),
         verbose=True,
     )
@@ -161,7 +167,7 @@ def connected_components(
                 .load_vortex()
                 .map(lambda record: CCNode(**record))
                 .flat_map(_emit_messages)
-                .group_by(key=lambda x: x["key"], reducer=_reduce_node_step)
+                .group_by(key=lambda x: x["key"], reducer=_reduce_node_step, num_output_shards=num_reduce_shards)
                 .map_shard(_get_write_shard_and_count_fn(i)),
                 verbose=True,
             )
