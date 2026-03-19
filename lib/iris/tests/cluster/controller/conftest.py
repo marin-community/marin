@@ -5,11 +5,14 @@
 
 import tempfile
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
+from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.db import ATTEMPTS, TASKS, ControllerDB
 from iris.cluster.controller.provider import ProviderUnsupportedError
+from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.log_store import LogStore
 from iris.cluster.types import JobName
@@ -45,6 +48,48 @@ class FakeProvider:
 @pytest.fixture
 def fake_provider() -> FakeProvider:
     return FakeProvider()
+
+
+@pytest.fixture
+def state(tmp_path):
+    """Create a fresh ControllerTransitions with temp DB and log store."""
+    db_path = tmp_path / "controller.sqlite3"
+    db = ControllerDB(db_path=db_path)
+    log_store = LogStore(log_dir=tmp_path / "logs")
+    s = ControllerTransitions(db=db, log_store=log_store)
+    yield s
+    log_store.close()
+    db.close()
+
+
+class MockController:
+    """Mock that implements the ControllerProtocol surface used by ControllerServiceImpl."""
+
+    def __init__(self):
+        self.wake = Mock()
+        self.kill_tasks_on_workers = Mock()
+        self.create_scheduling_context = Mock(return_value=Mock())
+        self.get_job_scheduling_diagnostics = Mock(return_value=None)
+        self.autoscaler = None
+        self.provider = Mock()
+        self.has_direct_provider = False
+
+
+@pytest.fixture
+def mock_controller() -> MockController:
+    return MockController()
+
+
+@pytest.fixture
+def controller_service(state, mock_controller, tmp_path) -> ControllerServiceImpl:
+    """ControllerServiceImpl with fresh DB, log store, and mock controller."""
+    return ControllerServiceImpl(
+        state,
+        state._db,
+        controller=mock_controller,
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
+        log_store=state._log_store,
+    )
 
 
 def make_controller_state(**kwargs) -> ControllerTransitions:

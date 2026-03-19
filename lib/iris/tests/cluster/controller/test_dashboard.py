@@ -18,7 +18,6 @@ from iris.cluster.controller.db import (
     JOBS,
     TASKS,
     ATTEMPTS,
-    ControllerDB,
     Endpoint,
     _tasks_with_attempts,
     healthy_active_workers_with_attributes,
@@ -26,11 +25,12 @@ from iris.cluster.controller.db import (
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
-from iris.cluster.log_store import LogStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Timestamp
+
+from .conftest import make_test_entrypoint
 
 
 def _query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName):
@@ -49,13 +49,6 @@ def _query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName):
             order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
         )
     return _tasks_with_attempts(tasks, attempts)
-
-
-def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
-    """Create a minimal RuntimeEntrypoint proto for testing."""
-    entrypoint = cluster_pb2.RuntimeEntrypoint()
-    entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    return entrypoint
 
 
 # =============================================================================
@@ -126,17 +119,6 @@ def set_task_state(state: ControllerTransitions, task_id: JobName, new_state: in
         "UPDATE tasks SET state = ? WHERE task_id = ?",
         (new_state, task_id.to_wire()),
     )
-
-
-@pytest.fixture
-def state(tmp_path):
-    db_path = tmp_path / "controller.sqlite3"
-    db = ControllerDB(db_path=db_path)
-    log_store = LogStore(log_dir=tmp_path / "logs")
-    s = ControllerTransitions(db=db, log_store=log_store)
-    yield s
-    log_store.close()
-    db.close()
 
 
 @pytest.fixture
@@ -270,7 +252,7 @@ def make_worker_metadata():
 def job_request():
     return cluster_pb2.Controller.LaunchJobRequest(
         name=JobName.root("test-user", "test-job").to_wire(),
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=1,
@@ -413,7 +395,7 @@ def test_list_jobs_includes_task_counts(client, state):
     # Submit a job with multiple replicas (replicas is on ResourceSpecProto)
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="multi-replica-job",
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=3,
         environment=cluster_pb2.EnvironmentConfig(),
@@ -444,7 +426,7 @@ def test_list_jobs_includes_task_counts(client, state):
 def test_list_users_returns_aggregates(client, state):
     """ListUsers RPC returns one aggregate row per user."""
     request = cluster_pb2.Controller.LaunchJobRequest(
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=1,
@@ -490,7 +472,7 @@ def test_get_job_status_returns_original_request(client, state):
     """GetJobStatus RPC returns the original LaunchJobRequest for the job detail page."""
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="request-detail-job",
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
             cpu_millicores=4000,
             memory_bytes=8 * 1024**3,
@@ -713,7 +695,7 @@ def test_pending_reason_uses_passive_autoscaler_hint_over_scheduler(
 
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="diag-constraint",
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=1,
@@ -894,7 +876,7 @@ def test_coscheduling_failure_reason_no_workers(client, state):
     """
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="cosched-job",
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=2,
         environment=cluster_pb2.EnvironmentConfig(),
@@ -930,7 +912,7 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
     # Submit a coscheduled job needing 4 replicas
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="big-cosched",
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
@@ -983,7 +965,7 @@ def test_list_jobs_returns_all_jobs_for_pagination(client, state):
     for i in range(60):
         request = cluster_pb2.Controller.LaunchJobRequest(
             name=f"job-{i:03d}",
-            entrypoint=_make_test_entrypoint(),
+            entrypoint=make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
             environment=cluster_pb2.EnvironmentConfig(),
         )
