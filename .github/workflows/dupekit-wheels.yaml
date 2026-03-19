@@ -62,22 +62,6 @@ jobs:
           name: sdist
           path: dist/*.tar.gz
 
-  publish:
-    if: startsWith(github.ref, 'refs/tags/dupekit-v')
-    needs: [build, sdist]
-    runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write  # trusted publishing
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist/
-
   release:
     if: startsWith(github.ref, 'refs/tags/dupekit-v')
     needs: [build, sdist]
