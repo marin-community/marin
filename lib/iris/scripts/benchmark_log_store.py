@@ -21,7 +21,8 @@ from tempfile import TemporaryDirectory
 
 import click
 
-from iris.cluster.log_store import LogStore, task_log_key
+from iris.cluster.log_store import task_log_key
+from iris.cluster.log_store.duckdb_store import DuckDBLogStore as LogStore
 from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import logging_pb2
 
@@ -284,7 +285,6 @@ def print_summary(results: list[tuple[str, float, float]]) -> None:
 @click.option("--tasks", default=100, help="Number of tasks per job")
 @click.option("--lines", default=1000, help="Log lines per task")
 @click.option("--iterations", "-n", default=20, help="Query benchmark iterations")
-@click.option("--flush-threshold", default=500_000, help="Rows per Parquet segment")
 @click.option("--only", "only_group", type=click.Choice(["ingest", "query"]), help="Run only this phase")
 @click.option(
     "--log-dir", type=click.Path(path_type=Path), default=None, help="Persist logs to this dir (default: tmpdir)"
@@ -294,21 +294,20 @@ def main(
     tasks: int,
     lines: int,
     iterations: int,
-    flush_threshold: int,
     only_group: str | None,
     log_dir: Path | None,
 ) -> None:
     """Benchmark LogStore write and query performance."""
     total = jobs * tasks * lines
     print(f"LogStore benchmark: {jobs} jobs x {tasks} tasks x {lines} lines = {total:,} entries")
-    print(f"  flush_threshold={flush_threshold:,}  query_iterations={iterations}")
+    print(f"  query_iterations={iterations}")
 
     tmp = None
     if log_dir is None:
         tmp = TemporaryDirectory(prefix="bench_log_store_")
         log_dir = Path(tmp.name) / "logs"
 
-    store = LogStore(log_dir=log_dir, flush_row_threshold=flush_threshold)
+    store = LogStore(log_dir=log_dir)
 
     try:
         if only_group is None or only_group == "ingest":
