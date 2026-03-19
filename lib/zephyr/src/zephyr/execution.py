@@ -36,6 +36,7 @@ import cloudpickle
 import fsspec
 import pyarrow as pa
 import pyarrow.compute as pc
+import pyarrow.dataset as pad
 import pyarrow.parquet as pq
 from iris.marin_fs import open_url, url_to_fs
 from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
@@ -195,34 +196,12 @@ def _get_scatter_read_fs(num_files: int, sample_path: str, memory_fraction: floa
     return pa.fs.PyFileSystem(pa.fs.FSSpecHandler(fsspec_fs))
 
 
-def _read_parquet_chunk(
-    path: str, filter_shard: int, chunk_idx: int, is_pickled: bool, filesystem: pa.fs.FileSystem
-) -> list:
-    """Read a single sorted chunk from a Parquet scatter file via predicate pushdown."""
-    col = _ZEPHYR_SHUFFLE_PICKLED_COL if is_pickled else _ZEPHYR_SHUFFLE_ITEM_COL
-    _, fs_path = url_to_fs(path)
-    table = pq.read_table(
-        fs_path,
-        columns=[col],
-        filters=(
-            (pc.field(_ZEPHYR_SHUFFLE_SHARD_IDX_COL) == filter_shard)
-            & (pc.field(_ZEPHYR_SHUFFLE_CHUNK_IDX_COL) == chunk_idx)
-        ),
-        use_threads=False,
-        pre_buffer=False,
-        filesystem=filesystem,
-    )
-    items = table.column(col).to_pylist()
-    if is_pickled:
-        return [pickle.loads(b) for b in items]
-    return items
-
-
 @dataclass(frozen=True)
 class ScatterParquetIterator:
     """Reference to sorted chunks for one target shard in one Parquet file.
 
-    Reads chunk data lazily via predicate pushdown on ``(shard_idx, chunk_idx)``.
+    Creates a ``pyarrow.dataset`` once (caching file metadata) and yields
+    lazy per-chunk iterators via Scanner with predicate pushdown.
     """
 
     path: str
@@ -233,15 +212,41 @@ class ScatterParquetIterator:
     filesystem: pa.fs.FileSystem
 
     def __iter__(self) -> Iterator:
-        for chunk_data in self.get_chunk_iterators():
-            yield from chunk_data
+        for chunk_iter in self.get_chunk_iterators():
+            yield from chunk_iter
 
     def get_chunk_iterators(self) -> Iterator[Iterator]:
-        """Yield one iterator per sorted chunk."""
+        """Yield one lazy iterator per sorted chunk.
+
+        Opens the file once via ``pyarrow.dataset`` and creates a Scanner
+        per chunk with predicate pushdown on ``(shard_idx, chunk_idx)``.
+        """
+        _, fs_path = url_to_fs(self.path)
+        dataset: pad.FileSystemDataset = pad.dataset(fs_path, format="parquet", filesystem=self.filesystem)
+        col = _ZEPHYR_SHUFFLE_PICKLED_COL if self.is_pickled else _ZEPHYR_SHUFFLE_ITEM_COL
+
         for i in range(self.chunk_count):
-            yield iter(
-                _read_parquet_chunk(self.path, self.shard_idx, self.chunk_offset + i, self.is_pickled, self.filesystem)
+            chunk_idx = self.chunk_offset + i
+            scanner = dataset.scanner(
+                columns=[col],
+                filter=(
+                    (pc.field(_ZEPHYR_SHUFFLE_SHARD_IDX_COL) == self.shard_idx)
+                    & (pc.field(_ZEPHYR_SHUFFLE_CHUNK_IDX_COL) == chunk_idx)
+                ),
+                batch_size=...,
+                batch_readahead=...,
+                fragment_readahead=...,
+                use_threads=False,
             )
+            yield self._iter_scanner(scanner, col)
+
+    def _iter_scanner(self, scanner: pad.Scanner, col: str) -> Iterator:
+        for batch in scanner.to_batches():
+            items = batch.column(col).to_pylist()
+            if self.is_pickled:
+                yield from (pickle.loads(b) for b in items)
+            else:
+                yield from items
 
 
 @dataclass

@@ -377,7 +377,14 @@ def test_scatter_parquet_iterator_pickle_roundtrip(tmp_path):
     path = str(tmp_path / "test.parquet")
     pq.write_table(pa.Table.from_batches([batch]), path)
 
-    it = ScatterParquetIterator(path=path, shard_idx=0, chunk_count=1, chunk_offset=0, is_pickled=True)
+    it = ScatterParquetIterator(
+        path=path,
+        shard_idx=0,
+        chunk_count=1,
+        chunk_offset=0,
+        is_pickled=True,
+        filesystem=pa.fs.LocalFileSystem(),
+    )
     chunks = [list(chunk_iter) for chunk_iter in it.get_chunk_iterators()]
     assert len(chunks) == 1
     assert chunks[0] == items
