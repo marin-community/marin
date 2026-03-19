@@ -178,12 +178,12 @@ class ContainerHandle(Protocol):
 
     @property
     def container_id(self) -> str | None:
-        """Return the current container ID, if any."""
-        ...
+        """Return the platform container identifier.
 
-    @property
-    def container_name(self) -> str | None:
-        """Return the Docker container name, if any."""
+        Docker: the container ID (hash from docker create).
+        K8s: the pod name.
+        Process: a local-<uuid> string.
+        """
         ...
 
     def build(self) -> list[LogLine]:

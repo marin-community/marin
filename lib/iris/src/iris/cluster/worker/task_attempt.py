@@ -273,10 +273,13 @@ class TaskAttempt:
         return None
 
     @property
-    def container_name(self) -> str | None:
-        """Return the Docker container name from the handle, if available."""
+    def platform_container_id(self) -> str | None:
+        """Return the platform container ID from the handle, if available.
+
+        Docker: container hash. K8s: pod name. Process: local-<uuid>.
+        """
         if self._container_handle:
-            return self._container_handle.container_name
+            return self._container_handle.container_id
         return None
 
     def recent_logs(self, max_entries: int = 0) -> list[logging_pb2.LogEntry]:
@@ -333,6 +336,49 @@ class TaskAttempt:
             raise ValueError(f"Task {self.task_id} has no container handle")
         return self._container_handle.profile(duration_seconds, profile_type)
 
+    def exec_in_container(self, command: list[str]) -> cluster_pb2.Worker.ExecInContainerResponse:
+        """Execute a command in this task's container.
+
+        Uses docker exec for Docker containers, subprocess for process containers.
+        """
+        if not self._container_handle:
+            return cluster_pb2.Worker.ExecInContainerResponse(error=f"Task {self.task_id} has no container handle")
+
+        import subprocess as _subprocess
+
+        container_id = self._container_handle.container_id
+        if not container_id:
+            return cluster_pb2.Worker.ExecInContainerResponse(error="No container ID available")
+
+        # Use docker exec for Docker containers, direct exec for process containers
+        from iris.cluster.runtime.docker import DockerContainerHandle
+
+        if isinstance(self._container_handle, DockerContainerHandle):
+            result = _subprocess.run(
+                ["docker", "exec", container_id, *command],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            return cluster_pb2.Worker.ExecInContainerResponse(
+                exit_code=result.returncode,
+                stdout=result.stdout,
+                stderr=result.stderr,
+            )
+
+        # Process runtime: run command directly
+        result = _subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return cluster_pb2.Worker.ExecInContainerResponse(
+            exit_code=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        )
+
     def transition_to(
         self,
         state: TaskState,
@@ -369,7 +415,7 @@ class TaskAttempt:
             error=self.error or "",
             ports=self.ports,
             current_attempt_id=self.attempt_id,
-            container_name=self.container_name or "",
+            container_id=self.platform_container_id or "",
             resource_usage=cluster_pb2.ResourceUsage(
                 memory_mb=self.current_memory_mb,
                 memory_peak_mb=self.peak_memory_mb,

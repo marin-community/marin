@@ -309,17 +309,11 @@ class DockerContainerHandle:
     runtime: "DockerRuntime"
     _resolved_mounts: list[ResolvedMount] = field(default_factory=list, repr=False)
     _run_container_id: str | None = field(default=None, repr=False)
-    _run_container_name: str | None = field(default=None, repr=False)
 
     @property
     def container_id(self) -> str | None:
-        """Return the current run container ID, if any."""
+        """Return the Docker container ID (hash), if any."""
         return self._run_container_id
-
-    @property
-    def container_name(self) -> str | None:
-        """Return the Docker container name for the run container, if any."""
-        return self._run_container_name
 
     def build(self) -> list[LogLine]:
         """Run setup_commands (uv sync, pip install, etc) in a temporary container.
@@ -434,7 +428,6 @@ exec {quoted_cmd}
         if self.config.task_id and self.config.attempt_id is not None:
             container_name = _make_container_name(self.config.task_id, self.config.attempt_id)
 
-        self._run_container_name = container_name
         self._run_container_id = self._docker_create(
             command=command,
             include_devices=True,

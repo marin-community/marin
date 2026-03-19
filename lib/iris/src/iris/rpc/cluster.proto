@@ -245,7 +245,7 @@ message TaskStatus {
   string pending_reason = 16;         // Why task can't be scheduled (empty if schedulable)
   bool can_be_scheduled = 17;         // Whether task is currently schedulable
   // field 18 was log_directory, removed
-  string container_name = 19;         // Docker container name (e.g. iris-user-job-0-a1)
+  string container_id = 19;           // Platform container identifier (Docker container ID, K8s pod name)
 }
 
 // Record of a single task execution attempt
@@ -697,6 +697,19 @@ message Controller {
     repeated TaskStatus tasks = 1;
   }
 
+  // --- Exec in Container (proxied to worker) ---
+  message ExecInContainerRequest {
+    string task_id = 1;             // Task whose container to exec into
+    repeated string command = 2;     // Command to execute (e.g. ["bash", "-c", "ls"])
+  }
+
+  message ExecInContainerResponse {
+    int32 exit_code = 1;
+    string stdout = 2;
+    string stderr = 3;
+    string error = 4;               // Non-empty if exec setup failed
+  }
+
   // --- Worker Management ---
   message WorkerInfo {
     string worker_id = 1;
@@ -718,7 +731,7 @@ message Controller {
     ResourceUsage resource_usage = 8;
     // Delta log entries since last heartbeat (capped per heartbeat)
     repeated iris.logging.LogEntry log_entries = 9;
-    string container_name = 10;       // Docker container name (e.g. iris-user-job-0-a1-3f8a1b2c)
+    string container_id = 10;         // Platform container identifier (Docker container ID, K8s pod name)
   }
 
 
@@ -1004,6 +1017,19 @@ message Worker {
     int32 running_tasks = 3;        // Renamed from running_jobs
   }
 
+  // --- Exec in Container ---
+  message ExecInContainerRequest {
+    string task_id = 1;             // Task whose container to exec into
+    repeated string command = 2;     // Command to execute (e.g. ["bash", "-c", "ls"])
+  }
+
+  message ExecInContainerResponse {
+    int32 exit_code = 1;
+    string stdout = 2;
+    string stderr = 3;
+    string error = 4;               // Non-empty if exec setup failed
+  }
+
 }
 
 // ============================================================================
@@ -1079,6 +1105,9 @@ service ControllerService {
   // Profiling (proxied to worker)
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
 
+  // Exec in container (proxied to worker)
+  rpc ExecInContainer(Controller.ExecInContainerRequest) returns (Controller.ExecInContainerResponse);
+
   // Unified worker detail (VM + worker + logs in one call)
   rpc GetWorkerStatus(Controller.GetWorkerStatusRequest) returns (Controller.GetWorkerStatusResponse);
 
@@ -1116,4 +1145,7 @@ service WorkerService {
 
   // Process status (local process info + recent logs)
   rpc GetProcessStatus(GetProcessStatusRequest) returns (GetProcessStatusResponse);
+
+  // Exec in container
+  rpc ExecInContainer(Worker.ExecInContainerRequest) returns (Worker.ExecInContainerResponse);
 }

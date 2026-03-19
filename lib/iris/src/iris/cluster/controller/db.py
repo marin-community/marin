@@ -623,7 +623,7 @@ class Task:
     )
     current_worker_id: WorkerId | None = db_field("current_worker_id", _nullable(_decode_worker_id), default=None)
     current_worker_address: str | None = db_field("current_worker_address", _nullable(_decode_str), default=None)
-    container_name: str | None = db_field("container_name", _nullable(_decode_str), default=None)
+    container_id: str | None = db_field("container_id", _nullable(_decode_str), default=None)
     attempts: tuple[Attempt, ...] = field(default_factory=tuple)
 
     def is_finished(self) -> bool:
