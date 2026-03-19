@@ -64,8 +64,16 @@ class TaskResources:
 
         memory = _resolve_memory(proto)
         cpu = _resolve_cpu(proto)
-        gpu = proto.device.gpu.count if proto is not None and proto.HasField("device") and proto.device.HasField("gpu") else 0
-        tpu = proto.device.tpu.count if proto is not None and proto.HasField("device") and proto.device.HasField("tpu") else 0
+        gpu = (
+            proto.device.gpu.count
+            if proto is not None and proto.HasField("device") and proto.device.HasField("gpu")
+            else 0
+        )
+        tpu = (
+            proto.device.tpu.count
+            if proto is not None and proto.HasField("device") and proto.device.HasField("tpu")
+            else 0
+        )
 
         result = TaskResources(memory_bytes=memory, cpu_cores=cpu, gpu_count=gpu, tpu_count=tpu)
         logger.info("TaskResources: %s", result)

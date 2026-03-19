@@ -3,7 +3,6 @@
 
 """Tests for iris.env_resources."""
 
-import json
 import os
 
 import pytest
@@ -49,14 +48,18 @@ def test_from_environment_with_full_env(monkeypatch):
 
 
 def test_from_environment_with_gpu(monkeypatch):
-    monkeypatch.setenv("IRIS_TASK_RESOURCES", _make_resource_env(cpu_millicores=8000, memory_bytes=16 * 1024**3, gpu_count=4))
+    monkeypatch.setenv(
+        "IRIS_TASK_RESOURCES", _make_resource_env(cpu_millicores=8000, memory_bytes=16 * 1024**3, gpu_count=4)
+    )
     res = TaskResources.from_environment()
     assert res.gpu_count == 4
     assert res.tpu_count == 0
 
 
 def test_from_environment_with_tpu(monkeypatch):
-    monkeypatch.setenv("IRIS_TASK_RESOURCES", _make_resource_env(cpu_millicores=8000, memory_bytes=16 * 1024**3, tpu_count=8))
+    monkeypatch.setenv(
+        "IRIS_TASK_RESOURCES", _make_resource_env(cpu_millicores=8000, memory_bytes=16 * 1024**3, tpu_count=8)
+    )
     res = TaskResources.from_environment()
     assert res.tpu_count == 8
     assert res.gpu_count == 0
