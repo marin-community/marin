@@ -425,6 +425,12 @@ class JAXTransferServer(WeightTransferServer):
     def get_metrics(self) -> dict:
         return dataclasses.asdict(self.metrics)
 
+    def mark_completed(self) -> None:
+        logger.info("JAX transfer server: training completed (no-op)")
+
+    def mark_failed(self) -> None:
+        logger.info("JAX transfer server: training failed (no-op)")
+
 
 class JAXTransferClient(WeightTransferClient):
     """JAX transfer server-based weight transfer client."""

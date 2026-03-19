@@ -17,6 +17,7 @@ from jax.sharding import Mesh
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.models.llama import LlamaConfig
 from marin.rl.environments.inference_ctx import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
+from marin.rl.weight_transfer.arrow_flight import FileSystemArrowFlightCoordinator
 from marin.rl.weight_transfer import (
     WeightTransferConfig,
     WeightTransferMode,
@@ -201,6 +202,116 @@ def test_concurrent_clients(weight_transfer_config, sample_params):
         server.cleanup()
         client_1.cleanup()
         client_2.cleanup()
+
+
+def test_filesystem_arrow_coordinator_roundtrip(tmp_path):
+    metadata_path = tmp_path / "arrow_flight_coordinator.json"
+    coordinator = FileSystemArrowFlightCoordinator(str(metadata_path))
+
+    assert coordinator.fetch_server() is None
+
+    coordinator.update_server(
+        weight_id=7,
+        param_names=["param_a", "param_b"],
+        server_locations=[("trainer-host", 31337), ("trainer-host", 31338)],
+    )
+    server_info = coordinator.fetch_server()
+    assert server_info is not None
+    assert server_info.weight_id == 7
+    assert server_info.param_names == ["param_a", "param_b"]
+    assert server_info.server_addresses == ["grpc://trainer-host:31337", "grpc://trainer-host:31338"]
+
+
+def test_filesystem_arrow_coordinator_rejects_stale_updates(tmp_path):
+    metadata_path = tmp_path / "arrow_flight_coordinator.json"
+    coordinator = FileSystemArrowFlightCoordinator(str(metadata_path))
+
+    coordinator.update_server(
+        weight_id=11,
+        param_names=["latest"],
+        server_locations=[("host", 9999)],
+    )
+    coordinator.update_server(
+        weight_id=10,
+        param_names=["stale"],
+        server_locations=[("host", 8888)],
+    )
+
+    server_info = coordinator.fetch_server()
+    assert server_info is not None
+    assert server_info.weight_id == 11
+    assert server_info.param_names == ["latest"]
+    assert server_info.server_addresses == ["grpc://host:9999"]
+
+
+def test_filesystem_coordinator_terminal_status_roundtrip(tmp_path):
+    """Terminal status is preserved through mark_completed/mark_failed and reset by update_server."""
+    metadata_path = tmp_path / "coord.json"
+    coordinator = FileSystemArrowFlightCoordinator(str(metadata_path))
+
+    # Publish weights → status defaults to running
+    coordinator.update_server(1, ["p1"], [("host", 1234)])
+    info = coordinator.fetch_server()
+    assert info.status == "running"
+
+    # mark_completed preserves existing metadata
+    coordinator.mark_completed()
+    info = coordinator.fetch_server()
+    assert info.status == "completed"
+    assert info.weight_id == 1
+    assert info.param_names == ["p1"]
+
+    # update_server resets status back to running
+    coordinator.update_server(2, ["p2"], [("host", 5678)])
+    info = coordinator.fetch_server()
+    assert info.status == "running"
+    assert info.weight_id == 2
+
+    # mark_failed works too
+    coordinator.mark_failed()
+    info = coordinator.fetch_server()
+    assert info.status == "failed"
+
+
+def test_filesystem_coordinator_terminal_before_first_publish(tmp_path):
+    """Terminal status written before any update_server still produces a readable ServerInfo."""
+    metadata_path = tmp_path / "coord.json"
+    coordinator = FileSystemArrowFlightCoordinator(str(metadata_path))
+
+    # No weights published yet
+    assert coordinator.fetch_server() is None
+
+    # Trainer crashes before ever publishing weights
+    coordinator.mark_failed()
+    info = coordinator.fetch_server()
+    assert info is not None
+    assert info.status == "failed"
+    assert info.weight_id is None
+    assert info.server_addresses == []
+    assert info.param_names == []
+
+
+def test_actor_coordinator_terminal_before_first_publish():
+    """Actor coordinator creates ServerInfo with terminal status even if no weights published."""
+    from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
+
+    coordinator = ArrowFlightCoordinator()
+    assert coordinator.fetch_server() is None
+
+    coordinator.mark_failed()
+    info = coordinator.fetch_server()
+    assert info is not None
+    assert info.status == "failed"
+    assert info.weight_id is None
+
+    # update_server resets to running
+    coordinator.update_server(1, ["p1"], [("host", 1234)])
+    info = coordinator.fetch_server()
+    assert info.status == "running"
+
+    coordinator.mark_completed()
+    info = coordinator.fetch_server()
+    assert info.status == "completed"
 
 
 @pytest.mark.skip("Manual benchmark test")

@@ -9,10 +9,13 @@ and writes the rollout data to files for training workers to consume.
 """
 
 import dataclasses
+import faulthandler
 import logging
 import os
 import random
+import signal
 import socket
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -35,7 +38,7 @@ from typing import Literal
 
 from levanter.utils.mesh import MeshConfig
 from fray.v1.job import get_default_job_ctx
-from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
+from marin.rl.curriculum import CurriculumConfig, create_local_curriculum, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
 from marin.rl.environments.inference_ctx import (
@@ -322,8 +325,12 @@ class RolloutWorker:
 
         self._environments = {}
 
-        # Create curriculum actor (no checkpoint path for rollout workers)
-        self._curriculum_actor = get_or_create_curriculum_actor(self.config.curriculum_config)
+        # Create curriculum: local instance for manual mode, Ray actor for cluster mode
+        self._local_curriculum = self.config.weight_transfer.coordinator_backend == "filesystem"
+        if self._local_curriculum:
+            self._curriculum_actor = create_local_curriculum(self.config.curriculum_config)
+        else:
+            self._curriculum_actor = get_or_create_curriculum_actor(self.config.curriculum_config)
 
         self.weight_transfer_thread: threading.Thread | None = None
         if self.config.inflight_weight_updates:
@@ -474,6 +481,11 @@ class RolloutWorker:
 
         if max_wait_time <= 0:
             update = _receive_once()
+            if update and (update.is_done or update.is_failed):
+                reason = "Training complete" if update.is_done else "Trainer failed"
+                logger.info("%s, stopping rollout worker", reason)
+                self._running = False
+                return None
             if update:
                 self._apply_weight_update(update)
 
@@ -483,6 +495,11 @@ class RolloutWorker:
 
         while self._running:
             update = _receive_once()
+            if update and (update.is_done or update.is_failed):
+                reason = "Training complete" if update.is_done else "Trainer failed"
+                logger.info("%s, stopping rollout worker", reason)
+                self._running = False
+                return None
             if update:
                 self._apply_weight_update(update)
                 break
@@ -604,10 +621,15 @@ class RolloutWorker:
         logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, self._current_weight_step, metrics)
         # only update curriculum for full evals
         if eval_type == "eval":
-            future = self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
-                stats.rollout_stats, mode="eval", current_step=self._current_weight_step
-            )
-            get_default_job_ctx().get(future)
+            if self._local_curriculum:
+                self._curriculum_actor.update_lesson_stats(
+                    stats.rollout_stats, mode="eval", current_step=self._current_weight_step
+                )
+            else:
+                future = self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
+                    stats.rollout_stats, mode="eval", current_step=self._current_weight_step
+                )
+                get_default_job_ctx().get(future)
         return stats
 
     def _evaluate_curriculum(self, rng, step: int) -> dict:
@@ -630,161 +652,214 @@ class RolloutWorker:
     def run(self):
         """Main inference worker loop."""
         logger.info("Starting inference worker...")
+        step = 0
 
-        # For inflight weight updates, wait for first weights before generating rollouts
-        if self.config.inflight_weight_updates:
-            max_wait_time = self.config.weight_transfer.max_weight_transfer_wait_time
-            logger.info(
-                "Waiting for first weight transfer before starting inference (timeout %.1fs)...",
-                max_wait_time,
-            )
-            start_time = time.time()
-            while True:
-                if self._first_weights_received.wait(timeout=10.0):
+        try:
+            faulthandler.enable()  # dump tracebacks on segfault/abort
+            faulthandler.register(signal.SIGUSR2, file=sys.stderr, all_threads=True)  # manual: kill -USR2 <pid>
+            # For inflight weight updates, wait for first weights before generating rollouts
+            if self.config.inflight_weight_updates:
+                max_wait_time = self.config.weight_transfer.max_weight_transfer_wait_time
+                logger.info(
+                    "Waiting for first weight transfer before starting inference (timeout %.1fs)...",
+                    max_wait_time,
+                )
+                start_time = time.time()
+                while True:
+                    if self._first_weights_received.wait(timeout=10.0):
+                        break
+
+                    if not self._running:
+                        logger.info("Shutdown requested while waiting for first weights")
+                        return
+
+                    elapsed = time.time() - start_time
+                    if max_wait_time - elapsed <= 0:
+                        raise RuntimeError("Timed out waiting for initial weight transfer.")
+
+                    logger.info("Still waiting for first weight transfer (elapsed: %.1fs)", elapsed)
+                logger.info("First weights received, starting inference loop")
+
+            use_jax_rng = self.config.inference_type == "levanter"
+
+            # Initialize RNG - use Python's random for vLLM to avoid JAX device access
+            if use_jax_rng:
+                rng = jax.random.PRNGKey(self.config.seed)
+                rng = multihost_utils.broadcast_one_to_all(rng)
+            else:
+                py_rng = random.Random(self.config.seed)
+
+            logger.info(f"Starting rollout worker with seed {self.config.seed}")
+
+            while self._running:
+                step_start = time.time()
+
+                # Synchronize weights on main thread unless using inflight weight updates
+                if not self.config.inflight_weight_updates:
+                    logger.info("PHASE: SYNC_WEIGHTS step=%d", step)
+                    faulthandler.dump_traceback_later(600, repeat=False, file=sys.stderr, exit=True)
+                    self._sync_weights()
+                    if not self._running:
+                        break
+
+                # Don't generate with dummy/uninitialized weights — the trainer will reject
+                # these rollouts and both sides waste compute. Keep retrying sync instead.
+                # Note: initial weights are served at step -1, so only block on -2 (never received).
+                if self._current_weight_step < -1:
+                    logger.warning(
+                        "No valid weights received yet (weight_step=%d), retrying sync...", self._current_weight_step
+                    )
+                    time.sleep(5.0)
+                    continue
+
+                if self.config.max_rollouts is not None and step >= self.config.max_rollouts:
+                    logger.info(f"Reached max rollouts ({self.config.max_rollouts}), stopping")
                     break
 
-                if not self._running:
-                    logger.info("Shutdown requested while waiting for first weights")
-                    self._shutdown_complete.set()
-                    return
+                logger.info("Generating rollout batch...")
 
-                elapsed = time.time() - start_time
-                if max_wait_time - elapsed <= 0:
-                    raise RuntimeError("Timed out waiting for initial weight transfer.")
-
-                logger.info("Still waiting for first weight transfer (elapsed: %.1fs)", elapsed)
-            logger.info("First weights received, starting inference loop")
-
-        step = 0
-        use_jax_rng = self.config.inference_type == "levanter"
-
-        # Initialize RNG - use Python's random for vLLM to avoid JAX device access
-        if use_jax_rng:
-            rng = jax.random.PRNGKey(self.config.seed)
-            rng = multihost_utils.broadcast_one_to_all(rng)
-        else:
-            py_rng = random.Random(self.config.seed)
-
-        logger.info(f"Starting rollout worker with seed {self.config.seed}")
-
-        while self._running:
-            # Synchronize weights on main thread unless using inflight weight updates
-            if not self.config.inflight_weight_updates:
-                self._sync_weights()
-
-            if self.config.max_rollouts is not None and step >= self.config.max_rollouts:
-                logger.info(f"Reached max rollouts ({self.config.max_rollouts}), stopping")
-                break
-
-            logger.info("Generating rollout batch...")
-
-            if use_jax_rng:
-                rng, seed_key = jax.random.split(rng)
-                seed = int(seed_key[0])
-            else:
-                seed = py_rng.randint(0, 2**31 - 1)
-
-            try:
-                future = self._curriculum_actor.sample_lesson.remote(seed)
-                lesson_id = get_default_job_ctx().get(future)
-            except Exception as e:
-                logger.warning(f"Failed to sample lesson from curriculum: {e}, will try again...")
-                time.sleep(10.0)
-                continue
-
-            # Micro-eval: feedback on current lesson
-            if step > 0 and step % self.config.curriculum_config.micro_eval_frequency == 0:
                 if use_jax_rng:
-                    rng, micro_eval_rng = jrandom.split(rng)
+                    rng, seed_key = jax.random.split(rng)
+                    seed = int(seed_key[0])
                 else:
-                    micro_eval_rng = py_rng.randint(0, 2**31 - 1)
-                self._evaluate_lesson(
-                    lesson_id,
-                    self.config.curriculum_config.micro_eval_n_examples,
-                    eval_type="micro_eval",
-                    rng=micro_eval_rng,
-                    step=self._current_weight_step,
+                    seed = py_rng.randint(0, 2**31 - 1)
+
+                try:
+                    if self._local_curriculum:
+                        lesson_id = self._curriculum_actor.sample_lesson(seed)
+                    else:
+                        future = self._curriculum_actor.sample_lesson.remote(seed)
+                        lesson_id = get_default_job_ctx().get(future)
+                except Exception as e:
+                    logger.warning(f"Failed to sample lesson from curriculum: {e}, will try again...")
+                    time.sleep(10.0)
+                    continue
+
+                # Micro-eval: feedback on current lesson
+                if step > 0 and step % self.config.curriculum_config.micro_eval_frequency == 0:
+                    if use_jax_rng:
+                        rng, micro_eval_rng = jrandom.split(rng)
+                    else:
+                        micro_eval_rng = py_rng.randint(0, 2**31 - 1)
+                    self._evaluate_lesson(
+                        lesson_id,
+                        self.config.curriculum_config.micro_eval_n_examples,
+                        eval_type="micro_eval",
+                        rng=micro_eval_rng,
+                        step=self._current_weight_step,
+                    )
+
+                # Full eval: comprehensive check on all lessons
+                # Evaluate based on the train worker step
+                if step % self.config.curriculum_config.eval_frequency == 0:
+                    if use_jax_rng:
+                        rng, eval_rng = jrandom.split(rng)
+                    else:
+                        eval_rng = py_rng.randint(0, 2**31 - 1)
+                    self._evaluate_curriculum(eval_rng, self._current_weight_step)
+
+                logger.info(f"Sampled lesson '{lesson_id}' from curriculum")
+
+                if use_jax_rng:
+                    rng, input_rng = jax.random.split(rng)
+                else:
+                    input_rng = py_rng.randint(0, 2**31 - 1)
+
+                lesson_config = self.config.curriculum_config.lessons[lesson_id]
+
+                # Time the batch sampling for throughput metrics
+                logger.info("PHASE: GENERATE step=%d lesson=%s", step, lesson_id)
+                faulthandler.dump_traceback_later(1200, repeat=False, file=sys.stderr, exit=True)
+                batch_start_time = time.time()
+                rollout_batch, env_metrics = self._sample_batch(
+                    lesson_id=lesson_id,
+                    n_examples=lesson_config.sampling_params.n_prompts,
+                    n_generations=lesson_config.sampling_params.n_generations_per_prompt,
+                    mode="train",
+                    rng=input_rng,
+                )
+                batch_time = time.time() - batch_start_time
+
+                if rollout_batch is None:
+                    continue
+
+                # Count tokens for throughput calculation
+                total_output_tokens = 0
+                total_prompts = 0
+                for group in rollout_batch.groups:
+                    for rollout in group.rollouts:
+                        total_output_tokens += len(rollout.response_tokens)
+                        total_prompts += 1
+
+                # Calculate throughput metrics
+                throughput_metrics = {
+                    "inference.throughput/tokens_per_second": total_output_tokens / batch_time if batch_time > 0 else 0,
+                    "inference.throughput/requests_per_second": total_prompts / batch_time if batch_time > 0 else 0,
+                    "inference.throughput/batch_time_seconds": batch_time,
+                }
+
+                logger.info("PHASE: WRITE_ROLLOUT step=%d", step)
+                faulthandler.dump_traceback_later(300, repeat=False, file=sys.stderr, exit=True)
+                self._rollout_writer.write_batch(rollout_batch)
+
+                stats = _compute_batch_stats(rollout_batch, lesson_id)
+                if self._local_curriculum:
+                    self._curriculum_actor.update_lesson_stats(
+                        stats.rollout_stats, mode="training", current_step=self._current_weight_step
+                    )
+                else:
+                    future = self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
+                        stats.rollout_stats, mode="training", current_step=self._current_weight_step
+                    )
+                    get_default_job_ctx().get(future)
+                eval_metrics = self._build_eval_metrics(
+                    prefix="rollout",
+                    lesson_id=lesson_id,
+                    batch=rollout_batch,
+                    n_generations=lesson_config.sampling_params.n_generations_per_prompt,
+                    temperature=lesson_config.sampling_params.temperature,
+                    top_k=lesson_config.sampling_params.top_k,
                 )
 
-            # Full eval: comprehensive check on all lessons
-            # Evaluate based on the train worker step
-            if step % self.config.curriculum_config.eval_frequency == 0:
-                if use_jax_rng:
-                    rng, eval_rng = jrandom.split(rng)
-                else:
-                    eval_rng = py_rng.randint(0, 2**31 - 1)
-                self._evaluate_curriculum(eval_rng, self._current_weight_step)
+                step += 1
 
-            logger.info(f"Sampled lesson '{lesson_id}' from curriculum")
+                if self.config.log_freq > 0 and step % self.config.log_freq == 0:
+                    log_metrics = eval_metrics
+                    log_metrics.update(self._transfer_client.get_metrics())
+                    log_metrics.update({f"env.{k}": v for k, v in (env_metrics or {}).items()})
+                    # Add storage metrics if available
+                    if hasattr(self._rollout_writer, "get_metrics"):
+                        log_metrics.update(self._rollout_writer.get_metrics())
+                    log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
+                    # Add throughput metrics (already prefixed with "inference.throughput/")
+                    log_metrics.update(throughput_metrics)
+                    logger.info(f"Logging metrics at step {step} (weight_step={self._current_weight_step})...")
+                    self.tracker.log(log_metrics, step=self._current_weight_step)
 
+                logger.info("PHASE: IDLE step=%d elapsed=%.1fs", step, time.time() - step_start)
+                faulthandler.cancel_dump_traceback_later()
+
+            logger.info(f"Inference worker completed after generating {step} rollouts")
             if use_jax_rng:
-                rng, input_rng = jax.random.split(rng)
-            else:
-                input_rng = py_rng.randint(0, 2**31 - 1)
-
-            lesson_config = self.config.curriculum_config.lessons[lesson_id]
-
-            # Time the batch sampling for throughput metrics
-            batch_start_time = time.time()
-            rollout_batch, env_metrics = self._sample_batch(
-                lesson_id=lesson_id,
-                n_examples=lesson_config.sampling_params.n_prompts,
-                n_generations=lesson_config.sampling_params.n_generations_per_prompt,
-                mode="train",
-                rng=input_rng,
-            )
-            batch_time = time.time() - batch_start_time
-
-            if rollout_batch is None:
-                continue
-
-            # Count tokens for throughput calculation
-            total_output_tokens = 0
-            total_prompts = 0
-            for group in rollout_batch.groups:
-                for rollout in group.rollouts:
-                    total_output_tokens += len(rollout.response_tokens)
-                    total_prompts += 1
-
-            # Calculate throughput metrics
-            throughput_metrics = {
-                "inference.throughput/tokens_per_second": total_output_tokens / batch_time if batch_time > 0 else 0,
-                "inference.throughput/requests_per_second": total_prompts / batch_time if batch_time > 0 else 0,
-                "inference.throughput/batch_time_seconds": batch_time,
-            }
-
-            self._rollout_writer.write_batch(rollout_batch)
-
-            stats = _compute_batch_stats(rollout_batch, lesson_id)
-            future = self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
-                stats.rollout_stats, mode="training", current_step=self._current_weight_step
-            )
-            get_default_job_ctx().get(future)
-            eval_metrics = self._build_eval_metrics(
-                prefix="rollout",
-                lesson_id=lesson_id,
-                batch=rollout_batch,
-                n_generations=lesson_config.sampling_params.n_generations_per_prompt,
-                temperature=lesson_config.sampling_params.temperature,
-                top_k=lesson_config.sampling_params.top_k,
-            )
-
-            step += 1
-
-            if self.config.log_freq > 0 and step % self.config.log_freq == 0:
-                log_metrics = eval_metrics
-                log_metrics.update(self._transfer_client.get_metrics())
-                log_metrics.update({f"env.{k}": v for k, v in (env_metrics or {}).items()})
-                # Add storage metrics if available
-                if hasattr(self._rollout_writer, "get_metrics"):
-                    log_metrics.update(self._rollout_writer.get_metrics())
-                log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
-                # Add throughput metrics (already prefixed with "inference.throughput/")
-                log_metrics.update(throughput_metrics)
-                logger.info(f"Logging metrics at step {step} (weight_step={self._current_weight_step})...")
-                self.tracker.log(log_metrics, step=self._current_weight_step)
-
-        logger.info(f"Inference worker completed after generating {step} rollouts")
-        if use_jax_rng:
-            barrier_sync()
-        self._shutdown_complete.set()
+                barrier_sync()
+        except Exception:
+            logger.exception("ROLLOUT WORKER CRASHED at step=%d, weight_step=%d", step, self._current_weight_step)
+            raise
+        finally:
+            self._running = False
+            try:
+                if hasattr(self.tracker, "finish"):
+                    self.tracker.finish()
+            except Exception:
+                logger.exception("Failed to finish tracker")
+            try:
+                self._transfer_client.cleanup()
+            except Exception:
+                logger.exception("Failed to cleanup transfer client")
+            try:
+                self._policy_ctx.shutdown()
+            except Exception:
+                logger.exception("Failed to shutdown policy context")
+            if self.weight_transfer_thread:
+                self.weight_transfer_thread.join(timeout=5.0)
+            self._shutdown_complete.set()

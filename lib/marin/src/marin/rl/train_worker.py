@@ -10,6 +10,7 @@ checkpoints are read by the rollout workers to update their models.
 """
 
 import dataclasses
+import faulthandler
 import logging
 import time
 from dataclasses import dataclass
@@ -29,7 +30,7 @@ from transformers import PreTrainedTokenizer
 
 from marin.rl import weight_transfer
 from fray.v1.job import get_default_job_ctx
-from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
+from marin.rl.curriculum import CurriculumConfig, create_local_curriculum, get_or_create_curriculum_actor
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.weight_transfer import WeightTransferConfig
 
@@ -113,6 +114,9 @@ class StreamingRolloutLoader:
 
     def __iter__(self):
         """Yield batches continuously from the replay buffer."""
+        cumulative_wait = 0.0
+        max_cumulative_wait = 3600.0  # 1 hour
+
         while True:
             fetch_start = time.time()
             rollouts = self.data_loader.get_rollouts(timeout=self.timeout)
@@ -121,8 +125,16 @@ class StreamingRolloutLoader:
             self._last_rollouts = rollouts
 
             if not rollouts:
-                logger.warning("No rollouts received from data loader within timeout, retrying...")
+                cumulative_wait += fetch_time
+                if cumulative_wait >= max_cumulative_wait:
+                    raise TimeoutError(f"No rollouts received after {cumulative_wait:.0f}s total wait")
+                logger.warning(
+                    "No rollouts received from data loader within timeout (cumulative_wait=%.0fs), retrying...",
+                    cumulative_wait,
+                )
                 continue
+
+            cumulative_wait = 0.0  # reset on success
 
             # Measure batch creation time
             batch_start = time.time()
@@ -213,11 +225,17 @@ class TrainWorker:
             axis_mapping=self.config.trainer.compute_axis_mapping,
         )
 
-        # Create curriculum actor with auto-restore from checkpoint
+        # Create curriculum: local instance for manual mode, Ray actor for cluster mode
         checkpoint_dir = config.trainer.checkpointer.expanded_path(config.run_id)
-        self._curriculum_actor = get_or_create_curriculum_actor(
-            self.config.curriculum_config, checkpoint_path=checkpoint_dir
-        )
+        self._local_curriculum = config.weight_transfer.coordinator_backend == "filesystem"
+        if self._local_curriculum:
+            self._curriculum_actor = create_local_curriculum(
+                self.config.curriculum_config, checkpoint_path=checkpoint_dir
+            )
+        else:
+            self._curriculum_actor = get_or_create_curriculum_actor(
+                self.config.curriculum_config, checkpoint_path=checkpoint_dir
+            )
 
         logger.info("Connected to curriculum actor: %s", config.curriculum_config.actor_name)
 
@@ -281,36 +299,57 @@ class TrainWorker:
     def train(self):
         """Main training method using Levanter's standard train_lm infrastructure."""
         logger.info("Starting RLOO training with Levanter...")
+        faulthandler.enable()
 
-        config = self.config
-        optimizer = config.optimizer.build(config.trainer.num_train_steps)
-        loss_fn = self.loss_module.create_loss_fn(self.reference_model, None)
+        try:
+            config = self.config
+            optimizer = config.optimizer.build(config.trainer.num_train_steps)
+            loss_fn = self.loss_module.create_loss_fn(self.reference_model, None)
 
-        @jax.jit
-        def _loss_function(model, batch, key):
-            return loss_fn(model, batch, key)
+            @jax.jit
+            def _loss_function(model, batch, key):
+                return loss_fn(model, batch, key)
 
-        with (
-            Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function) as trainer,
-            self.replay_loader,
-        ):
-            _, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 2)
-            state = trainer.initial_state(training_key, model=self.reference_model)
+            with (
+                Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function) as trainer,
+                self.replay_loader,
+            ):
+                _, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 2)
+                state = trainer.initial_state(training_key, model=self.reference_model)
 
-            # Always transfer initial weights to rollout workers before we attempt to start training
-            self.transfer_server.serve_weights(-1, state.model)
-            self.replay_buffer.set_current_step(-1)
+                # Always transfer initial weights to rollout workers before we attempt to start training
+                self.transfer_server.serve_weights(-1, state.model)
+                self.replay_buffer.set_current_step(-1)
 
-            # Wait for initial rollouts to ensure we have baseline measurements
-            if not self._wait_for_initial_rollouts():
-                raise RuntimeError("Timed out waiting for initial rollouts; aborting training.")
+                # Wait for initial rollouts to ensure we have baseline measurements
+                if not self._wait_for_initial_rollouts():
+                    raise RuntimeError("Timed out waiting for initial rollouts; aborting training.")
 
-            self._configure_training_hooks(trainer)
+                self._configure_training_hooks(trainer)
 
+                try:
+                    trainer.train(state, self.data_loader)
+                except StopTrainerException:
+                    pass
+            if self._should_stop:
+                logger.info("Training stopped via external signal")
+                self.transfer_server.mark_failed()
+            else:
+                self.transfer_server.mark_completed()
+        except StopTrainerException:
+            if self._should_stop:
+                self.transfer_server.mark_failed()
+            else:
+                self.transfer_server.mark_completed()
+        except Exception:
+            logger.exception("TRAIN WORKER CRASHED")
+            self.transfer_server.mark_failed()
+            raise
+        finally:
             try:
-                trainer.train(state, self.data_loader)
-            except StopTrainerException:
-                pass
+                self.stop()
+            except Exception:
+                logger.exception("Failed to stop train worker during cleanup")
 
     def _configure_training_hooks(self, trainer):
         def _weight_transfer_hook(info: levanter.callbacks.StepInfo):
@@ -383,8 +422,11 @@ class TrainWorker:
         def _curriculum_checkpoint_hook(info: levanter.callbacks.StepInfo):
             checkpoint_dir = self.config.trainer.checkpointer.expanded_path(self.config.run_id)
             try:
-                future = self._curriculum_actor.save_checkpoint.remote(checkpoint_dir)
-                get_default_job_ctx().get(future)
+                if self._local_curriculum:
+                    self._curriculum_actor.save_checkpoint(checkpoint_dir)
+                else:
+                    future = self._curriculum_actor.save_checkpoint.remote(checkpoint_dir)
+                    get_default_job_ctx().get(future)
             except Exception as e:
                 logger.error(f"Failed to save curriculum checkpoint: {e}")
 

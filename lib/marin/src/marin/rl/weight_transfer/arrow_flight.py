@@ -16,6 +16,7 @@ We can likely extract a bit more performance by:
 """
 
 import dataclasses
+import json
 import logging
 import math
 import os
@@ -26,6 +27,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import partial
+from typing import Literal
 
 import haliax as hax
 import haliax.state_dict as hsd
@@ -34,7 +36,6 @@ import jax.numpy as jnp
 import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
-from fray.v1.job.context import get_default_job_ctx
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
 from jaxtyping import PyTree
@@ -59,6 +60,7 @@ class ServerInfo:
     weight_id: int | None
     server_addresses: list[str]
     param_names: list[str]
+    status: Literal["running", "completed", "failed"] = "running"
 
 
 # The maximum number of array elements in a single Arrow RecordBatch.
@@ -227,6 +229,141 @@ class ArrowFlightCoordinator:
     def fetch_server(self) -> ServerInfo:
         return self._server_info
 
+    def _set_terminal_status(self, status: Literal["completed", "failed"]) -> None:
+        if self._server_info is not None:
+            self._server_info = dataclasses.replace(self._server_info, status=status)
+        else:
+            self._server_info = ServerInfo(weight_id=None, server_addresses=[], param_names=[], status=status)
+        logger.info("Marked training as %s in coordinator", status)
+
+    def mark_completed(self) -> None:
+        self._set_terminal_status("completed")
+
+    def mark_failed(self) -> None:
+        self._set_terminal_status("failed")
+
+
+class FileSystemArrowFlightCoordinator:
+    """Filesystem-based coordinator for no-Ray manual mode.
+
+    Stores coordinator metadata as a JSON file on a shared filesystem (e.g. GCS)
+    so that trainer and sampler on separate TPU VMs can coordinate without Ray.
+    """
+
+    def __init__(self, metadata_path: str):
+        self._metadata_path = metadata_path
+
+    def update_server(self, weight_id: int, param_names: list[str], server_locations: list[tuple[str, int]]) -> None:
+        # Read existing to check for stale updates (use strict < so restarts can overwrite)
+        existing = self._read_metadata()
+        if existing is not None and existing.get("weight_id") is not None:
+            if weight_id < existing["weight_id"]:
+                logger.warning(f"Ignoring stale weight update: {weight_id} < {existing['weight_id']}")
+                return
+
+        server_info = {
+            "weight_id": weight_id,
+            "server_addresses": [f"grpc://{host}:{port}" for host, port in server_locations],
+            "param_names": param_names,
+            "status": "running",
+        }
+
+        data = json.dumps(server_info).encode()
+        _gcs_write(self._metadata_path, data)
+
+        logger.info(
+            "Updated server (filesystem): weight_id=%d, params=%d, servers=%d",
+            weight_id,
+            len(param_names),
+            len(server_locations),
+        )
+
+    def fetch_server(self) -> ServerInfo | None:
+        data = self._read_metadata()
+        if data is None:
+            return None
+        return ServerInfo(
+            weight_id=data.get("weight_id"),
+            server_addresses=data.get("server_addresses", []),
+            param_names=data.get("param_names", []),
+            status=data.get("status", "running"),
+        )
+
+    def _set_status(self, status: str) -> None:
+        existing = self._read_metadata() or {}
+        existing["status"] = status
+        data = json.dumps(existing).encode()
+        _gcs_write(self._metadata_path, data)
+        logger.info("Set coordinator status to %s", status)
+
+    def mark_completed(self) -> None:
+        self._set_status("completed")
+
+    def mark_failed(self) -> None:
+        self._set_status("failed")
+
+    def _read_metadata(self) -> dict | None:
+        raw = _gcs_read(self._metadata_path)
+        if raw is None:
+            return None
+        return json.loads(raw)
+
+
+def _gcs_write(path: str, data: bytes) -> None:
+    """Write bytes to a GCS or local path using google-cloud-storage (sync, no aiohttp)."""
+    if path.startswith("gs://"):
+        from google.cloud import storage
+
+        bucket_name, blob_name = path[5:].split("/", 1)
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        bucket.blob(blob_name).upload_from_string(data)
+    else:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data)
+
+
+def _gcs_read(path: str) -> bytes | None:
+    """Read bytes from a GCS or local path using google-cloud-storage (sync, no aiohttp)."""
+    if path.startswith("gs://"):
+        from google.cloud import storage
+        from google.api_core.exceptions import NotFound
+
+        bucket_name, blob_name = path[5:].split("/", 1)
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        try:
+            return bucket.blob(blob_name).download_as_bytes()
+        except NotFound:
+            return None
+    else:
+        try:
+            with open(path, "rb") as f:
+                return f.read()
+        except FileNotFoundError:
+            return None
+
+
+def _create_coordinator(config: WeightTransferConfig):
+    """Create the appropriate coordinator based on config.coordinator_backend."""
+    if config.coordinator_backend == "filesystem":
+        if not config.coordinator_metadata_path:
+            raise ValueError("coordinator_metadata_path is required when coordinator_backend='filesystem'")
+        return FileSystemArrowFlightCoordinator(config.coordinator_metadata_path)
+
+    from fray.v1.job.context import get_default_job_ctx
+
+    ctx = get_default_job_ctx()
+    coordinator = ctx.create_actor(
+        ArrowFlightCoordinator,
+        name=config.coordinator_name,
+        get_if_exists=True,
+        preemptible=False,
+        num_cpus=0,
+    )
+    return coordinator, ctx
+
 
 class MarinFlightServer(flight.FlightServerBase):
     """Arrow Flight server for serving model weights."""
@@ -338,6 +475,37 @@ def copy_and_flatten(
     return flat_dict, shape_dict
 
 
+def _resolve_advertise_host(config: WeightTransferConfig) -> str:
+    """Determine the host address to advertise for Arrow Flight servers.
+
+    In Ray mode (coordinator_backend='actor'), uses socket.gethostname() which is
+    resolvable within the Ray cluster network.
+
+    In manual mode (coordinator_backend='filesystem'), the TPU VM hostname
+    (e.g. t1v-n-XXXX-w-0) is not in DNS, so we query the GCP metadata server
+    for the internal IP instead.
+    """
+    if config.flight_host != "0.0.0.0":
+        return config.flight_host
+
+    if config.coordinator_backend == "filesystem":
+        try:
+            import urllib.request
+
+            req = urllib.request.Request(
+                "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip",
+                headers={"Metadata-Flavor": "Google"},
+            )
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                ip = resp.read().decode().strip()
+                logger.info("Resolved advertise host via GCP metadata: %s", ip)
+                return ip
+        except Exception:
+            logger.warning("Failed to query GCP metadata for internal IP, falling back to hostname")
+
+    return socket.gethostname()
+
+
 class ArrowFlightServer(WeightTransferServer):
     """Arrow Flight-based weight transfer server for Haliax/Equinox models.
 
@@ -373,7 +541,7 @@ class ArrowFlightServer(WeightTransferServer):
         self._server_threads = []
         self._server_locations = []
 
-        actual_host = config.flight_host if config.flight_host != "0.0.0.0" else socket.gethostname()
+        actual_host = _resolve_advertise_host(config)
 
         for i in range(num_servers):
             # Use port 0 to auto-assign for all servers
@@ -395,14 +563,12 @@ class ArrowFlightServer(WeightTransferServer):
             logger.info(f"Arrow Flight server {i} started at {server_location}")
 
         self.metrics = WeightTransferServerMetrics()
-        self._ctx = get_default_job_ctx()
-        self._coordinator = self._ctx.create_actor(
-            ArrowFlightCoordinator,
-            name=self.config.coordinator_name,
-            get_if_exists=True,
-            preemptible=False,
-            num_cpus=0,
-        )
+        self._use_filesystem = config.coordinator_backend == "filesystem"
+        self._ctx: object | None = None
+        if self._use_filesystem:
+            self._coordinator = _create_coordinator(config)
+        else:
+            self._coordinator, self._ctx = _create_coordinator(config)
         logger.info("Started Arrow Flight weight transfer with config: %s", self.config)
 
     def serve_weights(self, weight_id: int, model: PyTree) -> None:
@@ -434,9 +600,12 @@ class ArrowFlightServer(WeightTransferServer):
 
                 # Update coordinator with weight info and server locations
                 param_names = list(params_dict.keys())
-                actual_host = self.config.flight_host if self.config.flight_host != "0.0.0.0" else socket.gethostname()
+                actual_host = _resolve_advertise_host(self.config)
                 server_locations = [(actual_host, server.port) for server in self._flight_servers]
-                self._ctx.get(self._coordinator.update_server.remote(weight_id, param_names, server_locations))
+                if self._use_filesystem:
+                    self._coordinator.update_server(weight_id, param_names, server_locations)
+                else:
+                    self._ctx.get(self._coordinator.update_server.remote(weight_id, param_names, server_locations))
                 update_time = time.time()
 
                 self.metrics.successful_transfers += 1
@@ -470,6 +639,18 @@ class ArrowFlightServer(WeightTransferServer):
         """Get transfer metrics."""
         return self.metrics
 
+    def mark_completed(self) -> None:
+        if self._use_filesystem:
+            self._coordinator.mark_completed()
+        else:
+            self._ctx.get(self._coordinator.mark_completed.remote())
+
+    def mark_failed(self) -> None:
+        if self._use_filesystem:
+            self._coordinator.mark_failed()
+        else:
+            self._ctx.get(self._coordinator.mark_failed.remote())
+
 
 class ArrowFlightClient(WeightTransferClient):
     """Arrow Flight-based weight transfer client for Haliax/Equinox models."""
@@ -496,14 +677,12 @@ class ArrowFlightClient(WeightTransferClient):
 
         self.metrics = WeightTransferClientMetrics()
         self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_RECEIVES)
-        self._ctx = get_default_job_ctx()
-        self._coordinator = self._ctx.create_actor(
-            ArrowFlightCoordinator,
-            name=self.config.coordinator_name,
-            get_if_exists=True,
-            preemptible=False,
-            num_cpus=0,
-        )
+        self._use_filesystem = config.coordinator_backend == "filesystem"
+        self._ctx: object | None = None
+        if self._use_filesystem:
+            self._coordinator = _create_coordinator(config)
+        else:
+            self._coordinator, self._ctx = _create_coordinator(config)
 
     def _connect_to_servers(self, new_locations) -> bool:
         """Connect to all Arrow Flight servers."""
@@ -558,13 +737,24 @@ class ArrowFlightClient(WeightTransferClient):
 
         try:
             start_time = time.time()
+            logger.info("receive_weights: polling for step > %d", self._last_weight_id)
 
             # Fetch server info from coordinator
-            server_info = self._ctx.get(self._coordinator.fetch_server.remote())
+            if self._use_filesystem:
+                server_info = self._coordinator.fetch_server()
+            else:
+                server_info = self._ctx.get(self._coordinator.fetch_server.remote())
 
             if not server_info:
                 logger.info("No Arrow Flight server info available from coordinator.")
                 return None
+
+            if server_info.status == "completed":
+                logger.info("Training complete signal received from coordinator")
+                return WeightUpdate(model=None, state_dict={}, weight_id=-1, is_done=True)
+            if server_info.status == "failed":
+                logger.info("Training failure signal received from coordinator")
+                return WeightUpdate(model=None, state_dict={}, weight_id=-1, is_failed=True)
 
             # N.B. - we _always_ accept the weight id from the training worker, even if it's
             # lower than our current weight. If the training worker crashes and restores from
@@ -596,6 +786,7 @@ class ArrowFlightClient(WeightTransferClient):
             if old_model is not None:
                 with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
                     model = update_model(old_model, state_dict)
+                logger.info("receive_weights: update_model complete, total=%.1fs", time.time() - start_time)
             else:
                 model = None
 

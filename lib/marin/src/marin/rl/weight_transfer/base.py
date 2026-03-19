@@ -12,6 +12,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
+from typing import Literal
 
 from jaxtyping import PyTree
 
@@ -52,6 +53,8 @@ class WeightUpdate:
     model: PyTree | None
     state_dict: dict
     weight_id: int
+    is_done: bool = False
+    is_failed: bool = False
 
 
 @dataclass
@@ -60,6 +63,10 @@ class WeightTransferConfig:
     # Common settings
     sync_interval_steps: int = 1
     coordinator_name: str = "weight_transfer_coordinator"
+    coordinator_backend: Literal["actor", "filesystem"] = "actor"
+    """How Arrow/JAX transfer clients discover latest server metadata."""
+    coordinator_metadata_path: str = ""
+    """Shared path for coordinator metadata when coordinator_backend='filesystem'."""
 
     transfer_timeout: float = 600.0
     max_weight_transfer_wait_time: float = 0.0
@@ -96,6 +103,16 @@ class WeightTransferServer(ABC):
 
     @abstractmethod
     def get_metrics(self) -> dict:
+        pass
+
+    @abstractmethod
+    def mark_completed(self) -> None:
+        """Signal that training completed normally."""
+        pass
+
+    @abstractmethod
+    def mark_failed(self) -> None:
+        """Signal that training failed."""
         pass
 
 
