@@ -1008,15 +1008,16 @@ def _dispatch_intranode_with_vjp_bwd(
         dtype=recv_topk_weights.dtype,
         reference=recv_topk_weights,
     )
-    grad_x, grad_topk_weights = _combine_intranode_impl(
-        grad_recv_x,
-        grad_recv_topk_weights,
-        recv_src_idx,
-        rank_prefix_matrix,
-        recv_channel_prefix_matrix,
-        send_head,
-        num_recv_tokens,
-    )
+    with jax.named_scope("deepep_dispatch_vjp_bwd_combine"):
+        grad_x, grad_topk_weights = _combine_intranode_impl(
+            grad_recv_x,
+            grad_recv_topk_weights,
+            recv_src_idx,
+            rank_prefix_matrix,
+            recv_channel_prefix_matrix,
+            send_head,
+            num_recv_tokens,
+        )
     return grad_x, None, grad_topk_weights, None, None, None
 
 
@@ -1096,16 +1097,17 @@ def _combine_intranode_with_vjp_bwd(residuals, cotangents):
         dtype=recv_x.dtype,
         shape=(send_head.shape[0], recv_x.shape[1]),
     )
-    grad_recv_x = _dispatch_intranode_cached_impl(
-        grad_combined_x,
-        is_token_in_rank,
-        rank_prefix_matrix,
-        dispatch_channel_prefix_matrix,
-        num_recv_tokens,
-        dispatch_config=None,
-        combine_config=None,
-        max_recv_tokens=recv_x.shape[0],
-    )
+    with jax.named_scope("deepep_combine_vjp_bwd_cached_dispatch"):
+        grad_recv_x = _dispatch_intranode_cached_impl(
+            grad_combined_x,
+            is_token_in_rank,
+            rank_prefix_matrix,
+            dispatch_channel_prefix_matrix,
+            num_recv_tokens,
+            dispatch_config=None,
+            combine_config=None,
+            max_recv_tokens=recv_x.shape[0],
+        )
     return (
         grad_recv_x,
         jnp.zeros_like(recv_topk_weights),
