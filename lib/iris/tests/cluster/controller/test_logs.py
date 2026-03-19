@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from iris.cluster.log_store import LogStore, _EST_BYTES_PER_ROW, task_log_key
+from iris.cluster.log_store.duckdb_store import DuckDBLogStore
 from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import logging_pb2
 
@@ -115,12 +116,12 @@ def test_get_logs_tail_concurrent(log_store: LogStore):
 def test_persistent_log_dir(tmp_path: Path):
     """Append, close, reopen with same dir, read logs."""
     log_dir = tmp_path / "logs"
-    store1 = LogStore(log_dir=log_dir)
+    store1 = DuckDBLogStore(log_dir=log_dir)
     entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(5)]
     store1.append(KEY, entries)
     store1.close()
 
-    store2 = LogStore(log_dir=log_dir)
+    store2 = DuckDBLogStore(log_dir=log_dir)
     result = store2.get_logs(KEY)
     assert len(result.entries) == 5
     assert [e.data for e in result.entries] == [f"line-{i}" for i in range(5)]
@@ -165,11 +166,11 @@ def test_cursor_round_trip(log_store: LogStore):
 def test_has_logs_no_known_attempts(tmp_path: Path):
     """has_logs works across store instances."""
     log_dir = tmp_path / "logs"
-    store1 = LogStore(log_dir=log_dir)
+    store1 = DuckDBLogStore(log_dir=log_dir)
     store1.append(KEY, [_make_entry("hello")])
     store1.close()
 
-    store2 = LogStore(log_dir=log_dir)
+    store2 = DuckDBLogStore(log_dir=log_dir)
     assert store2.has_logs(KEY)
     assert not store2.has_logs(task_log_key(TaskAttempt(task_id=TASK_ID, attempt_id=99)))
     store2.close()
@@ -339,7 +340,7 @@ def test_gc_drops_oldest_segments_by_count(tmp_path: Path):
     log_dir = tmp_path / "logs"
     # segment_target_bytes=1 means every parquet file is bigger than the target,
     # so consolidation is skipped and each seal creates a new file.
-    store = LogStore(
+    store = DuckDBLogStore(
         log_dir=log_dir,
         max_local_segments=2,
         max_local_bytes=10 * 1024**3,  # effectively unlimited
@@ -368,7 +369,7 @@ def test_gc_drops_oldest_segments_by_count(tmp_path: Path):
 def test_gc_drops_oldest_segments_by_bytes(tmp_path: Path):
     """When local parquet bytes exceed max_local_bytes, oldest are removed."""
     log_dir = tmp_path / "logs"
-    store = LogStore(
+    store = DuckDBLogStore(
         log_dir=log_dir,
         max_local_segments=100,  # effectively unlimited
         segment_target_bytes=1,  # seal after every append
@@ -408,7 +409,7 @@ def test_gc_drops_oldest_segments_by_bytes(tmp_path: Path):
 def test_flush_creates_parquet_segment(tmp_path: Path):
     """Verify that sealing the buffer writes a Parquet file."""
     log_dir = tmp_path / "logs"
-    store = LogStore(log_dir=log_dir, segment_target_bytes=1)
+    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
     try:
         entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(10)]
         store.append(KEY, entries)
@@ -424,7 +425,7 @@ def test_flush_creates_parquet_segment(tmp_path: Path):
 def test_cursor_continuity_across_flush(tmp_path: Path):
     """Cursor from pre-flush read correctly filters post-flush entries."""
     log_dir = tmp_path / "logs"
-    store = LogStore(log_dir=log_dir, segment_target_bytes=1)
+    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
     try:
         entries1 = [_make_entry(f"batch1-{i}", epoch_ms=i) for i in range(10)]
         store.append(KEY, entries1)
@@ -448,14 +449,14 @@ def test_cursor_continuity_across_flush(tmp_path: Path):
 def test_seq_recovery_on_restart(tmp_path: Path):
     """After close and reopen, sequence numbers don't collide."""
     log_dir = tmp_path / "logs"
-    store1 = LogStore(log_dir=log_dir, segment_target_bytes=1)
+    store1 = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
     entries1 = [_make_entry(f"s1-{i}", epoch_ms=i) for i in range(10)]
     store1.append(KEY, entries1)
     result1 = store1.get_logs(KEY)
     cursor1 = result1.cursor
     store1.close()
 
-    store2 = LogStore(log_dir=log_dir, segment_target_bytes=1)
+    store2 = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
     entries2 = [_make_entry(f"s2-{i}", epoch_ms=100 + i) for i in range(5)]
     store2.append(KEY, entries2)
 
@@ -473,7 +474,7 @@ def test_seq_recovery_on_restart(tmp_path: Path):
 def test_concurrent_read_write(tmp_path: Path):
     """Concurrent appends and reads don't crash or corrupt data."""
     log_dir = tmp_path / "logs"
-    store = LogStore(log_dir=log_dir, segment_target_bytes=50 * _EST_BYTES_PER_ROW)
+    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=50 * _EST_BYTES_PER_ROW)
     errors: list[Exception] = []
 
     def writer():
@@ -510,7 +511,7 @@ def test_small_segments_are_consolidated(tmp_path: Path):
     log_dir = tmp_path / "logs"
     # Large segment target means all small files are below the threshold
     # and will be consolidated into one file.
-    store = LogStore(
+    store = DuckDBLogStore(
         log_dir=log_dir,
         segment_target_bytes=100 * 1024 * 1024,  # 100MB — way bigger than our test data
         flush_interval_sec=0,  # seal on every append (time threshold always satisfied)
@@ -539,7 +540,7 @@ def test_small_segments_are_consolidated(tmp_path: Path):
 def test_consolidation_preserves_cursor_continuity(tmp_path: Path):
     """Cursors from before consolidation still work after consolidation."""
     log_dir = tmp_path / "logs"
-    store = LogStore(
+    store = DuckDBLogStore(
         log_dir=log_dir,
         segment_target_bytes=100 * 1024 * 1024,
         flush_interval_sec=0,
@@ -567,11 +568,60 @@ def test_consolidation_preserves_cursor_continuity(tmp_path: Path):
         store.close()
 
 
+def test_connection_pool_memory_limit(tmp_path: Path):
+    """DuckDB connections respect the configured memory limit."""
+    log_dir = tmp_path / "logs"
+    store = DuckDBLogStore(log_dir=log_dir, duckdb_memory_limit="64MB")
+    try:
+        entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(100)]
+        store.append(KEY, entries)
+        result = store.get_logs(KEY)
+        assert len(result.entries) == 100
+    finally:
+        store.close()
+
+
+def test_concurrent_reads_no_concat_copy(tmp_path: Path):
+    """Multiple concurrent reads work correctly without pa.concat_tables."""
+    log_dir = tmp_path / "logs"
+    store = DuckDBLogStore(log_dir=log_dir, duckdb_memory_limit="64MB")
+    errors: list[Exception] = []
+
+    # Create data across multiple RAM buffers: pending + chunks + sealed
+    for batch in range(5):
+        entries = [_make_entry(f"batch{batch}-{i}", epoch_ms=batch * 100 + i) for i in range(10)]
+        store.append(KEY, entries)
+
+    # Seal to create sealed buffers, then add more to pending
+    store._seal_head()
+    store.append(KEY, [_make_entry("after-seal", epoch_ms=999)])
+
+    def reader():
+        for _ in range(50):
+            try:
+                result = store.get_logs(KEY, max_lines=100, tail=True)
+                assert len(result.entries) > 0
+            except Exception as e:
+                errors.append(e)
+
+    threads = [threading.Thread(target=reader) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == [], f"Concurrent reads raised: {errors}"
+
+    result = store.get_logs(KEY)
+    assert len(result.entries) == 51  # 5*10 + 1
+    store.close()
+
+
 def test_sealed_buffers_readable_before_flush(tmp_path: Path):
     """Data in sealed buffers is still readable even before Parquet flush completes."""
     log_dir = tmp_path / "logs"
     # Use a large flush interval so time-based sealing won't trigger.
-    store = LogStore(log_dir=log_dir, segment_target_bytes=10 * 1024 * 1024, flush_interval_sec=9999)
+    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=10 * 1024 * 1024, flush_interval_sec=9999)
 
     entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(10)]
     # Append to head buffer only (segment_target_bytes is large, won't seal).

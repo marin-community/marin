@@ -36,14 +36,13 @@ Locking:
 from __future__ import annotations
 
 import logging
-import queue
 import tempfile
 import time
 from collections import deque
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from threading import Condition, Lock
 
@@ -53,13 +52,12 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
+from iris.cluster.log_store._types import _EST_BYTES_PER_ROW, _LIKE_ESCAPE_TABLE, LogReadResult
 from iris.cluster.types import TaskAttempt
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
 
 logger = logging.getLogger(__name__)
-
-_LIKE_ESCAPE_TABLE = str.maketrans({"%": "\\%", "_": "\\_", "\\": "\\\\"})
 
 _PARQUET_SCHEMA = pa.schema(
     [
@@ -72,6 +70,13 @@ _PARQUET_SCHEMA = pa.schema(
     ]
 )
 
+# Arrow type → DuckDB type mapping for empty-source fallback SQL.
+_DUCKDB_TYPE_MAP: dict[pa.DataType, str] = {
+    pa.int64(): "BIGINT",
+    pa.int32(): "INTEGER",
+    pa.string(): "VARCHAR",
+}
+
 # ---------------------------------------------------------------------------
 # Heuristic thresholds
 # ---------------------------------------------------------------------------
@@ -83,14 +88,16 @@ SEGMENT_TARGET_BYTES = 100 * 1024 * 1024  # 100 MB
 # Seal the head buffer after this many seconds (even if small).
 DEFAULT_FLUSH_INTERVAL_SEC = 600.0  # 10 minutes
 
-# Estimated bytes per buffered row (used to decide when to force-seal).
-_EST_BYTES_PER_ROW = 256
-
 # Default caps for local Parquet retention.
 DEFAULT_MAX_LOCAL_SEGMENTS = 50
 DEFAULT_MAX_LOCAL_BYTES = 5 * 1024**3  # 5 GB
 
 _ROW_GROUP_SIZE = 16_384
+
+# When doing a tail query, we optimistically restrict seq to the most recent
+# (max_lines * margin) entries. If the result is short, we fall back to a
+# full scan. 10x covers most realistic filter selectivities.
+_TAIL_SEQ_MARGIN = 10
 
 
 def _escape_like(s: str) -> str:
@@ -98,13 +105,20 @@ def _escape_like(s: str) -> str:
     return s.translate(_LIKE_ESCAPE_TABLE)
 
 
-PROCESS_LOG_KEY = "/system/process"
+def _prefix_upper_bound(prefix: str) -> str | None:
+    """Return the exclusive upper bound for a prefix range, or None if unbounded.
 
-
-def task_log_key(task_attempt: TaskAttempt) -> str:
-    """Build a hierarchical key for task attempt logs."""
-    task_attempt.require_attempt()
-    return task_attempt.to_wire()
+    All strings starting with ``prefix`` satisfy ``prefix <= s < upper``.
+    This lets DuckDB use range predicates on Parquet row-group statistics
+    instead of LIKE, which isn't pushed down through parameterized queries.
+    """
+    if not prefix:
+        return None
+    # Increment the last byte. Works for all realistic UTF-8 key prefixes.
+    last = ord(prefix[-1])
+    if last >= 0x10FFFF:
+        return None
+    return prefix[:-1] + chr(last + 1)
 
 
 def _fsspec_copy(src: str, dst: str) -> None:
@@ -128,6 +142,58 @@ def _recover_max_seq(log_dir: Path) -> int:
             except ValueError:
                 continue
     return max_seen + 1 if max_seen >= 0 else 1
+
+
+def _read_key_bounds(path: Path) -> tuple[str, str]:
+    """Read min/max key from Parquet row-group statistics."""
+    try:
+        meta = pq.read_metadata(path)
+        schema = meta.schema.to_arrow_schema()
+        key_idx = schema.get_field_index("key")
+        min_key = ""
+        max_key = ""
+        for i in range(meta.num_row_groups):
+            col = meta.row_group(i).column(key_idx)
+            if col.statistics is not None and col.statistics.has_min_max:
+                rg_min = col.statistics.min
+                rg_max = col.statistics.max
+                if not min_key or rg_min < min_key:
+                    min_key = rg_min
+                if not max_key or rg_max > max_key:
+                    max_key = rg_max
+        return min_key, max_key
+    except Exception:
+        return "", ""
+
+
+def _segment_overlaps_key(seg: _LocalSegment, key: str) -> bool:
+    """Check if a segment's key range could contain the exact key."""
+    if not seg.min_key:
+        return True  # no metadata, must scan
+    return seg.min_key <= key <= seg.max_key
+
+
+def _segment_overlaps_prefix(seg: _LocalSegment, prefix: str) -> bool:
+    """Check if a segment's key range could contain keys starting with prefix.
+
+    A prefix like "/user/job-50/" overlaps a segment if:
+    - segment's max_key >= prefix (some key could start at or after prefix)
+    - segment's min_key starts with prefix, OR min_key < prefix_upper_bound
+    """
+    if not seg.min_key:
+        return True  # no metadata, must scan
+    # Fast check: segment ends before prefix starts
+    if seg.max_key < prefix:
+        return False
+    # Compute the exclusive upper bound for the prefix by incrementing the last
+    # character. All strings matching the prefix satisfy: prefix <= s < upper.
+    # If we can't compute an upper bound (empty prefix or all-\xff), scan.
+    if not prefix:
+        return True
+    upper = prefix[:-1] + chr(ord(prefix[-1]) + 1)
+    if seg.min_key >= upper:
+        return False
+    return True
 
 
 def _build_buffer_table(buffer: list[tuple]) -> pa.Table:
@@ -198,6 +264,27 @@ class _LocalSegment:
     size_bytes: int
     min_seq: int = 0
     max_seq: int = 0
+    min_key: str = ""
+    max_key: str = ""
+
+
+@dataclass(frozen=True)
+class _SegmentFilter:
+    """Filters segments by key bounds before building a DuckDB query."""
+
+    exact_key: str | None = None
+    prefix: str | None = None
+
+    def apply(self, segments: list[_LocalSegment]) -> list[_LocalSegment]:
+        if self.exact_key is not None:
+            return [s for s in segments if _segment_overlaps_key(s, self.exact_key)]
+        if self.prefix is not None:
+            return [s for s in segments if _segment_overlaps_prefix(s, self.prefix)]
+        return segments
+
+
+# Sentinel: include all segments (no filtering).
+_SEGMENT_FILTER_ALL = _SegmentFilter()
 
 
 class _RWLock:
@@ -237,43 +324,60 @@ class _RWLock:
             self._cond.notify_all()
 
 
-class _ConnectionPool:
-    """Pool of reusable DuckDB connections.
+_DEFAULT_DUCKDB_MEMORY_LIMIT = "256MB"
 
-    Each connection is checked out by exactly one thread at a time.
-    The buffer table is registered per-use since it changes on every read.
+
+_cursor_counter = 0
+_cursor_counter_lock = Lock()
+
+
+def _next_cursor_id() -> int:
+    global _cursor_counter
+    with _cursor_counter_lock:
+        _cursor_counter += 1
+        return _cursor_counter
+
+
+class _ConnectionPool:
+    """Single DuckDB database with cursor-based concurrency.
+
+    One ``duckdb.connect()`` call creates the shared buffer pool. Callers
+    get cursors via ``conn.cursor()`` which share that pool, keeping total
+    memory bounded by a single ``memory_limit``.
+
+    RAM tables are registered with unique names (incorporating a monotonic
+    counter) so concurrent cursors don't collide on table names.
     """
 
-    def __init__(self, size: int = 8):
-        self._pool: queue.SimpleQueue[duckdb.DuckDBPyConnection] = queue.SimpleQueue()
-        for _ in range(size):
-            self._pool.put(duckdb.connect())
+    def __init__(self, memory_limit: str = _DEFAULT_DUCKDB_MEMORY_LIMIT):
+        self._conn = duckdb.connect(config={"memory_limit": memory_limit, "threads": "2"})
 
     @contextmanager
-    def checkout(self, buffer_table: pa.Table) -> Iterator[duckdb.DuckDBPyConnection]:
-        conn = self._pool.get()
+    def checkout(self, buffer_tables: list[pa.Table]) -> Iterator[tuple[duckdb.DuckDBPyConnection, list[str]]]:
+        """Create a cursor and register each RAM table under a unique name.
+
+        Yields ``(cursor, list_of_table_names)`` so callers can UNION ALL
+        the names into their SQL without a ``pa.concat_tables`` copy.
+        """
+        cid = _next_cursor_id()
+        cursor = self._conn.cursor()
+        names: list[str] = []
         try:
-            conn.register("ram_buffer", buffer_table)
-            yield conn
+            for i, table in enumerate(buffer_tables):
+                name = f"_ram_{cid}_{i}"
+                cursor.register(name, table)
+                names.append(name)
+            yield cursor, names
         finally:
-            conn.unregister("ram_buffer")
-            self._pool.put(conn)
+            for name in names:
+                cursor.unregister(name)
+            cursor.close()
 
     def close(self) -> None:
-        while not self._pool.empty():
-            try:
-                self._pool.get_nowait().close()
-            except queue.Empty:
-                break
+        self._conn.close()
 
 
-@dataclass
-class LogReadResult:
-    entries: list[logging_pb2.LogEntry] = field(default_factory=list)
-    cursor: int = 0  # max seq seen
-
-
-class LogStore:
+class DuckDBLogStore:
     """Log store backed by rotating RAM buffers + Parquet segments.
 
     Thread-safe. One lock protects all mutable state: the head buffer,
@@ -289,7 +393,7 @@ class LogStore:
         max_local_bytes: int = DEFAULT_MAX_LOCAL_BYTES,
         flush_interval_sec: float = DEFAULT_FLUSH_INTERVAL_SEC,
         segment_target_bytes: int = SEGMENT_TARGET_BYTES,
-        pool_size: int = 8,
+        duckdb_memory_limit: str = _DEFAULT_DUCKDB_MEMORY_LIMIT,
     ):
         self._temp_dir: tempfile.TemporaryDirectory[str] | None = None
         if log_dir is not None:
@@ -323,11 +427,19 @@ class LogStore:
             parts = p.stem.split("_")
             min_seq = int(parts[1]) if len(parts) >= 3 else 0
             max_seq = int(parts[2]) if len(parts) >= 3 else 0
+            min_key, max_key = _read_key_bounds(p)
             self._local_segments.append(
-                _LocalSegment(path=str(p), size_bytes=p.stat().st_size, min_seq=min_seq, max_seq=max_seq)
+                _LocalSegment(
+                    path=str(p),
+                    size_bytes=p.stat().st_size,
+                    min_seq=min_seq,
+                    max_seq=max_seq,
+                    min_key=min_key,
+                    max_key=max_key,
+                )
             )
 
-        self._pool = _ConnectionPool(size=pool_size)
+        self._pool = _ConnectionPool(memory_limit=duckdb_memory_limit)
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
 
     # ------------------------------------------------------------------
@@ -385,7 +497,15 @@ class LogStore:
         params: dict = {"key": key, "cursor": cursor}
         _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
 
-        return self._execute_read(where_parts, params, max_lines, tail, cursor, include_key_in_select=False)
+        return self._execute_read(
+            where_parts,
+            params,
+            max_lines,
+            tail,
+            cursor,
+            include_key_in_select=False,
+            segment_filter=_SegmentFilter(exact_key=key),
+        )
 
     def get_logs_by_prefix(
         self,
@@ -402,22 +522,38 @@ class LogStore:
         """Fetch logs for all keys matching prefix, ordered by seq."""
         min_level_enum = str_to_log_level(min_level) if min_level else 0
 
-        where_parts = ["key LIKE $prefix ESCAPE '\\'", "seq > $cursor"]
-        params: dict = {"prefix": _escape_like(prefix) + "%", "cursor": cursor}
+        # Use range predicates instead of LIKE so DuckDB can push them down
+        # to Parquet row-group statistics and skip non-matching row groups.
+        where_parts = ["key >= $prefix_lo", "seq > $cursor"]
+        params: dict = {"prefix_lo": prefix, "cursor": cursor}
+        upper = _prefix_upper_bound(prefix)
+        if upper is not None:
+            where_parts.append("key < $prefix_hi")
+            params["prefix_hi"] = upper
         if shallow:
             where_parts.append("key NOT LIKE $shallow_exclude ESCAPE '\\'")
             params["shallow_exclude"] = _escape_like(prefix) + "%/%"
         _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
 
-        return self._execute_read(where_parts, params, max_lines, tail, cursor, include_key_in_select=True)
+        return self._execute_read(
+            where_parts,
+            params,
+            max_lines,
+            tail,
+            cursor,
+            include_key_in_select=True,
+            segment_filter=_SegmentFilter(prefix=prefix),
+        )
 
     def has_logs(self, key: str) -> bool:
         """Check whether any log entries exist for the given key."""
         result = self.get_logs(key, max_lines=1)
         return len(result.entries) > 0
 
-    def cursor(self, key: str) -> LogCursor:
+    def cursor(self, key: str):
         """Return a stateful cursor for incremental reads on *key*."""
+        from iris.cluster.log_store import LogCursor
+
         return LogCursor(self, key)
 
     # ------------------------------------------------------------------
@@ -528,11 +664,14 @@ class LogStore:
                 )
                 tmp_path.rename(filepath)
 
+                key_col = combined.column("key")
                 seg = _LocalSegment(
                     path=str(filepath),
                     size_bytes=filepath.stat().st_size,
                     min_seq=combined_min_seq,
                     max_seq=combined_max_seq,
+                    min_key=key_col[0].as_py(),
+                    max_key=key_col[-1].as_py(),
                 )
 
                 with self._lock:
@@ -587,11 +726,14 @@ class LogStore:
             # Leave the sealed buffer in the deque so reads still see the data.
             return
 
+        key_col = new_table.column("key")
         seg = _LocalSegment(
             path=str(filepath),
             size_bytes=filepath.stat().st_size,
             min_seq=new_min_seq,
             max_seq=new_max_seq,
+            min_key=key_col[0].as_py(),
+            max_key=key_col[-1].as_py(),
         )
 
         with self._lock:
@@ -660,6 +802,7 @@ class LogStore:
         tail: bool,
         default_cursor: int,
         include_key_in_select: bool,
+        segment_filter: _SegmentFilter = _SEGMENT_FILTER_ALL,
     ) -> LogReadResult:
         # Acquire the segments read lock BEFORE snapshotting paths. This
         # guarantees that no file in our snapshot can be deleted (by GC or
@@ -667,18 +810,15 @@ class LogStore:
         self._segments_rwlock.read_acquire()
         try:
             with self._lock:
-                parquet_files = [s.path for s in self._local_segments]
+                segments = list(self._local_segments)
                 ram_tables: list[pa.Table] = [sb.table for sb in self._sealed]
                 ram_tables.extend(self._chunks)
                 if self._pending:
                     ram_tables.append(_build_buffer_table(self._pending))
+                current_max_seq = self._next_seq - 1
 
-            if ram_tables:
-                ram_table = pa.concat_tables(ram_tables)
-            else:
-                ram_table = _PARQUET_SCHEMA.empty_table()
+            parquet_files = [s.path for s in segment_filter.apply(segments)]
 
-            source = _build_union_source(parquet_files)
             where_clause = " AND ".join(where_parts)
 
             if include_key_in_select:
@@ -689,9 +829,29 @@ class LogStore:
             order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
             limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
 
-            sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
-            with self._pool.checkout(ram_table) as conn:
-                rows = conn.execute(sql, params).fetchall()
+            # Register each RAM table individually so DuckDB scans them
+            # via zero-copy Arrow, avoiding a pa.concat_tables() copy.
+            with self._pool.checkout(ram_tables) as (conn, ram_names):
+                source = _build_union_source(parquet_files, ram_names)
+
+                # For tail+prefix queries, try a seq-bounded scan first. The
+                # last max_lines rows must have seq within a bounded range of
+                # the global max. Use a generous margin and fall back to a
+                # full scan if we get fewer rows than requested. Skip this
+                # for exact-key queries since row-group pruning already
+                # narrows the scan sufficiently.
+                rows = None
+                if tail and max_lines > 0 and include_key_in_select:
+                    seq_lower = max(0, current_max_seq - max_lines * _TAIL_SEQ_MARGIN)
+                    bounded_where = f"{where_clause} AND seq > {seq_lower}"
+                    sql = f"SELECT {select_cols} FROM ({source}) WHERE {bounded_where} {order} {limit}"
+                    rows = conn.execute(sql, params).fetchall()
+                    if len(rows) < max_lines:
+                        rows = None  # margin was too tight, fall back
+
+                if rows is None:
+                    sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
+                    rows = conn.execute(sql, params).fetchall()
         finally:
             self._segments_rwlock.read_release()
 
@@ -747,72 +907,21 @@ def _add_common_filters(
         params["min_level"] = min_level_enum
 
 
-def _build_union_source(parquet_files: list[str]) -> str:
-    """Build a SQL source expression: local Parquet files UNION ALL ram_buffer.
+def _build_union_source(parquet_files: list[str], ram_table_names: list[str]) -> str:
+    """Build a SQL source expression: local Parquet files UNION ALL ram tables.
 
     File paths are self-generated (``logs_{seq}_{seq}.parquet``) so no SQL
-    injection risk from the f-string embedding.
+    injection risk from the f-string embedding. RAM table names are generated
+    internally (``_ram_0``, ``_ram_1``, …).
     """
     parts: list[str] = []
     if parquet_files:
         file_list = ", ".join(f"'{f}'" for f in parquet_files)
         parts.append(f"SELECT * FROM read_parquet([{file_list}])")
-    parts.append("SELECT * FROM ram_buffer")
+    for name in ram_table_names:
+        parts.append(f"SELECT * FROM {name}")
+    if not parts:
+        # No data sources at all; return an empty selection from the schema.
+        col_defs = ", ".join(f"NULL::{_DUCKDB_TYPE_MAP[f.type]} AS {f.name}" for f in _PARQUET_SCHEMA)
+        return f"SELECT {col_defs} WHERE false"
     return " UNION ALL ".join(parts)
-
-
-# ---------------------------------------------------------------------------
-# Cursor helper
-# ---------------------------------------------------------------------------
-
-
-class LogCursor:
-    """Stateful incremental reader for a single LogStore key.
-
-    Tracks a seq cursor across calls to read() so callers don't need to
-    manage cursor bookkeeping.
-    """
-
-    def __init__(self, store: LogStore, key: str) -> None:
-        self._store = store
-        self._key = key
-        self._cursor: int = 0
-
-    def read(self, max_entries: int = 5000) -> list[logging_pb2.LogEntry]:
-        """Return new entries since the last call, advancing the cursor."""
-        result = self._store.get_logs(self._key, cursor=self._cursor, max_lines=max_entries)
-        self._cursor = result.cursor
-        return result.entries
-
-
-# ---------------------------------------------------------------------------
-# Logging handler bridge
-# ---------------------------------------------------------------------------
-
-
-class LogStoreHandler(logging.Handler):
-    """Logging handler that writes formatted records directly into a LogStore."""
-
-    def __init__(self, log_store: LogStore, key: str = PROCESS_LOG_KEY):
-        super().__init__()
-        self._log_store = log_store
-        self._key = key
-        self._closed = False
-
-    def emit(self, record: logging.LogRecord) -> None:
-        if self._closed:
-            return
-        try:
-            entry = logging_pb2.LogEntry(
-                source="process",
-                data=self.format(record),
-                level=str_to_log_level(record.levelname),
-            )
-            entry.timestamp.epoch_ms = int(record.created * 1000)
-            self._log_store.append(self._key, [entry])
-        except Exception:
-            self.handleError(record)
-
-    def close(self) -> None:
-        self._closed = True
-        super().close()
