@@ -22,6 +22,9 @@ This skill describes the workflow for:
   - copy from `base` and modify locally (for example MoE).
 - **One-off speedruns:** `experiments/speedrun/...`
   - useful for exploration, not canonical.
+- **Reference branch for array-stacked grug variant wiring:**
+  - https://github.com/marin-community/marin/tree/codex/array-stacked-grug-variant-pointer
+  - useful for perf-focused experiments, especially when improving compile times and reducing peak HBM.
 
 ## Workflow
 
@@ -81,6 +84,8 @@ Keep it grug-style:
 - Equinox modules with `init` + `__call__`
 - minimal config knobs
 - keep legibility first; if a block gets hard to read, introduce a small local helper instead of adding framework indirection
+- when HBM is tight, use `docs/references/hbm-optimization.md` before introducing bespoke memory hacks
+- when compile time or peak HBM is the bottleneck, evaluate an array-stacked variant first (see reference branch above)
 
 ### 5) Delete stale paths
 
@@ -94,7 +99,7 @@ After upstreaming:
 Run the relevant checks:
 
 ```bash
-uv run python infra/pre-commit.py --all-files
+./infra/pre-commit.py --all-files
 uv run pytest tests/test_grug_variant_contracts.py
 ```
 

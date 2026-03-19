@@ -156,16 +156,57 @@ def _probe_gpu_info() -> tuple[int, str, int]:
         return 0, "", 0
 
 
+_MEMORY_HEADROOM_FRACTION = 0.10
+"""Reserve up to 10% of physical RAM for OS, Docker daemon, and worker agent."""
+
+_MEMORY_HEADROOM_MAX_BYTES = 8 * 1024**3
+"""Cap memory headroom at 8 GB."""
+
+_CPU_HEADROOM_FRACTION = 0.10
+"""Reserve up to 10% of CPUs for OS and worker agent."""
+
+_CPU_HEADROOM_MAX = 1
+"""Cap CPU headroom at 1 core."""
+
+
+def _compute_memory_headroom(physical_bytes: int) -> int:
+    """Compute memory headroom: min(10% of physical RAM, 8 GB)."""
+    return min(int(physical_bytes * _MEMORY_HEADROOM_FRACTION), _MEMORY_HEADROOM_MAX_BYTES)
+
+
+def _compute_cpu_headroom(physical_cpus: int) -> int:
+    """Compute CPU headroom: min(10% of CPUs, 1 core), as whole cores."""
+    fractional = min(physical_cpus * _CPU_HEADROOM_FRACTION, _CPU_HEADROOM_MAX)
+    return int(fractional)
+
+
 def _get_memory_total_bytes() -> int:
+    """Return schedulable memory in bytes, with headroom subtracted.
+
+    Reserves min(10%, 8 GB) for the OS, Docker daemon, and worker agent so the
+    scheduler cannot commit 100% of a machine's memory.
+    """
     try:
         with open("/proc/meminfo") as f:
             for line in f:
                 if line.startswith("MemTotal:"):
-                    return int(line.split()[1]) * 1024  # kB to bytes
+                    physical = int(line.split()[1]) * 1024  # kB to bytes
+                    headroom = _compute_memory_headroom(physical)
+                    return physical - headroom
     except FileNotFoundError:
         pass
     # Fallback for non-Linux
     return 8 * 1024**3  # Default 8GB
+
+
+def _get_cpu_count() -> int:
+    """Return schedulable CPU count, with headroom subtracted.
+
+    Reserves min(10%, 1 core) for the OS and worker agent.
+    """
+    physical = os.cpu_count() or 1
+    headroom = _compute_cpu_headroom(physical)
+    return max(1, physical - headroom)
 
 
 def _get_ip_address() -> str:
@@ -184,27 +225,6 @@ def _get_disk_bytes() -> int:
         return stat.f_bavail * stat.f_frsize
     except Exception:
         return 100 * 1024**3  # Default 100GB
-
-
-def collect_workdir_size_mb(workdir: Path) -> int:
-    """Calculate workdir size in MB using du -sm."""
-    if not workdir.exists():
-        return 0
-
-    result = subprocess.run(
-        ["du", "-sm", str(workdir)],
-        capture_output=True,
-        text=True,
-    )
-
-    if result.returncode != 0:
-        return 0
-
-    # du -sm output format: "SIZE\tPATH"
-    output = result.stdout.strip()
-    size_str = output.split("\t")[0]
-
-    return int(size_str)
 
 
 def _build_worker_attributes(
@@ -289,6 +309,43 @@ class HardwareProbe:
     tpu_worker_hostnames: str
     tpu_worker_id: str
     tpu_chips_per_host_bounds: str
+    gce_instance_name: str = ""
+
+
+def _probe_gce_instance_name() -> str:
+    """Read the GCE instance name from metadata. Empty string if not on GCP."""
+    if not _is_gcp_vm():
+        return ""
+    return _get_gcp_metadata("name") or ""
+
+
+def construct_worker_id(slice_id: str, worker_index: int) -> str:
+    """Build a deterministic worker ID from slice identity and within-slice index."""
+    return f"{slice_id}-worker-{worker_index}"
+
+
+IRIS_WORKER_ID_ENV = "IRIS_WORKER_ID"
+
+
+def infer_worker_id(hardware: HardwareProbe) -> str | None:
+    """Infer worker_id from environment or GCP metadata probes.
+
+    Priority:
+    1. IRIS_WORKER_ID env var (set by all platforms via WorkerConfig or pod env).
+    2. TPU metadata: combines tpu_name (the slice name) with the TPU worker index.
+    3. GCE instance name: uses the instance name as slice_id with worker index 0.
+
+    Returns None when not running on a recognized cloud VM and no env var is set.
+    """
+    env_worker_id = os.environ.get(IRIS_WORKER_ID_ENV)
+    if env_worker_id:
+        return env_worker_id
+    if hardware.tpu_name:
+        worker_index = int(hardware.tpu_worker_id) if hardware.tpu_worker_id else 0
+        return construct_worker_id(hardware.tpu_name, worker_index)
+    if hardware.gce_instance_name:
+        return construct_worker_id(hardware.gce_instance_name, 0)
+    return None
 
 
 def probe_hardware() -> HardwareProbe:
@@ -297,10 +354,11 @@ def probe_hardware() -> HardwareProbe:
     ip_address = _get_ip_address()
     tpu_name, tpu_type, tpu_worker_hostnames, tpu_worker_id, tpu_chips_per_host_bounds = _probe_tpu_metadata()
     gpu_count, gpu_name, gpu_memory_mb = _probe_gpu_info()
+    gce_instance_name = _probe_gce_instance_name()
     return HardwareProbe(
         hostname=hostname,
         ip_address=ip_address,
-        cpu_count=os.cpu_count() or 1,
+        cpu_count=_get_cpu_count(),
         memory_bytes=_get_memory_total_bytes(),
         disk_bytes=_get_disk_bytes(),
         gpu_count=gpu_count,
@@ -311,6 +369,7 @@ def probe_hardware() -> HardwareProbe:
         tpu_worker_hostnames=tpu_worker_hostnames,
         tpu_worker_id=tpu_worker_id,
         tpu_chips_per_host_bounds=tpu_chips_per_host_bounds,
+        gce_instance_name=gce_instance_name,
     )
 
 
@@ -391,7 +450,7 @@ def build_worker_metadata(
         gpu_memory_mb=gpu_memory_mb,
         device=device,
         attributes=attributes,
-        vm_address=hardware.ip_address,
+        gce_instance_name=hardware.gce_instance_name,
         git_hash=os.environ.get("IRIS_GIT_HASH", "unknown"),
     )
 
@@ -466,11 +525,12 @@ def check_worker_health(disk_path: str = "/") -> HealthCheckResult:
     Docker probing is implicit: if the worker is processing heartbeats
     and fetching task status, Docker is operational.
 
-    If disk_path does not exist (e.g. during teardown), the probe is
-    skipped and the worker is considered healthy.
+    If disk_path is not an existing directory (e.g. during teardown, or on
+    platforms where the path does not exist), the probe is skipped and the
+    worker is considered healthy.
     """
     dp = Path(disk_path)
-    if not dp.exists():
+    if not dp.is_dir():
         return HealthCheckResult(healthy=True)
 
     errors: list[str] = []
@@ -480,6 +540,9 @@ def check_worker_health(disk_path: str = "/") -> HealthCheckResult:
         probe_path = dp / ".iris_health_probe"
         probe_path.write_text("ok")
         probe_path.unlink()
+    except FileNotFoundError:
+        # TOCTOU: directory vanished between is_dir() check and write
+        pass
     except OSError as e:
         errors.append(f"tempfile write failed: {e}")
 

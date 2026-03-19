@@ -90,7 +90,6 @@ def mock_bundle_store(tmp_path):
     """Create mock BundleStore with a real temp directory."""
     cache = Mock(spec=BundleStore)
     cache.extract_bundle_to = Mock()
-    cache.write_workdir_files = Mock()
     return cache
 
 
@@ -136,6 +135,7 @@ def create_mock_container_handle(
     handle.log_reader = Mock(return_value=log_reader_mock)
 
     handle.stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True))
+    handle.disk_usage_mb = Mock(return_value=0)
     handle.cleanup = Mock()
     return handle
 
@@ -618,7 +618,7 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     """Job-level env vars win over default_task_env, which wins over iris system vars.
 
     The merge order in _create_container is:
-      1. iris system vars (IRIS_JOB_ID, etc.)
+      1. iris system vars (IRIS_TASK_ID, etc.)
       2. default_task_env (worker-level defaults, overrides iris vars)
       3. job-level env_vars (from the request, wins over everything user-visible)
 
@@ -664,7 +664,7 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     # Job-only key propagates.
     assert env["JOB_ONLY"] == "from_job"
     # Iris system vars are always injected.
-    assert "IRIS_JOB_ID" in env
+    assert "IRIS_TASK_ID" in env
 
 
 def test_task_failure_error_appears_in_logs(worker):
@@ -794,7 +794,7 @@ def test_bundle(tmp_path):
 @pytest.fixture
 def real_worker(cache_dir):
     """Create Worker with real components (not mocks)."""
-    runtime = DockerRuntime()
+    runtime = DockerRuntime(cache_dir=cache_dir)
     config = WorkerConfig(
         port=0,
         cache_dir=cache_dir,

@@ -1,20 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bundle ID utilities and a single sqlite-backed BundleStore implementation."""
+"""Bundle ID utilities and a BundleStore with fsspec persistence and in-memory LRU cache.
+
+Bundles are stored as ``{storage_dir}/{bundle_id}.zip`` using fsspec (supporting
+local paths and GCS URIs). An in-memory LRU cache avoids repeated reads from
+storage. The cache is populated lazily — no startup scan is performed.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import io
 import logging
-import posixpath
-import sqlite3
 import threading
 import time
 import zipfile
+from collections import OrderedDict
 from pathlib import Path
 from urllib.request import urlopen
+
+import fsspec.core
 
 logger = logging.getLogger(__name__)
 
@@ -24,109 +30,91 @@ def bundle_id_for_zip(blob: bytes) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
-def normalize_workdir_relative_path(path: str) -> str:
-    """Return a normalized relative path safe to write under a task workdir."""
-    candidate = path.replace("\\", "/")
-    if candidate.startswith("/"):
-        raise ValueError(f"Invalid workdir file path (absolute paths are not allowed): {path}")
-    normalized = posixpath.normpath(candidate)
-    if normalized in {"", "."}:
-        raise ValueError(f"Invalid workdir file path: {path}")
-    if normalized.startswith("../") or normalized == "..":
-        raise ValueError(f"Invalid workdir file path (path traversal): {path}")
-    return normalized
-
-
 class BundleStore:
-    """Single sqlite-backed bundle store for controller and workers.
+    """Bundle store with fsspec persistence and in-memory LRU cache.
 
-    Bundles are stored as zip bytes in sqlite by ``bundle_id``.
-    Workers can lazily fetch missing bundles from the controller and cache
-    them locally.
+    Bundles are persisted as ``{storage_dir}/{bundle_id}.zip`` via fsspec, supporting
+    both local paths and remote URIs (e.g. ``gs://bucket/path/bundles``).
+
+    The in-memory cache is populated lazily: ``get_zip`` checks in-memory cache first,
+    then falls back to fsspec storage, then (on workers) fetches from the controller.
+    Eviction from the in-memory cache does NOT delete from fsspec storage.
     """
 
     def __init__(
         self,
-        db_path: Path,
+        storage_dir: str,
         controller_address: str | None = None,
-        max_total_bytes: int = 1_000_000_000,
-        max_items: int = 1000,
+        max_cache_items: int = 1000,
+        max_cache_bytes: int = 1_000_000_000,
     ):
-        self._db_path = db_path
+        self._storage_dir = storage_dir
         self._controller_address = controller_address.rstrip("/") if controller_address else ""
-        self._max_total_bytes = max_total_bytes
-        self._max_items = max_items
+        self._max_cache_items = max_cache_items
+        self._max_cache_bytes = max_cache_bytes
         self._lock = threading.RLock()
 
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        # We intentionally share one sqlite connection across threads; every
-        # public DB operation must hold self._lock.
-        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=NORMAL")
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS bundles (
-                bundle_id TEXT PRIMARY KEY,
-                zip_bytes BLOB NOT NULL,
-                created_at_ms INTEGER NOT NULL,
-                last_access_ms INTEGER NOT NULL,
-                size_bytes INTEGER NOT NULL
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_bundles_last_access
-            ON bundles(last_access_ms)
-            """
-        )
-        self._conn.commit()
+        self._fs, self._fs_path = fsspec.core.url_to_fs(storage_dir)
+        self._fs.mkdirs(self._fs_path, exist_ok=True)
 
-    @staticmethod
-    def _now_ms() -> int:
-        return int(time.time() * 1000)
+        # OrderedDict mapping bundle_id -> blob bytes, ordered by access time
+        # (most recently accessed at end).
+        self._cache: OrderedDict[str, bytes] = OrderedDict()
+        self._cache_bytes = 0
+
+    def _bundle_fs_path(self, bundle_id: str) -> str:
+        return f"{self._fs_path}/{bundle_id}.zip"
+
+    def _exists_in_storage(self, bundle_id: str) -> bool:
+        return self._fs.exists(self._bundle_fs_path(bundle_id))
+
+    def _read_from_storage(self, bundle_id: str) -> bytes:
+        with self._fs.open(self._bundle_fs_path(bundle_id), "rb") as f:
+            return f.read()
+
+    def _write_to_storage(self, bundle_id: str, blob: bytes) -> None:
+        with self._fs.open(self._bundle_fs_path(bundle_id), "wb") as f:
+            f.write(blob)
+
+    def _cache_put(self, bundle_id: str, blob: bytes) -> None:
+        """Insert into in-memory cache and evict if needed. Caller must hold _lock."""
+        if bundle_id in self._cache:
+            self._cache.move_to_end(bundle_id)
+            return
+        self._cache[bundle_id] = blob
+        self._cache_bytes += len(blob)
+        self._evict_if_needed_locked()
 
     def write_zip(self, blob: bytes) -> str:
         """Write zip bytes if absent and return canonical bundle id."""
         bundle_id = bundle_id_for_zip(blob)
-        now_ms = self._now_ms()
         with self._lock:
-            row = self._conn.execute("SELECT 1 FROM bundles WHERE bundle_id = ?", (bundle_id,)).fetchone()
-            if row is None:
-                self._conn.execute(
-                    "INSERT INTO bundles(bundle_id, zip_bytes, created_at_ms, last_access_ms, size_bytes)"
-                    " VALUES (?, ?, ?, ?, ?)",
-                    (bundle_id, blob, now_ms, now_ms, len(blob)),
-                )
-            else:
-                self._conn.execute(
-                    "UPDATE bundles SET last_access_ms = ? WHERE bundle_id = ?",
-                    (now_ms, bundle_id),
-                )
-            self._conn.commit()
-            self._evict_if_needed_locked()
+            if bundle_id in self._cache:
+                self._cache.move_to_end(bundle_id)
+                return bundle_id
+
+            if not self._exists_in_storage(bundle_id):
+                self._write_to_storage(bundle_id, blob)
+            self._cache_put(bundle_id, blob)
         return bundle_id
 
     def get_zip(self, bundle_id: str) -> bytes:
         """Read zip bytes by bundle id.
 
-        Note: this method mutates the DB (updates ``last_access_ms``), so it
-        must hold ``self._lock`` like all other public DB methods.
+        Checks in-memory cache, then fsspec storage. Raises FileNotFoundError
+        if the bundle is not found in either location.
         """
         with self._lock:
-            row = self._conn.execute(
-                "SELECT zip_bytes FROM bundles WHERE bundle_id = ?",
-                (bundle_id,),
-            ).fetchone()
-            if row is None:
+            if bundle_id in self._cache:
+                self._cache.move_to_end(bundle_id)
+                return self._cache[bundle_id]
+
+            if not self._exists_in_storage(bundle_id):
                 raise FileNotFoundError(f"Bundle not found: {bundle_id}")
-            self._conn.execute(
-                "UPDATE bundles SET last_access_ms = ? WHERE bundle_id = ?",
-                (self._now_ms(), bundle_id),
-            )
-            self._conn.commit()
-            return bytes(row[0])
+
+            blob = self._read_from_storage(bundle_id)
+            self._cache_put(bundle_id, blob)
+            return blob
 
     def _fetch_from_controller(self, bundle_id: str) -> None:
         """Fetch a bundle from the controller HTTP endpoint and store it locally.
@@ -156,7 +144,7 @@ class BundleStore:
     def extract_bundle_to(self, bundle_id: str, dest: Path) -> None:
         """Extract a bundle zip into ``dest`` with zip-slip protection.
 
-        If the bundle is not in the local cache and a controller address is
+        If the bundle is not in the local cache/storage and a controller address is
         configured, it is fetched on demand before extraction.
         """
         try:
@@ -176,49 +164,29 @@ class BundleStore:
                     raise ValueError(f"Zip slip detected: {member} attempts to write outside extract path")
             zf.extractall(dest)
 
-    def write_workdir_files(self, dest: Path, files: dict[str, bytes]) -> None:
-        """Write workdir files under ``dest`` with path validation."""
-        for name, data in files.items():
-            normalized = normalize_workdir_relative_path(name)
-            path = dest / normalized
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-
     def _evict_if_needed_locked(self) -> None:
-        if self._max_items <= 0 and self._max_total_bytes <= 0:
+        """Evict oldest entries from in-memory cache. Caller must hold _lock."""
+        if self._max_cache_items <= 0 and self._max_cache_bytes <= 0:
             return
-        row = self._conn.execute(
-            "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM bundles",
-        ).fetchone()
-        if row is None:
-            return
-        count = int(row[0])
-        total = int(row[1])
 
-        # Compute how many items to evict based on count and size limits.
-        evict_for_items = max(0, count - self._max_items) if self._max_items > 0 else 0
-        # For bytes, estimate conservatively: evict at least 1 item at a time
-        # but start with the count-based minimum.
+        count = len(self._cache)
+        evict_for_items = max(0, count - self._max_cache_items) if self._max_cache_items > 0 else 0
         n_to_evict = evict_for_items
 
-        if self._max_total_bytes > 0 and total > self._max_total_bytes:
-            # Need to evict by size too — fetch LRU candidates and accumulate
-            # until we're under the byte limit.
-            candidates = self._conn.execute(
-                "SELECT bundle_id, size_bytes FROM bundles ORDER BY last_access_ms ASC",
-            ).fetchall()
+        if self._max_cache_bytes > 0 and self._cache_bytes > self._max_cache_bytes:
             freed = 0
-            for i, (_bid, sz) in enumerate(candidates):
-                if i >= n_to_evict and total - freed <= self._max_total_bytes:
+            for i, (_bid, blob) in enumerate(self._cache.items()):
+                if i >= n_to_evict and self._cache_bytes - freed <= self._max_cache_bytes:
                     break
-                freed += int(sz)
+                freed += len(blob)
                 n_to_evict = i + 1
 
-        if n_to_evict > 0:
-            victims = self._conn.execute(
-                "SELECT bundle_id FROM bundles ORDER BY last_access_ms ASC LIMIT ?",
-                (n_to_evict,),
-            ).fetchall()
-            victim_ids = [str(v[0]) for v in victims]
-            self._conn.executemany("DELETE FROM bundles WHERE bundle_id = ?", [(v,) for v in victim_ids])
-            self._conn.commit()
+        if n_to_evict <= 0:
+            return
+
+        for _ in range(n_to_evict):
+            _bid, blob = self._cache.popitem(last=False)
+            self._cache_bytes -= len(blob)
+
+    def close(self) -> None:
+        pass

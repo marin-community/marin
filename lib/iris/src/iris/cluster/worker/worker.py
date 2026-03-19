@@ -16,14 +16,17 @@ from iris.chaos import chaos
 from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import ContainerRuntime
-from iris.cluster.types import JobName
+from iris.cluster.types import JobName, TaskAttempt as TaskAttemptId
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
     EnvironmentProvider,
+    HardwareProbe,
     HostMetricsCollector,
     build_worker_metadata,
     check_worker_health,
+    construct_worker_id,
+    infer_worker_id,
     probe_hardware,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
@@ -33,6 +36,7 @@ from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import slow_log
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
 
@@ -49,6 +53,7 @@ class WorkerConfig:
     port_range: tuple[int, int] = (30000, 40000)
     controller_address: str | None = None
     worker_id: str | None = None
+    slice_id: str | None = None
     worker_attributes: dict[str, str] = field(default_factory=dict)
     default_task_env: dict[str, str] = field(default_factory=dict)
     default_task_image: str | None = None
@@ -60,6 +65,7 @@ class WorkerConfig:
     gpu_count: int = 0
     preemptible: bool = False
     storage_prefix: str = ""
+    auth_token: str = ""
 
 
 def worker_config_from_proto(
@@ -86,6 +92,7 @@ def worker_config_from_proto(
         port_range=(port_start, port_end),
         controller_address=controller_address or None,
         worker_id=proto.worker_id or None,
+        slice_id=proto.slice_id or None,
         worker_attributes=dict(proto.worker_attributes),
         default_task_env=dict(proto.default_task_env),
         default_task_image=proto.default_task_image or None,
@@ -105,6 +112,7 @@ def worker_config_from_proto(
         gpu_count=proto.gpu_count,
         preemptible=proto.preemptible,
         storage_prefix=proto.storage_prefix,
+        auth_token=proto.auth_token,
     )
 
 
@@ -130,14 +138,15 @@ class Worker:
 
         # Use overrides if provided, otherwise create defaults
         self._bundle_store = bundle_store or BundleStore(
-            db_path=self._cache_dir / "bundles.sqlite3",
+            storage_dir=str(self._cache_dir / "bundles"),
             controller_address=config.controller_address,
-            max_items=100,
+            max_cache_items=100,
         )
-        self._runtime = container_runtime or DockerRuntime()
+        self._runtime = container_runtime or DockerRuntime(cache_dir=self._cache_dir)
         self._port_allocator = port_allocator or PortAllocator(config.port_range)
 
         # Resolve worker metadata: explicit > environment_provider > hardware probe
+        hardware: HardwareProbe | None = None
         if worker_metadata is not None:
             self._worker_metadata = worker_metadata
         elif environment_provider is not None:
@@ -177,7 +186,14 @@ class Worker:
         self._threads = threads if threads is not None else get_thread_container()
         self._task_threads = self._threads.create_child("tasks")
 
-        self._worker_id: str | None = config.worker_id
+        # Resolve worker_id: config > slice_id + TPU index > GCP metadata inference > assigned by controller
+        worker_id = config.worker_id
+        if worker_id is None and config.slice_id and hardware is not None:
+            worker_index = int(hardware.tpu_worker_id) if hardware.tpu_worker_id else 0
+            worker_id = construct_worker_id(config.slice_id, worker_index)
+        elif worker_id is None and hardware is not None:
+            worker_id = infer_worker_id(hardware)
+        self._worker_id: str | None = worker_id
         self._controller_client: ControllerServiceClientSync | None = None
 
         # Heartbeat tracking for timeout detection
@@ -210,9 +226,13 @@ class Worker:
 
         # Create controller client if controller configured
         if self._config.controller_address:
+            interceptors = ()
+            if self._config.auth_token:
+                interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
             self._controller_client = ControllerServiceClientSync(
                 address=self._config.controller_address,
                 timeout_ms=5000,
+                interceptors=interceptors,
             )
 
             # Start lifecycle thread: register + serve + reset loop
@@ -244,6 +264,7 @@ class Worker:
         logging.getLogger().removeHandler(self._log_store_handler)
         self._log_store_handler.close()
         self._log_store.close()
+        self._bundle_store.close()
 
     def _run_lifecycle(self, stop_event: threading.Event) -> None:
         """Main lifecycle: register, serve, reset, repeat.
@@ -292,6 +313,7 @@ class Worker:
                     cluster_pb2.Controller.RegisterRequest(
                         address=address,
                         metadata=metadata,
+                        worker_id=self._worker_id or "",
                     )
                 )
                 if response.accepted:
@@ -354,25 +376,6 @@ class Worker:
         self._cleanup_all_iris_containers()
 
         logger.info("Worker state reset complete")
-
-    def _notify_task_update(self, task: TaskAttempt) -> None:
-        """Notify controller that task state changed.
-
-        Sends a lightweight ping to the controller, triggering a priority heartbeat.
-        """
-        if not self._controller_client or not self._worker_id:
-            return
-
-        # Send a lightweight ping to trigger priority heartbeat (best-effort)
-        try:
-            self._controller_client.notify_task_update(
-                cluster_pb2.Controller.NotifyTaskUpdateRequest(
-                    worker_id=self._worker_id,
-                )
-            )
-        except Exception as e:
-            # Best-effort ping; if it fails, the next regular heartbeat will deliver the update
-            logger.debug("notify_task_update failed (update will be delivered via next heartbeat): %s", e, exc_info=True)
 
     # Task management methods
 
@@ -456,12 +459,10 @@ class Worker:
         # workdir creation, log sink init) is deferred to TaskAttempt.run() so
         # the heartbeat RPC returns quickly.
         config = TaskAttemptConfig(
-            task_id=task_id,
+            task_attempt=TaskAttemptId(task_id=task_id, attempt_id=attempt_id),
             num_tasks=request.num_tasks,
-            attempt_id=attempt_id,
             request=request,
             cache_dir=self._cache_dir,
-            storage_prefix=self._config.storage_prefix,
         )
 
         attempt = TaskAttempt(
@@ -475,7 +476,6 @@ class Worker:
             default_task_image=self._config.default_task_image,
             resolve_image=self._config.resolve_image,
             port_allocator=self._port_allocator,
-            report_state=lambda: self._notify_task_update(attempt),
             log_store=self._log_store,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
         )

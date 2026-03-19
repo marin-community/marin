@@ -51,6 +51,7 @@ class GrugMoeLaunchConfig:
     optimizer: OptimizerConfig
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
+    profiler: ProfilerConfig = field(default_factory=lambda: ProfilerConfig(enabled=False))
 
 
 GRUG_MOE_TRIAL_MODEL = GrugModelConfig(
@@ -82,22 +83,22 @@ def _resolve_run_id(default_run_id: str) -> str:
     return run_id
 
 
-def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
+def _resolve_tracker(tracker: TrackerConfig, run_id: str, output_path: str) -> TrackerConfig:
     if isinstance(tracker, WandbConfig):
-        return dataclasses.replace(tracker, name=run_id)
+        return dataclasses.replace(tracker, name=run_id, replicate_path=output_path)
     return tracker
 
 
-def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
-    # Map template launch knobs onto full Levanter TrainerConfig.
+def run_grug_moe(config: GrugMoeLaunchConfig) -> None:
+    """Map GrugMoeLaunchConfig onto TrainerConfig and run training."""
     trainer = TrainerConfig(
         id=config.run_id,
         seed=config.seed,
         train_batch_size=config.batch_size,
         num_train_steps=config.steps,
-        profiler=ProfilerConfig(enabled=False, start_step=5, num_steps=100, perfetto_link=False),
+        profiler=config.profiler,
         mp=jmp.get_policy(config.mp),
-        tracker=_resolve_tracker(config.tracker, config.run_id),
+        tracker=_resolve_tracker(config.tracker, config.run_id, config.output_path),
         use_explicit_mesh_axes=True,
         mesh=MeshConfig(axes={"expert": 1}),
         require_accelerator=True,
@@ -128,7 +129,7 @@ RESOLVED_RUN_ID = _resolve_run_id("grug-moe-trial")
 
 grug_moe_trial = ExecutorStep(
     name="grug/moe-trial",
-    fn=run_grug_moe_trial,
+    fn=run_grug_moe,
     config=GrugMoeLaunchConfig(
         model=versioned(GRUG_MOE_TRIAL_MODEL),
         data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,

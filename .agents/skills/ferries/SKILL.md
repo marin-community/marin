@@ -14,11 +14,11 @@ Both ferries should keep core data assumptions aligned and share the same monito
 
 ## Ferry Lanes
 Templates:
-- `experiments/ferries/canary_ferry.py`
+- `experiments/ferries/canary_ferry.py` (MoE canary, TPU and GPU via `CANARY_ACCELERATOR`)
 - `experiments/ferries/daily.py`
 
 Current intent:
-- canary: catch infra/pretraining regressions early with a stable, mostly fixed config
+- canary: catch infra/pretraining regressions early with a stable Grug MoE config (one TPU, one GPU)
 - daily: exercise a larger run envelope and test small, explicit changes
 
 Shared baseline:
@@ -52,10 +52,10 @@ If objective is ambiguous, ask before editing.
 ### General
 - Hard launch gate: the agent must get explicit requester approval before launching any ferry job.
 - Only exception: the requester explicitly says to launch without asking (single run or standing instruction in-thread).
-- Always run `.agents/docs/job-monitoring-loop.md` until the run reaches a terminal state (`SUCCEEDED`/`FAILED`/`STOPPED`); do not stop early.
+- Always follow the **babysit-job** skill until the run reaches a terminal state (`SUCCEEDED`/`FAILED`/`STOPPED`); do not stop early.
 - Expect full ferry monitoring to often take 4-5 hours.
 - Never restart/recreate/mutate cluster without explicit human consent in-thread.
-- Keep cluster mutation guardrails exactly aligned with `.agents/docs/job-monitoring-loop.md`, including the TPU bad-node exception path.
+- Keep cluster mutation guardrails exactly aligned with **babysit-job** skill, including the **debug-tpu** exception path.
 - Use major-event updates (not spam): launch, first eval, major incident, terminal state.
 - Seal each completed daily run with a pushed git tag that points to the exact launch commit.
 - Canonical run-closure PR labels:
@@ -146,7 +146,7 @@ uv run lib/marin/src/marin/run/ray_run.py \
 ```
 
 #### 5) Monitor to terminal state
-Follow `.agents/docs/job-monitoring-loop.md` with:
+Follow the **babysit-job** skill with:
 - `job_id`
 - `cluster`
 - `experiment=<ferry script path>`
@@ -183,7 +183,7 @@ Recommendation / victory decision: <next action>
 
 #### 7) Seal and open log-only PR
 - Create and push a sealing tag for the exact launch commit (the commit containing the `experiments/ferries/daily.py` used for the run).
-- Open a PR that updates only `docs/experiments/daily-ferry-log.md`.
+- Open a PR that updates only `docs/experiments/daily-ferry-log.md`, following `.agents/skills/pull-request/SKILL.md` for description format.
 - Keep all detailed launch/retry/debug narrative in the run issue, not in the PR.
 - Apply canonical labels on the run-closure PR: `ferry`, `ferry-daily`, `ferry-log-only`, `ferry-sealed`.
 
@@ -191,12 +191,20 @@ Recommendation / victory decision: <next action>
 Default mode: launch the existing canary script as-is and monitor. Do not run the daily proposal/PR loop unless you are intentionally changing canary.
 Even for unchanged canary runs, ask the requester before launch unless they explicitly waived that requirement.
 
-Launch:
+Launch (TPU):
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py \
-  --no_wait \
-  --cluster us-central1 \
-  -- python experiments/ferries/canary_ferry.py
+uv run iris --config=lib/iris/examples/marin.yaml \
+  job run --memory=16G --disk=16G --cpu=1 --extra=tpu \
+  -- python -m experiments.ferries.canary_ferry
+```
+
+Launch (GPU / CoreWeave):
+```bash
+uv run iris --config=lib/iris/examples/coreweave.yaml \
+  job run --memory=16G --disk=16G --cpu=1 --extra=cpu \
+  -e MARIN_PREFIX s3://marin-na/marin \
+  -e CANARY_ACCELERATOR gpu \
+  -- python -m experiments.ferries.canary_ferry
 ```
 
 If canary fails:
@@ -232,6 +240,6 @@ When promoting:
 
 ## See Also
 - `docs/experiments/daily-ferry-log.md`
-- `.agents/docs/job-monitoring-loop.md`
+- `.agents/skills/babysit-job/SKILL.md`
 - `.agents/projects/ferry_framework.md`
 - `.agents/skills/agent-research/`

@@ -2,7 +2,7 @@
 # Usage: uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-config examples/smoke.yaml --iris-mode full -o "addopts="
 
 platform:
-  label_prefix: smoke
+  label_prefix: smoke-ci
   gcp:
     project_id: hai-gcp-models
 
@@ -18,6 +18,11 @@ defaults:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     default_task_image: ghcr.io/marin-community/iris-task:latest
     port: 10001
+
+storage:
+  remote_state_dir: gs://marin-us-central2/iris/smoke/state
+
+worker_provider: {}
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest

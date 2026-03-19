@@ -23,15 +23,20 @@ import difflib
 import logging
 import math
 from collections import deque
+from collections.abc import Callable
+
 from dataclasses import dataclass
 from enum import Enum
 
 from iris.cluster.platform.base import (
     CloudSliceState,
     CloudWorkerState,
+    CommandResult,
     Platform,
     QuotaExhaustedError,
     RemoteWorkerHandle,
+    SliceHandle,
+    WorkerStatus,
 )
 from iris.cluster.constraints import (
     ConstraintIndex,
@@ -40,13 +45,93 @@ from iris.cluster.constraints import (
     get_device_type_enum,
     routing_constraints,
 )
-from iris.cluster.types import VmWorkerStatusMap
-from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
+from iris.cluster.controller.db import SCALING_GROUPS, SLICES, TRACKED_WORKERS, ControllerDB
+from iris.cluster.types import WorkerStatusMap
+from iris.cluster.controller.scaling_group import (
+    GroupAvailability,
+    GroupSnapshot,
+    ScalingGroup,
+    SliceLifecycleState,
+    SliceSnapshot,
+    restore_scaling_group,
+)
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2, vm_pb2
+from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
+
+
+class _RestoredWorkerHandle:
+    """Minimal handle placeholder used for restored tracked workers.
+
+    Provides just enough of the RemoteWorkerHandle interface to let restored
+    workers participate in the autoscaler until they are replaced by real
+    handles from the platform or pruned by heartbeat failures.
+    """
+
+    def __init__(self, worker_id: str, internal_address: str) -> None:
+        self._worker_id = worker_id
+        self._internal_address = internal_address
+
+    @property
+    def worker_id(self) -> str:
+        return self._worker_id
+
+    @property
+    def vm_id(self) -> str:
+        return self._worker_id
+
+    @property
+    def internal_address(self) -> str:
+        return self._internal_address
+
+    @property
+    def external_address(self) -> str | None:
+        return None
+
+    @property
+    def bootstrap_log(self) -> str:
+        return ""
+
+    def status(self) -> WorkerStatus:
+        return WorkerStatus(state=CloudWorkerState.RUNNING)
+
+    def run_command(
+        self,
+        command: str,
+        timeout: Duration | None = None,
+        on_line: Callable[[str], None] | None = None,
+    ) -> CommandResult:
+        raise NotImplementedError("RestoredWorkerHandle does not support run_command")
+
+    def reboot(self) -> None:
+        raise NotImplementedError("RestoredWorkerHandle does not support reboot")
+
+
+@dataclass(frozen=True)
+class _TrackedWorkerRow:
+    """Lightweight record for a tracked worker read from the DB."""
+
+    worker_id: str
+    slice_id: str
+    scale_group: str
+    internal_address: str
+
+
+def _restore_tracked_workers(rows: list[_TrackedWorkerRow]) -> dict[str, TrackedWorker]:
+    """Restore tracked workers from DB rows."""
+    workers: dict[str, TrackedWorker] = {}
+    for row in rows:
+        handle = _RestoredWorkerHandle(worker_id=row.worker_id, internal_address=row.internal_address)
+        tw = TrackedWorker(
+            worker_id=row.worker_id,
+            slice_id=row.slice_id,
+            scale_group=row.scale_group,
+            handle=handle,
+        )
+        workers[tw.worker_id] = tw
+    return workers
 
 
 @dataclass
@@ -62,6 +147,9 @@ class TrackedWorker:
 
 # Slices that die within this time of creation trigger backoff (preemption detection)
 SHORT_LIVED_SLICE_THRESHOLD = Duration.from_minutes(5)
+
+# After this long in UNKNOWN state, treat the slice as FAILED (quota timeout is 5 min, so this is conservative)
+DEFAULT_UNRESOLVABLE_TIMEOUT = Duration.from_minutes(15)
 
 
 class ScalingAction(Enum):
@@ -653,6 +741,8 @@ class Autoscaler:
         platform: Platform,
         threads: ThreadContainer | None = None,
         base_worker_config: config_pb2.WorkerConfig | None = None,
+        db: ControllerDB | None = None,
+        unresolvable_timeout: Duration = DEFAULT_UNRESOLVABLE_TIMEOUT,
     ):
         """Create autoscaler with explicit parameters.
 
@@ -663,11 +753,15 @@ class Autoscaler:
             threads: Optional thread container for testing
             base_worker_config: Base worker config merged with per-group overrides
                 and passed to platform.create_slice(). None disables bootstrap (test/local mode).
+            db: Optional DB handle for write-through persistence of tracked workers.
+            unresolvable_timeout: How long a slice can remain UNKNOWN before being treated as FAILED.
         """
         self._groups = scale_groups
         self._platform = platform
+        self._db = db
         self.evaluation_interval = evaluation_interval
         self._base_worker_config = base_worker_config
+        self._unresolvable_timeout = unresolvable_timeout
 
         # Centralized per-worker state indexed by worker_id
         self._workers: dict[str, TrackedWorker] = {}
@@ -690,6 +784,7 @@ class Autoscaler:
         platform: Platform,
         threads: ThreadContainer | None = None,
         base_worker_config: config_pb2.WorkerConfig | None = None,
+        db: ControllerDB | None = None,
     ) -> Autoscaler:
         """Create autoscaler from proto config.
 
@@ -699,6 +794,7 @@ class Autoscaler:
             platform: Platform instance for shutdown lifecycle
             threads: Optional thread container for testing
             base_worker_config: Base worker config merged with per-group overrides
+            db: Optional DB handle for write-through persistence.
 
         Returns:
             Configured Autoscaler instance
@@ -709,6 +805,7 @@ class Autoscaler:
             platform=platform,
             threads=threads,
             base_worker_config=base_worker_config,
+            db=db,
         )
 
     def _wait_for_inflight(self) -> None:
@@ -835,8 +932,6 @@ class Autoscaler:
         pending = counts[SliceLifecycleState.BOOTING] + counts[SliceLifecycleState.INITIALIZING] + requesting
         total = sum(counts.values())
 
-        capacity_slices = ready + pending
-
         logger.debug(
             "Evaluating group %s: total=%d, ready=%d, pending=%d, required_slices=%d, min=%d, max=%d",
             group.name,
@@ -867,20 +962,22 @@ class Autoscaler:
                 )
             ]
 
-        # Priority 2: Scale UP when required slices exceed available capacity
-        if required_slices > capacity_slices and total < group.max_slices:
+        # Priority 2: Scale UP when required slices exceed pending capacity.
+        # Compare against pending only — ready slices were already tested by the
+        # dry-run and found insufficient (e.g. RAM-full), so counting them as
+        # available capacity would double-count and cause deadlock.
+        if required_slices > pending and total < group.max_slices:
             if not group.can_scale_up(ts):
                 logger.debug("Scale group %s: scale up blocked", group.name)
                 return []
 
-            slices_to_add = min(required_slices - capacity_slices, group.max_slices - total)
+            slices_to_add = min(required_slices - pending, group.max_slices - total)
             return [
                 ScalingDecision(
                     scale_group=group.name,
                     action=ScalingAction.SCALE_UP,
                     reason=(
-                        f"required_slices={required_slices} > capacity={capacity_slices}"
-                        f" (scaling {i + 1}/{slices_to_add})"
+                        f"required_slices={required_slices} > pending={pending}" f" (scaling {i + 1}/{slices_to_add})"
                     ),
                 )
                 for i in range(slices_to_add)
@@ -1010,14 +1107,25 @@ class Autoscaler:
                 handle=worker,
                 bootstrap_log=worker.bootstrap_log,
             )
+            if self._db is not None:
+                with self._db.transaction() as cur:
+                    cur.execute(
+                        "INSERT OR REPLACE INTO tracked_workers(worker_id, slice_id, scale_group, internal_address) "
+                        "VALUES (?, ?, ?, ?)",
+                        (worker.worker_id, slice_id, scale_group, worker.internal_address),
+                    )
 
     def _unregister_slice_workers(self, slice_id: str) -> None:
         """Remove all TrackedWorker entries belonging to a slice."""
         to_remove = [wid for wid, tw in self._workers.items() if tw.slice_id == slice_id]
         for wid in to_remove:
             del self._workers[wid]
+        if self._db is not None and to_remove:
+            with self._db.transaction() as cur:
+                for wid in to_remove:
+                    cur.execute("DELETE FROM tracked_workers WHERE worker_id = ?", (wid,))
 
-    def refresh(self, vm_status_map: VmWorkerStatusMap, timestamp: Timestamp | None = None) -> None:
+    def refresh(self, worker_status_map: WorkerStatusMap, timestamp: Timestamp | None = None) -> None:
         """State-read phase: scale down idle slices from currently tracked state."""
         timestamp = timestamp or Timestamp.now()
 
@@ -1030,14 +1138,14 @@ class Autoscaler:
                     continue
 
                 if status.state == CloudSliceState.READY:
-                    addrs = [w.internal_address for w in status.workers]
-                    group.mark_slice_ready(slice_id, addrs)
+                    worker_ids = [w.worker_id for w in status.workers]
+                    group.mark_slice_ready(slice_id, worker_ids)
                     self._register_slice_workers(status.workers, slice_id, group.name)
                     self._log_action(
                         "slice_ready",
                         group.name,
                         slice_id,
-                        reason=f"bootstrap completed ({len(addrs)} workers)",
+                        reason=f"bootstrap completed ({len(worker_ids)} workers)",
                     )
                 elif status.state == CloudSliceState.FAILED:
                     group.mark_slice_failed(slice_id, error_message=status.error_message)
@@ -1052,11 +1160,32 @@ class Autoscaler:
                         reason=reason,
                         status="failed",
                     )
+                elif status.state == CloudSliceState.UNKNOWN:
+                    age = Duration.from_ms(timestamp.epoch_ms() - handle.created_at.epoch_ms())
+                    if age >= self._unresolvable_timeout:
+                        group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
+                        group.scale_down(slice_id)
+                        self._unregister_slice_workers(slice_id)
+                        group.record_failure()
+                        self._log_action(
+                            "slice_failed",
+                            group.name,
+                            slice_id,
+                            reason=f"TPU unresolvable for {age}",
+                            status="failed",
+                        )
+                    else:
+                        logger.debug(
+                            "Slice %s UNKNOWN (age %s < timeout %s); will retry",
+                            slice_id,
+                            age,
+                            self._unresolvable_timeout,
+                        )
 
         for group in self._groups.values():
             target_capacity = max(group.current_demand, group.min_slices)
             ready_before = group.ready_slice_count()
-            scaled_down_handles = group.scale_down_if_idle(vm_status_map, target_capacity, timestamp)
+            scaled_down_handles = group.scale_down_if_idle(worker_status_map, target_capacity, timestamp)
             for handle in scaled_down_handles:
                 self._unregister_slice_workers(handle.slice_id)
                 self._log_action(
@@ -1084,31 +1213,135 @@ class Autoscaler:
     def run_once(
         self,
         demand_entries: list[DemandEntry],
-        vm_status_map: VmWorkerStatusMap,
+        worker_status_map: WorkerStatusMap,
         timestamp: Timestamp | None = None,
     ) -> list[ScalingDecision]:
         """Full cycle: refresh + update. Preserved for tests."""
         timestamp = timestamp or Timestamp.now()
         logger.debug("Autoscaler run_once: demand_entries=%s", demand_entries)
-        self.refresh(vm_status_map, timestamp)
+        self.refresh(worker_status_map, timestamp)
         return self.update(demand_entries, timestamp)
-
-    def to_tracked_worker_snapshots(self) -> list[snapshot_pb2.TrackedWorkerSnapshot]:
-        """Serialize tracked worker state for checkpointing."""
-
-        return [
-            snapshot_pb2.TrackedWorkerSnapshot(
-                worker_id=tw.worker_id,
-                slice_id=tw.slice_id,
-                scale_group=tw.scale_group,
-                internal_address=tw.handle.internal_address,
-            )
-            for tw in self._workers.values()
-        ]
 
     def restore_tracked_workers(self, workers: dict[str, TrackedWorker]) -> None:
         """Restore tracked worker state from a snapshot. Called before loops start."""
         self._workers.update(workers)
+
+    def restore_from_db(self, db: ControllerDB, platform: Platform) -> None:
+        """Reconcile DB-checkpointed autoscaler state against live cloud.
+
+        Reads scaling group and slice rows from proper DB tables,
+        reconciles each group against the cloud in parallel, and restores
+        tracked workers. Call at startup before loops begin.
+        """
+        with db.snapshot() as snapshot:
+            scaling_rows = snapshot.select(
+                SCALING_GROUPS,
+                columns=(
+                    SCALING_GROUPS.c.name,
+                    SCALING_GROUPS.c.consecutive_failures,
+                    SCALING_GROUPS.c.backoff_until_ms,
+                    SCALING_GROUPS.c.last_scale_up_ms,
+                    SCALING_GROUPS.c.last_scale_down_ms,
+                    SCALING_GROUPS.c.quota_exceeded_until_ms,
+                    SCALING_GROUPS.c.quota_reason,
+                ),
+            )
+            slice_rows = snapshot.select(
+                SLICES,
+                columns=(
+                    SLICES.c.slice_id,
+                    SLICES.c.scale_group,
+                    SLICES.c.lifecycle,
+                    SLICES.c.worker_ids,
+                    SLICES.c.created_at_ms,
+                    SLICES.c.last_active_ms,
+                    SLICES.c.error_message,
+                ),
+            )
+            tracked_rows = snapshot.select(
+                TRACKED_WORKERS,
+                columns=(
+                    TRACKED_WORKERS.c.worker_id,
+                    TRACKED_WORKERS.c.slice_id,
+                    TRACKED_WORKERS.c.scale_group,
+                    TRACKED_WORKERS.c.internal_address,
+                ),
+            )
+
+        # Build GroupSnapshot objects from DB rows
+        slices_by_group: dict[str, list[SliceSnapshot]] = {}
+        for row in slice_rows:
+            slices_by_group.setdefault(row.scale_group, []).append(
+                SliceSnapshot(
+                    slice_id=row.slice_id,
+                    scale_group=row.scale_group,
+                    lifecycle=row.lifecycle,
+                    worker_ids=row.worker_ids,
+                    created_at_ms=row.created_at_ms.epoch_ms(),
+                    last_active_ms=row.last_active_ms.epoch_ms(),
+                    error_message=row.error_message,
+                )
+            )
+
+        group_snapshots: dict[str, GroupSnapshot] = {}
+        for row in scaling_rows:
+            group_snapshots[row.name] = GroupSnapshot(
+                name=row.name,
+                slices=slices_by_group.get(row.name, []),
+                consecutive_failures=row.consecutive_failures,
+                backoff_until_ms=row.backoff_until_ms.epoch_ms(),
+                last_scale_up_ms=row.last_scale_up_ms.epoch_ms(),
+                last_scale_down_ms=row.last_scale_down_ms.epoch_ms(),
+                quota_exceeded_until_ms=row.quota_exceeded_until_ms.epoch_ms(),
+                quota_reason=row.quota_reason,
+            )
+
+        tracked_worker_rows = [
+            _TrackedWorkerRow(
+                worker_id=row.worker_id,
+                slice_id=row.slice_id,
+                scale_group=row.scale_group,
+                internal_address=row.internal_address,
+            )
+            for row in tracked_rows
+        ]
+
+        # Prefetch all managed slices in one shot (2 gcloud calls on GCP),
+        # then partition by scale group for pure in-memory restore.
+        all_cloud_slices = platform.list_all_slices()
+        cloud_by_group: dict[str, list[SliceHandle]] = {}
+        for handle in all_cloud_slices:
+            cloud_by_group.setdefault(handle.scale_group, []).append(handle)
+
+        for group_snap in group_snapshots.values():
+            group = self._groups.get(group_snap.name)
+            if group is None:
+                logger.warning(
+                    "Checkpoint references scaling group %s which does not exist in config, skipping",
+                    group_snap.name,
+                )
+                continue
+            restore_result = restore_scaling_group(
+                group_snapshot=group_snap,
+                cloud_handles=cloud_by_group.get(group_snap.name, []),
+                label_prefix=group.label_prefix,
+            )
+            group.restore_from_snapshot(
+                slices=restore_result.slices,
+                consecutive_failures=restore_result.consecutive_failures,
+                last_scale_up=restore_result.last_scale_up,
+                last_scale_down=restore_result.last_scale_down,
+                backoff_until=restore_result.backoff_until,
+                quota_exceeded_until=restore_result.quota_exceeded_until,
+                quota_reason=restore_result.quota_reason,
+            )
+
+        # Workers from discarded slices remain in the DB as healthy.
+        # They will naturally fail heartbeat checks and be pruned once
+        # consecutive failures exceed the threshold.
+        restored_workers = _restore_tracked_workers(tracked_worker_rows)
+        self.restore_tracked_workers(restored_workers)
+        logger.info("Restored %d tracked workers", len(restored_workers))
 
     def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
         """Get VM info by platform worker ID from the centralized worker registry."""
@@ -1256,54 +1489,50 @@ class Autoscaler:
         """All scale groups."""
         return self._groups
 
-    def notify_worker_failed(self, vm_address: str) -> list[str]:
+    def notify_worker_failed(self, worker_id: str) -> list[str]:
         """Called by controller when a worker fails. Terminates the containing slice.
 
         This integrates with the existing controller failure cascade:
         1. Controller detects worker timeout/failure
         2. Controller emits WorkerFailedEvent (cascades to tasks)
-        3. Controller calls this method (with worker's vm_address)
+        3. Controller calls this method (with the failed worker's ID)
         4. Autoscaler terminates the slice containing the failed worker
 
         If the slice was short-lived (died soon after creation), applies backoff
         to the scale group to prevent thrashing on bad zones/preemption.
 
         Returns:
-            List of sibling VM addresses from the same slice (excluding the
-            originally failed VM). The controller uses these to immediately
+            List of sibling worker IDs from the same slice (excluding the
+            originally failed worker). The controller uses these to immediately
             fail sibling workers, since the entire slice is being terminated.
         """
-        slice_id, group = self._find_slice_for_worker(vm_address)
+        slice_id, group = self._find_slice_for_worker(worker_id)
         if not slice_id or not group:
-            logger.debug("VM %s not found in any managed slice", vm_address)
+            logger.debug("Worker %s not found in any managed slice", worker_id)
             return []
 
-        # Collect sibling VM addresses before termination removes them.
-        sibling_vms = [addr for addr in group.get_slice_vm_addresses(slice_id) if addr != vm_address]
+        sibling_worker_ids = [wid for wid in group.get_slice_worker_ids(slice_id) if wid != worker_id]
 
-        logger.info("Worker at VM %s failed, terminating slice %s", vm_address, slice_id)
+        logger.info("Worker %s failed, terminating slice %s", worker_id, slice_id)
         self._log_action(
             "worker_failed",
             group.name,
             slice_id=slice_id,
-            reason=f"worker at VM {vm_address} failed",
+            reason=f"worker {worker_id} failed",
         )
 
         # Check if this was a short-lived slice (preemption detection)
         self._record_slice_failure(slice_id, group)
 
-        try:
-            group.scale_down(slice_id)
-            self._unregister_slice_workers(slice_id)
-        except Exception as e:
-            logger.warning("Failed to terminate slice %s: %s", slice_id, e)
+        group.scale_down(slice_id)
+        self._unregister_slice_workers(slice_id)
 
-        return sibling_vms
+        return sibling_worker_ids
 
-    def _find_slice_for_worker(self, vm_address: str) -> tuple[str | None, ScalingGroup | None]:
-        """Find the slice and group containing a worker by VM address."""
+    def _find_slice_for_worker(self, worker_id: str) -> tuple[str | None, ScalingGroup | None]:
+        """Find the slice and group containing a worker by worker ID."""
         for group in self._groups.values():
-            slice_id = group.find_slice_for_vm(vm_address)
+            slice_id = group.find_slice_for_worker(worker_id)
             if slice_id is not None:
                 return slice_id, group
         return None, None

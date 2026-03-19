@@ -21,6 +21,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from iris.cluster.types import TaskAttempt
 from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
@@ -134,9 +135,12 @@ def build_memray_transform_cmd(spec: MemoryProfileSpec, memray_bin: str, trace_p
         raise RuntimeError(f"Unknown memray reporter: {spec.reporter}")
 
 
-def build_pyspy_dump_cmd(pid: str, py_spy_bin: str = "py-spy") -> list[str]:
+def build_pyspy_dump_cmd(pid: str, py_spy_bin: str = "py-spy", *, include_locals: bool = False) -> list[str]:
     """Build a py-spy dump command for thread-level stack traces."""
-    return [py_spy_bin, "dump", "--pid", pid]
+    cmd = [py_spy_bin, "dump", "--pid", pid]
+    if include_locals:
+        cmd.append("--locals")
+    return cmd
 
 
 def profile_local_process(duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
@@ -149,7 +153,7 @@ def profile_local_process(duration_seconds: int, profile_type: cluster_pb2.Profi
 
     if profile_type.HasField("threads"):
         _check_tool("py-spy")
-        return run_pyspy_dump(pid)
+        return run_pyspy_dump(pid, include_locals=profile_type.threads.locals)
     elif profile_type.HasField("cpu"):
         _check_tool("py-spy")
         return _run_pyspy_record(pid, duration_seconds, profile_type.cpu)
@@ -160,9 +164,9 @@ def profile_local_process(duration_seconds: int, profile_type: cluster_pb2.Profi
         raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
 
-def run_pyspy_dump(pid: str, py_spy_bin: str = "py-spy") -> bytes:
+def run_pyspy_dump(pid: str, py_spy_bin: str = "py-spy", *, include_locals: bool = False) -> bytes:
     """Run py-spy dump to collect thread stacks from a process."""
-    cmd = build_pyspy_dump_cmd(pid, py_spy_bin)
+    cmd = build_pyspy_dump_cmd(pid, py_spy_bin, include_locals=include_locals)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if result.returncode != 0:
         raise RuntimeError(f"py-spy dump failed: {result.stderr}")
@@ -228,36 +232,16 @@ def is_system_target(target: str) -> bool:
     return target == SYSTEM_PROCESS_TARGET
 
 
-@dataclass(frozen=True)
-class ParsedTarget:
-    """Result of parsing a profiling target string.
-
-    For task targets like ``/user/job/0`` or ``/user/job/0:3``, ``task_id``
-    is the bare task path and ``attempt_id`` is the optional attempt qualifier
-    (``None`` when omitted, meaning "use the current/latest attempt").
-    """
-
-    task_id: str
-    attempt_id: int | None
-
-
-def parse_profile_target(target: str) -> ParsedTarget:
-    """Parse an optional ``:attempt_id`` suffix from a task target.
+def parse_profile_target(target: str) -> TaskAttempt:
+    """Parse a task target string into a TaskAttempt.
 
     Examples:
         >>> parse_profile_target("/alice/job/0")
-        ParsedTarget(task_id='/alice/job/0', attempt_id=None)
+        TaskAttempt('/alice/job/0')
         >>> parse_profile_target("/alice/job/0:3")
-        ParsedTarget(task_id='/alice/job/0', attempt_id=3)
+        TaskAttempt('/alice/job/0:3')
     """
-    if ":" in target:
-        task_part, attempt_str = target.rsplit(":", 1)
-        try:
-            attempt_id = int(attempt_str)
-        except ValueError as exc:
-            raise ValueError(f"Invalid attempt ID in target '{target}': '{attempt_str}' is not an integer") from exc
-        return ParsedTarget(task_id=task_part, attempt_id=attempt_id)
-    return ParsedTarget(task_id=target, attempt_id=None)
+    return TaskAttempt.from_wire(target)
 
 
 def _check_tool(name: str) -> None:

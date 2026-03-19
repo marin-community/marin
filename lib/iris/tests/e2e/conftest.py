@@ -12,10 +12,12 @@ stale worker state or chaos bleed. Chaos state is also reset per-test via an
 autouse fixture.
 """
 
+import fcntl
+import logging
+import os
 import shutil
 import subprocess
 import time
-import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,9 +25,7 @@ from pathlib import Path
 import pytest
 from iris.chaos import reset_chaos
 from iris.client.client import IrisClient, Job
-from iris.cluster.config import load_config, make_local_config
-from iris.cluster.manager import connect_cluster
-from iris.cluster.runtime.kubernetes import KubernetesRuntime
+from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.constraints import Constraint, WellKnownAttribute
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -45,6 +45,31 @@ IRIS_ROOT = Path(__file__).resolve().parents[2]  # lib/iris
 DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _ensure_dashboard_built(tmp_path_factory):
+    """Build dashboard assets once per session so dashboard tests have content to render.
+
+    With pytest-xdist each worker gets its own session fixture, so all 8 workers
+    race to run ``npm ci`` in the same directory — corrupting node_modules.
+    A filelock serialises this so only one worker installs at a time.
+    """
+    dashboard_dir = IRIS_ROOT / "dashboard"
+    if not (dashboard_dir / "package.json").exists():
+        return
+    if shutil.which("npm") is None:
+        logging.getLogger(__name__).warning("npm not found, skipping dashboard build for tests")
+        return
+
+    lock_path = tmp_path_factory.getbasetemp().parent / "dashboard_build.lock"
+    with open(lock_path, "w") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True, capture_output=True)
+            subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, check=True, capture_output=True)
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+
+
 def pytest_addoption(parser):
     """Cloud mode CLI options for running smoke tests against remote clusters."""
     parser.addoption("--iris-config", default=None, help="Path to cluster config YAML for cloud mode")
@@ -55,6 +80,7 @@ def pytest_addoption(parser):
         help="Cluster mode: local (in-process), full (start+stop), keep, redeploy",
     )
     parser.addoption("--iris-controller-url", default=None, help="Connect to existing controller")
+    parser.addoption("--iris-label-prefix", default=None, help="Override platform.label_prefix in config")
 
 
 @dataclass
@@ -336,6 +362,64 @@ def _reset_chaos():
     reset_chaos()
 
 
+logger = logging.getLogger(__name__)
+
+
+def _open_fds() -> dict[int, Path]:
+    """Snapshot all open file descriptors for the current process via /proc or lsof."""
+    pid = os.getpid()
+    proc_fd = Path(f"/proc/{pid}/fd")
+
+    if proc_fd.is_dir():
+        fds: dict[int, Path] = {}
+        for entry in proc_fd.iterdir():
+            try:
+                fd = int(entry.name)
+                target = entry.resolve()
+                fds[fd] = target
+            except (ValueError, OSError):
+                continue
+        return fds
+
+    # macOS: fall back to lsof
+    try:
+        result = subprocess.run(
+            ["lsof", "-p", str(pid), "-Fn"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return {}
+
+    fds = {}
+    current_fd: int | None = None
+    for line in result.stdout.splitlines():
+        if line.startswith("f") and line[1:].isdigit():
+            current_fd = int(line[1:])
+        elif line.startswith("n") and current_fd is not None:
+            fds[current_fd] = Path(line[1:])
+            current_fd = None
+    return fds
+
+
+@pytest.fixture(autouse=True)
+def _detect_fd_leaks(request):
+    """Log file descriptors that were opened but not closed during a test."""
+    before = _open_fds()
+    yield
+    after = _open_fds()
+    leaked = {fd: path for fd, path in after.items() if fd not in before}
+    if leaked:
+        lines = [f"  fd {fd} -> {path}" for fd, path in sorted(leaked.items())]
+        logger.warning(
+            "Test %s leaked %d file descriptor(s):\n%s",
+            request.node.nodeid,
+            len(leaked),
+            "\n".join(lines),
+        )
+
+
 @pytest.fixture
 def chronos(monkeypatch):
     """Virtual time fixture - makes time.sleep() controllable for fast tests."""
@@ -398,11 +482,13 @@ def _is_noop_page(page) -> bool:
     return isinstance(page, _NoOpPage)
 
 
-def assert_visible(page, selector: str, *, timeout: int = 5000) -> None:
+def assert_visible(page, selector: str, *, timeout: int = 10_000) -> None:
     """Assert a selector is visible. No-op when Playwright is unavailable."""
     if _is_noop_page(page):
         return
-    assert page.locator(selector).first.is_visible(timeout=timeout)
+    from playwright.sync_api import expect
+
+    expect(page.locator(selector).first).to_be_visible(timeout=timeout)
 
 
 def dashboard_click(page, selector: str) -> None:
@@ -413,102 +499,30 @@ def dashboard_click(page, selector: str) -> None:
 
 
 def dashboard_goto(page, url: str) -> None:
-    """Navigate to URL. No-op when Playwright is unavailable."""
+    """Navigate to URL, converting paths to hash-based URLs for Vue Router.
+
+    Vue Router uses createWebHashHistory, so /job/X must become /#/job/X.
+    """
     if _is_noop_page(page):
         return
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    path = parsed.path
+    if path and path != "/":
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        url = f"{base}/#{path}"
     page.goto(url)
 
 
 def wait_for_dashboard_ready(page) -> None:
-    """Wait for Preact to render the dashboard root.
-
-    Waits until the #root element has children and no longer shows "Loading...".
-    Used by dashboard assertion tests across multiple test modules.
-    """
+    """Wait for the Vue 3 dashboard to mount and render children into #app."""
     if _is_noop_page(page):
         return
     page.wait_for_function(
-        "() => document.getElementById('root').children.length > 0"
-        " && !document.getElementById('root').textContent.includes('Loading...')",
+        "() => {"
+        "  const app = document.getElementById('app');"
+        "  return app !== null && app.children.length > 0;"
+        "}",
         timeout=30000,
     )
-
-
-# ---------------------------------------------------------------------------
-# Kubernetes fixtures (for tests against real K8s: kind, k3d, minikube, etc.)
-# ---------------------------------------------------------------------------
-
-KIND_CLUSTER_NAME = "iris-test"
-
-
-def _cluster_reachable() -> bool:
-    try:
-        result = subprocess.run(["kubectl", "cluster-info"], capture_output=True, timeout=10)
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
-
-
-@pytest.fixture(scope="session")
-def k8s_cluster():
-    """Ensure a K8s cluster is available for the test session.
-
-    If a cluster is already reachable, uses it as-is. Otherwise, creates a
-    kind cluster and tears it down at the end of the session.
-    """
-    if shutil.which("kubectl") is None:
-        pytest.skip("kubectl not in PATH (install: brew install kubectl)")
-
-    if _cluster_reachable():
-        yield
-        return
-
-    if shutil.which("kind") is None:
-        pytest.skip("no reachable K8s cluster and kind not in PATH (install: brew install kind)")
-
-    subprocess.run(
-        ["kind", "create", "cluster", "--name", KIND_CLUSTER_NAME],
-        check=True,
-        timeout=120,
-    )
-    try:
-        yield
-    finally:
-        subprocess.run(
-            ["kind", "delete", "cluster", "--name", KIND_CLUSTER_NAME],
-            capture_output=True,
-            timeout=60,
-        )
-
-
-@pytest.fixture
-def k8s_runtime(k8s_cluster):
-    """KubernetesRuntime with an ephemeral namespace, torn down after each test."""
-    namespace = f"iris-test-{uuid.uuid4().hex[:8]}"
-    subprocess.run(
-        ["kubectl", "create", "namespace", namespace],
-        check=True,
-        capture_output=True,
-    )
-    # Wait for K8s to provision the default ServiceAccount in the new namespace.
-    # Without this, pod creation fails with "serviceaccount default not found".
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        result = subprocess.run(
-            ["kubectl", "-n", namespace, "get", "serviceaccount", "default"],
-            capture_output=True,
-        )
-        if result.returncode == 0:
-            break
-        time.sleep(0.5)
-    else:
-        pytest.skip(f"default ServiceAccount not ready in namespace {namespace} after 30s")
-    runtime = KubernetesRuntime(namespace=namespace)
-    try:
-        yield runtime
-    finally:
-        runtime.cleanup()
-        subprocess.run(
-            ["kubectl", "delete", "namespace", namespace, "--ignore-not-found"],
-            capture_output=True,
-        )

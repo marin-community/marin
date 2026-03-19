@@ -105,7 +105,7 @@ The simpler path is to remove the dead plumbing.
 - `Worker.GetTaskStatusRequest.include_result` (line 703): Remove field 2. Mark it
   `reserved`.
 
-Regenerate proto files via `scripts/generate_protos.py` after proto changes.
+Regenerate proto files from the repo root via `uv run python lib/iris/scripts/generate_protos.py` after proto changes.
 
 ### Files that need no changes (but are worth noting)
 

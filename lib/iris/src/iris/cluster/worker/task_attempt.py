@@ -7,9 +7,7 @@ This module encapsulates the full lifecycle of a single task execution attempt:
 bundle download -> image build -> container run -> monitor -> cleanup.
 """
 
-import json
 import logging
-import os
 import shutil
 import socket
 import threading
@@ -17,8 +15,6 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-
-from google.protobuf import json_format
 
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.runtime.types import (
@@ -29,15 +25,16 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerRuntime,
     RuntimeLogReader,
+    MountKind,
+    MountSpec,
 )
 from iris.cluster.types import (
     JobName,
+    TaskAttempt as TaskAttemptIdentity,
     is_task_finished,
 )
 from iris.cluster.bundle import BundleStore
-from iris.cluster.worker.env_probe import collect_workdir_size_mb
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.worker.profile_capture import ProfileCapture
 from iris.cluster.log_store import LogCursor, LogStore, task_log_key
 from iris.logging import parse_log_level, str_to_log_level
 from iris.rpc import cluster_pb2, logging_pb2
@@ -81,32 +78,7 @@ def _format_exit_error(exit_code: int | None, oom_killed: bool = False) -> str:
     return f"Exit code: {exit_code}"
 
 
-# GCE persistent disks (pd-standard) provide only ~68 read / ~135 write IOPS on
-# small volumes, making uv sync extremely slow.  /dev/shm is tmpfs backed by RAM
-# and provides memory-speed IOPS.  The bootstrap script bind-mounts
-# /dev/shm/iris into the worker container so this path is available on GCE VMs.
-_TMPFS_DIR = Path("/dev/shm/iris")
-_TMPFS_MIN_FREE_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB
-
-
-def get_fast_io_dir(cache_dir: Path) -> Path:
-    """Return a fast IO directory for ephemeral task data.
-
-    Prefers /dev/shm/iris (tmpfs) for memory-speed IOPS when available and has
-    sufficient free space.  Falls back to *cache_dir* on persistent disk.
-    """
-    try:
-        if _TMPFS_DIR.is_dir():
-            stat = os.statvfs(_TMPFS_DIR)
-            free_bytes = stat.f_bavail * stat.f_frsize
-            if free_bytes >= _TMPFS_MIN_FREE_BYTES:
-                logger.info("Using tmpfs at %s for fast IO (%d MB free)", _TMPFS_DIR, free_bytes // (1024 * 1024))
-                return _TMPFS_DIR
-    except OSError:
-        logger.warning("OSError checking tmpfs at %s, falling back to persistent disk", _TMPFS_DIR, exc_info=True)
-    else:
-        logger.warning("Fast IO (tmpfs) not available at %s, falling back to persistent disk", _TMPFS_DIR)
-    return cache_dir
+_DISK_CHECK_INTERVAL_SECONDS = 60.0
 
 
 class TaskCancelled(Exception):
@@ -119,12 +91,18 @@ class TaskCancelled(Exception):
 class TaskAttemptConfig:
     """Immutable configuration for a task attempt, derived from the RPC request."""
 
-    task_id: JobName
+    task_attempt: TaskAttemptIdentity
     num_tasks: int
-    attempt_id: int
     request: cluster_pb2.Worker.RunTaskRequest
     cache_dir: Path
-    storage_prefix: str = ""
+
+    @property
+    def task_id(self) -> JobName:
+        return self.task_attempt.task_id
+
+    @property
+    def attempt_id(self) -> int:
+        return self.task_attempt.require_attempt()
 
 
 def _get_host_ip() -> str:
@@ -149,69 +127,34 @@ def build_iris_env(
 ) -> dict[str, str]:
     """Build Iris system environment variables for the task container.
 
-    Auto-injects task metadata and configuration that tasks need to interact
-    with the Iris cluster (task ID, job ID, worker ID, controller address, ports).
-    These override user-provided values.
-
-    Args:
-        task: TaskAttempt object with metadata
-        worker_id: Worker identifier, if registered with controller
-        controller_address: Controller RPC address, if configured
-
-    Returns:
-        Dictionary of environment variables to inject into the task container
+    Thin wrapper around build_common_iris_env() that adds worker-specific
+    variables (IRIS_WORKER_ID, IRIS_ADVERTISE_HOST) and overrides port values
+    with real allocated ports.
     """
-    env = {}
+    from iris.cluster.runtime.env import build_common_iris_env
 
-    # N.B. This needs to mirror JobInfo.from_env()
-    # XXX: Should we move this code there instead?
-    # Core task metadata
-    env["IRIS_JOB_ID"] = task.task_id.to_wire()
-    env["IRIS_NUM_TASKS"] = str(task.num_tasks)
-    env["IRIS_ATTEMPT_ID"] = str(task.attempt_id)
-    env["IRIS_BUNDLE_ID"] = task.request.bundle_id
+    req = task.request
+    env = build_common_iris_env(
+        task_id=req.task_id,
+        attempt_id=task.attempt_id,
+        num_tasks=task.num_tasks,
+        bundle_id=req.bundle_id,
+        controller_address=controller_address,
+        environment=req.environment,
+        constraints=req.constraints,
+        ports=req.ports,
+        resources=req.resources if req.HasField("resources") else None,
+    )
 
     if worker_id:
         env["IRIS_WORKER_ID"] = worker_id
 
-    if controller_address:
-        # With --network=host, containers share the host's network directly,
-        # so no address rewriting is needed.
-        env["IRIS_CONTROLLER_ADDRESS"] = controller_address
-        env["IRIS_CONTROLLER_URL"] = controller_address
-
     # With --network=host, containers share the host's network stack.
     # Compute the host's routable IP so container code can read it via
     # get_job_info().advertise_host without needing its own socket tricks.
-    env["IRIS_BIND_HOST"] = "0.0.0.0"
     env["IRIS_ADVERTISE_HOST"] = _get_host_ip()
-    env["IRIS_WORKDIR"] = "/app"
-    env["IRIS_PYTHON"] = "python"
 
-    # Propagate extras and pip_packages so child jobs can inherit them
-    extras = list(task.request.environment.extras)
-    if extras:
-        env["IRIS_JOB_EXTRAS"] = json.dumps(extras)
-    pip_packages = list(task.request.environment.pip_packages)
-    if pip_packages:
-        env["IRIS_JOB_PIP_PACKAGES"] = json.dumps(pip_packages)
-
-    # Serialize the explicit user env vars so child jobs can inherit them
-    # via JobInfo.env without picking up infrastructure vars from os.environ.
-    user_env_vars = dict(task.request.environment.env_vars)
-    if user_env_vars:
-        env["IRIS_JOB_ENV"] = json.dumps(user_env_vars)
-    # Only propagate region/zone constraints to children; device constraints
-    # are re-derived from each child's own resource spec.
-    from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
-
-    inheritable = [c for c in task.request.constraints if c.key in INHERITED_CONSTRAINT_KEYS]
-    if inheritable:
-        env["IRIS_JOB_CONSTRAINTS"] = json.dumps(
-            [json_format.MessageToDict(c, preserving_proto_field_name=True) for c in inheritable]
-        )
-
-    # Inject allocated ports
+    # Override port placeholders with real allocated values
     for name, port in task.ports.items():
         env[f"IRIS_PORT_{name.upper()}"] = str(port)
 
@@ -248,7 +191,6 @@ class TaskAttempt:
         default_task_image: str | None,
         resolve_image: Callable[[str], str],
         port_allocator: PortAllocator,
-        report_state: Callable[[], None],
         log_store: LogStore,
         poll_interval_seconds: float = 5.0,
     ):
@@ -270,7 +212,6 @@ class TaskAttempt:
             resolve_image: Resolves image tags for the current platform
                 (e.g. GHCR→AR rewriting on GCP). Zone is pre-bound by the worker.
             port_allocator: Port allocator for releasing ports on cleanup
-            report_state: Callback to report task state changes to Worker
             log_store: Shared LogStore for appending and querying task logs.
             poll_interval_seconds: How often to poll container status
         """
@@ -283,12 +224,12 @@ class TaskAttempt:
         self._default_task_image = default_task_image
         self._resolve_image_fn = resolve_image
         self._port_allocator = port_allocator
-        self._report_state = report_state
         self._poll_interval_seconds = poll_interval_seconds
         self._log_store = log_store
-        self._log_key = task_log_key(config.task_id, config.attempt_id)
+        self._log_key = task_log_key(config.task_attempt)
 
         # Task identity (from config)
+        self.task_attempt: TaskAttemptIdentity = config.task_attempt
         self.task_id: JobName = config.task_id
         self.num_tasks: int = config.num_tasks
         self.attempt_id: int = config.attempt_id
@@ -296,7 +237,6 @@ class TaskAttempt:
         self.ports: dict[str, int] = {}
         self.workdir: Path | None = None
         self._cache_dir: Path = config.cache_dir
-        self._storage_prefix: str = config.storage_prefix
         # Task state
         self.status: TaskState = cluster_pb2.TASK_STATE_PENDING
         self.exit_code: int | None = None
@@ -464,13 +404,15 @@ class TaskAttempt:
         allocated_ports = self._port_allocator.allocate(len(port_names)) if port_names else []
         self.ports = dict(zip(port_names, allocated_ports, strict=True))
 
-        # Resolve fast IO directory (tmpfs when available, else cache_dir)
-        self._fast_io_dir = get_fast_io_dir(self._cache_dir)
-
         # Create task working directory with attempt isolation
         safe_task_id = self.task_id.to_safe_token()
-        self.workdir = self._fast_io_dir / "workdirs" / f"{safe_task_id}_attempt_{self.attempt_id}"
+        self.workdir = self._cache_dir / "workdirs" / f"{safe_task_id}_attempt_{self.attempt_id}"
         self.workdir.mkdir(parents=True, exist_ok=True)
+
+        # Mount tmpfs on workdir for quota enforcement (Docker only; no-op for process/k8s).
+        # Must happen before _download_bundle() so staged files land on the tmpfs.
+        disk_bytes = self.request.resources.disk_bytes if self.request.HasField("resources") else 0
+        self._runtime.prepare_workdir(self.workdir, disk_bytes)
 
     def run(self) -> None:
         """Execute the full task lifecycle. Intended to run in a background thread.
@@ -515,8 +457,6 @@ class TaskAttempt:
             self._append_log(source="error", data=f"Task failed:\n{error_msg}")
             self.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
-            if is_task_finished(self.status):
-                self._report_state()
             self._cleanup()
             logger.info(
                 "TaskAttempt finished: task_id=%s attempt=%s state=%s exit_code=%s",
@@ -535,7 +475,6 @@ class TaskAttempt:
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
         self.started_at = Timestamp.now()
         self._building_start_monotonic = time.monotonic()
-        self._report_state()  # Report BUILDING state to controller
 
         download_start = time.monotonic()
 
@@ -589,13 +528,17 @@ class TaskAttempt:
             self._controller_address,
         )
         env = dict(iris_env)
+
+        # Expose the worker's region so child jobs can inherit a region
+        # constraint (e.g. when the parent holds a reservation).
+        from iris.cluster.constraints import WellKnownAttribute
+
+        region_attr = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
+        if region_attr and region_attr.string_value:
+            env["IRIS_WORKER_REGION"] = region_attr.string_value
+
         env.update(self._default_task_env)
         env.update(dict(self.request.environment.env_vars))
-
-        # uv needs a writable directory for Python downloads.
-        # Use a subdirectory of the cache which is bind-mounted from the worker.
-        env["UV_PYTHON_INSTALL_DIR"] = "/uv/cache/python"
-        env["CARGO_TARGET_DIR"] = "/root/.cargo/target"
 
         # Get RuntimeEntrypoint proto directly
         rt_ep = self.request.entrypoint
@@ -608,20 +551,12 @@ class TaskAttempt:
         assert self.workdir is not None
         job_id, _ = self.task_id.require_task()
 
-        # Pre-create cache mount directories so Docker doesn't create them as root.
-        # Use tmpfs-backed fast IO dir when available for better IOPS.
-        uv_cache = self._fast_io_dir / "uv"
-        cargo_cache = self._fast_io_dir / "cargo"
-        cargo_target = self._fast_io_dir / "cargo-target"
-        uv_cache.mkdir(parents=True, exist_ok=True)
-        cargo_cache.mkdir(parents=True, exist_ok=True)
-        cargo_target.mkdir(parents=True, exist_ok=True)
-
         mounts = [
-            (str(self.workdir), "/app", "rw"),
-            (str(uv_cache), "/uv/cache", "rw"),
-            (str(cargo_cache), "/root/.cargo/registry", "rw"),
-            (str(cargo_target), "/root/.cargo/target", "rw"),
+            MountSpec("/app", kind=MountKind.WORKDIR),
+            MountSpec("/tmp", kind=MountKind.TMPFS),
+            MountSpec("/uv/cache", kind=MountKind.CACHE),
+            MountSpec("/root/.cargo/registry", kind=MountKind.CACHE),
+            MountSpec("/root/.cargo/target", kind=MountKind.CACHE),
         ]
 
         config = ContainerConfig(
@@ -631,6 +566,7 @@ class TaskAttempt:
             resources=self.request.resources if self.request.HasField("resources") else None,
             timeout_seconds=timeout_seconds,
             mounts=mounts,
+            workdir_host_path=self.workdir,
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,
             job_id=job_id.to_wire(),
@@ -653,7 +589,6 @@ class TaskAttempt:
         if self.request.entrypoint.setup_commands:
             self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="syncing dependencies")
             self.build_started = Timestamp.now()
-            self._report_state()
 
         build_logs = self._container_handle.build()
 
@@ -685,8 +620,7 @@ class TaskAttempt:
         Collects runtime statistics (CPU, memory, disk) and handles timeout enforcement.
         Updates task state to terminal status (SUCCEEDED/FAILED/KILLED) when container stops.
 
-        A background ProfileCapture thread periodically captures py-spy snapshots
-        and uploads the last N to cloud storage when the task finishes.
+        Profiling is handled centrally by the controller's profile loop thread.
         """
         assert self._container_handle is not None
         assert self.workdir is not None
@@ -699,15 +633,7 @@ class TaskAttempt:
             deadline = Deadline.from_seconds(timeout_seconds)
 
         log_reader = handle.log_reader()
-
-        with ProfileCapture(
-            container_handle=handle,
-            safe_token=self.task_id.to_safe_token(),
-            attempt_id=self.attempt_id,
-            workdir=self.workdir,
-            storage_prefix=self._storage_prefix,
-        ):
-            self._monitor_loop(handle, log_reader, deadline)
+        self._monitor_loop(handle, log_reader, deadline)
 
     def _monitor_loop(
         self,
@@ -715,6 +641,7 @@ class TaskAttempt:
         log_reader: RuntimeLogReader,
         deadline: Deadline | None,
     ) -> None:
+        last_disk_check = 0.0
         while True:
             if rule := chaos("worker.task_monitor"):
                 time.sleep(rule.delay_seconds)
@@ -747,7 +674,6 @@ class TaskAttempt:
                 building_duration = time.monotonic() - self._building_start_monotonic
                 logger.info("Task %s BUILDING→RUNNING after %.1fs", self.task_id, building_duration)
                 self.transition_to(cluster_pb2.TASK_STATE_RUNNING)
-                self._report_state()
 
             if status.phase == ContainerPhase.STOPPED:
                 logger.info(
@@ -799,8 +725,10 @@ class TaskAttempt:
                     if stats.memory_mb > self.peak_memory_mb:
                         self.peak_memory_mb = stats.memory_mb
 
-                if self.workdir:
-                    self.disk_mb = collect_workdir_size_mb(self.workdir)
+                now = time.monotonic()
+                if now - last_disk_check >= _DISK_CHECK_INTERVAL_SECONDS:
+                    self.disk_mb = handle.disk_usage_mb()
+                    last_disk_check = now
             except Exception:
                 logger.debug("Stats collection failed for task %s", self.task_id, exc_info=True)
 
@@ -850,7 +778,7 @@ class TaskAttempt:
         except Exception as e:
             logger.warning("Failed to release ports for task %s: %s", self.task_id, e)
 
-        # Remove working directory
+        # Remove working directory (handle.cleanup() already released backing storage)
         if self.workdir and self.workdir.exists():
             try:
                 shutil.rmtree(self.workdir)

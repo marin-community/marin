@@ -11,7 +11,7 @@ grug copy-first workflow in `.agents/skills/change-grug/`.
 import dataclasses
 
 from dataclasses import dataclass
-
+from typing import get_args
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -24,9 +24,9 @@ from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
-from levanter.grug.grug_moe import MoeActivation, moe_mlp
+from levanter.grug.grug_moe import MoeActivation, MoeImplementation, moe_mlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pvocab, unshard
+from levanter.grug.sharding import embed_vocab_pspec, lm_head_pspec, logits_pspec, unshard
 from levanter.tracker.histogram import Histogram
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -41,6 +41,10 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
 
 def _batch_spec() -> P:
     return P(("data", "expert"))
+
+
+def _token_batch_spec() -> P:
+    return P(_batch_spec()[0], None)
 
 
 @dataclass(frozen=True)
@@ -62,9 +66,13 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     load_balancing_loss_coef: float | None = 0.01
     router_z_loss_coef: float | None = 0.001
+    moe_implementation: MoeImplementation | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
+        if self.moe_implementation is not None and self.moe_implementation not in get_args(MoeImplementation):
+            valid = ", ".join(repr(choice) for choice in get_args(MoeImplementation))
+            raise ValueError(f"moe_implementation must be one of {valid} or None, got {self.moe_implementation!r}")
         _ = self.inferred_head_dim
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
@@ -175,11 +183,12 @@ class DenseMLP(eqx.Module):
             activation_fn = activation
 
         b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
+        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_batch_spec())
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
-        return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
+        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_token_batch_spec())
+        out = rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
+        return reshard(out, _batch_spec())
 
 
 def _routing_stats(
@@ -298,8 +307,13 @@ class MoEMLP(eqx.Module):
         x: Float[Array, "B S D"],
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
-        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None)))
+        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_batch_spec())
+        router_logits = jnp.einsum(
+            "td,de->te",
+            x_flat,
+            reshard(self.router, P(None, None)),
+            out_sharding=_token_batch_spec(),
+        )
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
         combine_weights = jax.nn.softmax(topk_logits, axis=-1).astype(x.dtype)
@@ -318,6 +332,7 @@ class MoEMLP(eqx.Module):
             self.w_up_gate,
             self.w_down,
             activation=ActivationFunctionEnum.silu,
+            implementation=self.cfg.moe_implementation,
             mesh=get_abstract_mesh(),
             capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
         )
@@ -377,8 +392,15 @@ class Transformer(eqx.Module):
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Transformer":
         embed_key, out_key, *block_keys = random.split(key, cfg.num_layers + 2)
-        token_embed = reshard(_init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pvocab)
-        output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Pvocab)
+        batch_axis = _batch_spec()[0]
+        token_embed = reshard(
+            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std),
+            embed_vocab_pspec(batch_axis),
+        )
+        output_proj = reshard(
+            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std),
+            lm_head_pspec(batch_axis),
+        )
         blocks = tuple(Block.init(cfg, key=layer_key) for layer_key in block_keys)
         final_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
 
@@ -422,7 +444,7 @@ class Transformer(eqx.Module):
     ) -> Float[Array, "B S V"]:
         batch_spec = _batch_spec()
         hidden, _ = self(token_ids, mask=mask)
-        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
+        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=logits_pspec(batch_spec[0]))
 
     def next_token_loss(
         self,
@@ -447,6 +469,7 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
+            implementation="pallas_tpu" if jax.default_backend() == "tpu" else None,
         )
         # Keep router metrics raw and apply coefficients only at the final
         # objective composition step (same separation as MaxText/Megatron).

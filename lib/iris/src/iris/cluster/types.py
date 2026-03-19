@@ -198,6 +198,82 @@ class JobName:
         return cls.from_string(s)
 
 
+@dataclass(frozen=True, slots=True)
+class TaskAttempt:
+    """A task identity combining a task-level JobName with an optional attempt qualifier.
+
+    Canonical wire format: /user/job/0:attempt_id
+    When attempt_id is None, the wire format omits the suffix: /user/job/0
+
+    The task_id must be a task-level JobName (last component numeric).
+    attempt_id is optional — when absent, semantics are per-operation but
+    typically "use the latest active attempt" is implied.
+
+    Examples:
+        TaskAttempt.from_wire("/alice/job/0")     -> TaskAttempt(task_id=/alice/job/0, attempt_id=None)
+        TaskAttempt.from_wire("/alice/job/0:3")   -> TaskAttempt(task_id=/alice/job/0, attempt_id=3)
+    """
+
+    task_id: JobName
+    attempt_id: int | None = None
+
+    @classmethod
+    def from_wire(cls, s: str) -> "TaskAttempt":
+        """Parse a wire-format string like '/user/job/0' or '/user/job/0:3'."""
+        if not s:
+            raise ValueError("TaskAttempt wire format must not be empty")
+        colon = s.rfind(":")
+        if colon >= 0:
+            task_part = s[:colon]
+            attempt_str = s[colon + 1 :]
+            try:
+                attempt_id = int(attempt_str)
+            except ValueError as exc:
+                raise ValueError(f"Invalid attempt ID in TaskAttempt '{s}': '{attempt_str}' is not an integer") from exc
+            return cls(task_id=JobName.from_wire(task_part), attempt_id=attempt_id)
+        return cls(task_id=JobName.from_wire(s))
+
+    def to_wire(self) -> str:
+        """Serialize to wire format: '/user/job/0' or '/user/job/0:3'."""
+        base = self.task_id.to_wire()
+        if self.attempt_id is not None:
+            return f"{base}:{self.attempt_id}"
+        return base
+
+    def require_attempt(self) -> int:
+        """Return attempt_id or raise if absent."""
+        if self.attempt_id is None:
+            raise ValueError(f"TaskAttempt has no attempt_id: {self}")
+        return self.attempt_id
+
+    @property
+    def job_id(self) -> JobName:
+        """Get the parent job name (task_id without the task index)."""
+        parent = self.task_id.parent
+        if parent is None:
+            raise ValueError(f"TaskAttempt task_id has no parent job: {self.task_id}")
+        return parent
+
+    @property
+    def task_index(self) -> int:
+        """Get the task index from the task_id."""
+        return self.task_id.require_task()[1]
+
+    def with_attempt(self, attempt_id: int) -> "TaskAttempt":
+        """Return a new TaskAttempt with the given attempt_id."""
+        return TaskAttempt(task_id=self.task_id, attempt_id=attempt_id)
+
+    def without_attempt(self) -> "TaskAttempt":
+        """Return a new TaskAttempt with attempt_id=None."""
+        return TaskAttempt(task_id=self.task_id)
+
+    def __str__(self) -> str:
+        return self.to_wire()
+
+    def __repr__(self) -> str:
+        return f"TaskAttempt({self.to_wire()!r})"
+
+
 def get_gpu_count(device: cluster_pb2.DeviceConfig) -> int:
     """Extract GPU count from DeviceConfig."""
     if device.HasField("gpu"):
@@ -217,15 +293,10 @@ EndpointId = NewType("EndpointId", str)
 
 
 @dataclass(frozen=True)
-class VmWorkerStatus:
-    """Worker status keyed by VM address for autoscaler.
+class WorkerStatus:
+    """Worker status keyed by worker_id for autoscaler idle tracking."""
 
-    The VM address is the worker's identity. This enables the autoscaler
-    to look up worker status directly by VM address without needing
-    to correlate separate worker_id to VM.
-    """
-
-    vm_address: str
+    worker_id: str
     running_task_ids: frozenset[str]
 
     @property
@@ -233,8 +304,7 @@ class VmWorkerStatus:
         return len(self.running_task_ids) == 0
 
 
-# Map of VM address -> worker status, used by autoscaler for idle tracking
-VmWorkerStatusMap = dict[str, VmWorkerStatus]
+WorkerStatusMap = dict[str, WorkerStatus]
 
 
 @dataclass(frozen=True)
@@ -374,12 +444,18 @@ class ResourceSpec:
     disk: str | int = 0
     device: cluster_pb2.DeviceConfig | None = None
 
+    # Accelerator tasks need enough CPU to avoid bottlenecking on data loading.
+    MIN_ACCELERATOR_CPU_MILLICORES = 32_000
+
     def to_proto(self) -> cluster_pb2.ResourceSpecProto:
         """Convert to wire format."""
         memory_bytes = self.memory if isinstance(self.memory, int) else parse_memory_string(self.memory)
         disk_bytes = self.disk if isinstance(self.disk, int) else parse_memory_string(self.disk)
+        cpu_mc = int(self.cpu * 1000)
+        if self.device is not None and cpu_mc < self.MIN_ACCELERATOR_CPU_MILLICORES:
+            cpu_mc = self.MIN_ACCELERATOR_CPU_MILLICORES
         spec = cluster_pb2.ResourceSpecProto(
-            cpu_millicores=int(self.cpu * 1000),
+            cpu_millicores=cpu_mc,
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
         )

@@ -4,46 +4,54 @@
 """Canary ferry regression gate: validate training metrics against thresholds.
 
 Reads tracker_metrics.jsonl from the canary ferry's GCS output directory and
-checks final metrics against hardcoded thresholds. Exits non-zero if any
+checks final metrics against coarse thresholds. Exits non-zero if any
 threshold is breached. Intended to run as a post-training step in the
 marin-canary-ferry GitHub Actions workflow.
+
+Thresholds are deliberately loose — they catch total failures (job hung,
+loss exploded, zero throughput) not quality regressions. Tighten after
+calibrating from several successful MoE canary runs.
 """
 
 import json
 import operator
+import os
 import sys
+from collections.abc import Callable
 
-from iris.marin_fs import open_url
+from iris.marin_fs import marin_prefix, open_url
 
 from marin.execution.executor import Executor
 
-MARIN_PREFIX = "gs://marin-us-central1"
 
-THRESHOLDS = [
-    # (summary_key, display_name, check, threshold)
-    # check(actual, threshold) → True means passing
-    ("train/loss", "Final loss", operator.le, 4.0),
-    ("throughput/p50_mfu", "MFU p50 (%)", operator.ge, 22.0),
-    ("_step", "Steps completed", operator.ge, 3000),
-    ("_runtime", "Wall-clock (s)", operator.le, 3600),
-]
+def _env_float(key: str, default: float) -> float:
+    raw = os.environ.get(key, "")
+    return float(raw) if raw else default
+
+
+def _thresholds() -> list[tuple[str, str, Callable[[float, float], bool], float]]:
+    return [
+        ("_step", "Steps completed", operator.ge, _env_float("CANARY_MIN_STEPS", 400)),
+        ("train/loss", "Final loss", operator.le, _env_float("CANARY_MAX_LOSS", 8.0)),
+        ("_runtime", "Wall-clock (s)", operator.le, _env_float("CANARY_MAX_WALL_CLOCK", 7200)),
+    ]
 
 
 def resolve_canary_output_path() -> str:
     """Resolve the canary ferry's GCS output path via the executor's version hash."""
-    from experiments.ferries.canary_ferry import make_training_step
+    from experiments.ferries.canary_ferry import canary_moe_step
 
-    training_step = make_training_step()
+    prefix = marin_prefix()
     executor = Executor(
-        prefix=MARIN_PREFIX,
-        executor_info_base_path=f"{MARIN_PREFIX}/experiments",
+        prefix=prefix,
+        executor_info_base_path=f"{prefix}/experiments",
     )
-    executor.compute_version(training_step, is_pseudo_dep=False)
-    return executor.output_paths[training_step]
+    executor.compute_version(canary_moe_step, is_pseudo_dep=False)
+    return executor.output_paths[canary_moe_step]
 
 
 def read_summary(output_path: str) -> dict:
-    """Read the summary dict from tracker_metrics.jsonl on GCS."""
+    """Read the summary dict from tracker_metrics.jsonl."""
     metrics_file = f"{output_path}/tracker_metrics.jsonl"
     with open_url(metrics_file, "r") as f:
         record = json.loads(f.read().strip())
@@ -51,11 +59,7 @@ def read_summary(output_path: str) -> dict:
 
 
 def lookup_metric(summary: dict, key: str):
-    """Look up a slash-separated metric key in a potentially nested dict.
-
-    WandB metrics like "train/loss" may be stored nested as {"train": {"loss": val}}
-    in the replicated summary. Falls back to flat key lookup.
-    """
+    """Look up a slash-separated metric key in a potentially nested dict."""
     parts = key.split("/")
     current = summary
     for part in parts:
@@ -67,9 +71,9 @@ def lookup_metric(summary: dict, key: str):
 
 
 def validate_metrics(summary: dict) -> list[tuple[str, float | None, float, bool]]:
-    """Check each metric against its threshold. Returns (name, actual, threshold, passed)."""
+    """Returns (display_name, actual_value, threshold, passed) per metric."""
     results = []
-    for summary_key, display_name, check, threshold in THRESHOLDS:
+    for summary_key, display_name, check, threshold in _thresholds():
         actual = lookup_metric(summary, summary_key)
         if actual is None:
             results.append((display_name, None, threshold, False))
@@ -81,7 +85,6 @@ def validate_metrics(summary: dict) -> list[tuple[str, float | None, float, bool
 
 
 def print_report(results: list[tuple[str, float | None, float, bool]]) -> None:
-    """Print a human-readable pass/fail table to stdout."""
     print(f"\n{'Metric':<20} {'Actual':>12} {'Threshold':>12} {'Status':>8}")
     print("-" * 56)
     for display_name, actual, threshold, passed in results:

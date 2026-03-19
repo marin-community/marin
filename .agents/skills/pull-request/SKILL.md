@@ -10,23 +10,23 @@ human and agent authors.
 
 ## PR Descriptions
 
-The PR description doubles as the squash-merge commit message. Write it
-accordingly: no markdown formatting beyond plain text paragraphs and bullets,
-concise, and self-contained.
+The PR description doubles as the squash-merge commit message. Write it like
+a git commit message: plain text, no markdown, no ceremony.
 
-**Required elements:**
+**Format:**
 
 1. **Title** -- short imperative sentence, optionally prefixed with a scope tag
    in brackets (e.g. `[RL] Fix loss normalization`).
-2. **Body** -- one paragraph stating what changed and why. Follow with a few
-   bullets for specific changes if needed. Link the issue with `Fixes #NNNN`.
+2. **Body** -- plain text. State what changed and why in 1-3 sentences. Link the
+   issue with `Fixes #NNNN` or `Part of #NNNN`. That's it.
 
 **Style rules:**
 
-- No markdown headers, tables, or images in the body.
+- No markdown headers, tables, images, or bullet sections.
+- No `## Summary`, `## Test plan`, or other section headers.
 - No filler ("This PR...", "I noticed..."). State the change directly.
-- Keep it under ~150 words. A reviewer should absorb it in 30 seconds.
-- Include example output or metrics when the change is substantial.
+- Plain text links only (no `[text](url)` markdown links).
+- Keep it under ~80 words. A reviewer should absorb it in 10 seconds.
 
 ### Example
 
@@ -34,14 +34,10 @@ concise, and self-contained.
 Title: [RL] Fix loss: use global token normalization instead of per-example
 
 Body:
-Fixes a regression in the DAPO loss computation by switching from per-example
-normalization (/ n_i) back to global token normalization (/ N). Per-example
-normalization gives shorter responses disproportionately more gradient weight,
-which hurts math reasoning tasks where correct answers often require detailed,
-longer derivations.
-
-- Switch normalization in `compute_dapo_loss()` from per-example to global.
-- Add regression test in `tests/test_dapo_loss.py`.
+Switch DAPO loss from per-example normalization (/ n_i) to global token
+normalization (/ N). Per-example normalization over-weights short responses,
+hurting math reasoning where correct answers need longer derivations.
+Adds regression test.
 
 Fixes #1234
 ```
@@ -63,6 +59,8 @@ Before marking a PR ready for review:
 - Run `./infra/pre-commit.py --all-files --fix` and fix any issues.
 - Do not substitute `uv run pre-commit ...`; use `./infra/pre-commit.py` directly so checks run in all environments.
 - Run `uv run pytest -m 'not slow'` for the relevant test directories.
+- When a PR adds, deletes, renames, or rewires docs pages or docs-owned links, run `uv run python infra/check_docs_source_links.py` before pushing so stale GitHub source links fail locally instead of in CI.
+- For docs-heavy changes, also run `uv run mkdocs build --strict`.
 - Ensure all CI checks pass after pushing. Monitor with
   `gh pr view <number> --json statusCheckRollup`.
 - If CI fails, investigate and push fixes. Do not consider the PR complete

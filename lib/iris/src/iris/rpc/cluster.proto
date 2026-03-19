@@ -19,12 +19,68 @@ package iris.cluster;
 import "time.proto";
 import "vm.proto";
 import "logging.proto";
+import "query.proto";
 
 // ============================================================================
 // SHARED TYPES
 // ============================================================================
 
 message Empty {}
+
+// --- Authentication ---
+message LoginRequest {
+  string identity_token = 1;
+}
+message LoginResponse {
+  string token = 1;
+  string key_id = 2;
+  string user_id = 3;
+}
+
+message GetAuthInfoRequest {}
+message GetAuthInfoResponse {
+  string provider = 1;        // "gcp" or "static" or "" (no auth)
+  string gcp_project_id = 2;  // set when provider == "gcp"
+}
+
+message CreateApiKeyRequest {
+  string user_id = 1;
+  string name = 2;
+  int64 ttl_ms = 3;
+}
+message CreateApiKeyResponse {
+  string key_id = 1;
+  string token = 2;
+  string key_prefix = 3;
+}
+
+message RevokeApiKeyRequest {
+  string key_id = 1;
+}
+
+message ListApiKeysRequest {
+  string user_id = 1;
+}
+message ApiKeyInfo {
+  string key_id = 1;
+  string key_prefix = 2;
+  string user_id = 3;
+  string name = 4;
+  int64 created_at_ms = 5;
+  int64 last_used_at_ms = 6;
+  int64 expires_at_ms = 7;
+  bool revoked = 8;
+}
+message ListApiKeysResponse {
+  repeated ApiKeyInfo keys = 1;
+}
+
+message GetCurrentUserRequest {}
+message GetCurrentUserResponse {
+  string user_id = 1;
+  string role = 2;
+  string display_name = 3;
+}
 
 // --- Profiling ---
 // Shared by both ControllerService and WorkerService (controller proxies to worker).
@@ -53,8 +109,10 @@ message MemoryProfile {
   bool leaks = 2;       // Focus on potential memory leaks
 }
 
-// Thread dump configuration (no additional options needed)
-message ThreadsProfile {}
+// Thread dump configuration
+message ThreadsProfile {
+  bool locals = 1;  // Include local variables in the dump (--locals flag)
+}
 
 // Profile type selector
 message ProfileType {
@@ -465,13 +523,27 @@ message WorkerMetadata {
   // using format: key1=value1,key2=value2 (e.g., taint:maintenance=true,pool=large-jobs)
   map<string, AttributeValue> attributes = 40;
 
-  // VM IP address used for autoscaler slice/worker matching.
-  // Self-discovered by the worker at startup via socket probe.
+  // DEPRECATED: No longer used for worker identification.
+  // Worker identity is now set via RegisterRequest.worker_id.
+  // Field kept for proto wire compatibility but ignored by the controller.
   string vm_address = 41;
 
   // Git commit hash baked into the worker image at build time (IRIS_GIT_HASH).
   // Allows the controller to surface per-worker version info for debugging.
   string git_hash = 42;
+}
+
+enum JobPreemptionPolicy {
+  JOB_PREEMPTION_POLICY_UNSPECIFIED = 0;
+  JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN = 1;
+  JOB_PREEMPTION_POLICY_PRESERVE_CHILDREN = 2;
+}
+
+enum ExistingJobPolicy {
+  EXISTING_JOB_POLICY_UNSPECIFIED = 0;
+  EXISTING_JOB_POLICY_ERROR = 1;
+  EXISTING_JOB_POLICY_KEEP = 2;
+  EXISTING_JOB_POLICY_RECREATE = 3;
 }
 
 // ============================================================================
@@ -536,6 +608,9 @@ message Controller {
     // Resource reservation. When set, the autoscaler pre-provisions capacity
     // and the reserving job is held pending until the reservation is satisfied.
     ReservationConfig reservation = 30;
+
+    JobPreemptionPolicy preemption_policy = 31;
+    ExistingJobPolicy existing_job_policy = 32;
   }
 
   message LaunchJobResponse {
@@ -655,15 +730,15 @@ message Controller {
   message RegisterRequest {
     string address = 1;
     WorkerMetadata metadata = 2;
+    // Worker ID assigned by the autoscaler via WorkerConfig.
+    // When set, the controller uses this as the canonical worker identity
+    // instead of deriving it from vm_address.
+    string worker_id = 3;
   }
 
   message RegisterResponse {
     string worker_id = 1;
     bool accepted = 2;
-  }
-
-  message NotifyTaskUpdateRequest {
-    string worker_id = 1;
   }
 
   // --- Endpoint Registry ---
@@ -728,7 +803,7 @@ message Controller {
   // --- Checkpoint ---
   message BeginCheckpointRequest {}
   message BeginCheckpointResponse {
-    string snapshot_path = 1;
+    string checkpoint_path = 1;
     iris.time.Timestamp created_at = 2;
     int32 job_count = 3;
     int32 task_count = 4;
@@ -808,6 +883,70 @@ message Controller {
 
     // Recent resource history (ring buffer of snapshots from heartbeats)
     repeated WorkerResourceSnapshot resource_history = 8;
+  }
+
+  // --- Provider Status (for direct-dispatch providers like KubernetesProvider) ---
+  message SchedulingEvent {
+    string task_id = 1;
+    int32 attempt_id = 2;
+    string event_type = 3;
+    string reason = 4;
+    string message = 5;
+    iris.time.Timestamp timestamp = 6;
+  }
+
+  message ClusterCapacity {
+    int32 schedulable_nodes = 1;
+    int64 total_cpu_millicores = 2;
+    int64 available_cpu_millicores = 3;
+    int64 total_memory_bytes = 4;
+    int64 available_memory_bytes = 5;
+  }
+
+  message GetProviderStatusRequest {}
+
+  message GetProviderStatusResponse {
+    bool has_direct_provider = 1;
+    repeated SchedulingEvent scheduling_events = 2;
+    ClusterCapacity capacity = 3;
+  }
+
+  message GetKubernetesClusterStatusRequest {}
+
+  message KubernetesPodStatus {
+    string pod_name = 1;
+    string task_id = 2;
+    string phase = 3;
+    string reason = 4;
+    string message = 5;
+    iris.time.Timestamp last_transition = 6;
+    string node_name = 7;
+  }
+
+  message NodePoolStatus {
+    string name = 1;
+    string instance_type = 2;
+    string scale_group = 3;
+    int32 target_nodes = 4;
+    int32 current_nodes = 5;
+    int32 queued_nodes = 6;
+    int32 in_progress_nodes = 7;
+    bool autoscaling = 8;
+    int32 min_nodes = 9;
+    int32 max_nodes = 10;
+    string capacity = 11;
+    string quota = 12;
+  }
+
+  message GetKubernetesClusterStatusResponse {
+    string namespace = 1;
+    int32 total_nodes = 2;
+    int32 schedulable_nodes = 3;
+    string allocatable_cpu = 4;
+    string allocatable_memory = 5;
+    repeated KubernetesPodStatus pod_statuses = 6;
+    string provider_version = 7;
+    repeated NodePoolStatus node_pools = 8;
   }
 
 }
@@ -906,8 +1045,6 @@ service ControllerService {
   // Worker management
   rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);
   rpc ListWorkers(Controller.ListWorkersRequest) returns (Controller.ListWorkersResponse);
-  rpc NotifyTaskUpdate(Controller.NotifyTaskUpdateRequest) returns (Empty);
-
   // Endpoint registry (generic service discovery)
   rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
   rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (Empty);
@@ -938,6 +1075,23 @@ service ControllerService {
 
   // Process status (local process info + recent logs)
   rpc GetProcessStatus(GetProcessStatusRequest) returns (GetProcessStatusResponse);
+
+  // Authentication & API key management
+  rpc GetAuthInfo(GetAuthInfoRequest) returns (GetAuthInfoResponse);
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc CreateApiKey(CreateApiKeyRequest) returns (CreateApiKeyResponse);
+  rpc RevokeApiKey(RevokeApiKeyRequest) returns (Empty);
+  rpc ListApiKeys(ListApiKeysRequest) returns (ListApiKeysResponse);
+  rpc GetCurrentUser(GetCurrentUserRequest) returns (GetCurrentUserResponse);
+
+  // Provider status (direct-dispatch providers)
+  rpc GetProviderStatus(Controller.GetProviderStatusRequest) returns (Controller.GetProviderStatusResponse);
+
+  // Kubernetes cluster status
+  rpc GetKubernetesClusterStatus(Controller.GetKubernetesClusterStatusRequest) returns (Controller.GetKubernetesClusterStatusResponse);
+
+  // Generic query API
+  rpc ExecuteRawQuery(RawQueryRequest) returns (RawQueryResponse);
 }
 
 service WorkerService {

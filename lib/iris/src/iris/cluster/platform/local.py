@@ -1,20 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """LocalPlatform implementation for in-process testing.
 
 Implements the full Platform interface. "VMs" are in-memory stubs,
@@ -48,7 +34,6 @@ from iris.cluster.platform.base import (
     Labels,
     SliceStatus,
     WorkerStatus,
-    default_stop_all,
     find_free_port,
     generate_slice_suffix,
 )
@@ -311,7 +296,7 @@ class LocalPlatform:
 
     Implements the full Platform interface. "VMs" are threads, "slices"
     are groups of worker threads, and "standalone VMs" (controller) are
-    in-process server instances.
+    in-memory handles.
 
     When constructed with worker-spawning params (controller_address, cache_path,
     fake_bundle, port_allocator), create_slice() spawns real Worker threads.
@@ -319,10 +304,6 @@ class LocalPlatform:
 
     shutdown() stops all worker threads via the ThreadContainer. This is
     critical for clean test teardown.
-
-    start_controller()/stop_controller() manage an in-process LocalController
-    (from iris.cluster.controller.local). The import is deferred to avoid a
-    circular dependency: controller/local.py imports LocalPlatform.
     """
 
     def __init__(
@@ -349,13 +330,12 @@ class LocalPlatform:
         self._worker_attributes_by_group = worker_attributes_by_group or {}
         self._gpu_count_by_group = gpu_count_by_group or {}
         self._storage_prefix = storage_prefix
-        self._local_controller: object | None = None
 
     def resolve_image(self, image: str, zone: str | None = None) -> str:
         return image
 
     def create_vm(self, config: config_pb2.VmConfig) -> _LocalStandaloneWorkerHandle:
-        """Create an in-process "VM". Used by start_controller() for local mode."""
+        """Create an in-process "VM" (e.g., for the controller in local mode)."""
         handle = _LocalStandaloneWorkerHandle(
             _vm_id=config.name,
             _internal_address="localhost",
@@ -427,10 +407,10 @@ class LocalPlatform:
         for tpu_worker_id in range(worker_count):
             worker_id = f"worker-{slice_id}-{tpu_worker_id}-{uuid.uuid4().hex[:8]}"
             bundle_store = BundleStore(
-                db_path=self._cache_path / f"bundles-{worker_id}.sqlite3",
+                storage_dir=str(self._cache_path / f"bundles-{worker_id}"),
                 controller_address=self._controller_address,
             )
-            container_runtime = ProcessRuntime()
+            container_runtime = ProcessRuntime(cache_dir=self._cache_path / worker_id)
             worker_port = find_free_port()
 
             # Collect extra worker attributes from scale group config
@@ -480,7 +460,6 @@ class LocalPlatform:
                 preemptible=preemptible,
                 worker_attributes=extra_attrs,
             )
-            metadata.vm_address = f"127.0.0.1:{worker_port}"
 
             env_provider = FixedEnvironmentProvider(metadata)
 
@@ -493,6 +472,7 @@ class LocalPlatform:
                 default_task_image="process-runtime-unused",
                 poll_interval=Duration.from_seconds(0.1),
                 storage_prefix=self._storage_prefix,
+                auth_token=worker_config.auth_token if worker_config is not None else "",
             )
             worker_threads = self._threads.create_child(f"worker-{worker_id}")
             worker = Worker(
@@ -541,8 +521,8 @@ class LocalPlatform:
             results = [s for s in results if all(s.labels.get(k) == v for k, v in labels.items())]
         return results
 
-    def list_all_slices(self, labels: dict[str, str] | None = None) -> list[LocalSliceHandle]:
-        return self.list_slices(zones=[], labels=labels)
+    def list_all_slices(self) -> list[LocalSliceHandle]:
+        return self.list_slices(zones=[], labels={self._iris_labels.iris_managed: "true"})
 
     def list_vms(
         self,
@@ -581,46 +561,19 @@ class LocalPlatform:
         port = controller_config.local.port or 10000
         return f"localhost:{port}"
 
-    def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
-        """Start an in-process LocalController. Returns address (host:port).
-
-        Uses a local import to avoid circular dependency:
-        controller/local.py imports LocalPlatform from this module.
-        """
-        from iris.cluster.controller.local import LocalController
-
-        controller = LocalController(config, threads=self._threads)
-        address = controller.start()
-        self._local_controller = controller
-        return address
-
-    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
-        raise NotImplementedError("restart_controller not supported for local clusters")
-
-    def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
-        """Stop the in-process LocalController."""
-        from iris.cluster.controller.local import LocalController
-
-        if self._local_controller is not None:
-            assert isinstance(self._local_controller, LocalController)
-            self._local_controller.stop()
-            self._local_controller = None
-
     def stop_all(
         self,
         config: config_pb2.IrisClusterConfig,
         dry_run: bool = False,
         label_prefix: str | None = None,
     ) -> list[str]:
-        return default_stop_all(self, config, dry_run=dry_run, label_prefix=label_prefix)
-
-    def wait_for_controller(self) -> None:
-        """Block until the local controller is stopped."""
-        from iris.cluster.controller.local import LocalController
-
-        if self._local_controller is not None:
-            assert isinstance(self._local_controller, LocalController)
-            self._local_controller.wait()
+        """Terminate all managed slices. No external controller to stop in local mode."""
+        all_slices = self.list_all_slices()
+        names = [f"slice:{s.slice_id}" for s in all_slices]
+        if not dry_run:
+            for s in all_slices:
+                s.terminate()
+        return names
 
     @property
     def threads(self) -> ThreadContainer:

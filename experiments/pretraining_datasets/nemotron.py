@@ -27,13 +27,13 @@ downloads = {
 _nemotron_cc_path = output_path_of(downloads["nemotron_cc"], "contrib/Nemotron/Nemotron-CC/data-jsonl/")
 
 NEMOTRON_DATASETS = {
-    "hq_actual": ["quality=high/kind=actual/**/*.jsonl.gz"],
-    "hq_synth": ["quality=high/kind=synthetic/**/*.jsonl.gz"],
-    "medium_high": ["quality=medium-high/**/*.jsonl.gz"],
-    "medium": ["quality=medium/**/*.jsonl.gz"],
-    "medium_low": ["quality=medium-low/**/*.jsonl.gz"],
-    "low_actual": ["quality=low/kind=actual/**/*.jsonl.gz"],
-    "low_synth": ["quality=low/kind=synthetic/**/*.jsonl.gz"],
+    "hq_actual": ["quality=high/kind=actual/**/*.jsonl.*"],
+    "hq_synth": ["quality=high/kind=synthetic/**/*.jsonl.*"],
+    "medium_high": ["quality=medium-high/**/*.jsonl.*"],
+    "medium": ["quality=medium/**/*.jsonl.*"],
+    "medium_low": ["quality=medium-low/**/*.jsonl.*"],
+    "low_actual": ["quality=low/kind=actual/**/*.jsonl.*"],
+    "low_synth": ["quality=low/kind=synthetic/**/*.jsonl.*"],
 }
 
 # Weights for each split based on their size in TiB
@@ -69,7 +69,6 @@ def tokenize_nemotron(
     *,
     tokenizer: str | None = None,
     max_workers: int = 4096,
-    writer_batch_size: int = 65536,
 ) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all Nemotron CC dataset splits."""
     if tokenizer is None:
@@ -90,7 +89,6 @@ def tokenize_nemotron(
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
                 max_workers=max_workers,
-                writer_batch_size=writer_batch_size,
             ),
         )
 

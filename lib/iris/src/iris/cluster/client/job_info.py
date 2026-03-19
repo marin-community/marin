@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from google.protobuf import json_format
 
 from iris.cluster.constraints import Constraint
-from iris.cluster.types import JobName
+from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,14 @@ class JobInfo:
     constraints: list[Constraint] = field(default_factory=list)
     """Explicit job constraints for child job inheritance."""
 
+    worker_region: str | None = None
+    """Region of the worker running this task, for child region constraint inheritance."""
+
+    @property
+    def task_attempt(self) -> TaskAttempt:
+        """Get the structured task identity (task_id + attempt_id)."""
+        return TaskAttempt(task_id=self.task_id, attempt_id=self.attempt_id)
+
     @property
     def job_id(self) -> JobName:
         return self.task_id.parent or self.task_id
@@ -80,13 +88,18 @@ def get_job_info() -> JobInfo | None:
     if info is not None:
         return info
 
-    # Fall back to environment variables
-    raw_task_id = os.environ.get("IRIS_JOB_ID") or os.environ.get("IRIS_TASK_ID")
-    if raw_task_id:
+    # Fall back to environment variables.
+    raw_task_attempt = os.environ.get("IRIS_TASK_ID")
+    raw_legacy_task_id = os.environ.get("IRIS_JOB_ID")
+    if raw_task_attempt or raw_legacy_task_id:
         try:
-            if ":" in raw_task_id:
-                raw_task_id = raw_task_id.rsplit(":", 1)[0]
-            task_id = JobName.from_wire(raw_task_id)
+            if raw_task_attempt:
+                parsed = TaskAttempt.from_wire(raw_task_attempt)
+                task_id = parsed.task_id
+                attempt_id = parsed.attempt_id if parsed.attempt_id is not None else 0
+            else:
+                task_id = JobName.from_wire(raw_legacy_task_id)
+                attempt_id = int(os.environ.get("IRIS_ATTEMPT_ID", "0"))
             task_id.require_task()
         except ValueError:
             return None
@@ -101,7 +114,7 @@ def get_job_info() -> JobInfo | None:
         info = JobInfo(
             task_id=task_id,
             num_tasks=int(os.environ.get("IRIS_NUM_TASKS", "1")),
-            attempt_id=int(os.environ.get("IRIS_ATTEMPT_ID", "0")),
+            attempt_id=attempt_id,
             worker_id=os.environ.get("IRIS_WORKER_ID"),
             controller_address=os.environ.get("IRIS_CONTROLLER_ADDRESS"),
             advertise_host=os.environ.get("IRIS_ADVERTISE_HOST", "127.0.0.1"),
@@ -111,6 +124,7 @@ def get_job_info() -> JobInfo | None:
             ports=_parse_ports_from_env(),
             env=job_env,
             constraints=constraints,
+            worker_region=os.environ.get("IRIS_WORKER_REGION"),
         )
         _job_info.set(info)
         return info

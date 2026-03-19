@@ -1,15 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for LogStore (SQLite-backed)."""
+"""Tests for LogStore (rotating RAM buffers + Parquet + DuckDB)."""
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
-from iris.cluster.log_store import LogStore, task_log_key
-from iris.cluster.types import JobName
+from iris.cluster.log_store import LogStore, _EST_BYTES_PER_ROW, task_log_key
+from iris.cluster.log_store.duckdb_store import DuckDBLogStore
+from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import logging_pb2
 
 
@@ -32,7 +34,7 @@ def log_store():
 
 
 TASK_ID = JobName.from_wire("/job/test/task/0")
-KEY = task_log_key(TASK_ID, 0)
+KEY = task_log_key(TaskAttempt(task_id=TASK_ID, attempt_id=0))
 
 
 # =============================================================================
@@ -114,12 +116,12 @@ def test_get_logs_tail_concurrent(log_store: LogStore):
 def test_persistent_log_dir(tmp_path: Path):
     """Append, close, reopen with same dir, read logs."""
     log_dir = tmp_path / "logs"
-    store1 = LogStore(log_dir=log_dir)
+    store1 = DuckDBLogStore(log_dir=log_dir)
     entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(5)]
     store1.append(KEY, entries)
     store1.close()
 
-    store2 = LogStore(log_dir=log_dir)
+    store2 = DuckDBLogStore(log_dir=log_dir)
     result = store2.get_logs(KEY)
     assert len(result.entries) == 5
     assert [e.data for e in result.entries] == [f"line-{i}" for i in range(5)]
@@ -164,26 +166,14 @@ def test_cursor_round_trip(log_store: LogStore):
 def test_has_logs_no_known_attempts(tmp_path: Path):
     """has_logs works across store instances."""
     log_dir = tmp_path / "logs"
-    store1 = LogStore(log_dir=log_dir)
+    store1 = DuckDBLogStore(log_dir=log_dir)
     store1.append(KEY, [_make_entry("hello")])
     store1.close()
 
-    store2 = LogStore(log_dir=log_dir)
+    store2 = DuckDBLogStore(log_dir=log_dir)
     assert store2.has_logs(KEY)
-    assert not store2.has_logs(task_log_key(TASK_ID, 99))
+    assert not store2.has_logs(task_log_key(TaskAttempt(task_id=TASK_ID, attempt_id=99)))
     store2.close()
-
-
-def test_clear_removes_logs(log_store: LogStore):
-    entries = [_make_entry(f"line-{i}") for i in range(5)]
-    log_store.append(KEY, entries)
-    assert log_store.has_logs(KEY)
-
-    log_store.clear(KEY)
-    assert not log_store.has_logs(KEY)
-    result = log_store.get_logs(KEY)
-    assert result.entries == []
-    assert result.cursor == 0
 
 
 # =============================================================================
@@ -196,9 +186,9 @@ def test_get_logs_by_prefix_returns_all_matching(log_store: LogStore):
     t0 = JobName.from_wire("/job/test/task/0")
     t1 = JobName.from_wire("/job/test/task/1")
 
-    log_store.append(task_log_key(t0, 0), [_make_entry("t0-a0-line0", epoch_ms=1)])
-    log_store.append(task_log_key(t0, 1), [_make_entry("t0-a1-line0", epoch_ms=2)])
-    log_store.append(task_log_key(t1, 0), [_make_entry("t1-a0-line0", epoch_ms=3)])
+    log_store.append(task_log_key(TaskAttempt(task_id=t0, attempt_id=0)), [_make_entry("t0-a0-line0", epoch_ms=1)])
+    log_store.append(task_log_key(TaskAttempt(task_id=t0, attempt_id=1)), [_make_entry("t0-a1-line0", epoch_ms=2)])
+    log_store.append(task_log_key(TaskAttempt(task_id=t1, attempt_id=0)), [_make_entry("t1-a0-line0", epoch_ms=3)])
 
     result = log_store.get_logs_by_prefix("/job/test/")
     assert len(result.entries) == 3
@@ -210,7 +200,9 @@ def test_get_logs_by_prefix_returns_all_matching(log_store: LogStore):
 def test_get_logs_by_prefix_cursor_continuation(log_store: LogStore):
     """Cursor-based continuation with prefix returns no duplicates."""
     t0 = JobName.from_wire("/job/test/task/0")
-    log_store.append(task_log_key(t0, 0), [_make_entry(f"line-{i}", epoch_ms=i) for i in range(5)])
+    log_store.append(
+        task_log_key(TaskAttempt(task_id=t0, attempt_id=0)), [_make_entry(f"line-{i}", epoch_ms=i) for i in range(5)]
+    )
 
     result1 = log_store.get_logs_by_prefix("/job/test/", max_lines=3)
     assert len(result1.entries) == 3
@@ -225,8 +217,8 @@ def test_get_logs_by_prefix_isolation(log_store: LogStore):
     t_test = JobName.from_wire("/job/test/task/0")
     t_testing = JobName.from_wire("/job/testing/task/0")
 
-    log_store.append(task_log_key(t_test, 0), [_make_entry("test-line")])
-    log_store.append(task_log_key(t_testing, 0), [_make_entry("testing-line")])
+    log_store.append(task_log_key(TaskAttempt(task_id=t_test, attempt_id=0)), [_make_entry("test-line")])
+    log_store.append(task_log_key(TaskAttempt(task_id=t_testing, attempt_id=0)), [_make_entry("testing-line")])
 
     result = log_store.get_logs_by_prefix("/job/test/")
     assert len(result.entries) == 1
@@ -240,8 +232,8 @@ def test_get_logs_by_prefix_shallow_excludes_children(log_store: LogStore):
     # Child job task: /job/parent/child/0
     child_t0 = JobName.from_wire("/job/parent/child/0")
 
-    log_store.append(task_log_key(t0, 0), [_make_entry("parent-line", epoch_ms=1)])
-    log_store.append(task_log_key(child_t0, 0), [_make_entry("child-line", epoch_ms=2)])
+    log_store.append(task_log_key(TaskAttempt(task_id=t0, attempt_id=0)), [_make_entry("parent-line", epoch_ms=1)])
+    log_store.append(task_log_key(TaskAttempt(task_id=child_t0, attempt_id=0)), [_make_entry("child-line", epoch_ms=2)])
 
     # Without shallow: both are returned
     result_all = log_store.get_logs_by_prefix("/job/parent/")
@@ -259,8 +251,13 @@ def test_get_logs_by_prefix_tail_returns_last_n(log_store: LogStore):
     t1 = JobName.from_wire("/job/test/task/1")
 
     # Insert 10 entries total: 5 per task
-    log_store.append(task_log_key(t0, 0), [_make_entry(f"t0-line-{i}", epoch_ms=i) for i in range(5)])
-    log_store.append(task_log_key(t1, 0), [_make_entry(f"t1-line-{i}", epoch_ms=10 + i) for i in range(5)])
+    log_store.append(
+        task_log_key(TaskAttempt(task_id=t0, attempt_id=0)), [_make_entry(f"t0-line-{i}", epoch_ms=i) for i in range(5)]
+    )
+    log_store.append(
+        task_log_key(TaskAttempt(task_id=t1, attempt_id=0)),
+        [_make_entry(f"t1-line-{i}", epoch_ms=10 + i) for i in range(5)],
+    )
 
     result = log_store.get_logs_by_prefix("/job/test/", max_lines=3, tail=True)
     assert len(result.entries) == 3
@@ -273,7 +270,7 @@ def test_get_logs_by_prefix_tail_with_substring_filter(log_store: LogStore):
     t0 = JobName.from_wire("/job/test/task/0")
 
     entries = [_make_entry(f"{'ERROR' if i % 3 == 0 else 'INFO'}: msg-{i}", epoch_ms=i) for i in range(12)]
-    log_store.append(task_log_key(t0, 0), entries)
+    log_store.append(task_log_key(TaskAttempt(task_id=t0, attempt_id=0)), entries)
 
     result = log_store.get_logs_by_prefix("/job/test/", max_lines=2, tail=True, substring_filter="ERROR")
     assert len(result.entries) == 2
@@ -285,8 +282,13 @@ def test_get_logs_by_prefix_tail_with_shallow(log_store: LogStore):
     t0 = JobName.from_wire("/job/parent/0")
     child_t0 = JobName.from_wire("/job/parent/child/0")
 
-    log_store.append(task_log_key(t0, 0), [_make_entry(f"parent-{i}", epoch_ms=i) for i in range(5)])
-    log_store.append(task_log_key(child_t0, 0), [_make_entry(f"child-{i}", epoch_ms=10 + i) for i in range(5)])
+    log_store.append(
+        task_log_key(TaskAttempt(task_id=t0, attempt_id=0)), [_make_entry(f"parent-{i}", epoch_ms=i) for i in range(5)]
+    )
+    log_store.append(
+        task_log_key(TaskAttempt(task_id=child_t0, attempt_id=0)),
+        [_make_entry(f"child-{i}", epoch_ms=10 + i) for i in range(5)],
+    )
 
     result = log_store.get_logs_by_prefix("/job/parent/", max_lines=2, tail=True, shallow=True)
     assert len(result.entries) == 2
@@ -329,29 +331,311 @@ def test_cursor_with_since_ms(log_store: LogStore):
 
 
 # =============================================================================
-# Eviction
+# Segment GC tests
 # =============================================================================
 
 
-def test_eviction_caps_total_rows():
-    """Appending beyond max_records triggers eviction down to max_records // 2."""
-    max_records = 50
-    store = LogStore(max_records=max_records)
+def test_gc_drops_oldest_segments_by_count(tmp_path: Path):
+    """When local segments exceed max_local_segments, oldest are removed."""
+    log_dir = tmp_path / "logs"
+    # segment_target_bytes=1 means every parquet file is bigger than the target,
+    # so consolidation is skipped and each seal creates a new file.
+    store = DuckDBLogStore(
+        log_dir=log_dir,
+        max_local_segments=2,
+        max_local_bytes=10 * 1024**3,  # effectively unlimited
+        segment_target_bytes=1,  # seal after every append
+    )
     try:
-        # Append max_records entries in one shot to trigger eviction check
-        entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(max_records)]
-        store.append(KEY, entries)
+        for batch in range(4):
+            entries = [_make_entry(f"batch{batch}-{i}", epoch_ms=batch * 100 + i) for i in range(10)]
+            store.append(KEY, entries)
 
-        # Not yet over max_records, so no eviction.
-        total = store._write_conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
-        assert total == max_records
+        # Wait for background flushes to complete.
+        store._executor.shutdown(wait=True)
+        store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
 
-        # Append another max_records entries to go over the limit and trigger eviction.
-        entries2 = [_make_entry(f"line2-{i}", epoch_ms=100 + i) for i in range(max_records)]
-        store.append(KEY, entries2)
+        remaining_files = sorted(store._log_dir.glob("logs_*_*.parquet"))
+        assert len(remaining_files) <= 2
 
-        total = store._write_conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
-        # Should have been evicted down to max_records // 2 = 25
-        assert total <= max_records // 2 + 1
+        # The most recent data should still be readable.
+        result = store.get_logs(KEY, max_lines=10, tail=True)
+        assert len(result.entries) > 0
+        assert all("batch3" in e.data for e in result.entries)
     finally:
         store.close()
+
+
+def test_gc_drops_oldest_segments_by_bytes(tmp_path: Path):
+    """When local parquet bytes exceed max_local_bytes, oldest are removed."""
+    log_dir = tmp_path / "logs"
+    store = DuckDBLogStore(
+        log_dir=log_dir,
+        max_local_segments=100,  # effectively unlimited
+        segment_target_bytes=1,  # seal after every append
+    )
+    try:
+        for batch in range(4):
+            entries = [_make_entry(f"batch{batch}-{i}", epoch_ms=batch * 100 + i) for i in range(10)]
+            store.append(KEY, entries)
+
+        store._executor.shutdown(wait=True)
+        store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
+
+        parquet_files = sorted(store._log_dir.glob("logs_*_*.parquet"))
+        assert len(parquet_files) == 4
+        one_file_size = parquet_files[0].stat().st_size
+
+        # Set budget to allow only 2 files, then trigger GC.
+        store._max_local_bytes = one_file_size * 2
+        store._gc_local_segments()
+
+        remaining = sorted(store._log_dir.glob("logs_*_*.parquet"))
+        assert len(remaining) <= 2
+
+        # The most recent data should still be readable.
+        result = store.get_logs(KEY, max_lines=10, tail=True)
+        assert len(result.entries) > 0
+        assert all("batch3" in e.data for e in result.entries)
+    finally:
+        store.close()
+
+
+# =============================================================================
+# Parquet-specific tests
+# =============================================================================
+
+
+def test_flush_creates_parquet_segment(tmp_path: Path):
+    """Verify that sealing the buffer writes a Parquet file."""
+    log_dir = tmp_path / "logs"
+    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
+    try:
+        entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(10)]
+        store.append(KEY, entries)
+        # Wait for background flush.
+        store._executor.shutdown(wait=True)
+        store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
+        parquet_files = list(log_dir.glob("logs_*_*.parquet"))
+        assert len(parquet_files) >= 1
+    finally:
+        store.close()
+
+
+def test_cursor_continuity_across_flush(tmp_path: Path):
+    """Cursor from pre-flush read correctly filters post-flush entries."""
+    log_dir = tmp_path / "logs"
+    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
+    try:
+        entries1 = [_make_entry(f"batch1-{i}", epoch_ms=i) for i in range(10)]
+        store.append(KEY, entries1)
+        store._executor.shutdown(wait=True)
+        store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
+
+        result1 = store.get_logs(KEY)
+        assert len(result1.entries) == 10
+        cursor = result1.cursor
+
+        entries2 = [_make_entry(f"batch2-{i}", epoch_ms=100 + i) for i in range(5)]
+        store.append(KEY, entries2)
+
+        result2 = store.get_logs(KEY, cursor=cursor)
+        assert len(result2.entries) == 5
+        assert all("batch2" in e.data for e in result2.entries)
+    finally:
+        store.close()
+
+
+def test_seq_recovery_on_restart(tmp_path: Path):
+    """After close and reopen, sequence numbers don't collide."""
+    log_dir = tmp_path / "logs"
+    store1 = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
+    entries1 = [_make_entry(f"s1-{i}", epoch_ms=i) for i in range(10)]
+    store1.append(KEY, entries1)
+    result1 = store1.get_logs(KEY)
+    cursor1 = result1.cursor
+    store1.close()
+
+    store2 = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=1)
+    entries2 = [_make_entry(f"s2-{i}", epoch_ms=100 + i) for i in range(5)]
+    store2.append(KEY, entries2)
+
+    # All entries from both sessions should be readable
+    result_all = store2.get_logs(KEY)
+    assert len(result_all.entries) == 15
+
+    # Cursor from session 1 should still work to get only session 2 entries
+    result_new = store2.get_logs(KEY, cursor=cursor1)
+    assert len(result_new.entries) == 5
+    assert all("s2" in e.data for e in result_new.entries)
+    store2.close()
+
+
+def test_concurrent_read_write(tmp_path: Path):
+    """Concurrent appends and reads don't crash or corrupt data."""
+    log_dir = tmp_path / "logs"
+    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=50 * _EST_BYTES_PER_ROW)
+    errors: list[Exception] = []
+
+    def writer():
+        for i in range(200):
+            store.append(KEY, [_make_entry(f"line-{i}", epoch_ms=i)])
+
+    def reader():
+        for _ in range(200):
+            try:
+                store.get_logs(KEY, max_lines=10)
+            except Exception as e:
+                errors.append(e)
+
+    threads = [
+        threading.Thread(target=writer),
+        threading.Thread(target=reader),
+        threading.Thread(target=reader),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == [], f"Concurrent access raised: {errors}"
+
+    # All 200 entries should be present
+    result = store.get_logs(KEY)
+    assert len(result.entries) == 200
+    store.close()
+
+
+def test_small_segments_are_consolidated(tmp_path: Path):
+    """Multiple small flushes consolidate into a single parquet file."""
+    log_dir = tmp_path / "logs"
+    # Large segment target means all small files are below the threshold
+    # and will be consolidated into one file.
+    store = DuckDBLogStore(
+        log_dir=log_dir,
+        segment_target_bytes=100 * 1024 * 1024,  # 100MB — way bigger than our test data
+        flush_interval_sec=0,  # seal on every append (time threshold always satisfied)
+    )
+    try:
+        for batch in range(5):
+            entries = [_make_entry(f"batch{batch}-{i}", epoch_ms=batch * 100 + i) for i in range(10)]
+            store.append(KEY, entries)
+            # Wait for flush to complete before next append so consolidation runs.
+            store._executor.shutdown(wait=True)
+            store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
+
+        parquet_files = list(log_dir.glob("logs_*_*.parquet"))
+        # All 5 batches should be consolidated into a single parquet file.
+        assert len(parquet_files) == 1, f"Expected 1 consolidated file, got {len(parquet_files)}"
+
+        # All data should still be readable.
+        result = store.get_logs(KEY)
+        assert len(result.entries) == 50
+        assert result.entries[0].data == "batch0-0"
+        assert result.entries[-1].data == "batch4-9"
+    finally:
+        store.close()
+
+
+def test_consolidation_preserves_cursor_continuity(tmp_path: Path):
+    """Cursors from before consolidation still work after consolidation."""
+    log_dir = tmp_path / "logs"
+    store = DuckDBLogStore(
+        log_dir=log_dir,
+        segment_target_bytes=100 * 1024 * 1024,
+        flush_interval_sec=0,
+    )
+    try:
+        entries1 = [_make_entry(f"batch1-{i}", epoch_ms=i) for i in range(10)]
+        store.append(KEY, entries1)
+        store._executor.shutdown(wait=True)
+        store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
+
+        result1 = store.get_logs(KEY)
+        cursor = result1.cursor
+
+        # Second batch will consolidate with the first.
+        entries2 = [_make_entry(f"batch2-{i}", epoch_ms=100 + i) for i in range(5)]
+        store.append(KEY, entries2)
+        store._executor.shutdown(wait=True)
+        store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
+
+        # Cursor from before consolidation should still return only new entries.
+        result2 = store.get_logs(KEY, cursor=cursor)
+        assert len(result2.entries) == 5
+        assert all("batch2" in e.data for e in result2.entries)
+    finally:
+        store.close()
+
+
+def test_connection_pool_memory_limit(tmp_path: Path):
+    """DuckDB connections respect the configured memory limit."""
+    log_dir = tmp_path / "logs"
+    store = DuckDBLogStore(log_dir=log_dir, duckdb_memory_limit="64MB")
+    try:
+        entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(100)]
+        store.append(KEY, entries)
+        result = store.get_logs(KEY)
+        assert len(result.entries) == 100
+    finally:
+        store.close()
+
+
+def test_concurrent_reads_no_concat_copy(tmp_path: Path):
+    """Multiple concurrent reads work correctly without pa.concat_tables."""
+    log_dir = tmp_path / "logs"
+    store = DuckDBLogStore(log_dir=log_dir, duckdb_memory_limit="64MB")
+    errors: list[Exception] = []
+
+    # Create data across multiple RAM buffers: pending + chunks + sealed
+    for batch in range(5):
+        entries = [_make_entry(f"batch{batch}-{i}", epoch_ms=batch * 100 + i) for i in range(10)]
+        store.append(KEY, entries)
+
+    # Seal to create sealed buffers, then add more to pending
+    store._seal_head()
+    store.append(KEY, [_make_entry("after-seal", epoch_ms=999)])
+
+    def reader():
+        for _ in range(50):
+            try:
+                result = store.get_logs(KEY, max_lines=100, tail=True)
+                assert len(result.entries) > 0
+            except Exception as e:
+                errors.append(e)
+
+    threads = [threading.Thread(target=reader) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == [], f"Concurrent reads raised: {errors}"
+
+    result = store.get_logs(KEY)
+    assert len(result.entries) == 51  # 5*10 + 1
+    store.close()
+
+
+def test_sealed_buffers_readable_before_flush(tmp_path: Path):
+    """Data in sealed buffers is still readable even before Parquet flush completes."""
+    log_dir = tmp_path / "logs"
+    # Use a large flush interval so time-based sealing won't trigger.
+    store = DuckDBLogStore(log_dir=log_dir, segment_target_bytes=10 * 1024 * 1024, flush_interval_sec=9999)
+
+    entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(10)]
+    # Append to head buffer only (segment_target_bytes is large, won't seal).
+    store.append(KEY, entries)
+
+    # Data should be readable from the head buffer.
+    result = store.get_logs(KEY)
+    assert len(result.entries) == 10
+    assert [e.data for e in result.entries] == [f"line-{i}" for i in range(10)]
+
+    # Now seal manually and verify sealed buffer is still readable.
+    store._seal_head()
+    # Data is in the sealed deque (flush is async, might not have completed).
+    result2 = store.get_logs(KEY)
+    assert len(result2.entries) == 10
+
+    store.close()
