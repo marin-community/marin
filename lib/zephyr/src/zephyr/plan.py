@@ -755,13 +755,22 @@ def run_stage(
         elif isinstance(op, Reduce):
             # Build ScatterShard from scatter file paths if needed,
             # then merge sorted chunks and reduce per key.
-            from zephyr.execution import ScatterShard, _build_scatter_shard
+            from zephyr.execution import (
+                ScatterShard,
+                _build_scatter_shard,
+                _build_scatter_shard_from_manifest,
+                _SCATTER_MANIFEST_NAME,
+            )
 
             shard = ctx.shard
             if not isinstance(shard, ScatterShard):
-                # Shard contains scatter file paths — build ScatterShard lazily
                 paths = list(shard)
-                shard = _build_scatter_shard(paths, ctx.shard_idx)
+                if len(paths) == 1 and paths[0].endswith(_SCATTER_MANIFEST_NAME):
+                    # Single consolidated manifest — read it to build ScatterShard
+                    shard = _build_scatter_shard_from_manifest(paths[0], ctx.shard_idx)
+                else:
+                    # Raw scatter file paths — build ScatterShard from sidecars
+                    shard = _build_scatter_shard(paths, ctx.shard_idx)
             stream = _reduce_gen(shard, op.key_fn, op.reducer_fn, sort_fn=op.sort_fn)
             op_index += 1
 

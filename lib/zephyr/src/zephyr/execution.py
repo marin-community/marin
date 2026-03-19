@@ -152,6 +152,7 @@ _ZEPHYR_SHUFFLE_CHUNK_IDX_COL = "chunk_idx"
 _ZEPHYR_SHUFFLE_ITEM_COL = "item"
 _ZEPHYR_SHUFFLE_PICKLED_COL = "pickled"
 _SCATTER_META_SUFFIX = ".scatter_meta"
+_SCATTER_MANIFEST_NAME = "scatter_metadata"
 
 
 def _read_parquet_chunk(path: str, filter_shard: int, chunk_idx: int, is_pickled: bool) -> list:
@@ -362,6 +363,66 @@ def _build_scatter_shard(paths: list[str], target_shard: int) -> ScatterShard:
                     chunk_count=count,
                     chunk_offset=offset,
                     is_pickled=is_pickled,
+                )
+            )
+    return ScatterShard(iterators=iterators)
+
+
+def _write_scatter_manifest(scatter_paths: list[str], output_path: str) -> None:
+    """Write a consolidated scatter manifest combining all sidecar metadata.
+
+    The manifest is a JSON array of objects, each containing a scatter file
+    path alongside its chunk_counts, chunk_offsets, and is_pickled metadata.
+    Reducers read this single file instead of N individual sidecars.
+    """
+    entries = []
+    for path in scatter_paths:
+        meta = _read_scatter_meta(path)
+        entries.append(
+            {
+                "path": path,
+                "chunk_counts": meta["chunk_counts"],
+                "chunk_offsets": meta["chunk_offsets"],
+                "is_pickled": meta["is_pickled"],
+            }
+        )
+
+    ensure_parent_dir(output_path)
+    payload = json.dumps(entries)
+    with log_time(f"Writing scatter manifest ({len(entries)} files) to {output_path}"):
+        with open_url(output_path, "w") as f:
+            f.write(payload)
+
+
+# Per-worker cache for scatter manifests (populated on first read, shared across tasks)
+_scatter_manifest_cache: dict[str, list[dict]] = {}
+
+
+def _read_scatter_manifest(manifest_path: str) -> list[dict]:
+    """Read a consolidated scatter manifest, cached per-worker."""
+    if manifest_path not in _scatter_manifest_cache:
+        with open_url(manifest_path, "r") as f:
+            _scatter_manifest_cache[manifest_path] = json.loads(f.read())
+    return _scatter_manifest_cache[manifest_path]
+
+
+def _build_scatter_shard_from_manifest(manifest_path: str, target_shard: int) -> ScatterShard:
+    """Build a ScatterShard for one target shard from a consolidated scatter manifest."""
+    entries = _read_scatter_manifest(manifest_path)
+    iterators: list[ScatterParquetIterator] = []
+    with log_time(f"Building ScatterShard for target shard {target_shard} from manifest ({len(entries)} files)"):
+        for entry in entries:
+            count = entry["chunk_counts"].get(str(target_shard), 0)
+            if count == 0:
+                continue
+            offset = entry["chunk_offsets"].get(str(target_shard), 0)
+            iterators.append(
+                ScatterParquetIterator(
+                    path=entry["path"],
+                    shard_idx=target_shard,
+                    chunk_count=count,
+                    chunk_offset=offset,
+                    is_pickled=entry["is_pickled"],
                 )
             )
     return ScatterShard(iterators=iterators)
@@ -1104,8 +1165,13 @@ class ZephyrCoordinator:
                 # Collect and regroup results for next stage
                 result_refs = self._collect_results()
                 stage_is_scatter = any(isinstance(op, Scatter) for op in stage.operations)
+                manifest_dir = f"{self._chunk_prefix}/{self._execution_id}/{stage_label}" if stage_is_scatter else None
                 shards = _regroup_result_refs(
-                    result_refs, len(shards), output_shard_count=stage.output_shards, is_scatter=stage_is_scatter
+                    result_refs,
+                    len(shards),
+                    output_shard_count=stage.output_shards,
+                    is_scatter=stage_is_scatter,
+                    scatter_manifest_dir=manifest_dir,
                 )
 
             # Flatten final results
@@ -1147,8 +1213,15 @@ class ZephyrCoordinator:
                 self._wait_for_stage()
                 raw = self._collect_results()
                 right_is_scatter = any(isinstance(op, Scatter) for op in right_stage.operations)
+                manifest_dir = (
+                    f"{self._chunk_prefix}/{self._execution_id}/{join_stage_label}" if right_is_scatter else None
+                )
                 right_refs = _regroup_result_refs(
-                    raw, len(right_refs), output_shard_count=right_stage.output_shards, is_scatter=right_is_scatter
+                    raw,
+                    len(right_refs),
+                    output_shard_count=right_stage.output_shards,
+                    is_scatter=right_is_scatter,
+                    scatter_manifest_dir=manifest_dir,
                 )
 
             if len(shard_refs) != len(right_refs):
@@ -1454,13 +1527,14 @@ def _regroup_result_refs(
     input_shard_count: int,
     output_shard_count: int | None = None,
     is_scatter: bool = False,
+    scatter_manifest_dir: str | None = None,
 ) -> list[Shard]:
     """Regroup worker output refs by output shard index without loading data.
 
     Non-scatter: each worker's ListShard maps to its own index (identity).
-    Scatter: combines all scatter file paths into a shared ListShard,
-    then creates R copies (one per reducer). Reducers build ScatterShards
-    lazily from sidecar metadata.
+    Scatter: writes a consolidated scatter manifest combining all sidecar
+    metadata into a single file, then gives each reducer a shard containing
+    just the manifest path.
     """
     num_output = max(max(result_refs.keys(), default=0) + 1, input_shard_count)
     if output_shard_count is not None:
@@ -1471,8 +1545,15 @@ def _regroup_result_refs(
         all_paths: list[str] = []
         for result in result_refs.values():
             all_paths.extend(result.shard)
-        # Share one MemChunk across all reducer shards
-        shared_refs = MemChunk(items=all_paths)
+
+        if scatter_manifest_dir:
+            # Write consolidated manifest and point reducers at it
+            manifest_path = f"{scatter_manifest_dir}/{_SCATTER_MANIFEST_NAME}"
+            _write_scatter_manifest(all_paths, manifest_path)
+            shared_refs = MemChunk(items=[manifest_path])
+        else:
+            shared_refs = MemChunk(items=all_paths)
+
         return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
 
     # Non-scatter: each result's shard maps to its own index
