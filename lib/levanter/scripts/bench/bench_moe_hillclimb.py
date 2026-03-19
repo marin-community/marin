@@ -57,6 +57,8 @@ Kernel = Literal[
     "deepep_transport_local_compute_only_probe",
     "deepep_transport_collapse_only_probe",
     "deepep_transport_combine_only_probe",
+    "deepep_transport_w13_only_bwd_probe",
+    "deepep_transport_w2_only_bwd_probe",
     "deepep_transport_local_compute_bwd_probe",
     "deepep_transport_combine_bwd_cached_dispatch_probe",
     "deepep_transport_dispatch_bwd_combine_probe",
@@ -5390,6 +5392,90 @@ def _make_deepep_transport_probe_forward_backward_runner(
 
         return run, tuple()
 
+    if probe_kernel == "deepep_transport_w13_only_bwd_probe":
+        (
+            x_dispatch,
+            _assignment_weights,
+            _recv_token_indices,
+            local_group_sizes,
+            _recv_topk_weights,
+            _recv_src_idx,
+            _rank_prefix_matrix,
+            _channel_prefix_matrix,
+            _recv_channel_prefix_matrix,
+            _send_head,
+            _num_recv_tokens,
+            _is_token_in_rank,
+        ) = dispatch_pack(x, selected_experts, combine_weights)
+
+        def w13_only_wrt(
+            x_dispatch_in: jax.Array,
+            w_up_gate_in: jax.Array,
+        ) -> jax.Array:
+            return _moe_mlp_deepep_transport_w13_only(
+                x_dispatch_in,
+                local_group_sizes,
+                w_up_gate_in,
+                mesh=mesh,
+                w13_local_expert_capacity=w13_local_expert_capacity,
+            )
+
+        w13_out, pullback = jax.vjp(w13_only_wrt, x_dispatch, w_up_gate)
+        cotangent = jnp.ones_like(w13_out, dtype=w13_out.dtype)
+        jax.block_until_ready(w13_out)
+
+        def run() -> jax.Array:
+            with jax.named_scope("w13_only_bwd_probe"):
+                grad_x_dispatch, _ = pullback(cotangent)
+                return grad_x_dispatch
+
+        return run, tuple()
+
+    if probe_kernel == "deepep_transport_w2_only_bwd_probe":
+        (
+            x_dispatch,
+            _assignment_weights,
+            _recv_token_indices,
+            local_group_sizes,
+            _recv_topk_weights,
+            _recv_src_idx,
+            _rank_prefix_matrix,
+            _channel_prefix_matrix,
+            _recv_channel_prefix_matrix,
+            _send_head,
+            _num_recv_tokens,
+            _is_token_in_rank,
+        ) = dispatch_pack(x, selected_experts, combine_weights)
+        gate_up = _moe_mlp_deepep_transport_gate_up_only(
+            x_dispatch,
+            local_group_sizes,
+            w_up_gate,
+            w_down,
+            mesh=mesh,
+        )
+
+        def w2_only_wrt(
+            gate_up_in: jax.Array,
+            w_down_in: jax.Array,
+        ) -> jax.Array:
+            return _moe_mlp_deepep_transport_w2_only(
+                gate_up_in,
+                local_group_sizes,
+                w_down_in,
+                mesh=mesh,
+            )
+
+        out_dispatch, pullback = jax.vjp(w2_only_wrt, gate_up, w_down)
+        cotangent = jnp.ones_like(out_dispatch, dtype=out_dispatch.dtype)
+        jax.block_until_ready(out_dispatch)
+
+        def run() -> jax.Array:
+            with jax.named_scope("w2_only_bwd_probe"):
+                grad_gate_up, _ = pullback(cotangent)
+                return grad_gate_up
+
+        return run, tuple()
+
     if probe_kernel == "deepep_transport_local_compute_bwd_probe":
         (
             x_dispatch,
@@ -6066,6 +6152,8 @@ def main() -> None:
             "deepep_transport_local_compute_only_probe",
             "deepep_transport_collapse_only_probe",
             "deepep_transport_combine_only_probe",
+            "deepep_transport_w13_only_bwd_probe",
+            "deepep_transport_w2_only_bwd_probe",
             "deepep_transport_local_compute_bwd_probe",
             "deepep_transport_combine_bwd_cached_dispatch_probe",
             "deepep_transport_dispatch_bwd_combine_probe",
@@ -6238,6 +6326,8 @@ def main() -> None:
 
             for kernel in kernels:
                 if args.bench_pass == "forward" and kernel in {
+                    "deepep_transport_w13_only_bwd_probe",
+                    "deepep_transport_w2_only_bwd_probe",
                     "deepep_transport_combine_bwd_cached_dispatch_probe",
                     "deepep_transport_dispatch_bwd_combine_probe",
                 }:
@@ -6416,6 +6506,8 @@ def main() -> None:
                     if kernel in {"deepep_transport_prewarmed", "deepep_transport_capped", "deepep_transport_staged"}:
                         raise ValueError(f"{kernel} currently supports only --bench-pass=forward")
                     if kernel in {
+                        "deepep_transport_w13_only_bwd_probe",
+                        "deepep_transport_w2_only_bwd_probe",
                         "deepep_transport_local_compute_bwd_probe",
                         "deepep_transport_combine_bwd_cached_dispatch_probe",
                         "deepep_transport_dispatch_bwd_combine_probe",
