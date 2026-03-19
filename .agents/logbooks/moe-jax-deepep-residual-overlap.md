@@ -1826,3 +1826,83 @@ KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/megatron_dee
   - operationally, this means the right next step is to trust the sealed Megatron anchors as the comparison baseline and profile the remaining JAX residual, not to keep spending H100 time on more noisy Megatron reruns.
 - Next action:
   - snapshot this milestone on the branch and start a fresh JAX `forward_backward` profile on the strongest remaining residual row (`262144`, shared `2048`, `topk=8`, exact-cap path).
+
+### 2026-03-19 18:01 UTC - Shared-MLP explicit backward clears forward guardrails; decisive rerun is boot-blocked
+- Experiment ID: `OVLP-RES-034`
+- Hypothesis:
+  - the worst remaining shared-2048 residual may now sit in the replicated shared-MLP backward rather than the routed exact-cap path, and an explicit backward for the shared MLP could reduce the pre-`all-reduce` wait seen in the `262144/topk=8` profile.
+- Commands:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-sharedbwd-ladder-t262144-r2-20260319-1636 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe,deepep_transport_local_compute_only_probe,deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --shared-mlp-explicit-bwd
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-sharedbwd-3717jax-fb-t262144-topk8-20260319-175102 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --shared-mlp-explicit-bwd \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `6630030e44d9495062b440e4bf1228fe72e4d20d`
+  - ladder log: `scratch/3717-rerun/ovlpres-sharedbwd-ladder-t262144-r2-20260319-1636.log`
+  - decisive rerun log: `scratch/3717-rerun/ovlpres-sharedbwd-3717jax-fb-t262144-topk8-20260319-175102.log`
+  - prior exact-cap forward reference on the explicit-bwd-expert-padded branch:
+    - `w13_only`: `242,678,805.79 tok/s`
+    - `local_compute_only`: `71,669,032.68 tok/s`
+    - `capped_prewarmed`: `40,048,270.15 tok/s`
+- Result so far:
+  - the required forward guardrail ladder stayed effectively flat:
+    - `w13_only`: `242,557,393.44 tok/s`
+    - `local_compute_only`: `71,628,043.93 tok/s`
+    - `capped_prewarmed`: `39,810,103.51 tok/s`
+  - the new shared-2048 rerun is launched on pod `iris-task-2739f114f804` and is currently still pending because the fresh H100 nodepool is booting.
+  - infra state on the pinned lane at checkpoint time:
+    - `i3821jax-h100-8x`: `target=1`, `inprogress=1`, `current=0`
+    - CoreWeave assigned node `g1464be` to the nodepool and reported that it may take up to `20 minutes` to boot.
+- Interpretation:
+  - the shared-MLP explicit backward is safe enough to keep exploring because it does not introduce a forward regression on the exact-cap guardrail ladder.
+  - the branch-decision result is still pending; at this checkpoint the blocker is infra bring-up, not a benchmark or code failure.
+- Next action:
+  - wait for the fresh H100 node to register, finish the `262144/topk=8/shared2048/forward_backward` rerun, and decide whether the shared-MLP backward is a real branch-level win or whether the next pivot should move to collective scheduling/overlap.

@@ -404,6 +404,7 @@ def _shared_mlp_explicit_bwd_bwd(
         return jnp.zeros_like(g), jnp.zeros((g.shape[-1], 0), dtype=g.dtype), jnp.zeros((0, g.shape[-1]), dtype=g.dtype)
 
     batch_spec = grug_moe_lib._batch_spec_from_x(x, get_abstract_mesh())
+    shared_param_spec = P(None, None)
     x_f32 = x.astype(jnp.float32)
     shared_w13_f32 = shared_w13.astype(jnp.float32)
     shared_w2_f32 = shared_w2.astype(jnp.float32)
@@ -414,7 +415,7 @@ def _shared_mlp_explicit_bwd_bwd(
         "tm,td->md",
         shared_gated,
         g_f32,
-        out_sharding=shared_w2.sharding,
+        out_sharding=shared_param_spec,
         preferred_element_type=jnp.float32,
     )
 
@@ -433,7 +434,7 @@ def _shared_mlp_explicit_bwd_bwd(
         "td,tm->dm",
         x_f32,
         grad_shared13,
-        out_sharding=shared_w13.sharding,
+        out_sharding=shared_param_spec,
         preferred_element_type=jnp.float32,
     )
 
