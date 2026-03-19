@@ -16,6 +16,8 @@ from .reference import (
     intra_chunk_log_alpha_cumsum,
     local_log_alpha,
     mamba3_chunk_state_reference_batched,
+    mamba3_mimo_chunked_forward_reference_batched,
+    mamba3_mimo_direct_recurrence_reference_batched,
     mamba3_chunked_forward_reference_batched,
     mamba3_chunked_sequential_reference_batched,
     mamba3_direct_recurrence_reference_batched,
@@ -23,7 +25,12 @@ from .reference import (
     prepare_mamba3_chunked_scales,
     prepare_mamba3_scales,
 )
-from .xla import mamba3_chunk_state_xla_batched, mamba3_chunked_forward_xla_batched, mamba3_intra_chunk_xla_batched
+from .xla import (
+    mamba3_chunk_state_xla_batched,
+    mamba3_chunked_forward_xla_batched,
+    mamba3_intra_chunk_xla_batched,
+    mamba3_mimo_chunked_forward_xla_batched,
+)
 
 
 Implementation: TypeAlias = Literal["pallas_tpu", "xla", "reference"]
@@ -290,6 +297,128 @@ def mamba3_chunked_forward(
     )
 
 
+def mamba3_mimo_chunked_forward_from_transformed(
+    a_log_cumsum: Float[Array, "... chunks chunk"],
+    src_scale: Float[Array, "... chunks chunk"],
+    out_correction: Float[Array, "... chunks chunk"],
+    b: Float[Array, "... chunks chunk state rank"],
+    c: Float[Array, "... chunks chunk state rank"],
+    x_base: Float[Array, "... chunks chunk value"],
+    z_base: Float[Array, "... chunks chunk value"],
+    w_x: Float[Array, "... value rank"] | Float[Array, "value rank"],
+    w_z: Float[Array, "... value rank"] | Float[Array, "value rank"],
+    w_o: Float[Array, "... value rank"] | Float[Array, "value rank"],
+    *,
+    implementation: Implementation | Sequence[Implementation] | None = None,
+    block_sizes: BlockSizes | None = None,
+    interpret: bool = False,
+    backend: str | None = None,
+) -> tuple[Float[Array, "... chunks chunk value"], Float[Array, "... value state"]]:
+    """Chunked real-valued MIMO Mamba-3 forward pass on transformed schedules."""
+
+    del block_sizes, interpret, backend
+    if implementation not in (None, "xla", "reference"):
+        raise ValueError("MIMO is currently available only for the XLA and reference implementations.")
+    if a_log_cumsum.ndim < 2 or src_scale.shape != a_log_cumsum.shape or out_correction.shape != a_log_cumsum.shape:
+        raise ValueError("Expected transformed inputs with shape `[..., chunks, chunk]`.")
+
+    leading_shape = a_log_cumsum.shape[:-2]
+    groups = math.prod(leading_shape) if leading_shape else 1
+    num_chunks, chunk_size = a_log_cumsum.shape[-2:]
+    flat_a_log_cumsum = a_log_cumsum.reshape(groups, num_chunks, chunk_size)
+    flat_src_scale = src_scale.reshape(groups, num_chunks, chunk_size)
+    flat_out_correction = out_correction.reshape(groups, num_chunks, chunk_size)
+    flat_b = b.reshape(groups, num_chunks, chunk_size, b.shape[-2], b.shape[-1])
+    flat_c = c.reshape(groups, num_chunks, chunk_size, c.shape[-2], c.shape[-1])
+    flat_x = x_base.reshape(groups, num_chunks, chunk_size, x_base.shape[-1])
+    flat_z = z_base.reshape(groups, num_chunks, chunk_size, z_base.shape[-1])
+
+    if implementation == "reference":
+        y, final_state = mamba3_mimo_chunked_forward_reference_batched(
+            flat_a_log_cumsum,
+            flat_src_scale,
+            flat_out_correction,
+            flat_b,
+            flat_c,
+            flat_x,
+            flat_z,
+            w_x,
+            w_z,
+            w_o,
+        )
+    else:
+        y, final_state = mamba3_mimo_chunked_forward_xla_batched(
+            flat_a_log_cumsum,
+            flat_src_scale,
+            flat_out_correction,
+            flat_b,
+            flat_c,
+            flat_x,
+            flat_z,
+            w_x,
+            w_z,
+            w_o,
+        )
+
+    return y.reshape(leading_shape + y.shape[-3:]), final_state.reshape(leading_shape + final_state.shape[-2:])
+
+
+def mamba3_mimo_chunked_forward(
+    dt: Float[Array, "... chunks chunk"],
+    lam: Float[Array, "... chunks chunk"],
+    a: Float[Array, "... chunks chunk"] | Float[Array, "... chunks"],
+    b: Float[Array, "... chunks chunk state rank"],
+    c: Float[Array, "... chunks chunk state rank"],
+    x_base: Float[Array, "... chunks chunk value"],
+    z_base: Float[Array, "... chunks chunk value"],
+    w_x: Float[Array, "... value rank"] | Float[Array, "value rank"],
+    w_z: Float[Array, "... value rank"] | Float[Array, "value rank"],
+    w_o: Float[Array, "... value rank"] | Float[Array, "value rank"],
+    *,
+    implementation: Implementation | Sequence[Implementation] | None = None,
+    block_sizes: BlockSizes | None = None,
+    interpret: bool = False,
+    backend: str | None = None,
+) -> tuple[Float[Array, "... chunks chunk value"], Float[Array, "... value state"]]:
+    """Stable MIMO Mamba-3 entrypoint on native chunked inputs."""
+
+    if implementation == "reference":
+        leading_shape = dt.shape[:-2]
+        groups = math.prod(leading_shape) if leading_shape else 1
+        y, final_state = mamba3_mimo_direct_recurrence_reference_batched(
+            dt.reshape(groups, dt.shape[-2], dt.shape[-1]),
+            lam.reshape(groups, lam.shape[-2], lam.shape[-1]),
+            a.reshape(groups, a.shape[-2], a.shape[-1]) if a.shape == dt.shape else a.reshape(groups, a.shape[-1]),
+            b.reshape(groups, b.shape[-4], b.shape[-3], b.shape[-2], b.shape[-1]),
+            c.reshape(groups, c.shape[-4], c.shape[-3], c.shape[-2], c.shape[-1]),
+            x_base.reshape(groups, x_base.shape[-3], x_base.shape[-2], x_base.shape[-1]),
+            z_base.reshape(groups, z_base.shape[-3], z_base.shape[-2], z_base.shape[-1]),
+            w_x,
+            w_z,
+            w_o,
+        )
+        return y.reshape(leading_shape + y.shape[-3:]), final_state.reshape(leading_shape + final_state.shape[-2:])
+
+    src_scale, out_correction = prepare_mamba3_chunked_scales(dt, lam)
+    a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
+    return mamba3_mimo_chunked_forward_from_transformed(
+        a_log_cumsum,
+        src_scale,
+        out_correction,
+        b,
+        c,
+        x_base,
+        z_base,
+        w_x,
+        w_z,
+        w_o,
+        implementation=implementation,
+        block_sizes=block_sizes,
+        interpret=interpret,
+        backend=backend,
+    )
+
+
 __all__ = [
     "BlockSizes",
     "IMPLEMENTATIONS",
@@ -298,9 +427,13 @@ __all__ = [
     "intra_chunk_log_alpha_cumsum",
     "local_log_alpha",
     "mamba3_chunk_state",
+    "mamba3_mimo_chunked_forward",
+    "mamba3_mimo_chunked_forward_from_transformed",
     "mamba3_chunk_state_reference_batched",
     "mamba3_chunked_forward",
     "mamba3_chunked_forward_from_transformed",
+    "mamba3_mimo_chunked_forward_reference_batched",
+    "mamba3_mimo_direct_recurrence_reference_batched",
     "mamba3_chunked_forward_reference_batched",
     "mamba3_chunked_sequential_reference_batched",
     "mamba3_direct_recurrence_reference_batched",
