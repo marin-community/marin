@@ -119,24 +119,15 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
 
 ## Rust Crates (dupekit)
 
-Marin includes Rust crates (e.g., `dupekit`) that are installed by default from
-pre-built wheels hosted on GitHub Releases — no Cargo needed.
+Marin includes Rust crates (e.g., `dupekit`) that are built from source by
+default. This requires a Rust toolchain (Cargo). `uv sync` will automatically
+build dupekit from the `rust/dupekit` directory.
 
-To build from source instead (requires Cargo):
-
-```bash
-make rust-dev   # copies uv.toml.dev → uv.toml
-uv sync
-```
-
-To switch back to pre-built wheels:
+If you don't have Cargo installed, you can install dupekit from pre-built wheels:
 
 ```bash
-make rust-user   # removes uv.toml
-uv sync
+uv pip install dupekit --find-links "https://github.com/marin-community/marin/releases/expanded_assets/dupekit-latest"
 ```
-
-Check current mode with `make rust-status`.
 
 ## Trying it Out
 

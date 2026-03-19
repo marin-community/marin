@@ -1,6 +1,0 @@
-# Dev mode: build Rust crates from source instead of using pre-built wheels.
-# Copy to uv.toml to activate:   cp uv.toml.dev uv.toml && uv sync
-# Remove to deactivate:          rm uv.toml && uv sync
-
-[sources]
-dupekit = { path = "rust/dupekit", editable = true }

@@ -53,6 +53,7 @@ zephyr = { workspace = true }
 # NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
+dupekit = { path = "rust/dupekit", editable = true }
 
 [tool.black]
 line-length = 121

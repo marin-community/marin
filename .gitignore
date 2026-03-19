@@ -234,7 +234,7 @@ scr/*
 .agents/tmp/
 .codex
 .entire
-uv.toml
+
 
 # Generated protobuf and Connect RPC files (rebuilt by hatch build hook)
 lib/iris/src/iris/rpc/*_pb2.py

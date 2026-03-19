@@ -1646,7 +1646,28 @@ wheels = [
 [[package]]
 name = "dupekit"
 version = "0.1.0"
-source = { registry = "https://github.com/marin-community/marin/releases/expanded_assets/dupekit-latest" }
+source = { editable = "rust/dupekit" }
+
+[package.metadata]
+requires-dist = [
+    { name = "pytest-benchmark", marker = "extra == 'benchmark'", specifier = ">=5.2.3" },
+    { name = "pytest-memray", marker = "extra == 'benchmark'", specifier = ">=1.8.0" },
+]
+provides-extras = ["benchmark"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "huggingface-hub" },
+    { name = "pyarrow", specifier = ">=11.0.0" },
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+]
+test = [
+    { name = "huggingface-hub" },
+    { name = "pyarrow", specifier = ">=11.0.0" },
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+]
 
 [[package]]
 name = "durationpy"
@@ -5226,7 +5247,7 @@ requires-dist = [
     { name = "ddsketch" },
     { name = "deepdiff" },
     { name = "draccus", specifier = ">=0.11.5" },
-    { name = "dupekit", marker = "extra == 'dedup'" },
+    { name = "dupekit", marker = "extra == 'dedup'", editable = "rust/dupekit" },
     { name = "fasteners", specifier = ">=0.19" },
     { name = "fire", marker = "extra == 'evalchemy'" },
     { name = "flask" },
@@ -5377,7 +5398,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dupekit", specifier = ">=0.1.0" },
+    { name = "dupekit", editable = "rust/dupekit" },
     { name = "fray", editable = "lib/fray" },
     { name = "haliax", editable = "lib/haliax" },
     { name = "iris", editable = "lib/iris" },
