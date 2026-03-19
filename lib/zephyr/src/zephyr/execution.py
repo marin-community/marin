@@ -1552,7 +1552,7 @@ class ZephyrContext:
                             _run_coordinator_job,
                             args=(config, result_path),
                         ),
-                        resources=ResourceConfig(cpu=1, ram="1g"),
+                        resources=ResourceConfig(cpu=0, ram="256m"),
                     )
                 )
 

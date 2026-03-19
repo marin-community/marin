@@ -318,8 +318,15 @@ class RayClient:
         else:
             num_gpus = 0
 
+        options: dict[str, Any] = {
+            "runtime_env": runtime_env,
+            "num_cpus": request.resources.cpu,
+        }
+        if request.resources.ram:
+            options["memory"] = humanfriendly.parse_size(request.resources.ram, binary=True)
+
         remote_fn = ray.remote(num_gpus=num_gpus, max_retries=compute_ray_retry_count(request))(entrypoint.callable)
-        ref = remote_fn.options(runtime_env=runtime_env).remote(*entrypoint.args, **entrypoint.kwargs)
+        ref = remote_fn.options(**options).remote(*entrypoint.args, **entrypoint.kwargs)
         job_id = f"ray-callable-{request.name}-{uuid.uuid4().hex[:8]}"
         return RayJobHandle(job_id, ref=ref)
 
