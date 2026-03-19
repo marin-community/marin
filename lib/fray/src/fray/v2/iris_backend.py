@@ -31,7 +31,7 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
-from iris.cluster.types import EnvironmentSpec, ResourceSpec, is_job_finished
+from iris.cluster.types import CoschedulingConfig, EnvironmentSpec, ResourceSpec, is_job_finished
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import cluster_pb2
 
@@ -53,6 +53,22 @@ from fray.v2.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_coscheduling(device: DeviceConfig, replicas: int) -> CoschedulingConfig | None:
+    """Determine coscheduling config for multi-host jobs.
+
+    Multi-host GPU jobs need coscheduling by pool to ensure all replicas land
+    in the same node pool for NCCL connectivity. Multi-host TPU jobs
+    coschedule by tpu-name so all workers share the same TPU slice.
+    """
+    if replicas <= 1:
+        return None
+    if isinstance(device, TpuConfig):
+        return CoschedulingConfig(group_by="tpu-name")
+    if isinstance(device, GpuConfig):
+        return CoschedulingConfig(group_by="pool")
+    return None
 
 
 def _convert_device(device: DeviceConfig) -> cluster_pb2.DeviceConfig | None:
@@ -484,20 +500,13 @@ class FrayIrisClient:
         return instance
 
     def submit(self, request: JobRequest, adopt_existing: bool = True) -> IrisJobHandle:
-        from iris.cluster.types import CoschedulingConfig
-
         iris_resources = convert_resources(request.resources)
         iris_entrypoint = convert_entrypoint(request.entrypoint)
         iris_environment = convert_environment(request.environment, request.resources.device)
         iris_constraints = convert_constraints(request.resources)
 
-        # Auto-enable coscheduling for multi-host TPU jobs.
-        # Without this, replicas can land on different TPU pods and JAX distributed
-        # init fails because workers have different TPU_WORKER_HOSTNAMES.
-        coscheduling = None
         replicas = request.replicas or 1
-        if isinstance(request.resources.device, TpuConfig) and replicas > 1:
-            coscheduling = CoschedulingConfig(group_by="tpu-name")
+        coscheduling = resolve_coscheduling(request.resources.device, replicas)
 
         try:
             job = self._iris.submit(
@@ -545,16 +554,12 @@ class FrayIrisClient:
         Uses Iris's multi-replica job feature instead of creating N separate jobs,
         which improves networking and reduces job overhead.
         """
-        from iris.cluster.types import CoschedulingConfig
         from iris.cluster.types import Entrypoint as IrisEntrypoint
 
         iris_resources = convert_resources(resources)
         iris_constraints = convert_constraints(resources)
 
-        # Auto-enable coscheduling for multi-host TPU actor groups.
-        coscheduling = None
-        if isinstance(resources.device, TpuConfig) and count > 1:
-            coscheduling = CoschedulingConfig(group_by="tpu-name")
+        coscheduling = resolve_coscheduling(resources.device, count)
 
         # Create a single job with N replicas
         # Each replica will run _host_actor with a unique task-based actor name

@@ -7,7 +7,6 @@ This module encapsulates the full lifecycle of a single task execution attempt:
 bundle download -> image build -> container run -> monitor -> cleanup.
 """
 
-import json
 import logging
 import shutil
 import socket
@@ -16,8 +15,6 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-
-from google.protobuf import json_format
 
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.runtime.types import (
@@ -130,66 +127,34 @@ def build_iris_env(
 ) -> dict[str, str]:
     """Build Iris system environment variables for the task container.
 
-    Auto-injects task metadata and configuration that tasks need to interact
-    with the Iris cluster (task ID, job ID, worker ID, controller address, ports).
-    These override user-provided values.
-
-    Args:
-        task: TaskAttempt object with metadata
-        worker_id: Worker identifier, if registered with controller
-        controller_address: Controller RPC address, if configured
-
-    Returns:
-        Dictionary of environment variables to inject into the task container
+    Thin wrapper around build_common_iris_env() that adds worker-specific
+    variables (IRIS_WORKER_ID, IRIS_ADVERTISE_HOST) and overrides port values
+    with real allocated ports.
     """
-    env = {}
+    from iris.cluster.runtime.env import build_common_iris_env
 
-    # N.B. This needs to mirror JobInfo.from_env()
-    env["IRIS_TASK_ID"] = task.task_attempt.to_wire()
-    env["IRIS_NUM_TASKS"] = str(task.num_tasks)
-    env["IRIS_BUNDLE_ID"] = task.request.bundle_id
+    req = task.request
+    env = build_common_iris_env(
+        task_id=req.task_id,
+        attempt_id=task.attempt_id,
+        num_tasks=task.num_tasks,
+        bundle_id=req.bundle_id,
+        controller_address=controller_address,
+        environment=req.environment,
+        constraints=req.constraints,
+        ports=req.ports,
+        resources=req.resources if req.HasField("resources") else None,
+    )
 
     if worker_id:
         env["IRIS_WORKER_ID"] = worker_id
 
-    if controller_address:
-        # With --network=host, containers share the host's network directly,
-        # so no address rewriting is needed.
-        env["IRIS_CONTROLLER_ADDRESS"] = controller_address
-        env["IRIS_CONTROLLER_URL"] = controller_address
-
     # With --network=host, containers share the host's network stack.
     # Compute the host's routable IP so container code can read it via
     # get_job_info().advertise_host without needing its own socket tricks.
-    env["IRIS_BIND_HOST"] = "0.0.0.0"
     env["IRIS_ADVERTISE_HOST"] = _get_host_ip()
-    env["IRIS_WORKDIR"] = "/app"
-    env["IRIS_PYTHON"] = "python"
 
-    # Propagate extras and pip_packages so child jobs can inherit them
-    extras = list(task.request.environment.extras)
-    if extras:
-        env["IRIS_JOB_EXTRAS"] = json.dumps(extras)
-    pip_packages = list(task.request.environment.pip_packages)
-    if pip_packages:
-        env["IRIS_JOB_PIP_PACKAGES"] = json.dumps(pip_packages)
-
-    # Serialize the explicit user env vars so child jobs can inherit them
-    # via JobInfo.env without picking up infrastructure vars from os.environ.
-    user_env_vars = dict(task.request.environment.env_vars)
-    if user_env_vars:
-        env["IRIS_JOB_ENV"] = json.dumps(user_env_vars)
-    # Only propagate region/zone constraints to children; device constraints
-    # are re-derived from each child's own resource spec.
-    from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
-
-    inheritable = [c for c in task.request.constraints if c.key in INHERITED_CONSTRAINT_KEYS]
-    if inheritable:
-        env["IRIS_JOB_CONSTRAINTS"] = json.dumps(
-            [json_format.MessageToDict(c, preserving_proto_field_name=True) for c in inheritable]
-        )
-
-    # Inject allocated ports
+    # Override port placeholders with real allocated values
     for name, port in task.ports.items():
         env[f"IRIS_PORT_{name.upper()}"] = str(port)
 
@@ -574,11 +539,6 @@ class TaskAttempt:
 
         env.update(self._default_task_env)
         env.update(dict(self.request.environment.env_vars))
-
-        # uv needs a writable directory for Python downloads.
-        # Use a subdirectory of the cache which is bind-mounted from the worker.
-        env["UV_PYTHON_INSTALL_DIR"] = "/uv/cache/python"
-        env["CARGO_TARGET_DIR"] = "/root/.cargo/target"
 
         # Get RuntimeEntrypoint proto directly
         rt_ep = self.request.entrypoint

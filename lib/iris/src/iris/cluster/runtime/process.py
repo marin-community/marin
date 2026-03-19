@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.env import build_device_env_vars, write_workdir_files
+from iris.cluster.runtime.env import write_workdir_files
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
     build_memray_transform_cmd,
@@ -439,7 +439,7 @@ class ProcessContainerHandle:
 
         # Remap container paths to host paths in env vars
         mount_map = _resolve_mount_map(config, cache_dir=self.runtime._cache_dir)
-        env = {**build_device_env_vars(config), **dict(config.env)}
+        env = dict(config.env)
         for key, value in env.items():
             if value in mount_map:
                 env[key] = mount_map[value]
