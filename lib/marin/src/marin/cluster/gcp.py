@@ -19,8 +19,10 @@ RESTART_REQUIRED_PERMISSIONS = (
     # Bootstrap reads used by `ray up --no-config-cache`.
     "resourcemanager.projects.get",
     "resourcemanager.projects.getIamPolicy",
-    "iam.serviceAccounts.get",
     "compute.projects.get",
+    # `iam.serviceAccounts.get` is intentionally excluded here: Ray may rely on
+    # a service-account-level grant, and `gcloud projects test-iam-permissions`
+    # would report a false negative for that resource-scoped permission.
     # Lifecycle operations used during stop/start.
     "compute.instances.create",
     "compute.instances.delete",

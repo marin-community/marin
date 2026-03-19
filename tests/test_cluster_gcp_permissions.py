@@ -79,3 +79,4 @@ def test_ensure_active_account_can_restart_cluster_returns_active_account(monkey
     account = gcp.ensure_active_account_can_restart_cluster("test-project")
     assert account == "test-user@example.com"
     assert seen_permissions == [gcp.RESTART_REQUIRED_PERMISSIONS]
+    assert "iam.serviceAccounts.get" not in seen_permissions[0]
