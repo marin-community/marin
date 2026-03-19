@@ -886,6 +886,7 @@ class ControllerTransitions:
                         ports=list(job.request.ports),
                         attempt_id=attempt_id,
                         constraints=list(job.request.constraints),
+                        service_account=job.request.service_account,
                     )
                     if job.request.timeout.milliseconds > 0:
                         run_request.timeout.CopyFrom(job.request.timeout)
@@ -1985,6 +1986,7 @@ class ControllerTransitions:
                     ports=list(job_req.ports),
                     attempt_id=attempt_id,
                     constraints=list(job_req.constraints),
+                    service_account=job_req.service_account,
                 )
                 if job_req.timeout.milliseconds > 0:
                     run_req.timeout.CopyFrom(job_req.timeout)

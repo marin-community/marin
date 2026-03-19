@@ -611,6 +611,12 @@ message Controller {
 
     JobPreemptionPolicy preemption_policy = 31;
     ExistingJobPolicy existing_job_policy = 32;
+
+    // GCP service account email to impersonate for this job.
+    // When set, GOOGLE_IMPERSONATE_SERVICE_ACCOUNT is injected into the task
+    // environment so the job and its children run under a narrow-scoped SA
+    // instead of the worker VM's default SA. Unset means inherit worker SA.
+    string service_account = 33;
   }
 
   message LaunchJobResponse {
@@ -968,6 +974,8 @@ message Worker {
     repeated string ports = 8;
     int32 attempt_id = 9;
     repeated Constraint constraints = 10; // Original job constraints for child-job inheritance metadata
+    // GCP service account email to impersonate (propagated from LaunchJobRequest).
+    string service_account = 11;
   }
 
   message GetTaskStatusRequest {

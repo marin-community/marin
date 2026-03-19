@@ -73,6 +73,7 @@ class RemoteClusterClient:
         reservation: cluster_pb2.ReservationConfig | None = None,
         preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: cluster_pb2.ExistingJobPolicy = cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+        service_account: str | None = None,
     ) -> None:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
@@ -97,6 +98,8 @@ class RemoteClusterClient:
             preemption_policy=preemption_policy,
             existing_job_policy=existing_job_policy,
         )
+        if service_account:
+            request.service_account = service_account
         if self._bundle_id:
             request.bundle_id = self._bundle_id
         else:

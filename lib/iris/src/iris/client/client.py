@@ -610,6 +610,7 @@ class IrisClient:
         reservation: list[ReservationEntry] | None = None,
         preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: cluster_pb2.ExistingJobPolicy = cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+        service_account: str | None = None,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -628,6 +629,10 @@ class IrisClient:
             timeout: Per-task timeout (None = no timeout)
             user: Optional explicit user override for top-level jobs
             reservation: Resource entries to pre-provision before scheduling (None = no reservation)
+            service_account: GCP service account email to impersonate. When set,
+                GOOGLE_IMPERSONATE_SERVICE_ACCOUNT is injected into the task environment.
+                Child jobs inherit the parent's SA unless they specify their own.
+                When unset, jobs inherit the worker VM's default SA.
 
         Returns:
             Job handle for the submitted job
@@ -692,6 +697,10 @@ class IrisClient:
                 inherited_region = region_constraint([job_info.worker_region])
                 constraints = [*constraints, inherited_region]
 
+            # Inherit parent's service account when the child doesn't set one explicitly.
+            if service_account is None and job_info and job_info.service_account:
+                service_account = job_info.service_account
+
         # Convert to wire format
         resources_proto = resources.to_proto()
         environment_proto = environment.to_proto() if environment else None
@@ -720,6 +729,7 @@ class IrisClient:
                 reservation=reservation_proto,
                 preemption_policy=preemption_policy,
                 existing_job_policy=existing_job_policy,
+                service_account=service_account,
             )
         except ConnectError as e:
             if e.code == Code.ALREADY_EXISTS:

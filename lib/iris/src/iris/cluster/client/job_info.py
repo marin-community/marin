@@ -56,6 +56,9 @@ class JobInfo:
     worker_region: str | None = None
     """Region of the worker running this task, for child region constraint inheritance."""
 
+    service_account: str | None = None
+    """GCP service account email from the parent job, for child job inheritance."""
+
     @property
     def task_attempt(self) -> TaskAttempt:
         """Get the structured task identity (task_id + attempt_id)."""
@@ -120,6 +123,7 @@ def get_job_info() -> JobInfo | None:
             env=job_env,
             constraints=constraints,
             worker_region=os.environ.get("IRIS_WORKER_REGION"),
+            service_account=os.environ.get("IRIS_JOB_SERVICE_ACCOUNT") or None,
         )
         _job_info.set(info)
         return info

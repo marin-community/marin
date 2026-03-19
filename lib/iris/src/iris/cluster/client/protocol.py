@@ -55,6 +55,7 @@ class ClusterClient(Protocol):
         reservation: cluster_pb2.ReservationConfig | None = None,
         preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: cluster_pb2.ExistingJobPolicy = cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+        service_account: str | None = None,
     ) -> None: ...
 
     def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus: ...

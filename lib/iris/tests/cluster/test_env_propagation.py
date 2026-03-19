@@ -11,6 +11,7 @@ Extras and pip_packages are inherited via IRIS_JOB_EXTRAS and IRIS_JOB_PIP_PACKA
 """
 
 import json
+from dataclasses import replace as dc_replace
 from unittest.mock import patch
 
 import pytest
@@ -383,6 +384,129 @@ def test_child_explicit_region_not_overridden_by_worker_region(local_client, par
     assert not any(
         c.key == WellKnownAttribute.REGION and c.value.string_value == "us-central1" for c in captured_constraints
     )
+
+
+def test_service_account_injected_into_env(local_client, parent_context):
+    """When service_account is set, GOOGLE_IMPERSONATE_SERVICE_ACCOUNT and
+    IRIS_JOB_SERVICE_ACCOUNT are injected into the task environment."""
+    from iris.cluster.runtime.env import build_common_iris_env
+    from iris.rpc import cluster_pb2
+
+    sa_email = "narrow-sa@project.iam.gserviceaccount.com"
+    env = build_common_iris_env(
+        task_id="/test-user/job/task/0",
+        attempt_id=0,
+        num_tasks=1,
+        bundle_id="abc123",
+        controller_address=None,
+        environment=cluster_pb2.EnvironmentConfig(),
+        constraints=[],
+        ports=[],
+        resources=None,
+        service_account=sa_email,
+    )
+    assert env["GOOGLE_IMPERSONATE_SERVICE_ACCOUNT"] == sa_email
+    assert env["IRIS_JOB_SERVICE_ACCOUNT"] == sa_email
+
+
+def test_no_service_account_no_impersonation_env(local_client, parent_context):
+    """When service_account is unset, GOOGLE_IMPERSONATE_SERVICE_ACCOUNT is absent."""
+    from iris.cluster.runtime.env import build_common_iris_env
+    from iris.rpc import cluster_pb2
+
+    env = build_common_iris_env(
+        task_id="/test-user/job/task/0",
+        attempt_id=0,
+        num_tasks=1,
+        bundle_id="abc123",
+        controller_address=None,
+        environment=cluster_pb2.EnvironmentConfig(),
+        constraints=[],
+        ports=[],
+        resources=None,
+    )
+    assert "GOOGLE_IMPERSONATE_SERVICE_ACCOUNT" not in env
+    assert "IRIS_JOB_SERVICE_ACCOUNT" not in env
+
+
+def test_service_account_propagated_in_submit(local_client, parent_context):
+    """service_account is forwarded to submit_job when passed to IrisClient.submit()."""
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+    sa_email = "narrow-sa@project.iam.gserviceaccount.com"
+
+    captured_sa = []
+    original_submit = local_client._cluster_client.submit_job
+
+    def capturing_submit(*, service_account=None, **kwargs):
+        captured_sa.append(service_account)
+        return original_submit(service_account=service_account, **kwargs)
+
+    local_client._cluster_client.submit_job = capturing_submit
+    try:
+        job = local_client.submit(entrypoint, "sa-test", resources, service_account=sa_email)
+    finally:
+        local_client._cluster_client.submit_job = original_submit
+
+    job.wait(timeout=30)
+    assert captured_sa == [sa_email]
+
+
+def test_child_inherits_parent_service_account(local_client, parent_context):
+    """Child jobs inherit the parent's service account from IRIS_JOB_SERVICE_ACCOUNT."""
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+    sa_email = "narrow-sa@project.iam.gserviceaccount.com"
+
+    captured_sa = []
+    original_submit = local_client._cluster_client.submit_job
+
+    def capturing_submit(*, service_account=None, **kwargs):
+        captured_sa.append(service_account)
+        return original_submit(service_account=service_account, **kwargs)
+
+    parent_job_info_with_sa = dc_replace(_parent_job_info({}), service_account=sa_email)
+
+    with (
+        iris_ctx_scope(parent_context),
+        patch("iris.client.client.get_job_info", return_value=parent_job_info_with_sa),
+    ):
+        local_client._cluster_client.submit_job = capturing_submit
+        try:
+            local_client.submit(entrypoint, "child-sa-inherit", resources)
+        finally:
+            local_client._cluster_client.submit_job = original_submit
+
+    assert captured_sa == [sa_email]
+
+
+def test_child_service_account_overrides_parent(local_client, parent_context):
+    """An explicit service_account on the child overrides the parent's SA."""
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+    parent_sa = "parent-sa@project.iam.gserviceaccount.com"
+    child_sa = "child-sa@project.iam.gserviceaccount.com"
+
+    captured_sa = []
+    original_submit = local_client._cluster_client.submit_job
+
+    def capturing_submit(*, service_account=None, **kwargs):
+        captured_sa.append(service_account)
+        return original_submit(service_account=service_account, **kwargs)
+
+    parent_job_info_with_sa = dc_replace(_parent_job_info({}), service_account=parent_sa)
+
+    with (
+        iris_ctx_scope(parent_context),
+        patch("iris.client.client.get_job_info", return_value=parent_job_info_with_sa),
+    ):
+        local_client._cluster_client.submit_job = capturing_submit
+        try:
+            local_client.submit(entrypoint, "child-sa-override", resources, service_account=child_sa)
+        finally:
+            local_client._cluster_client.submit_job = original_submit
+
+    assert captured_sa == [child_sa]
 
 
 def test_parent_region_constraint_not_overridden_by_worker_region(local_client, parent_context):

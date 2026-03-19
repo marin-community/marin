@@ -54,6 +54,7 @@ def build_common_iris_env(
     constraints: Sequence[cluster_pb2.Constraint],
     ports: Sequence[str],
     resources: cluster_pb2.ResourceSpecProto | None,
+    service_account: str | None = None,
 ) -> dict[str, str]:
     """Build the Iris system env vars shared by both worker and k8s paths.
 
@@ -97,6 +98,16 @@ def build_common_iris_env(
     user_env_vars = dict(environment.env_vars)
     if user_env_vars:
         env["IRIS_JOB_ENV"] = json.dumps(user_env_vars)
+
+    # Service account impersonation for agent-driven workloads.
+    # GOOGLE_IMPERSONATE_SERVICE_ACCOUNT is recognized by all google-cloud-python
+    # client libraries and gcloud; it instructs them to exchange the VM's default
+    # credentials for short-lived tokens scoped to the specified SA.
+    if service_account:
+        env["GOOGLE_IMPERSONATE_SERVICE_ACCOUNT"] = service_account
+        # Propagate to child jobs via IRIS_JOB_SERVICE_ACCOUNT so they inherit
+        # the same SA unless they explicitly override it.
+        env["IRIS_JOB_SERVICE_ACCOUNT"] = service_account
 
     # Only propagate region/zone constraints to children; device constraints
     # are re-derived from each child's own resource spec.
