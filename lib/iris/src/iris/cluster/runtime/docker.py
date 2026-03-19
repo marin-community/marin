@@ -222,13 +222,19 @@ def _parse_memory_size(size_str: str) -> int:
 
 
 def _make_container_name(task_id: str, attempt_id: int) -> str:
-    """Return a deterministic Docker container name for a task attempt.
+    """Return a Docker container name for a task attempt with a random suffix.
 
-    Format: iris-<sanitized-task-path>-a<attempt_id>
-    Example: /alice/root/child/0 -> iris-alice-root-child-0-a1
+    Format: iris-<sanitized-task-path>-a<attempt_id>-<random>
+    Example: /alice/root/child/0 -> iris-alice-root-child-0-a1-3f8a1b2c
+
+    A random 8-character hex suffix avoids name collisions when different task
+    paths sanitize to the same string (e.g. /a/b-c/0 vs /a/b/c/0). Iris
+    enforces task uniqueness at the scheduler level, so Docker-level name
+    uniqueness is best-effort.
     """
     safe = re.sub(r"[^a-zA-Z0-9_.-]", "-", task_id.lstrip("/")).strip("-")
-    return f"iris-{safe}-a{attempt_id}"
+    suffix = uuid.uuid4().hex[:8]
+    return f"iris-{safe}-a{attempt_id}-{suffix}"
 
 
 def _docker_logs(container_id: str, since: Timestamp | None = None) -> list[LogLine]:

@@ -86,6 +86,7 @@ def _apply_request_from_response(
                 exit_code=entry.exit_code if entry.HasField("exit_code") else None,
                 resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
                 log_entries=list(entry.log_entries),
+                container_name=entry.container_name or None,
             )
         )
     return HeartbeatApplyRequest(

@@ -171,6 +171,8 @@ def task_to_proto(task: Task, worker_address: str = "") -> cluster_pb2.TaskStatu
         proto.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
     if task.resource_usage:
         proto.resource_usage.CopyFrom(task.resource_usage)
+    if task.container_name:
+        proto.container_name = task.container_name
     # For pending tasks with prior terminal attempts, surface retry context.
     if task.state == cluster_pb2.TASK_STATE_PENDING and task.attempts and task.attempts[-1].is_terminal:
         last = task.attempts[-1]

@@ -718,6 +718,7 @@ message Controller {
     ResourceUsage resource_usage = 8;
     // Delta log entries since last heartbeat (capped per heartbeat)
     repeated iris.logging.LogEntry log_entries = 9;
+    string container_name = 10;       // Docker container name (e.g. iris-user-job-0-a1-3f8a1b2c)
   }
 
 

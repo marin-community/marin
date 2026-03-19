@@ -619,6 +619,7 @@ class Worker:
                                 exit_code=task_proto.exit_code,
                                 error=task_proto.error or "",
                                 log_entries=log_entries,
+                                container_name=task_proto.container_name or "",
                             )
                             if task.status in self._TERMINAL_STATES:
                                 entry.finished_at.CopyFrom(task_proto.finished_at)
