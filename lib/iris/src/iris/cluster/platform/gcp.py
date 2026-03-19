@@ -68,6 +68,7 @@ from iris.cluster.platform.bootstrap import (
     zone_to_multi_region,
 )
 from iris.cluster.platform.debug import wait_for_port
+from iris.cluster.platform.restart_permissions import RestartScope
 from iris.cluster.platform.remote_exec import (
     GceRemoteExec,
     GcloudRemoteExec,
@@ -100,6 +101,150 @@ _GCE_NAME_MAX_LEN = 63
 _GCE_NAME_RE = re.compile(r"[^a-z0-9-]+")
 _GCE_NAME_EDGE_RE = re.compile(r"^-+|-+$")
 _GCE_VM_SLICE_SSH_USER = "iris"
+
+# Default TTL for gcloud subprocess call cache. Concurrent callers with
+# identical args share a single subprocess invocation via per-key locking.
+_GCLOUD_CACHE_TTL_SECS = 5.0
+
+_GCP_REQUIRED_PERMISSIONS_BY_SCOPE: dict[RestartScope, tuple[str, ...]] = {
+    RestartScope.CLUSTER: (
+        "compute.instances.create",
+        "compute.instances.delete",
+        "compute.instances.get",
+        "compute.instances.list",
+        "compute.instances.setLabels",
+        "compute.instances.setMetadata",
+        "tpu.nodes.create",
+        "tpu.nodes.delete",
+        "tpu.nodes.get",
+        "tpu.nodes.list",
+    ),
+    RestartScope.CONTROLLER: (
+        "compute.instances.get",
+        "compute.instances.list",
+    ),
+}
+
+
+def _run_gcloud_restart_permission_command(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        raise RuntimeError(f"gcloud command failed: {' '.join(cmd)}\nError: {stderr}")
+    return result
+
+
+def _active_gcloud_account_for_restart() -> str | None:
+    result = _run_gcloud_restart_permission_command(
+        ["gcloud", "auth", "list", "--filter=status:ACTIVE", "--format=value(account)"]
+    )
+    account = result.stdout.strip()
+    return account or None
+
+
+def _missing_project_permissions(project_id: str, permissions: tuple[str, ...]) -> list[str]:
+    result = _run_gcloud_restart_permission_command(
+        [
+            "gcloud",
+            "projects",
+            "test-iam-permissions",
+            project_id,
+            f"--permissions={','.join(permissions)}",
+            "--format=json",
+        ]
+    )
+    try:
+        payload = json.loads(result.stdout) if result.stdout.strip() else {}
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Failed to parse test-iam-permissions output: {result.stdout}") from e
+
+    granted = set(payload.get("permissions", [])) if isinstance(payload, dict) else set()
+    return [permission for permission in permissions if permission not in granted]
+
+
+def ensure_gcp_restart_permissions(config: config_pb2.IrisClusterConfig, scope: RestartScope | str) -> None:
+    """Ensure active gcloud identity can perform restart operations for a given scope."""
+    platform_kind = config.platform.WhichOneof("platform")
+    if platform_kind != "gcp":
+        raise RuntimeError(f"GCP restart permission check called for non-GCP platform: {platform_kind}")
+
+    project_id = config.platform.gcp.project_id.strip()
+    if not project_id:
+        raise RuntimeError("platform.gcp.project_id is required for GCP restarts.")
+
+    account = _active_gcloud_account_for_restart()
+    if not account:
+        raise RuntimeError("No active gcloud account found. Run `gcloud auth login` and retry.")
+
+    try:
+        restart_scope = RestartScope(scope)
+    except ValueError as e:
+        supported_scopes = ", ".join(sorted(s.value for s in _GCP_REQUIRED_PERMISSIONS_BY_SCOPE))
+        raise RuntimeError(f"Unknown restart permission scope '{scope}'. Supported scopes: {supported_scopes}") from e
+
+    required_permissions = _GCP_REQUIRED_PERMISSIONS_BY_SCOPE[restart_scope]
+    missing_permissions = _missing_project_permissions(project_id, required_permissions)
+    if missing_permissions:
+        raise RuntimeError(
+            f"Active gcloud account '{account}' is missing required IAM permissions for restart "
+            f"on project '{project_id}': {', '.join(missing_permissions)}"
+        )
+
+
+class _GcloudCache:
+    """Thread-safe TTL cache for gcloud subprocess calls.
+
+    Keyed by the full command-line tuple. Concurrent callers that request the
+    same command while a subprocess is already in-flight block on a per-key lock
+    and receive the same result, avoiding redundant gcloud invocations.
+    """
+
+    def __init__(self, ttl: float = _GCLOUD_CACHE_TTL_SECS):
+        self._ttl = ttl
+        self._lock = threading.Lock()
+        # key -> (result_json_str, returncode, stderr, timestamp)
+        self._cache: dict[tuple[str, ...], tuple[str, int, str, float]] = {}
+        # key -> lock for in-flight deduplication
+        self._key_locks: dict[tuple[str, ...], threading.Lock] = {}
+
+    def run(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        """Run a gcloud command, returning a cached result if available."""
+        key = tuple(cmd)
+        now = time.monotonic()
+
+        # Fast path: check cache under the global lock.
+        with self._lock:
+            cached = self._cache.get(key)
+            if cached is not None:
+                stdout, returncode, stderr, ts = cached
+                if now - ts < self._ttl:
+                    return subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
+
+            # Get or create a per-key lock so only one thread executes the subprocess.
+            if key not in self._key_locks:
+                self._key_locks[key] = threading.Lock()
+            key_lock = self._key_locks[key]
+
+        with key_lock:
+            # Double-check: another thread may have populated the cache while we waited.
+            with self._lock:
+                cached = self._cache.get(key)
+                if cached is not None:
+                    stdout, returncode, stderr, ts = cached
+                    if time.monotonic() - ts < self._ttl:
+                        return subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            with self._lock:
+                self._cache[key] = (result.stdout, result.returncode, result.stderr, time.monotonic())
+
+            return result
+
+    def invalidate(self) -> None:
+        """Clear all cached entries (e.g. after a mutating operation)."""
+        with self._lock:
+            self._cache.clear()
 
 
 def _format_labels(labels: dict[str, str]) -> str:
