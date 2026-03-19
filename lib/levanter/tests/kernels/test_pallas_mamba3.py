@@ -7,6 +7,7 @@ import jax
 import jax.numpy as jnp
 
 from levanter.kernels.pallas.mamba3 import (
+    HybridModeConfig,
     mamba3_chunk_state,
     mamba3_chunk_state_reference_batched,
     mamba3_chunked_forward,
@@ -14,9 +15,12 @@ from levanter.kernels.pallas.mamba3 import (
     mamba3_chunked_forward_reference_batched,
     mamba3_chunked_sequential_reference_batched,
     mamba3_direct_recurrence_reference_batched,
+    mamba3_hybrid_chunked_forward,
+    mamba3_hybrid_chunked_forward_from_transformed,
     mamba3_intra_chunk,
     mamba3_intra_chunk_reference_batched,
     mamba3_mimo_chunked_forward,
+    mamba3_tpu_default_chunk_size,
     prepare_mamba3_chunked_scales,
     prepare_mamba3_scales,
 )
@@ -110,6 +114,13 @@ def test_prepare_mamba3_chunked_scales_shift_across_chunk_boundary():
     expected_src = jnp.array([[[1.25, 1.75], [6.25, 0.0]]], dtype=jnp.float32)
     assert jnp.allclose(out_correction, expected_out, atol=0.0, rtol=0.0)
     assert jnp.allclose(src_scale, expected_src, atol=0.0, rtol=0.0)
+
+
+def test_mamba3_hybrid_mode_config_resolves_current_tpu_defaults():
+    assert HybridModeConfig(mode="siso").resolved_chunk_size() == 512
+    assert HybridModeConfig(mode="mimo", mimo_rank=4).resolved_chunk_size() == 256
+    assert mamba3_tpu_default_chunk_size("siso") == 512
+    assert mamba3_tpu_default_chunk_size("mimo", mimo_rank=4) == 256
 
 
 def test_mamba3_intra_chunk_xla_matches_reference():
@@ -241,6 +252,53 @@ def test_mamba3_chunked_forward_from_transformed_matches_native_api():
     )
     assert jnp.allclose(y_native, y_transformed, atol=1e-5, rtol=1e-5)
     assert jnp.allclose(state_native, state_transformed, atol=1e-5, rtol=1e-5)
+
+
+def test_mamba3_hybrid_siso_matches_siso_api():
+    dt, lam, a, b, c, x = _sample_chunked_inputs(
+        leading_shape=(2,),
+        num_chunks=2,
+        chunk_size=8,
+        state_dim=4,
+        value_dim=6,
+    )
+    y_hybrid, state_hybrid = mamba3_hybrid_chunked_forward(dt, lam, a, b, c, x, mode="siso", implementation="xla")
+    y_siso, state_siso = mamba3_chunked_forward(dt, lam, a, b, c, x, implementation="xla")
+    assert jnp.allclose(y_hybrid, y_siso, atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(state_hybrid, state_siso, atol=1e-5, rtol=1e-5)
+
+
+def test_mamba3_hybrid_siso_from_transformed_matches_siso_api():
+    dt, lam, a, b, c, x = _sample_chunked_inputs(
+        leading_shape=(2,),
+        num_chunks=2,
+        chunk_size=8,
+        state_dim=4,
+        value_dim=6,
+    )
+    src_scale, out_correction = prepare_mamba3_chunked_scales(dt, lam)
+    a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
+    y_hybrid, state_hybrid = mamba3_hybrid_chunked_forward_from_transformed(
+        a_log_cumsum,
+        src_scale,
+        out_correction,
+        b,
+        c,
+        x,
+        mode="siso",
+        implementation="xla",
+    )
+    y_siso, state_siso = mamba3_chunked_forward_from_transformed(
+        a_log_cumsum,
+        src_scale,
+        out_correction,
+        b,
+        c,
+        x,
+        implementation="xla",
+    )
+    assert jnp.allclose(y_hybrid, y_siso, atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(state_hybrid, state_siso, atol=1e-5, rtol=1e-5)
 
 
 def test_mamba3_chunked_grad_matches_reference():
@@ -458,6 +516,73 @@ def test_mamba3_mimo_public_api_matches_reference_and_has_siso_carry_shape():
     assert state_xla.shape == (2, 5, 4)
     assert jnp.allclose(y_xla, y_ref, atol=1e-5, rtol=1e-5)
     assert jnp.allclose(state_xla, state_ref, atol=1e-5, rtol=1e-5)
+
+
+def test_mamba3_hybrid_mimo_matches_mimo_api():
+    inputs = _sample_mimo_chunked_inputs(
+        leading_shape=(2,),
+        num_chunks=2,
+        chunk_size=8,
+        state_dim=4,
+        value_dim=5,
+        rank=4,
+    )
+    y_hybrid, state_hybrid = mamba3_hybrid_chunked_forward(
+        *inputs[:5],
+        inputs[5],
+        mode="mimo",
+        z=inputs[6],
+        w_x=inputs[7],
+        w_z=inputs[8],
+        w_o=inputs[9],
+        implementation="xla",
+    )
+    y_mimo, state_mimo = mamba3_mimo_chunked_forward(*inputs, implementation="xla")
+    assert jnp.allclose(y_hybrid, y_mimo, atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(state_hybrid, state_mimo, atol=1e-5, rtol=1e-5)
+
+
+def test_mamba3_hybrid_mimo_from_transformed_matches_mimo_api():
+    inputs = _sample_mimo_chunked_inputs(
+        leading_shape=(2,),
+        num_chunks=2,
+        chunk_size=8,
+        state_dim=4,
+        value_dim=5,
+        rank=4,
+    )
+    dt, lam, a, b, c, x_base, z_base, w_x, w_z, w_o = inputs
+    src_scale, out_correction = prepare_mamba3_chunked_scales(dt, lam)
+    a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
+    y_hybrid, state_hybrid = mamba3_hybrid_chunked_forward_from_transformed(
+        a_log_cumsum,
+        src_scale,
+        out_correction,
+        b,
+        c,
+        x_base,
+        mode="mimo",
+        z=z_base,
+        w_x=w_x,
+        w_z=w_z,
+        w_o=w_o,
+        implementation="xla",
+    )
+    y_mimo, state_mimo = mamba3_mimo_chunked_forward(
+        dt,
+        lam,
+        a,
+        b,
+        c,
+        x_base,
+        z_base,
+        w_x,
+        w_z,
+        w_o,
+        implementation="xla",
+    )
+    assert jnp.allclose(y_hybrid, y_mimo, atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(state_hybrid, state_mimo, atol=1e-5, rtol=1e-5)
 
 
 def test_mamba3_mimo_grad_matches_reference():
