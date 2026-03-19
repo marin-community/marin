@@ -255,6 +255,7 @@ class S3Lease(DistributedLease):
 
     @staticmethod
     def _make_client():
+        import botocore.config
         import botocore.session
 
         session = botocore.session.get_session()
@@ -262,6 +263,11 @@ class S3Lease(DistributedLease):
         kwargs: dict = {}
         if endpoint_url:
             kwargs["endpoint_url"] = endpoint_url
+            # Some S3-compatible endpoints (CoreWeave cwobject.com, cwlota.com)
+            # reject path-style requests.  Virtual-host style is the modern
+            # default for AWS S3 anyway, so always prefer it when a custom
+            # endpoint is in use.
+            kwargs["config"] = botocore.config.Config(s3={"addressing_style": "virtual"})
         return session.create_client("s3", **kwargs)
 
     def _read_with_generation(self) -> tuple[int, Lease | None]:
