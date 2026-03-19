@@ -15,27 +15,6 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-RESTART_REQUIRED_PERMISSIONS = (
-    # Bootstrap reads used by `ray up --no-config-cache`.
-    "resourcemanager.projects.get",
-    "resourcemanager.projects.getIamPolicy",
-    "compute.projects.get",
-    # `iam.serviceAccounts.get` is intentionally excluded here: Ray may rely on
-    # a service-account-level grant, and `gcloud projects test-iam-permissions`
-    # would report a false negative for that resource-scoped permission.
-    # Lifecycle operations used during stop/start.
-    "compute.instances.create",
-    "compute.instances.delete",
-    "compute.instances.get",
-    "compute.instances.list",
-    "compute.instances.setLabels",
-    "compute.instances.setMetadata",
-    "tpu.nodes.create",
-    "tpu.nodes.delete",
-    "tpu.nodes.get",
-    "tpu.nodes.list",
-)
-
 
 def run_gcloud_command(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     """Run a gcloud command with error handling."""
@@ -53,56 +32,6 @@ def get_project_id() -> str | None:
         return result.stdout.strip() or None
     except RuntimeError:
         return None
-
-
-def get_active_account() -> str | None:
-    """Get the active gcloud account email."""
-    try:
-        result = run_gcloud_command(["gcloud", "auth", "list", "--filter=status:ACTIVE", "--format=value(account)"])
-        account = result.stdout.strip()
-        return account or None
-    except RuntimeError:
-        return None
-
-
-def missing_project_permissions(project: str, permissions: list[str] | tuple[str, ...]) -> list[str]:
-    """Return IAM permissions from ``permissions`` not granted on ``project`` for the active identity."""
-    result = run_gcloud_command(
-        [
-            "gcloud",
-            "projects",
-            "test-iam-permissions",
-            project,
-            f"--permissions={','.join(permissions)}",
-            "--format=json",
-        ]
-    )
-
-    try:
-        payload = json.loads(result.stdout) if result.stdout.strip() else {}
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"Failed to parse test-iam-permissions output: {result.stdout}") from e
-
-    granted = set(payload.get("permissions", [])) if isinstance(payload, dict) else set()
-    return [permission for permission in permissions if permission not in granted]
-
-
-def ensure_active_account_can_restart_cluster(
-    project: str,
-    required_permissions: tuple[str, ...] = RESTART_REQUIRED_PERMISSIONS,
-) -> str:
-    """Ensure the active account has required permissions to restart a GCP-backed cluster."""
-    account = get_active_account()
-    if not account:
-        raise RuntimeError("No active gcloud account found. Run `gcloud auth login` and retry.")
-
-    missing_permissions = missing_project_permissions(project, required_permissions)
-    if missing_permissions:
-        raise RuntimeError(
-            f"Active gcloud account '{account}' is missing required IAM permissions for cluster restart "
-            f"on project '{project}': {', '.join(missing_permissions)}"
-        )
-    return account
 
 
 def get_default_zone() -> str | None:
