@@ -469,18 +469,16 @@ def test_fresh_actors_per_execute(fray_client, tmp_path):
     results = list(zctx.execute(ds))
     assert sorted(results) == [2, 3, 4]
 
-    # After execute(): everything is torn down
-    assert zctx._coordinator is None
-    assert zctx._worker_group is None
+    # After execute(): coordinator job is torn down
+    assert zctx._coordinator_job is None
     assert zctx._pipeline_id == 0
 
-    # Can execute again (creates fresh coordinator + workers)
+    # Can execute again (creates fresh coordinator job)
     ds2 = Dataset.from_list([10, 20]).map(lambda x: x * 2)
     results2 = list(zctx.execute(ds2))
     assert sorted(results2) == [20, 40]
 
-    assert zctx._coordinator is None
-    assert zctx._worker_group is None
+    assert zctx._coordinator_job is None
     assert zctx._pipeline_id == 1
 
 
@@ -664,13 +662,13 @@ def test_run_pipeline_rejects_concurrent_calls(actor_context, tmp_path):
 
 
 def test_execute_retries_on_coordinator_death(tmp_path):
-    """When the coordinator dies mid-execution, execute() retries with a fresh
-    coordinator and worker pool and eventually succeeds.
+    """When the coordinator job fails, execute() retries with a fresh job
+    and eventually succeeds.
 
-    Uses LocalClient directly because simulating coordinator death requires
-    manipulating the local actor registry.
+    Patches client.submit so the first coordinator job submission raises,
+    then the retry submits a real job that succeeds.
     """
-    from fray.v2.local_backend import LocalClient, _local_actor_registry
+    from fray.v2.local_backend import LocalClient
 
     client = LocalClient()
     chunk_prefix = str(tmp_path / "chunks")
@@ -688,27 +686,24 @@ def test_execute_retries_on_coordinator_death(tmp_path):
     results = list(ctx.execute(Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)))
     assert sorted(results) == [2, 4, 6]
 
-    # Sabotage the registry so the *next* coordinator creation attempt fails
-    # on the first try. We do this by patching create_actor_group to fail once.
-    original_create = client.create_actor_group
-    fail_count = [0]
+    # Patch submit to fail on the first coordinator job, then succeed on retry.
+    original_submit = client.submit
+    submit_count = [0]
 
-    def flaky_create(*args, **kwargs):
-        group = original_create(*args, **kwargs)
-        if fail_count[0] == 0 and "coord" in kwargs.get("name", ""):
-            fail_count[0] += 1
-            # Kill the coordinator immediately after creation to simulate death
-            handles = group.wait_ready()
-            endpoint = handles[0]._endpoint
-            _local_actor_registry.pop(endpoint, None)
-        return group
+    def flaky_submit(request, adopt_existing=True):
+        if "zephyr-" in request.name:
+            submit_count[0] += 1
+            if submit_count[0] == 1:
+                raise RuntimeError("Simulated coordinator job submission failure")
+        return original_submit(request, adopt_existing)
 
-    client.create_actor_group = flaky_create
+    client.submit = flaky_submit
 
-    # Next execute() should: fail on attempt 0 (dead coordinator),
-    # then succeed on attempt 1 with a fresh coordinator.
+    # Next execute() should: fail on attempt 0 (submit raises),
+    # then succeed on attempt 1 with a fresh coordinator job.
     results = list(ctx.execute(Dataset.from_list([10, 20]).map(lambda x: x + 1)))
     assert sorted(results) == [11, 21]
+    assert submit_count[0] >= 2, "Expected at least 2 submit attempts (1 failed + 1 succeeded)"
 
     ctx.shutdown()
     client.shutdown(wait=True)
