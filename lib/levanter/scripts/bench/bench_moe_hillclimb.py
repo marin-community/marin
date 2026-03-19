@@ -83,6 +83,8 @@ Kernel = Literal[
     "weight_cast",
     "narrow_meta",
 ]
+
+_USE_SHARED_MLP_EXPLICIT_BWD = False
 BenchPass = Literal["forward", "forward_backward"]
 CollapseImpl = Literal["segment_sum", "sorted_segment_sum", "scatter_add", "lax_scatter"]
 
@@ -307,7 +309,35 @@ def _route_topk(router_logits: jax.Array, *, topk: int) -> tuple[jax.Array, jax.
     return topk_idx.astype(jnp.int32), topk_weights.astype(router_logits.dtype)
 
 
-def _shared_mlp(
+def _set_shared_mlp_explicit_bwd(enabled: bool) -> None:
+    global _USE_SHARED_MLP_EXPLICIT_BWD
+    _USE_SHARED_MLP_EXPLICIT_BWD = enabled
+
+
+def _batch_axis_names(x: jax.Array) -> tuple[str, ...]:
+    x_type = jax.typeof(x)
+    sharding = getattr(x_type, "sharding", None)
+    spec = getattr(sharding, "spec", None)
+    if spec is None or len(spec) == 0:
+        sharding = getattr(x, "sharding", None)
+        spec = getattr(sharding, "spec", None)
+    if spec is None or len(spec) == 0:
+        return ()
+
+    axis_spec = spec[0]
+    if axis_spec is None:
+        return ()
+    if isinstance(axis_spec, tuple):
+        return tuple(str(name) for name in axis_spec if name is not None)
+    return (str(axis_spec),)
+
+
+def _silu_grad(x: jax.Array) -> jax.Array:
+    sigmoid = jax.nn.sigmoid(x)
+    return sigmoid * (1.0 + x * (1.0 - sigmoid))
+
+
+def _shared_mlp_reference(
     x: jax.Array,
     shared_w13: jax.Array,
     shared_w2: jax.Array,
@@ -328,6 +358,110 @@ def _shared_mlp(
         preferred_element_type=jnp.float32,
     )
     return shared_out.astype(x.dtype)
+
+
+@jax.custom_vjp
+def _shared_mlp_explicit_bwd(
+    x: jax.Array,
+    shared_w13: jax.Array,
+    shared_w2: jax.Array,
+) -> jax.Array:
+    return _shared_mlp_reference(x, shared_w13, shared_w2)
+
+
+def _shared_mlp_explicit_bwd_fwd(
+    x: jax.Array,
+    shared_w13: jax.Array,
+    shared_w2: jax.Array,
+) -> tuple[jax.Array, tuple[jax.Array | None, ...]]:
+    shared_dim = shared_w2.shape[0]
+    if shared_dim == 0:
+        return jnp.zeros_like(x), (None, None, None, None, None)
+
+    batch_spec = grug_moe_lib._batch_spec_from_x(x, get_abstract_mesh())
+    shared13 = jnp.einsum("td,dm->tm", x, shared_w13, out_sharding=batch_spec, preferred_element_type=jnp.float32)
+    gate, up = jnp.split(shared13, [shared_dim], axis=-1)
+    gate_f32 = gate.astype(jnp.float32)
+    up_f32 = up.astype(jnp.float32)
+    shared_gated = jax.nn.silu(gate_f32) * up_f32
+    shared_out = jnp.einsum(
+        "tm,md->td",
+        shared_gated,
+        shared_w2,
+        out_sharding=batch_spec,
+        preferred_element_type=jnp.float32,
+    )
+    residuals = (x, shared_w13, shared_w2, gate_f32, up_f32)
+    return shared_out.astype(x.dtype), residuals
+
+
+def _shared_mlp_explicit_bwd_bwd(
+    residuals: tuple[jax.Array | None, ...],
+    g: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    x, shared_w13, shared_w2, gate_f32, up_f32 = residuals
+    if x is None or shared_w13 is None or shared_w2 is None or gate_f32 is None or up_f32 is None:
+        return jnp.zeros_like(g), jnp.zeros((g.shape[-1], 0), dtype=g.dtype), jnp.zeros((0, g.shape[-1]), dtype=g.dtype)
+
+    batch_spec = grug_moe_lib._batch_spec_from_x(x, get_abstract_mesh())
+    x_f32 = x.astype(jnp.float32)
+    shared_w13_f32 = shared_w13.astype(jnp.float32)
+    shared_w2_f32 = shared_w2.astype(jnp.float32)
+    g_f32 = g.astype(jnp.float32)
+    shared_gated = jax.nn.silu(gate_f32) * up_f32
+
+    grad_shared_w2_local = jnp.einsum(
+        "tm,td->md",
+        shared_gated,
+        g_f32,
+        out_sharding=shared_w2.sharding,
+        preferred_element_type=jnp.float32,
+    )
+
+    grad_shared_gated = jnp.einsum(
+        "td,md->tm",
+        g_f32,
+        shared_w2_f32,
+        out_sharding=batch_spec,
+        preferred_element_type=jnp.float32,
+    )
+    grad_gate = grad_shared_gated * up_f32 * _silu_grad(gate_f32)
+    grad_up = grad_shared_gated * jax.nn.silu(gate_f32)
+    grad_shared13 = jnp.concatenate([grad_gate, grad_up], axis=-1)
+
+    grad_shared_w13_local = jnp.einsum(
+        "td,tm->dm",
+        x_f32,
+        grad_shared13,
+        out_sharding=shared_w13.sharding,
+        preferred_element_type=jnp.float32,
+    )
+
+    grad_x = jnp.einsum(
+        "tm,dm->td",
+        grad_shared13,
+        shared_w13_f32,
+        out_sharding=batch_spec,
+        preferred_element_type=jnp.float32,
+    )
+    return (
+        grad_x.astype(x.dtype),
+        grad_shared_w13_local.astype(shared_w13.dtype),
+        grad_shared_w2_local.astype(shared_w2.dtype),
+    )
+
+
+_shared_mlp_explicit_bwd.defvjp(_shared_mlp_explicit_bwd_fwd, _shared_mlp_explicit_bwd_bwd)
+
+
+def _shared_mlp(
+    x: jax.Array,
+    shared_w13: jax.Array,
+    shared_w2: jax.Array,
+) -> jax.Array:
+    if _USE_SHARED_MLP_EXPLICIT_BWD:
+        return _shared_mlp_explicit_bwd(x, shared_w13, shared_w2)
+    return _shared_mlp_reference(x, shared_w13, shared_w2)
 
 
 def _moe_mlp_ep_ring_local_legacy(
@@ -6244,6 +6378,7 @@ def main() -> None:
     parser.add_argument("--w2-out-first", action="store_true")
     parser.add_argument("--w13-expert-padded", action="store_true")
     parser.add_argument("--w2-expert-padded", action="store_true")
+    parser.add_argument("--shared-mlp-explicit-bwd", action="store_true")
     parser.add_argument("--deepep-dispatch-num-sms", type=int)
     parser.add_argument("--deepep-dispatch-num-max-send-tokens", type=int)
     parser.add_argument("--deepep-dispatch-num-max-recv-tokens", type=int)
@@ -6269,6 +6404,7 @@ def main() -> None:
         )
 
     dtype = jnp.dtype(args.dtype)
+    _set_shared_mlp_explicit_bwd(args.shared_mlp_explicit_bwd)
     eps = [int(tok.strip()) for tok in args.ep_list.split(",") if tok.strip()]
     kernels: list[Kernel] = ["legacy", "current"] if args.kernel == "both" else [args.kernel]
 
@@ -6319,6 +6455,7 @@ def main() -> None:
         f"w13_out_first={args.w13_out_first} w2_out_first={args.w2_out_first} "
         f"w13_expert_padded={args.w13_expert_padded} "
         f"w2_expert_padded={args.w2_expert_padded} "
+        f"shared_mlp_explicit_bwd={args.shared_mlp_explicit_bwd} "
         f"deepep_collapse_impl={args.deepep_collapse_impl}"
     )
 
