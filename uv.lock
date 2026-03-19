@@ -5436,7 +5436,7 @@ dependencies = [
 requires-dist = [
     { name = "fray", editable = "lib/fray" },
     { name = "haliax", editable = "lib/haliax" },
-    { name = "iris", extras = ["logs"], editable = "lib/iris" },
+    { name = "iris", editable = "lib/iris" },
     { name = "levanter", editable = "lib/levanter" },
     { name = "marin", editable = "lib/marin" },
     { name = "watchdog" },

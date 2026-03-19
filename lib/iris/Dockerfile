@@ -56,9 +56,9 @@ ENV PATH="/app/.venv/bin:$PATH"
 COPY pyproject.toml hatch_build.py ./
 RUN uv sync --no-install-project
 
-# Source + project install (include logs extra for DuckDB/Parquet log store)
+# Source + project install
 COPY src/ ./src/
-RUN uv sync --extra logs
+RUN uv sync
 
 # Profiling tools — installed after uv sync so they aren't pruned by the exact sync.
 RUN uv pip install py-spy memray
