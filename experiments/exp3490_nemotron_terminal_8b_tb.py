@@ -11,28 +11,32 @@ Paper: https://arxiv.org/abs/2602.21193
 
 Tracked in: https://github.com/marin-community/marin/issues/3490
 
-Usage (Ray Cluster with Daytona):
-    uv run lib/marin/src/marin/run/ray_run.py \
-        --env_vars MARIN_PREFIX gs://marin-us-central1 \
-        --env_vars DAYTONA_API_KEY ${DAYTONA_API_KEY} \
-        --env_vars WANDB_API_KEY ${WANDB_API_KEY} \
-        --env_vars WANDB_ENTITY marin-community \
-        --env_vars WANDB_PROJECT harbor \
-        --env_vars HF_TOKEN ${HF_TOKEN} \
-        --cluster us-central1 \
-        --extra harbor,vllm \
-        --no_wait \
+Usage (Iris with Daytona):
+    uv run iris --config lib/iris/examples/marin.yaml job run \
+        --tpu v5p-8 \
+        --extra harbor --extra vllm \
+        -e MARIN_PREFIX gs://marin-us-central1 \
+        -e DAYTONA_API_KEY ${DAYTONA_API_KEY} \
+        -e WANDB_API_KEY ${WANDB_API_KEY} \
+        -e WANDB_ENTITY marin-community \
+        -e WANDB_PROJECT harbor \
+        -e HF_TOKEN ${HF_TOKEN} \
+        --no-wait \
         -- python experiments/exp3490_nemotron_terminal_8b_tb.py
 
     For TBLite (open-thoughts/OpenThoughts-TBLite):
-        Add --env_vars HARBOR_DATASET_LITE true to the command above.
+        Add -e HARBOR_DATASET_LITE true to the command above.
+
+    To evaluate a custom checkpoint:
+        Add -e HARBOR_MODEL_NAME <name> -e HARBOR_MODEL_PATH <gs://path/to/hf/checkpoint/>.
 
 Environment variables:
     - ENV_TYPE: "local" | "daytona" | "e2b" | "modal" (default: "daytona")
     - HARBOR_DATASET_LITE: "true" | "1" to use TBLite instead of TB2 (default: false)
     - HARBOR_MAX_INSTANCES: number of tasks to run (default: all)
-    - HARBOR_N_CONCURRENT: number of parallel trials (default: 100)
+    - HARBOR_N_CONCURRENT: number of parallel trials (default: 25)
     - HARBOR_AGENT_KWARGS_JSON: JSON dict forwarded to Harbor AgentConfig.kwargs
+    - HARBOR_TASK_NAMES_JSON: JSON list of task names to run (for sharding across workers)
 """
 
 import json
@@ -85,12 +89,18 @@ else:
 ENV_TYPE = os.environ.get("ENV_TYPE", "daytona")
 HARBOR_AGENT = "terminus-2"
 
-MODEL_NAME = "nemotron-terminal-8b"
-MODEL_PATH = "gs://marin-us-central1/models/nvidia--Nemotron-Terminal-8B--main/"
+MODEL_NAME = os.environ.get("HARBOR_MODEL_NAME", "nemotron-terminal-8b")
+MODEL_PATH = os.environ.get("HARBOR_MODEL_PATH", "gs://marin-us-central1/models/nvidia--Nemotron-Terminal-8B--main/")
 
 HARBOR_MAX_INSTANCES = _optional_int_from_env("HARBOR_MAX_INSTANCES", default=None)
 HARBOR_N_CONCURRENT = _optional_int_from_env("HARBOR_N_CONCURRENT", default=25) or 1
 HARBOR_AGENT_KWARGS = _optional_json_dict_from_env("HARBOR_AGENT_KWARGS_JSON")
+HARBOR_TASK_NAMES: list[str] | None = None
+_task_names_raw = os.environ.get("HARBOR_TASK_NAMES_JSON", "").strip()
+if _task_names_raw:
+    HARBOR_TASK_NAMES = json.loads(_task_names_raw)
+    if not isinstance(HARBOR_TASK_NAMES, list):
+        raise TypeError(f"HARBOR_TASK_NAMES_JSON must be a JSON list, got {type(HARBOR_TASK_NAMES)}")
 
 # Sampling parameters from the model's generation_config.json to match the paper.
 # Terminus-2 defaults to temperature=0.7; the model was evaluated with temperature=0.6.
@@ -98,6 +108,10 @@ HARBOR_AGENT_KWARGS.setdefault("temperature", 0.6)
 
 DATASET_PATH_SEGMENT = DATASET.replace("/", "__") if USE_TBLITE else "terminal-bench"
 OUTPUT_DIR = os.path.join("evaluation", "harbor", DATASET_PATH_SEGMENT, MODEL_NAME, HARBOR_AGENT)
+if HARBOR_TASK_NAMES:
+    import hashlib as _hl
+    _shard_hash = _hl.sha256("|".join(sorted(HARBOR_TASK_NAMES)).encode()).hexdigest()[:8]
+    OUTPUT_DIR = os.path.join(OUTPUT_DIR, f"shard_{_shard_hash}")
 
 if ENV_TYPE == "daytona" and not os.environ.get("DAYTONA_API_KEY"):
     logger.warning(
@@ -115,6 +129,7 @@ logger.info("Agent: %s", HARBOR_AGENT)
 logger.info("Env: %s", ENV_TYPE)
 logger.info("Max tasks: %s", HARBOR_MAX_INSTANCES)
 logger.info("Concurrent trials: %s", HARBOR_N_CONCURRENT)
+logger.info("Task names (shard): %s", f"{len(HARBOR_TASK_NAMES)} tasks" if HARBOR_TASK_NAMES else "all")
 logger.info("Output dir (under MARIN_PREFIX): %s", OUTPUT_DIR)
 logger.info("=" * 80)
 
@@ -133,6 +148,7 @@ if __name__ == "__main__":
         n_concurrent=HARBOR_N_CONCURRENT,
         env=ENV_TYPE,
         agent_kwargs=HARBOR_AGENT_KWARGS,
+        task_names=HARBOR_TASK_NAMES,
     ).with_output_path(OUTPUT_DIR)
 
     executor_main(steps=[step])

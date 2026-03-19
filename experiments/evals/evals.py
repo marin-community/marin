@@ -387,6 +387,7 @@ def evaluate_harbor(
     n_concurrent: int = 4,
     env: str = "local",
     agent_kwargs: dict | None = None,
+    task_names: list[str] | None = None,
 ) -> ExecutorStep:
     """
     Evaluate on ANY Harbor dataset from the registry.
@@ -439,6 +440,7 @@ def evaluate_harbor(
             "n_concurrent": n_concurrent,
             "env": env,
             "agent_kwargs": agent_kwargs or {},
+            "task_names": task_names,
         },
         "forwarded_env_vars": forwarded_env_vars,
     }

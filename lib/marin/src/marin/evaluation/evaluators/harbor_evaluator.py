@@ -258,6 +258,7 @@ class HarborEvaluator(Evaluator):
         n_concurrent = harbor_config.get("n_concurrent", 4)
         env_type = harbor_config.get("env", "local")
         agent_kwargs = harbor_config.get("agent_kwargs") or {}
+        task_names = harbor_config.get("task_names")
         if not isinstance(agent_kwargs, dict):
             raise TypeError(f"harbor_config['agent_kwargs'] must be a dict, got {type(agent_kwargs)}")
         agent_kwargs = dict(agent_kwargs)
@@ -279,6 +280,7 @@ class HarborEvaluator(Evaluator):
                 wandb_tags=wandb_tags,
                 dataset=dataset,
                 version=version,
+                task_names=task_names,
             )
             return
 
@@ -309,6 +311,7 @@ class HarborEvaluator(Evaluator):
                 wandb_tags=wandb_tags,
                 dataset=dataset,
                 version=version,
+                task_names=task_names,
             )
 
     def launch_evaluate_with_ray(
@@ -372,6 +375,7 @@ class HarborEvaluator(Evaluator):
         wandb_tags: list[str] | None,
         dataset: str,
         version: str,
+        task_names: list[str] | None = None,
     ) -> None:
         """Run Harbor trials and save results."""
         results = self._run_harbor_trials(
@@ -384,6 +388,7 @@ class HarborEvaluator(Evaluator):
             env_type=env_type,
             task_limit=max_eval_instances,
             output_path=output_path,
+            task_names=task_names,
         )
 
         parsed_results = self._parse_results(results)
@@ -411,6 +416,7 @@ class HarborEvaluator(Evaluator):
         task_limit: int | None = None,
         agent_kwargs: dict | None = None,
         output_path: str | None = None,
+        task_names: list[str] | None = None,
     ) -> dict:
         """Run Harbor trials using programmatic API.
 
@@ -428,7 +434,11 @@ class HarborEvaluator(Evaluator):
         from harbor.models.trial.config import AgentConfig, EnvironmentConfig
 
         # Generate deterministic job name for resume capability
+        # Include task_names in the key so each shard gets its own job directory
         job_name = _generate_stable_job_name(dataset, version, model_name, agent, task_limit)
+        if task_names:
+            shard_key = hashlib.sha256("|".join(sorted(task_names)).encode()).hexdigest()[:8]
+            job_name = f"{job_name}_shard_{shard_key}"
 
         # Get stable local working directory (persists across pre-emptions despite being in /tmp)
         workdir = _get_stable_local_workdir(job_name)
@@ -487,6 +497,7 @@ class HarborEvaluator(Evaluator):
             dataset_config = LocalDatasetConfig(
                 path=Path(dataset_root),
                 n_tasks=task_limit,
+                task_names=task_names,
             )
         elif dataset_path.exists():
             if not dataset_path.is_dir():
@@ -494,6 +505,7 @@ class HarborEvaluator(Evaluator):
             dataset_config = LocalDatasetConfig(
                 path=dataset_path,
                 n_tasks=task_limit,
+                task_names=task_names,
             )
         else:
             dataset_config = RegistryDatasetConfig(
@@ -501,6 +513,7 @@ class HarborEvaluator(Evaluator):
                 name=dataset,
                 version=version,
                 n_tasks=task_limit,
+                task_names=task_names,
             )
 
         # Create Harbor JobConfig with deterministic job name
