@@ -422,6 +422,11 @@ class ProcessContainerHandle:
         """Return the container ID, if any."""
         return self._container_id
 
+    @property
+    def container_name(self) -> str | None:
+        """Process runtime has no Docker container names."""
+        return None
+
     def build(self) -> list[LogLine]:
         """No-op for local execution - host is already configured.
 

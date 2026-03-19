@@ -245,6 +245,7 @@ message TaskStatus {
   string pending_reason = 16;         // Why task can't be scheduled (empty if schedulable)
   bool can_be_scheduled = 17;         // Whether task is currently schedulable
   // field 18 was log_directory, removed
+  string container_name = 19;         // Docker container name (e.g. iris-user-job-0-a1)
 }
 
 // Record of a single task execution attempt

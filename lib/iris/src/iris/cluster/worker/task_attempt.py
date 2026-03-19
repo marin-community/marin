@@ -272,6 +272,13 @@ class TaskAttempt:
             return self._container_handle.container_id
         return None
 
+    @property
+    def container_name(self) -> str | None:
+        """Return the Docker container name from the handle, if available."""
+        if self._container_handle:
+            return self._container_handle.container_name
+        return None
+
     def recent_logs(self, max_entries: int = 0) -> list[logging_pb2.LogEntry]:
         """Return recent logs for this task attempt."""
         return self._log_store.get_logs(self._log_key, tail=True, max_lines=max_entries or 1000).entries
@@ -362,6 +369,7 @@ class TaskAttempt:
             error=self.error or "",
             ports=self.ports,
             current_attempt_id=self.attempt_id,
+            container_name=self.container_name or "",
             resource_usage=cluster_pb2.ResourceUsage(
                 memory_mb=self.current_memory_mb,
                 memory_peak_mb=self.peak_memory_mb,

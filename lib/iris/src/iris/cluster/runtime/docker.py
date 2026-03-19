@@ -221,6 +221,16 @@ def _parse_memory_size(size_str: str) -> int:
         return 0
 
 
+def _make_container_name(task_id: str, attempt_id: int) -> str:
+    """Return a deterministic Docker container name for a task attempt.
+
+    Format: iris-<sanitized-task-path>-a<attempt_id>
+    Example: /alice/root/child/0 -> iris-alice-root-child-0-a1
+    """
+    safe = re.sub(r"[^a-zA-Z0-9_.-]", "-", task_id.lstrip("/")).strip("-")
+    return f"iris-{safe}-a{attempt_id}"
+
+
 def _docker_logs(container_id: str, since: Timestamp | None = None) -> list[LogLine]:
     """Get container logs, optionally filtered by timestamp.
 
@@ -293,11 +303,17 @@ class DockerContainerHandle:
     runtime: "DockerRuntime"
     _resolved_mounts: list[ResolvedMount] = field(default_factory=list, repr=False)
     _run_container_id: str | None = field(default=None, repr=False)
+    _run_container_name: str | None = field(default=None, repr=False)
 
     @property
     def container_id(self) -> str | None:
         """Return the current run container ID, if any."""
         return self._run_container_id
+
+    @property
+    def container_name(self) -> str | None:
+        """Return the Docker container name for the run container, if any."""
+        return self._run_container_name
 
     def build(self) -> list[LogLine]:
         """Run setup_commands (uv sync, pip install, etc) in a temporary container.
@@ -408,9 +424,15 @@ exec {quoted_cmd}
             # No setup, run command directly
             command = list(self.config.entrypoint.run_command.argv)
 
+        container_name = None
+        if self.config.task_id and self.config.attempt_id is not None:
+            container_name = _make_container_name(self.config.task_id, self.config.attempt_id)
+
+        self._run_container_name = container_name
         self._run_container_id = self._docker_create(
             command=command,
             include_devices=True,
+            container_name=container_name,
         )
         self.runtime.track_container(self._run_container_id)
         self._docker_start(self._run_container_id)
@@ -576,6 +598,7 @@ exec {quoted_cmd}
         label_suffix: str = "",
         include_devices: bool = False,
         memory_limit_mb: int | None = None,
+        container_name: str | None = None,
     ) -> str:
         """Create a Docker container. Returns container_id.
 
@@ -585,6 +608,7 @@ exec {quoted_cmd}
         Args:
             command: Command to run in the container.
             label_suffix: Suffix appended to the iris.task_id label.
+            container_name: If set, passed as --name to docker create.
             include_devices: If True, also pass through accelerator devices.
             memory_limit_mb: Override memory limit in MB. When None, uses
                 the task's requested memory from config.resources.
@@ -635,6 +659,10 @@ exec {quoted_cmd}
             cmd.extend(["--label", f"iris.task_id={config.task_id}{label_suffix}"])
         if config.job_id:
             cmd.extend(["--label", f"iris.job_id={config.job_id}"])
+
+        # Named container for easy identification in `docker ps`
+        if container_name:
+            cmd.extend(["--name", container_name])
 
         # Resource limits (cgroups v2) — always applied
         cpu_millicores = config.get_cpu_millicores()

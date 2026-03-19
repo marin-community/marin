@@ -181,6 +181,11 @@ class ContainerHandle(Protocol):
         """Return the current container ID, if any."""
         ...
 
+    @property
+    def container_name(self) -> str | None:
+        """Return the Docker container name, if any."""
+        ...
+
     def build(self) -> list[LogLine]:
         """Run setup_commands (uv sync, pip install, etc).
 

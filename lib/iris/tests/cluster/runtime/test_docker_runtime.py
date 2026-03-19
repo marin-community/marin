@@ -11,7 +11,7 @@ from unittest.mock import Mock
 import pytest
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.runtime.docker import DockerRuntime, _make_container_name
 from iris.cluster.runtime.types import MountKind, MountSpec
 
 
@@ -104,3 +104,11 @@ def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):
     )
     assert len(calls) == 0
     mock_bundle_store.extract_bundle_to.assert_called_once_with("abc", workdir)
+
+
+def test_make_container_name_sanitizes_task_id():
+    """_make_container_name produces a valid, deterministic Docker container name."""
+    assert _make_container_name("/alice/root/child/0", 1) == "iris-alice-root-child-0-a1"
+    assert _make_container_name("/alice/root/0", 3) == "iris-alice-root-0-a3"
+    # Special characters are replaced with dashes
+    assert _make_container_name("/user/my_job:v2/0", 1).startswith("iris-")
