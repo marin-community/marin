@@ -86,6 +86,7 @@ Kernel = Literal[
 
 _USE_SHARED_MLP_EXPLICIT_BWD = False
 _USE_SHARED_MLP_FAST_ACCUM = False
+_USE_COMBINE_FAST_ACCUM = False
 BenchPass = Literal["forward", "forward_backward"]
 CollapseImpl = Literal["segment_sum", "sorted_segment_sum", "scatter_add", "lax_scatter"]
 
@@ -320,6 +321,11 @@ def _set_shared_mlp_fast_accum(enabled: bool) -> None:
     _USE_SHARED_MLP_FAST_ACCUM = enabled
 
 
+def _set_combine_fast_accum(enabled: bool) -> None:
+    global _USE_COMBINE_FAST_ACCUM
+    _USE_COMBINE_FAST_ACCUM = enabled
+
+
 def _batch_axis_names(x: jax.Array) -> tuple[str, ...]:
     x_type = jax.typeof(x)
     sharding = getattr(x_type, "sharding", None)
@@ -351,6 +357,10 @@ def _silu_grad(x: jax.Array) -> jax.Array:
 
 def _shared_mlp_preferred_element_type():
     return None if _USE_SHARED_MLP_FAST_ACCUM else jnp.float32
+
+
+def _combine_preferred_element_type():
+    return None if _USE_COMBINE_FAST_ACCUM else jnp.float32
 
 
 def _shared_mlp_reference(
@@ -1371,8 +1381,12 @@ def _unpermute_from_global_expert(
 ) -> jax.Array:
     unsorted = _sort_activations(intermediate, jnp.argsort(sorted_indices))
     reshaped = unsorted.reshape(tokens_per_shard, topk, -1)
+    preferred = _combine_preferred_element_type()
     return jnp.einsum(
-        "tkd,tk->td", reshaped, combine_weights_local.astype(reshaped.dtype), preferred_element_type=jnp.float32
+        "tkd,tk->td",
+        reshaped,
+        combine_weights_local.astype(reshaped.dtype),
+        preferred_element_type=preferred,
     )
 
 
@@ -6452,6 +6466,7 @@ def main() -> None:
     parser.add_argument("--w2-expert-padded", action="store_true")
     parser.add_argument("--shared-mlp-explicit-bwd", action="store_true")
     parser.add_argument("--shared-mlp-fast-accum", action="store_true")
+    parser.add_argument("--combine-fast-accum", action="store_true")
     parser.add_argument("--deepep-dispatch-num-sms", type=int)
     parser.add_argument("--deepep-dispatch-num-max-send-tokens", type=int)
     parser.add_argument("--deepep-dispatch-num-max-recv-tokens", type=int)
@@ -6479,6 +6494,7 @@ def main() -> None:
     dtype = jnp.dtype(args.dtype)
     _set_shared_mlp_explicit_bwd(args.shared_mlp_explicit_bwd)
     _set_shared_mlp_fast_accum(args.shared_mlp_fast_accum)
+    _set_combine_fast_accum(args.combine_fast_accum)
     eps = [int(tok.strip()) for tok in args.ep_list.split(",") if tok.strip()]
     kernels: list[Kernel] = ["legacy", "current"] if args.kernel == "both" else [args.kernel]
 
@@ -6531,6 +6547,7 @@ def main() -> None:
         f"w2_expert_padded={args.w2_expert_padded} "
         f"shared_mlp_explicit_bwd={args.shared_mlp_explicit_bwd} "
         f"shared_mlp_fast_accum={args.shared_mlp_fast_accum} "
+        f"combine_fast_accum={args.combine_fast_accum} "
         f"deepep_collapse_impl={args.deepep_collapse_impl}"
     )
 
