@@ -63,7 +63,12 @@ class DedupConfig:
     mode: DedupMode = DedupMode.EXACT_PARAGRAPH
     # field to use for text content in Parquet files
     text_field: str = "text"
-    worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="32g", disk="5g"))
+    # Worker resource sizing notes:
+    # - RAM: should be tuned to input file sizes; the fuzzy dedup reduce stage accumulates
+    #   per-bucket dedup sets in memory, so hot LSH buckets can require 10-20 GB.
+    # - CPU: the Rust MinHash library (dupekit) releases the GIL and uses a Rayon thread pool,
+    #   so workers can productively use 2+ CPUs even though the Python pipeline is single-threaded.
+    worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=5, ram="32g", disk="5g"))
     # MinHash LSH parameters (only used for FUZZY_DOCUMENT mode)
     fuzzy_minhash_num_perms: int = 286
     fuzzy_minhash_num_bands: int = 26
