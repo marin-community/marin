@@ -469,18 +469,16 @@ def test_fresh_actors_per_execute(fray_client, tmp_path):
     results = list(zctx.execute(ds))
     assert sorted(results) == [2, 3, 4]
 
-    # After execute(): everything is torn down
-    assert zctx._coordinator is None
-    assert zctx._worker_group is None
+    # After execute(): coordinator job is torn down
+    assert zctx._coordinator_job is None
     assert zctx._pipeline_id == 0
 
-    # Can execute again (creates fresh coordinator + workers)
+    # Can execute again (creates fresh coordinator job)
     ds2 = Dataset.from_list([10, 20]).map(lambda x: x * 2)
     results2 = list(zctx.execute(ds2))
     assert sorted(results2) == [20, 40]
 
-    assert zctx._coordinator is None
-    assert zctx._worker_group is None
+    assert zctx._coordinator_job is None
     assert zctx._pipeline_id == 1
 
 

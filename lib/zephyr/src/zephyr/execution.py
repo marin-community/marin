@@ -1,12 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Actor-based execution engine for Zephyr pipelines.
+"""Job-based execution engine for Zephyr pipelines.
 
-Workers pull tasks from the coordinator, execute shard operations, and report
-results back. This enables persistent worker state (caches, loaded models),
-transient error recovery, and backend-agnostic dispatch via fray v2's Client
-protocol.
+The coordinator runs as a fray *job* that internally creates coordinator and
+worker *actors* as child jobs. Workers pull tasks from the coordinator actor,
+execute shard operations, and report results back. Because actors are children
+of the coordinator job, Iris cascading termination automatically cleans them
+up when the coordinator exits or is killed — preventing the stale-coordinator
+bug where orphaned coordinators and workers consume resources indefinitely.
 """
 
 from __future__ import annotations
@@ -1266,15 +1268,204 @@ def _regroup_result_refs(
     return [Shard(chunks=output_by_shard.get(idx, [])) for idx in range(num_output)]
 
 
+# ---------------------------------------------------------------------------
+# Coordinator-as-Job infrastructure
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _CoordinatorJobConfig:
+    """Serializable configuration for the coordinator job.
+
+    Contains everything the coordinator job needs to create workers, run
+    the pipeline, and write results. Serialized to disk via cloudpickle.
+    """
+
+    plan: PhysicalPlan
+    execution_id: str
+    hints: ExecutionHint
+    chunk_storage_prefix: str
+    no_workers_timeout: float
+    max_workers: int
+    worker_resources: ResourceConfig
+    name: str
+    pipeline_id: int
+    attempt: int
+
+
+@dataclass
+class _CoordinatorJobResult:
+    """Result written to disk by the coordinator job."""
+
+    results: list | None = None
+    error: Exception | None = None
+
+
+def _write_job_config(path: str, config: _CoordinatorJobConfig) -> None:
+    """Serialize coordinator job config to disk."""
+    ensure_parent_dir(path)
+    with open_url(path, "wb") as f:
+        f.write(cloudpickle.dumps(config))
+
+
+def _write_job_result(path: str, result: _CoordinatorJobResult) -> None:
+    """Write coordinator job result to disk."""
+    ensure_parent_dir(path)
+    with open_url(path, "wb") as f:
+        f.write(cloudpickle.dumps(result))
+
+
+def _read_job_result(path: str) -> _CoordinatorJobResult:
+    """Read coordinator job result from disk."""
+    with open_url(path, "rb") as f:
+        return cloudpickle.loads(f.read())
+
+
+def _start_watchdog(
+    worker_group: Any,
+    coordinator: ActorHandle,
+    stop_event: threading.Event,
+) -> threading.Thread | None:
+    """Start a daemon thread that aborts the coordinator when the worker job dies.
+
+    Returns None if worker_group is None (no workers to watch).
+    """
+    if worker_group is None:
+        return None
+
+    poll_interval = 10.0
+
+    def _watchdog():
+        while not stop_event.is_set():
+            stop_event.wait(poll_interval)
+            if stop_event.is_set():
+                return
+            try:
+                if worker_group.is_done():
+                    reason = (
+                        "Worker job terminated permanently (all retries exhausted). "
+                        "Workers likely crashed (OOM or other fatal error)."
+                    )
+                    logger.error("Worker watchdog: %s", reason)
+                    coordinator.abort.remote(reason)
+                    return
+            except Exception:
+                logger.debug("Worker watchdog: failed to check worker status", exc_info=True)
+
+    thread = threading.Thread(target=_watchdog, daemon=True, name="zephyr-worker-watchdog")
+    thread.start()
+    return thread
+
+
+def _run_coordinator_job(config_path: str, result_path: str) -> None:
+    """Entrypoint for the coordinator job.
+
+    Reads the plan from disk, creates coordinator and worker actors as
+    child jobs, runs the pipeline, and writes results to disk. Because
+    the coordinator and worker actors are child jobs of this job, Iris
+    automatically kills them when this job terminates (cascading
+    termination for single-task jobs).
+    """
+    from fray.v2.client import current_client
+
+    with open_url(config_path, "rb") as f:
+        config: _CoordinatorJobConfig = cloudpickle.loads(f.read())
+
+    logger.info(
+        "Coordinator job starting: name=%s, execution_id=%s, pipeline=%d, attempt=%d",
+        config.name,
+        config.execution_id,
+        config.pipeline_id,
+        config.attempt,
+    )
+
+    client = current_client()
+
+    coord_name = f"zephyr-{config.name}-p{config.pipeline_id}-a{config.attempt}-coord"
+    worker_name = f"zephyr-{config.name}-p{config.pipeline_id}-a{config.attempt}-workers"
+
+    # Create coordinator actor (child job of this coordinator job)
+    coordinator_group = client.create_actor_group(
+        ZephyrCoordinator,
+        name=coord_name,
+        count=1,
+        resources=ResourceConfig(cpu=1, ram="5g"),
+        actor_config=ActorConfig(max_concurrency=100),
+    )
+    coordinator = coordinator_group.wait_ready()[0]
+    coordinator.initialize.remote(
+        config.chunk_storage_prefix,
+        coordinator,
+        config.no_workers_timeout,
+    ).result()
+
+    logger.info("Coordinator actor initialized: %s", coord_name)
+
+    # Create workers (child jobs of this coordinator job)
+    num_shards = config.plan.num_shards
+    actual_workers = min(config.max_workers, num_shards) if num_shards > 0 else 0
+    worker_group = None
+
+    if actual_workers > 0:
+        logger.info(
+            "Starting worker group: %d workers (max_workers=%d, num_shards=%d)",
+            actual_workers,
+            config.max_workers,
+            num_shards,
+        )
+        worker_group = client.create_actor_group(
+            ZephyrWorker,
+            coordinator,
+            name=worker_name,
+            count=actual_workers,
+            resources=config.worker_resources,
+            actor_config=ActorConfig(max_task_retries=10),
+        )
+        worker_group.wait_ready(count=1, timeout=3600.0)
+        logger.info("Worker group ready: %d workers", actual_workers)
+
+    # Start watchdog that aborts the coordinator if workers die permanently
+    watchdog_stop = threading.Event()
+    watchdog_thread = _start_watchdog(worker_group, coordinator, watchdog_stop)
+
+    try:
+        results = coordinator.run_pipeline.remote(config.plan, config.execution_id, config.hints).result()
+        _write_job_result(result_path, _CoordinatorJobResult(results=results))
+    except Exception as e:
+        # Persist the original exception so the caller can re-raise it
+        # with the correct type (important for non-retryable error detection).
+        with suppress(Exception):
+            _write_job_result(result_path, _CoordinatorJobResult(error=e))
+        raise
+    finally:
+        watchdog_stop.set()
+        if watchdog_thread is not None:
+            watchdog_thread.join(timeout=15.0)
+        # Explicit cleanup — Iris cascade also kills these, but being
+        # explicit is cheaper than waiting for the controller sweep.
+        if worker_group is not None:
+            with suppress(Exception):
+                worker_group.shutdown()
+        with suppress(Exception):
+            coordinator_group.shutdown()
+        with suppress(Exception):
+            client.shutdown(wait=False)
+
+
 @dataclass
 class ZephyrContext:
     """Execution context for Zephyr pipelines.
 
-    Each execute() call creates a fresh coordinator and worker pool, runs
-    the pipeline, then tears everything down. Workers are sized to
-    min(max_workers, plan.num_shards) to avoid over-provisioning. Shared
-    data registered via put() is serialized to disk once and loaded lazily
-    by workers on first access.
+    Each execute() call serializes the plan and submits a coordinator *job*
+    that internally creates coordinator and worker actors. The coordinator
+    job owns the full lifecycle: it boots workers, runs the pipeline, writes
+    results to disk, and tears everything down. Because coordinator and
+    worker actors are child jobs of the coordinator job, Iris automatically
+    kills them when the coordinator job terminates (cascading termination).
+
+    This design fixes the stale-coordinator bug (#3705): if the parent task
+    is rescheduled, the old coordinator job and its children are cleaned up
+    instead of being orphaned.
 
     Args:
         client: The fray client to use. If None, auto-detects using current_client().
@@ -1304,10 +1495,8 @@ class ZephyrContext:
 
     # Shared data staged by put(), uploaded to disk at the start of execute()
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
-    _coordinator: ActorHandle | None = field(default=None, repr=False)
-    _coordinator_group: Any = field(default=None, repr=False)
-    _worker_group: Any = field(default=None, repr=False)
-    _worker_count: int = field(default=0, repr=False)
+    # Handle to the coordinator job (for termination on retry/shutdown)
+    _coordinator_job: Any = field(default=None, repr=False)
     # NOTE: execute calls increment this at the very beginning
     _pipeline_id: int = field(default=-1, repr=False)
 
@@ -1375,12 +1564,18 @@ class ZephyrContext:
     ) -> Sequence:
         """Execute a dataset pipeline.
 
-        Each call creates a fresh coordinator and worker pool, runs the
-        pipeline, then tears everything down. If the coordinator dies
-        mid-execution (e.g., VM preemption), the pipeline is retried
-        with fresh actors up to ``max_execution_retries`` times.
-        Application errors (``ZephyrWorkerError``) are never retried.
+        Submits a coordinator *job* that internally creates coordinator and
+        worker actors, runs the pipeline, and writes results to disk. The
+        coordinator job owns the full worker lifecycle: if it dies, workers
+        are killed via Iris cascading termination.
+
+        If the coordinator job fails mid-execution (e.g., VM preemption),
+        the pipeline is retried with a fresh job up to
+        ``max_execution_retries`` times. Application errors
+        (``ZephyrWorkerError``) are never retried.
         """
+        from fray.v2.types import Entrypoint, JobRequest
+
         plan = compute_plan(dataset, hints)
         if verbose or dry_run:
             _print_plan(dataset.operations, plan)
@@ -1399,38 +1594,73 @@ class ZephyrContext:
                 "Starting zephyr pipeline: %s (pipeline %d, attempt %d)", execution_id, self._pipeline_id, attempt
             )
 
+            config_path = f"{self.chunk_storage_prefix}/{execution_id}/job-config.pkl"
+            result_path = f"{self.chunk_storage_prefix}/{execution_id}/results.pkl"
+
             try:
                 self._upload_shared_data(execution_id)
-                self._create_coordinator(attempt)
-                self._create_workers(plan.num_shards, attempt)
 
-                # Actor creation succeeded — reset backoff so that a later
+                # Serialize coordinator job config to disk
+                config = _CoordinatorJobConfig(
+                    plan=plan,
+                    execution_id=execution_id,
+                    hints=hints,
+                    chunk_storage_prefix=self.chunk_storage_prefix,
+                    no_workers_timeout=self.no_workers_timeout,
+                    max_workers=self.max_workers,
+                    worker_resources=self.resources,
+                    name=self.name,
+                    pipeline_id=self._pipeline_id,
+                    attempt=attempt,
+                )
+                _write_job_config(config_path, config)
+
+                # Submit coordinator as a job. The job creates coordinator
+                # and worker actors internally as child jobs.
+                job_name = f"zephyr-{self.name}-p{self._pipeline_id}-a{attempt}"
+                self._coordinator_job = self.client.submit(
+                    JobRequest(
+                        name=job_name,
+                        entrypoint=Entrypoint.from_callable(
+                            _run_coordinator_job,
+                            args=(config_path, result_path),
+                        ),
+                        resources=ResourceConfig(cpu=1, ram="5g"),
+                    )
+                )
+
+                # Job submitted — reset backoff so that a later
                 # mid-pipeline failure doesn't start with a long delay.
                 backoff.reset()
 
-                # Start watchdog that aborts the coordinator if the worker
-                # job terminates permanently (e.g. all retries exhausted
-                # after OOM). Without this, the coordinator would wait up to
-                # no_workers_timeout (6h default) before giving up.
-                watchdog_stop = threading.Event()
-                watchdog_thread = self._start_worker_watchdog(watchdog_stop)
+                logger.info("Coordinator job submitted: %s (job_id=%s)", job_name, self._coordinator_job.job_id)
 
-                try:
-                    # Run pipeline on coordinator (blocking call).
-                    # run_pipeline() calls coordinator.shutdown() at the end,
-                    # which causes workers to receive SHUTDOWN on their next
-                    # pull_task() call.
-                    results = self._coordinator.run_pipeline.remote(plan, execution_id, hints).result()
+                # Wait for coordinator job to complete (blocking)
+                self._coordinator_job.wait(raise_on_failure=True)
 
-                    return results
-                finally:
-                    watchdog_stop.set()
-                    watchdog_thread.join(timeout=15.0)
+                # Read results written by the coordinator job
+                result = _read_job_result(result_path)
+                if result.error is not None:
+                    raise result.error
+                return result.results or []
 
             except _NON_RETRYABLE_ERRORS:
                 raise
 
             except Exception as e:
+                # The coordinator job may have written the original exception
+                # to disk before failing. Try to recover it so that
+                # non-retryable errors (ZephyrWorkerError, ValueError, …)
+                # are detected correctly.
+                try:
+                    result = _read_job_result(result_path)
+                    if result.error is not None and isinstance(result.error, _NON_RETRYABLE_ERRORS):
+                        raise result.error from None
+                except _NON_RETRYABLE_ERRORS:
+                    raise
+                except Exception:
+                    pass  # No result file or read failed — use the job exception
+
                 last_exception = e
                 if attempt >= self.max_execution_retries:
                     raise
@@ -1446,122 +1676,24 @@ class ZephyrContext:
                 time.sleep(delay)
 
             finally:
-                # Tear down coordinator and workers for this pipeline
-                self.shutdown()
+                # Kill the coordinator job (and its child actors via cascade)
+                self._terminate_coordinator_job()
                 # Clean up chunks for this execution
                 _cleanup_execution(self.chunk_storage_prefix, execution_id)
 
         # Should be unreachable, but just in case
         raise last_exception  # type: ignore[misc]
 
-    def _start_worker_watchdog(self, stop_event: threading.Event) -> threading.Thread:
-        """Start a daemon thread that aborts the coordinator when the worker job dies.
-
-        Polls worker_group.is_done() every 10s. When the worker job has
-        permanently terminated (retries exhausted), calls coordinator.abort()
-        which sets _fatal_error, causing _wait_for_stage() to raise
-        ZephyrWorkerError on the next iteration.
-        """
-        poll_interval = 10.0
-
-        def _watchdog():
-            while not stop_event.is_set():
-                stop_event.wait(poll_interval)
-                if stop_event.is_set():
-                    return
-                if self._worker_group is None:
-                    continue
-                try:
-                    if self._worker_group.is_done():
-                        reason = (
-                            "Worker job terminated permanently (all retries exhausted). "
-                            "Workers likely crashed (OOM or other fatal error)."
-                        )
-                        logger.error("Worker watchdog: %s", reason)
-                        if self._coordinator is not None:
-                            self._coordinator.abort.remote(reason)
-                        return
-                except Exception:
-                    logger.debug("Worker watchdog: failed to check worker status", exc_info=True)
-
-        thread = threading.Thread(target=_watchdog, daemon=True, name="zephyr-worker-watchdog")
-        thread.start()
-        return thread
-
-    def _create_coordinator(self, attempt: int = 0) -> None:
-        """Create a fresh coordinator actor."""
-        # max_concurrency allows workers to call pull_task/report_result
-        # while run_pipeline blocks.
-        logger.info("Starting coordinator for %s (pipeline %d, attempt %d)", self.name, self._pipeline_id, attempt)
-        coordinator_resources = ResourceConfig(cpu=1, ram="5g")
-        coordinator_actor_config = ActorConfig(max_concurrency=100)
-        self._coordinator_group = self.client.create_actor_group(
-            ZephyrCoordinator,
-            name=f"zephyr-{self.name}-p{self._pipeline_id}-a{attempt}-coord",
-            count=1,
-            resources=coordinator_resources,
-            actor_config=coordinator_actor_config,
-        )
-        self._coordinator = self._coordinator_group.wait_ready()[0]
-
-        self._coordinator.initialize.remote(
-            self.chunk_storage_prefix,
-            self._coordinator,
-            self.no_workers_timeout,
-        ).result()
-
-        logger.info("Coordinator initialized for %s", self.name)
-
-    def _create_workers(self, num_shards: int, attempt: int = 0) -> None:
-        """Create a fresh worker pool sized to demand.
-
-        The worker count is min(max_workers, num_shards) to avoid
-        over-provisioning when there are fewer shards than the cap.
-        """
-        if num_shards == 0:
-            logger.warning("No shards to process, skipping worker creation")
-            return
-
-        assert self.max_workers is not None  # set by __post_init__
-        actual_workers = min(self.max_workers, num_shards)
-        logger.info(
-            "Starting worker group: %d workers (max_workers=%d, num_shards=%d, attempt=%d)",
-            actual_workers,
-            self.max_workers,
-            num_shards,
-            attempt,
-        )
-        self._worker_group = self.client.create_actor_group(
-            ZephyrWorker,
-            self._coordinator,  # Pass coordinator handle as init arg
-            name=f"zephyr-{self.name}-p{self._pipeline_id}-a{attempt}-workers",
-            count=actual_workers,
-            resources=self.resources,
-            actor_config=ActorConfig(max_task_retries=10),
-        )
-
-        self._worker_count = actual_workers
-
-        # Wait for at least one worker to be ready before proceeding
-        self._worker_group.wait_ready(count=1, timeout=3600.0)
-
-        logger.info("ZephyrContext initialized with coordinator and %d workers", actual_workers)
+    def _terminate_coordinator_job(self) -> None:
+        """Terminate the coordinator job if it is still running."""
+        if self._coordinator_job is not None:
+            with suppress(Exception):
+                self._coordinator_job.terminate()
+            self._coordinator_job = None
 
     def shutdown(self) -> None:
-        """Shutdown coordinator and all workers."""
-        # Terminate worker group
-        if self._worker_group is not None:
-            with suppress(Exception):
-                self._worker_group.shutdown()
-
-        # Terminate coordinator actor group
-        if self._coordinator_group is not None:
-            with suppress(Exception):
-                self._coordinator_group.shutdown()
-
-        self._coordinator = None
-        self._coordinator_group = None
-        self._worker_group = None
+        """Shutdown the coordinator job and all child actors."""
+        self._terminate_coordinator_job()
 
 
 def _reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
