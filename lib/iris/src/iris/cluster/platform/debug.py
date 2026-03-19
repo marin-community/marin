@@ -335,6 +335,10 @@ def controller_tunnel(
             client = IrisClient.remote(url)
             job = client.submit(...)
     """
+    from iris.cluster.platform.gcp import _check_gcloud_ssh_key
+
+    _check_gcloud_ssh_key()
+
     vm_name = discover_controller_vm(zone, project, label_prefix)
     if not vm_name:
         raise RuntimeError(f"No controller VM found in zone {zone}")
