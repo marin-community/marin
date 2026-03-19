@@ -3,14 +3,14 @@
 
 """Local in-process cluster for testing.
 
-Runs Controller + Autoscaler(LocalPlatform) in the current process.
+Runs Controller + Autoscaler(GcpPlatform + GcpServiceImpl(LOCAL)) in the current process.
 Workers are threads, not VMs. No Docker, no GCS, no SSH.
 
 This module lives outside both controller/ and platform/ to avoid the
 circular dependency that existed when this code lived in controller/local.py.
 
 Provides:
-- create_local_autoscaler: Factory for creating autoscaler with LocalPlatform
+- create_local_autoscaler: Factory for creating autoscaler with GcpPlatform(LOCAL)
 - LocalCluster: In-process cluster implementation for testing
 - make_local_cluster_config: Build a fully-configured IrisClusterConfig for local execution
 """
@@ -39,7 +39,9 @@ from iris.cluster.controller.scaling_group import (
     ScalingGroup,
 )
 from iris.cluster.platform.base import find_free_port
-from iris.cluster.platform.local import LocalPlatform
+from iris.cluster.platform.gcp import GcpPlatform
+from iris.cluster.platform.gcp_service_impl import GcpServiceImpl
+from iris.cluster.platform.service_mode import ServiceMode
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
@@ -53,10 +55,10 @@ def create_local_autoscaler(
     threads: ThreadContainer | None = None,
     db: ControllerDB | None = None,
 ) -> tuple[Autoscaler, tempfile.TemporaryDirectory]:
-    """Create Autoscaler with LocalPlatform for all scale groups.
+    """Create Autoscaler with GcpPlatform(LOCAL) for all scale groups.
 
-    Creates temp directories and a PortAllocator so that LocalPlatform can
-    spawn real Worker threads that register with the controller.
+    Creates temp directories and a PortAllocator so that GcpServiceImpl(LOCAL)
+    can spawn real Worker threads that register with the controller.
 
     Args:
         config: Cluster configuration (with defaults already applied)
@@ -80,7 +82,7 @@ def create_local_autoscaler(
     port_allocator = PortAllocator()
 
     # Extract worker attributes and GPU counts from each scale group config so
-    # that LocalPlatform can propagate them to local workers.
+    # that GcpServiceImpl(LOCAL) can propagate them to local workers.
     worker_attributes_by_group: dict[str, dict[str, str | int | float]] = {}
     gpu_count_by_group: dict[str, int] = {}
     for name, sg_config in config.scale_groups.items():
@@ -95,16 +97,24 @@ def create_local_autoscaler(
 
     storage_prefix = config.storage.remote_state_dir or ""
 
-    platform = LocalPlatform(
-        label_prefix=label_prefix,
-        threads=threads,
+    gcp_service = GcpServiceImpl(
+        mode=ServiceMode.LOCAL,
+        project_id="local",
         controller_address=controller_address,
         cache_path=cache_path,
         fake_bundle=fake_bundle,
         port_allocator=port_allocator,
+        threads=threads,
         worker_attributes_by_group=worker_attributes_by_group,
         gpu_count_by_group=gpu_count_by_group,
         storage_prefix=storage_prefix,
+        label_prefix=label_prefix,
+    )
+    local_gcp_config = config_pb2.GcpPlatformConfig(project_id="local")
+    platform = GcpPlatform(
+        gcp_config=local_gcp_config,
+        label_prefix=label_prefix,
+        gcp_service=gcp_service,
     )
 
     scale_up_delay = Duration.from_proto(config.defaults.autoscaler.scale_up_delay)
@@ -142,8 +152,8 @@ def create_local_autoscaler(
 class LocalCluster:
     """In-process cluster for local testing.
 
-    Runs Controller + Autoscaler(LocalPlatform) in the current process.
-    Workers are threads, not VMs. No Docker, no GCS, no SSH.
+    Runs Controller + Autoscaler(GcpPlatform + GcpServiceImpl(LOCAL)) in the current
+    process. Workers are threads, not VMs. No Docker, no GCS, no SSH.
 
     A single instance can be stopped and restarted via restart(). The controller
     DB lives in a persistent _db_dir created at construction time, so checkpoints

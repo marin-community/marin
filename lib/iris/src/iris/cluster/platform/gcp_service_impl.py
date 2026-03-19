@@ -20,18 +20,30 @@ import os
 import re
 import subprocess
 import tempfile
+import uuid
 from datetime import datetime
+from pathlib import Path
 
-from iris.cluster.platform.base import PlatformError, QuotaExhaustedError, ResourceNotFoundError
+from iris.cluster.platform.base import (
+    Labels,
+    PlatformError,
+    QuotaExhaustedError,
+    ResourceNotFoundError,
+    find_free_port,
+)
 from iris.cluster.platform.gcp_service import (
     TpuCreateRequest,
     TpuInfo,
     VmCreateRequest,
     VmInfo,
 )
+from iris.cluster.platform.local import LocalSliceHandle
 from iris.cluster.platform.service_mode import ServiceMode
 from iris.cluster.types import TPU_TOPOLOGIES
-from iris.time_utils import Timestamp
+from iris.cluster.worker.port_allocator import PortAllocator
+from iris.managed_thread import ThreadContainer
+from iris.rpc import config_pb2
+from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +192,21 @@ class GcpServiceImpl:
 
     DEFAULT_QUOTA = 100
 
-    def __init__(self, mode: ServiceMode, project_id: str = "") -> None:
+    def __init__(
+        self,
+        mode: ServiceMode,
+        project_id: str = "",
+        # LOCAL mode params (extracted from LocalPlatform constructor)
+        controller_address: str | None = None,
+        cache_path: Path | None = None,
+        fake_bundle: Path | None = None,
+        port_allocator: PortAllocator | None = None,
+        threads: ThreadContainer | None = None,
+        worker_attributes_by_group: dict[str, dict[str, str | int | float]] | None = None,
+        gpu_count_by_group: dict[str, int] | None = None,
+        storage_prefix: str = "",
+        label_prefix: str = "iris",
+    ) -> None:
         self._mode = mode
         self._project_id = project_id
 
@@ -195,6 +221,21 @@ class GcpServiceImpl:
         # Failure injection (DRY_RUN/LOCAL only)
         self._injected_failures: dict[str, PlatformError] = {}
         self._zone_quotas: dict[str, int] = {}
+
+        # LOCAL mode: worker spawning params
+        self._controller_address = controller_address
+        self._cache_path = cache_path
+        self._fake_bundle = fake_bundle
+        self._port_allocator = port_allocator
+        self._threads = threads or (ThreadContainer(name="gcp-service-local") if mode == ServiceMode.LOCAL else None)
+        self._worker_attributes_by_group = worker_attributes_by_group or {}
+        self._gpu_count_by_group = gpu_count_by_group or {}
+        self._storage_prefix = storage_prefix
+        self._label_prefix = label_prefix
+        self._iris_labels = Labels(label_prefix) if mode == ServiceMode.LOCAL else None
+
+        # LOCAL mode: track spawned workers per slice for cleanup
+        self._local_slices: dict[str, LocalSliceHandle] = {}
 
     @property
     def mode(self) -> ServiceMode:
@@ -274,7 +315,13 @@ class GcpServiceImpl:
 
     def tpu_create(self, request: TpuCreateRequest) -> TpuInfo:
         self._check_injected_failure("tpu_create")
-        self._validate_tpu_create(request)
+
+        if self._mode == ServiceMode.LOCAL:
+            # LOCAL mode: skip strict GCP validation (zones, accelerator types)
+            self._validate_resource_name(request.name, "TPU")
+            self._validate_labels(request.labels)
+        else:
+            self._validate_tpu_create(request)
 
         if self._mode == ServiceMode.CLOUD:
             return self._tpu_create_cloud(request)
@@ -382,6 +429,11 @@ class GcpServiceImpl:
 
         # DRY_RUN / LOCAL: remove from in-memory state
         self._tpus.pop((name, zone), None)
+
+        # LOCAL: stop worker threads for this slice
+        local_slice = self._local_slices.pop(name, None)
+        if local_slice is not None:
+            local_slice.terminate()
 
     def _tpu_delete_cloud(self, name: str, zone: str) -> None:
         cmd = [
@@ -804,3 +856,182 @@ class GcpServiceImpl:
             logger.warning("Failed to get serial port output for %s: %s", name, result.stderr.strip())
             return ""
         return result.stdout
+
+    # ========================================================================
+    # LOCAL mode: worker spawning
+    # ========================================================================
+
+    def create_local_slice(
+        self,
+        slice_id: str,
+        config: config_pb2.SliceConfig,
+        worker_config: config_pb2.WorkerConfig | None = None,
+    ) -> LocalSliceHandle:
+        """Create a local slice, spawning real Worker threads if controller_address is set.
+
+        Extracted from LocalPlatform.create_slice / _create_slice_with_workers.
+        """
+        num_vms = config.num_vms or 1
+
+        if self._controller_address is not None:
+            handle = self._create_slice_with_workers(slice_id, num_vms, config, worker_config)
+        else:
+            vm_ids = [f"{slice_id}-worker-{i}" for i in range(num_vms)]
+            addresses = [f"localhost:{9000 + i}" for i in range(num_vms)]
+            handle = LocalSliceHandle(
+                _slice_id=slice_id,
+                _vm_ids=vm_ids,
+                _addresses=addresses,
+                _labels=dict(config.labels),
+                _created_at=Timestamp.now(),
+                _label_prefix=self._label_prefix,
+            )
+
+        self._local_slices[slice_id] = handle
+        return handle
+
+    def _create_slice_with_workers(
+        self,
+        slice_id: str,
+        num_vms: int,
+        config: config_pb2.SliceConfig,
+        worker_config: config_pb2.WorkerConfig | None = None,
+    ) -> LocalSliceHandle:
+        """Spawn real Worker threads for a slice.
+
+        Extracted from LocalPlatform._create_slice_with_workers.
+        """
+        from iris.cluster.bundle import BundleStore
+        from iris.cluster.runtime.process import ProcessRuntime
+        from iris.cluster.types import get_tpu_topology
+        from iris.cluster.worker.env_probe import FixedEnvironmentProvider, HardwareProbe, build_worker_metadata
+        from iris.cluster.worker.worker import Worker, WorkerConfig
+
+        assert self._cache_path is not None
+        assert self._threads is not None
+        assert self._iris_labels is not None
+
+        workers: list[Worker] = []
+        vm_ids: list[str] = []
+        addresses: list[str] = []
+
+        worker_count = num_vms
+        is_tpu = config.accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
+        is_gpu = config.accelerator_type == config_pb2.ACCELERATOR_TYPE_GPU
+        if is_tpu and config.accelerator_variant:
+            try:
+                topo = get_tpu_topology(config.accelerator_variant)
+                worker_count = topo.vm_count
+            except ValueError:
+                logger.debug("Unknown accelerator variant %r; TPU topology not available", config.accelerator_variant)
+
+        for tpu_worker_id in range(worker_count):
+            worker_id = f"worker-{slice_id}-{tpu_worker_id}-{uuid.uuid4().hex[:8]}"
+            bundle_store = BundleStore(
+                storage_dir=str(self._cache_path / f"bundles-{worker_id}"),
+                controller_address=self._controller_address,
+            )
+            container_runtime = ProcessRuntime(cache_dir=self._cache_path / worker_id)
+            worker_port = find_free_port()
+
+            extra_attrs: dict[str, str] = {}
+            sg_name = config.labels.get(self._iris_labels.iris_scale_group, "")
+            if sg_name and sg_name in self._worker_attributes_by_group:
+                for k, v in self._worker_attributes_by_group[sg_name].items():
+                    extra_attrs.setdefault(k, str(v))
+
+            if worker_config is not None:
+                for k, v in worker_config.worker_attributes.items():
+                    extra_attrs.setdefault(k, v)
+
+            extra_attrs.setdefault("region", "local")
+            preemptible = extra_attrs.pop("preemptible", "false").lower() == "true"
+
+            gpu_count = 0
+            if is_gpu:
+                gpu_count = self._gpu_count_by_group.get(sg_name, 1)
+
+            hardware = HardwareProbe(
+                hostname="local",
+                ip_address="127.0.0.1",
+                cpu_count=1000,
+                memory_bytes=1000 * 1024**3,
+                disk_bytes=100 * 1024**3,
+                gpu_count=0,
+                gpu_name="",
+                gpu_memory_mb=0,
+                tpu_name=slice_id if is_tpu else "",
+                tpu_type=config.accelerator_variant if is_tpu else "",
+                tpu_worker_hostnames="",
+                tpu_worker_id=str(tpu_worker_id) if is_tpu else "",
+                tpu_chips_per_host_bounds="",
+            )
+
+            metadata = build_worker_metadata(
+                hardware=hardware,
+                accelerator_type=config.accelerator_type,
+                accelerator_variant=config.accelerator_variant,
+                gpu_count_override=gpu_count,
+                preemptible=preemptible,
+                worker_attributes=extra_attrs,
+            )
+
+            env_provider = FixedEnvironmentProvider(metadata)
+
+            wc = WorkerConfig(
+                host="127.0.0.1",
+                port=worker_port,
+                cache_dir=self._cache_path / worker_id,
+                controller_address=self._controller_address,
+                worker_id=worker_id,
+                default_task_image="process-runtime-unused",
+                poll_interval=Duration.from_seconds(0.1),
+                storage_prefix=self._storage_prefix,
+                auth_token=worker_config.auth_token if worker_config is not None else "",
+            )
+            worker_threads = self._threads.create_child(f"worker-{worker_id}")
+            worker = Worker(
+                wc,
+                bundle_store=bundle_store,
+                container_runtime=container_runtime,
+                environment_provider=env_provider,
+                port_allocator=self._port_allocator,
+                threads=worker_threads,
+            )
+            worker.start()
+            workers.append(worker)
+            vm_ids.append(worker_id)
+            addresses.append(f"127.0.0.1:{worker_port}")
+
+        logger.info(
+            "GcpServiceImpl(LOCAL) created slice %s with %d workers",
+            slice_id,
+            len(workers),
+        )
+
+        return LocalSliceHandle(
+            _slice_id=slice_id,
+            _vm_ids=vm_ids,
+            _addresses=addresses,
+            _labels=dict(config.labels),
+            _created_at=Timestamp.now(),
+            _label_prefix=self._label_prefix,
+            _workers=workers,
+        )
+
+    def get_local_slices(self, labels: dict[str, str] | None = None) -> list[LocalSliceHandle]:
+        """Return tracked local slices, optionally filtered by labels."""
+        results = list(self._local_slices.values())
+        if labels:
+            results = [s for s in results if all(s.labels.get(k) == v for k, v in labels.items())]
+        return results
+
+    def shutdown(self) -> None:
+        """Stop all local worker threads. No-op in CLOUD/DRY_RUN modes."""
+        if self._mode != ServiceMode.LOCAL:
+            return
+        for s in list(self._local_slices.values()):
+            s.terminate()
+        self._local_slices.clear()
+        if self._threads is not None:
+            self._threads.stop(timeout=Duration.from_seconds(5.0))
