@@ -24,7 +24,7 @@ dependencies = [
     "typing-extensions>=4.0",
     "uvicorn[standard]>=0.23.0",
     "duckdb>=1.0.0",
-    "pyarrow>=11.0.0",
+    "pyarrow>=19.0.0",
 ]
 
 [project.optional-dependencies]
