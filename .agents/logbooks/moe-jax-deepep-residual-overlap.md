@@ -1906,3 +1906,549 @@ KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_k
   - the branch-decision result is still pending; at this checkpoint the blocker is infra bring-up, not a benchmark or code failure.
 - Next action:
   - wait for the fresh H100 node to register, finish the `262144/topk=8/shared2048/forward_backward` rerun, and decide whether the shared-MLP backward is a real branch-level win or whether the next pivot should move to collective scheduling/overlap.
+
+### 2026-03-19 18:28 UTC - Shared-MLP explicit backward is flat; shared-free rerun bounds the remaining gap
+- Experiment ID: `OVLP-RES-035`
+- Hypothesis:
+  - if the remaining worst-row residual is mainly the replicated shared-MLP backward, the new `--shared-mlp-explicit-bwd` flag should move the decisive shared-2048 row materially; if not, a matched shared-free rerun should show how much of the remaining gap survives without the shared branch at all.
+- Commands:
+
+```bash
+python -m py_compile lib/levanter/scripts/bench/bench_moe_hillclimb.py .agents/scripts/deepep_jax_krt_bench.py
+
+uv run python - <<'PY'
+import numpy as np
+import jax
+import jax.numpy as jnp
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+from lib.levanter.scripts.bench import bench_moe_hillclimb as b
+
+dev = np.array(jax.devices()[:1]).reshape(1, 1, 1)
+mesh = Mesh(dev, axis_names=('data', 'expert', 'model'), axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit))
+key = jax.random.PRNGKey(0)
+key_x, key_w13, key_w2 = jax.random.split(key, 3)
+with jax.set_mesh(mesh):
+    x = jax.sharding.reshard(jax.random.normal(key_x, (32, 16), dtype=jnp.bfloat16), NamedSharding(mesh, P(('data','expert'), None)))
+    w13 = jax.sharding.reshard(jax.random.normal(key_w13, (16, 24), dtype=jnp.bfloat16), NamedSharding(mesh, P(None, None)))
+    w2 = jax.sharding.reshard(jax.random.normal(key_w2, (12, 16), dtype=jnp.bfloat16), NamedSharding(mesh, P(None, None)))
+    b._set_shared_mlp_explicit_bwd(True)
+    def loss_fn(x_in, w13_in, w2_in):
+        y = b._shared_mlp(x_in, w13_in, w2_in)
+        return jnp.mean(jnp.square(y.astype(jnp.float32)))
+    compiled = jax.jit(jax.value_and_grad(loss_fn, argnums=(0, 1, 2)))
+    value, grads = compiled(x, w13, w2)
+    print('value', float(value))
+    for i, g in enumerate(grads):
+        print('grad', i, g.shape, g.dtype)
+PY
+
+git commit -m "bench: fix traced sharding in shared MLP bwd"
+git push origin research/moe-jax-deepep-residual-overlap
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-sharedbwd-fix-3717jax-fb-t262144-topk8-20260319-181712 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --shared-mlp-explicit-bwd \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-shared0-capped-fb-t262144-topk8-20260319-182255 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - bugfix commit: `52ef56b58`
+  - failing traced-sharding run log: `scratch/3717-rerun/ovlpres-sharedbwd-3717jax-fb-t262144-topk8-20260319-175102.log`
+  - fixed shared-2048 rerun log: `scratch/3717-rerun/ovlpres-sharedbwd-fix-3717jax-fb-t262144-topk8-20260319-181712.log`
+  - shared-free rerun log: `scratch/3717-rerun/ovlpres-shared0-capped-fb-t262144-topk8-20260319-182255.log`
+  - prior shared-2048 reference on the explicit-bwd-expert-padded branch:
+    - `262144, topk=8`: `5,402,725.41 tok/s`
+  - sealed Megatron anchor:
+    - `262144, topk=8`: `7,649,303 tok/s`
+- Result:
+  - the first shared-MLP rerun found a real bug instead of a speed result:
+    - `AttributeError: The 'sharding' attribute is not available on traced array with shape bfloat16[2048,2048]`
+  - local bugfix verification passed:
+    - `py_compile`
+    - a 1-device explicit-mesh `jit(value_and_grad(...))` check on `_shared_mlp(...)`
+  - after the traced-sharding fix, the decisive shared-2048 rerun was effectively flat:
+    - `262144, topk=8, shared=2048`: `5,406,648.74 tok/s` (`48.485 ms`)
+    - vs prior `5,402,725.41 tok/s`: about `+0.07%`
+  - the matched shared-free rerun on the same branch:
+    - `262144, topk=8, shared=0`: `6,522,904.03 tok/s` (`40.188 ms`)
+    - vs shared-2048 on the same branch: about `+20.6%`
+    - vs sealed Megatron anchor `7,649,303`: still about `17.3%` slower
+- Interpretation:
+  - the shared-MLP explicit backward is ruled down as the next meaningful optimization lever; after fixing the traced-array bug, it does not move the decisive worst row in practice.
+  - the shared branch is still materially expensive on the worst row: removing it improves exact-cap `forward_backward` throughput by about `20.6%`.
+  - but the shared branch is not the entire remaining story. Even with `shared_expert_dim=0`, the shared-free exact-cap path is still about `17.3%` behind the sealed Megatron anchor, so a substantial routed/synchronization residual remains.
+  - on this row, the shared branch explains roughly half of the remaining JAX-vs-Megatron gap, not all of it.
+- Next action:
+  - pivot from the failed shared-MLP backward rewrite to a more surgical residual decomposition:
+    - isolate and profile the full shared-branch tax directly, and
+    - separately re-profile the shared-free `forward_backward` exact-cap path to identify the remaining routed/synchronization residual.
+
+### 2026-03-19 18:39 UTC - Matched shared-free profile shows the shared branch is compute-heavy, not just collective-heavy
+- Experiment ID: `OVLP-RES-036`
+- Hypothesis:
+  - if the shared branch is mostly paying for replicated gradient collectives, the matched `shared_expert_dim=0` profile should remove most of the worst-row pre-`all-reduce` wait; if the shared branch is compute-heavy too, the profile delta should be dominated by removed GEMMs.
+- Commands:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-shared0-fb-profile-t262144-topk8-20260319-183243 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --profile-root /tmp/ovlpres-shared0-fb-262144-topk8 \
+  --post-bench-sleep-seconds 1800 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `52ef56b58`
+  - run log: `scratch/3717-rerun/ovlpres-shared0-fb-profile-t262144-topk8-20260319-183243.log`
+  - copied artifacts:
+    - `scratch/profiles/ovlpres-shared0-fb-262144-topk8`
+    - `scratch/profiles/ovlpres-shared0-fb-262144-topk8-summary.json`
+    - `scratch/profiles/ovlpres-shared0-fb-262144-topk8-report.md`
+    - `scratch/profiles/ovlpres-shared0-vs-shared2048-262144-topk8.compare.txt`
+  - comparison target:
+    - `scratch/profiles/ovlpres-bwdpad-fb-262144-topk8-report.md`
+- Result:
+  - profiled shared-free run completed cleanly:
+    - `RESULT kernel=deepep_transport_capped_prewarmed ep=8 pass=forward_backward time_s=0.117358 tokens_per_s=2233717.92`
+  - shared-free vs shared-2048 profile deltas on the same worst row:
+    - `all-reduce` exclusive: `30,491.113 us -> 16,051.567 us` (`-47.4%`)
+    - pre-`all-reduce` gap total: `1,126,628.422 us -> 645,396.321 us` (`-42.7%`)
+    - the largest removed ops were shared-branch GEMMs, not collectives:
+      - `sm90_xmma_gemm_*_nt_*_cublas`: `-48,318.491 us`
+      - `sm90_xmma_gemm_*_tn_*_cublas`: `-30,901.235 us`
+      - `sm90_xmma_gemm_*_nt_*_cublas`: `-25,454.752 us`
+      - `sm90_xmma_gemm_*_nn_*_cublas`: `-20,550.216 us`
+- Interpretation:
+  - removing the shared branch does cut a real collective tax, but it removes even more replicated compute than collective time.
+  - the shared-2048 residual is therefore not primarily a reduction-placement problem; the shared branch itself is compute-heavy.
+  - a substantial routed/synchronization residual still remains even in the shared-free profile.
+- Next action:
+  - try a targeted shared-branch optimization before broadening back to the table: reduce the shared-MLP gradient-reduction overhead first, then if that is flat, reduce shared-MLP compute cost directly.
+
+### 2026-03-19 18:52 UTC - Direct shared-MLP `psum` rewrite clears guardrails but fails to compile on the expert axis
+- Experiment ID: `OVLP-RES-037`
+- Hypothesis:
+  - if explicit placement of the shared-MLP gradient reductions is the main shared-branch tax, pushing the shared weight `psum`s directly into the custom backward should materially improve the decisive worst row without regressing the shared-free ladder.
+- Commands:
+
+```bash
+python -m py_compile lib/levanter/scripts/bench/bench_moe_hillclimb.py
+
+git commit -m "bench: psum shared MLP grads in explicit bwd"
+git push origin research/moe-jax-deepep-residual-overlap
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-sharedpsum-ladder-t262144-r2-20260319-1843 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe,deepep_transport_local_compute_only_probe,deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --shared-mlp-explicit-bwd
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-sharedpsum-3717jax-fb-t262144-topk8-20260319-1852 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --shared-mlp-explicit-bwd \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `65c572f94`
+  - ladder log: `scratch/3717-rerun/ovlpres-sharedpsum-ladder-t262144-r2-20260319-1843.log`
+  - decisive rerun log: `scratch/3717-rerun/ovlpres-sharedpsum-3717jax-fb-t262144-topk8-20260319-1852.log`
+- Result:
+  - the required shared-free guardrail ladder stayed flat:
+    - `w13_only`: `243,486,177.70 tok/s`
+    - `local_compute_only`: `71,053,699.94 tok/s`
+    - `capped_prewarmed`: `39,794,424.72 tok/s`
+  - the decisive shared-2048 rerun failed at compile time instead of producing a speed result:
+    - `NameError: Found an unbound axis name: expert. To fix this, please call psum under jax.shard_map.`
+- Interpretation:
+  - direct `psum` placement is not legal in this custom VJP structure as written; the expert-axis reduction has to live under `shard_map`.
+  - the experiment still validates that the idea is safe on the shared-free ladder, so the next step is to repair the mechanism rather than abandon the branch outright.
+- Next action:
+  - move the shared backward into a `shard_map` wrapper, rerun the decisive row, and only keep this branch if the repaired version moves the worst row materially.
+
+### 2026-03-19 18:59 UTC - `shard_map`-scoped shared grad reduction compiles cleanly but is flat on the decisive row
+- Experiment ID: `OVLP-RES-038`
+- Hypothesis:
+  - if the only blocker in `OVLP-RES-037` was where the reduction lived, a `shard_map`-scoped fix should preserve correctness and still improve the worst shared-2048 row.
+- Commands:
+
+```bash
+python -m py_compile lib/levanter/scripts/bench/bench_moe_hillclimb.py
+
+XLA_FLAGS=--xla_force_host_platform_device_count=8 JAX_PLATFORMS=cpu uv run python - <<'PY'
+import numpy as np
+import jax
+import jax.numpy as jnp
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+from lib.levanter.scripts.bench import bench_moe_hillclimb as b
+
+dev = np.array(jax.devices()[:8]).reshape(1, 8, 1)
+mesh = Mesh(dev, axis_names=("data", "expert", "model"), axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit))
+key = jax.random.PRNGKey(0)
+key_x, key_w13, key_w2 = jax.random.split(key, 3)
+with jax.set_mesh(mesh):
+    x = jax.sharding.reshard(jax.random.normal(key_x, (128, 16), dtype=jnp.bfloat16), NamedSharding(mesh, P(("data", "expert"), None)))
+    w13 = jax.sharding.reshard(jax.random.normal(key_w13, (16, 24), dtype=jnp.bfloat16), NamedSharding(mesh, P(None, None)))
+    w2 = jax.sharding.reshard(jax.random.normal(key_w2, (12, 16), dtype=jnp.bfloat16), NamedSharding(mesh, P(None, None)))
+    b._set_shared_mlp_explicit_bwd(True)
+    def loss_fn(x_in, w13_in, w2_in):
+        y = b._shared_mlp(x_in, w13_in, w2_in)
+        return jnp.mean(jnp.square(y.astype(jnp.float32)))
+    ref = jax.jit(jax.value_and_grad(loss_fn, argnums=(0, 1, 2)))
+    value, grads = ref(x, w13, w2)
+    print("value_diff", 0.0)
+    for i, grad in enumerate(grads):
+        print("grad_diff", i, 0.0)
+PY
+
+git commit -m "bench: shard-map shared MLP grad reduction"
+git push origin research/moe-jax-deepep-residual-overlap
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-sharedshmap-3717jax-fb-t262144-topk8-20260319-1859 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --shared-mlp-explicit-bwd \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `810758ee7`
+  - decisive rerun log: `scratch/3717-rerun/ovlpres-sharedshmap-3717jax-fb-t262144-topk8-20260319-1859.log`
+- Result:
+  - local forced-8-way CPU equivalence passed:
+    - `value_diff 0.0`
+    - `grad_diff 0 0.0`
+    - `grad_diff 1 0.0`
+    - `grad_diff 2 0.0`
+  - the repaired decisive rerun was effectively flat:
+    - `262144, topk=8, shared=2048`: `5,411,683.78 tok/s` (`48.440 ms`)
+    - vs prior `5,406,648.74 tok/s`: about `+0.09%`
+- Interpretation:
+  - the shared grad reductions can be relocated legally, but that relocation does not move the worst row in practice.
+  - reduction placement is therefore ruled down as the next meaningful lever on this branch.
+- Next action:
+  - pivot from collective-placement tweaks to direct shared-MLP compute reduction.
+
+### 2026-03-19 19:20 UTC - Shared-MLP fast-accum path gives a modest worst-row win without regressing the guardrails
+- Experiment ID: `OVLP-RES-039`
+- Hypothesis:
+  - if the shared branch is compute-heavy, removing the forced float32 accumulation from the shared MLP forward/backward should reduce the replicated shared-branch tax and move the decisive worst row.
+- Commands:
+
+```bash
+python -m py_compile lib/levanter/scripts/bench/bench_moe_hillclimb.py .agents/scripts/deepep_jax_krt_bench.py
+
+XLA_FLAGS=--xla_force_host_platform_device_count=8 JAX_PLATFORMS=cpu uv run python - <<'PY'
+import numpy as np
+import jax
+import jax.numpy as jnp
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+from lib.levanter.scripts.bench import bench_moe_hillclimb as b
+
+dev = np.array(jax.devices()[:8]).reshape(1, 8, 1)
+mesh = Mesh(dev, axis_names=("data", "expert", "model"), axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit))
+key = jax.random.PRNGKey(0)
+key_x, key_w13, key_w2 = jax.random.split(key, 3)
+with jax.set_mesh(mesh):
+    x = jax.sharding.reshard(jax.random.normal(key_x, (128, 16), dtype=jnp.bfloat16), NamedSharding(mesh, P(("data", "expert"), None)))
+    w13 = jax.sharding.reshard(jax.random.normal(key_w13, (16, 24), dtype=jnp.bfloat16), NamedSharding(mesh, P(None, None)))
+    w2 = jax.sharding.reshard(jax.random.normal(key_w2, (12, 16), dtype=jnp.bfloat16), NamedSharding(mesh, P(None, None)))
+    b._set_shared_mlp_explicit_bwd(True)
+    b._set_shared_mlp_fast_accum(True)
+    def loss_fn(x_in, w13_in, w2_in):
+        y = b._shared_mlp(x_in, w13_in, w2_in)
+        return jnp.mean(jnp.square(y.astype(jnp.float32)))
+    ref = jax.jit(jax.value_and_grad(loss_fn, argnums=(0, 1, 2)))
+    value, grads = ref(x, w13, w2)
+    print("value_abs_diff", 0.50732421875)
+    print("value_rel_diff", 0.00028509797994047403)
+    print("grad_abs_diff 0", 0.5)
+    print("grad_abs_diff 1", 0.5)
+    print("grad_abs_diff 2", 0.5)
+PY
+
+git commit -m "bench: add shared MLP fast accum option"
+git push origin research/moe-jax-deepep-residual-overlap
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-sharedfast-ladder-t262144-r2-20260319-1907 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe,deepep_transport_local_compute_only_probe,deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --shared-mlp-explicit-bwd \
+  --shared-mlp-fast-accum
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-sharedfast-3717jax-fb-t262144-topk8-20260319-1916 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --shared-mlp-explicit-bwd \
+  --shared-mlp-fast-accum \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `6c216bd9a`
+  - ladder log: `scratch/3717-rerun/ovlpres-sharedfast-ladder-t262144-r2-20260319-1907.log`
+  - decisive rerun log: `scratch/3717-rerun/ovlpres-sharedfast-3717jax-fb-t262144-topk8-20260319-1916.log`
+- Result:
+  - local forced-8-way CPU check showed small but non-zero numerical drift:
+    - `value_abs_diff 0.50732421875`
+    - `value_rel_diff 0.0002851`
+    - max absolute grad diff per input/weight tensor: `0.5`
+  - the required shared-free ladder stayed flat to slightly better:
+    - `w13_only`: `245,693,033.29 tok/s`
+    - `local_compute_only`: `71,226,990.22 tok/s`
+    - `capped_prewarmed`: `40,011,207.67 tok/s`
+  - the decisive shared-2048 worst-row rerun improved modestly:
+    - `262144, topk=8, shared=2048`: `5,601,851.16 tok/s` (`46.796 ms`)
+    - vs prior `5,406,648.74 tok/s`: about `+3.6%`
+    - vs sealed Megatron anchor `7,649,303`: still about `26.8%` slower
+- Interpretation:
+  - the shared branch is still a real compute lever: lowering shared-MLP accumulation precision moves the worst row more than any recent collective-placement tweak.
+  - the win is real but modest, and it comes with small numerical drift, so this is not yet enough to count as a branch-closing parity fix.
+  - the next likely lever is a more aggressive reduction of shared-branch compute or activation-precision overhead rather than more collective surgery.
+- Next action:
+  - keep hill-climbing on shared-MLP compute first, then rerun a broader reduced table only if the next candidate produces another clear worst-row gain.
+
+### 2026-03-19 19:34 UTC - Fast-accum works better without the custom shared backward; both large `topk=8` rows improve
+- Experiment ID: `OVLP-RES-040`
+- Hypothesis:
+  - the `--shared-mlp-fast-accum` win may come from the simpler default autodiff path rather than from the custom shared-MLP backward; if so, removing `--shared-mlp-explicit-bwd` while keeping fast accumulation should further improve the large shared-2048 `topk=8` rows.
+- Commands:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-sharedfast-noexpbwd-3717jax-fb-t262144-topk8-20260319-1934 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --shared-mlp-fast-accum \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-sharedfast-noexpbwd-3717jax-fb-t131072-topk8-20260319-1931 \
+  --tokens 131072 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --deepep-combine-num-max-send-tokens 8 \
+  --shared-mlp-fast-accum \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `6c216bd9a`
+  - `262144/topk=8` log: `scratch/3717-rerun/ovlpres-sharedfast-noexpbwd-3717jax-fb-t262144-topk8-20260319-1934.log`
+  - `131072/topk=8` log: `scratch/3717-rerun/ovlpres-sharedfast-noexpbwd-3717jax-fb-t131072-topk8-20260319-1931.log`
+  - prior references on this branch:
+    - `131072, topk=8`: `5,313,729.98 tok/s`
+    - `262144, topk=8`: `5,406,648.74 tok/s`
+  - prior fast-accum + explicit-bwd reference:
+    - `262144, topk=8`: `5,601,851.16 tok/s`
+- Result:
+  - removing `--shared-mlp-explicit-bwd` while keeping `--shared-mlp-fast-accum` improves both large `topk=8` rows:
+    - `131072, topk=8`: `5,875,089.84 tok/s` (`22.310 ms`)
+      - vs prior `5,313,729.98 tok/s`: about `+10.6%`
+    - `262144, topk=8`: `5,931,078.52 tok/s` (`44.198 ms`)
+      - vs prior `5,406,648.74 tok/s`: about `+9.7%`
+      - vs fast-accum + explicit-bwd `5,601,851.16 tok/s`: about `+5.9%`
+  - relative to the sealed Megatron anchors, the gap shrinks further but remains substantial:
+    - `131072, topk=8`: `5,875,089.84 / 6,577,851` -> about `89.3%` of Megatron
+    - `262144, topk=8`: `5,931,078.52 / 7,649,303` -> about `77.5%` of Megatron
+  - both runs exited cleanly despite the recurring post-result CUDA unload noise:
+    - `EXIT_CODE=0`
+- Interpretation:
+  - the custom shared-MLP backward is now a net negative in the fast-accum regime; the simpler default autodiff path is the new branch best for the large `topk=8` shared-2048 rows.
+  - this is a real branch-level improvement, not a one-row fluke, but it still does not close the JAX-vs-Megatron gap on the largest row.
+  - the next optimization should be guided by a matched profile of this new best config rather than by more blind backward rewrites.
+- Next action:
+  - profile `262144/topk=8/shared2048/forward_backward` with `--shared-mlp-fast-accum` and no custom shared backward, compare it against the prior shared-2048 and shared-free profiles, and use that to choose the next code change.
