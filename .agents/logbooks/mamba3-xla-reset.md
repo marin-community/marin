@@ -755,3 +755,119 @@
 - Decision:
   - Keep the internal `local_output auto` heuristic as the new XLA default.
   - Do not revisit Pallas for `local_output` unless future dump analysis shows a much clearer remaining compiler failure mode.
+
+### 2026-03-19 - Mamba-3 MIMO XLA implementation, tests, and first TPU sweep
+- Goal:
+  - Add the first real-valued MIMO Mamba-3 path on top of the current chunked XLA decomposition without changing the scan carry shape or introducing Pallas.
+- Implementation:
+  - Added a new MIMO API in:
+    - [mamba3/api.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/src/levanter/kernels/pallas/mamba3/api.py)
+    - `mamba3_mimo_chunked_forward(...)`
+    - `mamba3_mimo_chunked_forward_from_transformed(...)`
+  - Added reference-side helpers and oracles in:
+    - [mamba3/reference.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py)
+    - lightweight rank expand / collapse
+    - transformed chunked ranked oracle
+    - direct ranked recurrence oracle
+    - full public reference path with `X/Z/O` factorization
+  - Added the XLA path in:
+    - [mamba3/xla.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/src/levanter/kernels/pallas/mamba3/xla.py)
+    - `local_output`:
+      - `bc = einsum("gktnv,gksnu->gktsuv", c, b)`
+      - `y_local = einsum("gkts,gktsuv,gkspu->gktpv", decay, bc, x_scaled)`
+    - `chunk_state`:
+      - `einsum("gkcnu,gkcpu,gkc->gkpn", b, x, scaled_src)`
+    - inter-chunk scan:
+      - unchanged carry shape `[G, P, N]`
+    - `prefix_emit`:
+      - `einsum("gkpn,gkcnv,gkc->gkcpv", prefix_state, c, prefix_decay)`
+    - matrix-valued correction:
+      - `bc_diag = einsum("gktnu,gktnv->gktuv", b, c)`
+      - `y_corr = out_correction * einsum("gktpu,gktuv->gktpv", x, bc_diag)`
+    - gate/collapse stays outside the hot contractions:
+      - `rank_expand(X/Z)`
+      - `y_ranked * silu(z_ranked)`
+      - `rank_collapse(..., w_o)`
+- Design checks:
+  - the scan carry remains `[P, N]`
+  - rank does not enter the scan state
+  - no Pallas path was added
+- Test coverage added:
+  - `R=1` parity vs current SISO core
+  - direct ranked recurrence parity
+  - transformed ranked oracle parity
+  - `R^2` SISO decomposition oracle
+  - public API parity vs reference
+  - gradient parity on a small shape
+  - TPU-aligned compile smoke for `R=4`
+- Local validation:
+  - `./infra/pre-commit.py ... --fix` passed
+  - `uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_mamba3.py -q`
+    - `19 passed`
+- TPU compile sanity:
+  - `v5p-8`, `bf16`, `groups=16`, `seq_len=16384`, `state=128`, `value=512`, `rank=4`, `chunk=128`
+    - forward compile: `1.5076s`
+    - forward steady: `0.011021s`
+    - backward compile: `1.7470s`
+    - backward steady: `0.022908s`
+  - Conclusion:
+    - `R=4` compiles and runs end-to-end on TPU with XLA only
+- First TPU sweep:
+  - Setup:
+    - `v5p-8`
+    - `bf16`
+    - `groups=16`
+    - `seq_len=16384`
+    - `rank=4`
+    - current caveat:
+      - these are still default-placement runs rather than explicitly sharded slice measurements, so they should be read as effectively per-device-ish numbers
+  - `128 x 512`
+    - `chunk=128`
+      - forward: `23.87M tok/s`, `88.11` estimated TFLOP/s
+      - backward: `11.46M tok/s`, `42.30`
+      - remat-weighted combined: `64.74`
+    - `chunk=256`
+      - forward: `19.83M tok/s`, `125.18`
+      - backward: `10.82M tok/s`, `68.30`
+      - remat-weighted combined: `97.98`
+  - `512 x 1024`
+    - `chunk=128`
+      - forward: `8.85M tok/s`, `130.32`
+      - backward: `4.07M tok/s`, `59.89`
+      - remat-weighted combined: `93.62`
+    - `chunk=256`
+      - forward: `8.00M tok/s`, `168.14`
+      - backward: `4.29M tok/s`, `90.26`
+      - remat-weighted combined: `130.58`
+  - `1024 x 512`
+    - `chunk=128`
+      - forward: `10.03M tok/s`, `147.74`
+      - backward: `6.21M tok/s`, `91.52`
+      - remat-weighted combined: `122.63`
+    - `chunk=256`
+      - forward: `9.83M tok/s`, `206.58`
+      - backward: `6.30M tok/s`, `132.48`
+      - remat-weighted combined: `174.12`
+- Optional stress point:
+  - `128 x 512`, `chunk=512`
+    - forward: `15.03M tok/s`, `173.68`
+    - backward: `8.13M tok/s`, `93.91`
+    - remat-weighted combined: `135.36`
+- Interpretation:
+  - The acceptance criteria for the first phase are met:
+    - `R=1` parity
+    - `R=4` TPU compile/run on XLA only
+    - carry shape unchanged
+    - direct recurrence and `R^2` SISO decomposition tests
+    - `{128, 256}` benchmark sweep completed
+  - On this first `R=4` sweep, `chunk=256` beats `128` on all three fixed `(state, value)` pairs in remat-weighted contraction throughput.
+  - The old SISO story still partially shows up:
+    - larger chunk sizes increase contraction density
+    - but token throughput and contraction throughput are no longer aligned
+  - The optional `chunk=512` stress point on `128 x 512` suggests there may still be headroom beyond `256`, but it is already showing the same tradeoff:
+    - lower tokens/s
+    - higher contraction TFLOP/s
+- Decision:
+  - Keep the new XLA MIMO path.
+  - Use `chunk=256` as the next default candidate for `R=4` exploration on TPU.
+  - Do not start any Pallas work for MIMO at this stage.
