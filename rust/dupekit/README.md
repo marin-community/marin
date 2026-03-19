@@ -13,9 +13,9 @@ code and places it in the system `site-packages` (e.g., `/home/ray/anaconda3/lib
 >What about making `dupekit` a hybrid Python/Rust Maturin workspace? We tried and experienced issues getting
 the Docker build to work while keeping it simple—a simple Rust workspace helps keep the setup clean.
 
->[!WARNING]
->`dupekit` is configured as an optional dependency, thus must be explicitly requested e.g. via an `extra` group.
->If you get `ModuleNotFoundError: No module named 'dupekit'`, make sure you have requested/installed it.
+>[!NOTE]
+>Building from source requires a Rust toolchain (Cargo). Pre-built wheels are available
+>from GitHub Releases for users who don't want to compile locally.
 
 ## Benchmarking
 
