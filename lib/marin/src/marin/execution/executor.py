@@ -277,6 +277,7 @@ def _regions_for_tpu_variant_from_iris(variant: str) -> set[str] | None:
 
     variant = variant.lower()
     try:
+        # TODO: expose autoscaler status through a public Fray API.
         autoscaler_status = client._iris._cluster_client.get_autoscaler_status()
     except Exception:
         logger.warning("Could not query Iris autoscaler status for TPU region inference", exc_info=True)
@@ -304,6 +305,39 @@ def _regions_for_tpu_variant_from_iris(variant: str) -> set[str] | None:
     return regions or None
 
 
+def _regions_for_tpu_variants_from_iris(
+    variants: list[str],
+    *,
+    variant_region_cache: dict[str, set[str] | None],
+) -> set[str] | None:
+    inferred_regions: set[str] = set()
+    for variant in variants:
+        normalized_variant = variant.lower()
+        if normalized_variant not in variant_region_cache:
+            variant_region_cache[normalized_variant] = _regions_for_tpu_variant_from_iris(normalized_variant)
+        cached = variant_region_cache[normalized_variant]
+        if cached is None:
+            return None
+        inferred_regions |= cached
+    return inferred_regions
+
+
+def _tpu_regions_for_remote_callable(
+    remote_fn: RemoteCallable,
+    *,
+    variant_region_cache: dict[str, set[str] | None],
+) -> set[str] | None:
+    if not isinstance(remote_fn.resources.device, TpuConfig):
+        return None
+    if remote_fn.resources.regions:
+        return {r.lower() for r in remote_fn.resources.regions}
+
+    variants = [remote_fn.resources.device.variant]
+    if remote_fn.resources.device_alternatives:
+        variants.extend(remote_fn.resources.device_alternatives)
+    return _regions_for_tpu_variants_from_iris(variants, variant_region_cache=variant_region_cache)
+
+
 def _dag_tpu_regions(steps: list["ExecutorStep"]) -> list[str] | None:
     """Infer allowed regions for TPU steps in this DAG, if any."""
     tpu_region_intersection: set[str] | None = None
@@ -313,19 +347,9 @@ def _dag_tpu_regions(steps: list["ExecutorStep"]) -> list[str] | None:
         step_fn = step.fn
         if not isinstance(step_fn, RemoteCallable):
             continue
-        if not isinstance(step_fn.resources.device, TpuConfig):
+        step_regions = _tpu_regions_for_remote_callable(step_fn, variant_region_cache=tpu_variant_region_cache)
+        if not step_regions:
             continue
-
-        if step_fn.resources.regions:
-            step_regions = {r.lower() for r in step_fn.resources.regions}
-        else:
-            variant = step_fn.resources.device.variant.lower()
-            if variant not in tpu_variant_region_cache:
-                tpu_variant_region_cache[variant] = _regions_for_tpu_variant_from_iris(variant)
-            cached = tpu_variant_region_cache[variant]
-            if not cached:
-                continue
-            step_regions = cached
 
         if tpu_region_intersection is None:
             tpu_region_intersection = set(step_regions)
@@ -336,6 +360,50 @@ def _dag_tpu_regions(steps: list["ExecutorStep"]) -> list[str] | None:
             raise ValueError("No common region satisfies all TPU steps in this DAG.")
 
     return sorted(tpu_region_intersection) if tpu_region_intersection else None
+
+
+def _step_dag_tpu_regions(
+    steps: list["ExecutorStep"],
+    dependencies: dict["ExecutorStep", list["ExecutorStep"]],
+) -> dict["ExecutorStep", list[str] | None]:
+    """Infer TPU-capable regions per step from downstream TPU consumers in the same component."""
+    dependents: dict[ExecutorStep, list[ExecutorStep]] = {step: [] for step in steps}
+    for step in steps:
+        for dep in dependencies.get(step, []):
+            if dep in dependents:
+                dependents[dep].append(step)
+
+    reachable_tpu_regions: dict[ExecutorStep, set[str] | None] = {}
+    variant_region_cache: dict[str, set[str] | None] = {}
+
+    def regions_for_step(step: ExecutorStep) -> set[str] | None:
+        if step in reachable_tpu_regions:
+            return reachable_tpu_regions[step]
+
+        step_regions: set[str] | None = None
+        step_fn = step.fn
+        if isinstance(step_fn, RemoteCallable):
+            step_regions = _tpu_regions_for_remote_callable(step_fn, variant_region_cache=variant_region_cache)
+
+        downstream_tpu_regions: set[str] | None = step_regions
+        for dependent in dependents[step]:
+            dependent_regions = regions_for_step(dependent)
+            if dependent_regions is None:
+                continue
+            if downstream_tpu_regions is None:
+                downstream_tpu_regions = set(dependent_regions)
+            else:
+                downstream_tpu_regions &= dependent_regions
+            if not downstream_tpu_regions:
+                raise ValueError(f"No common region satisfies TPU consumers downstream of executor step {step.name!r}.")
+
+        reachable_tpu_regions[step] = downstream_tpu_regions
+        return downstream_tpu_regions
+
+    return {
+        step: sorted(regions) if regions else None
+        for step, regions in ((step, regions_for_step(step)) for step in steps)
+    }
 
 
 def _iris_backend_is_active() -> bool:
@@ -964,15 +1032,21 @@ class Executor:
 
     def _resolve_steps(self, steps: list[ExecutorStep]) -> list[StepSpec]:
         """Convert computed ExecutorStep state into a flat list of StepSpec."""
-        dag_tpu_regions = _dag_tpu_regions(steps)
+        dag_tpu_regions_by_step = _step_dag_tpu_regions(steps, self.dependencies)
         # First pass: create StepSpecs without deps so we have a mapping
         spec_by_step: dict[ExecutorStep, StepSpec] = {}
         for step in steps:
+            dep_stubs = [
+                StepSpec(name=dep.name, override_output_path=self.output_paths[dep])
+                for dep in self.dependencies[step]
+                if dep in self.output_paths
+            ]
             spec_by_step[step] = resolve_executor_step(
                 step=step,
                 config=self.configs[step],
                 output_path=self.output_paths[step],
-                dag_tpu_regions=dag_tpu_regions,
+                deps=dep_stubs,
+                dag_tpu_regions=dag_tpu_regions_by_step[step],
             )
         # Second pass: rebuild with deps pointing to resolved StepSpecs
         result = []
