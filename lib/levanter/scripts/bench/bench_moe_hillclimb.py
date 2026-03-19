@@ -5391,6 +5391,21 @@ def _make_deepep_transport_probe_forward_backward_runner(
         return run, tuple()
 
     if probe_kernel == "deepep_transport_local_compute_bwd_probe":
+        (
+            x_dispatch,
+            _assignment_weights,
+            _recv_token_indices,
+            local_group_sizes,
+            _recv_topk_weights,
+            _recv_src_idx,
+            _rank_prefix_matrix,
+            _channel_prefix_matrix,
+            _recv_channel_prefix_matrix,
+            _send_head,
+            _num_recv_tokens,
+            _is_token_in_rank,
+        ) = dispatch_pack(x, selected_experts, combine_weights)
+
         def local_compute_wrt(
             x_dispatch_in: jax.Array,
             w_up_gate_in: jax.Array,
