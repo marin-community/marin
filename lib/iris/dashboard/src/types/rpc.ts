@@ -322,6 +322,44 @@ export interface GetAutoscalerStatusResponse {
   status: AutoscalerStatus
 }
 
+// -- Kubernetes Cluster Status --
+
+export interface KubernetesPodStatus {
+  podName: string
+  taskId: string
+  phase: string
+  reason: string
+  message: string
+  lastTransition?: ProtoTimestamp
+  nodeName?: string
+}
+
+export interface NodePoolStatus {
+  name: string
+  instanceType: string
+  scaleGroup: string
+  targetNodes: number
+  currentNodes: number
+  queuedNodes: number
+  inProgressNodes: number
+  autoscaling: boolean
+  minNodes: number
+  maxNodes: number
+  capacity: string
+  quota: string
+}
+
+export interface GetKubernetesClusterStatusResponse {
+  namespace?: string
+  totalNodes?: number
+  schedulableNodes?: number
+  allocatableCpu?: string
+  allocatableMemory?: string
+  podStatuses?: KubernetesPodStatus[]
+  providerVersion?: string
+  nodePools?: NodePoolStatus[]
+}
+
 // -- Users --
 
 export interface UserSummary {
@@ -426,4 +464,17 @@ export interface ApiKeyInfo {
 
 export interface ListApiKeysResponse {
   keys: ApiKeyInfo[]
+}
+
+// -- Generic Query API --
+
+/** Column metadata describing a single column in a query result set. */
+export interface ColumnMeta {
+  name: string
+  type: string
+}
+
+export interface RawQueryResponse {
+  columns: ColumnMeta[]
+  rows: string[]
 }

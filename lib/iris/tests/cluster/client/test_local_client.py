@@ -9,7 +9,7 @@ import time
 import pytest
 
 from iris.client.client import IrisClient, Job
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName
 from iris.rpc import cluster_pb2
 
 
@@ -52,8 +52,9 @@ def test_command_entrypoint_preserves_env_vars(client):
 
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
-    # Check logs contain the task ID with correct wire format (task_id:attempt_id)
-    expected = TaskAttempt(task_id=job_id.task(0), attempt_id=0).to_wire()
+    # For attempt 0, build_common_iris_env omits the :attempt_id suffix
+    # (only appended for retries), so expect just the task_id wire format.
+    expected = job_id.task(0).to_wire()
     response = client.fetch_task_logs(job_id.task(0))
     log_text = extract_log_text(response)
     assert f"IRIS_TASK_ID={expected}" in log_text

@@ -8,25 +8,33 @@ Start with the shared practices below. Consult subproject manuals for directory-
 
 ## Workflow Playbooks
 
-Agent-friendly skills live in `.agents/skills/` (also accessible as `.claude/skills/`). Load a skill by reading its `SKILL.md`. Key ones:
+Skills are task-focused playbooks in `.agents/skills/` (also accessible as
+`.claude/skills/`). **Before starting any non-trivial task, check whether a
+matching skill exists** by scanning the skill descriptions in your system
+prompt. If a skill matches, invoke it via the Skill tool — do not skip it in
+favor of ad-hoc commands.
 
-- [pull-request](.agents/skills/pull-request/SKILL.md) — PR descriptions, testing, review workflow
-- [fix-issue](.agents/skills/fix-issue/SKILL.md) — issue triage and fix protocol
-- [file-issue](.agents/skills/file-issue/SKILL.md) — file a GitHub issue from conversation context
-- [add-dataset](.agents/skills/add-dataset/SKILL.md) — dataset addition (start with schema inspection)
-- [organize-experiments](.agents/skills/organize-experiments/SKILL.md) — experiment organization
-- [agent-research](.agents/skills/agent-research/SKILL.md) — long-running benchmark/research threads
-- [ferries](.agents/skills/ferries/SKILL.md) — canary/daily ferry workflow
-- [change-grug](.agents/skills/change-grug/SKILL.md) — Grug/Grugformer changes
-- [agent-profiling](.agents/skills/agent-profiling/SKILL.md) — profiling and optimization
-- [github-pr-review](.agents/skills/github-pr-review/SKILL.md) — PR review prompt
-- [debugger](.agents/skills/debugger/SKILL.md) — structured debugging workflow
-- [design-doc](.agents/skills/design-doc/SKILL.md) — writing design documents
-- [multi-stage](.agents/skills/multi-stage/SKILL.md) — coordinator/sub-agent orchestration
-- [add-pallas-kernel](.agents/skills/add-pallas-kernel/SKILL.md) — TPU Pallas kernel development
-- [archive-experiments](.agents/skills/archive-experiments/SKILL.md) — retiring legacy experiments
-- [architecture](.agents/skills/architecture/SKILL.md) — codebase architecture reference
-- [iris-controller-debug](.agents/skills/iris-controller-debug/SKILL.md) — debug Iris controller via live SQLite DB
+Key skills and their triggers:
+
+| Trigger | Skill |
+|---|---|
+| Creating or reviewing a PR | `pull-request` |
+| Fixing / investigating a GitHub issue | `fix-issue` |
+| Filing a new issue | `file-issue` |
+| Writing a design doc or spec | `design-doc` |
+| Debugging subtle code problems | `debugger` |
+| Multi-step plans needing sub-agents | `multi-stage` |
+| Adding a HF dataset | `add-dataset` |
+| Profiling JAX training | `agent-profiling` |
+| Running / monitoring ferries | `ferries` |
+| Babysitting any Ray/Iris job | `babysit-job` |
+| Babysitting Zephyr jobs | `babysit-zephyr` |
+| Debugging Zephyr pipelines | `debug-zephyr` |
+| Debugging Iris controller | `debug-iris-controller` |
+| TPU bad-node recovery | `debug-tpu` |
+
+For the full list, see `.agents/skills/`. Each skill has a `SKILL.md` with
+detailed workflow steps — read it after invoking for procedural guidance.
 
 ## Development
 
@@ -142,7 +150,7 @@ Before writing any utility function, helper, or data structure:
 
 If a suitable implementation exists, use it. Do not create parallel implementations.
 
-Dependency direction: `iris` → {`levanter`, `zephyr`} → `marin` → `haliax`. Each layer may only import from layers to its right. Never introduce reverse dependencies (e.g., marin importing from iris).
+Dependency direction: {`iris`, `haliax`} → {`levanter`, `zephyr`} → `marin`. Each layer may only import from layers to its left. Never introduce reverse dependencies (e.g., levanter importing from marin).
 
 ## Testing
 

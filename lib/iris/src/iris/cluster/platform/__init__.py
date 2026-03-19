@@ -59,6 +59,12 @@ from iris.cluster.platform.manual import (
     ManualStandaloneWorkerHandle,
     ManualWorkerHandle,
 )
+from iris.cluster.platform.restart_permissions import (
+    RestartPermissionError,
+    RestartScope,
+    ensure_restart_permissions,
+    register_restart_permission_checker,
+)
 
 __all__ = [
     "CloudSliceState",
@@ -82,9 +88,13 @@ __all__ = [
     "QuotaExhaustedError",
     "RemoteWorkerHandle",
     "ResourceNotFoundError",
+    "RestartPermissionError",
+    "RestartScope",
     "SliceHandle",
     "SliceStatus",
     "StandaloneWorkerHandle",
     "WorkerStatus",
     "create_platform",
+    "ensure_restart_permissions",
+    "register_restart_permission_checker",
 ]

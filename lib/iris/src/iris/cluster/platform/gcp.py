@@ -68,6 +68,7 @@ from iris.cluster.platform.bootstrap import (
     zone_to_multi_region,
 )
 from iris.cluster.platform.debug import wait_for_port
+from iris.cluster.platform.restart_permissions import RestartScope
 from iris.cluster.platform.remote_exec import (
     GceRemoteExec,
     GcloudRemoteExec,
@@ -104,6 +105,90 @@ _GCE_VM_SLICE_SSH_USER = "iris"
 # Default TTL for gcloud subprocess call cache. Concurrent callers with
 # identical args share a single subprocess invocation via per-key locking.
 _GCLOUD_CACHE_TTL_SECS = 5.0
+
+_GCP_REQUIRED_PERMISSIONS_BY_SCOPE: dict[RestartScope, tuple[str, ...]] = {
+    RestartScope.CLUSTER: (
+        "compute.instances.create",
+        "compute.instances.delete",
+        "compute.instances.get",
+        "compute.instances.list",
+        "compute.instances.setLabels",
+        "compute.instances.setMetadata",
+        "tpu.nodes.create",
+        "tpu.nodes.delete",
+        "tpu.nodes.get",
+        "tpu.nodes.list",
+    ),
+    RestartScope.CONTROLLER: (
+        "compute.instances.get",
+        "compute.instances.list",
+    ),
+}
+
+
+def _run_gcloud_restart_permission_command(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        raise RuntimeError(f"gcloud command failed: {' '.join(cmd)}\nError: {stderr}")
+    return result
+
+
+def _active_gcloud_account_for_restart() -> str | None:
+    result = _run_gcloud_restart_permission_command(
+        ["gcloud", "auth", "list", "--filter=status:ACTIVE", "--format=value(account)"]
+    )
+    account = result.stdout.strip()
+    return account or None
+
+
+def _missing_project_permissions(project_id: str, permissions: tuple[str, ...]) -> list[str]:
+    result = _run_gcloud_restart_permission_command(
+        [
+            "gcloud",
+            "projects",
+            "test-iam-permissions",
+            project_id,
+            f"--permissions={','.join(permissions)}",
+            "--format=json",
+        ]
+    )
+    try:
+        payload = json.loads(result.stdout) if result.stdout.strip() else {}
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Failed to parse test-iam-permissions output: {result.stdout}") from e
+
+    granted = set(payload.get("permissions", [])) if isinstance(payload, dict) else set()
+    return [permission for permission in permissions if permission not in granted]
+
+
+def ensure_gcp_restart_permissions(config: config_pb2.IrisClusterConfig, scope: RestartScope | str) -> None:
+    """Ensure active gcloud identity can perform restart operations for a given scope."""
+    platform_kind = config.platform.WhichOneof("platform")
+    if platform_kind != "gcp":
+        raise RuntimeError(f"GCP restart permission check called for non-GCP platform: {platform_kind}")
+
+    project_id = config.platform.gcp.project_id.strip()
+    if not project_id:
+        raise RuntimeError("platform.gcp.project_id is required for GCP restarts.")
+
+    account = _active_gcloud_account_for_restart()
+    if not account:
+        raise RuntimeError("No active gcloud account found. Run `gcloud auth login` and retry.")
+
+    try:
+        restart_scope = RestartScope(scope)
+    except ValueError as e:
+        supported_scopes = ", ".join(sorted(s.value for s in _GCP_REQUIRED_PERMISSIONS_BY_SCOPE))
+        raise RuntimeError(f"Unknown restart permission scope '{scope}'. Supported scopes: {supported_scopes}") from e
+
+    required_permissions = _GCP_REQUIRED_PERMISSIONS_BY_SCOPE[restart_scope]
+    missing_permissions = _missing_project_permissions(project_id, required_permissions)
+    if missing_permissions:
+        raise RuntimeError(
+            f"Active gcloud account '{account}' is missing required IAM permissions for restart "
+            f"on project '{project_id}': {', '.join(missing_permissions)}"
+        )
 
 
 class _GcloudCache:
@@ -373,7 +458,6 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
             f"--project={self._project_id}",
             f"--zone={self._zone}",
             "--quiet",
-            "--async",
         ]
         logger.info("Rebooting GCE instance: %s", self._gce_vm_name)
         logger.info("gcloud command: %s", cmd)
@@ -389,10 +473,8 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
             f"--project={self._project_id}",
             f"--zone={self._zone}",
             "--quiet",
-            "--async",
         ]
-        logger.info("Deleting GCE instance (async): %s", self._gce_vm_name)
-        logger.info("gcloud command: %s", cmd)
+        logger.info("Deleting GCE instance: %s", self._gce_vm_name)
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             error = result.stderr.strip()
@@ -456,7 +538,6 @@ class GcpSliceHandle:
         _ssh_config: config_pb2.SshConfig | None = None,
         _state: str = "READY",
         _bootstrapping: bool = False,
-        _gcloud_cache: _GcloudCache | None = None,
     ):
         self._slice_id = _slice_id
         self._zone = _zone
@@ -470,7 +551,6 @@ class GcpSliceHandle:
         self._state = _state
         self._bootstrap_state: CloudSliceState | None = None if _bootstrapping else CloudSliceState.READY
         self._bootstrap_lock = threading.Lock()
-        self._gcloud_cache = _gcloud_cache
 
     @property
     def slice_id(self) -> str:
@@ -596,8 +676,6 @@ class GcpSliceHandle:
             error = result.stderr.strip()
             if "not found" not in error.lower():
                 raise RuntimeError(f"Failed to delete TPU {self._slice_id}: {error}")
-        if self._gcloud_cache:
-            self._gcloud_cache.invalidate()
 
 
 class GcpVmSliceHandle:
@@ -615,7 +693,6 @@ class GcpVmSliceHandle:
         _label_prefix: str,
         _ssh_config: config_pb2.SshConfig | None = None,
         _bootstrapping: bool = False,
-        _gcloud_cache: _GcloudCache | None = None,
     ):
         self._slice_id = _slice_id
         self._vm_name = _vm_name
@@ -628,7 +705,6 @@ class GcpVmSliceHandle:
         self._ssh_config = _ssh_config
         self._bootstrap_state: CloudSliceState | None = None if _bootstrapping else CloudSliceState.READY
         self._bootstrap_lock = threading.Lock()
-        self._gcloud_cache = _gcloud_cache
 
     @property
     def slice_id(self) -> str:
@@ -725,17 +801,14 @@ class GcpVmSliceHandle:
             f"--project={self._project_id}",
             f"--zone={self._zone}",
             "--quiet",
-            "--async",
         ]
-        logger.info("Terminating VM slice (async): %s (vm=%s)", self._slice_id, self._vm_name)
+        logger.info("Terminating VM slice: %s (vm=%s)", self._slice_id, self._vm_name)
         logger.info("gcloud command: %s", cmd)
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             error = result.stderr.strip()
             if "not found" not in error.lower():
                 raise RuntimeError(f"Failed to delete VM {self._vm_name} for slice {self._slice_id}: {error}")
-        if self._gcloud_cache:
-            self._gcloud_cache.invalidate()
 
 
 # ============================================================================
@@ -769,7 +842,6 @@ class GcpPlatform:
         self._iris_labels = Labels(label_prefix)
         self._ssh_config = ssh_config
         self._zones = list(gcp_config.zones)
-        self._gcloud_cache = _GcloudCache()
 
     def resolve_image(self, image: str, zone: str | None = None) -> str:
         """Rewrite ``ghcr.io/`` images to the AR remote repo for *zone*'s continent.
@@ -814,7 +886,6 @@ class GcpPlatform:
         """Try to delete a GCE VM that may have been partially created.
 
         Silently ignores "not found" errors (resource was never created).
-        Uses --async so the caller is not blocked waiting for deletion.
         """
         cmd = [
             "gcloud",
@@ -825,9 +896,8 @@ class GcpPlatform:
             f"--zone={zone}",
             f"--project={self._project_id}",
             "--quiet",
-            "--async",
         ]
-        logger.info("Best-effort async cleanup of VM %s in %s", vm_name, zone)
+        logger.info("Best-effort cleanup of VM %s in %s", vm_name, zone)
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             error = result.stderr.strip()
@@ -982,7 +1052,6 @@ class GcpPlatform:
             _accelerator_variant=config.accelerator_variant,
             _ssh_config=self._ssh_config,
             _bootstrapping=worker_config is not None,
-            _gcloud_cache=self._gcloud_cache,
         )
 
         if worker_config:
@@ -1082,7 +1151,6 @@ class GcpPlatform:
             _label_prefix=self._label_prefix,
             _ssh_config=self._ssh_config,
             _bootstrapping=worker_config is not None,
-            _gcloud_cache=self._gcloud_cache,
         )
 
         if worker_config:
@@ -1306,8 +1374,7 @@ class GcpPlatform:
         """List TPU and VM slices across zones, optionally filtered by labels.
 
         Queries all zones in parallel (TPU + VM per zone) to avoid the latency
-        of sequential gcloud subprocess calls. Results are cached briefly via
-        ``_GcloudCache`` so back-to-back calls avoid redundant subprocesses.
+        of sequential gcloud subprocess calls.
         """
 
         def _query_zone(zone: str) -> list[GcpSliceHandle | GcpVmSliceHandle]:
@@ -1342,7 +1409,6 @@ class GcpPlatform:
                         _accelerator_variant=accelerator_type,
                         _ssh_config=self._ssh_config,
                         _state=state,
-                        _gcloud_cache=self._gcloud_cache,
                     )
                 )
 
@@ -1365,7 +1431,6 @@ class GcpPlatform:
                         _created_at=_parse_vm_created_at(vm_data),
                         _label_prefix=self._label_prefix,
                         _ssh_config=self._ssh_config,
-                        _gcloud_cache=self._gcloud_cache,
                     )
                 )
 
@@ -1382,13 +1447,120 @@ class GcpPlatform:
                 results.extend(future.result())
         return results
 
-    def list_all_slices(self, labels: dict[str, str] | None = None) -> list[GcpSliceHandle | GcpVmSliceHandle]:
-        if not self._zones:
-            raise ValueError(
-                "GcpPlatform.list_all_slices() called but no zones configured. "
-                "Set platform.gcp.zones in your cluster config."
+    def list_all_slices(self) -> list[GcpSliceHandle | GcpVmSliceHandle]:
+        """List all slices managed by this cluster using two project-wide gcloud calls.
+
+        Uses ``--zone=-`` for TPUs and project-wide instance listing for VMs,
+        both filtered by iris-{prefix}-managed=true and run in parallel.
+        """
+        managed_filter = _build_label_filter({self._iris_labels.iris_managed: "true"})
+
+        def _list_all_tpus() -> list[dict]:
+            cmd = [
+                "gcloud",
+                "compute",
+                "tpus",
+                "tpu-vm",
+                "list",
+                "--zone=-",
+                f"--project={self._project_id}",
+                "--format=json",
+                f"--filter={managed_filter}",
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.warning("list_all_slices: TPU list failed: %s", result.stderr.strip())
+                return []
+            if not result.stdout.strip():
+                return []
+            return json.loads(result.stdout)
+
+        def _list_all_instances() -> list[dict]:
+            cmd = [
+                "gcloud",
+                "compute",
+                "instances",
+                "list",
+                f"--project={self._project_id}",
+                "--format=json",
+                f"--filter={managed_filter}",
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.warning("list_all_slices: instance list failed: %s", result.stderr.strip())
+                return []
+            if not result.stdout.strip():
+                return []
+            return json.loads(result.stdout)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            tpu_future = executor.submit(_list_all_tpus)
+            vm_future = executor.submit(_list_all_instances)
+
+        handles: list[GcpSliceHandle | GcpVmSliceHandle] = []
+
+        for tpu_data in tpu_future.result():
+            state = tpu_data.get("state", "UNKNOWN")
+            if state not in ("READY", "CREATING"):
+                continue
+
+            # With --zone=-, name is a full resource path:
+            # projects/proj/locations/zone/nodes/my-tpu
+            raw_name = tpu_data.get("name", "")
+            parts = raw_name.split("/")
+            if len(parts) >= 4:
+                zone = parts[3]
+                node_name = parts[-1]
+            else:
+                zone = ""
+                node_name = _extract_node_name(raw_name)
+
+            tpu_labels = tpu_data.get("labels", {})
+            accelerator_type = tpu_data.get("acceleratorType", "")
+            if "/" in accelerator_type:
+                accelerator_type = accelerator_type.split("/")[-1]
+
+            handles.append(
+                GcpSliceHandle(
+                    _slice_id=node_name,
+                    _zone=zone,
+                    _project_id=self._project_id,
+                    _labels=tpu_labels,
+                    _created_at=_parse_tpu_created_at(tpu_data),
+                    _label_prefix=self._label_prefix,
+                    _accelerator_variant=accelerator_type,
+                    _ssh_config=self._ssh_config,
+                    _state=state,
+                )
             )
-        return self.list_slices(zones=self._zones, labels=labels)
+
+        for vm_data in vm_future.result():
+            vm_state = vm_data.get("status", "UNKNOWN")
+            if vm_state not in _ACTIVE_VM_SLICE_STATES:
+                continue
+            vm_labels = vm_data.get("labels", {})
+            slice_id = vm_labels.get(self._iris_labels.iris_slice_id, "")
+            if not slice_id:
+                continue
+
+            zone_url = vm_data.get("zone", "")
+            zone = zone_url.split("/")[-1] if zone_url else ""
+
+            handles.append(
+                GcpVmSliceHandle(
+                    _slice_id=slice_id,
+                    _vm_name=vm_data.get("name", ""),
+                    _zone=zone,
+                    _project_id=self._project_id,
+                    _labels=vm_labels,
+                    _created_at=_parse_vm_created_at(vm_data),
+                    _label_prefix=self._label_prefix,
+                    _ssh_config=self._ssh_config,
+                )
+            )
+
+        logger.info("list_all_slices: found %d managed slices", len(handles))
+        return handles
 
     def list_vms(
         self,
@@ -1402,8 +1574,6 @@ class GcpPlatform:
         configured).
 
         Queries all zones in parallel to avoid sequential gcloud subprocess latency.
-        Results are cached briefly via ``_GcloudCache`` so back-to-back calls
-        (e.g. from ``list_slices`` and ``list_vms``) share the same subprocess result.
         """
 
         def _instances_to_handles(
@@ -1558,7 +1728,7 @@ class GcpPlatform:
         if labels:
             cmd.append(f"--filter={_build_label_filter(labels)}")
 
-        result = self._gcloud_cache.run(cmd)
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             logger.warning("Failed to list TPUs in zone %s: %s", zone, result.stderr.strip())
             return []
@@ -1588,7 +1758,7 @@ class GcpPlatform:
         if labels:
             cmd.append(f"--filter={_build_label_filter(labels)}")
 
-        result = self._gcloud_cache.run(cmd)
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             logger.warning("Failed to list instances in %s: %s", zone or "all zones", result.stderr.strip())
             return []
@@ -1601,6 +1771,27 @@ class GcpPlatform:
 # ============================================================================
 # Tunnel
 # ============================================================================
+
+
+def _check_gcloud_ssh_key() -> None:
+    """Verify that the gcloud compute SSH key exists.
+
+    ``gcloud compute ssh`` expects ``~/.ssh/google_compute_engine``.  When the
+    key is missing, gcloud tries to generate one interactively — which hangs
+    indefinitely in a non-interactive subprocess.  Detect this early and give
+    the user a clear remediation path.
+    """
+    key_path = os.path.expanduser("~/.ssh/google_compute_engine")
+    if not os.path.exists(key_path):
+        raise RuntimeError(
+            f"SSH key not found at {key_path}. "
+            "gcloud compute ssh requires this key to connect to VMs.\n"
+            "To create it, run:\n"
+            "  gcloud compute ssh --dry-run <any-vm> --zone=<zone>\n"
+            "or:\n"
+            "  ssh-keygen -t rsa -f ~/.ssh/google_compute_engine -C \"$(gcloud config get account)\" -N ''\n"
+            "Then re-run your command."
+        )
 
 
 @contextmanager
@@ -1616,6 +1807,8 @@ def _gcp_tunnel(
     that may be listening on the same port on a different address family (IPv6).
     Picks a free port automatically if none is specified.
     """
+    _check_gcloud_ssh_key()
+
     if local_port is None:
         local_port = find_free_port(start=10000)
 

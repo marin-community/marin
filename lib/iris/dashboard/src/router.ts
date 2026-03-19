@@ -19,6 +19,10 @@ const routes = [
     component: () => import('./components/controller/AutoscalerTab.vue'),
   },
   {
+    path: '/cluster',
+    component: () => import('./components/controller/KubernetesClusterTab.vue'),
+  },
+  {
     path: '/endpoints',
     component: () => import('./components/controller/EndpointsTab.vue'),
   },
@@ -37,6 +41,10 @@ const routes = [
   {
     path: '/account',
     component: () => import('./components/controller/AccountTab.vue'),
+  },
+  {
+    path: '/query',
+    component: () => import('./components/controller/QueryExplorerTab.vue'),
   },
   {
     path: '/system/controller/threads',

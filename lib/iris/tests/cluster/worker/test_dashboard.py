@@ -32,7 +32,6 @@ def mock_bundle_store(tmp_path):
     """Create mock BundleStore with a real temp directory."""
     cache = Mock(spec=BundleStore)
     cache.extract_bundle_to = Mock()
-    cache.write_workdir_files = Mock()
     return cache
 
 
@@ -50,6 +49,7 @@ def create_mock_container_handle():
     handle.stop = Mock()
     handle.logs = Mock(return_value=[])
     handle.stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=1, available=True))
+    handle.disk_usage_mb = Mock(return_value=0)
     handle.cleanup = Mock()
     return handle
 

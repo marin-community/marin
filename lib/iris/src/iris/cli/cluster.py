@@ -15,14 +15,13 @@ from connectrpc.errors import ConnectError
 
 from iris.cli.build import (
     build_image,
-    find_iris_root,
     find_marin_root,
     get_git_sha,
     push_to_ghcr,
 )
 from iris.cli.main import require_controller_url
 from iris.cluster.config import IrisConfig, make_local_config
-from iris.cluster.manager import stop_all
+from iris.cluster.platform.restart_permissions import RestartPermissionError, RestartScope, ensure_restart_permissions
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_utils import Timestamp
@@ -99,7 +98,6 @@ def _build_and_push_for_tag(image_tag: str, image_type: str, verbose: bool = Fal
         image_type=image_type,
         tag=local_tag,
         push=False,
-        dockerfile=None,
         context=None,
         platform="linux/amd64",
         ghcr_org=org,
@@ -113,12 +111,10 @@ def _build_and_push_for_tag(image_tag: str, image_type: str, verbose: bool = Fal
 def _build_and_push_task_image(task_tag: str, verbose: bool = False) -> None:
     """Build and push the task image to GHCR.
 
-    The task image uses a different Dockerfile (Dockerfile.task) and build context
-    (marin repo root) than worker/controller, so it can't use _build_and_push_for_tag
-    directly.
+    The task image uses the ``task`` target in the unified Dockerfile and needs the
+    marin repo root as build context, so it can't use _build_and_push_for_tag directly.
     """
     marin_root = str(find_marin_root())
-    task_dockerfile = str(find_iris_root() / "Dockerfile.task")
 
     ghcr_parsed = _parse_ghcr_tag(task_tag)
     if not ghcr_parsed:
@@ -133,7 +129,6 @@ def _build_and_push_task_image(task_tag: str, verbose: bool = False) -> None:
         image_type="task",
         tag=local_tag,
         push=False,
-        dockerfile=task_dockerfile,
         context=marin_root,
         platform="linux/amd64",
         ghcr_org=org,
@@ -290,7 +285,12 @@ def cluster_stop(ctx, dry_run: bool, label_override: str | None):
         click.echo("Stopping cluster (controller + all slices)...")
 
     try:
-        names = stop_all(config, dry_run=dry_run, label_prefix=label_override)
+        iris_config = IrisConfig(config)
+        platform = iris_config.platform()
+        try:
+            names = platform.stop_all(config, dry_run=dry_run, label_prefix=label_override)
+        finally:
+            platform.shutdown()
     except Exception as e:
         click.echo(f"Failed to stop cluster: {e}", err=True)
         raise SystemExit(1) from e
@@ -310,6 +310,14 @@ def cluster_stop(ctx, dry_run: bool, label_override: str | None):
 @click.pass_context
 def cluster_restart(ctx):
     """Restart cluster by stopping then starting."""
+    config = ctx.obj.get("config")
+    if not config:
+        raise click.ClickException("--config is required for cluster restart")
+
+    try:
+        ensure_restart_permissions(config, scope=RestartScope.CLUSTER)
+    except RestartPermissionError as e:
+        raise click.ClickException(str(e)) from e
     ctx.invoke(cluster_stop)
     click.echo("")
     ctx.invoke(cluster_start)
@@ -552,6 +560,11 @@ def controller_restart(ctx):
             "controller restart is not supported for local clusters. "
             "Stop and restart the 'iris cluster start --local' process instead."
         )
+
+    try:
+        ensure_restart_permissions(config, scope=RestartScope.CONTROLLER)
+    except RestartPermissionError as e:
+        raise click.ClickException(str(e)) from e
 
     controller_url = require_controller_url(ctx)
 

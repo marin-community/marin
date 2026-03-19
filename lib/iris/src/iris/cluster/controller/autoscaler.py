@@ -24,7 +24,7 @@ import logging
 import math
 from collections import deque
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from dataclasses import dataclass
 from enum import Enum
 
@@ -35,6 +35,7 @@ from iris.cluster.platform.base import (
     Platform,
     QuotaExhaustedError,
     RemoteWorkerHandle,
+    SliceHandle,
     WorkerStatus,
 )
 from iris.cluster.constraints import (
@@ -1225,7 +1226,7 @@ class Autoscaler:
         """Restore tracked worker state from a snapshot. Called before loops start."""
         self._workers.update(workers)
 
-    def restore_from_db(self, db: ControllerDB) -> None:
+    def restore_from_db(self, db: ControllerDB, platform: Platform) -> None:
         """Reconcile DB-checkpointed autoscaler state against live cloud.
 
         Reads scaling group and slice rows from proper DB tables,
@@ -1305,8 +1306,13 @@ class Autoscaler:
             for row in tracked_rows
         ]
 
-        # Restore scaling groups (parallelized -- each calls platform.list_slices())
-        groups_to_restore = []
+        # Prefetch all managed slices in one shot (2 gcloud calls on GCP),
+        # then partition by scale group for pure in-memory restore.
+        all_cloud_slices = platform.list_all_slices()
+        cloud_by_group: dict[str, list[SliceHandle]] = {}
+        for handle in all_cloud_slices:
+            cloud_by_group.setdefault(handle.scale_group, []).append(handle)
+
         for group_snap in group_snapshots.values():
             group = self._groups.get(group_snap.name)
             if group is None:
@@ -1315,25 +1321,20 @@ class Autoscaler:
                     group_snap.name,
                 )
                 continue
-            groups_to_restore.append((group_snap, group))
-
-        with ThreadPoolExecutor(max_workers=16) as executor:
-            futures = {
-                executor.submit(restore_scaling_group, gs, g.platform, g.config, g.label_prefix): (gs, g)
-                for gs, g in groups_to_restore
-            }
-            for future in as_completed(futures):
-                group_snap, group = futures[future]
-                restore_result = future.result()
-                group.restore_from_snapshot(
-                    slices=restore_result.slices,
-                    consecutive_failures=restore_result.consecutive_failures,
-                    last_scale_up=restore_result.last_scale_up,
-                    last_scale_down=restore_result.last_scale_down,
-                    backoff_until=restore_result.backoff_until,
-                    quota_exceeded_until=restore_result.quota_exceeded_until,
-                    quota_reason=restore_result.quota_reason,
-                )
+            restore_result = restore_scaling_group(
+                group_snapshot=group_snap,
+                cloud_handles=cloud_by_group.get(group_snap.name, []),
+                label_prefix=group.label_prefix,
+            )
+            group.restore_from_snapshot(
+                slices=restore_result.slices,
+                consecutive_failures=restore_result.consecutive_failures,
+                last_scale_up=restore_result.last_scale_up,
+                last_scale_down=restore_result.last_scale_down,
+                backoff_until=restore_result.backoff_until,
+                quota_exceeded_until=restore_result.quota_exceeded_until,
+                quota_reason=restore_result.quota_reason,
+            )
 
         # Workers from discarded slices remain in the DB as healthy.
         # They will naturally fail heartbeat checks and be pruned once

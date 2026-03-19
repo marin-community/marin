@@ -5,7 +5,7 @@
 
 import logging
 
-from zephyr.dataset import Dataset
+from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import WorkerContext, ZephyrContext, zephyr_worker_ctx
 from zephyr.expr import Expr, col, lit
 from zephyr.plan import ExecutionHint, compute_plan
@@ -20,6 +20,7 @@ __all__ = [
     "ExecutionHint",
     "Expr",
     "InputFileSpec",
+    "ShardInfo",
     "WorkerContext",
     "ZephyrContext",
     "atomic_rename",

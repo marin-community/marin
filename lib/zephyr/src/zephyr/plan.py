@@ -37,6 +37,7 @@ from zephyr.dataset import (
     ReduceOp,
     ReshardOp,
     SelectOp,
+    ShardInfo,
     TakePerShardOp,
     WindowOp,
     WriteOp,
@@ -72,10 +73,12 @@ class Map:
         fn: Composed function that transforms an iterator to an iterator
         requires_full_shard: True if any composed op needs full shard context
             (e.g., MapShardOp). When True, chunk parallelism is disabled.
+        needs_shard_context: True if fn expects (stream, shard_info: ShardInfo).
     """
 
     fn: Callable[[Iterator], Iterator]
     requires_full_shard: bool = False
+    needs_shard_context: bool = False
 
 
 @dataclass
@@ -97,6 +100,7 @@ class Scatter:
     key_fn: Callable[[Any], Any]  # item → key
     num_output_shards: int
     sort_fn: Callable[[Any], Any] | None = None  # Optional secondary sort within each group
+    combiner_fn: Callable | None = None  # Optional local pre-aggregation per key
 
 
 @dataclass
@@ -189,10 +193,11 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
         operations: List of fusible logical ops (MapOp, FilterOp, LoadFileOp, etc.)
 
     Returns:
-        A function that transforms an iterator to an iterator
+        A function that transforms an iterator to an iterator.
+        For MapShardOp, also passes shard_idx and total_shards as ShardInfo.
     """
 
-    def pipeline(stream: Iterator) -> Iterator:
+    def pipeline(stream: Iterator, *, shard_idx: int = 0, total_shards: int = 1) -> Iterator:
         for op in operations:
             if isinstance(op, LoadFileOp):
                 stream = _load_file_gen(stream)
@@ -203,7 +208,7 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
             elif isinstance(op, FlatMapOp):
                 stream = _flatmap_gen(stream, op.fn)
             elif isinstance(op, MapShardOp):
-                stream = op.fn(stream)
+                stream = op.fn(stream, ShardInfo(shard_idx=shard_idx, total_shards=total_shards))
             elif isinstance(op, TakePerShardOp):
                 stream = islice(stream, op.n)
             elif isinstance(op, WindowOp):
@@ -327,10 +332,12 @@ class FusionState:
             return
 
         requires_full_shard = any(isinstance(op, MapShardOp) for op in self.pending_fusible)
+        needs_shard_context = requires_full_shard
         self.current_ops.append(
             Map(
                 fn=compose_map(self.pending_fusible[:]),
                 requires_full_shard=requires_full_shard,
+                needs_shard_context=needs_shard_context,
             )
         )
         self.pending_fusible = []
@@ -415,7 +422,12 @@ def _fuse_operations(operations: list, hints: ExecutionHint | None = None) -> li
         elif isinstance(op, GroupByOp):
             num_shards = op.num_output_shards if op.num_output_shards is not None else -1
             state.add_op(
-                Scatter(key_fn=op.key_fn, num_output_shards=num_shards, sort_fn=op.sort_fn),
+                Scatter(
+                    key_fn=op.key_fn,
+                    num_output_shards=num_shards,
+                    sort_fn=op.sort_fn,
+                    combiner_fn=op.combiner_fn,
+                ),
                 output_shards=num_shards if num_shards > 0 else None,
             )
             state.end_stage()
@@ -587,6 +599,17 @@ def _stream_chunks(items: Iterator, shard_idx: int, chunk_size: int) -> Iterator
         yield StageResultChunk(source_shard=shard_idx, target_shard=shard_idx, chunk=iter(chunk))
 
 
+def _apply_combiner(buffer: list, key_fn: Callable, combiner_fn: Callable) -> list:
+    """Apply combiner to a buffer, grouping by key and reducing locally."""
+    by_key: dict[object, list] = defaultdict(list)
+    for item in buffer:
+        by_key[key_fn(item)].append(item)
+    combined: list = []
+    for key, items in by_key.items():
+        combined.extend(combiner_fn(key, iter(items)))
+    return combined
+
+
 def _scatter_items(
     items: Iterable,
     key_fn: Callable,
@@ -594,6 +617,7 @@ def _scatter_items(
     chunk_size: int,
     sort_fn: Callable | None,
     source_shard: int,
+    combiner_fn: Callable | None = None,
 ) -> Iterator[StageResultChunk]:
     """Scatter items by key hash into sorted chunks per target shard.
 
@@ -604,6 +628,9 @@ def _scatter_items(
     Each chunk is pre-sorted by ``(key_fn, sort_fn)`` so the k-way merge in
     the Reduce phase can operate correctly.
 
+    When a combiner is provided, it is applied to each buffer before yielding,
+    reducing items locally per key (like a MapReduce combiner).
+
     Args:
         items: Input items to scatter
         key_fn: Function to extract grouping key from item
@@ -611,6 +638,7 @@ def _scatter_items(
         chunk_size: Maximum items per chunk (per target shard)
         sort_fn: Optional secondary sort key within each group
         source_shard: Index of the source shard
+        combiner_fn: Optional (key, Iterator[T]) -> Iterator[T] applied locally per key
 
     Yields:
         One StageResultChunk per chunk, with ``chunk`` being a sorted list of items.
@@ -631,16 +659,21 @@ def _scatter_items(
         target = deterministic_hash(key) % num_output_shards
         buffers[target].append(item)
         if chunk_size > 0 and len(buffers[target]) >= chunk_size:
-            buffers[target].sort(key=_sort_key)
+            buf = buffers[target]
+            if combiner_fn is not None:
+                buf = _apply_combiner(buf, key_fn, combiner_fn)
+            buf.sort(key=_sort_key)
             yield StageResultChunk(
                 source_shard=source_shard,
                 target_shard=target,
-                chunk=buffers[target],
+                chunk=buf,
             )
             buffers[target] = []
 
     for target, buffer in sorted(buffers.items()):
         if buffer:
+            if combiner_fn is not None:
+                buffer = _apply_combiner(buffer, key_fn, combiner_fn)
             buffer.sort(key=_sort_key)
             yield StageResultChunk(
                 source_shard=source_shard,
@@ -679,6 +712,8 @@ def _merge_sorted_chunks(shard, key_fn: Callable, sort_fn: Callable | None = Non
     chunk_iterators = []
     for chunk_data in shard.iter_chunks():
         chunk_iterators.append(iter(chunk_data))
+
+    logger.info(f"Merging {len(chunk_iterators):,} sorted chunk iterators")
 
     merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
     yield from groupby(merged_stream, key=key_fn)
@@ -794,7 +829,10 @@ def run_stage(
         op = ops[op_index]
 
         if isinstance(op, Map):
-            stream = op.fn(stream)
+            if op.needs_shard_context:
+                stream = op.fn(stream, shard_idx=ctx.shard_idx, total_shards=ctx.total_shards)
+            else:
+                stream = op.fn(stream)
             op_index += 1
         elif isinstance(op, Write):
             output_path = op.output_pattern(ctx.shard_idx, ctx.total_shards)
@@ -840,6 +878,7 @@ def run_stage(
                 ctx.chunk_size,
                 sort_fn=op.sort_fn,
                 source_shard=ctx.shard_idx,
+                combiner_fn=op.combiner_fn,
             )
             return
 

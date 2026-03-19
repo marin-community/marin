@@ -9,8 +9,8 @@ from iris.cluster.runtime.docker import DockerRuntime
 
 
 @pytest.fixture
-def docker_runtime():
+def docker_runtime(tmp_path):
     """DockerRuntime that cleans up its own containers after the test."""
-    rt = DockerRuntime()
+    rt = DockerRuntime(cache_dir=tmp_path / "cache")
     yield rt
     rt.cleanup()

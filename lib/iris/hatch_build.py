@@ -52,9 +52,14 @@ def _oldest_mtime(root: Path, globs: list[str]) -> float:
     return oldest if found else 0.0
 
 
-def _outputs_exist(root: Path, output_globs: list[str]) -> bool:
-    """Return True if at least one output file exists."""
-    return _oldest_mtime(root, output_globs) > 0.0
+def _has_missing_outputs(root: Path, source_globs: list[str]) -> bool:
+    """Return True if any .proto source is missing its corresponding _pb2.py."""
+    for pattern in source_globs:
+        for proto_path in root.glob(pattern):
+            pb2_path = proto_path.with_name(proto_path.stem + "_pb2.py")
+            if not pb2_path.exists():
+                return True
+    return False
 
 
 def _needs_rebuild(root: Path, source_globs: list[str], output_globs: list[str]) -> bool:
@@ -77,15 +82,15 @@ class CustomBuildHook(BuildHookInterface):
         self._maybe_generate_protos(root)
 
     def _maybe_generate_protos(self, root: Path) -> None:
-        outputs_present = _outputs_exist(root, _PROTO_OUTPUT_GLOBS)
+        outputs_complete = not _has_missing_outputs(root, _PROTO_SOURCE_GLOBS)
 
-        if outputs_present and not _needs_rebuild(root, _PROTO_SOURCE_GLOBS, _PROTO_OUTPUT_GLOBS):
+        if outputs_complete and not _needs_rebuild(root, _PROTO_SOURCE_GLOBS, _PROTO_OUTPUT_GLOBS):
             logger.info("Protobuf outputs are up-to-date, skipping generation")
             return
 
         generate_script = root / "scripts" / "generate_protos.py"
         if not generate_script.exists():
-            if not outputs_present:
+            if not outputs_complete:
                 raise RuntimeError(
                     "Protobuf outputs are missing and scripts/generate_protos.py not found. "
                     "Cannot build iris without generated protobuf files."
@@ -94,7 +99,7 @@ class CustomBuildHook(BuildHookInterface):
             return
 
         if shutil.which("npx") is None:
-            if not outputs_present:
+            if not outputs_complete:
                 raise RuntimeError(
                     "Protobuf outputs are missing and npx is not installed. "
                     "Install Node.js (which provides npx) to generate protobuf files: "

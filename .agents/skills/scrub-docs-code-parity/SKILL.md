@@ -25,7 +25,7 @@ Use this skill on scheduled scrub turns for docs/code parity in `marin-community
 ## Output
 
 - Keep the final scrub response concise and action-focused.
-- Treat local-only edits as incomplete work. If you modify files, publish the result (commit/push and open or update a PR) before finishing this scrub run.
+- Treat local-only edits as incomplete work. If you modify files, publish the result (commit/push and open or update a PR per `.agents/skills/pull-request/SKILL.md`) before finishing this scrub run.
 - If publish is blocked (auth, permissions, CI infra, etc.), report the blocker and set a future `needs_followup_at` instead of ending the run.
 - If no material drift is found, explicitly report inspected scope and why no change was needed.
 - Always end with the required `HARNESS_SCRUB_LOOP` footer (provided by the base scrub contract).
