@@ -255,3 +255,80 @@
 - Decision:
   - Revert the associative-scan attempt.
   - Keep the batched-einsum rewrite with the original scan.
+
+### 2026-03-18 - Fresh LLO/VLIW dump for the winning batched XLA path
+- Goal:
+  - Check whether the current `chunk_size=512` winner still has one clearly worse lowered region that is worth a bounded Pallas prototype.
+- Dump capture:
+  - Session: `dlwh-mamba3-chunks-03f9`
+  - Worker: `marin-tpu_v5p_8-us-central1-a-20260319-0332-cb5559cd`
+  - Remote dump root:
+    - HLO: `/tmp/mamba3_vliw_512_batched/hlo`
+    - LLO/VLIW: `/tmp/mamba3_vliw_512_batched/llo`
+    - Mosaic: `/tmp/mamba3_vliw_512_batched/mosaic`
+  - Benchmark during dump capture, same `seq_len=16384`, `batch_head_groups=16`, `chunk_size=512`, `state_dim=128`, `value_dim=512`, `bf16`:
+    - forward: `144.72M tok/s`, `132.78` estimated TFLOP/s
+    - backward: `87.71M tok/s`, `80.48` estimated TFLOP/s
+- Source mapping in the winning XLA path:
+  - `local_output`: [ssd/xla.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/src/levanter/kernels/pallas/ssd/xla.py#L55) through [ssd/xla.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/src/levanter/kernels/pallas/ssd/xla.py#L67)
+  - `chunk_state`: [ssd/xla.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/src/levanter/kernels/pallas/ssd/xla.py#L75) through [ssd/xla.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/src/levanter/kernels/pallas/ssd/xla.py#L83)
+  - `prefix_emit`: [ssd/xla.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/src/levanter/kernels/pallas/ssd/xla.py#L96) through [ssd/xla.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/src/levanter/kernels/pallas/ssd/xla.py#L103)
+- Dump findings:
+  - `local_output` top-level fusion:
+    - file: `1773899639031412371-fusion.4-78-schedule-analysis_final_bundles.txt`
+    - bundles: `15766`
+    - estimated cycles from `TLP-82`: `1442476`
+    - scoped memory: `32604160` bytes
+    - spill/fill counts from `1773899639031412371-fusion.4-52-pre-finalize-registers-and-allocations.txt`:
+      - `spill_to_hbm=8`
+      - `fill_from_hbm=151`
+      - `spill_to_mem=7013`
+      - `fill_from_mem=28119`
+      - `spill_to_reg=260`
+      - `fill_from_virtual=1800`
+  - `prefix_emit` top-level fusion:
+    - file: `1773899637968811033-fusion.7-78-schedule-analysis_final_bundles.txt`
+    - bundles: `10776`
+    - estimated cycles from `TLP-82`: `1071229`
+    - scoped memory: `27455488` bytes
+    - spill/fill counts from `1773899637968811033-fusion.7-52-pre-finalize-registers-and-allocations.txt`:
+      - `spill_to_hbm=5`
+      - `fill_from_hbm=26`
+      - `spill_to_mem=1060`
+      - `fill_from_mem=9769`
+      - `spill_to_reg=6`
+      - `fill_from_virtual=12`
+  - `chunk_state` is split across two lowered fusions:
+    - `1773899637825799999-convert_multiply_fusion-74-schedule-analysis_final_bundles.txt`
+      - bundles: `1065`
+      - estimated cycles: `937920`
+      - scoped memory: `25165824` bytes
+      - spill/fill counts:
+        - `spill_to_hbm=3`
+        - `fill_from_hbm=8`
+        - `spill_to_mem=185`
+        - `fill_from_mem=1614`
+        - `spill_to_reg=1`
+        - `fill_from_virtual=1`
+    - `1773899637965987948-convert_bitcast_fusion-77-schedule-analysis_final_bundles.txt`
+      - bundles: `8172`
+      - estimated cycles: `458976`
+      - scoped memory: `29360128` bytes
+      - spill/fill counts:
+        - `spill_to_hbm=3`
+        - `fill_from_hbm=5`
+        - `spill_to_mem=1020`
+        - `fill_from_mem=7266`
+        - `spill_to_reg=4`
+        - `fill_from_virtual=8`
+- Interpretation:
+  - `local_output` is still the worst lowered region by every compiler-side proxy that surfaced cleanly in these dumps:
+    - highest bundle count,
+    - highest estimated cycles,
+    - largest scoped VMEM footprint,
+    - dramatically heavier spill/fill traffic than `prefix_emit` or either `chunk_state` component.
+  - `prefix_emit` remains expensive, but it is materially cleaner than `local_output` and now looks more like a “keep trying XLA layout/algebra” region than a first Pallas target.
+  - `chunk_state` is split and nontrivial, but it does not show the same compiler pressure signature as `local_output`.
+- Decision:
+  - Proceed with exactly one bounded Pallas prototype for `local_output`, while keeping `chunk_state` and `prefix_emit` in XLA.
+  - If that prototype does not beat the current XLA baseline on the same `v5p-8` shape, delete or disable it and keep XLA.
