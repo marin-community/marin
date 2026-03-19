@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "c64cfe5ad54b",
+  "session_id": "951bbfd9-a05f-49d7-af58-85149e06d580",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-19T03:30:35.183658436Z",
+  "branch": "kevin/harbor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "experiments/evals/evals.py",
+    "experiments/exp3490_nemotron_terminal_8b_tb.py",
+    "lib/marin/src/marin/evaluation/evaluators/harbor_evaluator.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "6e442728d564",
+  "token_usage": {
+    "input_tokens": 2941,
+    "cache_creation_tokens": 834028,
+    "cache_read_tokens": 43928240,
+    "output_tokens": 121095,
+    "api_call_count": 476
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-19T03:30:33.824844553Z",
+    "agent_lines": 46,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 46,
+    "agent_percentage": 100
+  },
+  "transcript_path": ".claude/projects/-home-kevin-marin-harbor/951bbfd9-a05f-49d7-af58-85149e06d580.jsonl"
+}

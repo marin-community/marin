@@ -3,7 +3,7 @@
   "checkpoint_id": "c64cfe5ad54b",
   "strategy": "manual-commit",
   "branch": "kevin/harbor",
-  "checkpoints_count": 7,
+  "checkpoints_count": 8,
   "files_touched": [
     "experiments/evals/evals.py",
     "experiments/exp3490_nemotron_terminal_8b_tb.py",
@@ -23,13 +23,20 @@
       "context": "/c6/4cfe5ad54b/1/context.md",
       "content_hash": "/c6/4cfe5ad54b/1/content_hash.txt",
       "prompt": "/c6/4cfe5ad54b/1/prompt.txt"
+    },
+    {
+      "metadata": "/c6/4cfe5ad54b/2/metadata.json",
+      "transcript": "/c6/4cfe5ad54b/2/full.jsonl",
+      "context": "/c6/4cfe5ad54b/2/context.md",
+      "content_hash": "/c6/4cfe5ad54b/2/content_hash.txt",
+      "prompt": "/c6/4cfe5ad54b/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 330,
-    "cache_creation_tokens": 1031578,
-    "cache_read_tokens": 35595098,
-    "output_tokens": 91099,
-    "api_call_count": 286
+    "input_tokens": 3271,
+    "cache_creation_tokens": 1865606,
+    "cache_read_tokens": 79523338,
+    "output_tokens": 212194,
+    "api_call_count": 762
   }
 }
