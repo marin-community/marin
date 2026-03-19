@@ -3,6 +3,9 @@ on:
   push:
     branches:
       - main
+    paths:
+      - rust/dupekit/**
+      - .github/workflows/dupekit-unit-tests.yaml
   pull_request:
     paths:
       - rust/dupekit/**
