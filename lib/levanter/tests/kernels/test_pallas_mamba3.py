@@ -7,7 +7,6 @@ import jax
 import jax.numpy as jnp
 
 from levanter.kernels.pallas.mamba3 import (
-    BlockSizes,
     mamba3_chunk_state,
     mamba3_chunk_state_reference_batched,
     mamba3_chunked_forward,
@@ -93,32 +92,6 @@ def test_mamba3_intra_chunk_xla_matches_reference():
     )
     y = mamba3_intra_chunk(a_log_cumsum, src_scale, out_correction, b, c, x, implementation="xla")
     assert jnp.allclose(y.reshape(6, 8, 7), y_ref, atol=1e-5, rtol=1e-5)
-
-
-def test_mamba3_intra_chunk_pallas_interpret_matches_reference():
-    dt, lam, a, b, c, x = _sample_inputs(leading_shape=(2,), chunk_size=4, state_dim=4, value_dim=8)
-    src_scale, out_correction = prepare_mamba3_scales(dt, lam)
-    a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
-    y_ref = mamba3_intra_chunk_reference_batched(
-        a_log_cumsum.reshape(2, 4),
-        src_scale.reshape(2, 4),
-        out_correction.reshape(2, 4),
-        b.reshape(2, 4, 4),
-        c.reshape(2, 4, 4),
-        x.reshape(2, 4, 8),
-    )
-    y = mamba3_intra_chunk(
-        a_log_cumsum,
-        src_scale,
-        out_correction,
-        b,
-        c,
-        x,
-        implementation="pallas_tpu",
-        block_sizes=BlockSizes(group_block_size=1, query_block_size=4, key_block_size=4, value_block_size=4),
-        interpret=True,
-    )
-    assert jnp.allclose(y.reshape(2, 4, 8), y_ref, atol=1e-5, rtol=1e-5)
 
 
 def test_mamba3_chunk_state_matches_reference_shape_and_values():

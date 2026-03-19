@@ -41,24 +41,8 @@ def ssd_intra_chunk_pallas(
     interpret: bool = False,
     backend: str | None = None,
 ) -> Float[Array, "groups chunk value"]:
-    try:
-        from .pallas_tpu import ssd_intra_chunk_pallas_tpu
-    except ImportError as exc:  # pragma: no cover - import failure depends on runtime backend.
-        raise PallasUnsupportedError("SSD TPU Pallas kernel is unavailable in this environment.") from exc
-
-    try:
-        return ssd_intra_chunk_pallas_tpu(
-            a_log_cumsum,
-            src_scale,
-            b,
-            c,
-            x,
-            block_sizes=block_sizes or BlockSizes.get_default(),
-            interpret=interpret,
-            backend=backend,
-        )
-    except NotImplementedError as exc:
-        raise PallasUnsupportedError(str(exc)) from exc
+    del a_log_cumsum, src_scale, b, c, x, block_sizes, interpret, backend
+    raise PallasUnsupportedError("SSD TPU Pallas kernel is intentionally absent; use the XLA path.")
 
 
 IMPLEMENTATIONS = {

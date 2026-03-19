@@ -9,7 +9,6 @@ from typing import Literal, TypeAlias, cast
 import warnings
 
 import jax
-import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 from .config import BlockSizes
@@ -25,7 +24,6 @@ from .reference import (
     prepare_mamba3_scales,
 )
 from .xla import mamba3_chunk_state_xla_batched, mamba3_chunked_forward_xla_batched, mamba3_intra_chunk_xla_batched
-from ..ssd.api import ssd_intra_chunk_pallas
 
 
 Implementation: TypeAlias = Literal["pallas_tpu", "xla", "reference"]
@@ -47,26 +45,8 @@ def mamba3_intra_chunk_pallas(
     interpret: bool = False,
     backend: str | None = None,
 ) -> Float[Array, "groups chunk value"]:
-    acc_dtype = jnp.float32
-    try:
-        with jax.named_scope("mamba3_intra_chunk"):
-            with jax.named_scope("ssd_core"):
-                y = ssd_intra_chunk_pallas(
-                    a_log_cumsum,
-                    src_scale,
-                    b,
-                    c,
-                    x,
-                    block_sizes=block_sizes,
-                    interpret=interpret,
-                    backend=backend,
-                ).astype(acc_dtype)
-            with jax.named_scope("diagonal_correction"):
-                diag_cb = jnp.sum(c.astype(acc_dtype) * b.astype(acc_dtype), axis=-1)
-                correction = (out_correction.astype(acc_dtype) * diag_cb)[:, :, None] * x.astype(acc_dtype)
-            return (y - correction).astype(x.dtype)
-    except Exception as exc:
-        raise PallasUnsupportedError(str(exc)) from exc
+    del a_log_cumsum, src_scale, out_correction, b, c, x, block_sizes, interpret, backend
+    raise PallasUnsupportedError("Mamba-3 TPU Pallas kernel is intentionally absent; use the XLA path.")
 
 
 IMPLEMENTATIONS = {
