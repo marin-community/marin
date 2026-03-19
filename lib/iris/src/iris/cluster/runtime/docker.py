@@ -221,22 +221,6 @@ def _parse_memory_size(size_str: str) -> int:
         return 0
 
 
-def _make_container_name(task_id: str, attempt_id: int) -> str:
-    """Return a Docker container name for a task attempt with a random suffix.
-
-    Format: iris-<sanitized-task-path>-a<attempt_id>-<random>
-    Example: /alice/root/child/0 -> iris-alice-root-child-0-a1-3f8a1b2c
-
-    A random 8-character hex suffix avoids name collisions when different task
-    paths sanitize to the same string (e.g. /a/b-c/0 vs /a/b/c/0). Iris
-    enforces task uniqueness at the scheduler level, so Docker-level name
-    uniqueness is best-effort.
-    """
-    safe = re.sub(r"[^a-zA-Z0-9_.-]", "-", task_id.lstrip("/")).strip("-")
-    suffix = uuid.uuid4().hex[:8]
-    return f"iris-{safe}-a{attempt_id}-{suffix}"
-
-
 def _docker_logs(container_id: str, since: Timestamp | None = None) -> list[LogLine]:
     """Get container logs, optionally filtered by timestamp.
 
@@ -424,14 +408,9 @@ exec {quoted_cmd}
             # No setup, run command directly
             command = list(self.config.entrypoint.run_command.argv)
 
-        container_name = None
-        if self.config.task_id and self.config.attempt_id is not None:
-            container_name = _make_container_name(self.config.task_id, self.config.attempt_id)
-
         self._run_container_id = self._docker_create(
             command=command,
             include_devices=True,
-            container_name=container_name,
         )
         self.runtime.track_container(self._run_container_id)
         self._docker_start(self._run_container_id)
@@ -597,7 +576,6 @@ exec {quoted_cmd}
         label_suffix: str = "",
         include_devices: bool = False,
         memory_limit_mb: int | None = None,
-        container_name: str | None = None,
     ) -> str:
         """Create a Docker container. Returns container_id.
 
@@ -607,7 +585,6 @@ exec {quoted_cmd}
         Args:
             command: Command to run in the container.
             label_suffix: Suffix appended to the iris.task_id label.
-            container_name: If set, passed as --name to docker create.
             include_devices: If True, also pass through accelerator devices.
             memory_limit_mb: Override memory limit in MB. When None, uses
                 the task's requested memory from config.resources.
@@ -658,10 +635,6 @@ exec {quoted_cmd}
             cmd.extend(["--label", f"iris.task_id={config.task_id}{label_suffix}"])
         if config.job_id:
             cmd.extend(["--label", f"iris.job_id={config.job_id}"])
-
-        # Named container for easy identification in `docker ps`
-        if container_name:
-            cmd.extend(["--name", container_name])
 
         # Resource limits (cgroups v2) — always applied
         cpu_millicores = config.get_cpu_millicores()

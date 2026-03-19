@@ -11,7 +11,7 @@ from unittest.mock import Mock
 import pytest
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.docker import DockerRuntime, _make_container_name
+from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import MountKind, MountSpec
 
 
@@ -104,25 +104,3 @@ def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):
     )
     assert len(calls) == 0
     mock_bundle_store.extract_bundle_to.assert_called_once_with("abc", workdir)
-
-
-def test_make_container_name_sanitizes_task_id():
-    """_make_container_name produces a valid Docker container name with random suffix."""
-    name1 = _make_container_name("/alice/root/child/0", 1)
-    assert name1.startswith("iris-alice-root-child-0-a1-")
-    # Random suffix is 8 hex chars
-    suffix = name1.split("-a1-")[1]
-    assert len(suffix) == 8
-    assert all(c in "0123456789abcdef" for c in suffix)
-
-    name2 = _make_container_name("/alice/root/0", 3)
-    assert name2.startswith("iris-alice-root-0-a3-")
-
-    # Special characters are replaced with dashes
-    name3 = _make_container_name("/user/my_job:v2/0", 1)
-    assert name3.startswith("iris-")
-
-    # Two calls with the same input produce different names (random suffix)
-    name_a = _make_container_name("/alice/root/0", 1)
-    name_b = _make_container_name("/alice/root/0", 1)
-    assert name_a != name_b
