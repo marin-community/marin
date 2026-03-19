@@ -130,11 +130,13 @@ class ControllerDashboard:
     def _auth_config(self, request: Request) -> JSONResponse:
         """Unauthenticated endpoint telling the frontend whether auth is required."""
         has_session = SESSION_COOKIE in request.cookies
+        provider_kind = "kubernetes" if self._service._controller.has_direct_provider else "worker"
         return JSONResponse(
             {
                 "auth_enabled": self._auth_provider is not None,
                 "provider": self._auth_provider,
                 "has_session": has_session,
+                "provider_kind": provider_kind,
             }
         )
 

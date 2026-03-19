@@ -444,12 +444,18 @@ class ResourceSpec:
     disk: str | int = 0
     device: cluster_pb2.DeviceConfig | None = None
 
+    # Accelerator tasks need enough CPU to avoid bottlenecking on data loading.
+    MIN_ACCELERATOR_CPU_MILLICORES = 32_000
+
     def to_proto(self) -> cluster_pb2.ResourceSpecProto:
         """Convert to wire format."""
         memory_bytes = self.memory if isinstance(self.memory, int) else parse_memory_string(self.memory)
         disk_bytes = self.disk if isinstance(self.disk, int) else parse_memory_string(self.disk)
+        cpu_mc = int(self.cpu * 1000)
+        if self.device is not None and cpu_mc < self.MIN_ACCELERATOR_CPU_MILLICORES:
+            cpu_mc = self.MIN_ACCELERATOR_CPU_MILLICORES
         spec = cluster_pb2.ResourceSpecProto(
-            cpu_millicores=int(self.cpu * 1000),
+            cpu_millicores=cpu_mc,
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
         )
