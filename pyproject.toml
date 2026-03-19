@@ -23,7 +23,7 @@ dependencies = [
 
 [tool.uv]
 fork-strategy = "fewest"
-find-links = ["https://github.com/marin-community/marin/releases/expanded_assets/dupekit-latest"]
+find-links = ["https://github.com/marin-community/marin/releases/expanded_assets/dupekit-0.1.0-41b51df"]
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
     "antlr4-python3-runtime==4.11",
