@@ -332,6 +332,12 @@ def _batch_axis_names(x: jax.Array) -> tuple[str, ...]:
     return (str(axis_spec),)
 
 
+def _mesh_reduction_axes(mesh: jax.sharding.AbstractMesh | None) -> tuple[str, ...]:
+    if mesh is None or mesh.empty:
+        return ()
+    return tuple(str(name) for name, size in mesh.shape.items() if int(size) > 1)
+
+
 def _silu_grad(x: jax.Array) -> jax.Array:
     sigmoid = jax.nn.sigmoid(x)
     return sigmoid * (1.0 + x * (1.0 - sigmoid))
@@ -405,6 +411,7 @@ def _shared_mlp_explicit_bwd_bwd(
 
     batch_spec = grug_moe_lib._batch_spec_from_x(x, get_abstract_mesh())
     shared_param_spec = P(None, None)
+    reduction_axes = _mesh_reduction_axes(get_abstract_mesh())
     x_f32 = x.astype(jnp.float32)
     shared_w13_f32 = shared_w13.astype(jnp.float32)
     shared_w2_f32 = shared_w2.astype(jnp.float32)
@@ -437,6 +444,9 @@ def _shared_mlp_explicit_bwd_bwd(
         out_sharding=shared_param_spec,
         preferred_element_type=jnp.float32,
     )
+    if reduction_axes:
+        grad_shared_w13_local = jax.lax.psum(grad_shared_w13_local, reduction_axes)
+        grad_shared_w2_local = jax.lax.psum(grad_shared_w2_local, reduction_axes)
 
     grad_x = jnp.einsum(
         "tm,dm->td",
