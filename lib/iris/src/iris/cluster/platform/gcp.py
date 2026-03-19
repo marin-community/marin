@@ -1628,6 +1628,27 @@ class GcpPlatform:
 # ============================================================================
 
 
+def _check_gcloud_ssh_key() -> None:
+    """Verify that the gcloud compute SSH key exists.
+
+    ``gcloud compute ssh`` expects ``~/.ssh/google_compute_engine``.  When the
+    key is missing, gcloud tries to generate one interactively — which hangs
+    indefinitely in a non-interactive subprocess.  Detect this early and give
+    the user a clear remediation path.
+    """
+    key_path = os.path.expanduser("~/.ssh/google_compute_engine")
+    if not os.path.exists(key_path):
+        raise RuntimeError(
+            f"SSH key not found at {key_path}. "
+            "gcloud compute ssh requires this key to connect to VMs.\n"
+            "To create it, run:\n"
+            "  gcloud compute ssh --dry-run <any-vm> --zone=<zone>\n"
+            "or:\n"
+            "  ssh-keygen -t rsa -f ~/.ssh/google_compute_engine -C \"$(gcloud config get account)\" -N ''\n"
+            "Then re-run your command."
+        )
+
+
 @contextmanager
 def _gcp_tunnel(
     project: str,
@@ -1641,6 +1662,8 @@ def _gcp_tunnel(
     that may be listening on the same port on a different address family (IPv6).
     Picks a free port automatically if none is specified.
     """
+    _check_gcloud_ssh_key()
+
     if local_port is None:
         local_port = find_free_port(start=10000)
 
