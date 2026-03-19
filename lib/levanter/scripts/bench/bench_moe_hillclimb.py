@@ -57,6 +57,7 @@ Kernel = Literal[
     "deepep_transport_local_compute_only_probe",
     "deepep_transport_collapse_only_probe",
     "deepep_transport_combine_only_probe",
+    "deepep_transport_local_compute_bwd_probe",
     "deepep_transport_combine_bwd_cached_dispatch_probe",
     "deepep_transport_dispatch_bwd_combine_probe",
     "deepep_transport",
@@ -5389,6 +5390,30 @@ def _make_deepep_transport_probe_forward_backward_runner(
 
         return run, tuple()
 
+    if probe_kernel == "deepep_transport_local_compute_bwd_probe":
+        def local_compute_wrt(
+            x_dispatch_in: jax.Array,
+            w_up_gate_in: jax.Array,
+            w_down_in: jax.Array,
+        ) -> jax.Array:
+            return local_compute(
+                x_dispatch_in,
+                local_group_sizes,
+                w_up_gate_in,
+                w_down_in,
+            )
+
+        out_dispatch, pullback = jax.vjp(local_compute_wrt, x_dispatch, w_up_gate, w_down)
+        cotangent = jnp.ones_like(out_dispatch, dtype=out_dispatch.dtype)
+        jax.block_until_ready(out_dispatch)
+
+        def run() -> jax.Array:
+            with jax.named_scope("local_compute_bwd_probe"):
+                grad_x_dispatch, _, _ = pullback(cotangent)
+                return grad_x_dispatch
+
+        return run, tuple()
+
     if probe_kernel == "deepep_transport_dispatch_bwd_combine_probe":
         def dispatch_pack_wrt(
             x_in: jax.Array,
@@ -6026,6 +6051,7 @@ def main() -> None:
             "deepep_transport_local_compute_only_probe",
             "deepep_transport_collapse_only_probe",
             "deepep_transport_combine_only_probe",
+            "deepep_transport_local_compute_bwd_probe",
             "deepep_transport_combine_bwd_cached_dispatch_probe",
             "deepep_transport_dispatch_bwd_combine_probe",
             "deepep_transport",
@@ -6375,6 +6401,7 @@ def main() -> None:
                     if kernel in {"deepep_transport_prewarmed", "deepep_transport_capped", "deepep_transport_staged"}:
                         raise ValueError(f"{kernel} currently supports only --bench-pass=forward")
                     if kernel in {
+                        "deepep_transport_local_compute_bwd_probe",
                         "deepep_transport_combine_bwd_cached_dispatch_probe",
                         "deepep_transport_dispatch_bwd_combine_probe",
                     }:
