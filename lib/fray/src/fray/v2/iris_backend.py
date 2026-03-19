@@ -35,7 +35,7 @@ from iris.cluster.types import CoschedulingConfig, EnvironmentSpec, ResourceSpec
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import cluster_pb2
 
-from fray.v2.actor import ActorContext, ActorFuture, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.actor import ActorContext, ActorFuture, ActorHandle, HostedActor, _reset_current_actor, _set_current_actor
 from fray.v2.client import JobAlreadyExists as FrayJobAlreadyExists
 from fray.v2.types import (
     ActorConfig,
@@ -526,6 +526,39 @@ class FrayIrisClient:
                 return IrisJobHandle(e.job)
             raise FrayJobAlreadyExists(request.name, handle=IrisJobHandle(e.job)) from e
         return IrisJobHandle(job)
+
+    def host_actor(
+        self,
+        actor_class: type,
+        *args: Any,
+        name: str,
+        actor_config: ActorConfig = ActorConfig(),
+        **kwargs: Any,
+    ) -> HostedActor:
+        """Host an actor in the current process with Iris RPC serving."""
+        ctx = iris_ctx()
+        job_info = get_job_info()
+        if job_info is None:
+            raise RuntimeError("host_actor requires an Iris job context")
+
+        actor_name = f"{ctx.job_id}/{name}-0"
+        handle = IrisActorHandle(actor_name)
+        actor_ctx = ActorContext(handle=handle, index=0, group_name=name)
+        token = _set_current_actor(actor_ctx)
+        try:
+            instance = actor_class(*args, **kwargs)
+        finally:
+            _reset_current_actor(token)
+
+        server = ActorServer(host="0.0.0.0", port=0)
+        server.register(actor_name, instance)
+        actual_port = server.serve_background()
+
+        address = f"http://{job_info.advertise_host}:{actual_port}"
+        logger.info("host_actor: registered %s -> %s", actor_name, address)
+        ctx.registry.register(actor_name, address)
+
+        return HostedActor(handle, stop=server.stop)
 
     def create_actor(
         self,
