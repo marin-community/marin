@@ -143,6 +143,17 @@ def _round_up_capacity(value: int, *, multiple: int) -> int:
     return ((value + multiple - 1) // multiple) * multiple
 
 
+def _moe_intermediate_dim_from_w13_out(w13_out: jax.Array, moe_w2_local: jax.Array) -> int:
+    out_width = int(w13_out.shape[-1])
+    if moe_w2_local.shape[1] * 2 == out_width:
+        return int(moe_w2_local.shape[1])
+    if moe_w2_local.ndim > 2 and moe_w2_local.shape[2] * 2 == out_width:
+        return int(moe_w2_local.shape[2])
+    raise ValueError(
+        f"Could not infer MoE intermediate dim from w13_out.shape={w13_out.shape} and moe_w2_local.shape={moe_w2_local.shape}"
+    )
+
+
 def _time_fn(fn: Callable, *args, warmup: int = 2, iters: int = 5) -> float:
     compiled = jax.jit(fn)
     jax.block_until_ready(compiled(*args))
@@ -382,7 +393,7 @@ def _moe_mlp_ep_ring_local_legacy(
 
     with jax.named_scope("moe_up_down"):
         w13_out = ragged_dot(x_dispatch, moe_w13_local, group_sizes)
-        moe_dim = moe_w2_local.shape[1]
+        moe_dim = _moe_intermediate_dim_from_w13_out(w13_out, moe_w2_local)
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
 
@@ -568,7 +579,7 @@ def _moe_mlp_ep_ring_local_cumsum(
 
     with jax.named_scope("moe_up_down"):
         w13_out = ragged_dot(x_dispatch, moe_w13_local, group_sizes)
-        moe_dim = moe_w2_local.shape[1]
+        moe_dim = _moe_intermediate_dim_from_w13_out(w13_out, moe_w2_local)
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
 
@@ -1111,7 +1122,7 @@ def _moe_mlp_ep_ring_local_variant(
 
     with jax.named_scope("moe_up_down"):
         w13_out = ragged_dot(x_dispatch, moe_w13_local, group_sizes)
-        moe_dim = moe_w2_local.shape[1]
+        moe_dim = _moe_intermediate_dim_from_w13_out(w13_out, moe_w2_local)
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
 
@@ -1477,7 +1488,7 @@ def _moe_mlp_ep_ragged_a2a_local(
 
     with jax.named_scope("moe_up_down"):
         w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
-        moe_dim = moe_w2_local.shape[1]
+        moe_dim = _moe_intermediate_dim_from_w13_out(w13_out, moe_w2_local)
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
 
@@ -1645,7 +1656,7 @@ def _moe_mlp_ep_ragged_a2a_deepep_layout_local(
 
     with jax.named_scope("moe_up_down"):
         w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
-        moe_dim = moe_w2_local.shape[1]
+        moe_dim = _moe_intermediate_dim_from_w13_out(w13_out, moe_w2_local)
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
 
@@ -1750,7 +1761,7 @@ def _moe_mlp_ep_deepep_transport_local(
                 local_group_sizes,
                 local_expert_capacity=w13_local_expert_capacity,
             )
-        moe_dim = moe_w2_local.shape[1]
+        moe_dim = _moe_intermediate_dim_from_w13_out(w13_out, moe_w2_local)
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         gate_up = activation_fn(gate) * up
         if w2_local_expert_capacity is None:
@@ -2113,7 +2124,7 @@ def _moe_mlp_ep_deepep_transport_local_compute_local(
                 local_group_sizes,
                 local_expert_capacity=w13_local_expert_capacity,
             )
-    moe_dim = moe_w2_local.shape[1]
+    moe_dim = _moe_intermediate_dim_from_w13_out(w13_out, moe_w2_local)
     with jax.named_scope("gate_up_split"):
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
     with jax.named_scope("gate_activation"):
@@ -2250,7 +2261,7 @@ def _moe_mlp_ep_deepep_transport_gate_up_only_local(
 ) -> jax.Array:
     with jax.named_scope("w13_ragged_dot"):
         w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
-    moe_dim = moe_w2_local.shape[1]
+    moe_dim = _moe_intermediate_dim_from_w13_out(w13_out, moe_w2_local)
     with jax.named_scope("gate_up_split"):
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
     with jax.named_scope("gate_activation"):
@@ -3010,7 +3021,7 @@ def _moe_mlp_ep_deepep_transport_gate_probe_local(
         max_local_assignments=max_local_assignments,
     )
     w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
-    moe_dim = moe_w2_local.shape[1]
+    moe_dim = _moe_intermediate_dim_from_w13_out(w13_out, moe_w2_local)
     gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
     probe_out = activation_fn(gate) * up
     recv_out = _collapse_deepep_local_assignments(
@@ -3150,7 +3161,7 @@ def _moe_mlp_ep_deepep_transport_second_ragged_dot_probe_local(
         max_local_assignments=max_local_assignments,
     )
     w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
-    moe_dim = moe_w2_local.shape[1]
+    moe_dim = _moe_intermediate_dim_from_w13_out(w13_out, moe_w2_local)
     gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
     probe_out = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
     recv_out = _collapse_deepep_local_assignments(
@@ -4282,7 +4293,7 @@ def _moe_mlp_ep_ring_local_packed_return(
 
     with jax.named_scope("moe_up_down"):
         w13_out = ragged_dot(x_dispatch, moe_w13_local, group_sizes)
-        moe_dim = moe_w2_local.shape[1]
+        moe_dim = _moe_intermediate_dim_from_w13_out(w13_out, moe_w2_local)
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
 
@@ -4364,7 +4375,7 @@ def _moe_mlp_ep_stream_ring_local(
         )
 
         w13_out = ragged_dot(x_dispatch, moe_w13_local, group_sizes)
-        moe_dim = moe_w2_local.shape[1]
+        moe_dim = _moe_intermediate_dim_from_w13_out(w13_out, moe_w2_local)
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
         out_chunk = out_chunk.at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
@@ -6267,6 +6278,7 @@ def main() -> None:
     parser.add_argument("--check-equivalence", action="store_true")
     parser.add_argument("--profile-root", type=Path, default=None)
     parser.add_argument("--w13-out-first", action="store_true")
+    parser.add_argument("--w2-out-first", action="store_true")
     parser.add_argument("--w13-expert-padded", action="store_true")
     parser.add_argument("--w2-expert-padded", action="store_true")
     parser.add_argument("--deepep-dispatch-num-sms", type=int)
@@ -6325,8 +6337,13 @@ def main() -> None:
         if args.w13_out_first
         else (args.experts, args.hidden, 2 * args.mlp_dim)
     )
+    w2_shape = (
+        (args.experts, args.hidden, args.mlp_dim)
+        if args.w2_out_first
+        else (args.experts, args.mlp_dim, args.hidden)
+    )
     w_up_gate = jax.random.normal(key_w13, w13_shape, dtype=dtype)
-    w_down = jax.random.normal(key_w2, (args.experts, args.mlp_dim, args.hidden), dtype=dtype)
+    w_down = jax.random.normal(key_w2, w2_shape, dtype=dtype)
     shared_w13 = jax.random.normal(key_sw13, (args.hidden, 2 * args.shared_expert_dim), dtype=dtype)
     shared_w2 = jax.random.normal(key_sw2, (args.shared_expert_dim, args.hidden), dtype=dtype)
 
@@ -6336,7 +6353,8 @@ def main() -> None:
         f"tokens={args.tokens} hidden={args.hidden} mlp_dim={args.mlp_dim} experts={args.experts} "
         f"topk={args.topk} shared_expert_dim={args.shared_expert_dim} dtype={dtype} "
         f"distribution={args.distribution} bench_pass={args.bench_pass} capacity_factor={args.capacity_factor} "
-        f"w13_out_first={args.w13_out_first} w13_expert_padded={args.w13_expert_padded} "
+        f"w13_out_first={args.w13_out_first} w2_out_first={args.w2_out_first} "
+        f"w13_expert_padded={args.w13_expert_padded} "
         f"w2_expert_padded={args.w2_expert_padded} "
         f"deepep_collapse_impl={args.deepep_collapse_impl}"
     )

@@ -130,6 +130,7 @@ def _bench_block(args: argparse.Namespace) -> str:
     topk_values = " ".join(args.topk_list.split(","))
     profile_flag = f" \\\n        --profile-root {args.profile_root}" if args.profile_root else ""
     w13_layout_flag = " \\\n        --w13-out-first" if args.w13_out_first else ""
+    w2_layout_flag = " \\\n        --w2-out-first" if args.w2_out_first else ""
     w13_expert_padded_flag = " \\\n        --w13-expert-padded" if args.w13_expert_padded else ""
     w2_expert_padded_flag = " \\\n        --w2-expert-padded" if args.w2_expert_padded else ""
     collapse_impl_flag = (
@@ -193,7 +194,7 @@ for distribution in {distributions}; do
         --kernel "$kernel" \\
         --ep-list {args.ep_list} \\
         --warmup {args.warmup} \\
-        --iters {args.iters}{profile_flag}{w13_layout_flag}{w13_expert_padded_flag}{w2_expert_padded_flag}{collapse_impl_flag}{deepep_dispatch_num_sms_flag}{deepep_dispatch_num_max_send_tokens_flag}{deepep_dispatch_num_max_recv_tokens_flag}{deepep_combine_num_sms_flag}{deepep_combine_num_max_send_tokens_flag}{deepep_combine_num_max_recv_tokens_flag}
+        --iters {args.iters}{profile_flag}{w13_layout_flag}{w2_layout_flag}{w13_expert_padded_flag}{w2_expert_padded_flag}{collapse_impl_flag}{deepep_dispatch_num_sms_flag}{deepep_dispatch_num_max_send_tokens_flag}{deepep_dispatch_num_max_recv_tokens_flag}{deepep_combine_num_sms_flag}{deepep_combine_num_max_send_tokens_flag}{deepep_combine_num_max_recv_tokens_flag}
 {timeout_suffix}
       echo "BENCH_END kernel=$kernel distribution=$distribution topk=$topk"
     done
@@ -353,6 +354,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--profile-root", default=None)
     parser.add_argument("--post-bench-sleep-seconds", type=int, default=0)
     parser.add_argument("--w13-out-first", action="store_true")
+    parser.add_argument("--w2-out-first", action="store_true")
     parser.add_argument("--w13-expert-padded", action="store_true")
     parser.add_argument("--w2-expert-padded", action="store_true")
     parser.add_argument("--deepep-dispatch-num-sms", type=int, default=None)
