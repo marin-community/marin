@@ -119,4 +119,25 @@ def build_common_iris_env(
             env["PJRT_DEVICE"] = "TPU"
             env["JAX_FORCE_TPU_INIT"] = "1"
 
+    # Expose the task's resource limits so user code can query them via
+    # iris.resource_utils without relying on cgroup introspection.
+    # Only non-zero fields are included so that resource_utils falls back
+    # to cgroups / host values for unspecified dimensions.
+    if resources is not None:
+        res_dict: dict[str, int] = {}
+        if resources.cpu_millicores:
+            res_dict["cpu_millicores"] = resources.cpu_millicores
+        if resources.memory_bytes:
+            res_dict["memory_bytes"] = resources.memory_bytes
+        if resources.disk_bytes:
+            res_dict["disk_bytes"] = resources.disk_bytes
+        if resources.HasField("device"):
+            dev = resources.device
+            if dev.HasField("gpu") and dev.gpu.count:
+                res_dict["gpu_count"] = dev.gpu.count
+            elif dev.HasField("tpu") and dev.tpu.count:
+                res_dict["tpu_count"] = dev.tpu.count
+        if res_dict:
+            env["IRIS_TASK_RESOURCES"] = json.dumps(res_dict)
+
     return env

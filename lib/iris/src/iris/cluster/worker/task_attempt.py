@@ -6,7 +6,6 @@
 This module encapsulates the full lifecycle of a single task execution attempt:
 bundle download -> image build -> container run -> monitor -> cleanup.
 """
-import json
 
 import logging
 import shutil
@@ -158,20 +157,6 @@ def build_iris_env(
     # Override port placeholders with real allocated values
     for name, port in task.ports.items():
         env[f"IRIS_PORT_{name.upper()}"] = str(port)
-
-    # Expose the task's resource limits so user code can query them via
-    # iris.resource_utils without relying on cgroup introspection.
-    if task.request.HasField("resources"):
-        res = task.request.resources
-        env["IRIS_TASK_RESOURCES"] = json.dumps(
-            {
-                "memory_bytes": res.memory_bytes,
-                "cpu_millicores": res.cpu_millicores,
-                "disk_bytes": res.disk_bytes,
-                "gpu_count": res.device.gpu,
-                "tpu_count": res.device.tpu,
-            }
-        )
 
     return env
 
