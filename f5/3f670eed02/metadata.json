@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "f53f670eed02",
+  "strategy": "manual-commit",
+  "branch": "kevin/sft",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "experiments/exp3490b_sft_nemotron_terminal_corpus_qwen3_8b.py",
+    "experiments/posttrain/instruction_datasets.py",
+    "lib/marin/src/marin/transform/conversation/transform_conversation.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f5/3f670eed02/0/metadata.json",
+      "transcript": "/f5/3f670eed02/0/full.jsonl",
+      "context": "/f5/3f670eed02/0/context.md",
+      "content_hash": "/f5/3f670eed02/0/content_hash.txt",
+      "prompt": "/f5/3f670eed02/0/prompt.txt"
+    },
+    {
+      "metadata": "/f5/3f670eed02/1/metadata.json",
+      "transcript": "/f5/3f670eed02/1/full.jsonl",
+      "context": "/f5/3f670eed02/1/context.md",
+      "content_hash": "/f5/3f670eed02/1/content_hash.txt",
+      "prompt": "/f5/3f670eed02/1/prompt.txt"
+    },
+    {
+      "metadata": "/f5/3f670eed02/2/metadata.json",
+      "transcript": "/f5/3f670eed02/2/full.jsonl",
+      "context": "/f5/3f670eed02/2/context.md",
+      "content_hash": "/f5/3f670eed02/2/content_hash.txt",
+      "prompt": "/f5/3f670eed02/2/prompt.txt"
+    },
+    {
+      "metadata": "/f5/3f670eed02/3/metadata.json",
+      "transcript": "/f5/3f670eed02/3/full.jsonl",
+      "context": "/f5/3f670eed02/3/context.md",
+      "content_hash": "/f5/3f670eed02/3/content_hash.txt",
+      "prompt": "/f5/3f670eed02/3/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5010,
+    "cache_creation_tokens": 1738689,
+    "cache_read_tokens": 41476844,
+    "output_tokens": 177907,
+    "api_call_count": 467
+  }
+}
