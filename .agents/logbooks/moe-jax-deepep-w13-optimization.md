@@ -707,3 +707,433 @@ KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_k
   - the remaining gap to the sealed exact-cap prewarmed path (`12.045 ms`) is now much smaller, and the next question is whether enough of that gain can survive all the way into `current`
 - Next action:
   - post this as a major milestone on issue `#3821`, then decide whether to integrate the same expert-padded FC1 idea into the actual `current` path for the final rung.
+
+### 2026-03-18 23:47 UTC - The expert-padded `w13` candidate survives the final `current` rung on the fresh pinned lane
+- Experiment ID: `W13-OPT-014`
+- Hypothesis:
+  - if the `w13` exact-cap FC1 gain is the real dominant residual inside the live ring path, then threading the same expert-padded capacity into the actual `current` path should materially reduce the authoritative full forward time rather than stalling out at `capped_prewarmed`.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 7c3c5176d3d6aaa093dbd8359c7c965c4ac10610 \
+  --task-id w13opt-expertpadded-current-pinned-t262144-20260318-234531 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels current \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - pod: `iris-task-116ce90b3b3e`
+  - node: `g11ed54`
+  - node label: `iris-i3821jax-scale-group=h100-8x`
+  - code ref used by the pod: `7c3c5176d3d6aaa093dbd8359c7c965c4ac10610`
+  - current-path exact-cap metadata printed by the run:
+    - `CURRENT_RING_W13_CAPS local_capacity=81920 max_local_expert_assignments=4352`
+  - sealed baseline for comparison: `10,186,545.45 tok/s` (`25.735 ms`)
+- Result:
+  - `current`: `17,120,042.64 tok/s` (`15.312 ms`)
+  - delta vs sealed baseline:
+    - throughput: `+68.07%`
+    - time: `-40.50%`
+  - the task reached `BENCH_END` and the wrapper returned `EXIT_CODE=0`
+- Interpretation:
+  - the `w13` exact-cap FC1 candidate is not just a probe-path or prewarmed-path win; it survives into the live `current` ring forward as well
+  - the `current - capped_prewarmed` residual also shrank, from `4.044 ms` in the sealed baseline to `3.267 ms` here, so the ring-path integration preserved most of the rung-3 gain instead of reintroducing the old gap
+  - this completes the required validation ladder for the `w13`-first tranche on the authoritative cell with a material win at every rung
+- Next action:
+  - post the full-rung milestone on issue `#3821`, then decide whether the next thread should be a confirmation/profile pass on the remaining `current - capped_prewarmed` residual or broaderization beyond the single authoritative cell.
+
+### 2026-03-18 23:52 UTC - A fresh `current` profile shows the remaining residual is no longer the old `w13` transpose path
+- Experiment ID: `W13-OPT-015`
+- Hypothesis:
+  - after the expert-padded `w13` fix lands in `current`, the next bottleneck should move away from the old `w13` transpose-heavy ragged path; a fresh `current` trace should reveal whether the residual is now compute (`w2`-like) or communication/overlap dominated.
+- Commands:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 7c3c5176d3d6aaa093dbd8359c7c965c4ac10610 \
+  --task-id w13opt-expertpadded-current-profile-t262144-20260318-235000 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels current \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 2 \
+  --iters 3 \
+  --profile-root /tmp/current-expertpadded-262144 \
+  --post-bench-sleep-seconds 1800 \
+  --per-bench-timeout-seconds 1800 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl -n iris-3821-jax cp \
+  iris-task-b4a60f903086:/tmp/current-expertpadded-262144/. \
+  scratch/profiles/current-expertpadded-262144
+
+uv run python -m marin.profiling.cli summarize \
+  --profile-dir scratch/profiles/current-expertpadded-262144 \
+  --warmup-steps 0 \
+  --output scratch/profiles/current-expertpadded-262144-summary.json
+
+uv run python -m marin.profiling.cli report \
+  --summary scratch/profiles/current-expertpadded-262144-summary.json \
+  --output scratch/profiles/current-expertpadded-262144-report.md
+```
+
+- Config:
+  - profiling pod: `iris-task-b4a60f903086`
+  - node: `g11ed54`
+  - node label: `iris-i3821jax-scale-group=h100-8x`
+  - code ref used by the pod: `7c3c5176d3d6aaa093dbd8359c7c965c4ac10610`
+  - trace artifact copied locally to:
+    - `scratch/profiles/current-expertpadded-262144`
+    - `scratch/profiles/current-expertpadded-262144-summary.json`
+    - `scratch/profiles/current-expertpadded-262144-report.md`
+  - note: the profiled `RESULT kernel=current ... time_s=0.058428` is tracing overhead and is not comparable to the timing-only rung result
+- Result:
+  - top exclusive compute op:
+    - `nvjet_tst_256x128_64x4_1x2_h_bz_coopA_NNT`: `115934.245` exclusive (`21.9%` share)
+  - communication share:
+    - `25.11%` of exclusive profiled duration
+  - top collectives:
+    - `all-gather`: `67140.606` exclusive across `48` calls
+    - `reduce-scatter`: `66014.115` exclusive across `24` calls
+  - largest pre-op idle gaps:
+    - before `reduce-scatter`: `229021.318` total gap (`24` occurrences, `9542.555` avg)
+    - before `all-gather`: `175005.335` total gap (`24` occurrences, `7291.889` avg)
+  - the old pure-`w13` top kernel from the sealed probe summaries, `nvjet_tst_192x192_64x3_2x1_v_bz_coopB_NNN`, is no longer the dominant `current` hot op in this post-fix trace
+- Interpretation:
+  - the `w13` exact-cap optimization did what it needed to do: the remaining `current` residual is no longer centered on the old `w13` ragged FC1 transpose-heavy path
+  - the next branch point is now between:
+    - reopening an isolated local compute path around the new top GEMM (`w2`-like residual)
+    - or attacking the ring-path communication / synchronization residual, since collectives plus pre-collective gaps now dominate a large share of the trace
+- Next action:
+  - run a pinned `deepep_transport_w2_only_probe` on the same commit to decide whether the new top compute kernel is worth reopening `w2`, or whether the next tranche should pivot directly to communication/overlap.
+
+### 2026-03-18 23:58 UTC - Fresh pinned `w2_only` is effectively flat, so the next tranche should pivot to ring communication / synchronization
+- Experiment ID: `W13-OPT-016`
+- Hypothesis:
+  - if the new top `current` compute kernel in the post-fix profile is really the next dominant local-compute branch, then a fresh pinned `deepep_transport_w2_only_probe` should show a meaningful shift relative to the sealed baseline; if it stays flat, the next tranche should target the ring residual instead.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 7c3c5176d3d6aaa093dbd8359c7c965c4ac10610 \
+  --task-id w13opt-residualtriage-w2only-pinned-t262144-20260318-235356 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w2_only_probe \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - pod: `iris-task-7c5cef1aff4b`
+  - node: `g11ed54`
+  - node label: `iris-i3821jax-scale-group=h100-8x`
+  - code ref used by the pod: `7c3c5176d3d6aaa093dbd8359c7c965c4ac10610`
+  - exact-cap metadata printed by the run:
+    - `max_recv_tokens=61952`
+    - `max_local_assignments=65920`
+    - `max_local_expert_assignments=4352`
+  - sealed baseline for comparison: `51,574,551.62 tok/s` (`5.083 ms`)
+  - operational note:
+    - the pod lingered after the `RESULT` line without promptly emitting `BENCH_END` / `EXIT_CODE`; after the numerical result was captured I deleted the pod to free the fresh node
+- Result:
+  - `deepep_transport_w2_only_probe`: `51,933,311.55 tok/s` (`5.048 ms`)
+  - delta vs sealed baseline:
+    - throughput: `+0.70%`
+    - time: `-0.69%`
+- Interpretation:
+  - this is effectively flat relative to the sealed baseline, so the post-fix `current` residual is not pointing to a newly promising `w2`-first local-compute branch
+  - combined with the fresh `current` profile, the next tranche should pivot away from `w2` and toward the ring-path residual:
+    - `all-gather` / `reduce-scatter`
+    - and the large pre-collective idle gaps immediately before those collectives
+- Next action:
+  - start a new residual-focused thread on `current - capped_prewarmed`, centered on communication volume / overlap / synchronization rather than reopening `w2`.
+
+### 2026-03-19 00:36 UTC - Reduced `#3717` two-column rerun kickoff: JAX DeepEP `32768` row moves up materially with `w13_expert_padded`, but post-result teardown is still noisy
+- Experiment ID: `W13-OPT-017`
+- Hypothesis:
+  - if the `w13` layout fix also matters in the fixed-shape `forward_backward` regime from `#3717`, then rerunning only the JAX DeepEP and Megatron DeepEP columns with light sampling should show the JAX column move upward, especially on the larger-token rows where the old gap was most severe.
+- Benchmark harness change:
+  - patched `lib/levanter/scripts/bench/bench_moe_hillclimb.py` on commit `b3f3126e5887b41d2fa56705c14221513c44e329` so `deepep_transport_capped_prewarmed` threads `--w13-expert-padded` through the `forward_backward` path instead of only the forward-only path.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref b3f3126e5887b41d2fa56705c14221513c44e329 \
+  --task-id 3717rerun-jax-fb-t32768-20260319-0028 \
+  --tokens 32768 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 2,8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --w13-expert-padded \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - pod: `iris-task-7a403a8469c5`
+  - node: `g11ed54`
+  - code ref used by the pod: `b3f3126e5887b41d2fa56705c14221513c44e329`
+  - output log: `scratch/3717-rerun/jax-fb-t32768.log`
+- Result:
+  - `32768, topk=2`: `4,722,170.08 tok/s` (`6.939 ms`)
+    - old `#3717` JAX DeepEP value: `3,312,032 tok/s`
+    - delta: `+42.6%`
+  - `32768, topk=8`: `1,811,121.75 tok/s` (`18.093 ms`)
+    - old `#3717` JAX DeepEP value: `1,115,553 tok/s`
+    - delta: `+62.4%`
+- Operational note:
+  - both subcases emitted `DeepEP timeout check failed` plus `CUDA_ERROR_LAUNCH_FAILED` teardown noise after their `RESULT` lines, but the pod still completed with `EXIT_CODE=0` and the second subcase ran after the first.
+- Interpretation:
+  - the reduced rerun is already consistent with the earlier forward-only finding: the fixed-shape JAX DeepEP column does move upward materially once the `w13` layout change is actually threaded into the `forward_backward` path.
+  - this does not by itself imply parity with Megatron, but it is enough signal to continue the reduced two-column sweep before drawing conclusions.
+- Next action:
+  - continue the JAX DeepEP rerun for `65536`, `131072`, and `262144`, then run the Megatron DeepEP column with the same `2`-iteration lightweight settings for a direct side-by-side against the old `#3717` table.
+
+### 2026-03-19 00:43 UTC - Reduced `#3717` rerun: JAX DeepEP `65536` row also improves materially, with the same reproducible post-result DeepEP teardown noise
+- Experiment ID: `W13-OPT-018`
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref b3f3126e5887b41d2fa56705c14221513c44e329 \
+  --task-id 3717rerun-jax-fb-t65536-20260319-0037 \
+  --tokens 65536 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 2,8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --w13-expert-padded \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - pod: `iris-task-10fb691de691`
+  - node: `g11ed54`
+  - code ref used by the pod: `b3f3126e5887b41d2fa56705c14221513c44e329`
+  - output log: `scratch/3717-rerun/jax-fb-t65536.log`
+- Result:
+  - `65536, topk=2`: `5,423,119.32 tok/s` (`12.085 ms`)
+    - old `#3717` JAX DeepEP value: `3,752,354 tok/s`
+    - delta: `+44.5%`
+  - `65536, topk=8`: `1,840,043.05 tok/s` (`35.617 ms`)
+    - old `#3717` JAX DeepEP value: `1,116,306 tok/s`
+    - delta: `+64.8%`
+- Operational note:
+  - exactly like `32768`, both subcases emitted `DeepEP timeout check failed` followed by many `CUDA_ERROR_LAUNCH_FAILED` teardown lines after `RESULT`, but the pod still emitted `BENCH_END` and exited `0`.
+- Interpretation:
+  - the reduced rerun is not just improving the smallest row; the uplift persists at `65536` for both `topk=2` and `topk=8`.
+  - the repeated teardown signature looks systematic enough to log as a separate operational issue if it blocks broader sweeps, but it is not invalidating the measured throughput lines in these runs.
+- Next action:
+  - continue the JAX DeepEP rerun at `131072` and `262144`, where the old table’s JAX-vs-Megatron gap was largest and therefore most important to the original question.
+
+### 2026-03-19 00:50 UTC - Reduced `#3717` rerun: `131072` confirms the JAX DeepEP uplift carries into the high-token regime, but it is still well short of Megatron parity
+- Experiment ID: `W13-OPT-019`
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref b3f3126e5887b41d2fa56705c14221513c44e329 \
+  --task-id 3717rerun-jax-fb-t131072-20260319-0044 \
+  --tokens 131072 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 2,8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --w13-expert-padded \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - pod: `iris-task-3317f006bfce`
+  - node: `g11ed54`
+  - code ref used by the pod: `b3f3126e5887b41d2fa56705c14221513c44e329`
+  - output log: `scratch/3717-rerun/jax-fb-t131072.log`
+- Result:
+  - `131072, topk=2`: `5,812,763.83 tok/s` (`22.549 ms`)
+    - old `#3717` JAX DeepEP value: `3,824,437 tok/s`
+    - delta: `+52.0%`
+    - still well below old Megatron DeepEP `12,712,443 tok/s`
+  - `131072, topk=8`: `1,910,248.60 tok/s` (`68.615 ms`)
+    - old `#3717` JAX DeepEP value: `1,057,153 tok/s`
+    - delta: `+80.7%`
+    - still well below old Megatron DeepEP `6,577,851 tok/s`
+- Operational note:
+  - the same post-`RESULT` DeepEP timeout / `CUDA_ERROR_LAUNCH_FAILED` teardown signature appeared again, but the pod advanced through both subcases and exited `0`.
+- Interpretation:
+  - this is the first directly relevant high-token row against the original `#3717` question, and it makes the answer sharper:
+    - the `w13` fix materially improves JAX DeepEP in this regime,
+    - but it does not make JAX “keep up” with the old Megatron DeepEP column at `131072`.
+- Next action:
+  - finish the last JAX row at `262144`, then run the reduced Megatron DeepEP column so the final side-by-side is measured on the same fresh lane and same lightweight iteration settings.
+
+### 2026-03-19 00:57 UTC - Reduced `#3717` rerun: JAX DeepEP `262144` row also moves up, but still does not approach the old Megatron DeepEP throughput
+- Experiment ID: `W13-OPT-020`
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref b3f3126e5887b41d2fa56705c14221513c44e329 \
+  --task-id 3717rerun-jax-fb-t262144-20260319-0051 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 2,8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --w13-expert-padded \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - pod: `iris-task-7e4ee57484da`
+  - node: `g11ed54`
+  - code ref used by the pod: `b3f3126e5887b41d2fa56705c14221513c44e329`
+  - output log: `scratch/3717-rerun/jax-fb-t262144.log`
+- Result:
+  - `262144, topk=2`: `5,902,299.01 tok/s` (`44.414 ms`)
+    - old `#3717` JAX DeepEP value: `3,821,071 tok/s`
+    - delta: `+54.5%`
+    - still well below old Megatron DeepEP `15,830,875 tok/s`
+  - `262144, topk=8`: `1,790,803.36 tok/s` (`146.383 ms`)
+    - old `#3717` JAX DeepEP value: `985,350 tok/s`
+    - delta: `+81.7%`
+    - still well below old Megatron DeepEP `7,652,599 tok/s`
+- Operational note:
+  - the same reproducible post-`RESULT` DeepEP timeout / `CUDA_ERROR_LAUNCH_FAILED` teardown signature appeared again, but the pod still completed and exited `0`.
+- Interpretation:
+  - the reduced JAX DeepEP column is now complete and the conclusion is clearer than the earlier projection:
+    - the `w13` fix materially improves every row we checked,
+    - but the high-token rows still remain far from the old Megatron DeepEP column, so this fix alone does not make JAX DeepEP “keep up” in the sense asked in `#3717`.
+- Next action:
+  - run the reduced Megatron DeepEP column with the same lightweight iteration settings on the same fresh H100x8 lane, then compile the direct side-by-side table and post a milestone update.
+
+### 2026-03-19 01:06 UTC - Reduced two-column rerun complete: JAX DeepEP improves on every row, but still does not broadly keep up with Megatron DeepEP on the high-token regime
+- Experiment ID: `W13-OPT-021`
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/megatron_qwen_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --worktree /home/ubuntu/dev/marin-wt/moe-jax-megatron-gap-root-cause \
+  --task-id 3717rerun-megatron-deepep-20260319-0058 \
+  --cases marin_3633_topk_2,marin_3633_topk_8,marin_3633_topk_2_mb2,marin_3633_topk_8_mb2,marin_3633_topk_2_mb4,marin_3633_topk_8_mb4,marin_3633_topk_2_mb8,marin_3633_topk_8_mb8 \
+  --dispatchers deepep \
+  --warmup-iters 1 \
+  --measure-iters 2
+```
+
+- Config:
+  - pod: `iris-task-a16d2846edcd`
+  - node: `g11ed54`
+  - output log: `scratch/3717-rerun/megatron-deepep.log`
+  - comparison method:
+    - JAX `bench_pass=forward_backward` already reports full-step `tokens/s`
+    - for Megatron I computed comparable full-step throughput as:
+      - `global_tokens / ((forward_ms + backward_ms) / 1000)`
+- Direct reduced comparison:
+
+| tokens | topk | old `#3717` JAX DeepEP | new JAX DeepEP | old `#3717` Megatron DeepEP | new Megatron DeepEP (combined) | JAX / new-Meg ratio |
+|---|---|---|---|---|---|---|
+| 32768 | 2 | 3,312,032 | 4,722,170 | 2,644,307 | 934,083 | 5.06 |
+| 32768 | 8 | 1,115,553 | 1,811,122 | 1,965,951 | 812,600 | 2.23 |
+| 65536 | 2 | 3,752,354 | 5,423,119 | 2,660,216 | 897,613 | 6.04 |
+| 65536 | 8 | 1,116,306 | 1,840,043 | 3,088,961 | 2,927,885 | 0.63 |
+| 131072 | 2 | 3,824,437 | 5,812,764 | 12,712,443 | 5,607,280 | 1.04 |
+| 131072 | 8 | 1,057,153 | 1,910,249 | 6,577,851 | 5,053,786 | 0.38 |
+| 262144 | 2 | 3,821,071 | 5,902,299 | 15,830,875 | 12,996,676 | 0.45 |
+| 262144 | 8 | 985,350 | 1,790,803 | 7,652,599 | 3,783,723 | 0.47 |
+
+- Interpretation:
+  - the rerun decisively validates the directional claim:
+    - the `w13`-driven JAX fix improves the exact-cap DeepEP column on every row we remeasured
+    - but it does **not** make JAX DeepEP broadly “keep up” with Megatron DeepEP on the high-token regime that motivated `#3717`
+  - at the most relevant large-token points:
+    - `131072, topk=2`: JAX moved from `3.82M` to `5.81M tok/s`, which is a real gain but still far short of the old sealed Megatron anchor `12.71M tok/s`; the new `2`-iteration Megatron rerun happened to land near parity here, but that run is noisy enough that I would not treat that single near-match as stronger evidence than the broader pattern
+    - `262144, topk=2`: JAX moved from `3.82M` to `5.90M tok/s`, still clearly below both the old sealed Megatron anchor `15.83M tok/s` and the new direct Megatron rerun `13.00M tok/s`
+    - `topk=8` remains clearly behind at both `131072` and `262144`
+- Caveat:
+  - the user requested only `2` measurement iterations, and the Megatron side is visibly noisier under that setting than the JAX side, especially on the smaller-token rows; I trust the directional conclusion and the large-row separation more than the exact small-row ratios from this reduced rerun.
+- Next action:
+  - treat this as a confirmed “large partial fix, not full closure” result and keep the next optimization tranche focused on the post-`w13` residual in `current` / exact-cap:
+    - ring communication
+    - synchronization
+    - overlap
