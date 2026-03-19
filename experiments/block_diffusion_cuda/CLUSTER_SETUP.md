@@ -83,6 +83,16 @@ Why:
 
 ## Smoke Commands
 
+Convenience launcher:
+
+```bash
+chmod +x experiments/block_diffusion_cuda/launch_b200_fineweb.sh
+./experiments/block_diffusion_cuda/launch_b200_fineweb.sh baseline smoke
+./experiments/block_diffusion_cuda/launch_b200_fineweb.sh bigdn smoke
+```
+
+Equivalent explicit commands:
+
 Baseline:
 
 ```bash
@@ -146,6 +156,13 @@ and compare:
 - masked accuracy
 - tokens per second
 - GPU memory
+
+For the convenience launcher, that becomes:
+
+```bash
+./experiments/block_diffusion_cuda/launch_b200_fineweb.sh baseline full
+./experiments/block_diffusion_cuda/launch_b200_fineweb.sh bigdn full
+```
 
 ## Known Limitation
 

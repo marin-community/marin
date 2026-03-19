@@ -51,6 +51,7 @@ outer training loop.
 - `diffusion.py`: corruption schedule, loss, and block sampler
 - `data.py`: toy, text-file, Hugging Face, and FineWeb streaming datasets
 - `train.py`: single-node training entrypoint with optional DDP
+- `launch_b200_fineweb.sh`: concrete `B200` launcher for `smoke` and `full` runs
 
 ## Example Commands
 
@@ -95,6 +96,12 @@ uv run python -m experiments.block_diffusion_cuda.train \
 Single-node FineWeb baseline:
 
 ```bash
+./experiments/block_diffusion_cuda/launch_b200_fineweb.sh baseline smoke
+```
+
+Equivalent expanded command:
+
+```bash
 torchrun --nproc_per_node=8 -m experiments.block_diffusion_cuda.train \
   --dataset fineweb \
   --tokenizer gpt2 \
@@ -112,6 +119,12 @@ torchrun --nproc_per_node=8 -m experiments.block_diffusion_cuda.train \
 ```
 
 Single-node FineWeb Bi-GDN:
+
+```bash
+./experiments/block_diffusion_cuda/launch_b200_fineweb.sh bigdn smoke
+```
+
+Equivalent expanded command:
 
 ```bash
 torchrun --nproc_per_node=8 -m experiments.block_diffusion_cuda.train \
