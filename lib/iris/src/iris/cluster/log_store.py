@@ -609,21 +609,20 @@ class LogStore:
         default_cursor: int,
         include_key_in_select: bool,
     ) -> LogReadResult:
-        # Snapshot all state atomically.
-        with self._lock:
-            parquet_files = [s.path for s in self._local_segments]
-            # Collect all RAM data: sealed buffers + head.
-            ram_rows: list[tuple] = []
-            for sb in self._sealed:
-                ram_rows.extend(sb.rows)
-            ram_rows.extend(self._head)
-
-        ram_table = _build_buffer_table(ram_rows)
-
-        # Hold the segments read lock while DuckDB has files open so that
-        # GC (which takes the write lock) cannot delete them mid-query.
+        # Acquire the segments read lock BEFORE snapshotting paths. This
+        # guarantees that no file in our snapshot can be deleted (by GC or
+        # consolidation) until we release the lock after DuckDB is done.
         self._segments_rwlock.read_acquire()
         try:
+            with self._lock:
+                parquet_files = [s.path for s in self._local_segments]
+                ram_rows: list[tuple] = []
+                for sb in self._sealed:
+                    ram_rows.extend(sb.rows)
+                ram_rows.extend(self._head)
+
+            ram_table = _build_buffer_table(ram_rows)
+
             source = _build_union_source(parquet_files)
             where_clause = " AND ".join(where_parts)
 
