@@ -14,8 +14,11 @@ import pytest
 from fray.v2.iris_backend import (
     IrisActorHandle,
     convert_constraints,
+    resolve_coscheduling,
 )
 from fray.v2.types import (
+    GpuConfig,
+    LocalityConstraint,
     ResourceConfig,
     TpuConfig,
 )
@@ -75,6 +78,71 @@ class TestConvertConstraintsDeviceAlternatives:
 
         assert c.op == ConstraintOp.IN
         assert set(c.values) == {"v4-8", "v5p-8"}
+
+
+class TestConvertConstraintsLocality:
+    def test_no_locality_produces_no_constraint(self):
+        resources = ResourceConfig.with_gpu("H100", count=8)
+        constraints = convert_constraints(resources)
+        locality_constraints = [c for c in constraints if c.key == "locality"]
+        assert locality_constraints == []
+
+    def test_locality_enum_produces_eq_constraint(self):
+        resources = ResourceConfig.with_gpu("H100", count=8, locality=LocalityConstraint.SAME_SLICE)
+        constraints = convert_constraints(resources)
+        locality_constraints = [c for c in constraints if c.key == "locality"]
+        assert len(locality_constraints) == 1
+        c = locality_constraints[0]
+        from iris.cluster.constraints import ConstraintOp
+
+        assert c.op == ConstraintOp.EQ
+        assert c.value == "same-slice"
+
+    def test_locality_string_produces_eq_constraint(self):
+        resources = ResourceConfig.with_gpu("H100", count=8, locality="same-rack")
+        constraints = convert_constraints(resources)
+        locality_constraints = [c for c in constraints if c.key == "locality"]
+        assert len(locality_constraints) == 1
+        assert locality_constraints[0].value == "same-rack"
+
+    def test_locality_all_tiers(self):
+        for tier in ("same-slice", "same-rack", "same-superpod"):
+            resources = ResourceConfig.with_gpu("H100", count=8, locality=tier)
+            constraints = convert_constraints(resources)
+            locality_constraints = [c for c in constraints if c.key == "locality"]
+            assert len(locality_constraints) == 1
+            assert locality_constraints[0].value == tier
+
+    def test_invalid_locality_raises(self):
+        with pytest.raises(ValueError):
+            ResourceConfig.with_gpu("H100", count=8, locality="invalid-tier")
+
+    def test_with_gpu_stores_locality(self):
+        rc = ResourceConfig.with_gpu("H100", count=8, locality="same-slice")
+        assert rc.locality == LocalityConstraint.SAME_SLICE
+
+    def test_default_locality_is_none(self):
+        rc = ResourceConfig.with_gpu("H100", count=8)
+        assert rc.locality is None
+
+
+class TestResolveCoschedulingLocality:
+    def test_gpu_locality_uses_region_group_by(self):
+        device = GpuConfig(variant="H100", count=8)
+        result = resolve_coscheduling(device, replicas=2, locality="same-slice")
+        assert result is not None
+        assert result.group_by == "region"
+
+    def test_gpu_no_locality_uses_pool_group_by(self):
+        device = GpuConfig(variant="H100", count=8)
+        result = resolve_coscheduling(device, replicas=2, locality=None)
+        assert result is not None
+        assert result.group_by == "pool"
+
+    def test_single_replica_returns_none(self):
+        device = GpuConfig(variant="H100", count=8)
+        result = resolve_coscheduling(device, replicas=1, locality="same-slice")
+        assert result is None
 
 
 class TestIrisActorHandlePickle:

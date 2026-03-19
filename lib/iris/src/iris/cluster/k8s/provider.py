@@ -23,6 +23,7 @@ from iris.cluster.controller.transitions import ClusterCapacity, DirectProviderS
 from iris.cluster.controller.transitions import DirectProviderBatch, RunningTaskEntry, TaskUpdate
 from iris.cluster.k8s.constants import CW_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.k8s.kubectl import Kubectl, KubectlLogLine
+from iris.cluster.constraints import LOCALITY_TOPOLOGY_KEYS, WellKnownAttribute
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
 from iris.cluster.types import JobName, get_gpu_count
 from iris.rpc import cluster_pb2, logging_pb2
@@ -89,6 +90,24 @@ def _constraints_to_node_selector(
                 f"only CONSTRAINT_OP_EQ is supported for nodeSelector mapping"
             )
     return node_selector
+
+
+def _extract_locality_topology_key(
+    constraints: Sequence[cluster_pb2.Constraint],
+) -> str | None:
+    """Extract the Kubernetes topology key from a locality constraint, if present.
+
+    Returns the topology key string (e.g. "ib.coreweave.cloud/spine-switch")
+    or None if no locality constraint is set.
+    """
+    for c in constraints:
+        if c.key == WellKnownAttribute.LOCALITY and c.op == cluster_pb2.CONSTRAINT_OP_EQ:
+            tier = c.value.string_value.strip().lower()
+            topology_key = LOCALITY_TOPOLOGY_KEYS.get(tier)
+            if topology_key is None:
+                raise ValueError(f"Unknown locality tier {tier!r} in constraint")
+            return topology_key
+    return None
 
 
 def _task_hash(task_id: str) -> str:
@@ -430,25 +449,40 @@ def _build_pod_manifest(
     if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0:
         spec["activeDeadlineSeconds"] = max(1, run_req.timeout.milliseconds // 1000)
 
-    # Prefer co-locating sibling task pods on the same network spine for IB connectivity.
-    if run_req.num_tasks > 1 and colocation_topology_key:
-        spec["affinity"] = {
-            "podAffinity": {
-                "preferredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                        "weight": 100,
-                        "podAffinityTerm": {
-                            "labelSelector": {
-                                "matchLabels": {
-                                    _LABEL_JOB_ID: job_id,
-                                },
-                            },
-                            "topologyKey": colocation_topology_key,
-                        },
-                    }
-                ],
-            }
+    # Pod affinity for multi-host jobs: co-locate sibling tasks on the same
+    # network topology. When a locality constraint is present, use it as a
+    # *required* affinity rule (the user explicitly requested co-location).
+    # Otherwise, fall back to the default topology key as a *preferred* rule.
+    locality_key = _extract_locality_topology_key(run_req.constraints)
+    if run_req.num_tasks > 1 and (locality_key or colocation_topology_key):
+        effective_key = locality_key or colocation_topology_key
+        affinity_term = {
+            "labelSelector": {
+                "matchLabels": {
+                    _LABEL_JOB_ID: job_id,
+                },
+            },
+            "topologyKey": effective_key,
         }
+        if locality_key:
+            # Explicit locality: required affinity (hard constraint).
+            spec["affinity"] = {
+                "podAffinity": {
+                    "requiredDuringSchedulingIgnoredDuringExecution": [affinity_term],
+                }
+            }
+        else:
+            # Default: preferred affinity (soft, best-effort).
+            spec["affinity"] = {
+                "podAffinity": {
+                    "preferredDuringSchedulingIgnoredDuringExecution": [
+                        {
+                            "weight": 100,
+                            "podAffinityTerm": affinity_term,
+                        }
+                    ],
+                }
+            }
 
     return {
         "apiVersion": "v1",

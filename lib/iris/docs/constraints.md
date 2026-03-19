@@ -58,6 +58,7 @@ objects declaring type, allowed operators, and whether the constraint is:
 | `tpu-vm-count` | no | no | scheduler-only |
 | `gpu-variant` | no | no | scheduler-only |
 | `gpu-count` | no | no | scheduler-only (consumable) |
+| `locality` | no | yes | `same-slice`, `same-rack`, `same-superpod` |
 
 ## How constraints flow through the system
 
@@ -159,6 +160,31 @@ available CPU capacity.
 `ScalingGroup.matches_constraints()` applies the same stripping via
 `is_cpu_device_type_constraint()`, so the per-budget `try_assign()` check
 is consistent.
+
+## Locality constraints
+
+The `locality` constraint controls topology-aware pod placement for multi-host
+GPU jobs. When set, the KubernetesProvider builds a **required** pod affinity
+rule using the corresponding Kubernetes topology key:
+
+| Tier | Topology key | Description |
+|---|---|---|
+| `same-slice` | `ib.coreweave.cloud/spine-switch` | Same IB spine switch (tightest) |
+| `same-rack` | `topology.kubernetes.io/rack` | Same top-of-rack switch |
+| `same-superpod` | `backend.coreweave.cloud/superpod` | Same superpod (most relaxed) |
+
+Usage via fray v2:
+
+```python
+rc = ResourceConfig.with_gpu("H100", count=8, locality="same-slice", replicas=2)
+```
+
+This emits a `locality EQ "same-slice"` constraint which the provider translates
+to pod affinity with `topologyKey: ib.coreweave.cloud/spine-switch`, ensuring
+all replicas land on nodes sharing the same IB fabric.
+
+Without a locality constraint, multi-host jobs use a default soft (preferred)
+affinity rule for best-effort co-location.
 
 ## Lowercase normalization
 

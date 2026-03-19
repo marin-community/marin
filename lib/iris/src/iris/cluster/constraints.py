@@ -41,6 +41,7 @@ class WellKnownAttribute(StrEnum):
     TPU_VM_COUNT = "tpu-vm-count"
     GPU_VARIANT = "gpu-variant"
     GPU_COUNT = "gpu-count"
+    LOCALITY = "locality"
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +275,48 @@ def device_variant_constraint(variants: Sequence[str]) -> Constraint:
     return Constraint(
         key=WellKnownAttribute.DEVICE_VARIANT, op=ConstraintOp.IN, values=tuple(v.lower() for v in variants)
     )
+
+
+# ---------------------------------------------------------------------------
+# Locality constraint helpers
+# ---------------------------------------------------------------------------
+
+# Valid locality tiers and their corresponding Kubernetes topology keys.
+# The provider uses these to build pod affinity rules that co-locate
+# sibling tasks on nodes sharing the specified network topology.
+LOCALITY_TOPOLOGY_KEYS: dict[str, str] = {
+    "same-slice": "ib.coreweave.cloud/spine-switch",  # IB fabric (spine switch)
+    "same-rack": "topology.kubernetes.io/rack",  # shared top-of-rack switch
+    "same-superpod": "backend.coreweave.cloud/superpod",  # relaxed, more capacity
+}
+
+VALID_LOCALITY_TIERS: frozenset[str] = frozenset(LOCALITY_TOPOLOGY_KEYS.keys())
+
+
+def locality_constraint(tier: str) -> Constraint:
+    """Constraint requesting topology-aware placement at the given tier.
+
+    Args:
+        tier: One of "same-slice", "same-rack", "same-superpod".
+
+    Raises:
+        ValueError: If tier is not a valid locality tier.
+    """
+    if tier not in VALID_LOCALITY_TIERS:
+        raise ValueError(f"Invalid locality tier {tier!r}. Must be one of: {sorted(VALID_LOCALITY_TIERS)}")
+    return Constraint(key=WellKnownAttribute.LOCALITY, op=ConstraintOp.EQ, value=tier)
+
+
+def locality_topology_key(tier: str) -> str:
+    """Return the Kubernetes topology key for a locality tier.
+
+    Raises:
+        ValueError: If tier is not a valid locality tier.
+    """
+    key = LOCALITY_TOPOLOGY_KEYS.get(tier)
+    if key is None:
+        raise ValueError(f"Invalid locality tier {tier!r}. Must be one of: {sorted(VALID_LOCALITY_TIERS)}")
+    return key
 
 
 @dataclass(frozen=True)
@@ -638,6 +681,17 @@ _register(
         canonical=False,
         routing=False,
         extract=_extract_int,
+    )
+)
+_register(
+    ConstraintDescriptor(
+        key="locality",
+        kind=ConstraintKind.TAG,
+        python_type=str,
+        allowed_ops=_EQ_ONLY,
+        canonical=True,
+        routing=False,
+        extract=_extract_string_lower,
     )
 )
 

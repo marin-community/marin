@@ -28,6 +28,7 @@ from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import (
     Constraint,
     device_variant_constraint,
+    locality_constraint,
     preemptible_constraint,
     region_constraint,
 )
@@ -55,19 +56,26 @@ from fray.v2.types import (
 logger = logging.getLogger(__name__)
 
 
-def resolve_coscheduling(device: DeviceConfig, replicas: int) -> CoschedulingConfig | None:
+def resolve_coscheduling(
+    device: DeviceConfig,
+    replicas: int,
+    locality: str | None = None,
+) -> CoschedulingConfig | None:
     """Determine coscheduling config for multi-host jobs.
 
-    Multi-host GPU jobs need coscheduling by pool to ensure all replicas land
-    in the same node pool for NCCL connectivity. Multi-host TPU jobs
-    coschedule by tpu-name so all workers share the same TPU slice.
+    Multi-host GPU jobs need coscheduling by region to ensure all replicas are
+    assigned atomically. Multi-host TPU jobs coschedule by tpu-name so all
+    workers share the same TPU slice. GPU jobs with a locality constraint
+    always get coscheduling (the provider uses the locality topology key for
+    pod affinity).
     """
     if replicas <= 1:
         return None
     if isinstance(device, TpuConfig):
         return CoschedulingConfig(group_by="tpu-name")
     if isinstance(device, GpuConfig):
-        return CoschedulingConfig(group_by="pool")
+        group_by = "region" if locality else "pool"
+        return CoschedulingConfig(group_by=group_by)
     return None
 
 
@@ -117,6 +125,8 @@ def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
         if isinstance(resources.device, (TpuConfig, GpuConfig)):
             all_variants = [resources.device.variant, *resources.device_alternatives]
             constraints.append(device_variant_constraint(all_variants))
+    if resources.locality is not None:
+        constraints.append(locality_constraint(str(resources.locality)))
     return constraints
 
 
@@ -506,7 +516,8 @@ class FrayIrisClient:
         iris_constraints = convert_constraints(request.resources)
 
         replicas = request.replicas or 1
-        coscheduling = resolve_coscheduling(request.resources.device, replicas)
+        locality_str = str(request.resources.locality) if request.resources.locality else None
+        coscheduling = resolve_coscheduling(request.resources.device, replicas, locality=locality_str)
 
         try:
             job = self._iris.submit(
@@ -559,7 +570,8 @@ class FrayIrisClient:
         iris_resources = convert_resources(resources)
         iris_constraints = convert_constraints(resources)
 
-        coscheduling = resolve_coscheduling(resources.device, count)
+        locality_str = str(resources.locality) if resources.locality else None
+        coscheduling = resolve_coscheduling(resources.device, count, locality=locality_str)
 
         # Create a single job with N replicas
         # Each replica will run _host_actor with a unique task-based actor name

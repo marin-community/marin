@@ -13,6 +13,8 @@ from iris.cluster.k8s.provider import (
     _LABEL_TASK_HASH,
     _POD_NOT_FOUND_GRACE_CYCLES,
     KubernetesProvider,
+    _build_pod_manifest,
+    _extract_locality_topology_key,
     _pod_name,
     _sanitize_label_value,
     _task_hash,
@@ -22,7 +24,7 @@ from iris.cluster.k8s.kubectl import KubectlLogLine, KubectlLogResult
 from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
 
-from .conftest import completed_process, make_batch, make_pod, make_run_req
+from .conftest import add_eq_constraint, completed_process, make_batch, make_pod, make_run_req, pod_config
 
 # ---------------------------------------------------------------------------
 # sync(): tasks_to_run
@@ -908,3 +910,79 @@ def test_configmap_cleaned_up_on_delete(provider, mock_kubectl):
     assert mock_kubectl.delete.call_count == 2
     mock_kubectl.delete.assert_any_call("pod", "iris-pod-1")
     mock_kubectl.delete.assert_any_call("configmap", "iris-pod-1-wf")
+
+
+# ---------------------------------------------------------------------------
+# Locality constraint → pod affinity
+# ---------------------------------------------------------------------------
+
+
+def test_extract_locality_topology_key_same_slice():
+    req = make_run_req("/test-job/0")
+    add_eq_constraint(req, "locality", "same-slice")
+    key = _extract_locality_topology_key(req.constraints)
+    assert key == "ib.coreweave.cloud/spine-switch"
+
+
+def test_extract_locality_topology_key_same_rack():
+    req = make_run_req("/test-job/0")
+    add_eq_constraint(req, "locality", "same-rack")
+    key = _extract_locality_topology_key(req.constraints)
+    assert key == "topology.kubernetes.io/rack"
+
+
+def test_extract_locality_topology_key_same_superpod():
+    req = make_run_req("/test-job/0")
+    add_eq_constraint(req, "locality", "same-superpod")
+    key = _extract_locality_topology_key(req.constraints)
+    assert key == "backend.coreweave.cloud/superpod"
+
+
+def test_extract_locality_topology_key_none_when_absent():
+    req = make_run_req("/test-job/0")
+    key = _extract_locality_topology_key(req.constraints)
+    assert key is None
+
+
+def test_extract_locality_topology_key_unknown_tier_raises():
+    req = make_run_req("/test-job/0")
+    add_eq_constraint(req, "locality", "invalid-tier")
+    with pytest.raises(ValueError, match="Unknown locality tier"):
+        _extract_locality_topology_key(req.constraints)
+
+
+def test_pod_manifest_locality_uses_required_affinity():
+    """When locality constraint is set, pod affinity must be required (not preferred)."""
+    req = make_run_req("/test-job/0")
+    req.num_tasks = 2
+    add_eq_constraint(req, "locality", "same-slice")
+    config = pod_config()
+    manifest = _build_pod_manifest(req, config)
+    affinity = manifest["spec"]["affinity"]["podAffinity"]
+    assert "requiredDuringSchedulingIgnoredDuringExecution" in affinity
+    rules = affinity["requiredDuringSchedulingIgnoredDuringExecution"]
+    assert len(rules) == 1
+    assert rules[0]["topologyKey"] == "ib.coreweave.cloud/spine-switch"
+
+
+def test_pod_manifest_no_locality_uses_preferred_affinity():
+    """Without locality constraint, multi-task pods use preferred (soft) affinity."""
+    req = make_run_req("/test-job/0")
+    req.num_tasks = 2
+    config = pod_config(colocation_topology_key="coreweave.cloud/spine")
+    manifest = _build_pod_manifest(req, config)
+    affinity = manifest["spec"]["affinity"]["podAffinity"]
+    assert "preferredDuringSchedulingIgnoredDuringExecution" in affinity
+    rules = affinity["preferredDuringSchedulingIgnoredDuringExecution"]
+    assert len(rules) == 1
+    assert rules[0]["podAffinityTerm"]["topologyKey"] == "coreweave.cloud/spine"
+
+
+def test_pod_manifest_single_task_no_affinity():
+    """Single-task pods should not have pod affinity rules."""
+    req = make_run_req("/test-job/0")
+    req.num_tasks = 1
+    add_eq_constraint(req, "locality", "same-slice")
+    config = pod_config()
+    manifest = _build_pod_manifest(req, config)
+    assert "affinity" not in manifest["spec"]

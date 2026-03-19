@@ -227,6 +227,22 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
 DeviceKind = Literal["cpu", "gpu", "tpu"]
 
 
+class LocalityConstraint(StrEnum):
+    """Topology locality tiers for multi-host GPU scheduling.
+
+    Controls pod affinity rules so sibling tasks land on nodes sharing
+    the same network topology level:
+
+    - ``same-slice``: Same IB fabric spine switch (tightest, best bandwidth)
+    - ``same-rack``: Same top-of-rack switch
+    - ``same-superpod``: Same superpod (most relaxed, most capacity)
+    """
+
+    SAME_SLICE = "same-slice"
+    SAME_RACK = "same-rack"
+    SAME_SUPERPOD = "same-superpod"
+
+
 @dataclass(frozen=True)
 class CpuConfig:
     """CPU-only device configuration."""
@@ -333,6 +349,7 @@ class ResourceConfig:
     regions: Sequence[str] | None = None
     replicas: int = 1
     device_alternatives: Sequence[str] | None = None
+    locality: LocalityConstraint | None = None
 
     def chip_count(self) -> int:
         """Total accelerator chips across all replicas."""
@@ -378,9 +395,13 @@ class ResourceConfig:
         return ResourceConfig(device=device, replicas=replicas, device_alternatives=alternatives, **kwargs)
 
     @staticmethod
-    def with_gpu(gpu_type: str, count: int = 1, **kwargs: Any) -> ResourceConfig:
+    def with_gpu(
+        gpu_type: str, count: int = 1, *, locality: LocalityConstraint | str | None = None, **kwargs: Any
+    ) -> ResourceConfig:
         device = GpuConfig(variant=gpu_type, count=count)
-        return ResourceConfig(device=device, **kwargs)
+        if locality is not None and not isinstance(locality, LocalityConstraint):
+            locality = LocalityConstraint(locality)
+        return ResourceConfig(device=device, locality=locality, **kwargs)
 
     @staticmethod
     def with_cpu(**kwargs: Any) -> ResourceConfig:
