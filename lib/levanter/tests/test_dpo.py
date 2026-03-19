@@ -34,6 +34,7 @@ from levanter.data.text import (
 )
 from levanter.main.train_dpo import DpoModel, _build_dpo_dataset, _logp_sum, dpo_loss_from_logps
 from levanter.metrics import Metric
+from levanter.layers.attention import AttentionMask
 from levanter.models.gpt2 import Gpt2Config
 from levanter.models.lm_model import LmExample
 from levanter.optim import AdamConfig
@@ -260,6 +261,26 @@ def test_logp_sum_passes_key_for_dropout():
 
     out = _logp_sum(model, example, key=jrandom.PRNGKey(1))
     assert isinstance(out, hax.NamedArray)
+
+
+def test_logp_sum_preserves_batch_axis_for_batched_named_example():
+    config = Gpt2Config(max_seq_len=8, hidden_dim=16, num_layers=1, num_heads=2)
+    Vocab = hax.Axis("vocab", 32)
+    model = config.build(Vocab, key=jrandom.PRNGKey(0))
+
+    Batch = hax.Axis("batch", 2)
+    Pos = hax.Axis("position", 8)
+    tokens = hax.named(
+        jnp.arange(Batch.size * Pos.size, dtype=jnp.int32).reshape(Batch.size, Pos.size) % Vocab.size,
+        (Batch, Pos),
+    )
+    loss_weight = hax.ones((Batch, Pos), dtype=jnp.float32).at[Pos, Pos.size - 1].set(0.0)
+    example = LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=AttentionMask.causal())
+
+    out = _logp_sum(model, example)
+
+    assert isinstance(out, hax.NamedArray)
+    assert out.axes == (Batch,)
 
 
 def test_preference_chat_processor_outputs_masks(tokenizer_path: Path):

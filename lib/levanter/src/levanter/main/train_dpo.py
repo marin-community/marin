@@ -81,8 +81,14 @@ def _logp_sum(model: ArrayLmHeadModel, example, *, key=None, axis_mapping=None):
     else:
         nll = model.compute_next_token_loss_array(example, reduction="sum", reduction_axis="position", key=key)
 
-    if isinstance(example, LmExample) and not isinstance(nll, hax.NamedArray):
-        nll = hax.named(jnp.asarray(nll), ())
+    if isinstance(example, LmExample):
+        reduced_axes = tuple(ax for ax in example.tokens.axes if ax.name != "position")
+        if len(reduced_axes) == 0:
+            nll = hax.named(jnp.asarray(nll), ())
+        elif len(reduced_axes) == 1:
+            nll = hax.named(jnp.asarray(nll), reduced_axes[0])
+        else:
+            nll = hax.named(jnp.asarray(nll), reduced_axes)
 
     return -nll
 
