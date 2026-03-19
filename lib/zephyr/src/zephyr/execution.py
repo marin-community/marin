@@ -13,6 +13,7 @@ bugs where orphaned coordinators and workers consume resources indefinitely.
 
 from __future__ import annotations
 
+import functools
 import json
 import enum
 import itertools
@@ -32,6 +33,8 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import cloudpickle
+import fsspec
+import psutil
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
@@ -155,16 +158,58 @@ _SCATTER_META_SUFFIX = ".scatter_meta"
 _SCATTER_MANIFEST_NAME = "scatter_metadata"
 
 
-def _read_parquet_chunk(path: str, filter_shard: int, chunk_idx: int, is_pickled: bool) -> list:
+@functools.cache
+def _get_scatter_read_fs(num_files: int, sample_path: str, memory_fraction: float = 0.8) -> pa.fs.FileSystem:
+    """Return a pyarrow filesystem with per-file block_size budgeted from available memory.
+
+    Caps total fsspec buffer memory at ``memory_fraction`` of the worker's RAM,
+    split evenly across ``num_files``.  Falls back to a default fsspec-backed
+    filesystem when the budget is large enough or ``block_size`` is not supported.
+    """
+    fs, _ = fsspec.core.url_to_fs(sample_path)
+    default_fs = pa.fs.PyFileSystem(pa.fs.FSSpecHandler(fs))
+
+    if num_files <= 0:
+        return default_fs
+
+    total_mem = psutil.virtual_memory().total
+    budget = int(total_mem * memory_fraction)
+    per_file = max(budget // num_files, 64 * 1024)  # floor at 64 KB
+
+    # Only override when we would meaningfully reduce the default (~5 MB).
+    if per_file >= 5 * 1024 * 1024:
+        return default_fs
+
+    if not hasattr(fs, "blocksize"):
+        return default_fs
+
+    # Recreate the filesystem with the budgeted block_size.
+    fsspec_fs = type(fs)(block_size=per_file, **{k: v for k, v in fs.storage_options.items() if k != "block_size"})
+    logger.info(
+        "Scatter read: %d files, per-file block_size=%d KB (total budget=%.1f GB)",
+        num_files,
+        per_file // 1024,
+        budget / 1024**3,
+    )
+    return pa.fs.PyFileSystem(pa.fs.FSSpecHandler(fsspec_fs))
+
+
+def _read_parquet_chunk(
+    path: str, filter_shard: int, chunk_idx: int, is_pickled: bool, filesystem: pa.fs.FileSystem
+) -> list:
     """Read a single sorted chunk from a Parquet scatter file via predicate pushdown."""
     col = _ZEPHYR_SHUFFLE_PICKLED_COL if is_pickled else _ZEPHYR_SHUFFLE_ITEM_COL
+    _, fs_path = url_to_fs(path)
     table = pq.read_table(
-        path,
+        fs_path,
         columns=[col],
         filters=(
             (pc.field(_ZEPHYR_SHUFFLE_SHARD_IDX_COL) == filter_shard)
             & (pc.field(_ZEPHYR_SHUFFLE_CHUNK_IDX_COL) == chunk_idx)
         ),
+        use_threads=False,
+        pre_buffer=False,
+        filesystem=filesystem,
     )
     items = table.column(col).to_pylist()
     if is_pickled:
@@ -184,6 +229,7 @@ class ScatterParquetIterator:
     chunk_count: int
     chunk_offset: int  # starting chunk_idx (cumulative across segments from same source)
     is_pickled: bool
+    filesystem: pa.fs.FileSystem
 
     def __iter__(self) -> Iterator:
         for chunk_data in self.get_chunk_iterators():
@@ -192,7 +238,9 @@ class ScatterParquetIterator:
     def get_chunk_iterators(self) -> Iterator[Iterator]:
         """Yield one iterator per sorted chunk."""
         for i in range(self.chunk_count):
-            yield iter(_read_parquet_chunk(self.path, self.shard_idx, self.chunk_offset + i, self.is_pickled))
+            yield iter(
+                _read_parquet_chunk(self.path, self.shard_idx, self.chunk_offset + i, self.is_pickled, self.filesystem)
+            )
 
 
 @dataclass
@@ -388,10 +436,18 @@ def _build_scatter_shard_from_manifest(manifest_path: str, target_shard: int) ->
     entries = _read_scatter_manifest(manifest_path)
     iterators: list[ScatterParquetIterator] = []
     with log_time(f"Building ScatterShard for target shard {target_shard} from manifest ({len(entries)} files)"):
+        # First pass: count files that have data for this shard
+        file_entries = []
         for entry in entries:
             count = entry["chunk_counts"].get(str(target_shard), 0)
             if count == 0:
                 continue
+            file_entries.append(entry)
+
+        sample_path = file_entries[0]["path"] if file_entries else ""
+        filesystem = _get_scatter_read_fs(len(file_entries), sample_path)
+        for entry in file_entries:
+            count = entry["chunk_counts"].get(str(target_shard), 0)
             offset = entry["chunk_offsets"].get(str(target_shard), 0)
             iterators.append(
                 ScatterParquetIterator(
@@ -400,6 +456,7 @@ def _build_scatter_shard_from_manifest(manifest_path: str, target_shard: int) ->
                     chunk_count=count,
                     chunk_offset=offset,
                     is_pickled=entry["is_pickled"],
+                    filesystem=filesystem,
                 )
             )
     return ScatterShard(iterators=iterators)
