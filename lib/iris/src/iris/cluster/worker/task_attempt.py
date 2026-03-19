@@ -158,6 +158,20 @@ def build_iris_env(
     for name, port in task.ports.items():
         env[f"IRIS_PORT_{name.upper()}"] = str(port)
 
+    # Expose the task's resource limits so user code can query them via
+    # iris.resource_utils without relying on cgroup introspection.
+    if task.request.HasField("resources"):
+        res = task.request.resources
+        env["IRIS_TASK_RESOURCES"] = json.dumps(
+            {
+                "memory_bytes": res.memory_bytes,
+                "cpu_millicores": res.cpu_millicores,
+                "disk_bytes": res.disk_bytes,
+                "gpu_count": res.gpu_count,
+                "tpu_count": res.tpu_count,
+            }
+        )
+
     return env
 
 
