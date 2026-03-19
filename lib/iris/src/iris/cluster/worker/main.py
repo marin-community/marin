@@ -15,7 +15,6 @@ from google.protobuf.json_format import ParseDict
 
 from iris.cluster.platform.factory import create_platform
 from iris.cluster.runtime.docker import DockerRuntime
-from iris.cluster.runtime.kubernetes import KubernetesRuntime
 from iris.cluster.worker.env_probe import detect_gcp_zone
 from iris.cluster.worker.worker import Worker, worker_config_from_proto
 from iris.logging import configure_logging
@@ -68,17 +67,14 @@ def serve(worker_config: str):
 
     config = worker_config_from_proto(wc_proto, resolve_image=resolve_image)
 
-    if wc_proto.runtime == "kubernetes":
-        container_runtime = KubernetesRuntime(cache_dir=config.cache_dir)
-    else:
-        container_runtime = DockerRuntime(cache_dir=config.cache_dir)
+    container_runtime = DockerRuntime(cache_dir=config.cache_dir)
 
     worker = Worker(config, container_runtime=container_runtime)
 
     click.echo(f"Starting Iris worker on {config.host}:{config.port}")
     click.echo(f"  Cache dir: {config.cache_dir}")
     click.echo(f"  Controller: {config.controller_address}")
-    click.echo(f"  Runtime: {wc_proto.runtime or 'docker'}")
+    click.echo("  Runtime: docker")
     worker.start()
     worker.wait()
 

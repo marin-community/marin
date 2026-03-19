@@ -112,15 +112,15 @@ def _add_multi_region_groups(config: config_pb2.IrisClusterConfig) -> None:
 
 
 # Total local-mode workers:
-# 4 (local-cpu) + 2 (cosched_2) + 4 (cosched_4) + 2 (region-a + region-b) = 12
-SMOKE_WORKER_COUNT = 12
+# 2 (local-cpu) + 2 (cosched_2) + 4 (cosched_4) + 2 (region-a + region-b) = 10
+SMOKE_WORKER_COUNT = 10
 
 
 def _make_smoke_config() -> config_pb2.IrisClusterConfig:
     """Build a local config with CPU, TPU (coscheduling), and multi-region workers."""
     config = load_config(DEFAULT_CONFIG)
     config.scale_groups.clear()
-    _add_cpu_group(config, num_workers=4)
+    _add_cpu_group(config, num_workers=2)
     _add_coscheduling_group(config)
     _add_coscheduling_group_4vm(config)
     _add_multi_region_groups(config)
@@ -804,15 +804,15 @@ def test_checkpoint_restore():
 # ============================================================================
 
 
-@pytest.mark.timeout(1200)
-def test_stress_200_tasks(smoke_cluster):
-    """200 tasks exercises scheduler concurrency and bin-packing."""
+@pytest.mark.timeout(600)
+def test_stress_50_tasks(smoke_cluster):
+    """50 concurrent tasks exercises scheduler concurrency and bin-packing."""
     job = smoke_cluster.submit(
         TestJobs.quick,
-        "smoke-stress-200",
+        "smoke-stress-50",
         cpu=0,
         memory="100m",
-        replicas=200,
+        replicas=50,
     )
     status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout * 2)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED

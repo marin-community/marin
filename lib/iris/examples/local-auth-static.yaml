@@ -9,6 +9,8 @@ controller:
   local:
     port: 0  # auto-assign
 
+worker_provider: {}
+
 auth:
   static:
     tokens:

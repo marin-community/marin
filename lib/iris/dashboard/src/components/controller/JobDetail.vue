@@ -339,15 +339,7 @@ function buildProfileType(profilerType: string, format: string | null): Record<s
   return { threads: {} }
 }
 
-function openThreadDump(taskId: string) {
-  router.push(`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(taskId)}/threads`)
-}
-
 async function handleProfile(taskId: string, profilerType: string, format: string | null) {
-  if (profilerType === 'threads') {
-    openThreadDump(taskId)
-    return
-  }
   profilingTaskId.value = taskId
   try {
     const body = {
@@ -687,13 +679,12 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                   >
                     {{ profilingTaskId === task.taskId ? '⏳' : 'MEM' }}
                   </button>
-                  <button
-                    class="px-2 py-0.5 text-[11px] font-semibold rounded bg-accent text-white hover:opacity-80 disabled:opacity-50"
-                    :disabled="profilingTaskId === task.taskId"
-                    @click="handleProfile(task.taskId, 'threads', null)"
+                  <RouterLink
+                    :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(task.taskId)}/threads`"
+                    class="px-2 py-0.5 text-[11px] font-semibold rounded bg-accent text-white hover:opacity-80 inline-block text-center no-underline"
                   >
-                    {{ profilingTaskId === task.taskId ? '⏳' : 'THR' }}
-                  </button>
+                    THR
+                  </RouterLink>
                 </div>
                 <span v-else class="text-text-muted">&mdash;</span>
               </td>

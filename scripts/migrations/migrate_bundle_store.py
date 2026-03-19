@@ -113,7 +113,7 @@ def write_bundles_to_fsspec(bundles: dict[str, bytes], storage_dir: str, dry_run
     for bundle_id, blob in bundles.items():
         dest = f"{fs_path}/{bundle_id}.zip"
         if fs.exists(dest):
-            logger.debug("Bundle %s already exists, skipping", bundle_id)
+            logger.info("Bundle %s already exists, skipping", bundle_id)
             continue
         if dry_run:
             logger.info("[dry-run] Would write %s (%d bytes)", dest, len(blob))

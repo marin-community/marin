@@ -132,7 +132,7 @@ def set_task_state(state: ControllerTransitions, task_id: JobName, new_state: in
 def state(tmp_path):
     db_path = tmp_path / "controller.sqlite3"
     db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
+    log_store = LogStore(log_dir=tmp_path / "logs")
     s = ControllerTransitions(db=db, log_store=log_store)
     yield s
     log_store.close()
@@ -195,7 +195,8 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock.create_scheduling_context = _create_scheduling_context
     controller_mock.get_job_scheduling_diagnostics = _get_job_scheduling_diagnostics
     controller_mock.autoscaler = autoscaler
-    controller_mock.stub_factory = Mock()
+    controller_mock.provider = Mock()
+    controller_mock.has_direct_provider = False
     return controller_mock
 
 
@@ -1031,3 +1032,31 @@ def test_auth_config_returns_enabled_when_verifier_set(service):
     data = resp.json()
     assert data["auth_enabled"] is True
     assert data["provider"] == "gcp"
+
+
+def test_auth_config_worker_provider_kind(client):
+    """auth/config returns provider_kind=worker when no direct provider."""
+    resp = client.get("/auth/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["provider_kind"] == "worker"
+
+
+def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
+    """auth/config returns provider_kind=kubernetes when controller has direct provider."""
+    controller_mock = _make_controller_mock(state, scheduler)
+    controller_mock.has_direct_provider = True
+    svc = ControllerServiceImpl(
+        state,
+        state._db,
+        controller=controller_mock,
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
+        log_store=state._log_store,
+    )
+    dashboard = ControllerDashboard(svc)
+    k8s_client = TestClient(dashboard.app)
+
+    resp = k8s_client.get("/auth/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["provider_kind"] == "kubernetes"

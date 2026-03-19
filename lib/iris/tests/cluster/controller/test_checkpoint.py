@@ -15,14 +15,7 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.time_utils import Duration
-
-
-class FakeStubFactory:
-    def create(self, worker_id, address):
-        pass
-
-    def close(self):
-        pass
+from tests.cluster.controller.conftest import FakeProvider
 
 
 def _local_state_dir(tmp_path: Path, name: str = "state") -> Path:
@@ -36,7 +29,7 @@ def _make_controller(tmp_path: Path, remote_state_dir: str | None = None, **kwar
         remote_state_dir = f"file://{tmp_path}/remote"
     state_dir = _local_state_dir(tmp_path)
     config = ControllerConfig(remote_state_dir=remote_state_dir, local_state_dir=state_dir, **kwargs)
-    return Controller(config=config, worker_stub_factory=FakeStubFactory())
+    return Controller(config=config, provider=FakeProvider())
 
 
 def test_write_checkpoint_uploads_to_remote(tmp_path):

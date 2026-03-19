@@ -15,8 +15,9 @@ Use these helpers whenever you need to map, flatten, or rebuild PyTrees that mig
 
 * [`haliax.tree.map`][] mirrors [`jax.tree.map`][] but forwards to Haliax's [`haliax.tree_util.tree_map`][] so axis names remain
   intact.
-* [`haliax.tree.scan_aware_map`][] descends into [`haliax.nn.Stacked`][haliax.nn.Stacked] modules so that each layer is
-  transformed individually, effectively treating them as if they were unrolled when applying
+* [`haliax.tree.scan_aware_map`][] descends into [`haliax.nn.Stacked`][haliax.nn.Stacked] and
+  [`haliax.nn.ArrayStacked`][haliax.nn.ArrayStacked] modules so that each layer is transformed individually, effectively
+  treating them as if they were unrolled when applying
   [`haliax.tree_util.scan_aware_tree_map`][].
 * [`haliax.tree.flatten`][] / [`haliax.tree.unflatten`][] match the familiar flattening API while handling `NamedArray`
   payloads safely.

@@ -20,7 +20,7 @@ from marin.processing.classification.deduplication.dedup_commons import (
 )
 from fray.v2 import ResourceConfig
 from marin.processing.classification.deduplication.connected_components import connected_components
-from marin.utilities.time_logger import log_time
+from iris.time_utils import log_time
 import wandb
 from zephyr import ZephyrContext
 from zephyr.dataset import Dataset
