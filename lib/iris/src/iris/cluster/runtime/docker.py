@@ -114,7 +114,9 @@ def _discover_tpu_device_mappings() -> list[str]:
 
     vfio_path = Path("/dev/vfio")
     if vfio_path.exists():
-        mappings.append("/dev/vfio:/dev/vfio")
+        for entry in sorted(vfio_path.iterdir()):
+            if entry.is_char_device():
+                mappings.append(f"{entry}:{entry}")
 
     accel_devices: list[Path] = []
     for device_path in Path("/dev").glob("accel[0-9]*"):
