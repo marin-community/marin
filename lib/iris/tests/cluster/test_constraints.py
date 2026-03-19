@@ -6,15 +6,19 @@
 import pytest
 
 from iris.cluster.constraints import (
+    CONSTRAINT_REGISTRY,
     AttributeValue,
     Constraint,
     ConstraintOp,
     DeviceType,
     INHERITED_CONSTRAINT_KEYS,
     PlacementRequirements,
+    VALID_LOCALITY_TIERS,
     WellKnownAttribute,
     evaluate_constraint,
     is_cpu_device_type_constraint,
+    locality_constraint,
+    locality_topology_key,
     merge_constraints,
     extract_placement_requirements,
     routing_constraints,
@@ -159,3 +163,51 @@ def test_inherited_keys_strips_device_and_preemptible():
     assert len(inherited) == 2
     keys = {c.key for c in inherited}
     assert keys == {WellKnownAttribute.REGION, WellKnownAttribute.ZONE}
+
+
+# ---------------------------------------------------------------------------
+# Locality constraint helpers
+# ---------------------------------------------------------------------------
+
+
+def test_locality_constraint_same_slice():
+    c = locality_constraint("same-slice")
+    assert c.key == WellKnownAttribute.LOCALITY
+    assert c.op == ConstraintOp.EQ
+    assert c.value == "same-slice"
+
+
+def test_locality_constraint_all_tiers():
+    for tier in VALID_LOCALITY_TIERS:
+        c = locality_constraint(tier)
+        assert c.value == tier
+
+
+def test_locality_constraint_invalid_tier():
+    with pytest.raises(ValueError, match="Invalid locality tier"):
+        locality_constraint("invalid")
+
+
+def test_locality_topology_key_mapping():
+    assert locality_topology_key("same-slice") == "ib.coreweave.cloud/spine-switch"
+    assert locality_topology_key("same-rack") == "topology.kubernetes.io/rack"
+    assert locality_topology_key("same-superpod") == "backend.coreweave.cloud/superpod"
+
+
+def test_locality_topology_key_invalid():
+    with pytest.raises(ValueError, match="Invalid locality tier"):
+        locality_topology_key("invalid")
+
+
+def test_locality_registered_in_constraint_registry():
+    desc = CONSTRAINT_REGISTRY.get("locality")
+    assert desc is not None
+    assert desc.canonical is True
+    assert desc.routing is False
+
+
+def test_locality_not_routing():
+    """Locality is scheduler-only, not used for autoscaler routing."""
+    proto_constraint = _eq_constraint(WellKnownAttribute.LOCALITY, "same-slice")
+    filtered = routing_constraints([proto_constraint])
+    assert filtered == []
