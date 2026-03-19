@@ -48,7 +48,7 @@ from iris.cluster.controller.db import (
     running_tasks_by_worker,
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.kubernetes_provider import KubernetesProvider
+from iris.cluster.k8s.provider import KubernetesProvider
 from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.scheduler import (
     JobRequirements,

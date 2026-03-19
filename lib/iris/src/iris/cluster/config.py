@@ -25,7 +25,7 @@ import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.kubernetes_provider import KubernetesProvider
+from iris.cluster.k8s.provider import KubernetesProvider
 from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.types import parse_memory_string
 from iris.managed_thread import ThreadContainer, get_thread_container

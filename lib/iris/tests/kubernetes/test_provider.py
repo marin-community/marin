@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import pytest
 
 from iris.cluster.controller.transitions import ClusterCapacity, SchedulingEvent
-from iris.cluster.controller.kubernetes_provider import (
+from iris.cluster.k8s.provider import (
     _LABEL_MANAGED,
     _LABEL_TASK_HASH,
     _POD_NOT_FOUND_GRACE_CYCLES,

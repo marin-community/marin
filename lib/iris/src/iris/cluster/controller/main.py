@@ -65,7 +65,7 @@ def serve(
     from iris.cluster.controller.autoscaler import Autoscaler
     from iris.cluster.controller.checkpoint import download_checkpoint_to_local
     from iris.cluster.controller.db import ControllerDB
-    from iris.cluster.controller.kubernetes_provider import KubernetesProvider
+    from iris.cluster.k8s.provider import KubernetesProvider
     from iris.cluster.config import load_config, create_autoscaler, make_provider
     from iris.cluster.platform.factory import create_platform
 

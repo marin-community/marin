@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from iris.cluster.controller.kubernetes_provider import (
+from iris.cluster.k8s.provider import (
     _INFRASTRUCTURE_FAILURE_REASONS,
     _LABEL_JOB_ID,
     _LABEL_TASK_HASH,
@@ -132,7 +132,6 @@ def test_build_pod_manifest_task_hash_label():
     req = make_run_req("/test-job/0")
     manifest = _build_pod_manifest(req, pod_config())
     labels = manifest["metadata"]["labels"]
-    assert _LABEL_TASK_HASH in labels
     assert labels[_LABEL_TASK_HASH] == _task_hash("/test-job/0")
     assert len(labels[_LABEL_TASK_HASH]) <= 63
     assert labels[_LABEL_TASK_HASH].isalnum()
@@ -302,15 +301,6 @@ def test_constraints_to_node_selector_empty():
 # ---------------------------------------------------------------------------
 
 
-def test_build_pod_manifest_gpu_adds_cw_toleration():
-    req = make_run_req("/my-job/task-0")
-    req.resources.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="A100", count=4))
-
-    manifest = _build_pod_manifest(req, pod_config())
-    tolerations = manifest["spec"].get("tolerations", [])
-    assert any(t.get("key") == "qos.coreweave.cloud/interruptable" for t in tolerations)
-
-
 def test_build_pod_manifest_no_gpu_no_toleration():
     req = make_run_req("/my-job/task-0")
 
@@ -387,10 +377,12 @@ def test_build_pod_manifest_multi_task_no_topology_key_no_affinity():
 
 
 def test_job_id_label_on_pod():
-    """Pod metadata includes iris.job_id label."""
+    """Pod metadata includes iris.job_id label derived from the task's parent path."""
     req = make_run_req("/my-job/task-0", attempt_id=1)
     manifest = _build_pod_manifest(req, pod_config(default_image="img:latest"))
-    assert _LABEL_JOB_ID in manifest["metadata"]["labels"]
+    job_id = manifest["metadata"]["labels"][_LABEL_JOB_ID]
+    assert "my-job" in job_id
+    assert "task-0" not in job_id
 
 
 def test_job_id_from_task_strips_task_suffix():

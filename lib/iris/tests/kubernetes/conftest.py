@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from iris.cluster.controller.kubernetes_provider import KubernetesProvider, PodConfig
+from iris.cluster.k8s.provider import KubernetesProvider, PodConfig
 from iris.cluster.controller.transitions import DirectProviderBatch
 from iris.cluster.k8s.kubectl import KubectlLogResult
 from iris.rpc import cluster_pb2

@@ -244,7 +244,7 @@ def _build_init_container_spec(
     if not has_bundle and not workdir_files:
         return [], [], None
 
-    script_path = Path(__file__).with_name("kubernetes_bundle_fetch.py")
+    script_path = Path(__file__).with_name("bundle_fetch.py")
     bundle_script = script_path.read_text()
 
     init_env: list[dict] = [{"name": "IRIS_WORKDIR", "value": "/app"}]

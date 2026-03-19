@@ -10,9 +10,7 @@ They focus on:
 - Final state verification rather than intermediate steps
 """
 
-import tempfile
 import threading
-from pathlib import Path
 
 import pytest
 from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
@@ -52,18 +50,15 @@ from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
 
+from .conftest import (
+    make_controller_state as _make_state,
+    make_test_entrypoint as _make_test_entrypoint,
+    query_task as _query_task,
+)
+
 # =============================================================================
 # Test Helpers
 # =============================================================================
-
-
-def _make_state(**kwargs) -> ControllerTransitions:
-    """Create a ControllerTransitions with a fresh temp DB and log store."""
-    tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
-    db_path = tmp / "controller.sqlite3"
-    db = ControllerDB(db_path=db_path)
-    log_store = LogStore(log_dir=tmp / "logs")
-    return ControllerTransitions(db=db, log_store=log_store, **kwargs)
 
 
 def _schedulable_tasks(state: ControllerTransitions):
@@ -268,13 +263,6 @@ def fail_worker(state: ControllerTransitions, worker_id: WorkerId, error: str) -
         state.record_heartbeat_failure(worker_id, error, batch)
 
 
-def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
-    """Create a minimal RuntimeEntrypoint proto for testing."""
-    entrypoint = cluster_pb2.RuntimeEntrypoint()
-    entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    return entrypoint
-
-
 @pytest.fixture
 def job_request():
     """Create a minimal LaunchJobRequest for testing."""
@@ -336,11 +324,6 @@ def register_worker(
 def _query_job(state: ControllerTransitions, job_id: JobName) -> Job | None:
     with state._db.snapshot() as q:
         return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
-
-
-def _query_task(state: ControllerTransitions, task_id: JobName) -> Task | None:
-    with state._db.snapshot() as q:
-        return q.one(TASKS, where=TASKS.c.task_id == task_id.to_wire())
 
 
 def _query_worker(state: ControllerTransitions, worker_id: WorkerId) -> Worker | None:
