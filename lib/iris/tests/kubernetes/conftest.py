@@ -5,31 +5,23 @@
 
 from __future__ import annotations
 
-import subprocess
-from unittest.mock import MagicMock
-
 import pytest
 
-from iris.cluster.k8s.provider import KubernetesProvider, PodConfig
 from iris.cluster.controller.transitions import DirectProviderBatch
-from iris.cluster.k8s.kubectl import KubectlLogResult
+from iris.cluster.k8s.k8s_service_impl import K8sServiceImpl, ServiceMode
+from iris.cluster.k8s.provider import KubernetesProvider, PodConfig, _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
 from iris.rpc import cluster_pb2
 
 
 @pytest.fixture
-def mock_kubectl():
-    kubectl = MagicMock()
-    kubectl.namespace = "iris"
-    kubectl.list_json.return_value = []
-    kubectl.stream_logs.return_value = KubectlLogResult(lines=[], byte_offset=0)
-    kubectl.logs.return_value = ""
-    return kubectl
+def k8s() -> K8sServiceImpl:
+    return K8sServiceImpl(mode=ServiceMode.DRY_RUN)
 
 
 @pytest.fixture
-def provider(mock_kubectl):
+def provider(k8s):
     return KubernetesProvider(
-        kubectl=mock_kubectl,
+        kubectl=k8s,
         namespace="iris",
         default_image="myrepo/iris:latest",
         cache_dir="/cache",
@@ -86,6 +78,75 @@ def make_pod(name: str, phase: str, exit_code: int | None = None, reason: str = 
     return pod
 
 
+def populate_pod(
+    k8s: K8sServiceImpl,
+    name: str,
+    phase: str,
+    exit_code: int | None = None,
+    reason: str = "",
+    labels: dict[str, str] | None = None,
+) -> None:
+    """Insert a pod manifest into K8sServiceImpl with correct Iris labels."""
+    base_labels = {
+        _LABEL_MANAGED: "true",
+        _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+    }
+    if labels:
+        base_labels.update(labels)
+    pod = make_pod(name, phase, exit_code=exit_code, reason=reason)
+    pod["kind"] = "Pod"
+    pod["metadata"]["labels"] = base_labels
+    k8s._resources[("pod", name)] = pod
+
+
+def populate_node(
+    k8s: K8sServiceImpl,
+    name: str,
+    cpu: str = "4",
+    memory: str = "8Gi",
+    taints: list[dict] | None = None,
+) -> None:
+    """Insert a Node manifest into K8sServiceImpl."""
+    node = {
+        "kind": "Node",
+        "metadata": {"name": name},
+        "spec": {"taints": taints or []},
+        "status": {"allocatable": {"cpu": cpu, "memory": memory}},
+    }
+    k8s._resources[("node", name)] = node
+
+
+def populate_running_pod_resource(
+    k8s: K8sServiceImpl,
+    name: str,
+    cpu_limits: str = "1000m",
+    memory_limits: str | None = None,
+) -> None:
+    """Insert a running pod with resource limits (for capacity calculations)."""
+    mem = memory_limits or str(2 * 1024**3)
+    pod = {
+        "kind": "Pod",
+        "metadata": {
+            "name": name,
+            "labels": {
+                _LABEL_MANAGED: "true",
+                _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+            },
+        },
+        "status": {"phase": "Running"},
+        "spec": {
+            "containers": [
+                {
+                    "resources": {
+                        "limits": {"cpu": cpu_limits, "memory": mem},
+                    }
+                }
+            ]
+        },
+    }
+    k8s._resources[("pod", name)] = pod
+
+
 def add_eq_constraint(req: cluster_pb2.Worker.RunTaskRequest, key: str, value: str) -> None:
     """Add an EQ string constraint to a RunTaskRequest."""
     c = req.constraints.add()
@@ -112,8 +173,3 @@ def common_env_from_req(
         ports=req.ports,
         resources=req.resources if req.HasField("resources") else None,
     )
-
-
-def completed_process(stdout="", stderr="", returncode=0) -> subprocess.CompletedProcess[str]:
-    """Build a fake subprocess.CompletedProcess for mocking kubectl."""
-    return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)

@@ -10,9 +10,10 @@ for testing K8s-dependent code without shelling out to kubectl.
 from __future__ import annotations
 
 import subprocess
+from datetime import UTC, datetime
 from enum import StrEnum
 
-from iris.cluster.k8s.kubectl import KubectlError, KubectlLogResult
+from iris.cluster.k8s.kubectl import KubectlError, KubectlLogLine, KubectlLogResult
 
 
 class ServiceMode(StrEnum):
@@ -31,6 +32,28 @@ VALID_RESOURCE_TYPES = frozenset(
         "ephemeral-storage",
     }
 )
+
+# kubectl accepts plural resource names (e.g. "pods") but manifests use
+# singular kind (e.g. "Pod"). Normalize for consistent internal lookup.
+_PLURAL_TO_SINGULAR = {
+    "pods": "pod",
+    "nodes": "node",
+    "configmaps": "configmap",
+    "events": "event",
+    "deployments": "deployment",
+    "replicasets": "replicaset",
+    "statefulsets": "statefulset",
+    "daemonsets": "daemonset",
+    "jobs": "job",
+    "services": "service",
+    "nodepools": "nodepool",
+}
+
+
+def _normalize_resource(resource: str) -> str:
+    """Normalize a resource type string to its singular lowercase form."""
+    lower = resource.lower()
+    return _PLURAL_TO_SINGULAR.get(lower, lower)
 
 
 class K8sServiceImpl:
@@ -55,6 +78,10 @@ class K8sServiceImpl:
         self._injected_failures: dict[str, Exception] = {}
         self._logs: dict[str, str] = {}  # pod_name -> log text
         self._events: list[dict] = []
+        self._exec_responses: dict[str, list[subprocess.CompletedProcess[str]]] = {}
+        self._file_contents: dict[tuple[str, str], bytes] = {}  # (pod_name, path) -> data
+        self._rm_files_calls: list[tuple[str, list[str]]] = []
+        self._top_pod_overrides: dict[str, tuple[int, int] | None] = {}
 
     @property
     def namespace(self) -> str:
@@ -117,6 +144,18 @@ class K8sServiceImpl:
     def add_event(self, event: dict) -> None:
         self._events.append(event)
 
+    def set_exec_response(self, pod_name: str, response: subprocess.CompletedProcess[str]) -> None:
+        """Queue an exec response for a pod. Multiple calls queue FIFO responses."""
+        self._exec_responses.setdefault(pod_name, []).append(response)
+
+    def set_file_content(self, pod_name: str, path: str, data: bytes) -> None:
+        """Pre-populate file content readable via read_file."""
+        self._file_contents[(pod_name, path)] = data
+
+    def set_top_pod(self, pod_name: str, result: tuple[int, int] | None) -> None:
+        """Configure a specific top_pod result for a pod."""
+        self._top_pod_overrides[pod_name] = result
+
     # -- Protocol methods --
 
     def _check_failure(self, operation: str) -> None:
@@ -126,13 +165,13 @@ class K8sServiceImpl:
     def apply_json(self, manifest: dict) -> None:
         self._check_failure("apply_json")
         self._validate_manifest(manifest)
-        kind = manifest["kind"].lower()
+        kind = _normalize_resource(manifest["kind"])
         name = manifest["metadata"]["name"]
         self._resources[(kind, name)] = manifest
 
     def get_json(self, resource: str, name: str, *, cluster_scoped: bool = False) -> dict | None:
         self._check_failure("get_json")
-        return self._resources.get((resource.lower(), name))
+        return self._resources.get((_normalize_resource(resource), name))
 
     def list_json(
         self,
@@ -143,9 +182,9 @@ class K8sServiceImpl:
     ) -> list[dict]:
         self._check_failure("list_json")
         results = []
-        resource_lower = resource.lower()
+        normalized = _normalize_resource(resource)
         for (kind, _), manifest in self._resources.items():
-            if kind != resource_lower:
+            if kind != normalized:
                 continue
             if labels:
                 res_labels = manifest.get("metadata", {}).get("labels", {})
@@ -158,12 +197,13 @@ class K8sServiceImpl:
         self, resource: str, name: str, *, cluster_scoped: bool = False, force: bool = False, wait: bool = True
     ) -> None:
         self._check_failure("delete")
-        self._resources.pop((resource.lower(), name), None)
+        self._resources.pop((_normalize_resource(resource), name), None)
 
     def logs(self, pod_name: str, *, container: str | None = None, tail: int = 50, previous: bool = False) -> str:
         self._check_failure("logs")
         text = self._logs.get(pod_name, "")
-        if tail and text:
+        # tail <= 0 means "all lines"; tail > 0 means "last N lines"
+        if tail > 0 and text:
             lines = text.splitlines()
             return "\n".join(lines[-tail:])
         return text
@@ -180,8 +220,13 @@ class K8sServiceImpl:
         raw = text.encode("utf-8")
         if len(raw) <= byte_offset:
             return KubectlLogResult(lines=[], byte_offset=byte_offset)
-        # Return empty lines list; callers needing parsed lines can use logs()
-        return KubectlLogResult(lines=[], byte_offset=len(raw))
+        remaining = raw[byte_offset:].decode("utf-8")
+        lines = [
+            KubectlLogLine(timestamp=datetime.now(UTC), stream="stdout", data=line)
+            for line in remaining.splitlines()
+            if line
+        ]
+        return KubectlLogResult(lines=lines, byte_offset=len(raw))
 
     def exec(
         self,
@@ -192,15 +237,16 @@ class K8sServiceImpl:
         timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
         self._check_failure("exec")
-        if (pod_name.lower(), pod_name) not in self._resources and not any(
-            name == pod_name for (_, name) in self._resources
-        ):
+        # Return queued response if available
+        if self._exec_responses.get(pod_name):
+            return self._exec_responses[pod_name].pop(0)
+        if not any(name == pod_name for (_, name) in self._resources):
             return subprocess.CompletedProcess(args=cmd, returncode=1, stdout="", stderr=f"pod {pod_name!r} not found")
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
     def set_image(self, resource: str, name: str, container: str, image: str, *, namespaced: bool = False) -> None:
         self._check_failure("set_image")
-        manifest = self._resources.get((resource.lower(), name))
+        manifest = self._resources.get((_normalize_resource(resource), name))
         if manifest is None:
             raise KubectlError(f"{resource}/{name} not found")
 
@@ -223,7 +269,8 @@ class K8sServiceImpl:
 
     def top_pod(self, pod_name: str) -> tuple[int, int] | None:
         self._check_failure("top_pod")
-        # Return synthetic metrics if pod exists
+        if pod_name in self._top_pod_overrides:
+            return self._top_pod_overrides[pod_name]
         if any(name == pod_name for (_, name) in self._resources):
             return (100, 256 * 1024 * 1024)  # 100m CPU, 256Mi memory
         return None
@@ -236,7 +283,10 @@ class K8sServiceImpl:
         container: str | None = None,
     ) -> bytes:
         self._check_failure("read_file")
-        raise RuntimeError(f"read_file not supported in {self._mode} mode")
+        key = (pod_name, path)
+        if key in self._file_contents:
+            return self._file_contents[key]
+        raise RuntimeError(f"read_file: no content for {pod_name}:{path}")
 
     def rm_files(
         self,
@@ -246,6 +296,7 @@ class K8sServiceImpl:
         container: str | None = None,
     ) -> None:
         self._check_failure("rm_files")
+        self._rm_files_calls.append((pod_name, paths))
 
 
 def _pod_spec(manifest: dict) -> dict | None:
