@@ -157,27 +157,33 @@ def _probe_gpu_info() -> tuple[int, str, int]:
 
 
 _MEMORY_HEADROOM_FRACTION = 0.10
-"""Reserve at least 10% of physical RAM for OS, Docker daemon, and worker agent."""
+"""Reserve up to 10% of physical RAM for OS, Docker daemon, and worker agent."""
 
-_MEMORY_HEADROOM_MIN_BYTES = 16 * 1024**3
-"""Absolute minimum headroom on large machines: 16 GB."""
+_MEMORY_HEADROOM_MAX_BYTES = 8 * 1024**3
+"""Cap memory headroom at 8 GB."""
+
+_CPU_HEADROOM_FRACTION = 0.10
+"""Reserve up to 10% of CPUs for OS and worker agent."""
+
+_CPU_HEADROOM_MAX = 1
+"""Cap CPU headroom at 1 core."""
 
 
 def _compute_memory_headroom(physical_bytes: int) -> int:
-    """Compute memory headroom to reserve for OS, Docker daemon, and worker agent.
+    """Compute memory headroom: min(10% of physical RAM, 8 GB)."""
+    return min(int(physical_bytes * _MEMORY_HEADROOM_FRACTION), _MEMORY_HEADROOM_MAX_BYTES)
 
-    Uses max(10% of physical RAM, 16 GB), but never more than 50% of total so
-    small dev/CI machines still report usable memory.
-    """
-    headroom = max(int(physical_bytes * _MEMORY_HEADROOM_FRACTION), _MEMORY_HEADROOM_MIN_BYTES)
-    # Cap headroom at 50% so small machines remain usable
-    return min(headroom, physical_bytes // 2)
+
+def _compute_cpu_headroom(physical_cpus: int) -> int:
+    """Compute CPU headroom: min(10% of CPUs, 1 core), as whole cores."""
+    fractional = min(physical_cpus * _CPU_HEADROOM_FRACTION, _CPU_HEADROOM_MAX)
+    return int(fractional)
 
 
 def _get_memory_total_bytes() -> int:
     """Return schedulable memory in bytes, with headroom subtracted.
 
-    Reserves headroom for the OS, Docker daemon, and worker agent so the
+    Reserves min(10%, 8 GB) for the OS, Docker daemon, and worker agent so the
     scheduler cannot commit 100% of a machine's memory.
     """
     try:
@@ -191,6 +197,16 @@ def _get_memory_total_bytes() -> int:
         pass
     # Fallback for non-Linux
     return 8 * 1024**3  # Default 8GB
+
+
+def _get_cpu_count() -> int:
+    """Return schedulable CPU count, with headroom subtracted.
+
+    Reserves min(10%, 1 core) for the OS and worker agent.
+    """
+    physical = os.cpu_count() or 1
+    headroom = _compute_cpu_headroom(physical)
+    return max(1, physical - headroom)
 
 
 def _get_ip_address() -> str:
@@ -342,7 +358,7 @@ def probe_hardware() -> HardwareProbe:
     return HardwareProbe(
         hostname=hostname,
         ip_address=ip_address,
-        cpu_count=os.cpu_count() or 1,
+        cpu_count=_get_cpu_count(),
         memory_bytes=_get_memory_total_bytes(),
         disk_bytes=_get_disk_bytes(),
         gpu_count=gpu_count,

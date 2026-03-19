@@ -45,9 +45,6 @@ DEFAULT_MAX_BUILDING_TASKS_PER_WORKER = 8
 When many tasks start simultaneously, their setup commands (uv sync, pip install)
 can overwhelm the worker. This limit provides back-pressure by deferring new
 task assignments until existing tasks complete their build phase.
-
-Lowered from 16 to 8 (#3838): even with per-container memory limits, 16
-concurrent Rust/pyo3 compilations thrash the build cache and compete for I/O.
 """
 
 DEFAULT_MAX_ASSIGNMENTS_PER_WORKER = 1
