@@ -120,6 +120,12 @@ bool TrustRuntimeRecvCountEnabled() {
   return enabled;
 }
 
+int64_t HostDispatchTimestampMicros() {
+  static const auto start = std::chrono::steady_clock::now();
+  const auto now = std::chrono::steady_clock::now();
+  return std::chrono::duration_cast<std::chrono::microseconds>(now - start).count();
+}
+
 void LogHostDispatchStage(
     int rank,
     const char* stage,
@@ -133,8 +139,9 @@ void LogHostDispatchStage(
   }
   fprintf(
       stderr,
-      "HOST_DISPATCH_STAGE {\"rank\":%d,\"stage\":\"%s\",\"num_tokens\":%d,\"hidden\":%d,"
+      "HOST_DISPATCH_STAGE {\"ts_us\":%lld,\"rank\":%d,\"stage\":\"%s\",\"num_tokens\":%d,\"hidden\":%d,"
       "\"num_experts\":%d,\"num_topk\":%d,\"num_recv_tokens\":%d}\n",
+      static_cast<long long>(HostDispatchTimestampMicros()),
       rank,
       stage,
       num_tokens,
