@@ -4,9 +4,10 @@
 """Generic distributed locking with lease-based semantics.
 
 Provides lease-based distributed locks backed by a single lock file.
-Three backend implementations are available:
+Four backend implementations are available:
 
 - **GcsLease**: generation-based conditional writes for atomicity.
+- **S3Lease**: conditional writes (``If-None-Match`` / ``If-Match``) for S3-compatible stores.
 - **LocalFileLease**: ``fcntl`` file locking for mutual exclusion.
 - **FsspecLease**: best-effort write-then-read-back (advisory only).
 
@@ -62,6 +63,10 @@ def _is_local_path(path: str) -> bool:
 
 def _is_gcs_path(path: str) -> bool:
     return path.startswith("gs://")
+
+
+def _is_s3_path(path: str) -> bool:
+    return path.startswith("s3://")
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +230,90 @@ class GcsLease(DistributedLease):
 
 
 # ---------------------------------------------------------------------------
+# S3 backend
+# ---------------------------------------------------------------------------
+
+
+class S3Lease(DistributedLease):
+    """S3-backed lease using conditional writes (If-None-Match / If-Match).
+
+    Works with any S3-compatible store that supports conditional PutObject
+    (AWS S3, Cloudflare R2, MinIO, etc.).  Uses botocore directly (available
+    transitively via s3fs) to inject the conditional headers that the
+    high-level SDKs do not expose.
+    """
+
+    def __init__(self, lock_path: str, worker_id: str | None = None):
+        super().__init__(lock_path, worker_id)
+        self._last_etag: str | None = None
+
+    @staticmethod
+    def _parse_s3_path(path: str) -> tuple[str, str]:
+        path = path[5:]  # Remove s3://
+        bucket, _, key = path.partition("/")
+        return (bucket, key)
+
+    @staticmethod
+    def _make_client():
+        import botocore.session
+
+        session = botocore.session.get_session()
+        endpoint_url = os.environ.get("AWS_ENDPOINT_URL_S3") or os.environ.get("AWS_ENDPOINT_URL")
+        kwargs: dict = {}
+        if endpoint_url:
+            kwargs["endpoint_url"] = endpoint_url
+        return session.create_client("s3", **kwargs)
+
+    def _read_with_generation(self) -> tuple[int, Lease | None]:
+        from botocore.exceptions import ClientError
+
+        client = self._make_client()
+        bucket, key = self._parse_s3_path(self.lock_path)
+        try:
+            resp = client.get_object(Bucket=bucket, Key=key)
+            data = json.loads(resp["Body"].read())
+            self._last_etag = resp["ETag"]
+            return (1, Lease(**data))
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "NoSuchKey":
+                self._last_etag = None
+                return (0, None)
+            raise
+
+    def _write(self, lease: Lease, if_generation_match: int) -> None:
+        from botocore.exceptions import ClientError
+
+        client = self._make_client()
+        bucket, key = self._parse_s3_path(self.lock_path)
+        body = json.dumps(asdict(lease)).encode()
+
+        if if_generation_match == 0:
+            condition_header = {"If-None-Match": "*"}
+        else:
+            assert self._last_etag is not None, "Cannot conditionally update without a prior read"
+            condition_header = {"If-Match": self._last_etag}
+
+        def inject_condition(request, **kwargs):
+            for key, value in condition_header.items():
+                request.headers[key] = value
+
+        client.meta.events.register("before-sign.s3.PutObject", inject_condition)
+        try:
+            client.put_object(Bucket=bucket, Key=key, Body=body)
+        except ClientError as e:
+            if e.response["Error"]["Code"] in ("PreconditionFailed", "412"):
+                raise FileExistsError(f"Conditional write failed for {self.lock_path}") from e
+            raise
+        finally:
+            client.meta.events.unregister("before-sign.s3.PutObject", inject_condition)
+
+    def _delete(self) -> None:
+        client = self._make_client()
+        bucket, key = self._parse_s3_path(self.lock_path)
+        client.delete_object(Bucket=bucket, Key=key)
+
+
+# ---------------------------------------------------------------------------
 # Local filesystem backend
 # ---------------------------------------------------------------------------
 
@@ -331,6 +420,8 @@ def create_lock(lock_path: str, worker_id: str | None = None) -> DistributedLeas
     """Create the appropriate lease implementation for *lock_path*."""
     if _is_gcs_path(lock_path):
         return GcsLease(lock_path, worker_id)
+    elif _is_s3_path(lock_path):
+        return S3Lease(lock_path, worker_id)
     elif _is_local_path(lock_path):
         return LocalFileLease(lock_path, worker_id)
     else:
