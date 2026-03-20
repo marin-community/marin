@@ -3117,3 +3117,367 @@ KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_k
   - this exhausts the immediate combine-side runtime-isolation branch without producing a promotable candidate.
 - Next action:
   - stop spending time on blind DeepEP runtime knob sweeps and add narrow profile attribution in the routed backward path so the next profile can tell which backward producer family is arriving late before the persistent shared-gradient `all-reduce`.
+
+### 2026-03-20 02:12 UTC - Routed-backward named scopes do not survive into the copied shared-free trace, and the shared-free hard row does not show the giant `AllReduce_Sum_f32` wait
+- Experiment ID: `OVLP-RES-050`
+- Hypothesis:
+  - if the persistent `shared2048` worst-row gap is actually coming from routed-expert backward work arriving late, then adding explicit named scopes around `_ragged_dot_expert_padded_batched_prepared_bwd` should let the copied `shared=0` profile localize the late producer family before the `AllReduce_Sum_f32` gap.
+- Command:
+
+```bash
+git commit -m "moe: name expert padded backward substeps"
+git push origin research/moe-jax-deepep-residual-overlap
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 717beff3d \
+  --task-id ovlpres-bwdscope-shared0-fb-profile-t262144-topk8-20260320-021246 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --profile-root /tmp/ovlpres-bwdscope-shared0-fb-262144-topk8 \
+  --post-bench-sleep-seconds 1800 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code refs:
+    - scoped backward commit: `717beff3d`
+    - copied artifacts:
+      - `scratch/profiles/ovlpres-bwdscope-shared0-fb-262144-topk8`
+      - `scratch/profiles/ovlpres-bwdscope-shared0-fb-262144-topk8-summary.json`
+      - `scratch/profiles/ovlpres-bwdscope-shared0-fb-262144-topk8-report.md`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-bwdscope-shared0-fb-profile-t262144-topk8-20260320-021246.log`
+  - pod: `iris-task-ccda009b6035`
+  - node: `gd925a4`
+- Result:
+  - timed profile run returned `time_s=0.124149` / `2,111,533.55 tok/s`
+  - none of the inserted names appeared in the copied trace, report, or raw `perfetto_trace.json.gz`:
+    - `expert_padded_bmm_bwd`
+    - `pack_out_cotangent`
+    - `grad_lhs_dot`
+    - `unpack_grad_lhs`
+    - `grad_rhs_dot`
+  - exclusive time breakdown from the generated report:
+    - compute: `46.25%`
+    - communication: `0.85%`
+    - host: `52.82%`
+  - the copied report did not show a giant `AllReduce_Sum_f32` pre-gap on this shared-free row
+  - the largest reported pre-gap on the copied shared-free row was `Memset 3` with total gap `8544.127`
+- Interpretation:
+  - the current named-scope method is not useful for attribution because the inserted names do not survive into the copied trace.
+  - the extreme `shared2048` `AllReduce_Sum_f32` delay is not a generic property of the `262144/topk=8` shared-free exact-cap backward path.
+- Next action:
+  - isolate the shared branch directly so the next control can tell whether the large `shared2048` gap is standalone shared compute/backward or only appears in the combined graph.
+
+### 2026-03-20 02:20 UTC - `shared_mlp_only_probe` timing control shows standalone shared branch is much faster than the full combined hard row
+- Experiment ID: `OVLP-RES-051`
+- Hypothesis:
+  - if the remaining `262144/topk=8/shared2048` slowdown is mostly the shared branch itself, then a standalone shared-only `forward_backward` probe should land near the full combined row time.
+- Command:
+
+```bash
+git commit -m "bench: add shared mlp only probe"
+git push origin research/moe-jax-deepep-residual-overlap
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref d12fc864f \
+  --task-id ovlpres-sharedonly-fastaccum-fb-t262144-topk8-20260320-022057 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels shared_mlp_only_probe \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --shared-mlp-fast-accum \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `d12fc864f`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-sharedonly-fastaccum-fb-t262144-topk8-20260320-022057.log`
+  - pod: `iris-task-169f2005f39a`
+  - node: `gd925a4`
+- Result:
+  - `shared_mlp_only_probe`: `time_s=0.004265` / `61,458,713.70 tok/s`
+  - for comparison, the current combined branch-best hard row from `OVLP-RES-045` remained about `0.041261 s` / `6.19M tok/s`
+- Interpretation:
+  - the standalone shared branch timing control is far faster than the full combined hard row, so the headline slowdown is not explained by standalone shared branch runtime alone.
+- Next action:
+  - profile the same shared-only control so the copied report can be compared directly against the combined `shared2048` worst-row profile.
+
+### 2026-03-20 02:26 UTC - Shared-only copied profile has a real `AllReduce_Sum_f32` gap, but it is far smaller than the combined hard-row gap
+- Experiment ID: `OVLP-RES-052`
+- Hypothesis:
+  - if the shared branch alone is still causing the pathological `AllReduce_Sum_f32` delay, then the copied shared-only profile should reproduce a gap comparable to the combined `shared2048` profile.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref d12fc864f \
+  --task-id ovlpres-sharedonly-fastaccum-fb-profile-t262144-topk8-20260320-022307 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels shared_mlp_only_probe \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --profile-root /tmp/ovlpres-sharedonly-fastaccum-fb-262144-topk8 \
+  --post-bench-sleep-seconds 1800 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --shared-mlp-fast-accum \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `d12fc864f`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-sharedonly-fastaccum-fb-profile-t262144-topk8-20260320-022307.log`
+  - pod: `iris-task-9cd1b9d4db62`
+  - node: `gd925a4`
+  - copied artifacts:
+    - `scratch/profiles/ovlpres-sharedonly-fastaccum-fb-262144-topk8`
+    - `scratch/profiles/ovlpres-sharedonly-fastaccum-fb-262144-topk8-summary.json`
+    - `scratch/profiles/ovlpres-sharedonly-fastaccum-fb-262144-topk8-report.md`
+- Result:
+  - timed profile run returned `time_s=0.038953` / `6,729,807.73 tok/s`
+  - exclusive time breakdown from the copied report:
+    - compute: `34.55%`
+    - communication: `4.23%`
+    - host: `60.66%`
+  - copied shared-only report:
+    - `ncclDevKernel_AllReduce_Sum_f32_RING_LL(...)` pre-gap total: `9986.239`
+    - max pre-gap: `693.569`
+  - copied combined hard-row report from `OVLP-RES-047` remained much larger on the same op:
+    - total pre-gap: `269618.757`
+    - max pre-gap: `17153.967`
+- Interpretation:
+  - the shared-only graph does still contain a real `AllReduce_Sum_f32` wait, but it is much smaller than the combined hard-row wait.
+  - combined `shared2048` behavior is therefore not reproduced by shared-only alone.
+- Next action:
+  - split the combined graph with detach-style probes so the next hard-row timings can distinguish “both branches present” from “both branches backpropagating.”
+
+### 2026-03-20 02:34 UTC - Detach timing split on the hard row: removing either backward branch makes the row slower than the full combined graph
+- Experiment ID: `OVLP-RES-053`
+- Hypothesis:
+  - if one backward branch is the dominant late producer before the persistent shared-gradient `all-reduce`, then detaching that branch while leaving both forward branches present should make the combined hard row faster than the current full backward path.
+- Command:
+
+```bash
+git commit -m "bench: add detached shared vs routed probes"
+git push origin research/moe-jax-deepep-residual-overlap
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 2b4c8967e \
+  --task-id ovlpres-detachsplit-fb-t262144-topk8-20260320-023424 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed_shared_detached_probe,deepep_transport_capped_prewarmed_routed_detached_probe \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `2b4c8967e`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-detachsplit-fb-t262144-topk8-20260320-023424.log`
+  - pod: `iris-task-c27718677857`
+  - node: `gd925a4`
+  - effective transport config printed by the bench:
+    - `dispatch=num_sms=32 num_max_send_tokens=32 num_max_recv_tokens=256`
+    - `combine=num_sms=32 num_max_send_tokens=8 num_max_recv_tokens=256`
+- Result:
+  - `deepep_transport_capped_prewarmed_shared_detached_probe`:
+    - `time_s=0.245196` / `1,069,118.33 tok/s`
+  - `deepep_transport_capped_prewarmed_routed_detached_probe`:
+    - `time_s=0.090359` / `2,901,142.61 tok/s`
+  - both kernels still emitted the familiar post-result `DeepEP timeout check failed` / `CUDA_ERROR_LAUNCH_FAILED` cleanup noise while exiting `0`
+  - both detach variants remained slower than the full combined branch-best hard row from `OVLP-RES-045` (`~0.041261 s` / `~6.19M tok/s`)
+- Interpretation:
+  - on this hard row, detaching either backward branch makes the graph slower than the full combined backward path rather than faster.
+  - the observation is not consistent with “one backward branch alone is the easy dominant culprit” on this row.
+- Next action:
+  - copy a routed-detached profile on the same hard row so the next comparison can test whether the giant `AllReduce_Sum_f32` gap already appears once routed backward is removed, or only in the fully coupled graph.
+
+### 2026-03-20 02:41 UTC - Routed-detached copied profile collapses the giant `AllReduce_Sum_f32` gap back to the shared-only scale
+- Experiment ID: `OVLP-RES-054`
+- Hypothesis:
+  - if the giant `shared2048` hard-row `AllReduce_Sum_f32` wait only requires the shared branch, then a combined-graph profile with routed backward detached should still reproduce a gap close to the full combined graph.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 2b4c8967e \
+  --task-id ovlpres-routeddet-profile-t262144-topk8-20260320-024154 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed_routed_detached_probe \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --profile-root /tmp/ovlpres-routeddet-fb-262144-topk8 \
+  --post-bench-sleep-seconds 1800 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `2b4c8967e`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-routeddet-profile-t262144-topk8-20260320-024154.log`
+  - pod: `iris-task-27b2f5b0d06a`
+  - node: `gd925a4`
+  - copied artifacts:
+    - `scratch/profiles/ovlpres-routeddet-fb-262144-topk8`
+    - `scratch/profiles/ovlpres-routeddet-fb-262144-topk8-summary.json`
+    - `scratch/profiles/ovlpres-routeddet-fb-262144-topk8-report.md`
+- Result:
+  - timed profile run returned `time_s=0.146873` / `1,784,837.09 tok/s`
+  - exclusive time breakdown from the copied report:
+    - compute: `47.13%`
+    - communication: `0.26%`
+    - host: `52.55%`
+  - copied routed-detached report:
+    - `ncclDevKernel_AllReduce_Sum_f32_RING_LL(...)` pre-gap total: `10583.875`
+    - max pre-gap: `697.440`
+  - comparison on the same op:
+    - shared-only copied profile from `OVLP-RES-052`: total pre-gap `9986.239`, max `693.569`
+    - full combined copied profile from `OVLP-RES-047`: total pre-gap `269618.757`, max `17153.967`
+- Interpretation:
+  - once routed backward is removed, the giant `AllReduce_Sum_f32` wait collapses back to essentially the same scale as the standalone shared-only graph.
+  - the full combined hard-row gap therefore does not survive on a graph that keeps routed forward but removes routed backward.
+- Next action:
+  - copy the complementary shared-detached profile so the next comparison can test whether routed backward alone is sufficient to blow the `AllReduce_Sum_f32` gap back up when shared forward is still present.
+
+### 2026-03-20 15:25 UTC - Shared-detached copied profile also removes the pathological `AllReduce_Sum_f32` pre-gap
+- Experiment ID: `OVLP-RES-055`
+- Hypothesis:
+  - if routed backward alone is sufficient to trigger the giant `shared2048` hard-row `AllReduce_Sum_f32` wait, then a copied profile with shared backward detached should still show an `AllReduce_Sum_f32` pre-gap near the full combined graph.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 2b4c8967e \
+  --task-id ovlpres-shareddet-profile-rerun-t262144-topk8-20260320-151453 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed_shared_detached_probe \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --profile-root /tmp/ovlpres-shareddet-fb-262144-topk8 \
+  --post-bench-sleep-seconds 1800 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `2b4c8967e`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-shareddet-profile-rerun-t262144-topk8-20260320-151453.log`
+  - pod: `iris-task-13a9a337b9f2`
+  - node: `g1464be`
+  - copied artifacts:
+    - `scratch/profiles/ovlpres-shareddet-fb-262144-topk8`
+    - `scratch/profiles/ovlpres-shareddet-fb-262144-topk8-summary.json`
+    - `scratch/profiles/ovlpres-shareddet-fb-262144-topk8-report.md`
+- Result:
+  - timed profile run returned `time_s=0.345755` / `758178.86 tok/s`
+  - exclusive time breakdown from the copied report:
+    - compute: `46.84%`
+    - communication: `0.22%`
+    - host: `52.69%`
+  - copied shared-detached report:
+    - `ncclDevKernel_AllReduce_Sum_f32_RING_LL(...)` still appears as a collective op with exclusive `19415.300`
+    - there is no `AllReduce_Sum_f32` row in `gap_before_ops`
+    - largest reported pre-gap is instead `Memset 3`: total `6632.804`, max `847.007`
+  - four-way comparison on the `AllReduce_Sum_f32` pre-gap:
+    - shared-detached copied profile from this experiment: no `gap_before_ops` row
+    - routed-detached copied profile from `OVLP-RES-054`: total `10583.875`, max `697.440`
+    - shared-only copied profile from `OVLP-RES-052`: total `9986.239`, max `693.569`
+    - full combined copied profile from `OVLP-RES-047`: total `269618.757`, max `17153.967`
+- Interpretation:
+  - the pathological `AllReduce_Sum_f32` pre-gap does not survive either detached control.
+  - on this hard row, neither routed backward alone nor shared backward alone reproduces the giant wait seen in the full combined graph.
+  - the giant wait only appears when routed backward and shared backward are both present in the fully coupled backward graph.
+- Next action:
+  - treat the remaining problem as an interaction between the routed and shared backward branches, then build the next probe around splitting or separately scheduling those backward branches rather than more transport-only knob sweeps.
