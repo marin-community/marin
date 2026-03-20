@@ -8,14 +8,14 @@ from __future__ import annotations
 import pytest
 
 from iris.cluster.controller.transitions import DirectProviderBatch
-from iris.cluster.k8s.k8s_service_impl import K8sServiceImpl, ServiceMode
+from iris.cluster.k8s.k8s_service_impl import DryRunK8sService
 from iris.cluster.k8s.provider import KubernetesProvider, PodConfig, _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
 from iris.rpc import cluster_pb2
 
 
 @pytest.fixture
-def k8s() -> K8sServiceImpl:
-    return K8sServiceImpl(mode=ServiceMode.DRY_RUN)
+def k8s() -> DryRunK8sService:
+    return DryRunK8sService()
 
 
 @pytest.fixture
@@ -79,14 +79,14 @@ def make_pod(name: str, phase: str, exit_code: int | None = None, reason: str = 
 
 
 def populate_pod(
-    k8s: K8sServiceImpl,
+    k8s: DryRunK8sService,
     name: str,
     phase: str,
     exit_code: int | None = None,
     reason: str = "",
     labels: dict[str, str] | None = None,
 ) -> None:
-    """Insert a pod manifest into K8sServiceImpl with correct Iris labels."""
+    """Insert a pod manifest with correct Iris labels."""
     base_labels = {
         _LABEL_MANAGED: "true",
         _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
@@ -100,13 +100,13 @@ def populate_pod(
 
 
 def populate_node(
-    k8s: K8sServiceImpl,
+    k8s: DryRunK8sService,
     name: str,
     cpu: str = "4",
     memory: str = "8Gi",
     taints: list[dict] | None = None,
 ) -> None:
-    """Insert a Node manifest into K8sServiceImpl."""
+    """Insert a Node manifest."""
     node = {
         "kind": "Node",
         "metadata": {"name": name},
@@ -117,7 +117,7 @@ def populate_node(
 
 
 def populate_running_pod_resource(
-    k8s: K8sServiceImpl,
+    k8s: DryRunK8sService,
     name: str,
     cpu_limits: str = "1000m",
     memory_limits: str | None = None,

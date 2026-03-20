@@ -17,7 +17,8 @@ class K8sService(Protocol):
     """Protocol for Kubernetes operations.
 
     Implementations: Kubectl (CLOUD, shells out to kubectl binary),
-    K8sServiceImpl (DRY_RUN/LOCAL, in-memory fake with scheduling validation).
+    DryRunK8sService (DRY_RUN, in-memory fake with scheduling validation),
+    LocalK8sService (LOCAL, spawns real subprocesses for pods).
     Use create_k8s_service() to construct the right one.
     """
 

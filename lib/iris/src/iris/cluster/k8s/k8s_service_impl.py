@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""K8sService implementation for DRY_RUN and LOCAL modes.
+"""K8sService implementations for DRY_RUN and LOCAL modes.
 
-Validates manifests, tracks state in memory, and supports failure injection
-for testing K8s-dependent code without shelling out to kubectl.
+K8sStore holds shared in-memory state (manifests, scheduler, failure injection).
+DryRunK8sService wraps the store for pure in-memory testing.
+LocalK8sService extends DRY_RUN behavior by spawning real subprocesses for pods.
 
 Includes a simplified K8s scheduler: node model with labels/taints/resources,
 constraint-based pod scheduling, and resource commitment tracking.
@@ -12,6 +13,8 @@ constraint-based pod scheduling, and resource commitment tracking.
 
 from __future__ import annotations
 
+import os
+import select
 import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -19,7 +22,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from iris.cluster.k8s.k8s_types import KubectlError, KubectlLogLine, KubectlLogResult
-from iris.cluster.service_mode import ServiceMode
 
 # Resource types that K8s recognizes in container resource requests/limits.
 VALID_RESOURCE_TYPES = frozenset(
@@ -256,56 +258,44 @@ def _matches_field_selector(event: dict, selector: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# K8sServiceImpl
+# K8sStore — shared in-memory state
 # ---------------------------------------------------------------------------
 
 
-class K8sServiceImpl:
-    """K8sService implementation for DRY_RUN and LOCAL modes.
+class K8sStore:
+    """In-memory K8s state: manifests, scheduler, failure injection, test helpers.
 
-    Validates manifests, tracks state in memory, supports failure injection
-    and a simplified scheduler. For CLOUD mode, use Kubectl directly (or
-    create_k8s_service() which selects the right implementation).
+    Mode-agnostic — both DryRunK8sService and LocalK8sService delegate here
+    for all state management and protocol method implementations.
     """
 
     def __init__(
         self,
         namespace: str = "iris",
-        mode: ServiceMode = ServiceMode.DRY_RUN,
         available_node_pools: list[str] | None = None,
     ):
-        if mode == ServiceMode.CLOUD:
-            raise ValueError("CLOUD mode is not supported by K8sServiceImpl; use Kubectl or create_k8s_service()")
-
         self._namespace = namespace
-        self._mode = mode
         self._available_node_pools: set[str] | None = (
             set(available_node_pools) if available_node_pools is not None else None
         )
 
-        self._resources: dict[tuple[str, str], dict] = {}  # (kind, name) -> manifest
+        self._resources: dict[tuple[str, str], dict] = {}
         self._injected_failures: dict[str, Exception] = {}
-        self._logs: dict[str, str] = {}  # pod_name -> log text
+        self._logs: dict[str, str] = {}
         self._events: list[dict] = []
         self._exec_responses: dict[str, list[subprocess.CompletedProcess[str]]] = {}
-        self._file_contents: dict[tuple[str, str], bytes] = {}  # (pod_name, path) -> data
+        self._file_contents: dict[tuple[str, str], bytes] = {}
         self._rm_files_calls: list[tuple[str, list[str]]] = []
         self._top_pod_overrides: dict[str, tuple[int, int] | None] = {}
 
-        # Node model
         self._nodes: dict[str, FakeNode] = {}
         self._node_pools: dict[str, NodePoolConfig] = {}
-        # Track which node each pod was scheduled on + its resource requests
-        self._pod_node_assignments: dict[str, str] = {}  # pod_name -> node_name
-        self._pod_resource_requests: dict[str, dict[str, int]] = {}  # pod_name -> requests
+        self._pod_node_assignments: dict[str, str] = {}
+        self._pod_resource_requests: dict[str, dict[str, int]] = {}
 
     @property
     def namespace(self) -> str:
         return self._namespace
-
-    @property
-    def mode(self) -> ServiceMode:
-        return self._mode
 
     # -- Validation --
 
@@ -319,7 +309,6 @@ class K8sServiceImpl:
         if not name:
             raise KubectlError("Manifest missing 'metadata.name'")
 
-        # For pod-like resources, validate spec contents
         spec = _pod_spec(manifest)
         if spec is None:
             return
@@ -344,8 +333,6 @@ class K8sServiceImpl:
         if spec is None:
             return
 
-        # If no nodes exist, skip scheduling (backward compat: tests that don't
-        # set up nodes get manifests stored as-is without status changes).
         if not self._nodes:
             return
 
@@ -362,7 +349,6 @@ class K8sServiceImpl:
             if not _resources_fit(node, requests):
                 continue
 
-            # Schedule on this node
             _commit_resources(node, requests)
             spec["nodeName"] = node.name
             manifest["status"] = {
@@ -373,7 +359,6 @@ class K8sServiceImpl:
             self._pod_resource_requests[pod_name] = requests
             return
 
-        # No node fits → Pending
         manifest["status"] = {
             "phase": "Pending",
             "conditions": [
@@ -388,7 +373,6 @@ class K8sServiceImpl:
         self._auto_event(manifest, "FailedScheduling", "No node matched constraints")
 
     def _auto_event(self, manifest: dict, reason: str, message: str) -> None:
-        """Create and store a K8s event dict."""
         name = manifest.get("metadata", {}).get("name", "")
         self._events.append(
             {
@@ -404,7 +388,6 @@ class K8sServiceImpl:
         )
 
     def _release_pod_resources(self, pod_name: str) -> None:
-        """Release committed resources when a pod is deleted."""
         node_name = self._pod_node_assignments.pop(pod_name, None)
         requests = self._pod_resource_requests.pop(pod_name, None)
         if node_name and requests and node_name in self._nodes:
@@ -419,13 +402,16 @@ class K8sServiceImpl:
     def clear_failure(self, operation: str) -> None:
         self._injected_failures.pop(operation, None)
 
+    def _check_failure(self, operation: str) -> None:
+        if err := self._injected_failures.pop(operation, None):
+            raise err
+
     # -- Node pool management --
 
     def remove_node_pool(self, pool_name: str) -> None:
         """Remove a node pool and all its nodes."""
         if self._available_node_pools is not None:
             self._available_node_pools.discard(pool_name)
-        # Remove nodes belonging to this pool
         if pool_name in self._node_pools:
             pool = self._node_pools.pop(pool_name)
             for i in range(pool.node_count):
@@ -489,7 +475,6 @@ class K8sServiceImpl:
         current = config.node_count
 
         if count > current:
-            # Add new nodes
             for i in range(current, count):
                 node_name = f"{pool_name}-{i}"
                 self._nodes[node_name] = FakeNode(
@@ -504,7 +489,6 @@ class K8sServiceImpl:
                     ),
                 )
         elif count < current:
-            # Remove excess nodes (from the end)
             for i in range(count, current):
                 node_name = f"{pool_name}-{i}"
                 self._nodes.pop(node_name, None)
@@ -537,7 +521,6 @@ class K8sServiceImpl:
     # -- Test helpers --
 
     def set_logs(self, pod_name: str, text: str) -> None:
-        """Pre-populate logs for a pod."""
         self._logs[pod_name] = text
 
     def add_event(self, event: dict) -> None:
@@ -548,11 +531,9 @@ class K8sServiceImpl:
         self._exec_responses.setdefault(pod_name, []).append(response)
 
     def set_file_content(self, pod_name: str, path: str, data: bytes) -> None:
-        """Pre-populate file content readable via read_file."""
         self._file_contents[(pod_name, path)] = data
 
     def set_top_pod(self, pod_name: str, result: tuple[int, int] | None) -> None:
-        """Configure a specific top_pod result for a pod."""
         self._top_pod_overrides[pod_name] = result
 
     def seed_resource(self, kind: str, name: str, manifest: dict) -> None:
@@ -565,10 +546,6 @@ class K8sServiceImpl:
 
     # -- Protocol methods --
 
-    def _check_failure(self, operation: str) -> None:
-        if err := self._injected_failures.pop(operation, None):
-            raise err
-
     def apply_json(self, manifest: dict) -> None:
         self._check_failure("apply_json")
         self._validate_manifest(manifest)
@@ -576,7 +553,6 @@ class K8sServiceImpl:
         name = manifest["metadata"]["name"]
         self._resources[(kind, name)] = manifest
 
-        # Run scheduling for pod-bearing manifests
         if kind == "pod":
             self._schedule_pod(manifest)
 
@@ -594,7 +570,6 @@ class K8sServiceImpl:
         self._check_failure("list_json")
         normalized = _normalize_resource(resource)
 
-        # Nodes: merge FakeNode objects and any raw node manifests in _resources
         if normalized == "node":
             results = []
             seen_names: set[str] = set()
@@ -604,7 +579,6 @@ class K8sServiceImpl:
                         continue
                 results.append(node.to_k8s_dict())
                 seen_names.add(node.name)
-            # Also include raw node dicts stored via direct _resources manipulation
             for (kind, name), manifest in self._resources.items():
                 if kind != "node" or name in seen_names:
                     continue
@@ -633,14 +607,12 @@ class K8sServiceImpl:
         normalized = _normalize_resource(resource)
         self._resources.pop((normalized, name), None)
 
-        # Release resources when deleting a pod
         if normalized == "pod":
             self._release_pod_resources(name)
 
     def logs(self, pod_name: str, *, container: str | None = None, tail: int = 50, previous: bool = False) -> str:
         self._check_failure("logs")
         text = self._logs.get(pod_name, "")
-        # tail <= 0 means "all lines"; tail > 0 means "last N lines"
         if tail > 0 and text:
             lines = text.splitlines()
             return "\n".join(lines[-tail:])
@@ -675,7 +647,6 @@ class K8sServiceImpl:
         timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
         self._check_failure("exec")
-        # Return queued response if available
         if self._exec_responses.get(pod_name):
             return self._exec_responses[pod_name].pop(0)
         if not any(name == pod_name for (_, name) in self._resources):
@@ -698,7 +669,6 @@ class K8sServiceImpl:
         self._check_failure("get_events")
         if field_selector is None:
             return list(self._events)
-        # Simple field_selector matching: "involvedObject.name=foo"
         results = []
         for event in self._events:
             if _matches_field_selector(event, field_selector):
@@ -710,7 +680,7 @@ class K8sServiceImpl:
         if pod_name in self._top_pod_overrides:
             return self._top_pod_overrides[pod_name]
         if any(name == pod_name for (_, name) in self._resources):
-            return (100, 256 * 1024 * 1024)  # 100m CPU, 256Mi memory
+            return (100, 256 * 1024 * 1024)
         return None
 
     def read_file(
@@ -747,3 +717,271 @@ class K8sServiceImpl:
         self._check_failure("port_forward")
         port = local_port or 19999
         yield f"http://127.0.0.1:{port}"
+
+
+# ---------------------------------------------------------------------------
+# DryRunK8sService
+# ---------------------------------------------------------------------------
+
+
+class DryRunK8sService:
+    """K8sService for DRY_RUN mode — pure in-memory fake with scheduler and validation."""
+
+    def __init__(
+        self,
+        namespace: str = "iris",
+        available_node_pools: list[str] | None = None,
+    ):
+        self._store = K8sStore(namespace=namespace, available_node_pools=available_node_pools)
+
+    @property
+    def namespace(self) -> str:
+        return self._store.namespace
+
+    # -- Protocol methods (delegate to store) --
+
+    def apply_json(self, manifest: dict) -> None:
+        self._store.apply_json(manifest)
+
+    def get_json(self, resource: str, name: str, *, cluster_scoped: bool = False) -> dict | None:
+        return self._store.get_json(resource, name, cluster_scoped=cluster_scoped)
+
+    def list_json(
+        self, resource: str, *, labels: dict[str, str] | None = None, cluster_scoped: bool = False
+    ) -> list[dict]:
+        return self._store.list_json(resource, labels=labels, cluster_scoped=cluster_scoped)
+
+    def delete(
+        self, resource: str, name: str, *, cluster_scoped: bool = False, force: bool = False, wait: bool = True
+    ) -> None:
+        self._store.delete(resource, name, cluster_scoped=cluster_scoped, force=force, wait=wait)
+
+    def logs(self, pod_name: str, *, container: str | None = None, tail: int = 50, previous: bool = False) -> str:
+        return self._store.logs(pod_name, container=container, tail=tail, previous=previous)
+
+    def stream_logs(self, pod_name: str, *, container: str | None = None, byte_offset: int = 0) -> KubectlLogResult:
+        return self._store.stream_logs(pod_name, container=container, byte_offset=byte_offset)
+
+    def exec(
+        self, pod_name: str, cmd: list[str], *, container: str | None = None, timeout: float | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        return self._store.exec(pod_name, cmd, container=container, timeout=timeout)
+
+    def set_image(self, resource: str, name: str, container: str, image: str, *, namespaced: bool = False) -> None:
+        self._store.set_image(resource, name, container, image, namespaced=namespaced)
+
+    def rollout_restart(self, resource: str, name: str, *, namespaced: bool = False) -> None:
+        self._store.rollout_restart(resource, name, namespaced=namespaced)
+
+    def rollout_status(self, resource: str, name: str, *, timeout: float = 600.0, namespaced: bool = False) -> None:
+        self._store.rollout_status(resource, name, timeout=timeout, namespaced=namespaced)
+
+    def get_events(self, field_selector: str | None = None) -> list[dict]:
+        return self._store.get_events(field_selector=field_selector)
+
+    def top_pod(self, pod_name: str) -> tuple[int, int] | None:
+        return self._store.top_pod(pod_name)
+
+    def read_file(self, pod_name: str, path: str, *, container: str | None = None) -> bytes:
+        return self._store.read_file(pod_name, path, container=container)
+
+    def rm_files(self, pod_name: str, paths: list[str], *, container: str | None = None) -> None:
+        self._store.rm_files(pod_name, paths, container=container)
+
+    @contextmanager
+    def port_forward(
+        self, service_name: str, remote_port: int, local_port: int | None = None, timeout: float = 90.0
+    ) -> Iterator[str]:
+        with self._store.port_forward(service_name, remote_port, local_port=local_port, timeout=timeout) as url:
+            yield url
+
+    # -- Test helpers (delegate to store) --
+
+    def inject_failure(self, operation: str, error: Exception) -> None:
+        self._store.inject_failure(operation, error)
+
+    def clear_failure(self, operation: str) -> None:
+        self._store.clear_failure(operation)
+
+    def remove_node_pool(self, pool_name: str) -> None:
+        self._store.remove_node_pool(pool_name)
+
+    def add_node_pool(self, pool_name: str, **kwargs) -> None:
+        self._store.add_node_pool(pool_name, **kwargs)
+
+    def set_node_count(self, pool_name: str, count: int) -> None:
+        self._store.set_node_count(pool_name, count)
+
+    def transition_pod(self, name: str, phase: str, *, exit_code: int | None = None, reason: str | None = None) -> None:
+        self._store.transition_pod(name, phase, exit_code=exit_code, reason=reason)
+
+    def set_logs(self, pod_name: str, text: str) -> None:
+        self._store.set_logs(pod_name, text)
+
+    def add_event(self, event: dict) -> None:
+        self._store.add_event(event)
+
+    def set_exec_response(self, pod_name: str, response: subprocess.CompletedProcess[str]) -> None:
+        self._store.set_exec_response(pod_name, response)
+
+    def set_file_content(self, pod_name: str, path: str, data: bytes) -> None:
+        self._store.set_file_content(pod_name, path, data)
+
+    def set_top_pod(self, pod_name: str, result: tuple[int, int] | None) -> None:
+        self._store.set_top_pod(pod_name, result)
+
+    def seed_resource(self, kind: str, name: str, manifest: dict) -> None:
+        self._store.seed_resource(kind, name, manifest)
+
+    @property
+    def _rm_files_calls(self) -> list[tuple[str, list[str]]]:
+        return self._store._rm_files_calls
+
+
+# Backward-compat alias
+K8sServiceImpl = DryRunK8sService
+
+
+# ---------------------------------------------------------------------------
+# LocalK8sService
+# ---------------------------------------------------------------------------
+
+
+class LocalK8sService:
+    """K8sService for LOCAL mode — validates manifests and spawns real subprocesses for pods."""
+
+    def __init__(
+        self,
+        namespace: str = "iris",
+        available_node_pools: list[str] | None = None,
+    ):
+        self._store = K8sStore(namespace=namespace, available_node_pools=available_node_pools)
+        self._processes: dict[str, subprocess.Popen] = {}
+
+    @property
+    def namespace(self) -> str:
+        return self._store.namespace
+
+    def apply_json(self, manifest: dict) -> None:
+        self._store.apply_json(manifest)
+        if manifest.get("kind", "").lower() == "pod":
+            self._spawn_pod(manifest)
+
+    def _spawn_pod(self, manifest: dict) -> None:
+        name = manifest["metadata"]["name"]
+        spec = manifest["spec"]
+        container = spec["containers"][0]
+        cmd = container.get("command", []) + container.get("args", [])
+        if not cmd:
+            raise KubectlError(f"LOCAL mode requires explicit command in pod {name!r}")
+        env = {e["name"]: e["value"] for e in container.get("env", []) if "value" in e}
+        proc = subprocess.Popen(
+            cmd,
+            env={**os.environ, **env},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        self._processes[name] = proc
+
+    def logs(self, pod_name: str, *, container: str | None = None, tail: int = 50, previous: bool = False) -> str:
+        if pod_name in self._processes:
+            proc = self._processes[pod_name]
+            if proc.stdout is not None:
+                readable, _, _ = select.select([proc.stdout], [], [], 0)
+                if readable:
+                    data = proc.stdout.read1()  # type: ignore[union-attr]
+                    if data:
+                        existing = self._store._logs.get(pod_name, "")
+                        self._store._logs[pod_name] = existing + data.decode("utf-8", errors="replace")
+        return self._store.logs(pod_name, container=container, tail=tail, previous=previous)
+
+    def delete(
+        self, resource: str, name: str, *, cluster_scoped: bool = False, force: bool = False, wait: bool = True
+    ) -> None:
+        self._store.delete(resource, name, cluster_scoped=cluster_scoped, force=force, wait=wait)
+        if name in self._processes:
+            self._processes.pop(name).kill()
+
+    # All other protocol methods delegate to store
+
+    def get_json(self, resource: str, name: str, *, cluster_scoped: bool = False) -> dict | None:
+        return self._store.get_json(resource, name, cluster_scoped=cluster_scoped)
+
+    def list_json(
+        self, resource: str, *, labels: dict[str, str] | None = None, cluster_scoped: bool = False
+    ) -> list[dict]:
+        return self._store.list_json(resource, labels=labels, cluster_scoped=cluster_scoped)
+
+    def stream_logs(self, pod_name: str, *, container: str | None = None, byte_offset: int = 0) -> KubectlLogResult:
+        return self._store.stream_logs(pod_name, container=container, byte_offset=byte_offset)
+
+    def exec(
+        self, pod_name: str, cmd: list[str], *, container: str | None = None, timeout: float | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        return self._store.exec(pod_name, cmd, container=container, timeout=timeout)
+
+    def set_image(self, resource: str, name: str, container: str, image: str, *, namespaced: bool = False) -> None:
+        self._store.set_image(resource, name, container, image, namespaced=namespaced)
+
+    def rollout_restart(self, resource: str, name: str, *, namespaced: bool = False) -> None:
+        self._store.rollout_restart(resource, name, namespaced=namespaced)
+
+    def rollout_status(self, resource: str, name: str, *, timeout: float = 600.0, namespaced: bool = False) -> None:
+        self._store.rollout_status(resource, name, timeout=timeout, namespaced=namespaced)
+
+    def get_events(self, field_selector: str | None = None) -> list[dict]:
+        return self._store.get_events(field_selector=field_selector)
+
+    def top_pod(self, pod_name: str) -> tuple[int, int] | None:
+        return self._store.top_pod(pod_name)
+
+    def read_file(self, pod_name: str, path: str, *, container: str | None = None) -> bytes:
+        return self._store.read_file(pod_name, path, container=container)
+
+    def rm_files(self, pod_name: str, paths: list[str], *, container: str | None = None) -> None:
+        self._store.rm_files(pod_name, paths, container=container)
+
+    @contextmanager
+    def port_forward(
+        self, service_name: str, remote_port: int, local_port: int | None = None, timeout: float = 90.0
+    ) -> Iterator[str]:
+        with self._store.port_forward(service_name, remote_port, local_port=local_port, timeout=timeout) as url:
+            yield url
+
+    # -- Test helpers (delegate to store) --
+
+    def inject_failure(self, operation: str, error: Exception) -> None:
+        self._store.inject_failure(operation, error)
+
+    def clear_failure(self, operation: str) -> None:
+        self._store.clear_failure(operation)
+
+    def set_logs(self, pod_name: str, text: str) -> None:
+        self._store.set_logs(pod_name, text)
+
+    def add_event(self, event: dict) -> None:
+        self._store.add_event(event)
+
+    def set_exec_response(self, pod_name: str, response: subprocess.CompletedProcess[str]) -> None:
+        self._store.set_exec_response(pod_name, response)
+
+    def set_file_content(self, pod_name: str, path: str, data: bytes) -> None:
+        self._store.set_file_content(pod_name, path, data)
+
+    def set_top_pod(self, pod_name: str, result: tuple[int, int] | None) -> None:
+        self._store.set_top_pod(pod_name, result)
+
+    def seed_resource(self, kind: str, name: str, manifest: dict) -> None:
+        self._store.seed_resource(kind, name, manifest)
+
+    def remove_node_pool(self, pool_name: str) -> None:
+        self._store.remove_node_pool(pool_name)
+
+    def add_node_pool(self, pool_name: str, **kwargs) -> None:
+        self._store.add_node_pool(pool_name, **kwargs)
+
+    def set_node_count(self, pool_name: str, count: int) -> None:
+        self._store.set_node_count(pool_name, count)
+
+    def transition_pod(self, name: str, phase: str, *, exit_code: int | None = None, reason: str | None = None) -> None:
+        self._store.transition_pod(name, phase, exit_code=exit_code, reason=reason)
