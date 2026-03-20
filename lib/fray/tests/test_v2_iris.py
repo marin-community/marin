@@ -22,18 +22,19 @@ from fray.v2.types import (
 
 
 class TestConvertConstraints:
-    def test_preemptible_true_produces_no_constraints(self):
+    def test_preemptible_true_produces_preemptible_constraint(self):
         resources = ResourceConfig(preemptible=True)
         constraints = convert_constraints(resources)
-        assert constraints == []
+        preemptible = [c for c in constraints if c.key == "preemptible"]
+        assert len(preemptible) == 1
+        assert preemptible[0].value == "true"
 
     def test_preemptible_false_adds_constraint(self):
         resources = ResourceConfig(preemptible=False)
         constraints = convert_constraints(resources)
-        assert len(constraints) == 1
-        c = constraints[0]
-        assert c.key == "preemptible"
-        assert c.value == "false"
+        preemptible = [c for c in constraints if c.key == "preemptible"]
+        assert len(preemptible) == 1
+        assert preemptible[0].value == "false"
 
     def test_single_region_produces_eq_constraint(self):
         resources = ResourceConfig(regions=["us-central1"])

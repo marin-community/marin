@@ -20,7 +20,12 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
-from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
+from iris.cluster.constraints import (
+    Constraint,
+    constraints_from_resources,
+    infer_preemptible_constraint,
+    merge_constraints,
+)
 from iris.cluster.controller.auth import (
     DEFAULT_JWT_TTL_SECONDS,
     ControllerAuth,
@@ -636,20 +641,29 @@ class ControllerProtocol(Protocol):
 def _inject_resource_constraints(
     request: cluster_pb2.Controller.LaunchJobRequest,
 ) -> cluster_pb2.Controller.LaunchJobRequest:
-    """Merge auto-generated device constraints into a job submission request.
+    """Merge auto-generated device and preemptible constraints into a job submission request.
 
     Constraints derived from ResourceSpecProto.device (device-type, device-variant)
     are merged with any explicit user constraints on the request.  For canonical
     keys the user's explicit constraints replace auto-generated ones, so e.g.
     a user-provided multi-variant IN constraint overrides the single-variant
     EQ constraint from the resource spec.
+
+    Additionally, the executor heuristic is applied: small CPU-only jobs
+    (no accelerators, 1 task, CPU ≤ 1, RAM ≤ 4 GiB) are auto-tagged as
+    non-preemptible so coordinators survive spot reclamation.
     """
     auto = constraints_from_resources(request.resources)
-    if not auto:
-        return request
-
     user = [Constraint.from_proto(c) for c in request.constraints]
     merged = merge_constraints(auto, user)
+
+    # Apply executor heuristic: pin small CPU-only jobs to non-preemptible workers.
+    preemptible = infer_preemptible_constraint(request.resources, request.replicas, merged)
+    if preemptible is not None:
+        merged.append(preemptible)
+
+    if not merged and not user:
+        return request
 
     new_request = cluster_pb2.Controller.LaunchJobRequest()
     new_request.CopyFrom(request)

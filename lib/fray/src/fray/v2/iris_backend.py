@@ -107,10 +107,14 @@ def convert_resources(resources: ResourceConfig) -> ResourceSpec:
 
 
 def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
-    """Build Iris scheduling constraints from fray v2 ResourceConfig."""
+    """Build Iris scheduling constraints from fray v2 ResourceConfig.
+
+    Always emits a preemptible constraint so that preemptible jobs are
+    explicitly routed to preemptible workers (and never land on expensive
+    non-preemptible VMs).
+    """
     constraints: list[Constraint] = []
-    if not resources.preemptible:
-        constraints.append(preemptible_constraint(False))
+    constraints.append(preemptible_constraint(resources.preemptible))
     if resources.regions:
         constraints.append(region_constraint(resources.regions))
     if resources.device_alternatives:
