@@ -1000,14 +1000,20 @@ class ControllerDB:
 
     _READ_POOL_SIZE = 4
 
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, auth_db_path: Path | None = None):
         self._db_path = db_path
+        self._auth_db_path = auth_db_path
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = RLock()
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._configure(self._conn)
+        if self._auth_db_path is not None:
+            self._auth_db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._conn.execute("ATTACH DATABASE ? AS auth", (str(self._auth_db_path),))
         self.apply_migrations()
+        if self._auth_db_path is not None:
+            self._init_auth_schema()
         self._read_pool: queue.Queue[sqlite3.Connection] = queue.Queue()
         self._init_read_pool()
 
@@ -1025,9 +1031,53 @@ class ControllerDB:
             conn.execute("PRAGMA query_only = ON")
             self._read_pool.put(conn)
 
+    def _init_auth_schema(self) -> None:
+        """Create auth tables in the attached auth database.
+
+        If api_keys or controller_secrets exist in main (pre-separation),
+        copies their rows to auth and drops the originals from main.
+        """
+        self._conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS auth.api_keys (
+                key_id TEXT PRIMARY KEY,
+                key_hash TEXT NOT NULL UNIQUE,
+                key_prefix TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL,
+                last_used_at_ms INTEGER,
+                expires_at_ms INTEGER,
+                revoked_at_ms INTEGER
+            );
+
+            CREATE INDEX IF NOT EXISTS auth.idx_api_keys_hash ON api_keys(key_hash);
+            CREATE INDEX IF NOT EXISTS auth.idx_api_keys_user ON api_keys(user_id);
+
+            CREATE TABLE IF NOT EXISTS auth.controller_secrets (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL
+            );
+            """
+        )
+        # Migrate data from main to auth if tables exist in main
+        for table in ("api_keys", "controller_secrets"):
+            has_main = self._conn.execute(
+                "SELECT 1 FROM main.sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone()
+            if has_main:
+                self._conn.execute(f"INSERT OR IGNORE INTO auth.{table} SELECT * FROM main.{table}")
+                self._conn.execute(f"DROP TABLE main.{table}")
+        self._conn.commit()
+
     @property
     def db_path(self) -> Path:
         return self._db_path
+
+    @property
+    def auth_db_path(self) -> Path | None:
+        return self._auth_db_path
 
     @staticmethod
     def _configure(conn: sqlite3.Connection) -> None:
@@ -1156,6 +1206,14 @@ class ControllerDB:
                     "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
                     (path.name, Timestamp.now().epoch_ms()),
                 )
+
+    @property
+    def _api_keys_table(self) -> str:
+        return "auth.api_keys" if self._auth_db_path is not None else "api_keys"
+
+    @property
+    def _secrets_table(self) -> str:
+        return "auth.controller_secrets" if self._auth_db_path is not None else "controller_secrets"
 
     def ensure_user(self, user_id: str, now: Timestamp, role: str = "user") -> None:
         """Create user if not exists. Does not update role for existing users."""

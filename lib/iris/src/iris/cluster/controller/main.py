@@ -111,7 +111,8 @@ def serve(
         if checkpoint_path and not restored:
             raise click.ClickException(f"Checkpoint DB not found: {checkpoint_path}")
 
-    db = ControllerDB(db_path=db_path)
+    auth_db_path = db_path.with_name("auth.sqlite3")
+    db = ControllerDB(db_path=db_path, auth_db_path=auth_db_path)
 
     # --- Create provider ---
     provider = make_provider(cluster_config)
