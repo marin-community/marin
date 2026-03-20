@@ -659,15 +659,16 @@ def route_demand(
             continue
 
         # When soft routing constraints exist, re-sort matching groups so that
-        # groups satisfying more soft constraints come first (within each
-        # priority tier). This ensures e.g. preemptible=preferred routes to
-        # preemptible groups before falling through to non-preemptible ones.
+        # groups satisfying more soft constraints come first, then by priority.
+        # This ensures e.g. preemptible=soft routes to preemptible groups
+        # before falling through to non-preemptible ones, regardless of
+        # priority tier.
         if soft_routing_cs:
             matching_groups = sorted(
                 matching_groups,
                 key=lambda g: (
-                    g.config.priority or 100,
                     -soft_constraint_score(g.to_attributes(), soft_routing_cs),
+                    g.config.priority or 100,
                 ),
             )
 
@@ -689,7 +690,7 @@ def route_demand(
         matched = False
 
         # Use matching_groups order (respects soft-constraint ranking) for
-        # both phases so that preferred groups are tried first per entry.
+        # both phases so that soft-preferred groups are tried first per entry.
         matching_group_names = [g.name for g in matching_groups]
 
         # Phase 1: try committed budgets first (groups with requesting slices)

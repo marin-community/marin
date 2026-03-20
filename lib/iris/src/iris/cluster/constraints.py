@@ -119,31 +119,6 @@ class AttributeValue:
         return AttributeValue("")
 
 
-class ConstraintMode(IntEnum):
-    """Whether a constraint is required (hard) or preferred (soft).
-
-    REQUIRED constraints filter workers: non-matching workers are excluded.
-    PREFERRED constraints rank workers: matching workers are preferred but
-    non-matching workers are still eligible.
-    """
-
-    REQUIRED = 0
-    PREFERRED = 1
-
-    def to_proto(self) -> cluster_pb2.ConstraintMode:
-        mapping = {
-            ConstraintMode.REQUIRED: cluster_pb2.CONSTRAINT_MODE_REQUIRED,
-            ConstraintMode.PREFERRED: cluster_pb2.CONSTRAINT_MODE_PREFERRED,
-        }
-        return mapping[self]
-
-    @staticmethod
-    def from_proto(proto_mode: int) -> ConstraintMode:
-        if proto_mode == cluster_pb2.CONSTRAINT_MODE_PREFERRED:
-            return ConstraintMode.PREFERRED
-        return ConstraintMode.REQUIRED
-
-
 class ConstraintOp(IntEnum):
     """Constraint operators for worker attribute matching.
 
@@ -209,15 +184,15 @@ class Constraint:
     op: ConstraintOp
     value: str | int | float | None = None
     values: tuple[str | int | float, ...] | None = None
-    mode: ConstraintMode = ConstraintMode.REQUIRED
+    mode: int = cluster_pb2.CONSTRAINT_MODE_REQUIRED
 
     @property
-    def is_preferred(self) -> bool:
-        return self.mode == ConstraintMode.PREFERRED
+    def is_soft(self) -> bool:
+        return self.mode == cluster_pb2.CONSTRAINT_MODE_PREFERRED
 
     def to_proto(self) -> cluster_pb2.Constraint:
         """Convert to protobuf representation."""
-        proto = cluster_pb2.Constraint(key=self.key, op=self.op.to_proto(), mode=self.mode.to_proto())
+        proto = cluster_pb2.Constraint(key=self.key, op=self.op.to_proto(), mode=self.mode)
         if self.value is not None:
             proto.value.CopyFrom(AttributeValue(self.value).to_proto())
         if self.values is not None:
@@ -229,14 +204,13 @@ class Constraint:
     def from_proto(proto: cluster_pb2.Constraint) -> Constraint:
         """Convert from protobuf representation."""
         op = ConstraintOp(proto.op)
-        mode = ConstraintMode.from_proto(proto.mode)
         value: str | int | float | None = None
         if proto.HasField("value"):
             value = AttributeValue.from_proto(proto.value).value
         values: tuple[str | int | float, ...] | None = None
         if proto.values:
             values = tuple(AttributeValue.from_proto(v).value for v in proto.values)
-        return Constraint(key=proto.key, op=op, value=value, values=values, mode=mode)
+        return Constraint(key=proto.key, op=op, value=value, values=values, mode=proto.mode)
 
 
 # ---------------------------------------------------------------------------
@@ -244,15 +218,24 @@ class Constraint:
 # ---------------------------------------------------------------------------
 
 
-def preemptible_constraint(preemptible: bool = True, preferred: bool = False) -> Constraint:
+def preemptible_constraint(preemptible: bool = True, soft: bool | None = None) -> Constraint:
     """Constraint requiring (or preferring) workers to be preemptible (or not).
 
     Args:
         preemptible: Whether to match preemptible or non-preemptible workers.
-        preferred: If True, the constraint is soft — matching workers are
-            preferred but non-matching workers are still eligible.
+        soft: If True, the constraint is soft — matching workers are preferred
+            but non-matching workers are still eligible. If None (default),
+            the mode is inferred from preemptible:
+            - preemptible=False → hard constraint, because non-preemptible jobs
+              (e.g. coordinators) genuinely cannot tolerate spot eviction.
+            - preemptible=True → soft constraint, because preemptible is a cost
+              preference: we prefer spot capacity but can fall back to on-demand
+              when spot is unavailable rather than leaving the job unscheduled.
     """
-    mode = ConstraintMode.PREFERRED if preferred else ConstraintMode.REQUIRED
+    if soft is None:
+        # preemptible=True is a preference (soft), preemptible=False is a requirement (hard)
+        soft = preemptible
+    mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED if soft else cluster_pb2.CONSTRAINT_MODE_REQUIRED
     return Constraint(key=WellKnownAttribute.PREEMPTIBLE, op=ConstraintOp.EQ, value=str(preemptible).lower(), mode=mode)
 
 
@@ -917,8 +900,7 @@ def split_hard_soft(
 ) -> tuple[list[cluster_pb2.Constraint], list[cluster_pb2.Constraint]]:
     """Split proto constraints into (hard, soft) lists based on mode.
 
-    Hard (REQUIRED) constraints filter candidates; soft (PREFERRED) constraints
-    only influence ranking.
+    Hard constraints filter candidates; soft constraints only influence ranking.
     """
     hard: list[cluster_pb2.Constraint] = []
     soft: list[cluster_pb2.Constraint] = []

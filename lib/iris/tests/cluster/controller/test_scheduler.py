@@ -1481,10 +1481,10 @@ def test_preemptible_constraint_routes_to_matching_worker(scheduler, state, job_
     assert result.assignments[0][1] == WorkerId("w-ondemand")
 
 
-def test_preferred_preemptible_constraint_prefers_matching_but_allows_fallback(
+def test_soft_preemptible_constraint_prefers_matching_but_allows_fallback(
     scheduler, state, job_request, worker_metadata
 ):
-    """Job with preferred preemptible constraint schedules on preemptible worker
+    """Job with soft preemptible constraint schedules on preemptible worker
     when available, but falls back to non-preemptible when it is the only option."""
     # Preemptible worker
     meta_preemptible = worker_metadata()
@@ -1496,7 +1496,7 @@ def test_preferred_preemptible_constraint_prefers_matching_but_allows_fallback(
     meta_ondemand.attributes[WellKnownAttribute.PREEMPTIBLE].string_value = "false"
     register_worker(state, "w-ondemand", "addr2", meta_ondemand)
 
-    # Job with PREFERRED preemptible constraint
+    # Job with soft preemptible constraint
     req = job_request()
     constraint = req.constraints.add()
     constraint.key = WellKnownAttribute.PREEMPTIBLE
@@ -1514,10 +1514,8 @@ def test_preferred_preemptible_constraint_prefers_matching_but_allows_fallback(
     assert result.assignments[0][1] == WorkerId("w-preemptible")
 
 
-def test_preferred_constraint_falls_back_when_preferred_worker_at_capacity(
-    scheduler, state, job_request, worker_metadata
-):
-    """When preferred worker is at capacity, soft constraint allows fallback to non-matching worker."""
+def test_soft_constraint_falls_back_when_preferred_worker_at_capacity(scheduler, state, job_request, worker_metadata):
+    """When soft-preferred worker is at capacity, soft constraint allows fallback to non-matching worker."""
     # Preemptible worker with minimal resources (can only fit 1 task)
     meta_preemptible = worker_metadata(cpu=1, memory_bytes=1024**3)
     meta_preemptible.attributes[WellKnownAttribute.PREEMPTIBLE].string_value = "true"
@@ -1528,7 +1526,7 @@ def test_preferred_constraint_falls_back_when_preferred_worker_at_capacity(
     meta_ondemand.attributes[WellKnownAttribute.PREEMPTIBLE].string_value = "false"
     register_worker(state, "w-ondemand", "addr2", meta_ondemand)
 
-    # Submit 2 jobs with preferred preemptible constraint
+    # Submit 2 jobs with soft preemptible constraint
     for i in range(2):
         req = job_request(f"j{i}", cpu=1)
         constraint = req.constraints.add()
@@ -1547,14 +1545,14 @@ def test_preferred_constraint_falls_back_when_preferred_worker_at_capacity(
     assert WorkerId("w-ondemand") in assigned_workers
 
 
-def test_preferred_constraint_only_non_matching_workers_available(scheduler, state, job_request, worker_metadata):
+def test_soft_constraint_only_non_matching_workers_available(scheduler, state, job_request, worker_metadata):
     """When no worker matches the soft constraint, job still schedules (unlike hard constraint)."""
     # Only on-demand worker available
     meta_ondemand = worker_metadata()
     meta_ondemand.attributes[WellKnownAttribute.PREEMPTIBLE].string_value = "false"
     register_worker(state, "w-ondemand", "addr1", meta_ondemand)
 
-    # Job with PREFERRED preemptible=true (no preemptible worker exists)
+    # Job with soft preemptible=true (no preemptible worker exists)
     req = job_request()
     constraint = req.constraints.add()
     constraint.key = WellKnownAttribute.PREEMPTIBLE

@@ -431,7 +431,7 @@ def _rank_by_soft_score(
             continue
         score = soft_constraint_score(dict(cap.attributes), soft_constraints)
         scored.append((score, wid))
-    # Sort descending by score so preferred workers are tried first
+    # Sort descending by score so soft-preferred workers are tried first
     scored.sort(key=lambda t: t[0], reverse=True)
     return [wid for _, wid in scored]
 
@@ -481,8 +481,8 @@ class Scheduler:
         hard_constraints, soft_constraints = split_hard_soft(all_constraints)
 
         # Use posting lists for fast constraint matching on hard constraints only.
-        # Soft (PREFERRED) constraints do not filter — they only influence
-        # candidate ranking so that preferred workers are tried first.
+        # Soft constraints do not filter — they only influence candidate
+        # ranking so that matching workers are tried first.
         candidate_ids = context.matching_workers(hard_constraints)
 
         # When soft constraints are present, sort candidates so workers

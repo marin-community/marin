@@ -8,7 +8,6 @@ import pytest
 from iris.cluster.constraints import (
     AttributeValue,
     Constraint,
-    ConstraintMode,
     ConstraintOp,
     DeviceType,
     INHERITED_CONSTRAINT_KEYS,
@@ -242,45 +241,27 @@ def test_infer_preemptible_constraint_noop_for_gpu():
     assert result is None
 
 
-# --- ConstraintMode and soft constraints ---
+# --- Soft constraints ---
 
 
-def test_constraint_mode_default_is_required():
-    c = Constraint(key="region", op=ConstraintOp.EQ, value="us-central1")
-    assert c.mode == ConstraintMode.REQUIRED
-    assert not c.is_preferred
+def test_preemptible_constraint_soft_default_logic():
+    """preemptible=True defaults to soft, preemptible=False defaults to hard."""
+    c_true = preemptible_constraint(True)
+    assert c_true.mode == cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    assert c_true.value == "true"
+
+    c_false = preemptible_constraint(False)
+    assert c_false.mode == cluster_pb2.CONSTRAINT_MODE_REQUIRED
+    assert c_false.value == "false"
 
 
-def test_constraint_mode_preferred():
-    c = Constraint(key="preemptible", op=ConstraintOp.EQ, value="true", mode=ConstraintMode.PREFERRED)
-    assert c.is_preferred
-    assert c.mode == ConstraintMode.PREFERRED
+def test_preemptible_constraint_soft_override():
+    """Explicit soft= overrides the default logic."""
+    c = preemptible_constraint(True, soft=False)
+    assert c.mode == cluster_pb2.CONSTRAINT_MODE_REQUIRED
 
-
-def test_constraint_mode_proto_roundtrip():
-    c = Constraint(key="preemptible", op=ConstraintOp.EQ, value="true", mode=ConstraintMode.PREFERRED)
-    proto = c.to_proto()
-    assert proto.mode == cluster_pb2.CONSTRAINT_MODE_PREFERRED
-    restored = Constraint.from_proto(proto)
-    assert restored.mode == ConstraintMode.PREFERRED
-    assert restored == c
-
-
-def test_constraint_mode_proto_roundtrip_required():
-    c = Constraint(key="region", op=ConstraintOp.EQ, value="us-central1")
-    proto = c.to_proto()
-    assert proto.mode == cluster_pb2.CONSTRAINT_MODE_REQUIRED
-    restored = Constraint.from_proto(proto)
-    assert restored.mode == ConstraintMode.REQUIRED
-
-
-def test_preemptible_constraint_preferred_kwarg():
-    c = preemptible_constraint(True, preferred=True)
-    assert c.mode == ConstraintMode.PREFERRED
-    assert c.value == "true"
-
-    c2 = preemptible_constraint(True)
-    assert c2.mode == ConstraintMode.REQUIRED
+    c2 = preemptible_constraint(False, soft=True)
+    assert c2.mode == cluster_pb2.CONSTRAINT_MODE_PREFERRED
 
 
 def test_split_hard_soft():
