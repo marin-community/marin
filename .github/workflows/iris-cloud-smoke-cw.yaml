@@ -44,20 +44,21 @@ jobs:
             echo "prefix=smoke-cw-$(echo ${{ github.sha }} | head -c 8)" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
+
       - name: Set commit status to pending
         if: github.event_name == 'issue_comment'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
+          sha=$(git rev-parse HEAD)
+          gh api repos/${{ github.repository }}/statuses/"$sha" \
             -f state=pending \
             -f context="Iris Cloud Smoke Test (CW)" \
             -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || true
-
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5

@@ -12,6 +12,7 @@ platform:
     object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
 
 storage:
+  # Default for standalone use; start-smoke overrides via marin_temp_bucket().
   remote_state_dir: s3://marin-na/iris/state/smoke-cw
 
 worker_provider: {}

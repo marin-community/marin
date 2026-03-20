@@ -20,6 +20,7 @@ defaults:
     port: 10001
 
 storage:
+  # Default for standalone use; start-smoke overrides via marin_temp_bucket().
   remote_state_dir: gs://marin-us-central2/iris/smoke/state
 
 worker_provider: {}
