@@ -3481,3 +3481,228 @@ KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_k
   - the giant wait only appears when routed backward and shared backward are both present in the fully coupled backward graph.
 - Next action:
   - treat the remaining problem as an interaction between the routed and shared backward branches, then build the next probe around splitting or separately scheduling those backward branches rather than more transport-only knob sweeps.
+
+### 2026-03-20 15:57 UTC - Split-loss backward probe clears the padded exact-cap guardrail ladder
+- Experiment ID: `OVLP-RES-056`
+- Hypothesis:
+  - if the giant hard-row `AllReduce_Sum_f32` gap is caused by coupling between routed and shared backward through the single benchmark loss, then splitting the scalar loss into separate routed and shared terms while preserving the same gradients should keep the authoritative exact-cap forward guardrails healthy and be safe to promote to the hard `forward_backward` row.
+- Code change:
+  - code ref: `219853af7` (`bench: add split-loss backward probe`)
+  - added kernel:
+    - `deepep_transport_capped_prewarmed_split_loss_probe`
+  - local helper:
+    - `_split_coupled_square_loss(routed, shared)`
+  - local verification:
+    - `python -m py_compile lib/levanter/scripts/bench/bench_moe_hillclimb.py`
+    - `uv run python lib/levanter/scripts/bench/bench_moe_hillclimb.py --help | rg 'deepep_transport_capped_prewarmed_split_loss_probe'`
+    - direct toy gradient-equivalence check showed `x_diff=0.0`, `a_diff=0.0`, `b_diff=0.0`
+- First launch note:
+  - the first guardrail attempt (`ovlpres-splitloss-guardrail-t262144-20260320-153242`) omitted `--w13-expert-padded` and `--w2-expert-padded`, so its rung numbers were not comparable to the established exact-cap ladder and were discarded.
+- Corrected command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 219853af7 \
+  --task-id ovlpres-splitloss-guardrail-pad-t262144-20260320-154414 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe,deepep_transport_local_compute_only_probe,deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-splitloss-guardrail-pad-t262144-20260320-154414.log`
+  - pod: `iris-task-6be613cd37f0`
+  - node: `g1464be`
+- Result:
+  - `deepep_transport_w13_only_probe`:
+    - `time_s=0.001075` / `243,780,989.74 tok/s`
+  - `deepep_transport_local_compute_only_probe`:
+    - `time_s=0.002886` / `90,817,951.21 tok/s`
+  - `deepep_transport_capped_prewarmed`:
+    - `time_s=0.005317` / `49,298,799.04 tok/s`
+  - the run exited `0`
+  - the familiar `DeepEP timeout check failed` / `CUDA_ERROR_LAUNCH_FAILED` cleanup noise still appeared after each rung, matching prior accepted ladder runs
+- Comparison against the established padded branch-best ladder on the same authoritative cell:
+  - prior padded branch-best from `OVLP-RES-050`:
+    - `w13_only`: `243,433,494.68 tok/s`
+    - `local_compute_only`: `87,936,523.51 tok/s`
+    - `capped_prewarmed`: `47,425,520.46 tok/s`
+  - corrected split-loss guardrail:
+    - `w13_only`: `243,780,989.74 tok/s`
+    - `local_compute_only`: `90,817,951.21 tok/s`
+    - `capped_prewarmed`: `49,298,799.04 tok/s`
+- Interpretation:
+  - once run with the correct padded flags, the split-loss probe stays in family with the best exact-cap forward ladder and does not show a guardrail regression on the authoritative shared-free cell.
+  - the candidate is safe to promote to the decisive `262144/topk=8/shared2048/forward_backward` row.
+- Next action:
+  - run the hard `forward_backward` timing row for `deepep_transport_capped_prewarmed_split_loss_probe` with the current best runtime flags, then profile it only if the timed row improves materially.
+
+### 2026-03-20 16:02 UTC - Split-loss hard-row timing is effectively flat against the current branch best
+- Experiment ID: `OVLP-RES-057`
+- Hypothesis:
+  - if the giant hard-row `AllReduce_Sum_f32` wait is mostly caused by coupling through the single benchmark loss, then the split-loss probe should materially improve the decisive `262144/topk=8/shared2048/forward_backward` row on top of the current best runtime flags.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-splitloss-sharedfast-fb-t262144-topk8-20260320-155812 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed_split_loss_probe \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `219853af7`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-splitloss-sharedfast-fb-t262144-topk8-20260320-155812.log`
+  - pod: `iris-task-1be1afac948c`
+  - node: `g1464be`
+- Result:
+  - `deepep_transport_capped_prewarmed_split_loss_probe`:
+    - `time_s=0.041182` / `6,365,443.07 tok/s`
+  - run exited `0`
+- Comparison:
+  - current branch-best hard row from `OVLP-RES-045`:
+    - `deepep_transport_capped_prewarmed`: `6,353,316.54 tok/s` (`41.261 ms`)
+  - split-loss probe:
+    - `6,365,443.07 tok/s` (`41.182 ms`)
+  - delta vs current branch best:
+    - about `+0.19%`
+- Interpretation:
+  - the split-loss probe does not produce a material throughput improvement on the decisive hard row.
+  - separating the scalar loss into routed and shared terms is therefore not sufficient, by itself, to close the remaining branch-best gap.
+- Next action:
+  - copy a matched hard-row profile on the split-loss probe before writing another code candidate, so the next step can compare whether the routed/shared interaction changed structurally even though the wall-clock result stayed flat.
+
+### 2026-03-20 16:30 UTC - Matched split-loss profile shows the pathological `AllReduce_Sum_f32` pre-gap remains essentially intact
+- Experiment ID: `OVLP-RES-058`
+- Hypothesis:
+  - even if the split-loss hard-row timing is flat, a matched profile might still show that the routed/shared interaction has moved materially, which would justify a deeper follow-up on the same idea.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-splitloss-profile-t262144-topk8-20260320-160324 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed_split_loss_probe \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --profile-root /tmp/ovlpres-splitloss-fb-262144-topk8 \
+  --post-bench-sleep-seconds 1800 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl -n iris-3821-jax cp \
+  iris-task-5e90306cdb9f:/tmp/ovlpres-splitloss-fb-262144-topk8/. \
+  scratch/profiles/ovlpres-splitloss-fb-262144-topk8
+
+uv run python -m marin.profiling.cli summarize \
+  --profile-dir scratch/profiles/ovlpres-splitloss-fb-262144-topk8 \
+  --warmup-steps 0 \
+  --output scratch/profiles/ovlpres-splitloss-fb-262144-topk8-summary.json
+
+uv run python -m marin.profiling.cli report \
+  --summary scratch/profiles/ovlpres-splitloss-fb-262144-topk8-summary.json \
+  --output scratch/profiles/ovlpres-splitloss-fb-262144-topk8-report.md
+
+uv run python -m marin.profiling.cli compare \
+  --before scratch/profiles/ovlpres-disp32send32-sharedfast-fb-262144-topk8-summary.json \
+  --after scratch/profiles/ovlpres-splitloss-fb-262144-topk8-summary.json \
+  --top-k 12 \
+  > scratch/profiles/ovlpres-disp32send32-vs-splitloss-262144-topk8.compare.txt
+```
+
+- Config:
+  - code ref: `219853af7`
+  - profiling pod: `iris-task-5e90306cdb9f`
+  - node: `g1464be`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-splitloss-profile-t262144-topk8-20260320-160324.log`
+  - copied artifacts:
+    - `scratch/profiles/ovlpres-splitloss-fb-262144-topk8`
+    - `scratch/profiles/ovlpres-splitloss-fb-262144-topk8-summary.json`
+    - `scratch/profiles/ovlpres-splitloss-fb-262144-topk8-report.md`
+    - `scratch/profiles/ovlpres-disp32send32-vs-splitloss-262144-topk8.compare.txt`
+- Result:
+  - timed profile run returned `time_s=0.136659` / `1,918,235.81 tok/s`
+  - exclusive time breakdown from the copied report:
+    - compute: `46.30%`
+    - communication: `1.21%`
+    - host: `52.41%`
+  - copied split-loss report:
+    - `ncclDevKernel_AllReduce_Sum_f32_RING_LL(...)` pre-gap total: `264704.133`
+    - max pre-gap: `16596.283`
+  - comparison against the current branch-best full combined profile from `OVLP-RES-046`:
+    - prior full-combined pre-gap total: `269618.757`
+    - split-loss pre-gap total: `264704.133`
+    - prior full-combined max pre-gap: `17153.967`
+    - split-loss max pre-gap: `16596.283`
+  - direct compare file shows only small deltas:
+    - `ncclDevKernel_AllReduce_Sum_bf16_RING_LL(...)`: `17901.133 -> 16485.742`
+    - `cached_notify_combine<8>`: `89696.809 -> 88888.482`
+    - overall semantic family `other`: `640573.312 -> 639145.580`
+- Interpretation:
+  - the split-loss probe leaves the pathological hard-row `AllReduce_Sum_f32` wait essentially intact; the largest pre-gap only shrinks slightly and remains the dominant idle region.
+  - changing the scalar loss algebra is therefore not enough to decouple the problematic routed/shared backward interaction.
+- Next action:
+  - stop pursuing split-loss as a throughput fix and move to a stronger benchmark-only probe that explicitly separates routed and shared backward execution, rather than merely separating their loss terms.
