@@ -12,9 +12,11 @@ constraint-based pod scheduling, and resource commitment tracking.
 
 from __future__ import annotations
 
+import io
 import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 from iris.cluster.k8s.k8s_types import KubectlError, KubectlLogLine, KubectlLogResult
 from iris.cluster.service_mode import ServiceMode
@@ -251,6 +253,45 @@ def _matches_field_selector(event: dict, selector: str) -> bool:
         if str(obj) != value.strip():
             return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# FakePopen — subprocess.Popen stand-in for DRY_RUN/LOCAL mode
+# ---------------------------------------------------------------------------
+
+
+class FakePopen:
+    """Minimal subprocess.Popen stand-in for DRY_RUN/LOCAL mode.
+
+    Provides the attributes and methods that callers like _coreweave_tunnel
+    access: poll(), terminate(), kill(), wait(), stderr.read(), etc.
+    """
+
+    pid = 0
+    returncode: int | None = None
+    stdin = None
+
+    def __init__(self) -> None:
+        self.stdout = io.BytesIO(b"")
+        self.stderr = io.BytesIO(b"")
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.returncode = -15
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+    def wait(self, timeout: float | None = None) -> int:
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+    def communicate(self, data: bytes | str | None = None, timeout: float | None = None) -> tuple[str, str]:
+        self.returncode = 0
+        return ("", "")
 
 
 # ---------------------------------------------------------------------------
@@ -716,3 +757,7 @@ class K8sServiceImpl:
     ) -> None:
         self._check_failure("rm_files")
         self._rm_files_calls.append((pod_name, paths))
+
+    def popen(self, args: list[str], *, namespaced: bool = False, **kwargs: Any) -> subprocess.Popen:
+        self._check_failure("popen")
+        return FakePopen()  # type: ignore[return-value]
