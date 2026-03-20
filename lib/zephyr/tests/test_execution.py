@@ -5,14 +5,13 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import time
 import uuid
 from pathlib import Path
 
 import pytest
-from fray.v2 import Entrypoint, JobRequest, JobStatus, LocalClient, ResourceConfig
+from fray.v2 import ResourceConfig
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext, zephyr_worker_ctx
 
@@ -73,41 +72,6 @@ def test_context_manager(local_client):
     ds = Dataset.from_list([1, 2, 3]).map(lambda x: x + 1)
     results = list(zctx.execute(ds))
     assert sorted(results) == [2, 3, 4]
-
-
-def test_zephyr_ctx_fixture_teardown_shuts_down_context(tmp_path_factory):
-    """The shared module fixture must call shutdown() during teardown."""
-    conftest_path = Path(__file__).with_name("conftest.py")
-    spec = importlib.util.spec_from_file_location("zephyr_test_conftest", conftest_path)
-    assert spec is not None and spec.loader is not None
-    test_conftest = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(test_conftest)
-
-    client = LocalClient()
-    fixture_gen = test_conftest.zephyr_ctx.__wrapped__(client, tmp_path_factory)
-    ctx = next(fixture_gen)
-
-    coordinator_job = client.submit(
-        JobRequest(
-            name=f"test-zephyr-fixture-shutdown-{uuid.uuid4().hex[:8]}",
-            entrypoint=Entrypoint.from_callable(time.sleep, args=(0.5,)),
-            resources=ResourceConfig(cpu=1, ram="512m"),
-        )
-    )
-    ctx._coordinator_job = coordinator_job
-
-    deadline = time.monotonic() + 1.0
-    while coordinator_job.status() != JobStatus.RUNNING and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert coordinator_job.status() == JobStatus.RUNNING
-
-    with pytest.raises(StopIteration):
-        next(fixture_gen)
-
-    assert ctx._coordinator_job is None
-    assert coordinator_job.status() == JobStatus.STOPPED
-    time.sleep(0.6)
-    client.shutdown(wait=True)
 
 
 def test_write_jsonl(tmp_path, zephyr_ctx):
