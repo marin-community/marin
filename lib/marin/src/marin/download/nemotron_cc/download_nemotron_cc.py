@@ -18,6 +18,7 @@ import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 
+import draccus
 import requests
 import zstandard
 from fray.cluster import ResourceConfig
@@ -147,3 +148,9 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
     ctx.execute(pipeline)
 
     logger.info(f"Downloaded Nemotron CC files to {cfg.output_path}")
+
+
+@draccus.wrap()
+def main(cfg: NemotronIngressConfig) -> None:
+    logging.basicConfig(level=logging.INFO)
+    download_nemotron_cc(cfg)
