@@ -7,9 +7,12 @@ Focuses on format-to-flag mapping, default handling, and CLI structure —
 not on pass-through of constructor arguments.
 """
 
+import os
+
 import pytest
 
 from iris.cluster.runtime.profile import (
+    _run_memray_profile,
     build_memray_attach_cmd,
     build_memray_transform_cmd,
     build_pyspy_cmd,
@@ -133,3 +136,60 @@ def test_memray_transform_stats_includes_json_flag():
 
     assert "stats" in cmd
     assert "--json" in cmd
+
+
+# ---------------------------------------------------------------------------
+# _run_memray_profile: in-process Tracker produces valid output
+# ---------------------------------------------------------------------------
+
+
+def _allocate_during(duration_seconds: int) -> list:
+    """Force allocations so memray captures something during short profiles."""
+    import threading
+
+    results: list = []
+
+    def _alloc():
+        for _ in range(duration_seconds * 100):
+            results.append(bytearray(1024))
+            import time
+
+            time.sleep(duration_seconds / 100)
+
+    t = threading.Thread(target=_alloc, daemon=True)
+    t.start()
+    return results
+
+
+@pytest.mark.parametrize(
+    "proto_format",
+    [
+        cluster_pb2.MemoryProfile.FLAMEGRAPH,
+        cluster_pb2.MemoryProfile.TABLE,
+    ],
+)
+def test_run_memray_profile_returns_nonempty_output(proto_format):
+    """In-process memray Tracker produces non-empty output for flamegraph/table."""
+    _allocate_during(1)
+    cfg = cluster_pb2.MemoryProfile(format=proto_format, leaks=False)
+    pid = str(os.getpid())
+    result = _run_memray_profile(pid, duration_seconds=1, memory_config=cfg)
+    assert len(result) > 0
+
+
+def test_run_memray_profile_flamegraph_returns_html():
+    """Flamegraph format returns HTML content."""
+    _allocate_during(1)
+    cfg = cluster_pb2.MemoryProfile(format=cluster_pb2.MemoryProfile.FLAMEGRAPH, leaks=False)
+    pid = str(os.getpid())
+    result = _run_memray_profile(pid, duration_seconds=1, memory_config=cfg)
+    assert b"<html" in result.lower() or b"<!doctype" in result.lower()
+
+
+def test_run_memray_profile_leaks_flamegraph():
+    """Leaks mode (aggregated allocations) produces flamegraph output."""
+    _allocate_during(1)
+    cfg = cluster_pb2.MemoryProfile(format=cluster_pb2.MemoryProfile.FLAMEGRAPH, leaks=True)
+    pid = str(os.getpid())
+    result = _run_memray_profile(pid, duration_seconds=1, memory_config=cfg)
+    assert len(result) > 0
