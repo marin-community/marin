@@ -201,9 +201,9 @@ def test_looks_like_executor_false_with_gpu():
     assert not looks_like_executor(_make_resources(device="gpu"), replicas=1)
 
 
-def test_looks_like_executor_false_one_full_cpu():
-    """A job requesting 1 full CPU core is real workload, not an executor."""
-    assert not looks_like_executor(_make_resources(cpu_millicores=1000), replicas=1)
+def test_looks_like_executor_one_full_cpu():
+    """A job requesting exactly 1 CPU core is still an executor."""
+    assert looks_like_executor(_make_resources(cpu_millicores=1000), replicas=1)
 
 
 def test_looks_like_executor_false_high_cpu():
