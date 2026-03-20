@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
 from iris.cluster.k8s.k8s_service import K8sService
@@ -633,8 +631,11 @@ def test_local_logs_from_subprocess(local_svc: LocalK8sService):
     local_svc.apply_json(manifest)
     proc = local_svc._processes["echo-pod"]
     proc.wait(timeout=5)
-
-    time.sleep(0.1)
+    # Read remaining stdout after process exits so logs() finds it
+    if proc.stdout is not None:
+        remaining = proc.stdout.read()
+        if remaining:
+            local_svc.append_logs("echo-pod", remaining.decode("utf-8", errors="replace"))
 
     log_output = local_svc.logs("echo-pod")
     assert "hello from local" in log_output

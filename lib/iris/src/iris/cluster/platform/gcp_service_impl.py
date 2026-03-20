@@ -537,8 +537,10 @@ class LocalGcpService(DryRunGcpService):
         from iris.cluster.worker.env_probe import FixedEnvironmentProvider, HardwareProbe, build_worker_metadata
         from iris.cluster.worker.worker import Worker, WorkerConfig
 
-        assert self._cache_path is not None
-        assert self._threads is not None
+        if self._cache_path is None:
+            raise ValueError("cache_path required for LOCAL mode")
+        if self._threads is None:
+            raise ValueError("threads required for LOCAL mode")
 
         workers: list[Worker] = []
         vm_ids: list[str] = []
@@ -1078,6 +1080,3 @@ def create_gcp_service(mode: ServiceMode, project_id: str = "", **kwargs) -> Gcp
     if mode == ServiceMode.LOCAL:
         return LocalGcpService(project_id=project_id, **kwargs)
     return DryRunGcpService(project_id=project_id)
-
-
-GcpServiceImpl = DryRunGcpService

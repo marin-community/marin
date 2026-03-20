@@ -4,7 +4,7 @@
 """Shared Kubernetes helpers for Iris cluster components."""
 
 from iris.cluster.k8s.k8s_service import K8sService
-from iris.cluster.k8s.k8s_service_impl import DryRunK8sService, K8sServiceImpl, LocalK8sService
+from iris.cluster.k8s.k8s_service_impl import DryRunK8sService, LocalK8sService
 from iris.cluster.k8s.k8s_types import KubectlError
 from iris.cluster.service_mode import ServiceMode
 

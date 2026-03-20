@@ -3,7 +3,7 @@
 
 """Behavioral tests for CoreweavePlatform.
 
-Tests exercise the public interface of CoreweavePlatform using K8sServiceImpl
+Tests exercise the public interface of CoreweavePlatform using DryRunK8sService
 (in-memory K8s service). We test controller lifecycle, discovery, tunnel, RBAC,
 and configuration. Worker/slice management is handled by KubernetesProvider (not
 CoreweavePlatform).
@@ -17,7 +17,7 @@ import time
 
 import pytest
 
-from iris.cluster.k8s.k8s_service_impl import K8sServiceImpl
+from iris.cluster.k8s.k8s_service_impl import DryRunK8sService
 from iris.cluster.platform.base import (
     Labels,
     PlatformError,
@@ -35,9 +35,9 @@ def _make_platform(
     region: str = "LGA1",
     namespace: str = "iris",
     label_prefix: str = "iris",
-    k8s: K8sServiceImpl | None = None,
-) -> tuple[CoreweavePlatform, K8sServiceImpl]:
-    k8s = k8s or K8sServiceImpl(namespace=namespace)
+    k8s: DryRunK8sService | None = None,
+) -> tuple[CoreweavePlatform, DryRunK8sService]:
+    k8s = k8s or DryRunK8sService(namespace=namespace)
     config = config_pb2.CoreweavePlatformConfig(
         region=region,
         namespace=namespace,
@@ -46,7 +46,7 @@ def _make_platform(
     return platform, k8s
 
 
-def _auto_ready_deployment(k8s: K8sServiceImpl, name: str, timeout: float = 10):
+def _auto_ready_deployment(k8s: DryRunK8sService, name: str, timeout: float = 10):
     """Wait for deployment to appear in the in-memory store, then mark it available."""
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -114,7 +114,7 @@ def test_list_vms_returns_empty():
 
 def test_discover_controller_dns():
     """discover_controller returns correct K8s Service DNS name."""
-    k8s = K8sServiceImpl(namespace="iris")
+    k8s = DryRunK8sService(namespace="iris")
     config = config_pb2.CoreweavePlatformConfig(region="LGA1", namespace="iris")
     platform = CoreweavePlatform(config=config, label_prefix="iris", kubectl=k8s)
 
@@ -132,7 +132,7 @@ def test_discover_controller_dns():
 
 def test_discover_controller_defaults():
     """discover_controller uses default port and service name when not set."""
-    k8s = K8sServiceImpl(namespace="my-ns")
+    k8s = DryRunK8sService(namespace="my-ns")
     config = config_pb2.CoreweavePlatformConfig(region="LGA1", namespace="my-ns")
     platform = CoreweavePlatform(config=config, label_prefix="iris", kubectl=k8s)
 
@@ -250,7 +250,7 @@ def test_start_controller_reconciles_when_already_available():
     platform, k8s = _make_platform()
     cluster_config = _make_cluster_config()
 
-    # K8sServiceImpl replaces the full manifest on re-apply, so use auto_ready thread
+    # DryRunK8sService replaces the full manifest on re-apply, so use auto_ready thread
     t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
     t.start()
 
@@ -333,7 +333,7 @@ def test_stop_all_dry_run():
 
 def test_rbac_isolation_across_namespaces():
     """Two Iris instances with different namespaces get isolated RBAC; teardown of one doesn't affect the other."""
-    k8s = K8sServiceImpl(namespace="alpha")
+    k8s = DryRunK8sService(namespace="alpha")
     platform_a, _ = _make_platform(namespace="alpha", k8s=k8s)
     platform_b, _ = _make_platform(namespace="beta", k8s=k8s)
 
@@ -368,7 +368,7 @@ def test_rbac_isolation_across_namespaces():
 
 def test_tunnel_parses_address_and_forwards():
     """tunnel() parses address and delegates to K8sService.port_forward()."""
-    k8s = K8sServiceImpl(namespace="iris")
+    k8s = DryRunK8sService(namespace="iris")
     config = config_pb2.CoreweavePlatformConfig(region="LGA1", namespace="iris")
     platform = CoreweavePlatform(config=config, label_prefix="iris", kubectl=k8s)
 
@@ -411,7 +411,7 @@ def test_start_controller_deployment_command_references_config_json():
 
 def test_configmap_strips_kubeconfig_path():
     """ConfigMap must not contain kubeconfig_path so pods use in-cluster auth."""
-    k8s = K8sServiceImpl(namespace="iris")
+    k8s = DryRunK8sService(namespace="iris")
     cw_config = config_pb2.CoreweavePlatformConfig(
         region="LGA1",
         namespace="iris",
@@ -438,7 +438,7 @@ def test_configmap_strips_kubeconfig_path():
 
 def test_controller_deployment_includes_endpoint_url():
     """When object_storage_endpoint is set, the controller Deployment includes AWS_ENDPOINT_URL."""
-    k8s = K8sServiceImpl(namespace="iris")
+    k8s = DryRunK8sService(namespace="iris")
     cw_config = config_pb2.CoreweavePlatformConfig(
         region="LGA1",
         namespace="iris",
@@ -757,7 +757,7 @@ def test_ensure_nodepools_keeps_one_multihost_slice_warm():
 # ============================================================================
 
 
-def _apply_stub(k8s: K8sServiceImpl, kind: str, name: str, namespace: str = "iris") -> None:
+def _apply_stub(k8s: DryRunK8sService, kind: str, name: str, namespace: str = "iris") -> None:
     """Apply a minimal stub resource into the in-memory K8s store."""
     k8s.apply_json({"kind": kind, "metadata": {"name": name, "namespace": namespace}, "spec": {}})
 
