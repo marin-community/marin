@@ -81,8 +81,10 @@ _SCATTER_META_SUFFIX = ".scatter_meta"
 _SCATTER_MANIFEST_NAME = "scatter_metadata"
 
 _SCATTER_META_READ_CONCURRENCY = 256
-# Probe batch size for estimating item memory in _compute_scatter_read_batch_size
-_SCATTER_PROBE_BATCH_SIZE = 100
+# Number of items sampled from the first flush to estimate avg_item_bytes at scatter-write time
+_SCATTER_SAMPLE_SIZE = 100
+# Conservative item-bytes fallback when avg_item_bytes is not in the manifest
+_ITEM_BYTES_FALLBACK = 500.0
 # Fraction of total memory limit to budget for scatter read buffers
 _SCATTER_READ_BUFFER_FRACTION = 0.25
 
@@ -175,36 +177,6 @@ class ScatterParquetIterator:
             )
             yield self._iter_scanner(scanner, col)
 
-    def probe_item_bytes(self) -> int:
-        """Estimate bytes per deserialized item by reading a small probe batch.
-
-        Opens a fresh scanner for the first chunk and measures the pickled size
-        of _SCATTER_PROBE_BATCH_SIZE items. Used by ScatterShard to compute a
-        safe batch_size before initializing the k-way merge.
-        """
-        _, fs_path = url_to_fs(self.path)
-        dataset: pad.FileSystemDataset = pad.dataset(fs_path, format="parquet", filesystem=self.filesystem)
-        col = _ZEPHYR_SHUFFLE_PICKLED_COL if self.is_pickled else _ZEPHYR_SHUFFLE_ITEM_COL
-        scanner = dataset.scanner(
-            columns=[col],
-            filter=(
-                (pc.field(_ZEPHYR_SHUFFLE_SHARD_IDX_COL) == self.shard_idx)
-                & (pc.field(_ZEPHYR_SHUFFLE_CHUNK_IDX_COL) == self.chunk_offset)
-            ),
-            batch_size=_SCATTER_PROBE_BATCH_SIZE,
-            use_threads=False,
-        )
-        try:
-            batch = next(iter(scanner.to_batches()))
-        except StopIteration:
-            return 200  # fallback if no data
-        if batch.num_rows == 0:
-            return 200
-        items = batch.column(col).to_pylist()
-        if self.is_pickled:
-            items = [pickle.loads(b) for b in items]
-        return max(1, len(pickle.dumps(items)) // batch.num_rows)
-
     def _iter_scanner(self, scanner: pad.Scanner, col: str) -> Iterator:
         for batch in scanner.to_batches():
             items = batch.column(col).to_pylist()
@@ -242,22 +214,13 @@ class ScatterShard:
             yield from it.get_chunk_iterators(batch_size=batch_size)
 
     def needs_external_sort(self, memory_limit: int, memory_fraction: float = 0.5) -> bool:
-        """Return True if opening all chunk iterators simultaneously would exceed memory_fraction of memory_limit.
-
-        Uses manifest stats if available; falls back to conservative estimate.
-        """
+        """Return True if opening all chunk iterators simultaneously would exceed memory_fraction of memory_limit."""
         total_chunks = sum(it.chunk_count for it in self.iterators)
         if total_chunks == 0:
             return False
-        item_bytes = self.avg_item_bytes if self.avg_item_bytes > 0 else self._probe_item_bytes_once()
+        item_bytes = self.avg_item_bytes if self.avg_item_bytes > 0 else _ITEM_BYTES_FALLBACK
         estimated = total_chunks * self.max_row_group_rows * item_bytes
         return estimated > memory_limit * memory_fraction
-
-    def _probe_item_bytes_once(self) -> float:
-        probe_it = next((it for it in self.iterators if it.chunk_count > 0), None)
-        if probe_it is None:
-            return 200.0
-        return float(probe_it.probe_item_bytes())
 
     def _compute_batch_size(self) -> int:
         """Compute a safe batch_size that keeps scatter read buffers within budget.
@@ -270,7 +233,7 @@ class ScatterShard:
         total_chunks = sum(it.chunk_count for it in self.iterators)
         if total_chunks == 0:
             return 1024
-        bytes_per_item = self.avg_item_bytes if self.avg_item_bytes > 0 else self._probe_item_bytes_once()
+        bytes_per_item = self.avg_item_bytes if self.avg_item_bytes > 0 else _ITEM_BYTES_FALLBACK
         memory_limit = iris_resource_utils.get_memory_limit()
         buffer_budget = int(memory_limit * _SCATTER_READ_BUFFER_FRACTION)
         safe = max(1, int(buffer_budget // (total_chunks * bytes_per_item)))
@@ -621,7 +584,7 @@ def _write_parquet_scatter(
 
         # Sample avg_item_bytes once on first flush
         if not _sampled_avg and len(enveloped) > 0:
-            sample_size = min(len(enveloped), _SCATTER_PROBE_BATCH_SIZE)
+            sample_size = min(len(enveloped), _SCATTER_SAMPLE_SIZE)
             sample_rows = enveloped[:sample_size]
             if pickled:
                 total_bytes = sum(len(row[_ZEPHYR_SHUFFLE_PICKLED_COL]) for row in sample_rows)
