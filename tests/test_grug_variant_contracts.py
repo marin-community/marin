@@ -263,3 +263,11 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     ]
     for key in required_keys:
         assert key in summary
+
+
+def test_grug_iteration_02_v5p8_uses_expert_mesh_axis_one() -> None:
+    launch_module = importlib.import_module("experiments.grug.moe_scaling_iteration_02.launch")
+
+    assert launch_module._mesh_expert_axis(ResourceConfig.with_tpu("v5p-8")) == 1
+    assert launch_module._mesh_expert_axis(ResourceConfig.with_tpu("v5p-16")) == 1
+    assert launch_module._mesh_expert_axis(ResourceConfig.with_tpu("v5litepod-16")) == 4

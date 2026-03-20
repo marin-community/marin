@@ -13,6 +13,7 @@ __all__ = [
     # config
     "AdamConfig",
     "AdamHConfig",
+    "GrugAttentionMlpLmHeadAdamHConfig",
     "LionConfig",
     "OptimizerConfig",
     # kron
@@ -45,6 +46,7 @@ __all__ = [
 from .adam_mini import MiniConfig, ScaleByMiniState
 from .adopt import AdoptConfig, ScaleByAdoptState
 from .cautious import CautiousConfig
+from .grug_attention_mlp_lmhead_adamh import GrugAttentionMlpLmHeadAdamHConfig
 from .config import AdamConfig, LionConfig, OptimizerConfig
 from .adamh import AdamHConfig
 from .kron import KronConfig
