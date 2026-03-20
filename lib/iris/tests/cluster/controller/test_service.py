@@ -1064,7 +1064,6 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
     )
-    request.resources.device.CopyFrom(cluster_pb2.DeviceConfig(cpu=cluster_pb2.CpuDevice()))
 
     service.launch_job(request, None)
 

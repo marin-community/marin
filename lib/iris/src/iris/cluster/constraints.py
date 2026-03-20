@@ -697,6 +697,57 @@ def constraints_from_resources(resources: cluster_pb2.ResourceSpecProto) -> list
     return constraints
 
 
+# ---------------------------------------------------------------------------
+# Executor heuristic: auto-tag small CPU-only jobs as non-preemptible
+# ---------------------------------------------------------------------------
+
+# Thresholds for the executor heuristic.  A job that stays within all four
+# limits is assumed to be an orchestrator/coordinator and is pinned to
+# non-preemptible workers so it is not killed by spot reclamation.
+_EXECUTOR_MAX_CPU_MILLICORES = 1000  # 1 core
+_EXECUTOR_MAX_MEMORY_BYTES = 4 * 1024**3  # 4 GiB
+_EXECUTOR_MAX_REPLICAS = 1
+
+
+def looks_like_executor(
+    resources: cluster_pb2.ResourceSpecProto,
+    replicas: int,
+) -> bool:
+    """Return True when a job's resource shape matches the executor heuristic.
+
+    Heuristic: no accelerators, single task, CPU ≤ 1 core, RAM ≤ 4 GiB.
+    """
+    has_accelerator = resources.HasField("device") and not resources.device.HasField("cpu")
+    if has_accelerator:
+        return False
+    if replicas > _EXECUTOR_MAX_REPLICAS:
+        return False
+    if resources.cpu_millicores > _EXECUTOR_MAX_CPU_MILLICORES:
+        return False
+    if resources.memory_bytes > _EXECUTOR_MAX_MEMORY_BYTES:
+        return False
+    return True
+
+
+def infer_preemptible_constraint(
+    resources: cluster_pb2.ResourceSpecProto,
+    replicas: int,
+    existing_constraints: Sequence[Constraint],
+) -> Constraint | None:
+    """Return a non-preemptible constraint when the executor heuristic fires.
+
+    Returns None if the user already set an explicit preemptible constraint or
+    the job does not look like an executor.
+    """
+    for c in existing_constraints:
+        if c.key == WellKnownAttribute.PREEMPTIBLE:
+            return None
+
+    if looks_like_executor(resources, replicas):
+        return preemptible_constraint(False)
+    return None
+
+
 def accelerator_type_to_string(accel_type: int) -> str:
     """Convert AcceleratorType proto enum value to a scheduling string."""
     if accel_type == config_pb2.ACCELERATOR_TYPE_UNSPECIFIED:
