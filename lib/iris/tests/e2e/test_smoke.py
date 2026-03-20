@@ -18,11 +18,9 @@ from unittest.mock import patch
 
 import pytest
 from connectrpc.errors import ConnectError
-from iris.cli.cluster import _build_cluster_images, _pin_latest_images
 from iris.client.client import IrisClient
-from iris.cluster.config import IrisConfig, load_config, make_local_config
+from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
-from iris.cluster.config import connect_cluster
 from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.types import (
     Entrypoint,
@@ -127,76 +125,6 @@ def _make_smoke_config() -> config_pb2.IrisClusterConfig:
     return make_local_config(config)
 
 
-def _clear_remote_state(remote_state_dir: str) -> None:
-    """Remove all files under the remote state dir so the controller starts fresh."""
-    import fsspec
-
-    fs, path = fsspec.core.url_to_fs(remote_state_dir)
-    if fs.exists(path):
-        fs.rm(path, recursive=True)
-
-
-def _cloud_smoke_cluster(config_path: str, mode: str, label_prefix: str | None = None):
-    """Manage full cloud cluster lifecycle: stop old → build images → start → test → stop.
-
-    Uses the Iris Python API directly instead of subprocess to avoid stdout
-    parsing and to get proper tunnel management via the platform abstraction.
-    """
-    config = load_config(config_path)
-
-    if label_prefix:
-        config.platform.label_prefix = label_prefix
-        # Isolate snapshot storage so this run doesn't restore stale state
-        # from previous runs that shared the default remote_state_dir.
-        config.storage.remote_state_dir = f"gs://marin-tmp-eu-west4/ttl=7d/iris/state/{label_prefix}"
-
-    logger.info("Pinning and building cluster images...")
-    _pin_latest_images(config)
-    _build_cluster_images(config, verbose=False)
-
-    iris_config = IrisConfig(config)
-    platform = iris_config.platform()
-
-    # Tear down any existing cluster for a clean slate.
-    # GCE controller deletion is synchronous, so the old controller is fully
-    # gone before we clear remote state (no stale checkpoint race).
-    logger.info("Stopping any existing cluster...")
-    try:
-        platform.stop_all(config)
-    except Exception:
-        logger.info("No existing cluster to stop (or stop failed), continuing")
-
-    # Wipe remote state so the new controller doesn't restore a stale checkpoint
-    # (old bundle IDs, finished jobs from a previous run).
-    remote_state_dir = config.storage.remote_state_dir
-    if remote_state_dir:
-        logger.info("Clearing remote state dir: %s", remote_state_dir)
-        _clear_remote_state(remote_state_dir)
-
-    logger.info("Starting fresh controller...")
-    address = platform.start_controller(config)
-    logger.info("Controller started at %s", address)
-
-    try:
-        with platform.tunnel(address) as url:
-            logger.info("Tunnel ready: %s", url)
-            client = IrisClient.remote(url, workspace=IRIS_ROOT)
-            controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-            tc = IrisTestCluster(
-                url=url, client=client, controller_client=controller_client, job_timeout=600.0, is_cloud=True
-            )
-            tc.wait_for_workers(1, timeout=600)
-            yield tc
-            controller_client.close()
-    finally:
-        if mode != "keep":
-            logger.info("Stopping cluster...")
-            try:
-                platform.stop_all(config)
-            except Exception:
-                logger.warning("Cluster stop failed during teardown", exc_info=True)
-
-
 # ---------------------------------------------------------------------------
 # Smoke-test fixtures (module-scoped so all smoke tests share one cluster)
 # ---------------------------------------------------------------------------
@@ -206,20 +134,10 @@ def _cloud_smoke_cluster(config_path: str, mode: str, label_prefix: str | None =
 def smoke_cluster(request):
     """Module-scoped cluster shared across all smoke tests.
 
-    Local mode: boots in-process cluster with CPU + TPU + multi-region groups.
-    Cloud mode: connects to existing cluster via --iris-controller-url or
-    starts one via CLI using --iris-config.
+    Cloud mode: connect to existing cluster via --iris-controller-url.
+    Local mode: boot in-process cluster with CPU + TPU + multi-region groups.
     """
     controller_url = request.config.getoption("--iris-controller-url")
-    config_path = request.config.getoption("--iris-config")
-    mode = request.config.getoption("--iris-mode")
-    label_prefix = request.config.getoption("--iris-label-prefix")
-
-    is_cloud = mode != "local"
-    timeout = 600.0 if is_cloud else 60.0
-
-    if is_cloud and not controller_url:
-        assert label_prefix, "--iris-label-prefix is required in cloud mode to avoid stomping on production clusters"
 
     if controller_url:
         client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
@@ -228,17 +146,12 @@ def smoke_cluster(request):
             url=controller_url,
             client=client,
             controller_client=controller_client,
-            job_timeout=timeout,
-            is_cloud=is_cloud,
+            job_timeout=600.0,
+            is_cloud=True,
         )
-        if is_cloud:
-            tc.wait_for_workers(1, timeout=timeout)
+        tc.wait_for_workers(1, timeout=600)
         yield tc
         controller_client.close()
-        return
-
-    if config_path and mode != "local":
-        yield from _cloud_smoke_cluster(config_path, mode, label_prefix=label_prefix)
         return
 
     config = _make_smoke_config()

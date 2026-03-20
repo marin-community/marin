@@ -1158,3 +1158,12 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
         "    default_image: ...\n"
         "to your cluster config."
     )
+
+
+def clear_remote_state(remote_state_dir: str) -> None:
+    """Remove all files under the remote state dir so the controller starts fresh."""
+    import fsspec
+
+    fs, path = fsspec.core.url_to_fs(remote_state_dir)
+    if fs.exists(path):
+        fs.rm(path, recursive=True)

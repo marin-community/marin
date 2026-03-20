@@ -9,6 +9,8 @@ controller VM management, VM operations via controller RPC, and the dashboard tu
 
 import signal
 import threading
+import time
+from pathlib import Path
 
 import click
 from connectrpc.errors import ConnectError
@@ -266,6 +268,82 @@ def cluster_start(ctx, local: bool):
     except Exception as e:
         click.echo(f"Failed to start controller: {e}", err=True)
         raise SystemExit(1) from e
+
+
+@cluster.command("start-smoke")
+@click.option("--label-prefix", required=True, help="Label prefix to isolate GCP resources")
+@click.option("--url-file", required=True, type=click.Path(), help="Write tunnel URL to this file when ready")
+@click.option("--wait-for-workers", "min_workers", type=int, default=1, help="Min healthy workers before writing URL")
+@click.option("--worker-timeout", type=int, default=600, help="Seconds to wait for workers")
+@click.option("--clear-state/--no-clear-state", default=True, help="Wipe remote state before starting")
+@click.pass_context
+def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout, clear_state):
+    """Boot a smoke-test cluster, open tunnel, write URL to file, and block until killed.
+
+    Designed for CI: run in background, poll for url_file, then pass URL to pytest.
+    SIGINT/SIGTERM cleanly close the tunnel.
+    """
+    config = ctx.obj.get("config")
+    if not config:
+        raise click.ClickException("--config is required for start-smoke")
+
+    config.platform.label_prefix = label_prefix
+    config.storage.remote_state_dir = f"gs://marin-tmp-eu-west4/ttl=7d/iris/state/{label_prefix}"
+
+    _pin_latest_images(config)
+    verbose = ctx.obj.get("verbose", False)
+    _build_cluster_images(config, verbose=verbose)
+
+    iris_config = IrisConfig(config)
+    platform = iris_config.platform()
+
+    try:
+        platform.stop_all(config)
+    except Exception:
+        click.echo("No existing cluster to stop, continuing")
+
+    if clear_state:
+        from iris.cluster.config import clear_remote_state
+
+        remote_state_dir = config.storage.remote_state_dir
+        if remote_state_dir:
+            click.echo(f"Clearing remote state: {remote_state_dir}")
+            clear_remote_state(remote_state_dir)
+
+    click.echo("Starting controller...")
+    address = platform.start_controller(config)
+    click.echo(f"Controller at {address}")
+
+    stop_event = threading.Event()
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGINT, lambda *_: stop_event.set())
+        signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
+
+    try:
+        with platform.tunnel(address) as url:
+            click.echo(f"Tunnel ready: {url}")
+
+            client = cluster_connect.ControllerServiceClientSync(url, timeout_ms=30000)
+            deadline = time.monotonic() + worker_timeout
+            healthy_count = 0
+            while time.monotonic() < deadline:
+                workers = client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
+                healthy = [w for w in workers if w.healthy]
+                healthy_count = len(healthy)
+                if healthy_count >= min_workers:
+                    break
+                time.sleep(2)
+            else:
+                raise click.ClickException(
+                    f"Only {healthy_count} of {min_workers} workers healthy after {worker_timeout}s"
+                )
+
+            click.echo(f"{healthy_count} workers ready, writing URL to {url_file}")
+            Path(url_file).write_text(url)
+
+            stop_event.wait()
+    finally:
+        click.echo("Shutting down (tunnel closed)")
 
 
 @cluster.command("stop")
