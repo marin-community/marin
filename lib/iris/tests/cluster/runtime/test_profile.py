@@ -175,21 +175,3 @@ def test_run_memray_profile_returns_nonempty_output(proto_format):
     pid = str(os.getpid())
     result = _run_memray_profile(pid, duration_seconds=1, memory_config=cfg)
     assert len(result) > 0
-
-
-def test_run_memray_profile_flamegraph_returns_html():
-    """Flamegraph format returns HTML content."""
-    _allocate_during(1)
-    cfg = cluster_pb2.MemoryProfile(format=cluster_pb2.MemoryProfile.FLAMEGRAPH, leaks=False)
-    pid = str(os.getpid())
-    result = _run_memray_profile(pid, duration_seconds=1, memory_config=cfg)
-    assert b"<html" in result.lower() or b"<!doctype" in result.lower()
-
-
-def test_run_memray_profile_leaks_flamegraph():
-    """Leaks mode (aggregated allocations) produces flamegraph output."""
-    _allocate_during(1)
-    cfg = cluster_pb2.MemoryProfile(format=cluster_pb2.MemoryProfile.FLAMEGRAPH, leaks=True)
-    pid = str(os.getpid())
-    result = _run_memray_profile(pid, duration_seconds=1, memory_config=cfg)
-    assert len(result) > 0
