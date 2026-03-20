@@ -14,9 +14,12 @@ from iris.cluster.constraints import (
     PlacementRequirements,
     WellKnownAttribute,
     evaluate_constraint,
+    infer_preemptible_constraint,
     is_cpu_device_type_constraint,
+    looks_like_executor,
     merge_constraints,
     extract_placement_requirements,
+    preemptible_constraint,
     routing_constraints,
 )
 from iris.rpc import cluster_pb2
@@ -159,3 +162,78 @@ def test_inherited_keys_strips_device_and_preemptible():
     assert len(inherited) == 2
     keys = {c.key for c in inherited}
     assert keys == {WellKnownAttribute.REGION, WellKnownAttribute.ZONE}
+
+
+# --- looks_like_executor heuristic ---
+
+
+def _make_resources(
+    cpu_millicores: int = 500,
+    memory_bytes: int = 1 * 1024**3,
+    device: str | None = None,
+) -> cluster_pb2.ResourceSpecProto:
+    r = cluster_pb2.ResourceSpecProto(cpu_millicores=cpu_millicores, memory_bytes=memory_bytes)
+    if device == "cpu":
+        r.device.cpu.variant = "cpu"
+    elif device == "tpu":
+        r.device.tpu.variant = "v5litepod-16"
+    elif device == "gpu":
+        r.device.gpu.variant = "h100"
+        r.device.gpu.count = 8
+    return r
+
+
+def test_looks_like_executor_small_cpu_job():
+    """0.5 CPU, 1 GiB RAM, no device → executor."""
+    assert looks_like_executor(_make_resources(), replicas=1)
+
+
+def test_looks_like_executor_cpu_device_explicit():
+    """Explicit CpuDevice still counts as no accelerator."""
+    assert looks_like_executor(_make_resources(device="cpu"), replicas=1)
+
+
+def test_looks_like_executor_false_with_tpu():
+    assert not looks_like_executor(_make_resources(device="tpu"), replicas=1)
+
+
+def test_looks_like_executor_false_with_gpu():
+    assert not looks_like_executor(_make_resources(device="gpu"), replicas=1)
+
+
+def test_looks_like_executor_one_full_cpu():
+    """A job requesting exactly 1 CPU core is still an executor."""
+    assert looks_like_executor(_make_resources(cpu_millicores=1000), replicas=1)
+
+
+def test_looks_like_executor_false_high_cpu():
+    assert not looks_like_executor(_make_resources(cpu_millicores=2000), replicas=1)
+
+
+def test_looks_like_executor_false_high_memory():
+    assert not looks_like_executor(_make_resources(memory_bytes=5 * 1024**3), replicas=1)
+
+
+def test_looks_like_executor_false_multiple_replicas():
+    assert not looks_like_executor(_make_resources(), replicas=2)
+
+
+def test_infer_preemptible_constraint_adds_non_preemptible():
+    resources = _make_resources()
+    result = infer_preemptible_constraint(resources, replicas=1, existing_constraints=[])
+    assert result is not None
+    assert result.key == WellKnownAttribute.PREEMPTIBLE
+    assert result.value == "false"
+
+
+def test_infer_preemptible_constraint_noop_when_explicit():
+    resources = _make_resources()
+    existing = [preemptible_constraint(True)]
+    result = infer_preemptible_constraint(resources, replicas=1, existing_constraints=existing)
+    assert result is None
+
+
+def test_infer_preemptible_constraint_noop_for_gpu():
+    resources = _make_resources(device="gpu")
+    result = infer_preemptible_constraint(resources, replicas=1, existing_constraints=[])
+    assert result is None
