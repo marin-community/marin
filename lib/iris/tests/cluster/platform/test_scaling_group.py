@@ -168,7 +168,13 @@ def _tracked_scale_up(group: ScalingGroup, timestamp: Timestamp | None = None, *
     no longer tracks state internally.
     """
     timestamp = timestamp or Timestamp.from_ms(1000000)
+<<<<<<< Updated upstream
     group.begin_scale_up(timestamp=timestamp)
+||||||| constructed merge base
+    placeholder_id = group.begin_scale_up(timestamp)
+=======
+    placeholder_id = group.begin_scale_up()
+>>>>>>> Stashed changes
     handle = group.scale_up(timestamp=timestamp, **kwargs)
     group.complete_scale_up(handle, timestamp)
     return handle
@@ -887,7 +893,13 @@ class TestScalingGroupAvailability:
         group = ScalingGroup(unbounded_config, platform, quota_timeout=Duration.from_ms(60_000))
 
         ts = Timestamp.from_ms(1000)
+<<<<<<< Updated upstream
         group.begin_scale_up(timestamp=ts)
+||||||| constructed merge base
+        placeholder_id = group.begin_scale_up(ts)
+=======
+        placeholder_id = group.begin_scale_up()
+>>>>>>> Stashed changes
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts)
         group.cancel_scale_up()
@@ -913,7 +925,13 @@ class TestScalingGroupAvailability:
         group = ScalingGroup(unbounded_config, platform, quota_timeout=Duration.from_ms(300_000))
 
         ts1 = Timestamp.from_ms(1000)
+<<<<<<< Updated upstream
         group.begin_scale_up(timestamp=ts1)
+||||||| constructed merge base
+        p1 = group.begin_scale_up(ts1)
+=======
+        p1 = group.begin_scale_up()
+>>>>>>> Stashed changes
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts1)
         group.cancel_scale_up()
@@ -922,7 +940,13 @@ class TestScalingGroupAvailability:
 
         # Second attempt succeeds via complete_scale_up, which clears quota state
         ts2 = Timestamp.from_ms(3000)
+<<<<<<< Updated upstream
         group.begin_scale_up(timestamp=ts2)
+||||||| constructed merge base
+        p2 = group.begin_scale_up(ts2)
+=======
+        p2 = group.begin_scale_up()
+>>>>>>> Stashed changes
         handle = group.scale_up(timestamp=ts2)
         group.complete_scale_up(handle, ts2)
         assert group.can_accept_demand(timestamp=Timestamp.from_ms(4000))
@@ -941,7 +965,13 @@ class TestScalingGroupAvailability:
         group.record_failure(timestamp=ts)
 
         # Then trigger quota exceeded via failed scale-up
+<<<<<<< Updated upstream
         group.begin_scale_up(timestamp=ts)
+||||||| constructed merge base
+        p = group.begin_scale_up(ts)
+=======
+        p = group.begin_scale_up()
+>>>>>>> Stashed changes
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts)
         group.cancel_scale_up()
@@ -1128,7 +1158,13 @@ class TestCanScaleUpQuotaExhausted:
         )
 
         ts = Timestamp.from_ms(1000000)
+<<<<<<< Updated upstream
         group.begin_scale_up(timestamp=ts)
+||||||| constructed merge base
+        p = group.begin_scale_up(ts)
+=======
+        p = group.begin_scale_up()
+>>>>>>> Stashed changes
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts)
         group.cancel_scale_up()

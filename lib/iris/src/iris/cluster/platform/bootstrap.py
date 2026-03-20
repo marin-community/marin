@@ -10,15 +10,32 @@ is performed by the worker environment probe at runtime.
 
 from __future__ import annotations
 
+<<<<<<< Updated upstream
 import json
 import logging
 import re
+||||||| constructed merge base
+import shlex
+=======
+import logging
+import shlex
+import time
+>>>>>>> Stashed changes
 
 import yaml
 from google.protobuf.json_format import MessageToDict
 
+<<<<<<< Updated upstream
+||||||| constructed merge base
+from iris.cluster.config import config_to_dict
+from iris.cluster.platform.base import PlatformError
+=======
+from iris.cluster.platform.base import PlatformError, SliceHandle
+from iris.cluster.types import get_tpu_topology
+>>>>>>> Stashed changes
 from iris.rpc import config_pb2
 
+<<<<<<< Updated upstream
 logger = logging.getLogger(__name__)
 
 
@@ -30,6 +47,17 @@ _ZONE_PREFIX_TO_MULTI_REGION = {
     "us": "us",
     "europe": "europe",
 }
+||||||| constructed merge base
+# ============================================================================
+# Worker Bootstrap
+# ============================================================================
+=======
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# Worker Bootstrap
+# ============================================================================
+>>>>>>> Stashed changes
 
 _UNSUPPORTED_ZONE_PREFIXES = {"asia", "me"}
 
@@ -62,23 +90,146 @@ def rewrite_ghcr_to_ar_remote(
     ghcr.io/marin-community/iris-worker:v1
     → us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-worker:v1
 
+<<<<<<< Updated upstream
     Non-GHCR images pass through unchanged.
     """
     if not image_tag.startswith("ghcr.io/"):
         return image_tag
     path = image_tag.removeprefix("ghcr.io/")
     return f"{multi_region}-docker.pkg.dev/{project}/{mirror_repo}/{path}"
+||||||| constructed merge base
+    def bootstrap_slice(self, handle) -> dict[str, str]:
+        """Bootstrap all VMs in a newly created slice.
+=======
+    def bootstrap_slice(self, handle: SliceHandle) -> dict[str, str]:
+        """Bootstrap all VMs in a newly created slice.
+>>>>>>> Stashed changes
 
 
 def render_template(template: str, **variables: str | int) -> str:
     """Render a template string with {{ variable }} placeholders.
 
+<<<<<<< Updated upstream
     Uses ``{{ variable }}`` syntax (double braces with exactly one space) to
     avoid conflicts with shell ``${var}`` and Docker ``{{.Field}}`` syntax.
+||||||| constructed merge base
+        Raises:
+            PlatformError: If any VM has no internal address after becoming reachable.
+        """
+        logs: dict[str, str] = {}
+        for vm in handle.list_vms():
+            vm.wait_for_connection(timeout=Duration.from_seconds(300))
+            if not vm.internal_address:
+                raise PlatformError(
+                    f"VM {vm.vm_id} in slice {handle.slice_id} has no internal address. "
+                    f"The slice may still be provisioning network endpoints."
+                )
+            script = self._build_script(vm.internal_address)
+            vm.bootstrap(script)
+            logs[vm.vm_id] = vm.bootstrap_log
+        return logs
+=======
+        Raises:
+            PlatformError: If any VM has no internal address after becoming reachable,
+                or if wait_for_connection times out, or if not all expected VMs are present.
+        """
+        # Wait for all expected VMs to be present before bootstrapping.
+        # TPU slices can return partial VM lists during provisioning (e.g., 3 of 4 VMs).
+        self._wait_for_all_vms(handle)
 
+        logs: dict[str, str] = {}
+        for vm in handle.list_vms():
+            if not vm.wait_for_connection(timeout=Duration.from_seconds(300)):
+                raise PlatformError(
+                    f"VM {vm.vm_id} in slice {handle.slice_id} failed to become reachable "
+                    f"within timeout. The VM may be stuck in a boot loop or networking may be misconfigured."
+                )
+            if not vm.internal_address:
+                raise PlatformError(
+                    f"VM {vm.vm_id} in slice {handle.slice_id} has no internal address. "
+                    f"The slice may still be provisioning network endpoints."
+                )
+            script = self._build_script(vm.internal_address)
+            vm.bootstrap(script)
+            logs[vm.vm_id] = vm.bootstrap_log
+        return logs
+>>>>>>> Stashed changes
+
+<<<<<<< Updated upstream
     Args:
         template: Template string with ``{{ variable }}`` placeholders.
         **variables: Variable values to substitute.
+||||||| constructed merge base
+    def _build_script(self, vm_address: str) -> str:
+        """Build the full bootstrap script for a single VM."""
+        return build_worker_bootstrap_script(self._cluster_config, vm_address)
+=======
+    def _wait_for_all_vms(self, handle: SliceHandle) -> None:
+        """Wait for all expected VMs to be present in the slice.
+
+        During TPU provisioning, list_vms() may return partial results as network
+        endpoints are gradually created. This polls until the expected VM count
+        (from TPU topology) is reached or times out.
+
+        Raises:
+            PlatformError: If the expected VM count is not reached within timeout.
+        """
+        # Derive expected VM count from accelerator_variant label if present.
+        # For slices created by the autoscaler, this label is always set.
+        # For manually created slices or other platforms (manual, local), skip the check.
+        accelerator_variant = handle.labels.get("iris-accelerator-variant", "")
+        if not accelerator_variant:
+            logger.debug(
+                "Slice %s has no iris-accelerator-variant label; skipping VM count check",
+                handle.slice_id,
+            )
+            return
+
+        try:
+            topology = get_tpu_topology(accelerator_variant)
+            expected_vm_count = topology.vm_count
+        except ValueError:
+            logger.warning(
+                "Unknown accelerator variant %s for slice %s; skipping VM count check",
+                accelerator_variant,
+                handle.slice_id,
+            )
+            return
+
+        # Poll for up to 60 seconds
+        timeout = 60.0
+        poll_interval = 2.0
+        start = time.time()
+
+        while time.time() - start < timeout:
+            vms = handle.list_vms()
+            if len(vms) >= expected_vm_count:
+                logger.info(
+                    "Slice %s has all %d expected VMs ready for bootstrap",
+                    handle.slice_id,
+                    expected_vm_count,
+                )
+                return
+            logger.debug(
+                "Slice %s has %d/%d VMs ready; waiting for remaining VMs...",
+                handle.slice_id,
+                len(vms),
+                expected_vm_count,
+            )
+            time.sleep(poll_interval)
+
+        # Final check after timeout
+        vms = handle.list_vms()
+        if len(vms) < expected_vm_count:
+            raise PlatformError(
+                f"Slice {handle.slice_id} has only {len(vms)}/{expected_vm_count} VMs "
+                f"ready after {timeout}s. The slice may be stuck in provisioning."
+            )
+
+    def _build_script(self, vm_address: str) -> str:
+        """Build the full bootstrap script for a single VM."""
+        return build_worker_bootstrap_script(self._cluster_config, vm_address)
+>>>>>>> Stashed changes
 
     Returns:
         Rendered template string.

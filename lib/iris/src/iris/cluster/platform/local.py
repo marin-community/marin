@@ -165,3 +165,457 @@ class LocalSliceHandle:
         self._terminated = True
         for worker in self._workers:
             worker.stop()
+<<<<<<< Updated upstream
+||||||| constructed merge base
+
+    def status(self) -> SliceStatus:
+        if self._terminated:
+            return SliceStatus(state=CloudSliceState.DELETING, vm_count=0)
+        return SliceStatus(state=CloudSliceState.READY, vm_count=len(self._vm_ids))
+
+
+# ============================================================================
+# LocalPlatform
+# ============================================================================
+
+
+class LocalPlatform:
+    """Platform for local testing — workers run as in-process threads.
+
+    Implements the full Platform interface. "VMs" are threads, "slices"
+    are groups of worker threads, and "standalone VMs" (controller) are
+    in-process server instances.
+
+    When constructed with worker-spawning params (controller_address, cache_path,
+    fake_bundle, port_allocator), create_slice() spawns real Worker threads.
+    Without these params, create_slice() creates in-memory stubs only.
+
+    shutdown() stops all worker threads via the ThreadContainer. This is
+    critical for clean test teardown.
+    """
+
+    def __init__(
+        self,
+        label_prefix: str,
+        threads: ThreadContainer | None = None,
+        controller_address: str | None = None,
+        cache_path: Path | None = None,
+        fake_bundle: Path | None = None,
+        port_allocator: PortAllocator | None = None,
+    ):
+        self._label_prefix = label_prefix
+        self._threads = threads or ThreadContainer(name="local-platform")
+        self._slices: dict[str, LocalSliceHandle] = {}
+        self._vms: dict[str, _LocalStandaloneVmHandle] = {}
+        self._controller_address = controller_address
+        self._cache_path = cache_path
+        self._fake_bundle = fake_bundle
+        self._port_allocator = port_allocator
+
+    def create_vm(self, config: config_pb2.VmConfig) -> _LocalStandaloneVmHandle:
+        """Create an in-process "VM". Used by start_controller() for local mode."""
+        handle = _LocalStandaloneVmHandle(
+            _vm_id=config.name,
+            _internal_address="localhost",
+            _labels=dict(config.labels),
+            _metadata=dict(config.metadata),
+        )
+        self._vms[config.name] = handle
+        return handle
+
+    def create_slice(self, config: config_pb2.SliceConfig) -> LocalSliceHandle:
+        """Create a local slice, optionally spawning real Worker instances.
+
+        When controller_address was provided at construction, spawns real Workers
+        that register with the controller (E2E mode). Otherwise creates in-memory
+        stubs (unit test mode).
+        """
+        slice_id = f"{config.name_prefix}-{Timestamp.now().epoch_ms()}"
+        slice_size = config.slice_size or 1
+
+        if self._controller_address is not None:
+            return self._create_slice_with_workers(slice_id, slice_size, config)
+
+        vm_ids = [f"{slice_id}-worker-{i}" for i in range(slice_size)]
+        addresses = [f"localhost:{9000 + i}" for i in range(slice_size)]
+
+        handle = LocalSliceHandle(
+            _slice_id=slice_id,
+            _vm_ids=vm_ids,
+            _addresses=addresses,
+            _labels=dict(config.labels),
+            _created_at=Timestamp.now(),
+            _label_prefix=self._label_prefix,
+        )
+        self._slices[slice_id] = handle
+        return handle
+
+    def _create_slice_with_workers(
+        self,
+        slice_id: str,
+        slice_size: int,
+        config: config_pb2.SliceConfig,
+    ) -> LocalSliceHandle:
+        """Spawn real Worker threads for a slice."""
+        from iris.cluster.runtime.process import ProcessRuntime
+        from iris.cluster.types import get_tpu_topology, tpu_device
+        from iris.cluster.worker.worker import Worker, WorkerConfig
+
+        workers: list[Worker] = []
+        vm_ids: list[str] = []
+        addresses: list[str] = []
+
+        # Determine worker count from TPU topology if applicable
+        worker_count = slice_size
+        if config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU and config.accelerator_variant:
+            try:
+                topo = get_tpu_topology(config.accelerator_variant)
+                worker_count = topo.vm_count
+            except ValueError:
+                pass
+
+        for tpu_worker_id in range(worker_count):
+            bundle_provider = _LocalBundleProvider(self._fake_bundle)
+            container_runtime = ProcessRuntime()
+            worker_id = f"worker-{slice_id}-{tpu_worker_id}-{uuid.uuid4().hex[:8]}"
+            worker_port = find_free_port()
+
+            attributes: dict[str, str | int | float] = {}
+            device = None
+            if config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU and config.accelerator_variant:
+                attributes["tpu-name"] = slice_id
+                attributes["tpu-worker-id"] = tpu_worker_id
+                attributes["tpu-topology"] = config.accelerator_variant
+                topo = get_tpu_topology(config.accelerator_variant)
+                device = tpu_device(config.accelerator_variant, count=topo.chips_per_vm)
+
+            environment_provider = LocalEnvironmentProvider(
+                cpu=1000,
+                memory_gb=1000,
+                attributes=attributes,
+                device=device,
+            )
+
+            worker_config = WorkerConfig(
+                host="127.0.0.1",
+                port=worker_port,
+                cache_dir=self._cache_path,
+                controller_address=self._controller_address,
+                worker_id=worker_id,
+                poll_interval=Duration.from_seconds(0.1),
+            )
+            worker_threads = self._threads.create_child(f"worker-{worker_id}")
+            worker = Worker(
+                worker_config,
+                bundle_provider=bundle_provider,
+                container_runtime=container_runtime,
+                environment_provider=environment_provider,
+                port_allocator=self._port_allocator,
+                threads=worker_threads,
+            )
+            worker.start()
+            workers.append(worker)
+            vm_ids.append(worker_id)
+            addresses.append(f"127.0.0.1:{worker_port}")
+
+        logger.info(
+            "LocalPlatform created slice %s with %d workers",
+            slice_id,
+            len(workers),
+        )
+
+        handle = LocalSliceHandle(
+            _slice_id=slice_id,
+            _vm_ids=vm_ids,
+            _addresses=addresses,
+            _labels=dict(config.labels),
+            _created_at=Timestamp.now(),
+            _label_prefix=self._label_prefix,
+            _workers=workers,
+        )
+        self._slices[slice_id] = handle
+        return handle
+
+    def list_slices(
+        self,
+        zones: list[str],
+        labels: dict[str, str] | None = None,
+    ) -> list[LocalSliceHandle]:
+        """List all local slices, optionally filtered by labels.
+
+        The zones parameter is accepted for interface compatibility but ignored —
+        all local slices report zone="local".
+        """
+        results = list(self._slices.values())
+        if labels:
+            results = [s for s in results if all(s.labels.get(k) == v for k, v in labels.items())]
+        return results
+
+    def list_vms(
+        self,
+        zones: list[str],
+        labels: dict[str, str] | None = None,
+    ) -> list[_LocalStandaloneVmHandle]:
+        """List all local standalone VMs, optionally filtered by labels.
+
+        The zones parameter is accepted for interface compatibility but ignored —
+        local VMs have no zone concept.
+        """
+        results = list(self._vms.values())
+        if labels:
+            results = [v for v in results if all(v.labels.get(k) == val for k, val in labels.items())]
+        return results
+
+    def tunnel(
+        self,
+        address: str,
+        local_port: int | None = None,
+    ) -> AbstractContextManager[str]:
+        return nullcontext(address)
+
+    def shutdown(self) -> None:
+        """Stop all worker threads. Critical for clean test teardown."""
+        self._threads.stop(timeout=Duration.from_seconds(5.0))
+        self._slices.clear()
+        self._vms.clear()
+
+    def discover_controller(self, controller_config: config_pb2.ControllerVmConfig) -> str:
+        """Return controller address. Uses configured address or localhost."""
+        if self._controller_address:
+            return self._controller_address
+        port = controller_config.local.port or 10000
+        return f"localhost:{port}"
+
+    @property
+    def threads(self) -> ThreadContainer:
+        """Expose the ThreadContainer for callers that need to spawn worker threads."""
+        return self._threads
+=======
+
+    def status(self) -> SliceStatus:
+        if self._terminated:
+            return SliceStatus(state=CloudSliceState.DELETING, vm_count=0)
+        return SliceStatus(state=CloudSliceState.READY, vm_count=len(self._vm_ids))
+
+
+# ============================================================================
+# LocalPlatform
+# ============================================================================
+
+
+class LocalPlatform:
+    """Platform for local testing — workers run as in-process threads.
+
+    Implements the full Platform interface. "VMs" are threads, "slices"
+    are groups of worker threads, and "standalone VMs" (controller) are
+    in-process server instances.
+
+    When constructed with worker-spawning params (controller_address, cache_path,
+    fake_bundle, port_allocator), create_slice() spawns real Worker threads.
+    Without these params, create_slice() creates in-memory stubs only.
+
+    shutdown() stops all worker threads via the ThreadContainer. This is
+    critical for clean test teardown.
+    """
+
+    def __init__(
+        self,
+        label_prefix: str,
+        threads: ThreadContainer | None = None,
+        controller_address: str | None = None,
+        cache_path: Path | None = None,
+        fake_bundle: Path | None = None,
+        port_allocator: PortAllocator | None = None,
+    ):
+        self._label_prefix = label_prefix
+        self._threads = threads or ThreadContainer(name="local-platform")
+        self._slices: dict[str, LocalSliceHandle] = {}
+        self._vms: dict[str, _LocalStandaloneVmHandle] = {}
+        self._controller_address = controller_address
+        self._cache_path = cache_path
+        self._fake_bundle = fake_bundle
+        self._port_allocator = port_allocator
+
+    def create_vm(self, config: config_pb2.VmConfig) -> _LocalStandaloneVmHandle:
+        """Create an in-process "VM". Used by start_controller() for local mode."""
+        handle = _LocalStandaloneVmHandle(
+            _vm_id=config.name,
+            _internal_address="localhost",
+            _labels=dict(config.labels),
+            _metadata=dict(config.metadata),
+        )
+        self._vms[config.name] = handle
+        return handle
+
+    def create_slice(self, config: config_pb2.SliceConfig) -> LocalSliceHandle:
+        """Create a local slice, optionally spawning real Worker instances.
+
+        When controller_address was provided at construction, spawns real Workers
+        that register with the controller (E2E mode). Otherwise creates in-memory
+        stubs (unit test mode).
+        """
+        slice_id = f"{config.name_prefix}-{Timestamp.now().epoch_ms()}"
+        slice_size = config.slice_size or 1
+
+        if self._controller_address is not None:
+            return self._create_slice_with_workers(slice_id, slice_size, config)
+
+        vm_ids = [f"{slice_id}-worker-{i}" for i in range(slice_size)]
+        addresses = [f"localhost:{9000 + i}" for i in range(slice_size)]
+
+        handle = LocalSliceHandle(
+            _slice_id=slice_id,
+            _vm_ids=vm_ids,
+            _addresses=addresses,
+            _labels=dict(config.labels),
+            _created_at=Timestamp.now(),
+            _label_prefix=self._label_prefix,
+        )
+        self._slices[slice_id] = handle
+        return handle
+
+    def _create_slice_with_workers(
+        self,
+        slice_id: str,
+        slice_size: int,
+        config: config_pb2.SliceConfig,
+    ) -> LocalSliceHandle:
+        """Spawn real Worker threads for a slice."""
+        from iris.cluster.runtime.process import ProcessRuntime
+        from iris.cluster.types import get_tpu_topology, tpu_device
+        from iris.cluster.worker.worker import Worker, WorkerConfig
+
+        workers: list[Worker] = []
+        vm_ids: list[str] = []
+        addresses: list[str] = []
+
+        # Determine worker count from TPU topology if applicable
+        worker_count = slice_size
+        if config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU and config.accelerator_variant:
+            try:
+                topo = get_tpu_topology(config.accelerator_variant)
+                worker_count = topo.vm_count
+            except ValueError:
+                logger.debug(
+                    "Unknown topology %s, falling back to slice_size=%d",
+                    config.accelerator_variant,
+                    worker_count,
+                )
+
+        for tpu_worker_id in range(worker_count):
+            bundle_provider = _LocalBundleProvider(self._fake_bundle)
+            container_runtime = ProcessRuntime()
+            worker_id = f"worker-{slice_id}-{tpu_worker_id}-{uuid.uuid4().hex[:8]}"
+            worker_port = find_free_port()
+
+            attributes: dict[str, str | int | float] = {}
+            device = None
+            if config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU and config.accelerator_variant:
+                attributes["tpu-name"] = slice_id
+                attributes["tpu-worker-id"] = tpu_worker_id
+                attributes["tpu-topology"] = config.accelerator_variant
+                topo = get_tpu_topology(config.accelerator_variant)
+                device = tpu_device(config.accelerator_variant, count=topo.chips_per_vm)
+
+            environment_provider = LocalEnvironmentProvider(
+                cpu=1000,
+                memory_gb=1000,
+                attributes=attributes,
+                device=device,
+            )
+
+            worker_config = WorkerConfig(
+                host="127.0.0.1",
+                port=worker_port,
+                cache_dir=self._cache_path,
+                controller_address=self._controller_address,
+                worker_id=worker_id,
+                poll_interval=Duration.from_seconds(0.1),
+            )
+            worker_threads = self._threads.create_child(f"worker-{worker_id}")
+            worker = Worker(
+                worker_config,
+                bundle_provider=bundle_provider,
+                container_runtime=container_runtime,
+                environment_provider=environment_provider,
+                port_allocator=self._port_allocator,
+                threads=worker_threads,
+            )
+            worker.start()
+            workers.append(worker)
+            vm_ids.append(worker_id)
+            addresses.append(f"127.0.0.1:{worker_port}")
+
+        logger.info(
+            "LocalPlatform created slice %s with %d workers",
+            slice_id,
+            len(workers),
+        )
+
+        handle = LocalSliceHandle(
+            _slice_id=slice_id,
+            _vm_ids=vm_ids,
+            _addresses=addresses,
+            _labels=dict(config.labels),
+            _created_at=Timestamp.now(),
+            _label_prefix=self._label_prefix,
+            _workers=workers,
+        )
+        self._slices[slice_id] = handle
+        return handle
+
+    def list_slices(
+        self,
+        zones: list[str],
+        labels: dict[str, str] | None = None,
+    ) -> list[LocalSliceHandle]:
+        """List all local slices, optionally filtered by labels.
+
+        The zones parameter is accepted for interface compatibility but ignored —
+        all local slices report zone="local".
+        """
+        results = list(self._slices.values())
+        if labels:
+            results = [s for s in results if all(s.labels.get(k) == v for k, v in labels.items())]
+        return results
+
+    def list_vms(
+        self,
+        zones: list[str],
+        labels: dict[str, str] | None = None,
+    ) -> list[_LocalStandaloneVmHandle]:
+        """List all local standalone VMs, optionally filtered by labels.
+
+        The zones parameter is accepted for interface compatibility but ignored —
+        local VMs have no zone concept.
+        """
+        results = list(self._vms.values())
+        if labels:
+            results = [v for v in results if all(v.labels.get(k) == val for k, val in labels.items())]
+        return results
+
+    def tunnel(
+        self,
+        address: str,
+        local_port: int | None = None,
+    ) -> AbstractContextManager[str]:
+        return nullcontext(address)
+
+    def shutdown(self) -> None:
+        """Stop all worker threads. Critical for clean test teardown."""
+        self._threads.stop(timeout=Duration.from_seconds(5.0))
+        self._slices.clear()
+        self._vms.clear()
+
+    def discover_controller(self, controller_config: config_pb2.ControllerVmConfig) -> str:
+        """Return controller address. Uses configured address or localhost."""
+        if self._controller_address:
+            return self._controller_address
+        port = controller_config.local.port or 10000
+        return f"localhost:{port}"
+
+    @property
+    def threads(self) -> ThreadContainer:
+        """Expose the ThreadContainer for callers that need to spawn worker threads."""
+        return self._threads
+>>>>>>> Stashed changes

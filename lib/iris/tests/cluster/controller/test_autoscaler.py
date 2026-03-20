@@ -414,7 +414,13 @@ class TestAutoscalerScaleUp:
         platform = make_mock_platform()
         group = ScalingGroup(scale_group_config, platform, scale_up_cooldown=Duration.from_ms(3600_000))
         ts = Timestamp.now()
+<<<<<<< Updated upstream
         group.begin_scale_up()
+||||||| constructed merge base
+        p = group.begin_scale_up(ts)
+=======
+        p = group.begin_scale_up()
+>>>>>>> Stashed changes
         handle = group.scale_up(timestamp=ts)
         group.complete_scale_up(handle, ts)
         autoscaler = make_autoscaler({"test-group": group})
@@ -1792,7 +1798,13 @@ class TestAutoscalerQuotaHandling:
         )
 
         ts = Timestamp.from_ms(1000)
+<<<<<<< Updated upstream
         group.begin_scale_up(timestamp=ts)
+||||||| constructed merge base
+        p = group.begin_scale_up(ts)
+=======
+        p = group.begin_scale_up()
+>>>>>>> Stashed changes
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts)
         group.cancel_scale_up()
@@ -1934,7 +1946,13 @@ class TestScalingGroupRequestingState:
         group = ScalingGroup(config, platform)
 
         ts = Timestamp.now()
+<<<<<<< Updated upstream
         group.begin_scale_up()
+||||||| constructed merge base
+        placeholder_id = group.begin_scale_up(ts)
+=======
+        placeholder_id = group.begin_scale_up()
+>>>>>>> Stashed changes
 
         availability = group.availability(ts)
         assert availability.status == GroupAvailability.REQUESTING
@@ -1948,7 +1966,13 @@ class TestScalingGroupRequestingState:
         group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(0))
 
         ts = Timestamp.now()
+<<<<<<< Updated upstream
         group.begin_scale_up()
+||||||| constructed merge base
+        placeholder_id = group.begin_scale_up(ts)
+=======
+        placeholder_id = group.begin_scale_up()
+>>>>>>> Stashed changes
         assert group.availability(ts).status == GroupAvailability.REQUESTING
 
         handle = make_mock_slice_handle("new-slice-1", all_ready=True)
@@ -1967,7 +1991,13 @@ class TestScalingGroupRequestingState:
         group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(0))
 
         ts = Timestamp.now()
+<<<<<<< Updated upstream
         group.begin_scale_up()
+||||||| constructed merge base
+        placeholder_id = group.begin_scale_up(ts)
+=======
+        placeholder_id = group.begin_scale_up()
+>>>>>>> Stashed changes
         assert group.availability(ts).status == GroupAvailability.REQUESTING
 
         group.cancel_scale_up()
@@ -2369,6 +2399,7 @@ def test_bootstrap_skipped_without_config():
         assert vm._bootstrap_count == 0, "No bootstrap without config"
 
     autoscaler.shutdown()
+<<<<<<< Updated upstream
 
 
 class TestPerGroupWorkerConfig:
@@ -3831,3 +3862,105 @@ class TestAutoscalerUnresolvableTimeout:
 
         assert group.ready_slice_count() == 1
         autoscaler.shutdown()
+||||||| constructed merge base
+=======
+
+
+def test_bootstrap_failure_cleans_up_slice():
+    """When bootstrap fails after complete_scale_up, the real slice is cleaned up."""
+    from iris.cluster.platform.bootstrap import WorkerBootstrap
+
+    sg_config = make_scale_group_config(
+        name="test-group",
+        min_slices=0,
+        max_slices=4,
+        zones=["us-central1-a"],
+    )
+    platform = FakePlatform(FakePlatformConfig(config=sg_config))
+    group = ScalingGroup(
+        sg_config,
+        platform,
+        scale_up_cooldown=Duration.from_ms(0),
+    )
+
+    cluster_config = config_pb2.IrisClusterConfig()
+    cluster_config.defaults.bootstrap.docker_image = "test:latest"
+    cluster_config.defaults.bootstrap.worker_port = 10001
+
+    # Create a mock worker_bootstrap that raises an exception
+    class FailingBootstrap:
+        def bootstrap_slice(self, handle):
+            raise RuntimeError("Bootstrap failed")
+
+    autoscaler = Autoscaler(
+        scale_groups={"test-group": group},
+        evaluation_interval=Duration.from_ms(100),
+        platform=platform,
+        worker_bootstrap=FailingBootstrap(),
+    )
+
+    demand = make_demand_entries(1)
+    t0 = Timestamp.from_ms(1_000_000)
+
+    # Execute scale-up decision
+    decisions = autoscaler.run_once(demand, {}, t0)
+    assert len(decisions) == 1
+
+    # Wait for the scale-up thread to complete
+    autoscaler._wait_for_inflight()
+    platform.tick()
+
+    # The slice should have been cleaned up (removed from tracking and terminated)
+    assert group.slice_count() == 0, "Slice should be removed after bootstrap failure"
+
+    # Verify backoff was triggered due to failure
+    assert group.consecutive_failures > 0, "Failure should be recorded"
+
+    autoscaler.shutdown()
+
+
+def test_scale_up_failure_before_complete_removes_placeholder():
+    """When scale_up fails before complete_scale_up, only the placeholder is removed."""
+    sg_config = make_scale_group_config(
+        name="test-group",
+        min_slices=0,
+        max_slices=4,
+        zones=["us-central1-a"],
+    )
+
+    # Configure platform to fail during create_slice
+    platform_config = FakePlatformConfig(config=sg_config)
+    platform_config.failure_mode = FailureMode.CREATE_FAILS
+    platform = FakePlatform(platform_config)
+
+    group = ScalingGroup(
+        sg_config,
+        platform,
+        scale_up_cooldown=Duration.from_ms(0),
+    )
+
+    autoscaler = Autoscaler(
+        scale_groups={"test-group": group},
+        evaluation_interval=Duration.from_ms(100),
+        platform=platform,
+    )
+
+    demand = make_demand_entries(1)
+    t0 = Timestamp.from_ms(1_000_000)
+
+    # Execute scale-up decision
+    decisions = autoscaler.run_once(demand, {}, t0)
+    assert len(decisions) == 1
+
+    # Wait for the scale-up thread to complete
+    autoscaler._wait_for_inflight()
+    platform.tick()
+
+    # The placeholder should be removed, no real slice created
+    assert group.slice_count() == 0, "Placeholder should be removed after scale_up failure"
+
+    # Verify backoff was triggered due to failure
+    assert group.consecutive_failures > 0, "Failure should be recorded"
+
+    autoscaler.shutdown()
+>>>>>>> Stashed changes
