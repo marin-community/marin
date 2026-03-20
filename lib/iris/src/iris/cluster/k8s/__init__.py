@@ -6,7 +6,6 @@
 from iris.cluster.k8s.k8s_service import K8sService
 from iris.cluster.k8s.k8s_service_impl import K8sServiceImpl
 from iris.cluster.k8s.k8s_types import KubectlError
-from iris.cluster.k8s.kubectl import Kubectl
 from iris.cluster.service_mode import ServiceMode
 
 
@@ -24,5 +23,7 @@ def create_k8s_service(
     DRY_RUN/LOCAL: in-memory fake with scheduler and validation.
     """
     if mode == ServiceMode.CLOUD:
+        from iris.cluster.k8s.kubectl import Kubectl
+
         return Kubectl(namespace=namespace, kubeconfig_path=kubeconfig_path, timeout=timeout)
     return K8sServiceImpl(namespace=namespace, mode=mode, available_node_pools=available_node_pools)

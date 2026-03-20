@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Protocol for Kubernetes operations.
-
-Implementations: Kubectl (CLOUD, shells out to kubectl binary),
-K8sServiceImpl (DRY_RUN/LOCAL, in-memory fake with scheduling validation).
-Use create_k8s_service() to construct the right one.
-"""
+"""K8sService protocol for Kubernetes operations."""
 
 from __future__ import annotations
 
