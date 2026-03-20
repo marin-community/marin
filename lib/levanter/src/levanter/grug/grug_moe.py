@@ -356,32 +356,37 @@ def _ragged_dot_expert_padded_batched_prepared_bwd(
     out_cotangent: jax.Array,
 ) -> tuple[jax.Array, jax.Array, None]:
     packed_lhs, rhs_prepared, group_sizes = residuals
-    valid_rows, flat_indices, gather_rows, gather_valid = _expert_padded_ragged_metadata(
-        out_cotangent.shape[0],
-        group_sizes,
-        local_experts=rhs_prepared.shape[0],
-        local_expert_capacity=local_expert_capacity,
-    )
-    packed_out_cotangent = _expert_padded_pack_rows(
-        out_cotangent,
-        gather_rows=gather_rows,
-        gather_valid=gather_valid,
-    )
-    grad_packed_lhs = jax.lax.dot_general(
-        packed_out_cotangent,
-        rhs_prepared,
-        dimension_numbers=(((2,), (2,)), ((0,), (0,))),
-    )
-    grad_lhs = _expert_padded_unpack_rows(
-        grad_packed_lhs,
-        valid_rows=valid_rows,
-        flat_indices=flat_indices,
-    )
-    grad_rhs_prepared = jax.lax.dot_general(
-        packed_lhs,
-        packed_out_cotangent,
-        dimension_numbers=(((1,), (1,)), ((0,), (0,))),
-    )
+    with jax.named_scope("expert_padded_bmm_bwd"):
+        valid_rows, flat_indices, gather_rows, gather_valid = _expert_padded_ragged_metadata(
+            out_cotangent.shape[0],
+            group_sizes,
+            local_experts=rhs_prepared.shape[0],
+            local_expert_capacity=local_expert_capacity,
+        )
+        with jax.named_scope("pack_out_cotangent"):
+            packed_out_cotangent = _expert_padded_pack_rows(
+                out_cotangent,
+                gather_rows=gather_rows,
+                gather_valid=gather_valid,
+            )
+        with jax.named_scope("grad_lhs_dot"):
+            grad_packed_lhs = jax.lax.dot_general(
+                packed_out_cotangent,
+                rhs_prepared,
+                dimension_numbers=(((2,), (2,)), ((0,), (0,))),
+            )
+        with jax.named_scope("unpack_grad_lhs"):
+            grad_lhs = _expert_padded_unpack_rows(
+                grad_packed_lhs,
+                valid_rows=valid_rows,
+                flat_indices=flat_indices,
+            )
+        with jax.named_scope("grad_rhs_dot"):
+            grad_rhs_prepared = jax.lax.dot_general(
+                packed_lhs,
+                packed_out_cotangent,
+                dimension_numbers=(((1,), (1,)), ((0,), (0,))),
+            )
     return grad_lhs, grad_rhs_prepared, None
 
 

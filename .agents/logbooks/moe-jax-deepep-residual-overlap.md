@@ -2666,3 +2666,454 @@ KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_k
   - the remaining headline gap is now concentrated mostly in the largest `topk=8` row.
 - Next action:
   - treat `dispatch num_max_send_tokens=32` as the new default candidate for this branch, post a milestone update, and then profile the new `262144/topk=8/shared2048` best config before doing another blind sweep.
+
+### 2026-03-20 00:40 UTC - `dispatch_num_sms=28` on top of `dispatch_send=32` improves the guardrail ladder and sets a new best `262144/topk=8/shared2048` row
+- Experiment ID: `OVLP-RES-044`
+- Hypothesis:
+  - after the `dispatch num_max_send_tokens=32` win, the next cheap transport-runtime discriminator is a higher shared dispatch/combine `num_sms`; if the remaining residual still reflects under-occupied transport work, raising `dispatch_num_sms` from the implicit `20` to `28` should help the exact-cap guardrails and the hardest shared-2048 row.
+- Commands:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-cfg-disp28send32-ladder-t262144-r2-20260320-004018 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe,deepep_transport_local_compute_only_probe,deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 28 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-cfg-disp28send32-sharedfast-fb-t262144-topk8-20260320-010809 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 28 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `a180b4058`
+  - ladder log:
+    - `scratch/3717-rerun/ovlpres-cfg-disp28send32-ladder-t262144-r2-20260320-004018.log`
+  - decisive rerun log:
+    - `scratch/3717-rerun/ovlpres-cfg-disp28send32-sharedfast-fb-t262144-topk8-20260320-010809.log`
+  - pool/node facts:
+    - benchmark pod first triggered a fresh `i3821jax-h100-8x` scale-up from `0 -> 1`
+    - CoreWeave assigned node `gd925a4` to the pool and it registered after a long boot
+    - the node briefly hit `DNSFailure`, was cordoned, then recovered and was uncordoned before the first pod ran
+- Result:
+  - the required shared-free ladder stayed valid and improved across all three rungs:
+    - `w13_only`: `243,306,098.33 tok/s`
+    - `local_compute_only`: `87,016,493.48 tok/s`
+    - `capped_prewarmed`: `47,258,548.45 tok/s`
+  - the decisive worst-row rerun also improved:
+    - prior branch best `262144, topk=8, shared=2048`: `6,190,854.83 tok/s`
+    - `dispatch_num_sms=28` result: `6,310,262.10 tok/s` (`41.542 ms`)
+    - delta vs prior branch best: about `+1.9%`
+  - both the ladder run and the decisive rerun emitted repeated `DeepEP timeout check failed` messages and many `CUDA_ERROR_LAUNCH_FAILED` cleanup errors after the printed `RESULT`, but both wrapper commands still exited `0` and printed the timed benchmark result.
+- Interpretation:
+  - increasing the shared dispatch/combine `num_sms` to `28` on top of the `dispatch_send=32` baseline is a real positive runtime change, not just noise on the decisive row.
+  - the effect is smaller than the original `dispatch_send=32` jump, but it moves the strongest remaining `topk=8` row in the right direction while also helping the authoritative forward guardrails.
+- Next action:
+  - keep `dispatch_num_sms=28` as the new local best candidate, then decide whether the next cheap runtime follow-up should be `dispatch_num_sms=32` or whether the branch should pivot back to profile-guided attribution of the remaining pre-`all-reduce` gap.
+
+### 2026-03-20 01:12 UTC - `dispatch_num_sms=32` beats the `28` candidate and becomes the new runtime best on the worst shared-2048 row
+- Experiment ID: `OVLP-RES-045`
+- Hypothesis:
+  - if the `dispatch_num_sms=28` win reflects genuine remaining under-occupancy rather than a lucky local optimum, pushing the shared dispatch/combine `num_sms` to `32` should keep the authoritative guardrails healthy and may move the decisive `262144/topk=8/shared2048` row again.
+- Commands:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-cfg-disp32send32-ladder-t262144-r2-20260320-011254 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe,deepep_transport_local_compute_only_probe,deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-cfg-disp32send32-sharedfast-fb-t262144-topk8-20260320-012048 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `a180b4058`
+  - ladder log:
+    - `scratch/3717-rerun/ovlpres-cfg-disp32send32-ladder-t262144-r2-20260320-011254.log`
+  - decisive rerun log:
+    - `scratch/3717-rerun/ovlpres-cfg-disp32send32-sharedfast-fb-t262144-topk8-20260320-012048.log`
+- Result:
+  - the required guardrail ladder improved again relative to the `dispatch_num_sms=28` candidate:
+    - `w13_only`: `243,609,574.54 tok/s`
+    - `local_compute_only`: `89,851,300.66 tok/s`
+    - `capped_prewarmed`: `49,454,274.26 tok/s`
+  - the decisive worst-row rerun also improved again:
+    - prior `dispatch_num_sms=28` result: `6,310,262.10 tok/s`
+    - `dispatch_num_sms=32` result: `6,353,316.54 tok/s` (`41.261 ms`)
+    - delta vs `28`: about `+0.68%`
+    - delta vs the original `dispatch_send=32` branch best (`6,190,854.83 tok/s`): about `+2.6%`
+  - relative to the sealed Megatron anchor `7,649,303`, the new row sits at about `83.1%` of Megatron.
+  - as with the `28` candidate, both runs emitted repeated `DeepEP timeout check failed` messages and many `CUDA_ERROR_LAUNCH_FAILED` cleanup errors after the printed `RESULT`, but both wrapper commands still exited `0` and printed timed benchmark results.
+- Interpretation:
+  - the `num_sms` mini-branch is still paying off, but with diminishing returns: `32` is better than `28`, yet the gain on the decisive row is much smaller than the earlier `dispatch_send=32` jump.
+  - the best known runtime-only configuration on this branch is now:
+    - `shared_mlp_fast_accum`
+    - `deepep-dispatch-num-sms=32`
+    - `deepep-dispatch-num-max-send-tokens=32`
+    - `deepep-combine-num-max-send-tokens=8`
+- Next action:
+  - use this new best config either as the basis for one more tightly-bounded nearby runtime probe or for a fresh matched profile on the same worst row, depending on whether the next step should prioritize additional hillclimbing or renewed attribution.
+
+### 2026-03-20 01:35 UTC - Matched `disp32send32` profile confirms the new runtime win mostly comes from combine-side work, while the dominant pre-`all-reduce` gap remains
+- Experiment ID: `OVLP-RES-046`
+- Hypothesis:
+  - if the `dispatch_num_sms=32` runtime win is mostly hiding inside one specific DeepEP kernel family, a matched profile against the prior `dispatch_send=32` branch best should make it clear whether the gain came from dispatch, combine, or from shrinking the dominant host-side pre-`all-reduce` wait.
+- Commands:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-disp32send32-sharedfast-fb-profile-t262144-topk8-20260320-012530 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --profile-root /tmp/ovlpres-disp32send32-sharedfast-fb-262144-topk8 \
+  --post-bench-sleep-seconds 1800 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl -n iris-3821-jax cp \
+  iris-task-18e65465a0ef:/tmp/ovlpres-disp32send32-sharedfast-fb-262144-topk8/. \
+  scratch/profiles/ovlpres-disp32send32-sharedfast-fb-262144-topk8
+
+uv run python -m marin.profiling.cli summarize \
+  --profile-dir scratch/profiles/ovlpres-disp32send32-sharedfast-fb-262144-topk8 \
+  --warmup-steps 0 \
+  --output scratch/profiles/ovlpres-disp32send32-sharedfast-fb-262144-topk8-summary.json
+
+uv run python -m marin.profiling.cli report \
+  --summary scratch/profiles/ovlpres-disp32send32-sharedfast-fb-262144-topk8-summary.json \
+  --output scratch/profiles/ovlpres-disp32send32-sharedfast-fb-262144-topk8-report.md
+
+uv run python -m marin.profiling.cli compare \
+  --before scratch/profiles/ovlpres-dispsend32-sharedfast-fb-262144-topk8-summary.json \
+  --after scratch/profiles/ovlpres-disp32send32-sharedfast-fb-262144-topk8-summary.json \
+  --top-k 12 \
+  > scratch/profiles/ovlpres-dispsend32-vs-disp32send32-262144-topk8.compare.txt
+```
+
+- Config:
+  - code ref: `a180b4058`
+  - profiling pod: `iris-task-18e65465a0ef`
+  - node: `gd925a4`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-disp32send32-sharedfast-fb-profile-t262144-topk8-20260320-012530.log`
+  - local artifacts:
+    - `scratch/profiles/ovlpres-disp32send32-sharedfast-fb-262144-topk8`
+    - `scratch/profiles/ovlpres-disp32send32-sharedfast-fb-262144-topk8-summary.json`
+    - `scratch/profiles/ovlpres-disp32send32-sharedfast-fb-262144-topk8-report.md`
+    - `scratch/profiles/ovlpres-dispsend32-vs-disp32send32-262144-topk8.compare.txt`
+  - note:
+    - the profiled `RESULT` (`1,843,925.83 tok/s`) is tracing overhead and is not comparable to the timing-only rerun result `6,353,316.54 tok/s`
+- Result:
+  - time breakdown stayed dominated by host-side time:
+    - compute: `655275.629` (`46.13%`)
+    - communication: `18567.888` (`1.31%`)
+    - host: `745343.373` (`52.47%`)
+  - the top exclusive ops on the new best profile were:
+    - `cached_notify_combine<8>`: `89696.809`
+    - `dispatch<8,768,8192>`: `76301.974`
+    - `combine<bf16,8,768,4096>`: `67618.861`
+  - the dominant pre-op gap is still the same f32 all-reduce:
+    - `ncclDevKernel_AllReduce_Sum_f32_RING_LL`: `260630.931` total gap across `16` occurrences (`16289.433` avg)
+  - direct compare against the prior `dispatch_send=32` profile shows:
+    - biggest improvement:
+      - `combine<bf16,8,768,4096>`: `88637.462 -> 67618.861` (`-21018.601`)
+    - notable regressions:
+      - `dispatch<8,768,8192>`: `73845.095 -> 76301.974` (`+2456.879`)
+      - `cached_notify_combine<8>`: `87552.549 -> 89696.809` (`+2144.260`)
+    - the worst f32 all-reduce pre-gap shrank only modestly:
+      - `269618.757 -> 260630.931` (`-8987.826`, about `-3.3%`)
+- Interpretation:
+  - the `dispatch_num_sms=32` runtime win is not primarily a dispatch win.
+  - because the benchmark wiring inherits `dispatch_num_sms` into combine whenever `combine_num_sms` is unset, the new result is best read as a shared dispatch+combine `num_sms` change whose clearest kernel-level benefit is a large drop in `combine<bf16,...>`.
+  - the main residual bottleneck is still the same host-side wait before `ncclDevKernel_AllReduce_Sum_f32_RING_LL`; the matched profile only trims that gap slightly.
+- Next action:
+  - run a decoupled runtime probe that keeps the proven send-token settings (`dispatch_send=32`, `combine_send=8`) while restoring dispatch `num_sms` to default and keeping only combine `num_sms` elevated, to test whether the new win can be kept without the measured dispatch regression.
+
+### 2026-03-20 01:52 UTC - Combine-only `num_sms=32` decoupling is not a promotable candidate because it crashes in `capped_prewarmed`
+- Experiment ID: `OVLP-RES-047`
+- Hypothesis:
+  - if the runtime win from the profiled `dispatch_num_sms=32` branch is mainly a combine-side effect, then keeping the proven send-token settings while elevating only combine `num_sms` should preserve the win without paying the measured dispatch regression.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-cfg-comb32send32-ladder-t262144-r2-20260320-013715 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe,deepep_transport_local_compute_only_probe,deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-sms 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `a180b4058`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-cfg-comb32send32-ladder-t262144-r2-20260320-013715.log`
+  - pod: `iris-task-eb25fe2056e3`
+  - node: `gd925a4`
+  - effective DeepEP transport config captured in the launcher log:
+    - `dispatch=num_sms=20 num_max_send_tokens=32 num_max_recv_tokens=256`
+    - `combine=num_sms=32 num_max_send_tokens=8 num_max_recv_tokens=256`
+- Result:
+  - `w13_only`: `0.001078 s` / `243,112,452.22 tok/s`
+  - `local_compute_only`: `0.003306 s` / `79,284,102.16 tok/s`
+  - `capped_prewarmed` did not complete
+  - the run failed during the `capped_prewarmed` rung with repeated:
+    - `DeepEP timeout check failed`
+    - `CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure`
+  - wrapper exit status: `EXIT_CODE=1`
+- Interpretation:
+  - this candidate cannot be promoted regardless of its early-rung numbers because it is not stable through the required guardrail ladder.
+  - the combine-side `num_sms=32` setting appears to trigger a runtime failure in the first exact-cap transport rung that matters.
+  - this rules out the clean combine-only `num_sms=32` decoupling as the immediate follow-up to the shared `dispatch_num_sms=32` branch-best config.
+- Next action:
+  - fall back to the still-missing shared `dispatch_num_sms=28` / inherited `combine_num_sms=28` runtime probe on top of the proven send-token settings (`dispatch_send=32`, `combine_send=8`) and evaluate it through the standard forward guardrail ladder before spending more time on explicit combine-side tuning.
+
+### 2026-03-20 02:02 UTC - Durable rerun confirms `disp28send32` is clean but still below the `32` runtime best on the forward ladder
+- Experiment ID: `OVLP-RES-048`
+- Hypothesis:
+  - if the earlier `dispatch_num_sms=28` result was sensitive to the lost launcher session rather than a stable runtime effect, a fresh durable rerun should materially change the ranking against the current `dispatch_num_sms=32` best.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-cfg-disp28send32-ladder-t262144-r2-20260320-0153 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe,deepep_transport_local_compute_only_probe,deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 28 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `a180b4058`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-cfg-disp28send32-ladder-t262144-r2-20260320-0153.log`
+  - pod: `iris-task-b7b9303b0c35`
+  - node: `gd925a4`
+  - effective transport config:
+    - `dispatch=num_sms=28 num_max_send_tokens=32 num_max_recv_tokens=256`
+    - `combine=num_sms=28 num_max_send_tokens=8 num_max_recv_tokens=256`
+- Result:
+  - the rerun completed cleanly with `EXIT_CODE=0`
+  - forward ladder:
+    - `w13_only`: `243,433,494.68 tok/s`
+    - `local_compute_only`: `87,936,523.51 tok/s`
+    - `capped_prewarmed`: `47,425,520.46 tok/s`
+  - as in the earlier `28` and `32` runs, the wrapper emitted repeated `DeepEP timeout check failed` and `CUDA_ERROR_LAUNCH_FAILED` cleanup noise after the printed `RESULT`, but still advanced each rung and exited `0`
+  - compared against the current `dispatch_num_sms=32` best (`OVLP-RES-045`), the rerun stayed lower on every rung:
+    - `w13_only`: about `-0.07%`
+    - `local_compute_only`: about `-2.13%`
+    - `capped_prewarmed`: about `-4.10%`
+- Interpretation:
+  - this durable rerun reproduces the earlier `dispatch_num_sms=28` branch cleanly.
+  - it does not change the ranking: the shared `dispatch/combine num_sms=32` configuration remains the best known forward-ladder runtime point on this branch.
+- Next action:
+  - move from shared `num_sms` hillclimbing to a tighter combine-side isolation by keeping the proven send-token settings (`dispatch_send=32`, `combine_send=8`) and testing a smaller explicit combine-only uplift (`combine_num_sms=28`) with dispatch left at its default `20`.
+
+### 2026-03-20 02:10 UTC - Combine-only `num_sms=28` also fails in `capped_prewarmed`, this time with a deterministic DeepEP handle-shape error
+- Experiment ID: `OVLP-RES-049`
+- Hypothesis:
+  - if the shared `num_sms=32` runtime win is mostly combine-side, then a smaller explicit combine-only uplift (`combine_num_sms=28`) might retain the gain while avoiding the instability seen at combine `32`.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-cfg-comb28send32-ladder-t262144-r2-20260320-0204 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe,deepep_transport_local_compute_only_probe,deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-sms 28 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `a180b4058`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-cfg-comb28send32-ladder-t262144-r2-20260320-0204.log`
+  - pod: `iris-task-92cfb37c8582`
+  - node: `gd925a4`
+  - effective DeepEP transport config captured in the launcher log:
+    - `dispatch=num_sms=20 num_max_send_tokens=32 num_max_recv_tokens=256`
+    - `combine=num_sms=28 num_max_send_tokens=8 num_max_recv_tokens=256`
+- Result:
+  - `w13_only`: `0.001079 s` / `242,972,486.75 tok/s`
+  - `local_compute_only`: `0.003321 s` / `78,936,559.43 tok/s`
+  - `capped_prewarmed` did not complete
+  - the `capped_prewarmed` rung failed immediately with:
+    - `INVALID_ARGUMENT: DeepEP intranode combine handle tensor shapes are invalid`
+  - unlike the combine `32` attempt, this was not just cleanup noise after a printed result; the exact-cap rung itself rejected the combine handle shapes and raised a `jax.errors.JaxRuntimeError`
+- Interpretation:
+  - explicit combine-side `num_sms` overrides above the default are not currently a safe hillclimb direction on this branch.
+  - both combine-only attempts (`28` and `32`) fail before completing the required exact-cap guardrail rung, with different failure signatures.
+  - this exhausts the immediate combine-side runtime-isolation branch without producing a promotable candidate.
+- Next action:
+  - stop spending time on blind DeepEP runtime knob sweeps and add narrow profile attribution in the routed backward path so the next profile can tell which backward producer family is arriving late before the persistent shared-gradient `all-reduce`.
