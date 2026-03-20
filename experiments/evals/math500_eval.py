@@ -23,6 +23,8 @@ from typing import Callable
 
 import fsspec
 
+from marin.utils import fsspec_exists
+
 from fray.cluster import ResourceConfig
 from marin.execution.executor import (
     ExecutorStep,
@@ -186,9 +188,8 @@ def run_math500_eval(config: Math500EvalConfig):
 
         return results
 
-    fs, _ = fsspec.core.url_to_fs(config.output_path)
     for batch_start_idx in range(0, len(all_problems), config.batch_size):
-        if fs.exists(os.path.join(config.output_path, f"results-batch-{batch_start_idx}.json.gz")):
+        if fsspec_exists(os.path.join(config.output_path, f"results-batch-{batch_start_idx}.json.gz")):
             continue
 
         batch_problems = all_problems[batch_start_idx:batch_start_idx+config.batch_size]

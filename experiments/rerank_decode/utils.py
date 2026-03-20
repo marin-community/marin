@@ -18,14 +18,15 @@ import logging
 
 import openai
 
+from experiments.rerank_decode.scorer import Scorer
+
 logger = logging.getLogger(__name__)
 
 
 def rerank(
     proposal_client: openai.Client,
-    scoring_client: openai.Client,
     proposal_model: str,
-    scoring_model: str,
+    scorer: Scorer,
     prompt: str,
     num_samples: int,
     max_tokens: int,
@@ -33,7 +34,7 @@ def rerank(
     temperature: float,
 ) -> str:
     """Generate num_samples completions from the proposal model, return the one
-    with the highest log-likelihood under the scoring model.
+    with the highest score under the scorer.
 
     If the best completion was truncated, continues generating from it until
     it finishes naturally."""
@@ -53,26 +54,11 @@ def rerank(
         )
 
         completions = sorted(gen_resp.choices, key=lambda c: c.index)
-        candidate_texts = [current_prompt + c.text for c in completions]
+        completion_texts = [c.text for c in completions]
 
-        score_resp = scoring_client.completions.create(
-            model=scoring_model,
-            prompt=candidate_texts,
-            max_tokens=1,  # TODO: this is a hack
-            echo=True,
-            logprobs=1,
-        )
+        scores = scorer.score(current_prompt, completion_texts)
 
-        scored_choices = sorted(score_resp.choices, key=lambda c: c.index)
-
-        best_idx = -1
-        best_score = float("-inf")
-        for i, choice in enumerate(scored_choices):
-            token_logprobs = choice.logprobs.token_logprobs
-            score = sum(lp for lp in token_logprobs[:-1] if lp is not None)  # see above hack
-            if score > best_score:
-                best_score = score
-                best_idx = i
+        best_idx = max(range(len(scores)), key=lambda i: scores[i])
 
         generated += completions[best_idx].text
 
