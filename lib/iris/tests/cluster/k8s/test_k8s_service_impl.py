@@ -570,3 +570,24 @@ def test_port_forward_failure_injection(svc: K8sServiceImpl):
     with pytest.raises(KubectlError):
         with svc.port_forward("my-svc", 8080):
             pass
+
+
+# ---------------------------------------------------------------------------
+# CLOUD mode tests
+# ---------------------------------------------------------------------------
+
+
+def test_cloud_mode_construction():
+    from iris.cluster.service_mode import ServiceMode
+
+    svc = K8sServiceImpl(namespace="test", mode=ServiceMode.CLOUD)
+    assert svc.mode == ServiceMode.CLOUD
+    assert svc.namespace == "test"
+    assert svc._kubectl is not None
+
+
+def test_cloud_mode_satisfies_k8s_service_protocol():
+    from iris.cluster.service_mode import ServiceMode
+
+    svc = K8sServiceImpl(namespace="test", mode=ServiceMode.CLOUD)
+    assert isinstance(svc, K8sService)

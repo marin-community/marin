@@ -1128,14 +1128,15 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
     """
     which = cluster_config.WhichOneof("provider")
     if which == "kubernetes_provider":
-        from iris.cluster.k8s.kubectl import Kubectl
+        from iris.cluster.k8s.k8s_service_impl import K8sServiceImpl
+        from iris.cluster.service_mode import ServiceMode
 
         kp = cluster_config.kubernetes_provider
         namespace = kp.namespace or "iris"
         label_prefix = cluster_config.platform.label_prefix
         managed_label = f"iris-{label_prefix}-managed" if label_prefix else ""
         return KubernetesProvider(
-            kubectl=Kubectl(namespace=namespace, kubeconfig_path=kp.kubeconfig or None),
+            kubectl=K8sServiceImpl(namespace=namespace, mode=ServiceMode.CLOUD, kubeconfig_path=kp.kubeconfig or None),
             namespace=namespace,
             default_image=kp.default_image,
             colocation_topology_key=kp.colocation_topology_key or "coreweave.cloud/spine",

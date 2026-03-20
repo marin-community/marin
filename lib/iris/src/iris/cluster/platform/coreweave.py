@@ -145,10 +145,12 @@ class CoreweavePlatform:
         if kubectl is not None:
             self._kubectl: K8sService = kubectl
         else:
-            from iris.cluster.k8s.kubectl import Kubectl  # factory site
+            from iris.cluster.k8s.k8s_service_impl import K8sServiceImpl
+            from iris.cluster.service_mode import ServiceMode
 
-            self._kubectl = Kubectl(
+            self._kubectl = K8sServiceImpl(
                 namespace=self._namespace,
+                mode=ServiceMode.CLOUD,
                 kubeconfig_path=None if os.environ.get("KUBECONFIG") else (config.kubeconfig_path or None),
                 timeout=_KUBECTL_TIMEOUT,
             )
