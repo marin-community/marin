@@ -1,0 +1,124 @@
+Follow https://github.com/marin-community/marin/issues/3490 and https://github.com/marin-community/marin/issues/2601 to reproduce 2 OpenThoughts-Agent SFTs. At 32k context length laion/exp_tas_optimal_combined_traces. At 131k context length, REDACTED. Start with the 32k SFT. First find the SFT model at https://huggingface.co/laion/exp_tas_optimal_combined_traces and the dataset at https://huggingface.co/datasets/DCAgent/exp_tas_optimal_combined_traces (double check this for me please). Then, reproduce OT-A's reported 23.8% on TB-Lite and 12.6% on TB2 using their released SFT weights. After making sure we can reproduced within +/-3% for TB-Lite, in parallel set up SFT closely following the model card and start the SFT. Once TB2 eval finishes, confirm that it's also within +/-3% of the reported number. Keep monitoring the SFT run (should be trainble with a v5p-32/64, choose base on availablility in the Iris cluster). Log progress via github comments like #3490 to keep all everybody in the loop in a new GitHub issue titled "[Agentic SFT] Reproduce OT-Agent's best 32K context length SFT". Once you reproduced the TB-Lite for the 32k context length model and launched and confirmed SFT is running fine for it, go through the same process for the 131k in parallel. The longer context length may need some system optimization to prevent OOM. Track all progress for the 131k reproduction under "[Agentic SFT] Reproduce OT-Agent's best 131K context length SFT".
+
+---
+
+Continue monitoring and finishing the tasks until everything is done.
+
+---
+
+[Request interrupted by user]
+
+---
+
+For the eval, did you reference how https://github.com/marin-community/marin/issues/3490#issuecomment-4085706376 uses the marin-harbor worktree/branch to eval TB-Lite?
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+You can only run 1 Harbor eval at the same time due to Daytona sandbox concurrency limitations. Commit this rule to your project memory.
+
+---
+
+<task-notification>
+<task-id>btwb8ifsi</task-id>
+<tool-use-id>toolu_01Poet5ZNZouLYafE1eEVuZ9</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Stop the TB2 eval job (only 1 Harbor eval at a time)" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<task-notification>
+<task-id>bybd9bhq2</task-id>
+<tool-use-id>toolu_01CMjUtKEHrvLHHyzcDEyWU8</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Check both jobs after 30 minutes" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+Are we evaling with the latest 4-way sharding method introduced in https://github.com/marin-community/marin/issues/3846#issuecomment-4087523679?
+
+---
+
+Yes, Daytona limit allws sharding. As long as we have <=100 concurrent jobs.
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+Wait why are we modifying ~/marin-harbor code? I thought commit https://github.com/marin-community/marin/commit/1bdab9faa31ce1a02a3a2e155e31fb51a503eeb1 already has everything?
+
+---
+
+<task-notification>
+<task-id>bj3jy77vt</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Check all 4 shard statuses after 3 minutes" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+Can you dig into one of the failed shard's log
+
+---
+
+how are the 2 running shards doing?
+
+---
+
+<task-notification>
+<task-id>bzz6ovi5j</task-id>
+<tool-use-id>toolu_01CNcFcyH99ggiXwRvWvAXRE</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Check surviving shards + SFT after 30 min" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<task-notification>
+<task-id>bkk7mz5fd</task-id>
+<tool-use-id>toolu_01Ub6F8zdv8bMf1n6196unLe</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll all jobs after 1 hour" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+is the tblite eval running on daytona?
+
+---
+
+which DAYTONA_API_KEY is used?
+
+---
+
+how many TBLite eval trials have we completed in the last 20 minutes?
+
+---
+
+There are only 2 SFT jobs running but I don't see any eval job.
+
+---
+
+I see, add a rule to project memory: always run job with Iris, not Ray. Then stop the ray job and resubmit to Iris.
+
+---
+
+I think 32K SFT was submitted with Iris?
