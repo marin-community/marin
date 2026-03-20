@@ -31,6 +31,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from iris.cluster.k8s.k8s_types import KubectlError, KubectlLogLine, KubectlLogResult
+from iris.cluster.k8s.k8s_types import parse_k8s_cpu as _parse_k8s_cpu
+from iris.cluster.k8s.k8s_types import parse_k8s_memory as _parse_k8s_memory
 
 logger = logging.getLogger(__name__)
 
@@ -397,30 +399,3 @@ def _parse_kubectl_log_line(line: str) -> KubectlLogLine:
     else:
         logger.warning("Unexpected kubectl log line format (no space-separated timestamp): %r", line[:120])
     return KubectlLogLine(timestamp=datetime.now(timezone.utc), stream="stdout", data=line)
-
-
-def _parse_k8s_cpu(value: str) -> int:
-    """Parse Kubernetes CPU notation to millicores.
-
-    Examples: '250m' -> 250, '1' -> 1000, '0.5' -> 500, '2500m' -> 2500
-    """
-    if value.endswith("m"):
-        return int(value[:-1])
-    return int(float(value) * 1000)
-
-
-def _parse_k8s_memory(value: str) -> int:
-    """Parse Kubernetes memory notation to bytes.
-
-    Examples: '512Mi' -> 536870912, '1Gi' -> 1073741824, '100Ki' -> 102400,
-              '1000' -> 1000 (raw bytes)
-    """
-    units = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4}
-    for suffix, multiplier in units.items():
-        if value.endswith(suffix):
-            return int(value[: -len(suffix)]) * multiplier
-    si_units = {"K": 1000, "M": 1000**2, "G": 1000**3, "T": 1000**4}
-    for suffix, multiplier in si_units.items():
-        if value.endswith(suffix) and not value.endswith("i"):
-            return int(value[: -len(suffix)]) * multiplier
-    return int(value)
