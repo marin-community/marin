@@ -524,7 +524,8 @@ def print_db_stats(db: ControllerDB) -> None:
 @click.option("--no-analyze", is_flag=True, help="Skip ANALYZE to test unoptimized query plans")
 def main(db_path: Path, iterations: int, only_group: str | None, no_analyze: bool) -> None:
     """Benchmark Iris controller DB queries against a local checkpoint."""
-    db = ControllerDB(db_path)
+    db = ControllerDB(db_dir=db_path.parent)
+    db.apply_migrations()
     if no_analyze:
         print("Dropping sqlite_stat1 to test unoptimized query plans...")
         db.fetchall("DROP TABLE IF EXISTS sqlite_stat1")

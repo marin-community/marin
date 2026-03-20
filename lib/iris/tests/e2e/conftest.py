@@ -83,6 +83,34 @@ def pytest_addoption(parser):
     parser.addoption("--iris-label-prefix", default=None, help="Override platform.label_prefix in config")
 
 
+# Cloud mode needs much longer timeouts: GCE provisioning can take 20 minutes,
+# and individual tests need time for remote job execution.
+_CLOUD_FIXTURE_TIMEOUT = 1200  # 20 min for cluster provisioning
+_CLOUD_TEST_TIMEOUT = 120  # 2 min per test
+
+
+def pytest_collection_modifyitems(config, items):
+    """Set appropriate timeouts for cloud mode tests."""
+    mode = config.getoption("--iris-mode", default="local")
+    if mode == "local":
+        return
+
+    import pytest
+
+    first_smoke_test = True
+    for item in items:
+        if item.get_closest_marker("timeout"):
+            continue
+        if "smoke_cluster" in getattr(item, "fixturenames", ()):
+            if first_smoke_test:
+                item.add_marker(pytest.mark.timeout(_CLOUD_FIXTURE_TIMEOUT))
+                first_smoke_test = False
+            else:
+                item.add_marker(pytest.mark.timeout(_CLOUD_TEST_TIMEOUT))
+        else:
+            item.add_marker(pytest.mark.timeout(_CLOUD_TEST_TIMEOUT))
+
+
 @dataclass
 class IrisTestCluster:
     """Wraps a booted local cluster with convenience methods for E2E tests.
