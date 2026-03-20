@@ -4785,3 +4785,48 @@ uv run .agents/scripts/deepep_jax_krt_bench.py \
 - Next action:
   - move one level lower and test explicit ordering / dependency control between the two replicated shared reductions themselves.
   - stop spending time on structural split variants that do not actually change the reduction schedule.
+
+### 2026-03-20 23:35 UTC - OVLP-RES-073 explicit ordering breaks the giant wait but exposes heavy collective time
+
+- Goal:
+  - determine whether the full `shared_dw_psum_only` collapse can be structurally broken by forcing a true dependency between the two replicated shared reductions, rather than merely separating them into different custom-VJP branches.
+- Actions:
+  - added `deepep_transport_capped_prewarmed_shared_dw_psum_serial_probe` at code ref `f19cb263f`
+  - the probe preserves the synthetic replicated shared `psum` payloads, but forces the second one to depend on the first before it can launch
+- Config:
+  - code ref: `f19cb263f`
+  - pod: `iris-task-66f152b46351`
+  - node: `g12e0ba`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-shareddwpsumserial-profile-t262144-topk8-20260320-232743.log`
+  - copied profile artifacts:
+    - `scratch/profiles/ovlpres-shareddwpsumserial-fb-262144-topk8`
+  - rendered report:
+    - `scratch/profiles/ovlpres-shareddwpsumserial-fb-262144-topk8-report.md`
+  - compare output:
+    - `scratch/profiles/ovlpres-shareddwpsumonly-vs-shareddwpsumserial-262144-topk8.compare.txt`
+- Result:
+  - decisive hard-row timing:
+    - `deepep_transport_capped_prewarmed_shared_dw_psum_serial_probe`: `1,948,817.38 tok/s` (`134.514 ms`)
+  - profile highlights:
+    - dominant pre-gap payload:
+      - `ncclDevKernel_AllReduce_Sum_f32_RING_LL(...)`
+    - total pre-gap: `20,046.209`
+    - max pre-gap: `3,722.039`
+    - occurrences: `16`
+    - collective family exclusive: `96,011.528`
+    - collective count: `48`
+    - communication share: `0.067062`
+    - host share: `0.503916`
+  - direct comparisons vs full `shared_dw_psum_only`:
+    - total pre-gap delta: `-220,938.523`
+    - max pre-gap delta: `-11,376.235`
+    - collective exclusive delta: `+82,756.655`
+    - communication share delta: `+0.056883`
+    - host share delta: `-0.026398`
+- Interpretation:
+  - this is the first clean result showing that explicit ordering between the two replicated shared reductions can break the giant `f32` pre-`all-reduce` wait.
+  - the pathological idle gap is therefore a scheduling / concurrency artifact of the two shared replicated reductions, not an unavoidable consequence of the underlying payload alone.
+  - the current explicit-ordering implementation is still slower overall because it turns the hidden wait into much more visible collective work.
+- Next action:
+  - keep the focus on shared replicated reduction scheduling, but move from "can we break the wait at all?" to "can we preserve the smaller pre-gap with a cheaper dependency / ordering mechanism that does not explode collective time?"
