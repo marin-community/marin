@@ -4676,3 +4676,58 @@ uv run .agents/scripts/deepep_jax_krt_bench.py \
 - Next action:
   - pivot the next optimization branch toward changing or bypassing the replicated shared weight-gradient reduction path itself.
   - stop spending time on local shared backward GEMM rewrites unless they directly change the reduction schedule.
+
+### 2026-03-20 21:59 UTC - OVLP-RES-071 shared_dw13_psum_only / shared_dw2_psum_only are both partial, neither reproduces the full collapse
+
+- Goal:
+  - determine whether the replicated all-reduce collapse from `shared_dw_psum_only` is dominated by the `shared_w13` side, the `shared_w2` side, or only appears when both are alive together.
+- Config:
+  - code ref: `080e879ff`
+  - `shared_dw13_psum_only`:
+    - pod: `iris-task-02e04dc85775`
+    - node: `g12f724`
+    - launcher log:
+      - `scratch/3717-rerun/ovlpres-shareddw13psumonly-profile-t262144-topk8-20260320-214631.log`
+    - copied profile artifacts:
+      - `scratch/profiles/ovlpres-shareddw13psumonly-fb-262144-topk8`
+    - rendered report:
+      - `scratch/profiles/ovlpres-shareddw13psumonly-fb-262144-topk8-report.md`
+    - compare outputs:
+      - `scratch/profiles/ovlpres-shareddw13only-vs-shareddw13psumonly-262144-topk8.compare.txt`
+      - `scratch/profiles/ovlpres-shareddwpsumonly-vs-shareddw13psumonly-262144-topk8.compare.txt`
+  - `shared_dw2_psum_only`:
+    - pod: `iris-task-ee568d564e6b`
+    - node: `g12f724`
+    - launcher log:
+      - `scratch/3717-rerun/ovlpres-shareddw2psumonly-profile-t262144-topk8-20260320-215129.log`
+    - copied profile artifacts:
+      - `scratch/profiles/ovlpres-shareddw2psumonly-fb-262144-topk8`
+- Result:
+  - decisive hard-row timings:
+    - `deepep_transport_capped_prewarmed_shared_dw13_psum_only_probe`: `1,977,763.72 tok/s` (`132.546 ms`)
+    - `deepep_transport_capped_prewarmed_shared_dw2_psum_only_probe`: `1,990,658.39 tok/s` (`131.687 ms`)
+  - profile highlights:
+    - `shared_dw13_psum_only`:
+      - dominant pre-gap payload:
+        - `ncclDevKernel_AllReduce_Sum_bf16_RING_LL(...)`
+      - total pre-gap: `82,487.253`
+      - collective exclusive: `66,017.760`
+      - host share: `0.504576`
+    - `shared_dw2_psum_only`:
+      - dominant pre-gap payload:
+        - `ncclDevKernel_AllReduce_Sum_bf16_RING_LL(...)`
+      - total pre-gap: `93,334.047`
+      - collective exclusive: `63,618.525`
+      - host share: `0.508425`
+    - full `shared_dw_psum_only` control for comparison:
+      - dominant pre-gap payload:
+        - `ncclDevKernel_AllReduce_Sum_f32_RING_LL(...)`
+      - total pre-gap: `240,984.732`
+      - collective exclusive: `13,684.825`
+      - host share: `0.530314`
+- Interpretation:
+  - both split `psum-only` halves are similar and stay in the medium `bf16` all-reduce regime.
+  - neither half alone is sufficient to recreate the full `shared_dw_psum_only` pathology.
+  - the giant collapse only appears when both replicated shared reductions are alive together in the same backward graph.
+- Next action:
+  - test whether separating the two replicated shared reductions into distinct custom-VJP branches changes the lowering enough to avoid the full collapse.
