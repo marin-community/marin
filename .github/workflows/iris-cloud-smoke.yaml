@@ -1,6 +1,9 @@
 name: Iris - Cloud Smoke Test
 
 on:
+  pull_request:
+    paths:
+      - "lib/iris/**"
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -11,13 +14,14 @@ permissions:
   statuses: write  # post commit status from issue_comment trigger
 
 concurrency:
-  group: iris-cloud-smoke
-  cancel-in-progress: false  # never kill a running cloud test — would leak GCP resources
+  group: iris-cloud-smoke-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   cloud-smoke-test:
-    # Run on /iris-smoke comment from a repo member/collaborator, or manual dispatch
+    # Run on: PRs touching lib/iris/**, /iris-smoke comment, or manual dispatch
     if: >-
+      github.event_name == 'pull_request' ||
       github.event_name == 'workflow_dispatch' ||
       (
         github.event_name == 'issue_comment' &&
@@ -31,10 +35,21 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    env:
-      LABEL_PREFIX: smoke-ci
-
+    outputs:
+      label-prefix: ${{ steps.label.outputs.prefix }}
     steps:
+      - name: Compute label prefix
+        id: label
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "prefix=smoke-pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "issue_comment" ]; then
+            echo "prefix=smoke-pr-${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
+          else
+            # workflow_dispatch: use short SHA
+            echo "prefix=smoke-$(echo ${{ github.sha }} | head -c 8)" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set commit status to pending
         if: github.event_name == 'issue_comment'
         env:
@@ -48,7 +63,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: refs/pull/${{ github.event.issue.number }}/head
+          # pull_request uses default merge ref; issue_comment needs explicit PR head
+          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -99,6 +115,33 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Start smoke cluster
+        env:
+          LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
+        run: |
+          cd lib/iris && uv run --group dev iris -v \
+            --config=examples/smoke.yaml \
+            cluster start-smoke \
+            --label-prefix "$LABEL_PREFIX" \
+            --url-file /tmp/iris-controller-url \
+            --wait-for-workers 1 \
+            --worker-timeout 600 &
+          START_PID=$!
+          echo "START_PID=$START_PID" >> "$GITHUB_ENV"
+          for i in $(seq 1 360); do
+            if [ -f /tmp/iris-controller-url ]; then
+              echo "Cluster ready!"
+              echo "IRIS_CONTROLLER_URL=$(cat /tmp/iris-controller-url)" >> "$GITHUB_ENV"
+              break
+            fi
+            sleep 2
+          done
+          if [ ! -f /tmp/iris-controller-url ]; then
+            echo "Timed out waiting for cluster"
+            kill $START_PID 2>/dev/null || true
+            exit 1
+          fi
+
       - name: Run cloud smoke tests
         env:
           IRIS_SCREENSHOT_DIR: ${{ github.workspace }}/iris-cloud-screenshots
@@ -108,12 +151,24 @@ jobs:
           cd lib/iris && uv run --group dev python -m pytest \
             tests/e2e/test_smoke.py \
             -m e2e \
-            --iris-config examples/smoke.yaml \
-            --iris-mode full \
-            --iris-label-prefix "$LABEL_PREFIX" \
+            --iris-controller-url "$IRIS_CONTROLLER_URL" \
             -o "addopts=" \
             --tb=short -v \
             --timeout=1200
+
+      - name: Stop tunnel
+        if: always()
+        run: |
+          kill $START_PID 2>/dev/null || true
+
+      - name: Tear down smoke cluster
+        if: always()
+        env:
+          LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
+        run: |
+          cd lib/iris && uv run --group dev iris -v \
+            --config=examples/smoke.yaml \
+            cluster stop --label "$LABEL_PREFIX" || true
 
       - name: Upload screenshots
         if: always()
@@ -132,13 +187,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      LABEL_PREFIX: smoke-ci
+      LABEL_PREFIX: ${{ needs.cloud-smoke-test.outputs.label-prefix }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: refs/pull/${{ github.event.issue.number }}/head
+          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
