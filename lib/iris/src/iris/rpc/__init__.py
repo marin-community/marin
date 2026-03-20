@@ -1,9 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Import order matters for proto descriptor pool: each module must be loaded
-# after its dependencies. Chain: time → config → vm → cluster.
-from iris.rpc import time_pb2 as time_pb2
-from iris.rpc import config_pb2 as config_pb2
-from iris.rpc import vm_pb2 as vm_pb2
-from iris.rpc import cluster_pb2 as cluster_pb2
+# Proto submodules (time_pb2, config_pb2, vm_pb2, query_pb2, cluster_pb2)
+# are imported directly by their consumers rather than re-exported here.
+# Re-exporting them causes circular imports because iris.time_utils
+# imports time_pb2, which triggers this __init__, which tries to import
+# more submodules from the partially-initialized package.

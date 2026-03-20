@@ -750,6 +750,50 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         name="marin-community/open-thoughts-4-6k-math-qwen3-235b-a22b-neither-has-boxed",
         max_parallelism=32,
     ),
+    # OpenThoughts-Agent 32K context SFT traces (exp_tas_optimal_combined_traces)
+    # 9,046 rows of agent traces for Linux command-line tasks
+    # Used to train laion/exp_tas_optimal_combined_traces (Qwen3-8B SFT, 32K context)
+    # Tracked in: https://github.com/marin-community/marin/issues/3896
+    "DCAgent/exp_tas_optimal_combined_traces": InstructionDatasetConfig(
+        hf_dataset_id="DCAgent/exp_tas_optimal_combined_traces",
+        revision="ebbeebd",
+        adapter=multi_turn_adapter(conversation_column="conversations"),
+        metadata_columns=[
+            "agent",
+            "model",
+            "model_provider",
+            "date",
+            "task",
+            "episode",
+            "run_id",
+            "trial_name",
+            "result",
+        ],
+        name="DCAgent/exp_tas_optimal_combined_traces",
+        max_parallelism=32,
+    ),
+    # OpenThoughts-Agent 131K context SFT traces (GLM-4.7 R2EGym sandboxes)
+    # 4,521 rows of agent traces across 67 sandbox episodes
+    # Used to train laion/GLM-4_7-r2egym_sandboxes-maxeps-131k-lc (Qwen3-8B SFT, 131K context)
+    # Tracked in: https://github.com/marin-community/marin/issues/3897
+    "DCAgent2/GLM-4.7-r2egym_sandboxes-maxeps-131k": InstructionDatasetConfig(
+        hf_dataset_id="DCAgent2/GLM-4.7-r2egym_sandboxes-maxeps-131k",
+        revision="167ff86",
+        adapter=multi_turn_adapter(conversation_column="conversations"),
+        metadata_columns=[
+            "agent",
+            "model",
+            "model_provider",
+            "date",
+            "task",
+            "episode",
+            "run_id",
+            "trial_name",
+            "result",
+        ],
+        name="DCAgent2/GLM-4.7-r2egym_sandboxes-maxeps-131k",
+        max_parallelism=32,
+    ),
     "AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories": InstructionDatasetConfig(
         hf_dataset_id="AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories",
         revision="d4c902a",
