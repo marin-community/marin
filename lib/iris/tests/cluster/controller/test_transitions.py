@@ -3212,9 +3212,9 @@ def test_snapshot_round_trip_preserves_reservation_holder():
 
     # Save and restore
     with tempfile.TemporaryDirectory() as tmpdir:
-        checkpoint_path = Path(tmpdir) / "checkpoint.sqlite3"
+        checkpoint_path = Path(tmpdir) / "controller.sqlite3"
         state._db.backup_to(checkpoint_path)
-        restored_db = ControllerDB(db_path=checkpoint_path, auth_db_path=checkpoint_path.parent / "auth.sqlite3")
+        restored_db = ControllerDB(db_dir=Path(tmpdir))
         restored_log_store = LogStore(log_dir=Path(tmpdir) / "logs")
         restored_state = ControllerTransitions(db=restored_db, log_store=restored_log_store)
 

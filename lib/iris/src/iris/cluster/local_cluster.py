@@ -177,7 +177,7 @@ class LocalCluster:
         address = f"http://127.0.0.1:{port}"
 
         db_dir = Path(self._db_dir.name)
-        db = ControllerDB(db_path=db_dir / "controller.sqlite3", auth_db_path=db_dir / "auth.sqlite3")
+        db = ControllerDB(db_dir=db_dir)
 
         # Derive auth from config proto so callers never need to wire it manually.
         auth = create_controller_auth(self._config.auth, db=db)

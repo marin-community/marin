@@ -13,7 +13,7 @@ from iris.cluster.controller.query import execute_raw_query
 
 @pytest.fixture
 def db(tmp_path: Path) -> ControllerDB:
-    cdb = ControllerDB(tmp_path / "test.db", auth_db_path=tmp_path / "auth.sqlite3")
+    cdb = ControllerDB(db_dir=tmp_path)
     _seed_test_data(cdb)
     return cdb
 

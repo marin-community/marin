@@ -27,8 +27,7 @@ from iris.time_utils import Duration, Timestamp
 
 @pytest.fixture
 def state(tmp_path):
-    db_path = tmp_path / "controller.sqlite3"
-    db = ControllerDB(db_path=db_path, auth_db_path=tmp_path / "auth.sqlite3")
+    db = ControllerDB(db_dir=tmp_path)
     log_store = LogStore(log_dir=tmp_path / "logs")
     s = ControllerTransitions(db=db, log_store=log_store)
     yield s
@@ -121,8 +120,7 @@ def test_fail_heartbeat_below_threshold(state, worker_metadata):
 
 def test_fail_heartbeat_at_threshold(tmp_path, worker_metadata):
     """RPC failures at threshold return WORKER_FAILED and prune the worker."""
-    db_path = tmp_path / "controller.sqlite3"
-    db = ControllerDB(db_path=db_path, auth_db_path=tmp_path / "auth.sqlite3")
+    db = ControllerDB(db_dir=tmp_path)
     log_store = LogStore(log_dir=tmp_path / "logs")
     state = ControllerTransitions(db=db, log_store=log_store, heartbeat_failure_threshold=3)
     _register_worker(state, "worker1", worker_metadata)
@@ -161,8 +159,7 @@ def test_unhealthy_worker_cascades_to_tasks(tmp_path):
     complete_heartbeat resets consecutive_failures before checking health, so we
     use heartbeat_failure_threshold=1 to trigger removal on the first unhealthy report.
     """
-    db_path = tmp_path / "controller.sqlite3"
-    db = ControllerDB(db_path=db_path, auth_db_path=tmp_path / "auth.sqlite3")
+    db = ControllerDB(db_dir=tmp_path)
     log_store = LogStore(log_dir=tmp_path / "logs")
     state = ControllerTransitions(db=db, log_store=log_store, heartbeat_failure_threshold=1)
     worker_metadata = cluster_pb2.WorkerMetadata(
@@ -223,7 +220,7 @@ def test_unhealthy_worker_cascades_to_tasks(tmp_path):
 def test_reap_stale_workers_removes_old_heartbeat(tmp_path, worker_metadata):
     """Workers restored from checkpoint with heartbeat older than the staleness
     threshold are failed immediately by the heartbeat loop's reap pass."""
-    db = ControllerDB(db_path=tmp_path / "controller.sqlite3", auth_db_path=tmp_path / "auth.sqlite3")
+    db = ControllerDB(db_dir=tmp_path)
     log_store = LogStore(log_dir=tmp_path / "logs")
     config = ControllerConfig(remote_state_dir="file:///tmp/iris-test-state", local_state_dir=tmp_path)
     controller = Controller(config=config, provider=FakeProvider(), db=db)
@@ -261,7 +258,7 @@ def test_reap_stale_workers_removes_old_heartbeat(tmp_path, worker_metadata):
 
 def test_reap_stale_workers_no_op_when_all_fresh(tmp_path, worker_metadata):
     """When all workers have recent heartbeats, no workers are reaped."""
-    db = ControllerDB(db_path=tmp_path / "controller.sqlite3", auth_db_path=tmp_path / "auth.sqlite3")
+    db = ControllerDB(db_dir=tmp_path)
     log_store = LogStore(log_dir=tmp_path / "logs")
     config = ControllerConfig(remote_state_dir="file:///tmp/iris-test-state", local_state_dir=tmp_path)
     controller = Controller(config=config, provider=FakeProvider(), db=db)

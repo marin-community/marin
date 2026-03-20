@@ -42,6 +42,7 @@ import click
 import fsspec.core
 
 from iris.cluster.config import load_config
+from iris.cluster.controller.db import ControllerDB
 
 logger = logging.getLogger("controller-restart")
 
@@ -162,8 +163,6 @@ def main(
     if not remote_state_dir:
         raise click.ClickException("storage.remote_state_dir is required")
 
-    canonical_prefix = f"{remote_state_dir.rstrip('/')}/controller-state"
-
     # Step 1: Discover controller
     click.echo("=" * 60)
     click.echo("Step 1: Discover controller VM")
@@ -191,11 +190,11 @@ def main(
             f"Workers: {resp.get('workerCount', 0)}"
         )
 
-        latest = f"{canonical_prefix}/latest.sqlite3"
-        if _gcs_exists(latest):
-            click.echo(f"  Verified: {latest} exists")
+        checkpoint_path = resp.get("checkpointPath", "")
+        if checkpoint_path and _gcs_exists(f"{checkpoint_path}/{ControllerDB.DB_FILENAME}"):
+            click.echo(f"  Verified: {checkpoint_path}/{ControllerDB.DB_FILENAME} exists")
         else:
-            click.echo(f"  WARNING: {latest} not found yet")
+            click.echo(f"  WARNING: checkpoint DB not found at {checkpoint_path}")
 
     # Step 3: Restart controller
     click.echo()

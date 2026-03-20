@@ -31,7 +31,7 @@ from iris.rpc.auth import _verified_identity
 
 @pytest.fixture
 def db(tmp_path):
-    d = ControllerDB(db_path=tmp_path / "test.sqlite3", auth_db_path=tmp_path / "auth.sqlite3")
+    d = ControllerDB(db_dir=tmp_path)
     yield d
     d.close()
 

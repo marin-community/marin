@@ -17,7 +17,7 @@ from iris.time_utils import Timestamp
 
 @pytest.fixture
 def db(tmp_path: Path) -> ControllerDB:
-    return ControllerDB(tmp_path / "test.db", auth_db_path=tmp_path / "auth.sqlite3")
+    return ControllerDB(db_dir=tmp_path)
 
 
 def test_insert_and_retrieve_profile(db: ControllerDB) -> None:

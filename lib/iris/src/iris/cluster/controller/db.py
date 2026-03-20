@@ -999,16 +999,18 @@ class ControllerDB:
     """Thread-safe SQLite wrapper with typed query and migration helpers."""
 
     _READ_POOL_SIZE = 4
+    DB_FILENAME = "controller.sqlite3"
+    AUTH_DB_FILENAME = "auth.sqlite3"
 
-    def __init__(self, db_path: Path, auth_db_path: Path):
-        self._db_path = db_path
-        self._auth_db_path = auth_db_path
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, db_dir: Path):
+        self._db_dir = db_dir
+        self._db_dir.mkdir(parents=True, exist_ok=True)
+        self._db_path = self._db_dir / self.DB_FILENAME
+        self._auth_db_path = self._db_dir / self.AUTH_DB_FILENAME
         self._lock = RLock()
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._configure(self._conn)
-        self._auth_db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn.execute("ATTACH DATABASE ? AS auth", (str(self._auth_db_path),))
         self.apply_migrations()
         self._read_pool: queue.Queue[sqlite3.Connection] = queue.Queue()
@@ -1027,6 +1029,10 @@ class ControllerDB:
             self._configure(conn)
             conn.execute("PRAGMA query_only = ON")
             self._read_pool.put(conn)
+
+    @property
+    def db_dir(self) -> Path:
+        return self._db_dir
 
     @property
     def db_path(self) -> Path:
@@ -1213,22 +1219,36 @@ class ControllerDB:
             finally:
                 dest.close()
 
-    def replace_from(self, source: str | Path) -> None:
-        """Replace current DB file with ``source`` and reopen connection.
+    def replace_from(self, source_dir: str | Path) -> None:
+        """Replace current DB files from ``source_dir`` and reopen connection.
 
-        ``source`` may be a remote path (e.g. ``gs://...``) thanks to fsspec.
+        ``source_dir`` is a directory (local or remote) containing
+        ``controller.sqlite3`` and optionally ``auth.sqlite3``. Files are
+        downloaded via fsspec so remote paths (e.g. ``gs://...``) work.
         Only called at startup before concurrent access begins.
         """
         import fsspec.core
 
+        source_dir_str = str(source_dir).rstrip("/")
+
         with self._lock:
-            # Download to a temp file first so a failed copy doesn't leave
-            # the DB connection closed with no file to reopen.
+            # Download main DB
+            main_source = f"{source_dir_str}/{self.DB_FILENAME}"
             tmp_path = self._db_path.with_suffix(".tmp")
-            with fsspec.core.open(str(source), "rb") as src, open(tmp_path, "wb") as dst:
+            with fsspec.core.open(main_source, "rb") as src, open(tmp_path, "wb") as dst:
                 dst.write(src.read())
             self._conn.close()
             tmp_path.rename(self._db_path)
+
+            # Download auth DB if present in source
+            auth_source = f"{source_dir_str}/{self.AUTH_DB_FILENAME}"
+            fs, fs_path = fsspec.core.url_to_fs(auth_source)
+            if fs.exists(fs_path):
+                auth_tmp = self._auth_db_path.with_suffix(".tmp")
+                with fsspec.core.open(auth_source, "rb") as src, open(auth_tmp, "wb") as dst:
+                    dst.write(src.read())
+                auth_tmp.rename(self._auth_db_path)
+
             self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._configure(self._conn)

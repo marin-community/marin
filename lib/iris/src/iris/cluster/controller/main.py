@@ -40,7 +40,7 @@ def cli():
 @click.option(
     "--checkpoint-path",
     default=None,
-    help="Restore from this specific checkpoint DB copy instead of latest.sqlite3",
+    help="Restore from this specific checkpoint directory (e.g. gs://bucket/.../controller-state/1234567890)",
 )
 @click.option(
     "--checkpoint-interval",
@@ -103,16 +103,22 @@ def serve(
 
     # --- Restore or reuse local DB ---
     local_state_dir.mkdir(parents=True, exist_ok=True)
-    db_path = local_state_dir / "controller.sqlite3"
-    if db_path.exists():
-        logger.info("Local DB exists at %s, skipping remote restore", db_path)
+    db_dir = local_state_dir / "db"
+    db_path = db_dir / ControllerDB.DB_FILENAME
+    auth_db_path = db_dir / ControllerDB.AUTH_DB_FILENAME
+    if db_path.exists() and auth_db_path.exists():
+        logger.info("Local DB exists at %s, skipping remote restore", db_dir)
     else:
-        restored = download_checkpoint_to_local(remote_state_dir, db_path, checkpoint_path)
+        if db_path.exists() and not auth_db_path.exists():
+            logger.warning(
+                "Main DB exists at %s but auth DB is missing — fetching from remote",
+                db_path,
+            )
+        restored = download_checkpoint_to_local(remote_state_dir, db_dir, checkpoint_dir=checkpoint_path)
         if checkpoint_path and not restored:
-            raise click.ClickException(f"Checkpoint DB not found: {checkpoint_path}")
+            raise click.ClickException(f"Checkpoint not found: {checkpoint_path}")
 
-    auth_db_path = db_path.with_name("auth.sqlite3")
-    db = ControllerDB(db_path=db_path, auth_db_path=auth_db_path)
+    db = ControllerDB(db_dir=db_dir)
 
     # --- Create provider ---
     provider = make_provider(cluster_config)

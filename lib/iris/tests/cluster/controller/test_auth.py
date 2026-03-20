@@ -37,7 +37,7 @@ CSRF_HEADERS = {"Origin": "http://testserver"}
 
 @pytest.fixture
 def db(tmp_path):
-    db = ControllerDB(db_path=tmp_path / "controller.sqlite3", auth_db_path=tmp_path / "auth.sqlite3")
+    db = ControllerDB(db_dir=tmp_path)
     yield db
     db.close()
 
@@ -263,7 +263,7 @@ def test_write_connection_can_access_auth_tables(db: ControllerDB):
 def test_auth_db_file_created(tmp_path):
     auth_path = tmp_path / "auth.sqlite3"
     assert not auth_path.exists()
-    db = ControllerDB(db_path=tmp_path / "controller.sqlite3", auth_db_path=auth_path)
+    db = ControllerDB(db_dir=tmp_path)
     assert auth_path.exists()
     db.close()
 

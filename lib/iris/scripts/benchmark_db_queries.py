@@ -333,7 +333,7 @@ def print_db_stats(db: ControllerDB) -> None:
 @click.option("--only", "only_group", type=click.Choice(["scheduling", "dashboard"]), help="Run only this group")
 def main(db_path: Path, iterations: int, only_group: str | None) -> None:
     """Benchmark Iris controller DB queries against a local checkpoint."""
-    db = ControllerDB(db_path)
+    db = ControllerDB(db_dir=db_path.parent)
     db.apply_migrations()
     print(f"Benchmarking {db_path} ({iterations} iterations per query)")
     print_db_stats(db)

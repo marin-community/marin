@@ -518,7 +518,7 @@ def test_jwt_token_manager_load_revocations(tmp_path):
     from iris.cluster.controller.db import ControllerDB
     from iris.time_utils import Timestamp
 
-    db = ControllerDB(db_path=tmp_path / "test.sqlite3", auth_db_path=tmp_path / "auth.sqlite3")
+    db = ControllerDB(db_dir=tmp_path)
     now = Timestamp.now()
     db.ensure_user("alice", now)
 
