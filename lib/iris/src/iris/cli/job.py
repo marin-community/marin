@@ -474,8 +474,9 @@ def run_iris_job(
     if zone:
         constraints.append(zone_constraint(zone))
 
-    # Executor heuristic: pin small CPU-only jobs to non-preemptible workers
-    # so coordinators survive spot reclamation.
+    # Executor heuristic: small CPU-only CLI jobs (no accelerators, 1 replica,
+    # CPU ≤ 0.5 cores, RAM ≤ 4 GiB) are auto-tagged as non-preemptible so
+    # coordinators survive spot reclamation.
     resources_proto = resources.to_proto()
     preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
     if preemptible is not None:
