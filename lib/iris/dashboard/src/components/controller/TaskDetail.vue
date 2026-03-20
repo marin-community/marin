@@ -161,9 +161,6 @@ onMounted(async () => {
           <InfoRow v-if="task.pendingReason" label="Pending Reason">
             <span class="text-status-warning">{{ task.pendingReason }}</span>
           </InfoRow>
-          <InfoRow v-if="task.containerId" label="Container ID">
-            <span class="font-mono text-xs">{{ task.containerId }}</span>
-          </InfoRow>
         </InfoCard>
 
         <!-- Resources card -->
