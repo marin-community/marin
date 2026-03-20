@@ -132,13 +132,15 @@ class TestDryRunTpuState:
     def test_create_and_describe(self, svc: GcpServiceImpl) -> None:
         info = svc.tpu_create(_tpu_request(name="tpu-a"))
         assert info.name == "tpu-a"
-        assert info.state == "READY"
+        assert info.state == "CREATING"
         assert info.accelerator_type == "v4-8"
         assert info.zone == "us-central2-b"
 
+        svc.advance_tpu_state("tpu-a", "us-central2-b", "READY")
         described = svc.tpu_describe("tpu-a", "us-central2-b")
         assert described is not None
         assert described.name == "tpu-a"
+        assert described.state == "READY"
 
     def test_describe_nonexistent(self, svc: GcpServiceImpl) -> None:
         assert svc.tpu_describe("no-such-tpu", "us-central2-b") is None
@@ -367,3 +369,92 @@ def test_cloud_mode_property() -> None:
     svc = GcpServiceImpl(mode=ServiceMode.CLOUD, project_id="p")
     assert svc.mode == ServiceMode.CLOUD
     assert svc.project_id == "p"
+
+
+# ========================================================================
+# Duplicate detection
+# ========================================================================
+
+
+class TestDuplicateDetection:
+    def test_tpu_create_duplicate_raises(self, svc: GcpServiceImpl) -> None:
+        svc.tpu_create(_tpu_request(name="tpu-a", zone="us-central2-b"))
+        with pytest.raises(PlatformError, match="already exists"):
+            svc.tpu_create(_tpu_request(name="tpu-a", zone="us-central2-b"))
+
+    def test_vm_create_duplicate_raises(self, svc: GcpServiceImpl) -> None:
+        svc.vm_create(_vm_request(name="vm-a", zone="us-central2-b"))
+        with pytest.raises(PlatformError, match="already exists"):
+            svc.vm_create(_vm_request(name="vm-a", zone="us-central2-b"))
+
+
+# ========================================================================
+# TPU state transitions
+# ========================================================================
+
+
+class TestTpuStateTransitions:
+    def test_tpu_initial_state_creating(self, svc: GcpServiceImpl) -> None:
+        info = svc.tpu_create(_tpu_request(name="tpu-a"))
+        assert info.state == "CREATING"
+
+        described = svc.tpu_describe("tpu-a", "us-central2-b")
+        assert described is not None
+        assert described.state == "CREATING"
+
+    def test_advance_tpu_state(self, svc: GcpServiceImpl) -> None:
+        svc.tpu_create(_tpu_request(name="tpu-a"))
+        svc.advance_tpu_state("tpu-a", "us-central2-b", "READY")
+
+        described = svc.tpu_describe("tpu-a", "us-central2-b")
+        assert described is not None
+        assert described.state == "READY"
+
+    def test_advance_nonexistent_raises(self, svc: GcpServiceImpl) -> None:
+        with pytest.raises(ValueError, match="not found"):
+            svc.advance_tpu_state("no-such-tpu", "us-central2-b")
+
+
+# ========================================================================
+# Per-type-per-zone availability
+# ========================================================================
+
+
+class TestTypeZoneAvailability:
+    def test_tpu_type_zone_restriction(self, svc: GcpServiceImpl) -> None:
+        svc.set_available_types_by_zone({"us-central2-b": {"v4-8"}})
+
+        # Allowed type succeeds
+        info = svc.tpu_create(_tpu_request(name="tpu-ok", accelerator_type="v4-8"))
+        assert info.accelerator_type == "v4-8"
+
+        # Disallowed type raises
+        with pytest.raises(QuotaExhaustedError, match="not available"):
+            svc.tpu_create(_tpu_request(name="tpu-bad", accelerator_type="v4-16"))
+
+    def test_zone_not_in_mapping_rejects_all(self, svc: GcpServiceImpl) -> None:
+        svc.set_available_types_by_zone({"us-central1-a": {"v4-8"}})
+        with pytest.raises(QuotaExhaustedError, match="not available"):
+            svc.tpu_create(_tpu_request(name="tpu-a", zone="us-central2-b", accelerator_type="v4-8"))
+
+
+# ========================================================================
+# VM quota enforcement
+# ========================================================================
+
+
+class TestVmQuotaEnforcement:
+    def test_vm_quota_enforcement(self, svc: GcpServiceImpl) -> None:
+        svc.set_vm_zone_quota("us-central2-b", max_vms=2)
+        svc.vm_create(_vm_request(name="vm-a"))
+        svc.vm_create(_vm_request(name="vm-b"))
+
+        with pytest.raises(QuotaExhaustedError, match="VM quota exhausted"):
+            svc.vm_create(_vm_request(name="vm-c"))
+
+    def test_vm_quota_freed_after_delete(self, svc: GcpServiceImpl) -> None:
+        svc.set_vm_zone_quota("us-central2-b", max_vms=1)
+        svc.vm_create(_vm_request(name="vm-a"))
+        svc.vm_delete("vm-a", "us-central2-b")
+        info = svc.vm_create(_vm_request(name="vm-b"))
+        assert info.name == "vm-b"

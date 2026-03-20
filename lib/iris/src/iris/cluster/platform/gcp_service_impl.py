@@ -14,6 +14,7 @@ supported in DRY_RUN and LOCAL modes for testing.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -221,6 +222,8 @@ class GcpServiceImpl:
         # Failure injection (DRY_RUN/LOCAL only)
         self._injected_failures: dict[str, PlatformError] = {}
         self._zone_quotas: dict[str, int] = {}
+        self._vm_zone_quotas: dict[str, int] = {}
+        self._available_types_by_zone: dict[str, set[str]] | None = None
 
         # LOCAL mode: worker spawning params
         self._controller_address = controller_address
@@ -304,6 +307,21 @@ class GcpServiceImpl:
         """Add an accelerator type to the valid set."""
         self._valid_accelerator_types.add(accelerator_type)
 
+    def set_vm_zone_quota(self, zone: str, max_vms: int) -> None:
+        """Set VM quota for a zone. Enforced in DRY_RUN/LOCAL modes."""
+        self._vm_zone_quotas[zone] = max_vms
+
+    def set_available_types_by_zone(self, mapping: dict[str, set[str]]) -> None:
+        """Restrict which accelerator types are available per zone."""
+        self._available_types_by_zone = mapping
+
+    def advance_tpu_state(self, name: str, zone: str, state: str = "READY") -> None:
+        """Transition a TPU to a new state (DRY_RUN/LOCAL only)."""
+        key = (name, zone)
+        if key not in self._tpus:
+            raise ValueError(f"TPU {name!r} not found in {zone}")
+        self._tpus[key] = dataclasses.replace(self._tpus[key], state=state)
+
     def _check_injected_failure(self, operation: str) -> None:
         err = self._injected_failures.pop(operation, None)
         if err is not None:
@@ -326,11 +344,23 @@ class GcpServiceImpl:
         if self._mode == ServiceMode.CLOUD:
             return self._tpu_create_cloud(request)
 
-        # DRY_RUN / LOCAL: check quota, then create in-memory
+        # DRY_RUN / LOCAL: duplicate detection
+        if (request.name, request.zone) in self._tpus:
+            raise PlatformError(f"TPU {request.name!r} already exists in {request.zone}")
+
+        # Check quota
         zone_count = sum(1 for (_, z) in self._tpus if z == request.zone)
         max_quota = self._zone_quotas.get(request.zone, self.DEFAULT_QUOTA)
         if zone_count >= max_quota:
             raise QuotaExhaustedError(f"Quota exhausted in {request.zone}")
+
+        # Per-type-per-zone availability
+        if self._available_types_by_zone is not None:
+            zone_types = self._available_types_by_zone.get(request.zone, set())
+            if request.accelerator_type not in zone_types:
+                raise QuotaExhaustedError(
+                    f"Accelerator type {request.accelerator_type!r} not available in {request.zone}"
+                )
 
         # Synthetic network endpoints based on TPU topology
         from iris.cluster.types import get_tpu_topology
@@ -346,7 +376,7 @@ class GcpServiceImpl:
 
         info = TpuInfo(
             name=request.name,
-            state="READY",
+            state="CREATING",
             accelerator_type=request.accelerator_type,
             zone=request.zone,
             labels=dict(request.labels),
@@ -551,6 +581,16 @@ class GcpServiceImpl:
 
         if self._mode == ServiceMode.CLOUD:
             return self._vm_create_cloud(request)
+
+        # DRY_RUN / LOCAL: duplicate detection
+        if (request.name, request.zone) in self._vms:
+            raise PlatformError(f"VM {request.name!r} already exists in {request.zone}")
+
+        # Check VM quota
+        vm_zone_count = sum(1 for (_, z) in self._vms if z == request.zone)
+        max_vm_quota = self._vm_zone_quotas.get(request.zone, self.DEFAULT_QUOTA)
+        if vm_zone_count >= max_vm_quota:
+            raise QuotaExhaustedError(f"VM quota exhausted in {request.zone}")
 
         # DRY_RUN / LOCAL: create in-memory
         seq = len(self._vms)
