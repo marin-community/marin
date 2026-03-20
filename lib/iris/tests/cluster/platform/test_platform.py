@@ -746,6 +746,7 @@ def test_gcp_tpu_bootstrap_monitors_health_endpoints():
 
     handle = platform.create_slice(cfg)
     handle._bootstrap_state = None
+    gcp_service.advance_tpu_state(handle.slice_id, "us-central2-b", "READY")
 
     mock_resp = unittest.mock.MagicMock()
     mock_resp.status = 200
@@ -779,6 +780,7 @@ def test_gcp_tpu_bootstrap_timeout_fetches_cloud_logs():
 
     handle = platform.create_slice(cfg)
     handle._bootstrap_state = None
+    gcp_service.advance_tpu_state(handle.slice_id, "us-central2-b", "READY")
 
     with (
         unittest.mock.patch(
@@ -815,6 +817,7 @@ def test_gcp_tpu_bootstrap_partial_healthy():
 
     handle = platform.create_slice(cfg)
     handle._bootstrap_state = None
+    gcp_service.advance_tpu_state(handle.slice_id, "us-central2-b", "READY")
 
     # GcpServiceImpl creates 4 endpoints for v4-32 (10.0.0.0..10.0.0.3).
     # Only the first worker responds healthy; the rest refuse connections.
