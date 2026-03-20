@@ -47,6 +47,19 @@ def rpc_error_handler(
         raise connect_error_with_traceback(code, f"Error {operation}: {e}", exc=e) from e
 
 
+def connect_error_sanitized(
+    code: Code,
+    message: str,
+    exc: Exception | None = None,
+) -> ConnectError:
+    """Create a ConnectError WITHOUT traceback details. For production use."""
+    details = errors_pb2.ErrorDetails(message=message)
+    details.timestamp.CopyFrom(Timestamp.now().to_proto())
+    if exc is not None:
+        details.exception_type = f"{type(exc).__module__}.{type(exc).__name__}"
+    return ConnectError(code, message, details=[details])
+
+
 def connect_error_with_traceback(
     code: Code,
     message: str,

@@ -49,7 +49,7 @@ def _extract_cookie(cookie_header: str, name: str) -> str | None:
         return None
 
 
-def _extract_bearer_token(headers: dict) -> str | None:
+def extract_bearer_token(headers: dict) -> str | None:
     """Extract bearer token from Authorization header or session cookie."""
     auth_header = headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
@@ -229,7 +229,7 @@ class AuthInterceptor:
         self._verifier = verifier
 
     def intercept_unary_sync(self, call_next, request, ctx):
-        token = _extract_bearer_token(ctx.request_headers())
+        token = extract_bearer_token(ctx.request_headers())
         if not token:
             raise ConnectError(Code.UNAUTHENTICATED, "Missing or malformed Authorization header")
 
@@ -276,7 +276,7 @@ class NullAuthInterceptor:
         identity = self._default_identity
 
         if self._verifier is not None:
-            token = _extract_bearer_token(ctx.request_headers())
+            token = extract_bearer_token(ctx.request_headers())
             if token:
                 try:
                     identity = self._verifier.verify(token)

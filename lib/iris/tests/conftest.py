@@ -3,7 +3,6 @@
 
 # Test configuration for iris
 
-import atexit
 import logging
 import os
 import subprocess
@@ -157,4 +156,11 @@ def pytest_sessionfinish(session, exitstatus):
     tty.close()
 
     if exitstatus != 0:
-        atexit.register(os._exit, exitstatus)
+        # Spawn a daemon thread to force-exit after pytest prints its summary.
+        # atexit won't work here: Python joins non-daemon threads before running
+        # atexit handlers, so leaked controller threads would deadlock shutdown.
+        def _force_exit():
+            time.sleep(5)
+            os._exit(exitstatus)
+
+        threading.Thread(target=_force_exit, daemon=True).start()
