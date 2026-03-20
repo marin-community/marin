@@ -92,6 +92,7 @@ Kernel = Literal[
 ]
 
 _USE_SHARED_MLP_EXPLICIT_BWD = False
+_USE_SHARED_MLP_GRADX_FIRST_BWD = False
 _USE_SHARED_MLP_FAST_ACCUM = False
 _USE_COMBINE_FAST_ACCUM = False
 BenchPass = Literal["forward", "forward_backward"]
@@ -323,6 +324,11 @@ def _set_shared_mlp_explicit_bwd(enabled: bool) -> None:
     _USE_SHARED_MLP_EXPLICIT_BWD = enabled
 
 
+def _set_shared_mlp_gradx_first_bwd(enabled: bool) -> None:
+    global _USE_SHARED_MLP_GRADX_FIRST_BWD
+    _USE_SHARED_MLP_GRADX_FIRST_BWD = enabled
+
+
 def _set_shared_mlp_fast_accum(enabled: bool) -> None:
     global _USE_SHARED_MLP_FAST_ACCUM
     _USE_SHARED_MLP_FAST_ACCUM = enabled
@@ -394,6 +400,20 @@ def _shared_mlp_reference(
         preferred_element_type=preferred,
     )
     return shared_out.astype(x.dtype)
+
+
+def _psum_flattened_pair(
+    left: jax.Array,
+    right: jax.Array,
+    reduction_axes: tuple[str, ...],
+) -> tuple[jax.Array, jax.Array]:
+    if not reduction_axes:
+        return left, right
+
+    left_size = left.size
+    flat = jnp.concatenate([left.reshape(-1), right.reshape(-1)], axis=0)
+    flat = jax.lax.psum(flat, reduction_axes)
+    return flat[:left_size].reshape(left.shape), flat[left_size:].reshape(right.shape)
 
 
 @jax.custom_vjp
@@ -543,11 +563,141 @@ def _shared_mlp_explicit_bwd_bwd(
 _shared_mlp_explicit_bwd.defvjp(_shared_mlp_explicit_bwd_fwd, _shared_mlp_explicit_bwd_bwd)
 
 
+@jax.custom_vjp
+def _shared_mlp_gradx_first_bwd(
+    x: jax.Array,
+    shared_w13: jax.Array,
+    shared_w2: jax.Array,
+) -> jax.Array:
+    return _shared_mlp_reference(x, shared_w13, shared_w2)
+
+
+def _shared_mlp_gradx_first_bwd_fwd(
+    x: jax.Array,
+    shared_w13: jax.Array,
+    shared_w2: jax.Array,
+) -> tuple[jax.Array, tuple[jax.Array | None, ...]]:
+    return _shared_mlp_explicit_bwd_fwd(x, shared_w13, shared_w2)
+
+
+def _shared_mlp_gradx_first_bwd_bwd(
+    residuals: tuple[jax.Array | None, ...],
+    g: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    x, shared_w13, shared_w2, gate_f32, up_f32 = residuals
+    if x is None or shared_w13 is None or shared_w2 is None or gate_f32 is None or up_f32 is None:
+        return jnp.zeros_like(g), jnp.zeros((g.shape[-1], 0), dtype=g.dtype), jnp.zeros((0, g.shape[-1]), dtype=g.dtype)
+
+    x_f32 = x.astype(jnp.float32)
+    shared_w13_f32 = shared_w13.astype(jnp.float32)
+    shared_w2_f32 = shared_w2.astype(jnp.float32)
+    g_f32 = g.astype(jnp.float32)
+    mesh = get_abstract_mesh()
+    reduction_axes = _mesh_reduction_axes(mesh)
+    preferred = _shared_mlp_preferred_element_type()
+
+    def _shared_bwd_local(
+        x_local: jax.Array,
+        gate_local: jax.Array,
+        up_local: jax.Array,
+        g_local: jax.Array,
+        shared_w13_local: jax.Array,
+        shared_w2_local: jax.Array,
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+        shared_gated_local = jax.nn.silu(gate_local) * up_local
+        if _USE_SHARED_MLP_FAST_ACCUM:
+            shared_gated_mat = shared_gated_local.astype(jnp.bfloat16)
+            g_mat = g_local.astype(jnp.bfloat16)
+            x_mat = x_local.astype(jnp.bfloat16)
+            shared_w13_mat = shared_w13_local.astype(jnp.bfloat16)
+            grad_shared13_dtype = shared_w13_local.dtype
+        else:
+            shared_gated_mat = shared_gated_local
+            g_mat = g_local
+            x_mat = x_local
+            shared_w13_mat = shared_w13_local
+            grad_shared13_dtype = shared_w13_local.dtype
+        grad_shared_w2_local = jnp.einsum(
+            "tm,td->md",
+            shared_gated_mat,
+            g_mat,
+            preferred_element_type=preferred,
+        )
+        grad_shared_gated_local = jnp.einsum(
+            "td,md->tm",
+            g_mat,
+            shared_w2_local,
+            preferred_element_type=preferred,
+        )
+        grad_shared_gated_local = grad_shared_gated_local.astype(jnp.float32)
+        grad_gate_local = grad_shared_gated_local * up_local * _silu_grad(gate_local)
+        grad_up_local = grad_shared_gated_local * jax.nn.silu(gate_local)
+        grad_shared13_local = jnp.concatenate([grad_gate_local, grad_up_local], axis=-1)
+        grad_shared13_mat = (
+            grad_shared13_local.astype(grad_shared13_dtype) if _USE_SHARED_MLP_FAST_ACCUM else grad_shared13_local
+        )
+        grad_x_local = jnp.einsum(
+            "tm,dm->td",
+            grad_shared13_mat,
+            shared_w13_mat,
+            preferred_element_type=preferred,
+        )
+        grad_shared_w13_local = jnp.einsum(
+            "td,tm->dm",
+            x_mat,
+            grad_shared13_mat,
+            preferred_element_type=preferred,
+        )
+        grad_shared_w13_local, grad_shared_w2_local = _psum_flattened_pair(
+            grad_shared_w13_local,
+            grad_shared_w2_local,
+            reduction_axes,
+        )
+        return grad_x_local, grad_shared_w13_local, grad_shared_w2_local
+
+    if mesh is not None and not mesh.empty:
+        batch_spec = grug_moe_lib._batch_spec_from_x(x, mesh)
+        shard_fn = shard_map(
+            _shared_bwd_local,
+            mesh=mesh,
+            in_specs=(batch_spec, batch_spec, batch_spec, batch_spec, P(None, None), P(None, None)),
+            out_specs=(batch_spec, P(None, None), P(None, None)),
+            check_vma=False,
+        )
+        grad_x, grad_shared_w13_local, grad_shared_w2_local = shard_fn(
+            x_f32,
+            gate_f32,
+            up_f32,
+            g_f32,
+            shared_w13_f32,
+            shared_w2_f32,
+        )
+    else:
+        grad_x, grad_shared_w13_local, grad_shared_w2_local = _shared_bwd_local(
+            x_f32,
+            gate_f32,
+            up_f32,
+            g_f32,
+            shared_w13_f32,
+            shared_w2_f32,
+        )
+    return (
+        grad_x.astype(x.dtype),
+        grad_shared_w13_local.astype(shared_w13.dtype),
+        grad_shared_w2_local.astype(shared_w2.dtype),
+    )
+
+
+_shared_mlp_gradx_first_bwd.defvjp(_shared_mlp_gradx_first_bwd_fwd, _shared_mlp_gradx_first_bwd_bwd)
+
+
 def _shared_mlp(
     x: jax.Array,
     shared_w13: jax.Array,
     shared_w2: jax.Array,
 ) -> jax.Array:
+    if _USE_SHARED_MLP_GRADX_FIRST_BWD:
+        return _shared_mlp_gradx_first_bwd(x, shared_w13, shared_w2)
     if _USE_SHARED_MLP_EXPLICIT_BWD:
         return _shared_mlp_explicit_bwd(x, shared_w13, shared_w2)
     return _shared_mlp_reference(x, shared_w13, shared_w2)
@@ -7095,6 +7245,7 @@ def main() -> None:
     parser.add_argument("--w13-expert-padded", action="store_true")
     parser.add_argument("--w2-expert-padded", action="store_true")
     parser.add_argument("--shared-mlp-explicit-bwd", action="store_true")
+    parser.add_argument("--shared-mlp-gradx-first-bwd", action="store_true")
     parser.add_argument("--shared-mlp-fast-accum", action="store_true")
     parser.add_argument("--combine-fast-accum", action="store_true")
     parser.add_argument("--deepep-dispatch-num-sms", type=int)
@@ -7123,6 +7274,7 @@ def main() -> None:
 
     dtype = jnp.dtype(args.dtype)
     _set_shared_mlp_explicit_bwd(args.shared_mlp_explicit_bwd)
+    _set_shared_mlp_gradx_first_bwd(args.shared_mlp_gradx_first_bwd)
     _set_shared_mlp_fast_accum(args.shared_mlp_fast_accum)
     _set_combine_fast_accum(args.combine_fast_accum)
     eps = [int(tok.strip()) for tok in args.ep_list.split(",") if tok.strip()]
@@ -7176,6 +7328,7 @@ def main() -> None:
         f"w13_expert_padded={args.w13_expert_padded} "
         f"w2_expert_padded={args.w2_expert_padded} "
         f"shared_mlp_explicit_bwd={args.shared_mlp_explicit_bwd} "
+        f"shared_mlp_gradx_first_bwd={args.shared_mlp_gradx_first_bwd} "
         f"shared_mlp_fast_accum={args.shared_mlp_fast_accum} "
         f"combine_fast_accum={args.combine_fast_accum} "
         f"deepep_collapse_impl={args.deepep_collapse_impl}"
