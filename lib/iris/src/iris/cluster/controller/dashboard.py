@@ -15,6 +15,8 @@ The Python layer only serves HTML shells; all rendering is done client-side.
 """
 
 import logging
+from http.cookies import SimpleCookie
+from typing import Any
 
 import httpx
 from starlette.applications import Starlette
@@ -22,6 +24,7 @@ from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, static_files_mount
@@ -30,6 +33,59 @@ from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
 
 logger = logging.getLogger(__name__)
+
+
+_PUBLIC_PATH_PREFIXES = (
+    "/health",
+    "/auth/",
+    "/static/",
+    "/iris.cluster.ControllerService/",
+)
+
+
+def _extract_token_from_scope(scope: Scope) -> str | None:
+    """Extract auth token from ASGI scope (cookie or Authorization header)."""
+    headers: dict[str, str] = {k.decode(): v.decode() for k, v in scope.get("headers", [])}
+    auth_header = headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header[7:]
+    cookie_header = headers.get("cookie", "")
+    if not cookie_header:
+        return None
+    cookie = SimpleCookie(cookie_header)
+    if SESSION_COOKIE in cookie:
+        return cookie[SESSION_COOKIE].value
+    return None
+
+
+class _AuthMiddleware:
+    """ASGI middleware enforcing session cookie auth on all non-public routes."""
+
+    def __init__(self, app: ASGIApp, verifier: TokenVerifier):
+        self._app = app
+        self._verifier = verifier
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> Any:
+        if scope["type"] != "http":
+            return await self._app(scope, receive, send)
+
+        path: str = scope.get("path", "")
+        if any(path.startswith(prefix) for prefix in _PUBLIC_PATH_PREFIXES):
+            return await self._app(scope, receive, send)
+
+        token = _extract_token_from_scope(scope)
+        if token is None:
+            response = JSONResponse({"error": "authentication required"}, status_code=401)
+            return await response(scope, receive, send)
+
+        try:
+            identity = self._verifier.verify(token)
+        except ValueError:
+            response = JSONResponse({"error": "invalid session"}, status_code=401)
+            return await response(scope, receive, send)
+
+        scope["auth_identity"] = identity
+        return await self._app(scope, receive, send)
 
 
 _UNAUTHENTICATED_RPCS = {"Login", "GetAuthInfo"}
@@ -76,10 +132,10 @@ class ControllerDashboard:
         return self._port
 
     @property
-    def app(self) -> Starlette:
+    def app(self) -> ASGIApp:
         return self._app
 
-    def _create_app(self) -> Starlette:
+    def _create_app(self) -> ASGIApp:
         interceptors = [RequestTimingInterceptor()]
         if self._auth_provider is not None:
             interceptors.insert(0, _SelectiveAuthInterceptor(self._auth_verifier))
@@ -100,7 +156,10 @@ class ControllerDashboard:
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),
         ]
-        return Starlette(routes=routes)
+        app: Starlette | _AuthMiddleware = Starlette(routes=routes)
+        if self._auth_verifier is not None and self._auth_provider is not None:
+            app = _AuthMiddleware(app, self._auth_verifier)
+        return app
 
     def _dashboard(self, request: Request) -> Response:
         session_token = request.query_params.get("session_token")
