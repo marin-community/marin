@@ -11,9 +11,7 @@ Encodes the three comparison targets from issue #3930:
 All configs share vocab_size=128_256 (Llama3-ish tokenizer) and max_seq_len=4096.
 """
 
-import dataclasses
 import os
-from dataclasses import field
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
