@@ -12,11 +12,21 @@ The dashboard serves:
 
 All data fetching happens via Connect RPC calls from the browser JavaScript.
 The Python layer only serves HTML shells; all rendering is done client-side.
+
+Auth model:
+- HTML shell routes are public — they contain no data, just the SPA skeleton.
+- RPC routes have their own auth interceptor chain (AuthInterceptor / NullAuthInterceptor).
+- Bundle downloads use capability URLs (SHA-256 hash = 256 bits of entropy).
+- Auth endpoints (/auth/*) handle session management (CSRF-protected).
+- Each route handler is annotated @public or @requires_auth. The middleware
+  denies any route that lacks an annotation, so forgetting to annotate a new
+  route is a safe failure.
 """
 
 import logging
 import os
 from http.cookies import SimpleCookie
+from collections.abc import Callable
 from urllib.parse import urlparse
 
 import httpx
@@ -35,13 +45,23 @@ from iris.rpc.interceptors import RequestTimingInterceptor
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Route auth policy annotations
+# ---------------------------------------------------------------------------
 
-_PUBLIC_PATH_PREFIXES = (
-    "/health",
-    "/auth/",
-    "/static/",
-    "/iris.cluster.ControllerService/",
-)
+_AUTH_POLICY_ATTR = "_auth_policy"
+
+
+def public(fn: Callable) -> Callable:
+    """Mark a route handler as publicly accessible (no auth required)."""
+    setattr(fn, _AUTH_POLICY_ATTR, "public")
+    return fn
+
+
+def requires_auth(fn: Callable) -> Callable:
+    """Mark a route handler as requiring authentication via session cookie or Bearer token."""
+    setattr(fn, _AUTH_POLICY_ATTR, "requires_auth")
+    return fn
 
 
 def _extract_token_from_scope(scope: Scope) -> str | None:
@@ -59,32 +79,69 @@ def _extract_token_from_scope(scope: Scope) -> str | None:
     return None
 
 
-class _AuthMiddleware:
-    """ASGI middleware enforcing session cookie auth on all non-public routes."""
+class _RouteAuthMiddleware:
+    """ASGI middleware that enforces per-route auth policy annotations.
 
-    def __init__(self, app: ASGIApp, verifier: TokenVerifier):
+    Looks up the matched Starlette route's endpoint function and checks its
+    @public / @requires_auth annotation. Routes without an annotation are
+    denied (default-deny). RPC Mount routes and static file mounts are
+    skipped (they have their own auth).
+    """
+
+    def __init__(self, app: Starlette, verifier: TokenVerifier):
         self._app = app
         self._verifier = verifier
+        self._router = app.router
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             return await self._app(scope, receive, send)
 
-        path: str = scope.get("path", "")
-        if any(path.startswith(prefix) for prefix in _PUBLIC_PATH_PREFIXES):
+        policy = self._resolve_policy(scope)
+
+        if policy == "public":
             return await self._app(scope, receive, send)
 
+        if policy == "requires_auth":
+            return await self._check_auth(scope, receive, send)
+
+        # No policy (Mount for RPC/static, or unknown) — pass through.
+        # RPC routes have their own interceptor; static mounts serve assets.
+        if policy == "skip":
+            return await self._app(scope, receive, send)
+
+        # Default-deny: route exists but has no annotation.
+        response = JSONResponse({"error": "authentication required"}, status_code=401)
+        return await response(scope, receive, send)
+
+    def _resolve_policy(self, scope: Scope) -> str:
+        """Resolve the auth policy for the matched route."""
+        from starlette.routing import Match
+
+        for route in self._router.routes:
+            if isinstance(route, Mount):
+                if route.matches(scope)[0] != Match.NONE:
+                    return "skip"
+                continue
+            if isinstance(route, Route):
+                match_result, _ = route.matches(scope)
+                if match_result == Match.FULL:
+                    endpoint = route.endpoint
+                    return getattr(endpoint, _AUTH_POLICY_ATTR, "deny")
+
+        # No route matched — let Starlette handle 404.
+        return "skip"
+
+    async def _check_auth(self, scope: Scope, receive: Receive, send: Send) -> None:
         token = _extract_token_from_scope(scope)
         if token is None:
             response = JSONResponse({"error": "authentication required"}, status_code=401)
             return await response(scope, receive, send)
-
         try:
             identity = self._verifier.verify(token)
         except ValueError:
             response = JSONResponse({"error": "invalid session"}, status_code=401)
             return await response(scope, receive, send)
-
         scope["auth_identity"] = identity
         return await self._app(scope, receive, send)
 
@@ -177,14 +234,16 @@ class ControllerDashboard:
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),
         ]
-        app: Starlette | _AuthMiddleware = Starlette(routes=routes)
+        app: Starlette | _RouteAuthMiddleware = Starlette(routes=routes)
         if self._auth_verifier is not None and self._auth_provider is not None:
-            app = _AuthMiddleware(app, self._auth_verifier)
+            app = _RouteAuthMiddleware(app, self._auth_verifier)
         return app
 
+    @public
     def _dashboard(self, request: Request) -> Response:
         return HTMLResponse(html_shell("Iris Controller", "controller"))
 
+    @public
     def _session_bootstrap(self, request: Request) -> Response:
         """Accept token via query param, set cookie, redirect to dashboard."""
         token = request.query_params.get("token", "")
@@ -205,12 +264,15 @@ class ControllerDashboard:
         )
         return response
 
+    @public
     def _job_detail_page(self, _request: Request) -> HTMLResponse:
         return HTMLResponse(html_shell("Job Detail", "controller"))
 
+    @public
     def _worker_detail_page(self, _request: Request) -> HTMLResponse:
         return HTMLResponse(html_shell("Worker Detail", "controller"))
 
+    @public
     def _auth_config(self, request: Request) -> JSONResponse:
         """Unauthenticated endpoint telling the frontend whether auth is required."""
         has_session = SESSION_COOKIE in request.cookies
@@ -226,6 +288,7 @@ class ControllerDashboard:
 
     # Rate limiting is handled at the infrastructure layer via Cloudflare WAF rules.
     # See: https://developers.cloudflare.com/waf/rate-limiting-rules/
+    @public
     async def _auth_session(self, request: Request) -> JSONResponse:
         """Set auth cookie from bearer token."""
         if not _check_csrf(request):
@@ -250,6 +313,7 @@ class ControllerDashboard:
         )
         return response
 
+    @public
     async def _auth_logout(self, request: Request) -> JSONResponse:
         """Clear auth cookie."""
         if not _check_csrf(request):
@@ -258,15 +322,16 @@ class ControllerDashboard:
         response.delete_cookie(SESSION_COOKIE, path="/")
         return response
 
+    @public
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""
         return JSONResponse({"status": "ok"})
 
+    @public
     def _bundle_download(self, request: Request) -> Response:
-        # TODO(#3291): Add bearer token auth once Kubernetes init-containers
-        # support Authorization headers. Currently bundle IDs are SHA-256 hashes
-        # (256 bits of entropy) serving as capability URLs. Workers and K8s
-        # init-containers fetch via stdlib urlopen with no auth header support.
+        # Bundle IDs are SHA-256 hashes (256 bits of entropy) serving as
+        # capability URLs. Workers and K8s init-containers fetch via stdlib
+        # urlopen with no auth header support.
         bundle_id = request.path_params["bundle_id"]
         try:
             data = self._service.bundle_zip(bundle_id)
