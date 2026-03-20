@@ -29,7 +29,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as pad
 import pyarrow.parquet as pq
-from iris import resource_utils as iris_resource_utils
+from iris.env_resources import TaskResources as _TaskResources
 from iris.marin_fs import open_url, url_to_fs
 from iris.time_utils import log_time
 
@@ -108,7 +108,7 @@ def _get_scatter_read_fs(num_files: int, sample_path: str, memory_fraction: floa
     if num_files <= 0:
         return default_fs
 
-    total_mem = iris_resource_utils.get_memory_limit()
+    total_mem = _TaskResources.from_environment().memory_bytes
     budget = int(total_mem * memory_fraction)
     per_file = max(budget // num_files, 64 * 1024)  # floor at 64 KB
 
@@ -232,7 +232,7 @@ class ScatterShard:
         if total_chunks == 0:
             return 1024
         bytes_per_item = self.avg_item_bytes if self.avg_item_bytes > 0 else _ITEM_BYTES_FALLBACK
-        memory_limit = iris_resource_utils.get_memory_limit()
+        memory_limit = _TaskResources.from_environment().memory_bytes
         buffer_budget = int(memory_limit * _SCATTER_READ_BUFFER_FRACTION)
         safe = max(1, int(buffer_budget // (total_chunks * bytes_per_item)))
         safe = min(safe, 8192)

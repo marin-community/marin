@@ -22,7 +22,7 @@ from itertools import groupby, islice
 from typing import Any
 
 import msgspec
-from iris import resource_utils as iris_resource_utils
+from iris.env_resources import TaskResources as _TaskResources
 from iris.marin_fs import url_to_fs
 
 from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
@@ -602,7 +602,7 @@ def _merge_sorted_chunks(
         external_sort_dir is not None
         and hasattr(shard, "needs_external_sort")
         and hasattr(shard, "get_iterators")
-        and shard.needs_external_sort(iris_resource_utils.get_memory_limit())
+        and shard.needs_external_sort(_TaskResources.from_environment().memory_bytes)
     )
 
     if use_external:
