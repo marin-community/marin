@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import subprocess
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from iris.cluster.k8s.k8s_types import KubectlLogResult
 
@@ -86,3 +86,9 @@ class K8sService(Protocol):
         *,
         container: str | None = None,
     ) -> None: ...
+
+
+class SubprocessK8s(K8sService, Protocol):
+    """K8sService plus subprocess escape hatch for port-forwarding/tunneling."""
+
+    def popen(self, args: list[str], *, namespaced: bool = False, **kwargs: Any) -> subprocess.Popen: ...

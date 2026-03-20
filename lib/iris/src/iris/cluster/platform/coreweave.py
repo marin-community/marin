@@ -45,6 +45,7 @@ from urllib.parse import urlparse
 
 from iris.cluster.config import config_to_dict
 from iris.cluster.k8s.constants import CW_INTERRUPTABLE_TOLERATION
+from iris.cluster.k8s import SubprocessK8s
 from iris.cluster.k8s.kubectl import Kubectl
 from iris.cluster.platform.base import (
     Labels,
@@ -145,7 +146,7 @@ class CoreweavePlatform:
         self._region = config.region
         self._label_prefix = label_prefix
         self._iris_labels = Labels(label_prefix)
-        self._kubectl = Kubectl(
+        self._kubectl: SubprocessK8s = Kubectl(
             namespace=self._namespace,
             # Let kubectl handle KUBECONFIG natively; only pass --kubeconfig when no env override is present.
             kubeconfig_path=None if os.environ.get("KUBECONFIG") else (config.kubeconfig_path or None),
@@ -879,7 +880,7 @@ def _build_controller_deployment(
 
 @contextmanager
 def _coreweave_tunnel(
-    kubectl: Kubectl,
+    kubectl: SubprocessK8s,
     service_name: str,
     remote_port: int,
     local_port: int | None = None,
@@ -944,10 +945,16 @@ def _coreweave_tunnel(
         # invisible to normal pod-scoped queries. Without this, diagnosing
         # the tunnel race requires manual kubectl before events TTL (~1h).
         try:
-            result = kubectl.run(["get", "pods", "-n", "kube-system", "-o", "wide"], timeout=10)
-            if result.returncode == 0:
-                logger.warning("kube-system pods at tunnel failure:\n%s", result.stdout.strip())
-        except subprocess.TimeoutExpired:
+            diag = kubectl.popen(
+                ["get", "pods", "-n", "kube-system", "-o", "wide"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            stdout, _ = diag.communicate(timeout=10)
+            if diag.returncode == 0:
+                logger.warning("kube-system pods at tunnel failure:\n%s", stdout.strip())
+        except (subprocess.TimeoutExpired, OSError):
             pass
         raise RuntimeError(f"kubectl port-forward to {service_name}:{remote_port} failed after {timeout}s")
 
