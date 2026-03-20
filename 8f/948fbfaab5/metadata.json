@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "8f948fbfaab5",
+  "strategy": "manual-commit",
+  "branch": "kevin/sft",
+  "checkpoints_count": 7,
+  "files_touched": [
+    ".gitignore",
+    "experiments/exp3897_sft_ota_131k_qwen3_8b.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8f/948fbfaab5/0/metadata.json",
+      "transcript": "/8f/948fbfaab5/0/full.jsonl",
+      "context": "/8f/948fbfaab5/0/context.md",
+      "content_hash": "/8f/948fbfaab5/0/content_hash.txt",
+      "prompt": "/8f/948fbfaab5/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 380,
+    "cache_creation_tokens": 642153,
+    "cache_read_tokens": 44474091,
+    "output_tokens": 103140,
+    "api_call_count": 241
+  }
+}
