@@ -3,10 +3,10 @@
 
 """Shared Kubernetes helpers for Iris cluster components."""
 
-from iris.cluster.k8s.k8s_service import K8sService
+from iris.cluster.k8s.k8s_service import K8sService, SubprocessK8s
 from iris.cluster.k8s.k8s_service_impl import K8sServiceImpl
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.k8s.k8s_types import KubectlError
 from iris.cluster.k8s.kubectl import Kubectl
 
-__all__ = ["K8sService", "K8sServiceImpl", "Kubectl", "KubectlError", "ServiceMode"]
+__all__ = ["K8sService", "K8sServiceImpl", "Kubectl", "KubectlError", "ServiceMode", "SubprocessK8s"]
