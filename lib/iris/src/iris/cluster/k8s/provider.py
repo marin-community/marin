@@ -23,7 +23,7 @@ from iris.cluster.controller.transitions import ClusterCapacity, DirectProviderS
 from iris.cluster.controller.transitions import DirectProviderBatch, RunningTaskEntry, TaskUpdate
 from iris.cluster.k8s.constants import CW_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.k8s.k8s_service import K8sService
-from iris.cluster.k8s.kubectl import KubectlLogLine
+from iris.cluster.k8s.k8s_types import KubectlLogLine
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
 from iris.cluster.types import JobName, get_gpu_count
 from iris.rpc import cluster_pb2, logging_pb2

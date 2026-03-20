@@ -30,31 +30,12 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from iris.cluster.k8s.k8s_types import KubectlError, KubectlLogLine, KubectlLogResult
+
 logger = logging.getLogger(__name__)
 
 # Default timeout for kubectl commands (seconds)
 DEFAULT_TIMEOUT: float = 60.0
-
-
-class KubectlError(RuntimeError):
-    """Error raised for kubectl command failures."""
-
-
-@dataclass
-class KubectlLogLine:
-    """A single parsed log line from kubectl logs --timestamps."""
-
-    timestamp: datetime
-    stream: str  # "stdout" or "stderr"
-    data: str
-
-
-@dataclass
-class KubectlLogResult:
-    """Result of an incremental log fetch."""
-
-    lines: list[KubectlLogLine]
-    byte_offset: int
 
 
 @dataclass

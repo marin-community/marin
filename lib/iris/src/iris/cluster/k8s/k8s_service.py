@@ -8,7 +8,7 @@ from __future__ import annotations
 import subprocess
 from typing import Protocol, runtime_checkable
 
-from iris.cluster.k8s.kubectl import KubectlLogResult
+from iris.cluster.k8s.k8s_types import KubectlLogResult
 
 
 @runtime_checkable
