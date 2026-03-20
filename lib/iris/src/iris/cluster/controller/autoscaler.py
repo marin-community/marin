@@ -28,7 +28,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
-<<<<<<< Updated upstream
 from iris.cluster.platform.base import (
     CloudSliceState,
     CloudWorkerState,
@@ -56,16 +55,6 @@ from iris.cluster.controller.scaling_group import (
     SliceSnapshot,
     restore_scaling_group,
 )
-||||||| constructed merge base
-from iris.cluster.platform.base import Platform, QuotaExhaustedError, SliceHandle, VmHandle
-from iris.cluster.types import DeviceType, VmWorkerStatusMap
-from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
-=======
-from iris.cluster.platform.base import Platform, QuotaExhaustedError, SliceHandle, VmHandle
-from iris.cluster.platform.bootstrap import WorkerBootstrap
-from iris.cluster.types import DeviceType, VmWorkerStatusMap
-from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
->>>>>>> Stashed changes
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
@@ -73,7 +62,6 @@ from iris.time_utils import Duration, Timestamp
 logger = logging.getLogger(__name__)
 
 
-<<<<<<< Updated upstream
 class _RestoredWorkerHandle:
     """Minimal handle placeholder used for restored tracked workers.
 
@@ -146,25 +134,6 @@ def _restore_tracked_workers(rows: list[_TrackedWorkerRow]) -> dict[str, Tracked
     return workers
 
 
-||||||| constructed merge base
-class WorkerBootstrapProtocol(Protocol):
-    """Protocol for worker bootstrap functionality.
-
-    This protocol allows type checking without creating a circular import between
-    config.py, autoscaler.py, and bootstrap.py.
-    """
-
-    def bootstrap_slice(self, handle) -> dict[str, str]:
-        """Bootstrap all VMs in a newly created slice.
-
-        Returns:
-            Mapping of vm_id to bootstrap log text.
-        """
-        ...
-
-
-=======
->>>>>>> Stashed changes
 @dataclass
 class TrackedWorker:
     """Per-worker state tracked by the autoscaler across bootstrap and lifecycle."""
@@ -814,14 +783,8 @@ class Autoscaler:
         config: config_pb2.AutoscalerConfig,
         platform: Platform,
         threads: ThreadContainer | None = None,
-<<<<<<< Updated upstream
         base_worker_config: config_pb2.WorkerConfig | None = None,
         db: ControllerDB | None = None,
-||||||| constructed merge base
-        worker_bootstrap: WorkerBootstrapProtocol | None = None,
-=======
-        worker_bootstrap: WorkerBootstrap | None = None,
->>>>>>> Stashed changes
     ) -> Autoscaler:
         """Create autoscaler from proto config.
 
@@ -1057,13 +1020,7 @@ class Autoscaler:
         thread for the actual scale-up work. The counter is included in
         slice_count(), preventing double scale-up.
         """
-<<<<<<< Updated upstream
         group.begin_scale_up(timestamp=ts)
-||||||| constructed merge base
-        placeholder_id = group.begin_scale_up(ts)
-=======
-        placeholder_id = group.begin_scale_up()
->>>>>>> Stashed changes
 
         def _scale_up_wrapper(stop_event):
             self._do_scale_up(group, ts, reason)
@@ -1085,67 +1042,28 @@ class Autoscaler:
         """
         action = self._log_action("scale_up", group.name, reason=reason, status="pending")
 
-        # Track whether complete_scale_up has been called to determine cleanup path
         slice_obj = None
-        completed = False
 
         try:
             logger.info("Scaling up %s: %s", group.name, reason)
-<<<<<<< Updated upstream
             wc = self._per_group_worker_config(group)
             slice_obj = group.scale_up(worker_config=wc, timestamp=ts)
             group.complete_scale_up(slice_obj, ts)
-||||||| constructed merge base
-            slice_obj = group.scale_up(timestamp=ts)
-            group.complete_scale_up(placeholder_id, slice_obj, ts)
-=======
-            slice_obj = group.scale_up(timestamp=ts)
-            group.complete_scale_up(placeholder_id, slice_obj, ts)
-            completed = True
->>>>>>> Stashed changes
             logger.info("Created slice %s for group %s", slice_obj.slice_id, group.name)
             action.slice_id = slice_obj.slice_id
             action.status = "completed"
             return True
         except QuotaExhaustedError as e:
-<<<<<<< Updated upstream
             group.cancel_scale_up()
             group.record_quota_exceeded(str(e), ts)
-||||||| constructed merge base
-            group.fail_scale_up(placeholder_id)
-            group._quota_exceeded_until = Deadline.after(ts, group._quota_timeout)
-            group._quota_reason = str(e)
-=======
-            # QuotaExhaustedError can only happen during scale_up, before complete_scale_up
-            group.fail_scale_up(placeholder_id)
-            group._quota_exceeded_until = Deadline.after(ts, group._quota_timeout)
-            group._quota_reason = str(e)
->>>>>>> Stashed changes
             logger.warning("Quota exceeded for %s: %s", group.name, e)
             action.action_type = "quota_exceeded"
             action.status = "failed"
             action.reason = str(e)
             return False
         except Exception as e:
-<<<<<<< Updated upstream
             group.cancel_scale_up()
             logger.exception("Failed to create slice for %s: %s", group.name, e)
-||||||| constructed merge base
-            group.fail_scale_up(placeholder_id)
-            logger.error("Failed to create slice for %s: %s", group.name, e)
-=======
-            # If complete_scale_up succeeded, clean up the real slice; otherwise clean up placeholder
-            if completed and slice_obj is not None:
-                logger.error("Bootstrap failed for slice %s in %s: %s", slice_obj.slice_id, group.name, e)
-                try:
-                    group.scale_down(slice_obj.slice_id, ts)
-                    self._unregister_slice_vms(slice_obj.slice_id)
-                except Exception as cleanup_error:
-                    logger.warning("Failed to clean up slice %s: %s", slice_obj.slice_id, cleanup_error)
-            else:
-                group.fail_scale_up(placeholder_id)
-            logger.error("Failed to create slice for %s: %s", group.name, e)
->>>>>>> Stashed changes
             action.status = "failed"
             action.reason = f"{reason} - error: {e}"
             group.record_failure(ts)

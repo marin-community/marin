@@ -421,30 +421,15 @@ class ScalingGroup:
         """Number of consecutive scale-up failures."""
         return self._consecutive_failures
 
-<<<<<<< Updated upstream
     def begin_scale_up(self, timestamp: Timestamp | None = None) -> None:
         """Mark that a scale-up is in progress.
-||||||| constructed merge base
-    def begin_scale_up(self, timestamp: Timestamp | None = None) -> str:
-        """Insert a REQUESTING placeholder into _slices and return its ID.
-=======
-    def begin_scale_up(self) -> str:
-        """Insert a REQUESTING placeholder into _slices and return its ID.
->>>>>>> Stashed changes
 
         Increments the pending counter, which is included in slice_count()
         and slice_state_counts(REQUESTING) to prevent over-provisioning.
         Also updates _last_scale_up so the cooldown gates subsequent requests
         even while this one is still in-flight.
         """
-<<<<<<< Updated upstream
         timestamp = timestamp or Timestamp.now()
-||||||| constructed merge base
-        timestamp = timestamp or Timestamp.now()
-        placeholder_id = f"requesting-{uuid.uuid4().hex[:12]}"
-=======
-        placeholder_id = f"requesting-{uuid.uuid4().hex[:12]}"
->>>>>>> Stashed changes
         with self._slices_lock:
             self._pending_scale_ups += 1
         self._last_scale_up = timestamp
