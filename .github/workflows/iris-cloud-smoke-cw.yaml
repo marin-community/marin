@@ -196,10 +196,15 @@ jobs:
         run: |
           export KUBECONFIG=~/.kube/coreweave-iris
           NAMESPACE="iris-smoke-cw"
-          echo "Cleaning up Kubernetes resources with label prefix ${LABEL_PREFIX} in namespace ${NAMESPACE}..."
+          MANAGED_LABEL="iris-${LABEL_PREFIX}-managed"
+          echo "Cleaning up Kubernetes resources with label ${MANAGED_LABEL}=true in namespace ${NAMESPACE}..."
           kubectl delete pods,deployments,services,configmaps \
             -n "$NAMESPACE" \
-            -l "iris-label-prefix=$LABEL_PREFIX" \
+            -l "${MANAGED_LABEL}=true" \
+            --ignore-not-found || true
+          echo "Cleaning up NodePools with label ${MANAGED_LABEL}=true..."
+          kubectl delete nodepools \
+            -l "${MANAGED_LABEL}=true" \
             --ignore-not-found || true
 
       - name: Set commit status to result
