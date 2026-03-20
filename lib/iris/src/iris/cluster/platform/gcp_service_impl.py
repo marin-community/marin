@@ -150,18 +150,6 @@ def _parse_tpu_info(tpu_data: dict, zone: str) -> TpuInfo:
     )
 
 
-def _parse_vm_created_at(vm_data: dict) -> Timestamp:
-    create_time = vm_data.get("creationTimestamp", "")
-    if not create_time:
-        return Timestamp.now()
-    try:
-        dt = datetime.fromisoformat(create_time.replace("Z", "+00:00"))
-        epoch_ms = int(dt.timestamp() * 1000)
-        return Timestamp.from_ms(epoch_ms)
-    except (ValueError, AttributeError):
-        return Timestamp.now()
-
-
 def _parse_vm_info(vm_data: dict, fallback_zone: str = "") -> VmInfo:
     """Parse raw GCP VM JSON into a VmInfo dataclass."""
     zone_url = vm_data.get("zone", "")
