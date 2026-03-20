@@ -1475,11 +1475,18 @@ class ControllerTransitions:
             if not worker_rows:
                 return []
 
+            worker_id_set = {str(row["worker_id"]) for row in worker_rows}
+            placeholders = ",".join("?" for _ in worker_id_set)
             dispatch_rows = cur.execute(
-                "SELECT worker_id, id, kind, payload_proto, task_id FROM dispatch_queue ORDER BY id ASC"
+                f"SELECT worker_id, id, kind, payload_proto, task_id FROM dispatch_queue "
+                f"WHERE worker_id IN ({placeholders}) ORDER BY id ASC",
+                tuple(worker_id_set),
             ).fetchall()
             if dispatch_rows:
-                cur.execute("DELETE FROM dispatch_queue")
+                cur.execute(
+                    f"DELETE FROM dispatch_queue WHERE worker_id IN ({placeholders})",
+                    tuple(worker_id_set),
+                )
 
             running_rows = cur.execute(
                 "SELECT ta.worker_id, t.task_id, t.current_attempt_id "
