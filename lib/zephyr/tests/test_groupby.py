@@ -365,10 +365,7 @@ def test_scatter_parquet_iterator_pickle_roundtrip(tmp_path):
     """ScatterParquetIterator with is_pickled=True round-trips non-Arrow-serializable items."""
     import pyarrow.parquet as pq
 
-    from zephyr.execution import (
-        ScatterParquetIterator,
-        _make_pickle_envelope,
-    )
+    from zephyr.shuffle import ScatterParquetIterator, _make_pickle_envelope
 
     items = [frozenset([1, 2]), frozenset([3, 4, 5])]
     envelope = _make_pickle_envelope(items, target_shard=0, chunk_idx=0)
@@ -381,7 +378,6 @@ def test_scatter_parquet_iterator_pickle_roundtrip(tmp_path):
         path=path,
         shard_idx=0,
         chunk_count=1,
-        chunk_offset=0,
         is_pickled=True,
         filesystem=pa.fs.LocalFileSystem(),
     )
