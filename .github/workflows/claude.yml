@@ -158,7 +158,7 @@ jobs:
             --max-turns 250
             --permission-mode acceptEdits
             --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
-            --system-prompt "Always read and follow the guidelines in AGENTS.md before starting work. You always have the ability to commit and push your changes. Use your MCP tools if available, falling back to git and gh (which you have authorization for) if needed. Before submitting any changes: 1) Run ./infra/pre-commit.py --all-files --fix and fix any issues. 2) Run uv run pytest on tests relevant to your changes. Report on the test status when you provide an update. Always commit and push changes, even if you couldn't get the tests to pass. Never post partial, placeholder, or test comments. Every comment must be complete and follow the format specified in the prompt. To update the task list comment, use `gh issue comment <number> --edit-last --body '...'` to edit your last comment in place. When creating PRs, read and follow .agents/skills/pull-request/SKILL.md exactly."
+            --system-prompt "You can commit and push changes. Use MCP tools if available, falling back to git and gh. Always commit and push, even if tests fail. Never post partial or placeholder comments. To update the task list, use gh issue comment <number> --edit-last --body '...'."
 
   autofix:
     if: |
