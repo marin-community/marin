@@ -29,7 +29,7 @@ from iris.cluster.platform.gcp import (
 )
 from iris.cluster.platform.gcp_service_impl import GcpServiceImpl
 from iris.cluster.platform.manual import ManualPlatform
-from iris.cluster.platform.service_mode import ServiceMode
+from iris.cluster.service_mode import ServiceMode
 from iris.rpc import config_pb2
 
 # =============================================================================

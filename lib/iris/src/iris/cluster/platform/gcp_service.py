@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from iris.cluster.platform.local import LocalSliceHandle
-from iris.cluster.platform.service_mode import ServiceMode
+from iris.cluster.service_mode import ServiceMode
 from iris.rpc import config_pb2
 from iris.time_utils import Timestamp
 

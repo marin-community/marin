@@ -13,7 +13,7 @@ import subprocess
 from datetime import UTC, datetime
 
 from iris.cluster.k8s.kubectl import KubectlError, KubectlLogLine, KubectlLogResult
-from iris.cluster.platform.service_mode import ServiceMode
+from iris.cluster.service_mode import ServiceMode
 
 # Resource types that K8s recognizes in container resource requests/limits.
 VALID_RESOURCE_TYPES = frozenset(

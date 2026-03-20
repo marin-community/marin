@@ -38,7 +38,7 @@ from iris.cluster.platform.gcp_service import (
     VmInfo,
 )
 from iris.cluster.platform.local import LocalSliceHandle
-from iris.cluster.platform.service_mode import ServiceMode
+from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import TPU_TOPOLOGIES
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer

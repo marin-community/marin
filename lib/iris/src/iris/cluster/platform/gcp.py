@@ -74,7 +74,7 @@ from iris.cluster.platform.remote_exec import (
     GceRemoteExec,
     GcloudRemoteExec,
 )
-from iris.cluster.platform.service_mode import ServiceMode
+from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import get_tpu_topology
 from iris.cluster.worker.env_probe import construct_worker_id
 from iris.rpc import config_pb2

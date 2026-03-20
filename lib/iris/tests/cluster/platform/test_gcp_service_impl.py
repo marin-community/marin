@@ -13,7 +13,7 @@ import pytest
 from iris.cluster.platform.base import PlatformError, QuotaExhaustedError, ResourceNotFoundError
 from iris.cluster.platform.gcp_service import TpuCreateRequest, VmCreateRequest
 from iris.cluster.platform.gcp_service_impl import GcpServiceImpl
-from iris.cluster.platform.service_mode import ServiceMode
+from iris.cluster.service_mode import ServiceMode
 
 
 @pytest.fixture
