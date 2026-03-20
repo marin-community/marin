@@ -15,6 +15,7 @@ The Python layer only serves HTML shells; all rendering is done client-side.
 """
 
 import logging
+import os
 
 import httpx
 from starlette.applications import Starlette
@@ -80,7 +81,7 @@ class ControllerDashboard:
         return self._app
 
     def _create_app(self) -> Starlette:
-        interceptors = [RequestTimingInterceptor()]
+        interceptors = [RequestTimingInterceptor(include_traceback=bool(os.environ.get("IRIS_DEBUG")))]
         if self._auth_provider is not None:
             interceptors.insert(0, _SelectiveAuthInterceptor(self._auth_verifier))
         else:
