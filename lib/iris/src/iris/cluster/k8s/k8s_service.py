@@ -99,8 +99,5 @@ class K8sService(Protocol):
 
         The returned context manager keeps the tunnel alive for its duration.
         Implementations may reconnect transparently on transient failures.
-
-        In DRY_RUN/LOCAL mode, returns a fake URL without spawning subprocesses.
-        In CLOUD mode, runs ``kubectl port-forward`` with reconnection.
         """
         ...
