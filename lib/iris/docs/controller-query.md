@@ -56,12 +56,6 @@ iris query -f csv "SELECT * FROM workers"
 
 Implemented in `lib/iris/src/iris/cli/query.py`. Output formats: `table` (default), `json`, `csv`.
 
-## Dashboard
-
-**Query Explorer tab** (`QueryExplorerTab.vue`): raw SQL textarea with preset templates, paginated results table. Admin-only.
-
-**`useQuery.ts` composable**: `executeRawQuery(request)` and `parseRows(columns, rows)` for converting JSON-encoded row arrays into keyed objects.
-
 ## Future Work
 
 [#3706](https://github.com/marin-community/marin/issues/3706): Move `api_keys` and `controller_secrets` into a separate `auth.db`, attach the log store as `logs.db` via `ATTACH DATABASE`. This eliminates the need for the admin-only restriction on the query API (no secrets in the main DB) and allows querying logs via normal SQL (`SELECT * FROM logs.logs`).

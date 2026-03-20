@@ -11,23 +11,31 @@ Read first: @lib/iris/AGENTS.md
 
 ## Access Pattern
 
-**Always debug offline against a checkpoint copy — never run queries against the live controller DB.**
-Trigger a fresh checkpoint on-demand and download it:
+**Use the `iris query` CLI to run read-only SQL against the controller via the `ExecuteRawQuery` RPC.** This is the preferred method — it queries through the controller's RPC layer with snapshot isolation and does not touch the live DB file.
+
+```bash
+# Basic query (table output by default)
+uv run iris query "SELECT * FROM jobs LIMIT 10"
+
+# JSON output
+uv run iris query -f json "SELECT job_id, state FROM jobs WHERE state = 3"
+
+# CSV output
+uv run iris query -f csv "SELECT count(*) FROM tasks GROUP BY state"
+```
+
+The RPC is admin-only, SELECT-only, and blocks dangerous keywords (INSERT, UPDATE, DELETE, DROP, etc.).
+
+For deeper offline analysis, trigger a checkpoint and download it:
 
 ```bash
 # Trigger a fresh checkpoint (uses the BeginCheckpoint RPC)
-# The --config flag selects the cluster; adjust as needed.
 uv run iris --config lib/iris/examples/marin.yaml cluster controller checkpoint
-# Example output:
-#   Checkpoint DB written: gs://marin-us-central2/iris/marin/state/controller-state/checkpoint-1773533644027.sqlite3
-#   Jobs:    417
-#   Tasks:   46790
-#   Workers: 243
 
 # Download the checkpoint (use the path from the output above)
 gcloud storage cp gs://marin-us-central2/iris/marin/state/controller-state/checkpoint-<EPOCH_MS>.sqlite3 /tmp/controller.sqlite3
 
-# Query offline
+# Query offline with sqlite3
 python3 -c "
 import sqlite3
 conn = sqlite3.connect('/tmp/controller.sqlite3')
@@ -36,7 +44,7 @@ conn.row_factory = sqlite3.Row
 "
 ```
 
-If the state has changed and you need another snapshot, trigger another checkpoint with `uv run iris --config lib/iris/examples/marin.yaml cluster controller checkpoint` and re-download. **Do not SSH into the controller VM to run scripts against the live database** — a slow query can stall the controller and break other users.
+**Do not SSH into the controller VM to run scripts against the live database** — a slow query can stall the controller and break other users.
 
 **Production defaults** (verify at session start):
 - Checkpoint location: `gs://marin-us-central2/iris/marin/state/controller-state/latest.sqlite3`
