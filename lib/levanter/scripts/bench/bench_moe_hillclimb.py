@@ -42,6 +42,7 @@ Distribution = Literal["random", "runs"]
 Kernel = Literal[
     "legacy",
     "current",
+    "shared_mlp_only_probe",
     "cumsum",
     "packed_return",
     "stream_ring",
@@ -4788,6 +4789,8 @@ def _forward(
     shared_w13: jax.Array,
     shared_w2: jax.Array,
 ) -> jax.Array:
+    if kernel == "shared_mlp_only_probe":
+        return _shared_mlp(x, shared_w13, shared_w2)
     if kernel == "legacy":
         routed = _moe_mlp_legacy(
             x,
@@ -6409,6 +6412,7 @@ def main() -> None:
         choices=[
             "legacy",
             "current",
+            "shared_mlp_only_probe",
             "cumsum",
             "packed_return",
             "stream_ring",
