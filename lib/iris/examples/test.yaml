@@ -90,6 +90,27 @@ scale_groups:
         zone: europe-west4-b
         runtime_version: v2-alpha-tpuv6e
 
+  # Non-preemptible CPU group for executor-heuristic jobs (iris run).
+  # The executor heuristic auto-tags small CPU jobs with preemptible=false,
+  # so at least one non-preemptible worker must exist for scheduling to succeed.
+  cpu_non_preemptible:
+    num_vms: 1
+    resources:
+      cpu: 2
+      ram: 4GB
+      disk: 10GB
+      device_type: cpu
+      device_count: 0
+      preemptible: false
+    min_slices: 1
+    max_slices: 1
+    slice_template:
+      num_vms: 1
+      gcp:
+        mode: GCP_SLICE_MODE_VM
+        zone: europe-west4-b
+        machine_type: e2-standard-2
+
   # Disabled group - min and max both zero
   gpu_disabled:
     num_vms: 1
