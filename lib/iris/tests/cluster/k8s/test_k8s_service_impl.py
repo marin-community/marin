@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from iris.cluster.k8s.k8s_service import K8sService, SubprocessK8s
+from iris.cluster.k8s.k8s_service import K8sService
 from iris.cluster.k8s.k8s_service_impl import FakeNodeResources, K8sServiceImpl
 from iris.cluster.k8s.k8s_types import KubectlError
 
@@ -550,42 +550,23 @@ def test_failed_scheduling_event_generated(sched_svc: K8sServiceImpl):
 
 
 # ---------------------------------------------------------------------------
-# Popen tests
+# port_forward tests
 # ---------------------------------------------------------------------------
 
 
-def test_implements_subprocess_k8s_protocol():
-    impl = K8sServiceImpl()
-    assert isinstance(impl, SubprocessK8s)
+def test_port_forward_yields_url(svc: K8sServiceImpl):
+    with svc.port_forward("my-svc", 8080) as url:
+        assert url.startswith("http://127.0.0.1:")
+        assert "19999" in url
 
 
-def test_popen_returns_fake_process(svc: K8sServiceImpl):
-    proc = svc.popen(["get", "pods"])
-    assert proc.poll() is None  # alive
-    proc.terminate()
-    assert proc.returncode == -15
+def test_port_forward_with_explicit_port(svc: K8sServiceImpl):
+    with svc.port_forward("my-svc", 8080, local_port=12345) as url:
+        assert url == "http://127.0.0.1:12345"
 
 
-def test_popen_stderr_readable(svc: K8sServiceImpl):
-    proc = svc.popen(["port-forward", "svc/foo", "8080:80"])
-    assert proc.stderr is not None
-    assert proc.stderr.read() == b""
-
-
-def test_popen_kill(svc: K8sServiceImpl):
-    proc = svc.popen(["get", "pods"])
-    proc.kill()
-    assert proc.returncode == -9
-
-
-def test_popen_wait(svc: K8sServiceImpl):
-    proc = svc.popen(["get", "pods"])
-    rc = proc.wait()
-    assert rc == 0
-    assert proc.returncode == 0
-
-
-def test_popen_failure_injection(svc: K8sServiceImpl):
-    svc.inject_failure("popen", KubectlError("tunnel failed", 1))
+def test_port_forward_failure_injection(svc: K8sServiceImpl):
+    svc.inject_failure("port_forward", KubectlError("tunnel failed", 1))
     with pytest.raises(KubectlError):
-        svc.popen(["port-forward", "svc/foo", "8080:80"])
+        with svc.port_forward("my-svc", 8080):
+            pass

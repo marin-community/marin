@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import subprocess
-from typing import Any, Protocol, runtime_checkable
+from contextlib import AbstractContextManager
+from typing import Protocol, runtime_checkable
 
 from iris.cluster.k8s.k8s_types import KubectlLogResult
 
@@ -87,8 +88,19 @@ class K8sService(Protocol):
         container: str | None = None,
     ) -> None: ...
 
+    def port_forward(
+        self,
+        service_name: str,
+        remote_port: int,
+        local_port: int | None = None,
+        timeout: float = 90.0,
+    ) -> AbstractContextManager[str]:
+        """Port-forward to a K8s Service, yielding the local URL.
 
-class SubprocessK8s(K8sService, Protocol):
-    """K8sService plus subprocess escape hatch for port-forwarding/tunneling."""
+        The returned context manager keeps the tunnel alive for its duration.
+        Implementations may reconnect transparently on transient failures.
 
-    def popen(self, args: list[str], *, namespaced: bool = False, **kwargs: Any) -> subprocess.Popen: ...
+        In DRY_RUN/LOCAL mode, returns a fake URL without spawning subprocesses.
+        In CLOUD mode, runs ``kubectl port-forward`` with reconnection.
+        """
+        ...

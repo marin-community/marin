@@ -25,10 +25,16 @@ from __future__ import annotations
 import json
 import logging
 import os
+import socket
 import subprocess
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+
+from iris.cluster.platform.base import find_free_port
+from iris.time_utils import Deadline, ExponentialBackoff
 
 from iris.cluster.k8s.k8s_types import KubectlError, KubectlLogLine, KubectlLogResult
 from iris.cluster.k8s.k8s_types import parse_k8s_cpu as _parse_k8s_cpu
@@ -355,28 +361,99 @@ class Kubectl:
                 return (_parse_k8s_cpu(parts[2]), _parse_k8s_memory(parts[3]))
         return None
 
-    def popen(
+    def _popen(
         self,
         args: list[str],
         *,
         namespaced: bool = False,
         **kwargs,
     ) -> subprocess.Popen:
-        """Start a kubectl subprocess without waiting for completion.
-
-        This is the escape hatch for streaming operations (exec with on_line,
-        port-forward) that need a live process handle.
-
-        Args:
-            args: Arguments to pass after the kubectl prefix.
-            namespaced: If True, inject ``-n {namespace}`` before the args.
-            **kwargs: Additional keyword arguments passed to subprocess.Popen.
-        """
+        """Start a kubectl subprocess without waiting for completion."""
         cmd = list(self._prefix)
         if namespaced:
             cmd.extend(["-n", self.namespace])
         cmd.extend(args)
         return subprocess.Popen(cmd, **kwargs)
+
+    @contextmanager
+    def port_forward(
+        self,
+        service_name: str,
+        remote_port: int,
+        local_port: int | None = None,
+        timeout: float = 90.0,
+    ) -> Iterator[str]:
+        """Port-forward to a K8s Service, yielding the local URL.
+
+        Uses exponential backoff to handle freshly provisioned nodes whose
+        konnectivity agent may not be ready when the pod first passes its
+        readiness probe. If the kubectl process exits, it is relaunched.
+        """
+        if local_port is None:
+            local_port = find_free_port(start=10000)
+
+        proc: subprocess.Popen | None = None
+
+        def _stop() -> None:
+            nonlocal proc
+            if proc is None:
+                return
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            proc = None
+
+        deadline = Deadline.from_seconds(timeout)
+        backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
+
+        while not deadline.expired():
+            if proc is None:
+                proc = self._popen(
+                    ["port-forward", f"svc/{service_name}", f"{local_port}:{remote_port}"],
+                    namespaced=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True,
+                )
+
+            if proc.poll() is not None:
+                stderr = proc.stderr.read() if proc.stderr else ""
+                logger.warning("Port-forward exited (retrying): %s", stderr.strip())
+                proc = None
+                time.sleep(min(backoff.next_interval(), max(0, deadline.remaining_seconds())))
+                continue
+
+            try:
+                with socket.create_connection(("127.0.0.1", local_port), timeout=1):
+                    break
+            except OSError:
+                time.sleep(0.5)
+        else:
+            _stop()
+            # Capture konnectivity-agent state for diagnostics.
+            try:
+                diag = self._popen(
+                    ["get", "pods", "-n", "kube-system", "-o", "wide"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                stdout, _ = diag.communicate(timeout=10)
+                if diag.returncode == 0:
+                    logger.warning("kube-system pods at tunnel failure:\n%s", stdout.strip())
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+            raise RuntimeError(f"kubectl port-forward to {service_name}:{remote_port} failed after {timeout}s")
+
+        logger.info("Tunnel ready: 127.0.0.1:%d -> %s:%d", local_port, service_name, remote_port)
+        try:
+            yield f"http://127.0.0.1:{local_port}"
+        finally:
+            _stop()
 
 
 def _parse_kubectl_log_line(line: str) -> KubectlLogLine:

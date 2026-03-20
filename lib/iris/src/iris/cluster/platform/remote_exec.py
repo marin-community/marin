@@ -50,7 +50,7 @@ class RemoteExec(Protocol):
     def run_streaming(self, command: str) -> Any:
         """Run command with streaming stdout.
 
-        Returns subprocess.Popen in production, FakePopen in tests.
+        Returns subprocess.Popen in production, a process-like object in tests.
         """
         ...
 

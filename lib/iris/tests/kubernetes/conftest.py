@@ -96,7 +96,7 @@ def populate_pod(
     pod = make_pod(name, phase, exit_code=exit_code, reason=reason)
     pod["kind"] = "Pod"
     pod["metadata"]["labels"] = base_labels
-    k8s._resources[("pod", name)] = pod
+    k8s.seed_resource("pod", name, pod)
 
 
 def populate_node(
@@ -113,7 +113,7 @@ def populate_node(
         "spec": {"taints": taints or []},
         "status": {"allocatable": {"cpu": cpu, "memory": memory}},
     }
-    k8s._resources[("node", name)] = node
+    k8s.seed_resource("node", name, node)
 
 
 def populate_running_pod_resource(
@@ -144,7 +144,7 @@ def populate_running_pod_resource(
             ]
         },
     }
-    k8s._resources[("pod", name)] = pod
+    k8s.seed_resource("pod", name, pod)
 
 
 def add_eq_constraint(req: cluster_pb2.Worker.RunTaskRequest, key: str, value: str) -> None:

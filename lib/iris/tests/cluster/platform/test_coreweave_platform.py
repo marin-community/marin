@@ -366,8 +366,8 @@ def test_rbac_isolation_across_namespaces():
 # ============================================================================
 
 
-def test_tunnel_parses_address():
-    """tunnel() extracts service name and port from the address string."""
+def test_tunnel_parses_address_and_forwards():
+    """tunnel() parses address and delegates to K8sService.port_forward()."""
     k8s = K8sServiceImpl(namespace="iris")
     config = config_pb2.CoreweavePlatformConfig(region="LGA1", namespace="iris")
     platform = CoreweavePlatform(config=config, label_prefix="iris", kubectl=k8s)
@@ -378,12 +378,8 @@ def test_tunnel_parses_address():
     address = platform.discover_controller(controller_config)
     assert address == "my-svc.iris.svc.cluster.local:9999"
 
-    # Verify parsing logic directly
-    host, port_str = address.rsplit(":", 1)
-    service_name = host.split(".")[0]
-    remote_port = int(port_str)
-    assert service_name == "my-svc"
-    assert remote_port == 9999
+    with platform.tunnel(address) as url:
+        assert url.startswith("http://127.0.0.1:")
     platform.shutdown()
 
 

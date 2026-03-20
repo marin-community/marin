@@ -12,11 +12,11 @@ constraint-based pod scheduling, and resource commitment tracking.
 
 from __future__ import annotations
 
-import io
 import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
 
 from iris.cluster.k8s.k8s_types import KubectlError, KubectlLogLine, KubectlLogResult
 from iris.cluster.service_mode import ServiceMode
@@ -253,45 +253,6 @@ def _matches_field_selector(event: dict, selector: str) -> bool:
         if str(obj) != value.strip():
             return False
     return True
-
-
-# ---------------------------------------------------------------------------
-# FakePopen — subprocess.Popen stand-in for DRY_RUN/LOCAL mode
-# ---------------------------------------------------------------------------
-
-
-class FakePopen:
-    """Minimal subprocess.Popen stand-in for DRY_RUN/LOCAL mode.
-
-    Provides the attributes and methods that callers like _coreweave_tunnel
-    access: poll(), terminate(), kill(), wait(), stderr.read(), etc.
-    """
-
-    pid = 0
-    returncode: int | None = None
-    stdin = None
-
-    def __init__(self) -> None:
-        self.stdout = io.BytesIO(b"")
-        self.stderr = io.BytesIO(b"")
-
-    def poll(self) -> int | None:
-        return self.returncode
-
-    def terminate(self) -> None:
-        self.returncode = -15
-
-    def kill(self) -> None:
-        self.returncode = -9
-
-    def wait(self, timeout: float | None = None) -> int:
-        if self.returncode is None:
-            self.returncode = 0
-        return self.returncode
-
-    def communicate(self, data: bytes | str | None = None, timeout: float | None = None) -> tuple[str, str]:
-        self.returncode = 0
-        return ("", "")
 
 
 # ---------------------------------------------------------------------------
@@ -585,6 +546,14 @@ class K8sServiceImpl:
         """Configure a specific top_pod result for a pod."""
         self._top_pod_overrides[pod_name] = result
 
+    def seed_resource(self, kind: str, name: str, manifest: dict) -> None:
+        """Directly insert a resource into the in-memory store for test setup.
+
+        Use this to pre-populate pods, nodes, etc. without going through
+        apply_json validation and scheduling.
+        """
+        self._resources[(kind.lower(), name)] = manifest
+
     # -- Protocol methods --
 
     def _check_failure(self, operation: str) -> None:
@@ -758,6 +727,14 @@ class K8sServiceImpl:
         self._check_failure("rm_files")
         self._rm_files_calls.append((pod_name, paths))
 
-    def popen(self, args: list[str], *, namespaced: bool = False, **kwargs: Any) -> subprocess.Popen:
-        self._check_failure("popen")
-        return FakePopen()  # type: ignore[return-value]
+    @contextmanager
+    def port_forward(
+        self,
+        service_name: str,
+        remote_port: int,
+        local_port: int | None = None,
+        timeout: float = 90.0,
+    ) -> Iterator[str]:
+        self._check_failure("port_forward")
+        port = local_port or 19999
+        yield f"http://127.0.0.1:{port}"

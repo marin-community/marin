@@ -221,7 +221,12 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
 
     _zone: str = ""
     _project_id: str = ""
+    # Always populated at construction; Optional only for dataclass inheritance ordering.
     _gcp_service: GcpService | None = None
+
+    def __post_init__(self) -> None:
+        if self._gcp_service is None:
+            raise ValueError("_gcp_service is required")
 
     @property
     def _gce_vm_name(self) -> str:
@@ -229,8 +234,7 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
         return cast(GceRemoteExec, self._remote_exec).vm_name
 
     def status(self) -> WorkerStatus:
-        if self._gcp_service is None:
-            return WorkerStatus(state=CloudWorkerState.UNKNOWN)
+        assert self._gcp_service is not None
         info = self._gcp_service.vm_describe(self._gce_vm_name, self._zone)
         if info is None:
             return WorkerStatus(state=CloudWorkerState.UNKNOWN)
@@ -242,20 +246,17 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
         return WorkerStatus(state=state_map.get(info.status, CloudWorkerState.UNKNOWN))
 
     def reboot(self) -> None:
-        if self._gcp_service is None:
-            raise PlatformError("GcpService not available for reboot")
+        assert self._gcp_service is not None
         logger.info("Rebooting GCE instance: %s", self._gce_vm_name)
         self._gcp_service.vm_reset(self._gce_vm_name, self._zone)
 
     def terminate(self) -> None:
-        if self._gcp_service is None:
-            raise PlatformError("GcpService not available for terminate")
+        assert self._gcp_service is not None
         logger.info("Deleting GCE instance: %s", self._gce_vm_name)
         self._gcp_service.vm_delete(self._gce_vm_name, self._zone)
 
     def set_labels(self, labels: dict[str, str]) -> None:
-        if self._gcp_service is None:
-            raise PlatformError("GcpService not available for set_labels")
+        assert self._gcp_service is not None
         logger.info("Setting labels on GCE instance: %s", self._gce_vm_name)
         try:
             self._gcp_service.vm_update_labels(self._gce_vm_name, self._zone, labels)
@@ -263,8 +264,7 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
             logger.warning("Failed to set labels on %s", self._gce_vm_name)
 
     def set_metadata(self, metadata: dict[str, str]) -> None:
-        if self._gcp_service is None:
-            raise PlatformError("GcpService not available for set_metadata")
+        assert self._gcp_service is not None
         logger.info("Setting metadata on GCE instance: %s", self._gce_vm_name)
         try:
             self._gcp_service.vm_set_metadata(self._gce_vm_name, self._zone, metadata)

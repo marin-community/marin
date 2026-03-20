@@ -33,29 +33,25 @@ import base64
 import json
 import logging
 import os
-import socket
-import subprocess
 import threading
 import time
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager
 from datetime import datetime
 from urllib.parse import urlparse
 
 from iris.cluster.config import config_to_dict
 from iris.cluster.k8s.constants import CW_INTERRUPTABLE_TOLERATION
-from iris.cluster.k8s import SubprocessK8s
+from iris.cluster.k8s import K8sService
 from iris.cluster.platform.base import (
     Labels,
     PlatformError,
     QuotaExhaustedError,
     SliceHandle,
     StandaloneWorkerHandle,
-    find_free_port,
 )
 from iris.rpc import config_pb2
-from iris.time_utils import Deadline, ExponentialBackoff
+from iris.time_utils import Deadline
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +135,7 @@ class CoreweavePlatform:
         config: config_pb2.CoreweavePlatformConfig,
         label_prefix: str,
         poll_interval: float = _DEFAULT_POLL_INTERVAL,
-        kubectl: SubprocessK8s | None = None,
+        kubectl: K8sService | None = None,
     ):
         self._config = config
         self._namespace = config.namespace or "iris"
@@ -147,9 +143,9 @@ class CoreweavePlatform:
         self._label_prefix = label_prefix
         self._iris_labels = Labels(label_prefix)
         if kubectl is not None:
-            self._kubectl: SubprocessK8s = kubectl
+            self._kubectl: K8sService = kubectl
         else:
-            from iris.cluster.k8s.kubectl import Kubectl
+            from iris.cluster.k8s.kubectl import Kubectl  # factory site
 
             self._kubectl = Kubectl(
                 namespace=self._namespace,
@@ -456,8 +452,7 @@ class CoreweavePlatform:
         host, port_str = address.rsplit(":", 1)
         service_name = host.split(".")[0]
         remote_port = int(port_str)
-        return _coreweave_tunnel(
-            kubectl=self._kubectl,
+        return self._kubectl.port_forward(
             service_name=service_name,
             remote_port=remote_port,
             local_port=local_port,
@@ -875,95 +870,3 @@ def _build_controller_deployment(
             },
         },
     }
-
-
-# ============================================================================
-# Tunnel
-# ============================================================================
-
-
-@contextmanager
-def _coreweave_tunnel(
-    kubectl: SubprocessK8s,
-    service_name: str,
-    remote_port: int,
-    local_port: int | None = None,
-    timeout: float = 90.0,
-) -> Iterator[str]:
-    """kubectl port-forward to a K8s Service, yielding the local URL.
-
-    Uses a single deadline with exponential backoff to handle freshly
-    provisioned nodes whose konnectivity agent may not be ready when
-    the pod first passes its readiness probe.  If the kubectl process
-    exits (e.g. konnectivity timeout), it is relaunched automatically.
-    """
-    if local_port is None:
-        local_port = find_free_port(start=10000)
-
-    proc: subprocess.Popen | None = None
-
-    def _stop() -> None:
-        nonlocal proc
-        if proc is None:
-            return
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-        proc = None
-
-    deadline = Deadline.from_seconds(timeout)
-    backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
-
-    while not deadline.expired():
-        # (Re-)launch kubectl port-forward when needed.
-        if proc is None:
-            proc = kubectl.popen(
-                ["port-forward", f"svc/{service_name}", f"{local_port}:{remote_port}"],
-                namespaced=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-                start_new_session=True,
-            )
-
-        # Process died -- log, back off, and relaunch on next iteration.
-        if proc.poll() is not None:
-            stderr = proc.stderr.read() if proc.stderr else ""
-            logger.warning("Port-forward exited (retrying): %s", stderr.strip())
-            proc = None
-            time.sleep(min(backoff.next_interval(), max(0, deadline.remaining_seconds())))
-            continue
-
-        # Try to connect to the forwarded port.
-        try:
-            with socket.create_connection(("127.0.0.1", local_port), timeout=1):
-                break
-        except OSError:
-            time.sleep(0.5)
-    else:
-        _stop()
-        # Capture konnectivity-agent state -- it lives in kube-system and is
-        # invisible to normal pod-scoped queries. Without this, diagnosing
-        # the tunnel race requires manual kubectl before events TTL (~1h).
-        try:
-            diag = kubectl.popen(
-                ["get", "pods", "-n", "kube-system", "-o", "wide"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            stdout, _ = diag.communicate(timeout=10)
-            if diag.returncode == 0:
-                logger.warning("kube-system pods at tunnel failure:\n%s", stdout.strip())
-        except (subprocess.TimeoutExpired, OSError):
-            pass
-        raise RuntimeError(f"kubectl port-forward to {service_name}:{remote_port} failed after {timeout}s")
-
-    logger.info("Tunnel ready: 127.0.0.1:%d -> %s:%d", local_port, service_name, remote_port)
-    try:
-        yield f"http://127.0.0.1:{local_port}"
-    finally:
-        _stop()

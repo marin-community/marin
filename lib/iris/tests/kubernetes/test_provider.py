@@ -390,7 +390,7 @@ def test_fetch_scheduling_events_returns_events(provider, k8s):
         "reason": "FailedScheduling",
         "message": "0/3 nodes available",
     }
-    k8s._resources[("event", "evt-1")] = event
+    k8s.seed_resource("event", "evt-1", event)
 
     events = provider._fetch_scheduling_events()
     assert len(events) == 1
@@ -409,7 +409,7 @@ def test_fetch_scheduling_events_ignores_non_iris_events(provider, k8s):
         "reason": "FailedScheduling",
         "message": "0/3 nodes available",
     }
-    k8s._resources[("event", "evt-non-iris")] = event
+    k8s.seed_resource("event", "evt-non-iris", event)
 
     events = provider._fetch_scheduling_events()
     assert events == []
@@ -435,7 +435,7 @@ def test_get_cluster_status_basic(k8s):
         "spec": {"taints": [{"effect": "NoSchedule", "key": "k"}]},
         "status": {"allocatable": {"cpu": "4", "memory": "8Gi"}},
     }
-    k8s._resources[("node", "node-2")] = node_tainted
+    k8s.seed_resource("node", "node-2", node_tainted)
 
     populate_pod(
         k8s,
@@ -446,7 +446,7 @@ def test_get_cluster_status_basic(k8s):
             "iris.attempt_id": "0",
         },
     )
-    pod = k8s._resources[("pod", "iris-task-0")]
+    pod = k8s.get_json("pod", "iris-task-0")
     pod["status"]["conditions"] = []
 
     provider = KubernetesProvider(kubectl=k8s, namespace="iris", default_image="img:latest")
@@ -749,7 +749,7 @@ def test_configmap_cleaned_up_on_delete(provider, k8s):
         "kind": "ConfigMap",
         "metadata": {"name": "iris-pod-1-wf", "labels": labels},
     }
-    k8s._resources[("configmap", "iris-pod-1-wf")] = cm
+    k8s.seed_resource("configmap", "iris-pod-1-wf", cm)
 
     provider._delete_pods_by_task_id(task_id)
 
