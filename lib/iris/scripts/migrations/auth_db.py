@@ -26,8 +26,10 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -35,11 +37,52 @@ from pathlib import Path
 import click
 
 from iris.cluster.config import load_config
-from iris.scripts.migrations.gcloud_helpers import discover_controller_vm, scp_from_controller
 
 logger = logging.getLogger("migrate-auth-db")
 
 CONTROLLER_STATE_DIR = "/var/cache/iris/controller"
+
+
+def _run_cmd(
+    *args: str, timeout: float = 120, check: bool = True, capture: bool = True
+) -> subprocess.CompletedProcess[str]:
+    logger.debug("$ %s", " ".join(args))
+    return subprocess.run(list(args), capture_output=capture, text=True, timeout=timeout, check=check)
+
+
+def _discover_controller_vm(project: str, label_prefix: str) -> tuple[str, str] | None:
+    """Find controller VM by its Iris label. Returns (vm_name, zone) or None."""
+    r = _run_cmd(
+        "gcloud",
+        "compute",
+        "instances",
+        "list",
+        f"--project={project}",
+        f"--filter=labels.iris-{label_prefix}-controller=true",
+        "--format=json(name,zone)",
+        timeout=30,
+    )
+    instances = json.loads(r.stdout)
+    if not instances:
+        return None
+    vm = instances[0]
+    zone = vm["zone"].rsplit("/", 1)[-1]
+    return vm["name"], zone
+
+
+def _scp_from_controller(vm: str, zone: str, project: str, remote_path: str, local_path: Path) -> None:
+    _run_cmd(
+        "gcloud",
+        "compute",
+        "scp",
+        f"{vm}:{remote_path}",
+        str(local_path),
+        f"--zone={zone}",
+        f"--project={project}",
+        timeout=600,
+    )
+
+
 AUTH_TABLES = ("api_keys", "controller_secrets")
 
 
@@ -142,7 +185,7 @@ def main(
             raise click.ClickException(f"Local DB not found: {db_path}")
     else:
         click.echo("Discovering controller VM...")
-        vm_info = discover_controller_vm(project, label_prefix)
+        vm_info = _discover_controller_vm(project, label_prefix)
         if vm_info is None:
             raise click.ClickException(f"No controller VM found with label iris-{label_prefix}-controller=true")
         vm_name, zone = vm_info
@@ -156,7 +199,7 @@ def main(
             click.echo("[dry-run] Would SCP controller.sqlite3 — cannot proceed")
             return
         click.echo(f"SCP {vm_name}:{remote_sqlite} -> {db_path}")
-        scp_from_controller(vm_name, zone, project, remote_sqlite, db_path)
+        _scp_from_controller(vm_name, zone, project, remote_sqlite, db_path)
 
     total = migrate_auth_tables(db_path, dry_run=dry_run)
     auth_path = db_path.with_name("auth.sqlite3")
