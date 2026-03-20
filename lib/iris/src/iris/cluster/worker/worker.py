@@ -180,6 +180,7 @@ class Worker:
             self._service,
             host=config.host,
             port=config.port,
+            auth_token=config.auth_token,
         )
 
         self._server: uvicorn.Server | None = None

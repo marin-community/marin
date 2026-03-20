@@ -11,7 +11,10 @@ from starlette.routing import Mount, Route
 
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.dashboard_common import html_shell, static_files_mount
+from iris.rpc.auth import AuthInterceptor, NullAuthInterceptor, StaticTokenVerifier, TokenVerifier
 from iris.rpc.cluster_connect import WorkerServiceWSGIApplication
+
+WORKER_AUTH_USER = "system:worker"
 
 
 class WorkerDashboard:
@@ -22,10 +25,12 @@ class WorkerDashboard:
         service: WorkerServiceImpl,
         host: str = "0.0.0.0",
         port: int = 8080,
+        auth_token: str = "",
     ):
         self._service = service
         self._host = host
         self._port = port
+        self._auth_token = auth_token
         self._app = self._create_app()
 
     @property
@@ -36,8 +41,22 @@ class WorkerDashboard:
     def app(self) -> Starlette:
         return self._app
 
+    def _build_verifier(self) -> TokenVerifier | None:
+        if not self._auth_token:
+            return None
+        return StaticTokenVerifier(
+            tokens={self._auth_token: WORKER_AUTH_USER},
+            roles={WORKER_AUTH_USER: "worker"},
+        )
+
     def _create_app(self) -> Starlette:
-        rpc_wsgi_app = WorkerServiceWSGIApplication(service=self._service)
+        verifier = self._build_verifier()
+        interceptors: list = []
+        if verifier is not None:
+            interceptors.append(AuthInterceptor(verifier))
+        else:
+            interceptors.append(NullAuthInterceptor())
+        rpc_wsgi_app = WorkerServiceWSGIApplication(service=self._service, interceptors=interceptors)
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         routes = [

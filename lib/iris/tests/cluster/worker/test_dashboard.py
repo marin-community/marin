@@ -270,3 +270,71 @@ def test_get_task_status_completed_task(service, worker, request_context):
     assert status.exit_code == 0
     assert status.started_at.epoch_ms > 0
     assert status.finished_at.epoch_ms > 0
+
+
+# ============================================================================
+# Dashboard authentication tests
+# ============================================================================
+
+AUTH_TOKEN = "test-worker-jwt-token"
+
+
+@pytest.fixture
+def auth_server(service):
+    """Create WorkerDashboard with auth enabled."""
+    return WorkerDashboard(service=service, host="127.0.0.1", port=0, auth_token=AUTH_TOKEN)
+
+
+@pytest.fixture
+def auth_client(auth_server):
+    """Create test client for auth-enabled dashboard."""
+    return TestClient(auth_server._app)
+
+
+def rpc_post_with_auth(client, method, token, body=None):
+    """Call a Connect RPC method with a bearer token."""
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return client.post(
+        f"/iris.cluster.WorkerService/{method}",
+        json=body or {},
+        headers=headers,
+    )
+
+
+def test_auth_rpc_rejected_without_token(auth_client):
+    """RPC calls without a token are rejected when auth is enabled."""
+    response = rpc_post(auth_client, "ListTasks")
+    assert response.status_code != 200
+
+
+def test_auth_rpc_rejected_with_bad_token(auth_client):
+    """RPC calls with an invalid token are rejected."""
+    response = rpc_post_with_auth(auth_client, "ListTasks", token="wrong-token")
+    assert response.status_code != 200
+
+
+def test_auth_rpc_accepted_with_valid_token(auth_client):
+    """RPC calls with the correct worker token succeed."""
+    response = rpc_post_with_auth(auth_client, "ListTasks", token=AUTH_TOKEN)
+    assert response.status_code == 200
+
+
+def test_auth_health_open(auth_client):
+    """Health endpoint remains accessible without auth."""
+    response = auth_client.get("/health")
+    assert response.status_code == 200
+
+
+def test_auth_html_pages_open(auth_client):
+    """HTML shell pages remain accessible without auth."""
+    for path in ["/", "/status", "/task/some-task"]:
+        response = auth_client.get(path)
+        assert response.status_code == 200
+
+
+def test_no_auth_rpc_allowed_without_token(client):
+    """Without auth_token configured, RPC calls work without a token."""
+    response = rpc_post(client, "ListTasks")
+    assert response.status_code == 200
