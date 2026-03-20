@@ -1,13 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""K8sService implementation supporting DRY_RUN, LOCAL, and CLOUD modes.
+"""K8sService implementation for DRY_RUN and LOCAL modes.
 
-In DRY_RUN/LOCAL modes: validates manifests, tracks state in memory, and
-supports failure injection for testing K8s-dependent code without shelling
-out to kubectl.
-
-In CLOUD mode: delegates to an internal Kubectl instance.
+Validates manifests, tracks state in memory, and supports failure injection
+for testing K8s-dependent code without shelling out to kubectl.
 
 Includes a simplified K8s scheduler: node model with labels/taints/resources,
 constraint-based pod scheduling, and resource commitment tracking.
@@ -22,7 +19,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from iris.cluster.k8s.k8s_types import KubectlError, KubectlLogLine, KubectlLogResult
-from iris.cluster.k8s.kubectl import Kubectl
 from iris.cluster.service_mode import ServiceMode
 
 # Resource types that K8s recognizes in container resource requests/limits.
@@ -265,11 +261,11 @@ def _matches_field_selector(event: dict, selector: str) -> bool:
 
 
 class K8sServiceImpl:
-    """K8sService implementation for all three ServiceMode values.
+    """K8sService implementation for DRY_RUN and LOCAL modes.
 
-    DRY_RUN/LOCAL: validates manifests, tracks state in memory, supports
-    failure injection and a simplified scheduler.
-    CLOUD: delegates every protocol method to an internal Kubectl instance.
+    Validates manifests, tracks state in memory, supports failure injection
+    and a simplified scheduler. For CLOUD mode, use Kubectl directly (or
+    create_k8s_service() which selects the right implementation).
     """
 
     def __init__(
@@ -277,23 +273,15 @@ class K8sServiceImpl:
         namespace: str = "iris",
         mode: ServiceMode = ServiceMode.DRY_RUN,
         available_node_pools: list[str] | None = None,
-        kubeconfig_path: str | None = None,
-        timeout: float = 60.0,
     ):
+        if mode == ServiceMode.CLOUD:
+            raise ValueError("CLOUD mode is not supported by K8sServiceImpl; use Kubectl or create_k8s_service()")
+
         self._namespace = namespace
         self._mode = mode
         self._available_node_pools: set[str] | None = (
             set(available_node_pools) if available_node_pools is not None else None
         )
-
-        self._kubectl: Kubectl | None = None
-        if mode == ServiceMode.CLOUD:
-            self._kubectl = Kubectl(
-                namespace=namespace,
-                kubeconfig_path=kubeconfig_path,
-                timeout=timeout,
-            )
-            return
 
         self._resources: dict[tuple[str, str], dict] = {}  # (kind, name) -> manifest
         self._injected_failures: dict[str, Exception] = {}
@@ -582,8 +570,6 @@ class K8sServiceImpl:
             raise err
 
     def apply_json(self, manifest: dict) -> None:
-        if self._kubectl is not None:
-            return self._kubectl.apply_json(manifest)
         self._check_failure("apply_json")
         self._validate_manifest(manifest)
         kind = _normalize_resource(manifest["kind"])
@@ -595,8 +581,6 @@ class K8sServiceImpl:
             self._schedule_pod(manifest)
 
     def get_json(self, resource: str, name: str, *, cluster_scoped: bool = False) -> dict | None:
-        if self._kubectl is not None:
-            return self._kubectl.get_json(resource, name, cluster_scoped=cluster_scoped)
         self._check_failure("get_json")
         return self._resources.get((_normalize_resource(resource), name))
 
@@ -607,8 +591,6 @@ class K8sServiceImpl:
         labels: dict[str, str] | None = None,
         cluster_scoped: bool = False,
     ) -> list[dict]:
-        if self._kubectl is not None:
-            return self._kubectl.list_json(resource, labels=labels, cluster_scoped=cluster_scoped)
         self._check_failure("list_json")
         normalized = _normalize_resource(resource)
 
@@ -647,8 +629,6 @@ class K8sServiceImpl:
     def delete(
         self, resource: str, name: str, *, cluster_scoped: bool = False, force: bool = False, wait: bool = True
     ) -> None:
-        if self._kubectl is not None:
-            return self._kubectl.delete(resource, name, cluster_scoped=cluster_scoped, force=force, wait=wait)
         self._check_failure("delete")
         normalized = _normalize_resource(resource)
         self._resources.pop((normalized, name), None)
@@ -658,8 +638,6 @@ class K8sServiceImpl:
             self._release_pod_resources(name)
 
     def logs(self, pod_name: str, *, container: str | None = None, tail: int = 50, previous: bool = False) -> str:
-        if self._kubectl is not None:
-            return self._kubectl.logs(pod_name, container=container, tail=tail, previous=previous)
         self._check_failure("logs")
         text = self._logs.get(pod_name, "")
         # tail <= 0 means "all lines"; tail > 0 means "last N lines"
@@ -675,8 +653,6 @@ class K8sServiceImpl:
         container: str | None = None,
         byte_offset: int = 0,
     ) -> KubectlLogResult:
-        if self._kubectl is not None:
-            return self._kubectl.stream_logs(pod_name, container=container, byte_offset=byte_offset)
         self._check_failure("stream_logs")
         text = self._logs.get(pod_name, "")
         raw = text.encode("utf-8")
@@ -698,8 +674,6 @@ class K8sServiceImpl:
         container: str | None = None,
         timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        if self._kubectl is not None:
-            return self._kubectl.exec(pod_name, cmd, container=container, timeout=timeout)
         self._check_failure("exec")
         # Return queued response if available
         if self._exec_responses.get(pod_name):
@@ -709,26 +683,18 @@ class K8sServiceImpl:
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
     def set_image(self, resource: str, name: str, container: str, image: str, *, namespaced: bool = False) -> None:
-        if self._kubectl is not None:
-            return self._kubectl.set_image(resource, name, container, image, namespaced=namespaced)
         self._check_failure("set_image")
         manifest = self._resources.get((_normalize_resource(resource), name))
         if manifest is None:
             raise KubectlError(f"{resource}/{name} not found")
 
     def rollout_restart(self, resource: str, name: str, *, namespaced: bool = False) -> None:
-        if self._kubectl is not None:
-            return self._kubectl.rollout_restart(resource, name, namespaced=namespaced)
         self._check_failure("rollout_restart")
 
     def rollout_status(self, resource: str, name: str, *, timeout: float = 600.0, namespaced: bool = False) -> None:
-        if self._kubectl is not None:
-            return self._kubectl.rollout_status(resource, name, timeout=timeout, namespaced=namespaced)
         self._check_failure("rollout_status")
 
     def get_events(self, field_selector: str | None = None) -> list[dict]:
-        if self._kubectl is not None:
-            return self._kubectl.get_events(field_selector=field_selector)
         self._check_failure("get_events")
         if field_selector is None:
             return list(self._events)
@@ -740,8 +706,6 @@ class K8sServiceImpl:
         return results
 
     def top_pod(self, pod_name: str) -> tuple[int, int] | None:
-        if self._kubectl is not None:
-            return self._kubectl.top_pod(pod_name)
         self._check_failure("top_pod")
         if pod_name in self._top_pod_overrides:
             return self._top_pod_overrides[pod_name]
@@ -756,8 +720,6 @@ class K8sServiceImpl:
         *,
         container: str | None = None,
     ) -> bytes:
-        if self._kubectl is not None:
-            return self._kubectl.read_file(pod_name, path, container=container)
         self._check_failure("read_file")
         key = (pod_name, path)
         if key in self._file_contents:
@@ -771,8 +733,6 @@ class K8sServiceImpl:
         *,
         container: str | None = None,
     ) -> None:
-        if self._kubectl is not None:
-            return self._kubectl.rm_files(pod_name, paths, container=container)
         self._check_failure("rm_files")
         self._rm_files_calls.append((pod_name, paths))
 
@@ -784,10 +744,6 @@ class K8sServiceImpl:
         local_port: int | None = None,
         timeout: float = 90.0,
     ) -> Iterator[str]:
-        if self._kubectl is not None:
-            with self._kubectl.port_forward(service_name, remote_port, local_port=local_port, timeout=timeout) as url:
-                yield url
-            return
         self._check_failure("port_forward")
         port = local_port or 19999
         yield f"http://127.0.0.1:{port}"

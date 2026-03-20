@@ -7,12 +7,9 @@ from __future__ import annotations
 
 import pytest
 
-from unittest.mock import MagicMock
-
 from iris.cluster.k8s.k8s_service import K8sService
 from iris.cluster.k8s.k8s_service_impl import FakeNodeResources, K8sServiceImpl
 from iris.cluster.k8s.k8s_types import KubectlError
-from iris.cluster.service_mode import ServiceMode
 
 
 def _pod_manifest(
@@ -573,35 +570,3 @@ def test_port_forward_failure_injection(svc: K8sServiceImpl):
     with pytest.raises(KubectlError):
         with svc.port_forward("my-svc", 8080):
             pass
-
-
-# ---------------------------------------------------------------------------
-# CLOUD mode tests
-# ---------------------------------------------------------------------------
-
-
-def test_cloud_mode_construction():
-    svc = K8sServiceImpl(namespace="test", mode=ServiceMode.CLOUD)
-    assert svc.mode == ServiceMode.CLOUD
-    assert svc.namespace == "test"
-
-
-def test_cloud_mode_satisfies_k8s_service_protocol():
-    svc = K8sServiceImpl(namespace="test", mode=ServiceMode.CLOUD)
-    assert isinstance(svc, K8sService)
-
-
-def test_cloud_mode_delegates_to_kubectl():
-    svc = K8sServiceImpl(namespace="test", mode=ServiceMode.CLOUD)
-    mock_kubectl = MagicMock()
-    svc._kubectl = mock_kubectl
-
-    manifest = {"kind": "Pod", "metadata": {"name": "test"}}
-    svc.apply_json(manifest)
-    mock_kubectl.apply_json.assert_called_once_with(manifest)
-
-    svc.get_json("pod", "test")
-    mock_kubectl.get_json.assert_called_once_with("pod", "test", cluster_scoped=False)
-
-    svc.delete("pod", "test")
-    mock_kubectl.delete.assert_called_once_with("pod", "test", cluster_scoped=False, force=False, wait=True)
