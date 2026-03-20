@@ -15,6 +15,7 @@ The Python layer only serves HTML shells; all rendering is done client-side.
 """
 
 import logging
+from urllib.parse import urlparse
 
 import httpx
 from starlette.applications import Starlette
@@ -33,6 +34,20 @@ logger = logging.getLogger(__name__)
 
 
 _UNAUTHENTICATED_RPCS = {"Login", "GetAuthInfo"}
+
+
+def _check_csrf(request: Request) -> bool:
+    """Verify Origin header matches the request host for CSRF protection."""
+    origin = request.headers.get("origin")
+    if origin is None:
+        referer = request.headers.get("referer")
+        if referer is None:
+            return False
+        parsed = urlparse(referer)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+
+    expected_origin = f"{request.url.scheme}://{request.url.netloc}"
+    return origin == expected_origin
 
 
 class _SelectiveAuthInterceptor:
@@ -140,12 +155,21 @@ class ControllerDashboard:
             }
         )
 
+    # Rate limiting is handled at the infrastructure layer via Cloudflare WAF rules.
+    # See: https://developers.cloudflare.com/waf/rate-limiting-rules/
     async def _auth_session(self, request: Request) -> JSONResponse:
         """Set auth cookie from bearer token."""
+        if not _check_csrf(request):
+            return JSONResponse({"error": "CSRF check failed"}, status_code=403)
         body = await request.json()
         token = body.get("token", "").strip()
         if not token:
             return JSONResponse({"error": "token required"}, status_code=400)
+        if self._auth_verifier is not None:
+            try:
+                self._auth_verifier.verify(token)
+            except ValueError:
+                return JSONResponse({"error": "invalid token"}, status_code=401)
         response = JSONResponse({"ok": True})
         response.set_cookie(
             SESSION_COOKIE,
@@ -159,6 +183,8 @@ class ControllerDashboard:
 
     async def _auth_logout(self, request: Request) -> JSONResponse:
         """Clear auth cookie."""
+        if not _check_csrf(request):
+            return JSONResponse({"error": "CSRF check failed"}, status_code=403)
         response = JSONResponse({"ok": True})
         response.delete_cookie(SESSION_COOKIE, path="/")
         return response
