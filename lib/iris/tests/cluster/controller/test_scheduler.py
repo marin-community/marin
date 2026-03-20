@@ -1569,6 +1569,138 @@ def test_soft_constraint_only_non_matching_workers_available(scheduler, state, j
     assert result.assignments[0][1] == WorkerId("w-ondemand")
 
 
+def test_coscheduled_soft_preemptible_constraint_does_not_block_scheduling(scheduler, state, worker_metadata):
+    """Coscheduled job with soft preemptible=true schedules on on-demand workers.
+
+    Regression test: the coscheduled path used to pass all constraints (including
+    soft) to matching_workers(), making soft constraints act as hard filters for
+    multi-host jobs. A 4-task TPU pod job with soft preemptible=true should
+    schedule on 4 on-demand workers in the same tpu-name group rather than
+    staying pending because no preemptible workers exist.
+    """
+    # 4 on-demand workers in one tpu-name group — no preemptible workers at all
+    for i in range(4):
+        meta = worker_metadata()
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+        meta.attributes[WellKnownAttribute.PREEMPTIBLE].string_value = "false"
+        register_worker(state, f"w{i}", f"addr{i}", meta)
+
+    # Coscheduled 4-replica job with soft preemptible=true
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-soft-test",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=4,
+        environment=cluster_pb2.EnvironmentConfig(),
+    )
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
+    constraint = req.constraints.add()
+    constraint.key = WellKnownAttribute.PREEMPTIBLE
+    constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
+    constraint.value.string_value = "true"
+    constraint.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    submit_job(state, "j1", req)
+
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
+
+    # All 4 tasks should be assigned despite no preemptible workers
+    assert len(result.assignments) == 4
+    for _, worker_id in result.assignments:
+        attr = _worker_attr(state, worker_id, WellKnownAttribute.TPU_NAME)
+        assert attr is not None and attr.value == "tpu-a"
+
+
+def test_coscheduled_soft_constraint_prefers_matching_group(scheduler, state, worker_metadata):
+    """When multiple groups exist, coscheduled job prefers the group that
+    satisfies the most soft constraints."""
+    # Group tpu-a: 4 on-demand workers
+    for i in range(4):
+        meta = worker_metadata()
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+        meta.attributes[WellKnownAttribute.PREEMPTIBLE].string_value = "false"
+        register_worker(state, f"wa{i}", f"addra{i}", meta)
+
+    # Group tpu-b: 4 preemptible workers
+    for i in range(4):
+        meta = worker_metadata()
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-b"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+        meta.attributes[WellKnownAttribute.PREEMPTIBLE].string_value = "true"
+        register_worker(state, f"wb{i}", f"addrb{i}", meta)
+
+    # Coscheduled job with soft preemptible=true
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-soft-prefer",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=4,
+        environment=cluster_pb2.EnvironmentConfig(),
+    )
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
+    constraint = req.constraints.add()
+    constraint.key = WellKnownAttribute.PREEMPTIBLE
+    constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
+    constraint.value.string_value = "true"
+    constraint.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    submit_job(state, "j1", req)
+
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
+
+    # Should prefer tpu-b (preemptible group matching the soft constraint)
+    assert len(result.assignments) == 4
+    for _, worker_id in result.assignments:
+        attr = _worker_attr(state, worker_id, WellKnownAttribute.TPU_NAME)
+        assert attr is not None and attr.value == "tpu-b"
+
+
+def test_coscheduled_diagnostics_with_soft_constraint_does_not_say_no_match(scheduler, state, worker_metadata):
+    """Diagnostics for a coscheduled job with soft constraints should not
+    report 'No workers match constraints' when only the soft constraint fails."""
+    # 4 on-demand workers — soft preemptible=true won't match, but shouldn't block
+    for i in range(4):
+        meta = worker_metadata()
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+        meta.attributes[WellKnownAttribute.PREEMPTIBLE].string_value = "false"
+        register_worker(state, f"w{i}", f"addr{i}", meta)
+
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-diag-test",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=4,
+        environment=cluster_pb2.EnvironmentConfig(),
+    )
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
+    constraint = req.constraints.add()
+    constraint.key = WellKnownAttribute.PREEMPTIBLE
+    constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
+    constraint.value.string_value = "true"
+    constraint.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    tasks = submit_job(state, "j1", req)
+
+    context = scheduler.create_scheduling_context(_worker_capacities(state))
+    job = _query_job(state, tasks[0].job_id)
+    job_req = _job_requirements_from_job(job)
+    schedulable_task_id = next(
+        (t.task_id for t in _query_tasks_for_job(state, job.job_id) if t.can_be_scheduled()), None
+    )
+    diagnostics = scheduler.get_job_scheduling_diagnostics(
+        job_req,
+        context,
+        schedulable_task_id,
+        num_tasks=4,
+    )
+
+    # Diagnostics should NOT say "no workers match constraints" — soft constraints
+    # don't filter, so the 4 on-demand workers should still be considered
+    assert "no workers match" not in diagnostics.lower()
+
+
 # =============================================================================
 # Depth-First Scheduling Priority Assignment Tests
 # =============================================================================

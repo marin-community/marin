@@ -684,16 +684,31 @@ class Scheduler:
             return None
 
         num_tasks = len(task_ids)
-        constraints = list(req.constraints)
+        all_constraints = list(req.constraints)
+        hard_constraints, soft_constraints = split_hard_soft(all_constraints)
 
-        matching_worker_ids = context.matching_workers(constraints)
+        # Only hard constraints filter candidates; soft constraints rank groups.
+        matching_worker_ids = context.matching_workers(hard_constraints)
         groups = context.workers_by_group(group_by, matching_worker_ids)
+
+        # Sort groups so those satisfying more soft constraints are tried first.
+        def _group_soft_score(group_worker_ids: list[WorkerId]) -> int:
+            if not soft_constraints:
+                return 0
+            total = 0
+            for wid in group_worker_ids:
+                cap = context.capacities.get(wid)
+                if cap is not None:
+                    total += soft_constraint_score(dict(cap.attributes), soft_constraints)
+            return total
+
+        sorted_groups = sorted(groups.items(), key=lambda kv: _group_soft_score(kv[1]), reverse=True)
 
         # Find first group with enough workers that have capacity.
         # Note: matching_worker_ids passed attribute constraints (e.g., tpu-name=my-tpu),
         # but we still need to check resource capacity (CPU, memory, GPU). These are
         # orthogonal: a worker can match constraints but lack available resources.
-        for group_key, group_worker_ids in groups.items():
+        for group_key, group_worker_ids in sorted_groups:
             available = [
                 worker_id for worker_id in group_worker_ids if context.capacities[worker_id].can_fit(req) is None
             ]
@@ -814,12 +829,14 @@ class Scheduler:
         num_tasks: int,
     ) -> str:
         """Get detailed diagnostics for why a coscheduled job cannot be scheduled."""
-        constraints = list(req.constraints)
-        matching_ids = context.matching_workers(constraints)
+        all_constraints = list(req.constraints)
+        hard_constraints, _soft_constraints = split_hard_soft(all_constraints)
+        # Only hard constraints filter — soft constraints are preferences, not filters.
+        matching_ids = context.matching_workers(hard_constraints)
         group_by = req.coscheduling_group_by
 
         if not matching_ids:
-            constraint_keys = [c.key for c in constraints]
+            constraint_keys = [c.key for c in hard_constraints]
             return f"No workers match constraints: {constraint_keys}"
 
         if not group_by:
