@@ -11,8 +11,6 @@ import os
 
 import pytest
 
-memray = pytest.importorskip("memray")
-
 from iris.cluster.runtime.profile import (
     _run_memray_profile,
     build_memray_attach_cmd,
@@ -22,6 +20,8 @@ from iris.cluster.runtime.profile import (
     resolve_memory_spec,
 )
 from iris.rpc import cluster_pb2
+
+memray = pytest.importorskip("memray")
 
 # ---------------------------------------------------------------------------
 # resolve_cpu_spec: enum → (py_spy_format, ext) mapping and defaults
