@@ -3,9 +3,9 @@
 
 """Local handle implementations for in-process testing.
 
-Provides LocalSliceHandle and worker handle classes used by GcpServiceImpl
-in LOCAL mode. The LocalPlatform class has been removed — local testing now
-uses GcpPlatform + GcpServiceImpl(mode=ServiceMode.LOCAL).
+Provides LocalSliceHandle and worker handle classes used by LocalGcpService.
+The LocalPlatform class has been removed — local testing now
+uses GcpPlatform + LocalGcpService.
 """
 
 from __future__ import annotations

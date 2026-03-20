@@ -1,15 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""GcpService implementation supporting CLOUD, DRY_RUN, and LOCAL modes.
+"""GcpService implementations: DryRunGcpService, LocalGcpService, CloudGcpService.
 
-CLOUD mode shells out to gcloud CLI.
-DRY_RUN mode validates requests and returns synthetic responses with in-memory state.
-LOCAL mode validates, tracks in-memory state, and spawns real local worker threads.
+DryRunGcpService: In-memory fake with validation and failure injection for testing.
+LocalGcpService: Extends DryRunGcpService with real local worker thread spawning.
+CloudGcpService: Shells out to gcloud CLI for real GCP operations.
 
-Validation runs in ALL modes — zone, accelerator type, label format, name length.
-Failure injection (inject_failure, set_zone_quota, set_tpu_type_unavailable) is
-supported in DRY_RUN and LOCAL modes for testing.
+Factory: create_gcp_service(mode, ...) returns the appropriate implementation.
 """
 
 from __future__ import annotations
@@ -33,6 +31,7 @@ from iris.cluster.platform.base import (
     ResourceNotFoundError,
 )
 from iris.cluster.platform.gcp_service import (
+    GcpService,
     TpuCreateRequest,
     TpuInfo,
     VmCreateRequest,
@@ -183,141 +182,99 @@ def _parse_vm_info(vm_data: dict, fallback_zone: str = "") -> VmInfo:
     )
 
 
-class GcpServiceImpl:
-    """GcpService implementation driven by ServiceMode.
+def _validate_resource_name(name: str, resource_kind: str) -> None:
+    if len(name) > MAX_RESOURCE_NAME_LENGTH:
+        raise ValueError(f"{resource_kind} name exceeds {MAX_RESOURCE_NAME_LENGTH} chars: {name!r}")
+    if not _RESOURCE_NAME_RE.match(name):
+        raise ValueError(
+            f"Invalid {resource_kind} name (must be lowercase alphanumeric/hyphens, " f"start with letter): {name!r}"
+        )
 
-    Validation runs in ALL modes. The mode determines what happens after validation:
-    - CLOUD: shell out to gcloud CLI
-    - DRY_RUN: return synthetic response, maintain in-memory state
-    - LOCAL: return synthetic response, maintain in-memory state, spawn local workers
-    """
+
+def _validate_labels(labels: dict[str, str]) -> None:
+    for key, val in labels.items():
+        if not _LABEL_KEY_RE.match(key):
+            raise ValueError(f"Invalid label key: {key!r}")
+        if not _LABEL_VALUE_RE.match(val):
+            raise ValueError(f"Invalid label value for {key!r}: {val!r}")
+
+
+def _validate_zone(zone: str, valid_zones: set[str]) -> None:
+    if zone not in valid_zones:
+        raise PlatformError(f"Zone {zone!r} not available")
+
+
+def _validate_tpu_create(request: TpuCreateRequest, valid_zones: set[str], valid_accelerator_types: set[str]) -> None:
+    _validate_resource_name(request.name, "TPU")
+    _validate_zone(request.zone, valid_zones)
+    if request.accelerator_type not in valid_accelerator_types:
+        raise ResourceNotFoundError(f"Unknown accelerator type: {request.accelerator_type!r}")
+    if not request.runtime_version:
+        raise ValueError("runtime_version must be non-empty")
+    _validate_labels(request.labels)
+
+
+def _validate_vm_create(request: VmCreateRequest, valid_zones: set[str]) -> None:
+    _validate_resource_name(request.name, "VM")
+    _validate_zone(request.zone, valid_zones)
+    if request.disk_size_gb <= 0:
+        raise ValueError(f"disk_size_gb must be positive, got {request.disk_size_gb}")
+    _validate_labels(request.labels)
+
+
+# ============================================================================
+# DryRunGcpService
+# ============================================================================
+
+
+class DryRunGcpService:
+    """In-memory GCP fake with validation and failure injection for testing."""
 
     DEFAULT_QUOTA = 100
 
-    def __init__(
-        self,
-        mode: ServiceMode,
-        project_id: str = "",
-        # LOCAL mode params
-        controller_address: str | None = None,
-        cache_path: Path | None = None,
-        fake_bundle: Path | None = None,
-        port_allocator: PortAllocator | None = None,
-        threads: ThreadContainer | None = None,
-        worker_attributes_by_group: dict[str, dict[str, str | int | float]] | None = None,
-        gpu_count_by_group: dict[str, int] | None = None,
-        storage_prefix: str = "",
-        label_prefix: str = "iris",
-    ) -> None:
-        self._mode = mode
+    def __init__(self, project_id: str = "") -> None:
         self._project_id = project_id
-
-        # Mutable copies so tests can add/remove types
         self._valid_zones: set[str] = set(KNOWN_GCP_ZONES)
         self._valid_accelerator_types: set[str] = set(KNOWN_TPU_TYPES)
 
-        # In-memory state for DRY_RUN/LOCAL modes
         self._tpus: dict[tuple[str, str], TpuInfo] = {}
         self._vms: dict[tuple[str, str], VmInfo] = {}
 
-        # Failure injection (DRY_RUN/LOCAL only)
         self._injected_failures: dict[str, PlatformError] = {}
         self._zone_quotas: dict[str, int] = {}
         self._vm_zone_quotas: dict[str, int] = {}
         self._available_types_by_zone: dict[str, set[str]] | None = None
 
-        # LOCAL mode: worker spawning params
-        self._controller_address = controller_address
-        self._cache_path = cache_path
-        self._fake_bundle = fake_bundle
-        self._port_allocator = port_allocator
-        self._threads = threads or (ThreadContainer(name="gcp-service-local") if mode == ServiceMode.LOCAL else None)
-        self._worker_attributes_by_group = worker_attributes_by_group or {}
-        self._gpu_count_by_group = gpu_count_by_group or {}
-        self._storage_prefix = storage_prefix
-        self._label_prefix = label_prefix
-        self._iris_labels = Labels(label_prefix) if mode == ServiceMode.LOCAL else None
-
-        # LOCAL mode: track spawned workers per slice for cleanup
-        self._local_slices: dict[str, LocalSliceHandle] = {}
-
     @property
     def mode(self) -> ServiceMode:
-        return self._mode
+        return ServiceMode.DRY_RUN
 
     @property
     def project_id(self) -> str:
         return self._project_id
 
-    # ========================================================================
-    # Validation (shared across all modes)
-    # ========================================================================
-
-    def _validate_resource_name(self, name: str, resource_kind: str) -> None:
-        if len(name) > MAX_RESOURCE_NAME_LENGTH:
-            raise ValueError(f"{resource_kind} name exceeds {MAX_RESOURCE_NAME_LENGTH} chars: {name!r}")
-        if not _RESOURCE_NAME_RE.match(name):
-            raise ValueError(
-                f"Invalid {resource_kind} name (must be lowercase alphanumeric/hyphens, " f"start with letter): {name!r}"
-            )
-
-    def _validate_labels(self, labels: dict[str, str]) -> None:
-        for key, val in labels.items():
-            if not _LABEL_KEY_RE.match(key):
-                raise ValueError(f"Invalid label key: {key!r}")
-            if not _LABEL_VALUE_RE.match(val):
-                raise ValueError(f"Invalid label value for {key!r}: {val!r}")
-
-    def _validate_zone(self, zone: str) -> None:
-        if zone not in self._valid_zones:
-            raise PlatformError(f"Zone {zone!r} not available")
-
-    def _validate_tpu_create(self, request: TpuCreateRequest) -> None:
-        self._validate_resource_name(request.name, "TPU")
-        self._validate_zone(request.zone)
-        if request.accelerator_type not in self._valid_accelerator_types:
-            raise ResourceNotFoundError(f"Unknown accelerator type: {request.accelerator_type!r}")
-        if not request.runtime_version:
-            raise ValueError("runtime_version must be non-empty")
-        self._validate_labels(request.labels)
-
-    def _validate_vm_create(self, request: VmCreateRequest) -> None:
-        self._validate_resource_name(request.name, "VM")
-        self._validate_zone(request.zone)
-        if request.disk_size_gb <= 0:
-            raise ValueError(f"disk_size_gb must be positive, got {request.disk_size_gb}")
-        self._validate_labels(request.labels)
-
-    # ========================================================================
-    # Failure injection (DRY_RUN/LOCAL)
-    # ========================================================================
+    # -- Failure injection --
 
     def inject_failure(self, operation: str, error: PlatformError) -> None:
         """Make the next call to `operation` raise `error`, then auto-clear."""
         self._injected_failures[operation] = error
 
     def set_zone_quota(self, zone: str, max_tpus: int) -> None:
-        """Set TPU quota for a zone. Enforced in DRY_RUN/LOCAL modes."""
         self._zone_quotas[zone] = max_tpus
 
     def set_tpu_type_unavailable(self, accelerator_type: str) -> None:
-        """Remove an accelerator type from the valid set."""
         self._valid_accelerator_types.discard(accelerator_type)
 
     def add_tpu_type(self, accelerator_type: str) -> None:
-        """Add an accelerator type to the valid set."""
         self._valid_accelerator_types.add(accelerator_type)
 
     def set_vm_zone_quota(self, zone: str, max_vms: int) -> None:
-        """Set VM quota for a zone. Enforced in DRY_RUN/LOCAL modes."""
         self._vm_zone_quotas[zone] = max_vms
 
     def set_available_types_by_zone(self, mapping: dict[str, set[str]]) -> None:
-        """Restrict which accelerator types are available per zone."""
         self._available_types_by_zone = mapping
 
     def advance_tpu_state(self, name: str, zone: str, state: str = "READY") -> None:
-        """Transition a TPU to a new state (DRY_RUN/LOCAL only)."""
         key = (name, zone)
         if key not in self._tpus:
             raise ValueError(f"TPU {name!r} not found in {zone}")
@@ -328,34 +285,22 @@ class GcpServiceImpl:
         if err is not None:
             raise err
 
-    # ========================================================================
-    # TPU operations
-    # ========================================================================
+    # -- TPU operations --
 
     def tpu_create(self, request: TpuCreateRequest) -> TpuInfo:
         self._check_injected_failure("tpu_create")
+        _validate_tpu_create(request, self._valid_zones, self._valid_accelerator_types)
+        return self._tpu_create_in_memory(request)
 
-        if self._mode == ServiceMode.LOCAL:
-            # LOCAL mode: skip strict GCP validation (zones, accelerator types)
-            self._validate_resource_name(request.name, "TPU")
-            self._validate_labels(request.labels)
-        else:
-            self._validate_tpu_create(request)
-
-        if self._mode == ServiceMode.CLOUD:
-            return self._tpu_create_cloud(request)
-
-        # DRY_RUN / LOCAL: duplicate detection
+    def _tpu_create_in_memory(self, request: TpuCreateRequest) -> TpuInfo:
         if (request.name, request.zone) in self._tpus:
             raise PlatformError(f"TPU {request.name!r} already exists in {request.zone}")
 
-        # Check quota
         zone_count = sum(1 for (_, z) in self._tpus if z == request.zone)
         max_quota = self._zone_quotas.get(request.zone, self.DEFAULT_QUOTA)
         if zone_count >= max_quota:
             raise QuotaExhaustedError(f"Quota exhausted in {request.zone}")
 
-        # Per-type-per-zone availability
         if self._available_types_by_zone is not None:
             zone_types = self._available_types_by_zone.get(request.zone, set())
             if request.accelerator_type not in zone_types:
@@ -363,7 +308,6 @@ class GcpServiceImpl:
                     f"Accelerator type {request.accelerator_type!r} not available in {request.zone}"
                 )
 
-        # Synthetic network endpoints based on TPU topology
         from iris.cluster.types import get_tpu_topology
 
         try:
@@ -389,142 +333,16 @@ class GcpServiceImpl:
         self._tpus[(request.name, request.zone)] = info
         return info
 
-    def _tpu_create_cloud(self, request: TpuCreateRequest) -> TpuInfo:
-        cmd = [
-            "gcloud",
-            "compute",
-            "tpus",
-            "tpu-vm",
-            "create",
-            request.name,
-            f"--zone={request.zone}",
-            f"--project={self._project_id}",
-            f"--accelerator-type={request.accelerator_type}",
-            f"--version={request.runtime_version}",
-            "--format=json",
-        ]
-
-        if request.labels:
-            cmd.extend(["--labels", _format_labels(request.labels)])
-        if request.preemptible:
-            cmd.append("--preemptible")
-        if request.service_account:
-            cmd.append(f"--service-account={request.service_account}")
-        if request.network:
-            cmd.append(f"--network={request.network}")
-        if request.subnetwork:
-            cmd.append(f"--subnetwork={request.subnetwork}")
-
-        # Large metadata values (e.g. startup-script) are written to temp files
-        # to avoid shell-escaping issues with --metadata inline.
-        metadata_files: dict[str, str] = {}
-        inline_metadata: dict[str, str] = {}
-        for k, v in request.metadata.items():
-            if len(v) > 256:
-                f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
-                f.write(v)
-                f.close()
-                metadata_files[k] = f.name
-            else:
-                inline_metadata[k] = v
-
-        if inline_metadata:
-            metadata_str = ",".join(f"{k}={v}" for k, v in inline_metadata.items())
-            cmd.append(f"--metadata={metadata_str}")
-        if metadata_files:
-            file_str = ",".join(f"{k}={path}" for k, path in metadata_files.items())
-            cmd.append(f"--metadata-from-file={file_str}")
-
-        logger.info("Creating TPU: %s (type=%s, zone=%s)", request.name, request.accelerator_type, request.zone)
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
-        finally:
-            for path in metadata_files.values():
-                os.unlink(path)
-        if result.returncode != 0:
-            raise _classify_gcloud_error(result.stderr.strip())
-
-        if result.stdout.strip():
-            tpu_data = json.loads(result.stdout)
-            return _parse_tpu_info(tpu_data, request.zone)
-
-        info = self.tpu_describe(request.name, request.zone)
-        if info is None:
-            raise PlatformError(f"TPU {request.name} created but could not be described")
-        return info
-
     def tpu_delete(self, name: str, zone: str) -> None:
         self._check_injected_failure("tpu_delete")
-
-        if self._mode == ServiceMode.CLOUD:
-            return self._tpu_delete_cloud(name, zone)
-
-        # DRY_RUN / LOCAL: remove from in-memory state
         self._tpus.pop((name, zone), None)
-
-        # LOCAL: stop worker threads for this slice
-        local_slice = self._local_slices.pop(name, None)
-        if local_slice is not None:
-            local_slice.terminate()
-
-    def _tpu_delete_cloud(self, name: str, zone: str) -> None:
-        cmd = [
-            "gcloud",
-            "compute",
-            "tpus",
-            "tpu-vm",
-            "delete",
-            name,
-            f"--zone={zone}",
-            f"--project={self._project_id}",
-            "--quiet",
-            "--async",
-        ]
-        logger.info("Deleting TPU (async): %s", name)
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            error = result.stderr.strip()
-            if "not found" not in error.lower():
-                raise _classify_gcloud_error(error)
 
     def tpu_describe(self, name: str, zone: str) -> TpuInfo | None:
         self._check_injected_failure("tpu_describe")
-
-        if self._mode == ServiceMode.CLOUD:
-            return self._tpu_describe_cloud(name, zone)
-
         return self._tpus.get((name, zone))
-
-    def _tpu_describe_cloud(self, name: str, zone: str) -> TpuInfo | None:
-        cmd = [
-            "gcloud",
-            "compute",
-            "tpus",
-            "tpu-vm",
-            "describe",
-            name,
-            f"--zone={zone}",
-            f"--project={self._project_id}",
-            "--format=json",
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            error = result.stderr.strip().lower()
-            if "not found" in error or "could not be found" in error:
-                return None
-            logger.warning("Failed to describe TPU %s: %s", name, result.stderr.strip())
-            return None
-
-        tpu_data = json.loads(result.stdout)
-        return _parse_tpu_info(tpu_data, zone)
 
     def tpu_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[TpuInfo]:
         self._check_injected_failure("tpu_list")
-
-        if self._mode == ServiceMode.CLOUD:
-            return self._tpu_list_cloud(zones, labels)
-
-        # DRY_RUN / LOCAL: filter in-memory state
         results: list[TpuInfo] = []
         for (_, z), info in self._tpus.items():
             if zones and z not in zones:
@@ -534,72 +352,22 @@ class GcpServiceImpl:
             results.append(info)
         return results
 
-    def _tpu_list_cloud(self, zones: list[str], labels: dict[str, str] | None = None) -> list[TpuInfo]:
-        results: list[TpuInfo] = []
-
-        # Empty zones = project-wide search using --zone=-
-        zone_list = zones if zones else ["-"]
-
-        for zone in zone_list:
-            cmd = [
-                "gcloud",
-                "compute",
-                "tpus",
-                "tpu-vm",
-                "list",
-                f"--zone={zone}",
-                f"--project={self._project_id}",
-                "--format=json",
-            ]
-            if labels:
-                cmd.append(f"--filter={_build_label_filter(labels)}")
-
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.warning("Failed to list TPUs in zone %s: %s", zone, result.stderr.strip())
-                continue
-            if not result.stdout.strip():
-                continue
-
-            for tpu_data in json.loads(result.stdout):
-                # With --zone=-, name is a full resource path; extract zone from it
-                tpu_zone = zone
-                raw_name = tpu_data.get("name", "")
-                if zone == "-" and "/" in raw_name:
-                    parts = raw_name.split("/")
-                    if len(parts) >= 4:
-                        tpu_zone = parts[3]
-                results.append(_parse_tpu_info(tpu_data, tpu_zone))
-
-        return results
-
-    # ========================================================================
-    # VM operations
-    # ========================================================================
+    # -- VM operations --
 
     def vm_create(self, request: VmCreateRequest) -> VmInfo:
         self._check_injected_failure("vm_create")
+        _validate_vm_create(request, self._valid_zones)
+        return self._vm_create_in_memory(request)
 
-        if self._mode == ServiceMode.LOCAL:
-            self._validate_resource_name(request.name, "VM")
-            self._validate_labels(request.labels)
-        else:
-            self._validate_vm_create(request)
-
-        if self._mode == ServiceMode.CLOUD:
-            return self._vm_create_cloud(request)
-
-        # DRY_RUN / LOCAL: duplicate detection
+    def _vm_create_in_memory(self, request: VmCreateRequest) -> VmInfo:
         if (request.name, request.zone) in self._vms:
             raise PlatformError(f"VM {request.name!r} already exists in {request.zone}")
 
-        # Check VM quota
         vm_zone_count = sum(1 for (_, z) in self._vms if z == request.zone)
         max_vm_quota = self._vm_zone_quotas.get(request.zone, self.DEFAULT_QUOTA)
         if vm_zone_count >= max_vm_quota:
             raise QuotaExhaustedError(f"VM quota exhausted in {request.zone}")
 
-        # DRY_RUN / LOCAL: create in-memory
         seq = len(self._vms)
         info = VmInfo(
             name=request.name,
@@ -614,155 +382,19 @@ class GcpServiceImpl:
         self._vms[(request.name, request.zone)] = info
         return info
 
-    def _vm_create_cloud(self, request: VmCreateRequest) -> VmInfo:
-        cmd = [
-            "gcloud",
-            "compute",
-            "instances",
-            "create",
-            request.name,
-            f"--project={self._project_id}",
-            f"--zone={request.zone}",
-            f"--machine-type={request.machine_type}",
-            f"--boot-disk-size={request.disk_size_gb}GB",
-            f"--boot-disk-type={request.boot_disk_type}",
-            f"--image-family={request.image_family}",
-            f"--image-project={request.image_project}",
-            "--scopes=cloud-platform",
-            "--format=json",
-        ]
-
-        if request.labels:
-            cmd.append(f"--labels={_format_labels(request.labels)}")
-
-        # Large metadata values (e.g. startup-script) are written to temp files.
-        metadata_files: dict[str, str] = {}
-        all_metadata = dict(request.metadata)
-        if request.startup_script:
-            all_metadata["startup-script"] = request.startup_script
-
-        inline_metadata: dict[str, str] = {}
-        for k, v in all_metadata.items():
-            if len(v) > 256:
-                f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
-                f.write(v)
-                f.close()
-                metadata_files[k] = f.name
-            else:
-                inline_metadata[k] = v
-
-        if inline_metadata:
-            metadata_str = ",".join(f"{k}={v}" for k, v in inline_metadata.items())
-            cmd.append(f"--metadata={metadata_str}")
-        if metadata_files:
-            file_str = ",".join(f"{k}={path}" for k, path in metadata_files.items())
-            cmd.append(f"--metadata-from-file={file_str}")
-
-        if request.service_account:
-            cmd.append(f"--service-account={request.service_account}")
-
-        logger.info("Creating VM: %s (zone=%s, type=%s)", request.name, request.zone, request.machine_type)
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
-        finally:
-            for path in metadata_files.values():
-                os.unlink(path)
-        if result.returncode != 0:
-            error_msg = result.stderr.strip()
-            if "already exists" not in error_msg.lower():
-                raise _classify_gcloud_error(error_msg)
-
-        info = self.vm_describe(request.name, request.zone)
-        if info is None:
-            raise PlatformError(f"VM {request.name} created but could not be described")
-        return info
-
     def vm_delete(self, name: str, zone: str) -> None:
         self._check_injected_failure("vm_delete")
-
-        if self._mode == ServiceMode.CLOUD:
-            return self._vm_delete_cloud(name, zone)
-
         self._vms.pop((name, zone), None)
-
-    def _vm_delete_cloud(self, name: str, zone: str) -> None:
-        cmd = [
-            "gcloud",
-            "compute",
-            "instances",
-            "delete",
-            name,
-            f"--project={self._project_id}",
-            f"--zone={zone}",
-            "--quiet",
-        ]
-        logger.info("Deleting VM: %s", name)
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            error = result.stderr.strip()
-            if "not found" not in error.lower():
-                raise _classify_gcloud_error(error)
 
     def vm_reset(self, name: str, zone: str) -> None:
         self._check_injected_failure("vm_reset")
 
-        if self._mode == ServiceMode.CLOUD:
-            return self._vm_reset_cloud(name, zone)
-
-        # DRY_RUN / LOCAL: no-op (VM stays in same state)
-
-    def _vm_reset_cloud(self, name: str, zone: str) -> None:
-        cmd = [
-            "gcloud",
-            "compute",
-            "instances",
-            "reset",
-            name,
-            f"--project={self._project_id}",
-            f"--zone={zone}",
-            "--quiet",
-        ]
-        logger.info("Resetting VM: %s", name)
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise _classify_gcloud_error(result.stderr.strip())
-
     def vm_describe(self, name: str, zone: str) -> VmInfo | None:
         self._check_injected_failure("vm_describe")
-
-        if self._mode == ServiceMode.CLOUD:
-            return self._vm_describe_cloud(name, zone)
-
         return self._vms.get((name, zone))
-
-    def _vm_describe_cloud(self, name: str, zone: str) -> VmInfo | None:
-        cmd = [
-            "gcloud",
-            "compute",
-            "instances",
-            "describe",
-            name,
-            f"--project={self._project_id}",
-            f"--zone={zone}",
-            "--format=json",
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            error = result.stderr.strip().lower()
-            if "not found" in error or "could not be found" in error:
-                return None
-            logger.warning("Failed to describe VM %s: %s", name, result.stderr.strip())
-            return None
-
-        data = json.loads(result.stdout)
-        return _parse_vm_info(data, fallback_zone=zone)
 
     def vm_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[VmInfo]:
         self._check_injected_failure("vm_list")
-
-        if self._mode == ServiceMode.CLOUD:
-            return self._vm_list_cloud(zones, labels)
-
         results: list[VmInfo] = []
         for (_, z), info in self._vms.items():
             if zones and z not in zones:
@@ -772,142 +404,26 @@ class GcpServiceImpl:
             results.append(info)
         return results
 
-    def _vm_list_cloud(self, zones: list[str], labels: dict[str, str] | None = None) -> list[VmInfo]:
-        results: list[VmInfo] = []
-
-        if not zones:
-            # Project-wide search (no --zones flag)
-            cmd = [
-                "gcloud",
-                "compute",
-                "instances",
-                "list",
-                f"--project={self._project_id}",
-                "--format=json",
-            ]
-            if labels:
-                cmd.append(f"--filter={_build_label_filter(labels)}")
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.warning("Failed to list instances: %s", result.stderr.strip())
-                return []
-            if not result.stdout.strip():
-                return []
-            for vm_data in json.loads(result.stdout):
-                results.append(_parse_vm_info(vm_data))
-            return results
-
-        for zone in zones:
-            cmd = [
-                "gcloud",
-                "compute",
-                "instances",
-                "list",
-                f"--project={self._project_id}",
-                f"--zones={zone}",
-                "--format=json",
-            ]
-            if labels:
-                cmd.append(f"--filter={_build_label_filter(labels)}")
-
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.warning("Failed to list instances in zone %s: %s", zone, result.stderr.strip())
-                continue
-            if not result.stdout.strip():
-                continue
-
-            for vm_data in json.loads(result.stdout):
-                results.append(_parse_vm_info(vm_data, fallback_zone=zone))
-
-        return results
-
     def vm_update_labels(self, name: str, zone: str, labels: dict[str, str]) -> None:
         self._check_injected_failure("vm_update_labels")
-        self._validate_labels(labels)
-
-        if self._mode == ServiceMode.CLOUD:
-            return self._vm_update_labels_cloud(name, zone, labels)
-
-        # DRY_RUN / LOCAL: update in-memory state
+        _validate_labels(labels)
         vm = self._vms.get((name, zone))
         if vm is None:
             raise PlatformError(f"VM {name!r} not found in zone {zone!r}")
         vm.labels.update(labels)
 
-    def _vm_update_labels_cloud(self, name: str, zone: str, labels: dict[str, str]) -> None:
-        cmd = [
-            "gcloud",
-            "compute",
-            "instances",
-            "update",
-            name,
-            f"--project={self._project_id}",
-            f"--zone={zone}",
-            f"--update-labels={_format_labels(labels)}",
-        ]
-        logger.info("Updating labels on VM %s", name)
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise _classify_gcloud_error(result.stderr.strip())
-
     def vm_set_metadata(self, name: str, zone: str, metadata: dict[str, str]) -> None:
         self._check_injected_failure("vm_set_metadata")
-
-        if self._mode == ServiceMode.CLOUD:
-            return self._vm_set_metadata_cloud(name, zone, metadata)
-
         vm = self._vms.get((name, zone))
         if vm is None:
             raise PlatformError(f"VM {name!r} not found in zone {zone!r}")
         vm.metadata.update(metadata)
 
-    def _vm_set_metadata_cloud(self, name: str, zone: str, metadata: dict[str, str]) -> None:
-        metadata_str = ",".join(f"{k}={v}" for k, v in metadata.items())
-        cmd = [
-            "gcloud",
-            "compute",
-            "instances",
-            "add-metadata",
-            name,
-            f"--project={self._project_id}",
-            f"--zone={zone}",
-            f"--metadata={metadata_str}",
-        ]
-        logger.info("Setting metadata on VM %s", name)
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise _classify_gcloud_error(result.stderr.strip())
-
     def vm_get_serial_port_output(self, name: str, zone: str, start: int = 0) -> str:
         self._check_injected_failure("vm_get_serial_port_output")
-
-        if self._mode == ServiceMode.CLOUD:
-            return self._vm_get_serial_port_output_cloud(name, zone, start)
-
-        # DRY_RUN / LOCAL: return empty string (no serial console)
         return ""
 
-    def _vm_get_serial_port_output_cloud(self, name: str, zone: str, start: int = 0) -> str:
-        cmd = [
-            "gcloud",
-            "compute",
-            "instances",
-            "get-serial-port-output",
-            name,
-            f"--project={self._project_id}",
-            f"--zone={zone}",
-            f"--start={start}",
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            logger.warning("Failed to get serial port output for %s: %s", name, result.stderr.strip())
-            return ""
-        return result.stdout
-
-    # ========================================================================
-    # LOCAL mode: worker spawning
-    # ========================================================================
+    # -- Local slice operations (not supported in DRY_RUN) --
 
     def create_local_slice(
         self,
@@ -915,10 +431,80 @@ class GcpServiceImpl:
         config: config_pb2.SliceConfig,
         worker_config: config_pb2.WorkerConfig | None = None,
     ) -> LocalSliceHandle:
-        """Create a local slice, spawning real Worker threads if controller_address is set.
+        raise ValueError("DRY_RUN mode does not support local slices")
 
-        Creates in-memory stubs or spawns real Worker threads depending on config.
-        """
+    def get_local_slices(self, labels: dict[str, str] | None = None) -> list[LocalSliceHandle]:
+        return []
+
+    def shutdown(self) -> None:
+        pass
+
+
+# ============================================================================
+# LocalGcpService
+# ============================================================================
+
+
+class LocalGcpService(DryRunGcpService):
+    """Extends DryRunGcpService with local worker thread spawning."""
+
+    def __init__(
+        self,
+        project_id: str = "",
+        controller_address: str | None = None,
+        cache_path: Path | None = None,
+        fake_bundle: Path | None = None,
+        port_allocator: PortAllocator | None = None,
+        threads: ThreadContainer | None = None,
+        worker_attributes_by_group: dict[str, dict[str, str | int | float]] | None = None,
+        gpu_count_by_group: dict[str, int] | None = None,
+        storage_prefix: str = "",
+        label_prefix: str = "iris",
+    ) -> None:
+        super().__init__(project_id=project_id)
+        self._controller_address = controller_address
+        self._cache_path = cache_path
+        self._fake_bundle = fake_bundle
+        self._port_allocator = port_allocator
+        self._threads = threads or ThreadContainer(name="gcp-service-local")
+        self._worker_attributes_by_group = worker_attributes_by_group or {}
+        self._gpu_count_by_group = gpu_count_by_group or {}
+        self._storage_prefix = storage_prefix
+        self._label_prefix = label_prefix
+        self._iris_labels = Labels(label_prefix)
+        self._local_slices: dict[str, LocalSliceHandle] = {}
+
+    @property
+    def mode(self) -> ServiceMode:
+        return ServiceMode.LOCAL
+
+    def tpu_create(self, request: TpuCreateRequest) -> TpuInfo:
+        self._check_injected_failure("tpu_create")
+        # LOCAL mode: skip strict GCP zone/accelerator validation
+        _validate_resource_name(request.name, "TPU")
+        _validate_labels(request.labels)
+        return self._tpu_create_in_memory(request)
+
+    def tpu_delete(self, name: str, zone: str) -> None:
+        self._check_injected_failure("tpu_delete")
+        self._tpus.pop((name, zone), None)
+        local_slice = self._local_slices.pop(name, None)
+        if local_slice is not None:
+            local_slice.terminate()
+
+    def vm_create(self, request: VmCreateRequest) -> VmInfo:
+        self._check_injected_failure("vm_create")
+        # LOCAL mode: skip strict GCP zone/disk validation
+        _validate_resource_name(request.name, "VM")
+        _validate_labels(request.labels)
+        return self._vm_create_in_memory(request)
+
+    def create_local_slice(
+        self,
+        slice_id: str,
+        config: config_pb2.SliceConfig,
+        worker_config: config_pb2.WorkerConfig | None = None,
+    ) -> LocalSliceHandle:
         num_vms = config.num_vms or 1
 
         if self._controller_address is not None:
@@ -945,10 +531,6 @@ class GcpServiceImpl:
         config: config_pb2.SliceConfig,
         worker_config: config_pb2.WorkerConfig | None = None,
     ) -> LocalSliceHandle:
-        """Spawn real Worker threads for a slice.
-
-        Spawns Worker instances in-process for LOCAL mode testing.
-        """
         from iris.cluster.bundle import BundleStore
         from iris.cluster.runtime.process import ProcessRuntime
         from iris.cluster.types import get_tpu_topology
@@ -957,7 +539,6 @@ class GcpServiceImpl:
 
         assert self._cache_path is not None
         assert self._threads is not None
-        assert self._iris_labels is not None
 
         workers: list[Worker] = []
         vm_ids: list[str] = []
@@ -1052,7 +633,7 @@ class GcpServiceImpl:
             addresses.append(f"127.0.0.1:{worker_port}")
 
         logger.info(
-            "GcpServiceImpl(LOCAL) created slice %s with %d workers",
+            "LocalGcpService created slice %s with %d workers",
             slice_id,
             len(workers),
         )
@@ -1068,18 +649,435 @@ class GcpServiceImpl:
         )
 
     def get_local_slices(self, labels: dict[str, str] | None = None) -> list[LocalSliceHandle]:
-        """Return tracked local slices, optionally filtered by labels."""
         results = list(self._local_slices.values())
         if labels:
             results = [s for s in results if all(s.labels.get(k) == v for k, v in labels.items())]
         return results
 
     def shutdown(self) -> None:
-        """Stop all local worker threads. No-op in CLOUD/DRY_RUN modes."""
-        if self._mode != ServiceMode.LOCAL:
-            return
         for s in list(self._local_slices.values()):
             s.terminate()
         self._local_slices.clear()
         if self._threads is not None:
             self._threads.stop(timeout=Duration.from_seconds(5.0))
+
+
+# ============================================================================
+# CloudGcpService
+# ============================================================================
+
+
+class CloudGcpService:
+    """Shells out to gcloud CLI for real GCP operations."""
+
+    def __init__(self, project_id: str = "") -> None:
+        self._project_id = project_id
+        self._valid_zones: set[str] = set(KNOWN_GCP_ZONES)
+        self._valid_accelerator_types: set[str] = set(KNOWN_TPU_TYPES)
+
+    @property
+    def mode(self) -> ServiceMode:
+        return ServiceMode.CLOUD
+
+    @property
+    def project_id(self) -> str:
+        return self._project_id
+
+    # -- TPU operations --
+
+    def tpu_create(self, request: TpuCreateRequest) -> TpuInfo:
+        _validate_tpu_create(request, self._valid_zones, self._valid_accelerator_types)
+
+        cmd = [
+            "gcloud",
+            "compute",
+            "tpus",
+            "tpu-vm",
+            "create",
+            request.name,
+            f"--zone={request.zone}",
+            f"--project={self._project_id}",
+            f"--accelerator-type={request.accelerator_type}",
+            f"--version={request.runtime_version}",
+            "--format=json",
+        ]
+
+        if request.labels:
+            cmd.extend(["--labels", _format_labels(request.labels)])
+        if request.preemptible:
+            cmd.append("--preemptible")
+        if request.service_account:
+            cmd.append(f"--service-account={request.service_account}")
+        if request.network:
+            cmd.append(f"--network={request.network}")
+        if request.subnetwork:
+            cmd.append(f"--subnetwork={request.subnetwork}")
+
+        metadata_files: dict[str, str] = {}
+        inline_metadata: dict[str, str] = {}
+        for k, v in request.metadata.items():
+            if len(v) > 256:
+                f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
+                f.write(v)
+                f.close()
+                metadata_files[k] = f.name
+            else:
+                inline_metadata[k] = v
+
+        if inline_metadata:
+            metadata_str = ",".join(f"{k}={v}" for k, v in inline_metadata.items())
+            cmd.append(f"--metadata={metadata_str}")
+        if metadata_files:
+            file_str = ",".join(f"{k}={path}" for k, path in metadata_files.items())
+            cmd.append(f"--metadata-from-file={file_str}")
+
+        logger.info("Creating TPU: %s (type=%s, zone=%s)", request.name, request.accelerator_type, request.zone)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        finally:
+            for path in metadata_files.values():
+                os.unlink(path)
+        if result.returncode != 0:
+            raise _classify_gcloud_error(result.stderr.strip())
+
+        if result.stdout.strip():
+            tpu_data = json.loads(result.stdout)
+            return _parse_tpu_info(tpu_data, request.zone)
+
+        info = self.tpu_describe(request.name, request.zone)
+        if info is None:
+            raise PlatformError(f"TPU {request.name} created but could not be described")
+        return info
+
+    def tpu_delete(self, name: str, zone: str) -> None:
+        cmd = [
+            "gcloud",
+            "compute",
+            "tpus",
+            "tpu-vm",
+            "delete",
+            name,
+            f"--zone={zone}",
+            f"--project={self._project_id}",
+            "--quiet",
+            "--async",
+        ]
+        logger.info("Deleting TPU (async): %s", name)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            error = result.stderr.strip()
+            if "not found" not in error.lower():
+                raise _classify_gcloud_error(error)
+
+    def tpu_describe(self, name: str, zone: str) -> TpuInfo | None:
+        cmd = [
+            "gcloud",
+            "compute",
+            "tpus",
+            "tpu-vm",
+            "describe",
+            name,
+            f"--zone={zone}",
+            f"--project={self._project_id}",
+            "--format=json",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            error = result.stderr.strip().lower()
+            if "not found" in error or "could not be found" in error:
+                return None
+            logger.warning("Failed to describe TPU %s: %s", name, result.stderr.strip())
+            return None
+
+        tpu_data = json.loads(result.stdout)
+        return _parse_tpu_info(tpu_data, zone)
+
+    def tpu_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[TpuInfo]:
+        results: list[TpuInfo] = []
+        zone_list = zones if zones else ["-"]
+
+        for zone in zone_list:
+            cmd = [
+                "gcloud",
+                "compute",
+                "tpus",
+                "tpu-vm",
+                "list",
+                f"--zone={zone}",
+                f"--project={self._project_id}",
+                "--format=json",
+            ]
+            if labels:
+                cmd.append(f"--filter={_build_label_filter(labels)}")
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.warning("Failed to list TPUs in zone %s: %s", zone, result.stderr.strip())
+                continue
+            if not result.stdout.strip():
+                continue
+
+            for tpu_data in json.loads(result.stdout):
+                tpu_zone = zone
+                raw_name = tpu_data.get("name", "")
+                if zone == "-" and "/" in raw_name:
+                    parts = raw_name.split("/")
+                    if len(parts) >= 4:
+                        tpu_zone = parts[3]
+                results.append(_parse_tpu_info(tpu_data, tpu_zone))
+
+        return results
+
+    # -- VM operations --
+
+    def vm_create(self, request: VmCreateRequest) -> VmInfo:
+        _validate_vm_create(request, self._valid_zones)
+
+        cmd = [
+            "gcloud",
+            "compute",
+            "instances",
+            "create",
+            request.name,
+            f"--project={self._project_id}",
+            f"--zone={request.zone}",
+            f"--machine-type={request.machine_type}",
+            f"--boot-disk-size={request.disk_size_gb}GB",
+            f"--boot-disk-type={request.boot_disk_type}",
+            f"--image-family={request.image_family}",
+            f"--image-project={request.image_project}",
+            "--scopes=cloud-platform",
+            "--format=json",
+        ]
+
+        if request.labels:
+            cmd.append(f"--labels={_format_labels(request.labels)}")
+
+        metadata_files: dict[str, str] = {}
+        all_metadata = dict(request.metadata)
+        if request.startup_script:
+            all_metadata["startup-script"] = request.startup_script
+
+        inline_metadata: dict[str, str] = {}
+        for k, v in all_metadata.items():
+            if len(v) > 256:
+                f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
+                f.write(v)
+                f.close()
+                metadata_files[k] = f.name
+            else:
+                inline_metadata[k] = v
+
+        if inline_metadata:
+            metadata_str = ",".join(f"{k}={v}" for k, v in inline_metadata.items())
+            cmd.append(f"--metadata={metadata_str}")
+        if metadata_files:
+            file_str = ",".join(f"{k}={path}" for k, path in metadata_files.items())
+            cmd.append(f"--metadata-from-file={file_str}")
+
+        if request.service_account:
+            cmd.append(f"--service-account={request.service_account}")
+
+        logger.info("Creating VM: %s (zone=%s, type=%s)", request.name, request.zone, request.machine_type)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        finally:
+            for path in metadata_files.values():
+                os.unlink(path)
+        if result.returncode != 0:
+            error_msg = result.stderr.strip()
+            if "already exists" not in error_msg.lower():
+                raise _classify_gcloud_error(error_msg)
+
+        info = self.vm_describe(request.name, request.zone)
+        if info is None:
+            raise PlatformError(f"VM {request.name} created but could not be described")
+        return info
+
+    def vm_delete(self, name: str, zone: str) -> None:
+        cmd = [
+            "gcloud",
+            "compute",
+            "instances",
+            "delete",
+            name,
+            f"--project={self._project_id}",
+            f"--zone={zone}",
+            "--quiet",
+        ]
+        logger.info("Deleting VM: %s", name)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            error = result.stderr.strip()
+            if "not found" not in error.lower():
+                raise _classify_gcloud_error(error)
+
+    def vm_reset(self, name: str, zone: str) -> None:
+        cmd = [
+            "gcloud",
+            "compute",
+            "instances",
+            "reset",
+            name,
+            f"--project={self._project_id}",
+            f"--zone={zone}",
+            "--quiet",
+        ]
+        logger.info("Resetting VM: %s", name)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise _classify_gcloud_error(result.stderr.strip())
+
+    def vm_describe(self, name: str, zone: str) -> VmInfo | None:
+        cmd = [
+            "gcloud",
+            "compute",
+            "instances",
+            "describe",
+            name,
+            f"--project={self._project_id}",
+            f"--zone={zone}",
+            "--format=json",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            error = result.stderr.strip().lower()
+            if "not found" in error or "could not be found" in error:
+                return None
+            logger.warning("Failed to describe VM %s: %s", name, result.stderr.strip())
+            return None
+
+        data = json.loads(result.stdout)
+        return _parse_vm_info(data, fallback_zone=zone)
+
+    def vm_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[VmInfo]:
+        results: list[VmInfo] = []
+
+        if not zones:
+            cmd = [
+                "gcloud",
+                "compute",
+                "instances",
+                "list",
+                f"--project={self._project_id}",
+                "--format=json",
+            ]
+            if labels:
+                cmd.append(f"--filter={_build_label_filter(labels)}")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.warning("Failed to list instances: %s", result.stderr.strip())
+                return []
+            if not result.stdout.strip():
+                return []
+            for vm_data in json.loads(result.stdout):
+                results.append(_parse_vm_info(vm_data))
+            return results
+
+        for zone in zones:
+            cmd = [
+                "gcloud",
+                "compute",
+                "instances",
+                "list",
+                f"--project={self._project_id}",
+                f"--zones={zone}",
+                "--format=json",
+            ]
+            if labels:
+                cmd.append(f"--filter={_build_label_filter(labels)}")
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.warning("Failed to list instances in zone %s: %s", zone, result.stderr.strip())
+                continue
+            if not result.stdout.strip():
+                continue
+
+            for vm_data in json.loads(result.stdout):
+                results.append(_parse_vm_info(vm_data, fallback_zone=zone))
+
+        return results
+
+    def vm_update_labels(self, name: str, zone: str, labels: dict[str, str]) -> None:
+        _validate_labels(labels)
+        cmd = [
+            "gcloud",
+            "compute",
+            "instances",
+            "update",
+            name,
+            f"--project={self._project_id}",
+            f"--zone={zone}",
+            f"--update-labels={_format_labels(labels)}",
+        ]
+        logger.info("Updating labels on VM %s", name)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise _classify_gcloud_error(result.stderr.strip())
+
+    def vm_set_metadata(self, name: str, zone: str, metadata: dict[str, str]) -> None:
+        metadata_str = ",".join(f"{k}={v}" for k, v in metadata.items())
+        cmd = [
+            "gcloud",
+            "compute",
+            "instances",
+            "add-metadata",
+            name,
+            f"--project={self._project_id}",
+            f"--zone={zone}",
+            f"--metadata={metadata_str}",
+        ]
+        logger.info("Setting metadata on VM %s", name)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise _classify_gcloud_error(result.stderr.strip())
+
+    def vm_get_serial_port_output(self, name: str, zone: str, start: int = 0) -> str:
+        cmd = [
+            "gcloud",
+            "compute",
+            "instances",
+            "get-serial-port-output",
+            name,
+            f"--project={self._project_id}",
+            f"--zone={zone}",
+            f"--start={start}",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.warning("Failed to get serial port output for %s: %s", name, result.stderr.strip())
+            return ""
+        return result.stdout
+
+    # -- Local slice operations (not supported in CLOUD) --
+
+    def create_local_slice(
+        self,
+        slice_id: str,
+        config: config_pb2.SliceConfig,
+        worker_config: config_pb2.WorkerConfig | None = None,
+    ) -> LocalSliceHandle:
+        raise ValueError("CLOUD mode does not support local slices")
+
+    def get_local_slices(self, labels: dict[str, str] | None = None) -> list[LocalSliceHandle]:
+        return []
+
+    def shutdown(self) -> None:
+        pass
+
+
+# ============================================================================
+# Factory + backward compat
+# ============================================================================
+
+
+def create_gcp_service(mode: ServiceMode, project_id: str = "", **kwargs) -> GcpService:
+    if mode == ServiceMode.CLOUD:
+        return CloudGcpService(project_id=project_id)
+    if mode == ServiceMode.LOCAL:
+        return LocalGcpService(project_id=project_id, **kwargs)
+    return DryRunGcpService(project_id=project_id)
+
+
+GcpServiceImpl = DryRunGcpService

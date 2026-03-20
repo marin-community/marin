@@ -77,7 +77,8 @@ class GcpService(Protocol):
     """Service boundary for GCP operations.
 
     All methods raise PlatformError (or subclass) on failure.
-    Implementations: GcpServiceImpl with ServiceMode determining behavior.
+    Implementations: DryRunGcpService, LocalGcpService, CloudGcpService.
+    Use create_gcp_service(mode, ...) factory to construct the right one.
     """
 
     @property

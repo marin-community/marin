@@ -70,7 +70,7 @@ from iris.cluster.platform.gcp_service import (
     TpuCreateRequest,
     VmCreateRequest,
 )
-from iris.cluster.platform.gcp_service_impl import GcpServiceImpl
+from iris.cluster.platform.gcp_service_impl import CloudGcpService
 from iris.cluster.platform.remote_exec import (
     GceRemoteExec,
     GcloudRemoteExec,
@@ -533,7 +533,7 @@ class GcpPlatform:
         self._iris_labels = Labels(label_prefix)
         self._ssh_config = ssh_config
         self._zones = list(gcp_config.zones)
-        self._gcp: GcpService = gcp_service or GcpServiceImpl(mode=ServiceMode.CLOUD, project_id=self._project_id)
+        self._gcp: GcpService = gcp_service or CloudGcpService(project_id=self._project_id)
 
     def resolve_image(self, image: str, zone: str | None = None) -> str:
         """Rewrite ``ghcr.io/`` images to the AR remote repo for *zone*'s continent.
@@ -621,7 +621,7 @@ class GcpPlatform:
     ) -> SliceHandle:
         """Create a GCP-backed slice (TPU pod or single VM).
 
-        In LOCAL mode, delegates to GcpServiceImpl to spawn local worker threads
+        In LOCAL mode, delegates to LocalGcpService to spawn local worker threads
         and returns a LocalSliceHandle.
         """
         if self._gcp.mode == ServiceMode.LOCAL:
@@ -636,7 +636,7 @@ class GcpPlatform:
         config: config_pb2.SliceConfig,
         worker_config: config_pb2.WorkerConfig | None = None,
     ) -> SliceHandle:
-        """Create a local slice via GcpServiceImpl(LOCAL)."""
+        """Create a local slice via LocalGcpService(LOCAL)."""
         slice_id = f"{config.name_prefix}-{generate_slice_suffix()}"
         return self._gcp.create_local_slice(slice_id, config, worker_config)
 
