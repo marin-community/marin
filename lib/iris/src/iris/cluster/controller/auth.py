@@ -51,7 +51,7 @@ def create_api_key(
 ) -> None:
     """Insert a new API key row."""
     db.execute(
-        "INSERT INTO api_keys (key_id, key_hash, key_prefix, user_id, name, created_at_ms, expires_at_ms) "
+        f"INSERT INTO {db._api_keys_table} (key_id, key_hash, key_prefix, user_id, name, created_at_ms, expires_at_ms) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (key_id, key_hash, key_prefix, user_id, name, now.epoch_ms(), expires_at.epoch_ms() if expires_at else None),
     )
@@ -66,7 +66,7 @@ def lookup_api_key_by_hash(db: ControllerDB, key_hash: str) -> ApiKey | None:
 def touch_api_key(db: ControllerDB, key_id: str, now: Timestamp) -> None:
     """Update last_used_at timestamp."""
     db.execute(
-        "UPDATE api_keys SET last_used_at_ms = ? WHERE key_id = ?",
+        f"UPDATE {db._api_keys_table} SET last_used_at_ms = ? WHERE key_id = ?",
         (now.epoch_ms(), key_id),
     )
 
@@ -75,7 +75,7 @@ def revoke_api_key(db: ControllerDB, key_id: str, now: Timestamp) -> bool:
     """Revoke an API key. Returns True if key existed and was revoked."""
     with db.transaction() as cur:
         cur.execute(
-            "UPDATE api_keys SET revoked_at_ms = ? WHERE key_id = ? AND revoked_at_ms IS NULL",
+            f"UPDATE {db._api_keys_table} SET revoked_at_ms = ? WHERE key_id = ? AND revoked_at_ms IS NULL",
             (now.epoch_ms(), key_id),
         )
         return cur._cursor.rowcount > 0
@@ -91,9 +91,10 @@ def list_api_keys(db: ControllerDB, user_id: str | None = None) -> list[ApiKey]:
 
 def revoke_login_keys_for_user(db: ControllerDB, user_id: str, now: Timestamp) -> list[str]:
     """Revoke all active login keys for a user. Returns list of revoked key_ids."""
+    table = db._api_keys_table
     with db.snapshot() as q:
         active_login_keys = q.raw(
-            "SELECT key_id FROM api_keys WHERE user_id = ? AND name LIKE 'login-%' AND revoked_at_ms IS NULL",
+            f"SELECT key_id FROM {table} WHERE user_id = ? AND name LIKE 'login-%' AND revoked_at_ms IS NULL",
             (user_id,),
             decoders={"key_id": str},
         )
@@ -101,7 +102,7 @@ def revoke_login_keys_for_user(db: ControllerDB, user_id: str, now: Timestamp) -
     if revoked_ids:
         with db.transaction() as cur:
             cur.execute(
-                "UPDATE api_keys SET revoked_at_ms = ?"
+                f"UPDATE {table} SET revoked_at_ms = ?"
                 " WHERE user_id = ? AND name LIKE 'login-%' AND revoked_at_ms IS NULL",
                 (now.epoch_ms(), user_id),
             )
@@ -115,9 +116,10 @@ def revoke_login_keys_for_user(db: ControllerDB, user_id: str, now: Timestamp) -
 
 def _get_or_create_signing_key(db: ControllerDB) -> str:
     """Load the HMAC signing key from DB, or create one on first run."""
+    table = db._secrets_table
     with db.snapshot() as q:
         rows = q.raw(
-            "SELECT value FROM controller_secrets WHERE key = ?",
+            f"SELECT value FROM {table} WHERE key = ?",
             ("jwt_signing_key",),
             decoders={"value": str},
         )
@@ -127,13 +129,13 @@ def _get_or_create_signing_key(db: ControllerDB) -> str:
     new_key = secrets.token_hex(32)
     now = Timestamp.now()
     db.execute(
-        "INSERT OR IGNORE INTO controller_secrets (key, value, created_at_ms) VALUES (?, ?, ?)",
+        f"INSERT OR IGNORE INTO {table} (key, value, created_at_ms) VALUES (?, ?, ?)",
         ("jwt_signing_key", new_key, now.epoch_ms()),
     )
     # Re-read in case of concurrent insert (INSERT OR IGNORE)
     with db.snapshot() as q:
         rows = q.raw(
-            "SELECT value FROM controller_secrets WHERE key = ?",
+            f"SELECT value FROM {table} WHERE key = ?",
             ("jwt_signing_key",),
             decoders={"value": str},
         )
@@ -228,9 +230,10 @@ class JwtTokenManager:
         by signature verification anyway, so their JTIs don't need tracking.
         """
         now_ms = int(time.time() * 1000)
+        table = db._api_keys_table
         with db.snapshot() as q:
             rows = q.raw(
-                "SELECT key_id FROM api_keys"
+                f"SELECT key_id FROM {table}"
                 " WHERE revoked_at_ms IS NOT NULL"
                 " AND (expires_at_ms IS NULL OR expires_at_ms > ?)",
                 (now_ms,),
@@ -348,7 +351,7 @@ def _preload_static_tokens(
     if not tokens:
         raise ValueError("Static auth config requires at least one token")
 
-    db.execute("DELETE FROM api_keys WHERE key_id LIKE 'iris_k_static_%'")
+    db.execute(f"DELETE FROM {db._api_keys_table} WHERE key_id LIKE 'iris_k_static_%'")
 
     for raw_token, username in tokens.items():
         db.ensure_user(username, now)
