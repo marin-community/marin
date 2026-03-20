@@ -306,7 +306,7 @@ def _write_scatter_meta(
     chunk_counts: dict[int, int],
     chunk_offsets: dict[int, int],
     is_pickled: bool,
-    max_row_group_rows: int = 0,
+    max_chunk_rows: dict[int, int] | None = None,
     avg_item_bytes: float = 0.0,
 ) -> None:
     """Write a ``.scatter_meta`` sidecar alongside a scatter Parquet file."""
@@ -319,8 +319,8 @@ def _write_scatter_meta(
         payload_dict["chunk_offsets"] = non_zero_offsets
     if is_pickled:
         payload_dict["is_pickled"] = True
-    if max_row_group_rows > 0:
-        payload_dict["max_row_group_rows"] = max_row_group_rows
+    if max_chunk_rows:
+        payload_dict["max_chunk_rows"] = {str(k): v for k, v in max_chunk_rows.items() if v > 0}
     if avg_item_bytes > 0:
         payload_dict["avg_item_bytes"] = round(avg_item_bytes, 1)
     payload = json.dumps(payload_dict)
@@ -361,8 +361,8 @@ def _write_scatter_manifest(scatter_paths: list[str], output_path: str) -> None:
             "chunk_offsets": meta.get("chunk_offsets", {}),
             "is_pickled": meta.get("is_pickled", False),
         }
-        if "max_row_group_rows" in meta:
-            entry["max_row_group_rows"] = meta["max_row_group_rows"]
+        if "max_chunk_rows" in meta:
+            entry["max_chunk_rows"] = meta["max_chunk_rows"]
         if "avg_item_bytes" in meta:
             entry["avg_item_bytes"] = meta["avg_item_bytes"]
         return path, entry
@@ -422,8 +422,17 @@ def _build_scatter_shard_from_manifest(manifest_path: str, target_shard: int) ->
                 )
             )
 
-        # Aggregate stats from manifest entries for this shard
-        max_rg_rows = max((entry.get("max_row_group_rows", 0) for entry in file_entries), default=100_000)
+        # Aggregate stats from manifest entries for this shard.
+        # max_chunk_rows is a per-shard dict so we only look at target_shard's value.
+        # Fall back to the old scalar max_row_group_rows for pre-migration manifests.
+        max_rg_rows = 0
+        for entry in file_entries:
+            per_shard = entry.get("max_chunk_rows", {})
+            if per_shard:
+                max_rg_rows = max(max_rg_rows, per_shard.get(str(target_shard), 0))
+            else:
+                # old manifest: scalar max across all shards — use as conservative fallback
+                max_rg_rows = max(max_rg_rows, entry.get("max_row_group_rows", 0))
         if max_rg_rows == 0:
             max_rg_rows = 100_000  # fallback for old manifests without stats
 
@@ -538,7 +547,7 @@ def _write_parquet_scatter(
     pending_target: int = -1
     pending_cnt: int = 0
 
-    max_row_group_rows: int = 0
+    per_shard_max_rows: dict[int, int] = defaultdict(int)
     avg_item_bytes: float = 0.0
     _sampled_avg = False
 
@@ -599,7 +608,7 @@ def _write_parquet_scatter(
 
     def _write_buffer(target_shard: int, buf: list) -> None:
         """Sort a buffer and write it as a Parquet row group."""
-        nonlocal pending_chunk, pending_target, pending_cnt, max_row_group_rows, avg_item_bytes, _sampled_avg
+        nonlocal pending_chunk, pending_target, pending_cnt, avg_item_bytes, _sampled_avg
         enveloped = _prepare_batch(target_shard, buf)
         chunk_arrow = pa.RecordBatch.from_pylist(enveloped)
         write_schema = _ensure_writer(chunk_arrow.schema)
@@ -608,7 +617,7 @@ def _write_parquet_scatter(
         pending_chunk = chunk_arrow
         pending_target = target_shard
         pending_cnt = len(buf)
-        max_row_group_rows = max(max_row_group_rows, len(buf))
+        per_shard_max_rows[target_shard] = max(per_shard_max_rows[target_shard], len(buf))
 
         # Sample avg_item_bytes once on first flush
         if not _sampled_avg and len(enveloped) > 0:
@@ -651,7 +660,8 @@ def _write_parquet_scatter(
         for i, path in enumerate(seg_paths):
             counts = dict(seg_shard_counts.get(i, {}))
             offsets = {shard: cumulative_offsets[shard] for shard in counts}
-            _write_scatter_meta(path, counts, offsets, pickled, max_row_group_rows, avg_item_bytes)
+            seg_max_rows = {shard: per_shard_max_rows[shard] for shard in counts if per_shard_max_rows[shard] > 0}
+            _write_scatter_meta(path, counts, offsets, pickled, seg_max_rows, avg_item_bytes)
             for shard, count in counts.items():
                 cumulative_offsets[shard] += count
 
