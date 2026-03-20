@@ -227,20 +227,12 @@ def build_image(
 
     click.echo(f"Using Dockerfile: {dockerfile_path}")
 
-<<<<<<< Updated upstream
     all_tags = dict.fromkeys([tag, sha_tag, latest_tag])
     cmd = ["docker", "buildx", "build", "--platform", platform]
     cmd.extend(["--target", image_type])
     cmd.extend(["--build-arg", f"IRIS_GIT_HASH={git_sha}"])
     for t in all_tags:
         cmd.extend(["-t", t])
-||||||| constructed merge base
-    cmd = ["docker", "buildx", "build", "--no-cache", "--platform", platform]
-    cmd.extend(["-t", tag])
-=======
-    cmd = ["docker", "buildx", "build", "--platform", platform]
-    cmd.extend(["-t", tag])
->>>>>>> Stashed changes
     cmd.extend(["-f", str(dockerfile_path)])
 
     # Use the weekly GHCR image as a build cache source so that cold builds
