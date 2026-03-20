@@ -99,7 +99,7 @@ def test_write_connection_can_access_auth_tables(db_with_auth: ControllerDB):
     # snapshot() uses the write connection
     with db_with_auth.snapshot() as q:
         rows = q.raw(
-            f"SELECT key_id FROM {db_with_auth._api_keys_table}",
+            f"SELECT key_id FROM {db_with_auth.api_keys_table}",
             decoders={"key_id": str},
         )
         assert len(rows) == 1

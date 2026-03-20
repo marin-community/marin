@@ -17,7 +17,6 @@ The Python layer only serves HTML shells; all rendering is done client-side.
 import logging
 import os
 from http.cookies import SimpleCookie
-from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -67,7 +66,7 @@ class _AuthMiddleware:
         self._app = app
         self._verifier = verifier
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> Any:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             return await self._app(scope, receive, send)
 

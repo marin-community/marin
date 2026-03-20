@@ -1208,11 +1208,11 @@ class ControllerDB:
                 )
 
     @property
-    def _api_keys_table(self) -> str:
+    def api_keys_table(self) -> str:
         return "auth.api_keys" if self._auth_db_path is not None else "api_keys"
 
     @property
-    def _secrets_table(self) -> str:
+    def secrets_table(self) -> str:
         return "auth.controller_secrets" if self._auth_db_path is not None else "controller_secrets"
 
     def ensure_user(self, user_id: str, now: Timestamp, role: str = "user") -> None:

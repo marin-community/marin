@@ -113,13 +113,14 @@ def write_checkpoint(
     remote_latest_legacy = f"{prefix}/latest.sqlite3"
     _fsspec_copy(f"{prefix}/checkpoint.sqlite3", remote_latest_legacy)
 
-    if db.auth_db_path is not None and db.auth_db_path.exists():
+    auth_path = db.auth_db_path
+    if auth_path is not None and auth_path.exists():
         _upload_sqlite_backup(
-            db.auth_db_path,
+            auth_path,
             prefix,
             "auth-checkpoint",
             created_at,
-            backup_fn=lambda dest: _backup_sqlite_file(db.auth_db_path, dest),
+            backup_fn=lambda dest: _backup_sqlite_file(auth_path, dest),
         )
 
     with db.snapshot() as snapshot:
