@@ -35,6 +35,7 @@ from iris.rpc.auth import (
     get_verified_identity,
     get_verified_user,
     require_identity,
+    validate_worker_identity,
 )
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.db import (
@@ -1067,7 +1068,8 @@ class ControllerServiceImpl:
         Worker registers once, then waits for heartbeats from the controller.
         """
         if self._auth.provider is not None:
-            authorize(AuthzAction.REGISTER_WORKER)
+            identity = authorize(AuthzAction.REGISTER_WORKER)
+            validate_worker_identity(identity, request.worker_id)
 
         if not request.worker_id:
             logger.error("Worker at %s registered without worker_id", request.address)

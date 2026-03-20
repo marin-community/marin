@@ -35,6 +35,7 @@ class VerifiedIdentity:
 
     user_id: str
     role: str
+    worker_id: str | None = None
 
 
 def _extract_cookie(cookie_header: str, name: str) -> str | None:
@@ -117,6 +118,19 @@ def authorize(action: AuthzAction) -> VerifiedIdentity:
     if identity.role not in allowed:
         raise ConnectError(Code.PERMISSION_DENIED, f"{action} not allowed for role {identity.role}")
     return identity
+
+
+def validate_worker_identity(identity: VerifiedIdentity, claimed_worker_id: str) -> None:
+    """Check that the JWT worker_id claim matches the claimed worker_id.
+
+    If the token has no worker_id binding (shared tokens), this is a no-op.
+    Raises PERMISSION_DENIED if the bound worker_id does not match.
+    """
+    if identity.worker_id is not None and identity.worker_id != claimed_worker_id:
+        raise ConnectError(
+            Code.PERMISSION_DENIED,
+            f"Token bound to worker '{identity.worker_id}' cannot register as '{claimed_worker_id}'",
+        )
 
 
 def authorize_resource_owner(resource_owner: str) -> VerifiedIdentity:

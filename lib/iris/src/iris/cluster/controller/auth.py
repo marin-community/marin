@@ -168,6 +168,7 @@ class JwtTokenManager:
         role: str,
         key_id: str,
         ttl_seconds: int = DEFAULT_JWT_TTL_SECONDS,
+        worker_id: str | None = None,
     ) -> str:
         now = time.time()
         payload = {
@@ -177,6 +178,8 @@ class JwtTokenManager:
             "iat": int(now),
             "exp": int(now + ttl_seconds),
         }
+        if worker_id is not None:
+            payload["wid"] = worker_id
         return jwt.encode(payload, self._signing_key, algorithm="HS256")
 
     def verify(self, token: str) -> VerifiedIdentity:
@@ -201,6 +204,7 @@ class JwtTokenManager:
         return VerifiedIdentity(
             user_id=payload["sub"],
             role=payload.get("role", "user"),
+            worker_id=payload.get("wid"),
         )
 
     def _maybe_touch(self, jti: str) -> None:

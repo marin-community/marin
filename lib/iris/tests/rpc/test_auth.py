@@ -568,6 +568,46 @@ def test_jwt_token_manager_worker_role(jwt_manager):
     assert identity.role == "worker"
 
 
+def test_jwt_token_with_worker_id_claim(jwt_manager):
+    token = jwt_manager.create_token(user_id="system:worker", role="worker", key_id="w1", worker_id="node-0")
+    identity = jwt_manager.verify(token)
+    assert identity.worker_id == "node-0"
+
+
+def test_jwt_token_without_worker_id_claim(jwt_manager):
+    token = jwt_manager.create_token(user_id="system:worker", role="worker", key_id="w1")
+    identity = jwt_manager.verify(token)
+    assert identity.worker_id is None
+
+
+# ---------------------------------------------------------------------------
+# validate_worker_identity
+# ---------------------------------------------------------------------------
+
+
+def test_validate_worker_identity_matching():
+    from iris.rpc.auth import VerifiedIdentity, validate_worker_identity
+
+    identity = VerifiedIdentity(user_id="system:worker", role="worker", worker_id="node-0")
+    validate_worker_identity(identity, "node-0")  # should not raise
+
+
+def test_validate_worker_identity_mismatch():
+    from iris.rpc.auth import VerifiedIdentity, validate_worker_identity
+
+    identity = VerifiedIdentity(user_id="system:worker", role="worker", worker_id="node-0")
+    with pytest.raises(ConnectError) as exc_info:
+        validate_worker_identity(identity, "node-1")
+    assert exc_info.value.code == Code.PERMISSION_DENIED
+
+
+def test_validate_worker_identity_no_binding():
+    from iris.rpc.auth import VerifiedIdentity, validate_worker_identity
+
+    identity = VerifiedIdentity(user_id="system:worker", role="worker", worker_id=None)
+    validate_worker_identity(identity, "any-node")  # should not raise
+
+
 # ---------------------------------------------------------------------------
 # Streaming interceptor guards
 # ---------------------------------------------------------------------------
