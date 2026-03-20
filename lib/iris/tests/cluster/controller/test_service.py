@@ -1056,8 +1056,8 @@ def test_launch_job_user_constraints_override_auto(service, state):
     assert dt_constraints[0].value.string_value == "tpu"
 
 
-def test_launch_job_cpu_resource_no_device_constraints_injected(service, state):
-    """CPU-only jobs get no auto-injected device constraints (but may get preemptible)."""
+def test_launch_job_cpu_resource_no_constraints_injected(service, state):
+    """CPU-only jobs get no auto-injected device constraints."""
     request = cluster_pb2.Controller.LaunchJobRequest(
         name=JobName.root("test-user", "cpu-job").to_wire(),
         entrypoint=_make_test_entrypoint(),
@@ -1069,41 +1069,7 @@ def test_launch_job_cpu_resource_no_device_constraints_injected(service, state):
     service.launch_job(request, None)
 
     job = _query_job(state, JobName.root("test-user", "cpu-job"))
-    device_constraints = [c for c in job.request.constraints if c.key in ("device-type", "device-variant")]
-    assert len(device_constraints) == 0
-
-
-def test_launch_job_executor_heuristic_adds_non_preemptible(service, state):
-    """Small CPU-only jobs get auto-tagged as non-preemptible by the executor heuristic."""
-    request = cluster_pb2.Controller.LaunchJobRequest(
-        name=JobName.root("test-user", "executor-job").to_wire(),
-        entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=500, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
-    )
-
-    service.launch_job(request, None)
-
-    job = _query_job(state, JobName.root("test-user", "executor-job"))
-    preemptible = [c for c in job.request.constraints if c.key == WellKnownAttribute.PREEMPTIBLE]
-    assert len(preemptible) == 1
-    assert preemptible[0].value.string_value == "false"
-
-
-def test_launch_job_executor_heuristic_skipped_for_large_job(service, state):
-    """Jobs exceeding the executor heuristic thresholds get no auto preemptible constraint."""
-    request = cluster_pb2.Controller.LaunchJobRequest(
-        name=JobName.root("test-user", "big-cpu-job").to_wire(),
-        entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=4000, memory_bytes=16 * 1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
-    )
-
-    service.launch_job(request, None)
-
-    job = _query_job(state, JobName.root("test-user", "big-cpu-job"))
-    preemptible = [c for c in job.request.constraints if c.key == WellKnownAttribute.PREEMPTIBLE]
-    assert len(preemptible) == 0
+    assert len(job.request.constraints) == 0
 
 
 # =============================================================================
