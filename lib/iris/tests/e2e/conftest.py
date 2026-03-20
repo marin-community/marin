@@ -72,15 +72,7 @@ def _ensure_dashboard_built(tmp_path_factory):
 
 def pytest_addoption(parser):
     """Cloud mode CLI options for running smoke tests against remote clusters."""
-    parser.addoption("--iris-config", default=None, help="Path to cluster config YAML for cloud mode")
-    parser.addoption(
-        "--iris-mode",
-        default="local",
-        choices=["local", "full", "keep", "redeploy"],
-        help="Cluster mode: local (in-process), full (start+stop), keep, redeploy",
-    )
     parser.addoption("--iris-controller-url", default=None, help="Connect to existing controller")
-    parser.addoption("--iris-label-prefix", default=None, help="Override platform.label_prefix in config")
 
 
 # Cloud mode needs much longer timeouts: GCE provisioning can take 20 minutes,
