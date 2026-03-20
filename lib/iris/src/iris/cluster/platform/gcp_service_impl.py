@@ -196,7 +196,7 @@ class GcpServiceImpl:
         self,
         mode: ServiceMode,
         project_id: str = "",
-        # LOCAL mode params (extracted from LocalPlatform constructor)
+        # LOCAL mode params
         controller_address: str | None = None,
         cache_path: Path | None = None,
         fake_bundle: Path | None = None,
@@ -869,7 +869,7 @@ class GcpServiceImpl:
     ) -> LocalSliceHandle:
         """Create a local slice, spawning real Worker threads if controller_address is set.
 
-        Extracted from LocalPlatform.create_slice / _create_slice_with_workers.
+        Creates in-memory stubs or spawns real Worker threads depending on config.
         """
         num_vms = config.num_vms or 1
 
@@ -899,7 +899,7 @@ class GcpServiceImpl:
     ) -> LocalSliceHandle:
         """Spawn real Worker threads for a slice.
 
-        Extracted from LocalPlatform._create_slice_with_workers.
+        Spawns Worker instances in-process for LOCAL mode testing.
         """
         from iris.cluster.bundle import BundleStore
         from iris.cluster.runtime.process import ProcessRuntime

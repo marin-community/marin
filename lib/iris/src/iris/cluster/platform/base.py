@@ -194,7 +194,7 @@ class RemoteWorkerHandle(Protocol):
     """Handle to a single worker within a slice.
 
     Represents a remote worker process: a TPU VM on GCP, a Pod on CoreWeave,
-    a thread on LocalPlatform. Provides infrastructure-level operations.
+    a thread in LOCAL mode. Provides infrastructure-level operations.
     Lifecycle state machines, retries, and health checking are the
     orchestration layer's responsibility.
 
@@ -418,7 +418,7 @@ class Platform(Protocol):
         Distinct from terminate() on handles -- shutdown() doesn't destroy
         cloud resources. It cleans up the Platform object itself.
 
-        For LocalPlatform this stops worker threads managed by ThreadContainer.
+        In LOCAL mode this stops worker threads managed by ThreadContainer.
         For GCP/Manual this is typically a no-op.
         """
         ...
