@@ -9,8 +9,8 @@ import cloudpickle
 
 from marin.execution.artifact import Artifact
 from marin.execution.disk_cache import disk_cache
-from marin.execution.executor_step_status import distributed_lock
 from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile
+from marin.execution.step_runner import step_lock
 from marin.execution.step_spec import StepSpec
 
 
@@ -70,7 +70,7 @@ def test_disk_cached_skips_when_another_worker_completed(tmp_path: Path):
 
 
 def test_composition_with_save_load(tmp_path: Path):
-    """disk_cached + distributed_lock + save/load (the StepRunner pattern)."""
+    """disk_cached + step_lock + save/load (the StepRunner pattern)."""
     call_count = 0
 
     def counting_fn(output_path: str) -> dict:
@@ -79,10 +79,20 @@ def test_composition_with_save_load(tmp_path: Path):
         os.makedirs(output_path, exist_ok=True)
         return {"value": 42}
 
-    output_path = StepSpec(name="comp", output_path_prefix=tmp_path.as_posix()).output_path
+    spec = StepSpec(name="comp", output_path_prefix=tmp_path.as_posix())
+    output_path = spec.output_path
+
+    def locked_fn(output_path: str) -> dict:
+        from marin.execution.executor_step_status import StepAlreadyDone
+
+        try:
+            with step_lock(output_path, "comp"):
+                return counting_fn(output_path)
+        except StepAlreadyDone:
+            raise
 
     cached_fn = disk_cache(
-        distributed_lock(counting_fn),
+        locked_fn,
         output_path=output_path,
         save_fn=Artifact.save,
         load_fn=Artifact.load,

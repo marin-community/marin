@@ -109,11 +109,12 @@ from iris.marin_fs import split_gcs_path
 from iris.rpc import config_pb2
 
 from marin.execution.step_spec import StepSpec
-from marin.execution.step_runner import StepRunner, worker_id
+from marin.execution.step_runner import StepRunner
 from marin.execution.remote import RemoteCallable
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
+    worker_id,
 )
 from marin.utilities.json_encoder import CustomJsonEncoder
 from iris.logging import configure_logging

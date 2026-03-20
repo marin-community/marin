@@ -36,17 +36,17 @@ from fray.v2.client import JobHandle, JobStatus
 from fray.v2.local_backend import LocalJobHandle
 from marin.execution.artifact import Artifact
 from marin.execution.executor_step_status import (
+    PreviousTaskFailedError,
     STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_SUCCESS,
     StatusFile,
+    should_run,
+    worker_id,
 )
 from marin.execution.remote import RemoteCallable
 from marin.execution.step_spec import StepSpec
 from marin.utilities.json_encoder import CustomJsonEncoder
-
-# Re-export for backward compatibility
-from marin.execution.executor_step_status import PreviousTaskFailedError, should_run, worker_id
 
 logger = logging.getLogger(__name__)
 

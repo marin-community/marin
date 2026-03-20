@@ -52,7 +52,7 @@ class disk_cache(Generic[P, T]):
     *output_path* is used only for cache bookkeeping.
 
     By itself this class does not provide any locking guarantees.  Compose with
-    :func:`distributed_lock` to ensure single-writer semantics.
+    :func:`~marin.execution.step_runner.step_lock` to ensure single-writer semantics.
     """
 
     def __init__(
