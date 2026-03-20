@@ -4451,3 +4451,140 @@ uv run .agents/scripts/deepep_jax_krt_bench.py \
 - Next action:
   - stop promoting custom shared-backward optimization variants for now.
   - split the successful `shared_dw_only` attribution probe into `shared_dw13_only` and `shared_dw2_only` matched probes on the decisive hard row so the next branch is guided by which replicated shared weight-gradient reduction actually recreates the pathological all-reduce wait.
+
+### 2026-03-20 21:36 UTC - Both shared replicated weight-gradient halves recreate a medium all-reduce wait, but neither alone explains the full `shared_dw_only` collapse
+- Experiment ID: `OVLP-RES-069`
+- Hypothesis:
+  - if one shared replicated weight-gradient path is the primary cause of the pathological pre-`all-reduce` wait, then splitting `shared_dw_only` into matched `shared_dw13_only` and `shared_dw2_only` probes should show one side reproducing most of the pathology while the other stays close to `shared_dx_only`.
+- Actions:
+```bash
+TASK_ID=ovlpres-shareddw13only-profile-t262144-topk8-20260320-181640
+LOG=scratch/3717-rerun/${TASK_ID}.log
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris \
+uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 1d7db846c \
+  --task-id "${TASK_ID}" \
+  --tokens 262144 \
+  --hidden 2048 \
+  --mlp-dim 768 \
+  --experts 128 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed_shared_dw13_only_probe \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --profile-root /tmp/ovlpres-shareddw13only-fb-262144-topk8 \
+  --post-bench-sleep-seconds 1800 \
+  --per-bench-timeout-seconds 1800 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+
+TASK_ID=ovlpres-shareddw2only-profile-rerun3-t262144-topk8-20260320-210630
+LOG=scratch/3717-rerun/${TASK_ID}.log
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris \
+uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 1d7db846c \
+  --task-id "${TASK_ID}" \
+  --tokens 262144 \
+  --hidden 2048 \
+  --mlp-dim 768 \
+  --experts 128 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed_shared_dw2_only_probe \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --profile-root /tmp/ovlpres-shareddw2only-fb-262144-topk8 \
+  --post-bench-sleep-seconds 1800 \
+  --per-bench-timeout-seconds 1800 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `1d7db846c`
+  - `shared_dw13_only` pod: `iris-task-7307189266a9`
+  - `shared_dw2_only` pod: `iris-task-51e7812a56c0`
+  - nodes:
+    - `shared_dw13_only`: `g1464be`
+    - `shared_dw2_only`: `g12f724`
+  - launcher logs:
+    - `scratch/3717-rerun/ovlpres-shareddw13only-profile-t262144-topk8-20260320-181640.log`
+    - `scratch/3717-rerun/ovlpres-shareddw2only-profile-rerun3-t262144-topk8-20260320-210630.log`
+  - copied profile artifacts:
+    - `scratch/profiles/ovlpres-shareddw13only-fb-262144-topk8`
+    - `scratch/profiles/ovlpres-shareddw2only-fb-262144-topk8`
+  - rendered reports:
+    - `scratch/profiles/ovlpres-shareddw13only-fb-262144-topk8-report.md`
+    - `scratch/profiles/ovlpres-shareddw2only-fb-262144-topk8-report.md`
+  - compare outputs:
+    - `scratch/profiles/ovlpres-shareddxonly-vs-shareddw2only-262144-topk8.compare.txt`
+    - `scratch/profiles/ovlpres-shareddw13only-vs-shareddw2only-262144-topk8.compare.txt`
+    - `scratch/profiles/ovlpres-shareddwonly-vs-shareddw2only-262144-topk8.compare.txt`
+    - `scratch/profiles/ovlpres-disp32send32-vs-shareddw2only-262144-topk8.compare.txt`
+- Result:
+  - decisive hard-row timings:
+    - `shared_dw13_only`: `1,972,686.02 tok/s` (`132.887 ms`)
+    - `shared_dw2_only`: `1,998,066.24 tok/s` (`131.199 ms`)
+  - profile highlights:
+    - `shared_dx_only` remains the clean control:
+      - dominant collective exclusive: `7,724.318`
+      - no giant pre-gap beyond the normal small `f32` all-reduce
+    - `shared_dw13_only`:
+      - dominant collective: `ncclDevKernel_AllReduce_Sum_bf16_RING_LL(...)`
+      - collective exclusive: `66,702.983`
+      - total pre-gap: `107,204.537`
+      - max pre-gap: `10,139.014`
+    - `shared_dw2_only`:
+      - dominant collective: `ncclDevKernel_AllReduce_Sum_bf16_RING_LL(...)`
+      - collective exclusive: `67,587.000`
+      - total pre-gap: `92,551.435`
+      - max pre-gap: `9,324.504`
+    - `shared_dw_only` remains much worse:
+      - giant `f32` all-reduce pre-gap: `239,148.549`
+  - direct compares:
+    - `shared_dw2_only` vs `shared_dx_only`:
+      - collective family exclusive delta: `+59,862.682` (`+774.99%`)
+      - communication share delta: `+0.0426`
+    - `shared_dw2_only` vs `shared_dw13_only`:
+      - collective family exclusive delta: `+884.017` (`+1.33%`)
+      - time-breakdown deltas are tiny (`communication +0.0012`, `host +0.0019`, `compute -0.0032`)
+    - `shared_dw2_only` vs full branch-best combined trace:
+      - collective family exclusive delta: `+49,685.867` (`+277.56%`)
+      - still does not reach the full combined pre-gap scale
+- Interpretation:
+  - both replicated shared weight-gradient halves independently recreate a substantial pre-`all-reduce` wait.
+  - `shared_dw2_only` is extremely close to `shared_dw13_only`; this is not a one-sided pathology.
+  - neither half alone reaches the full `shared_dw_only` / combined-graph collapse, so the worst behavior appears when both replicated shared weight-gradient paths are live together.
+  - the bottleneck remains squarely in the shared replicated weight-gradient reduction path rather than `shared_dx_only`.
+- Next action:
+  - stop looking for a single guilty shared weight.
+  - split the shared replicated weight-gradient path one level deeper: local gradient GEMMs vs the replicated `psum`/all-reduce itself, so the next branch isolates whether the giant wait is created by the reduction payload or by the combined graph/scheduling around both reductions.
