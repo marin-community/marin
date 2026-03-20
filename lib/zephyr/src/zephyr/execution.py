@@ -1546,16 +1546,21 @@ class ZephyrContext:
                 job_name = f"zephyr-{self.name}-p{self._pipeline_id}-a{attempt}"
                 # The wrapper job just blocks on child actors; real
                 # resources are requested by the coordinator/worker children.
-                self._coordinator_job = self.client.submit(
-                    JobRequest(
-                        name=job_name,
-                        entrypoint=Entrypoint.from_callable(
-                            _run_coordinator_job,
-                            args=(config, result_path),
-                        ),
-                        resources=ResourceConfig(cpu=1, ram="1g"),
+                # Set the context var so the coordinator job inherits self.client
+                # instead of auto-detecting (which may pick a different backend).
+                from fray.v2.client import set_current_client
+
+                with set_current_client(self.client):
+                    self._coordinator_job = self.client.submit(
+                        JobRequest(
+                            name=job_name,
+                            entrypoint=Entrypoint.from_callable(
+                                _run_coordinator_job,
+                                args=(config, result_path),
+                            ),
+                            resources=ResourceConfig(cpu=1, ram="1g"),
+                        )
                     )
-                )
 
                 backoff.reset()
                 logger.info("Coordinator job submitted: %s (job_id=%s)", job_name, self._coordinator_job.job_id)
