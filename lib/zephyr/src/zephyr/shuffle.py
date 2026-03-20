@@ -146,7 +146,6 @@ class ScatterParquetIterator:
     path: str
     shard_idx: int
     chunk_count: int
-    chunk_offset: int  # starting chunk_idx (cumulative across segments from same source)
     is_pickled: bool
     filesystem: pa.fs.FileSystem
 
@@ -164,8 +163,7 @@ class ScatterParquetIterator:
         dataset: pad.FileSystemDataset = pad.dataset(fs_path, format="parquet", filesystem=self.filesystem)
         col = _ZEPHYR_SHUFFLE_PICKLED_COL if self.is_pickled else _ZEPHYR_SHUFFLE_ITEM_COL
 
-        for i in range(self.chunk_count):
-            chunk_idx = self.chunk_offset + i
+        for chunk_idx in range(self.chunk_count):
             scanner = dataset.scanner(
                 columns=[col],
                 filter=(
@@ -267,7 +265,6 @@ def _scatter_meta_path(parquet_path: str) -> str:
 def _write_scatter_meta(
     parquet_path: str,
     chunk_counts: dict[int, int],
-    chunk_offsets: dict[int, int],
     is_pickled: bool,
     max_chunk_rows: dict[int, int] | None = None,
     avg_item_bytes: float = 0.0,
@@ -277,9 +274,6 @@ def _write_scatter_meta(
     payload_dict: dict = {
         "chunk_counts": {str(k): v for k, v in chunk_counts.items()},
     }
-    non_zero_offsets = {str(k): v for k, v in chunk_offsets.items() if v != 0}
-    if non_zero_offsets:
-        payload_dict["chunk_offsets"] = non_zero_offsets
     if is_pickled:
         payload_dict["is_pickled"] = True
     if max_chunk_rows:
@@ -321,7 +315,6 @@ def _write_scatter_manifest(scatter_paths: list[str], output_path: str) -> None:
         entry: dict = {
             "path": path,
             "chunk_counts": meta["chunk_counts"],
-            "chunk_offsets": meta.get("chunk_offsets", {}),
             "is_pickled": meta.get("is_pickled", False),
         }
         if "max_chunk_rows" in meta:
@@ -373,13 +366,11 @@ def _build_scatter_shard_from_manifest(manifest_path: str, target_shard: int) ->
         filesystem = _get_scatter_read_fs(len(file_entries), sample_path)
         for entry in file_entries:
             count = entry["chunk_counts"].get(str(target_shard), 0)
-            offset = entry.get("chunk_offsets", {}).get(str(target_shard), 0)
             iterators.append(
                 ScatterParquetIterator(
                     path=entry["path"],
                     shard_idx=target_shard,
                     chunk_count=count,
-                    chunk_offset=offset,
                     is_pickled=entry.get("is_pickled", False),
                     filesystem=filesystem,
                 )
@@ -543,7 +534,7 @@ def _write_parquet_scatter(
 
     def _ensure_writer(chunk_schema: pa.Schema) -> pa.Schema:
         """Ensure Parquet writer is open and compatible. Returns the active write schema."""
-        nonlocal schema, writer, seg_file, seg_idx
+        nonlocal schema, writer, seg_file, seg_idx, per_shard_chunk_cnt
         if schema is None:
             schema = chunk_schema
             seg_file = _segment_path(parquet_path, seg_idx)
@@ -555,6 +546,7 @@ def _write_parquet_scatter(
             writer.close()
             schema = pa.unify_schemas([schema, chunk_schema])
             seg_idx += 1
+            per_shard_chunk_cnt = defaultdict(int)  # chunk_idx restarts at 0 in new segment
             seg_file = _segment_path(parquet_path, seg_idx)
             seg_paths.append(seg_file)
             ensure_parent_dir(seg_file)
@@ -618,14 +610,10 @@ def _write_parquet_scatter(
     # Write sidecar metadata for each segment.
     # chunk_offsets track where each segment's chunks start in the global
     # chunk_idx space (cumulative across segments from this source shard).
-    cumulative_offsets: dict[int, int] = defaultdict(int)
     with log_time(f"Writing scatter meta for {parquet_path}"):
         for i, path in enumerate(seg_paths):
             counts = dict(seg_shard_counts.get(i, {}))
-            offsets = {shard: cumulative_offsets[shard] for shard in counts}
             seg_max_rows = {shard: per_shard_max_rows[shard] for shard in counts if per_shard_max_rows[shard] > 0}
-            _write_scatter_meta(path, counts, offsets, pickled, seg_max_rows, avg_item_bytes)
-            for shard, count in counts.items():
-                cumulative_offsets[shard] += count
+            _write_scatter_meta(path, counts, pickled, seg_max_rows, avg_item_bytes)
 
     return ListShard(refs=[MemChunk(items=seg_paths)])
