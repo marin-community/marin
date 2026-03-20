@@ -22,7 +22,10 @@ from itertools import groupby, islice
 from typing import Any
 
 import msgspec
+from iris import resource_utils as iris_resource_utils
 from iris.marin_fs import url_to_fs
+
+from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
 
 from zephyr.dataset import (
     Dataset,
@@ -156,9 +159,15 @@ def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
         yield from fn(item)
 
 
-def _reduce_gen(shard: Any, key_fn: Callable, reducer_fn: Callable, sort_fn: Callable | None = None) -> Iterator:
+def _reduce_gen(
+    shard: Any,
+    key_fn: Callable,
+    reducer_fn: Callable,
+    sort_fn: Callable | None = None,
+    external_sort_dir: str | None = None,
+) -> Iterator:
     is_gen = inspect.isgeneratorfunction(reducer_fn)
-    for key, items_iter in _merge_sorted_chunks(shard, key_fn, sort_fn):
+    for key, items_iter in _merge_sorted_chunks(shard, key_fn, sort_fn, external_sort_dir=external_sort_dir):
         if is_gen:
             yield from reducer_fn(key, items_iter)
         else:
@@ -558,7 +567,9 @@ def make_windows(
         yield window
 
 
-def _merge_sorted_chunks(shard, key_fn: Callable, sort_fn: Callable | None = None) -> Iterator[tuple[object, Iterator]]:
+def _merge_sorted_chunks(
+    shard, key_fn: Callable, sort_fn: Callable | None = None, external_sort_dir: str | None = None
+) -> Iterator[tuple[object, Iterator]]:
     """Merge sorted chunks using k-way merge, yielding (key, items_iterator) groups.
 
     Each chunk is assumed to be sorted by key (and optionally by sort_fn within key).
@@ -585,11 +596,31 @@ def _merge_sorted_chunks(shard, key_fn: Callable, sort_fn: Callable | None = Non
     else:
         merge_key = key_fn
 
-    chunk_iterators = list(shard.get_iterators())
+    # Check if external sort is needed BEFORE materializing all iterators.
+    # ScatterShard can decide using manifest stats (no file opens needed).
+    use_external = (
+        external_sort_dir is not None
+        and hasattr(shard, "needs_external_sort")
+        and hasattr(shard, "get_iterators")
+        and shard.needs_external_sort(iris_resource_utils.get_memory_limit())
+    )
 
-    logger.info(f"Merging {len(chunk_iterators):,} sorted chunk iterators")
-
-    merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
+    if use_external:
+        logger.info(
+            "External sort triggered for shard with %d iterators, spilling to %s",
+            sum(it.chunk_count for it in shard.iterators),
+            external_sort_dir,
+        )
+        # Pass lazy generator — external_sort_merge consumes in batches without opening all files
+        merged_stream = external_sort_merge(shard.get_iterators(), merge_key, external_sort_dir)
+    else:
+        chunk_iterators = list(shard.get_iterators())
+        logger.info(f"Merging {len(chunk_iterators):,} sorted chunk iterators")
+        if external_sort_dir is not None and len(chunk_iterators) > EXTERNAL_SORT_FAN_IN:
+            # Fallback: stats unavailable, use fan_in threshold
+            merged_stream = external_sort_merge(iter(chunk_iterators), merge_key, external_sort_dir)
+        else:
+            merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
     yield from groupby(merged_stream, key=key_fn)
 
 
@@ -676,6 +707,7 @@ class StageContext:
 def run_stage(
     ctx: StageContext,
     ops: list[PhysicalOp],
+    external_sort_dir: str | None = None,
 ) -> Iterator:
     """Execute a stage's physical ops in a single pass, yielding plain items.
 
@@ -763,7 +795,9 @@ def run_stage(
                 paths = list(shard)
                 assert len(paths) == 1, f"Expected single scatter manifest path, got {len(paths)}"
                 shard = _build_scatter_shard_from_manifest(paths[0], ctx.shard_idx)
-            stream = _reduce_gen(shard, op.key_fn, op.reducer_fn, sort_fn=op.sort_fn)
+            stream = _reduce_gen(
+                shard, op.key_fn, op.reducer_fn, sort_fn=op.sort_fn, external_sort_dir=external_sort_dir
+            )
             op_index += 1
 
         elif isinstance(op, Fold):
