@@ -4390,3 +4390,64 @@ uv run .agents/scripts/deepep_jax_krt_bench.py \
   - the repeated teardown failures also mean this branch is less operationally clean than the current best path.
 - Next action:
   - drop the `gradx-first` branch and test the narrower variant that only fuses the two shared weight-gradient `psum`s without reordering local `grad_x`.
+
+### 2026-03-20 18:15 UTC - Fusing the shared `dw` `psum`s without reordering `grad_x` fails the guardrail ladder
+- Experiment ID: `OVLP-RES-068`
+- Hypothesis:
+  - if the `gradx-first` regression came from the reordering rather than the fused replicated shared weight-gradient reduction itself, then a narrower branch that only flattens the two shared `dw` `psum`s should stay in-family on the shared-free guardrail ladder even if it still uses a custom shared backward.
+- Actions:
+```bash
+TASK_ID=ovlpres-fuseddwpsum-guardrail-pad-t262144-20260320-180950
+LOG=scratch/3717-rerun/${TASK_ID}.log
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris \
+uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref fb650e40c \
+  --task-id "${TASK_ID}" \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe,deepep_transport_local_compute_only_probe,deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fused-dw-psum-bwd \
+  --shared-mlp-fast-accum \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `fb650e40c`
+  - pod: `iris-task-9670c965b726`
+  - node: `g1464be`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-fuseddwpsum-guardrail-pad-t262144-20260320-180950.log`
+- Result:
+  - first rung:
+    - `deepep_transport_w13_only_probe`: `244,761,960.18 tok/s`
+  - second rung:
+    - `deepep_transport_local_compute_only_probe`: `71,570,576.97 tok/s`
+  - compare vs current padded/shared-fast baseline:
+    - `w13_only`: `243,060,674.49 -> 244,761,960.18 tok/s` (`+0.70%`)
+    - `local_compute_only`: `90,345,174.54 -> 71,570,576.97 tok/s` (`-20.78%`)
+  - runtime stability:
+    - the same repeated `CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure` teardown spam appears after both completed rungs
+  - control action:
+    - the pod was deleted after the failed `local_compute_only` rung; the branch was not promoted to `deepep_transport_capped_prewarmed`
+- Interpretation:
+  - the regression is not coming only from the `grad_x` reordering.
+  - even the narrower custom shared backward that only fuses the shared replicated weight-gradient `psum`s badly regresses the shared-free local-compute rung.
+  - together with the unchanged teardown failures, this is strong evidence that the current custom-`vjp` shared-backward optimization direction is not viable in its present form.
+- Next action:
+  - stop promoting custom shared-backward optimization variants for now.
+  - split the successful `shared_dw_only` attribution probe into `shared_dw13_only` and `shared_dw2_only` matched probes on the decisive hard row so the next branch is guided by which replicated shared weight-gradient reduction actually recreates the pathological all-reduce wait.

@@ -1,0 +1,4 @@
+timestamp_utc=2026-03-20T18:08:58Z
+branch=research/moe-jax-deepep-residual-overlap
+head_commit=fb650e40c
+next_step=shared-mlp-fused-dw-psum guardrail ladder
