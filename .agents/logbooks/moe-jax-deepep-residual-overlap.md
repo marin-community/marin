@@ -4731,3 +4731,57 @@ uv run .agents/scripts/deepep_jax_krt_bench.py \
   - the giant collapse only appears when both replicated shared reductions are alive together in the same backward graph.
 - Next action:
   - test whether separating the two replicated shared reductions into distinct custom-VJP branches changes the lowering enough to avoid the full collapse.
+
+### 2026-03-20 23:20 UTC - OVLP-RES-072 split-VJP does not change the shared `dw psum` collapse
+
+- Goal:
+  - determine whether the full `shared_dw_psum_only` pathology is caused specifically by both replicated shared reductions being lowered together inside one custom-VJP backward rule.
+- Config:
+  - code ref: `9654f1dcf`
+  - first timing-only run:
+    - pod: `iris-task-7a27ce981928`
+    - node: `g12f724`
+    - launcher log:
+      - `scratch/3717-rerun/ovlpres-shareddwpsumsplitvjp-profile-t262144-topk8-20260320-220053.log`
+    - result:
+      - `deepep_transport_capped_prewarmed_shared_dw_psum_splitvjp_probe`: `1,979,948.75 tok/s` (`132.399 ms`)
+    - note:
+      - the pod was cleaned before the profile was copied, so I reran the same hard row with `--skip-cleanup` to capture the trace.
+  - profile rerun:
+    - pod: `iris-task-55b6c2b77ce6`
+    - node: `g12e0ba`
+    - launcher log:
+      - `scratch/3717-rerun/ovlpres-shareddwpsumsplitvjp-profile-rerun-t262144-topk8-20260320-231350.log`
+    - copied profile artifacts:
+      - `scratch/profiles/ovlpres-shareddwpsumsplitvjp-fb-262144-topk8`
+    - rendered report:
+      - `scratch/profiles/ovlpres-shareddwpsumsplitvjp-fb-262144-topk8-report.md`
+    - compare output:
+      - `scratch/profiles/ovlpres-shareddwpsumonly-vs-shareddwpsumsplitvjp-262144-topk8.compare.txt`
+- Result:
+  - decisive hard-row timing:
+    - `deepep_transport_capped_prewarmed_shared_dw_psum_splitvjp_probe`: `1,972,036.92 tok/s` (`132.931 ms`)
+  - profile highlights:
+    - dominant pre-gap payload:
+      - `ncclDevKernel_AllReduce_Sum_f32_RING_LL(...)`
+    - total pre-gap: `243,253.282`
+    - max pre-gap: `15,218.514`
+    - occurrences: `16`
+    - collective exclusive: `13,627.177`
+    - host share: `0.527859`
+    - communication share: `0.010005`
+  - direct comparisons vs full `shared_dw_psum_only`:
+    - `shared_dw_psum_only` total pre-gap: `240,984.732`
+    - `shared_dw_psum_splitvjp` total pre-gap: `243,253.282`
+    - `shared_dw_psum_only` max pre-gap: `15,098.274`
+    - `shared_dw_psum_splitvjp` max pre-gap: `15,218.514`
+    - collective exclusive delta: `-57.648`
+    - communication share delta: `-0.000173`
+    - host share delta: `-0.002456`
+- Interpretation:
+  - splitting the two replicated shared reductions across distinct custom-VJP branches does not remove the giant `f32` all-reduce wait.
+  - the collapse survives essentially unchanged even when the two reductions are no longer produced by the same backward rule.
+  - this rules down "both reductions are fused only because they originate in one custom-VJP" as the primary explanation.
+- Next action:
+  - move one level lower and test explicit ordering / dependency control between the two replicated shared reductions themselves.
+  - stop spending time on structural split variants that do not actually change the reduction schedule.
