@@ -4588,3 +4588,91 @@ uv run .agents/scripts/deepep_jax_krt_bench.py \
 - Next action:
   - stop looking for a single guilty shared weight.
   - split the shared replicated weight-gradient path one level deeper: local gradient GEMMs vs the replicated `psum`/all-reduce itself, so the next branch isolates whether the giant wait is created by the reduction payload or by the combined graph/scheduling around both reductions.
+
+### 2026-03-20 21:44 UTC - The shared replicated `psum`/all-reduce path alone reproduces the full collapse
+- Experiment ID: `OVLP-RES-070`
+- Hypothesis:
+  - if the giant `shared_dw_only` gap is fundamentally created by the replicated shared weight-gradient reduction path itself, then a probe that strips out the expensive local shared `dw` GEMMs but preserves only the replicated `psum`/all-reduce payload should still reproduce the large pre-`all-reduce` wait on the decisive hard row.
+- Actions:
+```bash
+TASK_ID=ovlpres-shareddwpsumonly-profile-t262144-topk8-20260320-213831
+LOG=scratch/3717-rerun/${TASK_ID}.log
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris \
+uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 8f7999a12 \
+  --task-id "${TASK_ID}" \
+  --tokens 262144 \
+  --hidden 2048 \
+  --mlp-dim 768 \
+  --experts 128 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed_shared_dw_psum_only_probe \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --profile-root /tmp/ovlpres-shareddwpsumonly-fb-262144-topk8 \
+  --post-bench-sleep-seconds 1800 \
+  --per-bench-timeout-seconds 1800 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `8f7999a12`
+  - pod: `iris-task-6a3cd1add8bd`
+  - node: `g12f724`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-shareddwpsumonly-profile-t262144-topk8-20260320-213831.log`
+  - copied profile artifacts:
+    - `scratch/profiles/ovlpres-shareddwpsumonly-fb-262144-topk8`
+  - rendered report:
+    - `scratch/profiles/ovlpres-shareddwpsumonly-fb-262144-topk8-report.md`
+  - compare outputs:
+    - `scratch/profiles/ovlpres-shareddxonly-vs-shareddwpsumonly-262144-topk8.compare.txt`
+    - `scratch/profiles/ovlpres-shareddw13only-vs-shareddwpsumonly-262144-topk8.compare.txt`
+    - `scratch/profiles/ovlpres-shareddw2only-vs-shareddwpsumonly-262144-topk8.compare.txt`
+    - `scratch/profiles/ovlpres-shareddwonly-vs-shareddwpsumonly-262144-topk8.compare.txt`
+- Result:
+  - decisive hard-row timing:
+    - `deepep_transport_capped_prewarmed_shared_dw_psum_only_probe`: `2,002,474.19 tok/s` (`130.910 ms`)
+  - profile highlights:
+    - dominant communication family:
+      - collective exclusive: `13,254.873`
+    - dominant optimization candidate:
+      - payload op: `ncclDevKernel_AllReduce_Sum_f32_RING_LL(...)`
+      - total pre-gap: `240,984.732`
+      - max pre-gap: `15,098.274`
+      - occurrences: `16`
+  - direct comparisons:
+    - vs `shared_dw_only`:
+      - `shared_dw_only` total pre-gap: `239,148.549`
+      - `shared_dw_psum_only` total pre-gap: `240,984.732`
+      - communication share delta: `+0.000835`
+      - host share delta: `+0.003097`
+    - vs `shared_dx_only`:
+      - `shared_dx_only` still only shows the small control-scale collective
+      - `shared_dw_psum_only` restores the giant `f32` all-reduce wait
+    - vs `shared_dw13_only` / `shared_dw2_only`:
+      - both partial probes had medium `bf16` all-reduce waits (`107,204.537` and `92,551.435`)
+      - the new `shared_dw_psum_only` probe jumps straight back to the full combined `f32` all-reduce pathology
+- Interpretation:
+  - this is the cleanest attribution result so far.
+  - the giant collapse does not require the real local shared `dw` GEMMs; the replicated shared reduction path by itself is sufficient to reproduce it.
+  - the shared replicated all-reduce / scheduling path is now the primary root-cause target, not the local shared backward math.
+- Next action:
+  - pivot the next optimization branch toward changing or bypassing the replicated shared weight-gradient reduction path itself.
+  - stop spending time on local shared backward GEMM rewrites unless they directly change the reduction schedule.
