@@ -38,7 +38,7 @@ from iris.cluster.controller.scaling_group import (
     DEFAULT_SCALE_UP_RATE_LIMIT,
     ScalingGroup,
 )
-from iris.cluster.platform.base import find_free_port
+from iris.cluster.net import find_free_port
 from iris.cluster.platform.gcp import GcpPlatform
 from iris.cluster.platform.gcp_service_impl import GcpServiceImpl
 from iris.cluster.service_mode import ServiceMode

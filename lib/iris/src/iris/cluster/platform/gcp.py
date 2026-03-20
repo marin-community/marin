@@ -47,6 +47,7 @@ from iris.cluster.controller.vm_lifecycle import restart_controller as vm_restar
 from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
 from iris.cluster.platform._worker_base import RemoteExecWorkerBase
+from iris.cluster.net import find_free_port
 from iris.cluster.platform.base import (
     CloudSliceState,
     CloudWorkerState,
@@ -56,7 +57,6 @@ from iris.cluster.platform.base import (
     SliceStatus,
     WorkerStatus,
     default_stop_all,
-    find_free_port,
     generate_slice_suffix,
 )
 from iris.cluster.platform.bootstrap import (

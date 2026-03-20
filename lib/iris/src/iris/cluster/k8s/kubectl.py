@@ -33,7 +33,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from iris.cluster.platform.base import find_free_port
+from iris.cluster.net import find_free_port
 from iris.time_utils import Deadline, ExponentialBackoff
 
 from iris.cluster.k8s.k8s_types import KubectlError, KubectlLogLine, KubectlLogResult

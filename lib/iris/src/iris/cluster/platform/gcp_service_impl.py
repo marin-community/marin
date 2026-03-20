@@ -25,12 +25,12 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from iris.cluster.net import find_free_port
 from iris.cluster.platform.base import (
     Labels,
     PlatformError,
     QuotaExhaustedError,
     ResourceNotFoundError,
-    find_free_port,
 )
 from iris.cluster.platform.gcp_service import (
     TpuCreateRequest,
