@@ -142,6 +142,15 @@ def test_memray_transform_stats_includes_json_flag():
 # _run_memray_profile: in-process Tracker produces valid output
 # ---------------------------------------------------------------------------
 
+try:
+    import memray  # noqa: F401
+
+    _has_memray = True
+except ImportError:
+    _has_memray = False
+
+_requires_memray = pytest.mark.skipif(not _has_memray, reason="memray not installed")
+
 
 def _allocate_during(duration_seconds: int) -> list:
     """Force allocations so memray captures something during short profiles."""
@@ -161,6 +170,7 @@ def _allocate_during(duration_seconds: int) -> list:
     return results
 
 
+@_requires_memray
 @pytest.mark.parametrize(
     "proto_format",
     [
@@ -177,6 +187,7 @@ def test_run_memray_profile_returns_nonempty_output(proto_format):
     assert len(result) > 0
 
 
+@_requires_memray
 def test_run_memray_profile_flamegraph_returns_html():
     """Flamegraph format returns HTML content."""
     _allocate_during(1)
@@ -186,6 +197,7 @@ def test_run_memray_profile_flamegraph_returns_html():
     assert b"<html" in result.lower() or b"<!doctype" in result.lower()
 
 
+@_requires_memray
 def test_run_memray_profile_leaks_flamegraph():
     """Leaks mode (aggregated allocations) produces flamegraph output."""
     _allocate_during(1)
