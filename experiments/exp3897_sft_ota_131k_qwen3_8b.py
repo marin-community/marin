@@ -42,6 +42,7 @@ import dataclasses
 import math
 import os
 
+from haliax.nn.scan import ScanCheckpointPolicy
 from levanter.data.text import ChatLmDatasetFormat
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
 
@@ -66,16 +67,18 @@ NUM_SAMPLES = 4521
 # batch=32 is the minimum for v5p-64 (1 example per chip, no accumulation).
 # The model card used batch=16 on 16 GPUs; we use batch=32 on 32 chips.
 # If v5p-64 unavailable, fall back to v5p-32 via TPU_VARIANT env var.
-TPU_VARIANT = os.environ.get("TPU_VARIANT", "v5p-64")
-RESOURCES = ResourceConfig.with_tpu(TPU_VARIANT)
+# v5p-256 (128 chips, 95 GB HBM each = 12.2 TB total).
+# v5p-64 (8 VMs, 128 GB host RAM each) OOM-kills during XLA compilation because
+# the 131K graph is too large for 128 GB host RAM per VM.
+TPU_VARIANT = os.environ.get("TPU_VARIANT", "v5p-256")
+# 256 GB host RAM per VM: XLA compilation of the 131K graph with host offloading
+# exceeds the default 128 GB. The compiler holds the full graph in host memory.
+RESOURCES = ResourceConfig.with_tpu(TPU_VARIANT, ram="256g")
 NUM_CHIPS = RESOURCES.chip_count()
 
-if NUM_CHIPS >= 32:
-    TRAIN_BATCH_SIZE = 32
-    MICROBATCH_SIZE = 32
-else:
-    TRAIN_BATCH_SIZE = 16
-    MICROBATCH_SIZE = 16
+# Minimum batch = num_chips (1 example per chip, no gradient accumulation).
+TRAIN_BATCH_SIZE = NUM_CHIPS
+MICROBATCH_SIZE = NUM_CHIPS
 
 
 def build_dataset_specs() -> tuple[dict[str, str], dict[str, float]]:
@@ -149,10 +152,12 @@ qwen3_8b_131k = dataclasses.replace(
     qwen3_8b,
     max_seq_len=131072,
     rope=DefaultRotaryEmbeddingsConfig(theta=1_000_000.0),
-    gradient_checkpointing="offload",
-    # Use 256 block size for splash attention to avoid XLA sublane assertion failure
-    # at 131K seq len (default 512 triggers async_dynamic_index_emitter.cc crash).
-    flash_attention_block_size=256,
+    # Offload layer carries (hidden states between layers) to host pinned memory.
+    # Only carries are offloaded; inputs are recomputed. This matches the proven
+    # pattern from exp1295_32b/exp1395_qwen3_32b on v4-2048. The string "offload"
+    # offloads BOTH carries and inputs, which triggers an XLA sublane assertion
+    # crash (jax-ml/jax#24115) on v5p TPUs.
+    gradient_checkpointing=ScanCheckpointPolicy(save_carries="offload"),
 )
 
 RESOURCE_SUFFIX = RESOURCES.device.variant.replace("-", "") if RESOURCES.device.kind == "tpu" else "gpu"
