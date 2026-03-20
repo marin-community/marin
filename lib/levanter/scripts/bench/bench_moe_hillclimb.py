@@ -45,6 +45,7 @@ Kernel = Literal[
     "shared_mlp_only_probe",
     "deepep_transport_capped_prewarmed_shared_detached_probe",
     "deepep_transport_capped_prewarmed_routed_detached_probe",
+    "deepep_transport_capped_prewarmed_split_loss_probe",
     "cumsum",
     "packed_return",
     "stream_ring",
@@ -5363,6 +5364,12 @@ def _forward_deepep_transport_capped_routed_detached_probe(
     return jax.lax.stop_gradient(routed) + shared
 
 
+def _split_coupled_square_loss(routed: jax.Array, shared: jax.Array) -> jax.Array:
+    routed_loss = jnp.mean(jnp.square((routed + jax.lax.stop_gradient(shared)).astype(jnp.float32)))
+    shared_loss = jnp.mean(jnp.square((jax.lax.stop_gradient(routed) + shared).astype(jnp.float32)))
+    return routed_loss + shared_loss
+
+
 def _make_deepep_transport_probe_forward_runner(
     probe_kernel: Kernel,
     x: jax.Array,
@@ -6620,6 +6627,142 @@ def _profile_deepep_transport_forward_backward_capped_prewarmed_detach_probe(
     )
 
 
+def _time_deepep_transport_forward_backward_capped_prewarmed_split_loss_probe(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    shared_w13: jax.Array,
+    shared_w2: jax.Array,
+    *,
+    warmup: int,
+    iters: int,
+    w13_expert_padded: bool = False,
+    w2_expert_padded: bool = False,
+    collapse_impl: CollapseImpl = "segment_sum",
+) -> float:
+    mesh = x.sharding.mesh
+    num_experts = int(w_up_gate.shape[0])
+    max_recv_tokens, max_local_assignments, max_local_expert_assignments = _deepep_transport_exact_cap_metadata(
+        selected_experts,
+        mesh=mesh,
+        num_experts=num_experts,
+    )
+    w13_local_expert_capacity = max_local_expert_assignments if w13_expert_padded else None
+    w2_local_expert_capacity = max_local_expert_assignments if w2_expert_padded else None
+    _prewarm_deepep_transport_local_compute(
+        x,
+        selected_experts,
+        w_up_gate,
+        w_down,
+        shared_w13,
+        shared_w2,
+        max_local_assignments=max_local_assignments,
+        w13_local_expert_capacity=w13_local_expert_capacity,
+        w2_local_expert_capacity=w2_local_expert_capacity,
+    )
+
+    def loss_fn(x_in, w_up_gate_in, w_down_in, shared_w13_in, shared_w2_in):
+        routed, shared = _forward_deepep_transport_capped_split(
+            x_in,
+            selected_experts,
+            combine_weights,
+            w_up_gate_in,
+            w_down_in,
+            shared_w13_in,
+            shared_w2_in,
+            max_recv_tokens=max_recv_tokens,
+            max_local_assignments=max_local_assignments,
+            w13_local_expert_capacity=w13_local_expert_capacity,
+            w2_local_expert_capacity=w2_local_expert_capacity,
+            collapse_impl=collapse_impl,
+        )
+        return _split_coupled_square_loss(routed, shared)
+
+    grad_fn = jax.value_and_grad(loss_fn, argnums=(0, 1, 2, 3, 4))
+    return _time_fn(
+        grad_fn,
+        x,
+        w_up_gate,
+        w_down,
+        shared_w13,
+        shared_w2,
+        warmup=warmup,
+        iters=iters,
+    )
+
+
+def _profile_deepep_transport_forward_backward_capped_prewarmed_split_loss_probe(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    shared_w13: jax.Array,
+    shared_w2: jax.Array,
+    *,
+    warmup: int,
+    iters: int,
+    profile_dir: Path,
+    profile_name: str,
+    w13_expert_padded: bool = False,
+    w2_expert_padded: bool = False,
+    collapse_impl: CollapseImpl = "segment_sum",
+) -> float:
+    mesh = x.sharding.mesh
+    num_experts = int(w_up_gate.shape[0])
+    max_recv_tokens, max_local_assignments, max_local_expert_assignments = _deepep_transport_exact_cap_metadata(
+        selected_experts,
+        mesh=mesh,
+        num_experts=num_experts,
+    )
+    w13_local_expert_capacity = max_local_expert_assignments if w13_expert_padded else None
+    w2_local_expert_capacity = max_local_expert_assignments if w2_expert_padded else None
+    _prewarm_deepep_transport_local_compute(
+        x,
+        selected_experts,
+        w_up_gate,
+        w_down,
+        shared_w13,
+        shared_w2,
+        max_local_assignments=max_local_assignments,
+        w13_local_expert_capacity=w13_local_expert_capacity,
+        w2_local_expert_capacity=w2_local_expert_capacity,
+    )
+
+    def loss_fn(x_in, w_up_gate_in, w_down_in, shared_w13_in, shared_w2_in):
+        routed, shared = _forward_deepep_transport_capped_split(
+            x_in,
+            selected_experts,
+            combine_weights,
+            w_up_gate_in,
+            w_down_in,
+            shared_w13_in,
+            shared_w2_in,
+            max_recv_tokens=max_recv_tokens,
+            max_local_assignments=max_local_assignments,
+            w13_local_expert_capacity=w13_local_expert_capacity,
+            w2_local_expert_capacity=w2_local_expert_capacity,
+            collapse_impl=collapse_impl,
+        )
+        return _split_coupled_square_loss(routed, shared)
+
+    grad_fn = jax.value_and_grad(loss_fn, argnums=(0, 1, 2, 3, 4))
+    return _profile_fn(
+        grad_fn,
+        x,
+        w_up_gate,
+        w_down,
+        shared_w13,
+        shared_w2,
+        warmup=warmup,
+        iters=iters,
+        profile_dir=profile_dir,
+        profile_name=profile_name,
+    )
+
+
 def _flatten_tree_max_abs(tree_a, tree_b) -> float:
     leaves_a = jax.tree.leaves(tree_a)
     leaves_b = jax.tree.leaves(tree_b)
@@ -6652,6 +6795,7 @@ def main() -> None:
             "shared_mlp_only_probe",
             "deepep_transport_capped_prewarmed_shared_detached_probe",
             "deepep_transport_capped_prewarmed_routed_detached_probe",
+            "deepep_transport_capped_prewarmed_split_loss_probe",
             "cumsum",
             "packed_return",
             "stream_ring",
@@ -7194,6 +7338,39 @@ def main() -> None:
                         else:
                             dt = _time_deepep_transport_forward_backward_capped_prewarmed_detach_probe(
                                 _forward_deepep_transport_capped_routed_detached_probe,
+                                x_sharded,
+                                selected_sharded,
+                                weights_sharded,
+                                w13_sharded,
+                                w2_sharded,
+                                shared_w13_sharded,
+                                shared_w2_sharded,
+                                warmup=args.warmup,
+                                iters=args.iters,
+                                w13_expert_padded=args.w13_expert_padded,
+                                w2_expert_padded=args.w2_expert_padded,
+                                collapse_impl=args.deepep_collapse_impl,
+                            )
+                    elif kernel == "deepep_transport_capped_prewarmed_split_loss_probe":
+                        if args.profile_root is not None:
+                            dt = _profile_deepep_transport_forward_backward_capped_prewarmed_split_loss_probe(
+                                x_sharded,
+                                selected_sharded,
+                                weights_sharded,
+                                w13_sharded,
+                                w2_sharded,
+                                shared_w13_sharded,
+                                shared_w2_sharded,
+                                warmup=args.warmup,
+                                iters=args.iters,
+                                profile_dir=args.profile_root,
+                                profile_name=profile_name,
+                                w13_expert_padded=args.w13_expert_padded,
+                                w2_expert_padded=args.w2_expert_padded,
+                                collapse_impl=args.deepep_collapse_impl,
+                            )
+                        else:
+                            dt = _time_deepep_transport_forward_backward_capped_prewarmed_split_loss_probe(
                                 x_sharded,
                                 selected_sharded,
                                 weights_sharded,
