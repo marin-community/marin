@@ -134,6 +134,9 @@ def _bench_block(args: argparse.Namespace) -> str:
     w13_expert_padded_flag = " \\\n        --w13-expert-padded" if args.w13_expert_padded else ""
     w2_expert_padded_flag = " \\\n        --w2-expert-padded" if args.w2_expert_padded else ""
     shared_mlp_explicit_bwd_flag = " \\\n        --shared-mlp-explicit-bwd" if args.shared_mlp_explicit_bwd else ""
+    shared_mlp_fused_dw_psum_bwd_flag = (
+        " \\\n        --shared-mlp-fused-dw-psum-bwd" if args.shared_mlp_fused_dw_psum_bwd else ""
+    )
     shared_mlp_gradx_first_bwd_flag = (
         " \\\n        --shared-mlp-gradx-first-bwd" if args.shared_mlp_gradx_first_bwd else ""
     )
@@ -200,7 +203,7 @@ for distribution in {distributions}; do
         --kernel "$kernel" \\
         --ep-list {args.ep_list} \\
         --warmup {args.warmup} \\
-        --iters {args.iters}{profile_flag}{w13_layout_flag}{w2_layout_flag}{w13_expert_padded_flag}{w2_expert_padded_flag}{shared_mlp_explicit_bwd_flag}{shared_mlp_gradx_first_bwd_flag}{shared_mlp_fast_accum_flag}{combine_fast_accum_flag}{collapse_impl_flag}{deepep_dispatch_num_sms_flag}{deepep_dispatch_num_max_send_tokens_flag}{deepep_dispatch_num_max_recv_tokens_flag}{deepep_combine_num_sms_flag}{deepep_combine_num_max_send_tokens_flag}{deepep_combine_num_max_recv_tokens_flag}
+        --iters {args.iters}{profile_flag}{w13_layout_flag}{w2_layout_flag}{w13_expert_padded_flag}{w2_expert_padded_flag}{shared_mlp_explicit_bwd_flag}{shared_mlp_fused_dw_psum_bwd_flag}{shared_mlp_gradx_first_bwd_flag}{shared_mlp_fast_accum_flag}{combine_fast_accum_flag}{collapse_impl_flag}{deepep_dispatch_num_sms_flag}{deepep_dispatch_num_max_send_tokens_flag}{deepep_dispatch_num_max_recv_tokens_flag}{deepep_combine_num_sms_flag}{deepep_combine_num_max_send_tokens_flag}{deepep_combine_num_max_recv_tokens_flag}
 {timeout_suffix}
       echo "BENCH_END kernel=$kernel distribution=$distribution topk=$topk"
     done
@@ -364,6 +367,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--w13-expert-padded", action="store_true")
     parser.add_argument("--w2-expert-padded", action="store_true")
     parser.add_argument("--shared-mlp-explicit-bwd", action="store_true")
+    parser.add_argument("--shared-mlp-fused-dw-psum-bwd", action="store_true")
     parser.add_argument("--shared-mlp-gradx-first-bwd", action="store_true")
     parser.add_argument("--shared-mlp-fast-accum", action="store_true")
     parser.add_argument("--combine-fast-accum", action="store_true")

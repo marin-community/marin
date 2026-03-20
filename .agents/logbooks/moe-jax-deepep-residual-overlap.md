@@ -3706,3 +3706,687 @@ uv run python -m marin.profiling.cli compare \
   - changing the scalar loss algebra is therefore not enough to decouple the problematic routed/shared backward interaction.
 - Next action:
   - stop pursuing split-loss as a throughput fix and move to a stronger benchmark-only probe that explicitly separates routed and shared backward execution, rather than merely separating their loss terms.
+
+### 2026-03-20 16:36 UTC - Added a stronger benchmark-only probe that forces routed and shared backward execution through separate VJPs while preserving exact local grads
+- Experiment ID: `OVLP-RES-059`
+- Hypothesis:
+  - if the remaining hard-row problem comes from the combined backward scheduling of routed and shared work, then a benchmark-only probe that computes the same scalar loss and exact same local gradients through separate routed/shared VJPs should change the structure more meaningfully than the flat split-loss probe.
+- Code:
+  - commit: `82ce46ebb`
+  - message: `bench: add separate routed/shared backward probe`
+  - branch: `research/moe-jax-deepep-residual-overlap`
+  - file changed:
+    - `lib/levanter/scripts/bench/bench_moe_hillclimb.py`
+  - new kernel:
+    - `deepep_transport_capped_prewarmed_separate_bwd_probe`
+  - new helpers:
+    - `_mean_square_loss`
+    - `_separate_branch_square_loss_and_grads`
+    - `_make_deepep_transport_capped_prewarmed_separate_bwd_grad_fn`
+    - `_time_deepep_transport_forward_backward_capped_prewarmed_separate_bwd_probe`
+    - `_profile_deepep_transport_forward_backward_capped_prewarmed_separate_bwd_probe`
+- Local verification:
+  - `python -m py_compile lib/levanter/scripts/bench/bench_moe_hillclimb.py`
+  - `uv run python lib/levanter/scripts/bench/bench_moe_hillclimb.py --help | rg 'deepep_transport_capped_prewarmed_separate_bwd_probe'`
+  - toy exact-equivalence check:
+    - `base_val 2.116421937942505`
+    - `sep_val 2.116421937942505`
+    - `x_diff 0.0`
+    - `a_diff 0.0`
+    - `b_diff 0.0`
+    - `c_diff 0.0`
+    - `d_diff 0.0`
+- Interpretation:
+  - the benchmark harness now has a materially stronger structural probe than split-loss, without changing the local mathematical result.
+- Next action:
+  - run the required padded exact-cap guardrail ladder on the shared-free authoritative cell before promoting the new probe to the decisive `262144/topk=8/shared2048/forward_backward` row.
+
+### 2026-03-20 16:45 UTC - Separate-backward probe clears the padded exact-cap guardrail ladder on the authoritative shared-free cell
+- Experiment ID: `OVLP-RES-060`
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-separatebwd-guardrail-pad-t262144-20260320-163709 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe,deepep_transport_local_compute_only_probe,deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `82ce46ebb`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-separatebwd-guardrail-pad-t262144-20260320-163709.log`
+  - pod: `iris-task-2e9028151bc7`
+  - node: `g1464be`
+  - note:
+    - the local launcher shell ended with `zsh: read-only variable: status` after printing `EXIT_CODE=0`; this was a wrapper bug from reusing `status` as a shell variable, not a benchmark failure.
+- Result:
+  - `deepep_transport_w13_only_probe`:
+    - `time_s=0.001070` / `245,067,099.59 tok/s`
+  - `deepep_transport_local_compute_only_probe`:
+    - `time_s=0.002913` / `89,983,597.48 tok/s`
+  - `deepep_transport_capped_prewarmed`:
+    - `time_s=0.005267` / `49,768,889.27 tok/s`
+  - benchmark matrix completed successfully; the durable launcher log includes `EXIT_CODE=0`
+- Comparison:
+  - prior corrected split-loss guardrail from `OVLP-RES-056`:
+    - `w13_only`: `243,780,989.74 tok/s`
+    - `local_compute_only`: `90,817,951.21 tok/s`
+    - `capped_prewarmed`: `49,298,799.04 tok/s`
+  - separate-backward deltas vs that ladder:
+    - `w13_only`: about `+0.53%`
+    - `local_compute_only`: about `-0.92%`
+    - `capped_prewarmed`: about `+0.95%`
+- Interpretation:
+  - the new benchmark-only probe is in family on the required shared-free forward ladder and is safe to promote to the decisive hard row.
+- Next action:
+  - run `deepep_transport_capped_prewarmed_separate_bwd_probe` on `262144/topk=8/shared2048/forward_backward` with the current best runtime flags, then copy a matched profile if the timed row is promising.
+
+### 2026-03-20 16:52 UTC - Separate-backward exact-gradient probe is effectively flat on the decisive hard row
+- Experiment ID: `OVLP-RES-061`
+- Hypothesis:
+  - if the remaining worst-row loss comes from the combined execution of routed and shared backward work, then forcing those branches through separate exact VJPs should materially improve `262144/topk=8/shared2048/forward_backward` on top of the current best runtime flags.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-separatebwd-sharedfast-fb-t262144-topk8-20260320-164628 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed_separate_bwd_probe \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `82ce46ebb`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-separatebwd-sharedfast-fb-t262144-topk8-20260320-164628.log`
+  - pod: `iris-task-ea4c48254d7d`
+  - node: `g1464be`
+  - run exited `0`
+- Result:
+  - `deepep_transport_capped_prewarmed_separate_bwd_probe`:
+    - `time_s=0.041237` / `6,356,991.98 tok/s`
+- Comparison:
+  - current branch-best hard row from `OVLP-RES-045`:
+    - `deepep_transport_capped_prewarmed`: `6,353,316.54 tok/s` (`41.261 ms`)
+  - split-loss probe from `OVLP-RES-057`:
+    - `6,365,443.07 tok/s` (`41.182 ms`)
+  - separate-backward exact-gradient probe:
+    - `6,356,991.98 tok/s` (`41.237 ms`)
+  - delta vs current branch best:
+    - about `+0.06%`
+- Interpretation:
+  - forcing routed and shared backward work through separate exact VJPs is not a meaningful throughput move on the hard row.
+  - the detached controls still prove that removing either branch collapses the pathological `AllReduce_Sum_f32` wait, but preserving exact gradients while merely separating the VJPs is not enough to translate that attribution into wall-clock speed.
+- Next action:
+  - take a matched profile on the separate-backward probe to see whether the pre-`AllReduce_Sum_f32` structure changed materially despite the flat wall-clock result, then use that trace to pick the next code branch.
+
+### 2026-03-20 16:59 UTC - Matched separate-backward profile trims the giant pre-`AllReduce_Sum_f32` gap only slightly, leaving the hard-row throughput flat
+- Experiment ID: `OVLP-RES-062`
+- Hypothesis:
+  - even if the separate-backward exact-gradient probe is flat in tokens/s, a matched profile might still reveal a meaningful structural reduction in the pathological `AllReduce_Sum_f32` wait, which would justify a more targeted scheduling follow-up.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref research/moe-jax-deepep-residual-overlap \
+  --task-id ovlpres-separatebwd-profile-t262144-topk8-20260320-165226 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed_separate_bwd_probe \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --profile-root /tmp/ovlpres-separatebwd-fb-262144-topk8 \
+  --post-bench-sleep-seconds 1800 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl -n iris-3821-jax cp \
+  iris-task-56d29c5b39db:/tmp/ovlpres-separatebwd-fb-262144-topk8/. \
+  scratch/profiles/ovlpres-separatebwd-fb-262144-topk8
+
+uv run python -m marin.profiling.cli summarize \
+  --profile-dir scratch/profiles/ovlpres-separatebwd-fb-262144-topk8 \
+  --warmup-steps 0 \
+  --output scratch/profiles/ovlpres-separatebwd-fb-262144-topk8-summary.json
+
+uv run python -m marin.profiling.cli report \
+  --summary scratch/profiles/ovlpres-separatebwd-fb-262144-topk8-summary.json \
+  --output scratch/profiles/ovlpres-separatebwd-fb-262144-topk8-report.md
+
+uv run python -m marin.profiling.cli compare \
+  --before scratch/profiles/ovlpres-disp32send32-sharedfast-fb-262144-topk8-summary.json \
+  --after scratch/profiles/ovlpres-separatebwd-fb-262144-topk8-summary.json \
+  --top-k 12 \
+  > scratch/profiles/ovlpres-disp32send32-vs-separatebwd-262144-topk8.compare.txt
+```
+
+- Config:
+  - code ref: `82ce46ebb`
+  - profiling pod: `iris-task-56d29c5b39db`
+  - node: `g1464be`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-separatebwd-profile-t262144-topk8-20260320-165226.log`
+  - copied artifacts:
+    - `scratch/profiles/ovlpres-separatebwd-fb-262144-topk8`
+    - `scratch/profiles/ovlpres-separatebwd-fb-262144-topk8-summary.json`
+    - `scratch/profiles/ovlpres-separatebwd-fb-262144-topk8-report.md`
+    - `scratch/profiles/ovlpres-disp32send32-vs-separatebwd-262144-topk8.compare.txt`
+- Result:
+  - timed profile run returned `time_s=0.136088` / `1,926,285.86 tok/s`
+  - exclusive time breakdown from the copied report:
+    - compute: `46.78%`
+    - communication: `1.43%`
+    - host: `51.71%`
+  - copied separate-backward report:
+    - `ncclDevKernel_AllReduce_Sum_f32_RING_LL(...)` pre-gap total: `259996.333`
+    - max pre-gap: `16583.760`
+  - top ops remain the same family:
+    - `cached_notify_combine<8>`: `87778.309`
+    - `dispatch<8, 768, 8192>`: `76362.946`
+    - `combine<bf16, 8, 768, 4096>`: `67800.081`
+    - `input_scatter_fusion_3`: `66001.621`
+    - `input_scatter_fusion`: `65958.229`
+- Comparison against current branch-best full combined profile from `OVLP-RES-046`:
+  - prior full-combined pre-gap total: `269618.757`
+  - separate-backward pre-gap total: `259996.333`
+  - prior full-combined max pre-gap: `17153.967`
+  - separate-backward max pre-gap: `16583.760`
+  - direct compare file:
+    - `cached_notify_combine<8>`: `89696.809 -> 87778.309`
+    - `ncclDevKernel_AllReduce_Sum_bf16_RING_LL(...)`: `17901.133 -> 19356.742`
+    - `combine<bf16, 8, 768, 4096>`: `67618.861 -> 67800.081`
+    - semantic family `collective`: `+8.13%`
+- Interpretation:
+  - the exact-gradient separate-backward probe does reduce the giant pre-`AllReduce_Sum_f32` wait somewhat, but only modestly; the wall-clock row stays flat because other collective time regresses and the remaining host wait is still dominant.
+  - this rules down another broad “separate the branches more” idea. The next useful attribution needs to be narrower than whole-branch VJP separation.
+- Next action:
+  - stop treating whole-branch backward separation as the next primary path.
+  - add narrower benchmark-only probes that distinguish shared-branch `grad_x` from shared replicated weight-gradient reductions, so the next branch can answer whether the remaining pathological wait is specifically tied to shared weight all-reduces or to the shared contribution to `grad_x`.
+
+### 2026-03-20 17:08 UTC - Shared grad-path disambiguation probes clear the shared-free guardrail ladder
+- Experiment ID: `OVLP-RES-063`
+- Hypothesis:
+  - if the remaining hard-row loss is specifically tied to one side of the shared-branch backward, then new `shared_dx_only` / `shared_dw_only` attribution probes should first stay in family on the authoritative shared-free forward guardrail ladder before being promoted.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 7bbde447d \
+  --task-id ovlpres-shareddisambig-guardrail-pad-t262144-20260320-170234 \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe,deepep_transport_local_compute_only_probe,deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `7bbde447d`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-shareddisambig-guardrail-pad-t262144-20260320-170234.log`
+  - pod: `iris-task-1ff06f8addb2`
+  - node: `g1464be`
+  - run exited `0`
+- Result:
+  - `deepep_transport_w13_only_probe`:
+    - `time_s=0.001079` / `243,060,674.49 tok/s`
+  - `deepep_transport_local_compute_only_probe`:
+    - `time_s=0.002902` / `90,345,174.54 tok/s`
+  - `deepep_transport_capped_prewarmed`:
+    - `time_s=0.005320` / `49,274,549.35 tok/s`
+- Comparison:
+  - prior separate-backward guardrail from `OVLP-RES-060`:
+    - `w13_only`: `245,067,099.59 tok/s`
+    - `local_compute_only`: `89,983,597.48 tok/s`
+    - `capped_prewarmed`: `49,768,889.27 tok/s`
+  - deltas vs that ladder:
+    - `w13_only`: about `-0.82%`
+    - `local_compute_only`: about `+0.40%`
+    - `capped_prewarmed`: about `-0.99%`
+- Interpretation:
+  - the new shared grad-path attribution branch remains safely in family on the required shared-free forward ladder and is valid to promote to the decisive hard row.
+- Next action:
+  - run both `deepep_transport_capped_prewarmed_shared_dx_only_probe` and `deepep_transport_capped_prewarmed_shared_dw_only_probe` on `262144/topk=8/shared2048/forward_backward` with the current best runtime flags.
+
+### 2026-03-20 17:18 UTC - Shared `dx` and shared `dw` probes both improve the hard row, with `shared_dx_only` the stronger result
+- Experiment ID: `OVLP-RES-064`
+- Hypothesis:
+  - if the giant hard-row wait is specifically tied to one side of the shared-branch backward, then removing only that side should materially outperform the other on `262144/topk=8/shared2048/forward_backward`.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 7bbde447d \
+  --task-id ovlpres-shareddisambig-fb-t262144-topk8-20260320-171440 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed_shared_dx_only_probe,deepep_transport_capped_prewarmed_shared_dw_only_probe \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `7bbde447d`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-shareddisambig-fb-t262144-topk8-20260320-171440.log`
+  - pod: `iris-task-11a361024d84`
+  - node: `g1464be`
+  - run exited `0`
+- Result:
+  - `deepep_transport_capped_prewarmed_shared_dx_only_probe`:
+    - `time_s=0.039951` / `6,561,629.47 tok/s`
+  - `deepep_transport_capped_prewarmed_shared_dw_only_probe`:
+    - `time_s=0.040268` / `6,509,969.53 tok/s`
+- Comparison:
+  - current branch-best full-combined hard row from `OVLP-RES-045`:
+    - `deepep_transport_capped_prewarmed`: `6,353,316.54 tok/s` (`41.261 ms`)
+  - shared-path probe deltas vs that branch best:
+    - `shared_dx_only`: about `+3.28%`
+    - `shared_dw_only`: about `+2.47%`
+  - delta between the two new probes:
+    - `shared_dx_only` is about `+0.79%` over `shared_dw_only`
+- Interpretation:
+  - both narrower probes move the hard row, but the stronger uplift comes from keeping shared `dx` and removing shared weight gradients.
+  - this is the first materially positive hard-row move from the shared grad-path disambiguation branch, so the next step is a matched profile on `shared_dx_only`.
+- Next action:
+  - copy a matched `shared_dx_only` profile on the same row and compare it directly against the full combined and separate-backward profiles.
+
+### 2026-03-20 17:31 UTC - `shared_dx_only` profile removes the giant pre-`AllReduce_Sum_f32` wait entirely
+- Experiment ID: `OVLP-RES-065`
+- Hypothesis:
+  - if the remaining pathological wait is primarily tied to shared replicated weight gradients rather than shared `grad_x`, then the matched `shared_dx_only` profile should eliminate the dominant pre-`AllReduce_Sum_f32` gap instead of merely shrinking it a little.
+- Command:
+
+```bash
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 7bbde447d \
+  --task-id ovlpres-shareddxonly-profile-t262144-topk8-20260320-172054 \
+  --tokens 262144 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed_shared_dx_only_probe \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --profile-root /tmp/ovlpres-shareddxonly-fb-262144-topk8 \
+  --post-bench-sleep-seconds 1800 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl -n iris-3821-jax cp \
+  iris-task-6775de05991a:/tmp/ovlpres-shareddxonly-fb-262144-topk8/. \
+  scratch/profiles/ovlpres-shareddxonly-fb-262144-topk8
+
+uv run python -m marin.profiling.cli summarize \
+  --profile-dir scratch/profiles/ovlpres-shareddxonly-fb-262144-topk8 \
+  --output scratch/profiles/ovlpres-shareddxonly-fb-262144-topk8-summary.json
+
+uv run python -m marin.profiling.cli report \
+  --summary scratch/profiles/ovlpres-shareddxonly-fb-262144-topk8-summary.json \
+  --output scratch/profiles/ovlpres-shareddxonly-fb-262144-topk8-report.md
+
+uv run python -m marin.profiling.cli compare \
+  --before scratch/profiles/ovlpres-disp32send32-sharedfast-fb-262144-topk8-summary.json \
+  --after scratch/profiles/ovlpres-shareddxonly-fb-262144-topk8-summary.json \
+  > scratch/profiles/ovlpres-disp32send32-vs-shareddxonly-262144-topk8.compare.txt
+
+uv run python -m marin.profiling.cli compare \
+  --before scratch/profiles/ovlpres-separatebwd-fb-262144-topk8-summary.json \
+  --after scratch/profiles/ovlpres-shareddxonly-fb-262144-topk8-summary.json \
+  > scratch/profiles/ovlpres-separatebwd-vs-shareddxonly-262144-topk8.compare.txt
+```
+
+- Config:
+  - code ref: `7bbde447d`
+  - profiling pod: `iris-task-6775de05991a`
+  - node: `g1464be`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-shareddxonly-profile-t262144-topk8-20260320-172054.log`
+  - copied artifacts:
+    - `scratch/profiles/ovlpres-shareddxonly-fb-262144-topk8`
+    - `scratch/profiles/ovlpres-shareddxonly-fb-262144-topk8-summary.json`
+    - `scratch/profiles/ovlpres-shareddxonly-fb-262144-topk8-report.md`
+    - `scratch/profiles/ovlpres-disp32send32-vs-shareddxonly-262144-topk8.compare.txt`
+    - `scratch/profiles/ovlpres-separatebwd-vs-shareddxonly-262144-topk8.compare.txt`
+- Result:
+  - timed profile run returned `time_s=0.132888` / `1,972,669.40 tok/s`
+  - exclusive time breakdown from the copied report:
+    - compute: `47.02%`
+    - communication: `0.57%`
+    - host: `52.32%`
+  - copied `shared_dx_only` report:
+    - top collective family is only `all-reduce` count `16`, exclusive `7724.318`
+    - there is no dominant pre-`ncclDevKernel_AllReduce_Sum_f32_RING_LL(...)` gap in the pre-op table
+    - largest listed pre-gap is `Memset 3`: `6979.254`
+  - direct compare vs current branch-best full-combined profile:
+    - collective family exclusive: `17901.133 -> 7724.318` (`-56.85%`)
+    - `cached_notify_combine<8>`: `89696.809 -> 89259.810`
+    - `dispatch<8, 768, 8192>`: `76301.974 -> 75905.191`
+    - `combine<bf16, 8, 768, 4096>`: `67618.861 -> 67558.597`
+    - time breakdown share delta:
+      - communication: `-0.73 pp`
+      - compute: `+0.89 pp`
+      - host: `-0.15 pp`
+  - direct compare vs separate-backward profile:
+    - collective family exclusive: `19356.742 -> 7724.318` (`-60.09%`)
+    - the modestly reduced full-combined pre-gap from `OVLP-RES-062` does not survive here; the pathological all-reduce wait is gone rather than slightly smaller.
+- Interpretation:
+  - removing shared weight gradients while keeping shared `grad_x` collapses the giant pre-`AllReduce_Sum_f32` wait entirely.
+  - the remaining hard-row loss is no longer explained by generic shared backward or routed/shared co-execution; the strongest surviving attribution now points specifically at the shared replicated weight-gradient path.
+- Next action:
+  - take the complementary `shared_dw_only` matched profile on the same row so the branch can distinguish “shared weight-gradient path is sufficient to recreate the pathology” from “the pathology only appears when shared weight gradients interact with shared `grad_x` or routed backward”.
+
+### 2026-03-20 17:45 UTC - `shared_dw_only` profile recreates nearly the full pathological pre-`AllReduce_Sum_f32` gap
+- Experiment ID: `OVLP-RES-066`
+- Hypothesis:
+  - if the giant hard-row wait is specifically caused by the replicated shared weight-gradient path, then a matched `shared_dw_only` profile should recreate almost the full pre-`AllReduce_Sum_f32` gap even after removing shared `grad_x`.
+- Actions:
+```bash
+TASK_ID=ovlpres-shareddwonly-profile-t262144-topk8-20260320-173010
+LOG=scratch/3717-rerun/${TASK_ID}.log
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris \
+uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 7bbde447d \
+  --task-id "${TASK_ID}" \
+  --tokens 262144 \
+  --hidden 2048 \
+  --mlp-dim 768 \
+  --experts 128 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed_shared_dw_only_probe \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --profile-root /tmp/ovlpres-shareddwonly-fb-262144-topk8 \
+  --post-bench-sleep-seconds 1800 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8
+
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris kubectl -n iris-3821-jax cp \
+  iris-task-e0ebb94fc940:/tmp/ovlpres-shareddwonly-fb-262144-topk8/. \
+  scratch/profiles/ovlpres-shareddwonly-fb-262144-topk8
+
+uv run python -m marin.profiling.cli summarize \
+  --profile-dir scratch/profiles/ovlpres-shareddwonly-fb-262144-topk8 \
+  --output scratch/profiles/ovlpres-shareddwonly-fb-262144-topk8-summary.json
+
+uv run python -m marin.profiling.cli report \
+  --summary scratch/profiles/ovlpres-shareddwonly-fb-262144-topk8-summary.json \
+  --output scratch/profiles/ovlpres-shareddwonly-fb-262144-topk8-report.md
+
+uv run python -m marin.profiling.cli compare \
+  --before scratch/profiles/ovlpres-disp32send32-sharedfast-fb-262144-topk8-summary.json \
+  --after scratch/profiles/ovlpres-shareddwonly-fb-262144-topk8-summary.json \
+  > scratch/profiles/ovlpres-disp32send32-vs-shareddwonly-262144-topk8.compare.txt
+
+uv run python -m marin.profiling.cli compare \
+  --before scratch/profiles/ovlpres-shareddxonly-fb-262144-topk8-summary.json \
+  --after scratch/profiles/ovlpres-shareddwonly-fb-262144-topk8-summary.json \
+  > scratch/profiles/ovlpres-shareddxonly-vs-shareddwonly-262144-topk8.compare.txt
+```
+
+- Config:
+  - code ref: `7bbde447d`
+  - profiling pod: `iris-task-e0ebb94fc940`
+  - node: `g1464be`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-shareddwonly-profile-t262144-topk8-20260320-173010.log`
+  - copied artifacts:
+    - `scratch/profiles/ovlpres-shareddwonly-fb-262144-topk8`
+    - `scratch/profiles/ovlpres-shareddwonly-fb-262144-topk8-summary.json`
+    - `scratch/profiles/ovlpres-shareddwonly-fb-262144-topk8-report.md`
+    - `scratch/profiles/ovlpres-disp32send32-vs-shareddwonly-262144-topk8.compare.txt`
+    - `scratch/profiles/ovlpres-shareddxonly-vs-shareddwonly-262144-topk8.compare.txt`
+- Result:
+  - timed profile run returned `time_s=0.133129` / `1,969,091.86 tok/s`
+  - exclusive time breakdown from the copied report:
+    - compute: `46.25%`
+    - communication: `0.93%`
+    - host: `52.72%`
+  - copied `shared_dw_only` report:
+    - top collective family is `all-reduce` count `16`, exclusive `12351.055`
+    - the dominant pre-gap before `ncclDevKernel_AllReduce_Sum_f32_RING_LL(...)` remains:
+      - total `239148.549`
+      - max `14970.362`
+      - avg `14946.784`
+  - direct compare vs current branch-best full-combined profile:
+    - dominant f32 all-reduce pre-gap: `260630.931 -> 239148.549`
+    - `cached_notify_combine<8>`: `89696.809 -> 87161.164`
+    - `dispatch<8, 768, 8192>`: `76301.974 -> 75841.488`
+    - `combine<bf16, 8, 768, 4096>`: `67618.861 -> 67431.991`
+    - time breakdown share delta:
+      - communication: `+0.10 pp`
+      - compute: `-0.71 pp`
+      - host: `+0.41 pp`
+  - direct compare vs `shared_dx_only`:
+    - dominant f32 all-reduce pre-gap: `absent -> 239148.549`
+    - collective family exclusive: `7724.318 -> 12351.055` (`+59.90%`)
+    - `cached_notify_combine<8>`: `89259.810 -> 87161.164`
+    - `dispatch<8, 768, 8192>`: `75905.191 -> 75841.488`
+    - `combine<bf16, 8, 768, 4096>`: `67558.597 -> 67431.991`
+- Interpretation:
+  - removing shared `grad_x` does not remove the pathological wait.
+  - the shared replicated weight-gradient path is sufficient by itself to recreate almost the full giant pre-`AllReduce_Sum_f32` gap.
+  - the residual is therefore no longer best described as generic shared backward or routed/shared interaction; the strongest current attribution is specifically shared replicated weight-gradient reduction scheduling.
+- Next action:
+  - implement a narrow shared-backward variant that preserves the existing approximate math path but computes local shared `grad_x` before the replicated shared weight-gradient reduction, then validate it on the standard shared-free guardrail ladder before promoting it to the hard row.
+
+### 2026-03-20 18:04 UTC - `gradx-first` shared backward is guardrail-neutral but loses on the hard row and keeps the teardown failures
+- Experiment ID: `OVLP-RES-067`
+- Hypothesis:
+  - if the shared replicated weight-gradient reduction is the specific bottleneck, then computing local shared `grad_x` before the replicated shared weight-gradient reduction and fusing the two shared weight-gradient `psum`s into one flattened reduction might shrink the hard-row all-reduce wait without hurting the shared-free exact-cap ladder.
+- Actions:
+```bash
+TASK_ID=ovlpres-gradxfirst-guardrail-pad-t262144-20260320-174850
+LOG=scratch/3717-rerun/${TASK_ID}.log
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris \
+uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 872e82be9669f0696c65e6e32f6931405103e0b1 \
+  --task-id "${TASK_ID}" \
+  --tokens 262144 \
+  --shared-expert-dim 0 \
+  --kernels deepep_transport_w13_only_probe,deepep_transport_local_compute_only_probe,deepep_transport_capped_prewarmed \
+  --topk-list 2 \
+  --distributions random \
+  --bench-pass forward \
+  --ep-list 8 \
+  --warmup 5 \
+  --iters 20 \
+  --per-bench-timeout-seconds 1200 \
+  --per-bench-kill-after-seconds 20 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-gradx-first-bwd \
+  --shared-mlp-fast-accum \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+
+TASK_ID=ovlpres-gradxfirst-hardrow-t262144-topk8-20260320-175703
+LOG=scratch/3717-rerun/${TASK_ID}.log
+KUBECONFIG=/home/ubuntu/.kube/coreweave-iris \
+uv run .agents/scripts/deepep_jax_krt_bench.py \
+  --config lib/iris/examples/coreweave-moe-jax-3821.yaml \
+  --repo-ref 872e82be9669f0696c65e6e32f6931405103e0b1 \
+  --task-id "${TASK_ID}" \
+  --tokens 262144 \
+  --hidden 2048 \
+  --mlp-dim 768 \
+  --experts 128 \
+  --shared-expert-dim 2048 \
+  --kernels deepep_transport_capped_prewarmed \
+  --topk-list 8 \
+  --distributions random \
+  --bench-pass forward_backward \
+  --ep-list 8 \
+  --warmup 1 \
+  --iters 2 \
+  --per-bench-timeout-seconds 3600 \
+  --per-bench-kill-after-seconds 30 \
+  --build-with-torch-extension \
+  --load-as-python-module \
+  --skip-smoke \
+  --skip-cleanup \
+  --w13-expert-padded \
+  --w2-expert-padded \
+  --shared-mlp-gradx-first-bwd \
+  --shared-mlp-fast-accum \
+  --deepep-dispatch-num-sms 32 \
+  --deepep-dispatch-num-max-send-tokens 32 \
+  --deepep-combine-num-max-send-tokens 8 \
+  --node-selector iris-i3821jax-scale-group=h100-8x
+```
+
+- Config:
+  - code ref: `872e82be9669f0696c65e6e32f6931405103e0b1`
+  - guardrail pod: `iris-task-05da684ac370`
+  - hard-row pod: `iris-task-033f60661882`
+  - node: `g1464be`
+  - launcher logs:
+    - `scratch/3717-rerun/ovlpres-gradxfirst-guardrail-pad-t262144-20260320-174850.log`
+    - `scratch/3717-rerun/ovlpres-gradxfirst-hardrow-t262144-topk8-20260320-175703.log`
+- Result:
+  - shared-free guardrail ladder:
+    - `deepep_transport_w13_only_probe`: `243,401,082.20 tok/s`
+    - `deepep_transport_local_compute_only_probe`: `89,839,904.13 tok/s`
+    - `deepep_transport_capped_prewarmed`: `49,288,774.35 tok/s`
+  - decisive hard row:
+    - `deepep_transport_capped_prewarmed`: `5,958,161.05 tok/s` (`43.997 ms`)
+  - compare vs current branch best on the same hard row:
+    - `6,353,316.54 -> 5,958,161.05 tok/s` (`-6.22%`)
+  - runtime stability:
+    - all guardrail rungs and the hard-row run emitted repeated `DeepEP timeout check failed` and `CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure` teardown errors after the `RESULT`
+    - despite the teardown failures, each run still ended with `bench_status=0` / `EXIT_CODE=0`
+- Interpretation:
+  - the branch stays in-family on the shared-free exact-cap ladder, so it does not introduce a clear forward-only transport regression.
+  - the decisive hard row is materially worse than the current branch best, so reordering local shared `grad_x` ahead of the replicated shared weight-gradient reduction does not translate into a real end-to-end win.
+  - the repeated teardown failures also mean this branch is less operationally clean than the current best path.
+- Next action:
+  - drop the `gradx-first` branch and test the narrower variant that only fuses the two shared weight-gradient `psum`s without reordering local `grad_x`.
