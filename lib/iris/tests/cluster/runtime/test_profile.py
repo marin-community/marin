@@ -10,7 +10,6 @@ not on pass-through of constructor arguments.
 import os
 
 import pytest
-
 from iris.cluster.runtime.profile import (
     _run_memray_profile,
     build_memray_attach_cmd,
