@@ -20,6 +20,7 @@ plain text — no markdown.
 **Hard rules — violations will be rejected:**
 
 - No markdown: no headers (`##`), no bullet lists (`-`/`*`), no tables, no images, no `[text](url)` links.
+- No checkboxes (`- [ ]`, `- [x]`).
 - No section headers like `## Summary`, `## Test plan`, `## Changes`.
 - No filler phrases: "This PR...", "I noticed...", "Summary of changes:".
 - No emoji.
@@ -37,18 +38,6 @@ hurting math reasoning where correct answers need longer derivations.
 Adds regression test.
 
 Fixes #1234
-```
-
-### Counter-example (do NOT produce this)
-
-```
-## Summary
-- Updated loss normalization in DAPO
-- Added regression test
-
-## Test Plan
-- [x] Unit tests pass
-- [x] Lint passes
 ```
 
 ## Issue Linking
