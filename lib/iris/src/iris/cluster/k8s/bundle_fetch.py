@@ -17,7 +17,7 @@ import urllib.request
 import zipfile
 
 
-def fetch_bundle(controller_url: str, bundle_id: str, workdir: str) -> None:
+def fetch_bundle(controller_url: str, bundle_id: str, workdir: str, auth_token: str = "") -> None:
     """Download a bundle zip from the controller and extract it into workdir."""
     url = f"{controller_url}/bundles/{bundle_id}.zip"
     zip_path = os.path.join(workdir, ".bundle.zip")
@@ -25,6 +25,8 @@ def fetch_bundle(controller_url: str, bundle_id: str, workdir: str) -> None:
     for attempt in range(3):
         try:
             req = urllib.request.Request(url)
+            if auth_token:
+                req.add_header("Authorization", f"Bearer {auth_token}")
             with urllib.request.urlopen(req, timeout=300) as resp:
                 data = resp.read()
                 sha_header = resp.getheader("X-Bundle-SHA256")
@@ -74,8 +76,9 @@ if __name__ == "__main__":
 
     bundle_id = os.environ.get("IRIS_BUNDLE_ID", "")
     controller_url = os.environ.get("IRIS_CONTROLLER_URL", "")
+    auth_token = os.environ.get("IRIS_BUNDLE_TOKEN", "")
     if bundle_id and controller_url:
-        fetch_bundle(controller_url, bundle_id, workdir)
+        fetch_bundle(controller_url, bundle_id, workdir, auth_token=auth_token)
 
     src_dir = os.environ.get("IRIS_WORKDIR_FILES_SRC", "")
     if src_dir:

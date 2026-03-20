@@ -168,6 +168,8 @@ def serve(
     auth = create_controller_auth(cluster_config.auth, db=db) if cluster_config else ControllerAuth()
     if auth.worker_token and base_worker_config is not None:
         base_worker_config.auth_token = auth.worker_token
+    if auth.worker_token and isinstance(provider, KubernetesProvider):
+        provider.auth_token = auth.worker_token
 
     config = ControllerConfig(
         host=host,

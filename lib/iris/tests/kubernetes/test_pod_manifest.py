@@ -773,3 +773,38 @@ def test_init_container_bundle_and_workdir_files():
     assert "IRIS_WORKDIR_FILES_SRC" in env_by_name
     assert configmap_name is not None
     assert len(extra_volumes) == 1
+
+
+def test_init_container_includes_bundle_token_when_provided():
+    """Init container includes IRIS_BUNDLE_TOKEN env var when auth_token is set."""
+    req = make_run_req("/my-job/task-0")
+    req.bundle_id = "bundle-abc"
+
+    init_containers, _, _ = _build_init_container_spec(
+        req,
+        "iris-pod-name",
+        "myrepo/iris:latest",
+        "http://ctrl:8080",
+        auth_token="my-jwt-token",
+    )
+
+    assert len(init_containers) == 1
+    env_by_name = {e["name"]: e["value"] for e in init_containers[0]["env"]}
+    assert env_by_name["IRIS_BUNDLE_TOKEN"] == "my-jwt-token"
+
+
+def test_init_container_omits_bundle_token_when_empty():
+    """Init container does not include IRIS_BUNDLE_TOKEN when auth_token is empty."""
+    req = make_run_req("/my-job/task-0")
+    req.bundle_id = "bundle-abc"
+
+    init_containers, _, _ = _build_init_container_spec(
+        req,
+        "iris-pod-name",
+        "myrepo/iris:latest",
+        "http://ctrl:8080",
+    )
+
+    assert len(init_containers) == 1
+    env_names = {e["name"] for e in init_containers[0]["env"]}
+    assert "IRIS_BUNDLE_TOKEN" not in env_names

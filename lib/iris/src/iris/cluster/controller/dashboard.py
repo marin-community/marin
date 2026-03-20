@@ -167,11 +167,32 @@ class ControllerDashboard:
         """Health check endpoint for controller availability."""
         return JSONResponse({"status": "ok"})
 
+    def _verify_bundle_request(self, request: Request) -> Response | None:
+        """Verify bearer token for bundle download requests.
+
+        Returns an error Response if auth is required and verification fails,
+        or None if the request is authorized.
+        """
+        if self._auth_provider is None:
+            # Null-auth mode: no verification required.
+            return None
+        if self._auth_verifier is None:
+            return None
+
+        auth_header = request.headers.get("authorization", "")
+        token = auth_header.removeprefix("Bearer ") if auth_header.startswith("Bearer ") else ""
+        if not token:
+            return Response("Missing or malformed Authorization header", status_code=401)
+        try:
+            self._auth_verifier.verify(token)
+        except ValueError:
+            return Response("Authentication failed", status_code=401)
+        return None
+
     def _bundle_download(self, request: Request) -> Response:
-        # TODO(#3291): Add bearer token auth once Kubernetes init-containers
-        # support Authorization headers. Currently bundle IDs are SHA-256 hashes
-        # (256 bits of entropy) serving as capability URLs. Workers and K8s
-        # init-containers fetch via stdlib urlopen with no auth header support.
+        error = self._verify_bundle_request(request)
+        if error is not None:
+            return error
         bundle_id = request.path_params["bundle_id"]
         try:
             data = self._service.bundle_zip(bundle_id)
@@ -259,7 +280,11 @@ class ProxyControllerDashboard:
 
     async def _proxy_bundle(self, request: Request) -> Response:
         bundle_id = request.path_params["bundle_id"]
-        upstream_resp = await self._client.get(f"/bundles/{bundle_id}.zip")
+        headers: dict[str, str] = {}
+        auth_header = request.headers.get("authorization")
+        if auth_header:
+            headers["authorization"] = auth_header
+        upstream_resp = await self._client.get(f"/bundles/{bundle_id}.zip", headers=headers)
         if upstream_resp.status_code != 200:
             return Response(upstream_resp.text, status_code=upstream_resp.status_code)
         return Response(upstream_resp.content, media_type="application/zip")

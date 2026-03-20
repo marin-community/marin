@@ -409,6 +409,7 @@ class LocalPlatform:
             bundle_store = BundleStore(
                 storage_dir=str(self._cache_path / f"bundles-{worker_id}"),
                 controller_address=self._controller_address,
+                auth_token=worker_config.auth_token if worker_config is not None else "",
             )
             container_runtime = ProcessRuntime(cache_dir=self._cache_path / worker_id)
             worker_port = find_free_port()

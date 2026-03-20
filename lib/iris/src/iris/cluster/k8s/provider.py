@@ -215,6 +215,7 @@ class PodConfig:
     host_network: bool = False
     controller_address: str | None = None
     managed_label: str = ""
+    auth_token: str = ""
 
 
 def _build_task_script(run_req: cluster_pb2.Worker.RunTaskRequest) -> str:
@@ -232,6 +233,7 @@ def _build_init_container_spec(
     pod_name: str,
     default_image: str,
     controller_address: str | None,
+    auth_token: str = "",
 ) -> tuple[list[dict], list[dict], str | None]:
     """Build init containers for bundle fetch and workdir file staging.
 
@@ -259,6 +261,8 @@ def _build_init_container_spec(
                 {"name": "IRIS_CONTROLLER_URL", "value": controller_address},
             ]
         )
+        if auth_token:
+            init_env.append({"name": "IRIS_BUNDLE_TOKEN", "value": auth_token})
 
     if workdir_files:
         configmap_name = f"{pod_name}-wf"
@@ -603,6 +607,7 @@ class KubernetesProvider:
     host_network: bool = False
     controller_address: str | None = None
     managed_label: str = ""
+    auth_token: str = ""
     _log_cursors: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
 
@@ -897,6 +902,7 @@ class KubernetesProvider:
             host_network=self.host_network,
             controller_address=self.controller_address,
             managed_label=self.managed_label,
+            auth_token=self.auth_token,
         )
 
     def _apply_pod(self, run_req: cluster_pb2.Worker.RunTaskRequest) -> None:
@@ -911,6 +917,7 @@ class KubernetesProvider:
             pod_name,
             self.default_image,
             self.controller_address,
+            auth_token=self.pod_config.auth_token,
         )
 
         if configmap_name:

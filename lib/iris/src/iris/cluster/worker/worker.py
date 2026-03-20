@@ -141,6 +141,7 @@ class Worker:
             storage_dir=str(self._cache_dir / "bundles"),
             controller_address=config.controller_address,
             max_cache_items=100,
+            auth_token=config.auth_token,
         )
         self._runtime = container_runtime or DockerRuntime(cache_dir=self._cache_dir)
         self._port_allocator = port_allocator or PortAllocator(config.port_range)

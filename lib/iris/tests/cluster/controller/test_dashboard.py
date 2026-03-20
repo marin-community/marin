@@ -1060,3 +1060,70 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
     assert resp.status_code == 200
     data = resp.json()
     assert data["provider_kind"] == "kubernetes"
+
+
+# =============================================================================
+# Bundle Download Auth Tests
+# =============================================================================
+
+
+def test_bundle_download_requires_auth_when_enabled(service):
+    """Bundle endpoint returns 401 when auth is enabled and no token provided."""
+    from iris.rpc.auth import StaticTokenVerifier
+
+    verifier = StaticTokenVerifier({"valid-token": "test-user"})
+    dashboard = ControllerDashboard(service, auth_verifier=verifier, auth_provider="static")
+    authed_client = TestClient(dashboard.app)
+
+    bundle_id = "a" * 64
+    service.bundle_zip = Mock(return_value=b"zip-bytes")
+
+    resp = authed_client.get(f"/bundles/{bundle_id}.zip")
+    assert resp.status_code == 401
+
+
+def test_bundle_download_succeeds_with_valid_token(service):
+    """Bundle endpoint serves bytes when a valid bearer token is provided."""
+    from iris.rpc.auth import StaticTokenVerifier
+
+    verifier = StaticTokenVerifier({"valid-token": "test-user"})
+    dashboard = ControllerDashboard(service, auth_verifier=verifier, auth_provider="static")
+    authed_client = TestClient(dashboard.app)
+
+    bundle_id = "a" * 64
+    bundle_bytes = b"zip-bytes"
+    service.bundle_zip = Mock(return_value=bundle_bytes)
+
+    resp = authed_client.get(
+        f"/bundles/{bundle_id}.zip",
+        headers={"Authorization": "Bearer valid-token"},
+    )
+    assert resp.status_code == 200
+    assert resp.content == bundle_bytes
+
+
+def test_bundle_download_rejects_invalid_token(service):
+    """Bundle endpoint returns 401 for invalid bearer token."""
+    from iris.rpc.auth import StaticTokenVerifier
+
+    verifier = StaticTokenVerifier({"valid-token": "test-user"})
+    dashboard = ControllerDashboard(service, auth_verifier=verifier, auth_provider="static")
+    authed_client = TestClient(dashboard.app)
+
+    bundle_id = "a" * 64
+    resp = authed_client.get(
+        f"/bundles/{bundle_id}.zip",
+        headers={"Authorization": "Bearer bad-token"},
+    )
+    assert resp.status_code == 401
+
+
+def test_bundle_download_open_in_null_auth_mode(client, service):
+    """Bundle endpoint remains open when auth is not enabled (null-auth mode)."""
+    bundle_id = "a" * 64
+    bundle_bytes = b"zip-bytes"
+    service.bundle_zip = Mock(return_value=bundle_bytes)
+
+    resp = client.get(f"/bundles/{bundle_id}.zip")
+    assert resp.status_code == 200
+    assert resp.content == bundle_bytes

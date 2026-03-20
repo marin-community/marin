@@ -15,6 +15,7 @@ import io
 import logging
 import threading
 import time
+import urllib.request
 import zipfile
 from collections import OrderedDict
 from pathlib import Path
@@ -47,9 +48,11 @@ class BundleStore:
         controller_address: str | None = None,
         max_cache_items: int = 1000,
         max_cache_bytes: int = 1_000_000_000,
+        auth_token: str = "",
     ):
         self._storage_dir = storage_dir
         self._controller_address = controller_address.rstrip("/") if controller_address else ""
+        self._auth_token = auth_token
         self._max_cache_items = max_cache_items
         self._max_cache_bytes = max_cache_bytes
         self._lock = threading.RLock()
@@ -128,7 +131,10 @@ class BundleStore:
         url = f"{self._controller_address}/bundles/{bundle_id}.zip"
         for attempt in range(3):
             try:
-                with urlopen(url, timeout=120) as resp:
+                req = urllib.request.Request(url)
+                if self._auth_token:
+                    req.add_header("Authorization", f"Bearer {self._auth_token}")
+                with urlopen(req, timeout=120) as resp:
                     blob = resp.read()
                 break
             except Exception as e:

@@ -48,8 +48,10 @@ def test_extract_bundle_fetches_on_demand(monkeypatch, store, tmp_path):
     bundle_zip = _make_zip({"main.py": b"print('hello')", "src/module.py": b"def f():\n  return 1\n"})
     bundle_id = hashlib.sha256(bundle_zip).hexdigest()
 
-    def fake_urlopen(url: str, timeout: int):
-        assert url == f"http://controller.internal/bundles/{bundle_id}.zip"
+    def fake_urlopen(req, timeout: int):
+        expected_url = f"http://controller.internal/bundles/{bundle_id}.zip"
+        url = req.full_url if hasattr(req, "full_url") else req
+        assert url == expected_url
         return _FakeResponse(bundle_zip)
 
     monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
@@ -74,13 +76,56 @@ def test_extract_bundle_hash_verification_failure(monkeypatch, store, tmp_path):
     bad_zip = _make_zip({"a.txt": b"A"})
     wrong_id = "a" * 64
 
-    def fake_urlopen(url: str, timeout: int):
-        assert url == f"http://controller.internal/bundles/{wrong_id}.zip"
+    def fake_urlopen(req, timeout: int):
+        expected_url = f"http://controller.internal/bundles/{wrong_id}.zip"
+        url = req.full_url if hasattr(req, "full_url") else req
+        assert url == expected_url
         return _FakeResponse(bad_zip)
 
     monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
     with pytest.raises(ValueError, match="Bundle hash mismatch"):
         store.extract_bundle_to(wrong_id, tmp_path / "extract")
+
+
+def test_fetch_from_controller_sends_auth_header(monkeypatch, tmp_path):
+    """_fetch_from_controller sends Authorization header when auth_token is set."""
+    bundle_zip = _make_zip({"auth.txt": b"secure"})
+    bundle_id = hashlib.sha256(bundle_zip).hexdigest()
+
+    store = BundleStore(
+        storage_dir=str(tmp_path / "bundles"),
+        controller_address="http://controller.internal",
+        auth_token="my-jwt",
+    )
+
+    def fake_urlopen(req, timeout: int):
+        assert req.get_header("Authorization") == "Bearer my-jwt"
+        return _FakeResponse(bundle_zip)
+
+    monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
+    extract_dir = tmp_path / "extract"
+    store.extract_bundle_to(bundle_id, extract_dir)
+    assert (extract_dir / "auth.txt").read_bytes() == b"secure"
+
+
+def test_fetch_from_controller_no_auth_header_when_empty(monkeypatch, tmp_path):
+    """_fetch_from_controller omits Authorization header when auth_token is empty."""
+    bundle_zip = _make_zip({"noauth.txt": b"open"})
+    bundle_id = hashlib.sha256(bundle_zip).hexdigest()
+
+    store = BundleStore(
+        storage_dir=str(tmp_path / "bundles"),
+        controller_address="http://controller.internal",
+    )
+
+    def fake_urlopen(req, timeout: int):
+        assert not req.has_header("Authorization")
+        return _FakeResponse(bundle_zip)
+
+    monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
+    extract_dir = tmp_path / "extract"
+    store.extract_bundle_to(bundle_id, extract_dir)
+    assert (extract_dir / "noauth.txt").read_bytes() == b"open"
 
 
 def test_lru_eviction_by_item_count(store):

@@ -107,7 +107,7 @@ Added to `ControllerService`:
 
 ### Known limitations
 
-- **Bundle downloads** are unauthenticated. Bundle IDs are SHA-256 hashes (256 bits of entropy) acting as capability URLs. Workers and K8s init-containers fetch bundles via stdlib `urlopen` which doesn't support auth headers.
+- **Bundle downloads** are authenticated when auth is enabled. Workers and K8s init-containers pass the worker JWT via `Authorization: Bearer` header. In null-auth mode, bundle downloads remain open.
 - **No token refresh**: JWTs have a 30-day TTL by default. Re-run `iris login` to get a new one.
 - **Single-role model**: a user has exactly one role. No per-job or per-resource ACLs.
 - **Revocation is in-memory**: revoked JTIs are loaded from the DB at startup and updated on revocation RPCs. A controller restart reloads the full revocation set.
