@@ -4,7 +4,7 @@
 """Consolidated Platform protocol tests.
 
 Tests exercise the Platform protocol contract through parameterized fixtures
-(GCP via GcpServiceImpl DRY_RUN, Manual). Platform-specific behavioral
+(GCP via DryRunGcpService, Manual). Platform-specific behavioral
 tests that cannot be expressed through the protocol are in dedicated sections.
 """
 
@@ -27,9 +27,8 @@ from iris.cluster.platform.gcp import (
     _build_vm_slice_id,
     _validate_slice_config,
 )
-from iris.cluster.platform.gcp_service_impl import GcpServiceImpl
+from iris.cluster.platform.gcp_service_impl import DryRunGcpService
 from iris.cluster.platform.manual import ManualPlatform
-from iris.cluster.service_mode import ServiceMode
 from iris.rpc import config_pb2
 
 # =============================================================================
@@ -85,12 +84,12 @@ def _make_vm_config(env: PlatformEnv, name: str = "test-controller") -> config_p
 def platform_env(request) -> Iterator[PlatformEnv]:
     """Yield a PlatformEnv for each platform implementation.
 
-    GCP is backed by GcpServiceImpl in DRY_RUN mode.
+    GCP is backed by DryRunGcpService.
     """
     name = request.param
 
     if name == "gcp":
-        gcp_service = GcpServiceImpl(mode=ServiceMode.DRY_RUN, project_id="test-project")
+        gcp_service = DryRunGcpService(project_id="test-project")
         gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
         platform = GcpPlatform(gcp_config, label_prefix="iris", gcp_service=gcp_service)
         yield PlatformEnv(platform=platform, zone="us-central2-b", name="gcp", label_prefix="iris")
@@ -201,7 +200,7 @@ def test_tunnel_returns_address_directly():
 
 def test_gcp_quota_error_raises_quota_exhausted():
     """GcpPlatform raises QuotaExhaustedError when service reports quota exhaustion."""
-    gcp_service = GcpServiceImpl(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_service = DryRunGcpService(project_id="test-project")
     gcp_service.inject_failure("tpu_create", QuotaExhaustedError("RESOURCE_EXHAUSTED: no capacity"))
 
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
@@ -273,7 +272,7 @@ def test_gcp_validate_vm_slice_config_rejects_num_vms_not_one():
 
 def test_gcp_create_vm_slice_mode_produces_single_worker_slice():
     """VM slice mode creates a single-worker slice that is discoverable and terminable."""
-    gcp_service = GcpServiceImpl(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_service = DryRunGcpService(project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
     platform = GcpPlatform(gcp_config, label_prefix="iris", gcp_service=gcp_service)
 
@@ -315,7 +314,7 @@ def test_gcp_build_vm_slice_id_bounds_and_normalizes():
 
 
 def test_gcp_create_vm_slice_mode_with_long_prefix_uses_valid_slice_id():
-    gcp_service = GcpServiceImpl(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_service = DryRunGcpService(project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
     platform = GcpPlatform(gcp_config, label_prefix="iris", gcp_service=gcp_service)
 
@@ -342,7 +341,7 @@ def test_gcp_create_vm_slice_mode_with_long_prefix_uses_valid_slice_id():
 
 def test_gcp_empty_accelerator_variant_rejected():
     """create_slice with empty accelerator_variant raises ValueError."""
-    gcp_service = GcpServiceImpl(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_service = DryRunGcpService(project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
     platform = GcpPlatform(gcp_config, label_prefix="iris", gcp_service=gcp_service)
 
@@ -359,7 +358,7 @@ def test_gcp_empty_accelerator_variant_rejected():
 
 def test_gcp_create_vm_validates_config():
     """create_vm with empty zone raises ValueError."""
-    gcp_service = GcpServiceImpl(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_service = DryRunGcpService(project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
     platform = GcpPlatform(gcp_config, label_prefix="iris", gcp_service=gcp_service)
 
@@ -371,7 +370,7 @@ def test_gcp_create_vm_validates_config():
 
 def test_gcp_list_slices_skips_deleting_tpus():
     """list_slices omits TPUs in DELETING state."""
-    gcp_service = GcpServiceImpl(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_service = DryRunGcpService(project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
     platform = GcpPlatform(gcp_config, label_prefix="iris", gcp_service=gcp_service)
 
@@ -399,7 +398,7 @@ def test_gcp_list_slices_skips_deleting_tpus():
 
 def test_gcp_create_slice_resolves_ghcr_image_in_worker_config():
     """create_slice rewrites GHCR images in worker_config via resolve_image."""
-    gcp_service = GcpServiceImpl(mode=ServiceMode.DRY_RUN, project_id="my-proj")
+    gcp_service = DryRunGcpService(project_id="my-proj")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="my-proj")
     platform = GcpPlatform(gcp_config, label_prefix="iris", gcp_service=gcp_service)
 
@@ -426,7 +425,7 @@ def test_gcp_create_slice_resolves_ghcr_image_in_worker_config():
 
 def test_gcp_list_slices_skips_inactive_vm_instances():
     """list_slices omits VM-backed slices for instances in inactive states."""
-    gcp_service = GcpServiceImpl(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_service = DryRunGcpService(project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
     platform = GcpPlatform(gcp_config, label_prefix="iris", gcp_service=gcp_service)
 
@@ -453,7 +452,7 @@ def test_gcp_list_slices_skips_inactive_vm_instances():
 
 def test_gcp_list_slices_preserves_vm_slice_discovery():
     """VM-backed slices are discoverable via list_all_slices after creation."""
-    gcp_service = GcpServiceImpl(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_service = DryRunGcpService(project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
     platform = GcpPlatform(gcp_config, label_prefix="iris", gcp_service=gcp_service)
 
@@ -563,7 +562,7 @@ def test_list_all_slices_returns_all_managed(platform_env: PlatformEnv):
 
 def test_gcp_list_all_slices_multi_zone():
     """GcpPlatform.list_all_slices returns slices across multiple zones."""
-    gcp_service = GcpServiceImpl(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_service = DryRunGcpService(project_id="test-project")
     # Add synthetic zones that aren't in KNOWN_GCP_ZONES
     gcp_service._valid_zones.update(["zone-a", "zone-b"])
     gcp_config = config_pb2.GcpPlatformConfig(
@@ -609,7 +608,7 @@ def test_gcp_list_all_slices_multi_zone():
 
 def test_gcp_vm_slice_bootstrap_monitors_serial_port():
     """VM slice bootstrap waits for startup-script completion via serial port monitoring."""
-    gcp_service = GcpServiceImpl(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_service = DryRunGcpService(project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
     platform = GcpPlatform(gcp_config, label_prefix="iris", gcp_service=gcp_service)
 
@@ -650,7 +649,7 @@ def test_gcp_vm_slice_bootstrap_monitors_serial_port():
 
 def test_gcp_vm_slice_bootstrap_detects_startup_script_failure():
     """VM slice bootstrap raises on [iris-init] ERROR in serial output."""
-    gcp_service = GcpServiceImpl(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_service = DryRunGcpService(project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
     platform = GcpPlatform(gcp_config, label_prefix="iris", gcp_service=gcp_service)
 
@@ -692,7 +691,7 @@ def test_gcp_vm_slice_bootstrap_detects_startup_script_failure():
 
 def test_gcp_tpu_slice_passes_startup_script_metadata():
     """_create_tpu_slice with worker_config embeds startup-script in TPU metadata."""
-    gcp_service = GcpServiceImpl(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_service = DryRunGcpService(project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
     platform = GcpPlatform(gcp_config, label_prefix="iris", gcp_service=gcp_service)
 
@@ -725,7 +724,7 @@ def test_gcp_tpu_slice_passes_startup_script_metadata():
 
 def test_gcp_tpu_bootstrap_monitors_health_endpoints():
     """_run_tpu_bootstrap detects all workers healthy via health endpoint polling."""
-    gcp_service = GcpServiceImpl(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_service = DryRunGcpService(project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
     platform = GcpPlatform(gcp_config, label_prefix="iris", gcp_service=gcp_service)
 
@@ -759,7 +758,7 @@ def test_gcp_tpu_bootstrap_monitors_health_endpoints():
 
 def test_gcp_tpu_bootstrap_timeout_fetches_cloud_logs():
     """_run_tpu_bootstrap on timeout raises PlatformError and fetches Cloud Logging."""
-    gcp_service = GcpServiceImpl(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_service = DryRunGcpService(project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
     platform = GcpPlatform(gcp_config, label_prefix="iris", gcp_service=gcp_service)
 
@@ -795,7 +794,7 @@ def test_gcp_tpu_bootstrap_timeout_fetches_cloud_logs():
 
 def test_gcp_tpu_bootstrap_partial_healthy():
     """Multi-VM TPU where only some workers become healthy reports correct count."""
-    gcp_service = GcpServiceImpl(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_service = DryRunGcpService(project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
     platform = GcpPlatform(gcp_config, label_prefix="iris", gcp_service=gcp_service)
 
@@ -819,7 +818,7 @@ def test_gcp_tpu_bootstrap_partial_healthy():
     handle._bootstrap_state = None
     gcp_service.advance_tpu_state(handle.slice_id, "us-central2-b", "READY")
 
-    # GcpServiceImpl creates 4 endpoints for v4-32 (10.0.0.0..10.0.0.3).
+    # DryRunGcpService creates 4 endpoints for v4-32 (10.0.0.0..10.0.0.3).
     # Only the first worker responds healthy; the rest refuse connections.
     first_ip = gcp_service._tpus[next(iter(gcp_service._tpus))].network_endpoints[0]
 
