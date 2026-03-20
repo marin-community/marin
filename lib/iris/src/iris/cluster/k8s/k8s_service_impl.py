@@ -705,7 +705,7 @@ class K8sServiceImpl:
         key = (pod_name, path)
         if key in self._file_contents:
             return self._file_contents[key]
-        raise RuntimeError(f"read_file: no content for {pod_name}:{path}")
+        raise KubectlError(f"read_file: no content for {pod_name}:{path}")
 
     def rm_files(
         self,

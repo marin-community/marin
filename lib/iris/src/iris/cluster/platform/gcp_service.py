@@ -37,6 +37,7 @@ class VmInfo:
     external_ip: str | None
     labels: dict[str, str]
     metadata: dict[str, str]
+    created_at: Timestamp
 
 
 @dataclass

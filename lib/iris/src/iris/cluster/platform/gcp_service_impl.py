@@ -150,6 +150,18 @@ def _parse_tpu_info(tpu_data: dict, zone: str) -> TpuInfo:
     )
 
 
+def _parse_vm_created_at(vm_data: dict) -> Timestamp:
+    create_time = vm_data.get("creationTimestamp", "")
+    if not create_time:
+        return Timestamp.now()
+    try:
+        dt = datetime.fromisoformat(create_time.replace("Z", "+00:00"))
+        epoch_ms = int(dt.timestamp() * 1000)
+        return Timestamp.from_ms(epoch_ms)
+    except (ValueError, AttributeError):
+        return Timestamp.now()
+
+
 def _parse_vm_info(vm_data: dict, fallback_zone: str = "") -> VmInfo:
     """Parse raw GCP VM JSON into a VmInfo dataclass."""
     zone_url = vm_data.get("zone", "")
@@ -179,6 +191,7 @@ def _parse_vm_info(vm_data: dict, fallback_zone: str = "") -> VmInfo:
         external_ip=external_ip,
         labels=vm_data.get("labels", {}),
         metadata=metadata,
+        created_at=_parse_vm_created_at(vm_data),
     )
 
 
@@ -369,6 +382,7 @@ class GcpServiceImpl:
             topo = get_tpu_topology(request.accelerator_type)
             vm_count = topo.vm_count
         except ValueError:
+            logger.debug("Unknown accelerator type %r; TPU topology not available", request.accelerator_type)
             vm_count = 1
 
         seq = len(self._tpus)
@@ -577,7 +591,12 @@ class GcpServiceImpl:
 
     def vm_create(self, request: VmCreateRequest) -> VmInfo:
         self._check_injected_failure("vm_create")
-        self._validate_vm_create(request)
+
+        if self._mode == ServiceMode.LOCAL:
+            self._validate_resource_name(request.name, "VM")
+            self._validate_labels(request.labels)
+        else:
+            self._validate_vm_create(request)
 
         if self._mode == ServiceMode.CLOUD:
             return self._vm_create_cloud(request)
@@ -602,6 +621,7 @@ class GcpServiceImpl:
             external_ip=None,
             labels=dict(request.labels),
             metadata=dict(request.metadata),
+            created_at=Timestamp.now(),
         )
         self._vms[(request.name, request.zone)] = info
         return info

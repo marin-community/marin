@@ -36,6 +36,7 @@ import re
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.request
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
@@ -268,7 +269,7 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
         try:
             self._gcp_service.vm_set_metadata(self._gce_vm_name, self._zone, metadata)
         except PlatformError:
-            logger.warning("Failed to set metadata on %s", self._vm_id)
+            logger.warning("Failed to set metadata on %s", self._gce_vm_name)
 
 
 class GcpSliceHandle:
@@ -848,7 +849,7 @@ class GcpPlatform:
                     if resp.status == 200:
                         healthy_workers.add(worker_id)
                         logger.info("Worker %s is healthy", worker_id)
-                except Exception:
+                except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
                     pass  # not ready yet
 
             if len(healthy_workers) == len(worker_addrs):
@@ -1019,7 +1020,7 @@ class GcpPlatform:
                     _project_id=self._project_id,
                     _gcp_service=self._gcp,
                     _labels=vm.labels,
-                    _created_at=Timestamp.now(),
+                    _created_at=vm.created_at,
                     _label_prefix=self._label_prefix,
                     _ssh_config=self._ssh_config,
                 )
@@ -1075,7 +1076,7 @@ class GcpPlatform:
                     _project_id=self._project_id,
                     _gcp_service=self._gcp,
                     _labels=vm.labels,
-                    _created_at=Timestamp.now(),
+                    _created_at=vm.created_at,
                     _label_prefix=self._label_prefix,
                     _ssh_config=self._ssh_config,
                 )
