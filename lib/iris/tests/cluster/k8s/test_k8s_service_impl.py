@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 from iris.cluster.k8s.k8s_service import K8sService
-from iris.cluster.k8s.k8s_service_impl import K8sServiceImpl
+from iris.cluster.k8s.k8s_service_impl import FakeNodeResources, K8sServiceImpl
 from iris.cluster.k8s.kubectl import KubectlError
 
 
@@ -17,11 +17,17 @@ def _pod_manifest(
     labels: dict[str, str] | None = None,
     node_pool: str | None = None,
     resources: dict | None = None,
+    node_selector: dict[str, str] | None = None,
+    tolerations: list[dict] | None = None,
 ) -> dict:
     """Build a minimal Pod manifest for testing."""
     spec: dict = {"containers": [{"name": "main", "image": "busybox"}]}
     if node_pool:
-        spec["nodeSelector"] = {"cloud.google.com/gke-nodepool": node_pool}
+        spec.setdefault("nodeSelector", {})["cloud.google.com/gke-nodepool"] = node_pool
+    if node_selector:
+        spec.setdefault("nodeSelector", {}).update(node_selector)
+    if tolerations:
+        spec["tolerations"] = tolerations
     if resources:
         spec["containers"][0]["resources"] = resources
     manifest: dict = {
@@ -333,3 +339,211 @@ def test_case_insensitive_resource_type(svc: K8sServiceImpl):
     assert svc.get_json("Pod", "p1") is not None
     assert svc.get_json("POD", "p1") is not None
     assert len(svc.list_json("Pod")) == 1
+
+
+# ---------------------------------------------------------------------------
+# Scheduling tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sched_svc() -> K8sServiceImpl:
+    """K8sServiceImpl with a GPU node pool for scheduling tests."""
+    svc = K8sServiceImpl(namespace="test-ns")
+    return svc
+
+
+def test_pod_scheduled_on_matching_node(sched_svc: K8sServiceImpl):
+    sched_svc.add_node_pool(
+        "gpu-pool",
+        labels={"accelerator": "nvidia-a100"},
+        resources=FakeNodeResources(gpu_count=4, cpu_millicores=8000, memory_bytes=64 * 1024**3),
+    )
+    pod = _pod_manifest(
+        "gpu-pod",
+        node_selector={"accelerator": "nvidia-a100", "cloud.google.com/gke-nodepool": "gpu-pool"},
+        resources={"requests": {"nvidia.com/gpu": "2"}},
+    )
+    sched_svc.apply_json(pod)
+    result = sched_svc.get_json("pod", "gpu-pod")
+    assert result is not None
+    assert result["status"]["phase"] == "Running"
+    assert result["spec"]["nodeName"] == "gpu-pool-0"
+
+
+def test_pod_pending_no_matching_node(sched_svc: K8sServiceImpl):
+    sched_svc.add_node_pool("cpu-pool")
+    pod = _pod_manifest(
+        "gpu-pod",
+        node_selector={"accelerator": "nvidia-a100"},
+        resources={"requests": {"nvidia.com/gpu": "1"}},
+    )
+    sched_svc.apply_json(pod)
+    result = sched_svc.get_json("pod", "gpu-pod")
+    assert result is not None
+    assert result["status"]["phase"] == "Pending"
+
+
+def test_pod_pending_insufficient_gpu(sched_svc: K8sServiceImpl):
+    sched_svc.add_node_pool(
+        "gpu-pool",
+        resources=FakeNodeResources(gpu_count=4),
+    )
+    pod = _pod_manifest(
+        "big-pod",
+        node_selector={"cloud.google.com/gke-nodepool": "gpu-pool"},
+        resources={"requests": {"nvidia.com/gpu": "8"}},
+    )
+    sched_svc.apply_json(pod)
+    result = sched_svc.get_json("pod", "big-pod")
+    assert result is not None
+    assert result["status"]["phase"] == "Pending"
+
+
+def test_toleration_required_for_tainted_node(sched_svc: K8sServiceImpl):
+    sched_svc.add_node_pool(
+        "tainted-pool",
+        taints=[{"key": "dedicated", "value": "gpu", "effect": "NoSchedule"}],
+    )
+
+    # Without toleration → Pending
+    pod_no_tol = _pod_manifest(
+        "no-tol",
+        node_selector={"cloud.google.com/gke-nodepool": "tainted-pool"},
+    )
+    sched_svc.apply_json(pod_no_tol)
+    assert sched_svc.get_json("pod", "no-tol")["status"]["phase"] == "Pending"
+
+    # With toleration → Running
+    pod_with_tol = _pod_manifest(
+        "with-tol",
+        node_selector={"cloud.google.com/gke-nodepool": "tainted-pool"},
+        tolerations=[{"key": "dedicated", "value": "gpu", "effect": "NoSchedule"}],
+    )
+    sched_svc.apply_json(pod_with_tol)
+    assert sched_svc.get_json("pod", "with-tol")["status"]["phase"] == "Running"
+
+
+def test_resource_commitment_tracking(sched_svc: K8sServiceImpl):
+    sched_svc.add_node_pool(
+        "gpu-pool",
+        resources=FakeNodeResources(gpu_count=4),
+    )
+
+    # First 2-GPU pod → Running
+    pod1 = _pod_manifest(
+        "pod1",
+        node_selector={"cloud.google.com/gke-nodepool": "gpu-pool"},
+        resources={"requests": {"nvidia.com/gpu": "2"}},
+    )
+    sched_svc.apply_json(pod1)
+    assert sched_svc.get_json("pod", "pod1")["status"]["phase"] == "Running"
+
+    # Second 2-GPU pod → Running (4 total committed)
+    pod2 = _pod_manifest(
+        "pod2",
+        node_selector={"cloud.google.com/gke-nodepool": "gpu-pool"},
+        resources={"requests": {"nvidia.com/gpu": "2"}},
+    )
+    sched_svc.apply_json(pod2)
+    assert sched_svc.get_json("pod", "pod2")["status"]["phase"] == "Running"
+
+    # Third 2-GPU pod → Pending (no capacity)
+    pod3 = _pod_manifest(
+        "pod3",
+        node_selector={"cloud.google.com/gke-nodepool": "gpu-pool"},
+        resources={"requests": {"nvidia.com/gpu": "2"}},
+    )
+    sched_svc.apply_json(pod3)
+    assert sched_svc.get_json("pod", "pod3")["status"]["phase"] == "Pending"
+
+
+def test_list_nodes_returns_node_dicts(sched_svc: K8sServiceImpl):
+    sched_svc.add_node_pool(
+        "my-pool",
+        resources=FakeNodeResources(gpu_count=8, cpu_millicores=16000),
+    )
+    nodes = sched_svc.list_json("nodes", cluster_scoped=True)
+    assert len(nodes) == 1
+    node = nodes[0]
+    assert node["metadata"]["name"] == "my-pool-0"
+    assert node["status"]["allocatable"]["cpu"] == "16000m"
+    assert node["status"]["allocatable"]["nvidia.com/gpu"] == "8"
+
+
+def test_add_node_pool_with_attributes(sched_svc: K8sServiceImpl):
+    sched_svc.add_node_pool(
+        "big-pool",
+        node_count=3,
+        labels={"zone": "us-central1-a"},
+        resources=FakeNodeResources(cpu_millicores=8000),
+    )
+    nodes = sched_svc.list_json("nodes", cluster_scoped=True)
+    assert len(nodes) == 3
+    for node in nodes:
+        assert node["metadata"]["labels"]["zone"] == "us-central1-a"
+        assert node["metadata"]["labels"]["cloud.google.com/gke-nodepool"] == "big-pool"
+
+
+def test_transition_pod_helper(sched_svc: K8sServiceImpl):
+    sched_svc.add_node_pool("pool")
+    pod = _pod_manifest("p1", node_selector={"cloud.google.com/gke-nodepool": "pool"})
+    sched_svc.apply_json(pod)
+    assert sched_svc.get_json("pod", "p1")["status"]["phase"] == "Running"
+
+    sched_svc.transition_pod("p1", "Failed", exit_code=1, reason="OOMKilled")
+    result = sched_svc.get_json("pod", "p1")
+    assert result["status"]["phase"] == "Failed"
+    assert result["status"]["containerStatuses"][0]["state"]["terminated"]["exitCode"] == 1
+    assert result["status"]["containerStatuses"][0]["state"]["terminated"]["reason"] == "OOMKilled"
+
+
+def test_delete_pod_releases_resources(sched_svc: K8sServiceImpl):
+    sched_svc.add_node_pool(
+        "gpu-pool",
+        resources=FakeNodeResources(gpu_count=2),
+    )
+
+    # Schedule a 2-GPU pod
+    pod1 = _pod_manifest(
+        "pod1",
+        node_selector={"cloud.google.com/gke-nodepool": "gpu-pool"},
+        resources={"requests": {"nvidia.com/gpu": "2"}},
+    )
+    sched_svc.apply_json(pod1)
+    assert sched_svc.get_json("pod", "pod1")["status"]["phase"] == "Running"
+
+    # Second pod can't fit
+    pod2 = _pod_manifest(
+        "pod2",
+        node_selector={"cloud.google.com/gke-nodepool": "gpu-pool"},
+        resources={"requests": {"nvidia.com/gpu": "2"}},
+    )
+    sched_svc.apply_json(pod2)
+    assert sched_svc.get_json("pod", "pod2")["status"]["phase"] == "Pending"
+
+    # Delete first pod, freeing resources
+    sched_svc.delete("pod", "pod1")
+
+    # Now a new pod can schedule
+    pod3 = _pod_manifest(
+        "pod3",
+        node_selector={"cloud.google.com/gke-nodepool": "gpu-pool"},
+        resources={"requests": {"nvidia.com/gpu": "2"}},
+    )
+    sched_svc.apply_json(pod3)
+    assert sched_svc.get_json("pod", "pod3")["status"]["phase"] == "Running"
+
+
+def test_failed_scheduling_event_generated(sched_svc: K8sServiceImpl):
+    sched_svc.add_node_pool("cpu-pool")
+    pod = _pod_manifest(
+        "unschedulable",
+        node_selector={"accelerator": "nonexistent"},
+    )
+    sched_svc.apply_json(pod)
+    assert sched_svc.get_json("pod", "unschedulable")["status"]["phase"] == "Pending"
+
+    events = sched_svc.get_events(field_selector="involvedObject.name=unschedulable")
+    assert len(events) == 1
+    assert events[0]["reason"] == "FailedScheduling"
