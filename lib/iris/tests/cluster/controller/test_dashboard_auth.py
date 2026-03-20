@@ -168,6 +168,34 @@ def test_csrf_on_logout_accepts_matching_origin(authed_client):
     assert resp.status_code == 200
 
 
+def test_csrf_accepts_x_forwarded_host(authed_client):
+    """CSRF check should use X-Forwarded-Host when behind a reverse proxy."""
+    resp = authed_client.post(
+        "/auth/session",
+        json={"token": _TEST_TOKEN},
+        headers={
+            "Origin": "https://proxy.example.com",
+            "X-Forwarded-Host": "proxy.example.com",
+            "X-Forwarded-Proto": "https",
+        },
+    )
+    assert resp.status_code == 200
+
+
+def test_csrf_rejects_wrong_x_forwarded_host(authed_client):
+    """CSRF check should reject when Origin doesn't match X-Forwarded-Host."""
+    resp = authed_client.post(
+        "/auth/session",
+        json={"token": _TEST_TOKEN},
+        headers={
+            "Origin": "https://evil.example.com",
+            "X-Forwarded-Host": "proxy.example.com",
+            "X-Forwarded-Proto": "https",
+        },
+    )
+    assert resp.status_code == 403
+
+
 # =============================================================================
 # Default-deny auth middleware (F-2)
 # =============================================================================
@@ -250,3 +278,50 @@ def test_no_middleware_when_auth_disabled(noauth_client):
     assert noauth_client.get("/worker/456").status_code == 200
     assert noauth_client.get("/health").status_code == 200
     assert noauth_client.get("/auth/config").status_code == 200
+
+
+# =============================================================================
+# Session bootstrap endpoint (F-9)
+# =============================================================================
+
+
+def test_session_bootstrap_valid_token(authed_client):
+    """Valid token sets session cookie and redirects to /."""
+    resp = authed_client.get(
+        f"/auth/session_bootstrap?token={_TEST_TOKEN}",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    assert resp.headers["location"].endswith("/")
+    assert SESSION_COOKIE in resp.cookies
+
+
+def test_session_bootstrap_invalid_token(authed_client):
+    """Invalid token returns 401."""
+    resp = authed_client.get(
+        "/auth/session_bootstrap?token=bad-token",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 401
+    assert resp.json()["error"] == "invalid token"
+
+
+def test_session_bootstrap_no_token(authed_client):
+    """Missing token redirects to / without setting cookie."""
+    resp = authed_client.get(
+        "/auth/session_bootstrap",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    assert resp.headers["location"].endswith("/")
+    assert SESSION_COOKIE not in resp.cookies
+
+
+def test_session_bootstrap_no_auth_configured(noauth_client):
+    """When auth is disabled, bootstrap redirects without setting cookie."""
+    resp = noauth_client.get(
+        f"/auth/session_bootstrap?token={_TEST_TOKEN}",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    assert SESSION_COOKIE not in resp.cookies

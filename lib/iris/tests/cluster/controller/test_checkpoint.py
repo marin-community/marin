@@ -210,6 +210,24 @@ def test_fresh_start_downloads_from_remote(tmp_path):
     db.close()
 
 
+def test_download_from_explicit_path_pairs_auth_db(tmp_path):
+    """When restoring from an explicit checkpoint path, the auth DB is derived as a sibling."""
+    remote_dir = f"file://{tmp_path}/remote"
+    source_db = ControllerDB(
+        db_path=tmp_path / "source" / "source.sqlite3", auth_db_path=tmp_path / "source" / "auth.sqlite3"
+    )
+    path, _ = write_checkpoint(source_db, remote_dir)
+    source_db.close()
+
+    local_path = tmp_path / "local" / "controller.sqlite3"
+    result = download_checkpoint_to_local(remote_dir, local_path, checkpoint_path=path)
+    assert result is True
+    assert local_path.exists()
+
+    auth_local = local_path.with_name("auth.sqlite3")
+    assert auth_local.exists(), "auth DB should be downloaded as sibling of explicit checkpoint"
+
+
 def test_periodic_checkpoint_inline(tmp_path):
     """Controller writes periodic checkpoints when limiter fires."""
     remote_dir = f"file://{tmp_path}/remote"

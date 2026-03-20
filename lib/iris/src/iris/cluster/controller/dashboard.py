@@ -102,7 +102,12 @@ def _check_csrf(request: Request) -> bool:
         parsed = urlparse(referer)
         origin = f"{parsed.scheme}://{parsed.netloc}"
 
-    expected_origin = f"{request.url.scheme}://{request.url.netloc}"
+    forwarded_host = request.headers.get("x-forwarded-host")
+    if forwarded_host:
+        proto = request.headers.get("x-forwarded-proto", "https")
+        expected_origin = f"{proto}://{forwarded_host}"
+    else:
+        expected_origin = f"{request.url.scheme}://{request.url.netloc}"
     return origin == expected_origin
 
 
@@ -161,6 +166,7 @@ class ControllerDashboard:
 
         routes = [
             Route("/", self._dashboard),
+            Route("/auth/session_bootstrap", self._session_bootstrap),
             Route("/auth/config", self._auth_config),
             Route("/auth/session", self._auth_session, methods=["POST"]),
             Route("/auth/logout", self._auth_logout, methods=["POST"]),
@@ -177,23 +183,27 @@ class ControllerDashboard:
         return app
 
     def _dashboard(self, request: Request) -> Response:
-        session_token = request.query_params.get("session_token")
-        if session_token and self._auth_verifier is not None:
-            try:
-                self._auth_verifier.verify(session_token)
-                response = RedirectResponse("/", status_code=302)
-                response.set_cookie(
-                    SESSION_COOKIE,
-                    session_token,
-                    httponly=True,
-                    samesite="strict",
-                    secure=request.url.scheme == "https",
-                    path="/",
-                )
-                return response
-            except ValueError:
-                pass
         return HTMLResponse(html_shell("Iris Controller", "controller"))
+
+    def _session_bootstrap(self, request: Request) -> Response:
+        """Accept token via query param, set cookie, redirect to dashboard."""
+        token = request.query_params.get("token", "")
+        if not token or self._auth_verifier is None:
+            return RedirectResponse("/", status_code=302)
+        try:
+            self._auth_verifier.verify(token)
+        except ValueError:
+            return JSONResponse({"error": "invalid token"}, status_code=401)
+        response = RedirectResponse("/", status_code=302)
+        response.set_cookie(
+            SESSION_COOKIE,
+            token,
+            httponly=True,
+            samesite="strict",
+            secure=request.url.scheme == "https",
+            path="/",
+        )
+        return response
 
     def _job_detail_page(self, _request: Request) -> HTMLResponse:
         return HTMLResponse(html_shell("Job Detail", "controller"))

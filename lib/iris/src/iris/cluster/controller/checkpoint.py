@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -81,10 +82,8 @@ def _upload_sqlite_backup(
 
 def _backup_sqlite_file(source: Path, dest: Path) -> None:
     """Hot-backup a standalone SQLite file using the backup API."""
-    import sqlite3 as _sqlite3
-
-    src_conn = _sqlite3.connect(str(source))
-    dst_conn = _sqlite3.connect(str(dest))
+    src_conn = sqlite3.connect(str(source))
+    dst_conn = sqlite3.connect(str(dest))
     try:
         src_conn.backup(dst_conn)
         dst_conn.commit()
@@ -160,7 +159,10 @@ def download_checkpoint_to_local(
     logger.info("Downloaded checkpoint from %s to %s", source, local_db_path)
 
     # Download auth DB checkpoint if available
-    auth_source = remote_state_dir.rstrip("/") + "/controller-state/auth-checkpoint.sqlite3"
+    if checkpoint_path:
+        auth_source = checkpoint_path.replace("checkpoint-", "auth-checkpoint-")
+    else:
+        auth_source = remote_state_dir.rstrip("/") + "/controller-state/auth-checkpoint.sqlite3"
     auth_fs, auth_fs_path = fsspec.core.url_to_fs(auth_source)
     if auth_fs.exists(auth_fs_path):
         auth_local_path = local_db_path.with_name("auth.sqlite3")

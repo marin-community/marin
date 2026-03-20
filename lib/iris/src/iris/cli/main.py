@@ -267,7 +267,7 @@ def login(ctx):
 
     click.echo(f"Authenticated as {response.user_id}")
     # Token in URL is visible in browser history/logs — acceptable for internal clusters
-    click.echo(f"Dashboard: {controller_url}?session_token={response.token}")
+    click.echo(f"Dashboard: {controller_url}/auth/session_bootstrap?token={response.token}")
     click.echo(f"Token stored for cluster '{cluster_name}'")
 
 

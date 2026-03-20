@@ -1232,6 +1232,7 @@ class ControllerDB:
             self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._configure(self._conn)
+            self._conn.execute("ATTACH DATABASE ? AS auth", (str(self._auth_db_path),))
             self._init_read_pool()
         self.apply_migrations()
 
