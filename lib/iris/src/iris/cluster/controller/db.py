@@ -1008,6 +1008,10 @@ class ControllerDB:
         self._conn.row_factory = sqlite3.Row
         self._configure(self._conn)
         self.apply_migrations()
+        # Populate sqlite_stat1 so the query planner picks good join orders.
+        # Without this, queries like running_tasks_by_worker scan thousands of
+        # rows instead of using the narrower index path.
+        self._conn.execute("ANALYZE")
         self._read_pool: queue.Queue[sqlite3.Connection] = queue.Queue()
         self._init_read_pool()
 
@@ -1035,6 +1039,15 @@ class ControllerDB:
         conn.execute("PRAGMA synchronous = NORMAL")
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA foreign_keys = ON")
+
+    def optimize(self) -> None:
+        """Run PRAGMA optimize to refresh statistics for tables with stale data.
+
+        Lightweight operation that SQLite recommends running periodically or on
+        connection close. Only re-analyzes tables whose stats have drifted.
+        """
+        with self._lock:
+            self._conn.execute("PRAGMA optimize")
 
     def close(self) -> None:
         with self._lock:
