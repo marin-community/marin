@@ -14,8 +14,6 @@ from .reference import (
 )
 
 PREFIX_EMIT_EINSUM3 = "einsum3"
-PREFIX_EMIT_PRESCALED_EINSUM2 = "prescaled_einsum2"
-PREFIX_EMIT_PRESCALED_MATMUL = "prescaled_matmul"
 PREFIX_EMIT_SCAN_FUSED = "scan_fused"
 PREFIX_EMIT_AUTO = "auto"
 LOCAL_OUTPUT_EINSUM = "einsum"
@@ -204,8 +202,6 @@ def ssd_chunked_from_local_blocks_xla_batched(
     else:
         with jax.named_scope("incoming_state_scan"):
             incoming_state, final_state = ssd_scan_chunk_states_reference_batched(chunk_decay, chunk_state)
-        with jax.named_scope("prepare_c_scaled"):
-            c_scaled = c.astype(acc_dtype) * decay[..., None]
         incoming_state_f32 = incoming_state.astype(acc_dtype)
         if prefix_emit_variant == PREFIX_EMIT_EINSUM3:
             with jax.named_scope("einsum3"):
@@ -214,21 +210,6 @@ def ssd_chunked_from_local_blocks_xla_batched(
                     c.astype(acc_dtype),
                     incoming_state_f32,
                     decay,
-                    preferred_element_type=acc_dtype,
-                ).astype(c.dtype)
-        elif prefix_emit_variant == PREFIX_EMIT_PRESCALED_EINSUM2:
-            with jax.named_scope("prescaled_einsum2"):
-                prefix_output = jnp.einsum(
-                    "gkcn,gkpn->gkcp",
-                    c_scaled,
-                    incoming_state_f32,
-                    preferred_element_type=acc_dtype,
-                ).astype(c.dtype)
-        elif prefix_emit_variant == PREFIX_EMIT_PRESCALED_MATMUL:
-            with jax.named_scope("prescaled_matmul"):
-                prefix_output = jnp.matmul(
-                    c_scaled,
-                    jnp.swapaxes(incoming_state_f32, -1, -2),
                     preferred_element_type=acc_dtype,
                 ).astype(c.dtype)
         else:
