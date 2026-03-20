@@ -48,37 +48,6 @@ def _partition_spec(array) -> PartitionSpec | None:
     return getattr(sharding, "spec", None)
 
 
-def _clear_mesh_axes(partition, axes_to_clear: frozenset[str]):
-    if partition is None:
-        return None
-    if isinstance(partition, tuple):
-        kept_axes = tuple(axis for axis in partition if axis not in axes_to_clear)
-        if not kept_axes:
-            return None
-        if len(kept_axes) == 1:
-            return kept_axes[0]
-        return kept_axes
-    if partition in axes_to_clear:
-        return None
-    return partition
-
-
-def _orthogonalization_target_pspec(
-    array,
-    *,
-    axes_to_clear: frozenset[str] = frozenset({"data", "model"}),
-    drop_leading_dims: int = 0,
-) -> PartitionSpec | None:
-    pspec = _partition_spec(array)
-    if pspec is None:
-        return None
-
-    partitions = tuple(pspec)
-    if drop_leading_dims:
-        partitions = partitions[drop_leading_dims:]
-    return PartitionSpec(*(_clear_mesh_axes(partition, axes_to_clear) for partition in partitions))
-
-
 def _batch_sharded_stack_target_pspec(array) -> PartitionSpec | None:
     if array is None or not hasattr(array, "shape") or array.ndim != 3:
         return None
@@ -300,51 +269,6 @@ def _match_update_sharding():
     return optax.GradientTransformation(init_fn, update_fn)
 
 
-def _zeropower_via_newtonschulz_preserve_sharding(
-    X: jax.Array,
-    steps: int = 5,
-    eps: float = 1e-7,
-    coefficient_type: CoefficientType = "quintic",
-    target_pspec: PartitionSpec | None = None,
-) -> jax.Array:
-    """Orthogonalize X without fully replicating it first.
-
-    The legacy Grug Muon path resharded each 2D update to ``P(None, None)``
-    before Newton-Schulz, which can introduce a full all-gather per matrix on
-    sharded TPU runs. Instead, reshard only to the contraction-friendly layout
-    used by the iteration and let the caller restore the final parameter layout.
-    """
-    from jax.sharding import PartitionSpec as P, reshard
-
-    coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
-    has_mesh = not jax.sharding.get_abstract_mesh().empty
-    X = X / (jnp.linalg.norm(X) + eps)
-
-    transpose = False
-    if X.shape[0] > X.shape[1]:
-        X = X.T
-        transpose = True
-
-    if target_pspec is None:
-        target_pspec = _orthogonalization_target_pspec(X)
-
-    if has_mesh and target_pspec is not None:
-        X = reshard(X, target_pspec)
-
-    gram_out_sharding = P(None, None) if has_mesh else None
-    X_out_sharding = target_pspec if (has_mesh and target_pspec is not None) else gram_out_sharding
-    for i in range(steps):
-        a, b, c = coeffs[i % len(coeffs)]
-        A = jnp.einsum("ik,jk->ij", X, X, out_sharding=gram_out_sharding)
-        B = b * A + c * jnp.einsum("ik,kj->ij", A, A, out_sharding=gram_out_sharding)
-        X = a * X + jnp.einsum("ik,kj->ij", B, X, out_sharding=X_out_sharding)
-
-    if transpose:
-        X = X.T
-
-    return X
-
-
 def _zeropower_via_newtonschulz_replicated(
     X: jax.Array,
     steps: int = 5,
@@ -361,7 +285,7 @@ def _zeropower_via_newtonschulz_replicated(
     from jax.sharding import PartitionSpec as P, reshard
 
     assert X.ndim == 2
-    del target_pspec
+    del target_pspec  # Kept for signature parity with the other Newton-Schulz helpers.
 
     coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
     has_mesh = not jax.sharding.get_abstract_mesh().empty
