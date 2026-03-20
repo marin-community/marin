@@ -4,13 +4,12 @@
 """Consolidated Platform protocol tests.
 
 Tests exercise the Platform protocol contract through parameterized fixtures
-(GCP via GcpServiceImpl DRY_RUN, Manual, Local). Platform-specific behavioral
+(GCP via GcpServiceImpl DRY_RUN, Manual). Platform-specific behavioral
 tests that cannot be expressed through the protocol are in dedicated sections.
 """
 
 from __future__ import annotations
 
-import threading
 import unittest.mock
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -29,10 +28,8 @@ from iris.cluster.platform.gcp import (
     _validate_slice_config,
 )
 from iris.cluster.platform.gcp_service_impl import GcpServiceImpl
-from iris.cluster.platform.local import LocalPlatform
 from iris.cluster.platform.manual import ManualPlatform
 from iris.cluster.platform.service_mode import ServiceMode
-from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
 
 # =============================================================================
@@ -44,7 +41,7 @@ from iris.rpc import config_pb2
 class PlatformEnv:
     """Test environment for a single Platform implementation."""
 
-    platform: GcpPlatform | ManualPlatform | LocalPlatform
+    platform: GcpPlatform | ManualPlatform
     zone: str
     name: str
     label_prefix: str
@@ -65,14 +62,9 @@ def _make_slice_config(env: PlatformEnv, group_name: str) -> config_pb2.SliceCon
         cfg.labels[labels.iris_managed] = "true"
         cfg.labels[labels.iris_scale_group] = group_name
         return cfg
-    elif env.name == "manual":
+    else:
         cfg = config_pb2.SliceConfig(name_prefix=f"iris-{group_name}", num_vms=1)
         cfg.manual.CopyFrom(config_pb2.ManualSliceConfig())
-        cfg.labels[labels.iris_managed] = "true"
-        cfg.labels[labels.iris_scale_group] = group_name
-        return cfg
-    else:
-        cfg = config_pb2.SliceConfig(name_prefix=f"test-{group_name}", num_vms=1)
         cfg.labels[labels.iris_managed] = "true"
         cfg.labels[labels.iris_scale_group] = group_name
         return cfg
@@ -84,12 +76,12 @@ def _make_vm_config(env: PlatformEnv, name: str = "test-controller") -> config_p
     if env.name == "gcp":
         cfg.gcp.zone = env.zone
         cfg.gcp.machine_type = "n2-standard-4"
-    elif env.name == "manual":
+    else:
         cfg.manual.CopyFrom(config_pb2.ManualVmConfig())
     return cfg
 
 
-@pytest.fixture(params=["gcp", "manual", "local"])
+@pytest.fixture(params=["gcp", "manual"])
 def platform_env(request) -> Iterator[PlatformEnv]:
     """Yield a PlatformEnv for each platform implementation.
 
@@ -102,16 +94,12 @@ def platform_env(request) -> Iterator[PlatformEnv]:
         gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
         platform = GcpPlatform(gcp_config, label_prefix="iris", gcp_service=gcp_service)
         yield PlatformEnv(platform=platform, zone="us-central2-b", name="gcp", label_prefix="iris")
-    elif name == "manual":
+    else:
         platform = ManualPlatform(
             label_prefix="iris",
             hosts=["10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5"],
         )
         yield PlatformEnv(platform=platform, zone="manual", name="manual", label_prefix="iris")
-    else:
-        platform = LocalPlatform("test")
-        yield PlatformEnv(platform=platform, zone="local", name="local", label_prefix="test")
-        platform.shutdown()
 
 
 # =============================================================================
@@ -180,45 +168,34 @@ def test_shutdown_completes_without_error(platform_env: PlatformEnv):
 
 
 # Tunnel and terminate have different semantics on GCP (SSH tunnel, gcloud delete)
-# so we test them on in-memory platforms only.
+# so we test them on ManualPlatform which is fully in-memory.
 
 
-@pytest.fixture(params=["manual", "local"])
-def in_memory_env(request) -> Iterator[PlatformEnv]:
-    """Platforms with fully in-memory state (no subprocess calls)."""
-    name = request.param
-    if name == "manual":
-        platform = ManualPlatform(
-            label_prefix="iris",
-            hosts=["10.0.0.1", "10.0.0.2", "10.0.0.3"],
-        )
-        yield PlatformEnv(platform=platform, zone="manual", name="manual", label_prefix="iris")
-    else:
-        platform = LocalPlatform("test")
-        yield PlatformEnv(platform=platform, zone="local", name="local", label_prefix="test")
-        platform.shutdown()
-
-
-def test_terminate_then_status_is_deleting(in_memory_env: PlatformEnv):
+def test_terminate_then_status_is_deleting():
     """After terminate(), slice status reports DELETING."""
-    cfg = _make_slice_config(in_memory_env, "term-group")
-    handle = in_memory_env.platform.create_slice(cfg)
+    platform = ManualPlatform(label_prefix="iris", hosts=["10.0.0.1", "10.0.0.2", "10.0.0.3"])
+    cfg = config_pb2.SliceConfig(name_prefix="iris-term-group", num_vms=2)
+    cfg.manual.CopyFrom(config_pb2.ManualSliceConfig())
+    cfg.labels[Labels("iris").iris_managed] = "true"
+    cfg.labels[Labels("iris").iris_scale_group] = "term-group"
+    handle = platform.create_slice(cfg)
 
     handle.terminate()
     assert handle.describe().state == CloudSliceState.DELETING
 
 
-def test_tunnel_returns_address_directly(in_memory_env: PlatformEnv):
-    """tunnel() is a passthrough on in-memory platforms (no SSH)."""
+def test_tunnel_returns_address_directly():
+    """tunnel() is a passthrough on ManualPlatform (no SSH)."""
+    platform = ManualPlatform(label_prefix="iris", hosts=["10.0.0.1"])
     addr = "http://10.0.0.1:10000"
-    with in_memory_env.platform.tunnel(addr) as tunneled:
+    with platform.tunnel(addr) as tunneled:
         assert tunneled == addr
 
 
 # =============================================================================
 # Section 2: GCP-Specific Tests
 #
-# Behaviors that only apply to GcpPlatform and need FakeGcloud.
+# Behaviors that only apply to GcpPlatform.
 # =============================================================================
 
 
@@ -558,35 +535,6 @@ def test_manual_slice_terminate_returns_hosts():
 
     handle.terminate()
     assert platform.available_host_count == 3
-
-
-# =============================================================================
-# Section 4: Local-Specific Tests
-# =============================================================================
-
-
-def test_local_shutdown_stops_thread_container():
-    """shutdown() stops the ThreadContainer and clears internal state."""
-    threads = ThreadContainer(name="test-threads")
-    platform = LocalPlatform("test", threads=threads)
-
-    started = threading.Event()
-
-    def worker(stop_event: threading.Event) -> None:
-        started.set()
-        stop_event.wait()
-
-    threads.spawn(worker, name="test-worker")
-    started.wait(timeout=5.0)
-    assert threads.is_alive
-
-    cfg_slice = config_pb2.SliceConfig(name_prefix="test", num_vms=1)
-    platform.create_slice(cfg_slice)
-    assert len(platform.list_slices(zones=["local"])) == 1
-
-    platform.shutdown()
-    assert not threads.is_alive
-    assert len(platform.list_slices(zones=["local"])) == 0
 
 
 # =============================================================================
