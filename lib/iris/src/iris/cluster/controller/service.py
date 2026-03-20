@@ -91,6 +91,9 @@ def redact_request_env_vars(
     request: cluster_pb2.Controller.LaunchJobRequest,
 ) -> cluster_pb2.Controller.LaunchJobRequest:
     """Return a copy of *request* with sensitive env var values replaced."""
+    if not request.environment.env_vars:
+        return request
+
     redacted = cluster_pb2.Controller.LaunchJobRequest()
     redacted.CopyFrom(request)
     env_vars = redacted.environment.env_vars

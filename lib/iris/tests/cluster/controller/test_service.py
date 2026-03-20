@@ -427,6 +427,22 @@ def test_get_job_status_not_found(service):
     assert "nonexistent" in exc_info.value.message
 
 
+def test_redact_request_env_vars_does_not_mutate_original():
+    """Verify redact_request_env_vars returns a copy and does not mutate the input."""
+    from iris.cluster.controller.service import REDACTED_VALUE, redact_request_env_vars
+
+    original = cluster_pb2.Controller.LaunchJobRequest(
+        name="/test-user/job",
+        entrypoint=_make_test_entrypoint(),
+        environment=cluster_pb2.EnvironmentConfig(env_vars={"WANDB_API_KEY": "secret", "SAFE": "ok"}),
+    )
+    redacted = redact_request_env_vars(original)
+
+    assert original.environment.env_vars["WANDB_API_KEY"] == "secret"
+    assert redacted.environment.env_vars["WANDB_API_KEY"] == REDACTED_VALUE
+    assert redacted.environment.env_vars["SAFE"] == "ok"
+
+
 def test_get_job_status_redacts_sensitive_env_vars(service):
     """Verify get_job_status redacts env var values whose keys match sensitive patterns."""
     from iris.cluster.controller.service import REDACTED_VALUE
