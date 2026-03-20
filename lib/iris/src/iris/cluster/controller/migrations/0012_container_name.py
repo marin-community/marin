@@ -13,7 +13,4 @@ def migrate(conn: sqlite3.Connection) -> None:
     """
     columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
     if "container_id" not in columns:
-        if "container_name" in columns:
-            conn.execute("ALTER TABLE tasks RENAME COLUMN container_name TO container_id")
-        else:
-            conn.execute("ALTER TABLE tasks ADD COLUMN container_id TEXT")
+        conn.execute("ALTER TABLE tasks ADD COLUMN container_id TEXT")
