@@ -5,7 +5,7 @@ description: Write in Marin's house style for public and internal text. Use when
 
 # Marin House Style
 
-Start here for any Marin-authored text. Keep this file as the common layer, then read the medium-specific file that matches the deliverable.
+Start here for any non-trivial Marin-authored text. Keep this file as the common layer, then read the medium-specific file that matches the deliverable.
 
 ## Read The Right File
 
@@ -60,6 +60,14 @@ deviations and flourishes that do not conflict with the core Marin values.
 - State uncertainty plainly. Use phrases like `we think`, `preliminary results suggest`, or `this seems to break down when...` when warranted.
 - Treat the reader as a capable collaborator. Do not condescend or over-explain basics.
 - Default to transparency. Include what worked, what failed, what surprised you, and what you would try next.
+- Cite the relevant prior work and artifacts. This includes Marin experiments, reports, issues, PRs, papers, and other external work when they materially inform the piece.
+
+## Add Structure For Longer-Form Writing
+
+- For longer-form writing, include an easy-to-scan doc-level TL;DR near the top.
+- For longer-form writing, add section-level takeaway lines or short TL;DRs where they help readers navigate.
+
+- Do not force these patterns into short-form media that do not benefit from them.
 
 ## Set Audience By Default
 

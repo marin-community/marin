@@ -18,12 +18,15 @@ Use this file for technical reports and research writeups.
 ## Write This Way
 
 - Lead with the result, then show how you got there, then state caveats.
+- Include a doc-level TL;DR near the top.
+- Add section-level takeaway lines when sections are long enough that readers need orientation.
 - Define non-standard or ambiguous terms briefly before relying on them.
 - Include concrete setup details, metrics, and comparison points.
 - Describe methodology at the level needed for a peer to evaluate the work, not at the level of Marin implementation internals unless those internals matter to the result.
 - Remove repo-local detail that does not help an outside researcher interpret the result.
 - Link to repo internals when they help with reproduction or provide useful context (similar to an appendix in a paper).
 - Clearly separate confirmed results from exploratory findings (e.g., label as exploratory, replicated, or stable).
+- Cite the prior work that the report builds on or compares against, including relevant Marin experiments and external papers where appropriate.
 
 ## Test
 

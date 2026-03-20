@@ -20,6 +20,9 @@ Use this file for precise reference documentation about a specific Marin compone
 - Document inputs, outputs, behavior, and constraints directly.
 - Prefer explicit behavior over narrative explanation.
 - Explain Marin-specific context only when it is required to use or interpret the documented thing.
+- Cite the relevant source artifacts for behavior, design intent, or background when they materially help readers, such as related issues, PRs, reports, or papers.
+- For longer reference docs, add section-level summary lines when they improve scanability.
+- For longer reference docs, include a short doc-level TL;DR or overview near the top.
 
 ## Test
 
