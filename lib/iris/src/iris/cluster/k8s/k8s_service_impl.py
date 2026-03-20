@@ -11,16 +11,9 @@ from __future__ import annotations
 
 import subprocess
 from datetime import UTC, datetime
-from enum import StrEnum
 
 from iris.cluster.k8s.kubectl import KubectlError, KubectlLogLine, KubectlLogResult
-
-
-class ServiceMode(StrEnum):
-    DRY_RUN = "dry_run"
-    LOCAL = "local"
-    CLOUD = "cloud"
-
+from iris.cluster.platform.service_mode import ServiceMode
 
 # Resource types that K8s recognizes in container resource requests/limits.
 VALID_RESOURCE_TYPES = frozenset(
