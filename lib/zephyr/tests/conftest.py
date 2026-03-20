@@ -87,6 +87,7 @@ def zephyr_ctx(local_client, tmp_path_factory):
         name="test-ctx",
     )
     yield ctx
+    ctx.shutdown()
 
 
 # --- Multi-backend fixtures (integration tests) ---
@@ -138,6 +139,7 @@ def integration_ctx(integration_client, tmp_path_factory):
         name="test-integration",
     )
     yield ctx
+    ctx.shutdown()
 
 
 @pytest.fixture
