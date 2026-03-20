@@ -34,6 +34,30 @@ ZEPHYR_ROOT = Path(__file__).resolve().parents[1]
 # Use Iris demo config as base
 IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "examples" / "test.yaml"
 
+ALL_BACKENDS = ["local", "iris", "ray"]
+DEFAULT_BACKENDS = ["local"]
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--zephyr-backends",
+        default=",".join(DEFAULT_BACKENDS),
+        help="Comma-separated list of backends to test: local,iris,ray (default: local)",
+    )
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "all_backends: run test on all backends regardless of --zephyr-backends")
+
+
+def _get_backends(config):
+    raw = config.getoption("--zephyr-backends", ",".join(DEFAULT_BACKENDS))
+    backends = [b.strip() for b in raw.split(",") if b.strip()]
+    for b in backends:
+        if b not in ALL_BACKENDS:
+            raise ValueError(f"Unknown backend {b!r}, must be one of {ALL_BACKENDS}")
+    return backends
+
 
 @pytest.fixture(scope="session")
 def iris_cluster():
@@ -63,19 +87,13 @@ def ray_cluster():
     # Don't shutdown - Ray will be reused across test sessions
 
 
-@pytest.fixture(params=["local", "iris", "ray"], scope="module")
-def fray_client(request):
-    """Parametrized fixture providing Local, Iris, and Ray clients.
-
-    Fixtures are requested lazily to avoid initializing Ray when running
-    Iris tests (and vice-versa), since ray.is_initialized() being true
-    causes current_client() auto-detection to pick Ray.
-    """
-    if request.param == "local":
+def _make_fray_client(request, backend):
+    """Create a fray client for the given backend."""
+    if backend == "local":
         client = LocalClient()
         yield client
         client.shutdown(wait=True)
-    elif request.param == "iris":
+    elif backend == "iris":
         from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
         from iris.cluster.types import JobName
 
@@ -83,18 +101,36 @@ def fray_client(request):
         iris_client = IrisClient.remote(iris_cluster, workspace=ZEPHYR_ROOT)
         client = FrayIrisClient.from_iris_client(iris_client)
 
-        # Set up IrisContext so actor handles can resolve
         ctx = IrisContext(job_id=JobName.root("test-user", "test"), client=iris_client)
         with iris_ctx_scope(ctx):
             yield client
         client.shutdown(wait=True)
-    elif request.param == "ray":
+    elif backend == "ray":
         request.getfixturevalue("ray_cluster")
         client = RayClient()
         yield client
         client.shutdown(wait=True)
     else:
-        raise ValueError(f"Unknown backend: {request.param}")
+        raise ValueError(f"Unknown backend: {backend}")
+
+
+def pytest_generate_tests(metafunc):
+    """Dynamically parametrize fray_client based on --zephyr-backends."""
+    if "fray_client" in metafunc.fixturenames:
+        backends = _get_backends(metafunc.config)
+        # If the test has the all_backends marker, use all backends
+        if metafunc.definition.get_closest_marker("all_backends"):
+            backends = ALL_BACKENDS
+        metafunc.parametrize("fray_client", backends, indirect=True, scope="module")
+
+
+@pytest.fixture(scope="module")
+def fray_client(request):
+    """Fray client fixture — backends selected by --zephyr-backends option.
+
+    Default: local only (fast). Pass --zephyr-backends=local,iris,ray for full coverage.
+    """
+    yield from _make_fray_client(request, request.param)
 
 
 @pytest.fixture
@@ -117,7 +153,7 @@ def sample_data():
 
 @pytest.fixture(scope="module")
 def zephyr_ctx(fray_client, tmp_path_factory):
-    """ZephyrContext running on all backends with temp chunk storage.
+    """ZephyrContext running on selected backends with temp chunk storage.
 
     Module-scoped to reuse coordinator/workers across tests in the same file.
     """
@@ -174,13 +210,13 @@ def _thread_cleanup():
     """Ensure no new non-daemon threads leak from each test.
 
     Takes a snapshot of threads before the test and checks that no new
-    non-daemon threads remain after teardown. Waits briefly for threads
-    that are in the process of shutting down.
+    non-daemon threads remain after teardown. Short timeout to avoid
+    slowing down the test suite for benign leaks.
     """
     before = {t.ident for t in threading.enumerate()}
     yield
 
-    deadline = time.monotonic() + 5.0
+    deadline = time.monotonic() + 1.0
     while time.monotonic() < deadline:
         leaked = [
             t
