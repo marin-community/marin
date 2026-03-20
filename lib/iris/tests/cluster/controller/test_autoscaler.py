@@ -1549,13 +1549,13 @@ class TestAutoscalerWaterfallEndToEnd:
         demand = make_demand_entries(1, device_type=DeviceType.CPU, device_variant=None)
 
         autoscaler.run_once(demand, {})
-        time.sleep(0.1)
+        autoscaler._wait_for_inflight()
         ts_after_fail = Timestamp.now()
         assert group_primary.availability(ts_after_fail).status == GroupAvailability.QUOTA_EXCEEDED
         assert group_fallback.slice_count() == 0
 
         autoscaler.run_once(demand, {})
-        time.sleep(0.1)
+        autoscaler._wait_for_inflight()
         assert group_fallback.slice_count() == 1
 
         time.sleep(1.1)

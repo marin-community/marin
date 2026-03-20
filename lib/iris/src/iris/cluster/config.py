@@ -1128,7 +1128,7 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
     """
     which = cluster_config.WhichOneof("provider")
     if which == "kubernetes_provider":
-        from iris.cluster.k8s.kubectl import Kubectl  # Factory site: concrete Kubectl for CLOUD mode
+        from iris.cluster.k8s.kubectl import Kubectl
 
         kp = cluster_config.kubernetes_provider
         namespace = kp.namespace or "iris"

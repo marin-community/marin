@@ -260,16 +260,16 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
         logger.info("Setting labels on GCE instance: %s", self._gce_vm_name)
         try:
             self._gcp_service.vm_update_labels(self._gce_vm_name, self._zone, labels)
-        except PlatformError:
-            logger.warning("Failed to set labels on %s", self._gce_vm_name)
+        except PlatformError as e:
+            logger.warning("Failed to set labels on %s: %s", self._gce_vm_name, e)
 
     def set_metadata(self, metadata: dict[str, str]) -> None:
         assert self._gcp_service is not None
         logger.info("Setting metadata on GCE instance: %s", self._gce_vm_name)
         try:
             self._gcp_service.vm_set_metadata(self._gce_vm_name, self._zone, metadata)
-        except PlatformError:
-            logger.warning("Failed to set metadata on %s", self._gce_vm_name)
+        except PlatformError as e:
+            logger.warning("Failed to set metadata on %s: %s", self._gce_vm_name, e)
 
 
 class GcpSliceHandle:
