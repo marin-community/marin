@@ -3,20 +3,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Orchestrate a full Iris controller restart with auth DB migration.
+"""Orchestrate a full Iris controller restart.
 
 Handles the complete restart dance:
 
   1. Take a checkpoint via BeginCheckpoint RPC
-  2. Migrate auth tables from main DB to separate auth.sqlite3
-  3. Restart the controller
-  4. Verify the new controller is healthy
+  2. Restart the controller
+  3. Verify the new controller is healthy
 
 The controller already writes checkpoints to the canonical
 ``remote_state_dir/controller-state/`` path, so no GCS copy is needed.
-
-Each step is idempotent and can be skipped individually. The auth DB
-migration is invoked as a separate process so it can also be run standalone.
+Schema migrations (including auth DB separation) run automatically on
+controller startup.
 
 Usage:
   uv run python lib/iris/scripts/migrations/controller_restart.py \
@@ -26,13 +24,9 @@ Usage:
   uv run python lib/iris/scripts/migrations/controller_restart.py \
       --config lib/iris/examples/marin.yaml --dry-run
 
-  # Checkpoint + migrate only (no restart)
+  # Checkpoint only (no restart)
   uv run python lib/iris/scripts/migrations/controller_restart.py \
       --config lib/iris/examples/marin.yaml --no-restart
-
-  # Skip auth DB migration (already done)
-  uv run python lib/iris/scripts/migrations/controller_restart.py \
-      --config lib/iris/examples/marin.yaml --skip-auth-db
 """
 
 from __future__ import annotations
@@ -50,8 +44,6 @@ import fsspec.core
 from iris.cluster.config import load_config
 
 logger = logging.getLogger("controller-restart")
-
-SCRIPTS_DIR = Path(__file__).resolve().parent
 
 
 def _run_cmd(
@@ -94,14 +86,6 @@ def _gcloud_ssh(vm: str, zone: str, project: str, command: str, timeout: float =
         timeout=timeout,
     )
     return r.stdout.strip()
-
-
-def _run_script(script_name: str, *args: str, timeout: float = 600) -> None:
-    """Run a sibling migration script as a subprocess."""
-    script_path = SCRIPTS_DIR / script_name
-    cmd = ["uv", "run", "python", str(script_path), *args]
-    click.echo(f"  Running: {' '.join(cmd)}")
-    subprocess.run(cmd, check=True, timeout=timeout)
 
 
 def _gcs_exists(path: str) -> bool:
@@ -152,9 +136,7 @@ def verify_controller_health(vm: str, zone: str, project: str, port: int, timeou
 @click.option("--config", "config_path", required=True, type=click.Path(exists=True))
 @click.option("--restart/--no-restart", default=True)
 @click.option("--dry-run", is_flag=True, default=False)
-@click.option("--skip-auth-db", is_flag=True, default=False, help="Skip auth DB migration")
 @click.option("--skip-verify", is_flag=True, default=False)
-@click.option("--local-db", type=click.Path(), default=None, help="Use local sqlite file for auth migration")
 @click.option("--project", default="hai-gcp-models")
 @click.option("--port", default=10000, type=int)
 @click.option("-v", "--verbose", is_flag=True, default=False)
@@ -162,9 +144,7 @@ def main(
     config_path: str,
     restart: bool,
     dry_run: bool,
-    skip_auth_db: bool,
     skip_verify: bool,
-    local_db: str | None,
     project: str,
     port: int,
     verbose: bool,
@@ -184,9 +164,9 @@ def main(
 
     canonical_prefix = f"{remote_state_dir.rstrip('/')}/controller-state"
 
-    # Step 0: Discover controller
+    # Step 1: Discover controller
     click.echo("=" * 60)
-    click.echo("Step 0: Discover controller VM")
+    click.echo("Step 1: Discover controller VM")
     click.echo("=" * 60)
 
     vm_info = _discover_controller_vm(project, label_prefix)
@@ -195,10 +175,10 @@ def main(
     vm_name, zone = vm_info
     click.echo(f"  VM: {vm_name} ({zone})")
 
-    # Step 1: Checkpoint
+    # Step 2: Checkpoint
     click.echo()
     click.echo("=" * 60)
-    click.echo("Step 1: Take checkpoint")
+    click.echo("Step 2: Take checkpoint")
     click.echo("=" * 60)
 
     if dry_run:
@@ -216,24 +196,6 @@ def main(
             click.echo(f"  Verified: {latest} exists")
         else:
             click.echo(f"  WARNING: {latest} not found yet")
-
-    # Step 2: Migrate auth DB
-    click.echo()
-    click.echo("=" * 60)
-    click.echo("Step 2: Migrate auth tables to separate auth.sqlite3")
-    click.echo("=" * 60)
-
-    if skip_auth_db:
-        click.echo("  Skipped (--skip-auth-db)")
-    else:
-        auth_args = ["--config", config_path, "--project", project]
-        if local_db:
-            auth_args += ["--local-db", local_db]
-        if dry_run:
-            auth_args.append("--dry-run")
-        if verbose:
-            auth_args.append("-v")
-        _run_script("auth_db.py", *auth_args)
 
     # Step 3: Restart controller
     click.echo()
