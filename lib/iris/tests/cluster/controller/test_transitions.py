@@ -10,22 +10,22 @@ They focus on:
 - Final state verification rather than intermediate steps
 """
 
-import tempfile
 import threading
-from pathlib import Path
 
 import pytest
+from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
 from iris.cluster.controller.autoscaler import DemandEntry
 from iris.cluster.controller.controller import compute_demand_entries
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     ATTEMPTS,
-    ControllerDB,
+    ENDPOINTS,
     JOBS,
     TASKS,
     TERMINAL_TASK_STATES,
-    WORKERS,
     WORKER_ATTRIBUTES,
+    WORKERS,
+    ControllerDB,
     Endpoint,
     EndpointQuery,
     Job,
@@ -34,36 +34,31 @@ from iris.cluster.controller.db import (
     _decode_attribute_rows,
     _tasks_with_attempts,
     endpoint_query_predicate,
-    ENDPOINTS,
 )
-from iris.cluster.log_store import LogStore
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.transitions import (
+    HEARTBEAT_FAILURE_THRESHOLD,
     MAX_REPLICAS_PER_JOB,
     Assignment,
     ControllerTransitions,
-    HEARTBEAT_FAILURE_THRESHOLD,
     HeartbeatApplyRequest,
+    PruneResult,
     TaskUpdate,
 )
-from iris.cluster.constraints import WellKnownAttribute, constraints_from_resources
-from iris.cluster.constraints import DeviceType
+from iris.cluster.log_store import LogStore
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
 
+from .conftest import (
+    make_controller_state as _make_state,
+    make_test_entrypoint as _make_test_entrypoint,
+    query_task as _query_task,
+)
+
 # =============================================================================
 # Test Helpers
 # =============================================================================
-
-
-def _make_state(**kwargs) -> ControllerTransitions:
-    """Create a ControllerTransitions with a fresh temp DB and log store."""
-    tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
-    db_path = tmp / "controller.sqlite3"
-    db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
-    return ControllerTransitions(db=db, log_store=log_store, **kwargs)
 
 
 def _schedulable_tasks(state: ControllerTransitions):
@@ -268,13 +263,6 @@ def fail_worker(state: ControllerTransitions, worker_id: WorkerId, error: str) -
         state.record_heartbeat_failure(worker_id, error, batch)
 
 
-def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
-    """Create a minimal RuntimeEntrypoint proto for testing."""
-    entrypoint = cluster_pb2.RuntimeEntrypoint()
-    entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    return entrypoint
-
-
 @pytest.fixture
 def job_request():
     """Create a minimal LaunchJobRequest for testing."""
@@ -336,11 +324,6 @@ def register_worker(
 def _query_job(state: ControllerTransitions, job_id: JobName) -> Job | None:
     with state._db.snapshot() as q:
         return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
-
-
-def _query_task(state: ControllerTransitions, task_id: JobName) -> Task | None:
-    with state._db.snapshot() as q:
-        return q.one(TASKS, where=TASKS.c.task_id == task_id.to_wire())
 
 
 def _query_worker(state: ControllerTransitions, worker_id: WorkerId) -> Worker | None:
@@ -597,6 +580,50 @@ def test_cancel_job_releases_committed_worker_resources(job_request, worker_meta
     # No active tasks on either worker
     assert len(_worker_running_tasks(state, w1)) == 0
     assert len(_worker_running_tasks(state, w2)) == 0
+
+
+def test_cancel_job_removes_endpoints_for_job_tree(job_request, worker_metadata):
+    state = _make_state()
+
+    parent_worker = register_worker(state, "w1", "host1:8080", worker_metadata())
+    child_worker = register_worker(state, "w2", "host2:8080", worker_metadata())
+
+    parent_tasks = submit_job(state, "parent", job_request("parent"))
+    child_req = job_request("child")
+    child_req.name = JobName.from_string("/test-user/parent/child").to_wire()
+    child_tasks = submit_job(state, "/test-user/parent/child", child_req)
+
+    dispatch_task(state, parent_tasks[0], parent_worker)
+    dispatch_task(state, child_tasks[0], child_worker)
+
+    state.add_endpoint(
+        Endpoint(
+            endpoint_id="parent-ep",
+            name="parent/actor",
+            address="host1:9000",
+            job_id=JobName.root("test-user", "parent"),
+            metadata={},
+            registered_at=Timestamp.now(),
+        ),
+        task_id=parent_tasks[0].task_id,
+    )
+    state.add_endpoint(
+        Endpoint(
+            endpoint_id="child-ep",
+            name="parent/child/actor",
+            address="host2:9000",
+            job_id=JobName.from_string("/test-user/parent/child"),
+            metadata={},
+            registered_at=Timestamp.now(),
+        ),
+        task_id=child_tasks[0].task_id,
+    )
+
+    assert len(_endpoints(state, EndpointQuery())) == 2
+
+    state.cancel_job(JobName.root("test-user", "parent"), reason="User cancelled")
+
+    assert _endpoints(state, EndpointQuery()) == []
 
 
 def test_cancelled_job_tasks_excluded_from_demand(job_request, worker_metadata):
@@ -895,8 +922,7 @@ def test_terminal_states_clean_up_endpoints(job_request, worker_metadata):
 
 
 def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
-    """Endpoints are visible for all non-terminal job states (PENDING, RUNNING, BUILDING)
-    and hidden once the job reaches a terminal state."""
+    """Endpoints associated with a task are deleted when the task reaches a terminal state."""
     state = _make_state()
 
     worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
@@ -914,9 +940,9 @@ def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
         metadata={},
         registered_at=Timestamp.now(),
     )
-    state.add_endpoint(ep)
+    state.add_endpoint(ep, task_id=task.task_id)
 
-    # Visible while pending (task may be executing before job state updates)
+    # Visible while pending
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
     # Still visible after transition to running
@@ -924,10 +950,130 @@ def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
     assert _query_job(state, job.job_id).state == cluster_pb2.JOB_STATE_RUNNING
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
-    # Not visible after completion (terminal state)
+    # Deleted when task reaches terminal state
     transition_task(state, task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
     assert _query_job(state, job.job_id).state == cluster_pb2.JOB_STATE_SUCCEEDED
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 0
+
+
+def test_endpoint_deleted_on_task_failure_with_retry(job_request, worker_metadata):
+    """Endpoints are cleaned up when a task fails even if it retries back to PENDING."""
+    state = _make_state()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("test")
+    req.max_retries_failure = 1
+    tasks = submit_job(state, "ns-1", req)
+    task = tasks[0]
+
+    dispatch_task(state, task, worker_id)
+
+    ep = Endpoint(
+        endpoint_id="ep-1",
+        name="ns-1/actor",
+        address="10.0.0.1:8080",
+        job_id=JobName.root("test-user", "ns-1"),
+        metadata={},
+        registered_at=Timestamp.now(),
+    )
+    state.add_endpoint(ep, task_id=task.task_id)
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
+
+    # Task fails but retries (goes back to PENDING)
+    transition_task(state, task.task_id, cluster_pb2.TASK_STATE_FAILED, error="crash")
+    assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_PENDING
+
+    # Stale endpoints should be deleted even though the task retried
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 0
+
+
+def test_endpoint_deleted_on_worker_failure(job_request, worker_metadata):
+    """Endpoints are cleaned up when the worker dies, even if the task retries."""
+    state = _make_state()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("test")
+    req.max_retries_preemption = 1
+    tasks = submit_job(state, "ns-1", req)
+    task = tasks[0]
+
+    dispatch_task(state, task, worker_id)
+
+    ep = Endpoint(
+        endpoint_id="ep-1",
+        name="ns-1/actor",
+        address="10.0.0.1:8080",
+        job_id=JobName.root("test-user", "ns-1"),
+        metadata={},
+        registered_at=Timestamp.now(),
+    )
+    state.add_endpoint(ep, task_id=task.task_id)
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
+
+    # Worker fails -> task retries to PENDING
+    fail_worker(state, worker_id, "Connection lost")
+    assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_PENDING
+
+    # Endpoints should be cleaned up because the worker is dead
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 0
+
+
+def test_endpoint_survives_building_state(job_request, worker_metadata):
+    """Endpoints registered during BUILDING are not deleted by subsequent BUILDING updates."""
+    state = _make_state()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("test")
+    tasks = submit_job(state, "ns-1", req)
+    task = tasks[0]
+
+    # Assign task and transition to BUILDING
+    state.queue_assignments([Assignment(task_id=task.task_id, worker_id=worker_id)])
+    task = _query_task(state, task.task_id)
+    state.apply_task_updates(
+        HeartbeatApplyRequest(
+            worker_id=worker_id,
+            worker_resource_snapshot=None,
+            updates=[
+                TaskUpdate(
+                    task_id=task.task_id,
+                    attempt_id=task.current_attempt_id,
+                    new_state=cluster_pb2.TASK_STATE_BUILDING,
+                )
+            ],
+        )
+    )
+
+    # Register endpoint during BUILDING (e.g. jax_init.py pre-registration)
+    ep = Endpoint(
+        endpoint_id="ep-1",
+        name="ns-1/actor",
+        address="10.0.0.1:8080",
+        job_id=JobName.root("test-user", "ns-1"),
+        metadata={},
+        registered_at=Timestamp.now(),
+    )
+    state.add_endpoint(ep, task_id=task.task_id)
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
+
+    # Transition to RUNNING — endpoint should survive
+    state.apply_task_updates(
+        HeartbeatApplyRequest(
+            worker_id=worker_id,
+            worker_resource_snapshot=None,
+            updates=[
+                TaskUpdate(
+                    task_id=task.task_id,
+                    attempt_id=_query_task(state, task.task_id).current_attempt_id,
+                    new_state=cluster_pb2.TASK_STATE_RUNNING,
+                )
+            ],
+        )
+    )
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
 
 def test_namespace_isolation(job_request, worker_metadata):
@@ -3069,7 +3215,7 @@ def test_snapshot_round_trip_preserves_reservation_holder():
         checkpoint_path = Path(tmpdir) / "checkpoint.sqlite3"
         state._db.backup_to(checkpoint_path)
         restored_db = ControllerDB(db_path=checkpoint_path)
-        restored_log_store = LogStore(db_path=checkpoint_path)
+        restored_log_store = LogStore(log_dir=Path(tmpdir) / "logs")
         restored_state = ControllerTransitions(db=restored_db, log_store=restored_log_store)
 
         restored_holder = _query_job(restored_state, holder_job_id)
@@ -3256,9 +3402,472 @@ def test_task_update_worker_failed_cascades_children(job_request, worker_metadat
     parent_job = _query_job(state, JobName.root("test-user", "parent"))
     assert parent_job.state == cluster_pb2.JOB_STATE_WORKER_FAILED
 
-    # Child should be killed via cascade
+    # Child should be killed via cascade — last occurrence in file
     child_task = _query_task(state, child_tasks[0].task_id)
     assert child_task.state == cluster_pb2.TASK_STATE_KILLED
 
     child_job = _query_job(state, JobName.from_string("/test-user/parent/child"))
     assert child_job.state == cluster_pb2.JOB_STATE_KILLED
+
+
+def test_endpoint_registered_after_task_terminal_is_orphaned(job_request, worker_metadata):
+    """Reproduce endpoint leak: register_endpoint succeeds for already-terminal tasks.
+
+    When a task completes, apply_task_updates deletes its endpoints. But
+    register_endpoint doesn't check task state — only attempt_id. So a slow
+    register_endpoint call arriving after the task is terminal inserts an
+    orphaned endpoint that is never cleaned up.
+    """
+    state = _make_state()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("leak")
+    tasks = submit_job(state, "leak", req)
+    task = tasks[0]
+
+    dispatch_task(state, task, worker_id)
+
+    # Task succeeds — any existing endpoints would be cleaned up here.
+    transition_task(state, task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
+    task_after = _query_task(state, task.task_id)
+    assert task_after.state == cluster_pb2.TASK_STATE_SUCCEEDED
+
+    # Now a slow register_endpoint arrives AFTER the task is terminal.
+    # This simulates the task process still alive briefly after the
+    # controller processed the terminal heartbeat.
+    ep = Endpoint(
+        endpoint_id="orphan-ep",
+        name="leak/actor",
+        address="a:1",
+        job_id=JobName.root("test-user", "leak"),
+        metadata={},
+        registered_at=Timestamp.now(),
+    )
+    state.add_endpoint(ep, task_id=task.task_id)
+
+    # BUG: The endpoint is now orphaned — the task is terminal so no
+    # future transition will clean it up.
+    leaked = _endpoints(state, EndpointQuery(exact_name="leak/actor"))
+    assert leaked == [], (
+        f"Expected no endpoints for terminal task, but found {len(leaked)}. "
+        "register_endpoint/add_endpoint must reject inserts for terminal tasks."
+    )
+
+
+# =============================================================================
+# Pruning Tests
+# =============================================================================
+def test_prune_old_terminal_jobs(job_request, worker_metadata):
+    """Terminal jobs older than retention are pruned; recent and active jobs are kept."""
+    state = _make_state()
+    wid = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    # Submit two jobs and complete them
+    old_req = job_request("old-job")
+    old_tasks = submit_job(state, "old-job", old_req)
+    dispatch_task(state, old_tasks[0], wid)
+    transition_task(state, old_tasks[0].task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
+
+    recent_req = job_request("recent-job")
+    recent_tasks = submit_job(state, "recent-job", recent_req)
+    dispatch_task(state, recent_tasks[0], wid)
+    transition_task(state, recent_tasks[0].task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
+
+    # Also submit an active (non-terminal) job
+    active_req = job_request("active-job")
+    submit_job(state, "active-job", active_req)
+
+    old_job_id = JobName.root("test-user", "old-job")
+    recent_job_id = JobName.root("test-user", "recent-job")
+    active_job_id = JobName.root("test-user", "active-job")
+
+    # Backdate old-job's finished_at_ms to epoch so it falls outside retention
+    state._db.execute(
+        "UPDATE jobs SET finished_at_ms = 1000 WHERE job_id = ?",
+        (old_job_id.to_wire(),),
+    )
+
+    # All three jobs exist
+    assert _query_job(state, old_job_id) is not None
+    assert _query_job(state, recent_job_id) is not None
+    assert _query_job(state, active_job_id) is not None
+
+    # Prune with a 1-day retention — old-job finished at ~epoch, recent-job finished just now
+    result = state.prune_old_data(
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        log_retention=Duration.from_seconds(86400),
+        txn_action_retention=Duration.from_seconds(86400),
+    )
+
+    assert result.jobs_deleted == 1
+    assert _query_job(state, old_job_id) is None  # pruned
+    assert _query_job(state, recent_job_id) is not None  # kept (recent)
+    assert _query_job(state, active_job_id) is not None  # kept (non-terminal)
+
+    # Tasks for old job should also be gone (CASCADE)
+    assert _query_task(state, old_tasks[0].task_id) is None
+
+
+def test_prune_old_inactive_workers(worker_metadata):
+    """Inactive workers with stale heartbeats are pruned; active workers are kept."""
+    state = _make_state()
+
+    # Register two workers: one healthy, one that we'll make inactive
+    active_wid = register_worker(state, "active-w", "host:8080", worker_metadata())
+    stale_wid = register_worker(state, "stale-w", "host:8081", worker_metadata())
+
+    # Mark the stale worker as unhealthy with an old heartbeat
+    state._db.execute(
+        "UPDATE workers SET healthy = 0, last_heartbeat_ms = ? WHERE worker_id = ?",
+        (1000, str(stale_wid)),
+    )
+
+    assert _query_worker(state, active_wid) is not None
+    assert _query_worker(state, stale_wid) is not None
+
+    result = state.prune_old_data(
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        log_retention=Duration.from_seconds(86400),
+        txn_action_retention=Duration.from_seconds(86400),
+    )
+
+    assert result.workers_deleted == 1
+    assert _query_worker(state, active_wid) is not None  # kept (healthy+active)
+    assert _query_worker(state, stale_wid) is None  # pruned
+
+
+def test_prune_old_logs_and_txn_actions(job_request, worker_metadata):
+    """Old logs and txn_actions are pruned by their respective retentions."""
+    state = _make_state()
+    register_worker(state, "w1", "host:8080", worker_metadata())
+
+    # Insert old logs directly
+    state._db.execute(
+        "INSERT INTO logs(key, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?)",
+        ("test-key", "test", "old log", 1000, 0),
+    )
+    state._db.execute(
+        "INSERT INTO logs(key, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?)",
+        ("test-key", "test", "recent log", Timestamp.now().epoch_ms(), 0),
+    )
+
+    # Submit a job to generate txn_actions, then backdate some
+    req = job_request("txn-test")
+    submit_job(state, "txn-test", req)
+
+    # Backdate all existing txn_actions to epoch
+    state._db.execute("UPDATE txn_actions SET created_at_ms = 1000")
+
+    old_txn_count = state._db.fetchone("SELECT COUNT(*) as c FROM txn_actions")["c"]
+    old_log_count = state._db.fetchone("SELECT COUNT(*) as c FROM logs")["c"]
+
+    assert old_txn_count > 0
+    assert old_log_count == 2
+
+    result = state.prune_old_data(
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        log_retention=Duration.from_seconds(86400),
+        txn_action_retention=Duration.from_seconds(86400),
+    )
+
+    assert result.logs_deleted == 1  # old log pruned, recent kept
+    assert result.txn_actions_deleted == old_txn_count
+
+    remaining_logs = state._db.fetchone("SELECT COUNT(*) as c FROM logs")["c"]
+    remaining_txn_actions = state._db.fetchone("SELECT COUNT(*) as c FROM txn_actions")["c"]
+
+    assert remaining_logs == 1  # only the recent log
+    # The prune itself records a new transaction with actions for the deletions
+    # it performed (logs_pruned + txn_actions_pruned). The old backdated actions
+    # are gone; only the 2 new prune-generated action rows remain.
+    assert remaining_txn_actions == 2
+
+
+def test_prune_noop_when_nothing_old():
+    """Pruning with no old data returns zero counts."""
+    state = _make_state()
+
+    result = state.prune_old_data(
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        log_retention=Duration.from_seconds(86400),
+        txn_action_retention=Duration.from_seconds(86400),
+    )
+
+    assert result == PruneResult()
+    assert result.total == 0
+
+
+# =============================================================================
+# Direct Provider Transition Tests
+# =============================================================================
+
+
+def _submit_job_direct(
+    state: ControllerTransitions,
+    job_id_str: str,
+    *,
+    replicas: int = 1,
+    max_retries_failure: int = 0,
+    max_retries_preemption: int = 0,
+) -> list[JobName]:
+    job_id = JobName.from_wire(job_id_str)
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name="test-job",
+        replicas=replicas,
+        max_retries_failure=max_retries_failure,
+        max_retries_preemption=max_retries_preemption,
+    )
+    result = state.submit_job(job_id, request, Timestamp.now())
+    return result.task_ids
+
+
+def _task_state_direct(state: ControllerTransitions, task_id: JobName) -> int:
+    with state._db.snapshot() as q:
+        tasks = q.select(TASKS, where=TASKS.c.task_id == task_id.to_wire())
+    assert len(tasks) == 1
+    return tasks[0].state
+
+
+def _task_row_direct(state: ControllerTransitions, task_id: JobName):
+    with state._db.snapshot() as q:
+        tasks = q.select(TASKS, where=TASKS.c.task_id == task_id.to_wire())
+    assert len(tasks) == 1
+    return tasks[0]
+
+
+def _run_direct_tasks(state: ControllerTransitions, task_ids: list[JobName]) -> None:
+    """Drain and transition tasks to RUNNING via direct provider."""
+    state.drain_for_direct_provider()
+    state.apply_direct_provider_updates(
+        [TaskUpdate(task_id=t, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING) for t in task_ids]
+    )
+
+
+def test_drain_pending_creates_attempt_rows():
+    """drain_for_direct_provider promotes PENDING tasks to ASSIGNED with NULL worker_id."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1")
+    task_id = task_ids[0]
+
+    batch = state.drain_for_direct_provider()
+
+    assert len(batch.tasks_to_run) == 1
+    assert batch.tasks_to_run[0].task_id == task_id.to_wire()
+    assert batch.tasks_to_run[0].attempt_id == 0
+    assert _task_state_direct(state, task_id) == cluster_pb2.TASK_STATE_ASSIGNED
+
+    # Verify attempt row was created with NULL worker_id.
+    row = state._db.fetchone(
+        "SELECT worker_id, state FROM task_attempts WHERE task_id = ? AND attempt_id = 0",
+        (task_id.to_wire(),),
+    )
+    assert row is not None
+    assert row["worker_id"] is None
+    assert int(row["state"]) == cluster_pb2.TASK_STATE_ASSIGNED
+
+
+def test_drain_skips_already_assigned():
+    """Already ASSIGNED tasks appear in running_tasks, not tasks_to_run."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1")
+    task_id = task_ids[0]
+
+    # First drain promotes to ASSIGNED.
+    batch1 = state.drain_for_direct_provider()
+    assert len(batch1.tasks_to_run) == 1
+
+    # Second drain: no new tasks to run, but task appears in running_tasks.
+    batch2 = state.drain_for_direct_provider()
+    assert len(batch2.tasks_to_run) == 0
+    assert len(batch2.running_tasks) == 1
+    assert batch2.running_tasks[0].task_id == task_id
+    assert batch2.running_tasks[0].attempt_id == 0
+
+
+def test_drain_kill_queue():
+    """Buffered kill entries are drained and deleted."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1")
+    task_id = task_ids[0]
+
+    state.buffer_direct_kill(task_id.to_wire())
+
+    batch = state.drain_for_direct_provider()
+    assert task_id.to_wire() in batch.tasks_to_kill
+
+    # Second drain should be empty (kills were consumed).
+    batch2 = state.drain_for_direct_provider()
+    assert len(batch2.tasks_to_kill) == 0
+
+
+def test_apply_running():
+    """Applying a RUNNING update transitions task from ASSIGNED to RUNNING."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1")
+    task_id = task_ids[0]
+    state.drain_for_direct_provider()
+
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING),
+        ]
+    )
+
+    assert _task_state_direct(state, task_id) == cluster_pb2.TASK_STATE_RUNNING
+
+
+def test_apply_succeeded():
+    """Applying SUCCEEDED transitions task to terminal state with exit_code=0."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1")
+    task_id = task_ids[0]
+    state.drain_for_direct_provider()
+
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING),
+        ]
+    )
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_SUCCEEDED),
+        ]
+    )
+
+    task = _task_row_direct(state, task_id)
+    assert task.state == cluster_pb2.TASK_STATE_SUCCEEDED
+    assert task.exit_code == 0
+    assert task.finished_at is not None
+
+
+def test_apply_failed_with_retry():
+    """FAILED with retries remaining returns task to PENDING."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1", max_retries_failure=1)
+    task_id = task_ids[0]
+    state.drain_for_direct_provider()
+
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING),
+        ]
+    )
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_FAILED, error="boom"),
+        ]
+    )
+
+    # Task should be PENDING again (1 failure <= 1 max_retries_failure).
+    assert _task_state_direct(state, task_id) == cluster_pb2.TASK_STATE_PENDING
+
+    # Draining again should promote it for a second attempt.
+    batch = state.drain_for_direct_provider()
+    assert len(batch.tasks_to_run) == 1
+    assert batch.tasks_to_run[0].attempt_id == 1
+
+
+def test_apply_failed_no_retry():
+    """FAILED with no retries remaining leaves task in FAILED terminal state."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1", max_retries_failure=0)
+    task_id = task_ids[0]
+    state.drain_for_direct_provider()
+
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING),
+        ]
+    )
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_FAILED, error="boom"),
+        ]
+    )
+
+    task = _task_row_direct(state, task_id)
+    assert task.state == cluster_pb2.TASK_STATE_FAILED
+    assert task.failure_count == 1
+    assert task.finished_at is not None
+
+
+def test_apply_worker_failed():
+    """WORKER_FAILED on a RUNNING task increments preemption_count and retries if allowed."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1", max_retries_preemption=1)
+    task_id = task_ids[0]
+    state.drain_for_direct_provider()
+
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING),
+        ]
+    )
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_WORKER_FAILED, error="node died"),
+        ]
+    )
+
+    # Should be retried (preemption_count=1 <= max_retries_preemption=1).
+    assert _task_state_direct(state, task_id) == cluster_pb2.TASK_STATE_PENDING
+    task = _task_row_direct(state, task_id)
+    assert task.preemption_count == 1
+
+
+def test_buffer_direct_kill():
+    """buffer_direct_kill inserts a NULL-worker_id kill entry in dispatch_queue."""
+    state = _make_state()
+    state.buffer_direct_kill("/user/job1:task-0")
+
+    row = state._db.fetchone(
+        "SELECT worker_id, kind, task_id FROM dispatch_queue WHERE task_id = ?",
+        ("/user/job1:task-0",),
+    )
+    assert row is not None
+    assert row["worker_id"] is None
+    assert row["kind"] == "kill"
+
+
+def test_cancel_job_kills_direct_provider_tasks():
+    """cancel_job includes NULL-worker_id (direct-provider) tasks in tasks_to_kill."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1", replicas=2)
+    _run_direct_tasks(state, task_ids)
+
+    result = state.cancel_job(JobName.from_wire("/user/job1"), reason="test cancel")
+
+    assert result.tasks_to_kill == set(task_ids)
+
+
+def test_kill_non_terminal_direct_provider_tasks():
+    """_kill_non_terminal_tasks includes NULL-worker_id tasks in tasks_to_kill."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1")
+    _run_direct_tasks(state, task_ids)
+
+    # Trigger via cancel_job which calls _kill_non_terminal_tasks indirectly through
+    # cascade, or call it via a job failure path. Use cancel_job for simplicity.
+    result = state.cancel_job(JobName.from_wire("/user/job1"), reason="test kill")
+
+    assert task_ids[0] in result.tasks_to_kill
+
+
+def test_max_failures_kills_direct_provider_tasks():
+    """When a task fails and triggers kill of siblings, direct-provider tasks appear in tasks_to_kill."""
+    state = _make_state()
+    task_ids = _submit_job_direct(state, "/user/job1", replicas=2, max_retries_failure=0)
+    _run_direct_tasks(state, task_ids)
+
+    # Fail one task — with max_task_failures=0 (default) this should kill the job,
+    # triggering _kill_non_terminal_tasks for the sibling.
+    result = state.apply_direct_provider_updates(
+        [TaskUpdate(task_id=task_ids[0], attempt_id=0, new_state=cluster_pb2.TASK_STATE_FAILED, error="boom")]
+    )
+
+    # The sibling task (task_ids[1]) should be in tasks_to_kill.
+    assert task_ids[1] in result.tasks_to_kill

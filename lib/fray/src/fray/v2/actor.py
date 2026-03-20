@@ -35,6 +35,19 @@ class ActorContext:
     """The name of the actor group this actor belongs to."""
 
 
+class HostedActor:
+    """An actor hosted in the current process. Holds handle + cleanup."""
+
+    def __init__(self, handle: ActorHandle, stop: Any = None):
+        self.handle = handle
+        self._stop = stop
+
+    def shutdown(self) -> None:
+        if self._stop is not None:
+            self._stop()
+            self._stop = None
+
+
 _current_actor_ctx: ContextVar[ActorContext | None] = ContextVar("actor_context", default=None)
 
 

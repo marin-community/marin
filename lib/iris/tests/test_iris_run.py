@@ -10,8 +10,7 @@ import pytest
 import yaml
 
 from iris.client import IrisClient
-from iris.cluster.config import IrisConfig, make_local_config, load_config
-from iris.cluster.manager import connect_cluster
+from iris.cluster.config import IrisConfig, connect_cluster, make_local_config, load_config
 from iris.cli.job import (
     build_resources,
     load_env_vars,

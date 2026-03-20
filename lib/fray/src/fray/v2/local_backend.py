@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import subprocess
 import threading
@@ -12,7 +13,15 @@ import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, cast
 
-from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.actor import (
+    ActorContext,
+    ActorFuture,
+    ActorGroup,
+    ActorHandle,
+    HostedActor,
+    _reset_current_actor,
+    _set_current_actor,
+)
 from fray.v2.types import (
     ActorConfig,
     BinaryEntrypoint,
@@ -110,11 +119,16 @@ class LocalClient:
                           LocalClient currently doesn't enforce unique names, so this
                           parameter has no effect but is included for API compatibility.
         """
+        # Copy the current context so that contextvars (e.g. set_current_client)
+        # propagate into the executor thread. Without this, callables that call
+        # current_client() would get a fresh auto-detected client instead of
+        # the one set by the caller.
+        ctx = contextvars.copy_context()
         entry = request.entrypoint
         if entry.callable_entrypoint is not None:
-            future = self._executor.submit(_run_callable, entry.callable_entrypoint)
+            future = self._executor.submit(ctx.run, _run_callable, entry.callable_entrypoint)
         elif entry.binary_entrypoint is not None:
-            future = self._executor.submit(_run_binary, entry.binary_entrypoint)
+            future = self._executor.submit(ctx.run, _run_binary, entry.binary_entrypoint)
         else:
             raise ValueError("JobRequest entrypoint must have either callable_entrypoint or binary_entrypoint")
 
@@ -129,6 +143,26 @@ class LocalClient:
         handle = LocalJobHandle(job_id, future)
         self._jobs.append(handle)
         return handle
+
+    def host_actor(
+        self,
+        actor_class: type,
+        *args: Any,
+        name: str,
+        actor_config: ActorConfig = ActorConfig(),
+        **kwargs: Any,
+    ) -> HostedActor:
+        """Host an actor in-process. No server to stop for LocalClient."""
+        endpoint = f"local/{name}-0"
+        handle = LocalActorHandle(endpoint)
+        ctx = ActorContext(handle=handle, index=0, group_name=name)
+        token = _set_current_actor(ctx)
+        try:
+            instance = actor_class(*args, **kwargs)
+        finally:
+            _reset_current_actor(token)
+        _local_actor_registry[endpoint] = instance
+        return HostedActor(handle)
 
     def create_actor(
         self,

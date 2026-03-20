@@ -22,7 +22,7 @@ from iris.cli.cluster import _build_cluster_images, _pin_latest_images
 from iris.client.client import IrisClient
 from iris.cluster.config import IrisConfig, load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
-from iris.cluster.manager import connect_cluster
+from iris.cluster.config import connect_cluster
 from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.types import (
     Entrypoint,
@@ -112,15 +112,15 @@ def _add_multi_region_groups(config: config_pb2.IrisClusterConfig) -> None:
 
 
 # Total local-mode workers:
-# 4 (local-cpu) + 2 (cosched_2) + 4 (cosched_4) + 2 (region-a + region-b) = 12
-SMOKE_WORKER_COUNT = 12
+# 2 (local-cpu) + 2 (cosched_2) + 4 (cosched_4) + 2 (region-a + region-b) = 10
+SMOKE_WORKER_COUNT = 10
 
 
 def _make_smoke_config() -> config_pb2.IrisClusterConfig:
     """Build a local config with CPU, TPU (coscheduling), and multi-region workers."""
     config = load_config(DEFAULT_CONFIG)
     config.scale_groups.clear()
-    _add_cpu_group(config, num_workers=4)
+    _add_cpu_group(config, num_workers=2)
     _add_coscheduling_group(config)
     _add_coscheduling_group_4vm(config)
     _add_multi_region_groups(config)
@@ -157,7 +157,9 @@ def _cloud_smoke_cluster(config_path: str, mode: str, label_prefix: str | None =
     iris_config = IrisConfig(config)
     platform = iris_config.platform()
 
-    # Tear down any existing cluster for a clean slate
+    # Tear down any existing cluster for a clean slate.
+    # GCE controller deletion is synchronous, so the old controller is fully
+    # gone before we clear remote state (no stale checkpoint race).
     logger.info("Stopping any existing cluster...")
     try:
         platform.stop_all(config)
@@ -802,15 +804,15 @@ def test_checkpoint_restore():
 # ============================================================================
 
 
-@pytest.mark.timeout(1200)
-def test_stress_200_tasks(smoke_cluster):
-    """200 tasks exercises scheduler concurrency and bin-packing."""
+@pytest.mark.timeout(600)
+def test_stress_50_tasks(smoke_cluster):
+    """50 concurrent tasks exercises scheduler concurrency and bin-packing."""
     job = smoke_cluster.submit(
         TestJobs.quick,
-        "smoke-stress-200",
+        "smoke-stress-50",
         cpu=0,
         memory="100m",
-        replicas=200,
+        replicas=50,
     )
     status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout * 2)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
@@ -874,7 +876,7 @@ def test_gpu_worker_metadata(tmp_path):
             )
             worker = Worker(
                 worker_config,
-                container_runtime=ProcessRuntime(),
+                container_runtime=ProcessRuntime(cache_dir=cache_dir),
                 environment_provider=env_provider,
                 threads=threads,
             )

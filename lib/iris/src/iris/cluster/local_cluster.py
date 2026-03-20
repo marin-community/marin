@@ -29,8 +29,8 @@ from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.controller import (
     Controller,
     ControllerConfig,
-    RpcWorkerStubFactory,
 )
+from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.vm_lifecycle import ControllerStatus
 from iris.cluster.controller.scaling_group import (
@@ -170,8 +170,8 @@ class LocalCluster:
         self._stopped = threading.Event()
         # Create temp dir for controller's bundle storage
         self._temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_controller_")
-        bundle_dir = Path(self._temp_dir.name) / "bundles"
-        bundle_dir.mkdir()
+        state_dir = Path(self._temp_dir.name) / "state"
+        state_dir.mkdir()
 
         port = self._config.controller.local.port or find_free_port()
         address = f"http://127.0.0.1:{port}"
@@ -198,7 +198,7 @@ class LocalCluster:
             config=ControllerConfig(
                 host="127.0.0.1",
                 port=port,
-                remote_state_dir=self._config.storage.remote_state_dir or f"file://{bundle_dir}",
+                remote_state_dir=self._config.storage.remote_state_dir or f"file://{state_dir}",
                 heartbeat_interval=Duration.from_seconds(0.5),
                 heartbeat_failure_threshold=self._config.controller.heartbeat_failure_threshold,
                 local_state_dir=Path(self._db_dir.name),
@@ -206,7 +206,7 @@ class LocalCluster:
                 auth_provider=auth.provider,
                 auth=auth,
             ),
-            worker_stub_factory=RpcWorkerStubFactory(),
+            provider=WorkerProvider(stub_factory=RpcWorkerStubFactory()),
             autoscaler=self._autoscaler,
             threads=controller_threads,
             db=db,

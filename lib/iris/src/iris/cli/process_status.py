@@ -3,9 +3,10 @@
 
 """CLI commands for process status, logs, and profiling.
 
-Provides ``iris process <status|logs|profile>`` with ``--worker=<id>`` to
-target a specific worker (proxied through the controller) or the controller
-itself (default).
+Provides ``iris process <status|logs|profile>`` with ``--target`` to address
+a specific process by its RPC path (e.g. ``/system/worker/<id>`` for a worker,
+``/alice/job/0`` for a task container). Omitting ``--target`` defaults to the
+controller itself.
 """
 
 
@@ -15,6 +16,8 @@ import humanfriendly
 from iris.cli.main import require_controller_url
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+
+_CONTROLLER_TARGET = "/system/process"
 
 
 def _print_status(resp: cluster_pb2.GetProcessStatusResponse, label: str) -> None:
@@ -39,18 +42,23 @@ def process_group():
 
 
 @process_group.command()
-@click.option("--worker", "-w", default=None, help="Worker ID to target (default: controller)")
+@click.option(
+    "--target",
+    "-t",
+    default=None,
+    help="RPC target path, e.g. /system/worker/<id> or /alice/job/0 (default: controller)",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
-def status(ctx, worker: str | None, as_json: bool):
+def status(ctx, target: str | None, as_json: bool):
     """Show process status (host info, resource usage)."""
     from google.protobuf import json_format
 
     url = require_controller_url(ctx)
     client = ControllerServiceClientSync(url)
-    target = f"/system/worker/{worker}" if worker else ""
-    resp = client.get_process_status(cluster_pb2.GetProcessStatusRequest(max_log_lines=0, target=target))
-    label = f"Worker {worker}" if worker else "Controller"
+    label = target or "Controller"
+    # GetProcessStatus uses empty string for controller
+    resp = client.get_process_status(cluster_pb2.GetProcessStatusRequest(max_log_lines=0, target=target or ""))
     if as_json:
         click.echo(json_format.MessageToJson(resp.process_info, preserving_proto_field_name=True, indent=2))
     else:
@@ -58,22 +66,25 @@ def status(ctx, worker: str | None, as_json: bool):
 
 
 @process_group.command()
-@click.option("--worker", "-w", default=None, help="Worker ID to target (default: controller)")
+@click.option(
+    "--target",
+    "-t",
+    default=None,
+    help="RPC target path, e.g. /system/worker/<id> (default: controller)",
+)
 @click.option("--level", default="", help="Minimum log level (DEBUG/INFO/WARNING/ERROR/CRITICAL)")
 @click.option("--follow", "-f", is_flag=True, help="Stream logs continuously")
 @click.option("--max-lines", default=200, help="Max lines to show")
 @click.option("--substring", default="", help="Substring filter")
 @click.pass_context
-def logs(ctx, worker: str | None, level: str, follow: bool, max_lines: int, substring: str):
+def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, substring: str):
     """Show process logs."""
     import time
     from datetime import datetime, timezone
 
     url = require_controller_url(ctx)
     client = ControllerServiceClientSync(url)
-
-    # Use /system/worker/<id> as the log source so the controller proxies to the worker
-    source = f"/system/worker/{worker}" if worker else "/system/process"
+    source = target or _CONTROLLER_TARGET
 
     cursor = 0
     first = True
@@ -105,19 +116,37 @@ def logs(ctx, worker: str | None, level: str, follow: bool, max_lines: int, subs
 
 
 @process_group.command()
-@click.option("--worker", "-w", default=None, help="Worker ID to target (default: controller)")
+@click.option(
+    "--target",
+    "-t",
+    default=None,
+    help="RPC target path, e.g. /system/worker/<id> or /alice/job/0 (default: controller)",
+)
 @click.argument("profiler", type=click.Choice(["threads", "cpu", "mem"]))
 @click.option("--duration", "-d", default=10, help="Profiling duration in seconds")
 @click.option("--output", "-o", default=None, help="Output file path")
+@click.option("--locals", "include_locals", is_flag=True, help="Include local variables in thread dump")
 @click.pass_context
-def profile(ctx, worker: str | None, profiler: str, duration: int, output: str | None):
-    """Profile the process (threads, cpu, or mem)."""
+def profile(
+    ctx,
+    target: str | None,
+    profiler: str,
+    duration: int,
+    output: str | None,
+    include_locals: bool,
+):
+    """Profile the process (threads, cpu, or mem).
+
+    By default profiles the controller. Use --target with the full RPC path:
+    /system/worker/<id> for a worker, /alice/job/0 for a task container.
+    """
     url = require_controller_url(ctx)
     client = ControllerServiceClientSync(url)
+    rpc_target = target or _CONTROLLER_TARGET
+    label = target or "Controller"
 
-    # Build profile type
     if profiler == "threads":
-        profile_type = cluster_pb2.ProfileType(threads=cluster_pb2.ThreadsProfile())
+        profile_type = cluster_pb2.ProfileType(threads=cluster_pb2.ThreadsProfile(locals=include_locals))
     elif profiler == "cpu":
         profile_type = cluster_pb2.ProfileType(cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.SPEEDSCOPE))
     elif profiler == "mem":
@@ -127,14 +156,10 @@ def profile(ctx, worker: str | None, profiler: str, duration: int, output: str |
     else:
         raise click.ClickException(f"Unknown profiler type: {profiler}")
 
-    # Target: /system/worker/<id> for workers, /system/process for controller
-    target = f"/system/worker/{worker}" if worker else "/system/process"
-    label = f"Worker {worker}" if worker else "Controller"
-
     click.echo(f"Profiling {label} ({profiler}, {duration}s)...")
     resp = client.profile_task(
         cluster_pb2.ProfileTaskRequest(
-            target=target,
+            target=rpc_target,
             duration_seconds=duration,
             profile_type=profile_type,
         )
@@ -151,7 +176,8 @@ def profile(ctx, worker: str | None, profiler: str, duration: int, output: str |
         click.echo(resp.profile_data.decode("utf-8"))
     else:
         ext = {"cpu": ".speedscope.json", "mem": ".html"}[profiler]
-        default_name = f"profile-{profiler}-{label.lower().replace(' ', '-')}{ext}"
+        safe_label = label.lower().replace(" ", "-").replace("/", "-").strip("-")
+        default_name = f"profile-{profiler}-{safe_label}{ext}"
         with open(default_name, "wb") as f:
             f.write(resp.profile_data)
         click.echo(f"Profile written to {default_name}")

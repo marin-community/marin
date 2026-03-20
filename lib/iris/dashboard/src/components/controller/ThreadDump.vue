@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, onMounted, computed, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { controllerRpcCall, workerRpcCall } from '@/composables/useRpc'
 import PageShell from '@/components/layout/PageShell.vue'
 
 const route = useRoute()
+const router = useRouter()
 
 // Derive the RPC target from route params/path.
 // Backend target conventions:
@@ -50,6 +51,11 @@ const threadDump = ref('')
 const loading = ref(false)
 const error = ref<string | null>(null)
 const lastFetched = ref<string | null>(null)
+const includeLocals = ref(route.query.locals === '1')
+
+watch(includeLocals, (val) => {
+  router.replace({ query: { ...route.query, locals: val ? '1' : undefined } })
+})
 
 async function fetchThreadDump() {
   const t = target.value
@@ -63,7 +69,7 @@ async function fetchThreadDump() {
     const body = {
       target: t,
       durationSeconds: 10,
-      profileType: { threads: {} },
+      profileType: { threads: { locals: includeLocals.value } },
     }
     const resp = await rpcCall.value<{ profileData?: string; error?: string }>('ProfileTask', body)
     if (resp.error) {
@@ -95,6 +101,14 @@ onMounted(fetchThreadDump)
       >
         {{ loading ? '⏳ Fetching...' : '↻ Refresh' }}
       </button>
+      <label class="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer select-none">
+        <input
+          v-model="includeLocals"
+          type="checkbox"
+          class="rounded border-surface-border"
+        />
+        Include locals
+      </label>
       <span v-if="lastFetched" class="text-xs text-text-muted">
         Last fetched: {{ lastFetched }}
       </span>

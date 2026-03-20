@@ -173,8 +173,8 @@ in `CoreweavePlatform`):
 |----------|---------|
 | `iris` Namespace | Isolation for all Iris resources |
 | `iris-controller` ServiceAccount | In-cluster K8s API auth for controller and worker Pods |
-| `iris-controller` ClusterRole | API permissions (see below) |
-| `iris-controller` ClusterRoleBinding | Binds ServiceAccount to ClusterRole |
+| `iris-controller-{namespace}` ClusterRole | API permissions (see below). Namespace-qualified to support multiple Iris instances on the same CKS cluster. |
+| `iris-controller-{namespace}` ClusterRoleBinding | Binds ServiceAccount to ClusterRole. Namespace-qualified to avoid collisions. |
 
 **ClusterRole permissions**:
 
@@ -364,7 +364,7 @@ The platform detects fatal errors before the full timeout expires:
 `CoreweavePlatform.start_controller()` orchestrates the full startup sequence.
 See `lib/iris/src/iris/cluster/platform/coreweave.py`.
 
-1. Apply RBAC prerequisites (Namespace, ServiceAccount, ClusterRole, ClusterRoleBinding)
+1. Apply RBAC prerequisites (Namespace, ServiceAccount, ClusterRole `iris-controller-{ns}`, ClusterRoleBinding `iris-controller-{ns}`)
 2. Create S3 credentials Secret (if S3 storage configured)
 3. Apply ConfigMap with cluster config
 4. Create/reconcile all shared NodePools in parallel via `ensure_nodepools()`
@@ -418,7 +418,10 @@ ConfigMap. All Pods in a slice must reach Ready before the slice is usable.
 ### Configuration
 
 Define a scale group with `num_vms > 1` in the cluster config. The
-`slice_template.num_vms` must match the top-level `num_vms`:
+`slice_template.num_vms` must match the top-level `num_vms`. For CoreWeave GPU
+groups, define at least one topology label in `worker.attributes`; use
+`same-slice` to discover the leader pod's node label value and pin follower
+pods to that same topology domain:
 
 ```yaml
 scale_groups:
@@ -435,6 +438,7 @@ scale_groups:
       attributes:
         region: US-WEST-04A
         pool: h100-16x
+        backend.coreweave.cloud/superpod: same-slice
     min_slices: 0
     max_slices: 1
     priority: 50
@@ -447,9 +451,9 @@ scale_groups:
 
 ### Submitting multi-replica jobs
 
-Jobs targeting a multi-VM group must use coscheduling so all replicas land on
-workers in the same pool. Include `ports=["jax"]` so Iris allocates a named
-port for JAX coordinator discovery:
+Jobs targeting a multi-VM CoreWeave GPU group should use coscheduling so all
+replicas are launched together. Include `ports=["jax"]` so Iris allocates a
+named port for JAX coordinator discovery:
 
 ```python
 from iris.sdk import IrisClient, CoschedulingConfig
@@ -474,9 +478,11 @@ by polling.
 
 ### Requirements
 
-- **Coscheduling is mandatory**: Without `CoschedulingConfig(group_by="pool")`,
-  replicas may land on workers from different scale groups, which lack
-  InfiniBand connectivity.
+- **Coscheduling is mandatory for multi-host GPU groups**: replicas must
+  launch together on workers from the same CoreWeave pool.
+- **Topology labels are mandatory for multi-host GPU groups**: set at least one
+  CoreWeave topology key in `worker.attributes`, such as
+  `backend.coreweave.cloud/superpod: same-slice`.
 - **hostNetwork anti-affinity**: Because worker Pods use `hostNetwork: true`,
   two Pods binding the same port cannot schedule on the same node. This
   provides implicit anti-affinity — no explicit `podAntiAffinity` rule needed.

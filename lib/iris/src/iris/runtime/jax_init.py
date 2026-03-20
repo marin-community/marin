@@ -4,7 +4,7 @@
 """JAX distributed initialization via Iris endpoint registry.
 
 Task 0 registers its coordinator address; tasks 1..N-1 poll for it.
-Single-task jobs skip coordination entirely.
+Single-task jobs skip distributed init entirely — JAX defaults suffice.
 
 JAX is imported at call time — iris does not depend on jax.
 """
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import atexit
 import logging
+import os
 
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
@@ -20,6 +21,41 @@ from iris.cluster.client.job_info import get_job_info
 from iris.time_utils import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
+
+_JAX_ENV_KEYS = (
+    "IRIS_TASK_ID",
+    "IRIS_NUM_TASKS",
+    "IRIS_PORT_jax",
+    "JAX_COORDINATOR_ADDRESS",
+    "JAX_COORDINATOR_BIND_ADDRESS",
+    "JAX_LOCAL_DEVICE_IDS",
+    "JAX_PROCESS_COUNT",
+    "JAX_PROCESS_INDEX",
+)
+
+
+def _log_jax_bootstrap_inputs(job_info, *, port: int, endpoint_name: str) -> None:
+    env_snapshot = {key: os.environ.get(key, "") for key in _JAX_ENV_KEYS if key in os.environ}
+    if job_info is None:
+        logger.info(
+            "initialize_jax bootstrap inputs: job_info=None endpoint_name=%s port=%s env=%s",
+            endpoint_name,
+            port,
+            env_snapshot or "none",
+        )
+        return
+
+    logger.info(
+        "initialize_jax bootstrap inputs: task_index=%s num_tasks=%s advertise_host=%s ports=%s endpoint_name=%s "
+        "requested_port=%s env=%s",
+        job_info.task_index,
+        job_info.num_tasks,
+        job_info.advertise_host,
+        dict(job_info.ports),
+        endpoint_name,
+        port,
+        env_snapshot or "none",
+    )
 
 
 def _poll_for_coordinator(
@@ -51,7 +87,7 @@ def _poll_for_coordinator(
             return True
         return False
 
-    backoff = ExponentialBackoff(initial=poll_interval)
+    backoff = ExponentialBackoff(initial=poll_interval, maximum=max(poll_interval, 30.0))
     backoff.wait_until_or_raise(
         _check,
         timeout=Duration.from_seconds(timeout),
@@ -68,12 +104,16 @@ def initialize_jax(
 ) -> None:
     """Initialize JAX distributed runtime using Iris endpoint discovery.
 
-    For multi-task jobs, task 0 registers its coordinator address via the Iris
-    endpoint registry, and tasks 1..N-1 poll until they discover it. All tasks
-    then call jax.distributed.initialize with the coordinator address.
+    For multi-task GPU jobs, task 0 registers its coordinator address via the
+    Iris endpoint registry, and tasks 1..N-1 poll until they discover it. All
+    tasks then call jax.distributed.initialize with the coordinator address.
 
     For single-task jobs (or when not running inside an Iris job),
-    jax.distributed.initialize() is called with defaults.
+    initialization is skipped — JAX works correctly without distributed
+    init when there is only one process.
+
+    On TPU, JAX handles distributed init natively via the TPU runtime —
+    calling jax.distributed.initialize would conflict, so this is a no-op.
 
     Args:
         port: Coordinator port. Overridden by IRIS_PORT_jax if allocated.
@@ -85,9 +125,21 @@ def initialize_jax(
     """
     import jax
 
+    # TPU has its own distributed init via the TPU runtime; skip the
+    # coordinator dance entirely to avoid conflicts.
+    if os.environ.get("PJRT_DEVICE", "").upper() == "TPU" or os.environ.get("JAX_PLATFORMS", "") == "tpu":
+        logger.info("TPU detected; skipping Iris JAX distributed init (TPU runtime handles it)")
+        return
+
     job_info = get_job_info()
-    if job_info is None or job_info.num_tasks <= 1:
-        jax.distributed.initialize()
+    _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
+    if job_info is None:
+        return
+
+    if job_info.num_tasks <= 1:
+        bound_port = job_info.ports.get("jax", port)
+        coordinator = f"{job_info.advertise_host}:{bound_port}"
+        jax.distributed.initialize(coordinator, num_processes=1, process_id=0)
         return
 
     ctx = iris_ctx()

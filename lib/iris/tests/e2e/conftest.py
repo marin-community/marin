@@ -12,12 +12,12 @@ stale worker state or chaos bleed. Chaos state is also reset per-test via an
 autouse fixture.
 """
 
+import fcntl
 import logging
 import os
 import shutil
 import subprocess
 import time
-import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,9 +25,7 @@ from pathlib import Path
 import pytest
 from iris.chaos import reset_chaos
 from iris.client.client import IrisClient, Job
-from iris.cluster.config import load_config, make_local_config
-from iris.cluster.manager import connect_cluster
-from iris.cluster.runtime.kubernetes import KubernetesRuntime
+from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.constraints import Constraint, WellKnownAttribute
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -48,16 +46,28 @@ DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _ensure_dashboard_built():
-    """Build dashboard assets once per session so dashboard tests have content to render."""
+def _ensure_dashboard_built(tmp_path_factory):
+    """Build dashboard assets once per session so dashboard tests have content to render.
+
+    With pytest-xdist each worker gets its own session fixture, so all 8 workers
+    race to run ``npm ci`` in the same directory — corrupting node_modules.
+    A filelock serialises this so only one worker installs at a time.
+    """
     dashboard_dir = IRIS_ROOT / "dashboard"
     if not (dashboard_dir / "package.json").exists():
         return
     if shutil.which("npm") is None:
         logging.getLogger(__name__).warning("npm not found, skipping dashboard build for tests")
         return
-    subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True, capture_output=True)
-    subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, check=True, capture_output=True)
+
+    lock_path = tmp_path_factory.getbasetemp().parent / "dashboard_build.lock"
+    with open(lock_path, "w") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True, capture_output=True)
+            subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, check=True, capture_output=True)
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
 
 def pytest_addoption(parser):
@@ -516,83 +526,3 @@ def wait_for_dashboard_ready(page) -> None:
         "}",
         timeout=30000,
     )
-
-
-# ---------------------------------------------------------------------------
-# Kubernetes fixtures (for tests against real K8s: kind, k3d, minikube, etc.)
-# ---------------------------------------------------------------------------
-
-KIND_CLUSTER_NAME = "iris-test"
-
-
-def _cluster_reachable() -> bool:
-    try:
-        result = subprocess.run(["kubectl", "cluster-info"], capture_output=True, timeout=10)
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
-
-
-@pytest.fixture(scope="session")
-def k8s_cluster():
-    """Ensure a K8s cluster is available for the test session.
-
-    If a cluster is already reachable, uses it as-is. Otherwise, creates a
-    kind cluster and tears it down at the end of the session.
-    """
-    if shutil.which("kubectl") is None:
-        pytest.skip("kubectl not in PATH (install: brew install kubectl)")
-
-    if _cluster_reachable():
-        yield
-        return
-
-    if shutil.which("kind") is None:
-        pytest.skip("no reachable K8s cluster and kind not in PATH (install: brew install kind)")
-
-    subprocess.run(
-        ["kind", "create", "cluster", "--name", KIND_CLUSTER_NAME],
-        check=True,
-        timeout=120,
-    )
-    try:
-        yield
-    finally:
-        subprocess.run(
-            ["kind", "delete", "cluster", "--name", KIND_CLUSTER_NAME],
-            capture_output=True,
-            timeout=60,
-        )
-
-
-@pytest.fixture
-def k8s_runtime(k8s_cluster):
-    """KubernetesRuntime with an ephemeral namespace, torn down after each test."""
-    namespace = f"iris-test-{uuid.uuid4().hex[:8]}"
-    subprocess.run(
-        ["kubectl", "create", "namespace", namespace],
-        check=True,
-        capture_output=True,
-    )
-    # Wait for K8s to provision the default ServiceAccount in the new namespace.
-    # Without this, pod creation fails with "serviceaccount default not found".
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        result = subprocess.run(
-            ["kubectl", "-n", namespace, "get", "serviceaccount", "default"],
-            capture_output=True,
-        )
-        if result.returncode == 0:
-            break
-        time.sleep(0.5)
-    else:
-        pytest.skip(f"default ServiceAccount not ready in namespace {namespace} after 30s")
-    runtime = KubernetesRuntime(namespace=namespace)
-    try:
-        yield runtime
-    finally:
-        runtime.cleanup()
-        subprocess.run(
-            ["kubectl", "delete", "namespace", namespace, "--ignore-not-found"],
-            capture_output=True,
-        )
