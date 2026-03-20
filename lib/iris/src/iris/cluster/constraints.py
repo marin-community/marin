@@ -119,6 +119,31 @@ class AttributeValue:
         return AttributeValue("")
 
 
+class ConstraintMode(IntEnum):
+    """Whether a constraint is required (hard) or preferred (soft).
+
+    REQUIRED constraints filter workers: non-matching workers are excluded.
+    PREFERRED constraints rank workers: matching workers are preferred but
+    non-matching workers are still eligible.
+    """
+
+    REQUIRED = 0
+    PREFERRED = 1
+
+    def to_proto(self) -> cluster_pb2.ConstraintMode:
+        mapping = {
+            ConstraintMode.REQUIRED: cluster_pb2.CONSTRAINT_MODE_REQUIRED,
+            ConstraintMode.PREFERRED: cluster_pb2.CONSTRAINT_MODE_PREFERRED,
+        }
+        return mapping[self]
+
+    @staticmethod
+    def from_proto(proto_mode: int) -> ConstraintMode:
+        if proto_mode == cluster_pb2.CONSTRAINT_MODE_PREFERRED:
+            return ConstraintMode.PREFERRED
+        return ConstraintMode.REQUIRED
+
+
 class ConstraintOp(IntEnum):
     """Constraint operators for worker attribute matching.
 
@@ -184,10 +209,15 @@ class Constraint:
     op: ConstraintOp
     value: str | int | float | None = None
     values: tuple[str | int | float, ...] | None = None
+    mode: ConstraintMode = ConstraintMode.REQUIRED
+
+    @property
+    def is_preferred(self) -> bool:
+        return self.mode == ConstraintMode.PREFERRED
 
     def to_proto(self) -> cluster_pb2.Constraint:
         """Convert to protobuf representation."""
-        proto = cluster_pb2.Constraint(key=self.key, op=self.op.to_proto())
+        proto = cluster_pb2.Constraint(key=self.key, op=self.op.to_proto(), mode=self.mode.to_proto())
         if self.value is not None:
             proto.value.CopyFrom(AttributeValue(self.value).to_proto())
         if self.values is not None:
@@ -199,13 +229,14 @@ class Constraint:
     def from_proto(proto: cluster_pb2.Constraint) -> Constraint:
         """Convert from protobuf representation."""
         op = ConstraintOp(proto.op)
+        mode = ConstraintMode.from_proto(proto.mode)
         value: str | int | float | None = None
         if proto.HasField("value"):
             value = AttributeValue.from_proto(proto.value).value
         values: tuple[str | int | float, ...] | None = None
         if proto.values:
             values = tuple(AttributeValue.from_proto(v).value for v in proto.values)
-        return Constraint(key=proto.key, op=op, value=value, values=values)
+        return Constraint(key=proto.key, op=op, value=value, values=values, mode=mode)
 
 
 # ---------------------------------------------------------------------------
@@ -213,9 +244,16 @@ class Constraint:
 # ---------------------------------------------------------------------------
 
 
-def preemptible_constraint(preemptible: bool = True) -> Constraint:
-    """Constraint requiring workers to be preemptible (or not)."""
-    return Constraint(key=WellKnownAttribute.PREEMPTIBLE, op=ConstraintOp.EQ, value=str(preemptible).lower())
+def preemptible_constraint(preemptible: bool = True, preferred: bool = False) -> Constraint:
+    """Constraint requiring (or preferring) workers to be preemptible (or not).
+
+    Args:
+        preemptible: Whether to match preemptible or non-preemptible workers.
+        preferred: If True, the constraint is soft — matching workers are
+            preferred but non-matching workers are still eligible.
+    """
+    mode = ConstraintMode.PREFERRED if preferred else ConstraintMode.REQUIRED
+    return Constraint(key=WellKnownAttribute.PREEMPTIBLE, op=ConstraintOp.EQ, value=str(preemptible).lower(), mode=mode)
 
 
 def zone_constraint(zone: str) -> Constraint:
@@ -872,6 +910,41 @@ def routing_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> list[c
             continue
         result.append(c)
     return result
+
+
+def split_hard_soft(
+    constraints: Sequence[cluster_pb2.Constraint],
+) -> tuple[list[cluster_pb2.Constraint], list[cluster_pb2.Constraint]]:
+    """Split proto constraints into (hard, soft) lists based on mode.
+
+    Hard (REQUIRED) constraints filter candidates; soft (PREFERRED) constraints
+    only influence ranking.
+    """
+    hard: list[cluster_pb2.Constraint] = []
+    soft: list[cluster_pb2.Constraint] = []
+    for c in constraints:
+        if c.mode == cluster_pb2.CONSTRAINT_MODE_PREFERRED:
+            soft.append(c)
+        else:
+            hard.append(c)
+    return hard, soft
+
+
+def soft_constraint_score(
+    entity_attrs: dict[str, AttributeValue],
+    soft_constraints: Sequence[cluster_pb2.Constraint],
+) -> int:
+    """Count how many soft constraints an entity satisfies.
+
+    Higher score means better match. Used to rank candidates when soft
+    constraints are present.
+    """
+    score = 0
+    for c in soft_constraints:
+        attr = entity_attrs.get(c.key)
+        if evaluate_constraint(attr, c):
+            score += 1
+    return score
 
 
 # ---------------------------------------------------------------------------

@@ -28,6 +28,8 @@ from iris.cluster.constraints import (
     WellKnownAttribute,
     check_resource_fit,
     evaluate_constraint,
+    soft_constraint_score,
+    split_hard_soft,
 )
 from iris.cluster.types import (
     JobName,
@@ -412,6 +414,28 @@ class SchedulingResult:
     assignments: list[tuple[JobName, WorkerId]] = field(default_factory=list)
 
 
+def _rank_by_soft_score(
+    candidate_ids: set[WorkerId],
+    soft_constraints: list[cluster_pb2.Constraint],
+    context: SchedulingContext,
+) -> list[WorkerId]:
+    """Sort candidate workers by soft-constraint satisfaction (descending).
+
+    Workers satisfying more soft constraints are tried first. Workers with the
+    same score retain arbitrary (set) order.
+    """
+    scored: list[tuple[int, WorkerId]] = []
+    for wid in candidate_ids:
+        cap = context.capacities.get(wid)
+        if cap is None:
+            continue
+        score = soft_constraint_score(dict(cap.attributes), soft_constraints)
+        scored.append((score, wid))
+    # Sort descending by score so preferred workers are tried first
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return [wid for _, wid in scored]
+
+
 class Scheduler:
     """Computes optimal task-to-worker assignments based on constraints and capacity.
 
@@ -453,11 +477,18 @@ class Scheduler:
         if not context.capacities:
             return TaskScheduleResult(task_id=task_id, failure_reason="No healthy workers available")
 
-        constraints = list(req.constraints)
+        all_constraints = list(req.constraints)
+        hard_constraints, soft_constraints = split_hard_soft(all_constraints)
 
-        # Use posting lists for fast constraint matching (device type/variant
-        # are matched via constraints, not bespoke device matching)
-        candidate_ids = context.matching_workers(constraints)
+        # Use posting lists for fast constraint matching on hard constraints only.
+        # Soft (PREFERRED) constraints do not filter — they only influence
+        # candidate ranking so that preferred workers are tried first.
+        candidate_ids = context.matching_workers(hard_constraints)
+
+        # When soft constraints are present, sort candidates so workers
+        # satisfying more soft constraints are tried first.
+        if soft_constraints:
+            candidate_ids = _rank_by_soft_score(candidate_ids, soft_constraints, context)
 
         # Cheap mode: try all matching workers, no detailed rejection tracking
         if not collect_details:
@@ -524,18 +555,18 @@ class Scheduler:
                 reason_lines.append(f"{sample} - {count} worker(s)")
 
             failure_reason = "\n".join(reason_lines)
-            if constraints:
-                constraint_keys = [c.key for c in constraints]
+            if hard_constraints:
+                constraint_keys = [c.key for c in hard_constraints]
                 failure_reason = f"{failure_reason}\n(with constraints={constraint_keys})"
             return TaskScheduleResult(task_id=task_id, failure_reason=failure_reason)
 
-        if constraints:
+        if hard_constraints:
             return TaskScheduleResult(
                 task_id=task_id,
                 failure_reason=(
                     f"No worker matches constraints and has sufficient resources "
                     f"(need cpu={res.cpu_millicores / 1000:g} cores, memory={res.memory_bytes}, "
-                    f"constraints={[c.key for c in constraints]})"
+                    f"constraints={[c.key for c in hard_constraints]})"
                 ),
             )
         return TaskScheduleResult(

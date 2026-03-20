@@ -8,6 +8,7 @@ import pytest
 from iris.cluster.constraints import (
     AttributeValue,
     Constraint,
+    ConstraintMode,
     ConstraintOp,
     DeviceType,
     INHERITED_CONSTRAINT_KEYS,
@@ -21,6 +22,8 @@ from iris.cluster.constraints import (
     extract_placement_requirements,
     preemptible_constraint,
     routing_constraints,
+    soft_constraint_score,
+    split_hard_soft,
 )
 from iris.rpc import cluster_pb2
 
@@ -237,3 +240,91 @@ def test_infer_preemptible_constraint_noop_for_gpu():
     resources = _make_resources(device="gpu")
     result = infer_preemptible_constraint(resources, replicas=1, existing_constraints=[])
     assert result is None
+
+
+# --- ConstraintMode and soft constraints ---
+
+
+def test_constraint_mode_default_is_required():
+    c = Constraint(key="region", op=ConstraintOp.EQ, value="us-central1")
+    assert c.mode == ConstraintMode.REQUIRED
+    assert not c.is_preferred
+
+
+def test_constraint_mode_preferred():
+    c = Constraint(key="preemptible", op=ConstraintOp.EQ, value="true", mode=ConstraintMode.PREFERRED)
+    assert c.is_preferred
+    assert c.mode == ConstraintMode.PREFERRED
+
+
+def test_constraint_mode_proto_roundtrip():
+    c = Constraint(key="preemptible", op=ConstraintOp.EQ, value="true", mode=ConstraintMode.PREFERRED)
+    proto = c.to_proto()
+    assert proto.mode == cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    restored = Constraint.from_proto(proto)
+    assert restored.mode == ConstraintMode.PREFERRED
+    assert restored == c
+
+
+def test_constraint_mode_proto_roundtrip_required():
+    c = Constraint(key="region", op=ConstraintOp.EQ, value="us-central1")
+    proto = c.to_proto()
+    assert proto.mode == cluster_pb2.CONSTRAINT_MODE_REQUIRED
+    restored = Constraint.from_proto(proto)
+    assert restored.mode == ConstraintMode.REQUIRED
+
+
+def test_preemptible_constraint_preferred_kwarg():
+    c = preemptible_constraint(True, preferred=True)
+    assert c.mode == ConstraintMode.PREFERRED
+    assert c.value == "true"
+
+    c2 = preemptible_constraint(True)
+    assert c2.mode == ConstraintMode.REQUIRED
+
+
+def test_split_hard_soft():
+    hard = _eq_constraint("region", "us-central1")
+    soft = cluster_pb2.Constraint(
+        key="preemptible",
+        op=cluster_pb2.CONSTRAINT_OP_EQ,
+        mode=cluster_pb2.CONSTRAINT_MODE_PREFERRED,
+    )
+    soft.value.string_value = "true"
+    hard_list, soft_list = split_hard_soft([hard, soft])
+    assert len(hard_list) == 1
+    assert hard_list[0].key == "region"
+    assert len(soft_list) == 1
+    assert soft_list[0].key == "preemptible"
+
+
+def test_split_hard_soft_all_required():
+    c1 = _eq_constraint("region", "us-central1")
+    c2 = _eq_constraint("device-type", "tpu")
+    hard_list, soft_list = split_hard_soft([c1, c2])
+    assert len(hard_list) == 2
+    assert len(soft_list) == 0
+
+
+def test_soft_constraint_score_counts_matches():
+    attrs = {
+        "preemptible": AttributeValue("true"),
+        "region": AttributeValue("us-central1"),
+    }
+    soft1 = _eq_constraint("preemptible", "true")
+    soft1.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    soft2 = _eq_constraint("region", "eu-west1")
+    soft2.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    # Only preemptible matches
+    assert soft_constraint_score(attrs, [soft1, soft2]) == 1
+    # Both match
+    soft2_match = _eq_constraint("region", "us-central1")
+    soft2_match.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    assert soft_constraint_score(attrs, [soft1, soft2_match]) == 2
+
+
+def test_soft_constraint_score_zero_when_no_match():
+    attrs = {"preemptible": AttributeValue("false")}
+    soft = _eq_constraint("preemptible", "true")
+    soft.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    assert soft_constraint_score(attrs, [soft]) == 0

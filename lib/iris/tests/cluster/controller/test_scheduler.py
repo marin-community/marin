@@ -1481,6 +1481,96 @@ def test_preemptible_constraint_routes_to_matching_worker(scheduler, state, job_
     assert result.assignments[0][1] == WorkerId("w-ondemand")
 
 
+def test_preferred_preemptible_constraint_prefers_matching_but_allows_fallback(
+    scheduler, state, job_request, worker_metadata
+):
+    """Job with preferred preemptible constraint schedules on preemptible worker
+    when available, but falls back to non-preemptible when it is the only option."""
+    # Preemptible worker
+    meta_preemptible = worker_metadata()
+    meta_preemptible.attributes[WellKnownAttribute.PREEMPTIBLE].string_value = "true"
+    register_worker(state, "w-preemptible", "addr1", meta_preemptible)
+
+    # On-demand worker
+    meta_ondemand = worker_metadata()
+    meta_ondemand.attributes[WellKnownAttribute.PREEMPTIBLE].string_value = "false"
+    register_worker(state, "w-ondemand", "addr2", meta_ondemand)
+
+    # Job with PREFERRED preemptible constraint
+    req = job_request()
+    constraint = req.constraints.add()
+    constraint.key = WellKnownAttribute.PREEMPTIBLE
+    constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
+    constraint.value.string_value = "true"
+    constraint.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    tasks = submit_job(state, "j1", req)
+
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
+
+    # Should prefer the preemptible worker
+    assert len(result.assignments) == 1
+    assert result.assignments[0][0] == tasks[0].task_id
+    assert result.assignments[0][1] == WorkerId("w-preemptible")
+
+
+def test_preferred_constraint_falls_back_when_preferred_worker_at_capacity(
+    scheduler, state, job_request, worker_metadata
+):
+    """When preferred worker is at capacity, soft constraint allows fallback to non-matching worker."""
+    # Preemptible worker with minimal resources (can only fit 1 task)
+    meta_preemptible = worker_metadata(cpu=1, memory_bytes=1024**3)
+    meta_preemptible.attributes[WellKnownAttribute.PREEMPTIBLE].string_value = "true"
+    register_worker(state, "w-preemptible", "addr1", meta_preemptible)
+
+    # On-demand worker with plenty of resources
+    meta_ondemand = worker_metadata(cpu=10, memory_bytes=10 * 1024**3)
+    meta_ondemand.attributes[WellKnownAttribute.PREEMPTIBLE].string_value = "false"
+    register_worker(state, "w-ondemand", "addr2", meta_ondemand)
+
+    # Submit 2 jobs with preferred preemptible constraint
+    for i in range(2):
+        req = job_request(f"j{i}", cpu=1)
+        constraint = req.constraints.add()
+        constraint.key = WellKnownAttribute.PREEMPTIBLE
+        constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
+        constraint.value.string_value = "true"
+        constraint.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
+        submit_job(state, f"j{i}", req)
+
+    result = schedule_until_done(scheduler, state)
+
+    # Both should be assigned - one to preemptible, one to on-demand fallback
+    assert len(result.assignments) == 2
+    assigned_workers = {a[1] for a in result.assignments}
+    assert WorkerId("w-preemptible") in assigned_workers
+    assert WorkerId("w-ondemand") in assigned_workers
+
+
+def test_preferred_constraint_only_non_matching_workers_available(scheduler, state, job_request, worker_metadata):
+    """When no worker matches the soft constraint, job still schedules (unlike hard constraint)."""
+    # Only on-demand worker available
+    meta_ondemand = worker_metadata()
+    meta_ondemand.attributes[WellKnownAttribute.PREEMPTIBLE].string_value = "false"
+    register_worker(state, "w-ondemand", "addr1", meta_ondemand)
+
+    # Job with PREFERRED preemptible=true (no preemptible worker exists)
+    req = job_request()
+    constraint = req.constraints.add()
+    constraint.key = WellKnownAttribute.PREEMPTIBLE
+    constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
+    constraint.value.string_value = "true"
+    constraint.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    submit_job(state, "j1", req)
+
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
+
+    # Should still schedule on the non-preemptible worker
+    assert len(result.assignments) == 1
+    assert result.assignments[0][1] == WorkerId("w-ondemand")
+
+
 # =============================================================================
 # Depth-First Scheduling Priority Assignment Tests
 # =============================================================================
