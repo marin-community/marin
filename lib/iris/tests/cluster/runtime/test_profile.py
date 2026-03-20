@@ -11,6 +11,8 @@ import os
 
 import pytest
 
+memray = pytest.importorskip("memray")
+
 from iris.cluster.runtime.profile import (
     _run_memray_profile,
     build_memray_attach_cmd,
