@@ -336,10 +336,13 @@ class TaskAttempt:
             raise ValueError(f"Task {self.task_id} has no container handle")
         return self._container_handle.profile(duration_seconds, profile_type)
 
-    def exec_in_container(self, command: list[str]) -> cluster_pb2.Worker.ExecInContainerResponse:
+    def exec_in_container(
+        self, command: list[str], timeout_seconds: int = 60
+    ) -> cluster_pb2.Worker.ExecInContainerResponse:
         """Execute a command in this task's container.
 
         Uses docker exec for Docker containers, subprocess for process containers.
+        A negative timeout_seconds means no timeout.
         """
         if not self._container_handle:
             return cluster_pb2.Worker.ExecInContainerResponse(error=f"Task {self.task_id} has no container handle")
@@ -350,6 +353,8 @@ class TaskAttempt:
         if not container_id:
             return cluster_pb2.Worker.ExecInContainerResponse(error="No container ID available")
 
+        effective_timeout: float | None = timeout_seconds if timeout_seconds >= 0 else None
+
         # Use docker exec for Docker containers, direct exec for process containers
         from iris.cluster.runtime.docker import DockerContainerHandle
 
@@ -358,7 +363,7 @@ class TaskAttempt:
                 ["docker", "exec", container_id, *command],
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=effective_timeout,
             )
             return cluster_pb2.Worker.ExecInContainerResponse(
                 exit_code=result.returncode,
@@ -371,7 +376,7 @@ class TaskAttempt:
             command,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=effective_timeout,
         )
         return cluster_pb2.Worker.ExecInContainerResponse(
             exit_code=result.returncode,

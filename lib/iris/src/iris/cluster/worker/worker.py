@@ -776,7 +776,9 @@ class Worker:
             raise ValueError(f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})")
         return attempt.profile(duration_seconds, profile_type)
 
-    def exec_in_container(self, task_id: str, command: list[str]) -> cluster_pb2.Worker.ExecInContainerResponse:
+    def exec_in_container(
+        self, task_id: str, command: list[str], timeout_seconds: int = 60
+    ) -> cluster_pb2.Worker.ExecInContainerResponse:
         """Execute a command in a running task's container.
 
         Delegates to the container handle's underlying runtime (docker exec, subprocess, kubectl exec).
@@ -791,7 +793,7 @@ class Worker:
         container_id = attempt.container_id
         if not container_id:
             return cluster_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} has no container")
-        return attempt.exec_in_container(command)
+        return attempt.exec_in_container(command, timeout_seconds)
 
     @property
     def url(self) -> str:

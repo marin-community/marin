@@ -28,8 +28,15 @@ def task():
 @task.command("exec")
 @click.argument("task_id")
 @click.argument("command", nargs=-1, required=True)
+@click.option(
+    "--timeout",
+    "timeout_seconds",
+    type=int,
+    default=60,
+    help="Command timeout in seconds (default: 60, -1 for no timeout)",
+)
 @click.pass_context
-def task_exec(ctx, task_id: str, command: tuple[str, ...]):
+def task_exec(ctx, task_id: str, command: tuple[str, ...], timeout_seconds: int):
     """Execute a command in a running task's container.
 
     Works across platforms: docker exec on Docker, kubectl exec on K8s.
@@ -38,7 +45,7 @@ def task_exec(ctx, task_id: str, command: tuple[str, ...]):
 
       iris task exec /user/job/0 -- bash -c "ls /app"
 
-      iris task exec /user/job/0 -- cat /proc/1/status
+      iris task exec /user/job/0 --timeout 300 -- cat /proc/1/status
     """
     controller_url = require_controller_url(ctx)
     token_provider: TokenProvider | None = ctx.obj.get("token_provider")
@@ -59,6 +66,7 @@ def task_exec(ctx, task_id: str, command: tuple[str, ...]):
         request = cluster_pb2.Controller.ExecInContainerRequest(
             task_id=task_id,
             command=list(command),
+            timeout_seconds=timeout_seconds,
         )
         response = client.exec_in_container(request)
 

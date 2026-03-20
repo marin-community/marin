@@ -1880,8 +1880,9 @@ class ControllerServiceImpl:
         worker_request = cluster_pb2.Worker.ExecInContainerRequest(
             task_id=request.task_id,
             command=request.command,
+            timeout_seconds=request.timeout_seconds,
         )
-        resp = self._controller.provider.exec_in_container(worker.address, worker_request)
+        resp = self._controller.provider.exec_in_container(worker.address, worker_request, request.timeout_seconds)
         return cluster_pb2.Controller.ExecInContainerResponse(
             exit_code=resp.exit_code,
             stdout=resp.stdout,

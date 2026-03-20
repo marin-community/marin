@@ -240,9 +240,15 @@ class WorkerProvider:
         self,
         address: str,
         request: cluster_pb2.Worker.ExecInContainerRequest,
+        timeout_seconds: int = 60,
     ) -> cluster_pb2.Worker.ExecInContainerResponse:
         stub = self.stub_factory.get_stub(address)
-        return stub.exec_in_container(request, timeout_ms=65000)
+        # Negative timeout means no limit; use a large RPC deadline (1 hour)
+        if timeout_seconds < 0:
+            rpc_timeout_ms = 3_600_000
+        else:
+            rpc_timeout_ms = (timeout_seconds + 5) * 1000
+        return stub.exec_in_container(request, timeout_ms=rpc_timeout_ms)
 
     def close(self) -> None:
         self._pool.shutdown(wait=False)
