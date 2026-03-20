@@ -12,7 +12,8 @@ permissions:
 
 concurrency:
   group: iris-cloud-smoke-cw-${{ github.event.issue.number || github.run_id }}
-  cancel-in-progress: true
+  # Never kill a running cloud test — would leak Kubernetes resources.
+  cancel-in-progress: false
 
 jobs:
   cw-cloud-smoke-test:
@@ -181,6 +182,10 @@ jobs:
           chmod 600 ~/.kube/coreweave-iris
 
       - name: Tear down cluster (iris stop)
+        env:
+          MARIN_PREFIX: s3://marin-na
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           cd lib/iris && uv run --group dev iris -v \
             --config=examples/smoke-cw.yaml \

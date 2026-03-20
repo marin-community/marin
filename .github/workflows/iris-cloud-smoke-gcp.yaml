@@ -15,7 +15,8 @@ permissions:
 
 concurrency:
   group: iris-cloud-smoke-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
-  cancel-in-progress: true
+  # Never kill a running cloud test — would leak GCP resources.
+  cancel-in-progress: false
 
 jobs:
   cloud-smoke-test:

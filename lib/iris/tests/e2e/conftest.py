@@ -83,8 +83,7 @@ _CLOUD_TEST_TIMEOUT = 120  # 2 min per test
 
 def pytest_collection_modifyitems(config, items):
     """Set appropriate timeouts for cloud mode tests."""
-    mode = config.getoption("--iris-mode", default="local")
-    if mode == "local":
+    if config.getoption("--iris-controller-url") is None:
         return
 
     import pytest

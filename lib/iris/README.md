@@ -309,8 +309,9 @@ dashboard rendering, log levels, profiling, and constraint routing.
 # Local mode (in-process cluster, default)
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e -o "addopts=" -v
 
-# Cloud mode: start cluster, run tests, stop cluster
-uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-config examples/smoke-gcp.yaml --iris-mode full -o "addopts="
+# Cloud mode: start cluster via CLI, then run tests against it
+# iris --config=examples/smoke-gcp.yaml cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url "$(cat /tmp/url)" -o "addopts="
 
 # Cloud mode: connect to existing cluster
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url http://localhost:8080 -o "addopts="
