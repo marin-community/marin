@@ -426,6 +426,56 @@ def test_get_job_status_not_found(service):
     assert "nonexistent" in exc_info.value.message
 
 
+def test_redact_request_env_vars_does_not_mutate_original():
+    """Verify redact_request_env_vars returns a copy and does not mutate the input."""
+    from iris.cluster.controller.service import REDACTED_VALUE, redact_request_env_vars
+
+    original = cluster_pb2.Controller.LaunchJobRequest(
+        name="/test-user/job",
+        entrypoint=_make_test_entrypoint(),
+        environment=cluster_pb2.EnvironmentConfig(env_vars={"WANDB_API_KEY": "secret", "SAFE": "ok"}),
+    )
+    redacted = redact_request_env_vars(original)
+
+    assert original.environment.env_vars["WANDB_API_KEY"] == "secret"
+    assert redacted.environment.env_vars["WANDB_API_KEY"] == REDACTED_VALUE
+    assert redacted.environment.env_vars["SAFE"] == "ok"
+
+
+def test_get_job_status_redacts_sensitive_env_vars(service):
+    """Verify get_job_status redacts env var values whose keys match sensitive patterns."""
+    from iris.cluster.controller.service import REDACTED_VALUE
+
+    job_name = JobName.root("test-user", "redact-test")
+    launch_req = cluster_pb2.Controller.LaunchJobRequest(
+        name=job_name.to_wire(),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(
+            env_vars={
+                "WANDB_API_KEY": "wk-secret123",
+                "HF_TOKEN": "hf_tok456",
+                "MY_SECRET": "s3cret",
+                "DB_PASSWORD": "hunter2",
+                "SAFE_VAR": "visible",
+                "NUM_WORKERS": "4",
+            }
+        ),
+    )
+    service.launch_job(launch_req, None)
+
+    status_req = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_name.to_wire())
+    response = service.get_job_status(status_req, None)
+
+    env = dict(response.request.environment.env_vars)
+    assert env["WANDB_API_KEY"] == REDACTED_VALUE
+    assert env["HF_TOKEN"] == REDACTED_VALUE
+    assert env["MY_SECRET"] == REDACTED_VALUE
+    assert env["DB_PASSWORD"] == REDACTED_VALUE
+    assert env["SAFE_VAR"] == "visible"
+    assert env["NUM_WORKERS"] == "4"
+
+
 # =============================================================================
 # Job Termination Tests
 # =============================================================================
