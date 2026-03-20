@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -192,18 +193,29 @@ def _run_pyspy_record(pid: str, duration_seconds: int, cpu_config: cluster_pb2.C
 
 
 def _run_memray_profile(pid: str, duration_seconds: int, memory_config: cluster_pb2.MemoryProfile) -> bytes:
-    """Run memray attach + transform against a local process."""
+    """Profile memory of the current process using memray's in-process Tracker.
+
+    Uses the programmatic Tracker API instead of ``memray attach``, avoiding
+    ptrace/SYS_PTRACE requirements that fail when profiling the controller or
+    worker's own process from within a container.
+    """
+    import memray
+
     spec = resolve_memory_spec(memory_config, duration_seconds, pid=pid)
+    file_format = memray.FileFormat.AGGREGATED_ALLOCATIONS if spec.leaks else memray.FileFormat.ALL_ALLOCATIONS
+
     trace_path = None
     output_path = None
     try:
+        # Tracker refuses to overwrite an existing file, so get a unique name
+        # then remove the placeholder before passing to Tracker.
         with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
             trace_path = f.name
+        os.unlink(trace_path)
 
-        attach_cmd = build_memray_attach_cmd(spec, memray_bin="memray", trace_path=trace_path)
-        result = subprocess.run(attach_cmd, capture_output=True, text=True, timeout=duration_seconds + 10)
-        if result.returncode != 0:
-            raise RuntimeError(f"memray attach failed: {result.stderr}")
+        # Track allocations in-process for the requested duration.
+        with memray.Tracker(trace_path, file_format=file_format):
+            time.sleep(duration_seconds)
 
         if spec.output_is_file:
             with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
