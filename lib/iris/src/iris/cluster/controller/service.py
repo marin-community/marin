@@ -10,6 +10,7 @@ aggregated from task states.
 
 import json
 import logging
+import re
 import secrets
 import uuid
 from dataclasses import dataclass
@@ -80,6 +81,28 @@ from iris.time_utils import Timestamp, Timer
 logger = logging.getLogger(__name__)
 
 DEFAULT_TRANSACTION_LIMIT = 50
+
+# Pattern for env var keys that contain secrets and should be redacted in API responses.
+_SENSITIVE_ENV_KEY_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL", re.IGNORECASE)
+REDACTED_VALUE = "**REDACTED**"
+
+
+def redact_request_env_vars(
+    request: cluster_pb2.Controller.LaunchJobRequest,
+) -> cluster_pb2.Controller.LaunchJobRequest:
+    """Return a copy of *request* with sensitive env var values replaced."""
+    if not request.environment.env_vars:
+        return request
+
+    redacted = cluster_pb2.Controller.LaunchJobRequest()
+    redacted.CopyFrom(request)
+    env_vars = redacted.environment.env_vars
+    for key in list(env_vars):
+        if _SENSITIVE_ENV_KEY_RE.search(key):
+            env_vars[key] = REDACTED_VALUE
+    return redacted
+
+
 DEFAULT_MAX_TOTAL_LINES = 100000
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
@@ -856,7 +879,7 @@ class ControllerServiceImpl:
 
         return cluster_pb2.Controller.GetJobStatusResponse(
             job=proto_job_status,
-            request=job.request,
+            request=redact_request_env_vars(job.request) if job.request else None,
         )
 
     def terminate_job(
