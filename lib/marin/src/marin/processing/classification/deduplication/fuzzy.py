@@ -7,6 +7,7 @@ import dupekit
 import logging
 from marin.utils import rebase_file_path
 import pyarrow as pa
+from fray.v2.client import set_current_client
 from fray.v2.local_backend import LocalClient
 from marin.processing.classification.deduplication.dedup_commons import (
     DEFAULT_FILETYPES,
@@ -31,23 +32,25 @@ logger = logging.getLogger(__name__)
 
 def _compute_fuzzy_dedup_stats(shards: list[str] | Sequence[str], method: str, level: str) -> DupCounters:
     with log_time(f"Compute fuzzy deduplication stats from {len(shards)} shards"):
-        ctx = ZephyrContext(client=LocalClient(), name="fuzzy-dup-counts")
-        result: DupCounters = ctx.execute(  # type: ignore[bad-assignment]
-            Dataset.from_list(shards)
-            .load_parquet(columns=["component_id"])
-            # Compute the per-component statistics and then roll them up into a single counter group
-            .group_by(
-                key=lambda r: r["component_id"],
-                reducer=lambda _, items: DupCounters(
-                    method=method,
-                    level=level,
-                    total=(total := sum(1 for _ in items)),
-                    dups=total if total > 1 else 0,
-                    unique=1,
-                ),
-            )
-            .reduce(partial(sum, start=DupCounters(method=method, level=level))),
-        )[0]
+        client = LocalClient()
+        with set_current_client(client):
+            ctx = ZephyrContext(client=client, name="fuzzy-dup-counts")
+            result: DupCounters = ctx.execute(  # type: ignore[bad-assignment]
+                Dataset.from_list(shards)
+                .load_parquet(columns=["component_id"])
+                # Compute the per-component statistics and then roll them up into a single counter group
+                .group_by(
+                    key=lambda r: r["component_id"],
+                    reducer=lambda _, items: DupCounters(
+                        method=method,
+                        level=level,
+                        total=(total := sum(1 for _ in items)),
+                        dups=total if total > 1 else 0,
+                        unique=1,
+                    ),
+                )
+                .reduce(partial(sum, start=DupCounters(method=method, level=level))),
+            )[0]
     return result
 
 
@@ -63,10 +66,12 @@ def _load_fuzzy_dupe_map_shard(shards: list[str]) -> dict[str, bool]:
         shard_dup_map[record["id"]] = record["fuzzy_duplicate"]
 
     with log_time(f"Load fuzzy duplicate map from {len(shards)} shards"):
-        ctx = ZephyrContext(client=LocalClient(), name="fuzzy-dup-map")
-        ctx.execute(
-            Dataset.from_list(shards).load_parquet().map(add_to_dup_map),
-        )
+        client = LocalClient()
+        with set_current_client(client):
+            ctx = ZephyrContext(client=client, name="fuzzy-dup-map")
+            ctx.execute(
+                Dataset.from_list(shards).load_parquet().map(add_to_dup_map),
+            )
 
     return shard_dup_map
 
