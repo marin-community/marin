@@ -46,7 +46,6 @@ from urllib.parse import urlparse
 from iris.cluster.config import config_to_dict
 from iris.cluster.k8s.constants import CW_INTERRUPTABLE_TOLERATION
 from iris.cluster.k8s import SubprocessK8s
-from iris.cluster.k8s.kubectl import Kubectl
 from iris.cluster.platform.base import (
     Labels,
     PlatformError,
@@ -140,18 +139,23 @@ class CoreweavePlatform:
         config: config_pb2.CoreweavePlatformConfig,
         label_prefix: str,
         poll_interval: float = _DEFAULT_POLL_INTERVAL,
+        kubectl: SubprocessK8s | None = None,
     ):
         self._config = config
         self._namespace = config.namespace or "iris"
         self._region = config.region
         self._label_prefix = label_prefix
         self._iris_labels = Labels(label_prefix)
-        self._kubectl: SubprocessK8s = Kubectl(
-            namespace=self._namespace,
-            # Let kubectl handle KUBECONFIG natively; only pass --kubeconfig when no env override is present.
-            kubeconfig_path=None if os.environ.get("KUBECONFIG") else (config.kubeconfig_path or None),
-            timeout=_KUBECTL_TIMEOUT,
-        )
+        if kubectl is not None:
+            self._kubectl: SubprocessK8s = kubectl
+        else:
+            from iris.cluster.k8s.kubectl import Kubectl
+
+            self._kubectl = Kubectl(
+                namespace=self._namespace,
+                kubeconfig_path=None if os.environ.get("KUBECONFIG") else (config.kubeconfig_path or None),
+                timeout=_KUBECTL_TIMEOUT,
+            )
         self._poll_interval = poll_interval
         self._shutdown_event = threading.Event()
         self._executor = ThreadPoolExecutor(max_workers=16, thread_name_prefix="coreweave")
