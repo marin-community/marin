@@ -1657,10 +1657,11 @@ def test_coscheduled_soft_constraint_prefers_matching_group(scheduler, state, wo
         assert attr is not None and attr.value == "tpu-b"
 
 
-def test_coscheduled_diagnostics_with_soft_constraint_does_not_say_no_match(scheduler, state, worker_metadata):
-    """Diagnostics for a coscheduled job with soft constraints should not
-    report 'No workers match constraints' when only the soft constraint fails."""
-    # 4 on-demand workers — soft preemptible=true won't match, but shouldn't block
+def test_coscheduled_soft_constraint_schedules_on_non_matching_group(scheduler, state, worker_metadata):
+    """Coscheduled job with soft preemptible=true schedules on on-demand workers
+    even when no preemptible group exists — verifies the coscheduled path treats
+    soft constraints as ranking hints, not hard filters."""
+    # 4 on-demand workers in one tpu-name group — none satisfy preemptible=true
     for i in range(4):
         meta = worker_metadata()
         meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
@@ -1681,24 +1682,16 @@ def test_coscheduled_diagnostics_with_soft_constraint_does_not_say_no_match(sche
     constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
     constraint.value.string_value = "true"
     constraint.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
-    tasks = submit_job(state, "j1", req)
+    submit_job(state, "j1", req)
 
-    context = scheduler.create_scheduling_context(_worker_capacities(state))
-    job = _query_job(state, tasks[0].job_id)
-    job_req = _job_requirements_from_job(job)
-    schedulable_task_id = next(
-        (t.task_id for t in _query_tasks_for_job(state, job.job_id) if t.can_be_scheduled()), None
-    )
-    diagnostics = scheduler.get_job_scheduling_diagnostics(
-        job_req,
-        context,
-        schedulable_task_id,
-        num_tasks=4,
-    )
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
-    # Diagnostics should NOT say "no workers match constraints" — soft constraints
-    # don't filter, so the 4 on-demand workers should still be considered
-    assert "no workers match" not in diagnostics.lower()
+    # All 4 tasks should be assigned to the on-demand group despite soft
+    # preemptible=true not matching — soft constraints must not block scheduling
+    assert len(result.assignments) == 4
+    assigned_workers = {worker_id for _, worker_id in result.assignments}
+    assert assigned_workers == {"w0", "w1", "w2", "w3"}
 
 
 # =============================================================================
