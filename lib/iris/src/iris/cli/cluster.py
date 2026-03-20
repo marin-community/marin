@@ -22,7 +22,7 @@ from iris.cli.build import (
     push_to_ghcr,
 )
 from iris.cli.main import require_controller_url
-from iris.cluster.config import IrisConfig, make_local_config
+from iris.cluster.config import IrisConfig, clear_remote_state, make_local_config
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_utils import Timestamp
@@ -303,8 +303,6 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
         click.echo("No existing cluster to stop, continuing")
 
     if clear_state:
-        from iris.cluster.config import clear_remote_state
-
         remote_state_dir = config.storage.remote_state_dir
         if remote_state_dir:
             click.echo(f"Clearing remote state: {remote_state_dir}")
