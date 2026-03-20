@@ -288,7 +288,12 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
         raise click.ClickException("--config is required for start-smoke")
 
     config.platform.label_prefix = label_prefix
-    config.storage.remote_state_dir = f"gs://marin-tmp-eu-west4/ttl=7d/iris/state/{label_prefix}"
+
+    # Use platform-appropriate ephemeral state dir: S3 for CoreWeave, GCS for GCP.
+    if config.platform.HasField("coreweave"):
+        config.storage.remote_state_dir = f"s3://marin-na/iris/state/smoke/{label_prefix}"
+    else:
+        config.storage.remote_state_dir = f"gs://marin-tmp-eu-west4/ttl=7d/iris/state/{label_prefix}"
 
     _pin_latest_images(config)
     verbose = ctx.obj.get("verbose", False)
