@@ -150,6 +150,9 @@ qwen3_8b_131k = dataclasses.replace(
     max_seq_len=131072,
     rope=DefaultRotaryEmbeddingsConfig(theta=1_000_000.0),
     gradient_checkpointing="offload",
+    # Use 256 block size for splash attention to avoid XLA sublane assertion failure
+    # at 131K seq len (default 512 triggers async_dynamic_index_emitter.cc crash).
+    flash_attention_block_size=256,
 )
 
 RESOURCE_SUFFIX = RESOURCES.device.variant.replace("-", "") if RESOURCES.device.kind == "tpu" else "gpu"
