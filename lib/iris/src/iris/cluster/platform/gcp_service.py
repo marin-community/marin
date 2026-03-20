@@ -6,7 +6,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from iris.cluster.platform.local import LocalSliceHandle
 from iris.cluster.platform.service_mode import ServiceMode
+from iris.rpc import config_pb2
 from iris.time_utils import Timestamp
 
 
@@ -96,6 +98,19 @@ class GcpService(Protocol):
     def vm_update_labels(self, name: str, zone: str, labels: dict[str, str]) -> None: ...
     def vm_set_metadata(self, name: str, zone: str, metadata: dict[str, str]) -> None: ...
     def vm_get_serial_port_output(self, name: str, zone: str, start: int = 0) -> str: ...
+
+    def create_local_slice(
+        self,
+        slice_id: str,
+        config: config_pb2.SliceConfig,
+        worker_config: config_pb2.WorkerConfig | None = None,
+    ) -> LocalSliceHandle:
+        """Create an in-process slice. Only valid in LOCAL mode."""
+        ...
+
+    def get_local_slices(self, labels: dict[str, str] | None = None) -> list[LocalSliceHandle]:
+        """Return tracked local slices, optionally filtered by labels. Only valid in LOCAL mode."""
+        ...
 
     def shutdown(self) -> None:
         """Stop all managed resources. No-op in CLOUD/DRY_RUN modes."""

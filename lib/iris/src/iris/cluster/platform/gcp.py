@@ -636,11 +636,8 @@ class GcpPlatform:
         worker_config: config_pb2.WorkerConfig | None = None,
     ) -> SliceHandle:
         """Create a local slice via GcpServiceImpl(LOCAL)."""
-        from iris.cluster.platform.gcp_service_impl import GcpServiceImpl
-
         slice_id = f"{config.name_prefix}-{generate_slice_suffix()}"
-        service = cast(GcpServiceImpl, self._gcp)
-        return service.create_local_slice(slice_id, config, worker_config)
+        return self._gcp.create_local_slice(slice_id, config, worker_config)
 
     def _create_tpu_slice(
         self,
@@ -982,10 +979,7 @@ class GcpPlatform:
     ) -> list[GcpSliceHandle | GcpVmSliceHandle]:
         """List TPU and VM slices across zones, optionally filtered by labels."""
         if self._gcp.mode == ServiceMode.LOCAL:
-            from iris.cluster.platform.gcp_service_impl import GcpServiceImpl
-
-            service = cast(GcpServiceImpl, self._gcp)
-            return service.get_local_slices(labels)  # type: ignore[return-value]
+            return self._gcp.get_local_slices(labels)  # type: ignore[return-value]
 
         handles: list[GcpSliceHandle | GcpVmSliceHandle] = []
 
@@ -1042,10 +1036,7 @@ class GcpPlatform:
         managed_labels = {self._iris_labels.iris_managed: "true"}
 
         if self._gcp.mode == ServiceMode.LOCAL:
-            from iris.cluster.platform.gcp_service_impl import GcpServiceImpl
-
-            service = cast(GcpServiceImpl, self._gcp)
-            return service.get_local_slices(managed_labels)  # type: ignore[return-value]
+            return self._gcp.get_local_slices(managed_labels)  # type: ignore[return-value]
 
         tpu_infos = self._gcp.tpu_list(zones=[], labels=managed_labels)
         vm_infos = self._gcp.vm_list(zones=[], labels=managed_labels)
