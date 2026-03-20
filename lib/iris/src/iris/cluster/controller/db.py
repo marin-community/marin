@@ -524,6 +524,22 @@ ACTIVE_TASK_STATES: frozenset[int] = frozenset(
     }
 )
 
+# Tasks executing on a worker (subset of ACTIVE that excludes ASSIGNED).
+EXECUTING_TASK_STATES: frozenset[int] = frozenset(
+    {
+        cluster_pb2.TASK_STATE_BUILDING,
+        cluster_pb2.TASK_STATE_RUNNING,
+    }
+)
+
+# Failure states that trigger coscheduled sibling cascades.
+FAILURE_TASK_STATES: frozenset[int] = frozenset(
+    {
+        cluster_pb2.TASK_STATE_FAILED,
+        cluster_pb2.TASK_STATE_WORKER_FAILED,
+    }
+)
+
 
 @db_row_model
 class Attempt:

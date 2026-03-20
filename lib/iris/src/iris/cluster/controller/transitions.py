@@ -16,6 +16,8 @@ from typing import Any, NamedTuple
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
+    EXECUTING_TASK_STATES,
+    FAILURE_TASK_STATES,
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
     WORKERS,
@@ -1055,10 +1057,7 @@ class ControllerTransitions:
                     task_error = "Scheduling timeout exceeded"
                 if update.new_state == cluster_pb2.TASK_STATE_FAILED:
                     failure_count += 1
-                if update.new_state == cluster_pb2.TASK_STATE_WORKER_FAILED and prior_state in (
-                    cluster_pb2.TASK_STATE_BUILDING,
-                    cluster_pb2.TASK_STATE_RUNNING,
-                ):
+                if update.new_state == cluster_pb2.TASK_STATE_WORKER_FAILED and prior_state in EXECUTING_TASK_STATES:
                     preemption_count += 1
                 if (
                     update.new_state == cluster_pb2.TASK_STATE_WORKER_FAILED
@@ -1074,7 +1073,7 @@ class ControllerTransitions:
                 if (
                     update.new_state == cluster_pb2.TASK_STATE_WORKER_FAILED
                     and preemption_count <= int(task_row["max_retries_preemption"])
-                    and prior_state in (cluster_pb2.TASK_STATE_BUILDING, cluster_pb2.TASK_STATE_RUNNING)
+                    and prior_state in EXECUTING_TASK_STATES
                 ):
                     task_state = cluster_pb2.TASK_STATE_PENDING
                     terminal_ms = None
@@ -1122,14 +1121,7 @@ class ControllerTransitions:
                     job_req_cache[job_id_wire] = None
             job_req = job_req_cache[job_id_wire]
 
-            if worker_id is not None and task_state in (
-                cluster_pb2.TASK_STATE_PENDING,
-                cluster_pb2.TASK_STATE_SUCCEEDED,
-                cluster_pb2.TASK_STATE_FAILED,
-                cluster_pb2.TASK_STATE_KILLED,
-                cluster_pb2.TASK_STATE_UNSCHEDULABLE,
-                cluster_pb2.TASK_STATE_WORKER_FAILED,
-            ):
+            if worker_id is not None and task_state not in ACTIVE_TASK_STATES:
                 if job_req is not None:
                     _decommit_worker_resources(cur, str(worker_id), job_req.resources)
 
@@ -1137,11 +1129,7 @@ class ControllerTransitions:
                 cur.execute("DELETE FROM endpoints WHERE task_id = ?", (update.task_id.to_wire(),))
 
             # Coscheduled jobs: a terminal host failure should cascade to siblings.
-            if (
-                job_req is not None
-                and job_req.HasField("coscheduling")
-                and task_state in (cluster_pb2.TASK_STATE_FAILED, cluster_pb2.TASK_STATE_WORKER_FAILED)
-            ):
+            if job_req is not None and job_req.HasField("coscheduling") and task_state in FAILURE_TASK_STATES:
                 sibling_rows = cur.execute(
                     "SELECT t.task_id, t.current_attempt_id, t.max_retries_preemption, a.worker_id "
                     "FROM tasks t LEFT JOIN task_attempts a "
@@ -1312,7 +1300,7 @@ class ControllerTransitions:
                     elif prior_state == cluster_pb2.TASK_STATE_ASSIGNED:
                         new_task_state = cluster_pb2.TASK_STATE_PENDING
                         finished_ms = None
-                    elif prior_state in (cluster_pb2.TASK_STATE_BUILDING, cluster_pb2.TASK_STATE_RUNNING):
+                    elif prior_state in EXECUTING_TASK_STATES:
                         preemption_count += 1
                         if preemption_count <= max_preemptions:
                             new_task_state = cluster_pb2.TASK_STATE_PENDING
@@ -2116,9 +2104,9 @@ class ControllerTransitions:
                         task_error = "Scheduling timeout exceeded"
                     if update.new_state == cluster_pb2.TASK_STATE_FAILED:
                         failure_count += 1
-                    if update.new_state == cluster_pb2.TASK_STATE_WORKER_FAILED and int(task_row["state"]) in (
-                        cluster_pb2.TASK_STATE_BUILDING,
-                        cluster_pb2.TASK_STATE_RUNNING,
+                    if (
+                        update.new_state == cluster_pb2.TASK_STATE_WORKER_FAILED
+                        and int(task_row["state"]) in EXECUTING_TASK_STATES
                     ):
                         preemption_count += 1
                     # WORKER_FAILED while still ASSIGNED -> retry immediately as PENDING
@@ -2136,7 +2124,7 @@ class ControllerTransitions:
                     if (
                         update.new_state == cluster_pb2.TASK_STATE_WORKER_FAILED
                         and preemption_count <= int(task_row["max_retries_preemption"])
-                        and int(task_row["state"]) in (cluster_pb2.TASK_STATE_BUILDING, cluster_pb2.TASK_STATE_RUNNING)
+                        and int(task_row["state"]) in EXECUTING_TASK_STATES
                     ):
                         task_state = cluster_pb2.TASK_STATE_PENDING
                         terminal_ms = None
@@ -2183,11 +2171,7 @@ class ControllerTransitions:
                     cur.execute("DELETE FROM endpoints WHERE task_id = ?", (update.task_id.to_wire(),))
 
                 # Coscheduled sibling cascade: no resource decommit since no worker.
-                if (
-                    job_req is not None
-                    and job_req.HasField("coscheduling")
-                    and task_state in (cluster_pb2.TASK_STATE_FAILED, cluster_pb2.TASK_STATE_WORKER_FAILED)
-                ):
+                if job_req is not None and job_req.HasField("coscheduling") and task_state in FAILURE_TASK_STATES:
                     sibling_rows = cur.execute(
                         "SELECT t.task_id, t.current_attempt_id, t.max_retries_preemption "
                         "FROM tasks t LEFT JOIN task_attempts a "
