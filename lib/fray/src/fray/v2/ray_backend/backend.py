@@ -365,9 +365,10 @@ class RayClient:
         actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> HostedActor:
-        """Ray cannot host actors in-process; falls back to create_actor."""
-        handle = self.create_actor(actor_class, *args, name=name, actor_config=actor_config, **kwargs)
-        return HostedActor(handle)
+        """Ray cannot host actors in-process; falls back to a single-actor group."""
+        group = self.create_actor_group(actor_class, *args, name=name, count=1, actor_config=actor_config, **kwargs)
+        handle = group.wait_ready()[0]
+        return HostedActor(handle, stop=group.shutdown)
 
     def create_actor(
         self,
