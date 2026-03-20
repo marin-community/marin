@@ -225,12 +225,13 @@ jobs:
       - name: Failsafe GCP resource cleanup
         run: |
           MANAGED_LABEL="iris-${LABEL_PREFIX}-managed"
+          CONTROLLER_LABEL="iris-${LABEL_PREFIX}-controller"
           PROJECT="${{ secrets.GCP_PROJECT_ID }}"
 
-          echo "Cleaning up GCE instances with label ${MANAGED_LABEL}=true..."
+          echo "Cleaning up GCE instances with label ${MANAGED_LABEL}=true OR ${CONTROLLER_LABEL}=true..."
           gcloud compute instances list \
             --project="$PROJECT" \
-            --filter="labels.${MANAGED_LABEL}=true" \
+            --filter="labels.${MANAGED_LABEL}=true OR labels.${CONTROLLER_LABEL}=true" \
             --format="csv[no-heading](name,zone)" 2>/dev/null \
           | while IFS=, read -r name zone; do
               [ -z "$name" ] && continue
@@ -243,12 +244,14 @@ jobs:
           gcloud compute tpus tpu-vm list \
             --project="$PROJECT" --zone=- \
             --filter="labels.${MANAGED_LABEL}=true" \
-            --format="csv[no-heading](name,zone)" 2>/dev/null \
-          | while IFS=, read -r name zone; do
-              [ -z "$name" ] && continue
-              echo "Deleting TPU $name ($zone)"
-              gcloud compute tpus tpu-vm delete "$name" \
-                --project="$PROJECT" --zone="$zone" --quiet || true
+            --uri 2>/dev/null \
+          | while read -r uri; do
+              [ -z "$uri" ] && continue
+              tpu_name=$(echo "$uri" | awk -F/ '{print $NF}')
+              tpu_zone=$(echo "$uri" | awk -F/ '{print $(NF-2)}')
+              echo "Deleting TPU $tpu_name ($tpu_zone)"
+              gcloud compute tpus tpu-vm delete "$tpu_name" \
+                --project="$PROJECT" --zone="$tpu_zone" --quiet --async || true
             done
 
       - name: Set commit status to result
