@@ -478,16 +478,8 @@ class TestSshConfigMerging:
 
         assert ssh_config.user == "ubuntu"
         assert ssh_config.key_file == "~/.ssh/cluster_key"
-<<<<<<< Updated upstream
         assert ssh_config.port == 22  # DEFAULT_SSH_PORT
         assert ssh_config.connect_timeout.milliseconds == 60_000
-||||||| constructed merge base
-        assert ssh_config.port == 22  # DEFAULT_SSH_PORT
-        assert ssh_config.connect_timeout == Duration.from_seconds(60)
-=======
-        assert ssh_config.port == 22
-        assert ssh_config.connect_timeout.milliseconds == 60_000
->>>>>>> Stashed changes
 
     def test_applies_per_group_ssh_overrides(self):
         """get_ssh_config applies per-group SSH overrides for manual slice template."""
@@ -536,13 +528,7 @@ class TestSshConfigMerging:
 
     def test_uses_defaults_when_cluster_ssh_config_empty(self):
         """get_ssh_config uses built-in defaults when cluster config empty."""
-<<<<<<< Updated upstream
 
-||||||| constructed merge base
-        from iris.time_utils import Duration
-
-=======
->>>>>>> Stashed changes
         config = config_pb2.IrisClusterConfig()
 
         ssh_config = get_ssh_config(config)
