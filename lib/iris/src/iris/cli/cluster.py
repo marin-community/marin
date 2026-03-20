@@ -170,7 +170,6 @@ def _pin_latest_images(config) -> dict[str, str]:
         "controller": config.controller.image,
         "worker": config.defaults.worker.docker_image,
         "task": config.defaults.worker.default_task_image,
-        "k8s-task": config.kubernetes_provider.default_image if config.HasField("kubernetes_provider") else "",
     }
     needs_pin = any(tag.endswith(":latest") for tag in tags.values() if tag)
     if not needs_pin:
@@ -185,8 +184,6 @@ def _pin_latest_images(config) -> dict[str, str]:
         config.defaults.worker.docker_image = pinned["worker"]
     if pinned["task"]:
         config.defaults.worker.default_task_image = pinned["task"]
-    if pinned.get("k8s-task"):
-        config.kubernetes_provider.default_image = pinned["k8s-task"]
 
     click.echo("Pinning :latest image tags to git SHA for this run:")
     for name, tag in pinned.items():
