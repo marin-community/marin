@@ -704,7 +704,7 @@ def constraints_from_resources(resources: cluster_pb2.ResourceSpecProto) -> list
 # Thresholds for the executor heuristic.  A job that stays within all four
 # limits is assumed to be an orchestrator/coordinator and is pinned to
 # non-preemptible workers so it is not killed by spot reclamation.
-_EXECUTOR_MAX_CPU_MILLICORES = 1000  # 1 core
+_EXECUTOR_MAX_CPU_MILLICORES = 500  # 0.5 cores
 _EXECUTOR_MAX_MEMORY_BYTES = 4 * 1024**3  # 4 GiB
 _EXECUTOR_MAX_REPLICAS = 1
 
@@ -715,7 +715,7 @@ def looks_like_executor(
 ) -> bool:
     """Return True when a job's resource shape matches the executor heuristic.
 
-    Heuristic: no accelerators, single task, CPU ≤ 1 core, RAM ≤ 4 GiB.
+    Heuristic: no accelerators, single task, CPU ≤ 0.5 cores, RAM ≤ 4 GiB.
     """
     has_accelerator = resources.HasField("device") and not resources.device.HasField("cpu")
     if has_accelerator:

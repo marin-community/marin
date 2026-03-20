@@ -1078,7 +1078,7 @@ def test_launch_job_executor_heuristic_adds_non_preemptible(service, state):
     request = cluster_pb2.Controller.LaunchJobRequest(
         name=JobName.root("test-user", "executor-job").to_wire(),
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=500, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
     )
 

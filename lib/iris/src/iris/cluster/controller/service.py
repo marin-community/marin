@@ -650,7 +650,7 @@ def _inject_resource_constraints(
     EQ constraint from the resource spec.
 
     Additionally, the executor heuristic is applied: small CPU-only jobs
-    (no accelerators, 1 task, CPU ≤ 1, RAM ≤ 4 GiB) are auto-tagged as
+    (no accelerators, 1 task, CPU ≤ 0.5 cores, RAM ≤ 4 GiB) are auto-tagged as
     non-preemptible so coordinators survive spot reclamation.
     """
     auto = constraints_from_resources(request.resources)

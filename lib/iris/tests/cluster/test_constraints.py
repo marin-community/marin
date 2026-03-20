@@ -168,7 +168,7 @@ def test_inherited_keys_strips_device_and_preemptible():
 
 
 def _make_resources(
-    cpu_millicores: int = 1000,
+    cpu_millicores: int = 500,
     memory_bytes: int = 1 * 1024**3,
     device: str | None = None,
 ) -> cluster_pb2.ResourceSpecProto:
@@ -184,7 +184,7 @@ def _make_resources(
 
 
 def test_looks_like_executor_small_cpu_job():
-    """1 CPU, 1 GiB RAM, no device → executor."""
+    """0.5 CPU, 1 GiB RAM, no device → executor."""
     assert looks_like_executor(_make_resources(), replicas=1)
 
 
@@ -199,6 +199,11 @@ def test_looks_like_executor_false_with_tpu():
 
 def test_looks_like_executor_false_with_gpu():
     assert not looks_like_executor(_make_resources(device="gpu"), replicas=1)
+
+
+def test_looks_like_executor_false_one_full_cpu():
+    """A job requesting 1 full CPU core is real workload, not an executor."""
+    assert not looks_like_executor(_make_resources(cpu_millicores=1000), replicas=1)
 
 
 def test_looks_like_executor_false_high_cpu():
