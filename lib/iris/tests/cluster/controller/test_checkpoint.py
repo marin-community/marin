@@ -43,7 +43,7 @@ def test_write_checkpoint_uploads_to_remote(tmp_path):
     assert path.endswith(".sqlite3")
 
     remote_state = tmp_path / "remote" / "controller-state"
-    assert (remote_state / "latest.sqlite3").exists()
+    assert (remote_state / "checkpoint.sqlite3").exists()
     timestamped = list(remote_state.glob("checkpoint-*.sqlite3"))
     assert len(timestamped) == 1
 
@@ -75,7 +75,7 @@ def test_atexit_checkpoint_writes_to_remote(tmp_path):
     controller._atexit_checkpoint()
 
     remote_state = tmp_path / "remote" / "controller-state"
-    assert (remote_state / "latest.sqlite3").exists()
+    assert (remote_state / "checkpoint.sqlite3").exists()
 
     controller._db.close()
 
@@ -84,7 +84,9 @@ def test_download_checkpoint_to_local(tmp_path):
     """download_checkpoint_to_local copies remote DB to local path."""
     remote_dir = f"file://{tmp_path}/remote"
     # Create a source DB and write a checkpoint
-    source_db = ControllerDB(db_path=tmp_path / "source" / "source.sqlite3")
+    source_db = ControllerDB(
+        db_path=tmp_path / "source" / "source.sqlite3", auth_db_path=tmp_path / "source" / "auth.sqlite3"
+    )
     write_checkpoint(source_db, remote_dir)
     source_db.close()
 
@@ -105,7 +107,9 @@ def test_download_checkpoint_returns_false_when_missing(tmp_path):
 def test_download_from_explicit_path(tmp_path):
     """download_checkpoint_to_local can restore from an explicit checkpoint path."""
     remote_dir = f"file://{tmp_path}/remote"
-    source_db = ControllerDB(db_path=tmp_path / "source" / "source.sqlite3")
+    source_db = ControllerDB(
+        db_path=tmp_path / "source" / "source.sqlite3", auth_db_path=tmp_path / "source" / "auth.sqlite3"
+    )
     path, _ = write_checkpoint(source_db, remote_dir)
     source_db.close()
 
@@ -125,7 +129,7 @@ def test_write_checkpoint_roundtrip(tmp_path):
     local_path = tmp_path / "restored" / "controller.sqlite3"
     download_checkpoint_to_local(remote_dir, local_path)
     # Should be openable as a ControllerDB
-    restored_db = ControllerDB(db_path=local_path)
+    restored_db = ControllerDB(db_path=local_path, auth_db_path=local_path.parent / "auth.sqlite3")
     restored_db.close()
 
 
@@ -155,14 +159,16 @@ def test_local_db_exists_skips_remote_download(tmp_path):
     remote_dir = f"file://{tmp_path}/remote"
 
     # Write a checkpoint to remote with one job count
-    source_db = ControllerDB(db_path=tmp_path / "source" / "source.sqlite3")
+    source_db = ControllerDB(
+        db_path=tmp_path / "source" / "source.sqlite3", auth_db_path=tmp_path / "source" / "auth.sqlite3"
+    )
     write_checkpoint(source_db, remote_dir)
     source_db.close()
 
     # Simulate existing local DB (from previous container run)
     local_path = tmp_path / "local" / "controller.sqlite3"
     local_path.parent.mkdir(parents=True, exist_ok=True)
-    existing_db = ControllerDB(db_path=local_path)
+    existing_db = ControllerDB(db_path=local_path, auth_db_path=local_path.parent / "auth.sqlite3")
     existing_db.close()
 
     # The main.py logic: if db_path.exists(), skip download
@@ -184,7 +190,9 @@ def test_fresh_start_downloads_from_remote(tmp_path):
     remote_dir = f"file://{tmp_path}/remote"
 
     # Write a checkpoint to remote
-    source_db = ControllerDB(db_path=tmp_path / "source" / "source.sqlite3")
+    source_db = ControllerDB(
+        db_path=tmp_path / "source" / "source.sqlite3", auth_db_path=tmp_path / "source" / "auth.sqlite3"
+    )
     write_checkpoint(source_db, remote_dir)
     source_db.close()
 
@@ -198,7 +206,7 @@ def test_fresh_start_downloads_from_remote(tmp_path):
     assert local_path.exists()
 
     # Should be a valid DB
-    db = ControllerDB(db_path=local_path)
+    db = ControllerDB(db_path=local_path, auth_db_path=local_path.parent / "auth.sqlite3")
     db.close()
 
 
@@ -218,6 +226,6 @@ def test_periodic_checkpoint_inline(tmp_path):
         write_checkpoint(controller._db, controller._config.remote_state_dir)
 
     remote_state = tmp_path / "remote" / "controller-state"
-    assert (remote_state / "latest.sqlite3").exists()
+    assert (remote_state / "checkpoint.sqlite3").exists()
 
     controller._db.close()

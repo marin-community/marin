@@ -733,7 +733,10 @@ class Controller:
         if db is not None:
             self._db = db
         else:
-            self._db = ControllerDB(db_path=config.local_state_dir / "controller.sqlite3")
+            self._db = ControllerDB(
+                db_path=config.local_state_dir / "controller.sqlite3",
+                auth_db_path=config.local_state_dir / "auth.sqlite3",
+            )
         self._log_store = LogStore(
             log_dir=config.local_state_dir / "logs",
             remote_log_dir=f"{config.remote_state_dir.rstrip('/')}/logs",

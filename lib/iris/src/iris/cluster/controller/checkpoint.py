@@ -101,7 +101,7 @@ def write_checkpoint(
 
     Backs up the DB to a local temp file, uploads to remote, then deletes
     the local copy. Returns the remote path and a summary of checkpoint contents.
-    Also backs up the auth DB if present.
+    Also backs up the auth DB.
     """
     created_at = Timestamp.now()
     prefix = remote_state_dir.rstrip("/") + "/controller-state"
@@ -109,12 +109,8 @@ def write_checkpoint(
     _upload_sqlite_backup(db.db_path, prefix, "checkpoint", created_at, backup_fn=db.backup_to)
     remote_timestamped = f"{prefix}/checkpoint-{created_at.epoch_ms()}.sqlite3"
 
-    # Also write legacy latest.sqlite3 for backward compatibility
-    remote_latest_legacy = f"{prefix}/latest.sqlite3"
-    _fsspec_copy(f"{prefix}/checkpoint.sqlite3", remote_latest_legacy)
-
     auth_path = db.auth_db_path
-    if auth_path is not None and auth_path.exists():
+    if auth_path.exists():
         _upload_sqlite_backup(
             auth_path,
             prefix,
@@ -150,7 +146,7 @@ def download_checkpoint_to_local(
     if checkpoint_path:
         source = checkpoint_path
     else:
-        source = remote_state_dir.rstrip("/") + "/controller-state/latest.sqlite3"
+        source = remote_state_dir.rstrip("/") + "/controller-state/checkpoint.sqlite3"
 
     fs, fs_path = fsspec.core.url_to_fs(source)
     if not fs.exists(fs_path):

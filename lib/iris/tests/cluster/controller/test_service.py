@@ -161,7 +161,7 @@ def worker_metadata():
 def state(tmp_path):
     """Create a fresh ControllerTransitions for each test."""
     db_path = tmp_path / "controller.sqlite3"
-    db = ControllerDB(db_path=db_path)
+    db = ControllerDB(db_path=db_path, auth_db_path=tmp_path / "auth.sqlite3")
     log_store = LogStore(log_dir=tmp_path / "logs")
     s = ControllerTransitions(db=db, log_store=log_store)
     yield s

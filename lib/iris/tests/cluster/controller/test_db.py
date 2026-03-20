@@ -17,7 +17,7 @@ from iris.cluster.controller.db import _SqlPredicate
 
 @pytest.fixture
 def db(tmp_path: Path) -> ControllerDB:
-    return ControllerDB(tmp_path / "test.db")
+    return ControllerDB(tmp_path / "test.db", auth_db_path=tmp_path / "auth.sqlite3")
 
 
 def _create_simple_table(db: ControllerDB) -> None:
@@ -304,7 +304,7 @@ def test_migration_with_dml_does_not_leave_open_transaction(tmp_path: Path) -> N
     # ControllerDB.__init__ already runs apply_migrations which applies all
     # standard migrations. Simulate adding a new migration with DML by
     # directly exercising the commit-after-migrate pattern on the raw conn.
-    db = ControllerDB(tmp_path / "test_dml.db")
+    db = ControllerDB(tmp_path / "test_dml.db", auth_db_path=tmp_path / "auth.sqlite3")
 
     # Insert a row so the UPDATE below has something to hit
     with db.transaction() as cur:

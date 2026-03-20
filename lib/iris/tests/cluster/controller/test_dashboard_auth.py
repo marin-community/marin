@@ -22,7 +22,7 @@ _TEST_USER = "test-user"
 
 @pytest.fixture
 def state(tmp_path):
-    db = ControllerDB(db_path=tmp_path / "controller.sqlite3")
+    db = ControllerDB(db_path=tmp_path / "controller.sqlite3", auth_db_path=tmp_path / "auth.sqlite3")
     log_store = LogStore(log_dir=tmp_path / "logs")
     s = ControllerTransitions(db=db, log_store=log_store)
     yield s

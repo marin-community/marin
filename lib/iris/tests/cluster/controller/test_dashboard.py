@@ -131,7 +131,7 @@ def set_task_state(state: ControllerTransitions, task_id: JobName, new_state: in
 @pytest.fixture
 def state(tmp_path):
     db_path = tmp_path / "controller.sqlite3"
-    db = ControllerDB(db_path=db_path)
+    db = ControllerDB(db_path=db_path, auth_db_path=tmp_path / "auth.sqlite3")
     log_store = LogStore(log_dir=tmp_path / "logs")
     s = ControllerTransitions(db=db, log_store=log_store)
     yield s
