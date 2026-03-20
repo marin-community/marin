@@ -182,7 +182,7 @@ IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_smoke.py -o
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url http://localhost:8080 -o "addopts="
 
 # Cloud mode: full lifecycle
-uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-config examples/smoke.yaml --iris-mode full -o "addopts="
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-config examples/smoke-gcp.yaml --iris-mode full -o "addopts="
 
 # K8s runtime tests (requires a running cluster — kind, k3d, minikube, etc.)
 uv run pytest lib/iris/tests/e2e/test_coreweave_live_kubernetes_runtime.py \

@@ -1,4 +1,4 @@
-name: Iris - Cloud Smoke Test
+name: Iris - Cloud Smoke Test (GCP)
 
 on:
   pull_request:
@@ -118,9 +118,10 @@ jobs:
       - name: Start smoke cluster
         env:
           LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
+          MARIN_PREFIX: gs://marin-eu-west4
         run: |
           cd lib/iris && uv run --group dev iris -v \
-            --config=examples/smoke.yaml \
+            --config=examples/smoke-gcp.yaml \
             cluster start-smoke \
             --label-prefix "$LABEL_PREFIX" \
             --url-file /tmp/iris-controller-url \
@@ -167,7 +168,7 @@ jobs:
           LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
         run: |
           cd lib/iris && uv run --group dev iris -v \
-            --config=examples/smoke.yaml \
+            --config=examples/smoke-gcp.yaml \
             cluster stop --label "$LABEL_PREFIX" || true
 
       - name: Upload screenshots
@@ -219,7 +220,7 @@ jobs:
       - name: Tear down cluster (iris stop)
         run: |
           cd lib/iris && uv run --group dev iris -v \
-            --config=examples/smoke.yaml \
+            --config=examples/smoke-gcp.yaml \
             cluster stop --label "$LABEL_PREFIX" || true
 
       - name: Failsafe GCP resource cleanup

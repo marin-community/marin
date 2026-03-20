@@ -48,7 +48,7 @@ from iris.rpc import cluster_pb2
 logger = logging.getLogger(__name__)
 
 GPU_CONFIG = "lib/iris/examples/coreweave-canary-multihost.yaml"
-CPU_CONFIG = "lib/iris/examples/coreweave-smoke.yaml"
+CPU_CONFIG = "lib/iris/examples/smoke-cw.yaml"
 GPU_NAMESPACE = "iris-canary-mh"
 GPU_LABEL_PREFIX = "iris-canary-mh"
 CPU_NAMESPACE = "iris-canary-cpu"

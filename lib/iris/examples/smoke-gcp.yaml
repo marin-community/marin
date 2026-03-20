@@ -1,5 +1,5 @@
-# Iris smoke-test configuration
-# Usage: uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-config examples/smoke.yaml --iris-mode full -o "addopts="
+# Iris smoke-test configuration (GCP)
+# Usage: uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-config examples/smoke-gcp.yaml --iris-mode full -o "addopts="
 
 platform:
   label_prefix: smoke-ci

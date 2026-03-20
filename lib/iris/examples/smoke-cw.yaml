@@ -1,7 +1,7 @@
 # Iris smoke-test configuration for CoreWeave (CPU-only).
 #
-# Mirrors examples/smoke.yaml but targets a CPU-only CoreWeave cluster.
-# Used by the iris-cloud-smoke GitHub Actions workflow.
+# Mirrors examples/smoke-gcp.yaml but targets a CPU-only CoreWeave cluster.
+# Used by the iris-cloud-smoke-cw GitHub Actions workflow.
 
 platform:
   label_prefix: iris-smoke-cw
