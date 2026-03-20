@@ -14,6 +14,7 @@ import dataclasses
 import logging
 import secrets
 import time
+from collections.abc import Callable
 
 import jwt
 
@@ -168,6 +169,7 @@ class JwtTokenManager:
         role: str,
         key_id: str,
         ttl_seconds: int = DEFAULT_JWT_TTL_SECONDS,
+        worker_id: str = "",
     ) -> str:
         now = time.time()
         payload = {
@@ -177,6 +179,8 @@ class JwtTokenManager:
             "iat": int(now),
             "exp": int(now + ttl_seconds),
         }
+        if worker_id:
+            payload["wid"] = worker_id
         return jwt.encode(payload, self._signing_key, algorithm="HS256")
 
     def verify(self, token: str) -> VerifiedIdentity:
@@ -201,6 +205,7 @@ class JwtTokenManager:
         return VerifiedIdentity(
             user_id=payload["sub"],
             role=payload.get("role", "user"),
+            worker_id=payload.get("wid", ""),
         )
 
     def _maybe_touch(self, jti: str) -> None:
@@ -244,13 +249,16 @@ class JwtTokenManager:
 # ---------------------------------------------------------------------------
 
 
+WorkerTokenFactory = Callable[[str], str]
+
+
 @dataclasses.dataclass
 class ControllerAuth:
     """Resolved auth configuration for a controller instance."""
 
     verifier: TokenVerifier | None = None
     provider: str | None = None
-    worker_token: str | None = None
+    worker_token_factory: WorkerTokenFactory | None = None
     login_verifier: TokenVerifier | None = None
     gcp_project_id: str | None = None
     jwt_manager: JwtTokenManager | None = None
@@ -260,11 +268,14 @@ def create_controller_auth(
     auth_config: config_pb2.AuthConfig,
     db: ControllerDB | None = None,
 ) -> ControllerAuth:
-    """Create auth verifier + worker token from config proto.
+    """Create auth verifier + per-worker token factory from config proto.
 
     All tokens are JWTs signed with a persistent key stored in
     controller_secrets. The api_keys table is retained for audit and
     revocation tracking, but verification never hits the database.
+
+    Instead of a single shared worker token, a ``worker_token_factory``
+    callable is returned that generates a unique JWT per worker_id.
     """
     if not auth_config.HasField("provider"):
         if db:
@@ -276,9 +287,10 @@ def create_controller_auth(
             jwt_mgr = JwtTokenManager(signing_key, db=db)
             jwt_mgr.load_revocations(db)
 
-            worker_token = _create_worker_jwt(db, jwt_mgr, now)
-            logger.info("Authentication disabled — null-auth mode (workers use JWT)")
-            return ControllerAuth(verifier=jwt_mgr, worker_token=worker_token, jwt_manager=jwt_mgr)
+            db.ensure_user(WORKER_USER, now, role="worker")
+            factory = _make_worker_token_factory(db, jwt_mgr)
+            logger.info("Authentication disabled — null-auth mode (workers use per-worker JWT)")
+            return ControllerAuth(verifier=jwt_mgr, worker_token_factory=factory, jwt_manager=jwt_mgr)
         logger.info("Authentication disabled — null-auth mode, no DB")
         return ControllerAuth()
 
@@ -286,7 +298,7 @@ def create_controller_auth(
     now = Timestamp.now()
 
     jwt_mgr: JwtTokenManager | None = None
-    worker_token: str | None = None
+    factory: WorkerTokenFactory | None = None
 
     if db:
         signing_key = _get_or_create_signing_key(db)
@@ -296,7 +308,8 @@ def create_controller_auth(
         if provider == "static":
             _preload_static_tokens(auth_config.static, db, now)
 
-        worker_token = _create_worker_jwt(db, jwt_mgr, now)
+        db.ensure_user(WORKER_USER, now, role="worker")
+        factory = _make_worker_token_factory(db, jwt_mgr)
 
         for admin_user in auth_config.admin_users:
             db.ensure_user(admin_user, now)
@@ -306,7 +319,9 @@ def create_controller_auth(
     else:
         ephemeral_key = secrets.token_hex(32)
         jwt_mgr = JwtTokenManager(ephemeral_key)
-        worker_token = jwt_mgr.create_token(WORKER_USER, "worker", f"iris_k_worker_{secrets.token_hex(8)}")
+        factory = lambda wid: jwt_mgr.create_token(  # noqa: E731
+            WORKER_USER, "worker", f"iris_k_worker_{secrets.token_hex(8)}", worker_id=wid
+        )
         verifier = None
 
     login_verifier: TokenVerifier | None = None
@@ -327,7 +342,7 @@ def create_controller_auth(
     return ControllerAuth(
         verifier=verifier,
         provider=provider,
-        worker_token=worker_token,
+        worker_token_factory=factory,
         login_verifier=login_verifier,
         gcp_project_id=gcp_project_id,
         jwt_manager=jwt_mgr,
@@ -365,23 +380,28 @@ def _preload_static_tokens(
     logger.info("Preloaded %d static token(s) into api_keys", len(tokens))
 
 
-def _create_worker_jwt(db: ControllerDB, jwt_mgr: JwtTokenManager, now: Timestamp) -> str:
-    """Generate a JWT for the worker identity on each controller start.
+def _make_worker_token_factory(db: ControllerDB, jwt_mgr: JwtTokenManager) -> WorkerTokenFactory:
+    """Return a callable that mints a unique per-worker JWT.
 
-    Old worker tokens are not revoked so that in-flight workers can finish
-    gracefully with their existing credentials.
+    Each call creates a fresh ``api_keys`` row for audit/revocation and
+    embeds the ``worker_id`` in the JWT ``wid`` claim. This enables
+    per-worker revocation and identity binding.
     """
-    key_id = f"iris_k_worker_{secrets.token_hex(8)}"
-    db.ensure_user(WORKER_USER, now, role="worker")
-    create_api_key(
-        db,
-        key_id=key_id,
-        key_hash=f"jwt:{key_id}",
-        key_prefix="jwt",
-        user_id=WORKER_USER,
-        name="worker-token",
-        now=now,
-    )
-    jwt_token = jwt_mgr.create_token(WORKER_USER, "worker", key_id)
-    logger.info("New worker JWT generated (key_id=%s)", key_id)
-    return jwt_token
+
+    def _create(worker_id: str) -> str:
+        now = Timestamp.now()
+        key_id = f"iris_k_worker_{secrets.token_hex(8)}"
+        create_api_key(
+            db,
+            key_id=key_id,
+            key_hash=f"jwt:{key_id}",
+            key_prefix="jwt",
+            user_id=WORKER_USER,
+            name=f"worker-token:{worker_id}",
+            now=now,
+        )
+        token = jwt_mgr.create_token(WORKER_USER, "worker", key_id, worker_id=worker_id)
+        logger.info("Per-worker JWT generated (key_id=%s, worker_id=%s)", key_id, worker_id)
+        return token
+
+    return _create

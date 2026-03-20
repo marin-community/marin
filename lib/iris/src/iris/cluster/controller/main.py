@@ -113,6 +113,9 @@ def serve(
 
     db = ControllerDB(db_path=db_path)
 
+    # --- Auth (before platform so worker_token_factory is available) ---
+    auth = create_controller_auth(cluster_config.auth, db=db) if cluster_config else ControllerAuth()
+
     # --- Create provider ---
     provider = make_provider(cluster_config)
     logger.info("Provider created: %s", type(provider).__name__)
@@ -125,6 +128,7 @@ def serve(
             platform = create_platform(
                 platform_config=cluster_config.platform,
                 ssh_config=cluster_config.defaults.ssh,
+                worker_token_factory=auth.worker_token_factory,
             )
             logger.info("Platform created")
 
@@ -164,10 +168,6 @@ def serve(
 
     logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)
     logger.info("Configuration: scheduler_interval=%.2fs", scheduler_interval)
-
-    auth = create_controller_auth(cluster_config.auth, db=db) if cluster_config else ControllerAuth()
-    if auth.worker_token and base_worker_config is not None:
-        base_worker_config.auth_token = auth.worker_token
 
     config = ControllerConfig(
         host=host,

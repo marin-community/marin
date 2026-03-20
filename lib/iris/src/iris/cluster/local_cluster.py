@@ -180,8 +180,10 @@ class LocalCluster:
 
         # Derive auth from config proto so callers never need to wire it manually.
         auth = create_controller_auth(self._config.auth, db=db)
-        if auth.worker_token:
-            self._config.defaults.worker.auth_token = auth.worker_token
+        # Per-worker tokens are generated at provisioning time by the platform.
+        # For local clusters, generate a token for the local worker identity.
+        if auth.worker_token_factory:
+            self._config.defaults.worker.auth_token = auth.worker_token_factory("local-worker-0")
 
         controller_threads = self._threads.create_child("controller") if self._threads else None
         autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None

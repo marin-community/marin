@@ -568,6 +568,44 @@ def test_jwt_token_manager_worker_role(jwt_manager):
     assert identity.role == "worker"
 
 
+def test_jwt_token_manager_worker_id_claim(jwt_manager):
+    """Per-worker JWT embeds worker_id in the wid claim."""
+    token = jwt_manager.create_token(user_id="system:worker", role="worker", key_id="w1", worker_id="slice-abc-worker-0")
+    identity = jwt_manager.verify(token)
+    assert identity.worker_id == "slice-abc-worker-0"
+
+
+def test_jwt_token_manager_no_worker_id_returns_empty(jwt_manager):
+    """Token without worker_id claim returns empty string."""
+    token = jwt_manager.create_token(user_id="alice", role="user", key_id="k1")
+    identity = jwt_manager.verify(token)
+    assert identity.worker_id == ""
+
+
+def test_jwt_per_worker_tokens_are_unique(jwt_manager):
+    """Different worker_ids produce different tokens with different jti."""
+    t1 = jwt_manager.create_token(user_id="system:worker", role="worker", key_id="w1", worker_id="worker-0")
+    t2 = jwt_manager.create_token(user_id="system:worker", role="worker", key_id="w2", worker_id="worker-1")
+    assert t1 != t2
+    id1 = jwt_manager.verify(t1)
+    id2 = jwt_manager.verify(t2)
+    assert id1.worker_id == "worker-0"
+    assert id2.worker_id == "worker-1"
+
+
+def test_jwt_per_worker_revocation(jwt_manager):
+    """Revoking one worker's token does not affect others."""
+    t1 = jwt_manager.create_token(user_id="system:worker", role="worker", key_id="w-revoke", worker_id="worker-0")
+    t2 = jwt_manager.create_token(user_id="system:worker", role="worker", key_id="w-keep", worker_id="worker-1")
+    jwt_manager.revoke("w-revoke")
+
+    with pytest.raises(ValueError, match="revoked"):
+        jwt_manager.verify(t1)
+
+    identity = jwt_manager.verify(t2)
+    assert identity.worker_id == "worker-1"
+
+
 # ---------------------------------------------------------------------------
 # Streaming interceptor guards
 # ---------------------------------------------------------------------------

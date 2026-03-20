@@ -40,7 +40,7 @@ import threading
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -691,12 +691,14 @@ class GcpPlatform:
         gcp_config: config_pb2.GcpPlatformConfig,
         label_prefix: str,
         ssh_config: config_pb2.SshConfig | None = None,
+        worker_token_factory: Callable[[str], str] | None = None,
     ):
         self._project_id = gcp_config.project_id
         self._label_prefix = label_prefix
         self._iris_labels = Labels(label_prefix)
         self._ssh_config = ssh_config
         self._zones = list(gcp_config.zones)
+        self._worker_token_factory = worker_token_factory
 
     def resolve_image(self, image: str, zone: str | None = None) -> str:
         """Rewrite ``ghcr.io/`` images to the AR remote repo for *zone*'s continent.
@@ -853,6 +855,8 @@ class GcpPlatform:
         if worker_config:
             worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
             worker_config.slice_id = slice_id
+            if self._worker_token_factory:
+                worker_config.auth_token = self._worker_token_factory(slice_id)
             startup_script = build_worker_bootstrap_script(worker_config)
 
         cmd = [
@@ -954,6 +958,8 @@ class GcpPlatform:
         if worker_config:
             worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
             worker_config.worker_id = construct_worker_id(slice_id, 0)
+            if self._worker_token_factory:
+                worker_config.auth_token = self._worker_token_factory(worker_config.worker_id)
             startup_script = build_worker_bootstrap_script(worker_config)
 
         cmd = [
