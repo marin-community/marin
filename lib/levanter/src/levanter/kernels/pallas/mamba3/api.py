@@ -506,6 +506,9 @@ def mamba3_mimo_attentionish_forward_from_transformed(
     if z is not None and mimo_z is None:
         raise ValueError("`z` requires `mimo_z`.")
 
+    if implementation not in (None, "xla", "reference"):
+        raise ValueError("Attention-ish MIMO is currently available only for the XLA and reference implementations.")
+
     num_chunks = seq_len // chunk_size
     q_chunked = _grouped_qk_to_chunked_state_rank(q, num_heads=heads, chunk_size=chunk_size)
     k_chunked = _grouped_qk_to_chunked_state_rank(k, num_heads=heads, chunk_size=chunk_size)

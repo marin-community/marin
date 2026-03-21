@@ -1181,3 +1181,53 @@
   - Keep the new attention-style API surface because it matches the intended upstream-facing contract better.
   - Do **not** treat it as a pure alias for benchmarking or throughput claims; benchmark numbers should distinguish `chunked_public` from `attentionish_public`.
   - If we need to claw this back later, the next step is a thinner attention-style path that avoids some of the regrouping/packaging overhead rather than another kernel rewrite first.
+
+## 2026-03-21: failed native attention-style MIMO XLA core
+
+- Goal:
+  - Replace the adapter-style attention-ish MIMO path with a native XLA core that consumes `q/k/v` directly, following the upstream Tilelang shape more closely.
+  - Flatten `chunk_size * rank` into the large local contractions and keep the same `[N, P]` carry shape.
+- Change attempted:
+  - Added a native XLA path in `mamba3_mimo_attentionish_forward_xla_batched(...)`.
+  - Kept real-valued-only semantics and no RoPE/segsum.
+  - Computed:
+    - chunk summaries from fused `[C * R, N] x [C * R, P]`
+    - prefix emit from the same fused view
+    - local strict-causal block from a fused `[C * R, C * R]` `qk_full`
+    - same-step rank interaction separately with the explicit `gamma` term
+  - Verified local correctness:
+    - `uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_mamba3.py -q`
+    - result: `28 passed, 2 skipped`
+- TPU results on `v5p-8`, `seq_len=16384`, `groups=16`, `rank=4`, explicit slice sharding:
+  - `128 x 512`, `chunk=128`
+    - old adapter-style attention-ish API:
+      - forward: `69.58M tok/s`, `256.78` estimated TFLOP/s
+      - backward: `36.09M tok/s`, `133.20`
+    - native XLA core:
+      - forward: `37.90M tok/s`, `139.87`
+      - backward: `20.79M tok/s`, `76.71`
+  - `512 x 1024`, `chunk=128`
+    - old adapter-style attention-ish API:
+      - forward: `27.40M tok/s`, `403.62`
+      - backward: `15.93M tok/s`, `234.61`
+    - native XLA core:
+      - forward: `17.35M tok/s`, `255.61`
+      - backward: `9.75M tok/s`, `143.60`
+  - `1024 x 512`, `chunk=256`
+    - old adapter-style attention-ish API:
+      - forward: `33.69M tok/s`, `708.21`
+      - backward: `22.32M tok/s`, `469.20`
+    - native XLA core:
+      - forward: `17.24M tok/s`, `362.45`
+      - backward: `11.77M tok/s`, `247.37`
+- Interpretation:
+  - The native `C * R` XLA formulation is a uniform regression across all three canonical shapes.
+  - The regression is too large to justify shipping the native path behind the same public API.
+  - The likely problem is the XLA lowering of the fused local block:
+    - explicit `[C * R, C * R]` `qk_full`
+    - repeated decay/mask expansion over the fused rank axis
+    - more expensive local-output schedule than the existing chunked ranked kernel
+- Decision:
+  - Revert the native XLA core.
+  - Keep the attention-style public API on top of the existing chunked ranked XLA kernel.
+  - Keep the design note in `.agents/projects/mamba3-mimo-native-attentionish-xla.md` as a future direction, but do not ship the current native implementation.
