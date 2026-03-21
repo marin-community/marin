@@ -88,15 +88,15 @@ jobs:
         env:
           LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
           MARIN_PREFIX: s3://marin-na
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           cd lib/iris && uv run --group dev iris -v \
             --config=examples/smoke-cw.yaml \
             cluster start-smoke \
             --label-prefix "$LABEL_PREFIX" \
             --url-file /tmp/iris-controller-url \
-            --wait-for-workers 1 \
+            --wait-for-workers 0 \
             --worker-timeout 900 &
           START_PID=$!
           echo "START_PID=$START_PID" >> "$GITHUB_ENV"
@@ -137,6 +137,9 @@ jobs:
         if: always()
         env:
           LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
+          MARIN_PREFIX: s3://marin-na
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           cd lib/iris && uv run --group dev iris -v \
             --config=examples/smoke-cw.yaml \
@@ -185,8 +188,8 @@ jobs:
       - name: Tear down cluster (iris stop)
         env:
           MARIN_PREFIX: s3://marin-na
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           cd lib/iris && uv run --group dev iris -v \
             --config=examples/smoke-cw.yaml \

@@ -149,7 +149,11 @@ def smoke_cluster(request):
             job_timeout=600.0,
             is_cloud=True,
         )
-        tc.wait_for_workers(1, timeout=600)
+        # Only wait for workers on platforms with persistent worker VMs (GCP).
+        # kubernetes_provider (CoreWeave) runs tasks as ephemeral pods.
+        workers = controller_client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
+        if workers:
+            tc.wait_for_workers(1, timeout=600)
         yield tc
         controller_client.close()
         return
@@ -226,26 +230,6 @@ def capabilities(smoke_cluster) -> ClusterCapabilities:
 
 
 # ============================================================================
-# Cluster readiness
-# ============================================================================
-
-
-def test_workers_ready(smoke_cluster, smoke_page, smoke_screenshot):
-    """Verify workers are healthy, screenshot fleet tab."""
-    request = cluster_pb2.Controller.ListWorkersRequest()
-    response = smoke_cluster.controller_client.list_workers(request)
-    healthy = [w for w in response.workers if w.healthy]
-    assert len(healthy) > 0, "No healthy workers registered"
-
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/fleet")
-    wait_for_dashboard_ready(smoke_page)
-    smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('Healthy')",
-        timeout=10000,
-    )
-    smoke_screenshot("workers-ready", "Fleet tab showing healthy workers with green Healthy badges")
-
-
 # ============================================================================
 # Dashboard tests
 # ============================================================================
@@ -343,8 +327,10 @@ def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
         )
 
 
-def test_dashboard_scheduling_diagnostic(smoke_cluster, smoke_page, smoke_screenshot):
+def test_dashboard_scheduling_diagnostic(smoke_cluster, smoke_page, smoke_screenshot, capabilities):
     """Scheduling diagnostic shows pending reason for oversized job."""
+    if not capabilities.has_workers:
+        pytest.skip("No persistent workers")
     smoke_cluster.wait_for_workers(1, timeout=smoke_cluster.job_timeout)
     with smoke_cluster.launched_job(TestJobs.quick, "smoke-diag-cpu", cpu=999_999) as job:
         # Poll until the scheduler has evaluated the job and produced a
@@ -366,8 +352,10 @@ def test_dashboard_scheduling_diagnostic(smoke_cluster, smoke_page, smoke_screen
         )
 
 
-def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot):
+def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot, capabilities):
     """Workers tab shows healthy workers."""
+    if not capabilities.has_workers:
+        pytest.skip("No persistent workers")
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/fleet")
     wait_for_dashboard_ready(smoke_page)
     smoke_page.wait_for_function(
@@ -377,8 +365,10 @@ def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot):
     smoke_screenshot("workers-tab", "Fleet tab showing worker list with health status badges")
 
 
-def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot):
+def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, capabilities):
     """Worker detail page shows info, task history, metric cards."""
+    if not capabilities.has_workers:
+        pytest.skip("No persistent workers")
     job = smoke_cluster.submit(TestJobs.quick, "smoke-worker-detail")
     smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
 

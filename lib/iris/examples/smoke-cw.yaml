@@ -15,7 +15,11 @@ storage:
   # Default for standalone use; start-smoke overrides via marin_temp_bucket().
   remote_state_dir: s3://marin-na/iris/state/smoke-cw
 
-worker_provider: {}
+kubernetes_provider:
+  namespace: iris-smoke-cw
+  default_image: ghcr.io/marin-community/iris-task:latest
+  cache_dir: /mnt/local/iris-cache
+  controller_address: http://iris-smoke-controller-svc.iris-smoke-cw.svc.cluster.local:10000
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest

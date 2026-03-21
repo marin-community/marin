@@ -301,6 +301,14 @@ def _validate_provider_platform_compat(config: config_pb2.IrisClusterConfig) -> 
             "manages slices). Use kubernetes_provider instead."
         )
 
+    uses_k8s_provider = config.WhichOneof("provider") == "kubernetes_provider"
+    if uses_k8s_provider and not config.kubernetes_provider.controller_address:
+        raise ValueError(
+            "kubernetes_provider.controller_address is required. Task pods need it to fetch "
+            "bundles from the controller. Set it to the in-cluster service URL, e.g. "
+            "http://iris-controller-svc.<namespace>.svc.cluster.local:<port>"
+        )
+
 
 def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     """Validate cluster config.

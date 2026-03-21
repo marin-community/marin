@@ -4,7 +4,7 @@
 # Prerequisites:
 #   - ~/.kube/coreweave-iris kubeconfig exists
 #   - GHCR auth: docker/podman login ghcr.io
-#   - AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY set (R2 credentials)
+#   - R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY set (Cloudflare R2 credentials)
 #   - MARIN_PREFIX set (defaults to s3://marin-na)
 #
 # Usage:
@@ -15,7 +15,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 IRIS_DIR="$REPO_ROOT/lib/iris"
-LABEL_PREFIX="smoke-cw-local-$(whoami)-$(date +%s | tail -c 6)"
+BRANCH="$(git -C "$(dirname "$0")" rev-parse --abbrev-ref HEAD 2>/dev/null | sed 's|[/_]|-|g' | cut -c1-30)"
+LABEL_PREFIX="smoke-${BRANCH:-local-$(whoami)}"
 SCREENSHOT_DIR="${IRIS_SCREENSHOT_DIR:-/tmp/iris-cloud-screenshots}"
 URL_FILE="/tmp/iris-controller-url-$$"
 WORKER_TIMEOUT="${WORKER_TIMEOUT:-900}"
@@ -33,16 +34,19 @@ cleanup() {
         export KUBECONFIG=~/.kube/coreweave-iris
         MANAGED_LABEL="iris-${LABEL_PREFIX}-managed"
 
-        # Namespaced resources
+        # Namespaced resources only — keep NodePools warm for faster reruns.
+        # Use --cleanup-nodepools to also delete NodePools.
         kubectl delete pods,deployments,services,configmaps \
             -n iris-smoke-cw \
             -l "${MANAGED_LABEL}=true" \
             --ignore-not-found || true
 
-        # Cluster-scoped NodePools
-        kubectl delete nodepools \
-            -l "${MANAGED_LABEL}=true" \
-            --ignore-not-found || true
+        if [[ "${CLEANUP_NODEPOOLS:-}" == "1" ]]; then
+            echo "--- Deleting NodePools ---"
+            kubectl delete nodepools \
+                -l "${MANAGED_LABEL}=true" \
+                --ignore-not-found || true
+        fi
     fi
 
     rm -f "$URL_FILE"
@@ -55,15 +59,27 @@ if [[ "${1:-}" == "--cleanup" ]]; then
     exit 0
 fi
 
+if [[ "${1:-}" == "--cleanup-nodepools" ]]; then
+    CLEANUP_NODEPOOLS=1
+    LABEL_PREFIX="${2:-$LABEL_PREFIX}"
+    cleanup
+    exit 0
+fi
+
 trap cleanup EXIT
 
 # --- Preflight checks ---
-for var in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+for var in R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
     if [ -z "${!var:-}" ]; then
         echo "ERROR: $var is not set (needed for R2 object storage)" >&2
         exit 1
     fi
 done
+
+# The iris CLI's _configure_client_s3() maps R2 creds to AWS env vars and sets
+# FSSPEC_S3 from the config's object_storage_endpoint. Just export R2 creds.
+export R2_ACCESS_KEY_ID
+export R2_SECRET_ACCESS_KEY
 
 if [ ! -f ~/.kube/coreweave-iris ]; then
     echo "ERROR: ~/.kube/coreweave-iris not found" >&2
@@ -82,14 +98,23 @@ cd "$IRIS_DIR" && uv run --group dev iris -v \
     cluster start-smoke \
     --label-prefix "$LABEL_PREFIX" \
     --url-file "$URL_FILE" \
-    --wait-for-workers 1 \
+    --wait-for-workers 0 \
     --worker-timeout "$WORKER_TIMEOUT" &
 START_PID=$!
 
-for i in $(seq 1 450); do
+# Poll longer than WORKER_TIMEOUT to account for image build + push + controller
+# deploy + nodepool warmup before the worker wait even starts.
+POLL_LIMIT=$(( (WORKER_TIMEOUT + 1800) / 2 ))
+for i in $(seq 1 "$POLL_LIMIT"); do
     if [ -f "$URL_FILE" ]; then
         echo "Cluster ready!"
         break
+    fi
+    # Exit early if the background process died
+    if ! kill -0 "$START_PID" 2>/dev/null; then
+        echo "ERROR: start-smoke process exited unexpectedly" >&2
+        wait "$START_PID" 2>/dev/null
+        exit 1
     fi
     sleep 2
 done

@@ -259,6 +259,7 @@ class ClusterCapabilities:
     regions: tuple[str, ...]
     device_types: frozenset[str]
     has_coscheduling: bool
+    has_workers: bool
 
     @property
     def has_multi_region(self) -> bool:
@@ -299,6 +300,7 @@ def discover_capabilities(controller_client: ControllerServiceClientSync) -> Clu
         regions=tuple(sorted(regions)),
         device_types=frozenset(device_types),
         has_coscheduling=len(tpu_names) > 0,
+        has_workers=len(healthy) > 0,
     )
 
 
