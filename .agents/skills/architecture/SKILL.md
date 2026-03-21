@@ -81,7 +81,7 @@ marin/
 
 **Getting Started**: See `README.md` for installation and getting started guides.
 
-**For Agents**: `.agents/skills/add-dataset/` • `.agents/skills/fix-issue/` • See `AGENTS.md` in repository root
+**For Agents**: `.agents/skills/marin-executor/` for executor step authoring • `.agents/skills/add-dataset/` • `.agents/skills/fix-issue/` • See `AGENTS.md` in repository root
 
 **Core APIs**: See `lib/marin/src/marin/execution/executor.py` for executor API, `experiments/defaults.py` for default steps
 

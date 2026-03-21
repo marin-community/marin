@@ -35,6 +35,41 @@ Coordination between multiple pipelines is handled via lease files. This
 prevents duplicate execution if, for example, 2 Executor pipelines share common
 ancestor steps.
 
+## Config Concretization Boundary
+
+`ExecutorStep.config` is allowed to contain unresolved executor markers:
+- `InputName` via `output_path_of(step)`
+- `OutputName` via `this_output_path()`
+- `VersionedValue` via `versioned(value)`
+
+The executor resolves those markers before it calls the step function.
+
+That means the underlying function should be written against a plain dataclass config with concrete paths and plain values. For manual or non-executor launches, build a fresh concrete config and call the function with that config directly.
+
+Do not reuse `ExecutorStep.config` outside executor execution. It may still contain unresolved wrappers that are only meaningful to the executor.
+
+## Multiple Leaves From One Experiment
+
+Pass every top-level output from the same experiment file into one `executor_main(...)` call. The executor will:
+- walk the full DAG,
+- resolve transitive dependencies,
+- deduplicate shared ancestors,
+- and launch only the steps needed for the requested leaves.
+
+This is the normal pattern for training plus multiple eval or reporting leaves from the same script.
+
+## `--run_only`
+
+`--run_only` matches step names by `regex.search` and runs only the matched steps plus their transitive dependencies.
+
+For example, this runs the `hello_world/stats` leaf and whatever it depends on:
+
+```bash
+uv run python experiments/tutorials/hello_world.py --prefix local_store --run_only 'hello_world/stats'
+```
+
+Quote the regex so the shell does not rewrite it before Python sees it.
+
 ## Ray
 
 Recall that a step's function can either be a normal Python function or in most realistic cases,

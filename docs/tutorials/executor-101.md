@@ -159,6 +159,14 @@ This command will create several output files:
 
     If you run the same command again, it will detect that both steps have already been run and return automatically. This saves computation time when rerunning experiments.
 
+You can also rerun only the `stats` leaf and its dependencies:
+
+```bash
+uv run python experiments/tutorials/hello_world.py --prefix local_store --run_only 'hello_world/stats'
+```
+
+`--run_only` matches step names by regex and includes the full dependency chain automatically.
+
 ## Complete Code
 
 The complete code for this tutorial is available at: [experiments/tutorials/hello_world.py](https://github.com/marin-community/marin/blob/main/experiments/tutorials/hello_world.py)

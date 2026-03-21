@@ -41,6 +41,8 @@ Ask:
 Example Iris resubmit command:
 `uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --extra marin:tpu --tpu v5litepod-16 -- python experiments/tutorials/train_tiny_model_tpu.py`
 
+Iris `job run --` passes argv literally. Prefer `python -c '...'` for inline Python. Do not use a local heredoc such as `python - <<'PY'` unless you explicitly wrap a remote shell, because the heredoc body is consumed before Iris sees the command.
+
 If any required field is missing, ask for it before proceeding.
 
 ## Monitoring Ownership and Duration

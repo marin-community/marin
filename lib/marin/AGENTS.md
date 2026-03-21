@@ -5,7 +5,7 @@ Vendored Marin pipeline framework. In this file, leading `/` refers to repositor
 ## Key Docs
 
 - `/.agents/skills/architecture/SKILL.md` — repository structure and core concepts
-- `/.agents/skills/add-dataset/SKILL.md` — dataset addition workflow
+- `/.agents/skills/marin-executor/SKILL.md` — executor DAG authoring, `--run_only`, and manual launch boundaries
 - `/lib/marin/pyproject.toml` — packaging metadata, extras, dependency groups
 
 ## Development
