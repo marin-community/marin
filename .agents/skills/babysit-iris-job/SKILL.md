@@ -1,21 +1,15 @@
 ---
 name: babysit-iris-job
-description: Monitor an Iris job continuously and recover on failure. Use when asked to babysit, monitor, or watch an Iris training job (not Zephyr pipelines — use babysit-zephyr for those).
+description: Monitor an Iris job continuously and recover on failure. Use when asked to babysit, monitor, or watch a job, pipeline, workflow, or training run.
 ---
 
 # Skill: Babysit Iris Job
 
-Monitor an Iris job continuously and recover on failure. Recovery is stop then resubmit.
+Monitor an Iris job continuously and recover on failure. Follows the shared
+practices in **babysit-job** — read that first for monitoring ownership, cadence,
+fixing small bugs, and escalation procedures.
 
-For Zephyr pipeline jobs, use **babysit-zephyr** instead.
-For TPU bad-node errors, escalate to **debug-tpu**.
-For Ray jobs, use **babysit-job** with `track=ray`.
-
-Cluster-level actions are out of scope. Do not restart, recreate, or otherwise mutate the cluster unless the user gives explicit consent in the current thread.
-
-## Before Starting
-
-### Required Info
+## Required Info
 
 1. `job_id` — Iris job ID in canonical format `/<user>/<job>` (e.g., `/dlwh/iris-run-train_tiny_model_tpu-20260302-185630`)
 2. `config` — Iris config path (e.g., `lib/iris/examples/marin.yaml`)
@@ -24,40 +18,12 @@ Cluster-level actions are out of scope. Do not restart, recreate, or otherwise m
 5. For TPU jobs, the resubmit command must request TPU resources with `--tpu <variant>`.
    `--reserve <variant>` only holds capacity; it does not attach TPU devices to the task container.
 
-Example Iris resubmit command:
+Example resubmit command:
 `uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --extra marin:tpu --tpu v5litepod-16 -- python experiments/tutorials/train_tiny_model_tpu.py`
 
 If any required field is missing, ask for it before proceeding.
 
-## Monitoring Ownership and Duration
-
-- Assign a single monitoring owner when the loop starts.
-- Keep this loop running until one of the following:
-  - the job reaches a terminal state and the user has acknowledged next action
-  - a user-specified stopping point is reached
-  - an unrecoverable error is found and reported to the user
-- Do not stop early after seeing first loss lines, first eval, or first W&B link.
-- Expect monitoring to commonly take 4-5 hours for ferry-scale runs.
-- For GPT Codex specifically: unless otherwise directed, do not end your turn just to give a status update; keep monitoring until terminal state or until the user's goal is reached.
-- If the user requests continuous monitoring, do not end the turn while monitoring is active; continue until terminal state, a user-specified stopping point, or an unrecoverable error.
-- If handoff is needed, transfer ownership explicitly with: track, current `job_id`, latest error/signal, W&B link(s), and resubmission metadata.
-
-## Cadence and Tooling Notes
-
-- Cadence default after startup stabilization is `sleep 570`.
-- Startup stabilization sequence (after submit/resubmit):
-  - once the job is submitted, sleep `120` and check for immediate failure
-  - if still alive, switch to the normal `570` cadence
-- Tool-runtime workaround:
-  - keep one long-running monitor process/session
-  - poll the same session in ~30 second chunks as needed by tool runtime limits
-  - repeated no-output polls are expected while waiting for the next 570-second check
-- Single monitor process rule:
-  - run only one active monitor loop per job to avoid duplicate SSH tunnel and port-binding conflicts
-
 ## State File
-
-Write to `scratch/<create_timestamp>_monitoring_state.json`, create the `scratch` directory if needed. `<create_timestamp>` should have format `YYYYMMDD-HHMM`.
 
 ```json
 {
@@ -94,33 +60,9 @@ Write to `scratch/<create_timestamp>_monitoring_state.json`, create the `scratch
    Treat RUNNING as controller-level signal only; confirm allocation via expected
    W&B run when possible.
 
-4. PRINT W&B RUN IDS/LINKS
-   - Inspect logs for W&B URL/ID (`wandb: View run`, `/runs/<RUN_ID>`).
-   - Print run id(s) and full link(s) once per training run.
-   - If resubmission creates a new run, print new id/link once.
-
-5. REPORT PROGRESS
-   - Report as `~<current>/<exact_max>`.
-   - Example: `~4600/5155`.
-   - Never present rounded max as exact.
-   - If max unknown, report `~<current>/unknown`.
-
-6. EVALUATE
-   - If user stop point reached -> summarize and exit.
-   - If terminal success -> report completion and exit.
-   - If terminal non-success -> go to step 7 unless user says otherwise.
-   - If output contains `error`/`Error`/`Traceback` -> go to step 7.
-   - Treat TPU/XLA HBM reports as failure even without literal OOM:
-     - `Program hbm requirement ...`
-     - `Largest program allocations in hbm`
-   - If progress stalls across multiple intervals with `OwnerDiedError`, dead node,
-     or unsatisfied resources -> mark `degraded` and notify user.
-   - If loss/progress lines are present and status non-terminal -> go to step 1.
-   - If no output and status non-terminal -> go to step 1.
+4-6. Follow generic PRINT W&B / REPORT PROGRESS / EVALUATE from babysit-job.
 
 7. RECOVER (STOP -> RESUBMIT)
-   - Recover only the job (never mutate cluster without explicit consent).
-   - For TPU bad-node errors, invoke **debug-tpu** skill first, then continue here.
    - If current job is still non-terminal, stop it first:
      uv run iris --config <CONFIG> job stop <JOB_ID>
    - Then resubmit:
@@ -136,7 +78,8 @@ Write to `scratch/<create_timestamp>_monitoring_state.json`, create the `scratch
 
 ## Task Exec
 
-Use `iris task exec` to run commands inside a running task's container.
+Use `iris task exec` to run commands inside a running task's container ONLY if you must, prefer existing
+logs, metrics, CLI commands and RPC calls for monitoring and diagnosis.
 
 ### Basic usage
 
@@ -147,7 +90,7 @@ iris task exec <TASK_ID> -- ls /app
 # Run with a custom timeout (default: 60s)
 iris task exec <TASK_ID> --timeout 300 -- python -c "import torch; print(torch.cuda.device_count())"
 
-# Run with no timeout
+# Run with no timeout - last resort for long-running commands
 iris task exec <TASK_ID> --timeout -1 -- tail -f /var/log/app.log
 ```
 
@@ -171,48 +114,7 @@ iris task exec <TASK_ID> -- pgrep -f heartbeat
 
 Task IDs follow the pattern `/<user>/<job>/<task_index>`, e.g., `/rav/my-job/0`.
 
-## Fixing Small Bugs
-
-When EVALUATE detects an error, before recovery:
-
-1. Analyze logs:
-   - Look for `Traceback`, `Error`, `Exception`.
-   - Identify file and line number.
-2. If it is a small fix (typo, missing import, wrong variable name):
-   - Read the file.
-   - Make the fix.
-   - Proceed to RECOVER.
-3. If it is complex (architectural, unclear cause, broad investigation):
-   - Do not auto-fix.
-   - Report to user and exit loop.
-
-Small-fix examples:
-- `NameError: name 'foo' is not defined`
-- `ImportError: cannot import 'bar'`
-- `SyntaxError` from missing comma/bracket/colon
-- obvious wrong `KeyError` key
-
-Complex examples:
-- OOM errors
-- TPU/XLA HBM exhaustion signatures (`Program hbm requirement`, `Largest program allocations in hbm`)
-- distributed training failures
-- data loading issues
-- unclear stack traces spanning multiple files
-
 ## Notes
 
-- Sleep must be foreground (max ~10 min due to tool timeout).
-- Loop control is at agent level, not bash.
-- Track `restart_count` to detect flapping.
-- State file allows resume after context reset.
-- Iris states: `JOB_STATE_PENDING`, `JOB_STATE_BUILDING`, `JOB_STATE_RUNNING`, `JOB_STATE_SUCCEEDED`, `JOB_STATE_FAILED`, `JOB_STATE_KILLED`, `JOB_STATE_WORKER_FAILED`, `JOB_STATE_UNSCHEDULABLE`
 - Iris `job list --prefix` requires canonical job names (`/<user>/<job>`), not short names.
 - Iris monitoring is job-level; cluster updates are not part of normal recovery.
-- Loop duration can be hours to days.
-- If same error repeats after one fix attempt, do not retry blindly; report to user.
-
-## When to Escalate
-
-- Zephyr pipeline issues -> **debug-zephyr**
-- Controller issues (RPCs timing out, stuck scheduling) -> **debug-iris-controller**
-- TPU bad-node errors -> **debug-tpu**
