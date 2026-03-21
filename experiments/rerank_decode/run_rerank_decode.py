@@ -43,7 +43,7 @@ class RerankDecodeConfig:
 
     num_samples: int = 16
     max_tokens: int = 2048
-    chunk_size: int = 256
+    chunk_size: int = 8
     temperature: float = 1.0
 
     proposal_gpus: tuple[int, ...] = (0,)
