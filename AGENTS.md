@@ -31,7 +31,8 @@ Key skills and their triggers:
 | Babysitting Ray jobs specifically | `babysit-ray-job` |
 | Babysitting Iris jobs specifically | `babysit-iris-job` |
 | Babysitting Zephyr jobs specifically | `babysit-zephyr` |
-| Debugging Zephyr pipelines | `debug-zephyr` |
+| Debugging Iris jobs (task exec) | `debug-iris-job` |
+| Debugging Zephyr pipelines | `debug-zephyr-job` |
 | Debugging Iris controller | `debug-iris-controller` |
 | TPU bad-node recovery | `debug-tpu` |
 

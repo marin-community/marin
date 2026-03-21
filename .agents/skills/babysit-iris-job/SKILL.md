@@ -76,45 +76,9 @@ If any required field is missing, ask for it before proceeding.
    - Go to step 1.
 ```
 
-## Task Exec
-
-Use `iris task exec` to run commands inside a running task's container ONLY if you must, prefer existing
-logs, metrics, CLI commands and RPC calls for monitoring and diagnosis.
-
-### Basic usage
-
-```bash
-# Run a one-shot command
-iris task exec <TASK_ID> -- ls /app
-
-# Run with a custom timeout (default: 60s)
-iris task exec <TASK_ID> --timeout 300 -- python -c "import torch; print(torch.cuda.device_count())"
-
-# Run with no timeout - last resort for long-running commands
-iris task exec <TASK_ID> --timeout -1 -- tail -f /var/log/app.log
-```
-
-### Running a background command that survives disconnect
-
-The exec session is non-interactive and buffers output. To kick off a long-running
-command that continues after the exec returns, use `nohup` + `&` inside a bash wrapper:
-
-```bash
-# Start a background process that writes to a file
-iris task exec <TASK_ID> -- bash -c "nohup bash -c 'while true; do date >> /tmp/heartbeat.txt; sleep 10; done' > /dev/null 2>&1 &"
-
-# Check on it later
-iris task exec <TASK_ID> -- cat /tmp/heartbeat.txt
-
-# Check if the process is still running
-iris task exec <TASK_ID> -- pgrep -f heartbeat
-```
-
-### Task ID format
-
-Task IDs follow the pattern `/<user>/<job>/<task_index>`, e.g., `/rav/my-job/0`.
-
 ## Notes
+
+For debugging running tasks with `iris task exec`, see **debug-iris-job**.
 
 - Iris `job list --prefix` requires canonical job names (`/<user>/<job>`), not short names.
 - Iris monitoring is job-level; cluster updates are not part of normal recovery.

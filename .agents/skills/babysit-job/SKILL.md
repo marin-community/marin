@@ -105,5 +105,5 @@ data loading issues, unclear multi-file stack traces.
 
 ### When to Escalate
 
-- Debug Zephyr pipeline issues -> **debug-zephyr**
+- Debug Zephyr pipeline issues -> **debug-zephyr-job**
 - Debug TPU bad-node errors -> **debug-tpu**
