@@ -4,8 +4,11 @@
 import warnings
 
 import jax
+from jax._src import pjit
 import jax.numpy as jnp
 import pytest
+from jax.sharding import Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
 
 from levanter.kernels.pallas import autotune_cache_utils
 from levanter.kernels.pallas.fused_cross_entropy_loss import api as fused_api
@@ -1001,8 +1004,8 @@ def test_autotune_benchmark_wraps_in_shard_map_when_named_sharding_present(
         calls.append((mesh, in_specs, out_specs, check_vma))
         return fn
 
-    monkeypatch.setattr(fused_api.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(fused_api, "_named_sharding_of", fake_named_sharding_of)
+    monkeypatch.setattr(fused_api, "_value_uses_manual_sharding", lambda value: False)
     monkeypatch.setattr(fused_api.jax, "shard_map", fake_shard_map)
 
     wrapped = fused_api._maybe_wrap_loss_in_shard_map_for_benchmark(
@@ -1015,6 +1018,55 @@ def test_autotune_benchmark_wraps_in_shard_map_when_named_sharding_present(
     out = wrapped(x, y, w)
     assert out.shape == (4,)
     assert calls == [(mesh, (x_sharding.spec, y_sharding.spec, w_sharding.spec), y_sharding.spec, False)]
+
+
+def test_autotune_benchmark_skips_nested_shard_map_for_manual_sharding(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    y = jnp.zeros((4,), dtype=jnp.int32)
+
+    calls: list[tuple[object, tuple[object, ...], object, bool]] = []
+
+    def fake_shard_map(fn, *, mesh, in_specs, out_specs, check_vma):
+        calls.append((mesh, in_specs, out_specs, check_vma))
+        return fn
+
+    monkeypatch.setattr(fused_api, "_value_uses_manual_sharding", lambda value: value is not w)
+    monkeypatch.setattr(fused_api.jax, "shard_map", fake_shard_map)
+
+    fn = lambda x_value, labels_value, w_value: x_value[:, 0] + labels_value.astype(x_value.dtype) + w_value[0, 0]
+    wrapped = fused_api._maybe_wrap_loss_in_shard_map_for_benchmark(fn, x=x, labels=y, w=w)
+
+    assert wrapped is fn
+    assert calls == []
+
+
+def test_shape_dtype_struct_for_benchmark_drops_manual_sharding_from_shard_map_tracer():
+    mesh = Mesh(jax.devices(), ("data",))
+    sharding = NamedSharding(mesh, P("data", None))
+    x = jax.device_put(jnp.ones((4, 8), dtype=jnp.float32), sharding)
+
+    seen_manual: list[bool] = []
+    seen_structs: list[jax.ShapeDtypeStruct] = []
+
+    @jax.shard_map(mesh=mesh, in_specs=P("data", None), out_specs=P("data", None), check_vma=False)
+    def _capture(local_x):
+        seen_manual.append(fused_api._value_uses_manual_sharding(local_x))
+        with pytest.raises(AssertionError):
+            pjit.pjit_check_aval_sharding([local_x.aval.sharding], [local_x.aval], ["x"], "arg", False)
+        seen_structs.append(fused_api._shape_dtype_struct_for_benchmark(local_x))
+        return local_x
+
+    _capture(x).block_until_ready()
+
+    assert seen_manual == [True]
+    assert len(seen_structs) == 1
+    struct = seen_structs[0]
+    assert struct.shape == (4, 8)
+    assert struct.dtype == jnp.float32
+    assert getattr(struct, "sharding", None) is None
 
 
 def test_pallas_tpu_vmem_compile_error_falls_back_to_xla_when_requested(monkeypatch: pytest.MonkeyPatch):
