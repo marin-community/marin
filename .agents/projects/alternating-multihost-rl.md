@@ -23,6 +23,11 @@ That gives us all three properties we want:
 - phase-alternating RL rather than concurrent trainer/sampler roles
 - stable multi-host training and stable multi-host sampling
 
+This mode is primarily for **single-allocation** or **availability-constrained**
+deployments. It is **not** intended to replace the existing concurrent two-TPU
+on-demand RL path when two TPU allocations are available and wall-clock speed or
+policy freshness is the top priority.
+
 ## Problem
 
 Marin currently has two useful but separate pieces:
@@ -133,7 +138,129 @@ That path might be workable for a single-process or loosely synchronized setup. 
 - We are not trying to keep one long-lived TPU Python process alive across both phases.
 - We are not trying to do live in-flight weight updates in this design.
 - We are not trying to make the current concurrent `TrainWorker` / `RolloutWorker` path disappear.
-- We are not optimizing phase-boundary I/O in the first implementation. Correctness and clarity come first.
+- We are not chasing every possible phase-boundary optimization in v1. Correctness and clarity come first, but
+  persistent compilation caching and bounded-memory materialization are mandatory day-1 requirements.
+
+## Choosing Between This Mode And Concurrent Two-TPU RL
+
+This design solves a different problem than the current concurrent on-demand RL
+path. The choice should be explicit.
+
+| Axis | Alternating Single-Pod RL | Concurrent Two-TPU RL |
+|------|----------------------------|------------------------|
+| TPU allocations required | 1 pod | 2 pods |
+| Wall-clock efficiency | Lower due to phase boundaries | Higher due to overlap |
+| Policy freshness | Lag = `steps_per_phase` | Near-stepwise |
+| Runtime semantics | Simpler, phase-based, durable manifests | More live coordination |
+| Live weight transfer | None | Required |
+| Multi-host sampling topology | Independent per-host vLLM replicas | Separate sampler TPU(s) |
+| Debuggability / resume | Strong | Moderate |
+| Allocation-hours per wall-clock hour | ~1 pod-hour/hour, minus boundary idle | ~2 pod-hours/hour, but better overlap |
+| Best fit | TPU scarcity, one-allocation limit, simpler operations | Highest throughput, freshest on-policy data |
+
+Use alternating RL when one of the following is true:
+
+- you can only get one TPU pod allocation
+- quota or availability makes two pods unreliable
+- you value a simpler, file-backed control plane more than maximum wall-clock throughput
+
+Prefer concurrent two-TPU RL when one of the following is true:
+
+- two TPU allocations are readily available
+- you want the closest behavior to the current on-policy live-sync regime
+- policy freshness matters more than allocation footprint
+
+## Hard Requirements And Day-1 Invariants
+
+These are not optional improvements. If we cannot satisfy them, this mode
+should not graduate.
+
+### 1. Persistent compilation cache for both phases
+
+Both training and sampling must use persistent XLA compilation caches.
+
+Training support already exists:
+
+- Marin sets `JAX_COMPILATION_CACHE_DIR` in `lib/marin/src/marin/training/training.py:254-258`
+- Levanter honors `jax_compilation_cache_dir` in `lib/levanter/src/levanter/trainer.py:1016-1017`
+
+Sampling support already exists:
+
+- Marin vLLM wiring sets `JAX_COMPILATION_CACHE_DIR` and `VLLM_XLA_CACHE_PATH` in
+  `lib/marin/src/marin/inference/vllm_server.py:748-795`
+
+The container runtime already mounts a persistent Docker volume at `/home/levanter`
+in `lib/levanter/src/levanter/infra/docker.py:218-240`. For v1, the cache should
+live on that mounted volume so it survives container restarts on the same TPU pod:
+
+- training cache: `/home/levanter/compilation-cache/train`
+- sampling cache: `/home/levanter/compilation-cache/vllm`
+
+The cache location must be stable across phases. Do not generate phase-specific
+cache paths.
+
+### 2. Stable compile signatures across phases
+
+Warm cache reuse only helps if the compiled programs are actually identical.
+Therefore the following must stay fixed across phases for a given run family:
+
+- TPU type and host count
+- Levanter mesh and axis mappings
+- training batch size and sequence shape
+- vLLM local tensor-parallel size
+- vLLM `max_model_len`
+- model config and tokenizer
+- container image digest
+- JAX / vLLM / tpu_inference versions
+
+Also, dynamic phase metadata must not leak into JIT static arguments or traced
+shape logic. In particular:
+
+- checkpoint paths
+- manifest paths
+- phase ids
+- policy version strings
+
+must remain runtime data, not compile-shape data.
+
+### 3. Warm-cache validation is a blocker, not a hope
+
+We must explicitly measure the second identical transition on the same pod.
+
+If the second training start or the second sampling start still behaves like a
+cold compile, the economics of this design change substantially and we should
+not treat it as production-ready.
+
+### 4. Bounded-memory materializer
+
+The materializer must never assume it can hold all raw rollouts for a phase in
+RAM at once. It must stream and, if needed, spill intermediate data to local
+disk on worker 0.
+
+### 5. Phase-boundary TPU lock hygiene
+
+Every phase transition must:
+
+- remove the previous phase container by fixed name
+- verify the container is gone
+- run a small health probe before starting the next phase
+
+This is required to avoid orphaned processes holding TPU device state across
+phase boundaries.
+
+### 6. Image digest pinning
+
+The controller must resolve the exact container image digest once at bootstrap,
+record it in `run_state.json`, and use that same digest for all later phase
+launches.
+
+This is required for two reasons:
+
+- compile-cache stability
+- semantic stability across a long-running RL job
+
+If someone rebuilds the image mid-run, the controller should fail fast instead
+of silently mixing versions across phases.
 
 ## Core Design Decision
 
@@ -281,6 +408,38 @@ At the phase boundary:
 
 This turns the hard runtime problem into an ordinary artifact handoff problem.
 
+## Phase Transition Budget And Economics
+
+This mode is expected to be slower in wall-clock time than concurrent two-TPU
+RL. The reason to build it is not “fastest possible RL”; the reason is “best
+single-allocation multi-host RL mode that we can make correct and operable”.
+
+Even with perfect warm-cache behavior, each phase has some irreducible
+non-training / non-sampling work:
+
+| Step | Warm-cache target |
+|------|-------------------|
+| Stop sampling containers and collect status | 5-15s |
+| Materialize raw rollouts into training batches | 20-90s |
+| Start training: distributed init + checkpoint restore + residual compile | 30-90s |
+| Export final policy for the phase | 20-60s |
+| Start sampling: fast bootstrap + residual compile | 15-45s |
+| Total per phase boundary | 90-180s target |
+
+These numbers are targets, not promises. They must be measured on the second
+and third phase transitions with caches already warm.
+
+Cold-cache behavior is not acceptable as the steady-state assumption. If we see
+repeated full cold compiles after the first phase, alternating RL is still a
+correct design, but probably not an economical default execution mode.
+
+The correct framing is:
+
+- concurrent two-TPU RL: higher allocation footprint, better wall-clock
+- alternating single-pod RL: lower allocation footprint, simpler runtime model, lower wall-clock efficiency
+
+This tradeoff is acceptable when allocation count is the binding constraint.
+
 ## Run Root Layout
 
 Every alternating RL run has one shared root:
@@ -364,6 +523,7 @@ Example:
   "tpu_name": "math500-alt-20260320-120000",
   "tpu_type": "v5p-16",
   "zone": "us-east5-a",
+  "image_digest": "us-east5-docker.pkg.dev/project/levanter/image@sha256:...",
   "current_policy_path": "gs://bucket/alternating-rl/math500-alt-20260320-120000/policies/policy_0003",
   "current_levanter_checkpoint_path": "gs://bucket/alternating-rl/math500-alt-20260320-120000/levanter_checkpoints/phase_0002",
   "current_sampling_manifest": "gs://bucket/alternating-rl/math500-alt-20260320-120000/sampling/phase_0003/manifest.json",
@@ -383,6 +543,9 @@ Allowed `status` values:
 - `failed`
 
 We should use one enum for this in code. Do not use multiple booleans like `is_sampling`, `is_training`, `did_export`.
+
+The controller writes `image_digest` at bootstrap and must refuse to launch any
+later phase with a different image digest. Mid-run image drift is not allowed.
 
 ## Policy Manifest
 
@@ -639,7 +802,44 @@ So each sampling phase has two sub-steps:
 
 ### Host quotas
 
-The controller assigns each host an explicit quota:
+The controller assigns each host an explicit quota, but in v1 those quotas
+should be **derived** from `steps_per_phase`, not hand-tuned independently.
+
+The key sizing rule is:
+
+- v1 should run with `max_samples = 1` for the alternating path
+
+That keeps the semantics closest to batched on-policy training: each individual
+rollout is consumed at most once during the next training phase.
+
+Given:
+
+- `S = steps_per_phase`
+- `B = global_batch_size`
+- `G = n_generations_per_prompt`
+- `H = num_hosts`
+
+the minimum number of individual rollouts needed for one phase is:
+
+```text
+required_individual_rollouts = S * B
+```
+
+The minimum number of rollout groups is:
+
+```text
+required_groups = ceil(required_individual_rollouts / G)
+```
+
+And the per-host train quota is:
+
+```text
+target_train_groups_per_host = ceil(required_groups / H)
+```
+
+On top of that, the controller adds a separate eval quota.
+
+So the manifest should carry:
 
 - `target_eval_groups`
 - `target_train_groups`
@@ -651,6 +851,29 @@ Why explicit quotas?
 - they avoid one fast host sampling forever while another lags
 
 Each host should keep generating until it has written at least its quota. If one final batch overshoots the quota slightly, that is fine. The materializer reads what actually exists.
+
+### Why `max_samples = 1` is more than a sizing detail
+
+This is not just an implementation convenience. It is an algorithmic choice.
+
+With `max_samples = 1`:
+
+- each sampled rollout influences training at most once
+- the alternating path behaves like batched policy iteration with no replay reuse
+- low-quality or uninformative rollouts still consume part of the next training phase budget
+
+This has two implications:
+
+- it keeps the semantics close to “generate fresh data, then train once on it”
+- it removes one of the stabilizing knobs the concurrent replay buffer has, namely
+  the ability to reuse or oversample especially informative rollouts
+
+So learning dynamics in alternating RL are affected by **both**:
+
+- policy lag from `steps_per_phase`
+- lack of rollout reuse from `max_samples = 1`
+
+That combination needs empirical validation, not assumption.
 
 ### Sampling outputs
 
@@ -700,6 +923,20 @@ Why this matters:
 
 So the controller may run locally, but the data-heavy phase-boundary work should run on the pod.
 
+### Bounded-memory requirement
+
+Worker 0 is the right place to host the materializer in v1, but worker 0 is not
+allowed to become a giant in-memory aggregation point.
+
+The materializer must keep memory bounded by:
+
+- one input rollout file
+- small per-environment buffers
+- metadata for its local spill files
+
+If it needs to hold more than that, it should spill to local disk under a
+phase-specific temporary directory on worker 0.
+
 ### Inputs
 
 The materializer reads:
@@ -731,21 +968,76 @@ Because `TrainingBatch` is already the exact object the trainer needs after:
 
 Those semantics already live in `create_training_batch_from_rollouts()` and should be applied once, deterministically, at the phase boundary.
 
+### Old-policy logprobs are a required input, not optional metadata
+
+The training loss uses the generating policy’s logprobs for the importance
+sampling ratio. That means the sampling phase must persist old-policy per-token
+logprobs and the materializer must preserve them into the final packed training
+batch.
+
+Current Marin already has this path:
+
+- `Rollout.response_logprobs` in `lib/marin/src/marin/rl/types.py:63-64`
+- `create_training_batch_from_rollouts()` packs them into
+  `TrainingBatch.policy_logprobs` in `lib/marin/src/marin/rl/train_batch.py:69-86`
+  and `lib/marin/src/marin/rl/train_batch.py:156-166`
+
+So this is not a new field we need to invent. But it is a hard contract for the
+alternating path:
+
+- raw rollout files must contain `response_logprobs`
+- spill files must retain them
+- `batch_<step>.pkl` must retain them
+
+If any phase drops those logprobs, the alternating training path is invalid.
+
 ### Materialization algorithm
 
-The materializer should do exactly this:
+The materializer should be implemented as a **streaming two-pass pipeline**.
 
-1. Read all raw rollout files.
-2. Filter to `policy_version == p`.
-3. For each rollout group, compute advantages with the configured `RLLossModule`.
-4. Flatten groups into `RolloutWithAdvantage` records.
-5. Partition rollouts by `env_name`.
-6. For each training step to materialize:
-   - sample `global_batch_size` individual rollouts using the same environment-balanced and recency-biased policy as the current replay buffer
-   - build a `TrainingBatch`
-   - serialize it to `batch_<step>.pkl`
+#### Pass 1: ingest and spool
 
-This reuses the useful logic from `ReplayBuffer` but makes the result explicit and finite.
+1. Iterate raw rollout files in deterministic sorted order.
+2. For each file:
+   - deserialize one `RolloutBatch`
+   - verify `policy_version == p`
+   - compute advantages for each rollout group immediately
+   - flatten to `RolloutWithAdvantage` records
+   - append those records to a local per-environment spill file
+3. Record per-environment counts and spill-file metadata in a small local index.
+
+The spill directory can look like:
+
+```text
+/tmp/marin-alt-materializer/phase_0003/
+  index.json
+  algebra/
+    shard_000.pkl
+    shard_001.pkl
+  geometry/
+    shard_000.pkl
+  number_theory/
+    shard_000.pkl
+```
+
+This pass does all expensive reward/advantage normalization exactly once while
+keeping RSS bounded.
+
+#### Pass 2: sample and pack
+
+1. Open the local spill index.
+2. Reuse the current replay sampling policy:
+   - environment-balanced sampling
+   - recency bias via `alpha`
+   - max usage count via `max_samples`
+3. Produce exactly `steps_per_phase` output batches.
+4. For each output batch:
+   - sample `global_batch_size` individual rollouts
+   - build one `TrainingBatch`
+   - write `batch_<step>.pkl`
+
+This preserves the useful parts of `ReplayBuffer` while moving them into an
+explicit offline boundary step.
 
 ### Sampling policy during materialization
 
@@ -759,7 +1051,19 @@ The first implementation should preserve the current replay semantics as closely
 The cleanest implementation is likely:
 
 - factor the sampling logic from `ReplayBuffer.sample_rollouts()` into a reusable helper
-- use that helper offline inside the materializer
+- feed that helper with local spill-file metadata instead of an in-memory list
+
+### Why not overlap materialization with straggling samplers in v1
+
+The architecture could eventually support overlapping materialization with late
+sampling hosts, but v1 should not do that.
+
+Waiting for all host `status.json` files before starting materialization keeps
+the phase boundary easy to reason about:
+
+- all sampling inputs are final
+- there is one manifest for the whole phase
+- resume logic does not need to reason about partially materialized input sets
 
 ### Determinism
 
@@ -853,6 +1157,73 @@ Recommended rule:
 
 That makes the phase boundary legible and removes all ambiguity.
 
+### `steps_per_phase` is the main economic and algorithmic knob
+
+This parameter controls two competing forces:
+
+- **phase overhead amortization**
+- **policy lag**
+- **single-use data**
+
+For the alternating design:
+
+```text
+policy_lag_in_steps = steps_per_phase
+```
+
+because one frozen policy generates the entire next training phase’s data.
+
+At the same time, larger phases amortize the fixed boundary cost better.
+
+Using a simple training-side approximation:
+
+- assume warm-cache phase boundary cost `O = 120s`
+- assume training step time `T = 10s`
+
+then the boundary fraction relative to training time alone is:
+
+```text
+boundary_fraction ~= O / (O + steps_per_phase * T)
+```
+
+Example values:
+
+| `steps_per_phase` | Training time only | Boundary fraction |
+|-------------------|--------------------|-------------------|
+| 40 | 400s | 23% |
+| 80 | 800s | 13% |
+| 160 | 1600s | 7% |
+
+These are intentionally conservative because they ignore sampling compute. They
+still show the important shape of the tradeoff: very small phases are expensive.
+
+The other side of the tradeoff is learning dynamics:
+
+- 20-40 steps: freshest policy, but likely poor utilization
+- 80-160 steps: likely the first useful search range
+- >200 steps: high-lag regime, only acceptable if experiments show stable learning
+
+This is not only a policy-lag question. With `max_samples = 1`, larger phases
+also mean more of the run’s learning signal comes from one large frozen batch of
+single-use rollouts. That is a meaningful regime change from the existing
+concurrent replay-based path.
+
+So the document should not pretend there is a universally correct setting. The
+correct initial plan is to empirically sweep this knob.
+
+### Initial recommendation for v1 experiments
+
+Do not bake in a single unquestioned default. Instead:
+
+1. start with `steps_per_phase` in `{40, 80, 160}`
+2. measure warm-cache phase overhead
+3. measure learning quality versus the concurrent baseline
+4. only promote a default after both utilization and learning dynamics look acceptable
+
+If the algorithm degrades sharply once policy lag reaches 80-160 steps, this
+execution mode may still be valuable as an availability fallback, but it should
+not be presented as a preferred research default.
+
 ### Checkpointing during training
 
 We should keep normal Levanter checkpointing during the phase, not just at the end.
@@ -883,6 +1254,22 @@ If this turns out to be awkward in practice, the fallback is:
 - reconstruct a global array with JAX multihost utilities
 
 But that is a fallback. The day-1 implementation should optimize for an obvious correctness story.
+
+### This `hax.shard()` path needs explicit validation
+
+This loading path is simple, but it is not the same path as Levanter’s usual
+per-process sliced dataset flow.
+
+So we need an early correctness test that:
+
+1. constructs one known `TrainingBatch`
+2. has every host deserialize the same batch
+3. applies `hax.shard(...)` on every host
+4. verifies the resulting global sharded arrays are numerically identical to an
+   expected reference layout
+
+This is a validation requirement, not an optional nice-to-have. If this path is
+wrong, training could silently produce bad gradients.
 
 ## Policy Export In Detail
 
@@ -1176,7 +1563,9 @@ class AlternatingRLConfig:
     tokenizer: str
     initial_checkpoint: str
     steps_per_phase: int
-    train_groups_per_host: int
+    training_compilation_cache_dir: str
+    sampling_compilation_cache_dir: str
+    train_groups_per_host: int | None
     eval_groups_per_host: int
 
 @dataclass
@@ -1210,6 +1599,10 @@ class SamplingManifest:
 
 The controller writes these as JSON. Do not invent parallel ad-hoc JSON structures in different modules.
 
+`train_groups_per_host` should be `None` in the normal path so the controller
+derives it from `steps_per_phase`. It exists only as an escape hatch for
+advanced experiments.
+
 ## Recommended Container Names
 
 Use fixed container names so phase cleanup is easy and scripts stay legible:
@@ -1229,7 +1622,9 @@ This is what one controller iteration should do operationally.
 For each worker ordinal `i`:
 
 1. `stop_container_on_worker(..., name="marin-alt-sampler")`
-2. `run_container_on_worker(..., worker_ordinal=i, name="marin-alt-sampler", command="... --mode sampling-host ... --host-ordinal i")`
+2. verify the container is gone
+3. run a small worker health probe
+4. `run_container_on_worker(..., worker_ordinal=i, name="marin-alt-sampler", command="... --mode sampling-host ... --host-ordinal i")`
 
 Then:
 
@@ -1241,17 +1636,21 @@ Then:
 On worker `0` only:
 
 1. `stop_container_on_worker(..., name="marin-alt-materializer")`
-2. `run_container_on_worker(..., worker_ordinal=0, name="marin-alt-materializer", command="... --mode materialize ...")`
-3. wait for `materialized/phase_<p>/manifest.json`
+2. verify the container is gone
+3. run a small worker health probe
+4. `run_container_on_worker(..., worker_ordinal=0, name="marin-alt-materializer", command="... --mode materialize ...")`
+5. wait for `materialized/phase_<p>/manifest.json`
 
 ### Training
 
 On all workers:
 
 1. `stop_container_all_workers(..., name="marin-alt-trainer")`
-2. `run_container_all_workers(..., name="marin-alt-trainer", command="... --mode train-phase ...")`
-3. wait for training completion marker or process exit
-4. verify new Levanter checkpoint path and new policy manifest exist
+2. verify the containers are gone
+3. run a small all-worker health probe
+4. `run_container_all_workers(..., name="marin-alt-trainer", command="... --mode train-phase ...")`
+5. wait for training completion marker or process exit
+6. verify new Levanter checkpoint path and new policy manifest exist
 
 ## Detailed Controller Algorithm
 
@@ -1345,6 +1744,85 @@ On a single-host TPU pod, the design degenerates cleanly:
 
 That means this design is not “multi-host only”. It is one design that covers both cases.
 
+## Go / No-Go Validation Before Adoption
+
+This mode should not be promoted based on architectural cleanliness alone. We
+need evidence in four areas.
+
+### 1. Warm-cache validation
+
+Run two identical sampling starts and two identical training starts on the same
+TPU pod with persistent cache paths.
+
+We want to see:
+
+- the second training start avoids a full cold compile
+- the second sampling start avoids a full cold compile
+- warm-start timings are materially lower than cold-start timings
+
+If the second start still looks cold, treat that as a blocker.
+
+### 1b. Identical-input sharding validation
+
+Run a dedicated multi-host test for the new loader contract:
+
+- every host reads the same serialized `TrainingBatch`
+- every host calls `hax.shard(...)`
+- the resulting sharded arrays match an expected reference
+
+If this path does not validate cleanly, do not proceed with the alternating
+training implementation.
+
+### 2. Phase-boundary budget validation
+
+Measure the second full transition:
+
+- sampling stop
+- materialization
+- training start
+- training finish
+- export
+- sampling start
+
+Record the warm-cache boundary time. If this remains much higher than the
+target `90-180s` range, the design may still be correct but should not be
+marketed as efficient.
+
+### 3. `steps_per_phase` sweep
+
+Run a small sweep over:
+
+- `40`
+- `80`
+- `160`
+
+For each point, measure:
+
+- phase overhead fraction
+- rollout throughput
+- trainer throughput
+- learning quality versus the concurrent baseline
+
+This sweep determines whether the alternating design has a usable operating
+range or only functions as a quota-constrained fallback.
+
+The sweep should be interpreted as measuring both:
+
+- policy lag sensitivity
+- sensitivity to the `max_samples = 1` single-use data regime
+
+### 4. Materializer throughput and memory
+
+On a representative phase size, measure:
+
+- worker 0 RSS
+- wall-clock materialization time
+- bytes read from GCS
+- bytes written back
+
+If worker 0 RSS grows linearly with total rollout volume, the materializer
+implementation has violated the bounded-memory requirement.
+
 ## Tests
 
 We should not treat this as complete without end-to-end tests. At minimum:
@@ -1382,16 +1860,19 @@ We should not treat this as complete without end-to-end tests. At minimum:
 
 This is the order I would actually build it in.
 
-1. Add run state + manifest dataclasses and JSON I/O.
+1. Add persistent compile-cache wiring and fixed cache paths for both training and sampling.
 2. Add the existing-pod TPU infra helpers in Levanter.
-3. Add policy export support for “one export per phase” inside the training phase process.
-4. Add the one-host sampling runner with frozen policy and frozen curriculum.
-5. Add the controller that launches sampling on every host and waits for `status.json`.
-6. Add the offline materializer that writes `TrainingBatch` files.
-7. Add the training phase runner over materialized batches.
-8. Add resume logic.
-9. Add eval prelude and curriculum phase-boundary update.
-10. Add end-to-end integration tests.
+3. Validate warm-cache reuse on repeated sampling and training starts on the same pod.
+4. Validate the identical-input `hax.shard(...)` training loader path on a small multi-host test.
+5. Add run state + manifest dataclasses and JSON I/O.
+6. Add policy export support for “one export per phase” inside the training phase process.
+7. Add the one-host sampling runner with frozen policy and frozen curriculum.
+8. Add the controller that launches sampling on every host and waits for `status.json`.
+9. Add the streaming offline materializer that writes `TrainingBatch` files.
+10. Add the training phase runner over materialized batches.
+11. Add resume logic.
+12. Add eval prelude and curriculum phase-boundary update.
+13. Add end-to-end integration tests and the `steps_per_phase` sweep.
 
 This order keeps the riskiest concurrency questions out of the first passes.
 
@@ -1411,6 +1892,7 @@ This order keeps the riskiest concurrency questions out of the first passes.
 - Add richer per-phase metrics dashboards.
 - Add a policy export cache if export time becomes material.
 - Add optional shorter subphases if policy lag becomes too large.
+- Overlap materialization with late-arriving samplers once the basic phase-boundary model is proven stable.
 
 ## Final Recommendation
 
@@ -1423,4 +1905,18 @@ The right abstraction is:
 - **two runtime topologies**
 - **durable file-based phase boundaries**
 
-That is the simplest design that matches the code Marin already has, the training mode Levanter already supports, and the multi-host sampling pattern that already appears to work well for vLLM.
+That is the simplest design that matches the code Marin already has, the
+training mode Levanter already supports, and the multi-host sampling pattern
+that already appears to work well for vLLM.
+
+But this should be presented honestly:
+
+- it is the best design for **single-allocation** multi-host RL
+- it is not automatically the best wall-clock RL mode when two TPU allocations are available
+
+So the recommendation is:
+
+1. build this as a separate execution mode
+2. require warm-cache validation before claiming it is economical
+3. compare it head-to-head against the concurrent two-TPU baseline
+4. treat it as the preferred option when allocation count or availability is the binding constraint
