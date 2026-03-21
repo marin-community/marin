@@ -704,7 +704,7 @@ class IrisClient:
             )
 
         try:
-            self._cluster_client.submit_job(
+            canonical_id = self._cluster_client.submit_job(
                 job_id=job_id,
                 entrypoint=entrypoint,
                 resources=resources_proto,
@@ -726,7 +726,7 @@ class IrisClient:
                 raise JobAlreadyExists(Job(self, job_id), str(e)) from e
             raise
 
-        return Job(self, job_id)
+        return Job(self, canonical_id)
 
     def status(self, job_id: JobName) -> cluster_pb2.JobStatus:
         """Get job status.
