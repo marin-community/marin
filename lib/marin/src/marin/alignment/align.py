@@ -25,6 +25,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from fray.v2.types import ResourceConfig
+from iris.marin_fs import url_to_fs
 from levanter.data.text.preference import PreferenceChatLmDatasetFormat
 
 from marin.alignment.generate_prompts import PromptGenConfig, generate_prompts_from_spec
@@ -113,12 +114,10 @@ class AlignConfig:
 
 def _upload_spec(config) -> None:
     """Upload a local spec JSONL to the executor output path (GCS)."""
-    import fsspec
-
     source_path = config.source_path
     output_path = config.output_path
 
-    fs_out, out_path = fsspec.core.url_to_fs(output_path)
+    fs_out, out_path = url_to_fs(output_path)
     fs_out.makedirs(out_path, exist_ok=True)
 
     dest_file = f"{out_path}/spec.jsonl"

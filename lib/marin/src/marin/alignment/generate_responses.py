@@ -22,6 +22,9 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from iris.marin_fs import url_to_fs
+
+from marin.alignment.generate_prompts import _write_sharded_jsonl_gz
 from marin.alignment.inference_config import InferenceConfig, LiteLLMConfig, VLLMConfig
 from marin.alignment.llm_client import llm_chat
 
@@ -63,9 +66,7 @@ class ResponseGenConfig:
 
 def _load_prompts(prompts_path: str) -> list[dict[str, Any]]:
     """Load prompts from sharded JSONL.GZ files. Supports both local and GCS paths."""
-    import fsspec
-
-    fs, base_path = fsspec.core.url_to_fs(prompts_path)
+    fs, base_path = url_to_fs(prompts_path)
     all_prompts: list[dict[str, Any]] = []
 
     shard_files = sorted(fs.glob(f"{base_path}/*.jsonl.gz"))
@@ -89,9 +90,7 @@ def _load_behavior_statements(path: str) -> dict[str, str]:
 
     Supports both local and GCS paths.
     """
-    import fsspec
-
-    fs, resolved_path = fsspec.core.url_to_fs(path)
+    fs, resolved_path = url_to_fs(path)
     with fs.open(resolved_path, "r", encoding="utf-8") as f:
         first_char = f.read(1)
         f.seek(0)
@@ -293,6 +292,4 @@ def generate_responses(config: ResponseGenConfig) -> None:
     logger.info("Generated responses for %d prompts", len(results))
 
     # Write output (supports both local and GCS paths)
-    from marin.alignment.generate_prompts import _write_sharded_jsonl_gz
-
     _write_sharded_jsonl_gz(results, config.output_path, shard_size=5000)

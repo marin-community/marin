@@ -18,6 +18,9 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from iris.marin_fs import url_to_fs
+
+from marin.alignment.generate_prompts import _write_sharded_jsonl_gz
 from marin.alignment.llm_client import llm_chat_single
 from marin.alignment.prompts.judge import build_compliance_judge_prompt, build_judge_system_prompt
 from marin.alignment.types import ComplianceResult, Statement
@@ -45,9 +48,7 @@ class JudgePairConfig:
 
 def _load_responses(path: str) -> dict[str, dict[str, Any]]:
     """Load responses keyed by prompt_id. Supports both local and GCS paths."""
-    import fsspec
-
-    fs, base_path = fsspec.core.url_to_fs(path)
+    fs, base_path = url_to_fs(path)
     responses: dict[str, dict[str, Any]] = {}
     for shard_file in sorted(fs.glob(f"{base_path}/*.jsonl.gz")):
         with fs.open(shard_file, "rb") as raw_f:
@@ -279,8 +280,6 @@ def judge_and_build_pairs(config: JudgePairConfig) -> None:
     )
 
     # Write output as sharded JSONL.GZ (supports both local and GCS paths)
-    from marin.alignment.generate_prompts import _write_sharded_jsonl_gz
-
     _write_sharded_jsonl_gz(pairs, config.output_path, shard_size=5000)
 
     logger.info("Wrote %d preference pairs to %s", len(pairs), config.output_path)

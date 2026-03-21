@@ -21,6 +21,9 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from iris.marin_fs import url_to_fs
+from zephyr import write_jsonl_file
+
 from marin.alignment.coverage import compute_coverage_stats, generate_covering_configs, make_tags
 from marin.alignment.llm_client import llm_chat_single
 from marin.alignment.prompts.concretize import make_concretize_prompt
@@ -75,9 +78,7 @@ class PromptGenConfig:
 
 def load_spec(spec_path: str) -> dict[str, Statement]:
     """Load behavioral statements from a JSONL file. Supports both local and GCS paths."""
-    import fsspec
-
-    fs, resolved_path = fsspec.core.url_to_fs(spec_path)
+    fs, resolved_path = url_to_fs(spec_path)
     statements: dict[str, Statement] = {}
     is_gz = resolved_path.endswith(".gz")
 
@@ -478,18 +479,10 @@ def generate_prompts_from_spec(config: PromptGenConfig) -> None:
 
 def _write_sharded_jsonl_gz(records: list[dict[str, Any]], output_path: str, shard_size: int = 5000) -> None:
     """Write records as sharded JSONL.GZ files. Supports both local and GCS paths."""
-    import fsspec
-
-    fs, base_path = fsspec.core.url_to_fs(output_path)
-    fs.makedirs(base_path, exist_ok=True)
-
     for shard_idx in range(0, max(1, len(records)), shard_size):
         shard = records[shard_idx : shard_idx + shard_size]
         shard_num = shard_idx // shard_size
-        shard_file = f"{base_path}/shard_{shard_num:05d}.jsonl.gz"
-        with fs.open(shard_file, "wb") as raw_f:
-            with gzip.open(raw_f, "wt", encoding="utf-8") as f:
-                for record in shard:
-                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        shard_file = f"{output_path}/shard_{shard_num:05d}.jsonl.gz"
+        write_jsonl_file(shard, shard_file)
 
     logger.info("Wrote %d records to %d shards in %s", len(records), (len(records) // shard_size) + 1, output_path)
