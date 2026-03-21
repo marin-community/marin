@@ -273,6 +273,30 @@ def test_filesystem_coordinator_terminal_status_roundtrip(tmp_path):
     assert info.status == "failed"
 
 
+def test_filesystem_coordinator_accepts_initial_weights_after_restart(tmp_path):
+    """weight_id=-1 (initial weights) bypasses the stale check so a restarted trainer can publish."""
+    metadata_path = tmp_path / "coord.json"
+    coordinator = FileSystemArrowFlightCoordinator(str(metadata_path))
+
+    # Simulate a run that reached step 50
+    coordinator.update_server(50, ["p1"], [("host", 1234)])
+    assert coordinator.fetch_server().weight_id == 50
+
+    # Trainer restarts and publishes initial weights (-1). Must succeed.
+    coordinator.update_server(-1, ["p1"], [("new-host", 5678)])
+    info = coordinator.fetch_server()
+    assert info.weight_id == -1
+    assert info.server_addresses == ["grpc://new-host:5678"]
+
+    # Normal updates still get the stale check
+    coordinator.update_server(45, ["p1"], [("new-host", 5678)])
+    assert coordinator.fetch_server().weight_id == 45
+
+    # Stale update is still rejected
+    coordinator.update_server(44, ["p1"], [("new-host", 5678)])
+    assert coordinator.fetch_server().weight_id == 45  # unchanged
+
+
 def test_filesystem_coordinator_terminal_before_first_publish(tmp_path):
     """Terminal status written before any update_server still produces a readable ServerInfo."""
     metadata_path = tmp_path / "coord.json"

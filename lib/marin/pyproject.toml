@@ -142,6 +142,7 @@ rl = [
     "prime",
     "sympy>=1.12.1,<1.14",
     "verifiers==0.1.5",
+    "pylatexenc",
 ]
 
 eval = [

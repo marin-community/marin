@@ -21,6 +21,14 @@ dependencies = [
     "dupekit >= 0.1.0",
 ]
 
+[project.optional-dependencies]
+# Composite extras that forward to subpackage extras.
+# Used by Docker builds to sync all needed deps in one command.
+rl = [
+    "levanter[serve,tpu]",
+    "marin[vllm,rl,tpu]",
+]
+
 [tool.uv]
 fork-strategy = "fewest"
 find-links = ["https://github.com/marin-community/marin/releases/expanded_assets/dupekit-0.1.0-41b51df"]

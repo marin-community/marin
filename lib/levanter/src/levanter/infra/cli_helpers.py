@@ -101,13 +101,15 @@ def add_arg(parser: argparse.ArgumentParser, config: CliConfig, flags: list[str]
 
 
 def load_config() -> CliConfig:
-    if os.path.exists(".levanter.yaml"):
-        d = yaml.load(open(".levanter.yaml", "r"), Loader=yaml.SafeLoader)
-    elif os.path.exists(".config"):
-        warnings.warn("Using deprecated .config file. Please rename to .levanter.yaml")
-        d = yaml.load(open(".config", "r"), Loader=yaml.SafeLoader)
-    else:
+    config_path = _find_config_path()
+
+    if config_path is None:
         d = {}
+    else:
+        if config_path.name == ".config":
+            warnings.warn("Using deprecated .config file. Please rename to .marin.yaml or .levanter.yaml")
+        with config_path.open("r") as f:
+            d = yaml.load(f, Loader=yaml.SafeLoader)
 
     return draccus.decode(CliConfig, d)
 
@@ -129,6 +131,32 @@ def default_run_id():
     for char in run_id:
         assert char in "abcdefghijklmnopqrstuvwxyz0123456789"
     return run_id
+
+
+def _find_config_path(start: Path | None = None) -> Path | None:
+    search_root = (start or Path.cwd()).resolve()
+    repo_root = find_repo_root(search_root)
+
+    search_dirs = [search_root] + list(search_root.parents)
+    if repo_root in search_dirs:
+        search_dirs = search_dirs[: search_dirs.index(repo_root) + 1]
+
+    for directory in search_dirs:
+        marin_path = directory / ".marin.yaml"
+        levanter_path = directory / ".levanter.yaml"
+        legacy_path = directory / ".config"
+
+        if marin_path.exists() and levanter_path.exists():
+            warnings.warn(f"Both .marin.yaml and .levanter.yaml found in {directory}; using .marin.yaml")
+            return marin_path
+        if marin_path.exists():
+            return marin_path
+        if levanter_path.exists():
+            return levanter_path
+        if legacy_path.exists():
+            return legacy_path
+
+    return None
 
 
 def find_repo_root(start: Path | None = None) -> Path:

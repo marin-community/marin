@@ -1,0 +1,13 @@
+.git
+.venv
+.ruff_cache
+.pytest_cache
+.mypy_cache
+__pycache__
+node_modules
+data_browser
+docs/
+lib/levanter/docs
+lib/harbor/viewer
+lib/iris/dashboard
+*.pack

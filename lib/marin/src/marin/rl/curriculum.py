@@ -622,3 +622,14 @@ def get_or_create_curriculum_actor(config: CurriculumConfig, checkpoint_path: st
             logger.warning(f"Failed to restore curriculum checkpoint from {checkpoint_path}: {e}, starting fresh")
 
     return actor
+
+
+def create_local_curriculum(config: CurriculumConfig, checkpoint_path: str | None = None) -> "Curriculum":
+    """Create a local Curriculum instance for no-Ray manual mode."""
+    curriculum = Curriculum(config)
+    if checkpoint_path:
+        try:
+            curriculum.restore_checkpoint(checkpoint_path)
+        except Exception as e:
+            logger.warning(f"Failed to restore curriculum checkpoint from {checkpoint_path}: {e}, starting fresh")
+    return curriculum

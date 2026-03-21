@@ -34,13 +34,17 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=lib/haliax/pyproject.toml,target=lib/haliax/pyproject.toml \
     --mount=type=bind,source=lib/fray/pyproject.toml,target=lib/fray/pyproject.toml \
     --mount=type=bind,source=lib/zephyr/pyproject.toml,target=lib/zephyr/pyproject.toml \
-    uv sync --frozen --no-install-workspace --package levanter --extra serve --extra tpu
+    --mount=type=bind,source=lib/marin/pyproject.toml,target=lib/marin/pyproject.toml \
+    --mount=type=bind,source=lib/iris/pyproject.toml,target=lib/iris/pyproject.toml \
+    uv sync --frozen --no-install-workspace --extra rl
 
 ADD . /opt/marin
 
-# Make python -m levanter.main.train_lm work:
+# Install workspace packages. The "rl" extra on marin-root pulls in
+# levanter[serve,tpu] + marin[vllm,rl] so all deps (including flax==0.11.1
+# required by tpu-inference) are resolved consistently.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --package levanter --extra serve --extra tpu
+    uv sync --frozen --extra rl
 
 
 WORKDIR /opt/marin/lib/levanter

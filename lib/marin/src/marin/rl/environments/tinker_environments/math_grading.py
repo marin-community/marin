@@ -12,6 +12,7 @@ Includes math_normalize functionality that was dependency of grader.
 
 import contextlib
 import logging
+import multiprocessing
 import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Any, Callable, Dict, Tuple, TypeVar
@@ -223,9 +224,26 @@ BAD_REGEXES = [r"\^[0-9]+\^", r"\^[0-9][0-9]+"]
 TUPLE_CHARS = "()[]"
 
 
-def _sympy_parse(expr: str):
-    """Parses an expression with sympy."""
-    py_expr = expr.replace("^", "**")
+_SYMPY_TIMEOUT = 10  # seconds; sympy can hang on pathological expressions like 2**999999
+
+
+def _run_in_process_with_timeout(fn, args, timeout):
+    """Run fn(*args) in a subprocess with a hard timeout.
+
+    ThreadPoolExecutor can't kill CPU-bound Python threads (GIL never yields),
+    so we use multiprocessing which can actually terminate the stuck worker.
+    """
+    with multiprocessing.Pool(processes=1) as pool:
+        result = pool.apply_async(fn, args)
+        try:
+            return result.get(timeout=timeout)
+        except multiprocessing.TimeoutError:
+            pool.terminate()
+            raise TimeoutError(f"timed out after {timeout}s")
+
+
+def _parse_expr_worker(py_expr: str):
+    """Worker function for subprocess — must be top-level for pickling."""
     return sympy_parser.parse_expr(
         py_expr,
         transformations=(
@@ -233,6 +251,16 @@ def _sympy_parse(expr: str):
             + (sympy_parser.implicit_multiplication_application,)
         ),
     )
+
+
+def _sympy_parse(expr: str):
+    """Parses an expression with sympy, with a hard process-level timeout."""
+    py_expr = expr.replace("^", "**")
+    try:
+        return _run_in_process_with_timeout(_parse_expr_worker, (py_expr,), _SYMPY_TIMEOUT)
+    except TimeoutError:
+        logger.warning("sympy parse_expr timed out after %ds on: %.100s", _SYMPY_TIMEOUT, py_expr)
+        raise
 
 
 def _parse_latex(expr: str) -> str:
@@ -398,13 +426,22 @@ def should_allow_eval(expr: str):
     return all(re.search(bad_regex, expr) is not None for bad_regex in BAD_REGEXES)
 
 
+def _sympy_simplify_with_timeout(expr, timeout=_SYMPY_TIMEOUT):
+    """Run sympy.simplify with a hard process-level timeout."""
+    try:
+        return _run_in_process_with_timeout(sympy.simplify, (expr,), timeout)
+    except TimeoutError:
+        logger.warning("sympy.simplify timed out after %ds", timeout)
+        raise
+
+
 def are_equal_under_sympy(ground_truth_normalized: str, given_normalized: str):
     are_equal = False
     try:
         expr = f"({ground_truth_normalized})-({given_normalized})"
         if should_allow_eval(expr):
             sympy_diff = _sympy_parse(expr)
-            simplified = sympy.simplify(sympy_diff)
+            simplified = _sympy_simplify_with_timeout(sympy_diff)
             if simplified == 0:
                 are_equal = True
     except Exception:

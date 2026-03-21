@@ -237,7 +237,15 @@ def create_inference_context(
     inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig,
     inflight_weight_updates: bool,
 ) -> BaseInferenceContext:
-    """Create an inference context based on the configuration."""
+    """Create an inference context based on the configuration.
+
+    IMPORTANT: When inflight_weight_updates=True with vLLM, this creates an
+    AsyncvLLMInferenceContext which uses AsyncLLM. AsyncLLM always forks an
+    EngineCore subprocess via os.fork(). If JAX's TPU runtime has been fully
+    initialized before this fork (e.g., by calling jax.devices()), the forked
+    subprocess will deadlock on TPU device locks (/dev/vfio). This function
+    must be called BEFORE any code that initializes JAX on TPU.
+    """
     if inference_type == "levanter":
         # Infer model_axis_size from the actual TPU configuration now that JAX is initialized.
         # For inference servers, we shard across all local devices on a single host.
@@ -657,9 +665,13 @@ class RolloutWorker:
         try:
             faulthandler.enable()  # dump tracebacks on segfault/abort
             faulthandler.register(signal.SIGUSR2, file=sys.stderr, all_threads=True)  # manual: kill -USR2 <pid>
-            # For inflight weight updates, wait for first weights before generating rollouts
+            # For inflight weight updates, wait for first weights before generating rollouts.
+            # The trainer and sampler start simultaneously, so the trainer may not have
+            # published initial weights yet. Use a generous timeout (default 20 min).
             if self.config.inflight_weight_updates:
                 max_wait_time = self.config.weight_transfer.max_weight_transfer_wait_time
+                if max_wait_time <= 0:
+                    max_wait_time = 1200.0  # 20 minutes default for first-weight wait
                 logger.info(
                     "Waiting for first weight transfer before starting inference (timeout %.1fs)...",
                     max_wait_time,

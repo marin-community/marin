@@ -5129,6 +5129,7 @@ math = [
 ]
 rl = [
     { name = "prime" },
+    { name = "pylatexenc" },
     { name = "sympy" },
     { name = "verifiers" },
 ]
@@ -5263,6 +5264,7 @@ requires-dist = [
     { name = "prime", marker = "extra == 'rl'" },
     { name = "pyarrow", specifier = ">=22" },
     { name = "pylatexenc", marker = "extra == 'math'" },
+    { name = "pylatexenc", marker = "extra == 'rl'" },
     { name = "ray", specifier = "==2.53.0" },
     { name = "regex" },
     { name = "requests" },
@@ -5379,6 +5381,15 @@ dependencies = [
     { name = "zephyr" },
 ]
 
+[package.optional-dependencies]
+rl = [
+    { name = "levanter", extra = ["serve"] },
+    { name = "levanter", extra = ["tpu"], marker = "extra == 'extra-8-levanter-tpu' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu')" },
+    { name = "marin", extra = ["rl"] },
+    { name = "marin", extra = ["tpu"], marker = "extra == 'extra-5-marin-tpu' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
+    { name = "marin", extra = ["vllm"], marker = "(extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-gpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "dupekit", specifier = ">=0.1.0" },
@@ -5386,10 +5397,13 @@ requires-dist = [
     { name = "haliax", editable = "lib/haliax" },
     { name = "iris", editable = "lib/iris" },
     { name = "levanter", editable = "lib/levanter" },
+    { name = "levanter", extras = ["serve", "tpu"], marker = "extra == 'rl'", editable = "lib/levanter" },
     { name = "marin", editable = "lib/marin" },
+    { name = "marin", extras = ["vllm", "rl", "tpu"], marker = "extra == 'rl'", editable = "lib/marin" },
     { name = "watchdog" },
     { name = "zephyr", editable = "lib/zephyr" },
 ]
+provides-extras = ["rl"]
 
 [[package]]
 name = "markdown"

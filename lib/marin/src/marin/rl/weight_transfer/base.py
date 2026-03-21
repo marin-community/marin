@@ -70,7 +70,9 @@ class WeightTransferConfig:
 
     transfer_timeout: float = 600.0
     max_weight_transfer_wait_time: float = 0.0
-    """Maximum time (in seconds) to wait for new weights before proceeding. 0 means run ahead without waiting."""
+    """Maximum time (in seconds) to wait for new weights before proceeding. 0 means run ahead without waiting.
+    Note: when inflight_weight_updates=True, the first-weight wait defaults to 1200s regardless of this value,
+    because the trainer and sampler start simultaneously and the trainer needs time to publish initial weights."""
 
     # GCS Checkpoint specific
     checkpoint_dir: str = ""

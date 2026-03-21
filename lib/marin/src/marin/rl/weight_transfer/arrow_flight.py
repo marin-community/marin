@@ -254,10 +254,11 @@ class FileSystemArrowFlightCoordinator:
         self._metadata_path = metadata_path
 
     def update_server(self, weight_id: int, param_names: list[str], server_locations: list[tuple[str, int]]) -> None:
-        # Read existing to check for stale updates (use strict < so restarts can overwrite)
+        # Read existing to check for stale updates. weight_id=-1 (initial weights)
+        # always bypasses the check so a restarted trainer can publish after preemption.
         existing = self._read_metadata()
         if existing is not None and existing.get("weight_id") is not None:
-            if weight_id < existing["weight_id"]:
+            if weight_id >= 0 and weight_id < existing["weight_id"]:
                 logger.warning(f"Ignoring stale weight update: {weight_id} < {existing['weight_id']}")
                 return
 
