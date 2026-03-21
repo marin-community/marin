@@ -1298,3 +1298,69 @@
   - Keep the new SISO attention-style API and the custom VJP.
   - Keep `chunked_public` as the fastest production TPU path.
   - Treat the attention-style SISO path as an API/structure milestone, not a new performance default.
+
+## 2026-03-21: SISO attention-style TPU wrapper layout tuning
+
+- Goal:
+  - Recover some of the SISO attention-style TPU gap without changing the underlying chunked XLA kernel.
+  - Treat the problem as a wrapper-to-core lowering/layout issue rather than a kernel-math issue.
+- Profile baseline on `v5p-8`, `seq_len=16384`, `groups=16`, `chunk=512`, sharded, `128 x 512`:
+  - `attentionish_public`:
+    - forward: `203.99M tok/s`
+    - backward: `145.02M tok/s`
+  - backward profile:
+    - `chunked_core => mamba3_chunked_forward`: `99.67%`
+    - `prefix_emit`: `46.02%`
+    - `local_output`: `37.91%`
+  - Interpretation:
+    - the wrapper itself was not visibly expensive by named scope
+    - the extra cost showed up as transpose/JVP structure around the same chunked core
+- Optimization attempt 1:
+  - Added explicit chunk-major materialization with `jnp.copy(...)` after packing `q/k/v` and schedules into chunked layout.
+  - Throughput-point result:
+    - forward: `210.45M tok/s`
+    - backward: `147.96M tok/s`
+  - Result:
+    - small positive move, but not enough on its own
+- Optimization attempt 2:
+  - Changed SISO chunk packing from:
+    - `transpose(... seq/head ...) -> reshape(... chunks, chunk ...)`
+  - To:
+    - `reshape(... chunks, chunk, heads, ...) -> transpose(... heads, chunks, chunk ...)`
+  - Kept the explicit materialization after packing.
+  - This preserves chunk-major structure better before entering the hot chunked kernel.
+- Final TPU results on `v5p-8`, `seq_len=16384`, `groups=16`, `chunk=512`, sharded:
+  - throughput-oriented `128 x 512`
+    - chunked public:
+      - forward: `374.04M tok/s`, `343.18` estimated TFLOP/s
+      - backward: `215.95M tok/s`, `198.14`
+    - attention-style public:
+      - forward: `216.10M tok/s`, `198.27`
+      - backward: `149.37M tok/s`, `137.04`
+    - relative to the earlier attention-style baseline:
+      - forward: `1.06x`
+      - backward: `1.03x`
+  - balanced `512 x 1024`
+    - chunked public:
+      - forward: `156.23M tok/s`, `573.37`
+      - backward: `86.30M tok/s`, `316.73`
+    - attention-style public:
+      - forward: `106.28M tok/s`, `390.05`
+      - backward: `67.64M tok/s`, `248.22`
+  - state-heavy dense `1024 x 512`
+    - chunked public:
+      - forward: `179.89M tok/s`, `660.21`
+      - backward: `98.77M tok/s`, `362.47`
+    - attention-style public:
+      - forward: `119.67M tok/s`, `439.21`
+      - backward: `75.67M tok/s`, `277.71`
+- Final profile read on the throughput point:
+  - `chunked_core => mamba3_chunked_forward`: `99.67%`
+  - `prefix_emit`: `45.99%`
+  - `local_output`: `37.92%`
+  - The hotspot mix is essentially unchanged.
+  - The improvement looks like a modest lowering/layout win rather than a decomposition change.
+- Decision:
+  - Keep the reshape-first chunk packing and the explicit chunk-major materialization in the SISO attention-style path.
+  - The improvement is real but modest.
+  - `chunked_public` remains the performance default; the attention-style path is still meaningfully slower on TPU.

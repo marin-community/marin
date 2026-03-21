@@ -447,8 +447,8 @@ def _chunk_value_by_head(
     chunk_size: int,
 ) -> Float[Array, "batch heads chunks chunk value"]:
     num_chunks = tensor.shape[1] // chunk_size
-    return tensor.transpose(0, 2, 1, 3).reshape(
-        tensor.shape[0], tensor.shape[2], num_chunks, chunk_size, tensor.shape[-1]
+    return tensor.reshape(tensor.shape[0], num_chunks, chunk_size, tensor.shape[2], tensor.shape[-1]).transpose(
+        0, 3, 1, 2, 4
     )
 
 
@@ -458,9 +458,15 @@ def _chunk_state_by_head(
     chunk_size: int,
 ) -> Float[Array, "batch heads chunks chunk state"]:
     num_chunks = tensor.shape[1] // chunk_size
-    return tensor.transpose(0, 2, 1, 3).reshape(
-        tensor.shape[0], tensor.shape[2], num_chunks, chunk_size, tensor.shape[-1]
+    return tensor.reshape(tensor.shape[0], num_chunks, chunk_size, tensor.shape[2], tensor.shape[-1]).transpose(
+        0, 3, 1, 2, 4
     )
+
+
+def _materialize_chunked_layout(tensor: jax.Array) -> jax.Array:
+    """Force a concrete chunk-major layout before entering the hot kernel."""
+
+    return jnp.copy(tensor)
 
 
 def _package_attentionish_outputs(
@@ -521,73 +527,86 @@ def mamba3_attentionish_forward_from_transformed(
     if implementation not in (None, "xla", "reference"):
         raise ValueError("Attention-ish SISO is currently available only for the XLA and reference implementations.")
 
-    num_chunks = seq_len // chunk_size
-    q_chunked = _chunk_state_by_head(q, chunk_size=chunk_size)
-    k_chunked = _chunk_state_by_head(k, chunk_size=chunk_size)
-    if q_bias is not None:
-        q_chunked = q_chunked + q_bias[None, :, None, None, :]
-    if k_bias is not None:
-        k_chunked = k_chunked + k_bias[None, :, None, None, :]
-    v_chunked = _chunk_value_by_head(v, chunk_size=chunk_size)
-    a_log_cumsum = da_cs.reshape(batch, heads, num_chunks, chunk_size)
-    lam = jax.nn.sigmoid(trap)
-    src_scale, out_correction = prepare_mamba3_chunked_scales(
-        dt.reshape(batch, heads, num_chunks, chunk_size),
-        lam.reshape(batch, heads, num_chunks, chunk_size),
-    )
+    with jax.named_scope("mamba3_attentionish_siso"):
+        num_chunks = seq_len // chunk_size
+        with jax.named_scope("prepare_qk"):
+            q_chunked = _chunk_state_by_head(q, chunk_size=chunk_size)
+            k_chunked = _chunk_state_by_head(k, chunk_size=chunk_size)
+            if q_bias is not None:
+                q_chunked = q_chunked + q_bias[None, :, None, None, :]
+            if k_bias is not None:
+                k_chunked = k_chunked + k_bias[None, :, None, None, :]
+            q_chunked = _materialize_chunked_layout(q_chunked)
+            k_chunked = _materialize_chunked_layout(k_chunked)
+        with jax.named_scope("prepare_v"):
+            v_chunked = _chunk_value_by_head(v, chunk_size=chunk_size)
+            v_chunked = _materialize_chunked_layout(v_chunked)
+        with jax.named_scope("prepare_scales"):
+            a_log_cumsum = da_cs.reshape(batch, heads, num_chunks, chunk_size)
+            lam = jax.nn.sigmoid(trap)
+            src_scale, out_correction = prepare_mamba3_chunked_scales(
+                dt.reshape(batch, heads, num_chunks, chunk_size),
+                lam.reshape(batch, heads, num_chunks, chunk_size),
+            )
+            a_log_cumsum = _materialize_chunked_layout(a_log_cumsum)
+            src_scale = _materialize_chunked_layout(src_scale)
+            out_correction = _materialize_chunked_layout(out_correction)
 
-    groups = batch * heads
-    flat_c = q_chunked.reshape(groups, num_chunks, chunk_size, state_dim)
-    flat_b = k_chunked.reshape(groups, num_chunks, chunk_size, state_dim)
-    flat_v = v_chunked.reshape(groups, num_chunks, chunk_size, v.shape[-1])
-    flat_a_log_cumsum = a_log_cumsum.reshape(groups, num_chunks, chunk_size)
-    flat_src_scale = src_scale.reshape(groups, num_chunks, chunk_size)
-    flat_out_correction = out_correction.reshape(groups, num_chunks, chunk_size)
+        groups = batch * heads
+        flat_c = q_chunked.reshape(groups, num_chunks, chunk_size, state_dim)
+        flat_b = k_chunked.reshape(groups, num_chunks, chunk_size, state_dim)
+        flat_v = v_chunked.reshape(groups, num_chunks, chunk_size, v.shape[-1])
+        flat_a_log_cumsum = a_log_cumsum.reshape(groups, num_chunks, chunk_size)
+        flat_src_scale = src_scale.reshape(groups, num_chunks, chunk_size)
+        flat_out_correction = out_correction.reshape(groups, num_chunks, chunk_size)
 
-    if implementation == "reference":
-        output_chunked, final_state = mamba3_chunked_forward_reference_batched(
-            flat_a_log_cumsum,
-            flat_src_scale,
-            flat_out_correction,
-            flat_b,
-            flat_c,
-            flat_v,
+        with jax.named_scope("chunked_core"):
+            if implementation == "reference":
+                output_chunked, final_state = mamba3_chunked_forward_reference_batched(
+                    flat_a_log_cumsum,
+                    flat_src_scale,
+                    flat_out_correction,
+                    flat_b,
+                    flat_c,
+                    flat_v,
+                )
+            else:
+                output_chunked, final_state = mamba3_chunked_forward_xla_batched(
+                    flat_a_log_cumsum,
+                    flat_src_scale,
+                    flat_out_correction,
+                    flat_b,
+                    flat_c,
+                    flat_v,
+                )
+
+        with jax.named_scope("diagonal_skip"):
+            if d is not None:
+                flat_d = jnp.broadcast_to(d[None, :], (batch, heads)).reshape(groups)
+                output_chunked = output_chunked + flat_d[:, None, None, None] * flat_v
+
+        with jax.named_scope("package_output"):
+            output = output_chunked.reshape(batch, heads, num_chunks, chunk_size, v.shape[-1]).transpose(0, 2, 3, 1, 4)
+            output = output.reshape(batch, seq_len, heads, v.shape[-1])
+            formatted_final_state = (
+                final_state.reshape(batch, heads, final_state.shape[-2], final_state.shape[-1]).transpose(0, 1, 3, 2)
+                if return_final_state
+                else None
+            )
+            formatted_final_k = None
+            if return_final_k:
+                final_k = jnp.take(k, seq_len - 1, axis=1)
+                if k_bias is not None:
+                    final_k = final_k + k_bias[None, ...]
+                formatted_final_k = final_k
+
+        return _package_attentionish_outputs(
+            output,
+            final_state=formatted_final_state,
+            final_k=formatted_final_k,
+            return_final_state=return_final_state,
+            return_final_k=return_final_k,
         )
-    else:
-        output_chunked, final_state = mamba3_chunked_forward_xla_batched(
-            flat_a_log_cumsum,
-            flat_src_scale,
-            flat_out_correction,
-            flat_b,
-            flat_c,
-            flat_v,
-        )
-
-    if d is not None:
-        flat_d = jnp.broadcast_to(d[None, :], (batch, heads)).reshape(groups)
-        output_chunked = output_chunked + flat_d[:, None, None, None] * flat_v
-
-    output = output_chunked.reshape(batch, heads, num_chunks, chunk_size, v.shape[-1]).transpose(0, 2, 3, 1, 4)
-    output = output.reshape(batch, seq_len, heads, v.shape[-1])
-    formatted_final_state = (
-        final_state.reshape(batch, heads, final_state.shape[-2], final_state.shape[-1]).transpose(0, 1, 3, 2)
-        if return_final_state
-        else None
-    )
-    formatted_final_k = None
-    if return_final_k:
-        final_k = jnp.take(k, seq_len - 1, axis=1)
-        if k_bias is not None:
-            final_k = final_k + k_bias[None, ...]
-        formatted_final_k = final_k
-
-    return _package_attentionish_outputs(
-        output,
-        final_state=formatted_final_state,
-        final_k=formatted_final_k,
-        return_final_state=return_final_state,
-        return_final_k=return_final_k,
-    )
 
 
 def mamba3_attentionish_forward(
