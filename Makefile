@@ -236,29 +236,16 @@ dev_setup: install_uv install_gcloud install_node get_secret_key get_ray_auth_to
 # Dev mode: adds dupekit path source to [tool.uv.sources] in pyproject.toml (requires Cargo)
 
 rust-dev:
-	@echo "Switching to dev mode (source build from pyproject.toml)..."
-	@if grep -q 'dupekit = { path' pyproject.toml; then \
-		echo "Already in dev mode."; \
-	else \
-		sed -i '/^harbor = {.*}$$/a dupekit = { path = "rust/dupekit", editable = true }' pyproject.toml; \
-		echo "Added dupekit path source to pyproject.toml."; \
-	fi
+	@python3 scripts/rust_mode.py dev
 	uv sync
-	@echo "Switched to dev mode. Do NOT commit pyproject.toml in this state."
+	@echo "Done. Run 'make rust-user' before committing."
 
 rust-user:
-	@echo "Switching to user mode (pre-built wheels)..."
-	@sed -i '/^dupekit = { path/d' pyproject.toml
+	@python3 scripts/rust_mode.py user
 	uv sync
-	@echo "Switched to user mode (pre-built wheel)."
 
 rust-status:
-	@echo "=== Rust build mode ==="
-	@if grep -q 'dupekit = { path' pyproject.toml; then \
-		echo "Mode: dev (source build from pyproject.toml)"; \
-	else \
-		echo "Mode: user (pre-built wheels) [default]"; \
-	fi
+	@python3 scripts/rust_mode.py status
 	@if command -v cargo > /dev/null 2>&1; then \
 		echo "Cargo: installed ($$(cargo --version))"; \
 	else \
