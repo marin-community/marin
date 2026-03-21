@@ -323,3 +323,63 @@ def test_revoke_login_keys(db: ControllerDB):
 
     revoked_ids = revoke_login_keys_for_user(db, "carol", now)
     assert set(revoked_ids) == {"k-login-1", "k-login-2"}
+
+
+# -- Optional auth (gradual adoption) -----------------------------------------
+
+
+@pytest.fixture
+def optional_auth_client(service, verifier):
+    """Dashboard with auth configured but optional — tokens verified if present, anonymous fallback."""
+    dashboard = ControllerDashboard(service, auth_verifier=verifier, auth_provider="static", auth_optional=True)
+    return TestClient(dashboard.app)
+
+
+def test_optional_auth_allows_unauthenticated_rpc(optional_auth_client):
+    """RPCs succeed without a token, falling back to anonymous/admin identity."""
+    resp = optional_auth_client.post(
+        "/iris.cluster.ControllerService/GetAuthInfo",
+        json={},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+
+
+def test_optional_auth_uses_token_when_present(optional_auth_client):
+    """When a valid token is supplied, the authenticated identity is used."""
+    resp = optional_auth_client.post(
+        "/iris.cluster.ControllerService/GetAuthInfo",
+        json={},
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {_TEST_TOKEN}"},
+    )
+    assert resp.status_code == 200
+
+
+def test_optional_auth_ignores_invalid_token(optional_auth_client):
+    """An invalid token does not reject the request — falls back to anonymous."""
+    resp = optional_auth_client.post(
+        "/iris.cluster.ControllerService/GetAuthInfo",
+        json={},
+        headers={"Content-Type": "application/json", "Authorization": "Bearer bad-token"},
+    )
+    assert resp.status_code == 200
+
+
+def test_optional_auth_dashboard_accessible(optional_auth_client):
+    """Dashboard pages are accessible without auth in optional mode."""
+    for path in ["/", "/job/123", "/worker/456", "/health"]:
+        assert optional_auth_client.get(path).status_code == 200
+
+
+def test_optional_auth_config_reports_optional(optional_auth_client):
+    """The /auth/config endpoint reports optional=true."""
+    data = optional_auth_client.get("/auth/config").json()
+    assert data["auth_enabled"] is True
+    assert data["optional"] is True
+    assert data["provider"] == "static"
+
+
+def test_auth_config_reports_not_optional(authed_client):
+    """Non-optional auth reports optional=false."""
+    data = authed_client.get("/auth/config").json()
+    assert data["optional"] is False

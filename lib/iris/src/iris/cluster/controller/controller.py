@@ -675,6 +675,9 @@ class ControllerConfig:
     auth: ControllerAuth | None = None
     """Full auth config passed to the service layer for login and API key management."""
 
+    auth_optional: bool = False
+    """When True, auth is attempted but not required (transition mode)."""
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
@@ -760,6 +763,7 @@ class Controller:
             port=config.port,
             auth_verifier=config.auth_verifier,
             auth_provider=config.auth_provider,
+            auth_optional=config.auth_optional,
         )
 
         # Ingest process logs into the LogStore so they are available via FetchLogs.

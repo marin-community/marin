@@ -196,12 +196,14 @@ class ControllerDashboard:
         port: int = 8080,
         auth_verifier: TokenVerifier | None = None,
         auth_provider: str | None = None,
+        auth_optional: bool = False,
     ):
         self._service = service
         self._host = host
         self._port = port
         self._auth_verifier = auth_verifier
         self._auth_provider = auth_provider
+        self._auth_optional = auth_optional
         self._app = self._create_app()
 
     @property
@@ -214,9 +216,12 @@ class ControllerDashboard:
 
     def _create_app(self) -> ASGIApp:
         interceptors = [RequestTimingInterceptor(include_traceback=bool(os.environ.get("IRIS_DEBUG")))]
-        if self._auth_provider is not None:
+        if self._auth_provider is not None and not self._auth_optional:
             interceptors.insert(0, _SelectiveAuthInterceptor(self._auth_verifier))
         else:
+            # In null-auth or optional mode, NullAuthInterceptor verifies
+            # tokens when present but lets unauthenticated requests through
+            # as anonymous/admin.
             interceptors.insert(0, NullAuthInterceptor(verifier=self._auth_verifier))
         rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=interceptors)
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
@@ -235,7 +240,7 @@ class ControllerDashboard:
             static_files_mount(),
         ]
         app: Starlette | _RouteAuthMiddleware = Starlette(routes=routes)
-        if self._auth_verifier is not None and self._auth_provider is not None:
+        if self._auth_verifier is not None and self._auth_provider is not None and not self._auth_optional:
             app = _RouteAuthMiddleware(app, self._auth_verifier)
         return app
 
@@ -283,6 +288,7 @@ class ControllerDashboard:
                 "provider": self._auth_provider,
                 "has_session": has_session,
                 "provider_kind": provider_kind,
+                "optional": self._auth_optional,
             }
         )
 

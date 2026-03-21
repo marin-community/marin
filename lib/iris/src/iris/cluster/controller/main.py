@@ -190,6 +190,7 @@ def serve(
         auth_verifier=auth.verifier,
         auth_provider=auth.provider,
         auth=auth,
+        auth_optional=auth.optional,
     )
 
     try:

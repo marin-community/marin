@@ -487,3 +487,25 @@ def test_null_auth_get_current_user(db):
         assert resp.role == "admin"
     finally:
         _verified_identity.reset(reset)
+
+
+# ---------------------------------------------------------------------------
+# Optional auth mode
+# ---------------------------------------------------------------------------
+
+
+def test_optional_auth_sets_flag(db):
+    """create_controller_auth propagates optional=True to ControllerAuth."""
+    config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}}, optional=True)
+    auth = create_controller_auth(config, db=db)
+    assert auth.optional is True
+    assert auth.provider == "static"
+    assert auth.verifier is not None
+    assert auth.login_verifier is not None
+
+
+def test_optional_auth_default_false(db):
+    """optional defaults to False when not set."""
+    config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}})
+    auth = create_controller_auth(config, db=db)
+    assert auth.optional is False
