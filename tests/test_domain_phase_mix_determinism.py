@@ -1,12 +1,16 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from types import SimpleNamespace
 
 import pandas as pd
+import pytest
+from fray.cluster import ResourceConfig
 
 import experiments.domain_phase_mix.determinism_analysis as determinism_analysis
 from experiments.domain_phase_mix.determinism_analysis import (
+    CollectManifestResultsConfig,
     CONTROL_RUNS_CSV,
     DETERMINISM_CONTROL_REPORT_JSON,
     FINAL_BPB_STATS_JSON,
@@ -14,8 +18,24 @@ from experiments.domain_phase_mix.determinism_analysis import (
     RESULTS_CSV,
     RUN_MANIFEST_FILE,
     SEED_RUNS_CSV,
+    SWARM_COMPARISON_CSV,
+    SWARM_COMPARISON_JSON,
     TRAJECTORY_BPB_STATS_CSV,
+    collect_manifest_results,
     create_jitter_report,
+)
+from experiments.defaults import default_train
+from experiments.simple_train_config import SimpleTrainConfig
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_seed_study import (
+    EXACT_CONTROL_DATA_SEED,
+    EXACT_CONTROL_NAMES,
+    RUN_00097_PHASE_WEIGHTS,
+    SEED_SWEEP_START,
+    SOURCE_RUN_NAME,
+    build_run_specs as build_run_00097_seed_specs,
+)
+from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
+    create_two_phase_dolma3_dolmino_top_level_experiment,
 )
 from experiments.domain_phase_mix.two_phase_starcoder_determinism_wsd import (
     FIXED_PHASE_WEIGHTS,
@@ -43,6 +63,111 @@ def test_build_run_specs_has_expected_seed_and_control_cohorts():
     assert all(spec.phase_weights == FIXED_PHASE_WEIGHTS for spec in run_specs)
 
 
+def test_default_train_uses_trainer_seed_and_preserves_data_seed(monkeypatch):
+    monkeypatch.setattr("experiments.defaults._prepare_data_config", lambda tokenized, use_default_validation: object())
+    monkeypatch.setattr("experiments.defaults._get_vocab_size", lambda _: 32_000)
+    monkeypatch.setattr("experiments.defaults._validate_train_length", lambda train_seq_len, model_config: 2048)
+    monkeypatch.setattr("experiments.defaults.compute_num_parameters", lambda model_config, vocab_size: 123)
+
+    train_config = SimpleTrainConfig(
+        resources=ResourceConfig.with_cpu(cpu=1, ram="4g"),
+        train_batch_size=8,
+        num_train_steps=10,
+        learning_rate=1e-3,
+        trainer_seed=123,
+        data_seed=None,
+    )
+    step = default_train(
+        name="unit/test",
+        tokenized=object(),
+        model_config=SimpleNamespace(max_seq_len=2048),
+        train_config=train_config,
+        eval_harness_tasks=(),
+        use_default_validation=False,
+    )
+
+    assert step.config.train_config.trainer.seed == 123
+    assert step.config.train_config.data_seed is None
+
+
+def test_mixture_experiment_create_train_config_allows_none_data_seed_override():
+    experiment = create_two_phase_dolma3_dolmino_top_level_experiment(name="unit-test")
+    train_config = experiment.create_train_config(run_id=42, data_seed=None, trainer_seed=123)
+
+    assert train_config.data_seed is None
+    assert train_config.trainer_seed == 123
+
+
+def test_run_00097_seed_study_builds_expected_manifest_and_weights():
+    run_specs = build_run_00097_seed_specs()
+
+    assert len(run_specs) == 12
+    assert [spec.run_id for spec in run_specs] == list(range(12))
+
+    seed_specs = [spec for spec in run_specs if spec.cohort == "seed_sweep"]
+    control_specs = [spec for spec in run_specs if spec.cohort == "exact_replay_control"]
+
+    assert len(seed_specs) == 10
+    assert len(control_specs) == 2
+    assert [spec.trainer_seed for spec in seed_specs] == list(range(SEED_SWEEP_START, SEED_SWEEP_START + 10))
+    assert all(spec.data_seed is None for spec in seed_specs)
+    assert [spec.run_name for spec in control_specs] == list(EXACT_CONTROL_NAMES)
+    assert {spec.data_seed for spec in control_specs} == {EXACT_CONTROL_DATA_SEED}
+    assert all(spec.source_run_name == SOURCE_RUN_NAME for spec in run_specs)
+    assert all(abs(sum(RUN_00097_PHASE_WEIGHTS[phase].values()) - 1.0) < 1e-12 for phase in RUN_00097_PHASE_WEIGHTS)
+    assert all(spec.phase_weights == RUN_00097_PHASE_WEIGHTS for spec in run_specs)
+
+
+def test_collect_manifest_results_falls_back_to_name_lookup_when_tags_are_missing(tmp_path, monkeypatch):
+    manifest_path = tmp_path / RUN_MANIFEST_FILE
+    output_dir = tmp_path / "analysis"
+    output_dir.mkdir()
+
+    manifest = {
+        "experiment_name": "pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_seed_study",
+        "runs": [
+            {
+                "run_id": 0,
+                "run_name": "trainer_seed_10000",
+                "cohort": "seed_sweep",
+                "trainer_seed": 10_000,
+                "data_seed": None,
+                "source_run_name": SOURCE_RUN_NAME,
+                "phase_weights": RUN_00097_PHASE_WEIGHTS,
+            }
+        ],
+    }
+    manifest_path.write_text(json.dumps(manifest))
+
+    monkeypatch.setattr("experiments.domain_phase_mix.analysis.query_wandb_runs", lambda **_: [])
+    monkeypatch.setattr(
+        "experiments.domain_phase_mix.analysis.query_wandb_runs_by_name_substrings",
+        lambda **_: [
+            {
+                "wandb_run_id": "trainer_seed_10000-5bf683",
+                "wandb_run_name": "pinlin_calvin_xu/data_mixture/ngd3dm~6fb11cac/trainer_seed_10000",
+                "status": "finished",
+                OBJECTIVE_METRIC: 2.34,
+            }
+        ],
+    )
+
+    collect_manifest_results(
+        CollectManifestResultsConfig(
+            output_path=str(output_dir),
+            run_manifest_path=str(manifest_path),
+            wandb_entity="marin-community",
+            wandb_project="marin",
+        )
+    )
+
+    results_df = pd.read_csv(output_dir / RESULTS_CSV)
+    assert len(results_df) == 1
+    assert results_df.loc[0, "status"] == "completed"
+    assert results_df.loc[0, "wandb_run_id"] == "trainer_seed_10000-5bf683"
+    assert results_df.loc[0, OBJECTIVE_METRIC] == pytest.approx(2.34)
+
+
 def test_resolve_wsd_schedule_aligns_boundary_and_decay():
     cfg = default_sweep_config("unit-test")
     schedule = resolve_wsd_schedule(cfg)
@@ -66,28 +191,36 @@ def test_create_jitter_report_writes_ci_and_control_outputs(tmp_path, monkeypatc
                 "run_id": 0,
                 "run_name": "run_00000",
                 "cohort": "seed_sweep",
+                "trainer_seed": 10_000,
                 "data_seed": 10_000,
+                "source_run_name": SOURCE_RUN_NAME,
                 "phase_weights": FIXED_PHASE_WEIGHTS,
             },
             {
                 "run_id": 1,
                 "run_name": "run_00001",
                 "cohort": "seed_sweep",
+                "trainer_seed": 10_001,
                 "data_seed": 10_001,
+                "source_run_name": SOURCE_RUN_NAME,
                 "phase_weights": FIXED_PHASE_WEIGHTS,
             },
             {
                 "run_id": 2,
-                "run_name": "run_00002",
-                "cohort": "determinism_control",
+                "run_name": "exact_replay_control_a",
+                "cohort": "exact_replay_control",
+                "trainer_seed": 0,
                 "data_seed": 424_242,
+                "source_run_name": SOURCE_RUN_NAME,
                 "phase_weights": FIXED_PHASE_WEIGHTS,
             },
             {
                 "run_id": 3,
-                "run_name": "run_00003",
-                "cohort": "determinism_control",
+                "run_name": "exact_replay_control_b",
+                "cohort": "exact_replay_control",
+                "trainer_seed": 0,
                 "data_seed": 424_242,
+                "source_run_name": SOURCE_RUN_NAME,
                 "phase_weights": FIXED_PHASE_WEIGHTS,
             },
         ]
@@ -124,10 +257,38 @@ def test_create_jitter_report_writes_ci_and_control_outputs(tmp_path, monkeypatc
     )
     results.to_csv(analysis_dir / RESULTS_CSV, index=False)
 
+    swarm_results = pd.DataFrame(
+        [
+            {
+                OBJECTIVE_METRIC: 0.70,
+                "lm_eval/mmlu_5shot/choice_logprob": -1.10,
+                "eval/paloma/c4_en/bpb": 1.15,
+                "eval/paloma/macro_bpb": 1.35,
+                "eval/uncheatable_eval/macro_bpb": 1.05,
+            },
+            {
+                OBJECTIVE_METRIC: 0.90,
+                "lm_eval/mmlu_5shot/choice_logprob": -1.30,
+                "eval/paloma/c4_en/bpb": 1.20,
+                "eval/paloma/macro_bpb": 1.40,
+                "eval/uncheatable_eval/macro_bpb": 1.10,
+            },
+            {
+                OBJECTIVE_METRIC: 1.10,
+                "lm_eval/mmlu_5shot/choice_logprob": -1.50,
+                "eval/paloma/c4_en/bpb": 1.25,
+                "eval/paloma/macro_bpb": 1.45,
+                "eval/uncheatable_eval/macro_bpb": 1.15,
+            },
+        ]
+    )
+    swarm_path = tmp_path / "two_phase_many.csv"
+    swarm_results.to_csv(swarm_path, index=False)
+
     def _fake_collect(runs_df: pd.DataFrame, **_: object) -> pd.DataFrame:
         rows = []
         for row in runs_df.itertuples(index=False):
-            if row.cohort == "determinism_control":
+            if row.cohort == "exact_replay_control":
                 values = [1.00, 0.95]
             elif int(row.run_id) == 0:
                 values = [1.10, 0.90]
@@ -140,6 +301,7 @@ def test_create_jitter_report_writes_ci_and_control_outputs(tmp_path, monkeypatc
                         "run_id": int(row.run_id),
                         "run_name": row.run_name,
                         "cohort": row.cohort,
+                        "trainer_seed": int(row.trainer_seed),
                         "data_seed": int(row.data_seed),
                         "wandb_run_id": row.wandb_run_id,
                         "step": step,
@@ -160,6 +322,14 @@ def test_create_jitter_report_writes_ci_and_control_outputs(tmp_path, monkeypatc
             wandb_project="unit",
             run_manifest_path=str(manifest_path),
             analysis_output_path=str(analysis_dir),
+            swarm_results_csv_path=str(swarm_path),
+            comparison_metrics=(
+                OBJECTIVE_METRIC,
+                "lm_eval/mmlu_5shot/choice_logprob",
+                "eval/paloma/c4_en/bpb",
+                "eval/paloma/macro_bpb",
+                "eval/uncheatable_eval/macro_bpb",
+            ),
             bootstrap_samples=200,
             bootstrap_seed=0,
         )
@@ -170,6 +340,8 @@ def test_create_jitter_report_writes_ci_and_control_outputs(tmp_path, monkeypatc
     assert (output_dir / FINAL_BPB_STATS_JSON).exists()
     assert (output_dir / TRAJECTORY_BPB_STATS_CSV).exists()
     assert (output_dir / DETERMINISM_CONTROL_REPORT_JSON).exists()
+    assert (output_dir / SWARM_COMPARISON_JSON).exists()
+    assert (output_dir / SWARM_COMPARISON_CSV).exists()
 
     final_stats = json.loads((output_dir / FINAL_BPB_STATS_JSON).read_text())
     assert final_stats["n_runs"] == 2
@@ -183,3 +355,16 @@ def test_create_jitter_report_writes_ci_and_control_outputs(tmp_path, monkeypatc
     assert control_report["status"] == "ok"
     assert control_report["final_abs_diff"] == 0.0
     assert control_report["max_abs_step_diff"] == 0.0
+
+    swarm_comparison = pd.read_csv(output_dir / SWARM_COMPARISON_CSV)
+    assert set(swarm_comparison["metric"]) == {
+        OBJECTIVE_METRIC,
+        "lm_eval/mmlu_5shot/choice_logprob",
+        "eval/paloma/c4_en/bpb",
+        "eval/paloma/macro_bpb",
+        "eval/uncheatable_eval/macro_bpb",
+    }
+    objective_row = swarm_comparison.loc[swarm_comparison["metric"] == OBJECTIVE_METRIC].iloc[0]
+    assert objective_row["repeat_n"] == 2
+    assert objective_row["swarm_n"] == 3
+    assert objective_row["variance_ratio"] == pytest.approx(0.005)

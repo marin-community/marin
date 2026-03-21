@@ -414,6 +414,7 @@ def default_train(
                 group=wandb_group,
                 replicate_path=this_output_path(),
             ),
+            seed=train_config.trainer_seed if train_config.trainer_seed is not None else 0,
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=train_config.train_batch_size,
             per_device_parallelism=train_config.per_device_parallelism,

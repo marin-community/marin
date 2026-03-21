@@ -1,19 +1,5 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """Analysis utilities for data mixture swarm experiments.
 
@@ -179,6 +165,22 @@ def load_weight_configs(path: str) -> dict:
 METRIC_PREFIXES = ("eval/", "lm_eval/")
 
 
+def _wandb_run_to_row(run, *, extra_keys: set[str], metric_prefixes: tuple[str, ...]) -> dict:
+    row = {
+        "wandb_run_id": run.id,
+        "wandb_run_name": run.name,
+        "status": run.state,
+    }
+
+    for key, value in run.summary.items():
+        if not isinstance(value, (int, float)):
+            continue
+        if any(key.startswith(prefix) for prefix in metric_prefixes) or key in extra_keys:
+            row[key] = value
+
+    return row
+
+
 def query_wandb_runs(
     entity: str,
     project: str,
@@ -215,22 +217,35 @@ def query_wandb_runs(
 
     results = []
     for run in runs:
-        row = {
-            "wandb_run_id": run.id,
-            "wandb_run_name": run.name,
-            "status": run.state,
-        }
-
-        # Auto-discover all eval/lm_eval metrics from the run summary
-        for key, value in run.summary.items():
-            if not isinstance(value, (int, float)):
-                continue
-            if any(key.startswith(prefix) for prefix in metric_prefixes) or key in extra_keys:
-                row[key] = value
-
-        results.append(row)
+        results.append(_wandb_run_to_row(run, extra_keys=extra_keys, metric_prefixes=metric_prefixes))
 
     return results
+
+
+def query_wandb_runs_by_name_substrings(
+    entity: str,
+    project: str,
+    name_substrings: Sequence[str],
+    metrics: list[str] | None = None,
+    metric_prefixes: tuple[str, ...] = METRIC_PREFIXES,
+) -> list[dict]:
+    """Query W&B API for runs whose display names match any of the given substrings."""
+    import wandb
+
+    api = wandb.Api()
+    extra_keys = set(metrics) if metrics else set()
+    rows_by_id: dict[str, dict] = {}
+
+    for substring in name_substrings:
+        pattern = re.escape(substring)
+        runs = api.runs(
+            f"{entity}/{project}",
+            filters={"displayName": {"$regex": pattern}},
+        )
+        for run in runs:
+            rows_by_id[run.id] = _wandb_run_to_row(run, extra_keys=extra_keys, metric_prefixes=metric_prefixes)
+
+    return list(rows_by_id.values())
 
 
 def match_runs_to_configs(runs: list[dict], configs: list[dict], experiment_name: str) -> list[dict]:

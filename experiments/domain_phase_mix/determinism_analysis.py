@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Post-run analysis for two-phase StarCoder determinism and seed jitter."""
@@ -27,9 +27,13 @@ SEED_RUNS_CSV = "seed_runs.csv"
 CONTROL_RUNS_CSV = "control_runs.csv"
 TRAJECTORY_RAW_PARQUET = "trajectory_raw.parquet"
 RESULTS_CSV = "results.csv"
+SWARM_COMPARISON_JSON = "swarm_comparison.json"
+SWARM_COMPARISON_CSV = "swarm_comparison.csv"
 
 DEFAULT_BOOTSTRAP_SAMPLES = 2_000
 DEFAULT_BOOTSTRAP_SEED = 0
+SEED_SWEEP_COHORT = "seed_sweep"
+CONTROL_COHORTS = ("determinism_control", "exact_replay_control")
 
 
 @dataclass(frozen=True)
@@ -42,8 +46,130 @@ class JitterReportConfig:
     wandb_project: str
     run_manifest_path: InputName | str
     analysis_output_path: InputName | str
+    swarm_results_csv_path: str | None = None
+    comparison_metrics: tuple[str, ...] = ()
     bootstrap_samples: int = DEFAULT_BOOTSTRAP_SAMPLES
     bootstrap_seed: int = DEFAULT_BOOTSTRAP_SEED
+
+
+@dataclass(frozen=True)
+class CollectManifestResultsConfig:
+    """Executor config for manifest-backed W&B result collection."""
+
+    output_path: str
+    run_manifest_path: InputName | str
+    wandb_entity: str
+    wandb_project: str
+    metric_prefixes: tuple[str, ...] = ("eval/", "lm_eval/")
+    extra_metrics: tuple[str, ...] = ()
+    depends_on: tuple[InputName, ...] = ()
+
+
+def _maybe_int(value: object) -> int | None:
+    if value is None or pd.isna(value):
+        return None
+    return int(value)
+
+
+def _phase_weights_to_columns(phase_weights: dict[str, dict[str, float]]) -> dict[str, float]:
+    columns: dict[str, float] = {}
+    for phase_name, domain_weights in phase_weights.items():
+        for domain_name, value in domain_weights.items():
+            columns[f"{phase_name}_{domain_name}"] = float(value)
+    return columns
+
+
+def _resolve_wandb_run_for_name(run_rows: list[dict[str, Any]], run_name: str) -> dict[str, Any] | None:
+    marker = f"/{run_name}"
+    matches = [row for row in run_rows if marker in str(row.get("wandb_run_name") or "")]
+    if not matches:
+        return None
+
+    finished = [row for row in matches if row.get("status") == "finished"]
+    if finished:
+        return finished[0]
+    return matches[0]
+
+
+def collect_manifest_results(config: CollectManifestResultsConfig) -> None:
+    """Collect run summaries from W&B for the runs listed in a manifest."""
+    from experiments.domain_phase_mix.analysis import query_wandb_runs, query_wandb_runs_by_name_substrings
+
+    with fsspec.open(str(config.run_manifest_path), "r") as f:
+        manifest_payload = json.load(f)
+
+    experiment_name = str(manifest_payload["experiment_name"])
+    run_rows = query_wandb_runs(
+        entity=config.wandb_entity,
+        project=config.wandb_project,
+        tags=[experiment_name],
+        metrics=list(config.extra_metrics),
+        metric_prefixes=config.metric_prefixes,
+    )
+    missing_run_names = [
+        str(manifest_row["run_name"])
+        for manifest_row in manifest_payload["runs"]
+        if _resolve_wandb_run_for_name(run_rows, str(manifest_row["run_name"])) is None
+    ]
+    if missing_run_names:
+        logger.warning(
+            "Tag-based W&B lookup missed %d/%d manifest runs; falling back to display-name lookup for %s",
+            len(missing_run_names),
+            len(manifest_payload["runs"]),
+            missing_run_names,
+        )
+        run_rows.extend(
+            query_wandb_runs_by_name_substrings(
+                entity=config.wandb_entity,
+                project=config.wandb_project,
+                name_substrings=missing_run_names,
+                metrics=list(config.extra_metrics),
+                metric_prefixes=config.metric_prefixes,
+            )
+        )
+
+    collected_rows: list[dict[str, Any]] = []
+    for manifest_row in manifest_payload["runs"]:
+        run_name = str(manifest_row["run_name"])
+        wandb_row = _resolve_wandb_run_for_name(run_rows, run_name)
+        row: dict[str, Any] = {
+            "run_id": int(manifest_row["run_id"]),
+            "run_name": run_name,
+            "cohort": str(manifest_row["cohort"]),
+            "trainer_seed": manifest_row.get("trainer_seed"),
+            "data_seed": manifest_row.get("data_seed"),
+            "source_run_name": manifest_row.get("source_run_name"),
+            **_phase_weights_to_columns(manifest_row["phase_weights"]),
+        }
+
+        if wandb_row is None:
+            row.update(
+                {
+                    "wandb_run_id": None,
+                    "wandb_run_name": None,
+                    "status": "not_found",
+                }
+            )
+            collected_rows.append(row)
+            continue
+
+        row.update(
+            {
+                "wandb_run_id": wandb_row.get("wandb_run_id"),
+                "wandb_run_name": wandb_row.get("wandb_run_name"),
+                "status": "completed" if wandb_row.get("status") == "finished" else wandb_row.get("status", "unknown"),
+            }
+        )
+        for key, value in wandb_row.items():
+            if isinstance(value, int | float) and any(key.startswith(prefix) for prefix in config.metric_prefixes):
+                row[key] = float(value)
+        collected_rows.append(row)
+
+    results_df = pd.DataFrame(collected_rows).sort_values("run_id").reset_index(drop=True)
+    fs, _, _ = fsspec.get_fs_token_paths(config.output_path)
+    fs.makedirs(config.output_path, exist_ok=True)
+    with fsspec.open(os.path.join(config.output_path, RESULTS_CSV), "w") as f:
+        results_df.to_csv(f, index=False)
 
 
 def _bootstrap_mean_and_std_ci(
@@ -134,7 +260,8 @@ def _collect_trajectory_rows(
         traj["run_id"] = run_id
         traj["run_name"] = row.run_name
         traj["cohort"] = row.cohort
-        traj["data_seed"] = int(row.data_seed)
+        traj["trainer_seed"] = _maybe_int(getattr(row, "trainer_seed", None))
+        traj["data_seed"] = _maybe_int(getattr(row, "data_seed", None))
         traj["wandb_run_id"] = str(wandb_run_id)
         all_rows.append(traj)
 
@@ -144,6 +271,7 @@ def _collect_trajectory_rows(
                 "run_id",
                 "run_name",
                 "cohort",
+                "trainer_seed",
                 "data_seed",
                 "wandb_run_id",
                 "step",
@@ -270,6 +398,114 @@ def _build_control_report(
     return report
 
 
+def _backfill_objective_metric_from_trajectories(
+    runs_df: pd.DataFrame,
+    trajectories: pd.DataFrame,
+    *,
+    objective_metric: str,
+) -> pd.DataFrame:
+    if runs_df.empty or trajectories.empty:
+        return runs_df
+
+    result = runs_df.copy()
+    if objective_metric not in result.columns:
+        result[objective_metric] = np.nan
+
+    objective_rows = (
+        trajectories.sort_values(["run_id", "step"])
+        .groupby("run_id", as_index=False)
+        .agg(metric_value=("metric_value", "last"))
+    )
+    objective_map = {int(row.run_id): float(row.metric_value) for row in objective_rows.itertuples(index=False)}
+
+    for idx, run_id in result["run_id"].items():
+        if pd.notna(result.at[idx, objective_metric]):
+            continue
+        backfilled = objective_map.get(int(run_id))
+        if backfilled is not None:
+            result.at[idx, objective_metric] = backfilled
+    return result
+
+
+def _metric_summary(values: np.ndarray) -> dict[str, float]:
+    values = np.asarray(values, dtype=np.float64)
+    if len(values) == 0:
+        return {
+            "n": 0,
+            "mean": np.nan,
+            "std": np.nan,
+            "min": np.nan,
+            "max": np.nan,
+            "iqr": np.nan,
+            "variance": np.nan,
+            "range": np.nan,
+        }
+
+    std = float(np.std(values, ddof=1)) if len(values) > 1 else 0.0
+    variance = float(std**2) if len(values) > 1 else 0.0
+    return {
+        "n": len(values),
+        "mean": float(np.mean(values)),
+        "std": std,
+        "min": float(np.min(values)),
+        "max": float(np.max(values)),
+        "iqr": float(np.quantile(values, 0.75) - np.quantile(values, 0.25)),
+        "variance": variance,
+        "range": float(np.max(values) - np.min(values)),
+    }
+
+
+def _build_swarm_comparison_rows(
+    *,
+    seed_runs_df: pd.DataFrame,
+    swarm_df: pd.DataFrame,
+    metrics: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for metric in metrics:
+        repeat_values = (
+            seed_runs_df[metric].dropna().to_numpy(dtype=np.float64) if metric in seed_runs_df.columns else np.array([])
+        )
+        swarm_values = (
+            swarm_df[metric].dropna().to_numpy(dtype=np.float64) if metric in swarm_df.columns else np.array([])
+        )
+
+        repeat_stats = _metric_summary(repeat_values)
+        swarm_stats = _metric_summary(swarm_values)
+        swarm_variance = swarm_stats["variance"]
+        swarm_range = swarm_stats["range"]
+        variance_ratio = (
+            float(repeat_stats["variance"] / swarm_variance)
+            if np.isfinite(repeat_stats["variance"]) and np.isfinite(swarm_variance) and swarm_variance != 0.0
+            else np.nan
+        )
+        range_ratio = (
+            float(repeat_stats["range"] / swarm_range)
+            if np.isfinite(repeat_stats["range"]) and np.isfinite(swarm_range) and swarm_range != 0.0
+            else np.nan
+        )
+        rows.append(
+            {
+                "metric": metric,
+                "repeat_n": repeat_stats["n"],
+                "repeat_mean": repeat_stats["mean"],
+                "repeat_std": repeat_stats["std"],
+                "repeat_min": repeat_stats["min"],
+                "repeat_max": repeat_stats["max"],
+                "repeat_iqr": repeat_stats["iqr"],
+                "swarm_n": swarm_stats["n"],
+                "swarm_mean": swarm_stats["mean"],
+                "swarm_std": swarm_stats["std"],
+                "swarm_min": swarm_stats["min"],
+                "swarm_max": swarm_stats["max"],
+                "swarm_iqr": swarm_stats["iqr"],
+                "variance_ratio": variance_ratio,
+                "range_ratio": range_ratio,
+            }
+        )
+    return rows
+
+
 def create_jitter_report(config: JitterReportConfig) -> None:
     """Build final/trajectory jitter stats and control determinism report."""
     run_manifest_path = str(config.run_manifest_path)
@@ -281,14 +517,47 @@ def create_jitter_report(config: JitterReportConfig) -> None:
     manifest_df = pd.DataFrame(manifest_payload["runs"])
     results_df = pd.read_csv(results_path)
 
-    merged = manifest_df.merge(results_df, on="run_id", how="left")
+    merged = manifest_df.merge(results_df, on="run_id", how="left", suffixes=("", "_collected"))
+    if "run_name_collected" in merged.columns:
+        merged["run_name"] = merged["run_name_collected"].combine_first(merged["run_name"])
+        merged = merged.drop(columns=["run_name_collected"])
+    if "cohort_collected" in merged.columns:
+        merged = merged.drop(columns=["cohort_collected"])
+    if "trainer_seed_collected" in merged.columns:
+        merged["trainer_seed"] = merged["trainer_seed"].combine_first(merged["trainer_seed_collected"])
+        merged = merged.drop(columns=["trainer_seed_collected"])
+    if "data_seed_collected" in merged.columns:
+        merged["data_seed"] = merged["data_seed"].combine_first(merged["data_seed_collected"])
+        merged = merged.drop(columns=["data_seed_collected"])
+    if "source_run_name_collected" in merged.columns:
+        merged["source_run_name"] = merged["source_run_name"].combine_first(merged["source_run_name_collected"])
+        merged = merged.drop(columns=["source_run_name_collected"])
     merged["status"] = merged["status"].fillna("not_found")
-
-    seed_df = merged[merged["cohort"] == "seed_sweep"].copy()
-    control_df = merged[merged["cohort"] == "determinism_control"].copy()
 
     fs, _, _ = fsspec.get_fs_token_paths(config.output_path)
     fs.makedirs(config.output_path, exist_ok=True)
+
+    with fsspec.open(os.path.join(config.output_path, RUN_MANIFEST_FILE), "w") as f:
+        json.dump(manifest_payload, f, indent=2, sort_keys=True)
+
+    completed_runs = merged[(merged["status"] == "completed") & merged["wandb_run_id"].notna()].copy()
+    all_traj = _collect_trajectory_rows(
+        completed_runs,
+        wandb_entity=config.wandb_entity,
+        wandb_project=config.wandb_project,
+        objective_metric=config.objective_metric,
+    )
+    merged = _backfill_objective_metric_from_trajectories(
+        merged,
+        all_traj,
+        objective_metric=config.objective_metric,
+    )
+
+    with fsspec.open(os.path.join(config.output_path, RESULTS_CSV), "w") as f:
+        merged.to_csv(f, index=False)
+
+    seed_df = merged[merged["cohort"] == SEED_SWEEP_COHORT].copy()
+    control_df = merged[merged["cohort"].isin(CONTROL_COHORTS)].copy()
 
     with fsspec.open(os.path.join(config.output_path, SEED_RUNS_CSV), "w") as f:
         seed_df.to_csv(f, index=False)
@@ -296,9 +565,7 @@ def create_jitter_report(config: JitterReportConfig) -> None:
         control_df.to_csv(f, index=False)
 
     seed_completed = seed_df[
-        (seed_df["status"] == "completed")
-        & seed_df["wandb_run_id"].notna()
-        & seed_df[config.objective_metric].notna()
+        (seed_df["status"] == "completed") & seed_df["wandb_run_id"].notna() & seed_df[config.objective_metric].notna()
     ].copy()
     if seed_completed.empty:
         raise ValueError("No completed seed_sweep runs with objective metric found for jitter report.")
@@ -331,12 +598,7 @@ def create_jitter_report(config: JitterReportConfig) -> None:
     with fsspec.open(os.path.join(config.output_path, FINAL_BPB_STATS_JSON), "w") as f:
         json.dump(final_stats, f, indent=2, sort_keys=True)
 
-    seed_traj = _collect_trajectory_rows(
-        seed_completed,
-        wandb_entity=config.wandb_entity,
-        wandb_project=config.wandb_project,
-        objective_metric=config.objective_metric,
-    )
+    seed_traj = all_traj[all_traj["cohort"] == SEED_SWEEP_COHORT].copy()
     trajectory_stats = _summarize_trajectory(
         seed_traj,
         bootstrap_samples=config.bootstrap_samples,
@@ -352,12 +614,7 @@ def create_jitter_report(config: JitterReportConfig) -> None:
         & control_df["wandb_run_id"].notna()
         & control_df[config.objective_metric].notna()
     ].copy()
-    control_traj = _collect_trajectory_rows(
-        control_completed,
-        wandb_entity=config.wandb_entity,
-        wandb_project=config.wandb_project,
-        objective_metric=config.objective_metric,
-    )
+    control_traj = all_traj[all_traj["cohort"].isin(CONTROL_COHORTS)].copy()
     control_report = _build_control_report(
         control_df=control_completed,
         control_traj_df=control_traj,
@@ -365,6 +622,28 @@ def create_jitter_report(config: JitterReportConfig) -> None:
     )
     with fsspec.open(os.path.join(config.output_path, DETERMINISM_CONTROL_REPORT_JSON), "w") as f:
         json.dump(control_report, f, indent=2, sort_keys=True)
+
+    if config.swarm_results_csv_path is not None and config.comparison_metrics:
+        with fsspec.open(config.swarm_results_csv_path, "r") as f:
+            swarm_df = pd.read_csv(f)
+        comparison_rows = _build_swarm_comparison_rows(
+            seed_runs_df=seed_completed,
+            swarm_df=swarm_df,
+            metrics=config.comparison_metrics,
+        )
+        with fsspec.open(os.path.join(config.output_path, SWARM_COMPARISON_JSON), "w") as f:
+            json.dump(
+                {
+                    "seed_cohort": SEED_SWEEP_COHORT,
+                    "swarm_results_csv_path": config.swarm_results_csv_path,
+                    "metrics": comparison_rows,
+                },
+                f,
+                indent=2,
+                sort_keys=True,
+            )
+        with fsspec.open(os.path.join(config.output_path, SWARM_COMPARISON_CSV), "w") as f:
+            pd.DataFrame(comparison_rows).to_csv(f, index=False)
 
     logger.info(
         "Wrote jitter report: %s runs, %s trajectory rows",
@@ -381,6 +660,8 @@ def create_determinism_report_step(
     analysis_step: ExecutorStep,
     wandb_entity: str,
     wandb_project: str,
+    swarm_results_csv_path: str | None = None,
+    comparison_metrics: tuple[str, ...] = (),
 ) -> ExecutorStep:
     """Create an ExecutorStep for determinism/jitter reporting."""
     return ExecutorStep(
@@ -394,5 +675,33 @@ def create_determinism_report_step(
             wandb_project=wandb_project,
             run_manifest_path=output_path_of(run_manifest_step, RUN_MANIFEST_FILE),
             analysis_output_path=output_path_of(analysis_step),
+            swarm_results_csv_path=swarm_results_csv_path,
+            comparison_metrics=comparison_metrics,
+        ),
+    )
+
+
+def create_manifest_results_step(
+    *,
+    name_prefix: str,
+    run_manifest_step: ExecutorStep,
+    wandb_entity: str,
+    wandb_project: str,
+    extra_metrics: tuple[str, ...] = (),
+    depends_on: list[ExecutorStep] | None = None,
+) -> ExecutorStep:
+    """Create a manifest-backed W&B results collection step."""
+    blocked_on = depends_on or []
+    return ExecutorStep(
+        name=f"{name_prefix}/collect_results",
+        description="Collect W&B summaries for explicitly named determinism study runs",
+        fn=collect_manifest_results,
+        config=CollectManifestResultsConfig(
+            output_path=this_output_path(),
+            run_manifest_path=output_path_of(run_manifest_step, RUN_MANIFEST_FILE),
+            wandb_entity=wandb_entity,
+            wandb_project=wandb_project,
+            extra_metrics=extra_metrics,
+            depends_on=tuple(output_path_of(step) for step in blocked_on),
         ),
     )
