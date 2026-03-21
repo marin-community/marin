@@ -229,6 +229,59 @@ Evidence needed:
 
 ---
 
+## ALT-TPU-002F: Single-host observability verification
+
+- Date: 2026-03-21
+- Owner: ahmed (claude-signal session)
+- Goal: Verify rebuilt image logs full async-style trainer metrics in W&B
+- TPU: v5p-8, us-east5-a, reusing `alt-v5p-probe-001` (ACTIVE)
+- Hosts: 1
+- Image: TBD (building with observability fixes)
+- Code revision: coalloc-rl branch, commit `318decd81`
+- Config: steps_per_phase=1, num_train_steps=1, train_batch_size=64, n_prompts=4, n_generations_per_prompt=16, eval_examples_per_lesson=8, max_input_tokens=512, max_output_tokens=256, inference_gpu_memory_utilization=0.92
+- Success criteria:
+  - train/loss, throughput metrics, and train/samples appear on trainer W&B run
+  - Controller W&B run stays live with phase-level metrics
+  - Full phase completes: sampling → materialization → training → export
+
+### Status: IN PROGRESS
+
+- [x] Commit observability code
+- [x] Push to remote
+- [ ] Build and push Docker image
+- [ ] Launch controller
+- [ ] Phase 0 sampling completes
+- [ ] Phase 0 training completes with W&B metrics visible
+- [ ] Phase 0 export completes
+- [ ] Verify W&B runs
+
+### Findings
+
+- 2026-03-21T21:35Z: Building image with shared training_observability.py. Reusing active `alt-v5p-probe-001` TPU.
+- 2026-03-21T21:42Z: Image pushed: `us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed:alt-rl-1774128928` (sha256:82a2241672915dd7455cb1f1ca8b9606b4ca2aa8e2f905b40efc4d6110722198). Launching controller.
+- 2026-03-21T21:43Z: Controller launched. run_id=alt-tpu-002f-obs, reusing alt-v5p-probe-001.
+- 2026-03-21T21:44Z: Bootstrap complete. run_state status=sampling, phase_id=0. Sampling in progress.
+- 2026-03-21T21:49Z: Phase 0 progressed through sampling → materialization → training:
+  - prepare_sampling: 92.2s
+  - sampling: 107.1s
+  - curriculum_update: 1.5s
+  - materialization: 56.2s
+  - New: `batch_000000_samples.json` sidecar present (observability fix working)
+  - Currently in training phase, waiting for checkpoint + export
+- 2026-03-21T22:02Z: ALT-TPU-002F COMPLETED. Full phase 0 end-to-end:
+  - prepare_sampling: 92.2s
+  - sampling: 107.1s
+  - curriculum_update: 1.5s
+  - materialization: 56.2s
+  - training: 157.0s
+  - export: 528.2s (the 9-min export tax)
+  - **phase_total: 942.2s (~15.7 min)**
+  - run_state: status=completed, policy_version=1, source_global_step=1
+  - W&B run synced with alternating phase metrics, train/samples table
+  - policy_0001/manifest.json written, levanter checkpoint at step-1
+
+---
+
 ## 2026-03-21 Local Milestone
 
 - Status:
