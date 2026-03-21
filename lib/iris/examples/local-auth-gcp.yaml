@@ -9,6 +9,8 @@ controller:
   local:
     port: 0  # auto-assign
 
+worker_provider: {}
+
 auth:
   gcp:
     project_id: hai-gcp-models  # GCP project ID — users must have access to log in
@@ -24,6 +26,7 @@ scale_groups:
       disk: 100GB
       device_type: cpu
       device_variant: cpu
+      preemptible: false
     min_slices: 1
     max_slices: 4
     slice_template:

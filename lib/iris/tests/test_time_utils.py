@@ -1,12 +1,35 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 import threading
 import time
 
 import pytest
 
-from iris.time_utils import Deadline, Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
+from iris.time_utils import Deadline, Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket, log_time
+
+
+def test_log_time_logs_elapsed(caplog):
+    """log_time context manager logs the elapsed time at the specified level."""
+    with caplog.at_level(logging.INFO, logger="iris.time_utils"):
+        with log_time("test-op"):
+            time.sleep(0.05)
+
+    assert len(caplog.records) == 1
+    record = caplog.records[0]
+    assert record.levelno == logging.INFO
+    assert "test-op took" in record.message
+
+
+def test_log_time_custom_level(caplog):
+    """log_time respects the custom log level."""
+    with caplog.at_level(logging.DEBUG, logger="iris.time_utils"):
+        with log_time("debug-op", level=logging.DEBUG):
+            pass
+
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno == logging.DEBUG
 
 
 def test_deadline_expires():

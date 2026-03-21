@@ -403,3 +403,131 @@ def test_group_by_schema_evolution(zephyr_ctx):
     assert len(results) == 5
     for r in results:
         assert r["count"] == 8  # 4 with None score + 4 with int score
+
+
+def test_group_by_combiner(zephyr_ctx):
+    """Combiner deduplicates locally during scatter; reducer still deduplicates globally."""
+    data = [
+        {"key": "a", "id": 1},
+        {"key": "a", "id": 1},  # duplicate
+        {"key": "a", "id": 2},
+        {"key": "b", "id": 3},
+        {"key": "b", "id": 3},  # duplicate
+        {"key": "b", "id": 3},  # duplicate
+        {"key": "b", "id": 4},
+    ]
+
+    def dedup_combiner(key, items):
+        seen = set()
+        for item in items:
+            if item["id"] not in seen:
+                seen.add(item["id"])
+                yield item
+
+    def dedup_reducer(key, items):
+        seen = set()
+        ids = []
+        for item in items:
+            if item["id"] not in seen:
+                seen.add(item["id"])
+                ids.append(item["id"])
+        return {"key": key, "ids": sorted(ids)}
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["key"],
+        reducer=dedup_reducer,
+        combiner=dedup_combiner,
+    )
+
+    results = sorted(zephyr_ctx.execute(ds), key=lambda x: x["key"])
+    assert results == [
+        {"key": "a", "ids": [1, 2]},
+        {"key": "b", "ids": [3, 4]},
+    ]
+
+
+def test_group_by_combiner_sum(zephyr_ctx):
+    """Combiner pre-aggregates partial sums, reducer produces final sum."""
+    data = [
+        {"cat": "x", "val": 1},
+        {"cat": "x", "val": 2},
+        {"cat": "x", "val": 3},
+        {"cat": "y", "val": 10},
+        {"cat": "y", "val": 20},
+    ]
+
+    def sum_combiner(key, items):
+        total = sum(item["val"] for item in items)
+        yield {"cat": key, "val": total}
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["cat"],
+        reducer=lambda key, items: {"cat": key, "total": sum(item["val"] for item in items)},
+        combiner=sum_combiner,
+    )
+
+    results = sorted(zephyr_ctx.execute(ds), key=lambda x: x["cat"])
+    assert results == [
+        {"cat": "x", "total": 6},
+        {"cat": "y", "total": 30},
+    ]
+
+
+# --- Integration tests (all backends) ---
+
+
+def test_deduplicate_basic_integration(integration_ctx):
+    data = [
+        {"id": 1, "val": "a"},
+        {"id": 2, "val": "b"},
+        {"id": 1, "val": "c"},
+        {"id": 3, "val": "d"},
+        {"id": 2, "val": "e"},
+    ]
+
+    ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"])
+
+    results = list(integration_ctx.execute(ds))
+    assert len(results) == 3
+    ids = sorted([r["id"] for r in results])
+    assert ids == [1, 2, 3]
+
+
+def test_group_by_combiner_integration(integration_ctx):
+    data = [
+        {"key": "a", "id": 1},
+        {"key": "a", "id": 1},
+        {"key": "a", "id": 2},
+        {"key": "b", "id": 3},
+        {"key": "b", "id": 3},
+        {"key": "b", "id": 3},
+        {"key": "b", "id": 4},
+    ]
+
+    def dedup_combiner(key, items):
+        seen = set()
+        for item in items:
+            if item["id"] not in seen:
+                seen.add(item["id"])
+                yield item
+
+    def dedup_reducer(key, items):
+        seen = set()
+        ids = []
+        for item in items:
+            if item["id"] not in seen:
+                seen.add(item["id"])
+                ids.append(item["id"])
+        return {"key": key, "ids": sorted(ids)}
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["key"],
+        reducer=dedup_reducer,
+        combiner=dedup_combiner,
+    )
+
+    results = sorted(integration_ctx.execute(ds), key=lambda x: x["key"])
+    assert results == [
+        {"key": "a", "ids": [1, 2]},
+        {"key": "b", "ids": [3, 4]},
+    ]

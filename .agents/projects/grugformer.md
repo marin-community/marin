@@ -34,7 +34,7 @@ New variants (for example MoE) should start as copies of `experiments/grug/base/
 Minimum checks for grug template changes:
 - `uv run pytest tests/test_grug_variant_contracts.py`
 - targeted additional tests for changed behavior
-- `uv run python infra/pre-commit.py --all-files`
+- `./infra/pre-commit.py --all-files`
 
 Testing copy-paste variants:
 - Contract checks discover variants automatically from `experiments/grug/<variant>/` and run lowering + one-step construction checks.

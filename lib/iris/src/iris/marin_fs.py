@@ -281,48 +281,57 @@ def check_gcs_paths_same_region(
                 return
             raise ValueError("Could not determine the region of the VM. This is required for path checks.")
 
-    _check_paths_recursively(
+    for key, path in collect_gcs_paths(
         obj,
-        "",
-        region=region,
-        local_ok=local_ok,
+        path_prefix="",
+        skip_if_prefix_contains=skip_if_prefix_contains,
+    ):
+        path_checker(key, path, region, local_ok)
+
+
+def collect_gcs_paths(
+    obj: Any,
+    *,
+    path_prefix: str = "",
+    skip_if_prefix_contains: Sequence[str] = ("train_urls", "validation_urls"),
+) -> list[tuple[str, str]]:
+    """Collect ``(path_key, gs://...)`` entries found recursively in ``obj``."""
+    paths: list[tuple[str, str]] = []
+    _collect_gcs_paths_recursively(
+        obj,
+        path_prefix,
         skip_if_prefix_contains=tuple(skip_if_prefix_contains),
-        path_checker=path_checker,
+        out=paths,
     )
+    return paths
 
 
-def _check_paths_recursively(
+def _collect_gcs_paths_recursively(
     obj: Any,
     path_prefix: str,
     *,
-    region: str,
-    local_ok: bool,
     skip_if_prefix_contains: tuple[str, ...],
-    path_checker: Callable[[str, str, str, bool], None],
+    out: list[tuple[str, str]],
 ) -> None:
     if isinstance(obj, dict):
         for key, value in obj.items():
             new_prefix = f"{path_prefix}.{key}" if path_prefix else str(key)
-            _check_paths_recursively(
+            _collect_gcs_paths_recursively(
                 value,
                 new_prefix,
-                region=region,
-                local_ok=local_ok,
                 skip_if_prefix_contains=skip_if_prefix_contains,
-                path_checker=path_checker,
+                out=out,
             )
         return
 
-    if isinstance(obj, list | tuple):
+    if isinstance(obj, list | tuple | set):
         for index, item in enumerate(obj):
             new_prefix = f"{path_prefix}[{index}]"
-            _check_paths_recursively(
+            _collect_gcs_paths_recursively(
                 item,
                 new_prefix,
-                region=region,
-                local_ok=local_ok,
                 skip_if_prefix_contains=skip_if_prefix_contains,
-                path_checker=path_checker,
+                out=out,
             )
         return
 
@@ -331,19 +340,17 @@ def _check_paths_recursively(
         if path_str.startswith("gs://"):
             if any(skip_token in path_prefix for skip_token in skip_if_prefix_contains):
                 return
-            path_checker(path_prefix, path_str, region, local_ok)
+            out.append((path_prefix, path_str))
         return
 
     if dataclasses.is_dataclass(obj):
         for field in dataclasses.fields(obj):
             new_prefix = f"{path_prefix}.{field.name}" if path_prefix else field.name
-            _check_paths_recursively(
+            _collect_gcs_paths_recursively(
                 getattr(obj, field.name),
                 new_prefix,
-                region=region,
-                local_ok=local_ok,
                 skip_if_prefix_contains=skip_if_prefix_contains,
-                path_checker=path_checker,
+                out=out,
             )
         return
 

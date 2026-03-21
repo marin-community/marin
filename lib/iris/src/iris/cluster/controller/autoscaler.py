@@ -24,7 +24,7 @@ import logging
 import math
 from collections import deque
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from dataclasses import dataclass
 from enum import Enum
 
@@ -35,6 +35,7 @@ from iris.cluster.platform.base import (
     Platform,
     QuotaExhaustedError,
     RemoteWorkerHandle,
+    SliceHandle,
     WorkerStatus,
 )
 from iris.cluster.constraints import (
@@ -43,6 +44,8 @@ from iris.cluster.constraints import (
     PlacementRequirements,
     get_device_type_enum,
     routing_constraints,
+    soft_constraint_score,
+    split_hard_soft,
 )
 from iris.cluster.controller.db import SCALING_GROUPS, SLICES, TRACKED_WORKERS, ControllerDB
 from iris.cluster.types import WorkerStatusMap
@@ -645,11 +648,29 @@ def route_demand(
             continue
 
         routing_cs = routing_constraints(entry.constraints)
-        matching_names = group_index.matching_entities(routing_cs)
+        hard_routing_cs, soft_routing_cs = split_hard_soft(routing_cs)
+
+        # Match groups using hard routing constraints only — soft constraints
+        # influence group ordering but never exclude groups.
+        matching_names = group_index.matching_entities(hard_routing_cs)
         matching_groups = [g for g in sorted_groups if g.name in matching_names]
         if not matching_groups:
             unmet.append(UnmetDemand(entry=entry, reason=_diagnose_no_matching_group(entry, sorted_groups)))
             continue
+
+        # When soft routing constraints exist, re-sort matching groups so that
+        # groups satisfying more soft constraints come first, then by priority.
+        # This ensures e.g. preemptible=soft routes to preemptible groups
+        # before falling through to non-preemptible ones, regardless of
+        # priority tier.
+        if soft_routing_cs:
+            matching_groups = sorted(
+                matching_groups,
+                key=lambda g: (
+                    -soft_constraint_score(g.to_attributes(), soft_routing_cs),
+                    g.config.priority or 100,
+                ),
+            )
 
         if entry.coschedule_group_id and not any(g.num_vms == len(entry.task_ids) for g in matching_groups):
             group_detail = ", ".join(f"{g.name}={g.num_vms}" for g in matching_groups)
@@ -668,9 +689,14 @@ def route_demand(
 
         matched = False
 
+        # Use matching_groups order (respects soft-constraint ranking) for
+        # both phases so that soft-preferred groups are tried first per entry.
+        matching_group_names = [g.name for g in matching_groups]
+
         # Phase 1: try committed budgets first (groups with requesting slices)
-        for budget in committed_budgets.values():
-            if budget.try_assign(entry):
+        for name in matching_group_names:
+            budget = committed_budgets.get(name)
+            if budget is not None and budget.try_assign(entry):
                 # Mirror into full budget so phase 2 sees consumed capacity
                 full_budgets[budget.name].try_assign(entry)
                 routed.setdefault(budget.name, []).append(entry)
@@ -680,8 +706,9 @@ def route_demand(
 
         # Phase 2: fall through to full waterfall
         if not matched:
-            for budget in full_budgets.values():
-                if budget.try_assign(entry):
+            for name in matching_group_names:
+                budget = full_budgets.get(name)
+                if budget is not None and budget.try_assign(entry):
                     routed.setdefault(budget.name, []).append(entry)
                     group_reasons.setdefault(budget.name, "demand-routed")
                     matched = True
@@ -1225,7 +1252,7 @@ class Autoscaler:
         """Restore tracked worker state from a snapshot. Called before loops start."""
         self._workers.update(workers)
 
-    def restore_from_db(self, db: ControllerDB) -> None:
+    def restore_from_db(self, db: ControllerDB, platform: Platform) -> None:
         """Reconcile DB-checkpointed autoscaler state against live cloud.
 
         Reads scaling group and slice rows from proper DB tables,
@@ -1305,8 +1332,13 @@ class Autoscaler:
             for row in tracked_rows
         ]
 
-        # Restore scaling groups (parallelized -- each calls platform.list_slices())
-        groups_to_restore = []
+        # Prefetch all managed slices in one shot (2 gcloud calls on GCP),
+        # then partition by scale group for pure in-memory restore.
+        all_cloud_slices = platform.list_all_slices()
+        cloud_by_group: dict[str, list[SliceHandle]] = {}
+        for handle in all_cloud_slices:
+            cloud_by_group.setdefault(handle.scale_group, []).append(handle)
+
         for group_snap in group_snapshots.values():
             group = self._groups.get(group_snap.name)
             if group is None:
@@ -1315,25 +1347,20 @@ class Autoscaler:
                     group_snap.name,
                 )
                 continue
-            groups_to_restore.append((group_snap, group))
-
-        with ThreadPoolExecutor(max_workers=16) as executor:
-            futures = {
-                executor.submit(restore_scaling_group, gs, g.platform, g.config, g.label_prefix): (gs, g)
-                for gs, g in groups_to_restore
-            }
-            for future in as_completed(futures):
-                group_snap, group = futures[future]
-                restore_result = future.result()
-                group.restore_from_snapshot(
-                    slices=restore_result.slices,
-                    consecutive_failures=restore_result.consecutive_failures,
-                    last_scale_up=restore_result.last_scale_up,
-                    last_scale_down=restore_result.last_scale_down,
-                    backoff_until=restore_result.backoff_until,
-                    quota_exceeded_until=restore_result.quota_exceeded_until,
-                    quota_reason=restore_result.quota_reason,
-                )
+            restore_result = restore_scaling_group(
+                group_snapshot=group_snap,
+                cloud_handles=cloud_by_group.get(group_snap.name, []),
+                label_prefix=group.label_prefix,
+            )
+            group.restore_from_snapshot(
+                slices=restore_result.slices,
+                consecutive_failures=restore_result.consecutive_failures,
+                last_scale_up=restore_result.last_scale_up,
+                last_scale_down=restore_result.last_scale_down,
+                backoff_until=restore_result.backoff_until,
+                quota_exceeded_until=restore_result.quota_exceeded_until,
+                quota_reason=restore_result.quota_reason,
+            )
 
         # Workers from discarded slices remain in the DB as healthy.
         # They will naturally fail heartbeat checks and be pruned once

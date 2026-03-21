@@ -20,7 +20,7 @@ from marin.processing.classification.deduplication.dedup_commons import (
 )
 from fray.v2 import ResourceConfig
 from marin.processing.classification.deduplication.connected_components import connected_components
-from marin.utilities.time_logger import log_time
+from iris.time_utils import log_time
 import wandb
 from zephyr import ZephyrContext
 from zephyr.dataset import Dataset
@@ -166,7 +166,7 @@ def dedup_fuzzy_document(
     if wandb.run:
         wandb.log(fuzzy_cnt.to_dict())
 
-    def mark_dup_documents(docs: Iterator[dict]) -> Iterator[dict]:
+    def mark_dup_documents(docs: Iterator[dict], _) -> Iterator[dict]:
         fuzzy_dup_map = _load_fuzzy_dupe_map_shard(fuzzy_dup_shards)
 
         for doc in docs:

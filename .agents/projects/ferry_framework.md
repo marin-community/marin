@@ -25,7 +25,7 @@ Focus only on **daily ferry as integration test**:
 - keep daily and canary ferry data-mix assumptions aligned (`experiments/ferries/canary_ferry.py`)
 - one issue-driven proposal workflow (agent/manual-triggered)
 - one launch flow on TPU infra
-- one monitoring loop using `.agents/docs/job-monitoring-loop.md`
+- one monitoring loop using **babysit-job** skill
 - optional manual Discord update (automation deferred)
 
 Out of scope for this phase:
@@ -72,7 +72,7 @@ Out of scope for this phase:
 
 5. Launch + monitor helpers:
 - `scripts/pm/ferries/launch_daily_ferry.py` (or equivalent command wrapper)
-- recipe-driven monitoring using `.agents/docs/job-monitoring-loop.md`
+- recipe-driven monitoring using **babysit-job** skill
 - `scripts/ferries/daily_analysis.py` to extract canonical final W&B keys for run-log entries
 - optional high-value helper: `scripts/pm/ferries/monitor_job.py` to standardize 570s cadence, exact progress parsing, and terminal summary output
 
@@ -115,7 +115,7 @@ Out of scope for this phase:
 - capture job id + links into issue
 
 6. Monitor to completion:
-- execute `.agents/docs/job-monitoring-loop.md`
+- execute **babysit-job** skill
 - keep monitoring active until terminal job state (`SUCCEEDED`/`FAILED`/`STOPPED`)
 - expect this loop to run for 4-5 hours for typical ferry runs
 - auto-restart only per documented loop policy
@@ -174,7 +174,7 @@ Monitoring ownership must be explicit from launch until terminal state.
 
 Rules:
 - assign one owner when the job is launched
-- keep `.agents/docs/job-monitoring-loop.md` running until terminal state
+- keep **babysit-job** skill running until terminal state
 - expected ownership window is often 4-5 hours
 - handoff is allowed only with an explicit replacement owner and a state handoff containing:
   - current job status
@@ -281,7 +281,7 @@ uv run lib/marin/src/marin/run/ray_run.py \
 ```
 
 Monitoring handoff:
-- follow `.agents/docs/job-monitoring-loop.md` with:
+- follow **babysit-job** skill with:
   - `job_id`
   - `cluster`
   - `experiment=experiments/ferries/daily.py`

@@ -9,6 +9,8 @@ controller:
   local:
     port: 0  # auto-assign
 
+worker_provider: {}
+
 scale_groups:
   cpu:
     num_vms: 1
@@ -18,6 +20,7 @@ scale_groups:
       disk: 100GB
       device_type: cpu
       device_variant: cpu
+      preemptible: false
     min_slices: 0
     max_slices: 4  # Allow up to 4 local workers
     slice_template:

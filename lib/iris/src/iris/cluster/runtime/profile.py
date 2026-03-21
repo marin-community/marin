@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -135,9 +136,12 @@ def build_memray_transform_cmd(spec: MemoryProfileSpec, memray_bin: str, trace_p
         raise RuntimeError(f"Unknown memray reporter: {spec.reporter}")
 
 
-def build_pyspy_dump_cmd(pid: str, py_spy_bin: str = "py-spy") -> list[str]:
+def build_pyspy_dump_cmd(pid: str, py_spy_bin: str = "py-spy", *, include_locals: bool = False) -> list[str]:
     """Build a py-spy dump command for thread-level stack traces."""
-    return [py_spy_bin, "dump", "--pid", pid]
+    cmd = [py_spy_bin, "dump", "--pid", pid]
+    if include_locals:
+        cmd.append("--locals")
+    return cmd
 
 
 def profile_local_process(duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
@@ -150,7 +154,7 @@ def profile_local_process(duration_seconds: int, profile_type: cluster_pb2.Profi
 
     if profile_type.HasField("threads"):
         _check_tool("py-spy")
-        return run_pyspy_dump(pid)
+        return run_pyspy_dump(pid, include_locals=profile_type.threads.locals)
     elif profile_type.HasField("cpu"):
         _check_tool("py-spy")
         return _run_pyspy_record(pid, duration_seconds, profile_type.cpu)
@@ -161,9 +165,9 @@ def profile_local_process(duration_seconds: int, profile_type: cluster_pb2.Profi
         raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
 
-def run_pyspy_dump(pid: str, py_spy_bin: str = "py-spy") -> bytes:
+def run_pyspy_dump(pid: str, py_spy_bin: str = "py-spy", *, include_locals: bool = False) -> bytes:
     """Run py-spy dump to collect thread stacks from a process."""
-    cmd = build_pyspy_dump_cmd(pid, py_spy_bin)
+    cmd = build_pyspy_dump_cmd(pid, py_spy_bin, include_locals=include_locals)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if result.returncode != 0:
         raise RuntimeError(f"py-spy dump failed: {result.stderr}")
@@ -189,18 +193,29 @@ def _run_pyspy_record(pid: str, duration_seconds: int, cpu_config: cluster_pb2.C
 
 
 def _run_memray_profile(pid: str, duration_seconds: int, memory_config: cluster_pb2.MemoryProfile) -> bytes:
-    """Run memray attach + transform against a local process."""
+    """Profile memory of the current process using memray's in-process Tracker.
+
+    Uses the programmatic Tracker API instead of ``memray attach``, avoiding
+    ptrace/SYS_PTRACE requirements that fail when profiling the controller or
+    worker's own process from within a container.
+    """
+    import memray
+
     spec = resolve_memory_spec(memory_config, duration_seconds, pid=pid)
+    file_format = memray.FileFormat.AGGREGATED_ALLOCATIONS if spec.leaks else memray.FileFormat.ALL_ALLOCATIONS
+
     trace_path = None
     output_path = None
     try:
+        # Tracker refuses to overwrite an existing file, so get a unique name
+        # then remove the placeholder before passing to Tracker.
         with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
             trace_path = f.name
+        os.unlink(trace_path)
 
-        attach_cmd = build_memray_attach_cmd(spec, memray_bin="memray", trace_path=trace_path)
-        result = subprocess.run(attach_cmd, capture_output=True, text=True, timeout=duration_seconds + 10)
-        if result.returncode != 0:
-            raise RuntimeError(f"memray attach failed: {result.stderr}")
+        # Track allocations in-process for the requested duration.
+        with memray.Tracker(trace_path, file_format=file_format):
+            time.sleep(duration_seconds)
 
         if spec.output_is_file:
             with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:

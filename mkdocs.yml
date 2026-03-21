@@ -69,7 +69,6 @@ nav:
       - Data Browser: tutorials/data-browser.md
       - Training an LM: tutorials/train-an-lm.md
       - Submitting a Speedrun: tutorials/submitting-speedrun.md
-      - Adding an Optimizer for Speedrun: tutorials/add-optimizer.md
   - Explanations:
       - The Language Modeling Pipeline: explanations/lm-pipeline.md
       - Evaluation: explanations/evaluation.md
@@ -90,6 +89,7 @@ nav:
       - Dev TPU (Iris): dev-guide/dev_tpu_iris.md
       - Tutorial Guidelines: dev-guide/tutorial-guidelines.md
       - Internal Guidelines: dev-guide/guidelines-internal.md
+      - Forking Policy: dev-guide/forking-policy.md
       - Building Docs: dev-guide/building-docs.md
       - Snapshot Tests: dev-guide/snapshot-tests.md
   - Technical Reference:

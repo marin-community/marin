@@ -15,6 +15,13 @@ platform:
 storage:
   remote_state_dir: s3://marin-na/iris/state/canary
 
+kubernetes_provider:
+  namespace: iris-canary
+  default_image: ghcr.io/marin-community/iris-task:latest
+  host_network: true              # Required for NCCL/IB multi-host traffic
+  cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal GPU nodes
+  controller_address: http://iris-controller-svc.iris-canary.svc.cluster.local:10000
+
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   coreweave:
@@ -36,7 +43,7 @@ defaults:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001
     cache_dir: /mnt/local/iris-cache
-    runtime: kubernetes
+    runtime: docker
     default_task_image: ghcr.io/marin-community/iris-task:latest
 
 scale_groups:
@@ -47,6 +54,7 @@ scale_groups:
       ram: 256GB
       disk: 1TB
       device_type: cpu
+      preemptible: false
     worker:
       attributes:
         region: US-WEST-04A
@@ -69,6 +77,7 @@ scale_groups:
       device_type: gpu
       device_variant: H100
       device_count: 8
+      preemptible: false
     worker:
       attributes:
         region: US-WEST-04A

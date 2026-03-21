@@ -14,6 +14,8 @@ import traceback
 import warnings
 from pathlib import Path
 
+from iris.time_utils import ExponentialBackoff
+
 # Disable Ray's automatic UV runtime env propagation BEFORE importing ray.
 # This prevents Ray from packaging the entire working directory (~38MB) for actors.
 os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
@@ -38,8 +40,7 @@ IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "examples" / "test.
 @pytest.fixture(scope="session")
 def iris_cluster():
     """Start local Iris cluster for testing - reused across all tests."""
-    from iris.cluster.manager import connect_cluster
-    from iris.cluster.config import load_config, make_local_config
+    from iris.cluster.config import load_config, make_local_config, connect_cluster
 
     config = load_config(IRIS_CONFIG)
     config = make_local_config(config)
@@ -64,10 +65,39 @@ def ray_cluster():
     # Don't shutdown - Ray will be reused across test sessions
 
 
-@pytest.fixture(params=["local", "iris", "ray"], scope="module")
-def fray_client(request):
+# --- Local-only fixtures (functional tests) ---
+
+
+@pytest.fixture(scope="session")
+def local_client():
+    client = LocalClient()
+    yield client
+    client.shutdown(wait=True)
+
+
+@pytest.fixture(scope="session")
+def zephyr_ctx(local_client, tmp_path_factory):
+    """Local-only ZephyrContext for functional tests."""
+    tmp_path = tmp_path_factory.mktemp("zephyr")
+    ctx = ZephyrContext(
+        client=local_client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name="test-ctx",
+    )
+    yield ctx
+    ctx.shutdown()
+
+
+# --- Multi-backend fixtures (integration tests) ---
+
+
+@pytest.fixture(params=["local", "iris", "ray"], scope="session")
+def integration_client(request):
     """Parametrized fixture providing Local, Iris, and Ray clients.
 
+    Session-scoped to reuse clusters across all test modules.
     Fixtures are requested lazily to avoid initializing Ray when running
     Iris tests (and vice-versa), since ray.is_initialized() being true
     causes current_client() auto-detection to pick Ray.
@@ -84,7 +114,6 @@ def fray_client(request):
         iris_client = IrisClient.remote(iris_cluster, workspace=ZEPHYR_ROOT)
         client = FrayIrisClient.from_iris_client(iris_client)
 
-        # Set up IrisContext so actor handles can resolve
         ctx = IrisContext(job_id=JobName.root("test-user", "test"), client=iris_client)
         with iris_ctx_scope(ctx):
             yield client
@@ -96,6 +125,21 @@ def fray_client(request):
         client.shutdown(wait=True)
     else:
         raise ValueError(f"Unknown backend: {request.param}")
+
+
+@pytest.fixture(scope="session")
+def integration_ctx(integration_client, tmp_path_factory):
+    """ZephyrContext on all backends for integration tests."""
+    tmp_path = tmp_path_factory.mktemp("zephyr-integration")
+    ctx = ZephyrContext(
+        client=integration_client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name="test-integration",
+    )
+    yield ctx
+    ctx.shutdown()
 
 
 @pytest.fixture
@@ -114,24 +158,6 @@ def actor_context():
 def sample_data():
     """Sample data for testing."""
     return list(range(1, 11))  # [1, 2, 3, ..., 10]
-
-
-@pytest.fixture(scope="module")
-def zephyr_ctx(fray_client, tmp_path_factory):
-    """ZephyrContext running on all backends with temp chunk storage.
-
-    Module-scoped to reuse coordinator/workers across tests in the same file.
-    """
-    tmp_path = tmp_path_factory.mktemp("zephyr")
-    chunk_prefix = str(tmp_path / "chunks")
-    ctx = ZephyrContext(
-        client=fray_client,
-        max_workers=2,
-        resources=ResourceConfig(cpu=1, ram="512m"),
-        chunk_storage_prefix=chunk_prefix,
-        name="test-ctx",
-    )
-    yield ctx
 
 
 class CallCounter:
@@ -170,6 +196,20 @@ def _configure_marin_prefix():
         del os.environ["MARIN_PREFIX"]
 
 
+# Thread name prefixes for infrastructure threads managed by session-scoped
+# clusters (iris, ray, fray). These persist across tests and are not leaks.
+_INFRA_THREAD_PREFIXES = (
+    "worker-server",
+    "worker-lifecycle",
+    "AnyIO worker thread",
+    "ThreadPoolExecutor",
+    "asyncio_",
+    "ray::",
+    "grpc_",
+    "monitoring",
+)
+
+
 @pytest.fixture(autouse=True)
 def _thread_cleanup():
     """Ensure no new non-daemon threads leak from each test.
@@ -177,20 +217,29 @@ def _thread_cleanup():
     Takes a snapshot of threads before the test and checks that no new
     non-daemon threads remain after teardown. Waits briefly for threads
     that are in the process of shutting down.
+
+    Infrastructure threads from session-scoped clusters (iris, ray) are
+    excluded — they persist for the session and are not leaks.
     """
     before = {t.ident for t in threading.enumerate()}
     yield
 
-    deadline = time.monotonic() + 5.0
+    def _is_leaked(t: threading.Thread) -> bool:
+        if not t.is_alive() or t.daemon or t.name == "MainThread":
+            return False
+        if t.ident in before:
+            return False
+        if any(t.name.startswith(prefix) for prefix in _INFRA_THREAD_PREFIXES):
+            return False
+        return True
+
+    backoff = ExponentialBackoff(initial=0.1, maximum=1.0)
+    deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline:
-        leaked = [
-            t
-            for t in threading.enumerate()
-            if t.is_alive() and not t.daemon and t.name != "MainThread" and t.ident not in before
-        ]
+        leaked = [t for t in threading.enumerate() if _is_leaked(t)]
         if not leaked:
             return
-        time.sleep(0.1)
+        time.sleep(backoff.next_interval())
 
     thread_info = [f"{t.name} (daemon={t.daemon}, ident={t.ident})" for t in leaked]
     warnings.warn(

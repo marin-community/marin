@@ -3,6 +3,7 @@
 
 import concurrent.futures
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +16,7 @@ from iris.marin_fs import (
     TransferBudgetExceeded,
     _regions_match,
     check_gcs_paths_same_region,
+    collect_gcs_paths,
     filesystem,
     marin_prefix,
     marin_region,
@@ -208,6 +210,26 @@ def test_check_gcs_paths_same_region_allows_unknown_region_for_local_runs():
         local_ok=True,
         region_getter=fail_region_lookup,
     )
+
+
+@dataclass
+class _PathHolder:
+    path: str
+
+
+def test_collect_gcs_paths_recurses_and_skips_prefixes():
+    payload = {
+        "cache_dir": "gs://bucket/path",
+        "train_urls": ["gs://bucket/source"],
+        "nested": _PathHolder(path=Path("gs://bucket/nested")),
+        "set_field": {"gs://bucket/from_set"},
+    }
+    paths = collect_gcs_paths(payload, path_prefix="config", skip_if_prefix_contains=("train_urls",))
+    assert sorted(paths) == [
+        ("config.cache_dir", "gs://bucket/path"),
+        ("config.nested.path", "gs://bucket/nested"),
+        ("config.set_field[0]", "gs://bucket/from_set"),
+    ]
 
 
 # ---------------------------------------------------------------------------

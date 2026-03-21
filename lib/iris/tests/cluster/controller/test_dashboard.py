@@ -130,9 +130,8 @@ def set_task_state(state: ControllerTransitions, task_id: JobName, new_state: in
 
 @pytest.fixture
 def state(tmp_path):
-    db_path = tmp_path / "controller.sqlite3"
-    db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
+    db = ControllerDB(db_dir=tmp_path)
+    log_store = LogStore(log_dir=tmp_path / "logs")
     s = ControllerTransitions(db=db, log_store=log_store)
     yield s
     log_store.close()
@@ -195,7 +194,8 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock.create_scheduling_context = _create_scheduling_context
     controller_mock.get_job_scheduling_diagnostics = _get_job_scheduling_diagnostics
     controller_mock.autoscaler = autoscaler
-    controller_mock.stub_factory = Mock()
+    controller_mock.provider = Mock()
+    controller_mock.has_direct_provider = False
     return controller_mock
 
 
@@ -206,7 +206,7 @@ def service(state, scheduler, tmp_path):
         state,
         state._db,
         controller=controller_mock,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
     )
 
@@ -225,7 +225,7 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
         state,
         state._db,
         controller=controller_mock,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
     )
 
@@ -342,11 +342,10 @@ def test_list_workers_returns_healthy_status(client, state, make_worker_metadata
 
 
 def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
-    """ListEndpoints filters out endpoints for terminal jobs.
+    """ListEndpoints returns endpoints for non-terminal jobs.
 
-    Endpoints are visible for jobs in non-terminal states (PENDING, BUILDING, RUNNING)
-    to support the case where tasks are executing but the job hasn't transitioned to
-    RUNNING yet due to controller-worker communication delay.
+    Endpoints are associated with tasks and deleted when tasks reach terminal states,
+    so only endpoints for pending/running jobs should exist at query time.
     """
     # Create jobs in various states
     pending_id = submit_job(state, "pending", job_request)
@@ -354,10 +353,11 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     running_id = submit_job(state, "running", job_request)
     set_job_state(state, running_id, cluster_pb2.JOB_STATE_RUNNING)
 
+    # No endpoint for succeeded job — endpoints are deleted when tasks go terminal
     succeeded_id = submit_job(state, "succeeded", job_request)
     set_job_state(state, succeeded_id, cluster_pb2.JOB_STATE_SUCCEEDED)
 
-    # Add endpoints for each
+    # Add endpoints only for non-terminal jobs
     state.add_endpoint(
         Endpoint(
             endpoint_id="ep1",
@@ -380,22 +380,10 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
         ),
         task_id=running_id.task(0),
     )
-    state.add_endpoint(
-        Endpoint(
-            endpoint_id="ep3",
-            name="done-svc",
-            address="h:3",
-            job_id=succeeded_id,
-            metadata={},
-            registered_at=Timestamp.now(),
-        ),
-        task_id=succeeded_id.task(0),
-    )
 
     resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
     endpoints = resp.get("endpoints", [])
 
-    # Both pending and running endpoints should be visible (terminal state filtered out)
     assert len(endpoints) == 2
     endpoint_names = {ep["name"] for ep in endpoints}
     assert endpoint_names == {"pending-svc", "running-svc"}
@@ -1043,3 +1031,31 @@ def test_auth_config_returns_enabled_when_verifier_set(service):
     data = resp.json()
     assert data["auth_enabled"] is True
     assert data["provider"] == "gcp"
+
+
+def test_auth_config_worker_provider_kind(client):
+    """auth/config returns provider_kind=worker when no direct provider."""
+    resp = client.get("/auth/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["provider_kind"] == "worker"
+
+
+def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
+    """auth/config returns provider_kind=kubernetes when controller has direct provider."""
+    controller_mock = _make_controller_mock(state, scheduler)
+    controller_mock.has_direct_provider = True
+    svc = ControllerServiceImpl(
+        state,
+        state._db,
+        controller=controller_mock,
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
+        log_store=state._log_store,
+    )
+    dashboard = ControllerDashboard(svc)
+    k8s_client = TestClient(dashboard.app)
+
+    resp = k8s_client.get("/auth/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["provider_kind"] == "kubernetes"

@@ -160,9 +160,8 @@ def worker_metadata():
 @pytest.fixture
 def state(tmp_path):
     """Create a fresh ControllerTransitions for each test."""
-    db_path = tmp_path / "controller.sqlite3"
-    db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
+    db = ControllerDB(db_dir=tmp_path)
+    log_store = LogStore(log_dir=tmp_path / "logs")
     s = ControllerTransitions(db=db, log_store=log_store)
     yield s
     log_store.close()
@@ -178,7 +177,8 @@ class MockSchedulerWake:
         self.create_scheduling_context = Mock(return_value=Mock())
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.autoscaler = None
-        self.stub_factory = Mock()
+        self.provider = Mock()
+        self.has_direct_provider = False
 
 
 @pytest.fixture
@@ -196,7 +196,7 @@ def service(state, mock_scheduler, tmp_path):
         state,
         state._db,
         controller=mock_scheduler,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
     )
 
@@ -426,6 +426,56 @@ def test_get_job_status_not_found(service):
     assert "nonexistent" in exc_info.value.message
 
 
+def test_redact_request_env_vars_does_not_mutate_original():
+    """Verify redact_request_env_vars returns a copy and does not mutate the input."""
+    from iris.cluster.controller.service import REDACTED_VALUE, redact_request_env_vars
+
+    original = cluster_pb2.Controller.LaunchJobRequest(
+        name="/test-user/job",
+        entrypoint=_make_test_entrypoint(),
+        environment=cluster_pb2.EnvironmentConfig(env_vars={"WANDB_API_KEY": "secret", "SAFE": "ok"}),
+    )
+    redacted = redact_request_env_vars(original)
+
+    assert original.environment.env_vars["WANDB_API_KEY"] == "secret"
+    assert redacted.environment.env_vars["WANDB_API_KEY"] == REDACTED_VALUE
+    assert redacted.environment.env_vars["SAFE"] == "ok"
+
+
+def test_get_job_status_redacts_sensitive_env_vars(service):
+    """Verify get_job_status redacts env var values whose keys match sensitive patterns."""
+    from iris.cluster.controller.service import REDACTED_VALUE
+
+    job_name = JobName.root("test-user", "redact-test")
+    launch_req = cluster_pb2.Controller.LaunchJobRequest(
+        name=job_name.to_wire(),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(
+            env_vars={
+                "WANDB_API_KEY": "wk-secret123",
+                "HF_TOKEN": "hf_tok456",
+                "MY_SECRET": "s3cret",
+                "DB_PASSWORD": "hunter2",
+                "SAFE_VAR": "visible",
+                "NUM_WORKERS": "4",
+            }
+        ),
+    )
+    service.launch_job(launch_req, None)
+
+    status_req = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_name.to_wire())
+    response = service.get_job_status(status_req, None)
+
+    env = dict(response.request.environment.env_vars)
+    assert env["WANDB_API_KEY"] == REDACTED_VALUE
+    assert env["HF_TOKEN"] == REDACTED_VALUE
+    assert env["MY_SECRET"] == REDACTED_VALUE
+    assert env["DB_PASSWORD"] == REDACTED_VALUE
+    assert env["SAFE_VAR"] == "visible"
+    assert env["NUM_WORKERS"] == "4"
+
+
 # =============================================================================
 # Job Termination Tests
 # =============================================================================
@@ -600,7 +650,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_scheduler, tmp_path, j
         state,
         state._db,
         controller=mock_scheduler,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles_owner.sqlite3"),
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
         log_store=state._log_store,
         auth=ControllerAuth(provider="static"),
     )
@@ -631,7 +681,7 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_scheduler, tmp_path
         state,
         state._db,
         controller=mock_scheduler,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles_child.sqlite3"),
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
         log_store=state._log_store,
         auth=ControllerAuth(provider="static"),
     )
@@ -755,6 +805,165 @@ def test_list_jobs_returns_all_jobs(service, job_request):
     assert states_by_id[JobName.root("test-user", "job-3").to_wire()] == cluster_pb2.JOB_STATE_KILLED
 
 
+def test_list_jobs_sql_pagination(service, job_request):
+    """SQL-level pagination returns correct page when sorting by date."""
+    for i in range(5):
+        service.launch_job(job_request(f"job-{i}"), None)
+
+    # Request page of 2
+    request = cluster_pb2.Controller.ListJobsRequest(offset=0, limit=2)
+    response = service.list_jobs(request, None)
+
+    assert len(response.jobs) == 2
+    assert response.total_count == 5
+    assert response.has_more is True
+
+    # Second page
+    request2 = cluster_pb2.Controller.ListJobsRequest(offset=2, limit=2)
+    response2 = service.list_jobs(request2, None)
+
+    assert len(response2.jobs) == 2
+    assert response2.total_count == 5
+    assert response2.has_more is True
+
+    # No overlap between pages
+    page1_ids = {j.job_id for j in response.jobs}
+    page2_ids = {j.job_id for j in response2.jobs}
+    assert page1_ids.isdisjoint(page2_ids)
+
+    # Last page
+    request3 = cluster_pb2.Controller.ListJobsRequest(offset=4, limit=2)
+    response3 = service.list_jobs(request3, None)
+
+    assert len(response3.jobs) == 1
+    assert response3.has_more is False
+
+
+def test_list_jobs_state_filter(service, job_request):
+    """SQL pagination respects state_filter."""
+    service.launch_job(job_request("job-a"), None)
+    service.launch_job(job_request("job-b"), None)
+    service.terminate_job(
+        cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("test-user", "job-b").to_wire()), None
+    )
+
+    # Filter to killed only
+    request = cluster_pb2.Controller.ListJobsRequest(state_filter="killed", limit=10)
+    response = service.list_jobs(request, None)
+
+    assert len(response.jobs) == 1
+    assert response.jobs[0].state == cluster_pb2.JOB_STATE_KILLED
+
+
+def test_list_jobs_name_filter(service, job_request):
+    """Name filter returns only matching jobs."""
+    service.launch_job(job_request("alpha-job"), None)
+    service.launch_job(job_request("beta-job"), None)
+
+    request = cluster_pb2.Controller.ListJobsRequest(name_filter="alpha")
+    response = service.list_jobs(request, None)
+
+    assert len(response.jobs) == 1
+    assert "alpha" in response.jobs[0].name.lower()
+
+
+def test_list_jobs_includes_descendants(service, state, job_request):
+    """list_jobs returns top-level jobs plus their descendants for tree display."""
+    service.launch_job(job_request("parent-job"), None)
+    # Submit child job directly via transitions
+    parent_id = JobName.root("test-user", "parent-job")
+    child_id = JobName.from_wire(parent_id.to_wire() + "/child")
+    child_req = cluster_pb2.Controller.LaunchJobRequest(
+        name=child_id.to_wire(),
+        entrypoint=cluster_pb2.RuntimeEntrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+    )
+    child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
+    state.submit_job(child_id, child_req, Timestamp.now())
+
+    request = cluster_pb2.Controller.ListJobsRequest()
+    response = service.list_jobs(request, None)
+
+    # Both parent and child should appear; pagination counts only top-level jobs
+    job_ids = [j.job_id for j in response.jobs]
+    assert parent_id.to_wire() in job_ids
+    assert child_id.to_wire() in job_ids
+    assert response.total_count == 1
+
+
+# =============================================================================
+# SQL Aggregation Tests
+# =============================================================================
+
+
+def test_task_summaries_sql_group_by(state, service, job_request):
+    """_task_summaries_for_jobs SQL GROUP BY produces correct aggregates."""
+    from iris.cluster.controller.service import _task_summaries_for_jobs
+
+    # Launch a job with 3 replicas
+    service.launch_job(job_request("multi-task", replicas=3), None)
+
+    job_id = JobName.root("test-user", "multi-task")
+    summaries = _task_summaries_for_jobs(state._db, {job_id})
+
+    assert job_id in summaries
+    s = summaries[job_id]
+    assert s.task_count == 3
+    # All tasks should be pending
+    assert s.task_state_counts.get(cluster_pb2.TASK_STATE_PENDING, 0) == 3
+    assert s.completed_count == 0
+    assert s.failure_count == 0
+    assert s.preemption_count == 0
+
+
+def test_live_user_stats_sql_aggregation(state, service, job_request):
+    """_live_user_stats SQL GROUP BY produces correct per-user counts."""
+    from iris.cluster.controller.service import _live_user_stats
+
+    service.launch_job(job_request("job-x", replicas=2), None)
+    service.launch_job(job_request("job-y"), None)
+
+    stats_list = _live_user_stats(state._db)
+    assert len(stats_list) >= 1
+
+    user_stats = {s.user: s for s in stats_list}
+    assert "test-user" in user_stats
+    s = user_stats["test-user"]
+
+    # 2 jobs
+    total_jobs = sum(s.job_state_counts.values())
+    assert total_jobs == 2
+
+    # 3 tasks total (2 + 1)
+    total_tasks = sum(s.task_state_counts.values())
+    assert total_tasks == 3
+
+
+def test_worker_addresses_for_tasks(state, service, job_request):
+    """_worker_addresses_for_tasks fetches only referenced workers."""
+    from iris.cluster.controller.service import _worker_addresses_for_tasks
+
+    # Register workers
+    _register_worker(state, WorkerId("w-1"))
+    _register_worker(state, WorkerId("w-2"))
+    _register_worker(state, WorkerId("w-3"))
+
+    # Launch job and assign one task to w-1
+    service.launch_job(job_request("assigned-job"), None)
+    job_id = JobName.root("test-user", "assigned-job")
+    task_id = JobName.from_wire(job_id.to_wire() + "/0")
+    state.queue_assignments([Assignment(task_id=task_id, worker_id=WorkerId("w-1"))])
+
+    # Get tasks with attempts
+    tasks = _query_tasks_with_attempts(state, job_id)
+    addresses = _worker_addresses_for_tasks(state._db, tasks)
+
+    # Should only have w-1
+    assert WorkerId("w-1") in addresses
+    assert len(addresses) == 1
+
+
 # =============================================================================
 # Worker Tests
 # =============================================================================
@@ -854,7 +1063,6 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
     )
-    request.resources.device.CopyFrom(cluster_pb2.DeviceConfig(cpu=cluster_pb2.CpuDevice()))
 
     service.launch_job(request, None)
 
@@ -882,7 +1090,7 @@ def test_register_requires_worker_role(state, mock_scheduler, tmp_path, worker_m
         state,
         db,
         controller=mock_scheduler,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
         auth=auth,
     )
@@ -918,7 +1126,7 @@ def test_register_allows_worker_role(state, mock_scheduler, tmp_path, worker_met
         state,
         db,
         controller=mock_scheduler,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
         auth=auth,
     )

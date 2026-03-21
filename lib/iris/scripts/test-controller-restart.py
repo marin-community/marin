@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", stream
 logger = logging.getLogger("test-restart")
 
 IRIS_ROOT = Path(__file__).parent.parent
-CONFIG = str(IRIS_ROOT / "examples" / "smoke.yaml")
+CONFIG = str(IRIS_ROOT / "examples" / "smoke-gcp.yaml")
 
 
 def iris(*args: str, timeout: float = 300) -> subprocess.CompletedProcess[str]:

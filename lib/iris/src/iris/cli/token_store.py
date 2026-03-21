@@ -84,18 +84,31 @@ def _default_store_path() -> Path:
 
 
 def _load_store(store_path: Path) -> dict:
-    """Load the token store, migrating from the legacy single-token file if needed."""
+    """Load the token store, migrating from the legacy single-token file if needed.
+
+    Tolerates empty or corrupt files (e.g. from a concurrent write) by
+    returning an empty store rather than raising.
+    """
     if not store_path.exists():
         _maybe_migrate_legacy(store_path)
     if store_path.exists():
-        return json.loads(store_path.read_text())
+        text = store_path.read_text()
+        if text.strip():
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return {"clusters": {}}
     return {"clusters": {}}
 
 
 def _save_store(store_path: Path, data: dict) -> None:
     store_path.parent.mkdir(parents=True, exist_ok=True)
-    store_path.write_text(json.dumps(data, indent=2) + "\n")
-    os.chmod(store_path, 0o600)
+    # Atomic write via rename to prevent readers from seeing a truncated file
+    # when concurrent processes (e.g. pytest-xdist workers) access the store.
+    tmp_path = store_path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(data, indent=2) + "\n")
+    os.chmod(tmp_path, 0o600)
+    tmp_path.rename(store_path)
 
 
 def _maybe_migrate_legacy(store_path: Path) -> None:

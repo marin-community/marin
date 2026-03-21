@@ -3,46 +3,16 @@ name: Nightshift Cleanup
 on:
   schedule:
     - cron: '0 10 * * 1-5'
-  workflow_dispatch:
-    inputs:
-      agent_count:
-        description: 'Number of cleanup agents to spawn (1-5)'
-        required: false
-        default: '5'
-        type: choice
-        options: ['1', '2', '3', '4', '5']
-      target_folder:
-        description: 'Specific folder to target (leave empty for random selection)'
-        required: false
-        type: string
+  workflow_dispatch: {}
 
 concurrency:
   group: nightshift-cleanup
   cancel-in-progress: false
 
 jobs:
-  plan:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      matrix: ${{ steps.pick.outputs.matrix }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Pick target folders
-        id: pick
-        run: python infra/scripts/nightshift_cleanup.py plan --agent-count ${{ inputs.agent_count || '5' }} ${{ inputs.target_folder && format('--target-folder {0}', inputs.target_folder) || '' }}
-
   cleanup:
-    needs: plan
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    strategy:
-      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
-      fail-fast: false
+    timeout-minutes: 240
     permissions:
       contents: write
       pull-requests: write
@@ -66,7 +36,8 @@ jobs:
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
-      - name: Run Cleanup Agent ${{ matrix.agent_id }}
+      - name: Run cleanup agent
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: python infra/scripts/nightshift_cleanup.py run --agent-id ${{ matrix.agent_id }} --folder ${{ matrix.folder }} --haiku-seed ${{ matrix.haiku_seed }}
+          GH_TOKEN: ${{ github.token }}
+        run: python infra/scripts/nightshift_cleanup.py

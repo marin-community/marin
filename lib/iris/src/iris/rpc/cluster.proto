@@ -109,8 +109,10 @@ message MemoryProfile {
   bool leaks = 2;       // Focus on potential memory leaks
 }
 
-// Thread dump configuration (no additional options needed)
-message ThreadsProfile {}
+// Thread dump configuration
+message ThreadsProfile {
+  bool locals = 1;  // Include local variables in the dump (--locals flag)
+}
 
 // Profile type selector
 message ProfileType {
@@ -243,6 +245,7 @@ message TaskStatus {
   string pending_reason = 16;         // Why task can't be scheduled (empty if schedulable)
   bool can_be_scheduled = 17;         // Whether task is currently schedulable
   // field 18 was log_directory, removed
+  string container_id = 19;           // Platform container identifier (Docker container ID, K8s pod name)
 }
 
 // Record of a single task execution attempt
@@ -466,6 +469,15 @@ enum ConstraintOp {
   CONSTRAINT_OP_IN = 8;         // Attribute value is in the provided set (disjunction)
 }
 
+// Whether a constraint is hard (required) or soft (preferred).
+// Hard constraints filter workers: non-matching workers are excluded.
+// Soft constraints rank workers: matching workers are preferred but
+// non-matching workers are still eligible.
+enum ConstraintMode {
+  CONSTRAINT_MODE_REQUIRED = 0;  // Hard constraint (default, backwards-compatible)
+  CONSTRAINT_MODE_PREFERRED = 1; // Soft constraint: prefer matching, allow non-matching
+}
+
 // Constraint for filtering workers by attribute.
 // Used in LaunchJobRequest to specify which workers can run a job.
 message Constraint {
@@ -473,6 +485,7 @@ message Constraint {
   ConstraintOp op = 2;      // Comparison operator
   AttributeValue value = 3; // Value to compare against (ignored for EXISTS/NOT_EXISTS)
   repeated AttributeValue values = 4; // Set of values for IN operator
+  ConstraintMode mode = 5;  // Hard (default) or soft
 }
 
 // Coscheduling configuration for multi-host jobs.
@@ -684,6 +697,20 @@ message Controller {
     repeated TaskStatus tasks = 1;
   }
 
+  // --- Exec in Container (proxied to worker) ---
+  message ExecInContainerRequest {
+    string task_id = 1;             // Task whose container to exec into
+    repeated string command = 2;     // Command to execute (e.g. ["bash", "-c", "ls"])
+    int32 timeout_seconds = 3;      // Command timeout in seconds (0 = default 60s)
+  }
+
+  message ExecInContainerResponse {
+    int32 exit_code = 1;
+    string stdout = 2;
+    string stderr = 3;
+    string error = 4;               // Non-empty if exec setup failed
+  }
+
   // --- Worker Management ---
   message WorkerInfo {
     string worker_id = 1;
@@ -705,6 +732,7 @@ message Controller {
     ResourceUsage resource_usage = 8;
     // Delta log entries since last heartbeat (capped per heartbeat)
     repeated iris.logging.LogEntry log_entries = 9;
+    string container_id = 10;         // Platform container identifier (Docker container ID, K8s pod name)
   }
 
 
@@ -883,6 +911,70 @@ message Controller {
     repeated WorkerResourceSnapshot resource_history = 8;
   }
 
+  // --- Provider Status (for direct-dispatch providers like KubernetesProvider) ---
+  message SchedulingEvent {
+    string task_id = 1;
+    int32 attempt_id = 2;
+    string event_type = 3;
+    string reason = 4;
+    string message = 5;
+    iris.time.Timestamp timestamp = 6;
+  }
+
+  message ClusterCapacity {
+    int32 schedulable_nodes = 1;
+    int64 total_cpu_millicores = 2;
+    int64 available_cpu_millicores = 3;
+    int64 total_memory_bytes = 4;
+    int64 available_memory_bytes = 5;
+  }
+
+  message GetProviderStatusRequest {}
+
+  message GetProviderStatusResponse {
+    bool has_direct_provider = 1;
+    repeated SchedulingEvent scheduling_events = 2;
+    ClusterCapacity capacity = 3;
+  }
+
+  message GetKubernetesClusterStatusRequest {}
+
+  message KubernetesPodStatus {
+    string pod_name = 1;
+    string task_id = 2;
+    string phase = 3;
+    string reason = 4;
+    string message = 5;
+    iris.time.Timestamp last_transition = 6;
+    string node_name = 7;
+  }
+
+  message NodePoolStatus {
+    string name = 1;
+    string instance_type = 2;
+    string scale_group = 3;
+    int32 target_nodes = 4;
+    int32 current_nodes = 5;
+    int32 queued_nodes = 6;
+    int32 in_progress_nodes = 7;
+    bool autoscaling = 8;
+    int32 min_nodes = 9;
+    int32 max_nodes = 10;
+    string capacity = 11;
+    string quota = 12;
+  }
+
+  message GetKubernetesClusterStatusResponse {
+    string namespace = 1;
+    int32 total_nodes = 2;
+    int32 schedulable_nodes = 3;
+    string allocatable_cpu = 4;
+    string allocatable_memory = 5;
+    repeated KubernetesPodStatus pod_statuses = 6;
+    string provider_version = 7;
+    repeated NodePoolStatus node_pools = 8;
+  }
+
 }
 
 // ============================================================================
@@ -924,6 +1016,20 @@ message Worker {
     bool healthy = 1;
     iris.time.Duration uptime = 2;
     int32 running_tasks = 3;        // Renamed from running_jobs
+  }
+
+  // --- Exec in Container ---
+  message ExecInContainerRequest {
+    string task_id = 1;             // Task whose container to exec into
+    repeated string command = 2;     // Command to execute (e.g. ["bash", "-c", "ls"])
+    int32 timeout_seconds = 3;      // Command timeout in seconds (0 = default 60s)
+  }
+
+  message ExecInContainerResponse {
+    int32 exit_code = 1;
+    string stdout = 2;
+    string stderr = 3;
+    string error = 4;               // Non-empty if exec setup failed
   }
 
 }
@@ -1001,6 +1107,9 @@ service ControllerService {
   // Profiling (proxied to worker)
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
 
+  // Exec in container (proxied to worker)
+  rpc ExecInContainer(Controller.ExecInContainerRequest) returns (Controller.ExecInContainerResponse);
+
   // Unified worker detail (VM + worker + logs in one call)
   rpc GetWorkerStatus(Controller.GetWorkerStatusRequest) returns (Controller.GetWorkerStatusResponse);
 
@@ -1018,6 +1127,12 @@ service ControllerService {
   rpc ListApiKeys(ListApiKeysRequest) returns (ListApiKeysResponse);
   rpc GetCurrentUser(GetCurrentUserRequest) returns (GetCurrentUserResponse);
 
+  // Provider status (direct-dispatch providers)
+  rpc GetProviderStatus(Controller.GetProviderStatusRequest) returns (Controller.GetProviderStatusResponse);
+
+  // Kubernetes cluster status
+  rpc GetKubernetesClusterStatus(Controller.GetKubernetesClusterStatusRequest) returns (Controller.GetKubernetesClusterStatusResponse);
+
   // Generic query API
   rpc ExecuteRawQuery(RawQueryRequest) returns (RawQueryResponse);
 }
@@ -1032,4 +1147,7 @@ service WorkerService {
 
   // Process status (local process info + recent logs)
   rpc GetProcessStatus(GetProcessStatusRequest) returns (GetProcessStatusResponse);
+
+  // Exec in container
+  rpc ExecInContainer(Worker.ExecInContainerRequest) returns (Worker.ExecInContainerResponse);
 }

@@ -31,14 +31,14 @@ from iris.rpc.auth import _verified_identity
 
 @pytest.fixture
 def db(tmp_path):
-    d = ControllerDB(db_path=tmp_path / "test.sqlite3")
+    d = ControllerDB(db_dir=tmp_path)
     yield d
     d.close()
 
 
 def _make_service(db, auth=None):
     """Create a ControllerServiceImpl with minimal dependencies for API key tests."""
-    log_store = LogStore(db_path=db.db_path)
+    log_store = LogStore(log_dir=db.db_path.parent / "logs")
     state = ControllerTransitions(db=db, log_store=log_store)
 
     controller_mock = Mock()
@@ -46,13 +46,14 @@ def _make_service(db, auth=None):
     controller_mock.create_scheduling_context = Mock(return_value=Mock())
     controller_mock.get_job_scheduling_diagnostics = Mock(return_value="")
     controller_mock.autoscaler = None
-    controller_mock.stub_factory = Mock()
+    controller_mock.provider = Mock()
+    controller_mock.has_direct_provider = False
 
     return ControllerServiceImpl(
         state,
         db,
         controller=controller_mock,
-        bundle_store=BundleStore(db_path=db.db_path.parent / "bundles.sqlite3"),
+        bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
         log_store=log_store,
         auth=auth or ControllerAuth(),
     )

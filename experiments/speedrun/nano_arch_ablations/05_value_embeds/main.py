@@ -34,7 +34,7 @@ from levanter.callbacks.profiler import ProfilerConfig
 from haliax.jax_utils import named_call
 from levanter.grug.attention import AttentionMask, attention
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pbatch, Pvocab, unshard
+from levanter.grug.sharding import Pbatch, Pembed_vocab, Plm_head, unshard
 from levanter.optim import GrugMuonConfig
 from marin.execution.executor import executor_main
 from marin.speedrun.speedrun import Author
@@ -214,10 +214,10 @@ class Transformer(eqx.Module):
         embed_key, ve_start_key, ve_end_key, out_key, block_key = random.split(key, 5)
         D = cfg.hidden_dim
         ve_dim = cfg.num_kv_heads * cfg.head_dim
-        token_embed = reshard(_init_weight(embed_key, (cfg.vocab_size, D), cfg.initializer_std), Pvocab)
-        ve_start_embed = reshard(_init_weight(ve_start_key, (cfg.vocab_size, ve_dim), cfg.initializer_std), Pvocab)
-        ve_end_embed = reshard(_init_weight(ve_end_key, (cfg.vocab_size, ve_dim), cfg.initializer_std), Pvocab)
-        output_proj = reshard(_init_weight(out_key, (D, cfg.vocab_size), cfg.initializer_std), Pvocab)
+        token_embed = reshard(_init_weight(embed_key, (cfg.vocab_size, D), cfg.initializer_std), Pembed_vocab)
+        ve_start_embed = reshard(_init_weight(ve_start_key, (cfg.vocab_size, ve_dim), cfg.initializer_std), Pembed_vocab)
+        ve_end_embed = reshard(_init_weight(ve_end_key, (cfg.vocab_size, ve_dim), cfg.initializer_std), Pembed_vocab)
+        output_proj = reshard(_init_weight(out_key, (D, cfg.vocab_size), cfg.initializer_std), Plm_head)
         blocks = tuple(Block.init(cfg, key=block_key) for _ in range(cfg.num_layers))
         resid_lambdas = tuple(jnp.ones((), dtype=jnp.float32) for _ in range(cfg.num_layers))
         x0_lambdas = tuple(jnp.zeros((), dtype=jnp.float32) for _ in range(cfg.num_layers))

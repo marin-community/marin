@@ -249,7 +249,7 @@ def test_reshard(zephyr_ctx):
 def test_reshard_noop(zephyr_ctx):
     """Test reshard with None is a noop, and non-positive values raise ValueError"""
 
-    def yield_1(it):
+    def yield_1(it, _):
         yield from [1]
 
     ds = Dataset.from_list(range(10)).reshard(None).map_shard(yield_1)
@@ -877,7 +877,7 @@ def test_sorted_merge_join_empty_datasets(zephyr_ctx):
 def test_map_shard_stateful_deduplication(zephyr_ctx):
     """Test map_shard for stateful within-shard deduplication."""
 
-    def deduplicate_shard(items):
+    def deduplicate_shard(items, _):
         seen = set()
         for item in items:
             key = item["id"]
@@ -906,7 +906,7 @@ def test_map_shard_stateful_deduplication(zephyr_ctx):
 def test_map_shard_empty_result(zephyr_ctx):
     """Test map_shard that filters everything out."""
 
-    def filter_all(items):
+    def filter_all(items, _):
         for _ in items:
             pass  # Consume but don't yield
         return iter([])  # Return empty iterator
@@ -919,7 +919,7 @@ def test_map_shard_empty_result(zephyr_ctx):
 def test_map_shard_error_propagation(zephyr_ctx):
     """Test that exceptions in map_shard functions propagate correctly."""
 
-    def failing_generator(items):
+    def failing_generator(items, _):
         for item in items:
             if item == 3:
                 raise ValueError("Test error")
@@ -931,6 +931,47 @@ def test_map_shard_error_propagation(zephyr_ctx):
 
     with pytest.raises(ZephyrWorkerError, match="Test error"):
         list(zephyr_ctx.execute(ds))
+
+
+def test_map_shard_with_shard_info(zephyr_ctx):
+    """Test map_shard passes ShardInfo to the function."""
+
+    def tag_with_shard_info(items, shard_info):
+        for item in items:
+            yield {**item, "shard_idx": shard_info.shard_idx, "total_shards": shard_info.total_shards}
+
+    data = [{"id": i} for i in range(10)]
+    ds = Dataset.from_list([data]).flat_map(lambda x: x).map_shard(tag_with_shard_info)
+    result = list(zephyr_ctx.execute(ds))
+
+    assert len(result) == 10
+    # All items should have shard info injected
+    for item in result:
+        assert "shard_idx" in item
+        assert "total_shards" in item
+        assert isinstance(item["shard_idx"], int)
+        assert item["total_shards"] >= 1
+
+
+def test_map_shard_with_shard_info_classmethod(zephyr_ctx):
+    """Test map_shard passes ShardInfo when fn is a classmethod."""
+
+    class ShardTagger:
+        @classmethod
+        def tag(cls, items, shard_info):
+            for item in items:
+                yield {**item, "shard_idx": shard_info.shard_idx, "total_shards": shard_info.total_shards}
+
+    data = [{"id": i} for i in range(10)]
+    ds = Dataset.from_list([data]).flat_map(lambda x: x).map_shard(ShardTagger.tag)
+    result = list(zephyr_ctx.execute(ds))
+
+    assert len(result) == 10
+    for item in result:
+        assert "shard_idx" in item
+        assert "total_shards" in item
+        assert isinstance(item["shard_idx"], int)
+        assert item["total_shards"] >= 1
 
 
 @pytest.fixture
@@ -1308,3 +1349,89 @@ def test_input_file_spec_with_columns_and_row_range(tmp_path):
     assert set(records[0].keys()) == {"id", "value"}
     assert records[0]["id"] == 5
     assert records[-1]["id"] == 9
+
+
+# --- Integration tests (all backends) ---
+
+
+def test_reshard_integration(integration_ctx):
+    ds = Dataset.from_list([list(range(50))]).flat_map(lambda x: x).reshard(5).map(lambda x: x * 2)
+    result = sorted(integration_ctx.execute(ds))
+    assert result == [x * 2 for x in range(50)]
+
+    ds = Dataset.from_list(range(50)).reshard(5).map(lambda x: x + 100)
+    result = sorted(integration_ctx.execute(ds))
+    assert result == [x + 100 for x in range(50)]
+
+    ds = Dataset.from_list(range(10)).reshard(3)
+    result = list(integration_ctx.execute(ds))
+    assert sorted(result) == list(range(10))
+
+
+def test_sorted_merge_join_inner_basic_integration(integration_ctx):
+    left = Dataset.from_list(
+        [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}, {"id": 3, "text": "foo"}]
+    ).group_by(key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5)
+    right = Dataset.from_list([{"id": 1, "score": 0.9}, {"id": 2, "score": 0.3}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+
+    joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+
+    results = sorted(list(integration_ctx.execute(joined)), key=lambda x: x["id"])
+    assert len(results) == 2
+    assert results[0] == {"id": 1, "text": "hello", "score": 0.9}
+    assert results[1] == {"id": 2, "text": "world", "score": 0.3}
+
+
+def test_sorted_merge_join_left_integration(integration_ctx):
+    left = Dataset.from_list([{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+    right = Dataset.from_list([{"id": 1, "score": 0.9}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+
+    joined = left.sorted_merge_join(
+        right,
+        left_key=lambda x: x["id"],
+        right_key=lambda x: x["id"],
+        combiner=lambda left, right: {**left, "score": right["score"] if right else 0.0},
+        how="left",
+    )
+
+    results = sorted(list(integration_ctx.execute(joined)), key=lambda x: x["id"])
+    assert len(results) == 2
+    assert results[0] == {"id": 1, "text": "hello", "score": 0.9}
+    assert results[1] == {"id": 2, "text": "world", "score": 0.0}
+
+
+def test_sorted_merge_join_after_group_by_integration(integration_ctx):
+    docs = Dataset.from_list(
+        [
+            {"id": 1, "text": "hello", "version": 1},
+            {"id": 1, "text": "hello updated", "version": 2},
+            {"id": 2, "text": "world", "version": 1},
+            {"id": 3, "text": "foo", "version": 1},
+        ]
+    ).group_by(
+        key=lambda x: x["id"],
+        reducer=lambda k, items: max(items, key=lambda x: x["version"]),
+        num_output_shards=10,
+    )
+
+    attrs = Dataset.from_list(
+        [
+            {"id": 1, "quality": 0.9},
+            {"id": 2, "quality": 0.3},
+            {"id": 3, "quality": 0.8},
+        ]
+    ).group_by(key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=10)
+
+    joined = docs.sorted_merge_join(attrs, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+
+    results = sorted(list(integration_ctx.execute(joined)), key=lambda x: x["id"])
+    assert len(results) == 3
+    assert results[0] == {"id": 1, "text": "hello updated", "version": 2, "quality": 0.9}
+    assert results[1] == {"id": 2, "text": "world", "version": 1, "quality": 0.3}
+    assert results[2] == {"id": 3, "text": "foo", "version": 1, "quality": 0.8}

@@ -14,10 +14,15 @@ from iris.cluster.constraints import (
     PlacementRequirements,
     WellKnownAttribute,
     evaluate_constraint,
+    infer_preemptible_constraint,
     is_cpu_device_type_constraint,
+    looks_like_executor,
     merge_constraints,
     extract_placement_requirements,
+    preemptible_constraint,
     routing_constraints,
+    soft_constraint_score,
+    split_hard_soft,
 )
 from iris.rpc import cluster_pb2
 
@@ -159,3 +164,148 @@ def test_inherited_keys_strips_device_and_preemptible():
     assert len(inherited) == 2
     keys = {c.key for c in inherited}
     assert keys == {WellKnownAttribute.REGION, WellKnownAttribute.ZONE}
+
+
+# --- looks_like_executor heuristic ---
+
+
+def _make_resources(
+    cpu_millicores: int = 500,
+    memory_bytes: int = 1 * 1024**3,
+    device: str | None = None,
+) -> cluster_pb2.ResourceSpecProto:
+    r = cluster_pb2.ResourceSpecProto(cpu_millicores=cpu_millicores, memory_bytes=memory_bytes)
+    if device == "cpu":
+        r.device.cpu.variant = "cpu"
+    elif device == "tpu":
+        r.device.tpu.variant = "v5litepod-16"
+    elif device == "gpu":
+        r.device.gpu.variant = "h100"
+        r.device.gpu.count = 8
+    return r
+
+
+def test_looks_like_executor_small_cpu_job():
+    """0.5 CPU, 1 GiB RAM, no device → executor."""
+    assert looks_like_executor(_make_resources(), replicas=1)
+
+
+def test_looks_like_executor_cpu_device_explicit():
+    """Explicit CpuDevice still counts as no accelerator."""
+    assert looks_like_executor(_make_resources(device="cpu"), replicas=1)
+
+
+def test_looks_like_executor_false_with_tpu():
+    assert not looks_like_executor(_make_resources(device="tpu"), replicas=1)
+
+
+def test_looks_like_executor_false_with_gpu():
+    assert not looks_like_executor(_make_resources(device="gpu"), replicas=1)
+
+
+def test_looks_like_executor_one_full_cpu():
+    """A job requesting exactly 1 CPU core is still an executor."""
+    assert looks_like_executor(_make_resources(cpu_millicores=1000), replicas=1)
+
+
+def test_looks_like_executor_false_high_cpu():
+    assert not looks_like_executor(_make_resources(cpu_millicores=2000), replicas=1)
+
+
+def test_looks_like_executor_false_high_memory():
+    assert not looks_like_executor(_make_resources(memory_bytes=5 * 1024**3), replicas=1)
+
+
+def test_looks_like_executor_false_multiple_replicas():
+    assert not looks_like_executor(_make_resources(), replicas=2)
+
+
+def test_infer_preemptible_constraint_adds_non_preemptible():
+    resources = _make_resources()
+    result = infer_preemptible_constraint(resources, replicas=1, existing_constraints=[])
+    assert result is not None
+    assert result.key == WellKnownAttribute.PREEMPTIBLE
+    assert result.value == "false"
+
+
+def test_infer_preemptible_constraint_noop_when_explicit():
+    resources = _make_resources()
+    existing = [preemptible_constraint(True)]
+    result = infer_preemptible_constraint(resources, replicas=1, existing_constraints=existing)
+    assert result is None
+
+
+def test_infer_preemptible_constraint_noop_for_gpu():
+    resources = _make_resources(device="gpu")
+    result = infer_preemptible_constraint(resources, replicas=1, existing_constraints=[])
+    assert result is None
+
+
+# --- Soft constraints ---
+
+
+def test_preemptible_constraint_soft_default_logic():
+    """preemptible=True defaults to soft, preemptible=False defaults to hard."""
+    c_true = preemptible_constraint(True)
+    assert c_true.mode == cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    assert c_true.value == "true"
+
+    c_false = preemptible_constraint(False)
+    assert c_false.mode == cluster_pb2.CONSTRAINT_MODE_REQUIRED
+    assert c_false.value == "false"
+
+
+def test_preemptible_constraint_soft_override():
+    """Explicit soft= overrides the default logic."""
+    c = preemptible_constraint(True, soft=False)
+    assert c.mode == cluster_pb2.CONSTRAINT_MODE_REQUIRED
+
+    c2 = preemptible_constraint(False, soft=True)
+    assert c2.mode == cluster_pb2.CONSTRAINT_MODE_PREFERRED
+
+
+def test_split_hard_soft():
+    hard = _eq_constraint("region", "us-central1")
+    soft = cluster_pb2.Constraint(
+        key="preemptible",
+        op=cluster_pb2.CONSTRAINT_OP_EQ,
+        mode=cluster_pb2.CONSTRAINT_MODE_PREFERRED,
+    )
+    soft.value.string_value = "true"
+    hard_list, soft_list = split_hard_soft([hard, soft])
+    assert len(hard_list) == 1
+    assert hard_list[0].key == "region"
+    assert len(soft_list) == 1
+    assert soft_list[0].key == "preemptible"
+
+
+def test_split_hard_soft_all_required():
+    c1 = _eq_constraint("region", "us-central1")
+    c2 = _eq_constraint("device-type", "tpu")
+    hard_list, soft_list = split_hard_soft([c1, c2])
+    assert len(hard_list) == 2
+    assert len(soft_list) == 0
+
+
+def test_soft_constraint_score_counts_matches():
+    attrs = {
+        "preemptible": AttributeValue("true"),
+        "region": AttributeValue("us-central1"),
+    }
+    soft1 = _eq_constraint("preemptible", "true")
+    soft1.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    soft2 = _eq_constraint("region", "eu-west1")
+    soft2.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    # Only preemptible matches
+    assert soft_constraint_score(attrs, [soft1, soft2]) == 1
+    # Both match
+    soft2_match = _eq_constraint("region", "us-central1")
+    soft2_match.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    assert soft_constraint_score(attrs, [soft1, soft2_match]) == 2
+
+
+def test_soft_constraint_score_zero_when_no_match():
+    attrs = {"preemptible": AttributeValue("false")}
+    soft = _eq_constraint("preemptible", "true")
+    soft.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    assert soft_constraint_score(attrs, [soft]) == 0

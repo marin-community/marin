@@ -9,20 +9,20 @@ controller VM management, VM operations via controller RPC, and the dashboard tu
 
 import signal
 import threading
+import time
+from pathlib import Path
 
 import click
 from connectrpc.errors import ConnectError
 
 from iris.cli.build import (
     build_image,
-    find_iris_root,
     find_marin_root,
     get_git_sha,
     push_to_ghcr,
 )
 from iris.cli.main import require_controller_url
-from iris.cluster.config import IrisConfig, make_local_config
-from iris.cluster.manager import stop_all
+from iris.cluster.config import IrisConfig, clear_remote_state, make_local_config
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_utils import Timestamp
@@ -99,7 +99,6 @@ def _build_and_push_for_tag(image_tag: str, image_type: str, verbose: bool = Fal
         image_type=image_type,
         tag=local_tag,
         push=False,
-        dockerfile=None,
         context=None,
         platform="linux/amd64",
         ghcr_org=org,
@@ -113,12 +112,10 @@ def _build_and_push_for_tag(image_tag: str, image_type: str, verbose: bool = Fal
 def _build_and_push_task_image(task_tag: str, verbose: bool = False) -> None:
     """Build and push the task image to GHCR.
 
-    The task image uses a different Dockerfile (Dockerfile.task) and build context
-    (marin repo root) than worker/controller, so it can't use _build_and_push_for_tag
-    directly.
+    The task image uses the ``task`` target in the unified Dockerfile and needs the
+    marin repo root as build context, so it can't use _build_and_push_for_tag directly.
     """
     marin_root = str(find_marin_root())
-    task_dockerfile = str(find_iris_root() / "Dockerfile.task")
 
     ghcr_parsed = _parse_ghcr_tag(task_tag)
     if not ghcr_parsed:
@@ -133,7 +130,6 @@ def _build_and_push_task_image(task_tag: str, verbose: bool = False) -> None:
         image_type="task",
         tag=local_tag,
         push=False,
-        dockerfile=task_dockerfile,
         context=marin_root,
         platform="linux/amd64",
         ghcr_org=org,
@@ -274,6 +270,85 @@ def cluster_start(ctx, local: bool):
         raise SystemExit(1) from e
 
 
+@cluster.command("start-smoke")
+@click.option("--label-prefix", required=True, help="Label prefix to isolate GCP resources")
+@click.option("--url-file", required=True, type=click.Path(), help="Write tunnel URL to this file when ready")
+@click.option("--wait-for-workers", "min_workers", type=int, default=1, help="Min healthy workers before writing URL")
+@click.option("--worker-timeout", type=int, default=600, help="Seconds to wait for workers")
+@click.option("--clear-state/--no-clear-state", default=True, help="Wipe remote state before starting")
+@click.pass_context
+def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout, clear_state):
+    """Boot a smoke-test cluster, open tunnel, write URL to file, and block until killed.
+
+    Designed for CI: run in background, poll for url_file, then pass URL to pytest.
+    SIGINT/SIGTERM cleanly close the tunnel.
+    """
+    config = ctx.obj.get("config")
+    if not config:
+        raise click.ClickException("--config is required for start-smoke")
+
+    config.platform.label_prefix = label_prefix
+
+    # Set ephemeral state dir via marin_temp_bucket, which resolves
+    # region-appropriate storage from MARIN_PREFIX.
+    from iris.marin_fs import marin_temp_bucket
+
+    config.storage.remote_state_dir = marin_temp_bucket(ttl_days=7, prefix=f"iris/state/{label_prefix}")
+
+    _pin_latest_images(config)
+    verbose = ctx.obj.get("verbose", False)
+    _build_cluster_images(config, verbose=verbose)
+
+    iris_config = IrisConfig(config)
+    platform = iris_config.platform()
+
+    try:
+        platform.stop_all(config)
+    except Exception:
+        click.echo("No existing cluster to stop, continuing")
+
+    if clear_state:
+        remote_state_dir = config.storage.remote_state_dir
+        if remote_state_dir:
+            click.echo(f"Clearing remote state: {remote_state_dir}")
+            clear_remote_state(remote_state_dir)
+
+    click.echo("Starting controller...")
+    address = platform.start_controller(config)
+    click.echo(f"Controller at {address}")
+
+    stop_event = threading.Event()
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGINT, lambda *_: stop_event.set())
+        signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
+
+    try:
+        with platform.tunnel(address) as url:
+            click.echo(f"Tunnel ready: {url}")
+
+            client = cluster_connect.ControllerServiceClientSync(url, timeout_ms=30000)
+            deadline = time.monotonic() + worker_timeout
+            healthy_count = 0
+            while time.monotonic() < deadline:
+                workers = client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
+                healthy = [w for w in workers if w.healthy]
+                healthy_count = len(healthy)
+                if healthy_count >= min_workers:
+                    break
+                time.sleep(2)
+            else:
+                raise click.ClickException(
+                    f"Only {healthy_count} of {min_workers} workers healthy after {worker_timeout}s"
+                )
+
+            click.echo(f"{healthy_count} workers ready, writing URL to {url_file}")
+            Path(url_file).write_text(url)
+
+            stop_event.wait()
+    finally:
+        click.echo("Shutting down (tunnel closed)")
+
+
 @cluster.command("stop")
 @click.option("--dry-run/--no-dry-run", default=False, help="Show what would be deleted without deleting")
 @click.option("--label", "label_override", default=None, help="Label prefix override (default from config or 'iris')")
@@ -290,7 +365,12 @@ def cluster_stop(ctx, dry_run: bool, label_override: str | None):
         click.echo("Stopping cluster (controller + all slices)...")
 
     try:
-        names = stop_all(config, dry_run=dry_run, label_prefix=label_override)
+        iris_config = IrisConfig(config)
+        platform = iris_config.platform()
+        try:
+            names = platform.stop_all(config, dry_run=dry_run, label_prefix=label_override)
+        finally:
+            platform.shutdown()
     except Exception as e:
         click.echo(f"Failed to stop cluster: {e}", err=True)
         raise SystemExit(1) from e

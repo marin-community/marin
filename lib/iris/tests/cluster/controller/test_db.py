@@ -1,8 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for TransactionCursor mutation helpers in db.py."""
+"""Tests for TransactionCursor mutation helpers and read pool in db.py."""
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,7 @@ from iris.cluster.controller.db import _SqlPredicate
 
 @pytest.fixture
 def db(tmp_path: Path) -> ControllerDB:
-    return ControllerDB(tmp_path / "test.db")
+    return ControllerDB(db_dir=tmp_path)
 
 
 def _create_simple_table(db: ControllerDB) -> None:
@@ -232,3 +233,123 @@ def test_update_with_composite_predicate(db: ControllerDB) -> None:
     assert row["value"] == "new"
     row2 = db.fetchone("SELECT value FROM kv WHERE key = 'nomatch'")
     assert row2["value"] == "old"
+
+
+def test_read_snapshot_does_not_block_write(db: ControllerDB) -> None:
+    """read_snapshot() uses a separate connection, so a concurrent write transaction proceeds."""
+    _create_simple_table(db)
+    with db.transaction() as cur:
+        cur.insert("kv", {"key": "init", "value": "v"})
+
+    results: dict[str, bool] = {}
+
+    def writer() -> None:
+        """Hold the write lock for a short time, recording success."""
+        with db.transaction() as cur:
+            cur.insert("kv", {"key": "from_writer", "value": "w"})
+        results["writer_done"] = True
+
+    # Hold a read_snapshot open while a writer thread runs.
+    with db.read_snapshot() as q:
+        rows_before = q.raw("SELECT key FROM kv")
+        t = threading.Thread(target=writer)
+        t.start()
+        t.join(timeout=5)
+        assert not t.is_alive(), "writer should not block on read_snapshot"
+        results["reader_saw"] = len(rows_before)
+
+    assert results["writer_done"] is True
+    assert results["reader_saw"] == 1
+
+
+def test_read_snapshot_returns_consistent_data(db: ControllerDB) -> None:
+    """Changes committed after BEGIN in read_snapshot are not visible within that snapshot."""
+    _create_simple_table(db)
+    with db.transaction() as cur:
+        cur.insert("kv", {"key": "a", "value": "1"})
+
+    with db.read_snapshot() as q:
+        rows_start = q.raw("SELECT key FROM kv")
+        assert len(rows_start) == 1
+
+        # Commit a new row from outside the snapshot.
+        with db.transaction() as cur:
+            cur.insert("kv", {"key": "b", "value": "2"})
+
+        # The snapshot should still only see the original row.
+        rows_after = q.raw("SELECT key FROM kv")
+        assert len(rows_after) == 1
+
+    # Outside the snapshot, both rows are visible.
+    all_rows = db.fetchall("SELECT key FROM kv ORDER BY key")
+    assert len(all_rows) == 2
+
+
+def test_read_snapshot_pool_returns_connections(db: ControllerDB) -> None:
+    """Connections are returned to the pool after read_snapshot exits."""
+    _create_simple_table(db)
+    pool_size = db._READ_POOL_SIZE
+
+    for _i in range(pool_size * 2):
+        with db.read_snapshot() as q:
+            q.raw("SELECT 1")
+
+    assert db._read_pool.qsize() == pool_size
+
+
+def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
+    """replace_from() must re-attach the auth DB so auth tables remain accessible."""
+    db = ControllerDB(db_dir=tmp_path)
+
+    # Write to an auth table
+    db.execute(
+        "INSERT INTO auth.api_keys (key_id, key_hash, key_prefix, name, user_id, created_at_ms) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        ("id1", "hash1", "pfx", "test-key", "user1", 1000),
+    )
+
+    # Create a copy of the DB to replace from (replace_from expects a directory)
+    backup_dir = tmp_path / "backup"
+    backup_dir.mkdir()
+    db.backup_to(backup_dir / "controller.sqlite3")
+
+    db.replace_from(str(backup_dir))
+
+    # Auth tables should still be accessible after replace_from
+    rows = db.fetchall("SELECT name FROM auth.api_keys WHERE key_hash = 'hash1'")
+    assert len(rows) == 1
+    assert rows[0]["name"] == "test-key"
+    db.close()
+
+
+def test_migration_with_dml_does_not_leave_open_transaction(tmp_path: Path) -> None:
+    """Migrations that issue DML (e.g. UPDATE) must not leave an implicit
+    transaction open, which would cause the subsequent BEGIN IMMEDIATE for
+    schema_migrations to fail."""
+    # ControllerDB.__init__ already runs apply_migrations which applies all
+    # standard migrations. Simulate adding a new migration with DML by
+    # directly exercising the commit-after-migrate pattern on the raw conn.
+    db = ControllerDB(db_dir=tmp_path)
+
+    # Insert a row so the UPDATE below has something to hit
+    with db.transaction() as cur:
+        cur.execute("CREATE TABLE IF NOT EXISTS dml_test (id INTEGER PRIMARY KEY, val TEXT)")
+        cur.insert("dml_test", {"id": 1, "val": "hello"})
+
+    # Simulate what a migration's migrate(conn) does: DML on the raw conn
+    # which opens an implicit transaction.
+    db._conn.execute("UPDATE dml_test SET val = 'world' WHERE id = 1")
+
+    # Commit the implicit transaction (this is what apply_migrations does).
+    db._conn.commit()
+
+    # This would fail with "cannot start a transaction within a transaction"
+    # if the commit above were missing.
+    with db.transaction() as cur:
+        cur.insert("dml_test", {"id": 2, "val": "after_commit"})
+
+    rows = db.fetchall("SELECT id, val FROM dml_test ORDER BY id")
+    assert len(rows) == 2
+    assert rows[0]["val"] == "world"
+    assert rows[1]["val"] == "after_commit"
+    db.close()

@@ -10,6 +10,7 @@ Example:
 """
 
 import asyncio
+import functools
 import inspect
 import logging
 import socket
@@ -150,7 +151,7 @@ class ActorServer:
             # We use our own executor instead of asyncio.to_thread() to avoid issues
             # when asyncio's default executor is shut down during process cleanup.
             loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(self._executor, method, *args, **kwargs)
+            result = await loop.run_in_executor(self._executor, functools.partial(method, *args, **kwargs))
 
             return actor_pb2.ActorResponse(serialized_value=cloudpickle.dumps(result))
 
@@ -262,7 +263,7 @@ class ActorServer:
 
         op.future = self._executor.submit(run)
 
-        logger.info("Started operation %s for %s.%s", op_id, request.actor_name, request.method_name)
+        logger.debug("Started operation %s for %s.%s", op_id, request.actor_name, request.method_name)
         return op.to_proto()
 
     async def get_operation(self, request: actor_pb2.OperationId, ctx: RequestContext) -> actor_pb2.Operation:
