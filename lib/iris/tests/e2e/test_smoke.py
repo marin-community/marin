@@ -532,8 +532,11 @@ def test_cancel_job_releases_resources(smoke_cluster):
 # ============================================================================
 
 
-def test_log_levels_populated(smoke_cluster, verbose_job):
+def test_log_levels_populated(smoke_cluster, verbose_job, capabilities):
     """Task logs have level field (INFO, WARNING, ERROR)."""
+    if not capabilities.has_workers:
+        pytest.skip("kubernetes_provider log collection does not parse structured levels yet")
+
     task_id = verbose_job.job_id.task(0).to_wire()
 
     deadline = time.monotonic() + smoke_cluster.job_timeout
@@ -560,8 +563,11 @@ def test_log_levels_populated(smoke_cluster, verbose_job):
     assert markers_found.get("error-marker") == logging_pb2.LOG_LEVEL_ERROR
 
 
-def test_log_level_filter(smoke_cluster, verbose_job):
+def test_log_level_filter(smoke_cluster, verbose_job, capabilities):
     """min_level=WARNING excludes INFO."""
+    if not capabilities.has_workers:
+        pytest.skip("kubernetes_provider log collection does not parse structured levels yet")
+
     task_id = verbose_job.job_id.task(0).to_wire()
 
     request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id, min_level="WARNING")
