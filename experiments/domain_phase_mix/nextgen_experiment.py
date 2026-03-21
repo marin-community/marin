@@ -13,10 +13,12 @@ This script provides a single submission surface for:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
 
+import fsspec
 from marin.execution.executor import executor_main
 
 from experiments.domain_phase_mix.nextgen.contracts import LoopConfig
@@ -24,6 +26,7 @@ from experiments.domain_phase_mix.nextgen.import_sources import (
     CsvDomainPhaseImportSource,
     LegacyDomainPhaseImportSource,
     default_legacy_sources,
+    source_from_dict,
 )
 from experiments.domain_phase_mix.nextgen.model_registry import available_model_names
 from experiments.domain_phase_mix.nextgen.pipeline import create_nextgen_steps, summarize_step_names
@@ -74,6 +77,12 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
         action="append",
         default=[],
         help="Additional CSV import source path (repeatable).",
+    )
+    parser.add_argument(
+        "--import-source-json",
+        action="append",
+        default=[],
+        help="Path to a JSON file containing one serialized import source dict.",
     )
     parser.add_argument(
         "--state-root",
@@ -128,6 +137,14 @@ def _domain_token_counts_from_experiment(experiment) -> dict[str, int]:
     return domain_token_counts
 
 
+def _load_import_source_json(path: str):
+    with fsspec.open(path, "r") as f:
+        payload = json.load(f)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Import source JSON must contain one dict, got {type(payload)} from {path}")
+    return source_from_dict(payload)
+
+
 def _build_loop_config(args: argparse.Namespace, experiment) -> LoopConfig:
     model_names = tuple(name.strip() for name in args.models.split(",") if name.strip())
     import_sources: list[LegacyDomainPhaseImportSource | CsvDomainPhaseImportSource] = []
@@ -138,6 +155,8 @@ def _build_loop_config(args: argparse.Namespace, experiment) -> LoopConfig:
                 csv_path=csv_path,
             )
         )
+    for import_source_path in args.import_source_json:
+        import_sources.append(_load_import_source_json(import_source_path))
     if args.import_legacy:
         import_sources.extend(default_legacy_sources())
 

@@ -30,6 +30,7 @@ from experiments.domain_phase_mix.nextgen.import_sources import (
     THREE_PHASE_EXPERIMENT,
     THREE_PHASE_STARCODER_EXPERIMENT,
     TWO_PHASE_STARCODER_EXPERIMENT,
+    NamedWandbRunImportSource,
     default_legacy_sources,
     source_from_dict,
 )
@@ -65,6 +66,11 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     build_top_level_domain_steps,
     create_two_phase_dolma3_dolmino_top_level_experiment,
     resolve_two_phase_wsd_boundary_schedule,
+)
+from experiments.domain_phase_mix.two_phase_many_olmix_loglinear import (
+    OLMIX_LOGLINEAR_PREDICTED_BPB,
+    OLMIX_LOGLINEAR_RUN_NAME,
+    create_olmix_loglinear_import_source,
 )
 from experiments.domain_phase_mix.nextgen.validation import (
     CollectValidationConfig,
@@ -139,6 +145,47 @@ def test_default_legacy_sources_cover_core_experiments(monkeypatch):
     assert TWO_PHASE_STARCODER_EXPERIMENT in source_names
     assert THREE_PHASE_EXPERIMENT in source_names
     assert THREE_PHASE_STARCODER_EXPERIMENT in source_names
+
+
+def test_named_wandb_import_source_roundtrip_and_collect_runs(monkeypatch):
+    source = create_olmix_loglinear_import_source(local_run_id=240)
+    payload = source_to_dict(source)
+    restored = source_from_dict(payload)
+
+    assert isinstance(restored, NamedWandbRunImportSource)
+    assert restored.local_run_id == 240
+    assert restored.run_name == OLMIX_LOGLINEAR_RUN_NAME
+
+    monkeypatch.setattr(
+        "experiments.domain_phase_mix.nextgen.import_sources.query_wandb_runs",
+        lambda **_: [
+            {
+                "wandb_run_id": "abc123",
+                "wandb_run_name": "pinlin_calvin_xu/data_mixture/~hash/baseline_olmix_loglinear",
+                "status": "finished",
+                "lm_eval/mmlu_5shot/bpb": 2.11,
+            }
+        ],
+    )
+
+    records = restored.collect_runs()
+    assert len(records) == 1
+    assert records[0].wandb_run_id == "abc123"
+    assert records[0].status == "completed"
+    assert records[0].local_run_id == 240
+    assert records[0].run_name == OLMIX_LOGLINEAR_RUN_NAME
+    assert records[0].metrics["lm_eval/mmlu_5shot/bpb"] == 2.11
+
+
+def test_nextgen_experiment_loads_import_source_json(tmp_path):
+    source = create_olmix_loglinear_import_source(local_run_id=240)
+    source_path = tmp_path / "source.json"
+    source_path.write_text(json.dumps(source_to_dict(source)), encoding="utf-8")
+
+    restored = nextgen_experiment._load_import_source_json(str(source_path))
+    assert isinstance(restored, NamedWandbRunImportSource)
+    assert restored.local_run_id == 240
+    assert restored.run_name == OLMIX_LOGLINEAR_RUN_NAME
 
 
 def test_export_csv_contains_phase_columns_and_objective(tmp_path):
@@ -311,7 +358,7 @@ def test_top_level_experiment_uses_linear_80_20_wsd():
 
     assert PHASE_BOUNDARIES == [0.8]
     assert MIN_RECOMMENDED_SWARM_RUNS == 234
-    assert MIN_RECOMMENDED_SAMPLED_RUNS == 232
+    assert MIN_RECOMMENDED_SAMPLED_RUNS == 231
     assert schedule.total_steps == 4577
     assert schedule.boundary_step == 3648
     assert schedule.warmup_steps == 45
@@ -319,6 +366,9 @@ def test_top_level_experiment_uses_linear_80_20_wsd():
     assert experiment.optimizer_config.warmup == 45
     assert experiment.optimizer_config.decay == 929
     assert experiment.optimizer_config.lr_schedule == "linear"
+    assert len(experiment.initial_fixed_weight_configs) == 3
+    assert experiment.initial_fixed_weight_configs[2].run_name == OLMIX_LOGLINEAR_RUN_NAME
+    assert OLMIX_LOGLINEAR_PREDICTED_BPB < 2.2
 
 
 def test_top_level_baseline_steps_keep_distinct_checkpoint_names_under_wandb_truncation():
@@ -335,24 +385,40 @@ def test_top_level_baseline_steps_keep_distinct_checkpoint_names_under_wandb_tru
         name_prefix=name_prefix,
         run_name="baseline_unimax",
     )
+    olmix_step = experiment.create_training_step(
+        experiment.initial_fixed_weight_configs[2].weight_config,
+        name_prefix=name_prefix,
+        run_name=OLMIX_LOGLINEAR_RUN_NAME,
+    )
 
     assert proportional_step.name.endswith("/baseline_proportional")
     assert unimax_step.name.endswith("/baseline_unimax")
+    assert olmix_step.name.endswith(f"/{OLMIX_LOGLINEAR_RUN_NAME}")
     assert proportional_step.name != unimax_step.name
+    assert proportional_step.name != olmix_step.name
+    assert unimax_step.name != olmix_step.name
 
     proportional_wandb_name = proportional_step.config.train_config.trainer.tracker.name
     unimax_wandb_name = unimax_step.config.train_config.trainer.tracker.name
+    olmix_wandb_name = olmix_step.config.train_config.trainer.tracker.name
     proportional_wandb_tags = proportional_step.config.train_config.trainer.tracker.tags
     unimax_wandb_tags = unimax_step.config.train_config.trainer.tracker.tags
+    olmix_wandb_tags = olmix_step.config.train_config.trainer.tracker.tags
     assert proportional_wandb_name is not None
     assert unimax_wandb_name is not None
+    assert olmix_wandb_name is not None
     assert len(proportional_wandb_name) <= 64
     assert len(unimax_wandb_name) <= 64
+    assert len(olmix_wandb_name) <= 64
     assert proportional_wandb_name != unimax_wandb_name
+    assert proportional_wandb_name != olmix_wandb_name
+    assert unimax_wandb_name != olmix_wandb_name
     assert proportional_wandb_name.endswith("/baseline_proportional")
     assert unimax_wandb_name.endswith("/baseline_unimax")
+    assert olmix_wandb_name.endswith(f"/{OLMIX_LOGLINEAR_RUN_NAME}")
     assert all(len(tag) <= 64 for tag in proportional_wandb_tags)
     assert all(len(tag) <= 64 for tag in unimax_wandb_tags)
+    assert all(len(tag) <= 64 for tag in olmix_wandb_tags)
 
 
 def test_model_resubmit_validation_plan_reuses_prior_candidate(tmp_path):

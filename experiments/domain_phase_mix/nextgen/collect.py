@@ -22,6 +22,7 @@ from experiments.domain_phase_mix.nextgen.contracts import PlannedRun, RunRecord
 from experiments.domain_phase_mix.nextgen.import_sources import (
     CsvDomainPhaseImportSource,
     LegacyDomainPhaseImportSource,
+    NamedWandbRunImportSource,
     source_from_dict,
 )
 
@@ -65,10 +66,32 @@ def collect_imported_data(config: CollectImportedConfig) -> None:
 
     for source in sources:
         records = source.collect_runs()
-        if records:
-            run_records.extend(records)
-
         traj = source.collect_trajectories(config.objective_metric)
+        if records:
+            backfilled_records: list[RunRecord] = []
+            for record in records:
+                if record.wandb_run_id is None or traj.empty:
+                    backfilled_records.append(record)
+                    continue
+
+                run_traj = traj.loc[traj["wandb_run_id"] == record.wandb_run_id]
+                backfilled_records.append(
+                    RunRecord(
+                        wandb_run_id=record.wandb_run_id,
+                        source_experiment=record.source_experiment,
+                        local_run_id=record.local_run_id,
+                        run_name=record.run_name,
+                        phase_weights=record.phase_weights,
+                        status=record.status,
+                        metrics=_backfill_objective_metric_from_trajectory(
+                            record.metrics,
+                            run_traj,
+                            config.objective_metric,
+                        ),
+                    )
+                )
+            run_records.extend(backfilled_records)
+
         if not traj.empty:
             traj_frames.append(traj)
 
@@ -295,6 +318,19 @@ def source_to_dict(source) -> dict:
             "source_experiment": source.source_experiment,
             "csv_path": source.csv_path,
             "status_filter": source.status_filter,
+            "metric_prefixes": list(source.metric_prefixes),
+        }
+    if isinstance(source, NamedWandbRunImportSource):
+        return {
+            "type": "named_wandb_run",
+            "source_experiment": source.source_experiment,
+            "local_run_id": source.local_run_id,
+            "run_name": source.run_name,
+            "phase_weights": source.phase_weights,
+            "wandb_entity": source.wandb_entity,
+            "wandb_project": source.wandb_project,
+            "wandb_tags": list(source.wandb_tags),
+            "wandb_name_substring": source.wandb_name_substring,
             "metric_prefixes": list(source.metric_prefixes),
         }
     raise TypeError(f"Unsupported import source object: {type(source)}")

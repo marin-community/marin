@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Import sources for legacy domain/phase mixture trajectories."""
@@ -94,9 +94,7 @@ class LegacyDomainPhaseImportSource:
                     source_experiment=self.source_experiment,
                     local_run_id=int(row["run_id"]) if row.get("run_id") is not None else None,
                     run_name=row.get("wandb_run_name"),
-                    phase_weights=normalize_phase_weights(
-                        {k: v for k, v in row.items() if isinstance(v, dict)}
-                    ),
+                    phase_weights=normalize_phase_weights({k: v for k, v in row.items() if isinstance(v, dict)}),
                     status=row.get("status", "unknown"),
                     metrics={
                         key: float(value)
@@ -166,9 +164,11 @@ class LegacyDomainPhaseImportSource:
                         "local_run_id": local_run_id,
                         "run_name": run_name,
                         "step": int(step),
-                        "total_tokens": float(entry["throughput/total_tokens"])
-                        if entry.get("throughput/total_tokens") is not None
-                        else None,
+                        "total_tokens": (
+                            float(entry["throughput/total_tokens"])
+                            if entry.get("throughput/total_tokens") is not None
+                            else None
+                        ),
                         "metric_key": objective_metric,
                         "metric_value": float(value),
                     }
@@ -253,6 +253,128 @@ class CsvDomainPhaseImportSource:
         )
 
 
+def _extract_summary_metrics(run_row: dict[str, object], metric_prefixes: tuple[str, ...]) -> dict[str, float]:
+    return {
+        key: float(value)
+        for key, value in run_row.items()
+        if isinstance(value, int | float) and any(key.startswith(prefix) for prefix in metric_prefixes)
+    }
+
+
+def _trajectory_frame_for_run(
+    *,
+    wandb_run,
+    objective_metric: str,
+    source_experiment: str,
+    local_run_id: int | None,
+    run_name: str | None,
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    keys = ["_step", objective_metric, "throughput/total_tokens"]
+    for entry in wandb_run.scan_history(keys=keys):
+        metric_value = entry.get(objective_metric)
+        step = entry.get("_step")
+        if metric_value is None or step is None:
+            continue
+        rows.append(
+            {
+                "wandb_run_id": wandb_run.id,
+                "source_experiment": source_experiment,
+                "local_run_id": local_run_id,
+                "run_name": run_name,
+                "step": int(step),
+                "total_tokens": (
+                    float(entry["throughput/total_tokens"]) if entry.get("throughput/total_tokens") is not None else None
+                ),
+                "metric_key": objective_metric,
+                "metric_value": float(metric_value),
+            }
+        )
+
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "wandb_run_id",
+            "source_experiment",
+            "local_run_id",
+            "run_name",
+            "step",
+            "total_tokens",
+            "metric_key",
+            "metric_value",
+        ],
+    )
+
+
+@dataclass(frozen=True)
+class NamedWandbRunImportSource:
+    """Import source for one explicitly named W&B run with known phase weights."""
+
+    source_experiment: str
+    local_run_id: int
+    run_name: str
+    phase_weights: dict[str, dict[str, float]]
+    wandb_entity: str = "marin-community"
+    wandb_project: str = "marin"
+    wandb_tags: tuple[str, ...] = ()
+    wandb_name_substring: str | None = None
+    metric_prefixes: tuple[str, ...] = ("eval/", "lm_eval/")
+
+    def _candidate_rows(self) -> list[dict[str, object]]:
+        tags = list(self.wandb_tags) if self.wandb_tags else [self.source_experiment]
+        return query_wandb_runs(
+            entity=self.wandb_entity,
+            project=self.wandb_project,
+            tags=tags,
+            metrics=[],
+            metric_prefixes=self.metric_prefixes,
+        )
+
+    def _resolve_run_row(self) -> dict[str, object]:
+        name_substring = self.wandb_name_substring or f"/{self.run_name}"
+        matches = [row for row in self._candidate_rows() if name_substring in str(row.get("wandb_run_name") or "")]
+        if not matches:
+            raise ValueError(
+                f"No W&B run found for source_experiment={self.source_experiment!r} "
+                f"matching substring {name_substring!r}"
+            )
+
+        finished = [row for row in matches if row.get("status") == "finished"]
+        return finished[0] if finished else matches[0]
+
+    def collect_runs(self) -> list[RunRecord]:
+        run_row = self._resolve_run_row()
+        return [
+            RunRecord(
+                wandb_run_id=_coerce_str(run_row.get("wandb_run_id")),
+                source_experiment=self.source_experiment,
+                local_run_id=self.local_run_id,
+                run_name=self.run_name,
+                phase_weights=normalize_phase_weights(self.phase_weights),
+                status="completed" if run_row.get("status") == "finished" else str(run_row.get("status", "unknown")),
+                metrics=_extract_summary_metrics(run_row, self.metric_prefixes),
+            )
+        ]
+
+    def collect_trajectories(self, objective_metric: str) -> pd.DataFrame:
+        import wandb
+
+        run_row = self._resolve_run_row()
+        wandb_run_id = _coerce_str(run_row.get("wandb_run_id"))
+        if wandb_run_id is None:
+            raise ValueError(f"Resolved W&B row for {self.run_name!r} is missing wandb_run_id")
+
+        api = wandb.Api()
+        wandb_run = api.run(f"{self.wandb_entity}/{self.wandb_project}/{wandb_run_id}")
+        return _trajectory_frame_for_run(
+            wandb_run=wandb_run,
+            objective_metric=objective_metric,
+            source_experiment=self.source_experiment,
+            local_run_id=self.local_run_id,
+            run_name=self.run_name,
+        )
+
+
 def _coerce_str(value) -> str | None:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return None
@@ -299,24 +421,15 @@ def default_legacy_sources() -> tuple[LegacyDomainPhaseImportSource, ...]:
     return (
         LegacyDomainPhaseImportSource(
             source_experiment=TWO_PHASE_STARCODER_EXPERIMENT,
-            weight_configs_path=(
-                f"{prefix}/{TWO_PHASE_STARCODER_EXPERIMENT}/"
-                "weight_configs-*/weight_configs.json"
-            ),
+            weight_configs_path=(f"{prefix}/{TWO_PHASE_STARCODER_EXPERIMENT}/" "weight_configs-*/weight_configs.json"),
         ),
         LegacyDomainPhaseImportSource(
             source_experiment=THREE_PHASE_EXPERIMENT,
-            weight_configs_path=(
-                f"{prefix}/{THREE_PHASE_EXPERIMENT}/"
-                "weight_configs-*/weight_configs.json"
-            ),
+            weight_configs_path=(f"{prefix}/{THREE_PHASE_EXPERIMENT}/" "weight_configs-*/weight_configs.json"),
         ),
         LegacyDomainPhaseImportSource(
             source_experiment=THREE_PHASE_STARCODER_EXPERIMENT,
-            weight_configs_path=(
-                f"{prefix}/{THREE_PHASE_STARCODER_EXPERIMENT}/"
-                "weight_configs-*/weight_configs.json"
-            ),
+            weight_configs_path=(f"{prefix}/{THREE_PHASE_STARCODER_EXPERIMENT}/" "weight_configs-*/weight_configs.json"),
         ),
     )
 
@@ -341,6 +454,18 @@ def source_from_dict(payload: dict) -> ImportSource:
             source_experiment=payload["source_experiment"],
             csv_path=csv_path,
             status_filter=payload.get("status_filter", "completed"),
+            metric_prefixes=tuple(payload.get("metric_prefixes", ("eval/", "lm_eval/"))),
+        )
+    if source_type == "named_wandb_run":
+        return NamedWandbRunImportSource(
+            source_experiment=payload["source_experiment"],
+            local_run_id=int(payload["local_run_id"]),
+            run_name=payload["run_name"],
+            phase_weights=normalize_phase_weights(payload["phase_weights"]),
+            wandb_entity=payload.get("wandb_entity", "marin-community"),
+            wandb_project=payload.get("wandb_project", "marin"),
+            wandb_tags=tuple(payload.get("wandb_tags", ())),
+            wandb_name_substring=payload.get("wandb_name_substring"),
             metric_prefixes=tuple(payload.get("metric_prefixes", ("eval/", "lm_eval/"))),
         )
 

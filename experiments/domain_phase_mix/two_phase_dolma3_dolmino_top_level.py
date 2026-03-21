@@ -26,6 +26,11 @@ from experiments.domain_phase_mix.experiment import (
     InitialFixedWeightConfig,
     MixtureExperiment,
 )
+from experiments.domain_phase_mix.two_phase_many_olmix_loglinear import (
+    OLMIX_LOGLINEAR_PHASE_WEIGHTS,
+    OLMIX_LOGLINEAR_RUN_NAME,
+    create_olmix_loglinear_weight_config,
+)
 from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 from experiments.domain_phase_mix.weight_sampler import (
     DirichletSamplingParams,
@@ -52,7 +57,7 @@ PHASE_NAMES = ("phase_0", "phase_1")
 DOMAIN_NAMES = tuple(all_top_level_domain_names())
 EVAL_TASKS = (MMLU_5_SHOT, MMLU_PRO_5_SHOT)
 EVAL_DATASETS_CACHE_PATH: str | None = None
-INITIAL_BASELINE_RUNS = 2
+INITIAL_BASELINE_RUNS = 3
 MIN_RECOMMENDED_SWARM_RUNS = 6 * len(DOMAIN_NAMES)
 MIN_RECOMMENDED_SAMPLED_RUNS = MIN_RECOMMENDED_SWARM_RUNS - INITIAL_BASELINE_RUNS
 MERGED_CC_DOMAIN_NAMES = tuple(name for name in DOMAIN_NAMES if name.startswith("dolma3_cc/"))
@@ -81,7 +86,7 @@ assert TARGET_BUDGET == 6_325_183_647_689, TARGET_BUDGET
 assert TOP_LEVEL_TOTAL_AVAILABLE_TOKENS == 6_986_431_605_135, TOP_LEVEL_TOTAL_AVAILABLE_TOKENS
 assert REALIZED_EXPERIMENT_BUDGET == 1_199_833_088, REALIZED_EXPERIMENT_BUDGET
 assert MIN_RECOMMENDED_SWARM_RUNS == 234, MIN_RECOMMENDED_SWARM_RUNS
-assert MIN_RECOMMENDED_SAMPLED_RUNS == 232, MIN_RECOMMENDED_SAMPLED_RUNS
+assert MIN_RECOMMENDED_SAMPLED_RUNS == 231, MIN_RECOMMENDED_SAMPLED_RUNS
 
 
 @dataclass(frozen=True)
@@ -226,7 +231,7 @@ def _constant_phase_weights(domain_weights: dict[str, float]) -> dict[str, dict[
 
 
 def create_initial_fixed_weight_configs() -> tuple[InitialFixedWeightConfig, ...]:
-    """Create the fixed proportional and UniMax baselines for an empty-state loop."""
+    """Create the fixed proportional, UniMax, and Olmix baselines for an empty-state loop."""
     total_tokens = float(TOP_LEVEL_TOTAL_AVAILABLE_TOKENS)
     proportional = {
         domain_name: TOP_LEVEL_DOMAIN_TOKEN_COUNTS[domain_name] / total_tokens for domain_name in DOMAIN_NAMES
@@ -239,6 +244,12 @@ def create_initial_fixed_weight_configs() -> tuple[InitialFixedWeightConfig, ...
     )
     unimax = {domain_name: float(weight) for domain_name, weight in zip(DOMAIN_NAMES, unimax_weights, strict=True)}
 
+    if set(OLMIX_LOGLINEAR_PHASE_WEIGHTS) != set(PHASE_NAMES):
+        raise ValueError("Olmix baseline phase names do not match the two-phase topology")
+    for phase_name, phase_weights in OLMIX_LOGLINEAR_PHASE_WEIGHTS.items():
+        if set(phase_weights) != set(DOMAIN_NAMES):
+            raise ValueError(f"Olmix baseline domains do not match topology domains for {phase_name}")
+
     return (
         InitialFixedWeightConfig(
             run_name="baseline_proportional",
@@ -247,6 +258,10 @@ def create_initial_fixed_weight_configs() -> tuple[InitialFixedWeightConfig, ...
         InitialFixedWeightConfig(
             run_name="baseline_unimax",
             weight_config=WeightConfig(run_id=1, phase_weights=_constant_phase_weights(unimax)),
+        ),
+        InitialFixedWeightConfig(
+            run_name=OLMIX_LOGLINEAR_RUN_NAME,
+            weight_config=create_olmix_loglinear_weight_config(),
         ),
     )
 
