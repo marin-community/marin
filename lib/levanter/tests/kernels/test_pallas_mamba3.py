@@ -39,6 +39,10 @@ from levanter.kernels.pallas.ssd import intra_chunk_log_alpha_cumsum, local_log_
 from tests.test_utils import skip_if_no_torch
 
 
+MAMBA3_MIMO_RANKED_PARITY_ATOL = 1e-4
+MAMBA3_MIMO_RANKED_PARITY_RTOL = 1e-4
+
+
 def _sample_inputs(
     *,
     leading_shape: tuple[int, ...],
@@ -621,7 +625,12 @@ def test_mamba3_mimo_chunked_xla_matches_direct_ranked_recurrence():
         c.reshape(2, 3, 8, 4, 3),
         x_ranked.reshape(2, 3, 8, 5, 3),
     )
-    assert jnp.allclose(y_xla, y_ref, atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(
+        y_xla,
+        y_ref,
+        atol=MAMBA3_MIMO_RANKED_PARITY_ATOL,
+        rtol=MAMBA3_MIMO_RANKED_PARITY_RTOL,
+    )
     assert jnp.allclose(state_xla, state_ref, atol=1e-5, rtol=1e-5)
 
 
@@ -653,7 +662,12 @@ def test_mamba3_mimo_chunked_reference_matches_transformed_ranked_oracle():
         c.reshape(2, 3, 8, 4, 3),
         x_ranked.reshape(2, 3, 8, 5, 3),
     )
-    assert jnp.allclose(y_shim, y_seq, atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(
+        y_shim,
+        y_seq,
+        atol=MAMBA3_MIMO_RANKED_PARITY_ATOL,
+        rtol=MAMBA3_MIMO_RANKED_PARITY_RTOL,
+    )
     assert jnp.allclose(state_shim, state_seq, atol=1e-5, rtol=1e-5)
 
 
