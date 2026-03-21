@@ -1,36 +1,31 @@
 ---
-name: babysit-job
-description: Monitor a Ray or Iris job continuously and recover on failure. Use when asked to babysit, monitor, or watch a training job (not Zephyr pipelines — use babysit-zephyr for those).
+name: babysit-iris-job
+description: Monitor an Iris job continuously and recover on failure. Use when asked to babysit, monitor, or watch an Iris training job (not Zephyr pipelines — use babysit-zephyr for those).
 ---
 
-# Skill: Babysit Job
+# Skill: Babysit Iris Job
 
-Monitor a job continuously and recover on failure. Recovery is stop then resubmit. Supports two tracks:
-
-- **ray**: Ray Jobs API (`scripts/ray/cluster.py`, `ray_run.py`)
-- **iris**: Iris Jobs API — **delegate to babysit-iris-job** for Iris-specific monitoring
+Monitor an Iris job continuously and recover on failure. Recovery is stop then resubmit.
 
 For Zephyr pipeline jobs, use **babysit-zephyr** instead.
 For TPU bad-node errors, escalate to **debug-tpu**.
+For Ray jobs, use **babysit-job** with `track=ray`.
 
 Cluster-level actions are out of scope. Do not restart, recreate, or otherwise mutate the cluster unless the user gives explicit consent in the current thread.
 
 ## Before Starting
 
-### Track Selection
+### Required Info
 
-Ask:
+1. `job_id` — Iris job ID in canonical format `/<user>/<job>` (e.g., `/dlwh/iris-run-train_tiny_model_tpu-20260302-185630`)
+2. `config` — Iris config path (e.g., `lib/iris/examples/marin.yaml`)
+3. `resubmit_command` — exact Iris submit command for resubmission; must include `--no-wait`
+4. For Marin TPU training jobs, use `--extra marin:tpu` (not `--extra marin:cpu`)
+5. For TPU jobs, the resubmit command must request TPU resources with `--tpu <variant>`.
+   `--reserve <variant>` only holds capacity; it does not attach TPU devices to the task container.
 
-> "Should I monitor this as `ray` or `iris`?"
-
-If **iris**, invoke the **babysit-iris-job** skill instead — it has Iris-specific
-monitoring, task exec, and recovery procedures.
-
-### Required Info: Ray Track
-
-1. `job_id` — Ray job ID (e.g., `ray-run-held-isoflop_sweep-20260131-051716`)
-2. `cluster` — cluster name/alias for `scripts/ray/cluster.py` (e.g., `us-east5-a`, `us-central2`)
-3. `experiment` — script path used for resubmission (e.g., `experiments/isoflop_sweep.py`)
+Example Iris resubmit command:
+`uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --extra marin:tpu --tpu v5litepod-16 -- python experiments/tutorials/train_tiny_model_tpu.py`
 
 If any required field is missing, ask for it before proceeding.
 
@@ -64,20 +59,18 @@ If any required field is missing, ask for it before proceeding.
 
 Write to `scratch/<create_timestamp>_monitoring_state.json`, create the `scratch` directory if needed. `<create_timestamp>` should have format `YYYYMMDD-HHMM`.
 
-### Ray State File
-
 ```json
 {
   "ts": <timestamp_ms>,
-  "track": "ray",
+  "track": "iris",
   "job_id": "<JOB_ID>",
-  "cluster": "<CLUSTER>",
-  "experiment": "<EXPERIMENT_PATH>",
+  "config": "<IRIS_CONFIG_PATH>",
+  "resubmit_command": "<IRIS_JOB_RUN_COMMAND_WITH_NO_WAIT>",
   "restart_count": 0
 }
 ```
 
-## Loop (Ray Track)
+## Loop
 
 ```
 1. SLEEP
@@ -85,14 +78,21 @@ Write to `scratch/<create_timestamp>_monitoring_state.json`, create the `scratch
    - otherwise: sleep 570
 
 2. CHECK LOGS
-   uv run scripts/ray/cluster.py --cluster <CLUSTER> job-logs -n 200 -g "loss\|error\|Error\|Traceback\|RESOURCE_EXHAUSTED\|compiler_base.cc:2587\|Program hbm requirement\|Largest program allocations" <JOB_ID>
+   uv run iris --config <CONFIG> job logs --since-seconds 900 --include-children <JOB_ID> | rg -i -e "loss|error|traceback|exception|resource_exhausted|oom|compiler_base\.cc:2587|program hbm requirement|largest program allocations|ownerdiederror|dead node|node death|autoscaler unsatisfied resources|no accelerator found|failed_precondition|device or resource busy"
 
 3. CHECK STATUS
-   - terminal success: SUCCEEDED
-   - terminal non-success: FAILED, STOPPED
-   - non-terminal: PENDING, RUNNING
-   - Treat RUNNING as controller-level signal only; confirm allocation via expected
-     W&B run when possible.
+   uv run iris --config <CONFIG> job list --json --prefix <JOB_ID>
+
+   Terminal success: JOB_STATE_SUCCEEDED
+   Terminal non-success: JOB_STATE_FAILED, JOB_STATE_KILLED, JOB_STATE_WORKER_FAILED, JOB_STATE_UNSCHEDULABLE
+   Non-terminal: JOB_STATE_PENDING, JOB_STATE_BUILDING, JOB_STATE_RUNNING
+
+   If `pending_reason` indicates worker scale-up/capacity wait, treat as scheduler
+   capacity wait — do not run cluster update/recreate/restart actions. Continue
+   waiting on cadence, or stop+resubmit only if user explicitly asks.
+
+   Treat RUNNING as controller-level signal only; confirm allocation via expected
+   W&B run when possible.
 
 4. PRINT W&B RUN IDS/LINKS
    - Inspect logs for W&B URL/ID (`wandb: View run`, `/runs/<RUN_ID>`).
@@ -122,13 +122,54 @@ Write to `scratch/<create_timestamp>_monitoring_state.json`, create the `scratch
    - Recover only the job (never mutate cluster without explicit consent).
    - For TPU bad-node errors, invoke **debug-tpu** skill first, then continue here.
    - If current job is still non-terminal, stop it first:
-     uv run scripts/ray/cluster.py --cluster <CLUSTER> stop-job <JOB_ID>
+     uv run iris --config <CONFIG> job stop <JOB_ID>
    - Then resubmit:
-     uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster <CLUSTER> -- python <EXPERIMENT_PATH>
-   - Capture `job_id` from submit output.
+     <RESUBMIT_COMMAND>
+   - Capture `job_id` from output (line like `Job submitted: /<user>/<job>`).
+   - Iris nuance:
+     - if `resubmit_command` omits `--job-name`, Iris auto-generates a fresh id each resubmission.
+     - if `resubmit_command` uses a fixed `--job-name`, Iris may reuse the same id
+       after terminal completion by replacing the finished job.
    - Update state file: `job_id=<NEW_JOB_ID>`, `restart_count += 1`.
    - Go to step 1.
 ```
+
+## Task Exec
+
+Use `iris task exec` to run commands inside a running task's container.
+
+### Basic usage
+
+```bash
+# Run a one-shot command
+iris task exec <TASK_ID> -- ls /app
+
+# Run with a custom timeout (default: 60s)
+iris task exec <TASK_ID> --timeout 300 -- python -c "import torch; print(torch.cuda.device_count())"
+
+# Run with no timeout
+iris task exec <TASK_ID> --timeout -1 -- tail -f /var/log/app.log
+```
+
+### Running a background command that survives disconnect
+
+The exec session is non-interactive and buffers output. To kick off a long-running
+command that continues after the exec returns, use `nohup` + `&` inside a bash wrapper:
+
+```bash
+# Start a background process that writes to a file
+iris task exec <TASK_ID> -- bash -c "nohup bash -c 'while true; do date >> /tmp/heartbeat.txt; sleep 10; done' > /dev/null 2>&1 &"
+
+# Check on it later
+iris task exec <TASK_ID> -- cat /tmp/heartbeat.txt
+
+# Check if the process is still running
+iris task exec <TASK_ID> -- pgrep -f heartbeat
+```
+
+### Task ID format
+
+Task IDs follow the pattern `/<user>/<job>/<task_index>`, e.g., `/rav/my-job/0`.
 
 ## Fixing Small Bugs
 
@@ -164,7 +205,9 @@ Complex examples:
 - Loop control is at agent level, not bash.
 - Track `restart_count` to detect flapping.
 - State file allows resume after context reset.
-- Ray states: `PENDING`, `RUNNING`, `STOPPED`, `SUCCEEDED`, `FAILED`
+- Iris states: `JOB_STATE_PENDING`, `JOB_STATE_BUILDING`, `JOB_STATE_RUNNING`, `JOB_STATE_SUCCEEDED`, `JOB_STATE_FAILED`, `JOB_STATE_KILLED`, `JOB_STATE_WORKER_FAILED`, `JOB_STATE_UNSCHEDULABLE`
+- Iris `job list --prefix` requires canonical job names (`/<user>/<job>`), not short names.
+- Iris monitoring is job-level; cluster updates are not part of normal recovery.
 - Loop duration can be hours to days.
 - If same error repeats after one fix attempt, do not retry blindly; report to user.
 
