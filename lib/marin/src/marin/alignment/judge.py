@@ -104,7 +104,7 @@ def _judge_response(
     )
 
     response = llm_chat_single(
-        model_id=judge_model,
+        config=judge_model,
         messages=[{"role": "user", "content": user_prompt}],
         system_prompt=system_prompt,
         max_tokens=max_tokens,

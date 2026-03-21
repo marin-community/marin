@@ -140,7 +140,7 @@ def _run_understanding(
     user_prompt = make_behavior_understanding_prompt(statement.id, statement.text)
 
     response = llm_chat_single(
-        model_id=config.ideation_model,
+        config=config.ideation_model,
         messages=[{"role": "user", "content": user_prompt}],
         system_prompt=system_prompt,
         max_tokens=config.understanding_max_tokens,
@@ -196,7 +196,7 @@ def _concretize_batch(
         batch_start_idx=batch_start_idx,
     )
     response = llm_chat_single(
-        model_id=model,
+        config=model,
         messages=[{"role": "user", "content": user_prompt}],
         system_prompt=system_prompt,
         max_tokens=16000,
@@ -326,7 +326,7 @@ def _extract_batch(
     """Extract clean prompts from a batch of scenarios."""
     system_prompt, user_prompt = make_extraction_prompt(scenarios, batch_start_idx, include_system_prompt=True)
     response = llm_chat_single(
-        model_id=model,
+        config=model,
         messages=[{"role": "user", "content": user_prompt}],
         system_prompt=system_prompt,
         max_tokens=16000,
