@@ -4933,3 +4933,51 @@ uv run .agents/scripts/deepep_jax_krt_bench.py \
   - this rules down "the scheduler only needs to see one packed shared `dw` reduction" as a sufficient explanation or fix.
 - Next action:
   - move one level up from sibling shared-reduction ordering and test whether explicit ordering between the shared `dw-psum` branch and routed backward is the higher-signal interaction.
+
+### 2026-03-21 00:11 UTC - OVLP-RES-076 branch-level serial removes the collective pathology but is too invasive to be useful
+
+- Goal:
+  - test whether forcing routed backward to wait on the shared `dw-psum` pullback removes the pathological coupled wait more cleanly than sibling shared-reduction ordering alone.
+- Actions:
+  - added `deepep_transport_capped_prewarmed_shared_dw_psum_branch_serial_probe` at code ref `bbd2ec698`
+  - this probe uses separate branch pullbacks and gates the routed pullback on a scalar dependency from the shared `dw-psum` pullback
+- Config:
+  - code ref: `bbd2ec698`
+  - pod: `iris-task-dc7c6a0bf886`
+  - node: `g12e0ba`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-shareddwpsumbranchserial-profile-t262144-topk8-20260321-000341.log`
+  - copied profile artifacts:
+    - `scratch/profiles/ovlpres-shareddwpsumbranchserial-fb-262144-topk8`
+  - rendered report:
+    - `scratch/profiles/ovlpres-shareddwpsumbranchserial-fb-262144-topk8-report.md`
+  - compare outputs:
+    - `scratch/profiles/ovlpres-shareddwpsumonly-vs-shareddwpsumbranchserial-262144-topk8.compare.txt`
+    - `scratch/profiles/ovlpres-shareddwpsumserial-vs-shareddwpsumbranchserial-262144-topk8.compare.txt`
+- Result:
+  - decisive hard-row timing:
+    - `deepep_transport_capped_prewarmed_shared_dw_psum_branch_serial_probe`: `790,949.79 tok/s` (`331.429 ms`)
+  - profile highlights:
+    - time breakdown:
+      - compute: `47.42%`
+      - communication: `0.04%`
+      - host: `52.53%`
+    - collective family exclusive: `4,868.503`
+    - largest reported pre-gap: `Memset 0` with total `13,424.590`
+    - there is no dominant `AllReduce_Sum_f32` pre-gap left in the copied report
+  - direct comparisons vs `shared_dw_psum_only`:
+    - collective exclusive delta: `-13,254.873`
+    - communication share delta: `-0.009798`
+    - compute share delta: `+0.015486`
+    - top-op stack is now dominated by large GEMMs / transpose glue instead of the prior shared-collective pattern
+  - direct comparisons vs `shared_dw_psum_serial`:
+    - collective exclusive delta: `-96,011.528`
+    - communication share delta: `-0.066682`
+    - compute share delta: `+0.045719`
+    - host share delta: `+0.021361`
+- Interpretation:
+  - forcing branch-level serial order does remove the collective-pathology signature, but it does so by changing the graph into a much more compute-heavy and host-heavy regime.
+  - this is too invasive to be a useful direct optimization path for the real benchmark.
+  - it is still evidence that branch-level coupling matters, but not in a form worth extending.
+- Next action:
+  - keep the branch-level dependency idea, but move to a lighter control at the split-loss scalar boundary so the next experiment changes ordering without rebuilding the backward graph around separate branch pullbacks.
