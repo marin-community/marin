@@ -38,7 +38,14 @@ def dedup_fuzzy_document(
     max_parallelism: int | None = None,
     worker_resources: ResourceConfig | None = None,
 ) -> dict:
-    """Perform fuzzy document-level deduplication"""
+    """Perform fuzzy document-level deduplication.
+
+    Args:
+        worker_resources: Resource config per Zephyr worker. The map stage runs
+            dupekit's Rust MinHash pipeline, which uses a native thread pool and
+            may consume up to ~2 cores beyond the Python thread. Size cpu
+            accordingly (e.g. cpu=5 reserves headroom for this).
+    """
 
     if fuzzy_minhash_num_perms % fuzzy_minhash_num_bands != 0:
         raise ValueError(
