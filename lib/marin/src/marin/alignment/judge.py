@@ -59,7 +59,7 @@ def _load_responses(path: str) -> dict[str, dict[str, Any]]:
                         continue
                     record = json.loads(line)
                     prompt_id = record.get("prompt_id", "")
-                responses[prompt_id] = record
+                    responses[prompt_id] = record
     return responses
 
 
