@@ -357,6 +357,12 @@ def _build_pod_manifest(
                     limits["rdma/ib"] = str(gpu_count)
         if limits:
             resources["limits"] = limits
+            # Set requests = limits for CPU/memory so K8s schedules based on
+            # actual resource needs. GPU/RDMA are excluded (K8s treats GPU
+            # limits as implicit requests).
+            requests = {k: v for k, v in limits.items() if k in ("cpu", "memory")}
+            if requests:
+                resources.setdefault("requests", {}).update(requests)
         if res.disk_bytes:
             disk_gi = max(1, res.disk_bytes // (1024**3))
             resources.setdefault("requests", {})["ephemeral-storage"] = f"{disk_gi}Gi"

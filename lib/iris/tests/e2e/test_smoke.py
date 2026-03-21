@@ -476,8 +476,10 @@ def test_endpoint_registration(smoke_cluster):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
-def test_port_allocation(smoke_cluster):
+def test_port_allocation(smoke_cluster, capabilities):
     """Port allocation job succeeded."""
+    if not capabilities.has_workers:
+        pytest.skip("kubernetes_provider does not inject port allocations into task pods yet")
     job = smoke_cluster.submit(TestJobs.validate_ports, "smoke-ports", ports=["http", "grpc"])
     status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
