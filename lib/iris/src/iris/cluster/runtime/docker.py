@@ -296,7 +296,7 @@ class DockerContainerHandle:
 
     @property
     def container_id(self) -> str | None:
-        """Return the current run container ID, if any."""
+        """Return the Docker container ID (hash), if any."""
         return self._run_container_id
 
     def build(self) -> list[LogLine]:
