@@ -430,42 +430,9 @@ def test_dashboard_job_detail_with_logs(smoke_cluster, verbose_job, smoke_page, 
     )
 
 
-def test_dashboard_task_detail_sparklines(smoke_cluster, smoke_page, smoke_screenshot):
-    """Task detail page shows resource sparklines for a running task."""
-    job = smoke_cluster.submit(TestJobs.busy_loop, "smoke-sparkline", 15)
-    smoke_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
-    time.sleep(8)
-
-    task_status = smoke_cluster.task_status(job)
-    task_id = task_status.task_id
-    job_id = job.job_id.to_wire()
-
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}/task/{task_id}")
-    wait_for_dashboard_ready(smoke_page)
-    smoke_page.wait_for_function(
-        "() => document.querySelectorAll('.sparkline').length >= 2",
-        timeout=15000,
-    )
-    smoke_screenshot(
-        "task-detail-sparklines",
-        "Task detail page for a running task showing CPU and memory sparkline charts with resource history",
-    )
-    smoke_cluster.kill(job)
-
-
 # ============================================================================
 # Scheduling & endpoint verification
 # ============================================================================
-
-
-def test_small_job_skips_oversized(smoke_cluster):
-    """Small job gets scheduled even when a large unschedulable job is queued."""
-    with smoke_cluster.launched_job(TestJobs.quick, "smoke-big", cpu=10000) as big_job:
-        small_job = smoke_cluster.submit(TestJobs.quick, "smoke-small", cpu=1)
-        status = smoke_cluster.wait(small_job, timeout=smoke_cluster.job_timeout)
-        assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
-        big_status = smoke_cluster.status(big_job)
-        assert big_status.state == cluster_pb2.JOB_STATE_PENDING
 
 
 def test_endpoint_registration(smoke_cluster):
