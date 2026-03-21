@@ -27,8 +27,11 @@ from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.completion_usage import CompletionUsage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob, TopLogprob
 from levanter.models.lm_model import LmHeadModel
-from transformers import AutoTokenizer
-from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
+from transformers import AutoConfig, AutoTokenizer
+from marin.rl.weight_utils import (
+    levanter_state_dict_to_nnx_state_on_cpu,
+    torch_compatible_state_dict_to_levanter_state_dict,
+)
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
 from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
@@ -259,7 +262,13 @@ class vLLMInferenceContext(BaseInferenceContext):
             bootstrap_local_dir = _stage_bootstrap_metadata(bootstrap_checkpoint_path)
             bootstrap_config = dataclasses.replace(inference_config, load_format="dummy")
             llm = cls._get_llm_engine(bootstrap_config, model_source=bootstrap_local_dir)
-            _bootstrap_weights_into_engine(llm, inference_config.model_name, bootstrap_checkpoint_path)
+            checkpoint_hf_config = AutoConfig.from_pretrained(bootstrap_local_dir)
+            _bootstrap_weights_into_engine(
+                llm,
+                inference_config.model_name,
+                bootstrap_checkpoint_path,
+                checkpoint_hf_config,
+            )
             logger.info(
                 "Fast bootstrap completed for model %s from %s", inference_config.model_name, bootstrap_checkpoint_path
             )
@@ -612,11 +621,14 @@ def _serialize_state_dict_for_rpc(state_dict: dict[str, np.ndarray]) -> dict:
     return serialized
 
 
-def _bootstrap_weights_into_engine(llm: object, model_name: str, checkpoint_path: str) -> None:
+def _bootstrap_weights_into_engine(
+    llm: object, model_name: str, checkpoint_path: str, checkpoint_hf_config: Any
+) -> None:
     if model_name not in MODEL_MAPPINGS or model_name not in MODEL_TRANSPOSE_KEYS:
         raise ValueError(f"No vLLM weight mapping found for model {model_name!r}")
 
     state_dict = _load_safetensors_from_remote(checkpoint_path)
+    state_dict = torch_compatible_state_dict_to_levanter_state_dict(state_dict, checkpoint_hf_config)
     nnx_state = levanter_state_dict_to_nnx_state_on_cpu(state_dict)
 
     llm_engine = getattr(llm, "llm_engine", None)

@@ -2195,6 +2195,63 @@ uv run python experiments/alternating_rl_math500.py controller \
       deterministically and then fix the transpose/padding logic
     - after the patch, rerun phase-1 `prepare-sampling` on the same `v5p-8`
       setup rather than changing TPU parameters again
+- 2026-03-21T18:41Z:
+  - ALT-TPU-002A local diagnosis result:
+    - the failure is fully explained without another TPU probe
+    - async RL and alternating fast bootstrap were feeding different tensor
+      formats into the same `sync_weights(...)` contract:
+      - async RL path:
+        - transfers live Levanter state
+        - attention projections are still articulated:
+          - `q_proj`: `(KVHeads, QHeadsPerGroup, HeadSize, Embed)`
+          - `k_proj` / `v_proj`: `(KVHeads, HeadSize, Embed)`
+          - `o_proj`: `(Embed, Heads, HeadSize)`
+      - alternating fast-bootstrap path:
+        - loads exported HF safetensors from `policy_0001`
+        - those linears were flattened for torch export:
+          - `q_proj`: `(4096, 4096)`
+          - `k_proj` / `v_proj`: `(1024, 4096)`
+          - `o_proj`: `(4096, 4096)`
+    - the existing transpose map in `MODEL_TRANSPOSE_KEYS` is correct for the
+      live Levanter-shaped tensors used by async RL, but not for the flattened
+      HF export tensors used by bootstrap:
+      - `q_proj` / `k_proj` / `v_proj`: `(2, 0, 1)`
+      - `o_proj`: `(1, 2, 0)`
+    - consequence:
+      - bootstrap was reusing the async/live converter on the wrong input
+        format
+      - `transfer_state_with_mappings(...)` then tried to apply a 3D transpose
+        to a 2D exported tensor and failed exactly as observed
+  - Local evidence:
+    - confirmed against recovered `retry6` export:
+      - `model.layers.0.self_attn.q_proj.weight`: `(4096, 4096)`
+      - `model.layers.0.self_attn.k_proj.weight`: `(1024, 4096)`
+      - `model.layers.0.self_attn.v_proj.weight`: `(1024, 4096)`
+      - `model.layers.0.self_attn.o_proj.weight`: `(4096, 4096)`
+    - scanned the full exported checkpoint against the current conversion +
+      transpose contract:
+      - `128` mismatches found
+      - this is all `32` layers times the `4` attention projection weights
+      - therefore the bug is systematic, not a one-off tensor
+  - Code change in progress:
+    - split the conversion paths explicitly:
+      - keep the existing live Levanter -> NNX conversion for async RL
+      - add a dedicated torch/HF-export -> Levanter-shaped conversion step for
+        fast bootstrap before calling the existing NNX adapter
+    - regression coverage added locally:
+      - exported attention weights now round-trip back to the original
+        Levanter-shaped tensors
+      - bootstrap now proves it hands grouped/padded 3D attention tensors to
+        `sync_weights(...)` instead of the flattened 2D export tensors
+  - Local validation:
+    - `uv run pytest tests/rl/test_inference_ctx.py -o addopts=`
+      - result: `14 passed`
+    - `./infra/pre-commit.py --all-files --fix`
+      - result: `OK`
+  - Next:
+    - push the conversion split to the TPU image
+    - rerun phase-1 `prepare-sampling` on the recovered single-host `retry6`
+      state with the same `v5p-8` and `gpu_memory_utilization=0.92`
 
 ## Next Experiments After Phase-1 Fast-Bootstrap Transpose Failure
 
@@ -2320,3 +2377,145 @@ uv run python experiments/alternating_rl_math500.py controller \
     - multi-host input sharding / `hax.shard`
     - TPU topology/env
     - export/runtime issues
+
+## 2026-03-21 19:02 UTC — ALT-TPU-002C execution start
+
+- Goal:
+  - rerun phase-1 `prepare-sampling` on the recovered
+    `alt-tpu-002-v5p-retry6` state using the export-shape fix, without
+    relaunching the controller
+- Recovered state:
+  - `config_path=gs://marin-us-east5/alternating-rl/alt-tpu-002-v5p-retry6/state/controller_config.pkl`
+  - `sampling_manifest=gs://marin-us-east5/alternating-rl/alt-tpu-002-v5p-retry6/sampling/phase_0001/manifest.json`
+  - `policy_path=gs://marin-us-east5/alternating-rl/alt-tpu-002-v5p-retry6/policies/policy_0001`
+  - `tpu_name=alt-v5p-probe-001`
+  - `zone=us-east5-a`
+  - `phase_id=1`
+  - `local_tensor_parallel_size=4`
+- Image under test:
+  - `us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:df9805f64343caef47e7ce4c3342a14e2f4a005e71a31de404ad0bf943d21242`
+- Method:
+  - clear stale `marin-alt-sampler` on worker 0
+  - reuse the controller's own `prepare-sampling` command and environment
+  - run foreground on worker 0 so the first post-fix failure or success is
+    visible immediately
+
+## 2026-03-21 18:51 UTC — ALT-TPU-002C prepare-sampling result
+
+- Result:
+  - `prepare-sampling --phase-id 1` completed successfully on
+    `alt-v5p-probe-001` with image
+    `us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:df9805f64343caef47e7ce4c3342a14e2f4a005e71a31de404ad0bf943d21242`
+- Evidence:
+  - the previous `axis 2 is out of bounds for array of dimension 2` failure
+    did not recur
+  - live weight-sync logs showed phase-1 attention projections arriving in
+    reconstructed Levanter geometry:
+    - `k_proj`: `(8, 128, 4096)`
+    - `q_proj`: `(32, 128, 4096)`
+    - `v_proj`: `(8, 128, 4096)`
+    - `o_proj`: `(4096, 32, 128)`
+  - `sampling/phase_0001/manifest.json` now has
+    `frozen_lesson_weights={'math_full': 1.0}`
+  - `curriculum_snapshot_path` exists
+- Next action:
+  - run `sampling-host --phase-id 1 --host-ordinal 0` on the same recovered
+    state to produce `sampling/phase_0001/host_0000/status.json`
+
+## 2026-03-21 18:56 UTC — ALT-TPU-002C complete, ALT-TPU-002D execution start
+
+- `ALT-TPU-002C` result:
+  - `sampling/phase_0001/host_0000/status.json` exists and reports
+    `status=succeeded`
+  - host 0 produced `num_train_groups=4`
+  - a rollout pickle was written under
+    `sampling/phase_0001/host_0000/rollouts/`
+- Interpretation:
+  - the robust export/import fix is now validated on the exact real blocked
+    path, not just in a unit test:
+    - phase-1 fast bootstrap succeeds
+    - phase-1 sampling succeeds
+    - the recovered `retry6` state is usable again
+- `ALT-TPU-002D` method:
+  - update the saved controller config to the fixed image digest
+  - heal `run_state.json` from `failed` back to the correct `sampling`
+    checkpoint for phase 1
+  - resume the normal controller so it performs:
+    - curriculum update
+    - materialization
+    - one remaining training step
+    - export of `policy_0002`
+
+## 2026-03-21 19:12 UTC — ALT-TPU-002D result
+
+- Result:
+  - resumed `alt-tpu-002-v5p-retry6` completed successfully
+  - final durable state:
+    - `run_state.status=completed`
+    - `phase_id=2`
+    - `policy_version=2`
+    - `source_global_step=2`
+  - `policy_0002/manifest.json` exists at
+    `gs://marin-us-east5/alternating-rl/alt-tpu-002-v5p-retry6/policies/policy_0002/manifest.json`
+- What was required:
+  - reconstruct exported HF attention projections back into native Levanter
+    tensor geometry before the existing NNX/vLLM transpose mapping
+  - validate the fix on the exact recovered phase-1 bootstrap path
+  - heal the saved controller config and `run_state.json` to resume from the
+    completed phase-1 sampling point under the fixed image digest
+- Phase-1 timings from durable metrics:
+  - `curriculum_update_seconds=1.81`
+  - `materialization_seconds=51.24`
+  - `training_seconds=210.77`
+  - `export_seconds=434.27`
+- Key artifacts:
+  - phase-1 sampling host status:
+    `gs://marin-us-east5/alternating-rl/alt-tpu-002-v5p-retry6/sampling/phase_0001/host_0000/status.json`
+  - phase-1 materialized batch:
+    `gs://marin-us-east5/alternating-rl/alt-tpu-002-v5p-retry6/materialized/phase_0001/batches/batch_000000.pkl`
+  - final Levanter checkpoint:
+    `gs://marin-us-east5/alternating-rl/alt-tpu-002-v5p-retry6/levanter_checkpoints/alt-tpu-002-v5p-retry6-alternating-train/step-2`
+- Interpretation:
+  - the blocker was not TPU memory at `0.92`; it was the export/import
+    contract mismatch between flattened HF attention tensors and the live
+    Levanter-to-vLLM sync path
+  - once that contract was fixed, the full single-host two-phase `v5p-8` run
+    completed end-to-end
+- Next step:
+  - promote this fix and use it as the new baseline before moving on to the
+    planned minimal multi-host validation in `ALT-TPU-003`
+
+## 2026-03-21 19:21 UTC — Command record for `ALT-TPU-002C` / `ALT-TPU-002D`
+
+- Fixed image digest used for all TPU revalidation and resume steps:
+  - `us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:df9805f64343caef47e7ce4c3342a14e2f4a005e71a31de404ad0bf943d21242`
+- Exact phase entrypoints exercised against the recovered `retry6` state:
+  - `prepare-sampling --config-path gs://marin-us-east5/alternating-rl/alt-tpu-002-v5p-retry6/state/controller_config.pkl --phase-id 1`
+  - `sampling-host --config-path gs://marin-us-east5/alternating-rl/alt-tpu-002-v5p-retry6/state/controller_config.pkl --phase-id 1 --host-ordinal 0`
+- Controller resume command:
+  - local `uv run python` invoking
+    `run_controller(read_pickle("gs://marin-us-east5/alternating-rl/alt-tpu-002-v5p-retry6/state/controller_config.pkl"), ExistingPodPhaseHooks())`
+- State-heal details before controller resume:
+  - updated `controller_config.pkl` in place to the fixed image digest
+  - rewrote `run_state.json` from:
+    - `status=failed`
+    - `phase_id=1`
+    - `policy_version=1`
+  - to:
+    - `status=sampling`
+    - `phase_id=1`
+    - `policy_version=1`
+    - `current_sampling_manifest=gs://marin-us-east5/alternating-rl/alt-tpu-002-v5p-retry6/sampling/phase_0001/manifest.json`
+    - `current_materialized_manifest=None`
+- Resume behavior observed:
+  - controller reused the completed phase-1 sampling artifacts
+  - controller wrote
+    `materialized/phase_0001/manifest.json`
+  - controller resumed Levanter training from
+    `levanter_checkpoints/alt-tpu-002-v5p-retry6-alternating-train/step-1`
+  - controller saved `step-2` and exported `policy_0002`
+- Operational note:
+  - an attempted backup path built with `PurePosixPath` normalized
+    `gs://...` incorrectly to a local `./gs:/...` scratch path
+  - that local scratch directory was removed immediately
+  - no durable backup artifact from that attempt should be relied on

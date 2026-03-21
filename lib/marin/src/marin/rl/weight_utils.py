@@ -1,6 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
+from typing import Any
+
 import jax
 from flax import nnx
 import jax.numpy as jnp
@@ -17,6 +20,148 @@ def _get_nnx_key_name(split_key: list[str]) -> str:
     if split_key[-1] == "bias":
         key_name = f"{key_name}_bias"
     return key_name
+
+
+@dataclass(frozen=True)
+class AttentionTensorGeometry:
+    hidden_size: int
+    num_attention_heads: int
+    num_key_value_heads: int
+    head_dim: int
+
+    @property
+    def q_heads_per_group(self) -> int:
+        return self.num_attention_heads // self.num_key_value_heads
+
+
+def _attention_tensor_geometry(hf_config: Any) -> AttentionTensorGeometry:
+    hidden_size = int(hf_config.hidden_size)
+    num_attention_heads = int(hf_config.num_attention_heads)
+    num_key_value_heads = int(getattr(hf_config, "num_key_value_heads", num_attention_heads))
+    head_dim = int(getattr(hf_config, "head_dim", hidden_size // num_attention_heads))
+
+    if num_attention_heads % num_key_value_heads != 0:
+        raise ValueError(
+            "num_attention_heads must be divisible by num_key_value_heads: "
+            f"{num_attention_heads} % {num_key_value_heads} != 0"
+        )
+
+    return AttentionTensorGeometry(
+        hidden_size=hidden_size,
+        num_attention_heads=num_attention_heads,
+        num_key_value_heads=num_key_value_heads,
+        head_dim=head_dim,
+    )
+
+
+def _reshape_torch_compatible_attention_tensor(key: str, value, geometry: AttentionTensorGeometry):
+    split_key = key.split(".")
+    split_key_without_leaf = split_key[:-1]
+    if "self_attn" not in split_key_without_leaf:
+        return value
+
+    param_name = split_key[-2]
+    is_bias = split_key[-1] == "bias"
+
+    q_weight_shape = (
+        geometry.num_attention_heads * geometry.head_dim,
+        geometry.hidden_size,
+    )
+    q_grouped_shape = (
+        geometry.num_key_value_heads,
+        geometry.q_heads_per_group,
+        geometry.head_dim,
+        geometry.hidden_size,
+    )
+    q_bias_shape = (geometry.num_attention_heads * geometry.head_dim,)
+    q_grouped_bias_shape = (
+        geometry.num_key_value_heads,
+        geometry.q_heads_per_group,
+        geometry.head_dim,
+    )
+    kv_weight_shape = (
+        geometry.num_key_value_heads * geometry.head_dim,
+        geometry.hidden_size,
+    )
+    kv_grouped_shape = (
+        geometry.num_key_value_heads,
+        geometry.head_dim,
+        geometry.hidden_size,
+    )
+    kv_bias_shape = (geometry.num_key_value_heads * geometry.head_dim,)
+    kv_grouped_bias_shape = (
+        geometry.num_key_value_heads,
+        geometry.head_dim,
+    )
+    o_weight_shape = (
+        geometry.hidden_size,
+        geometry.num_attention_heads * geometry.head_dim,
+    )
+    o_grouped_shape = (
+        geometry.hidden_size,
+        geometry.num_attention_heads,
+        geometry.head_dim,
+    )
+
+    shape = tuple(value.shape)
+
+    if param_name == "q_proj":
+        if is_bias:
+            if shape == q_bias_shape:
+                return value.reshape(q_grouped_bias_shape)
+            if shape == (geometry.num_attention_heads, geometry.head_dim):
+                return value.reshape(q_grouped_bias_shape)
+            if shape == q_grouped_bias_shape:
+                return value
+            raise ValueError(
+                f"Unsupported q_proj bias shape for {key}: {shape}; expected one of "
+                f"{q_bias_shape}, {(geometry.num_attention_heads, geometry.head_dim)}, {q_grouped_bias_shape}"
+            )
+
+        if shape == q_weight_shape:
+            return value.reshape(q_grouped_shape)
+        if shape == (geometry.num_attention_heads, geometry.head_dim, geometry.hidden_size):
+            return value.reshape(q_grouped_shape)
+        if shape == q_grouped_shape:
+            return value
+        raise ValueError(
+            f"Unsupported q_proj weight shape for {key}: {shape}; expected one of "
+            f"{q_weight_shape}, "
+            f"{(geometry.num_attention_heads, geometry.head_dim, geometry.hidden_size)}, "
+            f"{q_grouped_shape}"
+        )
+
+    if param_name in {"k_proj", "v_proj"}:
+        if is_bias:
+            if shape == kv_bias_shape:
+                return value.reshape(kv_grouped_bias_shape)
+            if shape == kv_grouped_bias_shape:
+                return value
+            raise ValueError(
+                f"Unsupported {param_name} bias shape for {key}: {shape}; expected one of "
+                f"{kv_bias_shape}, {kv_grouped_bias_shape}"
+            )
+
+        if shape == kv_weight_shape:
+            return value.reshape(kv_grouped_shape)
+        if shape == kv_grouped_shape:
+            return value
+        raise ValueError(
+            f"Unsupported {param_name} weight shape for {key}: {shape}; expected one of "
+            f"{kv_weight_shape}, {kv_grouped_shape}"
+        )
+
+    if param_name == "o_proj" and not is_bias:
+        if shape == o_weight_shape:
+            return value.reshape(o_grouped_shape)
+        if shape == o_grouped_shape:
+            return value
+        raise ValueError(
+            f"Unsupported o_proj weight shape for {key}: {shape}; expected one of "
+            f"{o_weight_shape}, {o_grouped_shape}"
+        )
+
+    return value
 
 
 def levanter_to_nnx_state(levanter_model: LmHeadModel) -> dict:
@@ -133,3 +278,17 @@ def levanter_state_dict_to_nnx_state_on_cpu(state_dict: dict) -> dict:
             current[_get_nnx_key_name(split_key)] = nnx.Param(value)
 
         return nnx.State(nested_state_dict)
+
+
+def torch_compatible_state_dict_to_levanter_state_dict(state_dict: dict, hf_config: Any) -> dict:
+    """Convert flattened torch/HF export tensors back into Levanter-shaped arrays."""
+
+    geometry = _attention_tensor_geometry(hf_config)
+    converted_state_dict = {}
+
+    with jax.default_device(jax.devices("cpu")[0]):
+        for key, value in state_dict.items():
+            value = jax.numpy.asarray(value)
+            converted_state_dict[key] = _reshape_torch_compatible_attention_tensor(key, value, geometry)
+
+    return converted_state_dict

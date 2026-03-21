@@ -19,8 +19,13 @@ from marin.rl.environments.inference_ctx.vllm import (
     vLLMInferenceContext,
     vLLMInferenceContextConfig,
     VllmSamplingConfig,
+    _bootstrap_weights_into_engine,
     _patch_tpu_inference_llama_nnx_compat,
     coerce_vllm_sampling_config,
+)
+from marin.rl.weight_utils import (
+    levanter_state_dict_to_nnx_state_on_cpu,
+    torch_compatible_state_dict_to_levanter_state_dict,
 )
 
 
@@ -333,6 +338,10 @@ def test_fast_bootstrap_failure_does_not_fall_back_to_base_model(monkeypatch) ->
         "marin.rl.environments.inference_ctx.vllm.shutil.rmtree",
         lambda *args, **kwargs: None,
     )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.AutoConfig.from_pretrained",
+        lambda _: SimpleNamespace(hidden_size=8, num_attention_heads=4, num_key_value_heads=2, head_dim=2),
+    )
 
     def _fake_get_llm_engine(config, model_source=None):
         engine_calls.append((config.enable_fast_bootstrap, config.load_format, model_source))
@@ -348,3 +357,121 @@ def test_fast_bootstrap_failure_does_not_fall_back_to_base_model(monkeypatch) ->
         vLLMInferenceContext._build_llm_with_optional_fast_bootstrap(inference_config)
 
     assert engine_calls == [(True, "dummy", "/tmp/marin-vllm-bootstrap-test")]
+
+
+def test_torch_compatible_state_dict_round_trips_attention_tensors() -> None:
+    hf_config = SimpleNamespace(hidden_size=8, num_attention_heads=4, num_key_value_heads=2, head_dim=2)
+    live_state_dict = {
+        "model.layers.0.self_attn.q_proj.weight": np.arange(2 * 2 * 2 * 8, dtype=np.float32).reshape(2, 2, 2, 8),
+        "model.layers.0.self_attn.q_proj.bias": np.arange(2 * 2 * 2, dtype=np.float32).reshape(2, 2, 2),
+        "model.layers.0.self_attn.k_proj.weight": np.arange(2 * 2 * 8, dtype=np.float32).reshape(2, 2, 8),
+        "model.layers.0.self_attn.k_proj.bias": np.arange(2 * 2, dtype=np.float32).reshape(2, 2),
+        "model.layers.0.self_attn.v_proj.weight": np.arange(2 * 2 * 8, dtype=np.float32).reshape(2, 2, 8) + 1000.0,
+        "model.layers.0.self_attn.v_proj.bias": np.arange(2 * 2, dtype=np.float32).reshape(2, 2) + 100.0,
+        "model.layers.0.self_attn.o_proj.weight": np.arange(8 * 4 * 2, dtype=np.float32).reshape(8, 4, 2),
+    }
+    exported_state_dict = {
+        "model.layers.0.self_attn.q_proj.weight": (
+            live_state_dict["model.layers.0.self_attn.q_proj.weight"].reshape(8, 8)
+        ),
+        "model.layers.0.self_attn.q_proj.bias": live_state_dict["model.layers.0.self_attn.q_proj.bias"].reshape(8),
+        "model.layers.0.self_attn.k_proj.weight": (
+            live_state_dict["model.layers.0.self_attn.k_proj.weight"].reshape(4, 8)
+        ),
+        "model.layers.0.self_attn.k_proj.bias": live_state_dict["model.layers.0.self_attn.k_proj.bias"].reshape(4),
+        "model.layers.0.self_attn.v_proj.weight": (
+            live_state_dict["model.layers.0.self_attn.v_proj.weight"].reshape(4, 8)
+        ),
+        "model.layers.0.self_attn.v_proj.bias": live_state_dict["model.layers.0.self_attn.v_proj.bias"].reshape(4),
+        "model.layers.0.self_attn.o_proj.weight": (
+            live_state_dict["model.layers.0.self_attn.o_proj.weight"].reshape(8, 8)
+        ),
+    }
+
+    recovered_state_dict = torch_compatible_state_dict_to_levanter_state_dict(exported_state_dict, hf_config)
+
+    for key, expected_value in live_state_dict.items():
+        np.testing.assert_array_equal(np.asarray(recovered_state_dict[key]), expected_value)
+
+    expected_nnx_state = levanter_state_dict_to_nnx_state_on_cpu(live_state_dict)
+    recovered_nnx_state = levanter_state_dict_to_nnx_state_on_cpu(recovered_state_dict)
+
+    np.testing.assert_array_equal(
+        np.asarray(expected_nnx_state["model"]["layers"]["0"]["self_attn"]["q_proj"].value),
+        np.asarray(recovered_nnx_state["model"]["layers"]["0"]["self_attn"]["q_proj"].value),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(expected_nnx_state["model"]["layers"]["0"]["self_attn"]["q_proj_bias"].value),
+        np.asarray(recovered_nnx_state["model"]["layers"]["0"]["self_attn"]["q_proj_bias"].value),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(expected_nnx_state["model"]["layers"]["0"]["self_attn"]["k_proj"].value),
+        np.asarray(recovered_nnx_state["model"]["layers"]["0"]["self_attn"]["k_proj"].value),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(expected_nnx_state["model"]["layers"]["0"]["self_attn"]["k_proj_bias"].value),
+        np.asarray(recovered_nnx_state["model"]["layers"]["0"]["self_attn"]["k_proj_bias"].value),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(expected_nnx_state["model"]["layers"]["0"]["self_attn"]["v_proj"].value),
+        np.asarray(recovered_nnx_state["model"]["layers"]["0"]["self_attn"]["v_proj"].value),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(expected_nnx_state["model"]["layers"]["0"]["self_attn"]["v_proj_bias"].value),
+        np.asarray(recovered_nnx_state["model"]["layers"]["0"]["self_attn"]["v_proj_bias"].value),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(expected_nnx_state["model"]["layers"]["0"]["self_attn"]["o_proj"].value),
+        np.asarray(recovered_nnx_state["model"]["layers"]["0"]["self_attn"]["o_proj"].value),
+    )
+
+
+def test_bootstrap_weights_reconstructs_grouped_attention_tensors_before_sync(monkeypatch) -> None:
+    hf_config = SimpleNamespace(hidden_size=8, num_attention_heads=4, num_key_value_heads=2, head_dim=2)
+    exported_state_dict = {
+        "model.layers.0.self_attn.q_proj.weight": np.arange(8 * 8, dtype=np.float32).reshape(8, 8),
+        "model.layers.0.self_attn.k_proj.weight": np.arange(4 * 8, dtype=np.float32).reshape(4, 8),
+        "model.layers.0.self_attn.v_proj.weight": np.arange(4 * 8, dtype=np.float32).reshape(4, 8) + 1000.0,
+        "model.layers.0.self_attn.o_proj.weight": np.arange(8 * 8, dtype=np.float32).reshape(8, 8) + 2000.0,
+    }
+    captured = {}
+
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm._load_safetensors_from_remote",
+        lambda _path: exported_state_dict,
+    )
+
+    class FakeDriverWorker:
+        def sync_weights(self, nnx_state, mappings, transpose_keys, reshard_fn):
+            del mappings, transpose_keys, reshard_fn
+            self_attn = nnx_state["model"]["layers"]["0"]["self_attn"]
+            captured["q_proj_shape"] = tuple(self_attn["q_proj"].value.shape)
+            captured["k_proj_shape"] = tuple(self_attn["k_proj"].value.shape)
+            captured["v_proj_shape"] = tuple(self_attn["v_proj"].value.shape)
+            captured["o_proj_shape"] = tuple(self_attn["o_proj"].value.shape)
+
+    class FakeLlmEngine:
+        def __init__(self):
+            self.model_executor = SimpleNamespace(driver_worker=FakeDriverWorker())
+            self.reset_prefix_cache_calls = 0
+
+        def reset_prefix_cache(self):
+            self.reset_prefix_cache_calls += 1
+
+    fake_llm_engine = FakeLlmEngine()
+    fake_llm = SimpleNamespace(llm_engine=fake_llm_engine)
+
+    _bootstrap_weights_into_engine(
+        fake_llm,
+        "meta-llama/Llama-3.1-8B-Instruct",
+        "gs://bucket/policy",
+        hf_config,
+    )
+
+    assert captured == {
+        "q_proj_shape": (4, 128, 8),
+        "k_proj_shape": (2, 128, 8),
+        "v_proj_shape": (2, 128, 8),
+        "o_proj_shape": (8, 4, 128),
+    }
+    assert fake_llm_engine.reset_prefix_cache_calls == 1
