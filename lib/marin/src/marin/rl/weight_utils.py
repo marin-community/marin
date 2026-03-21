@@ -4,10 +4,16 @@
 from dataclasses import dataclass
 from typing import Any
 
+import equinox as eqx
+from haliax import Axis
+from haliax.state_dict import to_numpy_state_dict
 import jax
 from flax import nnx
 import jax.numpy as jnp
+from levanter.checkpoint import load_checkpoint
 from levanter.models.lm_model import LmHeadModel
+from levanter.utils.jax_utils import local_cpu_mesh
+from transformers import AutoTokenizer
 
 
 def _get_nnx_key_name(split_key: list[str]) -> str:
@@ -292,3 +298,24 @@ def torch_compatible_state_dict_to_levanter_state_dict(state_dict: dict, hf_conf
             converted_state_dict[key] = _reshape_torch_compatible_attention_tensor(key, value, geometry)
 
     return converted_state_dict
+
+
+def load_levanter_checkpoint_state_dict_on_cpu(
+    checkpoint_path: str,
+    *,
+    model_config: Any,
+    tokenizer_name: str,
+    vocab_size: int | None,
+) -> dict[str, Any]:
+    """Load a Levanter checkpoint and return a flat CPU state dict."""
+
+    if vocab_size is None:
+        vocab_size = len(AutoTokenizer.from_pretrained(tokenizer_name))
+
+    vocab_axis = Axis("vocab", int(vocab_size))
+    model_key = jax.random.PRNGKey(0)
+
+    with local_cpu_mesh():
+        model = eqx.filter_eval_shape(model_config.build, vocab_axis, key=model_key)
+        model = load_checkpoint(model, checkpoint_path, subpath="model")
+        return to_numpy_state_dict(model)

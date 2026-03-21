@@ -29,6 +29,7 @@ from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenL
 from levanter.models.lm_model import LmHeadModel
 from transformers import AutoConfig, AutoTokenizer
 from marin.rl.weight_utils import (
+    load_levanter_checkpoint_state_dict_on_cpu,
     levanter_state_dict_to_nnx_state_on_cpu,
     torch_compatible_state_dict_to_levanter_state_dict,
 )
@@ -144,6 +145,10 @@ class vLLMInferenceContextConfig:
     enforce_eager: bool = True
     enable_fast_bootstrap: bool = False
     bootstrap_checkpoint_path: str | None = None
+    bootstrap_checkpoint_format: str = "hf_export"
+    bootstrap_levanter_model_config: Any | None = None
+    bootstrap_tokenizer_name: str | None = None
+    bootstrap_vocab_size: int | None = None
 
 
 class vLLMInferenceContext(BaseInferenceContext):
@@ -252,23 +257,43 @@ class vLLMInferenceContext(BaseInferenceContext):
                 "Alternating RL cannot fall back to the base model without changing policy weights."
             )
 
-        if not _is_object_store_path(bootstrap_checkpoint_path):
-            raise ValueError(
-                "Fast bootstrap requested with a non-object-store checkpoint path: " f"{bootstrap_checkpoint_path!r}"
-            )
-
+        bootstrap_format = inference_config.bootstrap_checkpoint_format
         bootstrap_local_dir = None
         try:
-            bootstrap_local_dir = _stage_bootstrap_metadata(bootstrap_checkpoint_path)
             bootstrap_config = dataclasses.replace(inference_config, load_format="dummy")
-            llm = cls._get_llm_engine(bootstrap_config, model_source=bootstrap_local_dir)
-            checkpoint_hf_config = AutoConfig.from_pretrained(bootstrap_local_dir)
-            _bootstrap_weights_into_engine(
-                llm,
-                inference_config.model_name,
-                bootstrap_checkpoint_path,
-                checkpoint_hf_config,
-            )
+            if bootstrap_format == "hf_export":
+                if not _is_object_store_path(bootstrap_checkpoint_path):
+                    raise ValueError(
+                        "HF-export fast bootstrap requires an object-store checkpoint path: "
+                        f"{bootstrap_checkpoint_path!r}"
+                    )
+
+                bootstrap_local_dir = _stage_bootstrap_metadata(bootstrap_checkpoint_path)
+                llm = cls._get_llm_engine(bootstrap_config, model_source=bootstrap_local_dir)
+                checkpoint_hf_config = AutoConfig.from_pretrained(bootstrap_local_dir)
+                _bootstrap_weights_into_engine(
+                    llm,
+                    inference_config.model_name,
+                    bootstrap_checkpoint_path,
+                    checkpoint_hf_config,
+                )
+            elif bootstrap_format == "levanter_checkpoint":
+                if inference_config.bootstrap_levanter_model_config is None:
+                    raise ValueError(
+                        "Checkpoint-native fast bootstrap requires bootstrap_levanter_model_config to be set"
+                    )
+                tokenizer_name = inference_config.bootstrap_tokenizer_name or inference_config.model_name
+                llm = cls._get_llm_engine(bootstrap_config, model_source=inference_config.model_name)
+                _bootstrap_levanter_checkpoint_into_engine(
+                    llm,
+                    inference_config.model_name,
+                    bootstrap_checkpoint_path,
+                    model_config=inference_config.bootstrap_levanter_model_config,
+                    tokenizer_name=tokenizer_name,
+                    vocab_size=inference_config.bootstrap_vocab_size,
+                )
+            else:
+                raise ValueError(f"Unsupported fast bootstrap format: {bootstrap_format!r}")
             logger.info(
                 "Fast bootstrap completed for model %s from %s", inference_config.model_name, bootstrap_checkpoint_path
             )
@@ -433,28 +458,12 @@ class vLLMInferenceContext(BaseInferenceContext):
         )
 
     def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> LmHeadModel | None:
-        t0 = time.time()
-        logger.info("reload_model: starting prefix cache reset")
-        # Reset prefix cache before syncing weights to free up memory
-        self.llm.llm_engine.reset_prefix_cache()
-        gc.collect()
-
-        # TODO(chris): levanter to vllm state dict
-        logger.info("reload_model: converting state dict")
-        nnx_state = levanter_state_dict_to_nnx_state_on_cpu(state_dict)
-        t1 = time.time()
-        logger.info("reload_model: calling sync_weights (%d params, %.1fs so far)", len(nnx_state), t1 - t0)
-        self.llm.llm_engine.model_executor.driver_worker.sync_weights(
-            nnx_state,
-            mappings=MODEL_MAPPINGS[self.model_name],
-            transpose_keys=MODEL_TRANSPOSE_KEYS[self.model_name],
-            reshard_fn=None,
+        _sync_levanter_state_dict_into_engine(
+            self.llm,
+            self.model_name,
+            state_dict,
+            reset_cache_before_sync=True,
         )
-        t2 = time.time()
-        logger.info("reload_model: sync_weights done in %.1fs, resetting prefix cache", t2 - t1)
-
-        self.llm.llm_engine.reset_prefix_cache()  # Reset prefix cache because of new weights
-        logger.info("reload_model: complete in %.1fs", time.time() - t0)
         return model
 
     def start_server(self, model: LmHeadModel) -> None:
@@ -621,17 +630,26 @@ def _serialize_state_dict_for_rpc(state_dict: dict[str, np.ndarray]) -> dict:
     return serialized
 
 
-def _bootstrap_weights_into_engine(
-    llm: object, model_name: str, checkpoint_path: str, checkpoint_hf_config: Any
+def _sync_levanter_state_dict_into_engine(
+    llm: object,
+    model_name: str,
+    state_dict: dict[str, Any],
+    *,
+    reset_cache_before_sync: bool,
 ) -> None:
     if model_name not in MODEL_MAPPINGS or model_name not in MODEL_TRANSPOSE_KEYS:
         raise ValueError(f"No vLLM weight mapping found for model {model_name!r}")
 
-    state_dict = _load_safetensors_from_remote(checkpoint_path)
-    state_dict = torch_compatible_state_dict_to_levanter_state_dict(state_dict, checkpoint_hf_config)
-    nnx_state = levanter_state_dict_to_nnx_state_on_cpu(state_dict)
-
     llm_engine = getattr(llm, "llm_engine", None)
+    if llm_engine is not None and reset_cache_before_sync:
+        logger.info("sync_weights: resetting prefix cache before sync")
+        llm_engine.reset_prefix_cache()
+        gc.collect()
+
+    logger.info("sync_weights: converting state dict")
+    nnx_state = levanter_state_dict_to_nnx_state_on_cpu(state_dict)
+    logger.info("sync_weights: converted %d top-level params", len(nnx_state))
+
     if llm_engine is not None:
         sync_weights = getattr(llm_engine.model_executor.driver_worker, "sync_weights", None)
         if not callable(sync_weights):
@@ -655,3 +673,29 @@ def _bootstrap_weights_into_engine(
         return
 
     raise RuntimeError("Unsupported vLLM engine type for fast bootstrap weight injection")
+
+
+def _bootstrap_weights_into_engine(
+    llm: object, model_name: str, checkpoint_path: str, checkpoint_hf_config: Any
+) -> None:
+    state_dict = _load_safetensors_from_remote(checkpoint_path)
+    state_dict = torch_compatible_state_dict_to_levanter_state_dict(state_dict, checkpoint_hf_config)
+    _sync_levanter_state_dict_into_engine(llm, model_name, state_dict, reset_cache_before_sync=False)
+
+
+def _bootstrap_levanter_checkpoint_into_engine(
+    llm: object,
+    model_name: str,
+    checkpoint_path: str,
+    *,
+    model_config: Any,
+    tokenizer_name: str,
+    vocab_size: int | None,
+) -> None:
+    state_dict = load_levanter_checkpoint_state_dict_on_cpu(
+        checkpoint_path,
+        model_config=model_config,
+        tokenizer_name=tokenizer_name,
+        vocab_size=vocab_size,
+    )
+    _sync_levanter_state_dict_into_engine(llm, model_name, state_dict, reset_cache_before_sync=False)

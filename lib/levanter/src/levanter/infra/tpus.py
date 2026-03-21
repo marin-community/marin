@@ -130,8 +130,11 @@ def _wait_for_queued_resource_absent(tpu_name: str, zone: str) -> None:
 
 
 def start_tpu_vm_queued_resources(tpu_name, *, tpu_type, capacity_type, version, zone, node_count):
-    # ensure alpha is enabled
-    run_command("gcloud", "components", "install", "alpha", "--quiet")
+    # ensure alpha is enabled (best-effort; may fail on managed installs like homebrew)
+    try:
+        run_command("gcloud", "components", "install", "alpha", "--quiet")
+    except RuntimeError:
+        pass
     if version is None:
         version = "tpu-ubuntu2204-base"
     tpu_stat = describe_tpu_queued_resource(tpu_name, zone)

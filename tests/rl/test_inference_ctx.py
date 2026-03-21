@@ -359,6 +359,51 @@ def test_fast_bootstrap_failure_does_not_fall_back_to_base_model(monkeypatch) ->
     assert engine_calls == [(True, "dummy", "/tmp/marin-vllm-bootstrap-test")]
 
 
+def test_checkpoint_native_fast_bootstrap_uses_levanter_checkpoint_loader(monkeypatch) -> None:
+    inference_config = vLLMInferenceContextConfig(
+        model_name="meta-llama/Llama-3.1-8B-Instruct",
+        max_model_len=128,
+        tensor_parallel_size=4,
+        gpu_memory_utilization=0.94,
+        sampling_params=VllmSamplingConfig(),
+        enable_fast_bootstrap=True,
+        bootstrap_checkpoint_path="gs://bucket/levanter/step-1",
+        bootstrap_checkpoint_format="levanter_checkpoint",
+        bootstrap_levanter_model_config=SimpleNamespace(name="dummy-model-config"),
+        bootstrap_tokenizer_name="meta-llama/Llama-3.1-8B-Instruct",
+        bootstrap_vocab_size=32000,
+    )
+    engine_calls: list[tuple[bool, str, str | None]] = []
+    bootstrap_calls: list[tuple[object, str, str, object, str, int | None]] = []
+
+    def _fake_get_llm_engine(config, model_source=None):
+        engine_calls.append((config.enable_fast_bootstrap, config.load_format, model_source))
+        return object()
+
+    monkeypatch.setattr(vLLMInferenceContext, "_get_llm_engine", staticmethod(_fake_get_llm_engine))
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm._bootstrap_levanter_checkpoint_into_engine",
+        lambda llm, model_name, checkpoint_path, *, model_config, tokenizer_name, vocab_size: bootstrap_calls.append(
+            (llm, model_name, checkpoint_path, model_config, tokenizer_name, vocab_size)
+        ),
+    )
+
+    result = vLLMInferenceContext._build_llm_with_optional_fast_bootstrap(inference_config)
+
+    assert result is bootstrap_calls[0][0]
+    assert engine_calls == [(True, "dummy", "meta-llama/Llama-3.1-8B-Instruct")]
+    assert bootstrap_calls == [
+        (
+            result,
+            "meta-llama/Llama-3.1-8B-Instruct",
+            "gs://bucket/levanter/step-1",
+            inference_config.bootstrap_levanter_model_config,
+            "meta-llama/Llama-3.1-8B-Instruct",
+            32000,
+        )
+    ]
+
+
 def test_torch_compatible_state_dict_round_trips_attention_tensors() -> None:
     hf_config = SimpleNamespace(hidden_size=8, num_attention_heads=4, num_key_value_heads=2, head_dim=2)
     live_state_dict = {

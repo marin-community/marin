@@ -17,8 +17,6 @@ import levanter
 from levanter.utils.fsspec_utils import exists
 from haliax import Axis
 from levanter.checkpoint import discover_latest_checkpoint
-from levanter.main.export_lm_to_hf import ConvertLmConfig
-from levanter.main import export_lm_to_hf
 from levanter.trainer import Trainer
 from levanter.utils.jax_utils import barrier_sync
 from iris.marin_fs import url_to_fs
@@ -31,6 +29,7 @@ from marin.rl.alternating.state import (
     AlternatingRunState,
     MaterializedBatchesManifest,
     PhaseMetricsManifest,
+    PolicyBootstrapFormat,
     PolicyManifest,
     RunStatus,
     update_phase_metrics,
@@ -252,7 +251,7 @@ def _log_phase_metrics_to_tracker(
     logger.info("alternating phase metrics: %s", metrics)
 
 
-def _export_policy(
+def _publish_policy_manifest(
     config: AlternatingRLConfig,
     paths: AlternatingRunPaths,
     *,
@@ -260,20 +259,8 @@ def _export_policy(
     source_global_step: int,
     policy_version: int,
     checkpoint_path: str,
-    trainer_config,
 ) -> str:
-    export_dir = paths.policy_dir(policy_version)
-    convert_config = ConvertLmConfig(
-        trainer=trainer_config,
-        checkpoint_path=checkpoint_path,
-        output_dir=export_dir,
-        model=config.model,
-        tokenizer=config.tokenizer_name,
-        use_cpu=True,
-    )
-
     if jax.process_index() == 0:
-        export_lm_to_hf.main(convert_config)
         policy_manifest_path = paths.policy_manifest_path(policy_version)
         write_policy_manifest(
             policy_manifest_path,
@@ -281,12 +268,13 @@ def _export_policy(
                 policy_version=policy_version,
                 phase_id=phase_id,
                 source_global_step=source_global_step,
-                policy_path=export_dir,
+                policy_path=checkpoint_path,
                 levanter_checkpoint_path=checkpoint_path,
                 model_name=config.inference.model_name,
                 tokenizer_name=config.tokenizer_name,
                 enable_fast_bootstrap=True,
                 created_at=utc_now_iso(),
+                bootstrap_format=PolicyBootstrapFormat.LEVANTER_CHECKPOINT,
             ),
         )
     barrier_sync()
@@ -299,7 +287,7 @@ def export_policy_only(
     state: AlternatingRunState,
     manifest: MaterializedBatchesManifest,
 ) -> str:
-    """Export the next policy from an already-completed training checkpoint."""
+    """Publish the next policy manifest from an already-completed training checkpoint."""
 
     def _recover_run_state(checkpoint_path: str | None) -> None:
         if jax.process_index() != 0:
@@ -334,19 +322,18 @@ def export_policy_only(
     checkpoint_step = _checkpoint_step(latest_checkpoint)
     if checkpoint_step != target_step:
         raise ValueError(
-            "export-only recovery refuses to export from an unexpected checkpoint step: "
+            "export-only recovery refuses to publish from an unexpected checkpoint step: "
             f"have={checkpoint_step}, expected={target_step}"
         )
 
     export_start = time.time()
-    policy_manifest_path = _export_policy(
+    policy_manifest_path = _publish_policy_manifest(
         config,
         paths,
         phase_id=state.phase_id,
         source_global_step=target_step,
         policy_version=manifest.policy_version + 1,
         checkpoint_path=latest_checkpoint,
-        trainer_config=trainer_config,
     )
     phase_metrics = update_phase_metrics(
         paths.phase_metrics_path(state.phase_id),
@@ -425,14 +412,13 @@ def run_training_phase(
     )
 
     export_start = time.time()
-    policy_manifest_path = _export_policy(
+    policy_manifest_path = _publish_policy_manifest(
         config,
         paths,
         phase_id=state.phase_id,
         source_global_step=target_step,
         policy_version=manifest.policy_version + 1,
         checkpoint_path=latest_checkpoint,
-        trainer_config=trainer_config,
     )
     phase_metrics = update_phase_metrics(
         paths.phase_metrics_path(state.phase_id),

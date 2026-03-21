@@ -282,6 +282,63 @@ Evidence needed:
 
 ---
 
+## ALT-TPU-003: Multi-host one-phase validation (v5p-16, 2 hosts)
+
+- Date: 2026-03-21
+- Owner: ahmed (claude-signal session)
+- Goal: First proof that alternating RL works on a real two-host pod
+- TPU: v5p-16, us-east5-a, spot, 2 hosts
+- Image: us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:82a2241672915dd7455cb1f1ca8b9606b4ca2aa8e2f905b40efc4d6110722198
+- Code revision: coalloc-rl branch, commit `9360dfc53`
+- Config: steps_per_phase=1, num_train_steps=1, num_hosts=2, TP=4, train_batch_size=64
+- Success criteria:
+  - One full multi-host phase completes (sampling on 2 hosts → materialization → multi-host training → export)
+  - policy_0001/manifest.json written
+  - No sharding or step consistency errors
+
+### Status: IN PROGRESS
+
+- Attempt 1 failed before TPU creation: `train_batch_size=64` not divisible by `per_device_parallelism(16) × num_hosts(2) × TP(4) = 128`. Minimum batch size for 2-host v5p-16 is 128.
+- Attempt 2 failed: `gcloud components install alpha` errors on homebrew-managed gcloud. Fixed by making install best-effort (try/except).
+- Attempt 3 launched with `train_batch_size=128`, `n_prompts=8`, gcloud fix. Creating spot v5p-16.
+- 2026-03-21T22:12Z: TPU `alt-tpu-003` status = WAITING_FOR_RESOURCES. Waiting for spot v5p-16 capacity in us-east5-a.
+- 2026-03-21T22:15Z: Cancelled v5p-16 request. Switching to existing v6e-16 TPU `vllm-ray-multihost-v6e16-use1d` in us-east1-d (4 hosts, already ACTIVE). Cleaned all Docker containers on it.
+- 2026-03-21T22:17Z: Building image with latest Codex changes included. Pushing to us-east1 registry. v6e-16 has 4 workers (not 2), so this tests 4-host alternating RL.
+- 2026-03-21T22:35Z: Image pushed to us-east1: `us-east1-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed:alt-rl-1774132138` (sha256:b5b01dc4396904fb0a0088e119fa71b0bea9420bb69b0f6a41042449abd54b64)
+- 2026-03-21T22:36Z: Launched ALT-TPU-003 on existing v6e-16 (`vllm-ray-multihost-v6e16-use1d`, us-east1-d, 4 hosts). Config: train_batch_size=256, n_prompts=16, num_hosts=4. GCS: gs://marin-us-east1/alternating-rl/alt-tpu-003-v6e16/
+- 2026-03-21T22:39Z: Bootstrap complete. run_state: status=sampling, num_hosts=4, phase_id=0. 4-host sampling in progress on v6e-16.
+- 2026-03-21T22:45Z: All 4 hosts completed sampling successfully! Host status files written for hosts 0-3.
+  - prepare_sampling: 160.7s, sampling: 165.7s, curriculum_update: 2.0s
+- 2026-03-21T22:46Z: Failed during materialization. `max_tokens=768` error. First run left stale `marin-alt-materializer` container on worker 0.
+- 2026-03-21T22:50Z: Retry with `--max-output-tokens 512` also showed `max_tokens=768` — stale container from first run was still present (name conflict). Controller didn't clean it before reuse.
+- 2026-03-21T22:57Z: Manually cleaned all containers on all 4 workers. Cleaned GCS. Relaunched with fully clean state. Pickled config verified: `curriculum.max_seq_len=1024`.
+- 2026-03-21T23:01Z: 4-host sampling succeeded again (66s prepare, 99s sampling). Reached materializing status.
+- 2026-03-21T23:09Z: Materializer hung on `TPU backend initialization is taking more than 60.0 seconds. Did you run your code on all TPU hosts?`. Root cause: materializer runs on worker 0 only but JAX on v6e-16 expects all 4 hosts for distributed init. Materializer is a CPU-only task.
+  - Fix: added `JAX_PLATFORMS=cpu` to materializer container env in runtime.py. Local controller fix, no image rebuild needed.
+- 2026-03-21T23:12Z: Cleaned all containers + GCS. Relaunched with materializer CPU fix.
+- 2026-03-21T23:20Z: BREAKTHROUGH — multi-host training running on v6e-16!
+  - 4-host sampling: 62s + 98s
+  - Materialization: 34.9s (JAX_PLATFORMS=cpu fix worked)
+  - Training: 101s so far on full 4-host Levanter mesh
+  - First multi-host training ever on alternating RL path
+  - Waiting for checkpoint + export to complete phase 0
+- 2026-03-21T23:30Z: Training ran and W&B logged but crashed writing phase metrics. Error: `OSError: The specified key does not exist` from `fs.rm()` in `update_phase_metrics`. Root cause: all 4 hosts run the same training code and all try to write/delete the same phase_metrics JSON on GCS. Race condition — one host deletes the file, another tries to delete it and gets 404.
+  - Fix needed: guard phase metrics write to process_index==0 only, or make the delete-then-write pattern tolerant of 404.
+  - The actual training likely succeeded — the crash is in observability, not the training step itself.
+  - Fix: added `_rm_if_exists` helper in state.py to tolerate 404 on delete during concurrent writes. Rebuilding image.
+- 2026-03-21T23:37Z: Rebuilt image `alt-rl-1774135803` (sha256:685142ed). Cleaned all containers + GCS. Relaunched.
+- 2026-03-21T23:47Z: Metrics race fix worked — training_seconds=135.9s logged successfully. But training container failed with `DEADLINE_EXCEEDED: Barrier timed out. 1/4 tasks reached barrier`. Checkpoint `step-1` exists — training succeeded but post-training barrier sync failed (workers 2,3 timed out).
+  - This is a multi-host synchronization issue in the post-training phase, not a training correctness issue.
+  - Checkpoint is saved, so export-only recovery should work if we can fix the barrier timeout.
+- [ ] TPU provisioned
+- [ ] Sampling phase (2 hosts)
+- [ ] Materialization
+- [ ] Multi-host training
+- [ ] Export
+- [ ] Verify artifacts
+
+---
+
 ## 2026-03-21 Local Milestone
 
 - Status:

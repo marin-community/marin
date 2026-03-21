@@ -15,6 +15,7 @@ from marin.rl.alternating import (
     AlternatingRunPaths,
     AlternatingRunState,
     MaterializedBatchesManifest,
+    PolicyBootstrapFormat,
     PolicyManifest,
     RunStatus,
     read_policy_manifest,
@@ -159,7 +160,6 @@ def test_training_phase_uses_full_run_optimizer_schedule_and_run_specific_checkp
 
     captured_trainer_config = {}
     discovered_paths: list[str] = []
-    exported_checkpoints: list[str] = []
 
     monkeypatch.setattr(
         "marin.rl.alternating.training_phase.levanter.initialize",
@@ -199,14 +199,6 @@ def test_training_phase_uses_full_run_optimizer_schedule_and_run_specific_checkp
         lambda _path: 7,
     )
 
-    def _export_checkpoint(convert_config) -> None:
-        exported_checkpoints.append(convert_config.checkpoint_path)
-
-    monkeypatch.setattr(
-        "marin.rl.alternating.training_phase.export_lm_to_hf.main",
-        _export_checkpoint,
-    )
-
     class FakeTrainer:
         def __init__(self, *, config, optimizer, loss_fn):
             captured_trainer_config["config"] = config
@@ -240,14 +232,15 @@ def test_training_phase_uses_full_run_optimizer_schedule_and_run_specific_checkp
     assert optimizer.calls == [config.quotas.num_train_steps]
     expected_checkpoint_root = f"{paths.levanter_checkpoints_root}/{config.run_id}-alternating-train"
     assert discovered_paths == [expected_checkpoint_root]
-    assert exported_checkpoints == [f"{expected_checkpoint_root}/step-7"]
 
     policy_manifest = read_policy_manifest(policy_manifest_path)
     assert isinstance(policy_manifest, PolicyManifest)
     assert policy_manifest.policy_version == 4
     assert policy_manifest.phase_id == state.phase_id
     assert policy_manifest.source_global_step == 7
+    assert policy_manifest.policy_path == f"{expected_checkpoint_root}/step-7"
     assert policy_manifest.levanter_checkpoint_path == f"{expected_checkpoint_root}/step-7"
+    assert policy_manifest.bootstrap_format == PolicyBootstrapFormat.LEVANTER_CHECKPOINT
 
 
 def test_training_phase_waits_for_checkpoint_visibility_before_export(monkeypatch, tmp_path):
@@ -284,7 +277,6 @@ def test_training_phase_waits_for_checkpoint_visibility_before_export(monkeypatc
     )
     trainer_checkpoint_root = f"{paths.levanter_checkpoints_root}/{config.run_id}-alternating-train"
     metadata_visibility = iter([False, False, True])
-    exported_checkpoints: list[str] = []
 
     monkeypatch.setattr("marin.rl.alternating.training_phase.levanter.initialize", lambda trainer_config: None)
     monkeypatch.setattr(
@@ -303,10 +295,6 @@ def test_training_phase_waits_for_checkpoint_visibility_before_export(monkeypatc
         lambda _path: next(metadata_visibility),
     )
     monkeypatch.setattr("marin.rl.alternating.training_phase.time.sleep", lambda _seconds: None)
-    monkeypatch.setattr(
-        "marin.rl.alternating.training_phase.export_lm_to_hf.main",
-        lambda convert_config: exported_checkpoints.append(convert_config.checkpoint_path),
-    )
 
     class FakeTrainer:
         def __init__(self, *, config, optimizer, loss_fn):
@@ -333,9 +321,10 @@ def test_training_phase_waits_for_checkpoint_visibility_before_export(monkeypatc
 
     policy_manifest_path = run_training_phase(config, paths, state, manifest)
 
-    assert exported_checkpoints == [f"{trainer_checkpoint_root}/step-1"]
     policy_manifest = read_policy_manifest(policy_manifest_path)
+    assert policy_manifest.policy_path == f"{trainer_checkpoint_root}/step-1"
     assert policy_manifest.levanter_checkpoint_path == f"{trainer_checkpoint_root}/step-1"
+    assert policy_manifest.bootstrap_format == PolicyBootstrapFormat.LEVANTER_CHECKPOINT
 
 
 def test_training_phase_sets_distinct_alternating_wandb_run_metadata(monkeypatch, tmp_path):
@@ -396,7 +385,6 @@ def test_training_phase_sets_distinct_alternating_wandb_run_metadata(monkeypatch
     monkeypatch.setattr("marin.rl.alternating.training_phase.jax.process_index", lambda: 0)
     monkeypatch.setattr("marin.rl.alternating.training_phase.discover_latest_checkpoint", lambda _path: None)
     monkeypatch.setattr("marin.rl.alternating.training_phase._checkpoint_metadata_exists", lambda _path: True)
-    monkeypatch.setattr("marin.rl.alternating.training_phase.export_lm_to_hf.main", lambda convert_config: None)
 
     class FakeTracker:
         def log(self, metrics, *, step, commit=None):
@@ -487,7 +475,6 @@ def test_training_phase_installs_async_rl_metric_hooks(monkeypatch, tmp_path):
     monkeypatch.setattr("marin.rl.alternating.training_phase.jax.process_index", lambda: 0)
     monkeypatch.setattr("marin.rl.alternating.training_phase.discover_latest_checkpoint", lambda _path: None)
     monkeypatch.setattr("marin.rl.alternating.training_phase._checkpoint_metadata_exists", lambda _path: True)
-    monkeypatch.setattr("marin.rl.alternating.training_phase.export_lm_to_hf.main", lambda convert_config: None)
 
     def _record_hooks(
         trainer,
@@ -601,7 +588,6 @@ def test_training_phase_finishes_tracker_after_logging_phase_metrics(monkeypatch
     monkeypatch.setattr("marin.rl.alternating.training_phase.jax.process_index", lambda: 0)
     monkeypatch.setattr("marin.rl.alternating.training_phase.discover_latest_checkpoint", lambda _path: None)
     monkeypatch.setattr("marin.rl.alternating.training_phase._checkpoint_metadata_exists", lambda _path: True)
-    monkeypatch.setattr("marin.rl.alternating.training_phase.export_lm_to_hf.main", lambda convert_config: None)
 
     class FakeTracker:
         def log(self, metrics, *, step, commit=None):
@@ -703,8 +689,6 @@ def test_export_only_recovery_writes_policy_manifest_from_latest_checkpoint(monk
             paths.materialized_batch_path(2, 1),
         ],
     )
-    exported_checkpoints: list[str] = []
-
     monkeypatch.setattr(
         "marin.rl.alternating.training_phase.barrier_sync",
         lambda: None,
@@ -722,21 +706,18 @@ def test_export_only_recovery_writes_policy_manifest_from_latest_checkpoint(monk
         lambda _path: 6,
     )
     monkeypatch.setattr(
-        "marin.rl.alternating.training_phase.export_lm_to_hf.main",
-        lambda convert_config: exported_checkpoints.append(convert_config.checkpoint_path),
-    )
-    monkeypatch.setattr(
         "marin.rl.alternating.training_phase.levanter.tracker.log",
         lambda metrics, step: None,
     )
 
     policy_manifest_path = export_policy_only(config, paths, state, manifest)
 
-    assert exported_checkpoints == [f"{paths.levanter_checkpoints_root}/{config.run_id}-alternating-train/step-6"]
     policy_manifest = read_policy_manifest(policy_manifest_path)
     assert policy_manifest.policy_version == 3
     assert policy_manifest.phase_id == state.phase_id
     assert policy_manifest.source_global_step == 6
+    assert policy_manifest.policy_path == f"{paths.levanter_checkpoints_root}/{config.run_id}-alternating-train/step-6"
+    assert policy_manifest.bootstrap_format == PolicyBootstrapFormat.LEVANTER_CHECKPOINT
 
 
 def test_export_policy_only_recovers_failed_run_state(monkeypatch, tmp_path):
@@ -776,7 +757,6 @@ def test_export_policy_only_recovers_failed_run_state(monkeypatch, tmp_path):
         ],
     )
     latest_checkpoint = f"{paths.levanter_checkpoints_root}/{config.run_id}-alternating-train/step-4"
-    export_calls: list[str] = []
 
     monkeypatch.setattr("marin.rl.alternating.training_phase.barrier_sync", lambda: None)
     monkeypatch.setattr("marin.rl.alternating.training_phase.jax.process_index", lambda: 0)
@@ -784,27 +764,20 @@ def test_export_policy_only_recovers_failed_run_state(monkeypatch, tmp_path):
         "marin.rl.alternating.training_phase.discover_latest_checkpoint", lambda _path: latest_checkpoint
     )
     monkeypatch.setattr("marin.rl.alternating.training_phase._checkpoint_step", lambda _path: 4)
-    monkeypatch.setattr(
-        "marin.rl.alternating.training_phase.export_lm_to_hf.main",
-        lambda convert_config: export_calls.append(convert_config.checkpoint_path),
-    )
     monkeypatch.setattr("marin.rl.alternating.training_phase.levanter.tracker.log", lambda metrics, step: None)
 
     policy_manifest_path = export_policy_only(config, paths, state, manifest)
     recovered_state = read_run_state(paths.run_state_path)
 
-    assert export_calls == [latest_checkpoint]
     assert policy_manifest_path == paths.policy_manifest_path(2)
     assert recovered_state.status == RunStatus.TRAINING
     assert recovered_state.current_levanter_checkpoint_path == latest_checkpoint
 
     write_run_state(paths.run_state_path, state)
-    export_calls.clear()
 
     second_manifest_path = export_policy_only(config, paths, state, manifest)
     second_recovered_state = read_run_state(paths.run_state_path)
 
     assert second_manifest_path == policy_manifest_path
-    assert export_calls == []
     assert second_recovered_state.status == RunStatus.TRAINING
     assert second_recovered_state.current_levanter_checkpoint_path == latest_checkpoint

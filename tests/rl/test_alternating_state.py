@@ -18,6 +18,7 @@ from marin.rl.alternating import (
     HostPhaseStatus,
     MaterializedBatchesManifest,
     PhaseMetricsManifest,
+    PolicyBootstrapFormat,
     PolicyManifest,
     RunStatus,
     SamplingHostAssignment,
@@ -273,3 +274,27 @@ def test_phase_metrics_merge_updates_fields_without_dropping_prior_values(tmp_pa
     assert stored.training_seconds == 45.0
     assert stored.export_seconds == 8.0
     assert stored.total_recorded_seconds == 185.5
+
+
+def test_policy_manifest_defaults_bootstrap_format_for_old_payloads(tmp_path):
+    config = _make_config(tmp_path)
+    paths = AlternatingRunPaths.from_config(config)
+    fs, fs_path = url_to_fs(paths.policy_manifest_path(1))
+    fs.makedirs(fs_path.rsplit("/", 1)[0], exist_ok=True)
+    payload = {
+        "policy_version": 1,
+        "phase_id": 0,
+        "source_global_step": 1,
+        "policy_path": paths.policy_dir(1),
+        "levanter_checkpoint_path": f"{paths.levanter_checkpoints_root}/step-1",
+        "model_name": "meta-llama/Llama-3.1-8B-Instruct",
+        "tokenizer_name": "meta-llama/Llama-3.1-8B-Instruct",
+        "enable_fast_bootstrap": True,
+        "created_at": utc_now_iso(),
+    }
+    with fs.open(fs_path, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+
+    manifest = read_policy_manifest(paths.policy_manifest_path(1))
+
+    assert manifest.bootstrap_format == PolicyBootstrapFormat.HF_EXPORT

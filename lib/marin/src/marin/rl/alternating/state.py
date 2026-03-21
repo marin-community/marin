@@ -69,6 +69,13 @@ class HostPhaseStatus(StrEnum):
     FAILED = "failed"
 
 
+class PolicyBootstrapFormat(StrEnum):
+    """How a policy manifest should be interpreted during sampling bootstrap."""
+
+    HF_EXPORT = "hf_export"
+    LEVANTER_CHECKPOINT = "levanter_checkpoint"
+
+
 @dataclass(frozen=True)
 class AlternatingRunPaths:
     """Canonical path layout for one alternating RL run."""
@@ -193,7 +200,7 @@ class AlternatingRunState:
 
 @dataclass(frozen=True)
 class PolicyManifest:
-    """One immutable policy export used by later sampling phases."""
+    """One immutable policy artifact used by later sampling phases."""
 
     policy_version: int
     phase_id: int
@@ -204,6 +211,7 @@ class PolicyManifest:
     tokenizer_name: str
     enable_fast_bootstrap: bool
     created_at: str
+    bootstrap_format: PolicyBootstrapFormat = PolicyBootstrapFormat.HF_EXPORT
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -220,6 +228,7 @@ class PolicyManifest:
             tokenizer_name=data["tokenizer_name"],
             enable_fast_bootstrap=data["enable_fast_bootstrap"],
             created_at=data["created_at"],
+            bootstrap_format=PolicyBootstrapFormat(data.get("bootstrap_format", PolicyBootstrapFormat.HF_EXPORT)),
         )
 
 
@@ -402,16 +411,21 @@ def _ensure_parent_dir(path: str) -> tuple[Any, str]:
     return fs, fs_path
 
 
+def _rm_if_exists(fs: Any, path: str) -> None:
+    try:
+        fs.rm(path)
+    except (FileNotFoundError, OSError):
+        pass
+
+
 def _write_json(path: str, payload: dict[str, Any]) -> None:
     fs, fs_path = _ensure_parent_dir(path)
     tmp_path = f"{fs_path}.tmp"
-    if fs.exists(tmp_path):
-        fs.rm(tmp_path)
+    _rm_if_exists(fs, tmp_path)
     with fs.open(tmp_path, "wt", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
         handle.write("\n")
-    if fs.exists(fs_path):
-        fs.rm(fs_path)
+    _rm_if_exists(fs, fs_path)
     fs.mv(tmp_path, fs_path)
 
 

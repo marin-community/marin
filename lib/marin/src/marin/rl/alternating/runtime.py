@@ -419,6 +419,12 @@ class ExistingPodPhaseHooks(AlternatingPhaseHooks):
             name=SAMPLER_CONTAINER_NAME,
         )
         materialization_start = time.time()
+        materialize_env = _common_phase_env(
+            config,
+            compilation_cache_dir=config.caches.training_compilation_cache_dir,
+        )
+        # Materializer is CPU-only; prevent JAX from attempting multi-host TPU init
+        materialize_env["JAX_PLATFORMS"] = "cpu"
         tpus.run_container_on_worker(
             tpu_name=config.cluster.tpu_name,
             zone=config.cluster.zone,
@@ -426,10 +432,7 @@ class ExistingPodPhaseHooks(AlternatingPhaseHooks):
             worker_ordinal=0,
             full_image_id=config.image_digest,
             command=_phase_command(paths, "materialize", phase_id=state.phase_id),
-            env=_common_phase_env(
-                config,
-                compilation_cache_dir=config.caches.training_compilation_cache_dir,
-            ),
+            env=materialize_env,
             foreground=True,
             name=MATERIALIZER_CONTAINER_NAME,
         )

@@ -21,6 +21,7 @@ from marin.rl.alternating.io import glob_paths
 from marin.rl.alternating.state import (
     AlternatingRunPaths,
     HostPhaseStatus,
+    PolicyBootstrapFormat,
     SamplingHostStatusManifest,
     read_policy_manifest,
     read_sampling_manifest,
@@ -92,6 +93,39 @@ def _policy_metadata(policy_version: int, phase_id: int, source_global_step: int
     )
 
 
+def _sampling_inference_config(config: AlternatingRLConfig, policy_manifest, *, tensor_parallel_size: int):
+    base_config = dataclasses.replace(
+        config.inference,
+        tensor_parallel_size=tensor_parallel_size,
+    )
+
+    if policy_manifest.bootstrap_format == PolicyBootstrapFormat.LEVANTER_CHECKPOINT:
+        checkpoint_path = policy_manifest.levanter_checkpoint_path or policy_manifest.policy_path
+        if checkpoint_path is None:
+            raise ValueError("checkpoint-native policy manifest is missing a checkpoint path")
+
+        return dataclasses.replace(
+            base_config,
+            model_name=policy_manifest.model_name,
+            enable_fast_bootstrap=True,
+            bootstrap_checkpoint_path=checkpoint_path,
+            bootstrap_checkpoint_format=policy_manifest.bootstrap_format.value,
+            bootstrap_levanter_model_config=config.model,
+            bootstrap_tokenizer_name=policy_manifest.tokenizer_name,
+            bootstrap_vocab_size=config.vocab_size,
+        )
+
+    return dataclasses.replace(
+        base_config,
+        model_name=(
+            policy_manifest.policy_path if not policy_manifest.enable_fast_bootstrap else policy_manifest.model_name
+        ),
+        enable_fast_bootstrap=policy_manifest.enable_fast_bootstrap,
+        bootstrap_checkpoint_path=policy_manifest.policy_path if policy_manifest.enable_fast_bootstrap else None,
+        bootstrap_checkpoint_format=policy_manifest.bootstrap_format.value,
+    )
+
+
 def _sample_batch(
     config: AlternatingRLConfig,
     lesson_id: str,
@@ -135,14 +169,10 @@ def prepare_sampling_phase(config: AlternatingRLConfig, paths: AlternatingRunPat
     policy_manifest = read_policy_manifest(manifest.policy_manifest_path)
     topology = local_vllm_topology(config.cluster.tpu_type, manifest.local_tensor_parallel_size)
     apply_local_vllm_topology(topology)
-    inference_config = dataclasses.replace(
-        config.inference,
-        model_name=(
-            policy_manifest.policy_path if not policy_manifest.enable_fast_bootstrap else policy_manifest.model_name
-        ),
+    inference_config = _sampling_inference_config(
+        config,
+        policy_manifest,
         tensor_parallel_size=topology.tensor_parallel_size,
-        enable_fast_bootstrap=policy_manifest.enable_fast_bootstrap,
-        bootstrap_checkpoint_path=policy_manifest.policy_path if policy_manifest.enable_fast_bootstrap else None,
     )
     inference_ctx = create_inference_context("vllm", inference_config, False)
     env_cache: dict[str, object] = {}
@@ -191,14 +221,10 @@ def run_sampling_host(
     assignment = next(item for item in manifest.host_assignments if item.host_ordinal == host_ordinal)
     topology = local_vllm_topology(config.cluster.tpu_type, manifest.local_tensor_parallel_size)
     apply_local_vllm_topology(topology)
-    inference_config = dataclasses.replace(
-        config.inference,
-        model_name=(
-            policy_manifest.policy_path if not policy_manifest.enable_fast_bootstrap else policy_manifest.model_name
-        ),
+    inference_config = _sampling_inference_config(
+        config,
+        policy_manifest,
         tensor_parallel_size=topology.tensor_parallel_size,
-        enable_fast_bootstrap=policy_manifest.enable_fast_bootstrap,
-        bootstrap_checkpoint_path=policy_manifest.policy_path if policy_manifest.enable_fast_bootstrap else None,
     )
     inference_ctx = create_inference_context("vllm", inference_config, False)
     writer = FileRolloutWriter(paths.sampling_host_rollout_dir(phase_id, host_ordinal), max_rollout_files=1_000_000)

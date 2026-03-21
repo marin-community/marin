@@ -3165,3 +3165,406 @@ uv run python experiments/alternating_rl_math500.py controller \
   - if alternating remains only a correctness harness, the important
     optimization target is eliminating full HF export per phase rather than
     trying to make the current export loop production-fast
+
+## 2026-03-21 22:05 UTC — `ALT-TPU-002F` completed: observability verification passed
+
+- Run:
+  - `run_id=alt-tpu-002f-obs`
+  - TPU:
+    - reused existing `alt-v5p-probe-001` in `us-east5-a`
+  - image:
+    - `us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed:alt-rl-1774128928`
+    - `sha256:82a2241672915dd7455cb1f1ca8b9606b4ca2aa8e2f905b40efc4d6110722198`
+- Goal:
+  - verify rebuilt image logs the full async-style trainer metrics in W&B while
+    preserving controller-level alternating visibility
+- Result:
+  - passed
+  - one full single-host phase completed end-to-end with the rebuilt image
+  - durable terminal state:
+    - `status=completed`
+    - `policy_version=1`
+    - `source_global_step=1`
+  - exported artifact present:
+    - `policy_0001/manifest.json`
+  - levanter checkpoint present at:
+    - `step-1`
+- Phase-0 timings:
+  - `prepare_sampling=92.2s`
+  - `sampling=107.1s`
+  - `curriculum_update=1.5s`
+  - `materialization=56.2s`
+  - `training=157.0s`
+  - `export=528.2s`
+  - `phase_total=942.2s` (`~15.7 min`)
+- Observability outcome:
+  - trainer W&B run now shows the async-style trainer metrics as intended,
+    including:
+    - scalar training metrics
+    - throughput metrics
+    - `train/samples` table
+  - controller W&B run remains live and records phase-level alternating metrics
+  - materialization wrote the expected sample-preview sidecar:
+    - `batch_000000_samples.json`
+- Remaining visibility gap:
+  - there is still no live sampler-internal W&B stream from the
+    `prepare-sampling` / `sampling-host` TPU containers
+  - however, the controller run already logs post-phase sampling summaries and
+    timings, including:
+    - expected sampling hosts
+    - succeeded / failed host counts
+    - rollout file counts
+    - sampled train-group counts
+    - phase-level `prepare_sampling_seconds` / `sampling_seconds`
+  - so the remaining gap is specifically:
+    - no live per-prompt / per-request / sampler-throughput telemetry while the
+      sampling container is running
+- Interpretation:
+  - `ALT-TPU-002F` clears the observability gate for alternating training and
+    controller runs
+  - remaining observability work is optional polish, not a blocker for the next
+    correctness experiment
+- Next recommended experiment:
+  - `ALT-TPU-003`
+  - minimal multi-host correctness gate:
+    - `v5p-16`
+    - `2 hosts`
+    - `steps_per_phase=1`
+    - `num_train_steps=1`
+  - success criterion:
+    - one clean multi-host phase completes and writes `policy_0001`
+
+## 2026-03-21 22:21 UTC — Aggressive optimization plan while `ALT-TPU-003` waits
+
+- Current runtime split from `ALT-TPU-002F`:
+  - `prepare_sampling=92.2s`
+  - `sampling=107.1s`
+  - `curriculum_update=1.5s`
+  - `materialization=56.2s`
+  - `training=157.0s`
+  - `export=528.2s`
+  - `phase_total=942.2s`
+- Interpretation:
+  - export is the dominant cost at roughly `56%` of phase wall clock
+  - sampling + materialization together are the secondary target
+  - training step time is not the bottleneck
+- Multi-host status:
+  - `ALT-TPU-003` is being launched separately and is currently blocked on
+    `v5p-16` spot capacity (`WAITING_FOR_RESOURCES`)
+  - do **not** block optimization work on that queue
+  - use the still-active single-host `v5p-8` (`alt-v5p-probe-001`) for speed
+    probes immediately
+
+### Optimization priority order
+
+1. `OPT-1`: remove full HF export from the phase boundary
+  - current contract:
+    - policy manifests point at a policy directory that looks like a full HF
+      pretrained model export
+    - fast bootstrap then stages metadata and loads remote safetensors before
+      converting them back into Levanter geometry and syncing weights
+  - target contract:
+    - policy manifest points at the Levanter checkpoint as the source of truth
+    - bootstrap builds the vLLM engine from static HF metadata and injects
+      weights directly from the Levanter checkpoint
+  - expected benefit:
+    - remove most of the current `528s` export tax
+    - likely the single biggest speedup available in the current architecture
+  - relevant code:
+    - `lib/marin/src/marin/rl/alternating/state.py`
+    - `lib/marin/src/marin/rl/alternating/training_phase.py`
+    - `lib/marin/src/marin/rl/alternating/sampling_phase.py`
+    - `lib/marin/src/marin/rl/environments/inference_ctx/vllm.py`
+    - `lib/levanter/src/levanter/checkpoint.py`
+
+2. `OPT-2`: quick fallback if `OPT-1` is slower to land than expected
+  - keep the current HF export contract, but export the inference artifact in
+    `bf16`
+  - rationale:
+    - the trainer already resumes from the Levanter checkpoint
+    - the exported policy artifact only exists to bootstrap inference
+    - reducing shard bytes should cut both save and upload time
+  - likely win:
+    - materially reduce the current export wall clock without changing the
+      controller contract
+  - relevant code:
+    - `lib/marin/src/marin/rl/alternating/training_phase.py`
+    - `lib/levanter/src/levanter/main/export_lm_to_hf.py`
+    - `lib/levanter/src/levanter/compat/hf_checkpoints.py`
+
+3. `OPT-3`: single-host localize large transient artifacts on the shared TPU
+   Docker volume
+  - observation:
+    - sampler, materializer, and trainer containers already share
+      `/home/levanter` via the Docker volume mount
+    - but alternating still writes rollouts and materialized batches under
+      `run_root` on GCS
+  - idea:
+    - keep only manifests / run state / phase metrics durable on GCS
+    - write large transient payloads locally for single-host probes:
+      - sampling rollouts
+      - materialized batches
+      - possibly local bootstrap artifacts
+  - benefit:
+    - lower GCS bandwidth / listing / serialization tax on the single-host
+      development loop
+  - caveat:
+    - this is a single-host optimization only, not the long-term multi-host
+      contract
+  - relevant code:
+    - `lib/levanter/src/levanter/infra/docker.py`
+    - `lib/marin/src/marin/rl/alternating/state.py`
+    - `lib/marin/src/marin/rl/alternating/sampling_phase.py`
+    - `lib/marin/src/marin/rl/alternating/materialization.py`
+
+4. `OPT-4`: only after boundary cost drops, sweep `steps_per_phase`
+  - `steps_per_phase=1` remains a correctness setting, not a throughput target
+  - once boundary cost is reduced, test at least:
+    - `steps_per_phase in {4, 8, 16}`
+  - goal:
+    - find the first phase size where boundary cost is amortized enough to make
+      alternating economically plausible
+
+### What not to optimize yet
+
+- do not spend time on Arrow for alternating phase handoff
+  - Arrow is the live async path, but alternating kills the trainer before the
+    next sampler starts
+- do not prioritize sampler-side W&B polish ahead of wall-clock improvements
+- do not micro-optimize the train step before the export / handoff tax is cut
+- do not treat multi-host performance tuning as unlocked until `ALT-TPU-004`
+  proves the second multi-host phase boundary
+
+### Recommended immediate execution order
+
+1. prototype `OPT-1` on the single-host `v5p-8`
+2. if `OPT-1` is blocked, immediately fall back to `OPT-2`
+3. follow with `OPT-3` for tighter single-host iteration loops
+4. keep `ALT-TPU-003` queued in parallel; if it acquires resources and passes,
+   run `ALT-TPU-004` before broad multi-host optimization work
+
+## 2026-03-21 22:22 UTC — `OPT-1` started: remove full HF export from phase boundary
+
+- Goal:
+  - make alternating phase handoff bootstrap vLLM directly from the Levanter
+    checkpoint plus static model metadata, instead of exporting a fresh HF
+    safetensors policy artifact every phase
+- Hypothesis:
+  - the current `policy_manifest` contract is too heavyweight:
+    - we export a full HF checkpoint
+    - then fast bootstrap stages HF metadata
+    - then it reloads the exported safetensors
+    - then converts them back into Levanter geometry before syncing weights
+  - for trained alternating phases, the Levanter checkpoint already contains the
+    real source-of-truth weights we need
+- Planned implementation direction:
+  - extend the policy-manifest contract so trained policies can declare a
+    checkpoint-native bootstrap format
+  - teach vLLM bootstrap to:
+    - stage HF metadata from the base model / existing metadata source
+    - read the Levanter checkpoint directly
+    - convert that state dict to NNX / vLLM sync format without the HF
+      round-trip
+  - preserve the existing HF-export path as a fallback until the new path is
+    verified
+- Immediate validation target:
+  - local tests for checkpoint-native bootstrap path
+  - then a single-host `v5p-8` timing probe comparing the new boundary against
+    `ALT-TPU-002F`
+
+## 2026-03-21 22:31 UTC — `OPT-1` landed locally: checkpoint-native policy bootstrap
+
+- Implementation result:
+  - trained alternating phases no longer publish a fresh HF safetensors policy
+    artifact
+  - instead, they now publish a policy manifest that points directly at the
+    Levanter checkpoint and marks the artifact format as
+    `levanter_checkpoint`
+- Core code changes:
+  - added `PolicyBootstrapFormat` to the manifest contract with backward-
+    compatible defaulting for old manifests:
+    - `lib/marin/src/marin/rl/alternating/state.py`
+  - changed training-phase policy publication from full HF export to checkpoint-
+    native manifest publication:
+    - `lib/marin/src/marin/rl/alternating/training_phase.py`
+  - updated sampling-phase inference-config construction so checkpoint-native
+    manifests pass the Levanter model config + checkpoint path into bootstrap:
+    - `lib/marin/src/marin/rl/alternating/sampling_phase.py`
+  - taught vLLM fast bootstrap a second branch:
+    - `hf_export` (old path)
+    - `levanter_checkpoint` (new path)
+    - `lib/marin/src/marin/rl/environments/inference_ctx/vllm.py`
+  - added a CPU-side helper that loads a Levanter checkpoint and converts it to
+    a flat state dict for the existing NNX/vLLM sync path:
+    - `lib/marin/src/marin/rl/weight_utils.py`
+- Important design choice:
+  - the old HF-export bootstrap path remains implemented as a fallback branch
+  - new trained manifests switch to the checkpoint-native path
+  - old manifests without the new field still deserialize as `hf_export`
+- Local validation:
+  - targeted tests passed:
+    - `tests/rl/test_alternating_state.py`
+    - `tests/rl/test_alternating_training_phase.py`
+    - `tests/rl/test_inference_ctx.py`
+  - compile check passed for all touched runtime files
+  - `./infra/pre-commit.py --all-files --fix` passed
+- Next validation run:
+  - single-host `v5p-8` timing probe on `alt-v5p-probe-001`
+  - goal:
+    - prove phase handoff still works end-to-end with checkpoint-native
+      bootstrap
+    - compare new `export_seconds` / phase total against `ALT-TPU-002F`
+  - key success criterion:
+    - no HF export is written
+    - `policy_0001/manifest.json` points at the Levanter checkpoint
+    - phase-0 completes and phase wall clock drops materially from the old
+      `~942s` baseline
+
+## 2026-03-21 22:33 UTC — `OPT-1` hardware validation launch prepared
+
+- Built/pushed image:
+  - tag:
+    - `alt-rl-1774132171-opt1`
+  - digest:
+    - `us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:94aa894cd0d74262cd84146d742315dfa2864492fa8fb3ecc2d40474a6dead01`
+- TPU state before launch:
+  - `alt-v5p-probe-001` remains `ACTIVE` in `us-east5-a`
+  - no live alternating controller process was running locally
+- Planned validation command:
+
+```bash
+uv run python experiments/alternating_rl_math500.py controller \
+  --run-id alt-tpu-opt1-v5p-obs \
+  --shared-root gs://marin-us-east5/alternating-rl \
+  --image us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:94aa894cd0d74262cd84146d742315dfa2864492fa8fb3ecc2d40474a6dead01 \
+  --tpu-name alt-v5p-probe-001 \
+  --tpu-type v5p-8 \
+  --zone us-east5-a \
+  --num-hosts 1 \
+  --local-tensor-parallel-size 4 \
+  --capacity-type spot \
+  --runtime-version v2-alpha-tpuv5 \
+  --steps-per-phase 1 \
+  --num-train-steps 1 \
+  --train-batch-size 64 \
+  --n-prompts 4 \
+  --n-generations-per-prompt 16 \
+  --eval-examples-per-lesson 8 \
+  --max-input-tokens 512 \
+  --max-output-tokens 256 \
+  --inference-gpu-memory-utilization 0.92
+```
+
+## 2026-03-21 22:44 UTC — `OPT-1` hardware result: export tax collapsed on single-host `v5p-8`
+
+- Validation run:
+  - `alt-tpu-opt1-v5p-obs`
+  - TPU:
+    - `alt-v5p-probe-001` in `us-east5-a`
+  - image:
+    - `us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:94aa894cd0d74262cd84146d742315dfa2864492fa8fb3ecc2d40474a6dead01`
+  - config:
+    - `steps_per_phase=1`
+    - `num_train_steps=1`
+    - `num_hosts=1`
+    - `local_tensor_parallel_size=4`
+- Final durable state:
+  - `status=completed`
+  - `phase_id=1`
+  - `policy_version=1`
+  - `source_global_step=1`
+  - `current_policy_manifest_path=gs://marin-us-east5/alternating-rl/alt-tpu-opt1-v5p-obs/policies/policy_0001/manifest.json`
+  - `current_levanter_checkpoint_path=gs://marin-us-east5/alternating-rl/alt-tpu-opt1-v5p-obs/levanter_checkpoints/alt-tpu-opt1-v5p-obs-alternating-train/step-1`
+- Published policy artifact:
+  - `policy_0001/manifest.json` exists
+  - manifest contents confirm checkpoint-native handoff:
+    - `bootstrap_format: "levanter_checkpoint"`
+    - `policy_path == levanter_checkpoint_path == gs://.../step-1`
+    - `enable_fast_bootstrap: true`
+- Phase-0 timings from `state/phase_metrics/phase_0000.json`:
+  - `prepare_sampling_seconds: 90.515`
+  - `sampling_seconds: 106.969`
+  - `curriculum_update_seconds: 1.451`
+  - `materialization_seconds: 51.886`
+  - `training_seconds: 199.917`
+  - `export_seconds: 0.285`
+  - total:
+    - `451.024s`
+- Comparison against `ALT-TPU-002F` baseline:
+  - old total:
+    - `~942s`
+  - new total:
+    - `451s`
+  - phase wall clock improved by about:
+    - `2.09x`
+  - old export:
+    - `~528s`
+  - new export:
+    - `0.285s`
+  - export tax reduction:
+    - effectively eliminated for this phase (`>99.9%`)
+- Interpretation:
+  - `OPT-1` succeeded at its main goal:
+    - trained alternating phases no longer pay the full HF safetensors export tax
+  - the remaining large costs are now:
+    - trainer cold start / base-model load
+    - checkpoint commit latency
+    - sampling + materialization
+- Important caveat:
+  - this run had `num_train_steps=1`, so it proved checkpoint-native policy publication but did **not** yet prove checkpoint-native bootstrap into the next sampling phase
+  - the next required validation is a 2-phase single-host run that actually consumes `policy_0001/manifest.json`
+- Next experiment:
+  - `OPT-1B`
+  - same single-host `v5p-8` on `alt-v5p-probe-001`
+  - `steps_per_phase=1`
+  - `num_train_steps=2`
+  - goals:
+    - prove phase-1 sampling bootstraps correctly from `bootstrap_format=levanter_checkpoint`
+    - measure whether phase-1 total wall clock also stays near the new lower bound
+
+## 2026-03-21 23:33 UTC — `OPT-1B` launch: 2-phase checkpoint-native bootstrap validation
+
+- Motivation:
+  - `OPT-1` proved checkpoint-native policy publication eliminates the export tax
+  - it did not yet prove the next phase can *consume* the new manifest format
+- Validation target:
+  - single-host `v5p-8`
+  - reuse active TPU:
+    - `alt-v5p-probe-001`
+  - same optimized image:
+    - `us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:94aa894cd0d74262cd84146d742315dfa2864492fa8fb3ecc2d40474a6dead01`
+  - run id:
+    - `alt-tpu-opt1b-v5p-2phase`
+- Exact launch command:
+
+```bash
+uv run python experiments/alternating_rl_math500.py controller \
+  --run-id alt-tpu-opt1b-v5p-2phase \
+  --shared-root gs://marin-us-east5/alternating-rl \
+  --image us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:94aa894cd0d74262cd84146d742315dfa2864492fa8fb3ecc2d40474a6dead01 \
+  --tpu-name alt-v5p-probe-001 \
+  --tpu-type v5p-8 \
+  --zone us-east5-a \
+  --num-hosts 1 \
+  --local-tensor-parallel-size 4 \
+  --capacity-type spot \
+  --runtime-version v2-alpha-tpuv5 \
+  --steps-per-phase 1 \
+  --num-train-steps 2 \
+  --train-batch-size 64 \
+  --n-prompts 4 \
+  --n-generations-per-prompt 16 \
+  --eval-examples-per-lesson 8 \
+  --max-input-tokens 512 \
+  --max-output-tokens 256 \
+  --inference-gpu-memory-utilization 0.92
+```
+
+- Success criteria:
+  - phase 0 completes and writes `policy_0001/manifest.json` with `bootstrap_format=levanter_checkpoint`
+  - phase 1 sampling starts successfully from that manifest
+  - run completes with:
+    - `status=completed`
+    - `phase_id=2`
+    - `policy_version=2`
+    - `source_global_step=2`
