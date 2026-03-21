@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import dataclasses
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
@@ -34,6 +35,16 @@ from marin.alignment.inference_config import InferenceConfig, LiteLLMConfig, VLL
 from marin.alignment.judge import JudgePairConfig, judge_and_build_pairs
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.execution.remote import remote
+
+
+def _llm_env_vars() -> dict[str, str]:
+    """Collect LLM API keys from the environment for forwarding to child jobs."""
+    env_vars: dict[str, str] = {}
+    for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+        val = os.environ.get(key)
+        if val:
+            env_vars[key] = val
+    return env_vars
 
 
 def _serialize_inference_config(config: InferenceConfig) -> dict:
@@ -197,6 +208,7 @@ def align(
             generate_prompts_from_spec,
             resources=align_config.cpu_resources,
             pip_dependency_groups=["cpu"],
+            env_vars=_llm_env_vars(),
         ),
         config=PromptGenConfig(
             spec_path=spec_gcs_path,
@@ -264,6 +276,7 @@ def align(
             judge_and_build_pairs,
             resources=align_config.cpu_resources,
             pip_dependency_groups=["cpu"],
+            env_vars=_llm_env_vars(),
         ),
         config=JudgePairConfig(
             prompts_path=output_path_of(prompts_step),
