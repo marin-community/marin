@@ -6,6 +6,7 @@ import getpass
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -19,6 +20,17 @@ import requests  # type: ignore
 from levanter.infra.docker import make_docker_run_command
 
 logger = logging.getLogger(__name__)
+
+_SENSITIVE_ENV_VARS = frozenset(
+    {
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_API_KEY",
+        "HF_TOKEN",
+        "OPENAI_API_KEY",
+        "WANDB_API_KEY",
+    }
+)
+_EMBEDDED_ENV_ASSIGNMENT_RE = re.compile(r"(?P<prefix>-e\s+)(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>\S+)")
 
 
 @dataclass(frozen=True)
@@ -82,6 +94,41 @@ def describe_tpu_queued_resource(tpu_name, zone):
         return None
 
 
+def _wait_for_queued_resource_active(tpu_name: str, zone: str) -> None:
+    print("Checking TPU creation status every minute...")
+    waited = 0
+    while True:
+        time.sleep(60)
+        waited += 1
+
+        tpu_stat = describe_tpu_queued_resource(tpu_name, zone)
+        assert tpu_stat is not None, f"{tpu_name} creation failed."
+        state = tpu_stat["state"]["state"]
+
+        match state:
+            case "ACTIVE":
+                return
+            case "FAILED":
+                raise RuntimeError(
+                    f"{tpu_name} creation failed: {tpu_stat['state']['failedData']['error']['message']}"
+                )
+            case _:
+                print(f"Status is {state}. Waited {waited} minutes...")
+
+
+def _wait_for_queued_resource_absent(tpu_name: str, zone: str) -> None:
+    print("Waiting for queued resource deletion to finish...")
+    waited = 0
+    while True:
+        time.sleep(30)
+        waited += 1
+        tpu_stat = describe_tpu_queued_resource(tpu_name, zone)
+        if tpu_stat is None:
+            return
+        state = tpu_stat["state"]["state"]
+        print(f"Delete still in progress with state {state}. Waited {waited * 30} seconds...")
+
+
 def start_tpu_vm_queued_resources(tpu_name, *, tpu_type, capacity_type, version, zone, node_count):
     # ensure alpha is enabled
     run_command("gcloud", "components", "install", "alpha", "--quiet")
@@ -89,23 +136,29 @@ def start_tpu_vm_queued_resources(tpu_name, *, tpu_type, capacity_type, version,
         version = "tpu-ubuntu2204-base"
     tpu_stat = describe_tpu_queued_resource(tpu_name, zone)
     if tpu_stat is not None:
-        if tpu_stat["state"]["state"] in ["FAILED", "SUSPENDED"]:
-            print("TPU suspended,  deleting...", file=sys.stderr)
-
-            run_command(
-                "gcloud",
-                "alpha",
-                "compute",
-                "tpus",
-                "queued-resources",
-                "delete",
-                tpu_name,
-                "--quiet",
-                f"--zone={zone}",
-                "--force",
-            )
+        state = tpu_stat["state"]["state"]
+        if state in ["FAILED", "SUSPENDED", "SUSPENDING", "DELETING"]:
+            print(f"TPU is in reclaim/deletion state {state}, deleting before recreate...", file=sys.stderr)
+            if state != "DELETING":
+                run_command(
+                    "gcloud",
+                    "alpha",
+                    "compute",
+                    "tpus",
+                    "queued-resources",
+                    "delete",
+                    tpu_name,
+                    "--quiet",
+                    f"--zone={zone}",
+                    "--force",
+                )
+            _wait_for_queued_resource_absent(tpu_name, zone)
+        elif state == "ACTIVE":
+            print(f"TPU {tpu_name} already exists and is in state {state}.", file=sys.stderr)
+            return
         else:
-            print(f"TPU {tpu_name} already exists and is in state {tpu_stat['state']['state']}.", file=sys.stderr)
+            print(f"TPU {tpu_name} already exists and is in state {state}. Waiting for ACTIVE.", file=sys.stderr)
+            _wait_for_queued_resource_active(tpu_name, zone)
             return
 
     print(f"Creating new TPU {tpu_name} in {zone} of type {tpu_type}...", file=sys.stderr)
@@ -145,25 +198,7 @@ def start_tpu_vm_queued_resources(tpu_name, *, tpu_type, capacity_type, version,
 
     run_command(*command)
 
-    # wait for queued resource to complete
-    print("Checking TPU creation status every minute...")
-    waited = 0
-    while True:
-        time.sleep(60)
-        waited += 1
-
-        tpu_stat = describe_tpu_queued_resource(tpu_name, zone)
-        assert tpu_stat is not None, f"{tpu_name} creation failed."
-
-        match tpu_stat["state"]["state"]:
-            case "ACTIVE":
-                break
-            case "FAILED":
-                raise RuntimeError(
-                    f"{tpu_name} creation failed: {tpu_stat['state']['failedData']['error']['message']}"
-                )
-            case _:
-                print(f"Status is {tpu_stat['state']['state']}. Waited {waited} minutes...")
+    _wait_for_queued_resource_active(tpu_name, zone)
 
 
 def launch_job(
@@ -201,9 +236,51 @@ def launch_job(
     tpu_ssh(tpu_name, zone, node_count, *docker_command)
 
 
+def _redact_env_assignment(arg: str) -> str:
+    if "=" not in arg:
+        return arg
+    key, value = arg.split("=", 1)
+    if key not in _SENSITIVE_ENV_VARS:
+        return arg
+    return f"{key}=<redacted>"
+
+
+def _redact_embedded_env_assignments(arg: str) -> str:
+    def _replace(match: re.Match[str]) -> str:
+        key = match.group("key")
+        if key not in _SENSITIVE_ENV_VARS:
+            return match.group(0)
+        return f"{match.group('prefix')}{key}=<redacted>"
+
+    return _EMBEDDED_ENV_ASSIGNMENT_RE.sub(_replace, arg)
+
+
+def _redacted_command(args: Sequence[object]) -> tuple[str, ...]:
+    redacted: list[str] = []
+    expect_env_assignment = False
+
+    for raw_arg in args:
+        arg = str(raw_arg)
+        if expect_env_assignment:
+            redacted.append(_redact_env_assignment(arg))
+            expect_env_assignment = False
+            continue
+        if arg == "-e":
+            redacted.append(arg)
+            expect_env_assignment = True
+            continue
+        redacted.append(_redact_embedded_env_assignments(arg))
+
+    return tuple(redacted)
+
+
 def run_command(*args, **kwargs):
-    print("Running:", " ".join(list(args)))
-    return subprocess.check_call(args, **kwargs)
+    redacted_args = _redacted_command(args)
+    print("Running:", " ".join(redacted_args))
+    result = subprocess.run(args, **kwargs)
+    if result.returncode != 0:
+        raise RuntimeError(f"Command failed with exit code {result.returncode}: {' '.join(redacted_args)}")
+    return result.returncode
 
 
 def add_ssh_key(ssh_key_filename):

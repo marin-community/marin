@@ -3,7 +3,14 @@
 
 from .base import BaseInferenceContext
 from .levanter import LevanterInferenceContext, LevanterInferenceContextConfig
-from .vllm import vLLMInferenceContext, vLLMInferenceContextConfig, MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
+from .vllm import (
+    MODEL_MAPPINGS,
+    MODEL_TRANSPOSE_KEYS,
+    VllmSamplingConfig,
+    coerce_vllm_sampling_config,
+    vLLMInferenceContext,
+    vLLMInferenceContextConfig,
+)
 from .async_vllm import AsyncvLLMInferenceContext
 
 __all__ = [
@@ -13,6 +20,8 @@ __all__ = [
     "BaseInferenceContext",
     "LevanterInferenceContext",
     "LevanterInferenceContextConfig",
+    "VllmSamplingConfig",
+    "coerce_vllm_sampling_config",
     "vLLMInferenceContext",
     "vLLMInferenceContextConfig",
 ]

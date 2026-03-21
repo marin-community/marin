@@ -18,6 +18,7 @@ from marin.rl.alternating.config import (
     TRAINER_CONTAINER_NAME,
     AlternatingRLConfig,
 )
+from marin.rl.alternating.topology import local_vllm_topology
 from marin.rl.alternating.controller import AlternatingPhaseHooks
 from marin.rl.alternating.io import read_pickle, write_pickle
 from marin.rl.alternating.materialization import run_materialization
@@ -95,7 +96,7 @@ def _phase_command(
         "uv",
         "run",
         "python",
-        "experiments/alternating_rl_math500.py",
+        "/opt/marin/experiments/alternating_rl_math500.py",
         subcommand,
         "--config-path",
         paths.controller_config_path,
@@ -151,6 +152,40 @@ def _log_phase_metrics(
     **updates: float | None,
 ) -> PhaseMetricsManifest:
     return update_phase_metrics(paths.phase_metrics_path(phase_id), phase_id=phase_id, **updates)
+
+
+def _sampler_container_exists(
+    config: AlternatingRLConfig,
+    *,
+    host_ordinal: int,
+) -> bool:
+    """Probe sampler container presence and surface TPU infrastructure loss explicitly."""
+
+    try:
+        return tpus.container_exists_on_worker(
+            config.cluster.tpu_name,
+            config.cluster.zone,
+            config.cluster.node_count,
+            host_ordinal,
+            name=SAMPLER_CONTAINER_NAME,
+        )
+    except subprocess.CalledProcessError as exc:
+        queued_resource = tpus.describe_tpu_queued_resource(
+            config.cluster.tpu_name,
+            config.cluster.zone,
+        )
+        queued_state = None
+        if queued_resource is not None:
+            queued_state = queued_resource.get("state", {}).get("state")
+        if queued_state in {"SUSPENDING", "SUSPENDED", "DELETING", "FAILED"}:
+            raise RuntimeError(
+                "TPU became unavailable while waiting for sampling host completion: "
+                f"tpu_name={config.cluster.tpu_name}, host_ordinal={host_ordinal}, queued_state={queued_state}"
+            ) from exc
+        raise RuntimeError(
+            "failed to probe sampling host container while waiting for completion: "
+            f"tpu_name={config.cluster.tpu_name}, host_ordinal={host_ordinal}"
+        ) from exc
 
 
 class ExistingPodPhaseHooks(AlternatingPhaseHooks):
@@ -238,6 +273,12 @@ class ExistingPodPhaseHooks(AlternatingPhaseHooks):
             config.cluster.zone,
             config.cluster.node_count,
         )
+        topology = local_vllm_topology(config.cluster.tpu_type, manifest.local_tensor_parallel_size)
+        prepare_env = _common_phase_env(
+            config,
+            compilation_cache_dir=config.caches.sampling_compilation_cache_dir,
+        )
+        prepare_env.update(topology.env())
         prepare_sampling_start = time.time()
         tpus.run_container_on_worker(
             tpu_name=config.cluster.tpu_name,
@@ -246,10 +287,7 @@ class ExistingPodPhaseHooks(AlternatingPhaseHooks):
             worker_ordinal=manifest.coordinator_host_ordinal,
             full_image_id=config.image_digest,
             command=_phase_command(paths, "prepare-sampling", phase_id=manifest.phase_id),
-            env=_common_phase_env(
-                config,
-                compilation_cache_dir=config.caches.sampling_compilation_cache_dir,
-            ),
+            env=prepare_env,
             foreground=True,
             name=SAMPLER_CONTAINER_NAME,
         )
@@ -271,6 +309,7 @@ class ExistingPodPhaseHooks(AlternatingPhaseHooks):
                 config,
                 compilation_cache_dir=config.caches.sampling_compilation_cache_dir,
             )
+            env.update(topology.env())
             env["ALT_RL_HOST_ORDINAL"] = str(assignment.host_ordinal)
             tpus.run_container_on_worker(
                 tpu_name=config.cluster.tpu_name,
@@ -318,12 +357,9 @@ class ExistingPodPhaseHooks(AlternatingPhaseHooks):
                     missing_container_polls[assignment.host_ordinal] = 0
                     continue
 
-                container_exists = tpus.container_exists_on_worker(
-                    config.cluster.tpu_name,
-                    config.cluster.zone,
-                    config.cluster.node_count,
-                    assignment.host_ordinal,
-                    name=SAMPLER_CONTAINER_NAME,
+                container_exists = _sampler_container_exists(
+                    config,
+                    host_ordinal=assignment.host_ordinal,
                 )
                 if container_exists:
                     missing_container_polls[assignment.host_ordinal] = 0

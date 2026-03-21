@@ -4,15 +4,24 @@
 """Tests for InferenceContext utilities and chat template handling."""
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from flax import nnx
 from levanter.inference.openai import ChatMessage
 from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
 from transformers import AutoTokenizer
 
 from marin.rl.environments.inference_ctx import LevanterInferenceContext, LevanterInferenceContextConfig
+from marin.rl.environments.inference_ctx.vllm import (
+    vLLMInferenceContext,
+    vLLMInferenceContextConfig,
+    VllmSamplingConfig,
+    _patch_tpu_inference_llama_nnx_compat,
+    coerce_vllm_sampling_config,
+)
 
 
 @dataclass
@@ -235,3 +244,107 @@ def test_create_rollout_from_choice_end_to_end(inference_ctx, llama3_tokenizer):
     # Verify token rewards
     assert len(rollout.token_rewards) == len(expected_response_tokens)
     np.testing.assert_array_equal(rollout.token_rewards, np.full(len(expected_response_tokens), reward))
+
+
+def test_patch_tpu_inference_llama_nnx_compat_wraps_layers_in_nnx_list() -> None:
+    llama3_module = SimpleNamespace()
+
+    def make_layers():
+        return 0, 2, ["layer-0", "layer-1"]
+
+    class DummyLlamaModel:
+        def __init__(self):
+            _, _, self.layers = llama3_module.make_layers()
+
+    llama3_module.LlamaModel = DummyLlamaModel
+    llama3_module.make_layers = make_layers
+
+    _patch_tpu_inference_llama_nnx_compat(llama3_module, nnx)
+    patched_make_layers = llama3_module.make_layers
+
+    model = llama3_module.LlamaModel()
+    assert isinstance(model.layers, nnx.List)
+    assert list(model.layers) == ["layer-0", "layer-1"]
+
+    _patch_tpu_inference_llama_nnx_compat(llama3_module, nnx)
+    assert llama3_module.make_layers is patched_make_layers
+
+
+def test_coerce_vllm_sampling_config_fills_missing_legacy_fields() -> None:
+    legacy_params = SimpleNamespace(
+        temperature=0.7,
+        n=4,
+        max_tokens=128,
+        top_k=256,
+        include_stop_str_in_output=True,
+        logprobs=2,
+    )
+
+    sampling_config = coerce_vllm_sampling_config(legacy_params)
+
+    assert sampling_config == VllmSamplingConfig(
+        temperature=0.7,
+        n=4,
+        max_tokens=128,
+        top_k=256,
+        stop=None,
+        include_stop_str_in_output=True,
+        logprobs=2,
+        output_kind=None,
+    )
+
+
+def test_fast_bootstrap_requires_checkpoint_path() -> None:
+    inference_config = vLLMInferenceContextConfig(
+        model_name="meta-llama/Llama-3.1-8B-Instruct",
+        max_model_len=128,
+        tensor_parallel_size=4,
+        gpu_memory_utilization=0.94,
+        sampling_params=VllmSamplingConfig(),
+        enable_fast_bootstrap=True,
+        bootstrap_checkpoint_path=None,
+    )
+
+    with pytest.raises(ValueError, match="bootstrap_checkpoint_path is unset"):
+        vLLMInferenceContext._build_llm_with_optional_fast_bootstrap(inference_config)
+
+
+def test_fast_bootstrap_failure_does_not_fall_back_to_base_model(monkeypatch) -> None:
+    inference_config = vLLMInferenceContextConfig(
+        model_name="meta-llama/Llama-3.1-8B-Instruct",
+        max_model_len=128,
+        tensor_parallel_size=4,
+        gpu_memory_utilization=0.94,
+        sampling_params=VllmSamplingConfig(),
+        enable_fast_bootstrap=True,
+        bootstrap_checkpoint_path="gs://bucket/policy",
+    )
+    engine_calls: list[tuple[bool, str, str | None]] = []
+
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm._is_object_store_path",
+        lambda _: True,
+    )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm._stage_bootstrap_metadata",
+        lambda _: "/tmp/marin-vllm-bootstrap-test",
+    )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.shutil.rmtree",
+        lambda *args, **kwargs: None,
+    )
+
+    def _fake_get_llm_engine(config, model_source=None):
+        engine_calls.append((config.enable_fast_bootstrap, config.load_format, model_source))
+        return object()
+
+    monkeypatch.setattr(vLLMInferenceContext, "_get_llm_engine", staticmethod(_fake_get_llm_engine))
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm._bootstrap_weights_into_engine",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("oom during sync_weights")),
+    )
+
+    with pytest.raises(RuntimeError, match="Fast bootstrap failed while loading policy weights"):
+        vLLMInferenceContext._build_llm_with_optional_fast_bootstrap(inference_config)
+
+    assert engine_calls == [(True, "dummy", "/tmp/marin-vllm-bootstrap-test")]

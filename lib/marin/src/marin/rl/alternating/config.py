@@ -184,6 +184,28 @@ class AlternatingRLConfig:
         if self.global_batch_size < 1:
             raise ValueError(f"trainer.train_batch_size must be >= 1, got {self.global_batch_size}")
 
+        per_device_parallelism = getattr(self.trainer, "per_device_parallelism", None)
+        if isinstance(per_device_parallelism, int) and per_device_parallelism > 0:
+            required_multiple = per_device_parallelism * self.cluster.num_hosts * self.cluster.local_tensor_parallel_size
+            if self.global_batch_size % required_multiple != 0:
+                raise ValueError(
+                    "trainer.train_batch_size must be divisible by "
+                    "trainer.per_device_parallelism * cluster.num_hosts * "
+                    "cluster.local_tensor_parallel_size: "
+                    f"{self.global_batch_size} % {required_multiple} != 0 "
+                    f"(per_device_parallelism={per_device_parallelism}, "
+                    f"num_hosts={self.cluster.num_hosts}, "
+                    f"local_tensor_parallel_size={self.cluster.local_tensor_parallel_size})"
+                )
+
+        inference_memory_utilization = getattr(self.inference, "gpu_memory_utilization", None)
+        if inference_memory_utilization is not None and not 0.0 < float(inference_memory_utilization) <= 1.0:
+            message = (
+                f"inference.gpu_memory_utilization must be in the interval (0, 1], got "
+                f"{inference_memory_utilization}"
+            )
+            raise ValueError(message)
+
     @property
     def run_root(self) -> str:
         """Return the per-run root under the shared storage prefix."""

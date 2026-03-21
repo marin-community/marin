@@ -9,7 +9,7 @@ import jmp
 import optax
 import pytest
 
-from levanter.callbacks import eval_loss_loop
+from levanter.callbacks import StepInfo, eval_loss_loop
 from levanter.metrics import (
     Metric,
     ReductionType,
@@ -318,3 +318,75 @@ def test_microbatching_metric_aggregation():
         assert jnp.allclose(logged_metrics["train/accuracy"], 0.95)
         assert jnp.allclose(logged_metrics["train/num_tokens"], 256.0)
         assert jnp.allclose(logged_metrics["train/max_logit"], 5.0)
+
+
+def test_trainer_force_run_hooks_forces_checkpoint(monkeypatch: pytest.MonkeyPatch):
+    model = SimpleModel.init(jax.random.PRNGKey(0))
+    Batch = hax.Axis("batch", size=4 * max(1, jax.device_count()))
+    config = TrainerConfig(
+        tracker=NoopConfig(),
+        seed=42,
+        num_train_steps=1,
+        train_batch_size=Batch.size,
+        per_device_parallelism=1,
+        id="test_run",
+    )
+
+    class FakeCheckpointer:
+        def __init__(self):
+            self.calls: list[tuple[int, bool]] = []
+
+        def on_step(self, *, tree, step: int, force: bool = False):
+            del tree
+            self.calls.append((step, force))
+
+    fake_checkpointer = FakeCheckpointer()
+    monkeypatch.setattr(config.checkpointer, "create", lambda _run_id: fake_checkpointer, raising=False)
+
+    optimizer = optax.sgd(0.01)
+    trainer = Trainer(config, optimizer, simple_loss_fn)
+
+    with trainer:
+        state = trainer.initial_state(jax.random.PRNGKey(0), model=model)
+        trainer.run_hooks(StepInfo(state, 0.0, 0.0), force=True)
+
+    assert fake_checkpointer.calls == [(0, True)]
+
+
+def test_trainer_waits_for_default_checkpointer_before_returning(monkeypatch: pytest.MonkeyPatch):
+    model = SimpleModel.init(jax.random.PRNGKey(0))
+    Batch = hax.Axis("batch", size=4 * max(1, jax.device_count()))
+    config = TrainerConfig(
+        tracker=NoopConfig(),
+        seed=42,
+        num_train_steps=1,
+        train_batch_size=Batch.size,
+        per_device_parallelism=1,
+        id="test_run",
+    )
+
+    class FakeCheckpointer:
+        def __init__(self):
+            self.calls: list[tuple[int, bool]] = []
+            self.wait_calls = 0
+
+        def on_step(self, *, tree, step: int, force: bool = False):
+            del tree
+            self.calls.append((step, force))
+
+        def wait_until_finished(self):
+            self.wait_calls += 1
+
+    fake_checkpointer = FakeCheckpointer()
+    monkeypatch.setattr(config.checkpointer, "create", lambda _run_id: fake_checkpointer, raising=False)
+
+    optimizer = optax.sgd(0.01)
+    trainer = Trainer(config, optimizer, simple_loss_fn)
+    batch = hax.random.normal(jax.random.PRNGKey(1), (Batch, Embed))
+
+    with trainer:
+        state = trainer.initial_state(jax.random.PRNGKey(0), model=model)
+        trainer.train(state, [batch])
+
+    assert fake_checkpointer.calls[-1] == (1, True)
+    assert fake_checkpointer.wait_calls == 1

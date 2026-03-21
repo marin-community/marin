@@ -13,6 +13,7 @@ from dataclasses import dataclass
 class LocalVllmTopology:
     """Environment contract for one host-local vLLM replica."""
 
+    tpu_type: str
     tensor_parallel_size: int
     tpu_process_bounds: str
     tpu_chips_per_process_bounds: str
@@ -24,6 +25,18 @@ class LocalVllmTopology:
             "VLLM_ENABLE_V1_MULTIPROCESSING": "0",
             "TPU_BACKEND_TYPE": "jax",
             "PJRT_DEVICE": "TPU",
+            # In Docker on TPU VMs, force libtpu/JAX to use explicit local
+            # metadata instead of querying the full pod topology from metadata
+            # service. This is what lets one host behave like an independent
+            # single-host replica.
+            "TPU_SKIP_MDS_QUERY": "1",
+            "TPU_ACCELERATOR_TYPE": self.tpu_type,
+            "TPU_TYPE": self.tpu_type,
+            "TPU_NAME": "alternating-local-vllm",
+            "TPU_WORKER_ID": "0",
+            "TPU_WORKER_HOSTNAMES": "127.0.0.1",
+            "TPU_HOST_BOUNDS": "1,1,1",
+            "TPU_CHIPS_PER_HOST_BOUNDS": self.tpu_chips_per_process_bounds,
             "CLOUD_TPU_TASK_ID": "0",
             "TPU_PROCESS_BOUNDS": self.tpu_process_bounds,
             "TPU_CHIPS_PER_PROCESS_BOUNDS": self.tpu_chips_per_process_bounds,
@@ -33,9 +46,9 @@ class LocalVllmTopology:
 
 def local_vllm_topology(tpu_type: str, tensor_parallel_size: int) -> LocalVllmTopology:
     """Return one-host TPU topology settings for supported vLLM replicas."""
-    del tpu_type
     if tensor_parallel_size == 1:
         return LocalVllmTopology(
+            tpu_type=tpu_type,
             tensor_parallel_size=1,
             tpu_process_bounds="1,1,1",
             tpu_chips_per_process_bounds="1,1,1",
@@ -43,6 +56,7 @@ def local_vllm_topology(tpu_type: str, tensor_parallel_size: int) -> LocalVllmTo
         )
     if tensor_parallel_size == 2:
         return LocalVllmTopology(
+            tpu_type=tpu_type,
             tensor_parallel_size=2,
             tpu_process_bounds="1,1,1",
             tpu_chips_per_process_bounds="2,1,1",
@@ -50,6 +64,7 @@ def local_vllm_topology(tpu_type: str, tensor_parallel_size: int) -> LocalVllmTo
         )
     if tensor_parallel_size == 4:
         return LocalVllmTopology(
+            tpu_type=tpu_type,
             tensor_parallel_size=4,
             tpu_process_bounds="1,1,1",
             tpu_chips_per_process_bounds="2,2,1",

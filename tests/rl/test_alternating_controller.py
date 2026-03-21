@@ -41,6 +41,7 @@ class DummyCheckpointer:
 @dataclass(frozen=True)
 class DummyTrainer:
     train_batch_size: int = 8
+    per_device_parallelism: int = 1
     checkpointer: DummyCheckpointer = DummyCheckpointer()
     seed: int = 0
 
@@ -49,6 +50,7 @@ class DummyTrainer:
 class DummyInference:
     model_name: str = "meta-llama/Llama-3.1-8B-Instruct"
     tensor_parallel_size: int = 4
+    gpu_memory_utilization: float = 0.9
 
 
 def _curriculum() -> CurriculumConfig:
@@ -231,6 +233,29 @@ def test_build_sampling_host_assignments_distributes_exact_total_when_uneven(tmp
 
     assert [assignment.target_train_groups for assignment in assignments] == [3, 2]
     assert sum(assignment.target_train_groups for assignment in assignments) == 5
+
+
+def test_validate_rejects_impossible_training_batch_for_cluster(tmp_path):
+    config = _make_config(tmp_path)
+    config = replace(
+        config,
+        cluster=replace(config.cluster, num_hosts=1),
+        trainer=replace(config.trainer, train_batch_size=16, per_device_parallelism=16),
+    )
+
+    with pytest.raises(ValueError, match=r"trainer\.train_batch_size must be divisible by"):
+        config.validate()
+
+
+def test_validate_rejects_invalid_inference_memory_utilization(tmp_path):
+    config = _make_config(tmp_path)
+    config = replace(
+        config,
+        inference=replace(config.inference, gpu_memory_utilization=1.1),
+    )
+
+    with pytest.raises(ValueError, match=r"inference\.gpu_memory_utilization must be in the interval"):
+        config.validate()
 
 
 def test_controller_runs_one_phase_and_completes(tmp_path):

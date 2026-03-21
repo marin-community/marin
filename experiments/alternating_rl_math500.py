@@ -35,6 +35,7 @@ from marin.rl.rl_losses import RLOOLoss
 logger = logging.getLogger(__name__)
 
 DEFAULT_SEED = 42
+DEFAULT_EVAL_EXAMPLES_PER_LESSON = 500
 
 try:
     from marin.rl.rl_experiment_utils import ModelConfig, RLExperimentConfig, make_rl_step
@@ -72,6 +73,7 @@ def create_math_curriculum(
     experiment_config: RLExperimentConfig,
     *,
     seed: int,
+    eval_n_examples: int,
 ) -> CurriculumConfig:
     """Create the MATH-500 curriculum used by alternating RL."""
     default_sampling = SamplingParams(
@@ -100,7 +102,7 @@ def create_math_curriculum(
         eval_frequency=10,
         micro_eval_frequency=9_999_999,
         actor_name=f"alternating-curriculum-{run_id}",
-        eval_n_examples=500,
+        eval_n_examples=eval_n_examples,
         max_seq_len=experiment_config.max_input_tokens + experiment_config.max_output_tokens,
     )
 
@@ -135,6 +137,26 @@ def _default_experiment_config() -> RLExperimentConfig:
     )
 
 
+def _experiment_config_from_args(args: argparse.Namespace) -> RLExperimentConfig:
+    experiment_config = _default_experiment_config()
+    overrides: dict[str, int | float] = {}
+    if args.train_batch_size is not None:
+        overrides["train_batch_size"] = args.train_batch_size
+    if args.max_input_tokens is not None:
+        overrides["max_input_tokens"] = args.max_input_tokens
+    if args.max_output_tokens is not None:
+        overrides["max_output_tokens"] = args.max_output_tokens
+    if args.n_prompts is not None:
+        overrides["n_prompts"] = args.n_prompts
+    if args.n_generations_per_prompt is not None:
+        overrides["n_generations_per_prompt"] = args.n_generations_per_prompt
+    if args.inference_gpu_memory_utilization is not None:
+        overrides["inference_gpu_memory_utilization"] = args.inference_gpu_memory_utilization
+    if not overrides:
+        return experiment_config
+    return dataclasses.replace(experiment_config, **overrides)
+
+
 def _groups_per_training_step(config: RLExperimentConfig) -> int:
     if config.train_batch_size % config.n_generations_per_prompt != 0:
         raise ValueError(
@@ -161,8 +183,16 @@ def _pass_through_env() -> dict[str, str]:
 
 
 def _build_controller_config(args: argparse.Namespace) -> AlternatingRLConfig:
-    experiment_config = _default_experiment_config()
-    curriculum = create_math_curriculum(args.run_id, experiment_config, seed=args.seed)
+    experiment_config = _experiment_config_from_args(args)
+    eval_n_examples = (
+        args.eval_examples_per_lesson if args.eval_examples_per_lesson is not None else DEFAULT_EVAL_EXAMPLES_PER_LESSON
+    )
+    curriculum = create_math_curriculum(
+        args.run_id,
+        experiment_config,
+        seed=args.seed,
+        eval_n_examples=eval_n_examples,
+    )
     assert make_rl_step is not None
     step = make_rl_step(args.run_id, experiment_config, curriculum)
     job_config = step.config
@@ -240,6 +270,13 @@ def build_parser() -> argparse.ArgumentParser:
     controller.add_argument("--steps-per-phase", type=int, required=True)
     controller.add_argument("--num-train-steps", type=int, default=None)
     controller.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    controller.add_argument("--train-batch-size", type=int, default=None)
+    controller.add_argument("--n-prompts", type=int, default=None)
+    controller.add_argument("--n-generations-per-prompt", type=int, default=None)
+    controller.add_argument("--eval-examples-per-lesson", type=int, default=None)
+    controller.add_argument("--max-input-tokens", type=int, default=None)
+    controller.add_argument("--max-output-tokens", type=int, default=None)
+    controller.add_argument("--inference-gpu-memory-utilization", type=float, default=None)
 
     for subcommand in ("prepare-sampling", "materialize", "train-phase", "export-policy"):
         subparser = subparsers.add_parser(subcommand)

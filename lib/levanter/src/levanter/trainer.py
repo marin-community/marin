@@ -277,6 +277,7 @@ class Trainer:
         self.config = config
         self.optimizer = optimizer
         self._raw_loss_function = loss_fn
+        self._default_checkpointer: levanter.checkpoint.Checkpointer | None = None
 
         # Use existing global tracker if available (e.g., from levanter.initialize()),
         # otherwise create a new one. This avoids calling wandb.init() twice.
@@ -557,6 +558,8 @@ class Trainer:
             )
             info = StepInfo(state, 0.0, 0.0)
             self.run_hooks(info, force=True)
+            if self._default_checkpointer is not None:
+                self._default_checkpointer.wait_until_finished()
             return info
 
         info: Optional[StepInfo[S]] = None
@@ -570,6 +573,8 @@ class Trainer:
 
         # force hooks to run at the end
         self.run_hooks(info, force=True)
+        if self._default_checkpointer is not None:
+            self._default_checkpointer.wait_until_finished()
 
         return info
 
@@ -579,10 +584,10 @@ class Trainer:
         self.add_hook(levanter.callbacks.pbar_logger(total=self.config.num_train_steps), every=1)
         self.add_hook(levanter.callbacks.log_step_info(self.config.num_train_steps), every=1)
         # engine.add_hook(callbacks.log_memory_usage(), every=1)
-        checkpointer = self.config.checkpointer.create(self.run_id)
+        self._default_checkpointer = self.config.checkpointer.create(self.run_id)
 
-        def checkpoint_hook(info):
-            checkpointer.on_step(tree=info.state.saveable_state, step=info.step)
+        def checkpoint_hook(info, *, force: bool = False):
+            self._default_checkpointer.on_step(tree=info.state.saveable_state, step=info.next_step, force=force)
 
         self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency
 

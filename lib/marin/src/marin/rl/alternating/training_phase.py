@@ -31,13 +31,18 @@ from marin.rl.alternating.state import (
     MaterializedBatchesManifest,
     PhaseMetricsManifest,
     PolicyManifest,
+    RunStatus,
     update_phase_metrics,
     utc_now_iso,
+    write_run_state,
     write_policy_manifest,
 )
 from marin.rl.model_utils import load_model_from_checkpoint
 
 logger = logging.getLogger(__name__)
+
+CHECKPOINT_VISIBILITY_TIMEOUT = 180
+CHECKPOINT_VISIBILITY_POLL_INTERVAL = 5
 
 
 class MaterializedTrainingLoader:
@@ -151,6 +156,44 @@ def _checkpoint_step(checkpoint_path: str) -> int:
     return int(metadata["step"])
 
 
+def _checkpoint_metadata_exists(checkpoint_path: str) -> bool:
+    fs, fs_path = url_to_fs(checkpoint_path, use_listings_cache=False)
+    return fs.exists(f"{fs_path}/metadata.json")
+
+
+def _wait_for_target_checkpoint(
+    checkpoint_root: str,
+    *,
+    target_step: int,
+    timeout: int = CHECKPOINT_VISIBILITY_TIMEOUT,
+    poll_interval: int = CHECKPOINT_VISIBILITY_POLL_INTERVAL,
+) -> str:
+    expected_checkpoint = f"{checkpoint_root}/step-{target_step}"
+    deadline = time.monotonic() + timeout
+    last_seen_checkpoint: str | None = None
+    last_seen_step: int | None = None
+
+    while True:
+        if _checkpoint_metadata_exists(expected_checkpoint):
+            return expected_checkpoint
+
+        latest_checkpoint = discover_latest_checkpoint(checkpoint_root)
+        if latest_checkpoint is not None:
+            last_seen_checkpoint = latest_checkpoint
+            last_seen_step = _checkpoint_step(latest_checkpoint)
+            if last_seen_step >= target_step:
+                return latest_checkpoint
+
+        if time.monotonic() >= deadline:
+            raise FileNotFoundError(
+                "training phase completed without a visible checkpoint at the expected step: "
+                f"checkpoint_root={checkpoint_root}, target_step={target_step}, "
+                f"last_seen_checkpoint={last_seen_checkpoint}, last_seen_step={last_seen_step}"
+            )
+
+        time.sleep(poll_interval)
+
+
 def _log_phase_metrics_to_tracker(
     phase_metrics: PhaseMetricsManifest,
     *,
@@ -235,9 +278,22 @@ def export_policy_only(
     manifest: MaterializedBatchesManifest,
 ) -> str:
     """Export the next policy from an already-completed training checkpoint."""
+
+    def _recover_run_state(checkpoint_path: str | None) -> None:
+        if jax.process_index() != 0:
+            return
+        recovered_state = dataclasses.replace(
+            state,
+            status=RunStatus.TRAINING,
+            current_levanter_checkpoint_path=checkpoint_path,
+        )
+        write_run_state(paths.run_state_path, recovered_state)
+
     expected_policy_manifest_path = paths.policy_manifest_path(state.policy_version + 1)
     policy_manifest_fs, policy_manifest_fs_path = url_to_fs(expected_policy_manifest_path)
     if policy_manifest_fs.exists(policy_manifest_fs_path):
+        policy_manifest = PolicyManifest.from_dict(json.loads(policy_manifest_fs.cat(policy_manifest_fs_path).decode()))
+        _recover_run_state(policy_manifest.levanter_checkpoint_path)
         return expected_policy_manifest_path
 
     batch_paths, target_step = _phase_batch_paths(config, state, manifest)
@@ -277,6 +333,7 @@ def export_policy_only(
     )
     if jax.process_index() == 0:
         _log_phase_metrics_to_tracker(phase_metrics, phase_id=state.phase_id, source_global_step=target_step)
+        _recover_run_state(latest_checkpoint)
     return policy_manifest_path
 
 
@@ -327,9 +384,10 @@ def run_training_phase(
     )
 
     barrier_sync()
-    latest_checkpoint = discover_latest_checkpoint(trainer_checkpoint_root)
-    if latest_checkpoint is None:
-        raise FileNotFoundError(f"training phase completed without a checkpoint under {trainer_checkpoint_root}")
+    latest_checkpoint = _wait_for_target_checkpoint(
+        trainer_checkpoint_root,
+        target_step=target_step,
+    )
 
     export_start = time.time()
     policy_manifest_path = _export_policy(

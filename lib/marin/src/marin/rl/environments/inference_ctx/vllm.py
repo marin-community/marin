@@ -18,6 +18,7 @@ import jax.numpy as jnp
 import numpy as np
 from enum import StrEnum
 from dataclasses import dataclass
+from typing import Any
 from iris.marin_fs import url_to_fs
 from levanter.compat.fsspec_safetensor import read_safetensors_fsspec
 from openai.types.chat import ChatCompletion
@@ -66,9 +67,64 @@ BOOTSTRAP_METADATA_FILENAMES: tuple[str, ...] = (
 )
 
 
+def _patch_tpu_inference_llama_nnx_compat(llama3_module, nnx_module) -> None:
+    """Make TPU-inference Llama pipeline layers construct as ``nnx.List``."""
+    original_make_layers = llama3_module.make_layers
+    if getattr(original_make_layers, "_marin_nnx_list_patch", False):
+        return
+
+    def _patched_make_layers(*args, **kwargs):
+        start_layer, end_layer, layers = original_make_layers(*args, **kwargs)
+        if not isinstance(layers, nnx_module.List):
+            layers = nnx_module.List(layers)
+        return start_layer, end_layer, layers
+
+    _patched_make_layers._marin_nnx_list_patch = True  # type: ignore[attr-defined]
+    _patched_make_layers.__wrapped__ = original_make_layers  # type: ignore[attr-defined]
+    llama3_module.make_layers = _patched_make_layers
+
+
 class InferenceMode(StrEnum):
     SYNC = "sync"
     ASYNC = "async"
+
+
+@dataclass
+class VllmSamplingConfig:
+    """Serializable sampling configuration for vLLM-backed inference.
+
+    This config intentionally belongs to Marin rather than vLLM so it can be
+    pickled on controller hosts that do not have a matching local vLLM install.
+    TPU workers convert it into a real ``vllm.SamplingParams`` object at the
+    point of use.
+    """
+
+    temperature: float = 1.0
+    n: int = 1
+    max_tokens: int = 1024
+    top_k: int = -1
+    stop: list[str] | None = None
+    include_stop_str_in_output: bool = False
+    logprobs: int | None = None
+    output_kind: str | None = None
+
+
+def coerce_vllm_sampling_config(value: Any) -> VllmSamplingConfig:
+    """Normalize legacy or foreign sampling-param objects into Marin config."""
+
+    if isinstance(value, VllmSamplingConfig):
+        return value
+
+    return VllmSamplingConfig(
+        temperature=float(getattr(value, "temperature", 1.0)),
+        n=int(getattr(value, "n", 1)),
+        max_tokens=int(getattr(value, "max_tokens", 1024)),
+        top_k=getattr(value, "top_k", -1),
+        stop=getattr(value, "stop", None),
+        include_stop_str_in_output=bool(getattr(value, "include_stop_str_in_output", False)),
+        logprobs=getattr(value, "logprobs", None),
+        output_kind=getattr(value, "output_kind", None),
+    )
 
 
 @dataclass
@@ -79,7 +135,7 @@ class vLLMInferenceContextConfig:
     max_model_len: int
     tensor_parallel_size: int
     gpu_memory_utilization: float
-    sampling_params: SamplingParams
+    sampling_params: VllmSamplingConfig
     mode: InferenceMode = InferenceMode.SYNC
     load_format: str = "auto"
     enforce_eager: bool = True
@@ -106,13 +162,13 @@ class vLLMInferenceContext(BaseInferenceContext):
         self.axis_mapping = {}
         self.tokenizer = AutoTokenizer.from_pretrained(inference_config.model_name)
         self.model_name = inference_config.model_name
-        self.sampling_params = inference_config.sampling_params
+        self.sampling_params = coerce_vllm_sampling_config(inference_config.sampling_params)
 
         # Initialize the appropriate renderer based on model type
         self.renderer = self._get_renderer(inference_config.model_name, self.tokenizer)
 
         if inference_config.mode == InferenceMode.ASYNC:
-            self.sampling_params.output_kind = RequestOutputKind.FINAL_ONLY
+            self.sampling_params.output_kind = "final_only"
 
     @staticmethod
     def _get_renderer(model_name: str, tokenizer) -> Renderer:
@@ -141,9 +197,13 @@ class vLLMInferenceContext(BaseInferenceContext):
 
     @staticmethod
     def _patch_tpu_inference_registry():
-        """Register Qwen2ForCausalLM in tpu_inference if not present."""
+        """Register Marin TPU-inference compatibility patches before vLLM starts."""
         try:
+            from flax import nnx
             from tpu_inference.models.common import model_loader
+            from tpu_inference.models.jax import llama3
+
+            _patch_tpu_inference_llama_nnx_compat(llama3, nnx)
 
             if "Qwen2ForCausalLM" not in model_loader._MODEL_REGISTRY:
                 logger.info("Patching tpu_inference to support Qwen2ForCausalLM")
@@ -184,18 +244,15 @@ class vLLMInferenceContext(BaseInferenceContext):
 
         bootstrap_checkpoint_path = inference_config.bootstrap_checkpoint_path
         if not bootstrap_checkpoint_path:
-            logger.warning(
-                "Fast bootstrap requested but bootstrap_checkpoint_path is unset. Falling back to normal vLLM load."
+            raise ValueError(
+                "Fast bootstrap requested but bootstrap_checkpoint_path is unset. "
+                "Alternating RL cannot fall back to the base model without changing policy weights."
             )
-            return cls._get_llm_engine(inference_config)
 
         if not _is_object_store_path(bootstrap_checkpoint_path):
-            logger.warning(
-                "Fast bootstrap requested but checkpoint path %r is not an object-store URI. "
-                "Falling back to normal vLLM load.",
-                bootstrap_checkpoint_path,
+            raise ValueError(
+                "Fast bootstrap requested with a non-object-store checkpoint path: " f"{bootstrap_checkpoint_path!r}"
             )
-            return cls._get_llm_engine(inference_config)
 
         bootstrap_local_dir = None
         try:
@@ -207,13 +264,16 @@ class vLLMInferenceContext(BaseInferenceContext):
                 "Fast bootstrap completed for model %s from %s", inference_config.model_name, bootstrap_checkpoint_path
             )
             return llm
-        except Exception:
+        except Exception as exc:
             logger.exception(
-                "Fast bootstrap failed for model %s from %s. Falling back to normal vLLM initialization.",
+                "Fast bootstrap failed for model %s from %s.",
                 inference_config.model_name,
                 bootstrap_checkpoint_path,
             )
-            return cls._get_llm_engine(dataclasses.replace(inference_config, enable_fast_bootstrap=False))
+            raise RuntimeError(
+                "Fast bootstrap failed while loading policy weights. "
+                "Alternating RL cannot safely fall back to the base model for a later policy version."
+            ) from exc
         finally:
             if bootstrap_local_dir is not None:
                 shutil.rmtree(bootstrap_local_dir, ignore_errors=True)
@@ -416,6 +476,11 @@ class vLLMInferenceContext(BaseInferenceContext):
         """
         if SamplingParams is None:
             raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
+        output_kind = None
+        if self.sampling_params.output_kind is not None:
+            if RequestOutputKind is None:
+                raise ImportError("vLLM RequestOutputKind is unavailable")
+            output_kind = RequestOutputKind(self.sampling_params.output_kind)
         sampling_params = SamplingParams(
             temperature=temperature,
             n=n,
@@ -425,7 +490,7 @@ class vLLMInferenceContext(BaseInferenceContext):
             stop=stop or self.sampling_params.stop,
             logprobs=1,
             include_stop_str_in_output=self.sampling_params.include_stop_str_in_output,
-            output_kind=self.sampling_params.output_kind,
+            output_kind=output_kind,
         )
 
         # Convert prompts to message lists if they aren't already

@@ -4,6 +4,7 @@
 import json
 import shlex
 from collections.abc import Sequence
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -72,6 +73,116 @@ def test_start_tpu_vm_queued_resources_on_demand_uses_no_special_capacity_flags(
     assert not _contains_arg(create_command, "--spot")
     assert not _contains_arg(create_command, "--best-effort")
     assert not _contains_arg(create_command, "--reserved")
+
+
+def test_start_tpu_vm_queued_resources_waits_for_existing_queued_resource(monkeypatch: pytest.MonkeyPatch):
+    commands: list[tuple[Any, ...]] = []
+    sleeps: list[int] = []
+    states = iter(
+        [
+            {"state": {"state": "WAITING_FOR_RESOURCES"}},
+            {"state": {"state": "ACTIVE"}},
+        ]
+    )
+
+    monkeypatch.setattr(tpus, "describe_tpu_queued_resource", lambda *_args, **_kwargs: next(states))
+    monkeypatch.setattr(tpus, "run_command", lambda *args, **_kwargs: commands.append(args))
+    monkeypatch.setattr(tpus.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    tpus.start_tpu_vm_queued_resources(
+        "exp2039-test",
+        tpu_type="v5p-8",
+        capacity_type="spot",
+        version="v2-alpha-tpuv5",
+        zone="us-east5-a",
+        node_count=1,
+    )
+
+    assert commands == [("gcloud", "components", "install", "alpha", "--quiet")]
+    assert sleeps == [60]
+
+
+def test_start_tpu_vm_queued_resources_returns_immediately_for_active_existing_resource(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    commands: list[tuple[Any, ...]] = []
+
+    monkeypatch.setattr(
+        tpus,
+        "describe_tpu_queued_resource",
+        lambda *_args, **_kwargs: {"state": {"state": "ACTIVE"}},
+    )
+    monkeypatch.setattr(tpus, "run_command", lambda *args, **_kwargs: commands.append(args))
+    monkeypatch.setattr(tpus.time, "sleep", lambda _seconds: pytest.fail("sleep should not be called"))
+
+    tpus.start_tpu_vm_queued_resources(
+        "exp2039-test",
+        tpu_type="v5p-8",
+        capacity_type="spot",
+        version="v2-alpha-tpuv5",
+        zone="us-east5-a",
+        node_count=1,
+    )
+
+    assert commands == [("gcloud", "components", "install", "alpha", "--quiet")]
+
+
+def test_start_tpu_vm_queued_resources_recreates_suspending_resource(monkeypatch: pytest.MonkeyPatch):
+    commands: list[tuple[Any, ...]] = []
+    sleeps: list[int] = []
+    states = iter(
+        [
+            {"state": {"state": "SUSPENDING"}},
+            {"state": {"state": "DELETING"}},
+            None,
+            {"state": {"state": "ACTIVE"}},
+        ]
+    )
+
+    monkeypatch.setattr(tpus, "describe_tpu_queued_resource", lambda *_args, **_kwargs: next(states))
+    monkeypatch.setattr(tpus, "run_command", lambda *args, **_kwargs: commands.append(args))
+    monkeypatch.setattr(tpus.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    tpus.start_tpu_vm_queued_resources(
+        "exp2039-test",
+        tpu_type="v5p-8",
+        capacity_type="spot",
+        version="v2-alpha-tpuv5",
+        zone="us-east5-a",
+        node_count=1,
+    )
+
+    assert commands == [
+        ("gcloud", "components", "install", "alpha", "--quiet"),
+        (
+            "gcloud",
+            "alpha",
+            "compute",
+            "tpus",
+            "queued-resources",
+            "delete",
+            "exp2039-test",
+            "--quiet",
+            "--zone=us-east5-a",
+            "--force",
+        ),
+        (
+            "gcloud",
+            "alpha",
+            "compute",
+            "tpus",
+            "queued-resources",
+            "create",
+            "exp2039-test",
+            "--accelerator-type=v5p-8",
+            "--zone=us-east5-a",
+            "--quiet",
+            "--runtime-version=v2-alpha-tpuv5",
+            "--spot",
+            "--node-id=exp2039-test",
+        ),
+    ]
+    assert sleeps == [30, 30, 60]
 
 
 def test_describe_tpu_workers_flattens_multislice_workers(monkeypatch: pytest.MonkeyPatch):
@@ -234,3 +345,25 @@ def test_run_python_on_worker_requires_exactly_one_entrypoint(monkeypatch: pytes
             module="pkg.entry",
             script_path="entry.py",
         )
+
+
+def test_run_command_redacts_sensitive_env_values(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
+    command = (
+        "gcloud",
+        "--command=docker run -e HF_TOKEN=secret-token -e RUN_ID=test -e WANDB_API_KEY=secret-wandb",
+        "-e",
+        "OPENAI_API_KEY=secret-openai",
+    )
+
+    monkeypatch.setattr(tpus.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=1))
+
+    with pytest.raises(RuntimeError, match="Command failed with exit code 1"):
+        tpus.run_command(*command)
+
+    output = capsys.readouterr().out
+    assert "HF_TOKEN=<redacted>" in output
+    assert "WANDB_API_KEY=<redacted>" in output
+    assert "OPENAI_API_KEY=<redacted>" in output
+    assert "secret-token" not in output
+    assert "secret-wandb" not in output
+    assert "secret-openai" not in output
