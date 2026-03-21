@@ -14,6 +14,7 @@ import haliax as hax
 import jax
 import jax.random as jrandom
 import levanter
+from levanter.utils.fsspec_utils import exists
 from haliax import Axis
 from levanter.checkpoint import discover_latest_checkpoint
 from levanter.main.export_lm_to_hf import ConvertLmConfig
@@ -39,6 +40,12 @@ from marin.rl.alternating.state import (
 )
 from marin.rl.alternating.wandb import alternating_training_tracker_config
 from marin.rl.model_utils import load_model_from_checkpoint
+from marin.rl.training_observability import (
+    TrainingSamplePreview,
+    configure_rl_training_metric_hooks,
+    maybe_read_training_sample_previews,
+    training_sample_preview_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,12 +59,21 @@ class MaterializedTrainingLoader:
     def __init__(self, batch_paths: list[str], trainer_config):
         self.batch_paths = batch_paths
         self.trainer_config = trainer_config
+        self._last_batch_prep_time: float = 0.0
+        self._last_sample_previews: list[TrainingSamplePreview] | None = None
 
     def __iter__(self):
         for batch_path in self.batch_paths:
+            prep_start = time.time()
             batch = read_pickle(batch_path)
+            preview_path = training_sample_preview_path(batch_path)
+            self._last_sample_previews = (
+                maybe_read_training_sample_previews(preview_path) if exists(preview_path) else None
+            )
             with hax.set_mesh(self.trainer_config.device_mesh):
-                yield hax.shard(batch, self.trainer_config.compute_axis_mapping)
+                sharded_batch = hax.shard(batch, self.trainer_config.compute_axis_mapping)
+            self._last_batch_prep_time = time.time() - prep_start
+            yield sharded_batch
 
 
 def _trainer_run_id(config: AlternatingRLConfig) -> str:
@@ -369,6 +385,10 @@ def run_training_phase(
     )
     optimizer = config.optimizer.build(config.quotas.num_train_steps)  # type: ignore[assignment]
     loss_fn = config.loss.create_loss_fn(reference_model, None)
+    vocab_size = config.vocab_size if config.vocab_size is not None else len(tokenizer)
+    tokens_per_example = config.curriculum.max_seq_len
+    flops_per_token = config.model.flops_per_token(vocab_size, tokens_per_example)
+    flops_per_example = 3 * flops_per_token * tokens_per_example if flops_per_token is not None else None
 
     @jax.jit
     def _loss_function(model, batch, key):
@@ -379,6 +399,15 @@ def run_training_phase(
     with Trainer(config=trainer_config, optimizer=optimizer, loss_fn=_loss_function) as trainer:
         training_key = jrandom.PRNGKey(trainer_config.seed)
         initial_state = trainer.initial_state(training_key, model=reference_model)
+        configure_rl_training_metric_hooks(
+            trainer,
+            tokenizer=tokenizer,
+            tokens_per_example=tokens_per_example,
+            flops_per_example=flops_per_example,
+            batch_schedule=trainer_config.train_batch_size,
+            batch_prep_time=lambda: loader._last_batch_prep_time,
+            sample_previews=lambda: loader._last_sample_previews,
+        )
         training_start = time.time()
         trainer.train(initial_state, loader)
         tracker = getattr(trainer, "tracker", None)

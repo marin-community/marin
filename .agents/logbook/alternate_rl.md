@@ -3065,3 +3065,103 @@ uv run python experiments/alternating_rl_math500.py controller \
   - the full-visibility relaunch is now genuinely live on the requested active
     TPU
   - trainer W&B run should appear once phase-0 reaches training
+
+## 2026-03-21 21:35 UTC — Async-style trainer metrics fix for alternating W&B
+
+- Observation from `ALT-TPU-002E retry3`:
+  - controller and trainer W&B runs both existed
+  - TPU logs proved phase-0 training and export really happened
+  - but W&B history still showed only system metrics / zero scalar rows
+- Root cause:
+  - alternating training was not installing the same RL train-worker hook stack
+    used by async RL
+  - so it was missing:
+    - step timing metrics
+    - async-style `train/samples` table
+    - throughput / MFU hook wiring
+  - and for one-step phases we also needed an explicit per-step W&B commit
+    because all scalar logs land on a single step
+- Fix landed in repo:
+  - added shared hook wiring in:
+    - `lib/marin/src/marin/rl/training_observability.py`
+  - switched async RL `train_worker.py` to use the shared helper so async and
+    alternating now share one metrics path
+  - updated alternating training to install the same hook stack
+  - updated alternating materialization to write per-batch sample-preview
+    sidecars so alternating can log the same `train/samples` table as async RL
+- Validation:
+  - `uv run pytest tests/rl/test_alternating_training_phase.py -o addopts=`
+  - `uv run pytest tests/rl/test_training_observability.py -o addopts=`
+  - `uv run python -m py_compile lib/marin/src/marin/rl/training_observability.py lib/marin/src/marin/rl/alternating/training_phase.py lib/marin/src/marin/rl/alternating/materialization.py lib/marin/src/marin/rl/train_worker.py`
+- Important caveat:
+  - this does **not** change the already-running `alt-tpu-002e-v5p-soak5-retry3`
+    TPU job because its image is already fixed in place
+  - the next rebuilt image / relaunch is the first run that can verify the new
+    async-style trainer metrics in W&B
+
+## 2026-03-21 21:45 UTC — Storage / Arrow / HF export clarification
+
+- Run state update:
+  - stopped `alt-tpu-002e-v5p-soak5-retry3` after phase-0 completion because
+    the live TPU image did not include the new shared async-style trainer
+    metrics fix
+  - durable state was explicitly marked failed with:
+    - `phase_id=1`
+    - `policy_version=1`
+    - `source_global_step=1`
+  - TPU `alt-v5p-probe-001` remains up; only the alternating run was stopped
+- Question answered:
+  - can async RL avoid loss by saving to local disk, or by using Arrow instead
+    of checkpoints / alternating export?
+- Findings:
+  - async RL already uses Arrow Flight as the fast live weight-transfer path by
+    default:
+    - `lib/marin/src/marin/rl/rl_experiment_utils.py`
+    - `lib/marin/src/marin/rl/train_worker.py`
+    - `lib/marin/src/marin/rl/rollout_worker.py`
+    - `lib/marin/src/marin/rl/weight_transfer/arrow_flight.py`
+  - Arrow is only a live weight handoff between running trainer and rollout
+    workers; it does **not** durably save:
+    - optimizer state
+    - trainer step / checkpointer state
+    - curriculum state needed for restart
+  - durable recovery therefore still needs Levanter checkpoints via the normal
+    checkpointer path:
+    - `lib/levanter/src/levanter/checkpoint.py`
+  - local-disk checkpoints are technically possible because the checkpointer
+    accepts local paths, but they only help if the same TPU VM is still alive;
+    they do **not** solve:
+    - spot reclaim
+    - TPU recreation
+    - multi-host visibility
+    - controller-visible durable resume
+  - the most plausible future checkpointing improvement is a two-tier scheme:
+    - frequent local temporary checkpoints for same-host crash recovery
+    - less frequent GCS checkpoints for durable recovery
+- Why alternating exports to HF at all:
+  - alternating phases hand off through a `policy_dir` artifact that vLLM can
+    treat like a pretrained model directory
+  - sampling/bootstrap currently expects HF-style metadata such as
+    `config.json` and tokenizer files:
+    - `lib/marin/src/marin/rl/alternating/sampling_phase.py`
+    - `lib/marin/src/marin/rl/environments/inference_ctx/vllm.py`
+  - even fast bootstrap still stages metadata from the exported policy
+    directory and then injects weights into the engine
+- Performance implication:
+  - HF export is a real part of the phase tax, not just a file copy
+  - current export path does:
+    - Levanter checkpoint -> HF-compatible state dict conversion on CPU
+    - sharded safetensors write
+    - remote upload when the output path is on GCS
+  - this behavior is implemented via:
+    - `ConvertLmConfig(... use_cpu=True)` in
+      `lib/marin/src/marin/rl/alternating/training_phase.py`
+    - HF shard/temp-upload logic in
+      `lib/levanter/src/levanter/compat/hf_checkpoints.py`
+- Architectural conclusion:
+  - Arrow is the right fast path for persistent async workers
+  - Arrow alone cannot replace alternating cross-phase handoff because once the
+    trainer exits there is no live transfer server left
+  - if alternating remains only a correctness harness, the important
+    optimization target is eliminating full HF export per phase rather than
+    trying to make the current export loop production-fast

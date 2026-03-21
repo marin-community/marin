@@ -30,6 +30,11 @@ from marin.rl.alternating.state import (
 )
 from marin.rl.replay_buffer import RolloutWithCount
 from marin.rl.train_batch import create_training_batch_from_rollouts
+from marin.rl.training_observability import (
+    training_sample_preview_path,
+    training_sample_previews_from_rollouts,
+    write_training_sample_previews,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -299,6 +304,10 @@ def _materialize_spill_plan(
         )
         batch_path = paths.materialized_batch_path(phase_id, batch_index)
         write_pickle(batch_path, batch)
+        write_training_sample_previews(
+            training_sample_preview_path(batch_path),
+            training_sample_previews_from_rollouts(sampled_rollouts),
+        )
         batch_paths.append(batch_path)
 
     return batch_paths

@@ -19,8 +19,6 @@ import haliax as hax
 import jax
 import jax.random as jrandom
 import levanter
-import wandb
-from levanter import callbacks
 from levanter.layers.attention import DEFAULT_SPLASH_BLOCK_SIZE, AttentionBackend
 from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SIZE
 from levanter.models.lm_model import LmConfig
@@ -32,6 +30,10 @@ from marin.rl import weight_transfer
 from fray.v1.job import get_default_job_ctx
 from marin.rl.curriculum import CurriculumConfig, create_local_curriculum, get_or_create_curriculum_actor
 from marin.rl.model_utils import load_model_from_checkpoint
+from marin.rl.training_observability import (
+    configure_rl_training_metric_hooks,
+    training_sample_previews_from_rollouts,
+)
 from marin.rl.weight_transfer import WeightTransferConfig
 
 from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader, RolloutWithCount
@@ -370,53 +372,22 @@ class TrainWorker:
                 raise StopTrainerException()
 
         trainer.add_hook(_stop_on_signal, every=1)
-
-        # Log training step timing for RL analysis
-        def _log_step_timing(info: levanter.callbacks.StepInfo):
-            # Get batch prep time from the data loader
-            batch_prep_time = self.data_loader._last_batch_prep_time
-
-            # Forward/backward = total step duration - batch prep time
-            forward_backward_duration = max(0.0, info.step_duration - batch_prep_time)
-
-            metrics = {
-                "throughput/step_duration_seconds": info.step_duration,
-                "throughput/batch_prep_duration_seconds": batch_prep_time,
-                "throughput/forward_backward_duration_seconds": forward_backward_duration,
-                "train/loss": float(info.loss),
-            }
-            trainer.tracker.log(metrics, step=info.step)
-            logger.info(
-                "Training step %d completed: duration=%.2fs (batch_prep=%.2fs, fwd_bwd=%.2fs), loss=%.4f",
-                info.step,
-                info.step_duration,
-                batch_prep_time,
-                forward_backward_duration,
-                info.loss,
-            )
-
-        trainer.add_hook(_log_step_timing, every=1)
-
-        def _log_samples_hook(info: levanter.callbacks.StepInfo):
-            rollouts = self.data_loader._last_rollouts
-            if rollouts is not None:
-                self._log_samples(trainer, info.step, rollouts)
-
-        trainer.add_hook(_log_samples_hook, every=1)
-
-        # Add MFU (Model FLOPs Utilization) logging
         vocab_size = self.config.vocab_size if self.config.vocab_size is not None else len(self.tokenizer)
         tokens_per_example = self.config.curriculum_config.max_seq_len
         flops_per_token = self.config.model.flops_per_token(vocab_size, tokens_per_example)
         flops_per_example = 3 * flops_per_token * tokens_per_example if flops_per_token is not None else None
-        trainer.add_hook(
-            callbacks.log_performance_stats(
-                tokens_per_example=tokens_per_example,
-                batch_schedule=self.config.trainer.train_batch_size,
-                flops_per_example=flops_per_example,
-                prefix="throughput",
+        configure_rl_training_metric_hooks(
+            trainer,
+            tokenizer=self.tokenizer,
+            tokens_per_example=tokens_per_example,
+            flops_per_example=flops_per_example,
+            batch_schedule=self.config.trainer.train_batch_size,
+            batch_prep_time=lambda: self.data_loader._last_batch_prep_time,
+            sample_previews=lambda: (
+                training_sample_previews_from_rollouts(self.data_loader._last_rollouts)
+                if self.data_loader._last_rollouts is not None
+                else None
             ),
-            every=1,
         )
 
         def _curriculum_checkpoint_hook(info: levanter.callbacks.StepInfo):
@@ -454,32 +425,6 @@ class TrainWorker:
 
         trainer.tracker.log(metrics, step=step)
         logger.info("Successfully transferred weights with ID %d (transfer_time=%.2fs)", step, transfer_time)
-
-    def _log_samples(self, trainer, step, rollouts):
-        """Log trainer samples for the first 5 prompts to wandb table."""
-        # group by prompt
-        prompts = {}
-        for r_adv in rollouts:
-            r = r_adv.rollout
-            pid = r.env_example_id
-            if pid not in prompts:
-                prompts[pid] = []
-            prompts[pid].append(r)
-
-        # take first 5 prompts
-        first_5_pids = list(prompts.keys())[:5]
-
-        columns = ["step", "prompt_id", "prompt", "response", "reward"]
-        data = []
-        for pid in first_5_pids:
-            prompt_rs = prompts[pid]
-            prompt_text = self.tokenizer.decode(prompt_rs[0].prompt_tokens, skip_special_tokens=False)
-            for r in prompt_rs:
-                response_text = self.tokenizer.decode(r.response_tokens, skip_special_tokens=False)
-                data.append([step, pid, prompt_text, response_text, float(r.episode_reward)])
-
-        table = wandb.Table(columns=columns, data=data)
-        trainer.tracker.log({"train/samples": table}, step=step)
 
     def stop(self):
         """Stop the training worker."""

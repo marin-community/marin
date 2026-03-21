@@ -144,3 +144,64 @@ After rebuilding the TPU image with `save_code=False`, the next relaunch moved
 through controller W&B initialization immediately and reached live phase-0
 sampling on the active probe. That removed the controller startup stall without
 reducing metric visibility.
+
+## Follow-up issue 3
+
+Even after controller + trainer runs were visible, the phase-0 trainer run
+still looked empty in W&B during `ALT-TPU-002E retry3`. The TPU logs showed the
+trainer really did:
+
+- load the base model
+- run one train step
+- save checkpoint `step-1`
+- export `policy_0001`
+
+But the W&B API still reported zero history rows for both the trainer and
+controller runs while the job was live.
+
+## Hypothesis 4
+
+Alternating training was not actually using the async RL training hook stack.
+It only relied on bare `Trainer` defaults plus the final alternating
+phase-metrics log, which meant:
+
+- no async-style step timing metrics
+- no async-style `train/samples` table
+- no MFU / throughput performance hook from the RL train worker
+
+There was also an extra one-step-run hazard: alternating phases use
+`steps_per_phase=1`, so if every metric lands on a single explicit W&B step,
+that row needs an explicit commit to avoid looking empty until a later step
+arrives.
+
+## Additional changes 3
+
+- Added shared RL training observability helpers in:
+  - `lib/marin/src/marin/rl/training_observability.py`
+- Moved the common async RL metric hooks there so alternating and async now use
+  the same code path for:
+  - step timing metrics
+  - `train/samples` W&B table
+  - throughput / MFU logging
+  - explicit per-step W&B commit
+- Updated `lib/marin/src/marin/rl/train_worker.py` to use the shared helper
+  instead of maintaining a parallel local hook implementation
+- Updated `lib/marin/src/marin/rl/alternating/training_phase.py` to install the
+  same hook stack during alternating training
+- Updated `lib/marin/src/marin/rl/alternating/materialization.py` to persist a
+  per-batch sample-preview sidecar so alternating can log the same async-style
+  `train/samples` table even though it trains from materialized batches rather
+  than a live replay loader
+
+## Validation 2
+
+- `uv run pytest tests/rl/test_alternating_training_phase.py -o addopts=`
+- `uv run pytest tests/rl/test_training_observability.py -o addopts=`
+- `uv run python -m py_compile lib/marin/src/marin/rl/training_observability.py lib/marin/src/marin/rl/alternating/training_phase.py lib/marin/src/marin/rl/alternating/materialization.py lib/marin/src/marin/rl/train_worker.py`
+
+## Remaining caveat 2
+
+This fix is in repo only. The currently running `ALT-TPU-002E retry3` TPU image
+does not include it, so that live run will not retroactively gain the new
+async-style trainer metrics. The next image build / relaunch is required to
+verify W&B history on real hardware.

@@ -55,6 +55,15 @@ class DummyInference:
     model_name: str = "meta-llama/Llama-3.1-8B-Instruct"
 
 
+class FakeTokenizer:
+    def __len__(self) -> int:
+        return 128
+
+    def decode(self, tokens, *, skip_special_tokens=False):
+        del skip_special_tokens
+        return ",".join(str(token) for token in tokens)
+
+
 class RecordingOptimizer:
     def __init__(self):
         self.calls: list[int] = []
@@ -101,7 +110,7 @@ def _make_config(tmp_path, optimizer: RecordingOptimizer) -> AlternatingRLConfig
             compute_axis_mapping={},
             parameter_axis_mapping={},
         ),
-        model=object(),
+        model=SimpleNamespace(flops_per_token=lambda vocab_size, tokens_per_example: None),
         optimizer=optimizer,
         loss=DummyLoss(),
         curriculum=SimpleNamespace(max_seq_len=128),
@@ -158,7 +167,7 @@ def test_training_phase_uses_full_run_optimizer_schedule_and_run_specific_checkp
     )
     monkeypatch.setattr(
         "marin.rl.alternating.training_phase.AutoTokenizer.from_pretrained",
-        lambda _name: object(),
+        lambda _name: FakeTokenizer(),
     )
     monkeypatch.setattr(
         "marin.rl.alternating.training_phase._build_reference_model",
@@ -203,6 +212,10 @@ def test_training_phase_uses_full_run_optimizer_schedule_and_run_specific_checkp
             captured_trainer_config["config"] = config
             captured_trainer_config["optimizer"] = optimizer
             captured_trainer_config["loss_fn"] = loss_fn
+            self.config = config
+
+        def add_hook(self, fn, *, every=1):
+            del fn, every
 
         def __enter__(self):
             return self
@@ -274,7 +287,10 @@ def test_training_phase_waits_for_checkpoint_visibility_before_export(monkeypatc
     exported_checkpoints: list[str] = []
 
     monkeypatch.setattr("marin.rl.alternating.training_phase.levanter.initialize", lambda trainer_config: None)
-    monkeypatch.setattr("marin.rl.alternating.training_phase.AutoTokenizer.from_pretrained", lambda _name: object())
+    monkeypatch.setattr(
+        "marin.rl.alternating.training_phase.AutoTokenizer.from_pretrained",
+        lambda _name: FakeTokenizer(),
+    )
     monkeypatch.setattr(
         "marin.rl.alternating.training_phase._build_reference_model",
         lambda config, trainer_config, tokenizer, resume_checkpoint_path: object(),
@@ -294,7 +310,11 @@ def test_training_phase_waits_for_checkpoint_visibility_before_export(monkeypatc
 
     class FakeTrainer:
         def __init__(self, *, config, optimizer, loss_fn):
-            del config, optimizer, loss_fn
+            self.config = config
+            del optimizer, loss_fn
+
+        def add_hook(self, fn, *, every=1):
+            del fn, every
 
         def __enter__(self):
             return self
@@ -364,7 +384,10 @@ def test_training_phase_sets_distinct_alternating_wandb_run_metadata(monkeypatch
     captured_trainer_config = {}
 
     monkeypatch.setattr("marin.rl.alternating.training_phase.levanter.initialize", lambda trainer_config: None)
-    monkeypatch.setattr("marin.rl.alternating.training_phase.AutoTokenizer.from_pretrained", lambda _name: object())
+    monkeypatch.setattr(
+        "marin.rl.alternating.training_phase.AutoTokenizer.from_pretrained",
+        lambda _name: FakeTokenizer(),
+    )
     monkeypatch.setattr(
         "marin.rl.alternating.training_phase._build_reference_model",
         lambda config, trainer_config, tokenizer, resume_checkpoint_path: object(),
@@ -386,7 +409,11 @@ def test_training_phase_sets_distinct_alternating_wandb_run_metadata(monkeypatch
         def __init__(self, *, config, optimizer, loss_fn):
             del optimizer, loss_fn
             captured_trainer_config["config"] = config
+            self.config = config
             self.tracker = FakeTracker()
+
+        def add_hook(self, fn, *, every=1):
+            del fn, every
 
         def __enter__(self):
             return self
@@ -411,6 +438,120 @@ def test_training_phase_sets_distinct_alternating_wandb_run_metadata(monkeypatch
     assert trainer_tracker.group == "alt-train-phase-test"
     assert trainer_tracker.tags == ["rl", "math", "alternating", "alternating-train"]
     assert trainer_tracker.save_code is False
+
+
+def test_training_phase_installs_async_rl_metric_hooks(monkeypatch, tmp_path):
+    optimizer = RecordingOptimizer()
+    config = _make_config(tmp_path, optimizer)
+    paths = AlternatingRunPaths.from_config(config)
+    state = AlternatingRunState(
+        run_id=config.run_id,
+        status=RunStatus.TRAINING,
+        phase_id=1,
+        policy_version=1,
+        source_global_step=0,
+        num_hosts=1,
+        tpu_name=config.cluster.tpu_name,
+        tpu_type=config.cluster.tpu_type,
+        zone=config.cluster.zone,
+        image_digest=config.image_digest,
+        current_policy_manifest_path=paths.policy_manifest_path(1),
+        current_levanter_checkpoint_path=None,
+        current_sampling_manifest=paths.sampling_manifest_path(1),
+        current_materialized_manifest=paths.materialized_manifest_path(1),
+        last_completed_phase=0,
+    )
+    manifest = MaterializedBatchesManifest(
+        phase_id=1,
+        policy_version=1,
+        input_rollout_paths=[],
+        num_rollout_groups=1,
+        num_individual_rollouts=4,
+        num_training_batches=1,
+        global_batch_size=config.global_batch_size,
+        max_seq_len=128,
+        batch_paths=[paths.materialized_batch_path(1, 0)],
+    )
+    hook_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr("marin.rl.alternating.training_phase.levanter.initialize", lambda trainer_config: None)
+    monkeypatch.setattr(
+        "marin.rl.alternating.training_phase.AutoTokenizer.from_pretrained",
+        lambda _name: FakeTokenizer(),
+    )
+    monkeypatch.setattr(
+        "marin.rl.alternating.training_phase._build_reference_model",
+        lambda config, trainer_config, tokenizer, resume_checkpoint_path: object(),
+    )
+    monkeypatch.setattr("marin.rl.alternating.training_phase.barrier_sync", lambda: None)
+    monkeypatch.setattr("marin.rl.alternating.training_phase.jax.process_index", lambda: 0)
+    monkeypatch.setattr("marin.rl.alternating.training_phase.discover_latest_checkpoint", lambda _path: None)
+    monkeypatch.setattr("marin.rl.alternating.training_phase._checkpoint_metadata_exists", lambda _path: True)
+    monkeypatch.setattr("marin.rl.alternating.training_phase.export_lm_to_hf.main", lambda convert_config: None)
+
+    def _record_hooks(
+        trainer,
+        *,
+        tokenizer,
+        tokens_per_example,
+        flops_per_example,
+        batch_schedule,
+        batch_prep_time,
+        sample_previews,
+    ):
+        hook_calls.append(
+            {
+                "trainer": trainer,
+                "tokenizer": tokenizer,
+                "tokens_per_example": tokens_per_example,
+                "flops_per_example": flops_per_example,
+                "batch_schedule": batch_schedule,
+                "batch_prep_time": batch_prep_time,
+                "sample_previews": sample_previews,
+            }
+        )
+
+    monkeypatch.setattr(
+        "marin.rl.alternating.training_phase.configure_rl_training_metric_hooks",
+        _record_hooks,
+    )
+
+    class FakeTracker:
+        def log(self, metrics, *, step, commit=None):
+            del metrics, step, commit
+
+        def finish(self):
+            return None
+
+    class FakeTrainer:
+        def __init__(self, *, config, optimizer, loss_fn):
+            del optimizer, loss_fn
+            self.config = config
+            self.tracker = FakeTracker()
+
+        def add_hook(self, fn, *, every=1):
+            del fn, every
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def initial_state(self, training_key, model):
+            del training_key, model
+            return "initial-state"
+
+        def train(self, initial_state, loader):
+            del initial_state, loader
+
+    monkeypatch.setattr("marin.rl.alternating.training_phase.Trainer", FakeTrainer)
+
+    run_training_phase(config, paths, state, manifest)
+
+    assert len(hook_calls) == 1
+    assert hook_calls[0]["tokens_per_example"] == config.curriculum.max_seq_len
+    assert hook_calls[0]["batch_schedule"] == config.trainer.train_batch_size
 
 
 def test_training_phase_finishes_tracker_after_logging_phase_metrics(monkeypatch, tmp_path):
@@ -448,7 +589,10 @@ def test_training_phase_finishes_tracker_after_logging_phase_metrics(monkeypatch
     tracker_events: list[tuple[str, int | None, dict[str, float] | None]] = []
 
     monkeypatch.setattr("marin.rl.alternating.training_phase.levanter.initialize", lambda trainer_config: None)
-    monkeypatch.setattr("marin.rl.alternating.training_phase.AutoTokenizer.from_pretrained", lambda _name: object())
+    monkeypatch.setattr(
+        "marin.rl.alternating.training_phase.AutoTokenizer.from_pretrained",
+        lambda _name: FakeTokenizer(),
+    )
     monkeypatch.setattr(
         "marin.rl.alternating.training_phase._build_reference_model",
         lambda config, trainer_config, tokenizer, resume_checkpoint_path: object(),
@@ -469,8 +613,12 @@ def test_training_phase_finishes_tracker_after_logging_phase_metrics(monkeypatch
 
     class FakeTrainer:
         def __init__(self, *, config, optimizer, loss_fn):
-            del config, optimizer, loss_fn
+            self.config = config
+            del optimizer, loss_fn
             self.tracker = FakeTracker()
+
+        def add_hook(self, fn, *, every=1):
+            del fn, every
 
         def __enter__(self):
             return self
