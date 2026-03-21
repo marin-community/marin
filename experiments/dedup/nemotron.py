@@ -92,6 +92,9 @@ def fuzzy_dedup_steps() -> list[StepSpec]:
             ],
             output_path=op,
             max_parallelism=2048,
+            # dupekit's Rust MinHash uses a native thread pool, so workers
+            # may consume up to ~2 cores beyond the Python thread in the map stage.
+            worker_resources=ResourceConfig(cpu=5, ram="32g", disk="5g"),
         ),
     )
 
