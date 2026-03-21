@@ -1,6 +1,6 @@
 # Alternating Multi-Host RL on a Single TPU Pod
 
-**Status**: planned
+**Status**: in progress
 **Audience**: engineers who know basic JAX and TPU concepts but are new to Marin
 
 ## Summary
@@ -27,6 +27,22 @@ This mode is primarily for **single-allocation** or **availability-constrained**
 deployments. It is **not** intended to replace the existing concurrent two-TPU
 on-demand RL path when two TPU allocations are available and wall-clock speed or
 policy freshness is the top priority.
+
+## Branch Direction
+
+This document now reflects the implementation direction we are actively taking.
+
+- the alternating RL implementation in this worktree is the base branch
+- competing sketches that reconstruct config independently per phase or mix
+  sampling/training contracts loosely are not the direction forward
+- ideas from those sketches may still be ported selectively when they improve
+  this branch without weakening state management, validation, or testability
+
+The most important example is the materializer:
+
+- this branch keeps the controller/runtime/state design
+- spill-to-disk materialization is being folded into this branch as an internal
+  improvement, not as a reason to switch architectures
 
 ## Problem
 
@@ -995,6 +1011,25 @@ If any phase drops those logprobs, the alternating training path is invalid.
 
 The materializer should be implemented as a **streaming two-pass pipeline**.
 
+### Current implementation status
+
+At the time of writing, this branch has moved the materializer partway toward
+the intended two-pass design:
+
+- pass 1 now spills advantage-annotated rollout records to local temporary shard
+  files on the worker running materialization
+- pass 2 now plans deterministic batch assignments from lightweight per-env
+  index metadata, then streams spill shards into per-batch append files before
+  packing final `TrainingBatch` payloads
+
+So the current state matches the intended two-pass architecture much more
+closely: rollout objects are no longer reloaded wholesale into RAM during pass
+2, and the main in-memory state is now the lightweight assignment/index plan.
+
+The remaining question is empirical rather than architectural: whether the
+local append-file pattern is fast enough on real TPU VMs, or whether we should
+later collapse the per-batch append files into a more specialized local format.
+
 #### Pass 1: ingest and spool
 
 1. Iterate raw rollout files in deterministic sorted order.
@@ -1030,14 +1065,25 @@ keeping RSS bounded.
    - environment-balanced sampling
    - recency bias via `alpha`
    - max usage count via `max_samples`
-3. Produce exactly `steps_per_phase` output batches.
-4. For each output batch:
-   - sample `global_batch_size` individual rollouts
+3. Plan exactly `steps_per_phase` output batches using rollout indices and
+   per-env usage counts only.
+4. Stream spill shards once, routing selected rollout records into local
+   per-batch append files.
+5. For each output batch:
+   - read the local per-batch append file
+   - restore the intended sample order using the saved slot indices
    - build one `TrainingBatch`
    - write `batch_<step>.pkl`
 
 This preserves the useful parts of `ReplayBuffer` while moving them into an
 explicit offline boundary step.
+
+Implementation note:
+
+- the current branch now implements both the spill step and the planned
+  streaming pass 2 described above
+- the remaining work is performance validation on real TPU VMs, not a missing
+  architecture step
 
 ### Sampling policy during materialization
 

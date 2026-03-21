@@ -44,6 +44,15 @@ class RolloutMetadata:
     weight_step: int = -1
     """The step at which the model weights were used to generate this rollout."""
 
+    policy_version: int = -1
+    """The immutable policy export version used to generate this rollout."""
+
+    phase_id: int = -1
+    """The alternating RL phase that produced this rollout."""
+
+    source_global_step: int = -1
+    """The trainer global step encoded by the frozen sampling policy."""
+
 
 class Rollout(eqx.Module):
     """A single rollout: one prompt + one generated response + rewards."""
