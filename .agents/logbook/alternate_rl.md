@@ -2519,3 +2519,549 @@ uv run python experiments/alternating_rl_math500.py controller \
     `gs://...` incorrectly to a local `./gs:/...` scratch path
   - that local scratch directory was removed immediately
   - no durable backup artifact from that attempt should be relied on
+
+## 2026-03-21 19:28 UTC — Proposed next experiment: `ALT-TPU-002E`
+
+- Goal:
+  - prove uninterrupted single-host phase alternation beyond the tiny
+    two-phase recovery case by running at least five consecutive
+    sample/materialize/train/export cycles
+- Why this comes before multi-host:
+  - `ALT-TPU-002D` proved end-to-end correctness on single-host, but not a
+    longer uninterrupted soak
+  - for a clean reliability signal, this run should remove spot reclaim as a
+    confounder
+- Proposed configuration:
+  - single-host `v5p-8`
+  - on-demand capacity
+  - fixed image digest:
+    `us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:df9805f64343caef47e7ce4c3342a14e2f4a005e71a31de404ad0bf943d21242`
+  - `steps_per_phase=1`
+  - `num_train_steps=5`
+  - same small smoke-scale workload as `ALT-TPU-002`:
+    - `train_batch_size=64`
+    - `n_prompts=4`
+    - `n_generations_per_prompt=16`
+    - `eval_examples_per_lesson=8`
+    - `max_input_tokens=512`
+    - `max_output_tokens=256`
+    - `inference_gpu_memory_utilization=0.92`
+- Exact controller launch:
+
+```bash
+uv run python experiments/alternating_rl_math500.py controller \
+  --run-id alt-tpu-002e-v5p-soak5 \
+  --shared-root gs://marin-us-east5/alternating-rl \
+  --image us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:df9805f64343caef47e7ce4c3342a14e2f4a005e71a31de404ad0bf943d21242 \
+  --tpu-name alt-v5p-soak-001 \
+  --tpu-type v5p-8 \
+  --zone us-east5-a \
+  --num-hosts 1 \
+  --local-tensor-parallel-size 4 \
+  --capacity-type on-demand \
+  --runtime-version v2-alpha-tpuv5 \
+  --steps-per-phase 1 \
+  --num-train-steps 5 \
+  --train-batch-size 64 \
+  --n-prompts 4 \
+  --n-generations-per-prompt 16 \
+  --eval-examples-per-lesson 8 \
+  --max-input-tokens 512 \
+  --max-output-tokens 256 \
+  --inference-gpu-memory-utilization 0.92
+```
+
+- Success criterion:
+  - no manual recovery
+  - durable final state reports:
+    - `status=completed`
+    - `phase_id=5`
+    - `policy_version=5`
+    - `source_global_step=5`
+  - `policy_0005/manifest.json` exists
+- If proven:
+  - single-host alternation is not just correct, but stable across repeated
+    phase swaps
+  - then move to `ALT-TPU-003` multi-host validation
+- If disproven:
+  - classify whether the failure is:
+    - cumulative cache/runtime drift across phases
+    - export-only overhead / artifact growth
+    - training checkpoint / resume fragility
+    - TPU infrastructure instability unrelated to alternating logic
+
+## 2026-03-21 19:30 UTC — Tracking change: dedicate alternating RL W&B project
+
+- Decision:
+  - move alternating RL runs off the shared `marin_post_training` W&B project
+    onto a dedicated `alternate_rl` project
+- Reason:
+  - alternating runtime debugging and soak tests now have enough volume and
+    distinct operational concerns that they should not be mixed with the
+    broader RL training runs
+- Code change:
+  - `experiments/alternating_rl_math500.py` now overrides the inherited RL
+    experiment default and sets `project_name="alternate_rl"`
+  - this changes both the trainer run and rollout tracker project for future
+    alternating launches
+- Implication for next runs:
+  - `ALT-TPU-002E` and later alternating experiments should appear under
+    `marin-community/alternate_rl`
+
+## 2026-03-21 19:33 UTC — ALT-TPU-002E execution start
+
+- Launch decision:
+  - use the existing fixed TPU image digest
+  - do not rebuild the TPU image just for the W&B project rename
+  - rely on the local controller code to write `project_name="alternate_rl"`
+    into `state/controller_config.pkl`
+- Exact launch:
+
+```bash
+uv run python experiments/alternating_rl_math500.py controller \
+  --run-id alt-tpu-002e-v5p-soak5 \
+  --shared-root gs://marin-us-east5/alternating-rl \
+  --image us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:df9805f64343caef47e7ce4c3342a14e2f4a005e71a31de404ad0bf943d21242 \
+  --tpu-name alt-v5p-soak-001 \
+  --tpu-type v5p-8 \
+  --zone us-east5-a \
+  --num-hosts 1 \
+  --local-tensor-parallel-size 4 \
+  --capacity-type on-demand \
+  --runtime-version v2-alpha-tpuv5 \
+  --steps-per-phase 1 \
+  --num-train-steps 5 \
+  --train-batch-size 64 \
+  --n-prompts 4 \
+  --n-generations-per-prompt 16 \
+  --eval-examples-per-lesson 8 \
+  --max-input-tokens 512 \
+  --max-output-tokens 256 \
+  --inference-gpu-memory-utilization 0.92
+```
+
+- Expected early signals:
+  - queued resource `alt-v5p-soak-001` becomes `ACTIVE`
+  - controller writes `state/controller_config.pkl` under the new run root
+  - W&B run lands under `marin-community/alternate_rl`
+
+## 2026-03-21 19:35 UTC — ALT-TPU-002E first launch failed before bootstrap
+
+- Result:
+  - on-demand `v5p-8` creation in `us-east5-a` failed immediately with
+    `Insufficient capacity`
+- Failure surface:
+  - `gcloud alpha compute tpus queued-resources create alt-v5p-soak-001 --accelerator-type=v5p-8 --zone=us-east5-a ...`
+- State impact:
+  - `state/controller_config.pkl` was written
+  - `state/run_state.json` was not written
+  - no TPU queued resource remains for `alt-v5p-soak-001` in `us-east5-a`
+- Next action:
+  - retry the exact same soak under the same `run_id`, but switch only the zone
+    to `us-east5-b`
+
+## 2026-03-21 19:36 UTC — ALT-TPU-002E second launch also blocked before bootstrap
+
+- Result:
+  - retrying the on-demand soak in `us-east5-b` failed immediately on quota
+- Failure surface:
+  - `TPUV5PPerProjectPerZoneForTPUAPI` quota is `0` in `us-east5-b` for this
+    project
+- State impact:
+  - `state/controller_config.pkl` can still be overwritten safely
+  - `state/run_state.json` still does not exist
+- Practical decision:
+  - the clean on-demand soak is blocked by current infra limits
+  - the simplest available launch is to reuse the already-`ACTIVE`
+    `alt-v5p-probe-001` spot TPU in `us-east5-a`
+  - this keeps the same five-phase controller configuration, but any result
+    must be interpreted with spot reclaim as a confounder
+
+## 2026-03-21 19:37 UTC — ALT-TPU-002E fallback launch on active spot probe
+
+- Launch:
+  - same `run_id=alt-tpu-002e-v5p-soak5`
+  - same five-phase controller settings
+  - fallback TPU target:
+    - `tpu_name=alt-v5p-probe-001`
+    - `zone=us-east5-a`
+    - `capacity_type=spot`
+- Early verification:
+  - `state/controller_config.pkl` now points at:
+    - `tpu_name=alt-v5p-probe-001`
+    - `zone=us-east5-a`
+    - `capacity_type=spot`
+    - `image_digest=us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:df9805f64343caef47e7ce4c3342a14e2f4a005e71a31de404ad0bf943d21242`
+    - `trainer.tracker.project=alternate_rl`
+  - durable `run_state.json` exists and reports:
+    - `status=sampling`
+    - `phase_id=0`
+    - `policy_version=0`
+    - `current_sampling_manifest=gs://marin-us-east5/alternating-rl/alt-tpu-002e-v5p-soak5/sampling/phase_0000/manifest.json`
+  - live TPU logs show phase-0 sampler startup on single-host `v5p-8`
+- Interpretation:
+  - the soak is now genuinely running
+  - if it completes, it will still be useful operational evidence, but not a
+    clean on-demand reliability proof because spot reclaim remains possible
+
+## 2026-03-21 19:42 UTC — ALT-TPU-002E confirmed on `alt-v5p-probe-001`
+
+- User direction:
+  - stop trying to allocate any new on-demand TPU
+  - run only on the already-`ACTIVE` single-host probe:
+    - `alt-v5p-probe-001`
+    - `zone=us-east5-a`
+    - `tpu_type=v5p-8`
+- Infra verification:
+  - `gcloud alpha compute tpus queued-resources list --zone=us-east5-a --filter='name:alt-v5p-probe-001'`
+    reports the queued resource still `ACTIVE`
+- Durable controller state:
+  - `gs://marin-us-east5/alternating-rl/alt-tpu-002e-v5p-soak5/state/run_state.json`
+    now shows:
+    - `status=training`
+    - `phase_id=0`
+    - `policy_version=0`
+    - `tpu_name=alt-v5p-probe-001`
+    - `zone=us-east5-a`
+    - `current_materialized_manifest=gs://marin-us-east5/alternating-rl/alt-tpu-002e-v5p-soak5/materialized/phase_0000/manifest.json`
+- Live controller signal:
+  - phase-0 training ran on the active probe
+  - the single train step completed in about `16.8s`
+  - checkpoint save for `step-1` started at:
+    - `gs://marin-us-east5/alternating-rl/alt-tpu-002e-v5p-soak5/levanter_checkpoints/alt-tpu-002e-v5p-soak5-alternating-train/step-1`
+- Interpretation:
+  - the soak is definitely running on the requested existing TPU
+  - no new TPU allocation is needed for this run unless the active probe dies
+
+## 2026-03-21 20:08 UTC — Alternating W&B lifecycle bug identified and fixed locally
+
+- Symptom:
+  - the durable controller state for `alt-tpu-002e-v5p-soak5` advanced to:
+    - `status=sampling`
+    - `phase_id=1`
+    - `policy_version=1`
+    - `source_global_step=1`
+  - but the linked trainer run in W&B:
+    - `https://wandb.ai/marin-community/alternate_rl/runs/alt-tpu-002e-v5p-soak5-alternating-train`
+    was marked `crashed`
+  - W&B API for that run reported:
+    - `state=crashed`
+    - `summary_runtime=None`
+    - `summary_step=None`
+- Root cause:
+  - alternating training was creating a trainer tracker with run id
+    `f"{config.run_id}-alternating-train"` but never explicitly calling
+    `tracker.finish()` on the successful phase path
+  - this differs from normal Levanter subprocess entrypoints like
+    `train_lm.py`, which explicitly call `trainer.tracker.finish()` after
+    training
+  - `Trainer.__exit__` only unwinds context managers; it does not finish the
+    tracker
+- Local code fix:
+  - `lib/marin/src/marin/rl/alternating/training_phase.py`
+    - after logging alternating phase metrics, call `tracker.finish()` before
+      returning the exported policy manifest
+  - regression coverage added in:
+    - `tests/rl/test_alternating_training_phase.py`
+    - new test verifies the alternating phase tracker logs metrics and then
+      finishes
+  - debug log captured in:
+    - `docs/debug-log-alternating-wandb-lifecycle.md`
+- Validation:
+  - `uv run pytest tests/rl/test_alternating_training_phase.py -o addopts=`
+    passed (`6 passed`)
+  - `./infra/pre-commit.py --all-files --fix` passed
+- Important caveat:
+  - the currently-running soak on `alt-v5p-probe-001` is still using image
+    digest
+    `us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:df9805f64343caef47e7ce4c3342a14e2f4a005e71a31de404ad0bf943d21242`
+  - so this W&B lifecycle fix is landed in repo, but not yet present in the
+    active TPU runtime image
+  - future TPU runs need a new image digest, or the controller would need to be
+    resumed against a rebuilt image, for W&B to reflect this fix
+
+## 2026-03-21 20:15 UTC — Refined next correctness experiments
+
+- Current correctness status:
+  - proven:
+    - single-host alternating correctness across two full phases on `v5p-8`
+    - recovery/resume correctness on the same single-host path
+    - robust alternating fast bootstrap from exported HF weights back into TPU
+      vLLM
+  - not yet proven:
+    - repeated single-host phase swaps without manual recovery
+    - any multi-host alternating phase
+    - repeated multi-host phase swaps
+    - W&B lifecycle correctness in the deployed TPU image
+- Ordered next experiments:
+
+### ALT-TPU-002E: Keep running the active single-host five-phase soak
+
+- Purpose:
+  - prove repeated single-host phase swaps on real TPU, not just the two-phase
+    end-to-end path
+- Current live target:
+  - `run_id=alt-tpu-002e-v5p-soak5`
+  - `tpu_name=alt-v5p-probe-001`
+  - `zone=us-east5-a`
+  - `tpu_type=v5p-8`
+  - `steps_per_phase=1`
+  - `num_train_steps=5`
+- Success criterion:
+  - durable final state reports:
+    - `status=completed`
+    - `phase_id=5`
+    - `policy_version=5`
+    - `source_global_step=5`
+  - `policy_0005/manifest.json` exists
+- Interpretation:
+  - if it completes cleanly, repeated single-host correctness is proven
+  - if it is interrupted only by spot reclaim, treat the result as infra
+    confounded but do not treat alternating correctness as disproven
+  - if it fails due to alternating logic, pause multi-host until that bug is
+    understood and fixed
+
+### ALT-TPU-003: Minimal multi-host one-phase correctness gate
+
+- Goal:
+  - first proof that the alternating controller, materialization path, and
+    training path all work on a real two-host pod
+- Planned configuration:
+  - `tpu_type=v5p-16`
+  - `num_hosts=2`
+  - `steps_per_phase=1`
+  - `num_train_steps=1`
+  - reuse the tiny Math500/smoke-sized quotas from `ALT-TPU-002E`
+  - reuse the current single-host bootstrap setting
+    `gpu_memory_utilization=0.92` unless disproven
+- Preferred image:
+  - use a rebuilt image digest that includes the W&B tracker-finish fix
+  - however, W&B lifecycle correctness is not a blocker for this alternating
+    correctness gate
+- Success criterion:
+  - one full multi-host phase completes
+  - exported policy manifest exists at `policy_0001/manifest.json`
+  - durable state reaches:
+    - `policy_version=1`
+    - `source_global_step=1`
+
+### ALT-TPU-004: Minimal multi-host two-phase correctness gate
+
+- Goal:
+  - prove that multi-host correctness survives at least one real phase boundary
+    and bootstrap into the next phase
+- Planned configuration:
+  - same pod shape as `ALT-TPU-003`
+  - `steps_per_phase=1`
+  - `num_train_steps=2`
+- Success criterion:
+  - the run reaches:
+    - `status=completed`
+    - `phase_id=2`
+    - `policy_version=2`
+    - `source_global_step=2`
+  - `policy_0002/manifest.json` exists
+- Failure split if disproven:
+  - multi-host sampling startup / topology
+  - multi-host materialization or batch sharding
+  - multi-host training/checkpoint visibility
+  - multi-host export/bootstrap boundary
+
+### ALT-TPU-005: Only after `ALT-TPU-004` passes
+
+- Decision point:
+  - choose between:
+    - longer multi-host soak for robustness
+    - separate correctness thread for persistent async TPU workers with live
+      weight sync
+- Important framing:
+  - the current alternating thread is now a correctness harness
+  - it should not be confused with the final fast async architecture
+
+## 2026-03-21 20:32 UTC
+
+### W&B observability fix: alternating controller visibility
+
+- Trigger:
+  - active soak visibility in W&B was still incomplete
+  - only the trainer subprocess run was visible
+  - sampling/materialization/controller progress only existed in durable state
+    files and TPU logs
+- Root cause:
+  - alternating training had a tracker
+  - alternating controller/runtime never initialized a W&B run at all
+  - therefore W&B went dark between training phases even when the soak was
+    healthy
+- Code changes:
+  - added `lib/marin/src/marin/rl/alternating/wandb.py`
+  - updated `lib/marin/src/marin/rl/alternating/controller.py` to create a
+    resumed controller run and log:
+    - controller start/resume
+    - sampling manifest readiness
+    - sampling completion and host counts
+    - materialization start/completion
+    - training completion
+    - phase advance
+    - terminal completed/failed summary
+    - per-phase timing metrics from `state/phase_metrics/*.json`
+  - updated `lib/marin/src/marin/rl/alternating/training_phase.py` so future
+    trainer subprocess runs have explicit alternating metadata:
+    - display name `<run_id>-alternating-train`
+    - group `<run_id>`
+    - tags include `alternating` plus role-specific tag
+- Expected W&B shape on the next rebuilt image:
+  - `<run_id>-alternating-controller`
+  - `<run_id>-alternating-train`
+- Validation:
+  - `uv run pytest tests/rl/test_alternating_controller.py -o addopts=`
+  - `uv run pytest tests/rl/test_alternating_training_phase.py -o addopts=`
+  - `./infra/pre-commit.py --all-files --fix`
+- Important caveat:
+  - the currently running `ALT-TPU-002E` soak is on the older TPU image
+  - it will not retroactively gain the controller W&B run
+  - this fix is ready for the next image build / TPU launch
+
+## 2026-03-21 20:36 UTC — Planned `ALT-TPU-002E` clean retry with full W&B coverage
+
+- User direction:
+  - stop the failed / stale `ALT-TPU-002E` attempt
+  - rerun the five-phase single-host soak on the already-`ACTIVE`
+    `alt-v5p-probe-001`
+  - rebuild the TPU image if required so W&B shows the full alternating run
+- Current pre-launch state:
+  - durable run state for `alt-tpu-002e-v5p-soak5` is terminal:
+    - `status=failed`
+    - `phase_id=2`
+    - `policy_version=2`
+    - `source_global_step=2`
+  - TPU queued resource remains:
+    - `alt-v5p-probe-001`
+    - `zone=us-east5-a`
+    - `state=ACTIVE`
+  - no sampler or trainer containers are live on the TPU at relaunch prep time
+- Relaunch decision:
+  - do not overwrite the failed run root
+  - launch a fresh retry run id so controller state and W&B ids do not resume
+    into the failed attempt
+- Planned retry run:
+  - experiment ID: `ALT-TPU-002E`
+  - run id: `alt-tpu-002e-v5p-soak5-retry1`
+  - TPU target:
+    - `tpu_name=alt-v5p-probe-001`
+    - `zone=us-east5-a`
+    - `tpu_type=v5p-8`
+    - `capacity_type=spot`
+- Planned image build command:
+
+```bash
+uv run python lib/levanter/infra/push_docker.py \
+  --docker_target gcp \
+  --project hai-gcp-models \
+  --region us-east5 \
+  --repository levanter \
+  --image levanter-ahmed \
+  --tag <to-fill-after-build> \
+  --docker_file lib/levanter/docker/tpu/Dockerfile.incremental
+```
+
+- Planned controller launch command:
+
+```bash
+uv run python experiments/alternating_rl_math500.py controller \
+  --run-id alt-tpu-002e-v5p-soak5-retry1 \
+  --shared-root gs://marin-us-east5/alternating-rl \
+  --image <to-fill-after-build> \
+  --tpu-name alt-v5p-probe-001 \
+  --tpu-type v5p-8 \
+  --zone us-east5-a \
+  --num-hosts 1 \
+  --local-tensor-parallel-size 4 \
+  --capacity-type spot \
+  --runtime-version v2-alpha-tpuv5 \
+  --steps-per-phase 1 \
+  --num-train-steps 5 \
+  --train-batch-size 64 \
+  --n-prompts 4 \
+  --n-generations-per-prompt 16 \
+  --eval-examples-per-lesson 8 \
+  --max-input-tokens 512 \
+  --max-output-tokens 256 \
+  --inference-gpu-memory-utilization 0.92
+```
+
+- Success criterion for the retry launch:
+  - controller W&B run appears:
+    - `<run_id>-alternating-controller`
+  - trainer W&B run appears when phase-0 training starts:
+    - `<run_id>-alternating-train`
+  - durable state enters phase-0 sampling on the existing TPU
+
+## 2026-03-21 20:45 UTC — `ALT-TPU-002E` relaunch sequence and active retry
+
+- Retry 1:
+  - `run_id=alt-tpu-002e-v5p-soak5-retry1`
+  - image digest:
+    - `us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:54972a8f5a94e031b7869a883a680f70850c1dc8fa24f543fbd3ab015da1cffe`
+  - result:
+    - failed immediately in local controller W&B setup
+  - root cause:
+    - `lib/marin/src/marin/rl/alternating/wandb.py` called `join_path(...)`
+      with three arguments while the helper only accepts two
+  - fix:
+    - nested the `join_path` calls and added regression coverage
+- Retry 2:
+  - `run_id=alt-tpu-002e-v5p-soak5-retry2`
+  - same image digest as retry 1
+  - result:
+    - controller W&B run came up, but controller startup was effectively stuck
+      in `wandb.run.log_code(...)` before phase-0 work
+  - evidence:
+    - local process sample showed time in file hashing / `copyfile` /
+      `mmap` from W&B code snapshotting
+  - fix:
+    - set alternating role-specific `WandbConfig.save_code=False`
+    - revalidated tests and pre-commit
+- Retry 3:
+  - `run_id=alt-tpu-002e-v5p-soak5-retry3`
+  - rebuilt image digest:
+    - `us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:ba49b843c2b780a1615d7303aead9087ce98e379891d48db4c7584fe208f94a8`
+  - exact controller launch:
+
+```bash
+uv run python experiments/alternating_rl_math500.py controller \
+  --run-id alt-tpu-002e-v5p-soak5-retry3 \
+  --shared-root gs://marin-us-east5/alternating-rl \
+  --image us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:ba49b843c2b780a1615d7303aead9087ce98e379891d48db4c7584fe208f94a8 \
+  --tpu-name alt-v5p-probe-001 \
+  --tpu-type v5p-8 \
+  --zone us-east5-a \
+  --num-hosts 1 \
+  --local-tensor-parallel-size 4 \
+  --capacity-type spot \
+  --runtime-version v2-alpha-tpuv5 \
+  --steps-per-phase 1 \
+  --num-train-steps 5 \
+  --train-batch-size 64 \
+  --n-prompts 4 \
+  --n-generations-per-prompt 16 \
+  --eval-examples-per-lesson 8 \
+  --max-input-tokens 512 \
+  --max-output-tokens 256 \
+  --inference-gpu-memory-utilization 0.92
+```
+
+- Live status:
+  - durable run state exists and currently reports:
+    - `status=sampling`
+    - `phase_id=0`
+    - `policy_version=0`
+    - `source_global_step=0`
+    - `current_sampling_manifest=gs://marin-us-east5/alternating-rl/alt-tpu-002e-v5p-soak5-retry3/sampling/phase_0000/manifest.json`
+  - W&B controller run is live:
+    - `https://wandb.ai/marin-community/alternate_rl/runs/alt-tpu-002e-v5p-soak5-retry3-alternating-controller`
+  - TPU verification:
+    - `marin-alt-sampler` is running on `alt-v5p-probe-001`
+- Interpretation:
+  - the full-visibility relaunch is now genuinely live on the requested active
+    TPU
+  - trainer W&B run should appear once phase-0 reaches training

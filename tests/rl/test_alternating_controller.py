@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 from iris.marin_fs import url_to_fs
+from levanter.tracker.wandb import WandbConfig
 
 from marin.rl.alternating import (
     AlternatingClusterConfig,
@@ -24,6 +25,7 @@ from marin.rl.alternating import (
     build_sampling_host_assignments,
     read_run_state,
     run_controller,
+    update_phase_metrics,
     utc_now_iso,
     write_materialized_batches_manifest,
     write_policy_manifest,
@@ -208,6 +210,93 @@ class FakeHooks:
         return manifest_path
 
 
+@dataclass
+class RecordingTracker:
+    hparams: list[dict[str, object]]
+    logs: list[tuple[dict[str, object], int | None]]
+    summaries: list[dict[str, object]]
+    finish_calls: int = 0
+
+    def __init__(self):
+        self.hparams = []
+        self.logs = []
+        self.summaries = []
+
+    def log_hyperparameters(self, hparams: dict[str, object]) -> None:
+        self.hparams.append(hparams)
+
+    def log(self, metrics, *, step, commit=None) -> None:
+        del commit
+        self.logs.append((dict(metrics), step))
+
+    def log_summary(self, metrics: dict[str, object]) -> None:
+        self.summaries.append(dict(metrics))
+
+    def finish(self) -> None:
+        self.finish_calls += 1
+
+
+class MetricHooks(FakeHooks):
+    def launch_sampling_phase(self, config: AlternatingRLConfig, state, manifest, paths: AlternatingRunPaths) -> None:
+        super().launch_sampling_phase(config, state, manifest, paths)
+        update_phase_metrics(
+            paths.phase_metrics_path(manifest.phase_id),
+            phase_id=manifest.phase_id,
+            prepare_sampling_seconds=1.5,
+        )
+
+    def wait_for_sampling_phase(self, config: AlternatingRLConfig, state, manifest, paths: AlternatingRunPaths) -> None:
+        del config, state
+        update_phase_metrics(
+            paths.phase_metrics_path(manifest.phase_id),
+            phase_id=manifest.phase_id,
+            sampling_seconds=2.5,
+        )
+
+    def update_curriculum_state(self, config: AlternatingRLConfig, state, manifest, paths: AlternatingRunPaths) -> None:
+        super().update_curriculum_state(config, state, manifest, paths)
+        update_phase_metrics(
+            paths.phase_metrics_path(manifest.phase_id),
+            phase_id=manifest.phase_id,
+            curriculum_update_seconds=3.5,
+        )
+
+    def materialize_training_batches(
+        self, config: AlternatingRLConfig, state, manifest, paths: AlternatingRunPaths
+    ) -> str:
+        manifest_path = super().materialize_training_batches(config, state, manifest, paths)
+        update_phase_metrics(
+            paths.phase_metrics_path(manifest.phase_id),
+            phase_id=manifest.phase_id,
+            materialization_seconds=4.5,
+        )
+        return manifest_path
+
+    def run_training_phase(
+        self,
+        config: AlternatingRLConfig,
+        state,
+        manifest: MaterializedBatchesManifest,
+        paths: AlternatingRunPaths,
+    ) -> str:
+        manifest_path = super().run_training_phase(config, state, manifest, paths)
+        update_phase_metrics(
+            paths.phase_metrics_path(state.phase_id),
+            phase_id=state.phase_id,
+            training_seconds=5.5,
+            export_seconds=6.5,
+        )
+        return manifest_path
+
+
+class FailingHooks(FakeHooks):
+    def materialize_training_batches(
+        self, config: AlternatingRLConfig, state, manifest, paths: AlternatingRunPaths
+    ) -> str:
+        del config, state, manifest, paths
+        raise RuntimeError("materialization exploded")
+
+
 def test_build_sampling_host_assignments_derives_per_host_quota(tmp_path):
     config = _make_config(tmp_path)
     assignments = build_sampling_host_assignments(config, phase_id=3, num_hosts=config.cluster.num_hosts)
@@ -274,6 +363,138 @@ def test_controller_runs_one_phase_and_completes(tmp_path):
     assert final_state.current_levanter_checkpoint_path == f"{paths.levanter_checkpoints_root}/step-2"
     assert final_state.current_sampling_manifest is None
     assert final_state.current_materialized_manifest is None
+
+
+def test_init_alternating_controller_tracker_uses_nested_replicate_path(monkeypatch, tmp_path):
+    config = _make_config(tmp_path)
+    config = replace(
+        config,
+        trainer=SimpleNamespace(
+            tracker=WandbConfig(
+                project="alternate_rl",
+                name="base-run",
+                tags=["rl"],
+            )
+        ),
+    )
+    paths = AlternatingRunPaths.from_config(config)
+    captured = {}
+
+    def _fake_init(self, run_id):
+        captured["run_id"] = run_id
+        captured["name"] = self.name
+        captured["group"] = self.group
+        captured["tags"] = self.tags
+        captured["save_code"] = self.save_code
+        captured["replicate_path"] = self.replicate_path
+        return object()
+
+    monkeypatch.setattr("marin.rl.alternating.wandb.WandbConfig.init", _fake_init)
+
+    from marin.rl.alternating.wandb import init_alternating_controller_tracker
+
+    tracker = init_alternating_controller_tracker(config, paths)
+
+    assert tracker is not None
+    assert captured == {
+        "run_id": "alt-controller-test-alternating-controller",
+        "name": "alt-controller-test-alternating-controller",
+        "group": "alt-controller-test",
+        "tags": ["rl", "alternating", "alternating-controller"],
+        "save_code": False,
+        "replicate_path": f"{paths.state_root}/wandb/alternating-controller",
+    }
+
+
+def test_controller_logs_phase_events_and_timings(monkeypatch, tmp_path):
+    config = _make_config(tmp_path)
+    tracker = RecordingTracker()
+    monkeypatch.setattr(
+        "marin.rl.alternating.controller.init_alternating_controller_tracker",
+        lambda _config, _paths: tracker,
+    )
+
+    final_state = run_controller(config, MetricHooks())
+
+    assert final_state.status == RunStatus.COMPLETED
+    assert tracker.finish_calls == 1
+    assert tracker.hparams == [
+        {
+            "alternating/run_id": config.run_id,
+            "alternating/shared_root": config.shared_root,
+            "alternating/image_digest": config.image_digest,
+            "alternating/seed": config.seed,
+            "alternating/resumed": False,
+            "alternating/cluster/tpu_name": config.cluster.tpu_name,
+            "alternating/cluster/tpu_type": config.cluster.tpu_type,
+            "alternating/cluster/zone": config.cluster.zone,
+            "alternating/cluster/num_hosts": config.cluster.num_hosts,
+            "alternating/cluster/local_tensor_parallel_size": config.cluster.local_tensor_parallel_size,
+            "alternating/cluster/capacity_type": config.cluster.capacity_type,
+            "alternating/quotas/steps_per_phase": config.quotas.steps_per_phase,
+            "alternating/quotas/num_train_steps": config.quotas.num_train_steps,
+            "alternating/quotas/groups_per_training_step": config.quotas.groups_per_training_step,
+            "alternating/quotas/eval_examples_per_lesson": config.quotas.eval_examples_per_lesson,
+            "alternating/initial_checkpoint": config.initial_checkpoint,
+            "alternating/tokenizer_name": config.tokenizer_name,
+            "alternating/model_name": config.inference.model_name,
+        }
+    ]
+
+    events = [metrics["alternating/controller/event"] for metrics, _step in tracker.logs]
+    assert events == [
+        "controller_started",
+        "sampling_manifest_ready",
+        "sampling_completed",
+        "materialization_started",
+        "materialization_completed",
+        "training_completed",
+        "phase_advanced",
+        "completed",
+    ]
+
+    training_metrics = next(
+        metrics for metrics, _step in tracker.logs if metrics["alternating/controller/event"] == "training_completed"
+    )
+    assert training_metrics["alternating/prepare_sampling_seconds"] == 1.5
+    assert training_metrics["alternating/sampling_seconds"] == 2.5
+    assert training_metrics["alternating/curriculum_update_seconds"] == 3.5
+    assert training_metrics["alternating/materialization_seconds"] == 4.5
+    assert training_metrics["alternating/training_seconds"] == 5.5
+    assert training_metrics["alternating/export_seconds"] == 6.5
+    assert training_metrics["alternating/phase_total_seconds"] == 24.0
+    assert training_metrics["alternating/controller/materialized_training_batches"] == 2
+
+    assert tracker.summaries == [
+        {
+            "alternating/controller/final_status": RunStatus.COMPLETED.value,
+            "alternating/controller/final_phase_id": 1,
+            "alternating/controller/final_policy_version": 1,
+            "alternating/controller/final_source_global_step": 2,
+            "alternating/controller/last_completed_phase": 0,
+        }
+    ]
+
+
+def test_controller_finishes_tracker_and_records_failure(monkeypatch, tmp_path):
+    config = _make_config(tmp_path)
+    tracker = RecordingTracker()
+    monkeypatch.setattr(
+        "marin.rl.alternating.controller.init_alternating_controller_tracker",
+        lambda _config, _paths: tracker,
+    )
+
+    with pytest.raises(RuntimeError, match="materialization exploded"):
+        run_controller(config, FailingHooks())
+
+    paths = AlternatingRunPaths.from_config(config)
+    failed_state = read_run_state(paths.run_state_path)
+
+    assert failed_state.status == RunStatus.FAILED
+    assert tracker.finish_calls == 1
+    assert tracker.logs[-1][0]["alternating/controller/event"] == "failed"
+    assert tracker.summaries[-1]["alternating/controller/final_status"] == RunStatus.FAILED.value
+    assert "materialization exploded" in tracker.summaries[-1]["alternating/controller/error_message"]
 
 
 def test_bootstrap_rejects_image_digest_drift(tmp_path):

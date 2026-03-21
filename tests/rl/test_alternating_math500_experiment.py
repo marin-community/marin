@@ -6,7 +6,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from experiments.alternating_rl_math500 import (
+    ALTERNATING_WANDB_PROJECT,
     _experiment_config_from_args,
+    _default_experiment_config,
     build_parser,
     create_math_curriculum,
 )
@@ -106,3 +108,9 @@ def test_controller_parser_accepts_smoke_override_flags():
     assert args.max_input_tokens == 512
     assert args.max_output_tokens == 256
     assert args.inference_gpu_memory_utilization == 0.95
+
+
+def test_alternating_math500_uses_dedicated_wandb_project():
+    config = _default_experiment_config()
+
+    assert config.project_name == ALTERNATING_WANDB_PROJECT

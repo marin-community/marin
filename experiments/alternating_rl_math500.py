@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SEED = 42
 DEFAULT_EVAL_EXAMPLES_PER_LESSON = 500
+ALTERNATING_WANDB_PROJECT = "alternate_rl"
 
 try:
     from marin.rl.rl_experiment_utils import ModelConfig, RLExperimentConfig, make_rl_step
@@ -124,6 +125,7 @@ def _default_experiment_config() -> RLExperimentConfig:
             vocab_tile_size=32064,
         ),
         experiment_name_suffix="alternating-math500",
+        project_name=ALTERNATING_WANDB_PROJECT,
         train_batch_size=1024,
         per_device_parallelism=16,
         learning_rate=2e-6,

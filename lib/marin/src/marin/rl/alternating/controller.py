@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import traceback
 import logging
 from dataclasses import replace
 from typing import Protocol
@@ -31,6 +32,7 @@ from marin.rl.alternating.state import (
     write_run_state,
     write_sampling_manifest,
 )
+from marin.rl.alternating.wandb import init_alternating_controller_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -357,13 +359,19 @@ def _expected_next_policy_manifest_path(paths: AlternatingRunPaths, state: Alter
     return paths.policy_manifest_path(state.policy_version + 1)
 
 
-def _log_phase_summary(paths: AlternatingRunPaths, phase_id: int) -> None:
+def _phase_metrics_for_phase(paths: AlternatingRunPaths, phase_id: int):
     metrics_path = paths.phase_metrics_path(phase_id)
     if not exists(metrics_path):
-        logger.info("alternating phase %d completed without a metrics manifest", phase_id)
-        return
+        return None
+    return read_phase_metrics_manifest(metrics_path)
 
-    metrics = read_phase_metrics_manifest(metrics_path)
+
+def _log_phase_summary(paths: AlternatingRunPaths, phase_id: int):
+    metrics = _phase_metrics_for_phase(paths, phase_id)
+    if metrics is None:
+        logger.info("alternating phase %d completed without a metrics manifest", phase_id)
+        return None
+
     logger.info(
         "alternating phase %d timings: prepare_sampling=%s sampling=%s curriculum_update=%s "
         "materialization=%s training=%s export=%s total=%s",
@@ -376,6 +384,142 @@ def _log_phase_summary(paths: AlternatingRunPaths, phase_id: int) -> None:
         metrics.export_seconds,
         metrics.total_recorded_seconds,
     )
+    return metrics
+
+
+def _controller_hyperparameters(
+    config: AlternatingRLConfig,
+    *,
+    resumed: bool,
+) -> dict[str, object]:
+    return {
+        "alternating/run_id": config.run_id,
+        "alternating/shared_root": config.shared_root,
+        "alternating/image_digest": config.image_digest,
+        "alternating/seed": config.seed,
+        "alternating/resumed": resumed,
+        "alternating/cluster/tpu_name": config.cluster.tpu_name,
+        "alternating/cluster/tpu_type": config.cluster.tpu_type,
+        "alternating/cluster/zone": config.cluster.zone,
+        "alternating/cluster/num_hosts": config.cluster.num_hosts,
+        "alternating/cluster/local_tensor_parallel_size": config.cluster.local_tensor_parallel_size,
+        "alternating/cluster/capacity_type": config.cluster.capacity_type,
+        "alternating/quotas/steps_per_phase": config.quotas.steps_per_phase,
+        "alternating/quotas/num_train_steps": config.quotas.num_train_steps,
+        "alternating/quotas/groups_per_training_step": config.quotas.groups_per_training_step,
+        "alternating/quotas/eval_examples_per_lesson": config.quotas.eval_examples_per_lesson,
+        "alternating/initial_checkpoint": config.initial_checkpoint,
+        "alternating/tokenizer_name": config.tokenizer_name,
+        "alternating/model_name": getattr(config.inference, "model_name", None),
+    }
+
+
+def _controller_metrics(
+    state: AlternatingRunState,
+    *,
+    event: str,
+    sampling_manifest: SamplingManifest | None = None,
+    sampling_statuses: list[SamplingHostStatusManifest] | None = None,
+    materialized_manifest: MaterializedBatchesManifest | None = None,
+    phase_metrics=None,
+) -> dict[str, object]:
+    metrics: dict[str, object] = {
+        "alternating/controller/event": event,
+        "alternating/controller/status": state.status.value,
+        "alternating/controller/phase_id": state.phase_id,
+        "alternating/controller/policy_version": state.policy_version,
+        "alternating/controller/source_global_step": state.source_global_step,
+        "alternating/controller/last_completed_phase": state.last_completed_phase,
+        "alternating/controller/num_hosts": state.num_hosts,
+    }
+    if sampling_manifest is not None:
+        metrics["alternating/controller/expected_sampling_hosts"] = len(sampling_manifest.host_assignments)
+        metrics["alternating/controller/local_tensor_parallel_size"] = sampling_manifest.local_tensor_parallel_size
+        metrics["alternating/controller/frozen_lesson_count"] = len(sampling_manifest.frozen_lesson_weights)
+        metrics["alternating/controller/target_train_groups"] = sum(
+            assignment.target_train_groups for assignment in sampling_manifest.host_assignments
+        )
+    if sampling_statuses is not None:
+        metrics["alternating/controller/sampling_hosts_succeeded"] = sum(
+            int(status.status == HostPhaseStatus.SUCCEEDED) for status in sampling_statuses
+        )
+        metrics["alternating/controller/sampling_hosts_failed"] = sum(
+            int(status.status == HostPhaseStatus.FAILED) for status in sampling_statuses
+        )
+        metrics["alternating/controller/sampling_rollout_files"] = sum(
+            len(status.rollout_file_paths) for status in sampling_statuses
+        )
+        metrics["alternating/controller/sampling_train_groups"] = sum(
+            status.num_train_groups for status in sampling_statuses
+        )
+    if materialized_manifest is not None:
+        metrics["alternating/controller/materialized_rollout_groups"] = materialized_manifest.num_rollout_groups
+        metrics["alternating/controller/materialized_rollouts"] = materialized_manifest.num_individual_rollouts
+        metrics["alternating/controller/materialized_training_batches"] = materialized_manifest.num_training_batches
+        metrics["alternating/controller/materialized_global_batch_size"] = materialized_manifest.global_batch_size
+    if phase_metrics is not None:
+        metrics["alternating/phase_total_seconds"] = phase_metrics.total_recorded_seconds
+        if phase_metrics.prepare_sampling_seconds is not None:
+            metrics["alternating/prepare_sampling_seconds"] = phase_metrics.prepare_sampling_seconds
+        if phase_metrics.sampling_seconds is not None:
+            metrics["alternating/sampling_seconds"] = phase_metrics.sampling_seconds
+        if phase_metrics.curriculum_update_seconds is not None:
+            metrics["alternating/curriculum_update_seconds"] = phase_metrics.curriculum_update_seconds
+        if phase_metrics.materialization_seconds is not None:
+            metrics["alternating/materialization_seconds"] = phase_metrics.materialization_seconds
+        if phase_metrics.training_seconds is not None:
+            metrics["alternating/training_seconds"] = phase_metrics.training_seconds
+        if phase_metrics.export_seconds is not None:
+            metrics["alternating/export_seconds"] = phase_metrics.export_seconds
+
+    return metrics
+
+
+def _log_controller_event(
+    tracker,
+    state: AlternatingRunState,
+    *,
+    event: str,
+    sampling_manifest: SamplingManifest | None = None,
+    sampling_statuses: list[SamplingHostStatusManifest] | None = None,
+    materialized_manifest: MaterializedBatchesManifest | None = None,
+    phase_metrics=None,
+) -> None:
+    if tracker is None:
+        return
+
+    tracker.log(
+        _controller_metrics(
+            state,
+            event=event,
+            sampling_manifest=sampling_manifest,
+            sampling_statuses=sampling_statuses,
+            materialized_manifest=materialized_manifest,
+            phase_metrics=phase_metrics,
+        ),
+        step=state.source_global_step,
+    )
+
+
+def _log_controller_summary(
+    tracker,
+    state: AlternatingRunState,
+    *,
+    error_message: str | None = None,
+) -> None:
+    if tracker is None:
+        return
+
+    summary = {
+        "alternating/controller/final_status": state.status.value,
+        "alternating/controller/final_phase_id": state.phase_id,
+        "alternating/controller/final_policy_version": state.policy_version,
+        "alternating/controller/final_source_global_step": state.source_global_step,
+        "alternating/controller/last_completed_phase": state.last_completed_phase,
+    }
+    if error_message is not None:
+        summary["alternating/controller/error_message"] = error_message
+    tracker.log_summary(summary)
 
 
 def run_controller(
@@ -384,40 +528,80 @@ def run_controller(
 ) -> AlternatingRunState:
     """Run the explicit alternating RL controller loop."""
     paths = AlternatingRunPaths.from_config(config)
+    resumed = exists(paths.run_state_path)
     state = bootstrap_or_resume(config, hooks, paths)
+    tracker = init_alternating_controller_tracker(config, paths)
+    tracker_finished = False
+    if tracker is not None:
+        tracker.log_hyperparameters(_controller_hyperparameters(config, resumed=resumed))
+        _log_controller_event(
+            tracker,
+            state,
+            event="controller_resumed" if resumed else "controller_started",
+        )
 
     try:
         while True:
             ensure_image_digest_matches(config, state)
 
             if state.status == RunStatus.COMPLETED:
+                _log_controller_event(tracker, state, event="completed")
+                _log_controller_summary(tracker, state)
                 return state
             if state.status == RunStatus.FAILED:
+                _log_controller_event(tracker, state, event="failed")
+                _log_controller_summary(tracker, state)
                 return state
             if should_stop(state, config):
                 completed_state = mark_completed(state)
                 write_run_state(paths.run_state_path, completed_state)
+                _log_controller_event(tracker, completed_state, event="completed")
+                _log_controller_summary(tracker, completed_state)
                 return completed_state
 
             if state.status == RunStatus.SAMPLING:
                 state, sampling_manifest = ensure_sampling_manifest(config, state, hooks, paths)
+                _log_controller_event(
+                    tracker,
+                    state,
+                    event="sampling_manifest_ready",
+                    sampling_manifest=sampling_manifest,
+                )
                 sampling_status_count = _existing_sampling_status_count(paths, sampling_manifest)
                 if sampling_status_count == 0:
                     hooks.launch_sampling_phase(config, state, sampling_manifest, paths)
                     hooks.wait_for_sampling_phase(config, state, sampling_manifest, paths)
                 elif sampling_status_count < len(sampling_manifest.host_assignments):
                     hooks.wait_for_sampling_phase(config, state, sampling_manifest, paths)
-                verify_sampling_host_statuses(sampling_manifest, paths)
+                sampling_statuses = verify_sampling_host_statuses(sampling_manifest, paths)
                 hooks.update_curriculum_state(config, state, sampling_manifest, paths)
+                _log_controller_event(
+                    tracker,
+                    state,
+                    event="sampling_completed",
+                    sampling_manifest=sampling_manifest,
+                    sampling_statuses=sampling_statuses,
+                    phase_metrics=_phase_metrics_for_phase(paths, state.phase_id),
+                )
                 state = replace(state, status=RunStatus.MATERIALIZING)
                 write_run_state(paths.run_state_path, state)
+                _log_controller_event(tracker, state, event="materialization_started")
                 continue
 
             if state.status == RunStatus.MATERIALIZING:
                 if state.current_sampling_manifest is None:
                     raise ValueError("state.current_sampling_manifest must be set during materialization")
                 sampling_manifest = read_sampling_manifest(state.current_sampling_manifest)
-                state, _ = ensure_materialized_manifest(config, state, hooks, sampling_manifest, paths)
+                state, materialized_manifest = ensure_materialized_manifest(
+                    config, state, hooks, sampling_manifest, paths
+                )
+                _log_controller_event(
+                    tracker,
+                    state,
+                    event="materialization_completed",
+                    materialized_manifest=materialized_manifest,
+                    phase_metrics=_phase_metrics_for_phase(paths, state.phase_id),
+                )
                 continue
 
             if state.status == RunStatus.TRAINING:
@@ -427,13 +611,32 @@ def run_controller(
                 next_policy_manifest_path = _expected_next_policy_manifest_path(paths, state)
                 if not exists(next_policy_manifest_path):
                     next_policy_manifest_path = hooks.run_training_phase(config, state, materialized_manifest, paths)
-                _log_phase_summary(paths, state.phase_id)
+                phase_metrics = _log_phase_summary(paths, state.phase_id)
+                _log_controller_event(
+                    tracker,
+                    state,
+                    event="training_completed",
+                    materialized_manifest=materialized_manifest,
+                    phase_metrics=phase_metrics,
+                )
                 state = advance_run_state(state, next_policy_manifest_path)
                 write_run_state(paths.run_state_path, state)
+                _log_controller_event(tracker, state, event="phase_advanced")
                 continue
 
             raise AssertionError(f"Unexpected controller state: {state.status}")
     except Exception:
         failed_state = mark_failed(state)
         write_run_state(paths.run_state_path, failed_state)
+        _log_controller_event(
+            tracker,
+            failed_state,
+            event="failed",
+            phase_metrics=_phase_metrics_for_phase(paths, failed_state.phase_id),
+        )
+        _log_controller_summary(tracker, failed_state, error_message=traceback.format_exc())
         raise
+    finally:
+        if tracker is not None and not tracker_finished:
+            tracker.finish()
+            tracker_finished = True

@@ -37,6 +37,7 @@ from marin.rl.alternating.state import (
     write_run_state,
     write_policy_manifest,
 )
+from marin.rl.alternating.wandb import alternating_training_tracker_config
 from marin.rl.model_utils import load_model_from_checkpoint
 
 logger = logging.getLogger(__name__)
@@ -75,14 +76,19 @@ def _trainer_config_for_phase(
         base_path=paths.levanter_checkpoints_root,
     )
     trainer_run_id = _trainer_run_id(config)
-    return dataclasses.replace(
-        config.trainer,
+    replace_kwargs = dict(
         id=trainer_run_id,
         num_train_steps=total_train_steps,
         load_checkpoint=resume_checkpoint_path is not None,
         load_checkpoint_path=resume_checkpoint_path,
         checkpointer=checkpointer,
     )
+    if hasattr(config.trainer, "tracker"):
+        replace_kwargs["tracker"] = alternating_training_tracker_config(
+            getattr(config.trainer, "tracker", None),
+            run_id=config.run_id,
+        )
+    return dataclasses.replace(config.trainer, **replace_kwargs)
 
 
 def _trainer_checkpoint_root(trainer_config) -> str:
@@ -411,4 +417,6 @@ def run_training_phase(
             source_global_step=target_step,
             tracker=tracker,
         )
+    if tracker is not None:
+        tracker.finish()
     return policy_manifest_path
