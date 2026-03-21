@@ -26,12 +26,14 @@ import requests
 from iris.marin_fs import marin_prefix
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.inference.vllm_async import (
+    AsyncVllmRuntime,
+    start_async_vllm_server,
+    stop_async_vllm_server,
+)
 from marin.inference.vllm_inprocess import (
     InProcessEligibility,
-    InProcessVllmRuntime,
     evaluate_inprocess_eligibility,
-    start_inprocess_vllm_server,
-    stop_inprocess_vllm_server,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,13 +67,13 @@ class VllmServerHandle:
     docker_container_name: str | None = None
     docker_image: str | None = None
     docker_run_cmd: str | None = None
-    inprocess_runtime: InProcessVllmRuntime | None = None
+    async_runtime: AsyncVllmRuntime | None = None
 
     @property
     def mode(self) -> Literal["native", "docker"]:
         if self.docker_container_name:
             return "docker"
-        if self.inprocess_runtime is not None:
+        if self.async_runtime is not None:
             return "native"
         if self.process is not None or self.log_dir is not None:
             return "native"
@@ -356,7 +358,7 @@ class NativeVllmServerBackend(VllmServerBackend):
             handle.process.kill()
 
 
-class InProcessVllmServerBackend(VllmServerBackend):
+class ManagedAsyncVllmServerBackend(VllmServerBackend):
     def __init__(self, *, model: ModelConfig, mapping_model_name: str) -> None:
         self._model = model
         self._mapping_model_name = mapping_model_name
@@ -371,7 +373,7 @@ class InProcessVllmServerBackend(VllmServerBackend):
         extra_cli_args: list[str] | None,
     ) -> VllmServerHandle:
         resolved_port = port if port is not None else 8000
-        runtime = start_inprocess_vllm_server(
+        runtime = start_async_vllm_server(
             model=self._model,
             model_name_or_path=model_name_or_path,
             mapping_model_name=self._mapping_model_name,
@@ -383,29 +385,29 @@ class InProcessVllmServerBackend(VllmServerBackend):
         return VllmServerHandle(
             server_url=runtime.server_url,
             port=runtime.port,
-            inprocess_runtime=runtime,
+            async_runtime=runtime,
         )
 
     def logs_tail(self, handle: VllmServerHandle, *, max_lines: int = 200) -> str:
-        runtime = handle.inprocess_runtime
+        runtime = handle.async_runtime
         if runtime is None:
-            return "<in-process runtime unavailable>"
+            return "<async runtime unavailable>"
         return runtime.logs_tail(max_lines=max_lines)
 
     def diagnostics(self, handle: VllmServerHandle, *, max_lines: int = 200) -> dict[str, str]:
-        runtime = handle.inprocess_runtime
+        runtime = handle.async_runtime
         if runtime is None:
-            return {"vLLM in-process diagnostics": "<runtime unavailable>"}
+            return {"vLLM async-native diagnostics": "<runtime unavailable>"}
         return {
-            "vLLM in-process model id": str(runtime.model_id),
-            "vLLM in-process events": runtime.logs_tail(max_lines=max_lines),
+            "vLLM async-native model id": str(runtime.model_id),
+            "vLLM async-native events": runtime.logs_tail(max_lines=max_lines),
         }
 
     def stop(self, handle: VllmServerHandle) -> None:
-        runtime = handle.inprocess_runtime
+        runtime = handle.async_runtime
         if runtime is None:
             return
-        stop_inprocess_vllm_server(runtime)
+        stop_async_vllm_server(runtime)
 
 
 def resolve_vllm_mode(mode: Literal["native", "docker"] | None) -> Literal["native", "docker"]:
@@ -490,6 +492,7 @@ class VllmEnvironment:
         host: str = "127.0.0.1",
         port: int | None = None,
         timeout_seconds: int = 3600,
+        native_startup_failure_mode: Literal["fallback", "raise"] = "fallback",
         docker_image: str | None = None,
         docker_run_args: list[str] | None = None,
         extra_args: list[str] | None = None,
@@ -498,6 +501,7 @@ class VllmEnvironment:
         self.host = host
         self.port = port
         self.timeout_seconds = timeout_seconds
+        self.native_startup_failure_mode = native_startup_failure_mode
         self.docker_image = docker_image
         self.docker_run_args = docker_run_args
         self._extra_args = list(extra_args or [])
@@ -515,8 +519,8 @@ class VllmEnvironment:
         if self.mode == "native":
             # Pass only raw extra_args (not engine_kwargs converted to CLI flags)
             # to the eligibility check.  engine_kwargs are read directly by
-            # _llm_kwargs(); passing them as CLI flags would look "supported"
-            # but any flag in raw extra_args is NOT applied to in-process LLM().
+            # the native async backend; passing them as CLI flags would look
+            # "supported" but raw extra_args need explicit handling there.
             self._inprocess_eligibility = evaluate_inprocess_eligibility(
                 model=self.model,
                 model_name_or_path=self.model_name_or_path,
@@ -524,7 +528,7 @@ class VllmEnvironment:
             )
             if self._inprocess_eligibility.eligible:
                 assert self._inprocess_eligibility.mapping_model_name is not None
-                self._backend = InProcessVllmServerBackend(
+                self._backend = ManagedAsyncVllmServerBackend(
                     model=self.model,
                     mapping_model_name=self._inprocess_eligibility.mapping_model_name,
                 )
@@ -538,7 +542,7 @@ class VllmEnvironment:
             else:
                 assert self._inprocess_eligibility is not None
                 logger.info(
-                    "In-process vLLM not selected; using subprocess native backend",
+                    "Async native vLLM not selected; using subprocess native backend",
                     extra={"reason": self._inprocess_eligibility.reason},
                 )
                 self.model = _maybe_enable_streaming(self.model)
@@ -574,14 +578,14 @@ class VllmEnvironment:
             try:
                 self._start_with_current_backend()
             except Exception as exc:
-                if self._fallback_backend is not None:
+                if self._fallback_backend is not None and self.native_startup_failure_mode == "fallback":
                     _emit_exception_to_iris(
-                        source="vllm.inprocess",
-                        header="In-process vLLM startup failed; falling back to subprocess native backend",
+                        source="vllm.async",
+                        header="Async native vLLM startup failed; falling back to subprocess native backend",
                         exc=exc,
                     )
                     logger.warning(
-                        "In-process vLLM startup failed; falling back to subprocess native backend",
+                        "Async native vLLM startup failed; falling back to subprocess native backend",
                         exc_info=True,
                     )
                     self._activate_fallback_backend()
@@ -598,6 +602,12 @@ class VllmEnvironment:
                                 logger.exception("Failed to collect vLLM diagnostics")
                         raise
                 else:
+                    if self._fallback_backend is not None:
+                        _emit_exception_to_iris(
+                            source="vllm.async",
+                            header="Async native vLLM startup failed; not falling back",
+                            exc=exc,
+                        )
                     logger.exception("Failed to start vLLM environment", extra=self.debug_snapshot())
                     if self.vllm_server is not None:
                         try:

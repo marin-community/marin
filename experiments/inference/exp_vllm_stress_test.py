@@ -154,13 +154,18 @@ def run_stress_test(
     max_concurrent: int,
     max_tokens: int,
     max_model_len: int,
+    startup_timeout: int,
     mode: str | None,
+    native_startup_failure_mode: str,
     tensor_parallel_size: int | None = None,
+    gpu_memory_utilization: float | None = None,
     enforce_eager: bool = False,
 ) -> dict:
     engine_kwargs: dict = {"max_model_len": max_model_len}
     if tensor_parallel_size is not None:
         engine_kwargs["tensor_parallel_size"] = tensor_parallel_size
+    if gpu_memory_utilization is not None:
+        engine_kwargs["gpu_memory_utilization"] = gpu_memory_utilization
     if enforce_eager:
         engine_kwargs["enforce_eager"] = True
 
@@ -182,8 +187,9 @@ def run_stress_test(
         model=model,
         host="127.0.0.1",
         port=8000,
-        timeout_seconds=3600,
+        timeout_seconds=startup_timeout,
         mode=mode,
+        native_startup_failure_mode=native_startup_failure_mode,
     )
 
     with env:
@@ -314,8 +320,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-concurrent", type=int, default=64, help="Max concurrent requests (default: 64)")
     parser.add_argument("--max-tokens", type=int, default=128, help="Max tokens per response (default: 128)")
     parser.add_argument("--max-model-len", type=int, default=4096, help="Max model sequence length (default: 4096)")
+    parser.add_argument(
+        "--startup-timeout",
+        type=int,
+        default=3600,
+        help="Server startup timeout in seconds before failing (default: 3600)",
+    )
+    parser.add_argument(
+        "--native-startup-failure-mode",
+        choices=["fallback", "raise"],
+        default="fallback",
+        help="How native mode handles async-native startup failure (default: fallback)",
+    )
     parser.add_argument("--mode", choices=["docker", "native"], default=None, help="vLLM mode")
     parser.add_argument("--tensor-parallel-size", type=int, default=None, help="Tensor parallel size (e.g. 4 for 70B)")
+    parser.add_argument(
+        "--gpu-memory-utilization",
+        type=float,
+        default=None,
+        help="Fraction of TPU HBM reserved for KV cache (e.g. 0.25)",
+    )
     parser.add_argument("--enforce-eager", action="store_true", help="Disable XLA compilation (faster startup)")
     args = parser.parse_args(argv)
 
@@ -325,8 +349,11 @@ def main(argv: list[str] | None = None) -> int:
         max_concurrent=args.max_concurrent,
         max_tokens=args.max_tokens,
         max_model_len=args.max_model_len,
+        startup_timeout=args.startup_timeout,
         mode=args.mode,
+        native_startup_failure_mode=args.native_startup_failure_mode,
         tensor_parallel_size=args.tensor_parallel_size,
+        gpu_memory_utilization=args.gpu_memory_utilization,
         enforce_eager=args.enforce_eager,
     )
     return 0

@@ -1,6 +1,6 @@
 # vLLM Fast Weight Loading on TPU
 
-## Status: Shard-Streaming Validated on 70B (24GB memory)
+## Status: Async-Native Startup Hang Fix Applied — Awaiting TPU Validation
 
 **Issue:** https://github.com/marin-community/marin/issues/3768
 **Branch:** `vllm_load_fast` (off main, commit `dbeddbd45`)
@@ -278,19 +278,146 @@ def load_and_inject_streaming(model_path, llm, mapping_model_name, model_config)
 
 ---
 
+### 2026-03-18 — Async-native backend refactor (Claude Opus session)
+
+#### Motivation
+The queue-based in-process backend (`InProcessVllmServerBackend`) from March 17 worked
+but had two fundamental problems:
+- It used a custom FastAPI app around blocking `LLM.generate()` — not the standard vLLM
+  async serving stack
+- Requests were serialized through a single worker thread, destroying concurrent throughput
+
+The RL codebase already proved that vLLM's `AsyncLLM` + worker extensions work on TPU
+(`lib/marin/src/marin/rl/environments/inference_ctx/inflight/worker.py`).
+
+#### What was done
+
+1. **Created `lib/marin/src/marin/inference/vllm_async.py`** — new async-native backend:
+   - `AsyncVllmRuntime` dataclass (serve thread, server URL, events, error tracking)
+   - `start_async_vllm_server()` — orchestrates the full pipeline in a daemon thread
+   - `_run_async_server()` — the async core:
+     - Stages bootstrap metadata via existing `_resolve_bootstrap_model_source_for_start`
+     - Imports vLLM async symbols (`AsyncEngineArgs`, `build_app`, `build_async_engine_client_from_engine_args`, etc.)
+     - Builds CLI args with `--load-format dummy`, `--worker-extension-cls` pointing to RL's `WorkerExtension`,
+       `--served-model-name`, `--disable-frontend-multiprocessing`
+     - Creates `AsyncLLM` engine via `build_async_engine_client_from_engine_args`
+     - Streams shards via `_load_and_inject_streaming_async()`:
+       - Downloads one shard at a time using Levanter `read_safetensors_fsspec`
+       - Reshapes attention tensors (HF 2D → 3D)
+       - Serializes via `serialize_state_dict_for_rpc` (from RL)
+       - Injects via `engine_client.collective_rpc("update_weight", ...)`
+       - Frees shard memory after each injection
+     - Resets prefix cache after weight injection
+     - Builds vLLM's standard OpenAI FastAPI app (`build_app` + `init_app_state`)
+     - Serves via uvicorn with a watchdog task monitoring engine health
+   - `stop_async_vllm_server()` — graceful shutdown + bootstrap cleanup
+   - `_configure_async_vllm_environment()` — TPU env defaults + `VLLM_ALLOW_INSECURE_SERIALIZATION`
+
+2. **Added `ManagedAsyncVllmServerBackend` to `vllm_server.py`**:
+   - New `VllmServerBackend` subclass that wraps `start_async_vllm_server` / `stop_async_vllm_server`
+   - `VllmEnvironment` now selects `ManagedAsyncVllmServerBackend` when native+eligible
+     (replaces the old `InProcessVllmServerBackend`)
+   - `VllmServerHandle` gained `async_runtime: AsyncVllmRuntime | None` field
+   - Fallback to `NativeVllmServerBackend` (subprocess `vllm serve`) on async failure preserved
+
+3. **Key architectural improvements over queue-based path:**
+   - Uses vLLM's standard `AsyncLLM` engine — proper continuous batching, not serialized `LLM.generate()`
+   - Uses vLLM's standard OpenAI app (`build_app`) — full API compatibility including `/v1/chat/completions`
+   - Weight injection via `collective_rpc("update_weight")` through RL's `WorkerExtension` —
+     no more direct `sync_weights` call from the frontend process
+   - `--served-model-name` now fully supported (was a known constraint before)
+   - No more custom queue/Future plumbing for thread safety
+
+4. **Updated tests in `tests/vllm/test_vllm_inprocess_backend.py`:**
+   - `test_vllm_environment_selects_inprocess_when_eligible` → asserts `ManagedAsyncVllmServerBackend`
+   - `test_vllm_environment_falls_back_to_native_subprocess` → tests async failure → subprocess fallback
+   - `test_build_openai_server_cli_args_sets_async_native_defaults` — validates CLI arg construction
+   - `test_configure_async_vllm_environment_sets_defaults` — validates env var setup
+   - Total: 13 tests
+
+#### Weight injection path comparison
+
+| | Queue-based (March 17) | Async-native (March 18) |
+|---|---|---|
+| Engine | `vllm.LLM` (blocking) | `AsyncLLM` (async) |
+| Weight injection | `sync_weights()` direct call | `collective_rpc("update_weight")` via WorkerExtension |
+| Serialization | `levanter_state_dict_to_nnx_state_on_cpu` | `serialize_state_dict_for_rpc` (RL helper) |
+| HTTP serving | Custom FastAPI + queue + worker thread | vLLM's standard `build_app` + uvicorn |
+| `--served-model-name` | Unsupported (fell back to subprocess) | Supported |
+| Concurrent requests | Serialized through single thread | vLLM continuous batching |
+
+---
+
+## Current Architecture
+
+```
+Pipeline (async-native path, MARIN_VLLM_MODE=native):
+  1. Stage config.json + tokenizer from GCS → local tmpdir (~2 MB, ~2s)
+  2. AsyncLLM(model=tmpdir, load_format="dummy", worker_extension_cls=WorkerExtension,
+     tensor_parallel_size=4, disable_frontend_multiprocessing=True)
+     → empty model skeleton on HBM
+  3. For each safetensor shard:
+     a. Download shard via Levanter read_safetensors_fsspec (~4.6 GiB)
+     b. Reshape attention tensors (HF 2D → 3D)
+     c. Serialize via serialize_state_dict_for_rpc
+     d. engine_client.collective_rpc("update_weight", shard, mapping_model_name)
+     e. Free shard memory
+  4. engine_client.reset_prefix_cache()
+  5. build_app(args, supported_tasks) → vLLM's standard OpenAI FastAPI app
+  6. init_app_state(engine_client, app.state, args, supported_tasks)
+  7. Serve via uvicorn + watchdog loop
+
+Fallback: any failure → subprocess `vllm serve` + runai_streamer (original path)
+```
+
+---
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `lib/marin/src/marin/inference/vllm_async.py` | Async-native backend: engine creation, shard streaming, OpenAI app serving |
+| `lib/marin/src/marin/inference/vllm_inprocess.py` | Eligibility checking, bootstrap staging, shared helpers (reshape, emit, etc.) |
+| `lib/marin/src/marin/inference/vllm_server.py` | Backend selection (`ManagedAsyncVllmServerBackend`), fallback, VllmEnvironment |
+| `lib/levanter/src/levanter/compat/fsspec_safetensor.py` | Parallel GCS weight loader (byte-range requests) |
+| `lib/marin/src/marin/rl/environments/inference_ctx/async_vllm.py` | `serialize_state_dict_for_rpc` (RPC serialization) |
+| `lib/marin/src/marin/rl/environments/inference_ctx/inflight/worker.py` | `WorkerExtension` — handles `update_weight` RPC on worker side |
+| `lib/marin/src/marin/rl/environments/inference_ctx/vllm_utils.py` | `MODEL_MAPPINGS`, `MODEL_TRANSPOSE_KEYS` |
+| `tests/vllm/test_vllm_inprocess_backend.py` | 13 unit tests |
+| `experiments/inference/exp_vllm_70b_smoke_test.py` | 70B smoke test with timing breakdown |
+| `experiments/inference/exp_vllm_inprocess_direct.py` | Direct LLM.generate() test (no HTTP) |
+| `experiments/inference/exp_vllm_eval.py` | lm-eval benchmark script |
+| `experiments/inference/exp_vllm_stress_test.py` | 5000-prompt stress test |
+| `.agents/projects/vllm_async_refactor.md` | Design doc for async refactor |
+
+### External reference
+| File | Purpose |
+|------|---------|
+| `/Users/ahmed/code/vllm_tpu_multi/tpu-inference/` | Local copy of vllm-tpu (github.com/vllm-project/tpu-inference) |
+| `tpu_inference/models/jax/utils/weight_utils.py` | `transfer_state_with_mappings` — the sync_weights implementation |
+| `tpu_inference/worker/tpu_worker.py:440` | `sync_weights` method on driver_worker |
+| `tpu_inference/runner/tpu_runner.py:1770` | `_sync_weights` delegation to transfer_state_with_mappings |
+
+---
+
 ## Known Constraints
 
 - **Supported architectures:** Llama and Qwen only (MODEL_MAPPINGS coverage)
-- **`--served-model-name`:** unsupported in in-process path, falls back to subprocess
 - **vLLM version:** tested on `vllm-tpu==0.13.2.post6`
-- **`sync_weights` stability:** vLLM extension, not guaranteed stable across upgrades
+- **`collective_rpc` stability:** depends on vLLM worker extension API, not guaranteed stable across upgrades
 - **70B requires TP=4:** single v5p chip (95.7 GiB) cannot hold 131 GiB model skeleton
 - **`enforce_eager=True`:** used to avoid XLA compilation overhead during testing;
   production runs may want to remove this for better inference throughput
+- **Async-native path had startup hang on TPU** — engine subprocess hung at `vllm_get_model()`.
+  Fix applied 2026-03-19: `VLLM_ENABLE_V1_MULTIPROCESSING=0` added to `_configure_async_vllm_environment()`
+  to run engine in-process (matching RL path). Awaiting TPU validation via Iris job `vllm-async-no-mp-v1`.
+
 ## Future Work
 
+- **Validate async-native startup hang fix on TPU** (Iris job `vllm-async-no-mp-v1`)
 - Expand model family mapping inference to generic Llama/Qwen in `vllm_utils.py`
-- `--served-model-name` support for Harbor evaluator compatibility
 - Performance regression tests (load MB/s, time-to-first-token) in CI
 - Benchmark with `enforce_eager=False` to measure XLA compilation + inference throughput
 - Tune `LEVANTER_FSSPEC_MAX_CONCURRENT_CHUNKS` for higher download throughput
+- Compare async-native throughput vs subprocess `vllm serve` under concurrent load
+- Extract RL async worker-extension utilities into a shared inference module
