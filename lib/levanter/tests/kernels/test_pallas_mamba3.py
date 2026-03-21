@@ -22,6 +22,8 @@ from levanter.kernels.pallas.mamba3 import (
     mamba3_hybrid_chunked_forward_from_transformed,
     mamba3_intra_chunk,
     mamba3_intra_chunk_reference_batched,
+    mamba3_mimo_attentionish_forward,
+    mamba3_mimo_attentionish_forward_from_transformed,
     mamba3_mimo_chunked_forward,
     mamba3_mimo_direct_recurrence_reference_batched,
     mamba3_tpu_default_chunk_size,
@@ -101,6 +103,61 @@ def _sample_mimo_chunked_inputs(
     w_z = jax.random.normal(keys[8], group_shape + (value_dim, rank), dtype=jnp.float32)
     w_o = jax.random.normal(keys[9], group_shape + (value_dim, rank), dtype=jnp.float32)
     return dt, lam, a, b, c, x_base, z_base, w_x, w_z, w_o
+
+
+def _headed_attentionish_fixture(
+    *,
+    batch: int,
+    heads: int,
+    num_chunks: int,
+    chunk_size: int,
+    state_dim: int,
+    value_dim: int,
+    rank: int,
+) -> tuple[jax.Array, ...]:
+    dt, lam, a, b, c, x_base, z_base, _, _, _ = _sample_mimo_chunked_inputs(
+        leading_shape=(batch, heads),
+        num_chunks=num_chunks,
+        chunk_size=chunk_size,
+        state_dim=state_dim,
+        value_dim=value_dim,
+        rank=rank,
+    )
+    weight_key = jax.random.PRNGKey(23)
+    w_x_key, w_z_key, w_o_key = jax.random.split(weight_key, 3)
+    w_x = jax.random.normal(w_x_key, (heads, value_dim, rank), dtype=jnp.float32)
+    w_z = jax.random.normal(w_z_key, (heads, value_dim, rank), dtype=jnp.float32)
+    w_o = jax.random.normal(w_o_key, (heads, value_dim, rank), dtype=jnp.float32)
+    seq_len = num_chunks * chunk_size
+    a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a)).reshape(batch, heads, seq_len)
+    eps = jnp.finfo(lam.dtype).eps
+    trap = jnp.log(jnp.clip(lam, eps, 1 - eps)) - jnp.log1p(-jnp.clip(lam, eps, 1 - eps))
+    q = c.transpose(0, 2, 3, 5, 1, 4).reshape(batch, seq_len, rank, heads, state_dim)
+    k = b.transpose(0, 2, 3, 5, 1, 4).reshape(batch, seq_len, rank, heads, state_dim)
+    v = x_base.transpose(0, 2, 3, 1, 4).reshape(batch, seq_len, heads, value_dim)
+    z = z_base.transpose(0, 2, 3, 1, 4).reshape(batch, seq_len, heads, value_dim)
+    q_bias = jnp.zeros((heads, rank, state_dim), dtype=jnp.float32)
+    k_bias = jnp.zeros((heads, rank, state_dim), dtype=jnp.float32)
+    return (
+        dt,
+        lam,
+        a,
+        b,
+        c,
+        x_base,
+        z_base,
+        w_x,
+        w_z,
+        w_o,
+        q,
+        k,
+        v,
+        z,
+        q_bias,
+        k_bias,
+        a_log_cumsum,
+        trap.reshape(batch, heads, seq_len),
+    )
 
 
 def _torch_logit(x):
@@ -723,6 +780,224 @@ def test_mamba3_mimo_public_api_matches_reference_and_has_siso_carry_shape():
     assert state_xla.shape == (2, 5, 4)
     assert jnp.allclose(y_xla, y_ref, atol=1e-5, rtol=1e-5)
     assert jnp.allclose(state_xla, state_ref, atol=1e-5, rtol=1e-5)
+
+
+def test_mamba3_mimo_attentionish_api_matches_chunked_api():
+    (
+        dt,
+        lam,
+        a,
+        b,
+        c,
+        x_base,
+        z_base,
+        w_x,
+        w_z,
+        w_o,
+        q,
+        k,
+        v,
+        z,
+        q_bias,
+        k_bias,
+        a_log_cumsum,
+        trap,
+    ) = _headed_attentionish_fixture(
+        batch=1,
+        heads=3,
+        num_chunks=2,
+        chunk_size=8,
+        state_dim=4,
+        value_dim=5,
+        rank=3,
+    )
+
+    y_old, state_old = mamba3_mimo_chunked_forward(
+        dt,
+        lam,
+        a,
+        b,
+        c,
+        x_base,
+        z_base,
+        jnp.broadcast_to(w_x[None, ...], (dt.shape[0],) + w_x.shape).reshape(-1, *w_x.shape[-2:]),
+        jnp.broadcast_to(w_z[None, ...], (dt.shape[0],) + w_z.shape).reshape(-1, *w_z.shape[-2:]),
+        jnp.broadcast_to(w_o[None, ...], (dt.shape[0],) + w_o.shape).reshape(-1, *w_o.shape[-2:]),
+        implementation="xla",
+    )
+    y_new, state_new = mamba3_mimo_attentionish_forward(
+        q,
+        k,
+        v,
+        jnp.swapaxes(w_x, -1, -2),
+        jnp.swapaxes(w_o, -1, -2),
+        q_bias=q_bias,
+        k_bias=k_bias,
+        z=z,
+        mimo_z=jnp.swapaxes(w_z, -1, -2),
+        da_cs=a_log_cumsum,
+        dt=dt.reshape(1, 3, 16),
+        trap=trap,
+        chunk_size=8,
+        reduce_o=True,
+        return_final_state=True,
+        implementation="xla",
+    )
+    assert jnp.allclose(y_new, y_old.transpose(0, 2, 3, 1, 4).reshape(1, 16, 3, 5), atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(state_new, state_old.transpose(0, 1, 3, 2), atol=1e-5, rtol=1e-5)
+
+
+def test_mamba3_mimo_attentionish_unreduced_output_and_final_k():
+    (
+        dt,
+        lam,
+        _a,
+        _b,
+        c,
+        _x_base,
+        z_base,
+        w_x,
+        w_z,
+        w_o,
+        q,
+        k,
+        v,
+        z,
+        q_bias,
+        k_bias,
+        a_log_cumsum,
+        trap,
+    ) = _headed_attentionish_fixture(
+        batch=1,
+        heads=2,
+        num_chunks=2,
+        chunk_size=4,
+        state_dim=3,
+        value_dim=4,
+        rank=2,
+    )
+
+    unreduced, final_state, final_k = mamba3_mimo_attentionish_forward_from_transformed(
+        q,
+        k,
+        v,
+        jnp.swapaxes(w_x, -1, -2),
+        jnp.swapaxes(w_o, -1, -2),
+        q_bias=q_bias,
+        k_bias=k_bias,
+        z=z,
+        mimo_z=jnp.swapaxes(w_z, -1, -2),
+        da_cs=a_log_cumsum,
+        dt=dt.reshape(1, 2, 8),
+        trap=trap,
+        chunk_size=4,
+        reduce_o=False,
+        return_final_state=True,
+        return_final_k=True,
+        implementation="reference",
+    )
+    reduced = jnp.einsum("bsrhp,hrp->bshp", unreduced, jnp.swapaxes(w_o, -1, -2), preferred_element_type=jnp.float32)
+    reduced_api = mamba3_mimo_attentionish_forward(
+        q,
+        k,
+        v,
+        jnp.swapaxes(w_x, -1, -2),
+        jnp.swapaxes(w_o, -1, -2),
+        q_bias=q_bias,
+        k_bias=k_bias,
+        z=z,
+        mimo_z=jnp.swapaxes(w_z, -1, -2),
+        da_cs=a_log_cumsum,
+        dt=dt.reshape(1, 2, 8),
+        trap=trap,
+        chunk_size=4,
+        reduce_o=True,
+        implementation="reference",
+    )
+    expected_final_k = k[:, -1] + k_bias.transpose(1, 0, 2)[None, ...]
+    assert unreduced.shape == (1, 8, 2, 2, 4)
+    assert final_state.shape == (1, 2, 3, 4)
+    assert final_k.shape == (1, 2, 2, 3)
+    assert jnp.allclose(reduced, reduced_api, atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(final_k, expected_final_k, atol=1e-5, rtol=1e-5)
+
+
+def test_mamba3_mimo_attentionish_qk_group_mapping_matches_head_shared_chunked_api():
+    batch = 1
+    heads = 4
+    qk_groups = 2
+    num_chunks = 2
+    chunk_size = 4
+    state_dim = 3
+    value_dim = 5
+    rank = 2
+
+    dt, lam, a, b, c, x_base, z_base, _, _, _ = _sample_mimo_chunked_inputs(
+        leading_shape=(batch, heads),
+        num_chunks=num_chunks,
+        chunk_size=chunk_size,
+        state_dim=state_dim,
+        value_dim=value_dim,
+        rank=rank,
+    )
+    group_to_head = jnp.array([0, 2])
+    head_to_group = jnp.array([0, 0, 1, 1])
+    b_group = jnp.take(b, group_to_head, axis=1)
+    c_group = jnp.take(c, group_to_head, axis=1)
+    b_shared = jnp.take(b_group, head_to_group, axis=1)
+    c_shared = jnp.take(c_group, head_to_group, axis=1)
+
+    seq_len = num_chunks * chunk_size
+    weight_key = jax.random.PRNGKey(29)
+    w_x_key, w_z_key, w_o_key = jax.random.split(weight_key, 3)
+    w_x = jax.random.normal(w_x_key, (heads, value_dim, rank), dtype=jnp.float32)
+    w_z = jax.random.normal(w_z_key, (heads, value_dim, rank), dtype=jnp.float32)
+    w_o = jax.random.normal(w_o_key, (heads, value_dim, rank), dtype=jnp.float32)
+    q = c_group.transpose(0, 2, 3, 5, 1, 4).reshape(batch, seq_len, rank, qk_groups, state_dim)
+    k = b_group.transpose(0, 2, 3, 5, 1, 4).reshape(batch, seq_len, rank, qk_groups, state_dim)
+    v = x_base.transpose(0, 2, 3, 1, 4).reshape(batch, seq_len, heads, value_dim)
+    z = z_base.transpose(0, 2, 3, 1, 4).reshape(batch, seq_len, heads, value_dim)
+    a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a)).reshape(batch, heads, seq_len)
+    eps = jnp.finfo(lam.dtype).eps
+    trap = jnp.log(jnp.clip(lam, eps, 1 - eps)) - jnp.log1p(-jnp.clip(lam, eps, 1 - eps))
+    q_bias = jnp.zeros((heads, rank, state_dim), dtype=jnp.float32)
+    k_bias = jnp.zeros((heads, rank, state_dim), dtype=jnp.float32)
+
+    y_old, state_old = mamba3_mimo_chunked_forward(
+        dt,
+        lam,
+        a,
+        b_shared,
+        c_shared,
+        x_base,
+        z_base,
+        jnp.broadcast_to(w_x[None, ...], (batch,) + w_x.shape).reshape(-1, *w_x.shape[-2:]),
+        jnp.broadcast_to(w_z[None, ...], (batch,) + w_z.shape).reshape(-1, *w_z.shape[-2:]),
+        jnp.broadcast_to(w_o[None, ...], (batch,) + w_o.shape).reshape(-1, *w_o.shape[-2:]),
+        implementation="reference",
+    )
+    y_new, state_new = mamba3_mimo_attentionish_forward(
+        q,
+        k,
+        v,
+        jnp.swapaxes(w_x, -1, -2),
+        jnp.swapaxes(w_o, -1, -2),
+        q_bias=q_bias,
+        k_bias=k_bias,
+        z=z,
+        mimo_z=jnp.swapaxes(w_z, -1, -2),
+        da_cs=a_log_cumsum,
+        dt=dt.reshape(batch, heads, seq_len),
+        trap=trap.reshape(batch, heads, seq_len),
+        chunk_size=chunk_size,
+        reduce_o=True,
+        return_final_state=True,
+        implementation="reference",
+    )
+    assert jnp.allclose(
+        y_new, y_old.transpose(0, 2, 3, 1, 4).reshape(batch, seq_len, heads, value_dim), atol=1e-5, rtol=1e-5
+    )
+    assert jnp.allclose(state_new, state_old.transpose(0, 1, 3, 2), atol=1e-5, rtol=1e-5)
 
 
 def test_mamba3_hybrid_mimo_matches_mimo_api():
