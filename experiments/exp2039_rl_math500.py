@@ -416,15 +416,12 @@ def _run_manual_mode(args: argparse.Namespace):
         bootstrap_checkpoint_path=bootstrap_checkpoint_path,
     )
 
-    # TEMPORARY HARDCODE: Match NB run seed config for comparability.
-    # NB run had: TrainerConfig.seed=0, MathEnv=42, RolloutWorker=1042
-    # TODO: Revert after image build.
-    trainer_overrides = {"seed": 0}
+    trainer_overrides = {"seed": seed}
     if args.num_train_steps is not None:
         trainer_overrides["num_train_steps"] = args.num_train_steps
     job_config = dataclasses.replace(
         job_config,
-        seed=seed,  # RLJobConfig.seed=42 → TrainWorkerConfig.seed=42
+        seed=seed,
         trainer=dataclasses.replace(job_config.trainer, **trainer_overrides),
     )
 

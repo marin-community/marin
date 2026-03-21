@@ -347,7 +347,7 @@ class RLJob:
             weight_transfer=weight_transfer_config,
             rollout_storage=self.config.rollout_storage,
             run_id=self.config.run_id,
-            seed=self.config.seed + 1000,  # TEMPORARY: match NB run offset. TODO: revert
+            seed=self.config.seed,
             inference_type=self.config.inference_type,
             inference_config=inference_config,
             system_prompt=self.config.system_prompt,
