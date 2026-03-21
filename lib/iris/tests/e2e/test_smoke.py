@@ -720,7 +720,6 @@ def test_stress_50_tasks(smoke_cluster):
         TestJobs.quick,
         "smoke-stress-50",
         cpu=0,
-        memory="100m",
         replicas=50,
     )
     status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout * 2)
