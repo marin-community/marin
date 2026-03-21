@@ -27,7 +27,7 @@ from dataclasses import dataclass
 import fsspec
 import openai
 
-from experiments.rerank_decode.scorer import VLLMLogprobScorer
+from experiments.rerank_decode.scorer import GuidedDecodingScorer, VLLMLogprobScorer
 from experiments.rerank_decode.serve import launch_vllm_servers, shutdown_servers
 from experiments.rerank_decode.utils import rerank
 
@@ -82,7 +82,8 @@ def run_rerank_decode(config: RerankDecodeConfig):
         scoring_client = openai.Client(
             base_url=f"http://localhost:{config.scoring_port}/v1", api_key="none"
         )
-        scorer = VLLMLogprobScorer(client=scoring_client, model=config.scoring_model_path)
+        # scorer = VLLMLogprobScorer(client=scoring_client, model=config.scoring_model_path)
+        scorer = GuidedDecodingScorer(client=scoring_client, model=config.scoring_model_path)
 
         results = []
         for i, prompt in enumerate(prompts):

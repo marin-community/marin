@@ -78,3 +78,35 @@ class VLLMLogprobScorer(Scorer):
             scores.append(score)
 
         return scores
+
+
+class GuidedDecodingScorer(Scorer):
+    """Scores completions by log-likelihood using guided decoding.
+
+    Forces the scoring model to regenerate each completion exactly via
+    guided_choice, then sums the output logprobs. Because this uses
+    output logprobs (not prompt logprobs / echo), vLLM's automatic
+    prefix caching (APC) is enabled — the shared prompt KV cache is
+    computed once and reused across candidates.
+    """
+
+    def __init__(self, client: openai.Client, model: str):
+        self.client = client
+        self.model = model
+
+    def score(self, prompt: str, completions: list[str]) -> list[float]:
+        scores = []
+        for completion in completions:
+            resp = self.client.completions.create(
+                model=self.model,
+                prompt=prompt,
+                max_tokens=len(completion) * 4,  # upper bound on token count
+                logprobs=1,
+                temperature=0.0,
+                extra_body={"guided_choice": [completion]},
+            )
+            choice = resp.choices[0]
+            token_logprobs = choice.logprobs.token_logprobs
+            score = sum(lp for lp in token_logprobs if lp is not None)
+            scores.append(score)
+        return scores
