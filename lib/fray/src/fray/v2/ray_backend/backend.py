@@ -16,7 +16,15 @@ import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
 
-from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.actor import (
+    ActorContext,
+    ActorFuture,
+    ActorGroup,
+    ActorHandle,
+    HostedActor,
+    _reset_current_actor,
+    _set_current_actor,
+)
 from fray.v2.ray_backend.deps import build_python_path, build_runtime_env_for_packages
 from fray.v2.ray_backend.tpu import run_on_pod_ray
 from fray.v2.types import (
@@ -348,6 +356,19 @@ class RayClient:
 
         job_id = f"ray-tpu-{request.name}-{uuid.uuid4().hex[:8]}"
         return RayJobHandle(job_id, ref=object_ref)
+
+    def host_actor(
+        self,
+        actor_class: type,
+        *args: Any,
+        name: str,
+        actor_config: ActorConfig = ActorConfig(),
+        **kwargs: Any,
+    ) -> HostedActor:
+        """Ray cannot host actors in-process; falls back to a single-actor group."""
+        group = self.create_actor_group(actor_class, *args, name=name, count=1, actor_config=actor_config, **kwargs)
+        handle = group.wait_ready()[0]
+        return HostedActor(handle, stop=group.shutdown)
 
     def create_actor(
         self,

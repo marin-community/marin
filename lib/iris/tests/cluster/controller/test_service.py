@@ -160,9 +160,8 @@ def worker_metadata():
 @pytest.fixture
 def state(tmp_path):
     """Create a fresh ControllerTransitions for each test."""
-    db_path = tmp_path / "controller.sqlite3"
-    db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
+    db = ControllerDB(db_dir=tmp_path)
+    log_store = LogStore(log_dir=tmp_path / "logs")
     s = ControllerTransitions(db=db, log_store=log_store)
     yield s
     log_store.close()
@@ -178,7 +177,8 @@ class MockSchedulerWake:
         self.create_scheduling_context = Mock(return_value=Mock())
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.autoscaler = None
-        self.stub_factory = Mock()
+        self.provider = Mock()
+        self.has_direct_provider = False
 
 
 @pytest.fixture
@@ -196,7 +196,7 @@ def service(state, mock_scheduler, tmp_path):
         state,
         state._db,
         controller=mock_scheduler,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
     )
 
@@ -426,6 +426,56 @@ def test_get_job_status_not_found(service):
     assert "nonexistent" in exc_info.value.message
 
 
+def test_redact_request_env_vars_does_not_mutate_original():
+    """Verify redact_request_env_vars returns a copy and does not mutate the input."""
+    from iris.cluster.controller.service import REDACTED_VALUE, redact_request_env_vars
+
+    original = cluster_pb2.Controller.LaunchJobRequest(
+        name="/test-user/job",
+        entrypoint=_make_test_entrypoint(),
+        environment=cluster_pb2.EnvironmentConfig(env_vars={"WANDB_API_KEY": "secret", "SAFE": "ok"}),
+    )
+    redacted = redact_request_env_vars(original)
+
+    assert original.environment.env_vars["WANDB_API_KEY"] == "secret"
+    assert redacted.environment.env_vars["WANDB_API_KEY"] == REDACTED_VALUE
+    assert redacted.environment.env_vars["SAFE"] == "ok"
+
+
+def test_get_job_status_redacts_sensitive_env_vars(service):
+    """Verify get_job_status redacts env var values whose keys match sensitive patterns."""
+    from iris.cluster.controller.service import REDACTED_VALUE
+
+    job_name = JobName.root("test-user", "redact-test")
+    launch_req = cluster_pb2.Controller.LaunchJobRequest(
+        name=job_name.to_wire(),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(
+            env_vars={
+                "WANDB_API_KEY": "wk-secret123",
+                "HF_TOKEN": "hf_tok456",
+                "MY_SECRET": "s3cret",
+                "DB_PASSWORD": "hunter2",
+                "SAFE_VAR": "visible",
+                "NUM_WORKERS": "4",
+            }
+        ),
+    )
+    service.launch_job(launch_req, None)
+
+    status_req = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_name.to_wire())
+    response = service.get_job_status(status_req, None)
+
+    env = dict(response.request.environment.env_vars)
+    assert env["WANDB_API_KEY"] == REDACTED_VALUE
+    assert env["HF_TOKEN"] == REDACTED_VALUE
+    assert env["MY_SECRET"] == REDACTED_VALUE
+    assert env["DB_PASSWORD"] == REDACTED_VALUE
+    assert env["SAFE_VAR"] == "visible"
+    assert env["NUM_WORKERS"] == "4"
+
+
 # =============================================================================
 # Job Termination Tests
 # =============================================================================
@@ -600,7 +650,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_scheduler, tmp_path, j
         state,
         state._db,
         controller=mock_scheduler,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles_owner.sqlite3"),
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
         log_store=state._log_store,
         auth=ControllerAuth(provider="static"),
     )
@@ -631,7 +681,7 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_scheduler, tmp_path
         state,
         state._db,
         controller=mock_scheduler,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles_child.sqlite3"),
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
         log_store=state._log_store,
         auth=ControllerAuth(provider="static"),
     )
@@ -1013,7 +1063,6 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
     )
-    request.resources.device.CopyFrom(cluster_pb2.DeviceConfig(cpu=cluster_pb2.CpuDevice()))
 
     service.launch_job(request, None)
 
@@ -1041,7 +1090,7 @@ def test_register_requires_worker_role(state, mock_scheduler, tmp_path, worker_m
         state,
         db,
         controller=mock_scheduler,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
         auth=auth,
     )
@@ -1077,7 +1126,7 @@ def test_register_allows_worker_role(state, mock_scheduler, tmp_path, worker_met
         state,
         db,
         controller=mock_scheduler,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
         auth=auth,
     )

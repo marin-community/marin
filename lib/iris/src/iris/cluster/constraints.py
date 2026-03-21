@@ -184,10 +184,15 @@ class Constraint:
     op: ConstraintOp
     value: str | int | float | None = None
     values: tuple[str | int | float, ...] | None = None
+    mode: int = cluster_pb2.CONSTRAINT_MODE_REQUIRED
+
+    @property
+    def is_soft(self) -> bool:
+        return self.mode == cluster_pb2.CONSTRAINT_MODE_PREFERRED
 
     def to_proto(self) -> cluster_pb2.Constraint:
         """Convert to protobuf representation."""
-        proto = cluster_pb2.Constraint(key=self.key, op=self.op.to_proto())
+        proto = cluster_pb2.Constraint(key=self.key, op=self.op.to_proto(), mode=self.mode)
         if self.value is not None:
             proto.value.CopyFrom(AttributeValue(self.value).to_proto())
         if self.values is not None:
@@ -205,7 +210,7 @@ class Constraint:
         values: tuple[str | int | float, ...] | None = None
         if proto.values:
             values = tuple(AttributeValue.from_proto(v).value for v in proto.values)
-        return Constraint(key=proto.key, op=op, value=value, values=values)
+        return Constraint(key=proto.key, op=op, value=value, values=values, mode=proto.mode)
 
 
 # ---------------------------------------------------------------------------
@@ -213,9 +218,25 @@ class Constraint:
 # ---------------------------------------------------------------------------
 
 
-def preemptible_constraint(preemptible: bool = True) -> Constraint:
-    """Constraint requiring workers to be preemptible (or not)."""
-    return Constraint(key=WellKnownAttribute.PREEMPTIBLE, op=ConstraintOp.EQ, value=str(preemptible).lower())
+def preemptible_constraint(preemptible: bool = True, soft: bool | None = None) -> Constraint:
+    """Constraint requiring (or preferring) workers to be preemptible (or not).
+
+    Args:
+        preemptible: Whether to match preemptible or non-preemptible workers.
+        soft: If True, the constraint is soft — matching workers are preferred
+            but non-matching workers are still eligible. If None (default),
+            the mode is inferred from preemptible:
+            - preemptible=False → hard constraint, because non-preemptible jobs
+              (e.g. coordinators) genuinely cannot tolerate spot eviction.
+            - preemptible=True → soft constraint, because preemptible is a cost
+              preference: we prefer spot capacity but can fall back to on-demand
+              when spot is unavailable rather than leaving the job unscheduled.
+    """
+    if soft is None:
+        # preemptible=True is a preference (soft), preemptible=False is a requirement (hard)
+        soft = preemptible
+    mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED if soft else cluster_pb2.CONSTRAINT_MODE_REQUIRED
+    return Constraint(key=WellKnownAttribute.PREEMPTIBLE, op=ConstraintOp.EQ, value=str(preemptible).lower(), mode=mode)
 
 
 def zone_constraint(zone: str) -> Constraint:
@@ -697,6 +718,57 @@ def constraints_from_resources(resources: cluster_pb2.ResourceSpecProto) -> list
     return constraints
 
 
+# ---------------------------------------------------------------------------
+# Executor heuristic: auto-tag small CPU-only jobs as non-preemptible
+# ---------------------------------------------------------------------------
+
+# Thresholds for the executor heuristic.  A job that stays within all four
+# limits is assumed to be an orchestrator/coordinator and is pinned to
+# non-preemptible workers so it is not killed by spot reclamation.
+_EXECUTOR_MAX_CPU_MILLICORES = 1000  # 1 core
+_EXECUTOR_MAX_MEMORY_BYTES = 4 * 1024**3  # 4 GiB
+_EXECUTOR_MAX_REPLICAS = 1
+
+
+def looks_like_executor(
+    resources: cluster_pb2.ResourceSpecProto,
+    replicas: int,
+) -> bool:
+    """Return True when a job's resource shape matches the executor heuristic.
+
+    Heuristic: no accelerators, single task, CPU ≤ 1 core, RAM ≤ 4 GiB.
+    """
+    has_accelerator = resources.HasField("device") and not resources.device.HasField("cpu")
+    if has_accelerator:
+        return False
+    if replicas > _EXECUTOR_MAX_REPLICAS:
+        return False
+    if resources.cpu_millicores > _EXECUTOR_MAX_CPU_MILLICORES:
+        return False
+    if resources.memory_bytes > _EXECUTOR_MAX_MEMORY_BYTES:
+        return False
+    return True
+
+
+def infer_preemptible_constraint(
+    resources: cluster_pb2.ResourceSpecProto,
+    replicas: int,
+    existing_constraints: Sequence[Constraint],
+) -> Constraint | None:
+    """Return a non-preemptible constraint when the executor heuristic fires.
+
+    Returns None if the user already set an explicit preemptible constraint or
+    the job does not look like an executor.
+    """
+    for c in existing_constraints:
+        if c.key == WellKnownAttribute.PREEMPTIBLE:
+            return None
+
+    if looks_like_executor(resources, replicas):
+        return preemptible_constraint(False)
+    return None
+
+
 def accelerator_type_to_string(accel_type: int) -> str:
     """Convert AcceleratorType proto enum value to a scheduling string."""
     if accel_type == config_pb2.ACCELERATOR_TYPE_UNSPECIFIED:
@@ -821,6 +893,40 @@ def routing_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> list[c
             continue
         result.append(c)
     return result
+
+
+def split_hard_soft(
+    constraints: Sequence[cluster_pb2.Constraint],
+) -> tuple[list[cluster_pb2.Constraint], list[cluster_pb2.Constraint]]:
+    """Split proto constraints into (hard, soft) lists based on mode.
+
+    Hard constraints filter candidates; soft constraints only influence ranking.
+    """
+    hard: list[cluster_pb2.Constraint] = []
+    soft: list[cluster_pb2.Constraint] = []
+    for c in constraints:
+        if c.mode == cluster_pb2.CONSTRAINT_MODE_PREFERRED:
+            soft.append(c)
+        else:
+            hard.append(c)
+    return hard, soft
+
+
+def soft_constraint_score(
+    entity_attrs: dict[str, AttributeValue],
+    soft_constraints: Sequence[cluster_pb2.Constraint],
+) -> int:
+    """Count how many soft constraints an entity satisfies.
+
+    Higher score means better match. Used to rank candidates when soft
+    constraints are present.
+    """
+    score = 0
+    for c in soft_constraints:
+        attr = entity_attrs.get(c.key)
+        if evaluate_constraint(attr, c):
+            score += 1
+    return score
 
 
 # ---------------------------------------------------------------------------

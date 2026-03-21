@@ -22,6 +22,8 @@ defaults:
 storage:
   remote_state_dir: gs://marin-us-central2/iris/marin/state
 
+worker_provider: {}
+
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   gcp:

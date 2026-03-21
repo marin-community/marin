@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.env import build_device_env_vars
+from iris.cluster.runtime.env import write_workdir_files
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
     build_memray_transform_cmd,
@@ -75,6 +75,14 @@ def _is_docker_infra_error(stderr: str) -> bool:
     return any(p.lower() in stderr_lower for p in _INFRA_ERROR_PATTERNS)
 
 
+# Network sysctl tuning for containers with their own network namespace (#3066).
+# Host-network containers inherit host settings (configured at VM bootstrap).
+_NETWORK_SYSCTLS: dict[str, str] = {
+    "net.ipv4.ip_local_port_range": "1024 65535",
+    "net.ipv4.tcp_tw_reuse": "1",
+}
+
+
 @dataclass(frozen=True)
 class ResolvedMount:
     """A MountSpec resolved to concrete host and container paths for Docker."""
@@ -106,7 +114,9 @@ def _discover_tpu_device_mappings() -> list[str]:
 
     vfio_path = Path("/dev/vfio")
     if vfio_path.exists():
-        mappings.append("/dev/vfio:/dev/vfio")
+        for entry in sorted(vfio_path.iterdir()):
+            if entry.is_char_device():
+                mappings.append(f"{entry}:{entry}")
 
     accel_devices: list[Path] = []
     for device_path in Path("/dev").glob("accel[0-9]*"):
@@ -137,19 +147,15 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
     logger.info("Device flags check: has_device=%s, has_tpu=%s", has_device, has_tpu)
 
     if has_tpu:
-        for device_mapping in _discover_tpu_device_mappings():
-            flags.extend(["--device", device_mapping])
-
         flags.extend(
             [
+                "--privileged",
                 "--shm-size=100g",
                 "--cap-add=SYS_RESOURCE",
                 "--ulimit",
                 "memlock=68719476736:68719476736",
             ]
         )
-        if "--device" not in flags:
-            logger.warning("TPU resources requested, but no TPU device nodes were discovered on host")
         logger.info("TPU device flags: %s", flags)
 
     return flags
@@ -290,7 +296,7 @@ class DockerContainerHandle:
 
     @property
     def container_id(self) -> str | None:
-        """Return the current run container ID, if any."""
+        """Return the Docker container ID (hash), if any."""
         return self._run_container_id
 
     def build(self) -> list[LogLine]:
@@ -316,10 +322,19 @@ class DockerContainerHandle:
         setup_script = self._generate_setup_script()
         self._write_setup_script(setup_script)
 
-        # Create and run the build container
+        # Build containers get max(8 GB, task request) memory
+        task_memory_bytes = self.config.resources.memory_bytes if self.config.resources else 0
+        build_memory_bytes = (
+            max(self._BUILD_MEMORY_LIMIT_BYTES, task_memory_bytes)
+            if task_memory_bytes
+            else self._BUILD_MEMORY_LIMIT_BYTES
+        )
+        build_memory_mb = build_memory_bytes // (1024 * 1024)
+
         build_container_id = self._docker_create(
             command=["bash", "/app/_setup_env.sh"],
             label_suffix="_build",
+            memory_limit_mb=build_memory_mb,
         )
 
         build_logs: list[LogLine] = []
@@ -395,7 +410,7 @@ exec {quoted_cmd}
 
         self._run_container_id = self._docker_create(
             command=command,
-            include_resources=True,
+            include_devices=True,
         )
         self.runtime.track_container(self._run_container_id)
         self._docker_start(self._run_container_id)
@@ -553,13 +568,27 @@ exec {quoted_cmd}
     # Docker CLI helpers
     # -------------------------------------------------------------------------
 
+    _BUILD_MEMORY_LIMIT_BYTES = 8 * 1024**3
+
     def _docker_create(
         self,
         command: list[str],
         label_suffix: str = "",
-        include_resources: bool = False,
+        include_devices: bool = False,
+        memory_limit_mb: int | None = None,
     ) -> str:
-        """Create a Docker container. Returns container_id."""
+        """Create a Docker container. Returns container_id.
+
+        CPU and memory cgroup limits are always applied. Device passthrough
+        (TPU/GPU) is only enabled for run containers via include_devices.
+
+        Args:
+            command: Command to run in the container.
+            label_suffix: Suffix appended to the iris.task_id label.
+            include_devices: If True, also pass through accelerator devices.
+            memory_limit_mb: Override memory limit in MB. When None, uses
+                the task's requested memory from config.resources.
+        """
         config = self.config
         self.runtime.ensure_image(config.image)
 
@@ -571,7 +600,10 @@ exec {quoted_cmd}
             "-w",
             config.workdir,
         ]
-        cmd.extend(["--security-opt", "no-new-privileges"])
+        is_tpu_run = include_devices and _has_tpu_device(config)
+
+        if not is_tpu_run:
+            cmd.extend(["--security-opt", "no-new-privileges"])
 
         # Run as the owner of bind-mounted directories
         user_flag = _detect_mount_user(self._resolved_mounts)
@@ -583,11 +615,18 @@ exec {quoted_cmd}
         else:
             cmd.append("--add-host=host.docker.internal:host-gateway")
 
-        cmd.extend(["--cap-drop", "ALL"])
-        cmd.extend(["--cap-add", "SYS_PTRACE"])
+        # Network sysctl tuning for containers with own network namespace (#3066).
+        # Host-network containers inherit host settings from VM bootstrap.
+        if config.network_mode != "host":
+            for key, value in _NETWORK_SYSCTLS.items():
+                cmd.extend(["--sysctl", f"{key}={value}"])
+
+        if not is_tpu_run:
+            cmd.extend(["--cap-drop", "ALL"])
+            cmd.extend(["--cap-add", "SYS_PTRACE"])
 
         # Device flags (TPU passthrough etc) - only for run container
-        if include_resources:
+        if include_devices:
             cmd.extend(_build_device_flags(config))
 
         # Labels for discoverability
@@ -597,26 +636,29 @@ exec {quoted_cmd}
         if config.job_id:
             cmd.extend(["--label", f"iris.job_id={config.job_id}"])
 
-        # Resource limits (cgroups v2) - only for run container
-        if include_resources:
-            cpu_millicores = config.get_cpu_millicores()
-            if cpu_millicores:
-                cpus = cpu_millicores / 1000
-                cmd.extend(["--cpus", str(cpus)])
-            memory_mb = config.get_memory_mb()
-            if memory_mb:
-                cmd.extend(["--memory", f"{memory_mb}m"])
+        # Resource limits (cgroups v2) — always applied
+        cpu_millicores = config.get_cpu_millicores()
+        if cpu_millicores:
+            cpus = cpu_millicores / 1000
+            cmd.extend(["--cpus", str(cpus)])
+        effective_memory_mb = memory_limit_mb or config.get_memory_mb()
+        if effective_memory_mb:
+            cmd.extend(["--memory", f"{effective_memory_mb}m"])
 
-        # Build combined environment
-        device_env = build_device_env_vars(config) if include_resources else {}
-        combined_env = {**device_env, **config.env}
+        # Device env vars (TPU/GPU) are now included in config.env by
+        # build_common_iris_env(), so no separate device_env merge needed.
+        combined_env = dict(config.env)
 
         for k, v in combined_env.items():
             cmd.extend(["-e", f"{k}={v}"])
 
         # Mounts
         for rm in self._resolved_mounts:
-            cmd.extend(["-v", f"{rm.host_path}:{rm.container_path}:{rm.mode}"])
+            if rm.kind == MountKind.TMPFS:
+                # Use Docker --tmpfs for per-container isolation instead of shared bind mount
+                cmd.extend(["--tmpfs", rm.container_path])
+            else:
+                cmd.extend(["-v", f"{rm.host_path}:{rm.container_path}:{rm.mode}"])
 
         cmd.append(config.image)
         cmd.extend(command)
@@ -829,8 +871,8 @@ class DockerRuntime:
         """Convert semantic MountSpecs to ResolvedMount instances.
 
         Creates host directories as needed. WORKDIR uses the explicit host path
-        (created by task_attempt) and mounts tmpfs on it for isolation.
-        CACHE and TMPFS get dirs under fast_io_dir.
+        (created by task_attempt). CACHE gets shared dirs under cache_dir.
+        TMPFS uses Docker --tmpfs for per-container isolation (no host dir).
         """
         result: list[ResolvedMount] = []
         for mount in mounts:
@@ -839,7 +881,10 @@ class DockerRuntime:
                 if workdir_host_path is None:
                     raise RuntimeError("WORKDIR mount requires workdir_host_path")
                 result.append(ResolvedMount(str(workdir_host_path), mount.container_path, mode, mount.kind))
-            elif mount.kind in (MountKind.TMPFS, MountKind.CACHE):
+            elif mount.kind == MountKind.TMPFS:
+                # TMPFS mounts use Docker --tmpfs (per-container isolation); no host dir needed
+                result.append(ResolvedMount("", mount.container_path, mode, mount.kind))
+            elif mount.kind == MountKind.CACHE:
                 host_dir = self._cache_dir / mount.container_path.strip("/").replace("/", "-")
                 host_dir.mkdir(parents=True, exist_ok=True)
                 result.append(ResolvedMount(str(host_dir), mount.container_path, mode, mount.kind))
@@ -870,7 +915,7 @@ class DockerRuntime:
         """Stage bundle and workdir files on worker-local filesystem."""
         if bundle_id:
             bundle_store.extract_bundle_to(bundle_id, workdir)
-        bundle_store.write_workdir_files(workdir, workdir_files)
+        write_workdir_files(workdir, workdir_files)
 
     def track_container(self, container_id: str) -> None:
         """Track a container ID for cleanup."""

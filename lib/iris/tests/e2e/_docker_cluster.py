@@ -14,7 +14,8 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 from iris.client import IrisClient
-from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
+from iris.cluster.controller.controller import Controller, ControllerConfig
+from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.platform.base import find_free_port
 from iris.cluster.runtime.docker import DockerRuntime
@@ -140,7 +141,7 @@ class E2ECluster:
         )
         self._controller = Controller(
             config=controller_config,
-            worker_stub_factory=RpcWorkerStubFactory(),
+            provider=WorkerProvider(stub_factory=RpcWorkerStubFactory()),
         )
         self._controller.start()
 
@@ -150,9 +151,9 @@ class E2ECluster:
         )
 
         bundle_store = BundleStore(
-            db_path=cache_path / "bundles.sqlite3",
+            storage_dir=str(cache_path / "bundles"),
             controller_address=f"http://127.0.0.1:{self._controller_port}",
-            max_items=10,
+            max_cache_items=10,
         )
         self._container_runtime = DockerRuntime(cache_dir=cache_path)
         container_runtime = self._container_runtime

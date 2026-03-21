@@ -64,6 +64,7 @@ from iris.cluster.constraints import (
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
+from tests.cluster.controller.conftest import FakeProvider
 
 # =============================================================================
 # Helpers
@@ -73,9 +74,8 @@ from iris.time_utils import Timestamp
 def _make_state(**kwargs) -> ControllerTransitions:
     """Create a ControllerTransitions with a fresh temp DB and log store."""
     tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
-    db_path = tmp / "controller.sqlite3"
-    db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
+    db = ControllerDB(db_dir=tmp)
+    log_store = LogStore(log_dir=tmp / "logs")
     return ControllerTransitions(db=db, log_store=log_store, **kwargs)
 
 
@@ -248,25 +248,12 @@ def _make_job_request_with_reservation(
     return req
 
 
-class FakeStubFactory:
-    """Minimal stub factory satisfying the WorkerStubFactory protocol."""
-
-    def get_stub(self, address: str):
-        raise NotImplementedError("stub not needed in unit tests")
-
-    def evict(self, address: str) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
-
-
 def _make_controller() -> Controller:
     """Create a Controller with minimal config for unit testing."""
     config = ControllerConfig(
         remote_state_dir="file:///tmp/iris-test-bundles",
     )
-    return Controller(config=config, worker_stub_factory=FakeStubFactory())
+    return Controller(config=config, provider=FakeProvider())
 
 
 def _register_worker(

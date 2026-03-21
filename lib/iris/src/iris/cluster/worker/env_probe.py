@@ -156,16 +156,57 @@ def _probe_gpu_info() -> tuple[int, str, int]:
         return 0, "", 0
 
 
+_MEMORY_HEADROOM_FRACTION = 0.10
+"""Reserve up to 10% of physical RAM for OS, Docker daemon, and worker agent."""
+
+_MEMORY_HEADROOM_MAX_BYTES = 8 * 1024**3
+"""Cap memory headroom at 8 GB."""
+
+_CPU_HEADROOM_FRACTION = 0.10
+"""Reserve up to 10% of CPUs for OS and worker agent."""
+
+_CPU_HEADROOM_MAX = 1
+"""Cap CPU headroom at 1 core."""
+
+
+def _compute_memory_headroom(physical_bytes: int) -> int:
+    """Compute memory headroom: min(10% of physical RAM, 8 GB)."""
+    return min(int(physical_bytes * _MEMORY_HEADROOM_FRACTION), _MEMORY_HEADROOM_MAX_BYTES)
+
+
+def _compute_cpu_headroom(physical_cpus: int) -> int:
+    """Compute CPU headroom: min(10% of CPUs, 1 core), as whole cores."""
+    fractional = min(physical_cpus * _CPU_HEADROOM_FRACTION, _CPU_HEADROOM_MAX)
+    return int(fractional)
+
+
 def _get_memory_total_bytes() -> int:
+    """Return schedulable memory in bytes, with headroom subtracted.
+
+    Reserves min(10%, 8 GB) for the OS, Docker daemon, and worker agent so the
+    scheduler cannot commit 100% of a machine's memory.
+    """
     try:
         with open("/proc/meminfo") as f:
             for line in f:
                 if line.startswith("MemTotal:"):
-                    return int(line.split()[1]) * 1024  # kB to bytes
+                    physical = int(line.split()[1]) * 1024  # kB to bytes
+                    headroom = _compute_memory_headroom(physical)
+                    return physical - headroom
     except FileNotFoundError:
         pass
     # Fallback for non-Linux
     return 8 * 1024**3  # Default 8GB
+
+
+def _get_cpu_count() -> int:
+    """Return schedulable CPU count, with headroom subtracted.
+
+    Reserves min(10%, 1 core) for the OS and worker agent.
+    """
+    physical = os.cpu_count() or 1
+    headroom = _compute_cpu_headroom(physical)
+    return max(1, physical - headroom)
 
 
 def _get_ip_address() -> str:
@@ -317,7 +358,7 @@ def probe_hardware() -> HardwareProbe:
     return HardwareProbe(
         hostname=hostname,
         ip_address=ip_address,
-        cpu_count=os.cpu_count() or 1,
+        cpu_count=_get_cpu_count(),
         memory_bytes=_get_memory_total_bytes(),
         disk_bytes=_get_disk_bytes(),
         gpu_count=gpu_count,
@@ -484,11 +525,12 @@ def check_worker_health(disk_path: str = "/") -> HealthCheckResult:
     Docker probing is implicit: if the worker is processing heartbeats
     and fetching task status, Docker is operational.
 
-    If disk_path does not exist (e.g. during teardown), the probe is
-    skipped and the worker is considered healthy.
+    If disk_path is not an existing directory (e.g. during teardown, or on
+    platforms where the path does not exist), the probe is skipped and the
+    worker is considered healthy.
     """
     dp = Path(disk_path)
-    if not dp.exists():
+    if not dp.is_dir():
         return HealthCheckResult(healthy=True)
 
     errors: list[str] = []
@@ -498,6 +540,9 @@ def check_worker_health(disk_path: str = "/") -> HealthCheckResult:
         probe_path = dp / ".iris_health_probe"
         probe_path.write_text("ok")
         probe_path.unlink()
+    except FileNotFoundError:
+        # TOCTOU: directory vanished between is_dir() check and write
+        pass
     except OSError as e:
         errors.append(f"tempfile write failed: {e}")
 

@@ -37,6 +37,7 @@ from zephyr.dataset import (
     ReduceOp,
     ReshardOp,
     SelectOp,
+    ShardInfo,
     TakePerShardOp,
     WindowOp,
     WriteOp,
@@ -72,10 +73,12 @@ class Map:
         fn: Composed function that transforms an iterator to an iterator
         requires_full_shard: True if any composed op needs full shard context
             (e.g., MapShardOp). When True, chunk parallelism is disabled.
+        needs_shard_context: True if fn expects (stream, shard_info: ShardInfo).
     """
 
     fn: Callable[[Iterator], Iterator]
     requires_full_shard: bool = False
+    needs_shard_context: bool = False
 
 
 @dataclass
@@ -190,10 +193,11 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
         operations: List of fusible logical ops (MapOp, FilterOp, LoadFileOp, etc.)
 
     Returns:
-        A function that transforms an iterator to an iterator
+        A function that transforms an iterator to an iterator.
+        For MapShardOp, also passes shard_idx and total_shards as ShardInfo.
     """
 
-    def pipeline(stream: Iterator) -> Iterator:
+    def pipeline(stream: Iterator, *, shard_idx: int = 0, total_shards: int = 1) -> Iterator:
         for op in operations:
             if isinstance(op, LoadFileOp):
                 stream = _load_file_gen(stream)
@@ -204,7 +208,7 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
             elif isinstance(op, FlatMapOp):
                 stream = _flatmap_gen(stream, op.fn)
             elif isinstance(op, MapShardOp):
-                stream = op.fn(stream)
+                stream = op.fn(stream, ShardInfo(shard_idx=shard_idx, total_shards=total_shards))
             elif isinstance(op, TakePerShardOp):
                 stream = islice(stream, op.n)
             elif isinstance(op, WindowOp):
@@ -328,10 +332,12 @@ class FusionState:
             return
 
         requires_full_shard = any(isinstance(op, MapShardOp) for op in self.pending_fusible)
+        needs_shard_context = requires_full_shard
         self.current_ops.append(
             Map(
                 fn=compose_map(self.pending_fusible[:]),
                 requires_full_shard=requires_full_shard,
+                needs_shard_context=needs_shard_context,
             )
         )
         self.pending_fusible = []
@@ -707,6 +713,8 @@ def _merge_sorted_chunks(shard, key_fn: Callable, sort_fn: Callable | None = Non
     for chunk_data in shard.iter_chunks():
         chunk_iterators.append(iter(chunk_data))
 
+    logger.info(f"Merging {len(chunk_iterators):,} sorted chunk iterators")
+
     merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
     yield from groupby(merged_stream, key=key_fn)
 
@@ -821,7 +829,10 @@ def run_stage(
         op = ops[op_index]
 
         if isinstance(op, Map):
-            stream = op.fn(stream)
+            if op.needs_shard_context:
+                stream = op.fn(stream, shard_idx=ctx.shard_idx, total_shards=ctx.total_shards)
+            else:
+                stream = op.fn(stream)
             op_index += 1
         elif isinstance(op, Write):
             output_path = op.output_pattern(ctx.shard_idx, ctx.total_shards)
