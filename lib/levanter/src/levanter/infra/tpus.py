@@ -279,6 +279,188 @@ GCE_TPU_ACCELERATOR_ENDPOINT = "http://metadata.google.internal/computeMetadata/
 GCE_TPU_HEADERS = {"Metadata-Flavor": "Google"}
 
 
+# ---------------------------------------------------------------------------
+# Helpers for alternating RL: per-worker and existing-pod operations
+# ---------------------------------------------------------------------------
+
+
+def ssh_tpu_worker(tpu_name: str, zone: str, worker_ordinal: int, *args, ignore_failure: bool = False):
+    """SSH into a specific worker of a TPU VM."""
+    try:
+        add_ssh_key(os.path.expanduser("~/.ssh/google_compute_engine"))
+    except subprocess.CalledProcessError as e:
+        print("Failed to add ssh key. This may lead to problems.", e)
+
+    try:
+        return run_command(
+            "gcloud",
+            "alpha",
+            "compute",
+            "tpus",
+            "tpu-vm",
+            "ssh",
+            tpu_name,
+            "--quiet",
+            f"--worker={worker_ordinal}",
+            f"--zone={zone}",
+            "--command=%s" % " ".join(args),
+        )
+    except subprocess.CalledProcessError as e:
+        if ignore_failure:
+            print("Ignoring failure:", e)
+        else:
+            raise
+
+
+def run_container_on_worker(
+    tpu_name: str,
+    zone: str,
+    worker_ordinal: int,
+    image_id: str,
+    command: list[str],
+    env: dict[str, str],
+    name: str = "levanter",
+    foreground: bool = True,
+):
+    """Run a Docker container on a specific TPU worker."""
+    docker_command = make_docker_run_command(image_id, command, env=env, foreground=foreground, name=name)
+    ssh_tpu_worker(tpu_name, zone, worker_ordinal, *docker_command)
+
+
+def run_container_all_workers(
+    tpu_name: str,
+    zone: str,
+    num_workers: int,
+    image_id: str,
+    command: list[str],
+    env: dict[str, str],
+    name: str = "levanter",
+    foreground: bool = True,
+):
+    """Run a Docker container on all TPU workers simultaneously."""
+    docker_command = make_docker_run_command(image_id, command, env=env, foreground=foreground, name=name)
+    tpu_ssh(tpu_name, zone, num_workers, *docker_command)
+
+
+def stop_container_on_worker(
+    tpu_name: str,
+    zone: str,
+    worker_ordinal: int,
+    name: str = "levanter",
+    ignore_failure: bool = True,
+):
+    """Stop and remove a Docker container on a specific TPU worker."""
+    ssh_tpu_worker(
+        tpu_name,
+        zone,
+        worker_ordinal,
+        "sudo",
+        "docker",
+        "rm",
+        "-f",
+        name,
+        ignore_failure=ignore_failure,
+    )
+
+
+def stop_container_all_workers(
+    tpu_name: str,
+    zone: str,
+    num_workers: int,
+    name: str = "levanter",
+    ignore_failure: bool = True,
+):
+    """Stop and remove a Docker container on all TPU workers."""
+    tpu_ssh(
+        tpu_name,
+        zone,
+        num_workers,
+        "sudo",
+        "docker",
+        "rm",
+        "-f",
+        name,
+        ignore_failure=ignore_failure,
+    )
+
+
+def describe_tpu_workers(tpu_name: str, zone: str) -> dict | None:
+    """Get TPU VM details including worker network endpoints."""
+    try:
+        return json.loads(
+            subprocess.check_output(
+                [
+                    "gcloud",
+                    "compute",
+                    "tpus",
+                    "tpu-vm",
+                    "describe",
+                    tpu_name,
+                    f"--zone={zone}",
+                    "--format=json",
+                    "--quiet",
+                ],
+                stderr=subprocess.DEVNULL,
+            )
+        )
+    except subprocess.CalledProcessError:
+        return None
+
+
+def worker_health_probe(
+    tpu_name: str,
+    zone: str,
+    worker_ordinal: int,
+) -> bool:
+    """Run a simple health check on a TPU worker. Returns True if healthy."""
+    try:
+        ssh_tpu_worker(tpu_name, zone, worker_ordinal, "echo", "ok")
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def resolve_image_digest(image_tag: str) -> str:
+    """Resolve a Docker image tag to its full digest."""
+    result = subprocess.check_output(
+        ["gcloud", "container", "images", "describe", image_tag, "--format=value(image_summary.digest)"],
+        text=True,
+    ).strip()
+    # Return full image reference with digest
+    repo = image_tag.rsplit(":", 1)[0]
+    return f"{repo}@{result}"
+
+
+def ensure_tpu_exists(
+    tpu_name: str,
+    tpu_type: str,
+    zone: str,
+    capacity_type: str = "on-demand",
+    version: str | None = None,
+) -> None:
+    """Create a TPU if it doesn't already exist."""
+    tpu_stat = describe_tpu_queued_resource(tpu_name, zone)
+    if tpu_stat is not None and tpu_stat["state"]["state"] == "ACTIVE":
+        logger.info("TPU %s already exists and is active", tpu_name)
+        return
+
+    # Determine node count from TPU type
+    parts = tpu_type.split("-")
+    total_chips = int(parts[1])
+    chips_per_host = 4
+    node_count = max(1, total_chips // chips_per_host)
+
+    start_tpu_vm_queued_resources(
+        tpu_name=tpu_name,
+        tpu_type=tpu_type,
+        capacity_type=capacity_type,
+        version=version,
+        zone=zone,
+        node_count=node_count,
+    )
+    setup_vm_docker(tpu_name=tpu_name, zone=zone, node_count=node_count)
+
+
 def get_current_tpu_is_preempted() -> bool:
     """curl -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/preempted"""
     try:
