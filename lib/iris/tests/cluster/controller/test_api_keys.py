@@ -78,10 +78,12 @@ def test_static_preload_inserts_keys(db):
     bob_identity = auth.login_verifier.verify("tok-b")
     assert bob_identity.user_id == "bob"
 
-    # The JWT verifier (JwtTokenManager) verifies worker token correctly.
-    assert auth.worker_token is not None
-    identity = auth.verifier.verify(auth.worker_token)
+    # The worker_token_factory mints per-worker JWTs with embedded worker_id.
+    assert auth.worker_token_factory is not None
+    token = auth.worker_token_factory("test-worker-0")
+    identity = auth.verifier.verify(token)
     assert identity.user_id == WORKER_USER
+    assert identity.worker_id == "test-worker-0"
 
 
 def test_static_preload_is_idempotent(db):
@@ -93,27 +95,37 @@ def test_static_preload_is_idempotent(db):
     assert len(keys) == 1
 
 
-def test_worker_token_in_api_keys(db):
+def test_worker_token_factory_creates_per_worker_tokens(db):
     config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}})
     auth = create_controller_auth(config, db=db)
 
-    # Worker token is a JWT — verify it resolves to WORKER_USER
-    assert auth.worker_token is not None
-    identity = auth.verifier.verify(auth.worker_token)
-    assert identity.user_id == WORKER_USER
+    assert auth.worker_token_factory is not None
+    token_a = auth.worker_token_factory("worker-a")
+    token_b = auth.worker_token_factory("worker-b")
+
+    # Each token resolves to WORKER_USER with the correct worker_id
+    identity_a = auth.verifier.verify(token_a)
+    assert identity_a.user_id == WORKER_USER
+    assert identity_a.worker_id == "worker-a"
+
+    identity_b = auth.verifier.verify(token_b)
+    assert identity_b.user_id == WORKER_USER
+    assert identity_b.worker_id == "worker-b"
+
+    # Tokens are distinct (different jti)
+    assert token_a != token_b
 
 
-def test_worker_token_differs_after_restart(db):
+def test_worker_tokens_survive_controller_restart(db):
     config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}})
     auth1 = create_controller_auth(config, db=db)
-    token1 = auth1.worker_token
+    token1 = auth1.worker_token_factory("worker-0")
 
+    # Simulate controller restart
     auth2 = create_controller_auth(config, db=db)
-    token2 = auth2.worker_token
-    assert token1 != token2
+    token2 = auth2.worker_token_factory("worker-0")
 
-    # Both tokens should still work (old not revoked) — using auth2's verifier
-    # (same signing key, loaded revocations from DB)
+    # Old token still works (not revoked), using auth2's verifier (same signing key)
     identity1 = auth2.verifier.verify(token1)
     identity2 = auth2.verifier.verify(token2)
     assert identity1.user_id == WORKER_USER
@@ -422,15 +434,21 @@ def test_discovery_login_flow(db):
 # ---------------------------------------------------------------------------
 
 
-def test_null_auth_creates_anonymous_admin_and_worker_token(db):
-    """No auth config + DB bootstraps anonymous admin and generates worker token."""
+def test_null_auth_creates_anonymous_admin_and_worker_factory(db):
+    """No auth config + DB bootstraps anonymous admin and generates worker token factory."""
     config = config_pb2.AuthConfig()
     auth = create_controller_auth(config, db=db)
     assert db.get_user_role("anonymous") == "admin"
     assert auth.verifier is not None
-    assert auth.worker_token is not None
+    assert auth.worker_token_factory is not None
     assert auth.provider is None
     assert auth.login_verifier is None
+
+    # Factory creates per-worker tokens
+    token = auth.worker_token_factory("null-auth-worker-0")
+    identity = auth.verifier.verify(token)
+    assert identity.user_id == WORKER_USER
+    assert identity.worker_id == "null-auth-worker-0"
 
 
 def test_null_auth_rpcs_work_with_anonymous_token(db):

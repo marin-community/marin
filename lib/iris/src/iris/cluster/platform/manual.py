@@ -217,6 +217,7 @@ class ManualPlatform:
         label_prefix: str,
         ssh_config: config_pb2.SshConfig | None = None,
         hosts: list[str] | None = None,
+        worker_token_factory: Callable[[str], str] | None = None,
     ):
         self._label_prefix = label_prefix
         self._iris_labels = Labels(label_prefix)
@@ -226,6 +227,7 @@ class ManualPlatform:
         self._allocated_hosts: set[str] = set()
         self._slices: dict[str, ManualSliceHandle] = {}
         self._vms: dict[str, ManualStandaloneWorkerHandle] = {}
+        self._worker_token_factory = worker_token_factory
 
     def resolve_image(self, image: str, zone: str | None = None) -> str:
         return image
@@ -352,6 +354,8 @@ class ManualPlatform:
                 per_worker_config = config_pb2.WorkerConfig()
                 per_worker_config.CopyFrom(worker_config)
                 per_worker_config.worker_id = worker.worker_id
+                if self._worker_token_factory:
+                    per_worker_config.auth_token = self._worker_token_factory(worker.worker_id)
                 script = build_worker_bootstrap_script(per_worker_config)
                 worker.bootstrap(script)
             except Exception as e:

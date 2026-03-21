@@ -35,6 +35,7 @@ class VerifiedIdentity:
 
     user_id: str
     role: str
+    worker_id: str = ""
 
 
 def _extract_cookie(cookie_header: str, name: str) -> str | None:

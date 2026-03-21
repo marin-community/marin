@@ -17,6 +17,7 @@
 
 """Factory for creating Platform instances from cluster configuration."""
 
+from collections.abc import Callable
 from typing import cast
 
 from iris.cluster.platform.base import Platform
@@ -26,16 +27,21 @@ from iris.cluster.platform.local import LocalPlatform
 from iris.cluster.platform.manual import ManualPlatform
 from iris.rpc import config_pb2
 
+WorkerTokenFactory = Callable[[str], str]
+
 
 def create_platform(
     platform_config: config_pb2.PlatformConfig,
     ssh_config: config_pb2.SshConfig | None = None,
+    worker_token_factory: WorkerTokenFactory | None = None,
 ) -> Platform:
     """Create a Platform instance from configuration.
 
     Args:
         platform_config: Platform type and provider-specific settings.
         ssh_config: SSH settings (used by GCP and manual platforms).
+        worker_token_factory: Optional callable ``(worker_id) -> jwt_token``
+            used by platforms to mint per-worker auth tokens at provisioning.
 
     Returns:
         Platform instance for the configured provider type.
@@ -58,6 +64,7 @@ def create_platform(
                 gcp_config=platform_config.gcp,
                 label_prefix=label_prefix,
                 ssh_config=ssh_config,
+                worker_token_factory=worker_token_factory,
             ),
         )
 
@@ -67,6 +74,7 @@ def create_platform(
             ManualPlatform(
                 label_prefix=label_prefix,
                 ssh_config=ssh_config,
+                worker_token_factory=worker_token_factory,
             ),
         )
 
