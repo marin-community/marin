@@ -62,11 +62,12 @@ packages = ["src/iris"]
 
 [tool.pytest.ini_options]
 timeout = 30
-addopts = "-n auto --durations=25 -m 'not slow and not docker' -v"
+addopts = "-n auto --durations=25 -m 'not slow and not docker and not kind' -v"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "docker: marks tests requiring Docker runtime (slow, needs daemon)",
     "e2e: end-to-end cluster tests (chaos, dashboard, scheduling)",
+    "kind: marks tests requiring a Kind (Kubernetes in Docker) cluster",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]
 log_level = "INFO"
