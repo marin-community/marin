@@ -573,6 +573,41 @@ def test_host_network_omitted_when_disabled():
 # ---------------------------------------------------------------------------
 
 
+def test_port_allocation_env_vars():
+    """Requested ports get non-zero values in IRIS_PORT_* env vars."""
+    req = make_run_req("/test-job/0")
+    req.ports.extend(["http", "grpc"])
+    manifest = _build_pod_manifest(req, pod_config())
+
+    env_by_name = {e["name"]: e.get("value") for e in manifest["spec"]["containers"][0]["env"]}
+    assert int(env_by_name["IRIS_PORT_HTTP"]) > 0
+    assert int(env_by_name["IRIS_PORT_GRPC"]) > 0
+    assert env_by_name["IRIS_PORT_HTTP"] != env_by_name["IRIS_PORT_GRPC"]
+
+
+def test_port_allocation_container_ports():
+    """Requested ports are declared as containerPort entries."""
+    req = make_run_req("/test-job/0")
+    req.ports.extend(["http", "grpc"])
+    manifest = _build_pod_manifest(req, pod_config())
+
+    container = manifest["spec"]["containers"][0]
+    container_ports = container.get("ports", [])
+    port_numbers = {p["containerPort"] for p in container_ports}
+    env_by_name = {e["name"]: e.get("value") for e in container["env"]}
+    assert int(env_by_name["IRIS_PORT_HTTP"]) in port_numbers
+    assert int(env_by_name["IRIS_PORT_GRPC"]) in port_numbers
+
+
+def test_no_ports_no_container_ports():
+    """No containerPort entries when no ports are requested."""
+    req = make_run_req("/test-job/0")
+    manifest = _build_pod_manifest(req, pod_config())
+
+    container = manifest["spec"]["containers"][0]
+    assert "ports" not in container
+
+
 def test_iris_env_vars_injected():
     """Pod manifest includes IRIS_TASK_ID, IRIS_NUM_TASKS, and other system vars."""
     req = make_run_req("/test-job/0")
