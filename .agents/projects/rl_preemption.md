@@ -100,3 +100,14 @@ Old rollout files remain. The replay buffer's `max_rollout_step_delay=1` rejects
 Remaining items (not blocking spot runs):
 - Sampler timeout fallback for dead Flight servers (medium priority)
 - Stale rollout cleanup on restart (low priority)
+
+### Validated in production (2026-03-21)
+
+Run `exp2039-nb-inflight2` on spot TPUs was preempted at step 111. Relaunched with same run ID:
+- Trainer found checkpoint at step 110 on GCS
+- Coordinator JSON had `weight_id=111` from previous run
+- Trainer published `weight_id=-1` → **accepted** (fix working, no deadlock)
+- Old rollouts (steps 104-111) correctly rejected as stale
+- Sampler received fresh weights, generated new rollouts
+- Trainer resumed training from step 110, reached step 112+ and continuing
+- Wandb run resumed successfully
