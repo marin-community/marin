@@ -8,10 +8,13 @@ Used by the reduce stage when the number of sorted chunk iterators exceeds
 exhausting worker memory.
 
 Pass 1: batch the k iterators into groups of EXTERNAL_SORT_FAN_IN, merge each
-group with heapq.merge, and spill the sorted result to a GCS pickle run file
-under ``{external_sort_dir}/run-{i:04d}.pkl``.
+group with heapq.merge, and spill items one-by-one to a GCS pickle run file
+under ``{external_sort_dir}/run-{i:04d}.pkl``.  Items are streamed to disk
+rather than accumulated in a list, so peak memory per batch is bounded by the
+number of open iterators rather than their total item count.
 
-Pass 2: heapq.merge over the (much smaller) set of run file iterators.
+Pass 2: heapq.merge over the (much smaller) set of run file iterators, reading
+each run file item-by-item.
 
 Run files are deleted after the final merge completes.
 """
@@ -27,8 +30,7 @@ from iris.marin_fs import url_to_fs
 
 logger = logging.getLogger(__name__)
 
-# Maximum simultaneous chunk iterators before spilling to GCS run files.
-# At 500 x ~5 MB/row-group (100 K rows x 50 B) = 2.5 GB peak during pass 1.
+# Maximum simultaneous chunk iterators per pass-1 batch.
 EXTERNAL_SORT_FAN_IN = 500
 
 
@@ -56,23 +58,28 @@ def external_sort_merge(
         batch = list(islice(chunk_iterators_gen, EXTERNAL_SORT_FAN_IN))
         if not batch:
             break
-        merged = list(heapq.merge(*batch, key=merge_key))
         run_path = f"{external_sort_dir}/run-{batch_idx:04d}.pkl"
+        item_count = 0
         with fsspec.open(run_path, "wb") as f:
-            pickle.dump(merged, f, protocol=pickle.HIGHEST_PROTOCOL)
+            for item in heapq.merge(*batch, key=merge_key):
+                pickle.dump(item, f, protocol=pickle.HIGHEST_PROTOCOL)
+                item_count += 1
         run_paths.append(run_path)
         logger.info(
             "External sort: wrote run %d (%d items) to %s",
             batch_idx + 1,
-            len(merged),
+            item_count,
             run_path,
         )
-        del merged
         batch_idx += 1
 
     def _read_run(path: str) -> Iterator:
         with fsspec.open(path, "rb") as f:
-            yield from pickle.load(f)
+            while True:
+                try:
+                    yield pickle.load(f)
+                except EOFError:
+                    break
 
     run_iters = [_read_run(p) for p in run_paths]
     try:

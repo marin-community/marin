@@ -241,3 +241,38 @@ def test_scatter_parquet_iterator_pickle_roundtrip(tmp_path):
     chunks = [list(chunk_iter) for chunk_iter in it.get_chunk_iterators()]
     assert len(chunks) == 1
     assert chunks[0] == items
+
+
+# ---------------------------------------------------------------------------
+# external_sort_merge
+# ---------------------------------------------------------------------------
+
+
+def test_external_sort_merge_streaming(tmp_path):
+    """external_sort_merge streams items to disk; output is fully sorted."""
+    from zephyr.external_sort import external_sort_merge
+
+    # Build 3 sorted iterators, more than would fit in one batch if fan-in were 2
+    iters = [iter([1, 4, 7]), iter([2, 5, 8]), iter([3, 6, 9])]
+
+    result = list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
+    assert result == list(range(1, 10))
+
+
+def test_external_sort_merge_single_batch(tmp_path):
+    """Works correctly when all iterators fit in a single pass-1 batch."""
+    from zephyr.external_sort import external_sort_merge
+
+    iters = [iter([i]) for i in range(10)]
+    result = list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
+    assert result == list(range(10))
+
+
+def test_external_sort_merge_cleans_up(tmp_path):
+    """Run files are deleted after the merge completes."""
+    from zephyr.external_sort import external_sort_merge, EXTERNAL_SORT_FAN_IN
+
+    # Force multiple batches by making more iterators than EXTERNAL_SORT_FAN_IN
+    iters = [iter([i]) for i in range(EXTERNAL_SORT_FAN_IN + 1)]
+    list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
+    assert list(tmp_path.iterdir()) == [], "run files should be deleted after merge"
