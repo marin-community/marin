@@ -35,7 +35,7 @@ llama_vllm = VLLMConfig(
     tensor_parallel_size=1,
     max_model_len=2048,
     gpu_memory_utilization=0.9,
-    tpu_type="v6e-8",
+    tpu_type="v5p-8",
 )
 
 align_config = AlignConfig(
