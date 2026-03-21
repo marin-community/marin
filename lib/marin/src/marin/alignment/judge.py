@@ -16,7 +16,6 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from marin.alignment.llm_client import llm_chat_single
@@ -45,16 +44,20 @@ class JudgePairConfig:
 
 
 def _load_responses(path: str) -> dict[str, dict[str, Any]]:
-    """Load responses keyed by prompt_id."""
+    """Load responses keyed by prompt_id. Supports both local and GCS paths."""
+    import fsspec
+
+    fs, base_path = fsspec.core.url_to_fs(path)
     responses: dict[str, dict[str, Any]] = {}
-    for shard_file in sorted(Path(path).glob("*.jsonl.gz")):
-        with gzip.open(shard_file, "rt", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                record = json.loads(line)
-                prompt_id = record.get("prompt_id", "")
+    for shard_file in sorted(fs.glob(f"{base_path}/*.jsonl.gz")):
+        with fs.open(shard_file, "rb") as raw_f:
+            with gzip.open(raw_f, "rt", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    record = json.loads(line)
+                    prompt_id = record.get("prompt_id", "")
                 responses[prompt_id] = record
     return responses
 
@@ -275,17 +278,9 @@ def judge_and_build_pairs(config: JudgePairConfig) -> None:
         len(failures),
     )
 
-    # Write output as sharded JSONL.GZ
-    output_dir = Path(config.output_path)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    shard_size = 5000
+    # Write output as sharded JSONL.GZ (supports both local and GCS paths)
+    from marin.alignment.generate_prompts import _write_sharded_jsonl_gz
 
-    for shard_idx in range(0, max(1, len(pairs)), shard_size):
-        shard = pairs[shard_idx : shard_idx + shard_size]
-        shard_num = shard_idx // shard_size
-        shard_path = output_dir / f"shard_{shard_num:05d}.jsonl.gz"
-        with gzip.open(shard_path, "wt", encoding="utf-8") as f:
-            for record in shard:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    _write_sharded_jsonl_gz(pairs, config.output_path, shard_size=5000)
 
     logger.info("Wrote %d preference pairs to %s", len(pairs), config.output_path)

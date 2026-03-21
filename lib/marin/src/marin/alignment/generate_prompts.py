@@ -19,7 +19,6 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from marin.alignment.coverage import compute_coverage_stats, generate_covering_configs, make_tags
@@ -75,18 +74,28 @@ class PromptGenConfig:
 
 
 def load_spec(spec_path: str) -> dict[str, Statement]:
-    """Load behavioral statements from a JSONL file."""
+    """Load behavioral statements from a JSONL file. Supports both local and GCS paths."""
+    import fsspec
+
+    fs, resolved_path = fsspec.core.url_to_fs(spec_path)
     statements: dict[str, Statement] = {}
-    path = Path(spec_path)
-    open_fn = gzip.open if path.suffix == ".gz" else open
-    with open_fn(path, "rt", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            data = json.loads(line)
-            stmt = Statement.from_dict(data)
-            statements[stmt.id] = stmt
+    is_gz = resolved_path.endswith(".gz")
+
+    with fs.open(resolved_path, "rb") as raw_f:
+        f = gzip.open(raw_f, "rt", encoding="utf-8") if is_gz else raw_f
+        try:
+            for line in f:
+                if isinstance(line, bytes):
+                    line = line.decode("utf-8")
+                line = line.strip()
+                if not line:
+                    continue
+                data = json.loads(line)
+                stmt = Statement.from_dict(data)
+                statements[stmt.id] = stmt
+        finally:
+            if is_gz:
+                f.close()
     return statements
 
 
@@ -468,16 +477,19 @@ def generate_prompts_from_spec(config: PromptGenConfig) -> None:
 
 
 def _write_sharded_jsonl_gz(records: list[dict[str, Any]], output_path: str, shard_size: int = 5000) -> None:
-    """Write records as sharded JSONL.GZ files."""
-    output_dir = Path(output_path)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    """Write records as sharded JSONL.GZ files. Supports both local and GCS paths."""
+    import fsspec
+
+    fs, base_path = fsspec.core.url_to_fs(output_path)
+    fs.makedirs(base_path, exist_ok=True)
 
     for shard_idx in range(0, max(1, len(records)), shard_size):
         shard = records[shard_idx : shard_idx + shard_size]
         shard_num = shard_idx // shard_size
-        shard_path = output_dir / f"shard_{shard_num:05d}.jsonl.gz"
-        with gzip.open(shard_path, "wt", encoding="utf-8") as f:
-            for record in shard:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        shard_file = f"{base_path}/shard_{shard_num:05d}.jsonl.gz"
+        with fs.open(shard_file, "wb") as raw_f:
+            with gzip.open(raw_f, "wt", encoding="utf-8") as f:
+                for record in shard:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     logger.info("Wrote %d records to %d shards in %s", len(records), (len(records) // shard_size) + 1, output_path)

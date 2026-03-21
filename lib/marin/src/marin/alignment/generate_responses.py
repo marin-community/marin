@@ -20,7 +20,6 @@ import gzip
 import json
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from marin.alignment.inference_config import InferenceConfig, LiteLLMConfig, VLLMConfig
@@ -63,17 +62,20 @@ class ResponseGenConfig:
 
 
 def _load_prompts(prompts_path: str) -> list[dict[str, Any]]:
-    """Load prompts from sharded JSONL.GZ files."""
-    prompts_dir = Path(prompts_path)
+    """Load prompts from sharded JSONL.GZ files. Supports both local and GCS paths."""
+    import fsspec
+
+    fs, base_path = fsspec.core.url_to_fs(prompts_path)
     all_prompts: list[dict[str, Any]] = []
 
-    shard_files = sorted(prompts_dir.glob("*.jsonl.gz"))
+    shard_files = sorted(fs.glob(f"{base_path}/*.jsonl.gz"))
     for shard_file in shard_files:
-        with gzip.open(shard_file, "rt", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    all_prompts.append(json.loads(line))
+        with fs.open(shard_file, "rb") as raw_f:
+            with gzip.open(raw_f, "rt", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        all_prompts.append(json.loads(line))
 
     return all_prompts
 
@@ -84,12 +86,16 @@ def _load_behavior_statements(path: str) -> dict[str, str]:
     Accepts either:
     - JSONL spec file (one statement per line with "id" and "text" fields)
     - JSON dict mapping ID → text
+
+    Supports both local and GCS paths.
     """
-    with open(path, "r", encoding="utf-8") as f:
+    import fsspec
+
+    fs, resolved_path = fsspec.core.url_to_fs(path)
+    with fs.open(resolved_path, "r", encoding="utf-8") as f:
         first_char = f.read(1)
         f.seek(0)
         if first_char == "{":
-            # Try as single JSON dict first
             content = f.read()
             try:
                 data = json.loads(content)
@@ -97,7 +103,6 @@ def _load_behavior_statements(path: str) -> dict[str, str]:
                     return data
             except json.JSONDecodeError:
                 pass
-            # Fall through to JSONL parsing
             f.seek(0)
 
         # JSONL: one statement per line
@@ -287,15 +292,7 @@ def generate_responses(config: ResponseGenConfig) -> None:
 
     logger.info("Generated responses for %d prompts", len(results))
 
-    # Write output
-    output_dir = Path(config.output_path)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    shard_size = 5000
+    # Write output (supports both local and GCS paths)
+    from marin.alignment.generate_prompts import _write_sharded_jsonl_gz
 
-    for shard_idx in range(0, max(1, len(results)), shard_size):
-        shard = results[shard_idx : shard_idx + shard_size]
-        shard_num = shard_idx // shard_size
-        shard_path = output_dir / f"shard_{shard_num:05d}.jsonl.gz"
-        with gzip.open(shard_path, "wt", encoding="utf-8") as f:
-            for record in shard:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    _write_sharded_jsonl_gz(results, config.output_path, shard_size=5000)

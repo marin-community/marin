@@ -21,10 +21,8 @@ Usage:
 from __future__ import annotations
 
 import dataclasses
-import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from fray.v2.types import ResourceConfig
 from levanter.data.text.preference import PreferenceChatLmDatasetFormat
@@ -113,15 +111,28 @@ class AlignConfig:
     statement_ids: list[str] | None = None
 
 
-def _write_behavior_statements(spec_path: str, output_path: str) -> None:
-    """Extract behavior ID → text mapping from spec and write as JSON."""
-    from marin.alignment.generate_prompts import load_spec
+def _upload_spec(config) -> None:
+    """Upload a local spec JSONL to the executor output path (GCS)."""
+    import fsspec
 
-    statements = load_spec(spec_path)
-    mapping = {sid: stmt.text for sid, stmt in statements.items()}
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(mapping, f, ensure_ascii=False, indent=2)
+    source_path = config.source_path
+    output_path = config.output_path
+
+    fs_out, out_path = fsspec.core.url_to_fs(output_path)
+    fs_out.makedirs(out_path, exist_ok=True)
+
+    dest_file = f"{out_path}/spec.jsonl"
+
+    # Source is always local (bundled in workspace)
+    with open(source_path, "rb") as src:
+        with fs_out.open(dest_file, "wb") as dst:
+            dst.write(src.read())
+
+
+@dataclass(frozen=True)
+class _UploadSpecConfig:
+    source_path: str
+    output_path: str
 
 
 def align(
@@ -158,11 +169,26 @@ def align(
     if rejected_model is None:
         rejected_model = teacher_model
 
-    # Resolve spec path
+    # Resolve spec: if it's a local path, upload to GCS as a step so all
+    # downstream jobs can read it reliably.
     if isinstance(spec, ExecutorStep):
-        spec_input = output_path_of(spec)
+        spec_step = spec
+        spec_gcs_path = output_path_of(spec)
     else:
-        spec_input = spec
+        spec_step = ExecutorStep(
+            name=f"align/{name}/spec",
+            description="Upload spec JSONL to GCS",
+            fn=remote(
+                _upload_spec,
+                resources=align_config.cpu_resources,
+                pip_dependency_groups=["cpu"],
+            ),
+            config=_UploadSpecConfig(
+                source_path=spec,
+                output_path=this_output_path(),
+            ),
+        )
+        spec_gcs_path = output_path_of(spec_step) / "spec.jsonl"
 
     # Step 1: Generate prompts from spec (stages 1-3)
     prompts_step = ExecutorStep(
@@ -174,7 +200,7 @@ def align(
             pip_dependency_groups=["cpu"],
         ),
         config=PromptGenConfig(
-            spec_path=spec_input,
+            spec_path=spec_gcs_path,
             output_path=this_output_path(),
             ideation_model=align_config.ideation_model,
             extract_model=align_config.extract_model,
@@ -206,7 +232,7 @@ def align(
             n=align_config.teacher_n,
             temperature=align_config.teacher_temperature,
             max_tokens=align_config.teacher_max_tokens,
-            behavior_statements_path=spec_input,  # teacher sees spec guidance
+            behavior_statements_path=spec_gcs_path,  # teacher sees spec guidance
         ),
     )
 
@@ -244,7 +270,7 @@ def align(
             prompts_path=output_path_of(prompts_step),
             chosen_responses_path=output_path_of(chosen_step),
             rejected_responses_path=output_path_of(rejected_step),
-            spec_path=spec_input,
+            spec_path=spec_gcs_path,
             output_path=this_output_path(),
             judge_model=align_config.judge_model,
             min_chosen_score=align_config.judge_min_chosen_score,
@@ -253,7 +279,7 @@ def align(
         ),
     )
 
-    steps = [prompts_step, chosen_step, rejected_step, pairs_step]
+    steps = [spec_step, prompts_step, chosen_step, rejected_step, pairs_step]
 
     # Steps 4 & 5: Tokenize + DPO (only if dpo_config provided)
     if dpo_config is not None:
