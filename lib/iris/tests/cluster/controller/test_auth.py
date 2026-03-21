@@ -338,7 +338,7 @@ def optional_auth_client(service, verifier):
 def test_optional_auth_allows_unauthenticated_rpc(optional_auth_client):
     """RPCs succeed without a token, falling back to anonymous/admin identity."""
     resp = optional_auth_client.post(
-        "/iris.cluster.ControllerService/GetAuthInfo",
+        "/iris.cluster.ControllerService/ListJobs",
         json={},
         headers={"Content-Type": "application/json"},
     )
@@ -355,14 +355,14 @@ def test_optional_auth_uses_token_when_present(optional_auth_client):
     assert resp.status_code == 200
 
 
-def test_optional_auth_ignores_invalid_token(optional_auth_client):
-    """An invalid token does not reject the request — falls back to anonymous."""
+def test_optional_auth_rejects_invalid_token(optional_auth_client):
+    """An invalid token is rejected — optional mode still enforces token validity."""
     resp = optional_auth_client.post(
-        "/iris.cluster.ControllerService/GetAuthInfo",
+        "/iris.cluster.ControllerService/ListJobs",
         json={},
         headers={"Content-Type": "application/json", "Authorization": "Bearer bad-token"},
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 401
 
 
 def test_optional_auth_dashboard_accessible(optional_auth_client):

@@ -39,7 +39,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, static_files_mount
-from iris.rpc.auth import SESSION_COOKIE, AuthInterceptor, NullAuthInterceptor, TokenVerifier
+from iris.rpc.auth import SESSION_COOKIE, AuthInterceptor, NullAuthInterceptor, TokenVerifier, extract_bearer_token
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
 
@@ -180,6 +180,34 @@ class _SelectiveAuthInterceptor:
         return self._inner.intercept_unary_sync(call_next, request, ctx)
 
 
+class _OptionalAuthInterceptor:
+    """Auth interceptor for optional/gradual-adoption mode.
+
+    Token-bearing requests are fully authenticated: valid tokens resolve to the
+    real identity with its actual role; invalid tokens are rejected. Requests
+    without a token fall through as anonymous/admin so existing unauthenticated
+    clients keep working during the transition.
+
+    Login and GetAuthInfo are always unauthenticated (same as mandatory mode).
+    """
+
+    def __init__(self, verifier: TokenVerifier):
+        self._inner = AuthInterceptor(verifier)
+        self._null = NullAuthInterceptor(verifier=verifier)
+
+    def intercept_unary_sync(self, call_next, request, ctx):
+        if ctx.method().name in _UNAUTHENTICATED_RPCS:
+            return call_next(request, ctx)
+
+        token = extract_bearer_token(ctx.request_headers())
+        if token:
+            # Token present — full auth (reject on failure).
+            return self._inner.intercept_unary_sync(call_next, request, ctx)
+
+        # No token — anonymous fallback for gradual adoption.
+        return self._null.intercept_unary_sync(call_next, request, ctx)
+
+
 class ControllerDashboard:
     """HTTP dashboard with Connect RPC and web UI.
 
@@ -218,10 +246,13 @@ class ControllerDashboard:
         interceptors = [RequestTimingInterceptor(include_traceback=bool(os.environ.get("IRIS_DEBUG")))]
         if self._auth_provider is not None and not self._auth_optional:
             interceptors.insert(0, _SelectiveAuthInterceptor(self._auth_verifier))
+        elif self._auth_optional and self._auth_verifier is not None:
+            # Optional mode: authenticate token-bearing requests fully (reject
+            # invalid tokens), but allow unauthenticated requests through.
+            interceptors.insert(0, _OptionalAuthInterceptor(self._auth_verifier))
         else:
-            # In null-auth or optional mode, NullAuthInterceptor verifies
-            # tokens when present but lets unauthenticated requests through
-            # as anonymous/admin.
+            # Null-auth mode: no provider configured. Verify worker tokens
+            # when present but treat everything as anonymous/admin.
             interceptors.insert(0, NullAuthInterceptor(verifier=self._auth_verifier))
         rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=interceptors)
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
