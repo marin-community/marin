@@ -58,6 +58,22 @@ Always run `build:check` after editing `.vue` or `.ts` files to catch type error
 - Avoid `TYPE_CHECKING`. Use real imports. If you hit a cycle, prefer refactoring or use a `Protocol` at the boundary.
 - Prefer spiral plans: each stage should be independently testable (proto → server stub → client wiring → end-to-end test).
 
+## Environment Variables
+
+Never use `os.environ` to pass env vars to Iris jobs. Tasks run in Docker containers — the submitter's process environment is not available inside the container.
+
+Use Iris's built-in mechanisms instead:
+
+- **CLI**: `iris job run -e KEY VALUE -- python script.py`
+- **SDK**: `EnvironmentSpec(env_vars={"KEY": "value"})` passed to `client.submit(environment=...)`
+
+Key behaviors:
+- `HF_TOKEN`, `WANDB_API_KEY`, `HF_DATASETS_TRUST_REMOTE_CODE`, and `TOKENIZERS_PARALLELISM` are auto-injected from the submitter's env by `EnvironmentSpec.to_proto()`.
+- Child jobs inherit parent env vars automatically (child values take precedence).
+- The CLI also loads env vars from `.marin.yaml`'s `env:` section.
+
+See https://github.com/marin-community/marin/issues/3859 for context.
+
 ## Architecture Notes
 
 Resource model: CPU demand is fungible and can route to any group; GPU/TPU demand is non-fungible and must match device type (and optionally variant).
