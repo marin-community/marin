@@ -96,8 +96,7 @@ class KindCluster:
             last_phase = phase
             time.sleep(_POD_POLL_INTERVAL)
         raise TimeoutError(
-            f"Pod {pod_name} did not reach {target_phases} within {timeout}s "
-            f"(last phase: {last_phase})"
+            f"Pod {pod_name} did not reach {target_phases} within {timeout}s " f"(last phase: {last_phase})"
         )
 
     def pod_is_unschedulable(self, pod_name: str) -> bool:
