@@ -130,11 +130,18 @@ def test_k8s_env_contains_all_common_env_keys(parity_req_and_ctrl):
 
 
 def test_k8s_env_values_match_common_env(parity_req_and_ctrl):
-    """Values for shared keys must be identical between common env and k8s path."""
+    """Values for shared keys must be identical between common env and k8s path.
+
+    IRIS_PORT_* vars are excluded: build_common_iris_env sets them to "0" as
+    placeholders, then both the worker path (PortAllocator) and the k8s path
+    (deterministic assignment from _K8S_PORT_BASE) override with real values.
+    """
     req, ctrl = parity_req_and_ctrl
     common = _common_env(req, ctrl)
     k8s = _k8s_env(req, ctrl)
-    mismatched = {k: (common[k], k8s[k]) for k in common if k in k8s and common[k] != k8s[k]}
+    mismatched = {
+        k: (common[k], k8s[k]) for k in common if k in k8s and common[k] != k8s[k] and not k.startswith("IRIS_PORT_")
+    }
     assert not mismatched, f"Value mismatches between common and k8s: {mismatched}"
 
 
@@ -212,6 +219,15 @@ def test_ports_set_to_zero():
     env = _common_env(_make_req(ports=["coordinator", "debug"]))
     assert env["IRIS_PORT_COORDINATOR"] == "0"
     assert env["IRIS_PORT_DEBUG"] == "0"
+
+
+def test_k8s_ports_assigned_nonzero():
+    """K8s path overrides port placeholders with real port numbers."""
+    req = _make_req(ports=["coordinator", "debug"])
+    k8s = _k8s_env(req)
+    assert int(k8s["IRIS_PORT_COORDINATOR"]) > 0
+    assert int(k8s["IRIS_PORT_DEBUG"]) > 0
+    assert k8s["IRIS_PORT_COORDINATOR"] != k8s["IRIS_PORT_DEBUG"]
 
 
 def test_standard_paths_always_present():

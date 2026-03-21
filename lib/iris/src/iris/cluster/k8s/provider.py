@@ -58,6 +58,11 @@ _K8S_LABEL_MAX_LEN = 63
 
 # Number of consecutive sync cycles where a pod is missing from the k8s API
 # before declaring FAILED. Avoids false positives from transient API misses.
+# Base port for deterministic port allocation inside k8s pods. Each pod has
+# its own network namespace so conflicts are impossible; ports are assigned
+# sequentially from this base (8080, 8081, ...).
+_K8S_PORT_BASE = 8080
+
 _POD_NOT_FOUND_GRACE_CYCLES = 3
 
 # Kubernetes terminated reasons that indicate infrastructure failure (not application error).
@@ -326,6 +331,16 @@ def _build_pod_manifest(
         ports=run_req.ports,
         resources=run_req.resources if run_req.HasField("resources") else None,
     )
+
+    # Allocate deterministic ports for k8s pods. Each pod has its own network
+    # namespace so there are no conflicts; assign sequential ports from a base.
+    port_names = list(run_req.ports)
+    allocated_ports: dict[str, int] = {}
+    for i, name in enumerate(port_names):
+        port = _K8S_PORT_BASE + i
+        allocated_ports[name] = port
+        iris_env[f"IRIS_PORT_{name.upper()}"] = str(port)
+
     combined = {**dict(run_req.environment.env_vars), **iris_env}
     env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]
     # Pod IP via downward API — not expressible as a static value.
@@ -380,6 +395,11 @@ def _build_pod_manifest(
         "volumeMounts": vol_mounts,
         "command": ["bash", "-lc", _build_task_script(run_req)],
     }
+
+    if allocated_ports:
+        container["ports"] = [
+            {"containerPort": port, "name": name, "protocol": "TCP"} for name, port in allocated_ports.items()
+        ]
 
     # SYS_PTRACE for profiling; SYS_RESOURCE for TPU memlock ulimits.
     capabilities = ["SYS_PTRACE"]
