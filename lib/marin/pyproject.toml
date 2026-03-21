@@ -29,6 +29,7 @@ dependencies = [
     "jaxopt>=0.8.3",
     "levanter[serve]",
     "litellm>=1.0.0",
+    "tenacity",
     "lxml[html_clean]",
     "lz4",
     "markdownify==0.12.1",
