@@ -20,6 +20,7 @@ from marin.rl.alternating import (
     ExistingPodPhaseHooks,
     resolve_container_image,
     run_controller,
+    run_export_policy_from_config_path,
     run_materialization_from_config_path,
     run_prepare_sampling_from_config_path,
     run_sampling_host_from_config_path,
@@ -240,7 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
     controller.add_argument("--num-train-steps", type=int, default=None)
     controller.add_argument("--seed", type=int, default=DEFAULT_SEED)
 
-    for subcommand in ("prepare-sampling", "materialize", "train-phase"):
+    for subcommand in ("prepare-sampling", "materialize", "train-phase", "export-policy"):
         subparser = subparsers.add_parser(subcommand)
         subparser.add_argument("--config-path", required=True)
         subparser.add_argument("--phase-id", type=int, required=True)
@@ -272,6 +273,9 @@ def main() -> None:
         return
     if args.command == "train-phase":
         run_training_phase_from_config_path(args.config_path, args.phase_id)
+        return
+    if args.command == "export-policy":
+        run_export_policy_from_config_path(args.config_path, args.phase_id)
         return
 
     raise AssertionError(f"unknown command {args.command}")

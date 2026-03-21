@@ -26,14 +26,17 @@ from marin.rl.alternating.state import (
     AlternatingRunPaths,
     AlternatingRunState,
     HostPhaseStatus,
+    PhaseMetricsManifest,
     PolicyManifest,
     SamplingManifest,
     SamplingHostStatusManifest,
     read_sampling_host_status,
     sampling_host_statuses_exist,
+    update_phase_metrics,
     utc_now_iso,
     write_policy_manifest,
 )
+from marin.rl.alternating.training_phase import export_policy_only
 from marin.rl.alternating.training_phase import run_training_phase as run_training_phase_local
 from marin.rl.curriculum import create_local_curriculum
 from marin.rl.types import RolloutStats
@@ -42,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_POLL_INTERVAL = 30
 DEFAULT_SAMPLING_TIMEOUT = 6 * 60 * 60
+DEFAULT_MISSING_CONTAINER_GRACE_POLLS = 2
 
 
 def resolve_container_image(image: str) -> str:
@@ -141,6 +145,14 @@ def _written_sampling_statuses(
     return statuses
 
 
+def _log_phase_metrics(
+    paths: AlternatingRunPaths,
+    phase_id: int,
+    **updates: float | None,
+) -> PhaseMetricsManifest:
+    return update_phase_metrics(paths.phase_metrics_path(phase_id), phase_id=phase_id, **updates)
+
+
 class ExistingPodPhaseHooks(AlternatingPhaseHooks):
     """Concrete pod/runtime hooks for the alternating RL controller."""
 
@@ -226,6 +238,7 @@ class ExistingPodPhaseHooks(AlternatingPhaseHooks):
             config.cluster.zone,
             config.cluster.node_count,
         )
+        prepare_sampling_start = time.time()
         tpus.run_container_on_worker(
             tpu_name=config.cluster.tpu_name,
             zone=config.cluster.zone,
@@ -239,6 +252,11 @@ class ExistingPodPhaseHooks(AlternatingPhaseHooks):
             ),
             foreground=True,
             name=SAMPLER_CONTAINER_NAME,
+        )
+        _log_phase_metrics(
+            paths,
+            manifest.phase_id,
+            prepare_sampling_seconds=time.time() - prepare_sampling_start,
         )
         tpus.stop_container_on_worker(
             config.cluster.tpu_name,
@@ -278,8 +296,12 @@ class ExistingPodPhaseHooks(AlternatingPhaseHooks):
         manifest: SamplingManifest,
         paths: AlternatingRunPaths,
     ) -> None:
-        del config, state
+        del state
         deadline = time.time() + DEFAULT_SAMPLING_TIMEOUT
+        sampling_start = time.time()
+        missing_container_polls: dict[int, int] = {
+            assignment.host_ordinal: 0 for assignment in manifest.host_assignments
+        }
         while time.time() < deadline:
             written_statuses = _written_sampling_statuses(paths, manifest)
             failure = _sampling_phase_failure(written_statuses)
@@ -289,7 +311,37 @@ class ExistingPodPhaseHooks(AlternatingPhaseHooks):
                     f"phase_id={failure.phase_id}, host_ordinal={failure.host_ordinal}, "
                     f"error={failure.error_message}"
                 )
+
+            written_host_ordinals = {status.host_ordinal for status in written_statuses}
+            for assignment in manifest.host_assignments:
+                if assignment.host_ordinal in written_host_ordinals:
+                    missing_container_polls[assignment.host_ordinal] = 0
+                    continue
+
+                container_exists = tpus.container_exists_on_worker(
+                    config.cluster.tpu_name,
+                    config.cluster.zone,
+                    config.cluster.node_count,
+                    assignment.host_ordinal,
+                    name=SAMPLER_CONTAINER_NAME,
+                )
+                if container_exists:
+                    missing_container_polls[assignment.host_ordinal] = 0
+                    continue
+
+                missing_container_polls[assignment.host_ordinal] += 1
+                if missing_container_polls[assignment.host_ordinal] >= DEFAULT_MISSING_CONTAINER_GRACE_POLLS:
+                    raise RuntimeError(
+                        "sampling host container exited before writing status: "
+                        f"phase_id={manifest.phase_id}, host_ordinal={assignment.host_ordinal}"
+                    )
+
             if sampling_host_statuses_exist(paths, manifest):
+                _log_phase_metrics(
+                    paths,
+                    manifest.phase_id,
+                    sampling_seconds=time.time() - sampling_start,
+                )
                 return
             time.sleep(DEFAULT_POLL_INTERVAL)
         raise TimeoutError(f"sampling phase {manifest.phase_id} timed out waiting for host completion")
@@ -301,6 +353,7 @@ class ExistingPodPhaseHooks(AlternatingPhaseHooks):
         manifest: SamplingManifest,
         paths: AlternatingRunPaths,
     ) -> None:
+        update_start = time.time()
         curriculum = create_local_curriculum(config.curriculum, checkpoint_path=paths.curriculum_root)
         for assignment in manifest.host_assignments:
             status: SamplingHostStatusManifest = read_sampling_host_status(
@@ -309,6 +362,11 @@ class ExistingPodPhaseHooks(AlternatingPhaseHooks):
             stats = _build_training_rollout_stats(config, status.lesson_rewards)
             curriculum.update_lesson_stats(stats, mode="training", current_step=state.source_global_step)
         curriculum.save_checkpoint(paths.curriculum_root)
+        _log_phase_metrics(
+            paths,
+            manifest.phase_id,
+            curriculum_update_seconds=time.time() - update_start,
+        )
 
     def materialize_training_batches(
         self,
@@ -324,6 +382,7 @@ class ExistingPodPhaseHooks(AlternatingPhaseHooks):
             config.cluster.node_count,
             name=SAMPLER_CONTAINER_NAME,
         )
+        materialization_start = time.time()
         tpus.run_container_on_worker(
             tpu_name=config.cluster.tpu_name,
             zone=config.cluster.zone,
@@ -344,6 +403,11 @@ class ExistingPodPhaseHooks(AlternatingPhaseHooks):
             config.cluster.node_count,
             0,
             name=MATERIALIZER_CONTAINER_NAME,
+        )
+        _log_phase_metrics(
+            paths,
+            state.phase_id,
+            materialization_seconds=time.time() - materialization_start,
         )
         return paths.materialized_manifest_path(state.phase_id)
 
@@ -422,3 +486,18 @@ def run_training_phase_from_config_path(config_path: str, phase_id: int) -> str:
         raise FileNotFoundError(f"missing materialized manifest for phase {phase_id}")
     manifest = read_materialized_batches_manifest(paths.materialized_manifest_path(phase_id))
     return run_training_phase_local(config, paths, state, manifest)
+
+
+def run_export_policy_from_config_path(config_path: str, phase_id: int) -> str:
+    """Local helper for the remote `export-policy` subcommand."""
+    from marin.rl.alternating.state import read_materialized_batches_manifest, read_run_state
+
+    config = read_pickle(config_path)
+    paths = AlternatingRunPaths.from_config(config)
+    state = read_run_state(paths.run_state_path)
+    if state.phase_id != phase_id:
+        logger.warning("export-only requested for phase %d but run_state is at phase %d", phase_id, state.phase_id)
+    if not exists(paths.materialized_manifest_path(phase_id)):
+        raise FileNotFoundError(f"missing materialized manifest for phase {phase_id}")
+    manifest = read_materialized_batches_manifest(paths.materialized_manifest_path(phase_id))
+    return export_policy_only(config, paths, state, manifest)

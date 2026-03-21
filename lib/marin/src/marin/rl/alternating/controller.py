@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from typing import Protocol
 
@@ -21,6 +22,7 @@ from marin.rl.alternating.state import (
     SamplingHostStatusManifest,
     SamplingManifest,
     read_materialized_batches_manifest,
+    read_phase_metrics_manifest,
     read_policy_manifest,
     read_run_state,
     read_sampling_host_status,
@@ -29,6 +31,8 @@ from marin.rl.alternating.state import (
     write_run_state,
     write_sampling_manifest,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AlternatingPhaseHooks(Protocol):
@@ -353,6 +357,27 @@ def _expected_next_policy_manifest_path(paths: AlternatingRunPaths, state: Alter
     return paths.policy_manifest_path(state.policy_version + 1)
 
 
+def _log_phase_summary(paths: AlternatingRunPaths, phase_id: int) -> None:
+    metrics_path = paths.phase_metrics_path(phase_id)
+    if not exists(metrics_path):
+        logger.info("alternating phase %d completed without a metrics manifest", phase_id)
+        return
+
+    metrics = read_phase_metrics_manifest(metrics_path)
+    logger.info(
+        "alternating phase %d timings: prepare_sampling=%s sampling=%s curriculum_update=%s "
+        "materialization=%s training=%s export=%s total=%s",
+        phase_id,
+        metrics.prepare_sampling_seconds,
+        metrics.sampling_seconds,
+        metrics.curriculum_update_seconds,
+        metrics.materialization_seconds,
+        metrics.training_seconds,
+        metrics.export_seconds,
+        metrics.total_recorded_seconds,
+    )
+
+
 def run_controller(
     config: AlternatingRLConfig,
     hooks: AlternatingPhaseHooks,
@@ -402,6 +427,7 @@ def run_controller(
                 next_policy_manifest_path = _expected_next_policy_manifest_path(paths, state)
                 if not exists(next_policy_manifest_path):
                     next_policy_manifest_path = hooks.run_training_phase(config, state, materialized_manifest, paths)
+                _log_phase_summary(paths, state.phase_id)
                 state = advance_run_state(state, next_policy_manifest_path)
                 write_run_state(paths.run_state_path, state)
                 continue

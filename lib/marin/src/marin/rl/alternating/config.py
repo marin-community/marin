@@ -27,6 +27,7 @@ class AlternatingMode(StrEnum):
     SAMPLING_HOST = "sampling-host"
     MATERIALIZE = "materialize"
     TRAIN_PHASE = "train-phase"
+    EXPORT_POLICY = "export-policy"
 
 
 @dataclass(frozen=True)

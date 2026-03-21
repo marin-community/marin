@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any
@@ -35,6 +35,7 @@ POLICIES_DIRNAME = "policies"
 SAMPLING_DIRNAME = "sampling"
 MATERIALIZED_DIRNAME = "materialized"
 LEVANTER_CHECKPOINTS_DIRNAME = "levanter_checkpoints"
+PHASE_METRICS_DIRNAME = "phase_metrics"
 ROLLOUTS_DIRNAME = "rollouts"
 BATCHES_DIRNAME = "batches"
 
@@ -90,6 +91,9 @@ class AlternatingRunPaths:
     @property
     def controller_config_path(self) -> str:
         return join_path(self.state_root, CONTROLLER_CONFIG_BASENAME)
+
+    def phase_metrics_path(self, phase_id: int) -> str:
+        return _join(self.state_root, PHASE_METRICS_DIRNAME, f"phase_{phase_id:0{PHASE_DIGITS}d}.json")
 
     @property
     def curriculum_root(self) -> str:
@@ -343,6 +347,53 @@ class MaterializedBatchesManifest:
         )
 
 
+@dataclass(frozen=True)
+class PhaseMetricsManifest:
+    """Per-phase wall-clock metrics recorded across controller/runtime boundaries."""
+
+    phase_id: int
+    prepare_sampling_seconds: float | None = None
+    sampling_seconds: float | None = None
+    curriculum_update_seconds: float | None = None
+    materialization_seconds: float | None = None
+    training_seconds: float | None = None
+    export_seconds: float | None = None
+    last_updated_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PhaseMetricsManifest:
+        return cls(
+            phase_id=data["phase_id"],
+            prepare_sampling_seconds=data.get("prepare_sampling_seconds"),
+            sampling_seconds=data.get("sampling_seconds"),
+            curriculum_update_seconds=data.get("curriculum_update_seconds"),
+            materialization_seconds=data.get("materialization_seconds"),
+            training_seconds=data.get("training_seconds"),
+            export_seconds=data.get("export_seconds"),
+            last_updated_at=data.get("last_updated_at", ""),
+        )
+
+    @property
+    def total_recorded_seconds(self) -> float:
+        return float(
+            sum(
+                value
+                for value in (
+                    self.prepare_sampling_seconds,
+                    self.sampling_seconds,
+                    self.curriculum_update_seconds,
+                    self.materialization_seconds,
+                    self.training_seconds,
+                    self.export_seconds,
+                )
+                if value is not None
+            )
+        )
+
+
 def _ensure_parent_dir(path: str) -> tuple[Any, str]:
     fs, fs_path = url_to_fs(path)
     parent = os.path.dirname(fs_path)
@@ -418,6 +469,52 @@ def write_materialized_batches_manifest(path: str, manifest: MaterializedBatches
 def read_materialized_batches_manifest(path: str) -> MaterializedBatchesManifest:
     """Read one materialized-batch manifest."""
     return MaterializedBatchesManifest.from_dict(_read_json(path))
+
+
+def write_phase_metrics_manifest(path: str, manifest: PhaseMetricsManifest) -> None:
+    """Write one per-phase metrics manifest."""
+    _write_json(path, manifest.to_dict())
+
+
+def read_phase_metrics_manifest(path: str) -> PhaseMetricsManifest:
+    """Read one per-phase metrics manifest."""
+    return PhaseMetricsManifest.from_dict(_read_json(path))
+
+
+def update_phase_metrics(
+    path: str,
+    *,
+    phase_id: int,
+    prepare_sampling_seconds: float | None = None,
+    sampling_seconds: float | None = None,
+    curriculum_update_seconds: float | None = None,
+    materialization_seconds: float | None = None,
+    training_seconds: float | None = None,
+    export_seconds: float | None = None,
+) -> PhaseMetricsManifest:
+    """Merge one or more per-phase timing fields into the durable metrics manifest."""
+    if exists(path):
+        manifest = read_phase_metrics_manifest(path)
+        if manifest.phase_id != phase_id:
+            raise ValueError(f"phase metrics path {path} contains phase {manifest.phase_id}, expected {phase_id}")
+    else:
+        manifest = PhaseMetricsManifest(phase_id=phase_id)
+
+    updates = {
+        "prepare_sampling_seconds": prepare_sampling_seconds,
+        "sampling_seconds": sampling_seconds,
+        "curriculum_update_seconds": curriculum_update_seconds,
+        "materialization_seconds": materialization_seconds,
+        "training_seconds": training_seconds,
+        "export_seconds": export_seconds,
+    }
+    for key, value in list(updates.items()):
+        if value is None:
+            del updates[key]
+
+    manifest = replace(manifest, **updates, last_updated_at=utc_now_iso())
+    write_phase_metrics_manifest(path, manifest)
+    return manifest
 
 
 def sampling_host_statuses_exist(paths: AlternatingRunPaths, manifest: SamplingManifest) -> bool:

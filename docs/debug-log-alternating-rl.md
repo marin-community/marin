@@ -19,7 +19,7 @@ Training-phase resume is currently using the wrong checkpoint root and can miss 
 ## Future Work
 
 - [ ] Validate the identical-input `hax.shard()` loading path on real multi-host TPU runtime.
-- [ ] Finish a fully bounded-memory materializer pass 2 instead of reloading spill shards into RAM.
+- [ ] Validate alternating phase metrics on a real WandB-backed TPU run.
 - [ ] Add an integration test that exercises one full alternating phase with a tiny local trainer stub.
 
 ## Results
@@ -88,3 +88,51 @@ because it reloads every spilled rollout object before batch packing.
   - final `TrainingBatch` packing happens one batch at a time
 - Added a multi-batch materialization regression in
   `tests/rl/test_alternating_materialization.py`.
+
+## Hypothesis 5
+
+Operational debugging on real TPU will be painful unless the alternating path
+records explicit per-phase timings and survives silent sampler death.
+
+## Changes to make
+
+- Persist per-phase timing metrics durably so controller/runtime/training stages
+  can contribute to one shared metrics record.
+- Add container-liveness checks during sampling wait so a dead host without a
+  status file fails quickly.
+- Log phase timing metrics to the active tracker when training/export has a
+  tracker context.
+
+## Results
+
+- Added durable `PhaseMetricsManifest` support and per-phase metrics paths.
+- Runtime now records prepare-sampling, sampling, curriculum-update, and
+  materialization timings.
+- Training/export now record training/export timings and log the aggregated
+  phase metrics to the active tracker when present.
+- The controller now logs a per-phase timing summary from the durable metrics
+  manifest after each completed phase, so TPU smoke tests have readable
+  boundary-cost breadcrumbs even before we trust dashboard wiring.
+- Added a runtime regression covering the "container exited without status"
+  path.
+
+## Hypothesis 6
+
+Recovery from "training finished, export did not" should not require rerunning
+the whole training phase.
+
+## Changes to make
+
+- Split policy export into a reusable helper.
+- Add an export-only recovery entrypoint that reads run state plus the
+  materialized manifest, verifies the latest checkpoint step, and writes the
+  next policy manifest.
+- Avoid reloading the original HF checkpoint on resumed zero-KL phases where
+  trainer checkpoint restore immediately overwrites the model weights.
+
+## Results
+
+- Added `export_policy_only(...)` plus the `export-policy` experiment subcommand.
+- Added a regression test for export-only recovery.
+- Resumed zero-KL training phases now skip the unnecessary initial checkpoint
+  load while preserving the original reference-model path for nonzero-KL runs.

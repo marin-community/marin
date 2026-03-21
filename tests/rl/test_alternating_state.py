@@ -17,16 +17,19 @@ from marin.rl.alternating import (
     AlternatingRunState,
     HostPhaseStatus,
     MaterializedBatchesManifest,
+    PhaseMetricsManifest,
     PolicyManifest,
     RunStatus,
     SamplingHostAssignment,
     SamplingHostStatusManifest,
     SamplingManifest,
     read_materialized_batches_manifest,
+    read_phase_metrics_manifest,
     read_policy_manifest,
     read_run_state,
     read_sampling_host_status,
     read_sampling_manifest,
+    update_phase_metrics,
     utc_now_iso,
     write_materialized_batches_manifest,
     write_policy_manifest,
@@ -239,3 +242,34 @@ def test_json_writer_overwrites_atomically(tmp_path):
     assert payload["status"] == RunStatus.TRAINING
     assert payload["phase_id"] == 1
     assert read_run_state(paths.run_state_path) == state_b
+
+
+def test_phase_metrics_merge_updates_fields_without_dropping_prior_values(tmp_path):
+    config = _make_config(tmp_path)
+    paths = AlternatingRunPaths.from_config(config)
+
+    first = update_phase_metrics(
+        paths.phase_metrics_path(2),
+        phase_id=2,
+        prepare_sampling_seconds=12.5,
+        sampling_seconds=120.0,
+    )
+    second = update_phase_metrics(
+        paths.phase_metrics_path(2),
+        phase_id=2,
+        training_seconds=45.0,
+        export_seconds=8.0,
+    )
+
+    assert isinstance(first, PhaseMetricsManifest)
+    assert first.prepare_sampling_seconds == 12.5
+    assert first.sampling_seconds == 120.0
+    assert first.training_seconds is None
+
+    stored = read_phase_metrics_manifest(paths.phase_metrics_path(2))
+    assert stored == second
+    assert stored.prepare_sampling_seconds == 12.5
+    assert stored.sampling_seconds == 120.0
+    assert stored.training_seconds == 45.0
+    assert stored.export_seconds == 8.0
+    assert stored.total_recorded_seconds == 185.5

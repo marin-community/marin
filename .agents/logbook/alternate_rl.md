@@ -22,6 +22,12 @@ Do not use this file for speculative design notes that belong in the main design
 ## Current Status
 
 - Code status: controller/runtime/materialization/training path implemented in this worktree
+- Recent implementation milestones:
+  - added per-phase durable metrics manifests for prepare-sampling, sampling, curriculum update, materialization, training, and export timings
+  - added sampler container liveness detection for the "host died without writing status" case
+  - added export-only recovery mode via `export-policy`
+  - optimized resumed zero-KL training phases to skip reloading the original HF checkpoint when only a correctly-shaped model tree is needed
+  - made alternating phase metrics resilient to trainers without an attached tracker and added controller-side per-phase timing summaries in logs
 - Local validation status:
   - alternating unit tests passing
   - repo pre-commit passing
@@ -120,14 +126,33 @@ Evidence needed:
 
 ## Run Ledger
 
+## 2026-03-21 Local Milestone
+
+- Status:
+  - local code path updated and revalidated before first TPU smoke test
+- Validation:
+  - `uv run pytest tests/rl/test_alternating_state.py tests/rl/test_alternating_controller.py tests/rl/test_alternating_materialization.py tests/rl/test_alternating_training_phase.py tests/rl/test_alternating_runtime.py tests/rl/test_train_batch.py -o addopts=`
+  - `./infra/pre-commit.py --all-files --fix`
+  - `uv run python experiments/alternating_rl_math500.py --help`
+- New operational fixes:
+  - sampler liveness now fails when a host container disappears without writing status
+  - alternating-specific phase timings are persisted durably, logged to the trainer tracker when present, and summarized by the controller after each completed phase
+  - export-only policy recovery is now available from the experiment CLI
+- Remaining TPU-only unknowns:
+  - warm-cache reuse across real phase restarts
+  - multi-host `hax.shard()` correctness on TPU runtime
+  - actual vLLM TPU bootstrap behavior in the launch image
+
 ## Open Issues
 
 - Warm-cache reuse is not yet validated on real TPU.
 - Multi-host loader correctness is not yet validated on real TPU.
 - First real vLLM TPU bootstrap in the target image is not yet validated under the alternating controller.
+- Alternating-specific metrics now exist, but their usefulness still needs to be checked in the first real WandB-backed TPU run.
 
 ## Decisions
 
 - 2026-03-21: Use the alternating controller/runtime/state architecture in this worktree as the base implementation.
 - 2026-03-21: Treat this mode as a single-allocation execution mode, not a replacement for concurrent two-TPU RL.
 - 2026-03-21: Require compile-cache persistence from day 1.
+- 2026-03-21: Keep the multi-host `hax.shard()` loader path for the first TPU smoke test, but treat it as an empirical validation gate rather than a proven assumption.
