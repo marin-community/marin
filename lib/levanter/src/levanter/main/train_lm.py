@@ -19,6 +19,7 @@ import levanter.callbacks
 import levanter.eval
 import levanter.eval_harness
 from levanter import callbacks
+from levanter.data import AsyncDataset
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, save_hf_checkpoint_callback
@@ -32,6 +33,24 @@ from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
 
 logger = logging.getLogger(__name__)
+
+
+def _find_nested_mixture_dataset(dataset: AsyncDataset | object) -> MixtureDataset | None:
+    """Return the first MixtureDataset reachable through common dataset wrappers."""
+    current = dataset
+    seen: set[int] = set()
+    while current is not None:
+        if isinstance(current, MixtureDataset):
+            return current
+        marker = id(current)
+        if marker in seen:
+            return None
+        seen.add(marker)
+        next_dataset = getattr(current, "dataset", None)
+        if next_dataset is None:
+            next_dataset = getattr(current, "_dataset", None)
+        current = next_dataset
+    return None
 
 
 @dataclass
@@ -232,15 +251,16 @@ def main(config: TrainLmConfig):
             callbacks.log_performance_stats(Pos.size, trainer.config.batch_schedule, flops_per_example), every=1
         )
 
-        if isinstance(train_dataset, MixtureDataset):
+        mixture_dataset = _find_nested_mixture_dataset(train_dataset)
+        if mixture_dataset is not None:
             last_stage = -1
 
             def log_mixture_weights(step_info):
                 nonlocal last_stage
                 seq_index = trainer.config.batch_schedule.global_data_offset_by_step(step_info.step)
-                block_id = seq_index // train_dataset.block_size
-                stage = train_dataset._get_stage_for_block(block_id)
-                weights = train_dataset.weight_stages[stage][1]
+                block_id = seq_index // mixture_dataset.block_size
+                stage = mixture_dataset._get_stage_for_block(block_id)
+                weights = mixture_dataset.weight_stages[stage][1]
                 if stage != last_stage:
                     metrics = {f"mixture/weight/{name}": weight for name, weight in weights.items()}
                     metrics["mixture/stage"] = stage

@@ -13,7 +13,9 @@ from haliax.quantization import QuantizationConfig
 import levanter.main.train_lm as train_lm
 import tiny_test_corpus
 from levanter.data.dataset import ListAsyncDataset
+from levanter.data.mixture import MixtureDataset
 from levanter.data.text import DirectDatasetComponent, GrugLmExample, LmDataConfig
+from levanter.data.text.datasets import NamedLmDataset
 from levanter.distributed import DistributedConfig, RayConfig
 from levanter.tracker import NoopConfig
 
@@ -130,3 +132,21 @@ def test_train_lm_direct_dataset():
                 os.unlink("wandb")
             except Exception:
                 pass
+
+
+def test_find_nested_mixture_dataset_recovers_named_wrapper():
+    seq_len = 8
+    tokens = jnp.arange(seq_len, dtype=jnp.int32)
+    example = GrugLmExample.causal(tokens)
+    child = ListAsyncDataset([example, example])
+    mixture = MixtureDataset(
+        datasets={"a": child, "b": child},
+        weights={"a": 0.75, "b": 0.25},
+        block_size=8,
+        key=0,
+    )
+    wrapped = NamedLmDataset(mixture, train_lm.Axis("position", seq_len))
+
+    recovered = train_lm._find_nested_mixture_dataset(wrapped)
+
+    assert recovered is mixture
