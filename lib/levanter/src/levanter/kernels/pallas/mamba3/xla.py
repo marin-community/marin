@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
@@ -75,6 +76,33 @@ def mamba3_chunked_forward_xla_batched(
 ) -> tuple[Float[Array, "groups chunks chunk value"], Float[Array, "groups value state"]]:
     """Chunked Mamba-3 forward pass in plain JAX/XLA."""
 
+    if prefix_emit_variant == PREFIX_EMIT_AUTO and local_output_variant == LOCAL_OUTPUT_AUTO:
+        return _mamba3_chunked_forward_xla_batched_default_custom_vjp(a_log_cumsum, src_scale, out_correction, b, c, x)
+    return _mamba3_chunked_forward_xla_batched_impl(
+        a_log_cumsum,
+        src_scale,
+        out_correction,
+        b,
+        c,
+        x,
+        prefix_emit_variant=prefix_emit_variant,
+        local_output_variant=local_output_variant,
+    )
+
+
+def _mamba3_chunked_forward_xla_batched_impl(
+    a_log_cumsum: Float[Array, "groups chunks chunk"],
+    src_scale: Float[Array, "groups chunks chunk"],
+    out_correction: Float[Array, "groups chunks chunk"],
+    b: Float[Array, "groups chunks chunk state"],
+    c: Float[Array, "groups chunks chunk state"],
+    x: Float[Array, "groups chunks chunk value"],
+    *,
+    prefix_emit_variant: PrefixEmitVariant = PREFIX_EMIT_AUTO,
+    local_output_variant: LocalOutputVariant = LOCAL_OUTPUT_AUTO,
+) -> tuple[Float[Array, "groups chunks chunk value"], Float[Array, "groups value state"]]:
+    """Chunked Mamba-3 forward pass in plain JAX/XLA."""
+
     with jax.named_scope("mamba3_chunked_forward"):
         with jax.named_scope("local_output"):
             acc_dtype = jnp.float32
@@ -99,6 +127,103 @@ def mamba3_chunked_forward_xla_batched(
                 chunk_state,
                 prefix_emit_variant=prefix_emit_variant,
             )
+
+
+def _materialize_cotangent(
+    cotangent: jax.Array | jax.custom_derivatives.SymbolicZero,
+    primal: jax.Array,
+) -> jax.Array:
+    if isinstance(cotangent, jax.custom_derivatives.SymbolicZero):
+        return jnp.zeros_like(primal)
+    return cotangent
+
+
+@jax.custom_vjp
+def _mamba3_chunked_forward_xla_batched_default_custom_vjp(
+    a_log_cumsum: Float[Array, "groups chunks chunk"],
+    src_scale: Float[Array, "groups chunks chunk"],
+    out_correction: Float[Array, "groups chunks chunk"],
+    b: Float[Array, "groups chunks chunk state"],
+    c: Float[Array, "groups chunks chunk state"],
+    x: Float[Array, "groups chunks chunk value"],
+) -> tuple[Float[Array, "groups chunks chunk value"], Float[Array, "groups value state"]]:
+    return _mamba3_chunked_forward_xla_batched_impl(
+        a_log_cumsum,
+        src_scale,
+        out_correction,
+        b,
+        c,
+        x,
+        prefix_emit_variant=PREFIX_EMIT_AUTO,
+        local_output_variant=LOCAL_OUTPUT_AUTO,
+    )
+
+
+def _mamba3_chunked_forward_xla_batched_default_custom_vjp_fwd(
+    a_log_cumsum: Float[Array, "groups chunks chunk"],
+    src_scale: Float[Array, "groups chunks chunk"],
+    out_correction: Float[Array, "groups chunks chunk"],
+    b: Float[Array, "groups chunks chunk state"],
+    c: Float[Array, "groups chunks chunk state"],
+    x: Float[Array, "groups chunks chunk value"],
+) -> tuple[
+    tuple[Float[Array, "groups chunks chunk value"], Float[Array, "groups value state"]],
+    tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
+]:
+    outputs = _mamba3_chunked_forward_xla_batched_impl(
+        a_log_cumsum,
+        src_scale,
+        out_correction,
+        b,
+        c,
+        x,
+        prefix_emit_variant=PREFIX_EMIT_AUTO,
+        local_output_variant=LOCAL_OUTPUT_AUTO,
+    )
+    residuals = (a_log_cumsum, src_scale, out_correction, b, c, x)
+    return outputs, residuals
+
+
+def _mamba3_chunked_forward_xla_batched_default_custom_vjp_bwd(
+    residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
+    cotangents: tuple[
+        jax.Array | jax.custom_derivatives.SymbolicZero,
+        jax.Array | jax.custom_derivatives.SymbolicZero,
+    ],
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    a_log_cumsum, src_scale, out_correction, b, c, x = residuals
+    y_bar, final_state_bar = cotangents
+    primals = (a_log_cumsum, src_scale, out_correction, b, c, x)
+
+    def forward_impl(
+        a_log_cumsum_in: jax.Array,
+        src_scale_in: jax.Array,
+        out_correction_in: jax.Array,
+        b_in: jax.Array,
+        c_in: jax.Array,
+        x_in: jax.Array,
+    ) -> tuple[jax.Array, jax.Array]:
+        return _mamba3_chunked_forward_xla_batched_impl(
+            a_log_cumsum_in,
+            src_scale_in,
+            out_correction_in,
+            b_in,
+            c_in,
+            x_in,
+            prefix_emit_variant=PREFIX_EMIT_AUTO,
+            local_output_variant=LOCAL_OUTPUT_AUTO,
+        )
+
+    primals_out, pullback = jax.vjp(forward_impl, *primals)
+    y_ct = _materialize_cotangent(y_bar, primals_out[0])
+    final_state_ct = _materialize_cotangent(final_state_bar, primals_out[1])
+    return pullback((y_ct, final_state_ct))
+
+
+_mamba3_chunked_forward_xla_batched_default_custom_vjp.defvjp(
+    _mamba3_chunked_forward_xla_batched_default_custom_vjp_fwd,
+    _mamba3_chunked_forward_xla_batched_default_custom_vjp_bwd,
+)
 
 
 def mamba3_chunked_forward_native_xla_batched(

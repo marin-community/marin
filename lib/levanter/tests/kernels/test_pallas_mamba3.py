@@ -11,6 +11,8 @@ import numpy as np
 
 from levanter.kernels.pallas.mamba3 import (
     HybridModeConfig,
+    mamba3_attentionish_forward,
+    mamba3_attentionish_forward_from_transformed,
     mamba3_chunk_state,
     mamba3_chunk_state_reference_batched,
     mamba3_chunked_forward,
@@ -158,6 +160,35 @@ def _headed_attentionish_fixture(
         a_log_cumsum,
         trap.reshape(batch, heads, seq_len),
     )
+
+
+def _headed_siso_attentionish_fixture(
+    *,
+    batch: int,
+    heads: int,
+    num_chunks: int,
+    chunk_size: int,
+    state_dim: int,
+    value_dim: int,
+) -> tuple[jax.Array, ...]:
+    dt, lam, a, b, c, x = _sample_chunked_inputs(
+        leading_shape=(batch, heads),
+        num_chunks=num_chunks,
+        chunk_size=chunk_size,
+        state_dim=state_dim,
+        value_dim=value_dim,
+    )
+    seq_len = num_chunks * chunk_size
+    a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a)).reshape(batch, heads, seq_len)
+    eps = jnp.finfo(lam.dtype).eps
+    trap = jnp.log(jnp.clip(lam, eps, 1 - eps)) - jnp.log1p(-jnp.clip(lam, eps, 1 - eps))
+    q = c.transpose(0, 2, 3, 1, 4).reshape(batch, seq_len, heads, state_dim)
+    k = b.transpose(0, 2, 3, 1, 4).reshape(batch, seq_len, heads, state_dim)
+    v = x.transpose(0, 2, 3, 1, 4).reshape(batch, seq_len, heads, value_dim)
+    q_bias = jnp.zeros((heads, state_dim), dtype=jnp.float32)
+    k_bias = jnp.zeros((heads, state_dim), dtype=jnp.float32)
+    d = jnp.linspace(0.1, 0.1 * heads, heads, dtype=jnp.float32)
+    return dt, lam, a, b, c, x, q, k, v, q_bias, k_bias, d, a_log_cumsum, trap.reshape(batch, heads, seq_len)
 
 
 def _torch_logit(x):
@@ -575,6 +606,113 @@ def test_mamba3_siso_reference_matches_upstream_torch_step_reference():
         rtol=1e-5,
         atol=1e-5,
     )
+
+
+def test_mamba3_siso_attentionish_api_matches_chunked_api():
+    dt, lam, a, b, c, x, q, k, v, q_bias, k_bias, d, a_log_cumsum, trap = _headed_siso_attentionish_fixture(
+        batch=1,
+        heads=3,
+        num_chunks=2,
+        chunk_size=8,
+        state_dim=4,
+        value_dim=5,
+    )
+
+    y_old, state_old = mamba3_chunked_forward(dt, lam, a, b, c, x, implementation="xla")
+    y_old = y_old + d[None, :, None, None, None] * x
+    y_old = y_old.transpose(0, 2, 3, 1, 4).reshape(1, 16, 3, 5)
+    state_old = state_old.transpose(0, 1, 3, 2)
+
+    y_new, state_new = mamba3_attentionish_forward(
+        q,
+        k,
+        v,
+        q_bias=q_bias,
+        k_bias=k_bias,
+        d=d,
+        da_cs=a_log_cumsum,
+        dt=dt.reshape(1, 3, 16),
+        trap=trap,
+        chunk_size=8,
+        return_final_state=True,
+        implementation="xla",
+    )
+
+    assert jnp.allclose(y_new, y_old, atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(state_new, state_old, atol=1e-5, rtol=1e-5)
+
+
+def test_mamba3_siso_attentionish_final_k_matches_last_key_plus_bias():
+    dt, _lam, _a, _b, _c, _x, q, k, v, q_bias, k_bias, _d, a_log_cumsum, trap = _headed_siso_attentionish_fixture(
+        batch=1,
+        heads=2,
+        num_chunks=2,
+        chunk_size=4,
+        state_dim=3,
+        value_dim=4,
+    )
+
+    output, final_state, final_k = mamba3_attentionish_forward_from_transformed(
+        q,
+        k,
+        v,
+        q_bias=q_bias,
+        k_bias=k_bias,
+        da_cs=a_log_cumsum,
+        dt=dt.reshape(1, 2, 8),
+        trap=trap,
+        chunk_size=4,
+        return_final_state=True,
+        return_final_k=True,
+        implementation="reference",
+    )
+    expected_final_k = k[:, -1] + k_bias[None, ...]
+
+    assert output.shape == (1, 8, 2, 4)
+    assert final_state.shape == (1, 2, 3, 4)
+    assert final_k.shape == (1, 2, 3)
+    assert jnp.allclose(final_k, expected_final_k, atol=1e-5, rtol=1e-5)
+
+
+def test_mamba3_siso_attentionish_xla_grad_matches_reference():
+    dt, _lam, _a, _b, _c, _x, q, k, v, q_bias, k_bias, d, a_log_cumsum, trap = _headed_siso_attentionish_fixture(
+        batch=1,
+        heads=2,
+        num_chunks=2,
+        chunk_size=4,
+        state_dim=3,
+        value_dim=4,
+    )
+
+    def loss(
+        implementation: Implementation,
+        q_in: jax.Array,
+        k_in: jax.Array,
+        v_in: jax.Array,
+        q_bias_in: jax.Array,
+        k_bias_in: jax.Array,
+        d_in: jax.Array,
+    ) -> jax.Array:
+        output = mamba3_attentionish_forward_from_transformed(
+            q_in,
+            k_in,
+            v_in,
+            q_bias=q_bias_in,
+            k_bias=k_bias_in,
+            d=d_in,
+            da_cs=a_log_cumsum,
+            dt=dt.reshape(1, 2, 8),
+            trap=trap,
+            chunk_size=4,
+            implementation=implementation,
+        )
+        return jnp.sum(output.astype(jnp.float32) ** 2)
+
+    grads_xla = jax.grad(loss, argnums=(1, 2, 3, 4, 5, 6))("xla", q, k, v, q_bias, k_bias, d)
+    grads_ref = jax.grad(loss, argnums=(1, 2, 3, 4, 5, 6))("reference", q, k, v, q_bias, k_bias, d)
+
+    for grad_xla, grad_ref in zip(grads_xla, grads_ref, strict=True):
+        assert jnp.allclose(grad_xla, grad_ref, atol=1e-5, rtol=1e-5)
 
 
 def test_mamba3_xla_longer_stress_stays_finite():

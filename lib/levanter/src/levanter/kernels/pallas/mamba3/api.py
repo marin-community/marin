@@ -389,6 +389,25 @@ def _validate_attentionish_mimo_inputs(
     return batch, seq_len, heads, rank, qk_groups, state_dim
 
 
+def _validate_attentionish_siso_inputs(
+    q: Float[Array, "batch seq heads state"],
+    k: Float[Array, "batch seq heads state"],
+    v: Float[Array, "batch seq heads value"],
+    *,
+    chunk_size: int,
+) -> tuple[int, int, int, int]:
+    if q.shape != k.shape:
+        raise ValueError(f"`q` and `k` must have the same shape, got {q.shape} and {k.shape}.")
+    if q.ndim != 4 or v.ndim != 4:
+        raise ValueError("Expected `q/k` with shape `[B, S, H, N]` and `v` with shape `[B, S, H, P]`.")
+    batch, seq_len, heads, state_dim = q.shape
+    if v.shape[:3] != (batch, seq_len, heads):
+        raise ValueError("`v` must share batch, sequence, and head axes with `q/k`.")
+    if chunk_size <= 0 or seq_len % chunk_size != 0:
+        raise ValueError(f"`chunk_size` must divide the sequence length exactly, got {chunk_size} for {seq_len}.")
+    return batch, seq_len, heads, state_dim
+
+
 def _require_none_or_zero(name: str, value: jax.Array | None) -> None:
     if value is None:
         return
@@ -433,6 +452,17 @@ def _chunk_value_by_head(
     )
 
 
+def _chunk_state_by_head(
+    tensor: Float[Array, "batch seq heads state"],
+    *,
+    chunk_size: int,
+) -> Float[Array, "batch heads chunks chunk state"]:
+    num_chunks = tensor.shape[1] // chunk_size
+    return tensor.transpose(0, 2, 1, 3).reshape(
+        tensor.shape[0], tensor.shape[2], num_chunks, chunk_size, tensor.shape[-1]
+    )
+
+
 def _package_attentionish_outputs(
     output: jax.Array,
     *,
@@ -448,6 +478,163 @@ def _package_attentionish_outputs(
     if return_final_k:
         return output, cast(jax.Array, final_k)
     return output
+
+
+def mamba3_attentionish_forward_from_transformed(
+    q: Float[Array, "batch seq heads state"],
+    k: Float[Array, "batch seq heads state"],
+    v: Float[Array, "batch seq heads value"],
+    *,
+    q_bias: Float[Array, "heads state"] | None = None,
+    k_bias: Float[Array, "heads state"] | None = None,
+    d: Float[Array, "heads"] | None = None,
+    angles: Float[Array, "batch seq heads rot"] | None = None,
+    da_cs: Float[Array, "batch heads seq"] | None = None,
+    da_cs_rev: Float[Array, "batch heads seq"] | None = None,
+    dt: Float[Array, "batch heads seq"] | None = None,
+    trap: Float[Array, "batch heads seq"] | None = None,
+    segsum: Float[Array, "batch heads chunks chunk chunk"] | None = None,
+    chunk_size: int,
+    return_final_state: bool = False,
+    return_final_k: bool = False,
+    implementation: Implementation | Sequence[Implementation] | None = None,
+    block_sizes: BlockSizes | None = None,
+    interpret: bool = False,
+    backend: str | None = None,
+) -> jax.Array | tuple[jax.Array, ...]:
+    """Attention-like real-valued SISO entrypoint mapped onto the chunked Mamba-3 kernel family."""
+
+    del block_sizes, interpret, backend, da_cs_rev
+    _require_none_or_zero("angles", angles)
+    _require_none_or_zero("segsum", segsum)
+    batch, seq_len, heads, state_dim = _validate_attentionish_siso_inputs(q, k, v, chunk_size=chunk_size)
+    if da_cs is None or dt is None or trap is None:
+        raise ValueError("`da_cs`, `dt`, and `trap` are required for the transformed attention-ish SISO API.")
+    if da_cs.shape != (batch, heads, seq_len) or dt.shape != da_cs.shape or trap.shape != da_cs.shape:
+        raise ValueError("`da_cs`, `dt`, and `trap` must all have shape `[B, H, S]`.")
+    if q_bias is not None and q_bias.shape != (heads, state_dim):
+        raise ValueError(f"`q_bias` must have shape `[H, N]`, got {q_bias.shape}.")
+    if k_bias is not None and k_bias.shape != (heads, state_dim):
+        raise ValueError(f"`k_bias` must have shape `[H, N]`, got {k_bias.shape}.")
+    if d is not None and d.shape != (heads,):
+        raise ValueError(f"`d` must have shape `[H]`, got {d.shape}.")
+    if implementation not in (None, "xla", "reference"):
+        raise ValueError("Attention-ish SISO is currently available only for the XLA and reference implementations.")
+
+    num_chunks = seq_len // chunk_size
+    q_chunked = _chunk_state_by_head(q, chunk_size=chunk_size)
+    k_chunked = _chunk_state_by_head(k, chunk_size=chunk_size)
+    if q_bias is not None:
+        q_chunked = q_chunked + q_bias[None, :, None, None, :]
+    if k_bias is not None:
+        k_chunked = k_chunked + k_bias[None, :, None, None, :]
+    v_chunked = _chunk_value_by_head(v, chunk_size=chunk_size)
+    a_log_cumsum = da_cs.reshape(batch, heads, num_chunks, chunk_size)
+    lam = jax.nn.sigmoid(trap)
+    src_scale, out_correction = prepare_mamba3_chunked_scales(
+        dt.reshape(batch, heads, num_chunks, chunk_size),
+        lam.reshape(batch, heads, num_chunks, chunk_size),
+    )
+
+    groups = batch * heads
+    flat_c = q_chunked.reshape(groups, num_chunks, chunk_size, state_dim)
+    flat_b = k_chunked.reshape(groups, num_chunks, chunk_size, state_dim)
+    flat_v = v_chunked.reshape(groups, num_chunks, chunk_size, v.shape[-1])
+    flat_a_log_cumsum = a_log_cumsum.reshape(groups, num_chunks, chunk_size)
+    flat_src_scale = src_scale.reshape(groups, num_chunks, chunk_size)
+    flat_out_correction = out_correction.reshape(groups, num_chunks, chunk_size)
+
+    if implementation == "reference":
+        output_chunked, final_state = mamba3_chunked_forward_reference_batched(
+            flat_a_log_cumsum,
+            flat_src_scale,
+            flat_out_correction,
+            flat_b,
+            flat_c,
+            flat_v,
+        )
+    else:
+        output_chunked, final_state = mamba3_chunked_forward_xla_batched(
+            flat_a_log_cumsum,
+            flat_src_scale,
+            flat_out_correction,
+            flat_b,
+            flat_c,
+            flat_v,
+        )
+
+    if d is not None:
+        flat_d = jnp.broadcast_to(d[None, :], (batch, heads)).reshape(groups)
+        output_chunked = output_chunked + flat_d[:, None, None, None] * flat_v
+
+    output = output_chunked.reshape(batch, heads, num_chunks, chunk_size, v.shape[-1]).transpose(0, 2, 3, 1, 4)
+    output = output.reshape(batch, seq_len, heads, v.shape[-1])
+    formatted_final_state = (
+        final_state.reshape(batch, heads, final_state.shape[-2], final_state.shape[-1]).transpose(0, 1, 3, 2)
+        if return_final_state
+        else None
+    )
+    formatted_final_k = None
+    if return_final_k:
+        final_k = jnp.take(k, seq_len - 1, axis=1)
+        if k_bias is not None:
+            final_k = final_k + k_bias[None, ...]
+        formatted_final_k = final_k
+
+    return _package_attentionish_outputs(
+        output,
+        final_state=formatted_final_state,
+        final_k=formatted_final_k,
+        return_final_state=return_final_state,
+        return_final_k=return_final_k,
+    )
+
+
+def mamba3_attentionish_forward(
+    q: Float[Array, "batch seq heads state"],
+    k: Float[Array, "batch seq heads state"],
+    v: Float[Array, "batch seq heads value"],
+    *,
+    q_bias: Float[Array, "heads state"] | None = None,
+    k_bias: Float[Array, "heads state"] | None = None,
+    d: Float[Array, "heads"] | None = None,
+    angles: Float[Array, "batch seq heads rot"] | None = None,
+    da_cs: Float[Array, "batch heads seq"] | None = None,
+    da_cs_rev: Float[Array, "batch heads seq"] | None = None,
+    dt: Float[Array, "batch heads seq"] | None = None,
+    trap: Float[Array, "batch heads seq"] | None = None,
+    segsum: Float[Array, "batch heads chunks chunk chunk"] | None = None,
+    chunk_size: int,
+    return_final_state: bool = False,
+    return_final_k: bool = False,
+    implementation: Implementation | Sequence[Implementation] | None = None,
+    block_sizes: BlockSizes | None = None,
+    interpret: bool = False,
+    backend: str | None = None,
+) -> jax.Array | tuple[jax.Array, ...]:
+    """Native attention-like SISO Mamba-3 entrypoint."""
+
+    return mamba3_attentionish_forward_from_transformed(
+        q,
+        k,
+        v,
+        q_bias=q_bias,
+        k_bias=k_bias,
+        d=d,
+        angles=angles,
+        da_cs=da_cs,
+        da_cs_rev=da_cs_rev,
+        dt=dt,
+        trap=trap,
+        segsum=segsum,
+        chunk_size=chunk_size,
+        return_final_state=return_final_state,
+        return_final_k=return_final_k,
+        implementation=implementation,
+        block_sizes=block_sizes,
+        interpret=interpret,
+        backend=backend,
+    )
 
 
 def mamba3_mimo_attentionish_forward_from_transformed(
@@ -802,6 +989,8 @@ __all__ = [
     "Mamba3Mode",
     "intra_chunk_log_alpha_cumsum",
     "local_log_alpha",
+    "mamba3_attentionish_forward",
+    "mamba3_attentionish_forward_from_transformed",
     "mamba3_hybrid_chunked_forward",
     "mamba3_hybrid_chunked_forward_from_transformed",
     "mamba3_tpu_default_chunk_size",

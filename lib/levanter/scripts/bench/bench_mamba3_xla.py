@@ -9,13 +9,22 @@ import json
 import math
 from pathlib import Path
 import time
+from typing import Literal
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 
-from levanter.kernels.pallas.mamba3 import mamba3_chunked_forward
+from levanter.kernels.pallas.mamba3 import (
+    intra_chunk_log_alpha_cumsum,
+    local_log_alpha,
+    mamba3_attentionish_forward,
+    mamba3_chunked_forward,
+)
+
+
+ApiVariant = Literal["chunked_public", "attentionish_public"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,7 +38,7 @@ class Shape:
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkResult:
-    implementation: str
+    api: ApiVariant
     seq_len: int
     batch_head_groups: int
     chunk_size: int
@@ -105,6 +114,31 @@ def _maybe_shard_inputs(
     return tuple(put(x) for x in inputs)
 
 
+def _attentionish_inputs(
+    dt: jax.Array,
+    lam: jax.Array,
+    a: jax.Array,
+    b: jax.Array,
+    c: jax.Array,
+    x: jax.Array,
+) -> tuple[jax.Array, ...]:
+    groups, num_chunks, chunk_size = dt.shape
+    seq_len = num_chunks * chunk_size
+    state_dim = b.shape[-1]
+    a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
+    eps = jnp.finfo(lam.dtype).eps
+    clipped_lam = jnp.clip(lam, eps, 1 - eps)
+    trap = (jnp.log(clipped_lam) - jnp.log1p(-clipped_lam)).reshape(groups, 1, seq_len)
+    q = c.reshape(groups, seq_len, 1, state_dim)
+    k = b.reshape(groups, seq_len, 1, state_dim)
+    v = x.reshape(groups, seq_len, 1, x.shape[-1])
+    q_bias = jnp.zeros((1, state_dim), dtype=dt.dtype)
+    k_bias = jnp.zeros((1, state_dim), dtype=dt.dtype)
+    da_cs = a_log_cumsum.reshape(groups, 1, seq_len)
+    dt_seq = dt.reshape(groups, 1, seq_len)
+    return q, k, v, q_bias, k_bias, da_cs, dt_seq, trap
+
+
 def _time_jitted(fn, *args, steps: int, warmup: int) -> tuple[float, float]:
     start = time.perf_counter()
     out = fn(*args)
@@ -144,7 +178,7 @@ def _benchmark(
     shape: Shape,
     *,
     dtype: jnp.dtype,
-    implementation: str,
+    api: ApiVariant,
     shard_groups: bool,
     steps: int,
     warmup: int,
@@ -158,30 +192,55 @@ def _benchmark(
     tokens = groups * shape.seq_len
     flops = _estimate_forward_flops(shape)
 
-    forward_fn = jax.jit(lambda *xs: mamba3_chunked_forward(*xs, implementation=implementation)[0])
-    backward_fn = jax.jit(
-        jax.grad(
-            lambda *xs: jnp.sum(
-                mamba3_chunked_forward(*xs, implementation=implementation)[0].astype(jnp.float32) ** 2
-            ),
-            argnums=5,
+    if api == "chunked_public":
+        forward_fn = jax.jit(lambda *xs: mamba3_chunked_forward(*xs, implementation="xla")[0])
+        backward_fn = jax.jit(
+            jax.grad(
+                lambda *xs: jnp.sum(mamba3_chunked_forward(*xs, implementation="xla")[0].astype(jnp.float32) ** 2),
+                argnums=5,
+            )
         )
-    )
+        forward_args = inputs
+        backward_args = inputs
+    else:
+        attentionish_inputs = _attentionish_inputs(*inputs)
 
-    forward_compile, forward_steady = _time_jitted(forward_fn, *inputs, steps=steps, warmup=warmup)
-    backward_compile, backward_steady = _time_jitted(backward_fn, *inputs, steps=steps, warmup=warmup)
+        def forward_attentionish(q, k, v, q_bias, k_bias, da_cs, dt_seq, trap):
+            return mamba3_attentionish_forward(
+                q,
+                k,
+                v,
+                q_bias=q_bias,
+                k_bias=k_bias,
+                da_cs=da_cs,
+                dt=dt_seq,
+                trap=trap,
+                chunk_size=shape.chunk_size,
+                implementation="xla",
+            )
+
+        def backward_attentionish(q, k, v, q_bias, k_bias, da_cs, dt_seq, trap):
+            return jnp.sum(forward_attentionish(q, k, v, q_bias, k_bias, da_cs, dt_seq, trap).astype(jnp.float32) ** 2)
+
+        forward_fn = jax.jit(forward_attentionish)
+        backward_fn = jax.jit(jax.grad(backward_attentionish, argnums=2))
+        forward_args = attentionish_inputs
+        backward_args = attentionish_inputs
+
+    forward_compile, forward_steady = _time_jitted(forward_fn, *forward_args, steps=steps, warmup=warmup)
+    backward_compile, backward_steady = _time_jitted(backward_fn, *backward_args, steps=steps, warmup=warmup)
 
     if profile_dir is not None:
         if profile_mode == "forward":
-            _capture_profile(forward_fn, *inputs, profile_dir=profile_dir, profile_steps=profile_steps)
+            _capture_profile(forward_fn, *forward_args, profile_dir=profile_dir, profile_steps=profile_steps)
         elif profile_mode == "backward":
-            _capture_profile(backward_fn, *inputs, profile_dir=profile_dir, profile_steps=profile_steps)
+            _capture_profile(backward_fn, *backward_args, profile_dir=profile_dir, profile_steps=profile_steps)
         else:
             raise ValueError(f"Unsupported profile mode: {profile_mode}.")
 
     return [
         BenchmarkResult(
-            implementation=implementation,
+            api=api,
             seq_len=shape.seq_len,
             batch_head_groups=shape.batch_head_groups,
             chunk_size=shape.chunk_size,
@@ -198,7 +257,7 @@ def _benchmark(
             estimated_tflops=flops / forward_steady / 1e12,
         ),
         BenchmarkResult(
-            implementation=implementation,
+            api=api,
             seq_len=shape.seq_len,
             batch_head_groups=shape.batch_head_groups,
             chunk_size=shape.chunk_size,
@@ -220,7 +279,7 @@ def _benchmark(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark Mamba-3 reference and XLA chunked paths.")
     parser.add_argument("--dtype", type=str, default="bfloat16")
-    parser.add_argument("--implementations", type=str, default="reference,xla")
+    parser.add_argument("--api", type=str, default="chunked_public,attentionish_public")
     parser.add_argument("--steps", type=int, default=10)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--seq-lens", type=str, default="")
@@ -239,7 +298,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     dtype = _dtype_from_name(args.dtype)
-    implementations = tuple(item.strip() for item in args.implementations.split(",") if item.strip())
+    apis = tuple(item.strip() for item in args.api.split(",") if item.strip())
     shapes = DEFAULT_SHAPES
     if args.seq_lens:
         shapes = tuple(
@@ -255,12 +314,12 @@ def main() -> None:
 
     rows: list[BenchmarkResult] = []
     for shape in shapes:
-        for implementation in implementations:
+        for api in apis:
             rows.extend(
                 _benchmark(
                     shape,
                     dtype=dtype,
-                    implementation=implementation,
+                    api=api,  # type: ignore[arg-type]
                     shard_groups=args.shard_groups,
                     steps=args.steps,
                     warmup=args.warmup,
@@ -274,7 +333,7 @@ def main() -> None:
     print(f"devices={len(jax.devices())} shard_groups={args.shard_groups}")
     for row in rows:
         print(
-            f"impl={row.implementation:9s} mode={row.mode:8s} seq={row.seq_len:5d} "
+            f"api={row.api:17s} mode={row.mode:8s} seq={row.seq_len:5d} "
             f"groups={row.groups:3d} chunk={row.chunk_size:3d} state={row.state_dim:3d} value={row.value_dim:3d} "
             f"sharded={str(row.sharded):5s} "
             f"compile_s={row.compile_s:.4f} steady_s={row.steady_s:.6f} "

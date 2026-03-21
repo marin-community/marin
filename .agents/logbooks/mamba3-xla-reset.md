@@ -1231,3 +1231,70 @@
   - Revert the native XLA core.
   - Keep the attention-style public API on top of the existing chunked ranked XLA kernel.
   - Keep the design note in `.agents/projects/mamba3-mimo-native-attentionish-xla.md` as a future direction, but do not ship the current native implementation.
+
+## 2026-03-21: SISO attention-style API plus chunked-XLA custom VJP
+
+- Goal:
+  - Add the missing SISO attention-style API surface.
+  - Add a bounded custom VJP on the default XLA SISO chunked path so backward can recompute from inputs instead of relying entirely on ordinary autodiff through the chunked kernel.
+- Code:
+  - Added:
+    - `mamba3_attentionish_forward(...)`
+    - `mamba3_attentionish_forward_from_transformed(...)`
+  - Implemented as an attention-style adapter over the existing chunked SISO kernel family, matching the real-valued no-RoPE/no-segsum subset of the Mamba-3 public API shape.
+  - Added a custom VJP only for the default XLA `auto/auto` chunked SISO backend path:
+    - the custom backward recomputes the plain XLA forward via `jax.vjp`
+    - non-default variant overrides still use the plain implementation
+- Local validation:
+  - `./infra/pre-commit.py lib/levanter/src/levanter/kernels/pallas/mamba3/xla.py lib/levanter/src/levanter/kernels/pallas/mamba3/api.py lib/levanter/src/levanter/kernels/pallas/mamba3/__init__.py lib/levanter/tests/kernels/test_pallas_mamba3.py lib/levanter/scripts/bench/bench_mamba3_xla.py --fix`
+  - `uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_mamba3.py -q`
+  - result: `31 passed, 2 skipped`
+- TPU benchmark setup:
+  - device: `v5p-8`
+  - `seq_len=16384`
+  - `groups=16`
+  - explicit slice sharding over the leading stream axis
+  - `chunk_size=512`
+  - `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`
+- Results, `chunked_public` vs new `attentionish_public`:
+  - throughput-oriented `128 x 512`
+    - chunked public:
+      - forward: `348.35M tok/s`, `319.62` estimated TFLOP/s
+      - backward: `210.06M tok/s`, `192.73`
+    - attention-style public:
+      - forward: `203.99M tok/s`, `187.16`
+      - backward: `145.02M tok/s`, `133.06`
+    - attention-style relative to chunked public:
+      - forward: `0.59x`
+      - backward: `0.69x`
+  - balanced `512 x 1024`
+    - chunked public:
+      - forward: `151.98M tok/s`, `557.77`
+      - backward: `84.65M tok/s`, `310.67`
+    - attention-style public:
+      - forward: `107.56M tok/s`, `394.75`
+      - backward: `67.44M tok/s`, `247.52`
+    - attention-style relative to chunked public:
+      - forward: `0.71x`
+      - backward: `0.80x`
+  - state-heavy dense `1024 x 512`
+    - chunked public:
+      - forward: `175.72M tok/s`, `644.91`
+      - backward: `96.37M tok/s`, `353.67`
+    - attention-style public:
+      - forward: `116.65M tok/s`, `428.10`
+      - backward: `74.98M tok/s`, `275.18`
+    - attention-style relative to chunked public:
+      - forward: `0.66x`
+      - backward: `0.78x`
+- Interpretation:
+  - The SISO attention-style path is correct and usable, but it is still substantially slower than the chunked public path.
+  - The custom VJP does not create an obvious end-to-end throughput win for the chunked public path on these steady-state slice benchmarks; current chunked numbers are essentially in line with the earlier baselines.
+  - So the immediate value of the custom VJP is structural:
+    - a cleaner place to control recomputation in backward
+    - a production-ready SISO attention-style API surface
+  - It is not, yet, a compelling TPU throughput win on its own.
+- Decision:
+  - Keep the new SISO attention-style API and the custom VJP.
+  - Keep `chunked_public` as the fastest production TPU path.
+  - Treat the attention-style SISO path as an API/structure milestone, not a new performance default.
