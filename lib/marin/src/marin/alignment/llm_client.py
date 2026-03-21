@@ -6,11 +6,15 @@
 All alignment modules call through this client. The backend is selected
 by the type of InferenceConfig passed in — LiteLLMConfig routes to the
 litellm library, VLLMConfig spins up a local vLLM engine.
+
+For repeated vLLM calls within a single step, use VLLMEngine as a context
+manager to avoid re-creating the engine on every call.
 """
 
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 import litellm
@@ -21,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 # Suppress litellm's verbose logging
 litellm.suppress_debug_info = True
+
+# Module-level vLLM engine cache — set by VLLMEngine context manager
+_active_vllm_engine: dict | None = None
 
 
 @dataclass
@@ -72,6 +79,29 @@ def _chat_litellm(
 # ---------------------------------------------------------------------------
 
 
+def _get_or_create_vllm_engine(config: VLLMConfig):
+    """Get cached vLLM engine or create a new one."""
+    global _active_vllm_engine
+
+    if _active_vllm_engine is not None and _active_vllm_engine["model"] == config.model:
+        return _active_vllm_engine["llm"], _active_vllm_engine["tokenizer"]
+
+    try:
+        from vllm import LLM
+    except ImportError as exc:
+        raise ImportError("vLLM is required for local model inference. Install with: pip install vllm") from exc
+
+    logger.info("Creating vLLM engine for model: %s", config.model)
+    llm = LLM(
+        model=config.model,
+        max_model_len=config.max_model_len,
+        tensor_parallel_size=config.tensor_parallel_size,
+        gpu_memory_utilization=config.gpu_memory_utilization,
+    )
+    tokenizer = llm.get_tokenizer()
+    return llm, tokenizer
+
+
 def _chat_vllm(
     config: VLLMConfig,
     messages: list[dict[str, str]],
@@ -79,22 +109,15 @@ def _chat_vllm(
     temperature: float,
     n: int,
 ) -> list[LLMResponse]:
-    """Single-call vLLM inference. For batch inference, use generate_responses directly."""
+    """vLLM inference. Reuses cached engine if available."""
     try:
-        from vllm import LLM, SamplingParams
+        from vllm import SamplingParams
     except ImportError as exc:
         raise ImportError("vLLM is required for local model inference. Install with: pip install vllm") from exc
 
-    llm = LLM(
-        model=config.model,
-        max_model_len=config.max_model_len,
-        tensor_parallel_size=config.tensor_parallel_size,
-        gpu_memory_utilization=config.gpu_memory_utilization,
-    )
-
+    llm, tokenizer = _get_or_create_vllm_engine(config)
     sampling_params = SamplingParams(temperature=temperature, max_tokens=max_tokens, n=n)
 
-    tokenizer = llm.get_tokenizer()
     text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     outputs = llm.generate([text], sampling_params)
 
@@ -102,8 +125,33 @@ def _chat_vllm(
     for completion in outputs[0].outputs:
         results.append(LLMResponse(content=completion.text, model=config.model))
 
-    del llm
+    # Only clean up if there's no active context manager holding the engine
+    if _active_vllm_engine is None:
+        del llm
+
     return results
+
+
+@contextmanager
+def vllm_engine(config: VLLMConfig):
+    """Context manager that keeps a vLLM engine alive for multiple calls.
+
+    Usage:
+        with vllm_engine(config) as engine_config:
+            # All llm_chat_single calls within this block reuse the same engine
+            for prompt in prompts:
+                response = llm_chat_single(config=engine_config, ...)
+    """
+    global _active_vllm_engine
+
+    llm, tokenizer = _get_or_create_vllm_engine(config)
+    _active_vllm_engine = {"llm": llm, "tokenizer": tokenizer, "model": config.model}
+
+    try:
+        yield config
+    finally:
+        _active_vllm_engine = None
+        del llm
 
 
 # ---------------------------------------------------------------------------

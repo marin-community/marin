@@ -25,7 +25,8 @@ from iris.marin_fs import url_to_fs
 from zephyr import write_jsonl_file
 
 from marin.alignment.coverage import compute_coverage_stats, generate_covering_configs, make_tags
-from marin.alignment.llm_client import llm_chat_single
+from marin.alignment.inference_config import VLLMConfig
+from marin.alignment.llm_client import llm_chat_single, vllm_engine
 from marin.alignment.prompts.concretize import make_concretize_prompt
 from marin.alignment.prompts.extract import make_extraction_prompt
 from marin.alignment.prompts.understanding import (
@@ -45,9 +46,9 @@ class PromptGenConfig:
     spec_path: str
     output_path: str
 
-    # LLM settings
-    ideation_model: str = "openai/gpt-4.1"
-    extract_model: str = "openai/gpt-4.1-mini"
+    # LLM settings — InferenceConfig or string (string → LiteLLMConfig)
+    ideation_model: Any = "openai/gpt-4.1"
+    extract_model: Any = "openai/gpt-4.1-mini"
 
     # Covering array
     covering_strength: int = 3
@@ -403,6 +404,26 @@ def generate_prompts_from_spec(config: PromptGenConfig) -> None:
     Reads a specification JSONL, runs understanding → concretization → extraction
     for each behavior statement, and writes the results as sharded JSONL.GZ files.
     """
+    # If using vLLM for ideation, keep the engine alive for all stages 1-2
+    ideation_ctx = vllm_engine(config.ideation_model) if isinstance(config.ideation_model, VLLMConfig) else None
+    extract_ctx = vllm_engine(config.extract_model) if isinstance(config.extract_model, VLLMConfig) else None
+
+    if ideation_ctx:
+        ideation_ctx.__enter__()
+    if extract_ctx and extract_ctx is not ideation_ctx:
+        extract_ctx.__enter__()
+
+    try:
+        _generate_prompts_inner(config)
+    finally:
+        if extract_ctx and extract_ctx is not ideation_ctx:
+            extract_ctx.__exit__(None, None, None)
+        if ideation_ctx:
+            ideation_ctx.__exit__(None, None, None)
+
+
+def _generate_prompts_inner(config: PromptGenConfig) -> None:
+    """Inner implementation of prompt generation."""
     statements = load_spec(config.spec_path)
     logger.info("Loaded %d statements from spec", len(statements))
 
@@ -413,12 +434,15 @@ def generate_prompts_from_spec(config: PromptGenConfig) -> None:
 
     all_prompts: list[dict[str, Any]] = []
 
-    # Stage 1: Understanding (parallel across statements)
+    # Stage 1: Understanding (sequential for vLLM, parallel for API)
     logger.info("Stage 1: Generating understanding for %d statements", len(statements))
     understandings: dict[str, dict[str, Any]] = {}
     failures: list[tuple[str, str]] = []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=config.ideation_workers) as pool:
+    # vLLM is not thread-safe — use 1 worker when running locally
+    ideation_workers = 1 if isinstance(config.ideation_model, VLLMConfig) else config.ideation_workers
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=ideation_workers) as pool:
         future_map = {pool.submit(_run_understanding, stmt, config): sid for sid, stmt in statements.items()}
         for future in concurrent.futures.as_completed(future_map):
             sid = future_map[future]
@@ -436,7 +460,8 @@ def generate_prompts_from_spec(config: PromptGenConfig) -> None:
     ideations: dict[str, dict[str, Any]] = {}
     failures = []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, config.concretize_workers)) as pool:
+    concretize_workers = 1 if isinstance(config.ideation_model, VLLMConfig) else min(8, config.concretize_workers)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concretize_workers) as pool:
         future_map = {
             pool.submit(_run_concretization, sid, understanding, config): sid
             for sid, understanding in understandings.items()
@@ -456,7 +481,8 @@ def generate_prompts_from_spec(config: PromptGenConfig) -> None:
     logger.info("Stage 3: Extracting prompts from %d statements", len(ideations))
     failures = []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, config.extract_workers)) as pool:
+    extract_workers = 1 if isinstance(config.extract_model, VLLMConfig) else min(8, config.extract_workers)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=extract_workers) as pool:
         future_map = {pool.submit(_run_extraction, sid, ideation, config): sid for sid, ideation in ideations.items()}
         for future in concurrent.futures.as_completed(future_map):
             sid = future_map[future]

@@ -21,7 +21,8 @@ from typing import Any
 from iris.marin_fs import url_to_fs
 
 from marin.alignment.generate_prompts import _write_sharded_jsonl_gz
-from marin.alignment.llm_client import llm_chat_single
+from marin.alignment.inference_config import VLLMConfig
+from marin.alignment.llm_client import llm_chat_single, vllm_engine
 from marin.alignment.prompts.judge import build_compliance_judge_prompt, build_judge_system_prompt
 from marin.alignment.types import ComplianceResult, Statement
 
@@ -38,7 +39,7 @@ class JudgePairConfig:
     spec_path: str
     output_path: str
 
-    judge_model: str = "openai/gpt-4.1"
+    judge_model: Any = "openai/gpt-4.1"
     min_chosen_score: float = 7.0
     min_gap: float = 2.0
 
@@ -235,6 +236,16 @@ def judge_and_build_pairs(config: JudgePairConfig) -> None:
     using an LLM judge, filters by quality thresholds, and writes marin-format
     preference pairs as sharded JSONL.GZ.
     """
+    # Keep vLLM engine alive for all judge calls if using local model
+    if isinstance(config.judge_model, VLLMConfig):
+        with vllm_engine(config.judge_model):
+            _judge_and_build_pairs_inner(config)
+    else:
+        _judge_and_build_pairs_inner(config)
+
+
+def _judge_and_build_pairs_inner(config: JudgePairConfig) -> None:
+    """Inner implementation of judge and build pairs."""
     statements = _load_spec(config.spec_path)
     chosen = _load_responses(config.chosen_responses_path)
     rejected = _load_responses(config.rejected_responses_path)
@@ -248,7 +259,10 @@ def judge_and_build_pairs(config: JudgePairConfig) -> None:
     filtered_count = 0
     failures: list[str] = []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=config.workers) as pool:
+    # vLLM is not thread-safe — use 1 worker when running locally
+    workers = 1 if isinstance(config.judge_model, VLLMConfig) else config.workers
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         future_map = {
             pool.submit(
                 _process_prompt_pair,

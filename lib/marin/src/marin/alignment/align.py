@@ -37,6 +37,13 @@ from marin.execution.executor import ExecutorStep, output_path_of, this_output_p
 from marin.execution.remote import remote
 
 
+def _model_name(model: InferenceConfig | str) -> str:
+    """Extract a human-readable model name for logging."""
+    if isinstance(model, str):
+        return model
+    return model.model
+
+
 def _llm_env_vars() -> dict[str, str]:
     """Collect LLM API keys from the environment for forwarding to child jobs."""
     env_vars: dict[str, str] = {}
@@ -84,10 +91,10 @@ class AlignConfig:
         cpu_resources: Resources for CPU-only steps (prompt gen, judging).
     """
 
-    # Infrastructure models (always API)
-    ideation_model: str = "openai/gpt-4.1"
-    extract_model: str = "openai/gpt-4.1-mini"
-    judge_model: str = "openai/gpt-4.1"
+    # Infrastructure models — LiteLLMConfig for API, VLLMConfig for local, or string (→ LiteLLMConfig)
+    ideation_model: InferenceConfig | str = "openai/gpt-4.1"
+    extract_model: InferenceConfig | str = "openai/gpt-4.1-mini"
+    judge_model: InferenceConfig | str = "openai/gpt-4.1"
 
     # Covering array
     covering_strength: int = 3
@@ -201,13 +208,16 @@ def align(
         spec_gcs_path = output_path_of(spec_step) / "spec.jsonl"
 
     # Step 1: Generate prompts from spec (stages 1-3)
+    # Use TPU resources if ideation model is local (VLLMConfig)
+    ideation_is_local = isinstance(align_config.ideation_model, VLLMConfig)
+    prompts_resources = align_config.ideation_model.resources if ideation_is_local else align_config.cpu_resources
     prompts_step = ExecutorStep(
         name=f"align/{name}/prompts",
-        description=f"Generate eval prompts from spec via {align_config.ideation_model}",
+        description=f"Generate eval prompts from spec via {_model_name(align_config.ideation_model)}",
         fn=remote(
             generate_prompts_from_spec,
-            resources=align_config.cpu_resources,
-            pip_dependency_groups=["cpu"],
+            resources=prompts_resources,
+            pip_dependency_groups=["cpu"] if not ideation_is_local else [],
             env_vars=_llm_env_vars(),
         ),
         config=PromptGenConfig(
@@ -269,13 +279,15 @@ def align(
     )
 
     # Step 3: Judge + build preference pairs
+    judge_is_local = isinstance(align_config.judge_model, VLLMConfig)
+    judge_resources = align_config.judge_model.resources if judge_is_local else align_config.cpu_resources
     pairs_step = ExecutorStep(
         name=f"align/{name}/preference_pairs",
-        description=f"Judge and build preference pairs via {align_config.judge_model}",
+        description=f"Judge and build preference pairs via {_model_name(align_config.judge_model)}",
         fn=remote(
             judge_and_build_pairs,
-            resources=align_config.cpu_resources,
-            pip_dependency_groups=["cpu"],
+            resources=judge_resources,
+            pip_dependency_groups=["cpu"] if not judge_is_local else [],
             env_vars=_llm_env_vars(),
         ),
         config=JudgePairConfig(
