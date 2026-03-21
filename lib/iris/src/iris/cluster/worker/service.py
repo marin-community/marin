@@ -37,6 +37,9 @@ class TaskProvider(Protocol):
     def profile_task(
         self, task_id: str, duration_seconds: int, profile_type: cluster_pb2.ProfileType, attempt_id: int | None = None
     ) -> bytes: ...
+    def exec_in_container(
+        self, task_id: str, command: list[str], timeout_seconds: int = 60
+    ) -> cluster_pb2.Worker.ExecInContainerResponse: ...
 
 
 class WorkerServiceImpl:
@@ -176,3 +179,15 @@ class WorkerServiceImpl:
                 return cluster_pb2.ProfileTaskResponse(profile_data=data)
             except Exception as e:
                 return cluster_pb2.ProfileTaskResponse(error=str(e))
+
+    def exec_in_container(
+        self,
+        request: cluster_pb2.Worker.ExecInContainerRequest,
+        _ctx: RequestContext,
+    ) -> cluster_pb2.Worker.ExecInContainerResponse:
+        """Execute a command in a running task's container."""
+        with rpc_error_handler("exec_in_container"):
+            if not request.command:
+                raise ConnectError(Code.INVALID_ARGUMENT, "command is required")
+            timeout_seconds = request.timeout_seconds if request.timeout_seconds != 0 else 60
+            return self._provider.exec_in_container(request.task_id, list(request.command), timeout_seconds)

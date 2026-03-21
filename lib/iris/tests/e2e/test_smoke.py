@@ -659,6 +659,39 @@ def test_profile_running_task(smoke_cluster):
 
 
 # ============================================================================
+# Exec in container
+# ============================================================================
+
+
+@pytest.mark.timeout(300)
+def test_exec_in_container(smoke_cluster):
+    """Exec a command in a running task's container."""
+    job = smoke_cluster.submit(TestJobs.sleep, "smoke-exec", 120)
+    smoke_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
+
+    # Wait for the task itself to reach RUNNING (job can be RUNNING while task is still BUILDING)
+    task_id = smoke_cluster.task_status(job, task_index=0).task_id
+    deadline = time.monotonic() + smoke_cluster.job_timeout
+    while time.monotonic() < deadline:
+        task = smoke_cluster.task_status(job, task_index=0)
+        if task.state == cluster_pb2.TASK_STATE_RUNNING:
+            break
+        time.sleep(0.5)
+    assert task.state == cluster_pb2.TASK_STATE_RUNNING, f"Task stuck in {cluster_pb2.TaskState.Name(task.state)}"
+
+    request = cluster_pb2.Controller.ExecInContainerRequest(
+        task_id=task_id,
+        command=["echo", "hello"],
+    )
+    response = smoke_cluster.controller_client.exec_in_container(request)
+    assert not response.error, f"exec failed: {response.error}"
+    assert response.exit_code == 0
+    assert "hello" in response.stdout
+
+    smoke_cluster.kill(job)
+
+
+# ============================================================================
 # Checkpoint / restore
 # ============================================================================
 
