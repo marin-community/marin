@@ -74,7 +74,7 @@ def main() -> None:
             "--dangerously-skip-permissions",
             "--tools=Read,Write,Edit,Glob,Grep,Bash",
             "--max-turns",
-            "80",
+            "800",
             "--",
             prompt,
         ],
