@@ -112,6 +112,11 @@ uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml list-jobs
 uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml stop-job raysubmit_pAJM8vKfHPhiyHBa
 ```
 
+## Forking External Packages
+
+See [Forking Policy](forking-policy.md) for our requirements on maintaining
+forked dependencies under `marin-community/`.
+
 ## Precommit
 
 `./infra/pre-commit.py --all-files --fix`
