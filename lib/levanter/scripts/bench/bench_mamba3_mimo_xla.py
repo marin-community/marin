@@ -15,8 +15,8 @@ import numpy as np
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.kernels.pallas.mamba3.reference import (
-    mamba3_mimo_apply_gate_and_collapse,
-    mamba3_mimo_rank_expand,
+    mamba3_mimo_apply_gate_and_collapse_chunked,
+    mamba3_mimo_rank_expand_chunked,
 )
 from levanter.kernels.pallas.mamba3 import prepare_mamba3_chunked_scales
 from levanter.kernels.pallas.mamba3.xla import mamba3_mimo_chunked_forward_ranked_xla_batched
@@ -190,8 +190,8 @@ def _benchmark(
     dt, lam, a, b, c, x_base, z_base, w_x, w_z, w_o = inputs
     src_scale, out_correction = prepare_mamba3_chunked_scales(dt, lam)
     a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
-    x_ranked = mamba3_mimo_rank_expand(x_base, w_x)
-    z_ranked = mamba3_mimo_rank_expand(z_base, w_z)
+    x_ranked = mamba3_mimo_rank_expand_chunked(x_base, w_x)
+    z_ranked = mamba3_mimo_rank_expand_chunked(z_base, w_z)
     flops = _estimate_forward_flops(seq_len, groups, chunk_size, shape.state_dim, shape.value_dim, rank)
     tokens = groups * seq_len
 
@@ -204,7 +204,7 @@ def _benchmark(
             c_in,
             x_ranked_in,
         )
-        return mamba3_mimo_apply_gate_and_collapse(y_ranked, z_ranked_in, w_o_in)
+        return mamba3_mimo_apply_gate_and_collapse_chunked(y_ranked, z_ranked_in, w_o_in)
 
     def backward_loss(a_log_cumsum_in, src_scale_in, out_correction_in, b_in, c_in, x_ranked_in, z_ranked_in, w_o_in):
         return jnp.sum(

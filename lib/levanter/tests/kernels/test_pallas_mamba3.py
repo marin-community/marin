@@ -32,7 +32,7 @@ from levanter.kernels.pallas.mamba3.reference import (
     mamba3_mimo_chunked_forward_ranked_reference_batched,
     mamba3_mimo_chunked_sequential_ranked_reference_batched,
     mamba3_mimo_direct_recurrence_ranked_reference_batched,
-    mamba3_mimo_rank_expand,
+    mamba3_mimo_rank_expand_chunked,
 )
 from levanter.kernels.pallas.mamba3.xla import mamba3_mimo_chunked_forward_ranked_xla_batched
 from levanter.kernels.pallas.ssd import intra_chunk_log_alpha_cumsum, local_log_alpha
@@ -574,7 +574,7 @@ def test_mamba3_mimo_rank1_matches_siso_ranked_core():
     )
     src_scale, out_correction = prepare_mamba3_chunked_scales(dt, lam)
     a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
-    x_ranked = mamba3_mimo_rank_expand(x_base, w_x)
+    x_ranked = mamba3_mimo_rank_expand_chunked(x_base, w_x)
 
     y_mimo, state_mimo = mamba3_mimo_chunked_forward_ranked_xla_batched(
         a_log_cumsum.reshape(2, 3, 8),
@@ -582,7 +582,7 @@ def test_mamba3_mimo_rank1_matches_siso_ranked_core():
         out_correction.reshape(2, 3, 8),
         b.reshape(2, 3, 8, 4, 1),
         c.reshape(2, 3, 8, 4, 1),
-        x_ranked.reshape(2, 3, 8, 6, 1),
+        x_ranked.reshape(2, 3, 1, 8, 6),
     )
     y_siso, state_siso = mamba3_chunked_forward(
         dt,
@@ -590,10 +590,10 @@ def test_mamba3_mimo_rank1_matches_siso_ranked_core():
         a,
         b[..., 0],
         c[..., 0],
-        x_ranked[..., 0],
+        x_ranked[:, :, 0],
         implementation="xla",
     )
-    assert jnp.allclose(y_mimo[..., 0], y_siso, atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(y_mimo[:, :, 0], y_siso, atol=1e-5, rtol=1e-5)
     assert jnp.allclose(state_mimo, state_siso, atol=1e-5, rtol=1e-5)
 
 
@@ -608,14 +608,14 @@ def test_mamba3_mimo_chunked_xla_matches_direct_ranked_recurrence():
     )
     src_scale, out_correction = prepare_mamba3_chunked_scales(dt, lam)
     a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
-    x_ranked = mamba3_mimo_rank_expand(x_base, w_x)
+    x_ranked = mamba3_mimo_rank_expand_chunked(x_base, w_x)
     y_xla, state_xla = mamba3_mimo_chunked_forward_ranked_xla_batched(
         a_log_cumsum.reshape(2, 3, 8),
         src_scale.reshape(2, 3, 8),
         out_correction.reshape(2, 3, 8),
         b.reshape(2, 3, 8, 4, 3),
         c.reshape(2, 3, 8, 4, 3),
-        x_ranked.reshape(2, 3, 8, 5, 3),
+        x_ranked.reshape(2, 3, 3, 8, 5),
     )
     y_ref, state_ref = mamba3_mimo_direct_recurrence_ranked_reference_batched(
         dt.reshape(2, 3, 8),
@@ -623,7 +623,7 @@ def test_mamba3_mimo_chunked_xla_matches_direct_ranked_recurrence():
         a.reshape(2, 3, 8),
         b.reshape(2, 3, 8, 4, 3),
         c.reshape(2, 3, 8, 4, 3),
-        x_ranked.reshape(2, 3, 8, 5, 3),
+        x_ranked.reshape(2, 3, 3, 8, 5),
     )
     assert jnp.allclose(
         y_xla,
@@ -645,14 +645,14 @@ def test_mamba3_mimo_chunked_reference_matches_transformed_ranked_oracle():
     )
     src_scale, out_correction = prepare_mamba3_chunked_scales(dt, lam)
     a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
-    x_ranked = mamba3_mimo_rank_expand(x_base, w_x)
+    x_ranked = mamba3_mimo_rank_expand_chunked(x_base, w_x)
     y_shim, state_shim = mamba3_mimo_chunked_forward_ranked_reference_batched(
         a_log_cumsum.reshape(2, 3, 8),
         src_scale.reshape(2, 3, 8),
         out_correction.reshape(2, 3, 8),
         b.reshape(2, 3, 8, 4, 3),
         c.reshape(2, 3, 8, 4, 3),
-        x_ranked.reshape(2, 3, 8, 5, 3),
+        x_ranked.reshape(2, 3, 3, 8, 5),
     )
     y_seq, state_seq = mamba3_mimo_chunked_sequential_ranked_reference_batched(
         a_log_cumsum.reshape(2, 3, 8),
@@ -660,7 +660,7 @@ def test_mamba3_mimo_chunked_reference_matches_transformed_ranked_oracle():
         out_correction.reshape(2, 3, 8),
         b.reshape(2, 3, 8, 4, 3),
         c.reshape(2, 3, 8, 4, 3),
-        x_ranked.reshape(2, 3, 8, 5, 3),
+        x_ranked.reshape(2, 3, 3, 8, 5),
     )
     assert jnp.allclose(
         y_shim,
@@ -682,14 +682,14 @@ def test_mamba3_mimo_ranked_matches_r_squared_siso_decomposition():
     )
     src_scale, out_correction = prepare_mamba3_chunked_scales(dt, lam)
     a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
-    x_ranked = mamba3_mimo_rank_expand(x_base, w_x)
+    x_ranked = mamba3_mimo_rank_expand_chunked(x_base, w_x)
     y_mimo, _ = mamba3_mimo_chunked_forward_ranked_reference_batched(
         a_log_cumsum.reshape(1, 2, 6),
         src_scale.reshape(1, 2, 6),
         out_correction.reshape(1, 2, 6),
         b.reshape(1, 2, 6, 3, 3),
         c.reshape(1, 2, 6, 3, 3),
-        x_ranked.reshape(1, 2, 6, 4, 3),
+        x_ranked.reshape(1, 2, 3, 6, 4),
     )
     y_sum = jnp.zeros_like(y_mimo)
     for out_rank in range(3):
@@ -701,10 +701,10 @@ def test_mamba3_mimo_ranked_matches_r_squared_siso_decomposition():
                 out_correction.reshape(1, 2, 6),
                 b[..., in_rank].reshape(1, 2, 6, 3),
                 c[..., out_rank].reshape(1, 2, 6, 3),
-                x_ranked[..., in_rank].reshape(1, 2, 6, 4),
+                x_ranked[:, :, in_rank].reshape(1, 2, 6, 4),
             )
             partial.append(y_pair)
-        y_sum = y_sum.at[..., out_rank].set(sum(partial))
+        y_sum = y_sum.at[:, :, out_rank].set(sum(partial))
     assert jnp.allclose(y_mimo, y_sum, atol=1e-5, rtol=1e-5)
 
 

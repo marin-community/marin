@@ -24,8 +24,8 @@ from ..ssd.xla import (
     ssd_intra_chunk_xla_chunked_batched,
 )
 from .reference import (
-    mamba3_mimo_apply_gate_and_collapse,
-    mamba3_mimo_rank_expand,
+    mamba3_mimo_apply_gate_and_collapse_chunked,
+    mamba3_mimo_rank_expand_chunked,
     prepare_mamba3_chunked_scales,
 )
 
@@ -122,7 +122,7 @@ def mamba3_mimo_chunk_state_xla_chunked_batched(
     a_log_cumsum: Float[Array, "groups chunks chunk"],
     src_scale: Float[Array, "groups chunks chunk"],
     b: Float[Array, "groups chunks chunk state rank"],
-    x: Float[Array, "groups chunks chunk value rank"],
+    x: Float[Array, "groups chunks rank chunk value"],
 ) -> Float[Array, "groups chunks value state"]:
     """Chunk-state accumulation for rank-expanded MIMO inputs with the same `[P, N]` carry as SISO."""
 
@@ -133,7 +133,7 @@ def mamba3_mimo_chunk_state_xla_chunked_batched(
         scaled_src = decay_to_end * src_scale.astype(acc_dtype)
     with jax.named_scope("emit_chunk_state"):
         return jnp.einsum(
-            "gkcnu,gkcpu,gkc->gkpn",
+            "gkcnu,gkucp,gkc->gkpn",
             b.astype(acc_dtype),
             x.astype(acc_dtype),
             scaled_src,
@@ -147,8 +147,8 @@ def mamba3_mimo_chunked_forward_ranked_xla_batched(
     out_correction: Float[Array, "groups chunks chunk"],
     b: Float[Array, "groups chunks chunk state rank"],
     c: Float[Array, "groups chunks chunk state rank"],
-    x: Float[Array, "groups chunks chunk value rank"],
-) -> tuple[Float[Array, "groups chunks chunk value rank"], Float[Array, "groups value state"]]:
+    x: Float[Array, "groups chunks rank chunk value"],
+) -> tuple[Float[Array, "groups chunks rank chunk value"], Float[Array, "groups value state"]]:
     """Chunked MIMO forward pass on rank-expanded tensors before gating/collapse."""
 
     acc_dtype = jnp.float32
@@ -167,10 +167,10 @@ def mamba3_mimo_chunked_forward_ranked_xla_batched(
                 diff = a_log_cumsum.astype(acc_dtype)[..., :, None] - a_log_cumsum.astype(acc_dtype)[..., None, :]
                 decay = jnp.exp(jnp.where(mask, diff, -jnp.inf))
             with jax.named_scope("scale_x"):
-                x_scaled = x.astype(acc_dtype) * src_scale.astype(acc_dtype)[..., None, None]
+                x_scaled = x.astype(acc_dtype) * src_scale.astype(acc_dtype)[:, :, None, :, None]
             with jax.named_scope("emit_local_output"):
                 local_output = jnp.einsum(
-                    "gkts,gktsuv,gkspu->gktpv",
+                    "gkts,gktsuv,gkusp->gkvtp",
                     decay,
                     bc,
                     x_scaled,
@@ -183,8 +183,8 @@ def mamba3_mimo_chunked_forward_ranked_xla_batched(
                     c.astype(acc_dtype),
                     preferred_element_type=acc_dtype,
                 )
-                correction = out_correction.astype(acc_dtype)[..., None, None] * jnp.einsum(
-                    "gktpu,gktuv->gktpv",
+                correction = out_correction.astype(acc_dtype)[:, :, None, :, None] * jnp.einsum(
+                    "gkucp,gkcuv->gkvcp",
                     x.astype(acc_dtype),
                     bc_diag,
                     preferred_element_type=acc_dtype,
@@ -201,7 +201,7 @@ def mamba3_mimo_chunked_forward_ranked_xla_batched(
                 prefix_decay = jnp.exp(a_log_cumsum.astype(acc_dtype))
             with jax.named_scope("emit_prefix"):
                 prefix_output = jnp.einsum(
-                    "gkpn,gkcnv,gkc->gkcpv",
+                    "gkpn,gkcnv,gkc->gkvcp",
                     incoming_state.astype(acc_dtype),
                     c.astype(acc_dtype),
                     prefix_decay,
@@ -226,8 +226,8 @@ def mamba3_mimo_chunked_forward_xla_batched(
 
     with jax.named_scope("mamba3_mimo_output_xla"):
         with jax.named_scope("rank_expand"):
-            x_ranked = mamba3_mimo_rank_expand(x_base, w_x)
-            z_ranked = mamba3_mimo_rank_expand(z_base, w_z)
+            x_ranked = mamba3_mimo_rank_expand_chunked(x_base, w_x)
+            z_ranked = mamba3_mimo_rank_expand_chunked(z_base, w_z)
         y_ranked, final_state = mamba3_mimo_chunked_forward_ranked_xla_batched(
             a_log_cumsum,
             src_scale,
@@ -237,5 +237,5 @@ def mamba3_mimo_chunked_forward_xla_batched(
             x_ranked,
         )
         with jax.named_scope("gate_and_collapse"):
-            y = mamba3_mimo_apply_gate_and_collapse(y_ranked, z_ranked, w_o)
+            y = mamba3_mimo_apply_gate_and_collapse_chunked(y_ranked, z_ranked, w_o)
         return y, final_state
