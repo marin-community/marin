@@ -156,3 +156,201 @@ Evidence needed:
 - 2026-03-21: Treat this mode as a single-allocation execution mode, not a replacement for concurrent two-TPU RL.
 - 2026-03-21: Require compile-cache persistence from day 1.
 - 2026-03-21: Keep the multi-host `hax.shard()` loader path for the first TPU smoke test, but treat it as an empirical validation gate rather than a proven assumption.
+
+## 2026-03-21 Planned TPU Experiment Sequence
+
+The next TPU work should be run in this order. Do not skip ahead unless a prior
+experiment already proves the required precondition.
+
+### ALT-TPU-001: Single-host one-phase smoke test
+
+- Goal:
+  - prove that one complete alternating phase works on a real TPU VM with the
+    current controller/runtime path
+- Hypothesis:
+  - with `num_hosts=1`, `steps_per_phase=1`, and `num_train_steps=1`, the run
+    completes `sampling -> materialization -> training -> export` and writes
+    the next policy manifest without manual intervention
+- Suggested launch:
+
+```bash
+uv run python experiments/alternating_rl_math500.py controller \
+  --run-id alt-tpu-001 \
+  --shared-root gs://<bucket>/alternating-rl \
+  --image <image> \
+  --tpu-name alt-tpu-001 \
+  --tpu-type v5p-8 \
+  --zone us-east5-a \
+  --num-hosts 1 \
+  --local-tensor-parallel-size 4 \
+  --steps-per-phase 1 \
+  --num-train-steps 1
+```
+
+- Evidence to collect:
+  - `state/run_state.json`
+  - `state/phase_metrics/phase_0000.json`
+  - `policies/policy_0001/manifest.json`
+  - controller logs
+  - sampling host status file
+- If proven:
+  - move immediately to `ALT-TPU-002`
+- If disproven:
+  - classify the failure first:
+    - if sampling/vLLM bootstrap fails, debug the sampling container/image path
+      before any multi-host test
+    - if training/export fails, debug the Levanter resume/export path on
+      single-host before any multi-host test
+    - if controller/container lifecycle fails, fix runtime orchestration before
+      spending more TPU time
+
+### ALT-TPU-002: Single-host two-phase warm-cache validation
+
+- Goal:
+  - validate that phase 2 restart cost is materially lower than phase 1 because
+    compile caches are being reused
+- Hypothesis:
+  - with `steps_per_phase=1` and `num_train_steps=2`, phase 1 pays the cold
+    start cost and phase 2 reuses caches well enough that boundary time drops
+    noticeably
+- Suggested launch:
+
+```bash
+uv run python experiments/alternating_rl_math500.py controller \
+  --run-id alt-tpu-002 \
+  --shared-root gs://<bucket>/alternating-rl \
+  --image <image> \
+  --tpu-name alt-tpu-002 \
+  --tpu-type v5p-8 \
+  --zone us-east5-a \
+  --num-hosts 1 \
+  --local-tensor-parallel-size 4 \
+  --steps-per-phase 1 \
+  --num-train-steps 2
+```
+
+- Evidence to collect:
+  - `state/phase_metrics/phase_0000.json`
+  - `state/phase_metrics/phase_0001.json`
+  - controller phase timing summaries in logs
+  - any compile-cache hit/miss logging from training and sampling startup
+- Success criterion:
+  - phase 2 boundary cost is clearly lower than phase 1 and does not look like
+    a full cold compile again
+- If proven:
+  - move to multi-host validation in `ALT-TPU-003`
+- If disproven:
+  - block all cost/economics claims for alternating RL
+  - inspect cache path stability, image digest stability, shape stability, and
+    startup env differences across phases
+  - rerun this experiment only after a concrete cache-fix change lands
+
+### ALT-TPU-003: Minimal multi-host one-phase sharding validation
+
+- Goal:
+  - validate the current identical-input `TrainingBatch` loader path on a real
+    multi-host pod
+- Hypothesis:
+  - on a two-host pod, every host can deserialize the same materialized batch
+    file, call `hax.shard(...)`, and train one phase without sharding or step
+    consistency errors
+- Suggested launch:
+
+```bash
+uv run python experiments/alternating_rl_math500.py controller \
+  --run-id alt-tpu-003 \
+  --shared-root gs://<bucket>/alternating-rl \
+  --image <image> \
+  --tpu-name alt-tpu-003 \
+  --tpu-type v5p-16 \
+  --zone us-east5-a \
+  --num-hosts 2 \
+  --local-tensor-parallel-size 4 \
+  --steps-per-phase 1 \
+  --num-train-steps 1
+```
+
+- Evidence to collect:
+  - `state/run_state.json`
+  - `state/phase_metrics/phase_0000.json`
+  - `materialized/phase_0000/manifest.json`
+  - training logs from all hosts
+  - next policy manifest
+- Success criterion:
+  - one full multi-host phase completes and the exported policy manifest reports
+    the expected next `source_global_step`
+- If proven:
+  - move to `ALT-TPU-004`
+- If disproven:
+  - treat the current `hax.shard()` path as invalid for multi-host
+  - next engineering step is a new loader path that slices batches per process
+    explicitly instead of relying on identical full-batch deserialization on
+    every host
+
+### ALT-TPU-004: Minimal multi-host two-phase reliability run
+
+- Goal:
+  - validate repeated phase alternation on a real pod, including cache reuse,
+    container restarts, and next-policy advancement across more than one phase
+- Hypothesis:
+  - with `steps_per_phase=1` and `num_train_steps=2`, the pod survives two full
+    alternating phases and writes `policy_0002`
+- Suggested launch:
+
+```bash
+uv run python experiments/alternating_rl_math500.py controller \
+  --run-id alt-tpu-004 \
+  --shared-root gs://<bucket>/alternating-rl \
+  --image <image> \
+  --tpu-name alt-tpu-004 \
+  --tpu-type v5p-16 \
+  --zone us-east5-a \
+  --num-hosts 2 \
+  --local-tensor-parallel-size 4 \
+  --steps-per-phase 1 \
+  --num-train-steps 2
+```
+
+- Evidence to collect:
+  - both phase metrics manifests
+  - both policy manifests
+  - controller logs showing per-phase timing summaries
+  - any missing-status / dead-container failures
+- If proven:
+  - alternating RL is ready for an economic and algorithmic sweep
+- If disproven:
+  - classify the failure:
+    - cache/restart problem -> stay on `steps_per_phase=1` until lifecycle is
+      stable
+    - export-only gap -> use the new `export-policy` path to recover, then fix
+      the controller path
+    - sampler liveness / stale container issue -> improve runtime health checks
+      before longer runs
+
+### ALT-TPU-005 / 006 / 007: `steps_per_phase` sweep on multi-host
+
+- Goal:
+  - find whether a practical operating point exists where phase-boundary cost
+    is amortized without making policy lag unacceptable
+- Hypothesis:
+  - one of `steps_per_phase in {40, 80, 160}` gives a usable tradeoff for
+    alternating RL on the target workload
+- Suggested launches:
+  - `ALT-TPU-005`: `steps_per_phase=40`
+  - `ALT-TPU-006`: `steps_per_phase=80`
+  - `ALT-TPU-007`: `steps_per_phase=160`
+  - keep the same TPU type, image, and curriculum; vary only
+    `steps_per_phase` and set `num_train_steps` large enough to complete at
+    least two phases per run
+- Evidence to collect:
+  - boundary fraction from phase metrics
+  - sampling/training throughput
+  - reward/loss behavior from tracker logs
+  - qualitative notes on instability, clipping pathologies, or obvious lag
+- If proven:
+  - pick the best point and document it as the default alternating RL operating
+    regime
+- If disproven:
+  - keep alternating RL as an availability fallback only
+  - prefer concurrent two-allocation RL whenever wall-clock or policy freshness
+    is the priority
