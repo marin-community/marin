@@ -1413,6 +1413,9 @@ class ZephyrContext:
             min(max_workers, num_shards), computed at first execute(). If None,
             defaults to os.cpu_count() for LocalClient, or 128 for distributed clients.
         resources: Resource config per worker.
+        coordinator_resources: Resource config for the coordinator job. The coordinator
+            accumulates scatter manifests for all shards in memory; increase ram for
+            large pipelines (many shards). Defaults to 4 GB.
         chunk_storage_prefix: Storage prefix for intermediate chunks. If None, defaults
             to MARIN_PREFIX/tmp/zephyr or /tmp/zephyr.
         name: Descriptive name for this context, used in actor group names for debugging.
@@ -1427,6 +1430,7 @@ class ZephyrContext:
     client: Client | None = None
     max_workers: int | None = None
     resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="1g"))
+    coordinator_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="4g"))
     chunk_storage_prefix: str | None = None
     name: str = ""
     no_workers_timeout: float | None = None
@@ -1560,7 +1564,7 @@ class ZephyrContext:
                                 _run_coordinator_job,
                                 args=(config, result_path),
                             ),
-                            resources=ResourceConfig(cpu=1, ram="1g"),
+                            resources=self.coordinator_resources,
                         )
                     )
 
