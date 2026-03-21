@@ -271,3 +271,45 @@ def test_grug_iteration_02_v5p8_uses_expert_mesh_axis_one() -> None:
     assert launch_module._mesh_expert_axis(ResourceConfig.with_tpu("v5p-8")) == 1
     assert launch_module._mesh_expert_axis(ResourceConfig.with_tpu("v5p-16")) == 1
     assert launch_module._mesh_expert_axis(ResourceConfig.with_tpu("v5litepod-16")) == 4
+
+
+def test_grug_iteration_02_gated_norm_one_step_contract_lowers() -> None:
+    train_module = importlib.import_module("experiments.grug.moe_scaling_iteration_02.train")
+    model_module = importlib.import_module("experiments.grug.moe_scaling_iteration_02.model")
+
+    cfg = dataclasses.replace(
+        _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=32),
+        gated_norm_rank=8,
+        num_dense_layers=1,
+    )
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+    train_step = train_module._make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
+    mesh, token_pspec = model_module.debug_mesh_and_token_pspec(num_devices=4)
+    batch = GrugLmExample(
+        tokens=jnp.zeros((8, 4), dtype=jnp.int32),
+        loss_weight=jnp.ones((8, 4), dtype=jnp.float32),
+        attn_mask=GrugAttentionMask.causal(),
+    )
+
+    def one_step():
+        sharded_batch = dataclasses.replace(
+            batch,
+            tokens=jax.sharding.reshard(batch.tokens, token_pspec),
+            loss_weight=jax.sharding.reshard(batch.loss_weight, token_pspec),
+        )
+        state = train_module.initial_state(
+            cfg,
+            optimizer=optimizer,
+            mp=mp,
+            key=jax.random.PRNGKey(0),
+        )
+        return train_step(state, sharded_batch, compute_watch=False)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        out_state_shape, out_metrics_shape, out_watch_shape = eqx.filter_eval_shape(one_step)
+
+    assert out_state_shape.step.shape == ()
+    assert "train/loss" in out_metrics_shape
+    assert out_metrics_shape["train/loss"].shape == ()
+    assert out_watch_shape is None

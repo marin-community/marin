@@ -33,7 +33,7 @@ iris_env_args=(
 
 last_rc=0
 for attempt in $(seq 1 "${IRIS_SUBMIT_RETRIES}"); do
-  job_name="isoflop-moe-adamh-r3-gatedschema-$(date -u +%Y%m%d-%H%M%S)"
+  job_name="isoflop-moe-adamh-gatednorm-r2-$(date -u +%Y%m%d-%H%M%S)"
 
   if uv run iris --config "${IRIS_CONFIG}" job run \
     --no-wait \
@@ -45,7 +45,7 @@ for attempt in $(seq 1 "${IRIS_SUBMIT_RETRIES}"); do
     --job-name "${job_name}" \
     "${iris_env_args[@]}" \
     -- \
-    python experiments/grug/moe_scaling_iteration_02/launch_isoflop_moe_adamh.py \
+    python experiments/grug/moe_scaling_iteration_02/launch_isoflop_moe_adamh_gatednorm.py \
     "$@"; then
     exit 0
   fi

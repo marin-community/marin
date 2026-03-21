@@ -76,6 +76,7 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.0
+    gated_norm_rank: int | None = None
     load_balancing_loss_coef: float | None = 0.01
     router_z_loss_coef: float | None = 0.001
     bias_update_rate: float = 0.01
@@ -98,6 +99,8 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be positive")
         if self.num_experts_per_token > self.num_experts:
             raise ValueError("num_experts_per_token must be <= num_experts")
+        if self.gated_norm_rank is not None and self.gated_norm_rank <= 0:
+            raise ValueError("gated_norm_rank must be positive when set")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         if self.load_balancing_loss_coef is not None and self.load_balancing_loss_coef < 0:
@@ -182,6 +185,26 @@ class RMSNorm(eqx.Module):
         variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
         normed = x * jax.lax.rsqrt(variance + self.eps)
         return (normed * weight).astype(dtype)
+
+
+class GatedNorm(eqx.Module):
+    w_down: jax.Array
+    w_up: jax.Array
+
+    @staticmethod
+    def init(hidden_dim: int, rank: int, initializer_std: float, *, key: PRNGKeyArray) -> "GatedNorm":
+        k_down, k_up = random.split(key)
+        return GatedNorm(
+            w_down=reshard(_init_weight(k_down, (hidden_dim, rank), initializer_std), P(None, None)),
+            w_up=reshard(_init_weight(k_up, (rank, hidden_dim), initializer_std), P(None, None)),
+        )
+
+    @named_call
+    def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
+        gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
+        gate_hidden = jax.nn.silu(gate_hidden)
+        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
+        return x * gate.astype(x.dtype)
 
 
 class DenseMLP(eqx.Module):
@@ -365,18 +388,25 @@ class MoEMLP(eqx.Module):
 
 class Block(eqx.Module):
     rms_attn: RMSNorm
+    attn_gated_norm: GatedNorm | None
     attn: CausalSelfAttention
     rms_mlp: RMSNorm
+    mlp_gated_norm: GatedNorm | None
     mlp: MoEMLP | None
     shared: DenseMLP | None
     dense_mlp: DenseMLP | None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, dense_only: bool = False) -> "Block":
-        attn_key, mlp_key, shared_key, dense_key = random.split(key, 4)
+        attn_key, mlp_key, shared_key, dense_key, attn_gate_key, mlp_gate_key = random.split(key, 6)
         shared = None
         moe = None
         dense_mlp = None
+        attn_gated_norm = None
+        mlp_gated_norm = None
+        if cfg.gated_norm_rank is not None:
+            attn_gated_norm = GatedNorm.init(cfg.hidden_dim, cfg.gated_norm_rank, cfg.initializer_std, key=attn_gate_key)
+            mlp_gated_norm = GatedNorm.init(cfg.hidden_dim, cfg.gated_norm_rank, cfg.initializer_std, key=mlp_gate_key)
         if dense_only:
             dense_mlp = DenseMLP.init(
                 cfg.hidden_dim,
@@ -395,8 +425,10 @@ class Block(eqx.Module):
                 )
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            attn_gated_norm=attn_gated_norm,
             attn=CausalSelfAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            mlp_gated_norm=mlp_gated_norm,
             mlp=moe,
             shared=shared,
             dense_mlp=dense_mlp,
@@ -409,8 +441,13 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         use_rope: bool = True,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        x = x + self.attn(self.rms_attn(x), mask, use_rope=use_rope)
+        attn_in = self.rms_attn(x)
+        if self.attn_gated_norm is not None:
+            attn_in = self.attn_gated_norm(attn_in)
+        x = x + self.attn(attn_in, mask, use_rope=use_rope)
         mlp_in = self.rms_mlp(x)
+        if self.mlp_gated_norm is not None:
+            mlp_in = self.mlp_gated_norm(mlp_in)
         if self.dense_mlp is not None:
             mlp_out = self.dense_mlp(mlp_in, activation=ActivationFunctionEnum.silu)
             router_stats = {}
@@ -428,12 +465,14 @@ class Transformer(eqx.Module):
     output_proj: jax.Array
     blocks: tuple[Block, ...]
     embed_norm: RMSNorm
+    embed_gated_norm: GatedNorm | None
     final_norm: RMSNorm
+    final_gated_norm: GatedNorm | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Transformer":
-        embed_key, out_key, *block_keys = random.split(key, cfg.num_layers + 2)
+        embed_key, out_key, embed_gate_key, final_gate_key, *block_keys = random.split(key, cfg.num_layers + 4)
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
@@ -443,12 +482,23 @@ class Transformer(eqx.Module):
         )
         embed_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
         final_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+        embed_gated_norm = None
+        final_gated_norm = None
+        if cfg.gated_norm_rank is not None:
+            embed_gated_norm = GatedNorm.init(
+                cfg.hidden_dim, cfg.gated_norm_rank, cfg.initializer_std, key=embed_gate_key
+            )
+            final_gated_norm = GatedNorm.init(
+                cfg.hidden_dim, cfg.gated_norm_rank, cfg.initializer_std, key=final_gate_key
+            )
         return Transformer(
             token_embed=token_embed,
             output_proj=output_proj,
             blocks=blocks,
             embed_norm=embed_norm,
+            embed_gated_norm=embed_gated_norm,
             final_norm=final_norm,
+            final_gated_norm=final_gated_norm,
             config=cfg,
         )
 
@@ -464,6 +514,8 @@ class Transformer(eqx.Module):
         batch_spec = _batch_spec()
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
         hidden = self.embed_norm(hidden)
+        if self.embed_gated_norm is not None:
+            hidden = self.embed_gated_norm(hidden)
 
         cfg = self.config
         if cfg.sliding_window is not None:
@@ -487,7 +539,10 @@ class Transformer(eqx.Module):
             "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in moe_router_stats], axis=0),
             "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
         }
-        return self.final_norm(hidden), router_metrics
+        hidden = self.final_norm(hidden)
+        if self.final_gated_norm is not None:
+            hidden = self.final_gated_norm(hidden)
+        return hidden, router_metrics
 
     @named_call
     def logits(
@@ -567,6 +622,7 @@ __all__ = [
     "Block",
     "CausalSelfAttention",
     "DenseMLP",
+    "GatedNorm",
     "GrugModelConfig",
     "MoEMLP",
     "MoeActivation",

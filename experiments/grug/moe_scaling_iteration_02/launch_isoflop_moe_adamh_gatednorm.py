@@ -1,19 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Isoflop AdamH scaling sweep on the iteration_02 architecture.
+"""Isoflop AdamH scaling sweep on iteration_02 with GatedNorm enabled.
 
-This suite keeps the remote-v2 / iteration_02 model and trainer codepath, uses
-the attention+MLP+lm-head AdamH optimizer split, and anchors the learning-rate
-scaling on the old d512 reference hyper:
+This matches `launch_isoflop_moe_adamh.py` except it applies the paper's
+post-RMSNorm low-rank self-gating:
 
-    adamh_lr = 0.007292038680986272
+    y = RMSNorm(x)
+    gate = sigmoid(W_up(swish(W_down(y))))
+    y' = gate * y
 
-Both AdamH and Adam learning rates scale as:
-
-    lr ~ sqrt(batch_size) / data_size^0.25
+We apply it after every RMSNorm in the model with rank 16.
 """
 
+import dataclasses
 import math
 
 from fray.cluster import ResourceConfig
@@ -32,18 +32,19 @@ from experiments.grug.moe_scaling_iteration_02.launch import (
     run_grug_moe_trial,
 )
 
-BUDGETS: tuple[float, ...] = (1e19,)
-HIDDEN_DIMS: tuple[int, ...] = (512, 1536, 2048)
+BUDGETS: tuple[float, ...] = (1e18, 3e18, 1e19)
+HIDDEN_DIMS: tuple[int, ...] = (512, 768, 1024, 1536, 2048)
 
 REFERENCE_BUDGET = 1e18
 REFERENCE_HIDDEN_DIM = 512
 REFERENCE_ADAMH_LR = 0.007292038680986272
-RUN_NAME_PREFIX = "isoflop-moe-adamh-r3-gatedschema"
-GROUP = "isoflop-moe-adamh-r3-gatedschema"
+GATED_NORM_RANK = 16
+RUN_NAME_PREFIX = "isoflop-moe-adamh-gatednorm-r2"
+GROUP = "isoflop-moe-adamh-gatednorm-r2"
 DEFAULT_TPU_VARIANT = "v5p-8"
 LARGE_MODEL_TPU_VARIANT = "v5p-16"
 
-REFERENCE_MODEL_CONFIG = _build_model_config(REFERENCE_HIDDEN_DIM)
+REFERENCE_MODEL_CONFIG = dataclasses.replace(_build_model_config(REFERENCE_HIDDEN_DIM), gated_norm_rank=GATED_NORM_RANK)
 REFERENCE_FLOPS_PER_TOKEN = _compute_flops_per_token(REFERENCE_MODEL_CONFIG)
 _, REFERENCE_BATCH_SIZE, REFERENCE_TRAIN_STEPS = _compute_tokens_and_batch(REFERENCE_BUDGET, REFERENCE_FLOPS_PER_TOKEN)
 REFERENCE_ADAM_LR = min(0.01, (0.33 * math.sqrt(REFERENCE_BATCH_SIZE)) / REFERENCE_HIDDEN_DIM)
@@ -89,7 +90,7 @@ def create_isoflop_steps() -> list[ExecutorStep]:
 
     for budget in BUDGETS:
         for hidden_dim in HIDDEN_DIMS:
-            model_cfg = _build_model_config(hidden_dim)
+            model_cfg = dataclasses.replace(_build_model_config(hidden_dim), gated_norm_rank=GATED_NORM_RANK)
             flops_per_token = _compute_flops_per_token(model_cfg)
             _tokens, batch_size, train_steps = _compute_tokens_and_batch(budget, flops_per_token)
             adamh_lr = _compute_adamh_lr(batch_size=batch_size, train_steps=train_steps)
@@ -116,6 +117,8 @@ def create_isoflop_steps() -> list[ExecutorStep]:
                         "v3",
                         "isoflop",
                         "attn-mlp-lmh-adamh",
+                        "gatednorm",
+                        f"gated_norm_rank={GATED_NORM_RANK}",
                         "mesh-expert=1-on-v5p",
                         "lr-scaling=sqrt_bsz_over_datasize0p25",
                         f"budget={budget:.0e}",
@@ -180,9 +183,9 @@ if __name__ == "__main__":
     executor_main(
         steps=isoflop_steps,
         description=(
-            "Iteration_02 isoflop AdamH sweep anchored on the old d512 "
-            "adamh0p00729204 reference with lr ~ sqrt(batch_size) / data_size^0.25, "
-            "expert mesh axis 1 on v5p, v5p-16 for d1536/d2048, and only the "
-            "1e19 d512/d1536/d2048 rerun slice"
+            "Iteration_02 isoflop AdamH sweep with paper GatedNorm after every RMSNorm, "
+            "rank 16, anchored on the old d512 adamh0p00729204 reference with "
+            "lr ~ sqrt(batch_size) / data_size^0.25, expert mesh axis 1 on v5p, "
+            "v5p-16 for d1536/d2048, and the full isoflop grid"
         ),
     )
