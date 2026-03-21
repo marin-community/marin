@@ -79,9 +79,36 @@ def _load_prompts(prompts_path: str) -> list[dict[str, Any]]:
 
 
 def _load_behavior_statements(path: str) -> dict[str, str]:
-    """Load behavior statement texts keyed by ID."""
+    """Load behavior statement texts keyed by ID.
+
+    Accepts either:
+    - JSONL spec file (one statement per line with "id" and "text" fields)
+    - JSON dict mapping ID → text
+    """
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        first_char = f.read(1)
+        f.seek(0)
+        if first_char == "{":
+            # Try as single JSON dict first
+            content = f.read()
+            try:
+                data = json.loads(content)
+                if isinstance(data, dict) and all(isinstance(v, str) for v in data.values()):
+                    return data
+            except json.JSONDecodeError:
+                pass
+            # Fall through to JSONL parsing
+            f.seek(0)
+
+        # JSONL: one statement per line
+        statements: dict[str, str] = {}
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            statements[record["id"]] = record["text"]
+        return statements
 
 
 def _build_messages(
