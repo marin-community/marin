@@ -9,8 +9,7 @@ Before you begin, ensure you have the following installed:
 - Python 3.11 or higher
 - uv (Python package manager)
 - Git
-- Rust toolchain via [rustup](https://rustup.rs) (needed for `lib/dupekit`, which is built with Maturin;
-  see [`lib/dupekit/README.md`](https://github.com/marin-community/marin/blob/main/lib/dupekit/README.md) for background)
+- Rust toolchain via [rustup](https://rustup.rs) (only needed for source builds of Rust crates; see Rust Crates section below)
     - Recommended: `rustup toolchain install 1.91.0 && rustup default 1.91.0` (matches the Docker pin)
     - If you hit an `edition2024` error from Cargo (e.g., when building Arrow), use nightly: `rustup default nightly`
 - On macOS, install additional build tools for SentencePiece: ```brew install cmake pkg-config coreutils```
@@ -117,6 +116,30 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
         # Install TPU-specific dependencies
         uv sync --all-packages --extra=tpu
         ```
+
+## Rust Crates (dupekit)
+
+Marin includes Rust crates (e.g., `dupekit`) that are installed as **pre-built
+wheels** by default — no Rust toolchain needed. `uv sync` fetches wheels from
+GitHub Releases automatically.
+
+To switch to **source builds** (requires Cargo), use the Makefile targets:
+
+```bash
+# Check current mode and Cargo availability
+make rust-status
+
+# Switch to dev mode: modifies pyproject.toml to build from source (requires Cargo)
+make rust-dev
+
+# Switch back to user mode: reverts pyproject.toml to pre-built wheels (no Cargo needed)
+make rust-user
+```
+
+!!! warning
+    `make rust-dev` modifies `pyproject.toml` to add a local path source for dupekit.
+    **Do not commit `pyproject.toml` while in dev mode** — CI will reject it.
+    Run `make rust-user` before committing.
 
 ## Trying it Out
 
