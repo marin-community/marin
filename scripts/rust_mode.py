@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Switch dupekit between dev mode (source build) and user mode (pre-built wheel).
 
 Operates on pyproject.toml by replacing the block between RUST-DEV markers:
