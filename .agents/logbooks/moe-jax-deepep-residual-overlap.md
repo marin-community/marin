@@ -4830,3 +4830,106 @@ uv run .agents/scripts/deepep_jax_krt_bench.py \
   - the current explicit-ordering implementation is still slower overall because it turns the hidden wait into much more visible collective work.
 - Next action:
   - keep the focus on shared replicated reduction scheduling, but move from "can we break the wait at all?" to "can we preserve the smaller pre-gap with a cheaper dependency / ordering mechanism that does not explode collective time?"
+
+### 2026-03-20 23:45 UTC - OVLP-RES-074 lighter tie dependency only partially preserves the serial structural win
+
+- Goal:
+  - test whether a cheaper data dependency between the two replicated shared reductions can preserve most of the serial probe's pre-gap reduction without paying the full collective-time cost of the explicit serial `cond`.
+- Actions:
+  - added `deepep_transport_capped_prewarmed_shared_dw_psum_tie_probe` at code ref `9172b9742`
+  - the probe keeps the same synthetic replicated shared `psum` payloads as `shared_dw_psum_only`, but ties a single `w2` element to the completed `w13` reduction result instead of using the heavier serial `cond`
+- Config:
+  - code ref: `9172b9742`
+  - pod: `iris-task-2115dd5b49ce`
+  - node: `g12e0ba`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-shareddwpsumtie-profile-t262144-topk8-20260320-233753.log`
+  - copied profile artifacts:
+    - `scratch/profiles/ovlpres-shareddwpsumtie-fb-262144-topk8`
+  - rendered report:
+    - `scratch/profiles/ovlpres-shareddwpsumtie-fb-262144-topk8-report.md`
+  - compare outputs:
+    - `scratch/profiles/ovlpres-shareddwpsumonly-vs-shareddwpsumtie-262144-topk8.compare.txt`
+    - `scratch/profiles/ovlpres-shareddwpsumserial-vs-shareddwpsumtie-262144-topk8.compare.txt`
+- Result:
+  - decisive hard-row timing:
+    - `deepep_transport_capped_prewarmed_shared_dw_psum_tie_probe`: `1,941,919.47 tok/s` (`134.992 ms`)
+  - profile highlights:
+    - dominant pre-gap payload:
+      - `ncclDevKernel_AllReduce_Sum_f32_RING_LL(...)`
+    - total pre-gap: `39,507.977`
+    - max pre-gap: `5,112.307`
+    - occurrences: `16`
+    - collective family exclusive: `90,266.746`
+    - communication share: `0.063331`
+    - host share: `0.512530`
+  - direct comparisons vs full `shared_dw_psum_only`:
+    - total pre-gap delta: `-201,476.755`
+    - max pre-gap delta: `-9,985.967`
+    - collective exclusive delta: `+77,011.873`
+    - communication share delta: `+0.053152`
+    - host share delta: `-0.017785`
+  - direct comparisons vs `shared_dw_psum_serial`:
+    - total pre-gap delta: `+19,461.768`
+    - max pre-gap delta: `+1,390.268`
+    - collective exclusive delta: `-5,744.782`
+    - communication share delta: `-0.003731`
+    - host share delta: `+0.008613`
+- Interpretation:
+  - the lighter tie dependency does break most of the catastrophic `f32` pre-`all-reduce` wait from `shared_dw_psum_only`, so the scheduling sensitivity is real.
+  - however, it does not preserve enough of the structural win to beat either the original `psum-only` control or the heavier `serial` probe on wall clock.
+  - this rules down "just add a cheaper dependency edge between the two sibling reductions" as a sufficient fix by itself.
+- Next action:
+  - replace the two sibling replicated shared reductions with one packed replicated reduction so the scheduler only sees one shared `dw` collective instead of two concurrent peers.
+
+### 2026-03-20 23:58 UTC - OVLP-RES-075 packed single-`psum` stays structurally close to `shared_dw_psum_only`
+
+- Goal:
+  - test whether replacing the two sibling replicated shared `dw` reductions with one packed replicated reduction is enough to remove the giant pre-`AllReduce_Sum_f32` wait without paying the explicit-ordering cost of `serial`.
+- Actions:
+  - added `deepep_transport_capped_prewarmed_shared_dw_psum_packed_probe` at code ref `8ae611165`
+  - the probe packs the synthetic `shared_w13` and `shared_w2` payloads into one flattened buffer, runs a single `jax.lax.psum`, then splits the result back to the original shapes
+- Config:
+  - code ref: `8ae611165`
+  - pod: `iris-task-f6a0a7524f8c`
+  - node: `g12e0ba`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-shareddwpsumpacked-profile-t262144-topk8-20260320-235002.log`
+  - copied profile artifacts:
+    - `scratch/profiles/ovlpres-shareddwpsumpacked-fb-262144-topk8`
+  - rendered report:
+    - `scratch/profiles/ovlpres-shareddwpsumpacked-fb-262144-topk8-report.md`
+  - compare outputs:
+    - `scratch/profiles/ovlpres-shareddwpsumonly-vs-shareddwpsumpacked-262144-topk8.compare.txt`
+    - `scratch/profiles/ovlpres-shareddwpsumserial-vs-shareddwpsumpacked-262144-topk8.compare.txt`
+- Result:
+  - decisive hard-row timing:
+    - `deepep_transport_capped_prewarmed_shared_dw_psum_packed_probe`: `2,003,642.91 tok/s` (`130.834 ms`)
+  - profile highlights:
+    - dominant pre-gap payload:
+      - `ncclDevKernel_AllReduce_Sum_f32_RING_LL(...)`
+    - total pre-gap: `242,966.839`
+    - max pre-gap: `15,217.012`
+    - occurrences: `16`
+    - collective family exclusive: `13,335.181`
+    - communication share: `0.010420`
+    - host share: `0.524077`
+  - direct comparisons vs full `shared_dw_psum_only`:
+    - timing delta: `+1,168.72 tok/s`
+    - total pre-gap delta: `+1,982.107`
+    - max pre-gap delta: `+118.738`
+    - collective exclusive delta: `+80.308`
+    - communication share delta: `+0.000242`
+    - host share delta: `-0.006238`
+  - direct comparisons vs `shared_dw_psum_serial`:
+    - total pre-gap delta: `+222,920.630`
+    - max pre-gap delta: `+11,494.973`
+    - collective exclusive delta: `-82,676.347`
+    - communication share delta: `-0.056642`
+    - host share delta: `+0.020161`
+- Interpretation:
+  - replacing the two sibling shared reductions with one packed replicated reduction does not remove the giant pre-`AllReduce_Sum_f32` wait.
+  - the packed probe stays structurally close to `shared_dw_psum_only`: almost the same host share, almost the same communication share, and nearly the same dominant `f32` pre-gap.
+  - this rules down "the scheduler only needs to see one packed shared `dw` reduction" as a sufficient explanation or fix.
+- Next action:
+  - move one level up from sibling shared-reduction ordering and test whether explicit ordering between the shared `dw-psum` branch and routed backward is the higher-signal interaction.
