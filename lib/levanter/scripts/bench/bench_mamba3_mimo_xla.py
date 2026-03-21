@@ -8,17 +8,22 @@ from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import time
+from typing import Literal
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 
+from levanter.kernels.pallas.mamba3 import (
+    mamba3_mimo_attentionish_forward,
+    mamba3_mimo_chunked_forward,
+    prepare_mamba3_chunked_scales,
+)
 from levanter.kernels.pallas.mamba3.reference import (
     mamba3_mimo_apply_gate_and_collapse_chunked,
     mamba3_mimo_rank_expand_chunked,
 )
-from levanter.kernels.pallas.mamba3 import prepare_mamba3_chunked_scales
 from levanter.kernels.pallas.mamba3.xla import mamba3_mimo_chunked_forward_ranked_xla_batched
 from levanter.kernels.pallas.ssd import intra_chunk_log_alpha_cumsum, local_log_alpha
 
@@ -39,6 +44,7 @@ class BenchmarkResult:
     value_dim: int
     dtype: str
     sharded: bool
+    api: str
     mode: str
     compile_s: float
     steady_s: float
@@ -51,6 +57,7 @@ DEFAULT_SHAPES = (
     Shape(state_dim=512, value_dim=1024),
     Shape(state_dim=1024, value_dim=512),
 )
+ApiVariant = Literal["ranked_core", "chunked_public", "attentionish_public"]
 
 
 def _dtype_from_name(name: str) -> jnp.dtype:
@@ -132,6 +139,41 @@ def _capture_profile(fn, *args, profile_dir: str, profile_steps: int) -> None:
         jax.profiler.stop_trace()
 
 
+def _attentionish_public_inputs(
+    dt: jax.Array,
+    lam: jax.Array,
+    a: jax.Array,
+    b: jax.Array,
+    c: jax.Array,
+    x_base: jax.Array,
+    z_base: jax.Array,
+    w_x: jax.Array,
+    w_z: jax.Array,
+    w_o: jax.Array,
+) -> tuple[jax.Array, ...]:
+    groups, num_chunks, chunk_size = dt.shape
+    seq_len = num_chunks * chunk_size
+    state_dim = b.shape[-2]
+    rank = b.shape[-1]
+    value_dim = x_base.shape[-1]
+    a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
+    eps = jnp.finfo(lam.dtype).eps
+    clipped_lam = jnp.clip(lam, eps, 1 - eps)
+    trap = (jnp.log(clipped_lam) - jnp.log1p(-clipped_lam)).reshape(groups, 1, seq_len)
+    q = c.transpose(0, 1, 2, 4, 3).reshape(groups, seq_len, rank, 1, state_dim)
+    k = b.transpose(0, 1, 2, 4, 3).reshape(groups, seq_len, rank, 1, state_dim)
+    v = x_base.reshape(groups, seq_len, 1, value_dim)
+    z = z_base.reshape(groups, seq_len, 1, value_dim)
+    q_bias = jnp.zeros((1, rank, state_dim), dtype=dt.dtype)
+    k_bias = jnp.zeros((1, rank, state_dim), dtype=dt.dtype)
+    mimo_v = jnp.broadcast_to(jnp.swapaxes(w_x, -1, -2)[None, ...], (1, rank, value_dim))
+    mimo_z = jnp.broadcast_to(jnp.swapaxes(w_z, -1, -2)[None, ...], (1, rank, value_dim))
+    mimo_o = jnp.broadcast_to(jnp.swapaxes(w_o, -1, -2)[None, ...], (1, rank, value_dim))
+    da_cs = a_log_cumsum.reshape(groups, 1, seq_len)
+    dt_seq = dt.reshape(groups, 1, seq_len)
+    return q, k, v, mimo_v, mimo_o, q_bias, k_bias, z, mimo_z, da_cs, dt_seq, trap
+
+
 def _shard_spec(ndim: int, *, shard_groups: bool) -> P:
     return P("data", *([None] * (ndim - 1))) if shard_groups else P(*([None] * ndim))
 
@@ -169,6 +211,7 @@ def _benchmark(
     shape: Shape,
     dtype: jnp.dtype,
     shard_groups: bool,
+    api: ApiVariant,
     steps: int,
     warmup: int,
     profile_dir: str | None,
@@ -188,91 +231,153 @@ def _benchmark(
         shard_groups=shard_groups,
     )
     dt, lam, a, b, c, x_base, z_base, w_x, w_z, w_o = inputs
-    src_scale, out_correction = prepare_mamba3_chunked_scales(dt, lam)
-    a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
-    x_ranked = mamba3_mimo_rank_expand_chunked(x_base, w_x)
-    z_ranked = mamba3_mimo_rank_expand_chunked(z_base, w_z)
     flops = _estimate_forward_flops(seq_len, groups, chunk_size, shape.state_dim, shape.value_dim, rank)
     tokens = groups * seq_len
 
-    def forward_core(a_log_cumsum_in, src_scale_in, out_correction_in, b_in, c_in, x_ranked_in, z_ranked_in, w_o_in):
-        y_ranked, _ = mamba3_mimo_chunked_forward_ranked_xla_batched(
-            a_log_cumsum_in,
-            src_scale_in,
-            out_correction_in,
-            b_in,
-            c_in,
-            x_ranked_in,
-        )
-        return mamba3_mimo_apply_gate_and_collapse_chunked(y_ranked, z_ranked_in, w_o_in)
+    if api == "ranked_core":
+        src_scale, out_correction = prepare_mamba3_chunked_scales(dt, lam)
+        a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
+        x_ranked = mamba3_mimo_rank_expand_chunked(x_base, w_x)
+        z_ranked = mamba3_mimo_rank_expand_chunked(z_base, w_z)
 
-    def backward_loss(a_log_cumsum_in, src_scale_in, out_correction_in, b_in, c_in, x_ranked_in, z_ranked_in, w_o_in):
-        return jnp.sum(
-            forward_core(
-                a_log_cumsum_in, src_scale_in, out_correction_in, b_in, c_in, x_ranked_in, z_ranked_in, w_o_in
-            ).astype(jnp.float32)
-            ** 2
-        )
+        def forward_core(
+            a_log_cumsum_in, src_scale_in, out_correction_in, b_in, c_in, x_ranked_in, z_ranked_in, w_o_in
+        ):
+            y_ranked, _ = mamba3_mimo_chunked_forward_ranked_xla_batched(
+                a_log_cumsum_in,
+                src_scale_in,
+                out_correction_in,
+                b_in,
+                c_in,
+                x_ranked_in,
+            )
+            return mamba3_mimo_apply_gate_and_collapse_chunked(y_ranked, z_ranked_in, w_o_in)
 
-    forward_fn = jax.jit(forward_core)
-    backward_fn = jax.jit(jax.grad(backward_loss, argnums=5))
+        def backward_loss(
+            a_log_cumsum_in, src_scale_in, out_correction_in, b_in, c_in, x_ranked_in, z_ranked_in, w_o_in
+        ):
+            return jnp.sum(
+                forward_core(
+                    a_log_cumsum_in, src_scale_in, out_correction_in, b_in, c_in, x_ranked_in, z_ranked_in, w_o_in
+                ).astype(jnp.float32)
+                ** 2
+            )
 
-    forward_compile, forward_steady = _time_jitted(
-        forward_fn,
-        a_log_cumsum,
-        src_scale,
-        out_correction,
-        b,
-        c,
-        x_ranked,
-        z_ranked,
-        w_o,
-        steps=steps,
-        warmup=warmup,
-    )
-    backward_compile, backward_steady = _time_jitted(
-        backward_fn,
-        a_log_cumsum,
-        src_scale,
-        out_correction,
-        b,
-        c,
-        x_ranked,
-        z_ranked,
-        w_o,
-        steps=steps,
-        warmup=warmup,
-    )
+        forward_fn = jax.jit(forward_core)
+        backward_fn = jax.jit(jax.grad(backward_loss, argnums=5))
+        forward_args = (a_log_cumsum, src_scale, out_correction, b, c, x_ranked, z_ranked, w_o)
+        backward_args = forward_args
+    elif api == "chunked_public":
+
+        def forward_public(dt_in, lam_in, a_in, b_in, c_in, x_base_in, z_base_in, w_x_in, w_z_in, w_o_in):
+            return mamba3_mimo_chunked_forward(
+                dt_in,
+                lam_in,
+                a_in,
+                b_in,
+                c_in,
+                x_base_in,
+                z_base_in,
+                w_x_in,
+                w_z_in,
+                w_o_in,
+                implementation="xla",
+            )[0]
+
+        def backward_public(dt_in, lam_in, a_in, b_in, c_in, x_base_in, z_base_in, w_x_in, w_z_in, w_o_in):
+            return jnp.sum(
+                forward_public(dt_in, lam_in, a_in, b_in, c_in, x_base_in, z_base_in, w_x_in, w_z_in, w_o_in).astype(
+                    jnp.float32
+                )
+                ** 2
+            )
+
+        forward_fn = jax.jit(forward_public)
+        backward_fn = jax.jit(jax.grad(backward_public, argnums=5))
+        forward_args = inputs
+        backward_args = inputs
+    elif api == "attentionish_public":
+        attentionish_inputs = _attentionish_public_inputs(dt, lam, a, b, c, x_base, z_base, w_x, w_z, w_o)
+        q, k, v, mimo_v, mimo_o, q_bias, k_bias, z, mimo_z, da_cs, dt_seq, trap = attentionish_inputs
+
+        def forward_attentionish(
+            q_in,
+            k_in,
+            v_in,
+            mimo_v_in,
+            mimo_o_in,
+            q_bias_in,
+            k_bias_in,
+            z_in,
+            mimo_z_in,
+            da_cs_in,
+            dt_seq_in,
+            trap_in,
+        ):
+            return mamba3_mimo_attentionish_forward(
+                q_in,
+                k_in,
+                v_in,
+                mimo_v_in,
+                mimo_o_in,
+                q_bias=q_bias_in,
+                k_bias=k_bias_in,
+                z=z_in,
+                mimo_z=mimo_z_in,
+                da_cs=da_cs_in,
+                dt=dt_seq_in,
+                trap=trap_in,
+                chunk_size=chunk_size,
+                implementation="xla",
+            )
+
+        def backward_attentionish(
+            q_in,
+            k_in,
+            v_in,
+            mimo_v_in,
+            mimo_o_in,
+            q_bias_in,
+            k_bias_in,
+            z_in,
+            mimo_z_in,
+            da_cs_in,
+            dt_seq_in,
+            trap_in,
+        ):
+            return jnp.sum(
+                forward_attentionish(
+                    q_in,
+                    k_in,
+                    v_in,
+                    mimo_v_in,
+                    mimo_o_in,
+                    q_bias_in,
+                    k_bias_in,
+                    z_in,
+                    mimo_z_in,
+                    da_cs_in,
+                    dt_seq_in,
+                    trap_in,
+                ).astype(jnp.float32)
+                ** 2
+            )
+
+        forward_fn = jax.jit(forward_attentionish)
+        backward_fn = jax.jit(jax.grad(backward_attentionish, argnums=2))
+        forward_args = attentionish_inputs
+        backward_args = attentionish_inputs
+    else:
+        raise ValueError(f"Unsupported benchmark API: {api}.")
+
+    forward_compile, forward_steady = _time_jitted(forward_fn, *forward_args, steps=steps, warmup=warmup)
+    backward_compile, backward_steady = _time_jitted(backward_fn, *backward_args, steps=steps, warmup=warmup)
 
     if profile_dir is not None:
         if profile_mode == "forward":
-            _capture_profile(
-                forward_fn,
-                a_log_cumsum,
-                src_scale,
-                out_correction,
-                b,
-                c,
-                x_ranked,
-                z_ranked,
-                w_o,
-                profile_dir=profile_dir,
-                profile_steps=profile_steps,
-            )
+            _capture_profile(forward_fn, *forward_args, profile_dir=profile_dir, profile_steps=profile_steps)
         elif profile_mode == "backward":
-            _capture_profile(
-                backward_fn,
-                a_log_cumsum,
-                src_scale,
-                out_correction,
-                b,
-                c,
-                x_ranked,
-                z_ranked,
-                w_o,
-                profile_dir=profile_dir,
-                profile_steps=profile_steps,
-            )
+            _capture_profile(backward_fn, *backward_args, profile_dir=profile_dir, profile_steps=profile_steps)
         else:
             raise ValueError(f"Unsupported profile mode: {profile_mode}.")
 
@@ -286,6 +391,7 @@ def _benchmark(
             value_dim=shape.value_dim,
             dtype=str(dtype),
             sharded=shard_groups,
+            api=api,
             mode="forward",
             compile_s=forward_compile,
             steady_s=forward_steady,
@@ -301,6 +407,7 @@ def _benchmark(
             value_dim=shape.value_dim,
             dtype=str(dtype),
             sharded=shard_groups,
+            api=api,
             mode="backward",
             compile_s=backward_compile,
             steady_s=backward_steady,
@@ -329,6 +436,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--rank", type=int, default=4)
     parser.add_argument("--shapes", type=str, default="128x512,512x1024,1024x512")
     parser.add_argument("--shard-groups", action="store_true")
+    parser.add_argument(
+        "--api",
+        type=str,
+        default="ranked_core",
+        choices=("ranked_core", "chunked_public", "attentionish_public"),
+    )
     parser.add_argument("--steps", type=int, default=10)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--json", action="store_true")
@@ -353,6 +466,7 @@ def main() -> None:
                 shape=shape,
                 dtype=dtype,
                 shard_groups=args.shard_groups,
+                api=args.api,
                 steps=args.steps,
                 warmup=args.warmup,
                 profile_dir=args.profile_dir or None,
@@ -366,7 +480,7 @@ def main() -> None:
     for row in rows:
         print(
             f"mode={row.mode:8s} seq={row.seq_len:5d} groups={row.groups:3d} chunk={row.chunk_size:4d} rank={row.rank:2d} "
-            f"state={row.state_dim:4d} value={row.value_dim:4d} sharded={str(row.sharded):5s} "
+            f"state={row.state_dim:4d} value={row.value_dim:4d} api={row.api:18s} sharded={str(row.sharded):5s} "
             f"compile_s={row.compile_s:.4f} steady_s={row.steady_s:.6f} "
             f"tokens_per_s={row.tokens_per_s:.2f} est_tflops={row.estimated_tflops:.2f}"
         )

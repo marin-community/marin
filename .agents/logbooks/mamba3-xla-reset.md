@@ -1103,3 +1103,81 @@
 - Decision:
   - Keep the Torch-gated upstream parity checks in the test suite.
   - Treat the current Levanter SISO and real-valued MIMO reference recurrences as numerically aligned with the upstream Mamba reference under the mapping above.
+
+## 2026-03-21: attention-style MIMO API TPU benchmark update
+
+- Goal:
+  - Benchmark the new production-facing attention-style MIMO API on TPU and compare it directly against the existing chunked public MIMO API.
+  - Measure the real wrapper tax on the same `v5p-8` slice rather than assuming the API migration is free.
+- Kernel status:
+  - This benchmark pass did **not** change the underlying XLA MIMO kernel.
+  - The new public entrypoints:
+    - `mamba3_mimo_attentionish_forward(...)`
+    - `mamba3_mimo_attentionish_forward_from_transformed(...)`
+    wrap the existing rank-major XLA MIMO core.
+  - The benchmark harness was extended in:
+    - [bench_mamba3_mimo_xla.py](/Users/dlwh/.codex/worktrees/03f9/marin/lib/levanter/scripts/bench/bench_mamba3_mimo_xla.py)
+    - new `--api` modes:
+      - `ranked_core`
+      - `chunked_public`
+      - `attentionish_public`
+- TPU setup:
+  - device: `v5p-8`
+  - `seq_len=16384`
+  - `groups=16`
+  - `rank=4`
+  - explicit slice sharding over the leading stream axis
+  - `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`
+- Benchmark points:
+  - Throughput-oriented:
+    - `state=128`, `value=512`, `chunk=128`
+  - Balanced:
+    - `state=512`, `value=1024`, `chunk=128`
+  - State-heavy dense:
+    - `state=1024`, `value=512`, `chunk=256`
+- Results, `chunked_public` vs `attentionish_public`:
+  - `128 x 512`, `chunk=128`
+    - chunked public:
+      - forward: `82.38M tok/s`, `304.02` estimated TFLOP/s
+      - backward: `38.64M tok/s`, `142.60`
+    - attention-style public:
+      - forward: `69.58M tok/s`, `256.78`
+      - backward: `36.09M tok/s`, `133.20`
+    - attention-style relative to chunked public:
+      - forward: `0.84x`
+      - backward: `0.93x`
+  - `512 x 1024`, `chunk=128`
+    - chunked public:
+      - forward: `32.01M tok/s`, `471.44`
+      - backward: `16.51M tok/s`, `243.18`
+    - attention-style public:
+      - forward: `27.40M tok/s`, `403.62`
+      - backward: `15.93M tok/s`, `234.61`
+    - attention-style relative to chunked public:
+      - forward: `0.86x`
+      - backward: `0.96x`
+  - `1024 x 512`, `chunk=256`
+    - chunked public:
+      - forward: `40.45M tok/s`, `850.39`
+      - backward: `25.32M tok/s`, `532.25`
+    - attention-style public:
+      - forward: `33.69M tok/s`, `708.21`
+      - backward: `22.32M tok/s`, `469.20`
+    - attention-style relative to chunked public:
+      - forward: `0.83x`
+      - backward: `0.88x`
+- Interpretation:
+  - The API migration is functional and production-usable, but it is not free.
+  - The attention-style wrapper costs roughly:
+    - `14%` to `17%` forward throughput
+    - `4%` to `12%` backward throughput
+    relative to the existing chunked public API on these slice-level measurements.
+  - That cost is consistent with the wrapper doing real extra work:
+    - Q/K regrouping
+    - sequence reshapes/transposes
+    - final output/state packaging
+  - Because the underlying XLA kernel did not change, the regression is an API-surface tax, not a kernel regression.
+- Decision:
+  - Keep the new attention-style API surface because it matches the intended upstream-facing contract better.
+  - Do **not** treat it as a pure alias for benchmarking or throughput claims; benchmark numbers should distinguish `chunked_public` from `attentionish_public`.
+  - If we need to claw this back later, the next step is a thinner attention-style path that avoids some of the regrouping/packaging overhead rather than another kernel rewrite first.
