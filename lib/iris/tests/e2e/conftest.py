@@ -83,8 +83,7 @@ _CLOUD_TEST_TIMEOUT = 120  # 2 min per test
 
 def pytest_collection_modifyitems(config, items):
     """Set appropriate timeouts for cloud mode tests."""
-    mode = config.getoption("--iris-mode", default="local")
-    if mode == "local":
+    if config.getoption("--iris-controller-url") is None:
         return
 
     import pytest
@@ -117,13 +116,18 @@ class IrisTestCluster:
     job_timeout: float = 60.0
     is_cloud: bool = False
 
+    # Cloud task pods run uv sync per pod, needing ~4GB. Local workers
+    # share a pre-built venv so 1GB is fine.
+    _CLOUD_MEMORY_DEFAULT = "4g"
+    _LOCAL_MEMORY_DEFAULT = "1g"
+
     def submit(
         self,
         fn,
         name: str,
         *args,
         cpu: float = 1,
-        memory: str = "1g",
+        memory: str | None = None,
         ports: list[str] | None = None,
         scheduling_timeout: Duration | None = None,
         replicas: int = 1,
@@ -135,6 +139,8 @@ class IrisTestCluster:
         reservation: list[ReservationEntry] | None = None,
     ) -> Job:
         """Submit a callable as a job. Returns a Job handle."""
+        if memory is None:
+            memory = self._CLOUD_MEMORY_DEFAULT if self.is_cloud else self._LOCAL_MEMORY_DEFAULT
         return self.client.submit(
             entrypoint=Entrypoint.from_callable(fn, *args),
             name=name,
@@ -260,6 +266,7 @@ class ClusterCapabilities:
     regions: tuple[str, ...]
     device_types: frozenset[str]
     has_coscheduling: bool
+    has_workers: bool
 
     @property
     def has_multi_region(self) -> bool:
@@ -300,6 +307,7 @@ def discover_capabilities(controller_client: ControllerServiceClientSync) -> Clu
         regions=tuple(sorted(regions)),
         device_types=frozenset(device_types),
         has_coscheduling=len(tpu_names) > 0,
+        has_workers=len(healthy) > 0,
     )
 
 
