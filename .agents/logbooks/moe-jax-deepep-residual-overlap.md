@@ -4981,3 +4981,61 @@ uv run .agents/scripts/deepep_jax_krt_bench.py \
   - it is still evidence that branch-level coupling matters, but not in a form worth extending.
 - Next action:
   - keep the branch-level dependency idea, but move to a lighter control at the split-loss scalar boundary so the next experiment changes ordering without rebuilding the backward graph around separate branch pullbacks.
+
+### 2026-03-21 00:22 UTC - OVLP-RES-077 split-loss serial is a hard regression and restores the giant `f32` all-reduce wait
+
+- Goal:
+  - test whether a lighter dependency edge at the scalar split-loss boundary can preserve the structural win from branch-level serial ordering without rebuilding the backward graph around separate routed/shared pullbacks.
+- Actions:
+  - added `deepep_transport_capped_prewarmed_split_loss_serial_probe` at code ref `de53c2850`
+  - the probe keeps the prior `split_loss_probe` structure but gates the routed loss through a scalar dependency on `shared_loss` via `jax.lax.optimization_barrier` and `jax.lax.cond`
+- Config:
+  - code ref: `de53c2850`
+  - pod: `iris-task-da682472bbe6`
+  - node: `g12e0ba`
+  - launcher log:
+    - `scratch/3717-rerun/ovlpres-splitlossserial-profile-t262144-topk8-20260321-001255.log`
+  - copied profile artifacts:
+    - `scratch/profiles/ovlpres-splitlossserial-fb-262144-topk8`
+  - rendered report:
+    - `scratch/profiles/ovlpres-splitlossserial-fb-262144-topk8-report.md`
+  - compare outputs:
+    - `scratch/profiles/ovlpres-splitloss-vs-splitlossserial-262144-topk8.compare.txt`
+    - `scratch/profiles/ovlpres-shareddwpsumonly-vs-splitlossserial-262144-topk8.compare.txt`
+- Result:
+  - decisive hard-row timing:
+    - `deepep_transport_capped_prewarmed_split_loss_serial_probe`: `755,028.34 tok/s` (`347.198 ms`)
+  - profile highlights:
+    - time breakdown:
+      - compute: `44.99%`
+      - communication: `4.63%`
+      - host: `50.38%`
+    - dominant pre-gap payload:
+      - `ncclDevKernel_AllReduce_Sum_f32_RING_LL(...)`
+      - total pre-gap: `4,046,754.243`
+      - max pre-gap: `526,432.303`
+      - occurrences: `56`
+    - collective family exclusive:
+      - `647,629.049`
+  - direct comparisons:
+    - vs prior `split_loss_probe`:
+      - timing delta: `-5,610,414.73 tok/s`
+      - total pre-gap delta: `+3,782,050.110`
+      - max pre-gap delta: `+509,836.020`
+      - collective exclusive delta: `+630,504.427`
+      - communication share delta: `+0.034124`
+      - host share delta: `-0.020380`
+    - vs `shared_dw_psum_only`:
+      - timing delta: `-1,247,445.85 tok/s`
+      - total pre-gap delta: `+3,805,769.511`
+      - max pre-gap delta: `+511,334.029`
+      - collective exclusive delta: `+633,944.224`
+      - communication share delta: `+0.036076`
+      - host share delta: `-0.026554`
+- Interpretation:
+  - the lighter scalar dependency does not preserve the structural win from branch-level serial ordering.
+  - instead it reintroduces a much worse version of the same `f32` all-reduce pathology, with both a larger total pre-gap and far larger collective time than either `split_loss_probe` or `shared_dw_psum_only`.
+  - this rules down "add a scalar dependency at the loss boundary" as a viable fix direction.
+- Next action:
+  - stop pushing loss-boundary ordering tricks.
+  - move back to the real shared backward implementation and test a direct serial-`psum` variant inside the explicit shared MLP backward, since the synthetic probes suggest shared `dw` reduction ordering is the only lever that consistently changes the pathology.
