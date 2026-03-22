@@ -206,11 +206,14 @@ def _handle_result(
             f"dispatch: update logbook for {event.collection_name} run {event.run_index}",
             event.branch,
         )
-        if not pushed:
+        if pushed:
+            state.consecutive_failures = 0
+            outcome.succeeded += 1
+        else:
             logger.error("Failed to push logbook update for %s", event.collection_name)
-
-        state.consecutive_failures = 0
-        outcome.succeeded += 1
+            state.consecutive_failures += 1
+            state.last_error = "push failed after rebase retries"
+            outcome.failed += 1
     else:
         state.consecutive_failures += 1
         state.last_error = result.error or "unknown error"

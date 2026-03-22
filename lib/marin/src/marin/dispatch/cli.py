@@ -25,6 +25,7 @@ from marin.dispatch.storage import (
     load_collection,
     load_state,
     save_collection,
+    save_state,
 )
 from marin.dispatch.tick import process_tick
 
@@ -197,6 +198,13 @@ def remove_run(ctx: click.Context, name: str, index: int) -> None:
     removed = runs.pop(index)
     updated = replace(collection, runs=tuple(runs))
     save_collection(repo_root, updated)
+
+    # Remove the corresponding state entry so indices stay aligned.
+    states = load_state(repo_root, name)
+    if index < len(states):
+        states.pop(index)
+        save_state(repo_root, name, states)
+
     job_id = removed.ray.job_id if removed.ray else (removed.iris.job_id if removed.iris else "?")
     click.echo(f"Removed run [{index}] ({removed.track}: {job_id}) from {name}")
 
