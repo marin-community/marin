@@ -345,31 +345,74 @@ This means two `VLLMConfig`s with the same `model` but different `tensor_paralle
 
 **Agreed fix:** Replace with generic naming ("AI alignment research assistant" / "this evaluation pipeline"). Update test.
 
-### Implementation Plan for ALIGN-012 (revised per user feedback)
+### Implementation Plan for ALIGN-012 (revised twice — user feedback + Codex corrections)
 
 **Key design decision:** Stages 1-3 (understanding, concretization, extraction) must **hard-fail on parse errors**. The rationale: these stages produce the foundation of the dataset. If the LLM can't produce parseable output (valid XML tags, valid JSON variation axes, correct scenario count), the covering array is broken and everything downstream is garbage. Silent degradation (padding with empty scenarios, inserting empty records, warn-and-continue) was the Bloom pipeline's approach for robustness, but it hides model inadequacy. The right signal is: crash, tell the user why, and let them either fix the prompt or switch to a stronger model. No silent dataset degradation.
 
 The **judge** is different: individual unparseable judge responses out of hundreds are tolerable. But the fallback score must be 0 (auto-filtered), not 5 (fake mid-score that might pass quality thresholds and inject noise).
 
-All fixes in priority order:
+#### Codex corrections to first revision (2026-03-22)
 
-1. **Hard-fail Stages 1-3 on parse errors** (quality — highest priority)
-   - **Stage 1**: `_run_understanding` currently catches exceptions and warns (`generate_prompts.py:434`). Remove the try/except — let `_parse_variation_axes` raise propagate. One failed statement kills the run.
-   - **Stage 2**: `_concretize_batch` currently pads with empty scenarios on count mismatch (`generate_prompts.py:190`). **Raise RuntimeError instead.** If the LLM returned 3 scenarios when we asked for 10, the model can't follow instructions.
-   - **Stage 3**: `_parse_extraction_response` currently inserts empty records on missing `<scenario_N>` blocks (`generate_prompts.py:289`). **Raise RuntimeError instead.**
-   - **Statement-level**: Remove warn-and-continue pattern in `_generate_prompts_inner` (`generate_prompts.py:434, 456, 476`). All statements must succeed or the pipeline fails with a clear error message listing which statements failed and why.
-   - **Judge**: Keep warn-and-continue (individual pair failures are tolerable). Change fallback score from 5 → 0 so parse-failure pairs always get filtered out. Add `max_failure_rate: float = 0.5` to `JudgePairConfig` — abort if more than half of judge calls fail.
+**Correction 1: Don't literally remove the try/except around concurrent futures.**
+
+My first plan said "remove the try/except — let it propagate." Codex pointed out this is wrong: if you let the first failed future propagate, you lose visibility into all the other failures. The ThreadPoolExecutor has N futures in flight — if statement 3 fails and you raise immediately, you never learn that statements 7 and 12 also failed.
+
+**Correct approach:** Keep per-statement error collection. Let all submitted futures finish. Then raise ONE aggregated error listing every failed statement and its reason. This gives full visibility ("statements ask_clarifying_questions, be_honest, and avoid_abuse all failed: <reasons>") instead of just "ask_clarifying_questions failed."
+
+Concretely in `_generate_prompts_inner`:
+```python
+# Stage 1 — still uses ThreadPoolExecutor, still collects failures
+with concurrent.futures.ThreadPoolExecutor(...) as pool:
+    ...
+    for future in as_completed(future_map):
+        try:
+            understandings[sid] = future.result()
+        except Exception as exc:
+            failures.append((sid, str(exc)))
+
+# But NOW: raise after all futures complete, not warn-and-continue
+if failures:
+    detail = "; ".join(f"{sid}: {msg}" for sid, msg in failures)
+    raise RuntimeError(f"Stage 1 failed for {len(failures)} statement(s): {detail}")
+```
+
+Same pattern for Stage 2 and Stage 3.
+
+**Correction 2: vLLM needs a cache dict, not a single slot.**
+
+My first plan said "key on full config object instead of model string." Codex pointed out this is necessary but not sufficient. The real bug is the **single global slot** `_active_vllm_engine` (`llm_client.py:30`). Because `generate_prompts.py:396` can hold two vLLM contexts simultaneously in one `ExitStack` (ideation engine + extract engine), a single slot can't support two active engines — the second `vllm_engine()` context overwrites the first.
+
+**Correct approach:** Replace the single global `_active_vllm_engine: dict | None` with a **cache dict** keyed by full frozen config:
+```python
+_vllm_engine_cache: dict[VLLMConfig, tuple[LLM, Tokenizer]] = {}
+```
+
+`get_or_create_vllm_engine(config)` checks this dict. `vllm_engine(config)` adds to it on enter, removes on exit. Two simultaneous contexts with different configs each get their own engine. Same config reuses the cached engine.
+
+**Correction 3: Judge max_failure_rate default too loose.**
+
+Codex suggested 0.1 or 0.2 instead of 0.5. Agreed — if 50% of your judge calls fail, something is fundamentally wrong. Default to 0.2.
+
+#### Final fix list (priority order)
+
+1. **Hard-fail Stages 1-3** (quality — highest priority)
+   - Keep ThreadPoolExecutor + per-statement error collection (Codex correction 1)
+   - After all futures complete, raise aggregated error if ANY statement failed
+   - `_concretize_batch`: raise on scenario count mismatch (not pad)
+   - `_parse_extraction_response`: raise on missing blocks (not insert empty)
 
 2. **ExecutorStep spec path** → `output_path_of(spec) / "spec.jsonl"` (bug fix at `align.py:190`)
 
-3. **vLLM cache** → key on full frozen config object instead of just model string (bug fix at `llm_client.py:86`)
+3. **vLLM engine cache dict** → replace single global slot with `dict[VLLMConfig, engine]` (Codex correction 2, bug fix at `llm_client.py:30`)
 
-4. **teacher_n** → judge picks best of N teacher responses instead of always reading `responses[0]` (behavior fix at `judge.py:133`). Makes `teacher_n > 1` a genuine quality-vs-cost knob.
+4. **teacher_n** → judge picks best of N teacher responses instead of always reading `responses[0]` (behavior fix at `judge.py:133`)
 
-5. **env_vars** → add `_llm_env_vars()` to chosen/rejected `@remote` calls (consistency fix at `align.py:243, 264`)
+5. **Judge failure accounting** → fallback score 5 → 0, `max_failure_rate: float = 0.2` (Codex correction 3)
 
-6. **Bloom naming** → replace "BloomUnderstanding"/"Bloom Evals" in Stage 1 system prompt with generic names. Update test assertion.
+6. **env_vars** → add `_llm_env_vars()` to chosen/rejected `@remote` calls (consistency at `align.py:243, 264`)
 
-7. **Follow-up issue:** structured output / `response_format` support in `llm_chat` for JSON-expecting stages (Stage 1 variation axes, judge scoring). This is the proper long-term fix for Finding 1 but can be a separate PR.
+7. **Bloom naming** → replace "BloomUnderstanding"/"Bloom Evals" with generic names (cleanup at `understanding.py:62`, `test_alignment.py:619`)
+
+8. **Follow-up issue:** structured output / `response_format` support in `llm_chat` for JSON-expecting stages
 
 - **Next action:** Implement all fixes, re-run pipeline on Iris to validate.
