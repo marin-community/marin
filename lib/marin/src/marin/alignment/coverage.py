@@ -59,6 +59,7 @@ def generate_covering_configs(
             uncovered.add(tup)
 
     configs: list[dict[str, str]] = []
+    all_axis_combos = list(combinations(range(n_axes), t))
 
     while uncovered:
         best_config_indices: list[int] | None = None
@@ -68,7 +69,7 @@ def generate_covering_configs(
             candidate = [rng.randrange(len(vals)) for vals in axes_values]
 
             count = 0
-            for axis_indices in combinations(range(n_axes), t):
+            for axis_indices in all_axis_combos:
                 tup = tuple((ai, candidate[ai]) for ai in axis_indices)
                 if tup in uncovered:
                     count += 1
@@ -81,7 +82,7 @@ def generate_covering_configs(
             best_config_indices = [rng.randrange(len(vals)) for vals in axes_values]
 
         to_remove = set()
-        for axis_indices in combinations(range(n_axes), t):
+        for axis_indices in all_axis_combos:
             tup = tuple((ai, best_config_indices[ai]) for ai in axis_indices)
             if tup in uncovered:
                 to_remove.add(tup)

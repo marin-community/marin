@@ -24,8 +24,8 @@ from marin.alignment.generate_prompts import (
     _parse_concretize_response,
     _parse_extraction_response,
     _parse_variation_axes,
-    _write_sharded_jsonl_gz,
     load_spec,
+    write_sharded_jsonl_gz,
 )
 from marin.alignment.generate_responses import (
     _build_messages,
@@ -412,9 +412,9 @@ class TestSpecLoading:
 
 
 class TestShardedOutput:
-    def test_write_sharded_jsonl_gz(self, tmp_path):
+    def testwrite_sharded_jsonl_gz(self, tmp_path):
         records = [{"id": i, "text": f"record {i}"} for i in range(12)]
-        _write_sharded_jsonl_gz(records, str(tmp_path / "output"), shard_size=5)
+        write_sharded_jsonl_gz(records, str(tmp_path / "output"), shard_size=5)
 
         output_dir = tmp_path / "output"
         shards = sorted(output_dir.glob("*.jsonl.gz"))
@@ -431,7 +431,7 @@ class TestShardedOutput:
         assert all_records[11]["id"] == 11
 
     def test_write_sharded_empty(self, tmp_path):
-        _write_sharded_jsonl_gz([], str(tmp_path / "empty"), shard_size=5)
+        write_sharded_jsonl_gz([], str(tmp_path / "empty"), shard_size=5)
         shards = sorted((tmp_path / "empty").glob("*.jsonl.gz"))
         assert len(shards) == 1  # one empty shard
 

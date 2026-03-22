@@ -16,7 +16,6 @@ teaches the model to internalize behavior without needing the spec at inference 
 from __future__ import annotations
 
 import concurrent.futures
-import gzip
 import json
 import logging
 from dataclasses import dataclass
@@ -24,9 +23,9 @@ from typing import Any
 
 from iris.marin_fs import url_to_fs
 
-from marin.alignment.generate_prompts import _write_sharded_jsonl_gz
+from marin.alignment.generate_prompts import load_sharded_jsonl_gz, write_sharded_jsonl_gz
 from marin.alignment.inference_config import InferenceConfig, LiteLLMConfig, VLLMConfig
-from marin.alignment.llm_client import llm_chat
+from marin.alignment.llm_client import _get_or_create_vllm_engine, llm_chat
 
 logger = logging.getLogger(__name__)
 
@@ -66,19 +65,7 @@ class ResponseGenConfig:
 
 def _load_prompts(prompts_path: str) -> list[dict[str, Any]]:
     """Load prompts from sharded JSONL.GZ files. Supports both local and GCS paths."""
-    fs, base_path = url_to_fs(prompts_path)
-    all_prompts: list[dict[str, Any]] = []
-
-    shard_files = sorted(fs.glob(f"{base_path}/*.jsonl.gz"))
-    for shard_file in shard_files:
-        with fs.open(shard_file, "rb") as raw_f:
-            with gzip.open(raw_f, "rt", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        all_prompts.append(json.loads(line))
-
-    return all_prompts
+    return load_sharded_jsonl_gz(prompts_path)
 
 
 def _load_behavior_statements(path: str) -> dict[str, str]:
@@ -226,17 +213,12 @@ def _generate_via_vllm(
 ) -> list[dict[str, Any]]:
     """Generate responses for all prompts via local vLLM instance."""
     try:
-        from vllm import LLM, SamplingParams
+        from vllm import SamplingParams
     except ImportError as exc:
         raise ImportError("vLLM is required for local model inference. Install with: pip install vllm") from exc
 
     logger.info("Starting vLLM with model: %s", inference_config.model)
-    llm = LLM(
-        model=inference_config.model,
-        max_model_len=inference_config.max_model_len,
-        tensor_parallel_size=inference_config.tensor_parallel_size,
-        gpu_memory_utilization=inference_config.gpu_memory_utilization,
-    )
+    llm, tokenizer = _get_or_create_vllm_engine(inference_config)
 
     sampling_params = SamplingParams(
         temperature=config.temperature,
@@ -245,7 +227,6 @@ def _generate_via_vllm(
     )
 
     # Build all message lists and apply chat template
-    tokenizer = llm.get_tokenizer()
     all_prompt_texts = []
     for prompt in prompts:
         messages = _build_messages(prompt, behavior_statements)
@@ -259,7 +240,6 @@ def _generate_via_vllm(
         responses = [{"content": completion.text, "index": j} for j, completion in enumerate(output.outputs)]
         results.append(_make_response_record(prompt, inference_config.model, responses))
 
-    del llm
     return results
 
 
@@ -292,4 +272,4 @@ def generate_responses(config: ResponseGenConfig) -> None:
     logger.info("Generated responses for %d prompts", len(results))
 
     # Write output (supports both local and GCS paths)
-    _write_sharded_jsonl_gz(results, config.output_path, shard_size=5000)
+    write_sharded_jsonl_gz(results, config.output_path, shard_size=5000)

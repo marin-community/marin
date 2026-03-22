@@ -25,7 +25,7 @@ from iris.marin_fs import url_to_fs
 from zephyr import write_jsonl_file
 
 from marin.alignment.coverage import compute_coverage_stats, generate_covering_configs, make_tags
-from marin.alignment.inference_config import VLLMConfig
+from marin.alignment.inference_config import InferenceConfig, VLLMConfig
 from marin.alignment.llm_client import llm_chat_single, vllm_engine
 from marin.alignment.prompts.concretize import make_concretize_prompt
 from marin.alignment.prompts.extract import make_extraction_prompt
@@ -47,8 +47,8 @@ class PromptGenConfig:
     output_path: str
 
     # LLM settings — InferenceConfig or string (string → LiteLLMConfig)
-    ideation_model: Any = "openai/gpt-4.1"
-    extract_model: Any = "openai/gpt-4.1-mini"
+    ideation_model: InferenceConfig | str = "openai/gpt-4.1"
+    extract_model: InferenceConfig | str = "openai/gpt-4.1-mini"
 
     # Covering array
     covering_strength: int = 3
@@ -233,7 +233,7 @@ def _run_concretization(
         batches.append((start + 1, batch_configs))
 
     # Concretize in parallel
-    all_scenarios: list[dict[str, Any]] = [{}] * len(configs)
+    all_scenarios: list[dict[str, Any]] = [{} for _ in range(len(configs))]
     failures: list[str] = []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=config.concretize_workers) as pool:
@@ -349,7 +349,7 @@ def _run_extraction(
         batch = variations[start : start + config.extract_batch_size]
         batches.append((start, batch))
 
-    all_extractions: list[dict[str, str]] = [{"system_prompt": "", "user_message": ""}] * len(variations)
+    all_extractions: list[dict[str, str]] = [{"system_prompt": "", "user_message": ""} for _ in range(len(variations))]
     failures: list[str] = []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=config.extract_workers) as pool:
@@ -500,13 +500,27 @@ def _generate_prompts_inner(config: PromptGenConfig) -> None:
     logger.info("Total prompts generated: %d", len(all_prompts))
 
     # Write output as sharded JSONL.GZ
-    _write_sharded_jsonl_gz(all_prompts, config.output_path, shard_size=5000)
+    write_sharded_jsonl_gz(all_prompts, config.output_path, shard_size=5000)
 
     # Save intermediate artifacts for reproducibility and inspection
     _save_artifacts(config.output_path, statements, understandings, ideations)
 
 
-def _write_sharded_jsonl_gz(records: list[dict[str, Any]], output_path: str, shard_size: int = 5000) -> None:
+def load_sharded_jsonl_gz(path: str) -> list[dict]:
+    """Read all shards from a directory of JSONL.GZ files. Supports local and GCS paths."""
+    fs, base_path = url_to_fs(path)
+    records: list[dict] = []
+    for shard_file in sorted(fs.glob(f"{base_path}/*.jsonl.gz")):
+        with fs.open(shard_file, "rb") as raw_f:
+            with gzip.open(raw_f, "rt", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        records.append(json.loads(line))
+    return records
+
+
+def write_sharded_jsonl_gz(records: list[dict[str, Any]], output_path: str, shard_size: int = 5000) -> None:
     """Write records as sharded JSONL.GZ files. Supports both local and GCS paths."""
     for shard_idx in range(0, max(1, len(records)), shard_size):
         shard = records[shard_idx : shard_idx + shard_size]
@@ -532,22 +546,23 @@ def _save_artifacts(
     """
     fs, base_path = url_to_fs(output_path)
 
+    # Collect all statement IDs that have artifacts, create each directory once
+    all_sids = set(understandings.keys()) | set(ideations.keys())
+    for sid in all_sids:
+        fs.makedirs(f"{base_path}/artifacts/{sid}", exist_ok=True)
+
     for sid, understanding in understandings.items():
         serializable = dict(understanding)
         if not isinstance(serializable.get("model"), str):
             serializable["model"] = str(serializable.get("model", ""))
-        artifact_dir = f"{base_path}/artifacts/{sid}"
-        fs.makedirs(artifact_dir, exist_ok=True)
-        with fs.open(f"{artifact_dir}/understanding.json", "w", encoding="utf-8") as f:
+        with fs.open(f"{base_path}/artifacts/{sid}/understanding.json", "w", encoding="utf-8") as f:
             f.write(json.dumps(serializable, indent=2, ensure_ascii=False))
 
     for sid, ideation in ideations.items():
         serializable = dict(ideation)
         if not isinstance(serializable.get("model"), str):
             serializable["model"] = str(serializable.get("model", ""))
-        artifact_dir = f"{base_path}/artifacts/{sid}"
-        fs.makedirs(artifact_dir, exist_ok=True)
-        with fs.open(f"{artifact_dir}/ideation.json", "w", encoding="utf-8") as f:
+        with fs.open(f"{base_path}/artifacts/{sid}/ideation.json", "w", encoding="utf-8") as f:
             f.write(json.dumps(serializable, indent=2, ensure_ascii=False))
 
     # Write summary

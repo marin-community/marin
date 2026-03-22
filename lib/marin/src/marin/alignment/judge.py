@@ -11,17 +11,14 @@ filters by quality thresholds, and outputs preference pairs in marin format
 from __future__ import annotations
 
 import concurrent.futures
-import gzip
 import json
 import logging
 import re
 from dataclasses import dataclass
 from typing import Any
 
-from iris.marin_fs import url_to_fs
-
-from marin.alignment.generate_prompts import _write_sharded_jsonl_gz
-from marin.alignment.inference_config import VLLMConfig
+from marin.alignment.generate_prompts import load_sharded_jsonl_gz, load_spec, write_sharded_jsonl_gz
+from marin.alignment.inference_config import InferenceConfig, VLLMConfig
 from marin.alignment.llm_client import llm_chat_single, vllm_engine
 from marin.alignment.prompts.judge import build_compliance_judge_prompt, build_judge_system_prompt
 from marin.alignment.types import ComplianceResult, Statement
@@ -39,7 +36,7 @@ class JudgePairConfig:
     spec_path: str
     output_path: str
 
-    judge_model: Any = "openai/gpt-4.1"
+    judge_model: InferenceConfig | str = "openai/gpt-4.1"
     min_chosen_score: float = 7.0
     min_gap: float = 2.0
 
@@ -49,26 +46,8 @@ class JudgePairConfig:
 
 def _load_responses(path: str) -> dict[str, dict[str, Any]]:
     """Load responses keyed by prompt_id. Supports both local and GCS paths."""
-    fs, base_path = url_to_fs(path)
-    responses: dict[str, dict[str, Any]] = {}
-    for shard_file in sorted(fs.glob(f"{base_path}/*.jsonl.gz")):
-        with fs.open(shard_file, "rb") as raw_f:
-            with gzip.open(raw_f, "rt", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    record = json.loads(line)
-                    prompt_id = record.get("prompt_id", "")
-                    responses[prompt_id] = record
-    return responses
-
-
-def _load_spec(spec_path: str) -> dict[str, Statement]:
-    """Load statements from spec JSONL."""
-    from marin.alignment.generate_prompts import load_spec
-
-    return load_spec(spec_path)
+    records = load_sharded_jsonl_gz(path)
+    return {record.get("prompt_id", ""): record for record in records}
 
 
 def _parse_judge_response(content: str) -> dict[str, Any]:
@@ -246,7 +225,7 @@ def judge_and_build_pairs(config: JudgePairConfig) -> None:
 
 def _judge_and_build_pairs_inner(config: JudgePairConfig) -> None:
     """Inner implementation of judge and build pairs."""
-    statements = _load_spec(config.spec_path)
+    statements = load_spec(config.spec_path)
     chosen = _load_responses(config.chosen_responses_path)
     rejected = _load_responses(config.rejected_responses_path)
     logger.info("Loaded %d chosen, %d rejected responses", len(chosen), len(rejected))
@@ -294,6 +273,6 @@ def _judge_and_build_pairs_inner(config: JudgePairConfig) -> None:
     )
 
     # Write output as sharded JSONL.GZ (supports both local and GCS paths)
-    _write_sharded_jsonl_gz(pairs, config.output_path, shard_size=5000)
+    write_sharded_jsonl_gz(pairs, config.output_path, shard_size=5000)
 
     logger.info("Wrote %d preference pairs to %s", len(pairs), config.output_path)
