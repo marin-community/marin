@@ -32,12 +32,19 @@ def rerank(
     max_tokens: int,
     chunk_size: int,
     temperature: float,
+    eos_token: str = "",
 ) -> str:
     """Generate num_samples completions from the proposal model, return the one
     with the highest score under the scorer.
 
     If the best completion was truncated, continues generating from it until
-    it finishes naturally."""
+    it finishes naturally.
+
+    Args:
+        eos_token: The scoring model's EOS token string. Appended to
+            completions that finish with stop so the scorer includes
+            P(stop) in the score.
+    """
     current_prompt = prompt
     generated = ""
     remaining_tokens = max_tokens
@@ -54,7 +61,10 @@ def rerank(
         )
 
         completions = sorted(gen_resp.choices, key=lambda c: c.index)
-        completion_texts = [c.text for c in completions]
+        completion_texts = [
+            c.text + eos_token if c.finish_reason == "stop" else c.text
+            for c in completions
+        ]
 
         scores = scorer.score(current_prompt, completion_texts)
 

@@ -100,7 +100,7 @@ class GuidedDecodingScorer(Scorer):
             resp = self.client.completions.create(
                 model=self.model,
                 prompt=prompt,
-                max_tokens=len(completion) * 4,  # upper bound on token count
+                max_tokens=4096,
                 logprobs=1,
                 temperature=1.0,
                 extra_body={"guided_choice": [completion]},

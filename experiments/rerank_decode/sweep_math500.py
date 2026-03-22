@@ -31,6 +31,7 @@ from dataclasses import dataclass
 
 import fsspec
 import openai
+from transformers import AutoTokenizer
 
 from marin.utils import fsspec_exists
 
@@ -66,7 +67,7 @@ class SweepConfig:
     math500_path: str | InputName = output_path_of(download_math500_step)
 
     proposal_model: str = PROPOSAL_MODEL
-    scoring_model: str = SCORING_MODEL
+    scoring_model: str = SCORING_MODEL # TODO: add eos_token
     prompt_format: str = "question_with_boxed_suffix"
     max_tokens: int = 2048
     temperature: float = 1.0
@@ -94,6 +95,9 @@ def run_single_eval(
     replaced by rerank() and the inner sample loop removed (rerank returns one
     best completion per prompt).
     """
+
+    eos_token = AutoTokenizer.from_pretrained(config.scoring_model).eos_token
+
     # -- generation (replaces llm.generate) --
     generations = []
     for i, prompt in enumerate(prompts):
@@ -109,6 +113,7 @@ def run_single_eval(
                 max_tokens=config.max_tokens,
                 chunk_size=chunk_size,
                 temperature=config.temperature,
+                eos_token=eos_token,
             )
         )
 

@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 import fsspec
 import openai
+from transformers import AutoTokenizer
 
 from experiments.rerank_decode.scorer import GuidedDecodingScorer, VLLMLogprobScorer
 from experiments.rerank_decode.serve import launch_vllm_servers, shutdown_servers
@@ -37,7 +38,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class RerankDecodeConfig:
     proposal_model_path: str
-    scoring_model_path: str
+    scoring_model_path: str # TODO: add eos_token
     output_path: str
     prompts_path: str  # JSONL file, each line has a "prompt" field
 
@@ -54,6 +55,8 @@ class RerankDecodeConfig:
 
 def run_rerank_decode(config: RerankDecodeConfig):
     logging.basicConfig(level=logging.INFO)
+
+    eos_token = AutoTokenizer.from_pretrained(config.scoring_model_path).eos_token
 
     # Load prompts
     prompts = []
@@ -97,6 +100,7 @@ def run_rerank_decode(config: RerankDecodeConfig):
                 max_tokens=config.max_tokens,
                 chunk_size=config.chunk_size,
                 temperature=config.temperature,
+                eos_token=eos_token,
             )
             results.append(result)
 
