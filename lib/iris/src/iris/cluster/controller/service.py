@@ -171,6 +171,8 @@ def task_to_proto(task: Task, worker_address: str = "") -> cluster_pb2.TaskStatu
         proto.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
     if task.resource_usage:
         proto.resource_usage.CopyFrom(task.resource_usage)
+    if task.container_id:
+        proto.container_id = task.container_id
     # For pending tasks with prior terminal attempts, surface retry context.
     if task.state == cluster_pb2.TASK_STATE_PENDING and task.attempts and task.attempts[-1].is_terminal:
         last = task.attempts[-1]
@@ -1845,6 +1847,47 @@ class ControllerServiceImpl:
         return cluster_pb2.GetCurrentUserResponse(
             user_id=identity.user_id,
             role=identity.role,
+        )
+
+    def exec_in_container(
+        self,
+        request: cluster_pb2.Controller.ExecInContainerRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.ExecInContainerResponse:
+        """Execute a command in a running task's container.
+
+        Proxies to the worker that owns the task. On K8s, delegates to the provider.
+        """
+        try:
+            task_id = JobName.from_wire(request.task_id)
+            task_id.require_task()
+        except ValueError as exc:
+            raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
+
+        task = _read_task_with_attempts(self._db, task_id)
+        if not task:
+            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+
+        task_worker_id = task.worker_id
+        if not task_worker_id:
+            raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
+
+        worker = _read_worker(self._db, task_worker_id)
+        if not worker or not worker.healthy:
+            raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
+
+        # Proxy to worker
+        worker_request = cluster_pb2.Worker.ExecInContainerRequest(
+            task_id=request.task_id,
+            command=request.command,
+            timeout_seconds=request.timeout_seconds,
+        )
+        resp = self._controller.provider.exec_in_container(worker.address, worker_request, request.timeout_seconds)
+        return cluster_pb2.Controller.ExecInContainerResponse(
+            exit_code=resp.exit_code,
+            stdout=resp.stdout,
+            stderr=resp.stderr,
+            error=resp.error,
         )
 
     def execute_raw_query(

@@ -44,6 +44,8 @@ from iris.cluster.constraints import (
     PlacementRequirements,
     get_device_type_enum,
     routing_constraints,
+    soft_constraint_score,
+    split_hard_soft,
 )
 from iris.cluster.controller.db import SCALING_GROUPS, SLICES, TRACKED_WORKERS, ControllerDB
 from iris.cluster.types import WorkerStatusMap
@@ -646,11 +648,29 @@ def route_demand(
             continue
 
         routing_cs = routing_constraints(entry.constraints)
-        matching_names = group_index.matching_entities(routing_cs)
+        hard_routing_cs, soft_routing_cs = split_hard_soft(routing_cs)
+
+        # Match groups using hard routing constraints only — soft constraints
+        # influence group ordering but never exclude groups.
+        matching_names = group_index.matching_entities(hard_routing_cs)
         matching_groups = [g for g in sorted_groups if g.name in matching_names]
         if not matching_groups:
             unmet.append(UnmetDemand(entry=entry, reason=_diagnose_no_matching_group(entry, sorted_groups)))
             continue
+
+        # When soft routing constraints exist, re-sort matching groups so that
+        # groups satisfying more soft constraints come first, then by priority.
+        # This ensures e.g. preemptible=soft routes to preemptible groups
+        # before falling through to non-preemptible ones, regardless of
+        # priority tier.
+        if soft_routing_cs:
+            matching_groups = sorted(
+                matching_groups,
+                key=lambda g: (
+                    -soft_constraint_score(g.to_attributes(), soft_routing_cs),
+                    g.config.priority or 100,
+                ),
+            )
 
         if entry.coschedule_group_id and not any(g.num_vms == len(entry.task_ids) for g in matching_groups):
             group_detail = ", ".join(f"{g.name}={g.num_vms}" for g in matching_groups)
@@ -669,9 +689,14 @@ def route_demand(
 
         matched = False
 
+        # Use matching_groups order (respects soft-constraint ranking) for
+        # both phases so that soft-preferred groups are tried first per entry.
+        matching_group_names = [g.name for g in matching_groups]
+
         # Phase 1: try committed budgets first (groups with requesting slices)
-        for budget in committed_budgets.values():
-            if budget.try_assign(entry):
+        for name in matching_group_names:
+            budget = committed_budgets.get(name)
+            if budget is not None and budget.try_assign(entry):
                 # Mirror into full budget so phase 2 sees consumed capacity
                 full_budgets[budget.name].try_assign(entry)
                 routed.setdefault(budget.name, []).append(entry)
@@ -681,8 +706,9 @@ def route_demand(
 
         # Phase 2: fall through to full waterfall
         if not matched:
-            for budget in full_budgets.values():
-                if budget.try_assign(entry):
+            for name in matching_group_names:
+                budget = full_budgets.get(name)
+                if budget is not None and budget.try_assign(entry):
                     routed.setdefault(budget.name, []).append(entry)
                     group_reasons.setdefault(budget.name, "demand-routed")
                     matched = True
