@@ -43,7 +43,7 @@ DEFAULT_METRIC_KEY = "eval/paloma/c4_en/bpb"
 OUTPUT_DIR = Path(__file__).parent
 TRACKED_BUDGETS: tuple[float, ...] = (1e18, 3e18, 1e19)
 TRACKED_HIDDEN_DIMS: tuple[int, ...] = (512, 768, 1024, 1536, 2048)
-EXTRAPOLATION_BUDGETS: tuple[float, ...] = (1e18, 3e18, 1e19, 1e20, 1e21)
+EXTRAPOLATION_BUDGETS: tuple[float, ...] = (1e18, 3e18, 1e19, 1e20, 1e21, 1e22)
 GATED_NORM_RANK = 16
 V2_SEQ_LEN = 4096
 V2_VOCAB_SIZE = 128_256
@@ -670,7 +670,7 @@ def make_method_comparison_plot(
         )
 
     fig.update_xaxes(type="log", title_text="Training FLOP budget")
-    fig.update_yaxes(type="log", title_text=f"Fitted best {metric_key}")
+    fig.update_yaxes(title_text=f"Fitted best {metric_key}")
     fig.update_layout(
         template="plotly_white",
         title=f"Fitted best {metric_key} by method",

@@ -342,3 +342,21 @@ def test_iteration_02_summary_selects_best_duplicate():
     assert len(grouped) == 1
     assert len(selected) == 1
     assert selected[0].name == retry_finished.name
+
+
+def test_iteration_02_method_comparison_plot_uses_linear_y_axis():
+    from experiments.grug.moe_scaling_iteration_02.summary.summary import IsoFlopFit, make_method_comparison_plot
+
+    fits = [
+        IsoFlopFit(budget=1e18, a=0.0, b=0.0, c=0.0, logT_star=9.0, T_star=1e9, loss_star=1.1),
+        IsoFlopFit(budget=3e18, a=0.0, b=0.0, c=0.0, logT_star=9.2, T_star=1.6e9, loss_star=1.0),
+        IsoFlopFit(budget=1e19, a=0.0, b=0.0, c=0.0, logT_star=9.5, T_star=3.2e9, loss_star=0.9),
+    ]
+    method_frontiers = {
+        variant: (fits, jnp.array([0.0, 0.5]), jnp.array([0.0, 0.1])) for variant in ("v2", "adamh", "gatednorm")
+    }
+
+    fig = make_method_comparison_plot(method_frontiers, metric_key="eval/paloma/c4_en/bpb")
+
+    assert fig.layout.xaxis.type == "log"
+    assert fig.layout.yaxis.type != "log"
