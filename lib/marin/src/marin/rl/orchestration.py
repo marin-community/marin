@@ -77,9 +77,14 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
     logger.info("Runtime handles created: curriculum, run_state, weight_transfer coordinator")
 
     # Create worker environment
+    # Use pip_packages instead of extras to avoid uv re-resolving the full dependency
+    # tree and replacing TPU torch with CUDA torch (vllm-tpu pulls in CUDA deps).
     env = {"EQX_ON_ERROR": "nan"}
     env = _add_run_env_variables(env)
-    worker_env = create_environment(env_vars=env, extras=config.pip_dependency_groups)
+    worker_env = create_environment(
+        env_vars=env,
+        pip_packages=["vllm-tpu==0.13.2.post6", "sympy", "pylatexenc", "math-verify"],
+    )
 
     # Resource configs
     inference_tpu_type = run_config.inference_tpu_type or run_config.train_tpu_type
