@@ -16,12 +16,11 @@ teaches the model to internalize behavior without needing the spec at inference 
 from __future__ import annotations
 
 import concurrent.futures
-import json
 import logging
 from dataclasses import dataclass
 from typing import Any
 
-from iris.marin_fs import url_to_fs
+from zephyr import load_jsonl
 
 from marin.alignment.generate_prompts import load_sharded_jsonl_gz, write_sharded_jsonl_gz
 from marin.alignment.inference_config import InferenceConfig, LiteLLMConfig, VLLMConfig
@@ -69,37 +68,11 @@ def _load_prompts(prompts_path: str) -> list[dict[str, Any]]:
 
 
 def _load_behavior_statements(path: str) -> dict[str, str]:
-    """Load behavior statement texts keyed by ID.
-
-    Accepts either:
-    - JSONL spec file (one statement per line with "id" and "text" fields)
-    - JSON dict mapping ID → text
+    """Load behavior statement texts keyed by ID from a spec JSONL file.
 
     Supports both local and GCS paths.
     """
-    fs, resolved_path = url_to_fs(path)
-    with fs.open(resolved_path, "r", encoding="utf-8") as f:
-        first_char = f.read(1)
-        f.seek(0)
-        if first_char == "{":
-            content = f.read()
-            try:
-                data = json.loads(content)
-                if isinstance(data, dict) and all(isinstance(v, str) for v in data.values()):
-                    return data
-            except json.JSONDecodeError:
-                pass
-            f.seek(0)
-
-        # JSONL: one statement per line
-        statements: dict[str, str] = {}
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            record = json.loads(line)
-            statements[record["id"]] = record["text"]
-        return statements
+    return {record["id"]: record["text"] for record in load_jsonl(path)}
 
 
 def _build_messages(

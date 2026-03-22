@@ -14,7 +14,6 @@ Ported from bloom/synthetic_pipeline/stage{1,2,3}.py.
 from __future__ import annotations
 
 import concurrent.futures
-import gzip
 import json
 import logging
 import re
@@ -22,7 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from iris.marin_fs import url_to_fs
-from zephyr import write_jsonl_file
+from zephyr import load_jsonl, write_jsonl_file
 
 from marin.alignment.coverage import compute_coverage_stats, generate_covering_configs, make_tags
 from marin.alignment.inference_config import InferenceConfig, VLLMConfig
@@ -79,26 +78,7 @@ class PromptGenConfig:
 
 def load_spec(spec_path: str) -> dict[str, Statement]:
     """Load behavioral statements from a JSONL file. Supports both local and GCS paths."""
-    fs, resolved_path = url_to_fs(spec_path)
-    statements: dict[str, Statement] = {}
-    is_gz = resolved_path.endswith(".gz")
-
-    with fs.open(resolved_path, "rb") as raw_f:
-        f = gzip.open(raw_f, "rt", encoding="utf-8") if is_gz else raw_f
-        try:
-            for line in f:
-                if isinstance(line, bytes):
-                    line = line.decode("utf-8")
-                line = line.strip()
-                if not line:
-                    continue
-                data = json.loads(line)
-                stmt = Statement.from_dict(data)
-                statements[stmt.id] = stmt
-        finally:
-            if is_gz:
-                f.close()
-    return statements
+    return {record["id"]: Statement.from_dict(record) for record in load_jsonl(spec_path)}
 
 
 # ---------------------------------------------------------------------------
@@ -509,14 +489,14 @@ def _generate_prompts_inner(config: PromptGenConfig) -> None:
 def load_sharded_jsonl_gz(path: str) -> list[dict]:
     """Read all shards from a directory of JSONL.GZ files. Supports local and GCS paths."""
     fs, base_path = url_to_fs(path)
+    protocol = getattr(fs, "protocol", None)
+    if isinstance(protocol, (list, tuple)):
+        protocol = protocol[0]
+
     records: list[dict] = []
     for shard_file in sorted(fs.glob(f"{base_path}/*.jsonl.gz")):
-        with fs.open(shard_file, "rb") as raw_f:
-            with gzip.open(raw_f, "rt", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        records.append(json.loads(line))
+        full_path = f"{protocol}://{shard_file}" if protocol else shard_file
+        records.extend(load_jsonl(full_path))
     return records
 
 
