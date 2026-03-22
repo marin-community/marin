@@ -1034,11 +1034,13 @@ def test_shape_dtype_struct_for_benchmark_drops_manual_sharding_from_shard_map_t
     x = jax.device_put(jnp.ones((4, 8), dtype=jnp.float32), sharding)
 
     seen_manual: list[bool] = []
+    seen_shapes: list[tuple[int, ...]] = []
     seen_structs: list[jax.ShapeDtypeStruct] = []
 
     @jax.shard_map(mesh=mesh, in_specs=P("data", None), out_specs=P("data", None), check_vma=False)
     def _capture(local_x):
         seen_manual.append(fused_api._value_uses_manual_sharding(local_x))
+        seen_shapes.append(local_x.shape)
         with pytest.raises(AssertionError):
             pjit.pjit_check_aval_sharding([local_x.aval.sharding], [local_x.aval], ["x"], "arg", False)
         seen_structs.append(fused_api._shape_dtype_struct_for_benchmark(local_x))
@@ -1047,9 +1049,10 @@ def test_shape_dtype_struct_for_benchmark_drops_manual_sharding_from_shard_map_t
     _capture(x).block_until_ready()
 
     assert seen_manual == [True]
+    assert len(seen_shapes) == 1
     assert len(seen_structs) == 1
     struct = seen_structs[0]
-    assert struct.shape == (4, 8)
+    assert struct.shape == seen_shapes[0]
     assert struct.dtype == jnp.float32
     assert getattr(struct, "sharding", None) is None
 
