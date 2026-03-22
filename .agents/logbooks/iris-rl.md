@@ -319,6 +319,18 @@ Fixed by creating `VLLMSamplingConfig` — a plain dataclass that replaces `vllm
 4. Child TPU jobs submitted with pip_packages ✅
 5. Waiting for TPU capacity to validate: trainer startup, Arrow Flight weight transfer, full RL loop
 
+### 2026-03-22 02:00-03:20 UTC — Cluster capacity exhaustion
+
+Tried v6e-4 (europe-west4, 98+ slices running), v6e-8 (0 available), v5litepod-4 (all scale groups saturated). Every attempt gets the rollout worker running but the trainer stays PENDING.
+
+**Validated on Iris (rollout worker on v5litepod-4)**:
+- vLLM engine initialized: Llama 8B on v5litepod-4, 14.96 GiB HBM used, 341K token KV cache
+- Iris actor resolution working: rollout worker resolves `run-state` and `wt-coord` actors hosted on CPU coordinator via Iris controller endpoint registry
+- Phase logging, faulthandler watchdogs, dummy weight guard all operational
+- Cross-region actor RPC works (coordinator on CPU in one zone, rollout on v5litepod-4 in another)
+
+**Still blocked**: No second TPU available anywhere for the trainer. Job `/ahmed/iris-rl-direct-13` running, monitoring continues.
+
 ### BLOCKER 2 (resolved): vllm-tpu installs CUDA torch on TPU workers
 
 This is the same issue on-demand-rl hit — `bootstrap_rl.sh` solved it with constraint pinning. The `uv` extras system can't handle "install vllm-tpu but keep the existing TPU torch". Need to either:
