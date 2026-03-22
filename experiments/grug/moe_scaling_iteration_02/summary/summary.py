@@ -30,6 +30,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import wandb
 
+from levanter.utils.flop_utils import lm_flops_per_token
 from experiments.grug.moe_scaling_iteration_02.launch import (
     _build_model_config,
     _compute_flops_per_token,
@@ -44,8 +45,12 @@ TRACKED_BUDGETS: tuple[float, ...] = (1e18, 3e18, 1e19)
 TRACKED_HIDDEN_DIMS: tuple[int, ...] = (512, 768, 1024, 1536, 2048)
 EXTRAPOLATION_BUDGETS: tuple[float, ...] = (1e18, 3e18, 1e19, 1e20, 1e21)
 GATED_NORM_RANK = 16
+V2_SEQ_LEN = 4096
+V2_VOCAB_SIZE = 128_256
+V2_MIN_BATCH_SIZE = 32
 
 VARIANT_LABELS = {
+    "v2": "V2",
     "adamh": "AdamH",
     "gatednorm": "GatedNorm",
 }
@@ -100,6 +105,12 @@ class IsoFlopFit:
     logT_star: float
     T_star: float
     loss_star: float
+
+
+def _round_to_power_of_two(value: float) -> int:
+    if value <= 1:
+        return 1
+    return 2 ** math.ceil(math.log2(value))
 
 
 def _parse_args() -> argparse.Namespace:
@@ -239,10 +250,10 @@ def _iteration_02_run(name: str, group: str, tags: list[str]) -> bool:
     if "isoflop-moe-adamh" in text:
         return True
 
-    if "attn-mlp-lmh-adamh" not in tags or "isoflop" not in tags:
+    if "attn-mlp-lmh-adamh" not in tags:
         return False
 
-    return any(marker in text for marker in ("iteration-02", "iteration_02", "it02"))
+    return "iteration-02" in tags or any(marker in text for marker in ("iteration-02", "iteration_02", "it02"))
 
 
 def _iter_candidate_runs(api: wandb.Api) -> list[Any]:
@@ -258,6 +269,13 @@ def _iter_candidate_runs(api: wandb.Api) -> list[Any]:
             runs.append(run)
 
     for run in api.runs(WANDB_PROJECT, filters={"tags": {"$in": ["attn-mlp-lmh-adamh"]}}):
+        path = _run_path(run) or f"{getattr(run, 'group', '')}:{getattr(run, 'name', '')}"
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
+        runs.append(run)
+
+    for run in api.runs(WANDB_PROJECT, filters={"display_name": {"$regex": ".*it02.*attnmlplmh.*"}}):
         path = _run_path(run) or f"{getattr(run, 'group', '')}:{getattr(run, 'name', '')}"
         if path in seen_paths:
             continue
@@ -290,6 +308,37 @@ def _variant_model_config(hidden_dim: int, variant: str) -> GrugModelConfig:
     if variant == "gatednorm":
         return dataclasses.replace(cfg, gated_norm_rank=GATED_NORM_RANK)
     return cfg
+
+
+def _compute_v2_num_layers(hidden_dim: int) -> int:
+    hs_pow = math.log2(hidden_dim)
+    return round(hidden_dim / (64 + (hs_pow * 4.0) - 9))
+
+
+def _compute_v2_flops_per_token(hidden_dim: int) -> float:
+    num_heads = hidden_dim // 128
+    return lm_flops_per_token(
+        hidden_dim=hidden_dim,
+        intermediate_dim=hidden_dim // 2,
+        num_layers=_compute_v2_num_layers(hidden_dim),
+        num_kv_heads=num_heads,
+        num_heads=num_heads,
+        seq_len=V2_SEQ_LEN,
+        vocab_size=V2_VOCAB_SIZE,
+        glu=True,
+        num_experts=64,
+        num_shared_experts=1,
+        num_experts_per_tok=4,
+    )
+
+
+def _compute_v2_tokens_and_batch(budget: float, flops_per_token: float) -> tuple[float, int, int]:
+    tokens = budget / (3 * flops_per_token)
+    target_steps = 2**14
+    batch_exact = tokens / (target_steps * V2_SEQ_LEN)
+    batch_size = max(V2_MIN_BATCH_SIZE, _round_to_power_of_two(batch_exact))
+    train_steps = max(1, round(tokens / (batch_size * V2_SEQ_LEN)))
+    return tokens, batch_size, train_steps
 
 
 def _estimate_total_params(cfg: GrugModelConfig) -> int:
@@ -387,6 +436,60 @@ def fetch_run_cells(metric_key: str) -> tuple[list[RunCell], dict[str, list[str]
         groups_to_names[row.group].append(row.name)
 
     return rows, groups_to_names
+
+
+def fetch_v2_run_cells(metric_key: str) -> list[RunCell]:
+    api = wandb.Api()
+    rows: list[RunCell] = []
+
+    for run in api.runs(WANDB_PROJECT, filters={"group": "isoflop-moe-v2", "state": "finished"}):
+        tags = list(getattr(run, "tags", []) or [])
+        config = dict(getattr(run, "config", {}) or {})
+        name = getattr(run, "name", "")
+        budget = _extract_budget(tags, config, name)
+        hidden_dim = _extract_hidden_dim(tags, config, name)
+        if budget is None or hidden_dim is None:
+            continue
+        if budget not in TRACKED_BUDGETS or hidden_dim not in TRACKED_HIDDEN_DIMS:
+            continue
+
+        summary = getattr(run, "summary", {})
+        metric = _metric_value(summary, metric_key)
+        if metric is None:
+            continue
+
+        flops_per_token = _compute_v2_flops_per_token(hidden_dim)
+        tokens, batch_size, train_steps = _compute_v2_tokens_and_batch(budget, flops_per_token)
+        params = summary.get("parameter_count")
+        if not isinstance(params, (int, float)):
+            params = 0.0
+
+        rows.append(
+            RunCell(
+                variant="v2",
+                budget=budget,
+                hidden_dim=hidden_dim,
+                name=name,
+                group="isoflop-moe-v2",
+                path=_run_path(run),
+                state=getattr(run, "state", "finished"),
+                metric=metric,
+                tokens=tokens,
+                batch_size=batch_size,
+                train_steps=train_steps,
+                params=float(params),
+                step=_extract_step(summary),
+                created_ts=max(
+                    _parse_timestamp(getattr(run, "updated_at", None)),
+                    _parse_timestamp(getattr(run, "created_at", None)),
+                    float(summary.get("_timestamp", 0.0) or 0.0),
+                ),
+                tags=tuple(tags),
+            )
+        )
+
+    rows.sort(key=lambda row: (row.budget, row.hidden_dim))
+    return rows
 
 
 def select_best_runs(rows: list[RunCell]) -> tuple[list[RunCell], dict[tuple[str, float, int], list[RunCell]]]:
@@ -495,10 +598,59 @@ def write_figure(fig: go.Figure, stem: str) -> Path:
     except ValueError as err:
         if "Kaleido" not in str(err):
             raise
+        raise RuntimeError(
+            "PNG export requires the kaleido package. Run `uv sync` to install workspace dependencies."
+        ) from err
 
-    html_path = OUTPUT_DIR / f"{stem}.html"
-    fig.write_html(str(html_path), include_plotlyjs="cdn")
-    return html_path
+
+def make_method_comparison_plot(
+    method_frontiers: dict[str, tuple[list[IsoFlopFit], np.ndarray, np.ndarray]],
+    *,
+    metric_key: str,
+) -> go.Figure:
+    fig = go.Figure()
+    method_order = ("v2", "adamh", "gatednorm")
+    method_colors = {
+        "v2": "#6E7781",
+        "adamh": "#1877F2",
+        "gatednorm": "#F0701A",
+    }
+    budget_grid = np.logspace(np.log10(min(TRACKED_BUDGETS)), np.log10(max(TRACKED_BUDGETS)), 200)
+
+    for method in method_order:
+        fits, token_coeffs, loss_coeffs = method_frontiers[method]
+        color = method_colors[method]
+        label = VARIANT_LABELS[method]
+        predicted_losses = [predict_optimal(token_coeffs, loss_coeffs, budget)[1] for budget in budget_grid]
+        fig.add_trace(
+            go.Scatter(
+                x=budget_grid,
+                y=predicted_losses,
+                mode="lines",
+                line=dict(width=3, color=color),
+                name=label,
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=[fit.budget for fit in fits],
+                y=[fit.loss_star for fit in fits],
+                mode="markers",
+                marker=dict(size=9, color=color),
+                showlegend=False,
+                hovertemplate=f"{label}<br>budget=%{{x:.3e}}<br>fitted best=%{{y:.4f}}<extra></extra>",
+            )
+        )
+
+    fig.update_xaxes(type="log", title_text="Training FLOP budget")
+    fig.update_yaxes(type="log", title_text=f"Fitted best {metric_key}")
+    fig.update_layout(
+        template="plotly_white",
+        title=f"Fitted best {metric_key} by method",
+        width=1000,
+        height=600,
+    )
+    return fig
 
 
 def make_plot(
@@ -758,7 +910,7 @@ def summarize_variant(
     variant: str,
     metric_key: str,
     skip_training_curves: bool,
-) -> None:
+) -> tuple[list[IsoFlopFit], np.ndarray, np.ndarray] | None:
     variant_rows = [row for row in rows if row.variant == variant]
     print(f"\n=== {VARIANT_LABELS[variant]} ===")
     print(f"Selected {len(variant_rows)} cells")
@@ -771,7 +923,7 @@ def summarize_variant(
     fits = _fit_variant(variant_rows)
     if len(fits) < 2:
         print("  Not enough fitted budgets to extrapolate frontier")
-        return
+        return None
 
     loss_coeffs, token_coeffs = fit_frontier(fits)
     param_coeffs = fit_param_frontier(fits, variant)
@@ -796,6 +948,7 @@ def summarize_variant(
         best_run=best_run,
     )
     print(f"  Summary saved to {summary_path}")
+    return fits, token_coeffs, loss_coeffs
 
 
 def write_selection_manifest(
@@ -830,10 +983,29 @@ def main() -> None:
     print(f"Selection manifest saved to {manifest_path}")
 
     api = wandb.Api()
+    method_frontiers: dict[str, tuple[list[IsoFlopFit], np.ndarray, np.ndarray]] = {}
     for variant in variants:
-        summarize_variant(
+        frontier = summarize_variant(
             api, selected_rows, variant=variant, metric_key=args.metric, skip_training_curves=args.skip_training_curves
         )
+        if frontier is not None:
+            method_frontiers[variant] = frontier
+
+    if args.variant == "all":
+        print(f"\n=== {VARIANT_LABELS['v2']} ===")
+        v2_rows = fetch_v2_run_cells(args.metric)
+        print(f"Selected {len(v2_rows)} cells")
+        for row in v2_rows:
+            print(f"  {fmt_sci(row.budget)} d{row.hidden_dim}: {row.metric:.4f} from {row.name} [{row.state}]")
+
+        v2_fits = _fit_variant(v2_rows)
+        v2_loss_coeffs, v2_token_coeffs = fit_frontier(v2_fits)
+        method_frontiers["v2"] = (v2_fits, v2_token_coeffs, v2_loss_coeffs)
+
+        if {"v2", "adamh", "gatednorm"} <= method_frontiers.keys():
+            comparison_fig = make_method_comparison_plot(method_frontiers, metric_key=args.metric)
+            comparison_path = write_figure(comparison_fig, f"best_loss_by_method_{_slugify_metric(args.metric)}")
+            print(f"\nMethod comparison plot saved to {comparison_path}")
 
 
 if __name__ == "__main__":

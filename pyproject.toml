@@ -18,6 +18,7 @@ dependencies = [
     "zephyr",
     # top level deps. try to keep these small.
     "watchdog",
+    "kaleido==0.2.1",
 ]
 
 [tool.uv]
