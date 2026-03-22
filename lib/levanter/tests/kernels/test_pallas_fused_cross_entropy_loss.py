@@ -5,6 +5,7 @@ import warnings
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from levanter.kernels.pallas import autotune_cache_utils
@@ -1015,6 +1016,57 @@ def test_autotune_benchmark_wraps_in_shard_map_when_named_sharding_present(
     out = wrapped(x, y, w)
     assert out.shape == (4,)
     assert calls == [(mesh, (x_sharding.spec, y_sharding.spec, w_sharding.spec), y_sharding.spec, False)]
+
+
+def test_benchmark_candidate_handles_real_shard_map_tracers():
+    partition_spec = jax.sharding.PartitionSpec
+    mesh = jax.sharding.Mesh(
+        np.array(jax.devices()[:1]),
+        ("data",),
+        axis_types=(jax.sharding.AxisType.Explicit,),
+    )
+    x = jax.device_put(
+        jnp.ones((4, 8), dtype=jnp.float32),
+        jax.sharding.NamedSharding(mesh, partition_spec("data", None)),
+    )
+    y = jax.device_put(
+        jnp.zeros((4,), dtype=jnp.int32),
+        jax.sharding.NamedSharding(mesh, partition_spec("data")),
+    )
+    w = jax.device_put(
+        jnp.ones((8, 16), dtype=jnp.float32),
+        jax.sharding.NamedSharding(mesh, partition_spec(None, None)),
+    )
+    candidate = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+
+    def fake_impl(x_raw, labels_raw, w_raw, **kwargs):
+        del labels_raw, w_raw, kwargs
+        batch = x_raw.shape[0]
+        return jnp.zeros((batch,), dtype=jnp.float32), jnp.zeros((batch,), dtype=jnp.float32)
+
+    def benchmark_from_shard_map(x_shard, y_shard, w_shard):
+        return fused_api._benchmark_block_sizes_candidate(
+            fn=fake_impl,
+            candidate=candidate,
+            x=x_shard,
+            labels=y_shard,
+            w=w_shard,
+            dtype=jnp.float32,
+            logit_soft_cap=None,
+            precision=None,
+            return_argmax=False,
+        )
+
+    mapped = jax.shard_map(
+        benchmark_from_shard_map,
+        mesh=mesh,
+        in_specs=(partition_spec("data", None), partition_spec("data"), partition_spec(None, None)),
+        out_specs=partition_spec(),
+        check_vma=True,
+    )
+
+    score = mapped(x, y, w)
+    assert float(score) >= 0.0
 
 
 def test_pallas_tpu_vmem_compile_error_falls_back_to_xla_when_requested(monkeypatch: pytest.MonkeyPatch):
