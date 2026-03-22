@@ -142,22 +142,23 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
 
 
 def _create_runtime_handles(client: Client, config: RLJobConfig) -> RLRuntimeHandles:
-    """Create all shared actors for the RL run."""
+    """Create all shared actors for the RL run.
+
+    Uses host_actor() to run lightweight actors in-process on the coordinator.
+    This avoids needing separate CPU worker slots for each actor.
+    """
     from marin.rl.curriculum import Curriculum
 
-    # Curriculum actor
-    curriculum_handle = client.create_actor(
+    # Host actors in-process on the coordinator (no separate jobs needed)
+    curriculum_hosted = client.host_actor(
         Curriculum,
         config.curriculum,
         name=f"rl-{config.run_id}-curriculum",
-        resources=ResourceConfig.with_cpu(preemptible=False),
     )
 
-    # Run state actor
-    run_state_handle = client.create_actor(
+    run_state_hosted = client.host_actor(
         RLRunState,
         name=f"rl-{config.run_id}-run-state",
-        resources=ResourceConfig.with_cpu(preemptible=False),
     )
 
     # Weight transfer coordinator (Arrow Flight)
@@ -165,15 +166,15 @@ def _create_runtime_handles(client: Client, config: RLJobConfig) -> RLRuntimeHan
 
     arrow_coordinator = None
     if config.weight_transfer.mode == WeightTransferMode.ARROW_FLIGHT:
-        arrow_coordinator = client.create_actor(
+        arrow_hosted = client.host_actor(
             ArrowFlightCoordinator,
             name=config.weight_transfer.coordinator_name or f"rl-{config.run_id}-wt-coord",
-            resources=ResourceConfig.with_cpu(preemptible=False),
         )
+        arrow_coordinator = arrow_hosted.handle
 
     return RLRuntimeHandles(
-        curriculum=curriculum_handle,
-        run_state=run_state_handle,
+        curriculum=curriculum_hosted.handle,
+        run_state=run_state_hosted.handle,
         weight_transfer=WeightTransferRuntime(arrow_flight_coordinator=arrow_coordinator),
     )
 

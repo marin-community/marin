@@ -246,7 +246,19 @@ All fixes in commit `84cbb2528`.
 **Attempt 7** (`/ahmed/iris-rl-debug-7`): v6e-4, `--extra tpu --extra vllm --extra math` — outer job ran! But hit `pip_dependency_groups` kwarg error. Fixed in `c11db6cca`.
 **Attempt 8** (`/ahmed/iris-rl-debug-8`): v6e-4, with fix — outer job ran, executor submitted coordinator child job, **but child job failed with `libcublas.so not found`**. The child job inherits `extras=["vllm", "math"]` from `RLJobConfig.pip_dependency_groups`, and `vllm-tpu` pulls in CUDA torch which conflicts with the TPU worker's JAX.
 
-### BLOCKER: vllm-tpu installs CUDA torch on TPU workers
+**Attempt 9-11** (direct submission): Fixed `pip_dependency_groups` kwarg, fixed `dataclasses.replace`, fixed coordinator also needing `pip_packages`.
+**Attempt direct-3** (`/ahmed/iris-rl-direct-3`): V2 ORCHESTRATION WORKING!
+- Outer job: RUNNING on v6e-4
+- Coordinator child job: RUNNING on CPU
+- Curriculum actor: RUNNING
+- Run-state actor: PENDING — **insufficient CPU** (no free CPU workers)
+- Trainer/rollout workers: not yet created (coordinator waiting for run-state)
+
+### BLOCKER 1: Run-state actor stuck on CPU capacity
+
+The `create_actor(RLRunState, resources=ResourceConfig.with_cpu())` needs a separate CPU worker slot. The cluster doesn't have free CPU workers. Fix: use `host_actor()` to run lightweight actors in-process on the coordinator instead of as separate jobs.
+
+### BLOCKER 2 (resolved): vllm-tpu installs CUDA torch on TPU workers
 
 This is the same issue on-demand-rl hit — `bootstrap_rl.sh` solved it with constraint pinning. The `uv` extras system can't handle "install vllm-tpu but keep the existing TPU torch". Need to either:
 1. Fix the vllm-tpu dependency to not pull in CUDA torch
