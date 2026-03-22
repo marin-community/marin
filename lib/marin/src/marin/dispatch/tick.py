@@ -58,17 +58,13 @@ class TickOutcome:
 
 def query_ray_status(run: RayRunConfig) -> RunStatus:
     try:
-        result = subprocess.run(
-            ["ray", "job", "status", run.job_id],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            logger.warning("ray job status failed: %s", result.stderr.strip())
-            return RunStatus.UNKNOWN
-        return RAY_STATUS_MAP.get(result.stdout.strip().upper(), RunStatus.UNKNOWN)
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+        from marin.run.ray_run import make_client
+
+        client = make_client()
+        status = str(client.get_job_status(run.job_id))
+        return RAY_STATUS_MAP.get(status.upper(), RunStatus.UNKNOWN)
+    except Exception:
+        logger.warning("Failed to query Ray job %s", run.job_id, exc_info=True)
         return RunStatus.UNKNOWN
 
 
