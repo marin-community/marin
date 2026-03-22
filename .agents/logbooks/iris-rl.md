@@ -302,9 +302,22 @@ Attempted solutions:
 2. Convert to `vllm.SamplingParams` inside the worker where vllm is available
 3. This decouples config construction from vllm, allowing the coordinator to run on CPU
 
-**Workaround** (for immediate testing):
-- Find a region with 3+ free v6e-4 slices
-- Or use v5p-8 which has more per-chip HBM (won't OOM on copy_and_flatten)
+### BLOCKER 3 (resolved): vllm import chain forces outer job onto TPU
+
+Fixed by creating `VLLMSamplingConfig` — a plain dataclass that replaces `vllm.SamplingParams` in config objects. Converted to `vllm.SamplingParams` lazily inside the inference context. Commit `59e2f7c95`.
+
+**Attempt direct-6** (`/ahmed/iris-rl-direct-6`):
+- Outer job: RUNNING on CPU (0.5cpu, no TPU!) — first time coordinator runs without TPU
+- All 3 actors hosted in-process via `host_actor()` with registered IPs
+- 2 child jobs submitted (trainer + rollout)
+- Both pending on v6e-4 capacity (europe-west4 pool saturated)
+
+**Full validation chain so far:**
+1. Experiment script runs on CPU without vllm ✅
+2. Coordinator runs on CPU, hosts actors in-process ✅
+3. Actor endpoints registered with controller (curriculum, run_state, wt-coord) ✅
+4. Child TPU jobs submitted with pip_packages ✅
+5. Waiting for TPU capacity to validate: trainer startup, Arrow Flight weight transfer, full RL loop
 
 ### BLOCKER 2 (resolved): vllm-tpu installs CUDA torch on TPU workers
 
