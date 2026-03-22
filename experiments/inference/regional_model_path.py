@@ -83,18 +83,17 @@ def resolve_regional_model_path(model_name: str) -> str:
         print(f"WARNING: No bucket mapping for region {region}, trying us-central1", file=sys.stderr)
         buckets = _REGION_TO_BUCKETS["us-central1"]
 
-    # Check each bucket + subdir combination
+    # Check each bucket + subdir combination using gcsfs (available in venv)
+    import gcsfs
+
+    fs = gcsfs.GCSFileSystem()
     for bucket in buckets:
         for subdir in _MODEL_SUBDIRS:
             path = f"{bucket}/{subdir}/{model_name}"
+            # Strip gs:// for gcsfs
+            gcs_path = path.removeprefix("gs://")
             try:
-                result = subprocess.run(
-                    ["gcloud", "storage", "ls", f"{path}/config.json"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                if result.returncode == 0:
+                if fs.exists(f"{gcs_path}/config.json"):
                     print(f"Resolved model path: {path} (same-region ✅)", file=sys.stderr)
                     return path
             except Exception:
