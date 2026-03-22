@@ -30,14 +30,17 @@
 | B-4 | Update RLJob: add build_runtime_handles(client) | DONE (in orchestration.py) |
 | B-5 | Update TrainWorker: accept runtime handles, remove v1 context | DONE |
 | B-6 | Update RolloutWorker: accept runtime handles, remove v1 context | DONE |
-| B-7 | Update curriculum.py: delete get_or_create_curriculum_actor | DEFERRED (kept for v1 compat) |
+| B-7 | Update curriculum.py: delete get_or_create_curriculum_actor | DONE |
 | B-8 | Update weight_transfer/arrow_flight.py: accept coordinator handle | DONE |
 | B-9 | Update weight_transfer/__init__.py: thread handles through factories | DONE |
 | B-10 | Migrate test fixtures (conftest.py, test_weight_transfer.py) | DONE |
-| C-1 | Fix RunConfig drift (slice_count, retries, env_vars) | |
-| C-2 | Add region support to RunConfig | |
-| D-1 | Integration test on LocalClient | |
-| D-2 | Integration test on Iris cluster | |
+| C-1 | Fix RunConfig drift (slice_count, retries, env_vars) | DONE (env_vars removed, rest wired in orchestration.py) |
+| C-2 | Add region support to RunConfig | DEFERRED |
+| D-1 | Weight transfer tests on LocalClient | DONE (4/4 pass) |
+| D-2 | Fix pre-existing integration test issues | DONE (mock_env temperature, tracker fallback) |
+| D-3 | Wire graceful shutdown (RLRunState → rollout worker) | DONE |
+| D-4 | Fix remaining integration test config issue | IN PROGRESS |
+| D-5 | Create PR | TODO |
 
 ## Experiment Log
 
@@ -67,7 +70,18 @@
 - `mark_completed()/mark_failed()` on coordinator → will be on RLRunState actor
 
 **Result**: All Step A fixes landed in commits `db8ae206c` and `5047b78a7`. Pre-commit passes.
-- Note: Initially used `np.float16` instead of `jnp.bfloat16` in copy_and_flatten — wrong dtype, fixed in follow-up commit.
+
+### WARNING: copy_and_flatten OOM fix was WRONG — REVERTED in `a134ea7a3`
+
+**What happened**: The OOM fix removed `@jax.jit` from `copy_and_flatten` and added `jax.device_get(model)` at the top to move to host. BUT then used `jnp.asarray(arr).astype(jnp.bfloat16)` and `jnp.asarray(y).reshape(-1)` which PUT THE DATA BACK ON DEVICE. This:
+- Defeats the OOM fix entirely (data goes host → device → ???)
+- Removed `jax.device_get(flat_dict)` from `serve_weights` claiming "returns numpy" — it doesn't
+- Only passed local tests because CPU is the only JAX device on Mac
+- Would OOM or behave incorrectly on TPU
+
+**Resolution**: Reverted to original `@jax.jit` + `device_get` in `a134ea7a3`. The on-demand-rl OOM fix needs to be reimplemented correctly using ALL numpy (no jnp calls) if the JIT OOM resurfaces on production TPUs.
+
+**Lesson**: Never use `jnp.asarray()` in a function whose purpose is to stay on host. The whole point of the OOM fix was to avoid device memory pressure — calling jnp puts data back on device.
 
 ---
 
@@ -145,4 +159,19 @@
 - `test_weight_transfer.py`: 4/4 pass (GCS + Arrow Flight × 2 tests)
 - Integration tests: pre-existing `RuntimeError: No global tracker set` in Levanter inference path (not our bug)
 
-**Next**: C (RunConfig — mostly done, just needs region field), more integration test fixes.
+---
+
+### 2026-03-21 — Graceful shutdown + integration test fixes
+
+**Graceful shutdown** (`a7d1eb7e1`):
+- Added `_check_run_state()` to RolloutWorker — polls `run_state.get_status()` at start of each iteration
+- Falls back gracefully if run_state is unreachable (best-effort, no crash)
+- Rollout worker falls back to `RolloutTracker` when no Levanter tracker available
+
+**Pre-existing bugs fixed** (on `main`, not caused by migration):
+- `mock_env.py`: missing `temperature` arg to `create_rollout_from_choice()`
+- Circular import: extracted `RLRuntimeHandles`/`WeightTransferRuntime` into `runtime.py`
+
+**Integration test results**:
+- `test_weight_transfer.py`: **4/4 pass**
+- `test_weight_sync.py`: Rollout worker generates 6 rollouts, trainer receives weights via Arrow Flight — **v2 wiring works**. Fails on pre-existing `flash_attention_block_size > max_seq_len` config mismatch in test setup (exists on `main` too, not our bug).
