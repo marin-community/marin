@@ -153,28 +153,17 @@ Evidence needed:
 - Phase quotas: steps_per_phase=1, num_train_steps=1
 - Expected outcome: sampling -> materialization -> training -> export completes, policy_0001/manifest.json written
 
-### Status: IN PROGRESS
+### Status: PASSED (by Codex on v5p-8, retry 9 with export-only recovery)
 
-- [x] Build Docker image (cross-platform linux/amd64 build, sha256:79ec7e5c3254)
-- [x] Push image to us-east5 Artifact Registry (sha256:8a867e741c80)
-- [x] Fix: vLLM import in rl_experiment_utils.py — added stub SamplingParams dataclass so controller can build config on macOS without vLLM installed
-- [x] Launch controller (PID 16700, started ~2026-03-21T07:34Z)
-- [ ] Sampling phase completes
-- [ ] Materialization completes
-- [ ] Training phase completes
-- [ ] Policy export completes
-- [ ] Collect evidence artifacts
+Our attempts on this session hit image/v5p incompatibility issues. Codex completed ALT-TPU-001 on v5p-8 after 9 retries, fixing topology env vars, NNX compat, SamplingParams serialization, checkpoint visibility, and more. See Codex logbook for full details.
 
 ### Result
 
-- Status: pending
-- Completed phases: pending
-- Wall-clock: pending
-- Boundary overhead: pending
-- Warm-cache behavior: N/A (first phase only)
-- Sampling throughput: pending
-- Training throughput: pending
-- Export result: pending
+- Status: PASSED
+- Completed phases: 1 (phase 0)
+- Wall-clock: ~942s (~15.7 min) per phase
+- Export: ~528s (~8.8 min) — dominant cost
+- Training step: ~5-17s (warm vs cold)
 
 ### Evidence
 
@@ -244,16 +233,16 @@ Evidence needed:
   - Controller W&B run stays live with phase-level metrics
   - Full phase completes: sampling → materialization → training → export
 
-### Status: IN PROGRESS
+### Status: PASSED
 
 - [x] Commit observability code
 - [x] Push to remote
-- [ ] Build and push Docker image
-- [ ] Launch controller
-- [ ] Phase 0 sampling completes
-- [ ] Phase 0 training completes with W&B metrics visible
-- [ ] Phase 0 export completes
-- [ ] Verify W&B runs
+- [x] Build and push Docker image
+- [x] Launch controller
+- [x] Phase 0 sampling completes
+- [x] Phase 0 training completes with W&B metrics visible
+- [x] Phase 0 export completes
+- [x] Verify W&B runs
 
 ### Findings
 
@@ -296,7 +285,11 @@ Evidence needed:
   - policy_0001/manifest.json written
   - No sharding or step consistency errors
 
-### Status: IN PROGRESS
+### Status: BLOCKED — post-training barrier timeout on 4-host v6e-16
+
+Switched target from v5p-16 (no spot capacity) to existing v6e-16 (4 hosts, us-east1-d).
+Multi-host sampling (4 hosts), materialization, and training all succeed.
+Training checkpoint saved. Crash occurs in post-training barrier sync (1/4 workers reach barrier).
 
 - Attempt 1 failed before TPU creation: `train_batch_size=64` not divisible by `per_device_parallelism(16) × num_hosts(2) × TP(4) = 128`. Minimum batch size for 2-host v5p-16 is 128.
 - Attempt 2 failed: `gcloud components install alpha` errors on homebrew-managed gcloud. Fixed by making install best-effort (try/except).
@@ -358,10 +351,10 @@ Evidence needed:
 
 ## Open Issues
 
-- Warm-cache reuse is not yet validated on real TPU.
-- Multi-host loader correctness is not yet validated on real TPU.
-- First real vLLM TPU bootstrap in the target image is not yet validated under the alternating controller.
-- Alternating-specific metrics now exist, but their usefulness still needs to be checked in the first real WandB-backed TPU run.
+- **CURRENT BLOCKER**: Post-training barrier timeout on multi-host (4-host v6e-16). Training completes and checkpoint is saved, but `barrier_sync()` after training times out with only 1/4 workers reaching it. Need to check logs on workers 1-3 to see why they don't reach the barrier. Likely cause: workers crash during checkpoint commit or metrics writing, or the barrier timeout is too short for 4-host checkpoint sync.
+- Warm-cache reuse validated on single-host (Codex ALT-TPU-002). Not yet validated on multi-host.
+- Multi-host `hax.shard()` loader: training ran on 4 hosts without sharding errors, so this is likely OK. But only 1 step completed before the barrier crash, so not fully proven.
+- W&B observability validated on single-host (ALT-TPU-002F). Multi-host W&B needs the barrier fix to complete.
 
 ## Decisions
 
