@@ -49,9 +49,9 @@ for attempt in $(seq 1 "${IRIS_SUBMIT_RETRIES}"); do
     python experiments/grug/moe_scaling_iteration_02/launch_isoflop_moe_adamh_gatednorm_v5p256_1e21_d2304_h2h.py \
     "$@"; then
     exit 0
+  else
+    last_rc=$?
   fi
-
-  last_rc=$?
   if [[ "${attempt}" -lt "${IRIS_SUBMIT_RETRIES}" ]]; then
     echo "Attempt ${attempt}/${IRIS_SUBMIT_RETRIES} failed with exit code ${last_rc}; retrying in 5s." >&2
     sleep 5

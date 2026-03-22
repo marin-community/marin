@@ -26,6 +26,9 @@ from typing import Any, ClassVar
 
 from iris.rpc import cluster_pb2, config_pb2
 
+CONSTRAINT_MODE_REQUIRED = cluster_pb2.ConstraintMode.CONSTRAINT_MODE_REQUIRED
+CONSTRAINT_MODE_PREFERRED = cluster_pb2.ConstraintMode.CONSTRAINT_MODE_PREFERRED
+
 
 class WellKnownAttribute(StrEnum):
     """Canonical attribute keys for constraint-based scheduling."""
@@ -184,11 +187,11 @@ class Constraint:
     op: ConstraintOp
     value: str | int | float | None = None
     values: tuple[str | int | float, ...] | None = None
-    mode: int = cluster_pb2.CONSTRAINT_MODE_REQUIRED
+    mode: int = CONSTRAINT_MODE_REQUIRED
 
     @property
     def is_soft(self) -> bool:
-        return self.mode == cluster_pb2.CONSTRAINT_MODE_PREFERRED
+        return self.mode == CONSTRAINT_MODE_PREFERRED
 
     def to_proto(self) -> cluster_pb2.Constraint:
         """Convert to protobuf representation."""
@@ -235,7 +238,7 @@ def preemptible_constraint(preemptible: bool = True, soft: bool | None = None) -
     if soft is None:
         # preemptible=True is a preference (soft), preemptible=False is a requirement (hard)
         soft = preemptible
-    mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED if soft else cluster_pb2.CONSTRAINT_MODE_REQUIRED
+    mode = CONSTRAINT_MODE_PREFERRED if soft else CONSTRAINT_MODE_REQUIRED
     return Constraint(key=WellKnownAttribute.PREEMPTIBLE, op=ConstraintOp.EQ, value=str(preemptible).lower(), mode=mode)
 
 
@@ -905,7 +908,7 @@ def split_hard_soft(
     hard: list[cluster_pb2.Constraint] = []
     soft: list[cluster_pb2.Constraint] = []
     for c in constraints:
-        if c.mode == cluster_pb2.CONSTRAINT_MODE_PREFERRED:
+        if c.mode == CONSTRAINT_MODE_PREFERRED:
             soft.append(c)
         else:
             hard.append(c)
