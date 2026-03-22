@@ -43,14 +43,28 @@ def main():
     # Auto-resolve model path to same-region bucket if not a full gs:// path
     model_path = args.model
     if not model_path.startswith("gs://") and not model_path.startswith("/"):
-        from experiments.inference.regional_model_path import resolve_regional_model_path
+        from experiments.inference.regional_model_path import (
+            _detect_region,
+            resolve_regional_model_path,
+        )
 
+        detected_region = _detect_region()
+        print(f"[region] Detected GCE region: {detected_region}")
         model_path = resolve_regional_model_path(model_path)
+        # Validate same-region: extract region from resolved gs:// path
+        bucket_region = model_path.split("/")[2].replace("marin-", "")
+        if detected_region and detected_region != bucket_region:
+            print(
+                f"[region] WARNING: worker region {detected_region} != "
+                f"bucket region {bucket_region} — CROSS-REGION READ!"
+            )
+        else:
+            print(f"[region] Confirmed same-region: " f"worker={detected_region}, bucket={bucket_region}")
 
-    print(f"MODEL_IMPL_TYPE={os.environ.get('MODEL_IMPL_TYPE', '<not set>')}")
-    print(f"model={model_path}")
-    print(f"load_format={args.load_format}")
-    print(f"tp={args.tp}")
+    print(f"[config] MODEL_IMPL_TYPE={os.environ.get('MODEL_IMPL_TYPE', '<not set>')}")
+    print(f"[config] model={model_path}")
+    print(f"[config] load_format={args.load_format}")
+    print(f"[config] tp={args.tp}")
     sys.stdout.flush()
 
     from vllm import LLM, SamplingParams

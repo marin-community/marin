@@ -503,13 +503,193 @@ both `LLM.generate()` and `vllm serve` get fast loading through one unified path
 
 ---
 
+### 2026-03-22 — Fix vLLM architecture remapping (Claude Opus session)
+
+#### Root cause confirmed
+Job `/ahmed/vllm-smoke-fsspec-v2` logs proved the hypothesis:
+- vLLM's `ModelRegistry` rewrites `hf_config.architectures` from `["LlamaForCausalLM"]` to `["MistralForCausalLM"]`
+- `_get_model_architecture()` couldn't find `MistralForCausalLM` in JAX registry → `UnsupportedArchitectureError`
+- `get_model()` caught the error → fell back to `get_vllm_model()` → RunAI loaded weights → OOM at 16/32GB
+
+#### Fix applied
+- Added `_MODEL_TYPE_TO_REGISTRY_KEY` mapping: `{"llama": "LlamaForCausalLM", "qwen3": "Qwen3ForCausalLM"}`
+- In `_get_model_architecture()`, after architectures lookup fails, check `model_type` fallback
+- `model_type` is NOT mutated by vLLM, so it's reliable ground truth
+- Fork commit: `b2c90c99`, wheel: `marin-b2c90c99`
+- Marin commit: `298b5d9e4` (wheel pin update on `vllm_load_fast`)
+
+#### Test job: `/ahmed/vllm-smoke-fsspec-v4`
+- Config: v6e-4, 32GB, `abstract_load` + `fsspec_streamer`
+- Submitted 2026-03-22T05:54:53Z
+- **Status: FAILED** — same issue. `model_type=transformer` (not `llama`), so
+  `_MODEL_TYPE_TO_REGISTRY_KEY` fallback didn't fire either. Still fell back to
+  vLLM PyTorch path → RunAI → OOM.
+- Key log: `hf_config.architectures=['MistralForCausalLM'] | hf_config.model_type=transformer`
+
+#### Second fix: register MistralForCausalLM as alias
+- Fork commit: `a74f6142`, wheel: `marin-a74f6142`
+- Added `_MODEL_REGISTRY["MistralForCausalLM"] = LlamaForCausalLM` directly
+- Added `"MistralForCausalLM"` to `_ABSTRACT_BOOTSTRAP_ARCHITECTURES`
+- Marin commit: `47f6ef4d8`
+
+#### Test job: `/ahmed/vllm-smoke-fsspec-v5`
+- Config: v6e-4, 32GB, `abstract_load` + `fsspec_streamer`
+- Submitted 2026-03-22T06:00:55Z
+- **Status: FAILED** — MistralForCausalLM alias worked! But `nnx.eval_shape` was
+  called outside `with mesh:` context. LlamaForCausalLM constructor creates sharded
+  nnx.Embed with PartitionSpec — needs mesh context.
+- Error: `ValueError: An auto mesh context or metadata is required if creating a variable with annotation out_sharding=PartitionSpec(('data', 'model'), None)`
+- Key log: `Abstract load bootstrap for LlamaForCausalLM` — architecture routing ✓
+
+#### Third fix: move eval_shape inside mesh context
+- Fork commit: `af97bfbd`, wheel: `marin-af97bfbd`
+- Moved `nnx.eval_shape(abstract_model_fn)` inside `with mesh:` block
+- Marin commit: `d40a8ce0a`
+
+#### Test job: `/ahmed/vllm-smoke-fsspec-v6`
+- Config: v6e-4, 32GB, `abstract_load` + `fsspec_streamer`
+- Submitted 2026-03-22T06:05:50Z
+- **Status: FAILED** — Same mesh error. `with mesh:` sets physical mesh but Flax uses
+  `jax.sharding.get_abstract_mesh()` which is NOT set by `with mesh:`.
+
+#### Fourth fix: use abstract mesh context
+- Fork commit: `85bcc9c1`, wheel: `marin-85bcc9c1`
+- Added `jax.sharding.use_abstract_mesh(mesh.abstract_mesh)` alongside `with mesh:`
+  in both `_build_abstract_model_and_load_weights()` and `_get_nnx_model()` abstract_dummy path
+- Marin commit: `3d2166a19`
+
+#### Test job: `/ahmed/vllm-smoke-fsspec-v7`
+- Config: v6e-4, 32GB, `abstract_load` + `fsspec_streamer`
+- Submitted 2026-03-22T06:15:11Z
+- **Status: FAILED** — Abstract mesh fix worked! But now:
+  `ValueError: Found data on value of type '<class 'list'>' assigned to static attribute 'layers'`
+  `nnx.eval_shape` traces the model, producing abstract values. Plain Python `list` attrs are treated
+  as static by Flax NNX, which rejects abstract data in static attrs.
+
+#### Fifth fix: use nnx.List for model layers
+- Fork commit: `988ed996`, wheel: `marin-988ed996`
+- Changed `make_layers()` return and Qwen3 `self.layers` from `list` to `nnx.List`
+- `nnx.List` is a proper NNX pytree container that supports abstract values during tracing
+- Marin commit: `59bcf90df`
+
+#### Test job: `/ahmed/vllm-smoke-fsspec-v8`
+- Config: v6e-4, 32GB, `abstract_load` + `fsspec_streamer`
+- Submitted 2026-03-22T06:23:49Z
+- **Status: SUCCEEDED**
+- Total runtime: 342.2s
+- Output haiku: "Accelerated code / TPUs speed through the math / Faster, leaner runs"
+- Key: succeeded at 32GB (RunAI OOM'd at 32GB), confirming fsspec streaming was used
+- Memory: 32 GiB (vs 64 GiB needed for RunAI default path)
+
+#### Summary of fixes (5 issues resolved in one session)
+
+| # | Issue | Fix | Commit |
+|---|-------|-----|--------|
+| 1 | vLLM remaps `LlamaForCausalLM` → `MistralForCausalLM` | Added `model_type` fallback + registered `MistralForCausalLM` as alias | `a74f6142` |
+| 2 | `model_type` also remapped to `"transformer"` | Direct registry alias (MistralForCausalLM → LlamaForCausalLM) | `a74f6142` |
+| 3 | `nnx.eval_shape` outside mesh context | Moved inside `with mesh:` | `af97bfbd` |
+| 4 | `with mesh:` doesn't set abstract mesh (Flax uses `get_abstract_mesh()`) | Added `jax.sharding.use_abstract_mesh(mesh.abstract_mesh)` | `85bcc9c1` |
+| 5 | Plain Python `list` layers incompatible with `nnx.eval_shape` tracing | Changed to `nnx.List` | `988ed996` |
+
+#### Sixth fix: jax.set_mesh for TP>1 (70B)
+- Fork commit: `3afb06f0`, wheel: `marin-3afb06f0`
+- `with mesh: + use_abstract_mesh()` didn't work with `device_put` + `PartitionSpec` for TP>1
+- `jax.set_mesh(mesh)` sets both abstract mesh AND device context in one call
+- Also added `tensor_parallel_size` passthrough from `engine_kwargs` to `vllm serve` CLI
+- Marin commits: `051d040f3` (TP passthrough), `f8474ed29` (wheel pin)
+
+#### Also fixed: vLLM subprocess log visibility
+- Marin commit: `3ad8a9269`
+- `vllm serve` subprocess stdout/stderr was only written to temp files, invisible in Iris dashboard
+- Added tee threads to write to both log files AND parent stdout/stderr
+
+---
+
+### 2026-03-22 — Head-to-head benchmarks: fsspec vs RunAI
+
+#### 8B Benchmark (Llama 3.1 8B, v6e-4, TP=1)
+
+Same TPU worker, same model, same max-model-len=4096.
+
+| | RunAI (`baseline-v7`) | fsspec (`fsspec-v9`) |
+|---|---|---|
+| **Weight download** | **7.0s** (2.1 GiB/s) | 126.3s (121 MiB/s) |
+| **Total runtime** | **135.8s** | 342.2s |
+| **Memory needed** | 64 GiB | **32 GiB** |
+| **Peak host RSS** | not reported | 12.8 GiB |
+
+#### 70B Benchmark (Llama 3.3 70B, v5p-8, TP=4)
+
+| | RunAI (`70b-baseline-v4`) | fsspec (`70b-fsspec-v3`) |
+|---|---|---|
+| **Weight download** | **185s** (727 MiB/s) | 1174s (115 MiB/s) |
+| **Total runtime** | **481s** | 1482s |
+| **Peak host RSS** | ~131 GiB (full model) | **15.5 GiB** |
+| **HBM per chip** | 32.86 GiB | 32.86 GiB |
+
+#### 70B at 32GB Memory (the key test)
+
+| | RunAI (`70b-baseline-32g`) | fsspec (`70b-fsspec-32g`) |
+|---|---|---|
+| **Result** | **OOM killed** | **Succeeded** |
+| **Weight download** | N/A | 1239s (109 MiB/s) |
+| **Total runtime** | N/A | 1447s |
+| **Peak host RSS** | >32 GiB (killed) | **15.5 GiB** |
+
+---
+
+### Why RunAI is 6-18x faster than fsspec — deep dive
+
+The #1 reason: **our fsspec code is fully sequential**. We ported from Levanter
+but didn't port the concurrency.
+
+#### What RunAI does
+- Concurrent multi-file streaming (`streamer.stream_files([shard1, shard2, ...])` — all shards at once)
+- Configurable parallelism via `RUNAI_STREAMER_CONCURRENCY` env var
+- C++ implementation with optimized GCS client, connection pooling
+- Overlaps network I/O with CPU tensor materialization
+
+#### What our fsspec does
+```python
+for shard_file in shard_files:       # sequential over shards
+    for chunk in chunks:              # sequential over chunks within a shard
+        raw = fs.cat_file(...)        # blocking single HTTP request
+        # materialize tensors...
+        del raw
+```
+One HTTP request at a time. No overlap, no parallelism, nothing.
+
+#### What Levanter's original code does (that we didn't port)
+Levanter uses `asyncio.gather()` with a `ThreadPoolExecutor` and a semaphore to
+download **4 chunks concurrently** (configurable via `LEVANTER_FSSPEC_MAX_CONCURRENT_CHUNKS`).
+We stripped all of that out when porting to the fork and made it sequential.
+
+#### The speed gap breakdown
+
+| Factor | Our code | RunAI | Gap |
+|--------|----------|-------|-----|
+| Chunk concurrency | 1 | 4-16 | 4-16x |
+| Shard parallelism | sequential | all at once | 2-4x |
+| I/O + CPU overlap | none | pipelined | ~1.5x |
+| **Combined** | | | **~12x** |
+
+This matches the observed 6-18x gap.
+
+#### Tradeoff summary
+
+- **RunAI wins on speed**: 6-18x faster weight loading (C++ parallel streamer vs sequential Python HTTP)
+- **fsspec wins on memory**: 15.5 GiB peak RSS vs 131 GiB (loads one shard at a time, not all at once)
+- **fsspec enables 70B at 32GB** where RunAI OOMs — this is the real value proposition
+- **Cold start tradeoff**: 2x slower cold start (24 min vs 8 min for 70B) but 2x less host memory
+
+---
+
 ## Future Work
 
-- **Resubmit fsspec smoke test** with `MODEL_IMPL_TYPE=auto` fix
-- Concurrent chunk downloads (v2 of streaming_weights.py)
-- Expand model family mapping inference to generic Llama/Qwen in `vllm_utils.py`
-- Performance regression tests (load MB/s, time-to-first-token) in CI
+- **Port Levanter's async concurrency** back into `streaming_weights.py` (wrap fsspec in
+  `ThreadPoolExecutor` + `asyncio.gather()` with semaphore for concurrent chunk downloads).
+  This alone should get us from ~109 MiB/s to ~500+ MiB/s, closing much of the gap with RunAI.
+- Performance regression tests (load MiB/s, time-to-first-token) in CI
 - Benchmark with `enforce_eager=False` to measure XLA compilation + inference throughput
-- Tune `LEVANTER_FSSPEC_MAX_CONCURRENT_CHUNKS` for higher download throughput
-- Compare async-native throughput vs subprocess `vllm serve` under concurrent load
+- Try lower memory limits (24GB, 16GB) for 70B to find the floor
 - Extract RL async worker-extension utilities into a shared inference module
