@@ -254,9 +254,17 @@ All fixes in commit `84cbb2528`.
 - Run-state actor: PENDING — **insufficient CPU** (no free CPU workers)
 - Trainer/rollout workers: not yet created (coordinator waiting for run-state)
 
-### BLOCKER 1: Run-state actor stuck on CPU capacity
+### BLOCKER 1 (resolved): Run-state actor stuck on CPU capacity
 
-The `create_actor(RLRunState, resources=ResourceConfig.with_cpu())` needs a separate CPU worker slot. The cluster doesn't have free CPU workers. Fix: use `host_actor()` to run lightweight actors in-process on the coordinator instead of as separate jobs.
+Fixed by switching from `create_actor()` (separate jobs) to `host_actor()` (in-process on coordinator). Commit `46f1da861`.
+
+**Attempt direct-4** (`/ahmed/iris-rl-direct-4`): FULL HIERARCHY RUNNING!
+- Outer job: RUNNING (v6e-4)
+- Coordinator: RUNNING (CPU, host_actor() for all actors)
+- Rollout worker: **RUNNING (v6e-4!)** — first time an RL worker is running on Iris!
+- Trainer: PENDING (needs second v6e-4 slice)
+
+The v2 orchestration, coordinator job, host_actor(), and child job submission all work. Waiting for a second v6e-4 slice for the trainer.
 
 ### BLOCKER 2 (resolved): vllm-tpu installs CUDA torch on TPU workers
 
