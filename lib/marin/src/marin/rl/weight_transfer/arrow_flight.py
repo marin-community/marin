@@ -30,6 +30,7 @@ from functools import partial
 import haliax as hax
 import haliax.state_dict as hsd
 import jax
+import jax.numpy as jnp
 import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
@@ -322,13 +323,13 @@ def copy_and_flatten(
     if convert_to_bfloat16:
 
         def maybe_cast_to_bf16(arr):
-            if hasattr(arr, "dtype") and np.issubdtype(arr.dtype, np.floating):
-                return arr.astype(np.float16)  # numpy doesn't have bfloat16, use float16
+            if jnp.issubdtype(arr.dtype, jnp.floating):
+                return jnp.asarray(arr).astype(jnp.bfloat16)
             return arr
 
         state_dict = jax.tree.map(maybe_cast_to_bf16, state_dict)
 
-    flat_dict = jax.tree.map(lambda y: np.asarray(y).reshape(-1), state_dict)
+    flat_dict = jax.tree.map(lambda y: jnp.asarray(y).reshape(-1), state_dict)
 
     return flat_dict, shape_dict
 
