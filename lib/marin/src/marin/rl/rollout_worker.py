@@ -65,6 +65,16 @@ from .weight_transfer import WeightTransferClient, WeightTransferConfig, create_
 logger = logging.getLogger(__name__)
 
 
+class _NoOpTracker:
+    """Minimal tracker that discards all metrics. Used when no tracker config is available."""
+
+    def log(self, metrics, step=None):
+        pass
+
+    def finish(self):
+        pass
+
+
 @dataclass
 class RolloutTrackerConfig:
     """Configuration for the rollout worker's WandB tracker.
@@ -297,7 +307,10 @@ class RolloutWorker:
                 self.tracker = levanter.current_tracker()
             except RuntimeError:
                 # No global tracker set (e.g. in tests or standalone rollout workers)
-                self.tracker = RolloutTracker(config.tracker_config, config.run_id)
+                if config.tracker_config is not None:
+                    self.tracker = RolloutTracker(config.tracker_config, config.run_id)
+                else:
+                    self.tracker = _NoOpTracker()
         else:
             # Initialize our own tracker to avoid JAX distributed initialization deadlocks.
             # Levanter's tracker calls jax.process_index() which forces JAX initialization.
@@ -712,6 +725,10 @@ class RolloutWorker:
                     logger.info("PHASE: SYNC_WEIGHTS step=%d", step)
                     faulthandler.dump_traceback_later(600, repeat=False, file=sys.stderr, exit=True)
                     self._sync_weights()
+
+                # Re-check after potentially long weight sync wait
+                if not self._check_run_state():
+                    break
 
                 # Guard: never generate rollouts with dummy weights
                 if self._current_weight_step < -1:

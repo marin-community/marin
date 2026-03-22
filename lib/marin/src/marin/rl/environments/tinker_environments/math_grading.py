@@ -231,8 +231,12 @@ def _run_in_process_with_timeout(fn, args, timeout):
 
     ThreadPoolExecutor can't kill CPU-bound Python threads (GIL never yields),
     so we use multiprocessing which can actually terminate the stuck worker.
+
+    Uses 'spawn' context to avoid forking after JAX/libtpu initialization,
+    which deadlocks on TPU device locks (/dev/vfio).
     """
-    with multiprocessing.Pool(processes=1) as pool:
+    ctx = multiprocessing.get_context("spawn")
+    with ctx.Pool(processes=1) as pool:
         result = pool.apply_async(fn, args)
         try:
             return result.get(timeout=timeout)

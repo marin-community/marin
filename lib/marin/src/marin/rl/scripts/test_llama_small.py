@@ -2,6 +2,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# NOTE: This script is outdated and does not work with the v2 orchestration layer.
+# TrainWorker and RolloutWorker now require a `runtime: RLRuntimeHandles` parameter.
+# This script also uses stale config fields (kl_coef, environment_spec, etc.).
+# Use exp2039_rl_math500.py or the orchestration.submit_rl_job() API instead.
+
 import argparse
 import dataclasses
 import datetime
