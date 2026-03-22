@@ -18,7 +18,6 @@ from levanter.data.text import LmDataConfig
 from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
-from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.mesh import MeshConfig
 from marin.processing.tokenize import add_validation_sets_to_mixture
@@ -44,6 +43,7 @@ class GrugMoeLaunchConfig:
     mp: str
     tracker: TrackerConfig
     optimizer: OptimizerConfig
+    max_retries_failure: int = 3
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
 
@@ -89,6 +89,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         model=config.model,
         data=config.data,
         resources=config.resources,
+        max_retries_failure=config.max_retries_failure,
         optimizer=config.optimizer,
         trainer=grug_trainer,
         eval=config.eval,

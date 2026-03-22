@@ -343,6 +343,7 @@ def test_grug_iteration_02_launch_preserves_trainer_parallelism_overrides(
         output_path=str(tmp_path),
         run_id="test-lowparallelism-override",
         resources=ResourceConfig.with_tpu("v5p-8"),
+        max_retries_failure=11,
         steps=123,
         batch_size=64,
         seed=7,
@@ -359,6 +360,40 @@ def test_grug_iteration_02_launch_preserves_trainer_parallelism_overrides(
     assert run_config.trainer.trainer.per_device_eval_parallelism == 8
     assert run_config.trainer.trainer.train_batch_size == 64
     assert run_config.trainer.trainer.num_train_steps == 123
+    assert run_config.max_retries_failure == 11
+
+
+def test_grug_iteration_02_run_grug_passes_failure_retry_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    train_module = importlib.import_module("experiments.grug.moe_scaling_iteration_02.train")
+    model_module = importlib.import_module("experiments.grug.moe_scaling_iteration_02.model")
+
+    captured: dict[str, object] = {}
+
+    def fake_dispatch_grug_training_run(**kwargs) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(train_module, "dispatch_grug_training_run", fake_dispatch_grug_training_run)
+
+    trainer_config = TrainerConfig(
+        id="test-grug-retry-budget",
+        require_accelerator=False,
+        distributed=DistributedConfig(initialize_jax_distributed=False),
+        ray=RayConfig(auto_start_cluster=False),
+    )
+
+    run_cfg = train_module.GrugRunConfig(
+        model=_small_model_config(model_module.GrugModelConfig, vocab_size=128, seq_len=32),
+        data=LmDataConfig(components={}, vocab_size=128, tokenizer="passthrough"),
+        resources=ResourceConfig.with_cpu(),
+        max_retries_failure=17,
+        trainer=train_module.GrugTrainerConfig(trainer=trainer_config),
+        eval=None,
+    )
+
+    train_module.run_grug(run_cfg)
+
+    assert captured["run_id"] == "test-grug-retry-budget"
+    assert captured["max_retries_failure"] == 17
 
 
 def test_grug_iteration_02_v4_256_scaleup_launcher_bakes_expected_schedule() -> None:
@@ -491,3 +526,41 @@ def test_grug_iteration_02_v5p64_1e20_d1536_v2steps_launcher_schedule_is_valid()
     assert config.model.value.hidden_dim == 1536
     assert config.model.value.num_layers == 16
     assert config.model.value.gated_norm_rank == 16
+
+
+def test_grug_iteration_02_v5p64_1e20_d1536_retry25_launcher_schedule_is_valid() -> None:
+    launch_module = importlib.import_module(
+        "experiments.grug.moe_scaling_iteration_02.launch_isoflop_moe_adamh_gatednorm_v5p64_1e20_d1536_retry25"
+    )
+
+    step = launch_module.scaleup_step
+    config = step.config
+
+    assert config.run_id == "isoflop-moe-adamh-gatednorm-v5p64-r2-1e20-d1536-retry25"
+    assert config.max_retries_failure == 25
+    assert isinstance(config.resources, VersionedValue)
+    assert config.resources.value.device.variant == "v5p-64"
+    assert config.resources.value.regions == ("us-central1",)
+    assert isinstance(config.batch_size, VersionedValue)
+    assert config.batch_size.value == 256
+    assert isinstance(config.steps, VersionedValue)
+    assert config.steps.value == 17822
+
+
+def test_grug_iteration_02_v5p64_1e20_d1536_v2steps_retry25_launcher_schedule_is_valid() -> None:
+    launch_module = importlib.import_module(
+        "experiments.grug.moe_scaling_iteration_02.launch_isoflop_moe_adamh_gatednorm_v5p64_1e20_d1536_v2steps_retry25"
+    )
+
+    step = launch_module.scaleup_step
+    config = step.config
+
+    assert config.run_id == "isoflop-moe-adamh-gatednorm-v5p64-r2-1e20-d1536-v2steps-retry25"
+    assert config.max_retries_failure == 25
+    assert isinstance(config.resources, VersionedValue)
+    assert config.resources.value.device.variant == "v5p-64"
+    assert config.resources.value.regions == ("us-central1",)
+    assert isinstance(config.batch_size, VersionedValue)
+    assert config.batch_size.value == 256
+    assert isinstance(config.steps, VersionedValue)
+    assert config.steps.value == 19031

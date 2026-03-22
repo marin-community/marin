@@ -81,6 +81,7 @@ class GrugRunConfig:
     model: GrugModelConfig
     data: LmDataConfig
     resources: ResourceConfig
+    max_retries_failure: int = 3
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
@@ -550,6 +551,7 @@ def run_grug(config: GrugRunConfig) -> None:
         config=config,
         local_entrypoint=_run_grug_local,
         resources=config.resources,
+        max_retries_failure=config.max_retries_failure,
     )
 
 
