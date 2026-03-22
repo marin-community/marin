@@ -25,7 +25,6 @@ from marin.rl.curriculum import CurriculumConfig, LessonConfig
 from marin.rl.curriculum import SamplingParams as CurriculumSamplingParams
 from marin.rl.environments import EnvConfig
 from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
-from marin.rl.orchestration import submit_rl_job
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
@@ -157,11 +156,12 @@ def main():
         pip_dependency_groups=["vllm", "math"],
     )
 
-    logger.info("Submitting RL job: %s", name)
-    handle = submit_rl_job(job_config)
-    logger.info("Job submitted: %s", handle.job_id)
-    handle.wait(raise_on_failure=True)
-    logger.info("Job completed: %s", name)
+    # Run coordinator directly in this process (not as a child job).
+    # This saves one TPU slot — the outer job IS the coordinator.
+    from marin.rl.orchestration import _run_rl_coordinator
+
+    logger.info("Running RL coordinator directly for: %s", name)
+    _run_rl_coordinator(job_config)
 
 
 if __name__ == "__main__":
