@@ -183,7 +183,7 @@ overrides = [
     { name = "equinox", specifier = ">=0.11.10" },
     { name = "omegaconf", specifier = ">=2.4.0.dev4" },
     { name = "python-multipart", specifier = ">=0.0.22" },
-    { name = "tpu-inference", url = "https://github.com/marin-community/tpu-inference/releases/download/marin-5741def2/tpu_inference-0.0.0.dev20260322+5741def2-py3-none-any.whl" },
+    { name = "tpu-inference", url = "https://github.com/marin-community/tpu-inference/releases/download/marin-ecc13081/tpu_inference-0.0.0.dev20260322+ecc13081-py3-none-any.whl" },
     { name = "wheel", specifier = ">=0.46.2" },
 ]
 
@@ -10092,11 +10092,13 @@ wheels = [
 
 [[package]]
 name = "tpu-inference"
-version = "0.0.0.dev20260322+5741def2"
-source = { url = "https://github.com/marin-community/tpu-inference/releases/download/marin-5741def2/tpu_inference-0.0.0.dev20260322+5741def2-py3-none-any.whl" }
+version = "0.0.0.dev20260322+ecc13081"
+source = { url = "https://github.com/marin-community/tpu-inference/releases/download/marin-ecc13081/tpu_inference-0.0.0.dev20260322+ecc13081-py3-none-any.whl" }
 dependencies = [
     { name = "absl-py" },
     { name = "flax" },
+    { name = "fsspec" },
+    { name = "gcsfs" },
     { name = "google-cloud-storage" },
     { name = "jaxtyping" },
     { name = "numba" },
@@ -10108,13 +10110,15 @@ dependencies = [
     { name = "tpu-info" },
 ]
 wheels = [
-    { url = "https://github.com/marin-community/tpu-inference/releases/download/marin-5741def2/tpu_inference-0.0.0.dev20260322+5741def2-py3-none-any.whl", hash = "sha256:9a503cd45a802e2490b96ecd1b7618d3b27cea404251766f046900a4c28abba2" },
+    { url = "https://github.com/marin-community/tpu-inference/releases/download/marin-ecc13081/tpu_inference-0.0.0.dev20260322+ecc13081-py3-none-any.whl", hash = "sha256:0f19e4414901faea962c7dcd46133ece6d8eb4882535bc54d87c24580bdcd5d3" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "absl-py" },
     { name = "flax", specifier = ">=0.11.1" },
+    { name = "fsspec", specifier = ">=2024.1.0" },
+    { name = "gcsfs", specifier = ">=2024.1.0" },
     { name = "google-cloud-storage" },
     { name = "jaxtyping" },
     { name = "numba", specifier = ">=0.60.0" },
