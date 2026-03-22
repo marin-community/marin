@@ -21,7 +21,7 @@ from typing import Any
 
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
-from marin.alignment.generate_prompts import load_sharded_jsonl_gz
+from marin.alignment.generate_prompts import load_sharded_jsonl_gz, write_sharded_jsonl_gz
 from marin.alignment.inference_config import InferenceConfig, LiteLLMConfig, VLLMConfig
 from marin.alignment.llm_client import _get_or_create_vllm_engine, llm_chat
 
@@ -186,8 +186,6 @@ def _generate_via_vllm(
     outputs = llm.generate(all_prompt_texts, sampling_params)
 
     # Write results using zephyr
-    from marin.alignment.generate_prompts import write_sharded_jsonl_gz
-
     results: list[dict[str, Any]] = []
     for prompt, output in zip(prompts, outputs, strict=True):
         responses = [{"content": completion.text, "index": j} for j, completion in enumerate(output.outputs)]

@@ -25,6 +25,7 @@ import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+from experiments.defaults import default_dpo, default_tokenize
 from fray.v2.types import ResourceConfig
 from iris.marin_fs import url_to_fs
 from levanter.data.text.preference import PreferenceChatLmDatasetFormat
@@ -181,8 +182,6 @@ def align(
     Returns:
         List of ExecutorSteps comprising the alignment pipeline.
     """
-    from experiments.defaults import default_dpo, default_tokenize
-
     if rejected_model is None:
         rejected_model = teacher_model
 
