@@ -338,32 +338,36 @@ class MarinFlightServer(flight.FlightServerBase):
             return self._latest_weight_id
 
 
+@partial(jax.jit, static_argnames=("convert_to_bfloat16",))
 def copy_and_flatten(
     model: PyTree, convert_to_bfloat16: bool = True
-) -> tuple[dict[str, np.ndarray], dict[str, tuple[int, ...]]]:
-    """Convert `model` into a state dict with flattened numpy arrays and shapes.
+) -> tuple[dict[str, jax.Array], dict[str, tuple[int, ...]]]:
+    """Convert `model` into a state with flattened arrays and shapes.
 
-    Transfers the model to host first, then does all unstacking/conversion in numpy.
-    This avoids the OOM that occurred when @jax.jit pre-allocated all intermediate
-    buffers simultaneously on device (e.g. 9.62G needed but only 7.14G free).
+    Optionally converts weights to bfloat16 for efficient transfer to inference workers.
+    This provides several benefits:
+    1. Reduces network transfer size by 50% (float32 -> bfloat16)
+    2. Reduces device-to-host copy bandwidth by 50%
+    3. Eliminates dtype conversion overhead in vLLM
+    4. Reduces memory fragmentation from temporary conversion buffers
 
-    Returns numpy arrays so the caller's jax.device_get() is a no-op.
+    The training model remains in float32 for numerical stability during optimization.
     """
-    # Transfer entire model pytree to host numpy first
-    host_model = jax.device_get(model)
-    state_dict = hsd.to_state_dict(host_model)
+    state_dict = hsd.to_state_dict(model)
     shape_dict = jax.tree.map(lambda y: y.shape, state_dict)
 
     if convert_to_bfloat16:
-
+        # Convert to bfloat16 for inference - happens on GPU before device_get
+        # Only cast floating point arrays to avoid issues with integer/bool arrays
         def maybe_cast_to_bf16(arr):
             if jnp.issubdtype(arr.dtype, jnp.floating):
-                return jnp.asarray(arr).astype(jnp.bfloat16)
+                return arr.astype(jnp.bfloat16)
             return arr
 
-        state_dict = jax.tree.map(maybe_cast_to_bf16, state_dict)
-
-    flat_dict = jax.tree.map(lambda y: jnp.asarray(y).reshape(-1), state_dict)
+        bf16_dict = jax.tree.map(maybe_cast_to_bf16, state_dict)
+        flat_dict = jax.tree.map(lambda y: y.reshape(-1), bf16_dict)
+    else:
+        flat_dict = jax.tree.map(lambda y: y.reshape(-1), state_dict)
 
     return flat_dict, shape_dict
 
@@ -441,9 +445,11 @@ class ArrowFlightServer(WeightTransferServer):
             barrier_sync()
 
             if jax.process_index() == 0:
-                # copy_and_flatten transfers to host and returns numpy arrays
+                # Fetching the entire state dict to CPU allows JAX to parallelize the individual transfers
                 flat_dict, shape_dict = copy_and_flatten(model, self.config.convert_to_bfloat16)
                 state_dict_time = time.time()
+                flat_dict = jax.device_get(flat_dict)
+                copy_time = time.time()
 
                 # Convert to Arrow RecordBatch per parameter
                 params_dict = state_dict_to_batches(flat_dict, shape_dict, weight_id)
@@ -467,10 +473,11 @@ class ArrowFlightServer(WeightTransferServer):
 
                 logger.info(
                     "Served weights for weight_id %s. "
-                    "timings: state_dict=%.2fs, serialize=%.2fs, store=%.2fs, update=%.2fs",
+                    "timings: state_dict=%.2fs, copy=%.2fs, serialize=%.2fs, store=%.2fs, update=%.2fs",
                     weight_id,
                     state_dict_time - start_time,
-                    serialize_time - state_dict_time,
+                    copy_time - state_dict_time,
+                    serialize_time - copy_time,
                     store_time - serialize_time,
                     update_time - store_time,
                 )
