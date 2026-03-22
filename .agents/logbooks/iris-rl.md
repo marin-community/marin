@@ -218,3 +218,26 @@
 | P3 | Update `test_llama_small.py` caller | DONE — marked as outdated |
 
 All fixes in commit `84cbb2528`.
+
+---
+
+### 2026-03-21 22:45 UTC — MONITORING PHASE: Two jobs launched
+
+**Jobs submitted:**
+1. `/ahmed/iris-rl-debug` — v6e-8, europe-west4
+2. `/ahmed/iris-rl-debug-v5p` — v5p-8, us-east5
+
+**Monitoring plan (8 hours, until ~06:45 UTC 2026-03-22):**
+1. Wait 10 minutes
+2. Read job logs for both jobs
+3. If error → diagnose, fix code, push, resubmit
+4. If running → log progress, continue monitoring
+5. If succeeded → record results, celebrate
+6. Update logbook after every check
+7. Repeat until jobs complete or 8 hours elapsed
+
+**Commands:**
+```
+uv run iris --config=lib/iris/examples/marin.yaml job logs /ahmed/iris-rl-debug
+uv run iris --config=lib/iris/examples/marin.yaml job logs /ahmed/iris-rl-debug-v5p
+```
