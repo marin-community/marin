@@ -615,20 +615,37 @@ def make_method_comparison_plot(
         "adamh": "#1877F2",
         "gatednorm": "#F0701A",
     }
-    budget_grid = np.logspace(np.log10(min(TRACKED_BUDGETS)), np.log10(max(TRACKED_BUDGETS)), 200)
+    observed_budget_max = max(TRACKED_BUDGETS)
+    extrapolated_budget_max = max(EXTRAPOLATION_BUDGETS)
+    observed_budget_grid = np.logspace(np.log10(min(TRACKED_BUDGETS)), np.log10(observed_budget_max), 160)
+    extrapolated_budget_grid = np.logspace(np.log10(observed_budget_max), np.log10(extrapolated_budget_max), 120)
+    extrapolated_marker_budgets = [budget for budget in EXTRAPOLATION_BUDGETS if budget > observed_budget_max]
 
     for method in method_order:
         fits, token_coeffs, loss_coeffs = method_frontiers[method]
         color = method_colors[method]
         label = VARIANT_LABELS[method]
-        predicted_losses = [predict_optimal(token_coeffs, loss_coeffs, budget)[1] for budget in budget_grid]
+        observed_losses = [predict_optimal(token_coeffs, loss_coeffs, budget)[1] for budget in observed_budget_grid]
+        extrapolated_losses = [
+            predict_optimal(token_coeffs, loss_coeffs, budget)[1] for budget in extrapolated_budget_grid
+        ]
         fig.add_trace(
             go.Scatter(
-                x=budget_grid,
-                y=predicted_losses,
+                x=observed_budget_grid,
+                y=observed_losses,
                 mode="lines",
                 line=dict(width=3, color=color),
                 name=label,
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=extrapolated_budget_grid,
+                y=extrapolated_losses,
+                mode="lines",
+                line=dict(width=3, dash="dash", color=color),
+                showlegend=False,
+                hovertemplate=f"{label} extrapolated<br>budget=%{{x:.3e}}<br>fitted best=%{{y:.4f}}<extra></extra>",
             )
         )
         fig.add_trace(
@@ -639,6 +656,16 @@ def make_method_comparison_plot(
                 marker=dict(size=9, color=color),
                 showlegend=False,
                 hovertemplate=f"{label}<br>budget=%{{x:.3e}}<br>fitted best=%{{y:.4f}}<extra></extra>",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=extrapolated_marker_budgets,
+                y=[predict_optimal(token_coeffs, loss_coeffs, budget)[1] for budget in extrapolated_marker_budgets],
+                mode="markers",
+                marker=dict(symbol="diamond", size=10, color=color, line=dict(width=1, color="black")),
+                showlegend=False,
+                hovertemplate=f"{label} extrapolated<br>budget=%{{x:.3e}}<br>fitted best=%{{y:.4f}}<extra></extra>",
             )
         )
 
