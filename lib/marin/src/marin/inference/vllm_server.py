@@ -299,6 +299,9 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     additional_config = engine_kwargs.get("additional_config")
     if additional_config is not None:
         args.extend(["--additional-config", json.dumps(additional_config)])
+    tensor_parallel_size = engine_kwargs.get("tensor_parallel_size")
+    if tensor_parallel_size is not None:
+        args.extend(["--tensor-parallel-size", str(tensor_parallel_size)])
     return args
 
 
