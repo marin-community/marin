@@ -590,16 +590,53 @@ placement per-job without zone pinning. The RunAI download speeds (2.0 and
    us-east5-b and europe-west4-a. We added `regional_model_path.py` to
    auto-detect region and pick the right model bucket going forward.
 
-### Batch 1 rerun: direct LLM.generate() with auto-regional resolution
+### Run 3b: Direct LLM.generate(), same-region ✅ (`vllm-sr-llm-direct-v4`)
 
-| # | Job name | Mode | Region handling | Status |
-|---|----------|------|----------------|--------|
-| 3b | `vllm-sr-llm-direct-v2` | `LLM.generate()` | auto-resolve via `regional_model_path.py` | submitted |
+Worker: `us-east1-d`. Model: `gs://marin-us-east1/models/...` (same-region confirmed).
 
-Uses model name `meta-llama--Llama-3-1-8B-Instruct--0e9e39f` (not a full
-gs:// path). The script detects region from GCE metadata and resolves to
-the correct bucket. Logs will print `Detected region:` and `Resolved model
-path:` for validation.
+| Phase | Time |
+|-------|------|
+| Region detection + model resolution | <1s |
+| eval_shape | 2.5s |
+| RunAI download | 7.21s (15.0 GiB at **2.1 GiB/s**) |
+| load_weights (includes RunAI) | 7.9s |
+| create_jit_model | 0.8s |
+| **abstract_load TOTAL** | **11.2s** |
+| **LLM() constructor TOTAL** | **288.9s** |
+| generate | 2.1s (128 tokens, 60.1 tok/s) |
+| **Overall TOTAL** | **291.1s** |
+
+**H2 verdict:** Direct `LLM.generate()` on the corrected JAX path is fast for
+model loading (11.2s) but slow for total startup (289s). The gap between
+model loading (11.2s) and LLM() constructor (289s) is **~278s of XLA
+compilation + KV cache init**. This matches what we saw in runs 1 and 2.
+
+**Same-region RunAI speed: 2.1 GiB/s** — matching the cross-region numbers.
+This suggests the earlier ~1 GiB/s measurements were NOT cross-region
+bandwidth limited; they were just normal variance or different cache states.
+
+### Updated batch 1 summary (with region annotations)
+
+| Run | Job | Path | Worker zone | Model region | Same-region? | Model load | RunAI speed | Total |
+|-----|-----|------|-------------|-------------|-------------|-----------|------------|-------|
+| 1 | `vllm-sr-phase-vllm` | PyTorch (vllm serve) | us-east1-d | us-east1 | ✅ | 18.1s | 2.5 GiB/s | 136.8s |
+| 2 | `vllm-sr-phase-jax-v2` | JAX (vllm serve) | us-east1-d | us-east1 | ✅ | 11.6s | 2.1 GiB/s | 217.4s |
+| 3 | `vllm-sr-llm-direct-v4` | JAX (LLM.generate) | us-east1-d | us-east1 | ✅ | 11.2s | 2.1 GiB/s | 291.1s |
+
+All three runs: same worker (`us-east1-d`), same model region (`us-east1`),
+same-region confirmed ✅.
+
+**Key observations:**
+- Model loading is 11-18s on all paths. Not the bottleneck.
+- RunAI download is 2.1-2.5 GiB/s same-region. Not bandwidth-limited.
+- The total runtime gap (137s vs 217s vs 291s) is dominated by what happens
+  AFTER model loading: XLA compilation, KV cache init, server startup.
+- Run 1 (PyTorch, 137s) is the fastest total. The PyTorch path uses torchax
+  which may skip some JAX-specific compilation overhead.
+- Run 2 (JAX vllm serve, 217s) vs Run 3 (JAX LLM.generate, 291s): the
+  74s gap is likely vllm serve reusing cached XLA compilations or having
+  different compilation characteristics from direct LLM().
+- Generation itself is fast on both JAX runs: 60 tok/s.
 
 ### Unresolved questions deferred to later
 
