@@ -1471,3 +1471,82 @@ After fix v2: ran unattended for 30+ hours, 9 sympy timeouts caught, zero crashe
 - Graceful shutdown: sampler should exit cleanly when trainer finishes
 - Any crashes from the inflight path (soak test)
 
+---
+
+## On-Demand RL: Final Summary (2026-03-21)
+
+### Goal achieved
+
+We successfully built and validated a no-Ray, manual-mode RL training pipeline that runs on dedicated TPU VMs coordinated via GCS. The system supports inflight weight updates, graceful shutdown, and preemption recovery on spot TPUs.
+
+### All runs
+
+| Run | Mode | Steps | Duration | Pace | Eval pass@1 (peak) | Wandb trainer | Wandb sampler |
+|-----|------|-------|----------|------|-------------------|---------------|---------------|
+| Sync Run 1 | Blocking sync, on-demand | 500/500 | 36.8h | 4.4 min/step | ~0.46 | [link](https://wandb.ai/marin-community/marin_post_training/runs/exp2039-20260318-040100-train) | [link](https://wandb.ai/marin-community/marin_post_training/runs/exp2039-20260318-032600) |
+| Sync Run 2 (seed=1) | Blocking sync, on-demand | 461/500 | 26.7h | 3.4 min/step | 0.472 | [link](https://wandb.ai/marin-community/marin_post_training/runs/exp2039-seed1-20260319-225725-train) | [link](https://wandb.ai/marin-community/marin_post_training/runs/exp2039-seed1-20260319-225725) |
+| Inflight 1 (NB) | Non-blocking + inflight, on-demand | 500/500 | 28.6h | 3.4 min/step | 0.488 | [link](https://wandb.ai/marin-community/marin_post_training/runs/exp2039nb-20260319-032500-train) | [link](https://wandb.ai/marin-community/marin_post_training/runs/exp2039nb-20260319-032500) |
+| Inflight 2 | Inflight + graceful shutdown, spot | 186/500 | 8.7h | 2.6 min/step | 0.490 | [link](https://wandb.ai/marin-community/marin_post_training/runs/exp2039-nb-inflight2-train) | [link](https://wandb.ai/marin-community/marin_post_training/runs/exp2039-nb-inflight2) |
+
+### Speed progression
+
+| Optimization | Pace | Speedup vs baseline | Projected 500-step time |
+|-------------|------|---------------------|------------------------|
+| Blocking sync (baseline) | 4.4 min/step | 1.0x | 36h |
+| Non-blocking sync | 3.4 min/step | 1.3x | 28h |
+| Inflight weight updates | 2.6 min/step | 1.7x | 21h |
+| Theoretical floor (pure fwd/bwd) | 0.75 min/step | 5.9x | 6.25h |
+
+### Trainer timing breakdown (medians from Inflight 1, 500 steps)
+
+| Phase | Time | Overlappable? |
+|-------|------|---------------|
+| Forward/backward | 51s | No (the floor) |
+| Batch prep (wait for rollouts) | 21s | Yes — high variance (4-56s) |
+| Weight transfer serve | 14s | Yes — with background serving |
+| Step overhead | ~5s | Hooks, logging, etc. |
+| **Total** | **~67s** (median) | |
+
+### What we built
+
+1. **No-Ray manual mode** — Trainer and sampler run on separate TPU VMs, coordinated via GCS filesystem coordinator (`FileSystemArrowFlightCoordinator`). No Ray cluster needed.
+
+2. **Inflight weight updates** — Background thread fetches weights from Arrow Flight while the main thread generates rollouts. Weights arrive mid-generation instead of blocking between cycles. Required debugging a fork deadlock (JAX + `AsyncLLM` subprocess) — turned out to be a test artifact, not a real bug.
+
+3. **Graceful shutdown** — Tri-state coordinator status (`running`/`completed`/`failed`). Trainer signals completion/failure, sampler exits cleanly, wandb runs finalize. Fixed the bug where the sampler ran forever after the trainer finished.
+
+4. **Preemption recovery** — `weight_id=-1` (initial weights) bypasses the coordinator's stale-weight check, so a restarted trainer can always publish to a coordinator that has stale state from a previous run. Validated in production: preempted at step 111 → resumed from checkpoint step 110 → continued training.
+
+5. **CLI args** — `--seed`, `--num-train-steps` for experiment control. `--seed` flows to all components (MathEnv, trainer, rollout worker).
+
+6. **First-weight timeout fix** — Inflight mode defaults to 1200s for the initial weight wait (trainer and sampler start simultaneously, need time for trainer to initialize and publish).
+
+### What we didn't solve
+
+1. **Training quality** — Eval pass@1 peaks around 0.49 and degrades in longer runs (Inflight 1 ended at 0.396). Multiple hypotheses in the logbook (LR scaling, DAPO normalization, batch size) but not yet investigated.
+
+2. **Second sampler** — Would eliminate batch prep variance (the 4s-56s swing). Single sampler produces rollouts at exactly the trainer's consumption rate — any slowdown starves the trainer.
+
+3. **Background weight serving** — Trainer blocks for ~14s per step on device-to-host copy. Could be overlapped with the next forward/backward pass.
+
+### Key files
+
+| File | What |
+|------|------|
+| `experiments/exp2039_rl_math500.py` | Experiment entry point, manual mode CLI |
+| `lib/marin/src/marin/rl/weight_transfer/arrow_flight.py` | Filesystem coordinator, graceful shutdown signals, preemption fix |
+| `lib/marin/src/marin/rl/weight_transfer/base.py` | `WeightUpdate` with `is_done`/`is_failed`, abstract `mark_completed`/`mark_failed` |
+| `lib/marin/src/marin/rl/train_worker.py` | Completion/failure signaling in `train()` |
+| `lib/marin/src/marin/rl/rollout_worker.py` | Inflight mode, graceful shutdown check, first-weight timeout, JAX-before-fork docs |
+| `on-demand-rl-scripts/_run_exp2039.sh` | Launch script with seed/capacity/rollout-shape overrides |
+
+### Logbooks and project docs
+
+| Path | What |
+|------|------|
+| `.agents/logbooks/on-demand-rl.md` | This logbook — full history of all runs, changes, and decisions |
+| `.agents/logbooks/debug_inflight_weight_updates.md` | Inflight weight update investigation (hypothesis-driven, 5 experiments) |
+| `.agents/projects/graceful_sampler_exit.md` | Graceful shutdown design and implementation |
+| `.agents/projects/inflight_weight_updates.md` | Inflight weight update design (Option A vs B analysis) |
+| `.agents/projects/rl_preemption.md` | Preemption recovery design and production validation |
+
