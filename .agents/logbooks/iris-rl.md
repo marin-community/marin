@@ -175,3 +175,44 @@
 **Integration test results**:
 - `test_weight_transfer.py`: **4/4 pass**
 - `test_weight_sync.py`: Rollout worker generates 6 rollouts, trainer receives weights via Arrow Flight — **v2 wiring works**. Fails on pre-existing `flash_attention_block_size > max_seq_len` config mismatch in test setup (exists on `main` too, not our bug).
+
+---
+
+### 2026-03-21 — Codex Review Feedback (PR #3960)
+
+**Reviewer**: Codex agent
+**Verdict**: "Not yet safe to treat as correct" — at least one confirmed regression + lifecycle/TPU-runtime issues.
+
+#### [P1] RolloutTracker fallback crashes when tracker_config is None
+
+**File**: `rollout_worker.py:295-300`
+**Problem**: The new fallback `RolloutTracker(config.tracker_config, config.run_id)` crashes with `AttributeError` when `tracker_config` is `None` (which is the default on both `RolloutWorkerConfig` and `RLJobConfig`). The exact "tests or standalone rollout workers" scenario it's meant to handle still crashes.
+**Impact**: `tests/rl/integration/test_rollout_worker.py` fails immediately.
+**Fix needed**: Check for `None` before constructing `RolloutTracker`, use a no-op tracker or create a default config.
+
+#### [P2] Graceful shutdown doesn't re-check after blocking weight sync
+
+**File**: `rollout_worker.py:710-714`
+**Problem**: `_check_run_state()` only runs at the TOP of the loop, before `_sync_weights()`. If `max_weight_transfer_wait_time > 0` (e.g. 600s with `with_on_policy_training()`), the worker blocks inside `_sync_weights()` for up to 600s. If the trainer completes during that wait, the worker still generates one more rollout batch with stale weights before the next loop iteration notices.
+**Fix needed**: Check run state after `_sync_weights()` returns, or pass the run_state handle into `_sync_weights()` so it can break early.
+
+#### [P1] SymPy timeout uses fork — deadlocks on TPU
+
+**File**: `math_grading.py:235-240`
+**Problem**: `multiprocessing.Pool()` uses `fork` by default on Linux. The rollout worker docstring explicitly warns that forking after JAX/libtpu initialization deadlocks on TPU device locks (`/dev/vfio`). Math grading runs inside rollout workers, so this timeout wrapper will deadlock or crash on TPU with Levanter inference.
+**Fix needed**: Use `multiprocessing.get_context("spawn")` or `"forkserver"` instead of default `Pool()`.
+
+#### [P3] Missed callers of RolloutWorker/TrainWorker
+
+**File**: `lib/marin/src/marin/rl/scripts/test_llama_small.py`
+**Problem**: `RolloutWorker(config=worker_config)` — still uses old signature without `runtime=`. Will crash with `TypeError` immediately.
+**Fix needed**: Update to pass `runtime=` or add to deferred list.
+
+#### Action items
+
+| Priority | Issue | Status |
+|----------|-------|--------|
+| P1 | Handle `tracker_config=None` in RolloutTracker fallback | TODO |
+| P1 | Use spawn context for sympy multiprocessing on TPU | TODO |
+| P2 | Re-check run_state after `_sync_weights()` | TODO |
+| P3 | Update `test_llama_small.py` caller | TODO |
