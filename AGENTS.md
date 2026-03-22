@@ -24,6 +24,7 @@ Key skills and their triggers:
 | Writing a design doc or spec | `design-doc` |
 | Debugging subtle code problems | `debugger` |
 | Multi-step plans needing sub-agents | `multi-stage` |
+| Using or debugging Marin executor DAGs | `marin-executor` |
 | Adding a HF dataset | `add-dataset` |
 | Profiling JAX training | `agent-profiling` |
 | Running / monitoring ferries | `ferries` |
