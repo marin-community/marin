@@ -199,3 +199,109 @@ jax 0.9.2 (incompatible).
 5. Upstream `tpu-inference` main is developed against unreleased vllm. The
    latest released `vllm-tpu` (0.13.3) uses jax 0.8.1. jax 0.9.2 is only
    on unreleased main.
+
+---
+
+## 2026-03-22 — `abstract_load` Bootstrap Mode (Real Weight Loading)
+
+### Problem
+
+The `abstract_dummy` mode added in the previous session creates an abstract
+model via `nnx.eval_shape()` and returns immediately — no weights, no JIT.
+This works for RL (caller injects weights via `_sync_weights()`), but for
+`vllm serve` (evaluators, smoke tests) we need the fork to create the
+abstract model fast AND then load real weights.
+
+The existing `else` branch in `_get_nnx_model()` already does
+`eval_shape → load_weights → JIT`. The fix is a control-flow change to
+make this path available via `additional_config`, not a new loader.
+
+### Changes to Fork (`feat/fast-tpu-bootstrap-v0.13.2`)
+
+#### Commit `c24fb86e` — feat: add abstract_load bootstrap mode
+
+1. **`TpuBootstrapConfig`** — added `"abstract_load"` to valid values
+
+2. **`_resolved_bootstrap_mode()`** — replaced boolean
+   `_use_abstract_dummy_bootstrap()` with a mode-resolver returning
+   `"default"` / `"abstract_dummy"` / `"abstract_load"`. Non-default modes
+   now **raise ValueError** instead of silently falling back when conditions
+   aren't met (unsupported arch, quantization, wrong load_format).
+
+3. **`_build_abstract_model_and_load_weights()`** — extracted the existing
+   `else` branch (eval_shape → load_weights → JIT) into a reusable helper.
+   Added `try/finally` for `model_weights_iterator` cleanup (was bare
+   `del` before — would leak on exception).
+
+4. **`_get_nnx_model()` refactored** to mode-based dispatch:
+   - `abstract_dummy` → RL path (abstract model only, no weights)
+   - `abstract_load` → fast serve path (abstract + real weights + JIT)
+   - `default` + `dummy` → existing concrete random-init (unchanged)
+   - `default` + non-dummy → delegates to same helper
+
+5. **No changes to `tpu_runner.py`** — `_init_sampling_rng()` checks
+   `== "abstract_dummy"` by string, so `abstract_load` uses normal RNG path.
+
+6. **Tests** — `TestTpuBootstrapConfig` (abstract_load parsing),
+   `TestResolvedBootstrapMode` (8 tests for all mode/error combos),
+   `TestAbstractLoadBehavior` (4 behavioral tests + 1 dispatch test)
+
+#### Commit `5741def2` — fix: truthiness check + dispatch test
+
+- Changed `hasattr(model_config, "model_weights")` to
+  `getattr(model_config, "model_weights", "")` truthiness check (more
+  robust if vLLM ever adds a default empty-string attribute)
+- Added `test_get_nnx_model_dispatches_abstract_load` — patches
+  `_resolved_bootstrap_mode` and `_build_abstract_model_and_load_weights`
+  at module level, calls `_get_nnx_model()`, asserts the sentinel from the
+  helper is returned (not an early-return bare abstract model)
+
+### Marin-Side Changes (`vllm_load_fast` branch)
+
+#### Commit `9324e95d0` — feat: abstract_load bootstrap + cleanup + wheel update
+
+- Updated `pyproject.toml` wheel URL to `marin-5741def2`
+- `uv lock --upgrade-package tpu-inference && uv sync`
+- Deleted dead monkeypatch code, simplified evaluators and smoke test
+
+### Verification — Iris Smoke Tests (2026-03-22 04:20 UTC)
+
+Both jobs used Llama 3.1 8B Instruct from GCS, v6e-4 TPU, 64GB host RAM,
+`max_model_len=4096`, native mode.
+
+| Job | Mode | Zone | Time | Output |
+|-----|------|------|------|--------|
+| `/ahmed/vllm-smoke-abstract-load-v2` | `abstract_load` (new) | us-east1-d | 240.9s | "Accelerated code / TPUs speed through the math / Faster, leaner runs" |
+| `/ahmed/vllm-smoke-default-v2` | `default` (old) | us-east5-b | 231.0s | "Accelerated code / TPUs speed through the math / Faster, leaner runs" |
+
+Both produced identical coherent haiku output. ~10s difference is within
+cold-start compilation noise.
+
+**Result**: `abstract_load` mode works end-to-end. Existing default path
+is not regressed by the refactor.
+
+Note: first attempt at 32GB OOM'd — 8B model (~16GB weights) needs
+headroom for KV cache + loading overhead. 64GB is the minimum for 8B.
+
+### What's Deployed on the Fork (Updated)
+
+| Commit | Branch | What |
+|--------|--------|------|
+| `690e8048` | `feat/fast-tpu-bootstrap` | Initial: abstract bootstrap, RNG, KV clamp |
+| `03eb4529` | `feat/fast-tpu-bootstrap` | Review round 1: narrow scope, typed config, tests |
+| `00f5efc1` | `feat/fast-tpu-bootstrap` | Review round 2: routing allowlist, quantization guard |
+| `5620d202` | `feat/fast-tpu-bootstrap` | Style: isort/yapf formatting |
+| `92ceeb0c` | `feat/fast-tpu-bootstrap-v0.13.2` | Fix: read config from additional_config |
+| `c24fb86e` | `feat/fast-tpu-bootstrap-v0.13.2` | **feat: abstract_load mode** |
+| `5741def2` | `feat/fast-tpu-bootstrap-v0.13.2` | Fix: truthiness check + dispatch test |
+| `b3953b2c` | `marin` only | CI: wheel build workflow |
+
+### Next Steps
+
+1. Run compilation-cache test (`--repeat 2 --local-cache-dir`) to measure
+   warm-start speedup (should skip XLA compilation on run 2)
+2. Integrate with evaluators (`lm_evaluation_harness_evaluator`,
+   `simple_evaluator`) — pass `abstract_load` config through engine_kwargs
+3. Consider Levanter fsspec loader integration for faster GCS weight
+   streaming (current path uses vLLM's default HF loader or RunAI streamer
+   at ~53 MiB/s — issue #3768 targets ~154 MiB/s via parallel byte-range)
