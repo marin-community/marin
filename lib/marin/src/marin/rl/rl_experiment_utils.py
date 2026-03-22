@@ -25,8 +25,6 @@ from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutTrackerConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 
-from vllm import SamplingParams
-
 logger = logging.getLogger(__name__)
 
 
@@ -114,6 +112,8 @@ def get_stop_tokens(model_type: str) -> list[str]:
 
 
 def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumConfig) -> ExecutorStep:
+    from vllm import SamplingParams
+
     hf_config = AutoConfig.from_pretrained(config.model_config.name)
     model_config_cls = config.model_config.config_class.from_hf_config(hf_config)
 
