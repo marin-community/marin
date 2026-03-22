@@ -127,4 +127,22 @@
 
 **Commit**: `5a5edf949`
 
-**Next**: C (RunConfig drift), D (integration tests).
+### 2026-03-21 — Step D: Run tests, fix bugs
+
+**Bugs found and fixed by running tests:**
+
+1. **bfloat16 + PyArrow incompatibility** (`be90ad30d`): `copy_and_flatten` now produces jnp.bfloat16 arrays on host, but `pa.py_buffer()` can't handle bfloat16 via Python buffer protocol. Fix: view bfloat16 as uint8 before serialization — dtype is stored in schema metadata, deserialization already handles it via `.view(dtype)`.
+
+2. **gRPC hostname resolution** (`be90ad30d`): `socket.gethostname()` returns `.local` mDNS names on macOS, which gRPC's c-ares resolver can't handle. Added `_resolve_advertise_host()` that tries GCP metadata server (for TPU VMs), then falls back to `localhost` for `.local` hostnames.
+
+3. **Circular import** (`ee5ccdac4`): `rl_job → rollout_worker → orchestration → rl_job`. Fixed by extracting `RLRuntimeHandles` and `WeightTransferRuntime` into `runtime.py`.
+
+4. **Stale test API** (`ee5ccdac4`): `RLOOLoss(clip_epsilon=0.2)` → `RLOOLoss(clip_epsilon_low=0.2, clip_epsilon_high=0.2)` in all 8 test files. Pre-existing issue unrelated to our migration.
+
+5. **Test tolerance** (`be90ad30d`): bfloat16 round-trip is lossy (7-bit mantissa, ~0.4% max relative error). Changed `assert_array_equal` to `assert_allclose(rtol=4e-3)`.
+
+**Test results:**
+- `test_weight_transfer.py`: 4/4 pass (GCS + Arrow Flight × 2 tests)
+- Integration tests: pre-existing `RuntimeError: No global tracker set` in Levanter inference path (not our bug)
+
+**Next**: C (RunConfig — mostly done, just needs region field), more integration test fixes.
