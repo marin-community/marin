@@ -3,12 +3,12 @@
     "moe_rwe_latent"
   ],
   "base_sha": "c9e80db5d01749ef416f093b753ebce78f81391d",
-  "head_sha": "be65c328bc4167528597a97ff80c7ae8bf636674",
+  "head_sha": "c3f5b7959c2514e1625a092280725f8aa6ca6c29",
   "report_count": 1,
   "reports": [
     {
       "closest_variant": "moe",
-      "distance_score": 147,
+      "distance_score": 143,
       "report_relpath": "moe_rwe_latent/index.html",
       "status_counts": {
         "added": 0,
