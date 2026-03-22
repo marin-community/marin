@@ -183,7 +183,7 @@ overrides = [
     { name = "equinox", specifier = ">=0.11.10" },
     { name = "omegaconf", specifier = ">=2.4.0.dev4" },
     { name = "python-multipart", specifier = ">=0.0.22" },
-    { name = "tpu-inference", url = "https://github.com/marin-community/tpu-inference/releases/download/marin-18ba8f9b/tpu_inference-0.0.0.dev20260322+18ba8f9b-py3-none-any.whl" },
+    { name = "tpu-inference", url = "https://github.com/marin-community/tpu-inference/releases/download/marin-b2c90c99/tpu_inference-0.0.0.dev20260322+b2c90c99-py3-none-any.whl" },
     { name = "wheel", specifier = ">=0.46.2" },
 ]
 
@@ -10092,8 +10092,8 @@ wheels = [
 
 [[package]]
 name = "tpu-inference"
-version = "0.0.0.dev20260322+18ba8f9b"
-source = { url = "https://github.com/marin-community/tpu-inference/releases/download/marin-18ba8f9b/tpu_inference-0.0.0.dev20260322+18ba8f9b-py3-none-any.whl" }
+version = "0.0.0.dev20260322+b2c90c99"
+source = { url = "https://github.com/marin-community/tpu-inference/releases/download/marin-b2c90c99/tpu_inference-0.0.0.dev20260322+b2c90c99-py3-none-any.whl" }
 dependencies = [
     { name = "absl-py" },
     { name = "flax" },
@@ -10110,7 +10110,7 @@ dependencies = [
     { name = "tpu-info" },
 ]
 wheels = [
-    { url = "https://github.com/marin-community/tpu-inference/releases/download/marin-18ba8f9b/tpu_inference-0.0.0.dev20260322+18ba8f9b-py3-none-any.whl", hash = "sha256:dd83b106a92791932cb089714b62fd0578c97575dadf5acd4ec97674acf068ca" },
+    { url = "https://github.com/marin-community/tpu-inference/releases/download/marin-b2c90c99/tpu_inference-0.0.0.dev20260322+b2c90c99-py3-none-any.whl", hash = "sha256:ba95cad1978c0cfa24b81796a8d4149c1fb403495eab1f148dc7202efe045e40" },
 ]
 
 [package.metadata]
