@@ -410,3 +410,30 @@ def test_grug_iteration_02_v5p256_h2h_launcher_bakes_expected_schedule() -> None
     assert config.model.value.hidden_dim == 2304
     assert config.model.value.num_layers == 24
     assert config.model.value.gated_norm_rank == 16
+
+
+def test_grug_iteration_02_v5p64_h2h_launcher_bakes_expected_schedule() -> None:
+    launch_module = importlib.import_module(
+        "experiments.grug.moe_scaling_iteration_02.launch_isoflop_moe_adamh_gatednorm_v5p64_1e21_d2304_h2h"
+    )
+
+    step = launch_module.scaleup_step
+    config = step.config
+
+    assert config.run_id == "isoflop-moe-adamh-gatednorm-v5p64-h2h-r1-1e21-d2304"
+    assert isinstance(config.resources, VersionedValue)
+    assert config.resources.value.device.variant == "v5p-64"
+    assert config.resources.value.regions == ("us-central1",)
+    assert isinstance(config.batch_size, VersionedValue)
+    assert config.batch_size.value == 512
+    assert isinstance(config.steps, VersionedValue)
+    assert config.steps.value == 35802
+    assert isinstance(config.grug_trainer, VersionedValue)
+    assert config.grug_trainer.value.trainer.per_device_parallelism == 2
+    assert config.grug_trainer.value.trainer.per_device_eval_parallelism == 1
+    assert isinstance(config.eval, VersionedValue)
+    assert config.eval.value.eval_batch_size == 128
+    assert isinstance(config.model, VersionedValue)
+    assert config.model.value.hidden_dim == 2304
+    assert config.model.value.num_layers == 24
+    assert config.model.value.gated_norm_rank == 16
