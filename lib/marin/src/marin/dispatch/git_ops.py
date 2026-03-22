@@ -62,13 +62,16 @@ def commit_and_push(
     """
     _run_git(["add", logbook_rel_path], cwd=worktree_path, check=False)
 
-    # Check if there is anything to commit.
+    # Commit if there are staged changes.
     status = _run_git(["status", "--porcelain"], cwd=worktree_path)
-    if not status.stdout.strip():
-        logger.info("Nothing to commit")
-        return True
+    if status.stdout.strip():
+        _run_git(["commit", "-m", message], cwd=worktree_path)
 
-    _run_git(["commit", "-m", message], cwd=worktree_path)
+    # Check for unpushed commits (covers both new commit and prior stranded commits).
+    ahead = _run_git(["rev-list", "--count", f"origin/{branch}..HEAD"], cwd=worktree_path, check=False)
+    if ahead.returncode == 0 and ahead.stdout.strip() == "0":
+        logger.info("Nothing to push")
+        return True
 
     for attempt in range(1, max_retries + 1):
         push = _run_git(["push", "origin", branch], cwd=worktree_path, check=False)

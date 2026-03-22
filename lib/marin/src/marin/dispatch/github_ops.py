@@ -70,11 +70,11 @@ def post_progress_comment(
     branch: str,
     logbook: str,
 ) -> bool:
-    """Post an agent's issue comment with branch/logbook context appended."""
-    context = (
+    """Post an agent's issue comment prefixed with robot emoji and branch/logbook links."""
+    header = f"\U0001f916 **Dispatch Update** \u2014 collection `{collection_name}`\n\n"
+    footer = (
         f"\n\n---\n"
-        f"\U0001f916 *Dispatch: collection `{collection_name}`* | "
         f"[branch](https://github.com/{REPO}/tree/{branch}) | "
         f"[logbook](https://github.com/{REPO}/blob/{branch}/{logbook})"
     )
-    return post_issue_comment(issue, body + context)
+    return post_issue_comment(issue, header + body + footer)
