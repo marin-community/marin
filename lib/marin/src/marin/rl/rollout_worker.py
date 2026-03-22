@@ -314,7 +314,10 @@ class RolloutWorker:
         else:
             # Initialize our own tracker to avoid JAX distributed initialization deadlocks.
             # Levanter's tracker calls jax.process_index() which forces JAX initialization.
-            self.tracker = RolloutTracker(config.tracker_config, config.run_id)
+            if config.tracker_config is not None:
+                self.tracker = RolloutTracker(config.tracker_config, config.run_id)
+            else:
+                self.tracker = _NoOpTracker()
 
         self.config = config
         self._runtime = runtime
@@ -533,6 +536,10 @@ class RolloutWorker:
                     "Waited %.1fs for new weights, proceeding with current weights",
                     elapsed,
                 )
+                break
+
+            # Check if training finished while we're waiting for weights
+            if not self._check_run_state():
                 break
 
             time.sleep(1.0)
