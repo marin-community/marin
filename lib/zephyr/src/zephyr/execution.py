@@ -1374,6 +1374,8 @@ def _run_coordinator_job(config: _CoordinatorJobConfig, result_path: str) -> Non
             with suppress(Exception):
                 worker_group.shutdown()
         with suppress(Exception):
+            coordinator.shutdown.remote().result()
+        with suppress(Exception):
             hosted.shutdown()
 
 
