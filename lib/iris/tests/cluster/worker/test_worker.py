@@ -106,6 +106,7 @@ def create_mock_container_handle(
     """
     handle = Mock()
     handle.container_id = "container123"
+    # container_id is already set above as "container123"
     handle.build = Mock(return_value=[])
 
     if run_side_effect:

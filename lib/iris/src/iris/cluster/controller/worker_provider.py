@@ -86,6 +86,7 @@ def _apply_request_from_response(
                 exit_code=entry.exit_code if entry.HasField("exit_code") else None,
                 resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
                 log_entries=list(entry.log_entries),
+                container_id=entry.container_id or None,
             )
         )
     return HeartbeatApplyRequest(
@@ -234,6 +235,20 @@ class WorkerProvider:
     ) -> cluster_pb2.ProfileTaskResponse:
         stub = self.stub_factory.get_stub(address)
         return stub.profile_task(request, timeout_ms=timeout_ms)
+
+    def exec_in_container(
+        self,
+        address: str,
+        request: cluster_pb2.Worker.ExecInContainerRequest,
+        timeout_seconds: int = 60,
+    ) -> cluster_pb2.Worker.ExecInContainerResponse:
+        stub = self.stub_factory.get_stub(address)
+        # Negative timeout means no limit; use a large RPC deadline (1 hour)
+        if timeout_seconds < 0:
+            rpc_timeout_ms = 3_600_000
+        else:
+            rpc_timeout_ms = (timeout_seconds + 5) * 1000
+        return stub.exec_in_container(request, timeout_ms=rpc_timeout_ms)
 
     def close(self) -> None:
         self._pool.shutdown(wait=False)

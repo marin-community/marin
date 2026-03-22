@@ -15,7 +15,12 @@ platform:
 storage:
   remote_state_dir: s3://marin-na/iris/state/canary
 
-worker_provider: {}
+kubernetes_provider:
+  namespace: iris-canary
+  default_image: ghcr.io/marin-community/iris-task:latest
+  host_network: true              # Required for NCCL/IB multi-host traffic
+  cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal GPU nodes
+  controller_address: http://iris-controller-svc.iris-canary.svc.cluster.local:10000
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest

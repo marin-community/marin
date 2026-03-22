@@ -288,7 +288,12 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
         raise click.ClickException("--config is required for start-smoke")
 
     config.platform.label_prefix = label_prefix
-    config.storage.remote_state_dir = f"gs://marin-tmp-eu-west4/ttl=7d/iris/state/{label_prefix}"
+
+    # Set ephemeral state dir via marin_temp_bucket, which resolves
+    # region-appropriate storage from MARIN_PREFIX.
+    from iris.marin_fs import marin_temp_bucket
+
+    config.storage.remote_state_dir = marin_temp_bucket(ttl_days=7, prefix=f"iris/state/{label_prefix}")
 
     _pin_latest_images(config)
     verbose = ctx.obj.get("verbose", False)
