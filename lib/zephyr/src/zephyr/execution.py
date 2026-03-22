@@ -549,7 +549,7 @@ class ZephyrCoordinator:
         self._worker_handles: dict[str, ActorHandle] = {}
         self._worker_group: Any = None  # ActorGroup, set via set_worker_group()
         self._coordinator_thread: threading.Thread | None = None
-        self._shutdown: bool = False
+        self._shutdown_event = threading.Event()
         self._is_last_stage: bool = False
         self._initialized: bool = False
         self._pipeline_running: bool = False
@@ -621,7 +621,7 @@ class ZephyrCoordinator:
         """Background loop for heartbeat checking and worker job monitoring."""
         last_log_time = 0.0
 
-        while not self._shutdown:
+        while not self._shutdown_event.is_set():
             self.check_heartbeats()
             self._check_worker_group()
 
@@ -630,7 +630,7 @@ class ZephyrCoordinator:
                 self._log_status()
                 last_log_time = now
 
-            time.sleep(0.5)
+            self._shutdown_event.wait(timeout=0.5)
 
     def _check_worker_group(self) -> None:
         """Abort the pipeline if the worker job has permanently terminated."""
@@ -695,7 +695,7 @@ class ZephyrCoordinator:
             self._last_seen[worker_id] = time.monotonic()
             self._worker_states[worker_id] = WorkerState.READY
 
-            if self._shutdown:
+            if self._shutdown_event.is_set():
                 self._worker_states[worker_id] = WorkerState.DEAD
                 return "SHUTDOWN"
 
@@ -775,7 +775,7 @@ class ZephyrCoordinator:
                 retries=self._retries,
                 in_flight=len(self._in_flight),
                 queue_depth=len(self._task_queue),
-                done=self._shutdown,
+                done=self._shutdown_event.is_set(),
                 fatal_error=self._fatal_error,
                 workers={
                     wid: {
@@ -817,11 +817,12 @@ class ZephyrCoordinator:
 
     def _wait_for_stage(self) -> None:
         """Block until current stage completes or error occurs."""
-        backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
+        backoff = ExponentialBackoff(initial=0.1, maximum=1.0)
         last_log_completed = -1
         start_time = time.monotonic()
         all_dead_since: float | None = None
         no_workers_timeout = self._no_workers_timeout
+        stage_done = threading.Event()
 
         while True:
             with self._lock:
@@ -865,7 +866,7 @@ class ZephyrCoordinator:
                 last_log_completed = completed
                 backoff.reset()
 
-            time.sleep(backoff.next_interval())
+            stage_done.wait(timeout=backoff.next_interval())
 
     def _collect_results(self) -> dict[int, TaskResult]:
         """Return results for the completed stage."""
@@ -985,7 +986,7 @@ class ZephyrCoordinator:
     def shutdown(self) -> None:
         """Signal workers to exit. Worker group is managed by ZephyrContext."""
         logger.info("[coordinator.shutdown] Starting shutdown")
-        self._shutdown = True
+        self._shutdown_event.set()
 
         # Wait for coordinator thread to exit
         if self._coordinator_thread is not None:
@@ -1022,7 +1023,7 @@ class ZephyrCoordinator:
 
     def signal_done(self) -> None:
         """Signal workers that no more stages will be submitted (legacy compat)."""
-        self._shutdown = True
+        self._shutdown_event.set()
 
 
 # ---------------------------------------------------------------------------
@@ -1141,7 +1142,7 @@ class ZephyrWorker:
     def _poll_loop(self, coordinator: ActorHandle) -> None:
         """Pure polling loop. Exits on SHUTDOWN signal, coordinator death, or shutdown event."""
         task_count = 0
-        backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
+        backoff = ExponentialBackoff(initial=0.1, maximum=1.0)
 
         future: ActorFuture | None = None
         future_start = 0.0
@@ -1545,16 +1546,21 @@ class ZephyrContext:
                 job_name = f"zephyr-{self.name}-p{self._pipeline_id}-a{attempt}"
                 # The wrapper job just blocks on child actors; real
                 # resources are requested by the coordinator/worker children.
-                self._coordinator_job = self.client.submit(
-                    JobRequest(
-                        name=job_name,
-                        entrypoint=Entrypoint.from_callable(
-                            _run_coordinator_job,
-                            args=(config, result_path),
-                        ),
-                        resources=ResourceConfig(cpu=1, ram="1g"),
+                # Set the context var so the coordinator job inherits self.client
+                # instead of auto-detecting (which may pick a different backend).
+                from fray.v2.client import set_current_client
+
+                with set_current_client(self.client):
+                    self._coordinator_job = self.client.submit(
+                        JobRequest(
+                            name=job_name,
+                            entrypoint=Entrypoint.from_callable(
+                                _run_coordinator_job,
+                                args=(config, result_path),
+                            ),
+                            resources=ResourceConfig(cpu=1, ram="1g"),
+                        )
                     )
-                )
 
                 backoff.reset()
                 logger.info("Coordinator job submitted: %s (job_id=%s)", job_name, self._coordinator_job.job_id)

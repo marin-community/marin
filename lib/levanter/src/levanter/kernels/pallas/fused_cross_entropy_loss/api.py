@@ -136,9 +136,27 @@ def _named_sharding_of(value: jax.Array) -> NamedSharding | None:
     return None
 
 
-def _shape_dtype_struct_with_sharding(value: jax.Array) -> jax.ShapeDtypeStruct:
+def _hlo_sharding_of(value: jax.Array):
     sharding = _sharding_of(value)
     if sharding is None:
+        return None
+    to_hlo = getattr(sharding, "_to_xla_hlo_sharding", None)
+    if to_hlo is None:
+        return None
+    try:
+        return to_hlo(value.ndim)
+    except Exception:
+        return None
+
+
+def _value_uses_manual_sharding(value: jax.Array) -> bool:
+    hlo_sharding = _hlo_sharding_of(value)
+    return hlo_sharding is not None and hlo_sharding.is_manual()
+
+
+def _shape_dtype_struct_for_benchmark(value: jax.Array) -> jax.ShapeDtypeStruct:
+    sharding = _sharding_of(value)
+    if sharding is None or _value_uses_manual_sharding(value):
         return jax.ShapeDtypeStruct(value.shape, value.dtype)
     return jax.ShapeDtypeStruct(value.shape, value.dtype, sharding=sharding)
 
@@ -150,6 +168,9 @@ def _maybe_wrap_loss_in_shard_map_for_benchmark(
     labels: jax.Array,
     w: jax.Array,
 ) -> Callable[[jax.Array, jax.Array, jax.Array], jax.Array]:
+    if _value_uses_manual_sharding(x) or _value_uses_manual_sharding(labels) or _value_uses_manual_sharding(w):
+        return fn
+
     x_sharding = _named_sharding_of(x)
     labels_sharding = _named_sharding_of(labels)
     w_sharding = _named_sharding_of(w)
@@ -423,9 +444,9 @@ def _benchmark_block_sizes_candidate(
         (x, labels, w)
         if use_tracer_lowering
         else (
-            _shape_dtype_struct_with_sharding(x),
-            _shape_dtype_struct_with_sharding(labels),
-            _shape_dtype_struct_with_sharding(w),
+            _shape_dtype_struct_for_benchmark(x),
+            _shape_dtype_struct_for_benchmark(labels),
+            _shape_dtype_struct_for_benchmark(w),
         )
     )
     start = time.perf_counter()

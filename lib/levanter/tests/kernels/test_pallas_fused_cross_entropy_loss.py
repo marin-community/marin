@@ -4,9 +4,12 @@
 import warnings
 
 import jax
+from jax._src import pjit
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.sharding import Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
 
 from levanter.kernels.pallas import autotune_cache_utils
 from levanter.kernels.pallas.fused_cross_entropy_loss import api as fused_api
@@ -975,47 +978,80 @@ def test_pallas_autotune_skipped_when_tuned_match_exists(monkeypatch: pytest.Mon
     assert seen_block_sizes == [inferred]
 
 
-def test_autotune_benchmark_wraps_in_shard_map_when_named_sharding_present(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    x = jnp.ones((4, 8), dtype=jnp.float32)
-    w = jnp.ones((8, 16), dtype=jnp.float32)
-    y = jnp.zeros((4,), dtype=jnp.int32)
+def test_autotune_benchmark_wraps_in_shard_map_for_global_named_sharding():
+    mesh = Mesh(jax.devices(), ("data",))
+    x = jax.device_put(jnp.ones((4, 8), dtype=jnp.float32), NamedSharding(mesh, P("data", None)))
+    y = jax.device_put(jnp.zeros((4,), dtype=jnp.int32), NamedSharding(mesh, P("data")))
+    w = jax.device_put(jnp.ones((8, 16), dtype=jnp.float32), NamedSharding(mesh, P(None, None)))
 
-    mesh = object()
-    x_sharding = type("FakeNamedSharding", (), {"mesh": mesh, "spec": ("data", None)})()
-    y_sharding = type("FakeNamedSharding", (), {"mesh": mesh, "spec": ("data",)})()
-    w_sharding = type("FakeNamedSharding", (), {"mesh": mesh, "spec": (None, "model")})()
+    fn = lambda x_value, labels_value, w_value: x_value[:, 0] + labels_value.astype(x_value.dtype) + w_value[0, 0]
 
-    def fake_named_sharding_of(value):
-        if value is x:
-            return x_sharding
-        if value is y:
-            return y_sharding
-        if value is w:
-            return w_sharding
-        return None
+    assert not fused_api._value_uses_manual_sharding(x)
+    assert not fused_api._value_uses_manual_sharding(y)
+    assert not fused_api._value_uses_manual_sharding(w)
 
-    calls: list[tuple[object, tuple[object, ...], object, bool]] = []
+    wrapped = fused_api._maybe_wrap_loss_in_shard_map_for_benchmark(fn, x=x, labels=y, w=w)
 
-    def fake_shard_map(fn, *, mesh, in_specs, out_specs, check_vma):
-        calls.append((mesh, in_specs, out_specs, check_vma))
-        return fn
-
-    monkeypatch.setattr(fused_api.jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(fused_api, "_named_sharding_of", fake_named_sharding_of)
-    monkeypatch.setattr(fused_api.jax, "shard_map", fake_shard_map)
-
-    wrapped = fused_api._maybe_wrap_loss_in_shard_map_for_benchmark(
-        lambda x_value, labels_value, w_value: x_value[:, 0] + labels_value.astype(x_value.dtype) + w_value[0, 0],
-        x=x,
-        labels=y,
-        w=w,
-    )
-
+    assert wrapped is not fn
     out = wrapped(x, y, w)
     assert out.shape == (4,)
-    assert calls == [(mesh, (x_sharding.spec, y_sharding.spec, w_sharding.spec), y_sharding.spec, False)]
+    assert jnp.array_equal(out, fn(x, y, w))
+
+
+def test_autotune_benchmark_skips_nested_shard_map_for_manual_sharding():
+    mesh = Mesh(jax.devices(), ("data",))
+    x = jax.device_put(jnp.ones((4, 8), dtype=jnp.float32), NamedSharding(mesh, P("data", None)))
+    y = jax.device_put(jnp.zeros((4,), dtype=jnp.int32), NamedSharding(mesh, P("data")))
+    w = jax.device_put(jnp.ones((8, 16), dtype=jnp.float32), NamedSharding(mesh, P(None, None)))
+
+    fn = lambda x_value, labels_value, w_value: x_value[:, 0] + labels_value.astype(x_value.dtype) + w_value[0, 0]
+    seen_wrapped_identity: list[bool] = []
+
+    @jax.shard_map(
+        mesh=mesh,
+        in_specs=(P("data", None), P("data"), P(None, None)),
+        out_specs=P("data"),
+        check_vma=False,
+    )
+    def _capture(local_x, local_y, local_w):
+        assert fused_api._value_uses_manual_sharding(local_x)
+        assert fused_api._value_uses_manual_sharding(local_y)
+        assert fused_api._value_uses_manual_sharding(local_w)
+        wrapped = fused_api._maybe_wrap_loss_in_shard_map_for_benchmark(fn, x=local_x, labels=local_y, w=local_w)
+        seen_wrapped_identity.append(wrapped is fn)
+        return wrapped(local_x, local_y, local_w)
+
+    out = _capture(x, y, w)
+    out.block_until_ready()
+
+    assert seen_wrapped_identity == [True]
+    assert out.shape == (4,)
+
+
+def test_shape_dtype_struct_for_benchmark_drops_manual_sharding_from_shard_map_tracer():
+    mesh = Mesh(jax.devices(), ("data",))
+    sharding = NamedSharding(mesh, P("data", None))
+    x = jax.device_put(jnp.ones((4, 8), dtype=jnp.float32), sharding)
+
+    seen_manual: list[bool] = []
+    seen_structs: list[jax.ShapeDtypeStruct] = []
+
+    @jax.shard_map(mesh=mesh, in_specs=P("data", None), out_specs=P("data", None), check_vma=False)
+    def _capture(local_x):
+        seen_manual.append(fused_api._value_uses_manual_sharding(local_x))
+        with pytest.raises(AssertionError):
+            pjit.pjit_check_aval_sharding([local_x.aval.sharding], [local_x.aval], ["x"], "arg", False)
+        seen_structs.append(fused_api._shape_dtype_struct_for_benchmark(local_x))
+        return local_x
+
+    _capture(x).block_until_ready()
+
+    assert seen_manual == [True]
+    assert len(seen_structs) == 1
+    struct = seen_structs[0]
+    assert struct.shape == (4, 8)
+    assert struct.dtype == jnp.float32
+    assert getattr(struct, "sharding", None) is None
 
 
 def test_benchmark_candidate_handles_real_shard_map_tracers():

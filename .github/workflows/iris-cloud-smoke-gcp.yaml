@@ -1,4 +1,4 @@
-name: Iris - Cloud Smoke Test
+name: Iris - Cloud Smoke Test (GCP)
 
 on:
   pull_request:
@@ -15,7 +15,8 @@ permissions:
 
 concurrency:
   group: iris-cloud-smoke-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
-  cancel-in-progress: true
+  # Never kill a running cloud test — would leak GCP resources.
+  cancel-in-progress: false
 
 jobs:
   cloud-smoke-test:
@@ -118,9 +119,10 @@ jobs:
       - name: Start smoke cluster
         env:
           LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
+          MARIN_PREFIX: gs://marin-eu-west4
         run: |
           cd lib/iris && uv run --group dev iris -v \
-            --config=examples/smoke.yaml \
+            --config=examples/smoke-gcp.yaml \
             cluster start-smoke \
             --label-prefix "$LABEL_PREFIX" \
             --url-file /tmp/iris-controller-url \
@@ -167,7 +169,7 @@ jobs:
           LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
         run: |
           cd lib/iris && uv run --group dev iris -v \
-            --config=examples/smoke.yaml \
+            --config=examples/smoke-gcp.yaml \
             cluster stop --label "$LABEL_PREFIX" || true
 
       - name: Upload screenshots
@@ -219,18 +221,19 @@ jobs:
       - name: Tear down cluster (iris stop)
         run: |
           cd lib/iris && uv run --group dev iris -v \
-            --config=examples/smoke.yaml \
+            --config=examples/smoke-gcp.yaml \
             cluster stop --label "$LABEL_PREFIX" || true
 
       - name: Failsafe GCP resource cleanup
         run: |
           MANAGED_LABEL="iris-${LABEL_PREFIX}-managed"
+          CONTROLLER_LABEL="iris-${LABEL_PREFIX}-controller"
           PROJECT="${{ secrets.GCP_PROJECT_ID }}"
 
-          echo "Cleaning up GCE instances with label ${MANAGED_LABEL}=true..."
+          echo "Cleaning up GCE instances with label ${MANAGED_LABEL}=true OR ${CONTROLLER_LABEL}=true..."
           gcloud compute instances list \
             --project="$PROJECT" \
-            --filter="labels.${MANAGED_LABEL}=true" \
+            --filter="labels.${MANAGED_LABEL}=true OR labels.${CONTROLLER_LABEL}=true" \
             --format="csv[no-heading](name,zone)" 2>/dev/null \
           | while IFS=, read -r name zone; do
               [ -z "$name" ] && continue
@@ -243,12 +246,14 @@ jobs:
           gcloud compute tpus tpu-vm list \
             --project="$PROJECT" --zone=- \
             --filter="labels.${MANAGED_LABEL}=true" \
-            --format="csv[no-heading](name,zone)" 2>/dev/null \
-          | while IFS=, read -r name zone; do
-              [ -z "$name" ] && continue
-              echo "Deleting TPU $name ($zone)"
-              gcloud compute tpus tpu-vm delete "$name" \
-                --project="$PROJECT" --zone="$zone" --quiet || true
+            --uri 2>/dev/null \
+          | while read -r uri; do
+              [ -z "$uri" ] && continue
+              tpu_name=$(echo "$uri" | awk -F/ '{print $NF}')
+              tpu_zone=$(echo "$uri" | awk -F/ '{print $(NF-2)}')
+              echo "Deleting TPU $tpu_name ($tpu_zone)"
+              gcloud compute tpus tpu-vm delete "$tpu_name" \
+                --project="$PROJECT" --zone="$tpu_zone" --quiet --async || true
             done
 
       - name: Set commit status to result

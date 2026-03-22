@@ -69,7 +69,7 @@ pub fn hash_array(
 }
 
 pub fn add_column(batch: &RecordBatch, name: &str, col: Arc<dyn Array>) -> PyResult<RecordBatch> {
-    let mut fields: Vec<Arc<Field>> = batch.schema().fields().iter().map(|f| f.clone()).collect();
+    let mut fields: Vec<Arc<Field>> = batch.schema().fields().iter().cloned().collect();
     fields.push(Arc::new(Field::new(name, col.data_type().clone(), true)));
 
     let mut columns = batch.columns().to_vec();

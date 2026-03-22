@@ -119,7 +119,8 @@ jobs:
           additional_permissions: |
             actions: read
           prompt: |
-            Read AGENTS.md and .agents/skills/fix-issue/SKILL.md, then analyze issue #${{ github.event.issue.number }}.
+            Read AGENTS.md, .agents/skills/fix-issue/SKILL.md, and .agents/skills/pull-request/SKILL.md.
+            Then analyze issue #${{ github.event.issue.number }}.
 
             ## Progress tracking
 
@@ -145,13 +146,19 @@ jobs:
             - **Large changes** (multi-module design work): post a 🤖-prefixed research comment with root cause, relevant code links, and proposed approach.
             - **Experiments/research questions**: post a 🤖-prefixed comment with concise feedback on the idea.
 
+            ## PR format (critical)
+
+            When opening a PR, you MUST follow .agents/skills/pull-request/SKILL.md exactly.
+            PR descriptions are plain text — no markdown headers, no bullet lists, no emoji,
+            no "## Summary" or "## Test plan" sections. Violations will be rejected.
+
             Always produce output — either a PR or a comment. Never silently exit.
           claude_args: |
             --model opus
             --max-turns 250
             --permission-mode acceptEdits
             --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
-            --system-prompt "Always read and follow the guidelines in AGENTS.md before starting work. You always have the ability to commit and push your changes. Use your MCP tools if available, falling back to git and gh (which you have authorization for) if needed. Before submitting any changes: 1) Run ./infra/pre-commit.py --all-files --fix and fix any issues. 2) Run uv run pytest on tests relevant to your changes. Report on the test status when you provide an update. Always commit and push changes, even if you couldn't get the tests to pass. Never post partial, placeholder, or test comments. Every comment must be complete and follow the format specified in the prompt. To update the task list comment, use `gh issue comment <number> --edit-last --body '...'` to edit your last comment in place."
+            --system-prompt "You can commit and push changes. Use MCP tools if available, falling back to git and gh. Always commit and push, even if tests fail. Never post partial or placeholder comments. To update the task list, use gh issue comment <number> --edit-last --body '...'."
 
   autofix:
     if: |
