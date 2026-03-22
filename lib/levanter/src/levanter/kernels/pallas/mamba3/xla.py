@@ -214,6 +214,10 @@ def _mamba3_chunked_forward_xla_batched_default_custom_vjp_bwd(
             local_output_variant=LOCAL_OUTPUT_AUTO,
         )
 
+    # This VJP is intentionally recompute-heavy: we re-run the forward under
+    # autodiff rather than storing large intermediates from the chunked kernel.
+    # primals_out is only used to materialize SymbolicZero cotangents with the
+    # correct shapes/dtypes before feeding them into the pullback.
     primals_out, pullback = jax.vjp(forward_impl, *primals)
     y_ct = _materialize_cotangent(y_bar, primals_out[0])
     final_state_ct = _materialize_cotangent(final_state_bar, primals_out[1])

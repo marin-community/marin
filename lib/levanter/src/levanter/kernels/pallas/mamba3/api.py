@@ -743,9 +743,6 @@ def mamba3_mimo_attentionish_forward_from_transformed(
     flat_w_o = _reshape_attentionish_weights(mimo_o, batch=batch).reshape(groups, v.shape[-1], rank)
     flat_x_ranked = mamba3_mimo_rank_expand_chunked(flat_x, flat_w_v)
 
-    if implementation not in (None, "xla", "reference"):
-        raise ValueError("Attention-ish MIMO is currently available only for the XLA and reference implementations.")
-
     if implementation == "reference":
         y_ranked, final_state = mamba3_mimo_chunked_forward_ranked_reference_batched(
             flat_a_log_cumsum,
