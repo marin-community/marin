@@ -29,8 +29,7 @@ from levanter.trainer import Trainer, TrainerConfig
 from transformers import PreTrainedTokenizer
 
 from marin.rl import weight_transfer
-from fray.v1.job import get_default_job_ctx
-from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
+from marin.rl.curriculum import CurriculumConfig
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.weight_transfer import WeightTransferConfig
 
@@ -182,11 +181,14 @@ class TrainWorker:
     def __init__(
         self,
         config: TrainWorkerConfig,
+        runtime=None,
     ):
         """Initialize training worker.
 
         Args:
             config: Training worker configuration with Levanter components.
+            runtime: RLRuntimeHandles with actor handles for curriculum, run_state,
+                     and weight transfer. If None, falls back to fray v1 actor discovery.
         """
 
         print("Run id: ", config.run_id)
@@ -195,6 +197,7 @@ class TrainWorker:
         levanter.initialize(config.trainer)
 
         self.config = config
+        self._runtime = runtime
         self._should_stop = False
         self.tokenizer = config.tokenizer
         self.loss_module = config.loss
@@ -219,17 +222,31 @@ class TrainWorker:
             self.replay_loader,
             config,
         )
+
+        coordinator_handle = runtime.weight_transfer.arrow_flight_coordinator if runtime else None
         self.transfer_server = weight_transfer.create_weight_transfer_server(
             config.weight_transfer,
             mesh=self.config.trainer.device_mesh,
             axis_mapping=self.config.trainer.compute_axis_mapping,
+            coordinator_handle=coordinator_handle,
         )
 
-        # Create curriculum actor with auto-restore from checkpoint
-        checkpoint_dir = config.trainer.checkpointer.expanded_path(config.run_id)
-        self._curriculum_actor = get_or_create_curriculum_actor(
-            self.config.curriculum_config, checkpoint_path=checkpoint_dir
-        )
+        # Curriculum actor: use runtime handle if available, fall back to v1 discovery
+        if runtime:
+            self._curriculum_actor = runtime.curriculum
+            # Restore checkpoint if available
+            checkpoint_dir = config.trainer.checkpointer.expanded_path(config.run_id)
+            try:
+                self._curriculum_actor.restore_checkpoint.remote(checkpoint_dir).result()
+            except Exception as e:
+                logger.warning("Failed to restore curriculum checkpoint from %s: %s, starting fresh", checkpoint_dir, e)
+        else:
+            from marin.rl.curriculum import get_or_create_curriculum_actor
+
+            checkpoint_dir = config.trainer.checkpointer.expanded_path(config.run_id)
+            self._curriculum_actor = get_or_create_curriculum_actor(
+                self.config.curriculum_config, checkpoint_path=checkpoint_dir
+            )
 
         logger.info("Connected to curriculum actor: %s", config.curriculum_config.actor_name)
 
@@ -407,8 +424,13 @@ class TrainWorker:
         def _curriculum_checkpoint_hook(info: levanter.callbacks.StepInfo):
             checkpoint_dir = self.config.trainer.checkpointer.expanded_path(self.config.run_id)
             try:
-                future = self._curriculum_actor.save_checkpoint.remote(checkpoint_dir)
-                get_default_job_ctx().get(future)
+                if self._runtime:
+                    self._curriculum_actor.save_checkpoint.remote(checkpoint_dir).result()
+                else:
+                    from fray.v1.job import get_default_job_ctx
+
+                    future = self._curriculum_actor.save_checkpoint.remote(checkpoint_dir)
+                    get_default_job_ctx().get(future)
             except Exception as e:
                 logger.error(f"Failed to save curriculum checkpoint: {e}")
 
