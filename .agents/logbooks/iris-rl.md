@@ -236,8 +236,8 @@ All fixes in commit `84cbb2528`.
 6. Update logbook after every check
 7. Repeat until jobs complete or 8 hours elapsed
 
-**Commands:**
-```
-uv run iris --config=lib/iris/examples/marin.yaml job logs /ahmed/iris-rl-debug
-uv run iris --config=lib/iris/examples/marin.yaml job logs /ahmed/iris-rl-debug-v5p
-```
+**Attempt 1** (`/ahmed/iris-rl-debug`): FAILED — `can't open file` — experiment file not in workspace bundle (submitted from main repo, not worktree).
+**Attempt 2** (`/ahmed/iris-rl-debug-2`): FAILED — `libcublas.so not found` — `--extra vllm` installed CUDA vllm on CPU worker.
+**Attempt 3** (`/ahmed/iris-rl-debug-3`): KILLED — removed vllm extra but `rl_experiment_utils.py` has top-level `from vllm import SamplingParams`.
+**Fix**: Made vllm import lazy in `make_rl_step()` (commit `391331f29`). But `make_rl_step` is called at step construction time on the outer job, and it calls `SamplingParams(...)`, so the outer job still needs vllm.
+**Attempt 4** (`/ahmed/iris-rl-debug-4`): Submitted outer job on v6e-8 TPU so vllm imports work. PENDING.
