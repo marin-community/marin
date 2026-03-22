@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from typing import NamedTuple
 
 import jax
-import jax.numpy as jnp
 import optax
 from optax import tree_utils as otu
 
@@ -77,9 +76,7 @@ class MuonHRConfig(OptimizerConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(
-                    scale_by_adamhr(self.beta1, self.beta2, self.epsilon, learning_rate)
-                )
+                components.append(scale_by_adamhr(self.beta1, self.beta2, self.epsilon, learning_rate))
                 return optax.chain(*components)
 
             def adam_transform():
@@ -98,9 +95,7 @@ class MuonHRConfig(OptimizerConfig):
 
             return optax.multi_transform(transformations, self.create_mask)
 
-        return optax.inject_hyperparams(optimizer)(
-            learning_rate=learning_rate_schedule, adam_lr=adam_lr_schedule
-        )
+        return optax.inject_hyperparams(optimizer)(learning_rate=learning_rate_schedule, adam_lr=adam_lr_schedule)
 
     def create_mask(self, params):
         """Route linear weights to muonhr, lm_head and embeddings to adamhr, rest to adam."""
@@ -117,9 +112,7 @@ class MuonHRConfig(OptimizerConfig):
             else:
                 return "adam"
 
-        return haliax.tree_util.tree_map(
-            mask_fn, params, paths, is_leaf=lambda x: isinstance(x, haliax.nn.Linear)
-        )
+        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, haliax.nn.Linear))
 
 
 class ScaleByMuonHRState(NamedTuple):

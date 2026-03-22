@@ -57,9 +57,7 @@ class AdamHRConfig(OptimizerConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(
-                    scale_by_adamhr(self.beta1, self.beta2, self.epsilon, learning_rate)
-                )
+                components.append(scale_by_adamhr(self.beta1, self.beta2, self.epsilon, learning_rate))
                 return optax.chain(*components)
 
             def adam_transform():
@@ -77,9 +75,7 @@ class AdamHRConfig(OptimizerConfig):
 
             return optax.multi_transform(transformations, self.create_mask)
 
-        return optax.inject_hyperparams(optimizer)(
-            learning_rate=learning_rate_schedule, adam_lr=adam_lr_schedule
-        )
+        return optax.inject_hyperparams(optimizer)(learning_rate=learning_rate_schedule, adam_lr=adam_lr_schedule)
 
     def create_mask(self, params):
         """Route linear weights AND input embeddings to adamhr; biases and norms to adam."""

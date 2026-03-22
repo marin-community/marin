@@ -13,7 +13,7 @@ See: https://github.com/marin-community/marin/issues/3964
 
 from dataclasses import replace
 
-from levanter.optim import AdamHConfig, AdamHRConfig
+from levanter.optim import AdamHRConfig
 
 from experiments.defaults import default_train
 from experiments.pretraining_datasets.nemotron import nemotron_mix
@@ -86,9 +86,7 @@ def build_steps() -> list[ExecutorStep]:
             name=f"{EXPERIMENT_NAME}-adamhr-lr{mult:.1f}x",
             tokenized=nemotron_mix,
             model_config=model_config_with_gain,
-            train_config=_make_simple_train_config(
-                **base_train_config_kwargs, optimizer_config=adamhr_config
-            ),
+            train_config=_make_simple_train_config(**base_train_config_kwargs, optimizer_config=adamhr_config),
             tags=("adamhr", f"lr_mult={mult}", f"FLOPs={BUDGET:.0e}"),
             eval_harness_tasks=[],
         )
