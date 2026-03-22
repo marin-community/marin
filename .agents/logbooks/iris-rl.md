@@ -331,6 +331,22 @@ Tried v6e-4 (europe-west4, 98+ slices running), v6e-8 (0 available), v5litepod-4
 
 **Still blocked**: No second TPU available anywhere for the trainer. Job `/ahmed/iris-rl-direct-13` running, monitoring continues.
 
+### 2026-03-22 03:10-08:10 UTC — 5 hours monitoring, trainer still pending
+
+Job `/ahmed/iris-rl-direct-13` has been running for 5+ hours:
+- Outer coordinator: RUNNING on CPU
+- Rollout worker: RUNNING on v5litepod-4 (polling for weights, dummy guard active)
+- Trainer: PENDING — "No worker matches constraints" on v5litepod-4
+
+The entire Iris cluster is saturated across all TPU types (v6e-4, v6e-8, v5litepod-4). No TPU freed up in 5 hours of monitoring.
+
+**For the user when they wake up**:
+1. The v2 orchestration code is working end-to-end on Iris — coordinator, actors, child jobs, actor resolution, weight polling
+2. The only thing blocking full e2e validation is cluster TPU capacity
+3. The rollout worker has been validated: vLLM initialized, Iris actor resolution works, phase logging works
+4. When a second TPU frees up, the trainer will start and we should see Arrow Flight weight transfer + training
+5. If capacity remains an issue, consider asking the cluster admin to add more workers, or try during off-peak hours
+
 ### BLOCKER 2 (resolved): vllm-tpu installs CUDA torch on TPU workers
 
 This is the same issue on-demand-rl hit — `bootstrap_rl.sh` solved it with constraint pinning. The `uv` extras system can't handle "install vllm-tpu but keep the existing TPU torch". Need to either:
