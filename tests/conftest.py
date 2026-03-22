@@ -4,26 +4,17 @@ import os
 import tempfile
 
 import pytest
-from fray.v1.cluster import create_cluster, set_current_cluster
-from fray.v1.job.context import _job_context
+from fray.v2 import LocalClient, set_current_client
 
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
 
 
 @pytest.fixture(autouse=True)
-def reset_fray_context():
-    """Reset fray context between tests for isolation."""
-    _job_context.set(None)
-    yield
-    _job_context.set(None)
-
-
-@pytest.fixture(autouse=True)
-def fray_cluster():
-    set_current_cluster(create_cluster("local"))
-    yield
-    set_current_cluster(None)
+def fray_client():
+    """Set up a v2 LocalClient for all tests."""
+    with set_current_client(LocalClient()) as client:
+        yield client
 
 
 @pytest.fixture(autouse=True)

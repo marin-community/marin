@@ -90,6 +90,9 @@ def sample_params():
 
 def create_test_weight_transfer_pair(weight_transfer_config):
     """Helper function to create server/client pairs for testing with simplified Levanter API."""
+    from fray.v2 import current_client
+    from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
+
     # Set unique coordinator name for distributed modes
     coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
     weight_transfer_config.coordinator_name = coordinator_name
@@ -102,16 +105,27 @@ def create_test_weight_transfer_pair(weight_transfer_config):
         "layers": None,
     }
 
+    # Create coordinator handle for Arrow Flight mode
+    coordinator_handle = None
+    if weight_transfer_config.mode == WeightTransferMode.ARROW_FLIGHT:
+        client = current_client()
+        coordinator_handle = client.create_actor(
+            ArrowFlightCoordinator,
+            name=coordinator_name,
+        )
+
     server = create_weight_transfer_server(
         config=weight_transfer_config,
         mesh=mesh,
         axis_mapping=axis_mapping,
+        coordinator_handle=coordinator_handle,
     )
 
     client = create_weight_transfer_client(
         config=weight_transfer_config,
         mesh=mesh,
         axis_mapping=axis_mapping,
+        coordinator_handle=coordinator_handle,
     )
 
     return server, client
@@ -130,14 +144,12 @@ def weight_transfer_config(transfer_mode):
 
 
 @pytest.fixture(autouse=True)
-def job_context():
-    """Ensure a shared job context for all tests."""
-    from fray.v1.job.context import create_job_ctx, fray_default_job_ctx
+def v2_client():
+    """Ensure a v2 LocalClient for weight transfer tests."""
+    from fray.v2 import LocalClient, set_current_client
 
-    # Use threadpool context for tests to avoid Ray overhead unless needed
-    ctx = create_job_ctx("threadpool")
-    with fray_default_job_ctx(ctx):
-        yield ctx
+    with set_current_client(LocalClient()) as client:
+        yield client
 
 
 def test_multiple_weight_updates(weight_transfer_config, sample_params):
