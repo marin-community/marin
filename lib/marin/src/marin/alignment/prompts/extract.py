@@ -1,10 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stage 3 prompt templates: extracting clean system_prompt + user_message from scenarios.
-
-Ported from bloom/synthetic_pipeline/stage3.py prompt construction.
-"""
+"""Stage 3 prompt templates: extracting clean system_prompt + user_message from scenarios."""
 
 from __future__ import annotations
 

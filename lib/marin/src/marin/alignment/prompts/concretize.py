@@ -1,10 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stage 2 prompt templates: concretizing axis configurations into scenarios.
-
-Ported from bloom/prompts/concretize.py.
-"""
+"""Stage 2 prompt templates: concretizing axis configurations into scenarios."""
 
 from __future__ import annotations
 

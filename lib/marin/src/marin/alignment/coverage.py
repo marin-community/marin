@@ -9,7 +9,6 @@ appears in at least one configuration. Uses a greedy set-cover algorithm.
 
 t=2 gives pairwise covering, t=3 gives 3-way covering, etc.
 
-Ported from bloom/coverage.py.
 """
 
 from __future__ import annotations
@@ -117,13 +116,13 @@ def compute_coverage_stats(
             tup = tuple((axes_names[ai], config[axes_names[ai]]) for ai in axis_indices)
             covered_tuples.add(tup)
 
-    per_axis_value_counts: dict[str, dict[str, int]] = {}
-    for ax in axes:
-        name = ax["axis"]
-        counts: dict[str, int] = {}
-        for val in ax["spectrum"]:
-            counts[val] = sum(1 for c in configs if c.get(name) == val)
-        per_axis_value_counts[name] = counts
+    # Single pass over configs to count per-axis value occurrences
+    per_axis_value_counts: dict[str, dict[str, int]] = {ax["axis"]: {val: 0 for val in ax["spectrum"]} for ax in axes}
+    for config in configs:
+        for name in axes_names:
+            val = config.get(name)
+            if val is not None and val in per_axis_value_counts[name]:
+                per_axis_value_counts[name][val] += 1
 
     return {
         "total_tuples": total_tuples,

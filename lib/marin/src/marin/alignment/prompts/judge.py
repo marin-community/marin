@@ -1,10 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Judge prompt templates for compliance scoring.
-
-Ported from bloom/speceval/prompts.py.
-"""
+"""Judge prompt templates for compliance scoring."""
 
 from __future__ import annotations
 

@@ -1,10 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stage 1 prompt templates: behavior understanding and variation axes.
-
-Ported from bloom/prompts/step1_understanding.py.
-"""
+"""Stage 1 prompt templates: behavior understanding and variation axes."""
 
 from typing import Any
 

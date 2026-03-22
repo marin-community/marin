@@ -23,7 +23,7 @@ from zephyr import Dataset, ZephyrContext, load_jsonl
 
 from marin.alignment.generate_prompts import load_sharded_jsonl_gz, write_sharded_jsonl_gz
 from marin.alignment.inference_config import InferenceConfig, LiteLLMConfig, VLLMConfig
-from marin.alignment.llm_client import _get_or_create_vllm_engine, llm_chat
+from marin.alignment.llm_client import get_or_create_vllm_engine, llm_chat
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +168,7 @@ def _generate_via_vllm(
     prompts = load_sharded_jsonl_gz(config.prompts_path)
     logger.info("Loaded %d prompts for vLLM batch generation", len(prompts))
 
-    llm, tokenizer = _get_or_create_vllm_engine(inference_config)
+    llm, tokenizer = get_or_create_vllm_engine(inference_config)
 
     sampling_params = SamplingParams(
         temperature=config.temperature,

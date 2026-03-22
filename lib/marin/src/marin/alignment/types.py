@@ -1,10 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Data types for alignment pipeline.
-
-Ported from bloom/speceval/types.py.
-"""
+"""Data types for alignment pipeline."""
 
 from dataclasses import dataclass, field
 from enum import Enum

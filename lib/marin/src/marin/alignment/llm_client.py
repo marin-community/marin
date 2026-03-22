@@ -79,7 +79,7 @@ def _chat_litellm(
 # ---------------------------------------------------------------------------
 
 
-def _get_or_create_vllm_engine(config: VLLMConfig):
+def get_or_create_vllm_engine(config: VLLMConfig):
     """Get cached vLLM engine or create a new one."""
     global _active_vllm_engine
 
@@ -115,7 +115,7 @@ def _chat_vllm(
     except ImportError as exc:
         raise ImportError("vLLM is required for local model inference. Install with: pip install vllm") from exc
 
-    llm, tokenizer = _get_or_create_vllm_engine(config)
+    llm, tokenizer = get_or_create_vllm_engine(config)
     sampling_params = SamplingParams(temperature=temperature, max_tokens=max_tokens, n=n)
 
     text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -144,7 +144,7 @@ def vllm_engine(config: VLLMConfig):
     """
     global _active_vllm_engine
 
-    llm, tokenizer = _get_or_create_vllm_engine(config)
+    llm, tokenizer = get_or_create_vllm_engine(config)
     _active_vllm_engine = {"llm": llm, "tokenizer": tokenizer, "model": config.model}
 
     try:

@@ -8,12 +8,12 @@ Implements the 3-stage Bloom pipeline:
   Stage 2: Concretization — covering array → concrete scenarios via LLM
   Stage 3: Extraction — extract clean system_prompt + user_message from scenario prose
 
-Ported from bloom/synthetic_pipeline/stage{1,2,3}.py.
 """
 
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import json
 import logging
 import re
@@ -65,7 +65,9 @@ class PromptGenConfig:
     # LLM parameters
     understanding_max_tokens: int = 4000
     understanding_temperature: float = 1.0
+    concretize_max_tokens: int = 16000
     concretize_temperature: float = 1.0
+    extract_max_tokens: int = 16000
 
     # Filtering
     statement_ids: list[str] | None = None
@@ -165,6 +167,7 @@ def _concretize_batch(
     batch_start_idx: int,
     model: str,
     temperature: float,
+    max_tokens: int = 16000,
 ) -> list[dict[str, Any]]:
     """Concretize a batch of axis configs into scenarios."""
     system_prompt, user_prompt = make_concretize_prompt(
@@ -180,7 +183,7 @@ def _concretize_batch(
         config=model,
         messages=[{"role": "user", "content": user_prompt}],
         system_prompt=system_prompt,
-        max_tokens=16000,
+        max_tokens=max_tokens,
         temperature=temperature,
     )
     parsed_scenarios = _parse_concretize_response(response.content)
@@ -227,6 +230,7 @@ def _run_concretization(
                 batch_start_idx,
                 config.ideation_model,
                 config.concretize_temperature,
+                config.concretize_max_tokens,
             ): (batch_start_idx, len(batch_configs))
             for batch_start_idx, batch_configs in batches
         }
@@ -303,6 +307,7 @@ def _extract_batch(
     scenarios: list[dict[str, Any]],
     batch_start_idx: int,
     model: str,
+    max_tokens: int = 16000,
 ) -> list[dict[str, str]]:
     """Extract clean prompts from a batch of scenarios."""
     system_prompt, user_prompt = make_extraction_prompt(scenarios, batch_start_idx, include_system_prompt=True)
@@ -310,7 +315,7 @@ def _extract_batch(
         config=model,
         messages=[{"role": "user", "content": user_prompt}],
         system_prompt=system_prompt,
-        max_tokens=16000,
+        max_tokens=max_tokens,
         temperature=0.0,
     )
     return _parse_extraction_response(response.content, len(scenarios), batch_start_idx, include_system_prompt=True)
@@ -334,7 +339,10 @@ def _run_extraction(
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=config.extract_workers) as pool:
         future_map = {
-            pool.submit(_extract_batch, batch, batch_start, config.extract_model): (batch_start, len(batch))
+            pool.submit(_extract_batch, batch, batch_start, config.extract_model, config.extract_max_tokens): (
+                batch_start,
+                len(batch),
+            )
             for batch_start, batch in batches
         }
         for future in concurrent.futures.as_completed(future_map):
@@ -384,22 +392,13 @@ def generate_prompts_from_spec(config: PromptGenConfig) -> None:
     Reads a specification JSONL, runs understanding → concretization → extraction
     for each behavior statement, and writes the results as sharded JSONL.GZ files.
     """
-    # If using vLLM for ideation, keep the engine alive for all stages 1-2
-    ideation_ctx = vllm_engine(config.ideation_model) if isinstance(config.ideation_model, VLLMConfig) else None
-    extract_ctx = vllm_engine(config.extract_model) if isinstance(config.extract_model, VLLMConfig) else None
-
-    if ideation_ctx:
-        ideation_ctx.__enter__()
-    if extract_ctx and extract_ctx is not ideation_ctx:
-        extract_ctx.__enter__()
-
-    try:
+    # Keep vLLM engines alive for the duration of all stages
+    with contextlib.ExitStack() as stack:
+        if isinstance(config.ideation_model, VLLMConfig):
+            stack.enter_context(vllm_engine(config.ideation_model))
+        if isinstance(config.extract_model, VLLMConfig):
+            stack.enter_context(vllm_engine(config.extract_model))
         _generate_prompts_inner(config)
-    finally:
-        if extract_ctx and extract_ctx is not ideation_ctx:
-            extract_ctx.__exit__(None, None, None)
-        if ideation_ctx:
-            ideation_ctx.__exit__(None, None, None)
 
 
 def _generate_prompts_inner(config: PromptGenConfig) -> None:
