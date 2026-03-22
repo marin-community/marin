@@ -4,8 +4,8 @@
 """Steps 2a/2b: Generate chosen and rejected responses.
 
 Supports two backends via InferenceConfig:
-- LiteLLMConfig → API calls (OpenAI, Anthropic, etc.)
-- VLLMConfig → local vLLM instance
+- LiteLLMConfig → API calls via Zephyr pipeline (streaming, parallel workers)
+- VLLMConfig → local vLLM instance (batch generation)
 
 Teacher responses receive spec guidance in the system prompt.
 Rejected responses receive NO spec guidance.
@@ -15,14 +15,13 @@ teaches the model to internalize behavior without needing the spec at inference 
 
 from __future__ import annotations
 
-import concurrent.futures
 import logging
 from dataclasses import dataclass
 from typing import Any
 
-from zephyr import load_jsonl
+from zephyr import Dataset, ZephyrContext, load_jsonl
 
-from marin.alignment.generate_prompts import load_sharded_jsonl_gz, write_sharded_jsonl_gz
+from marin.alignment.generate_prompts import load_sharded_jsonl_gz
 from marin.alignment.inference_config import InferenceConfig, LiteLLMConfig, VLLMConfig
 from marin.alignment.llm_client import _get_or_create_vllm_engine, llm_chat
 
@@ -62,16 +61,8 @@ class ResponseGenConfig:
             raise ValueError(f"Unknown inference backend: {backend}")
 
 
-def _load_prompts(prompts_path: str) -> list[dict[str, Any]]:
-    """Load prompts from sharded JSONL.GZ files. Supports both local and GCS paths."""
-    return load_sharded_jsonl_gz(prompts_path)
-
-
 def _load_behavior_statements(path: str) -> dict[str, str]:
-    """Load behavior statement texts keyed by ID from a spec JSONL file.
-
-    Supports both local and GCS paths.
-    """
+    """Load behavior statement texts keyed by ID from a spec JSONL file."""
     return {record["id"]: record["text"] for record in load_jsonl(path)}
 
 
@@ -115,82 +106,68 @@ def _make_response_record(
     }
 
 
-def _generate_for_prompt_api(
-    prompt: dict[str, Any],
-    inference_config: LiteLLMConfig,
-    n: int,
-    temperature: float,
-    max_tokens: int,
-    behavior_statements: dict[str, str] | None,
-) -> dict[str, Any]:
-    """Generate responses for a single prompt via API."""
-    messages = _build_messages(prompt, behavior_statements)
-
-    responses = llm_chat(
-        config=inference_config,
-        messages=messages,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        n=n,
-    )
-
-    return _make_response_record(
-        prompt,
-        inference_config.model,
-        [{"content": r.content, "index": i} for i, r in enumerate(responses)],
-    )
+# ---------------------------------------------------------------------------
+# API path: Zephyr pipeline (streaming, distributed)
+# ---------------------------------------------------------------------------
 
 
 def _generate_via_api(
-    prompts: list[dict[str, Any]],
-    inference_config: LiteLLMConfig,
     config: ResponseGenConfig,
+    inference_config: LiteLLMConfig,
     behavior_statements: dict[str, str] | None,
-) -> list[dict[str, Any]]:
-    """Generate responses for all prompts via litellm API calls."""
-    results: list[dict[str, Any]] = []
-    failures: list[str] = []
+) -> None:
+    """Generate responses for all prompts via Zephyr pipeline + litellm API calls."""
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=inference_config.workers) as pool:
-        future_map = {
-            pool.submit(
-                _generate_for_prompt_api,
-                prompt,
-                inference_config,
-                config.n,
-                config.temperature,
-                config.max_tokens,
-                behavior_statements,
-            ): i
-            for i, prompt in enumerate(prompts)
-        }
-        for future in concurrent.futures.as_completed(future_map):
-            idx = future_map[future]
-            try:
-                results.append(future.result())
-            except Exception as exc:
-                failures.append(f"prompt {idx}: {exc}")
-                logger.error("Response generation failed for prompt %d: %s", idx, exc)
+    def _process_prompt(prompt: dict) -> dict:
+        messages = _build_messages(prompt, behavior_statements)
+        responses = llm_chat(
+            config=inference_config,
+            messages=messages,
+            max_tokens=config.max_tokens,
+            temperature=config.temperature,
+            n=config.n,
+        )
+        return _make_response_record(
+            prompt,
+            inference_config.model,
+            [{"content": r.content, "index": i} for i, r in enumerate(responses)],
+        )
 
-    if failures:
-        logger.warning("%d/%d prompts failed during response generation", len(failures), len(prompts))
+    ds = (
+        Dataset.from_files(f"{config.prompts_path}/*.jsonl.gz")
+        .load_jsonl()
+        .map(_process_prompt)
+        .write_jsonl(f"{config.output_path}/shard-{{shard:05d}}.jsonl.gz")
+    )
 
-    return results
+    ctx = ZephyrContext(max_workers=inference_config.workers)
+    ctx.execute(ds)
+
+
+# ---------------------------------------------------------------------------
+# vLLM path: batch generation (all prompts in one llm.generate call)
+# ---------------------------------------------------------------------------
 
 
 def _generate_via_vllm(
-    prompts: list[dict[str, Any]],
-    inference_config: VLLMConfig,
     config: ResponseGenConfig,
+    inference_config: VLLMConfig,
     behavior_statements: dict[str, str] | None,
-) -> list[dict[str, Any]]:
-    """Generate responses for all prompts via local vLLM instance."""
+) -> None:
+    """Generate responses for all prompts via local vLLM instance.
+
+    Uses batch generation (single llm.generate call) for efficiency.
+    Zephyr's per-record map would call vLLM once per prompt which is much
+    slower than batching, so this path loads all prompts eagerly.
+    """
     try:
         from vllm import SamplingParams
     except ImportError as exc:
         raise ImportError("vLLM is required for local model inference. Install with: pip install vllm") from exc
 
-    logger.info("Starting vLLM with model: %s", inference_config.model)
+    prompts = load_sharded_jsonl_gz(config.prompts_path)
+    logger.info("Loaded %d prompts for vLLM batch generation", len(prompts))
+
     llm, tokenizer = _get_or_create_vllm_engine(inference_config)
 
     sampling_params = SamplingParams(
@@ -208,22 +185,27 @@ def _generate_via_vllm(
 
     outputs = llm.generate(all_prompt_texts, sampling_params)
 
+    # Write results using zephyr
+    from marin.alignment.generate_prompts import write_sharded_jsonl_gz
+
     results: list[dict[str, Any]] = []
     for prompt, output in zip(prompts, outputs, strict=True):
         responses = [{"content": completion.text, "index": j} for j, completion in enumerate(output.outputs)]
         results.append(_make_response_record(prompt, inference_config.model, responses))
 
-    return results
+    write_sharded_jsonl_gz(results, config.output_path, shard_size=5000)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 
 def generate_responses(config: ResponseGenConfig) -> None:
     """Generate responses for all prompts.
 
-    Dispatches to litellm or vLLM based on the InferenceConfig type.
+    Dispatches to Zephyr pipeline (API) or batch vLLM based on InferenceConfig type.
     """
-    prompts = _load_prompts(config.prompts_path)
-    logger.info("Loaded %d prompts", len(prompts))
-
     behavior_statements = None
     if config.behavior_statements_path:
         behavior_statements = _load_behavior_statements(config.behavior_statements_path)
@@ -234,15 +216,10 @@ def generate_responses(config: ResponseGenConfig) -> None:
     inference_config = config.resolve_inference_config()
 
     if isinstance(inference_config, LiteLLMConfig):
-        logger.info("Using litellm API: %s", inference_config.model)
-        results = _generate_via_api(prompts, inference_config, config, behavior_statements)
+        logger.info("Using Zephyr + litellm API: %s", inference_config.model)
+        _generate_via_api(config, inference_config, behavior_statements)
     elif isinstance(inference_config, VLLMConfig):
-        logger.info("Using local vLLM: %s", inference_config.model)
-        results = _generate_via_vllm(prompts, inference_config, config, behavior_statements)
+        logger.info("Using batch vLLM: %s", inference_config.model)
+        _generate_via_vllm(config, inference_config, behavior_statements)
     else:
         raise ValueError(f"Unknown inference config type: {type(inference_config)}")
-
-    logger.info("Generated responses for %d prompts", len(results))
-
-    # Write output (supports both local and GCS paths)
-    write_sharded_jsonl_gz(results, config.output_path, shard_size=5000)

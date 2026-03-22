@@ -45,7 +45,13 @@ class JudgePairConfig:
 
 
 def _load_responses(path: str) -> dict[str, dict[str, Any]]:
-    """Load responses keyed by prompt_id. Supports both local and GCS paths."""
+    """Load responses keyed by prompt_id. Supports both local and GCS paths.
+
+    # TODO: This eagerly loads all responses into memory for prompt_id lookup.
+    # Zephyr's Dataset API would be better for streaming at scale, but it lacks
+    # a join/lookup primitive — the judge needs to match chosen and rejected
+    # responses by prompt_id. Until Zephyr supports keyed joins, we load eagerly.
+    """
     records = load_sharded_jsonl_gz(path)
     return {record.get("prompt_id", ""): record for record in records}
 
