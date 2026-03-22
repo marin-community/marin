@@ -189,6 +189,17 @@ lib/marin/src/marin/alignment/
 ### 2026-03-21 — ALIGN-006: End-to-End Validation on Iris (API path)
 - **Action:** Ran full pipeline on Iris cluster with 1 statement (`ask_clarifying_questions`), GPT-4.1-mini for all roles, pairwise covering.
 - **Job:** `/ahmed/iris-run-align_openai_spec_smoke-20260322-001645` (us-central1, CPU only)
+- **Experiment page:** https://marin.community/data-browser/experiment?path=gs%3A//marin-us-central1/experiments/align_openai_spec_smoke-5f28b7.json
+- **GCS output:** `gs://marin-us-central1/align/openai_spec_smoke/`
+  - Prompts: `gs://marin-us-central1/align/openai_spec_smoke/prompts-8a5a5d/`
+  - Chosen: `gs://marin-us-central1/align/openai_spec_smoke/chosen-41661c/`
+  - Rejected: `gs://marin-us-central1/align/openai_spec_smoke/rejected-a966b4/`
+  - Preference pairs: `gs://marin-us-central1/align/openai_spec_smoke/preference_pairs-0abbf8/`
+  - Spec: `gs://marin-us-central1/align/openai_spec_smoke/spec-e79888/`
+  - Artifacts: `gs://marin-us-central1/align/openai_spec_smoke/prompts-8a5a5d/artifacts/`
+    - `ask_clarifying_questions/understanding.json`
+    - `ask_clarifying_questions/ideation.json`
+    - `summary.json`
 - **Results (confidence: replicated — ran multiple times during debugging):**
   - Stage 1: 8 variation axes (6 behavior-specific + 2 demographic)
   - Stage 2: 72 pairwise covering configs, 688/688 tuples covered
@@ -196,8 +207,6 @@ lib/marin/src/marin/alignment/
   - Chosen: 74 responses (with spec guidance)
   - Rejected: 74 responses (without spec guidance)
   - Judge: 15 preference pairs after filtering (20% pass rate)
-  - All artifacts saved to GCS: understanding.json, ideation.json, summary.json
-  - Output: `gs://marin-us-central1/align/openai_spec_smoke/`
 - **Bugs found and fixed during validation:**
   1. `_load_behavior_statements` crashed on JSONL spec files (`json.load` vs JSONL)
   2. All file I/O used `Path()` which doesn't work with `gs://` paths — switched to `iris.marin_fs.url_to_fs` + `zephyr.write_jsonl_file`
@@ -207,12 +216,26 @@ lib/marin/src/marin/alignment/
   6. `tenacity` missing in remote Iris jobs — added as explicit dep
   7. `OPENAI_API_KEY` not forwarded to child Iris jobs — added `_llm_env_vars()` to `@remote` env_vars
 - **Confidence:** `replicated` — pipeline ran successfully multiple times after fixes
+- **Prior failed jobs (for debugging context):**
+  - `/ahmed/iris-run-align_openai_spec_smoke-20260321-213606` — JSONL parse error (bug #1)
+  - `/ahmed/iris-run-align_openai_spec_smoke-20260321-213736` — chosen step failed, rejected succeeded (bug #1)
+  - `/ahmed/iris-run-align_openai_spec_smoke-20260321-214458` — empty shards (GCS I/O bug #2)
+  - `/ahmed/iris-run-align_openai_spec_smoke-20260321-220844` — `UnboundLocalError` (bug #4)
+  - `/ahmed/iris-run-align_openai_spec_smoke-20260321-221610` — cached empty results from prior failures
+  - `/ahmed/iris-run-align_openai_spec_smoke-20260321-222038` — `model_id` kwarg error (bug #5)
+  - `/ahmed/iris-run-align_openai_spec_smoke-20260321-222614` — `tenacity` missing (bug #6)
+  - `/ahmed/iris-run-align_openai_spec_smoke-20260321-223307` — `Incorrect API key` (bug #7)
+  - `/ahmed/iris-run-align_openai_spec_smoke-20260321-224003` — first fully successful run
 
 ### 2026-03-21 — ALIGN-007: VLLMConfig for All Model Roles
 - **Action:** Extended InferenceConfig support to ideation/extract/judge models (not just teacher/rejected). Added `vllm_engine()` context manager for efficient engine reuse across multiple calls within a step. Auto-selects TPU resources and single-threaded execution for vLLM.
 - **Commit:** 2a493aa6a
 - **Debug script:** `experiments/align_debug_vllm.py` — uses Llama 3.1 8B Instruct via vLLM for all roles
-- **Status:** Not yet validated — no TPU capacity available during testing. Job queued but killed.
+- **Failed jobs (no TPU capacity):**
+  - `/ahmed/iris-run-align_debug_vllm-20260321-224937` — pending v6e-8, killed
+  - `/ahmed/iris-run-align_debug_vllm-20260321-225552` — pending v5p-8 us-central1, killed
+  - `/ahmed/iris-run-align_debug_vllm-20260321-230115` — pending v5p-8 any region, killed (all TPUs busy)
+- **Status:** Not yet validated — no TPU capacity available during testing.
 
 ### 2026-03-21 — ALIGN-008: Intermediate Artifact Persistence
 - **Action:** Pipeline now saves per-statement artifacts alongside prompts:
@@ -221,7 +244,7 @@ lib/marin/src/marin/alignment/
   - `artifacts/summary.json` — overview with axis names, config counts, coverage stats
 - **Commit:** 9bdb3b892
 - **Verified:** Artifacts correctly written to GCS and contain full pipeline state
-- **Next action:** Validate vLLM path when TPU capacity available. Run full 46-statement pipeline.
+- **GCS artifacts:** `gs://marin-us-central1/align/openai_spec_smoke/prompts-8a5a5d/artifacts/`
 
 ### 2026-03-21 — ALIGN-009: Simplify Round 1 + Zephyr Refactor
 - **Action:** Code review and cleanup:
@@ -234,7 +257,9 @@ lib/marin/src/marin/alignment/
   - Refactored `generate_responses` API path to use Zephyr pipeline (`Dataset.from_files → load_jsonl → map → write_jsonl`) instead of eager load + ThreadPoolExecutor
   - Added TODO on judge `_load_responses` noting Zephyr lacks join/lookup primitive
 - **Validation job:** `/ahmed/iris-run-align_openai_spec_smoke-20260322-013808` (us-central1)
-- **Results:** 71 prompts → 71 chosen → 71 rejected → 13 preference pairs. All artifacts present.
+- **GCS output:** `gs://marin-us-central1/align/openai_spec_smoke/` (cleared and regenerated)
+- **Results:** 71 prompts → 71 chosen → 71 rejected → 13 preference pairs (18% pass rate). All artifacts present.
+- **Note:** Zephyr writes `shard-00000.jsonl.gz` (hyphen) vs old `shard_00000.jsonl.gz` (underscore) for chosen/rejected. Prompts step still uses underscore.
 
 ### 2026-03-21 — ALIGN-010: Simplify Round 2
 - **Action:** Second review pass:
@@ -245,6 +270,12 @@ lib/marin/src/marin/alignment/
   - Extracted hardcoded `max_tokens=16000` into config fields (`concretize_max_tokens`, `extract_max_tokens`)
   - Moved all non-guard imports to top of file
 - **Validation job:** `/ahmed/iris-run-align_openai_spec_smoke-20260322-020230` (us-central1)
+- **GCS output:** `gs://marin-us-central1/align/openai_spec_smoke/` (cleared and regenerated)
 - **Results:** 72 prompts → 72 chosen → 72 rejected → 26 preference pairs (36% pass rate). All artifacts present.
+- **GCS data sizes:**
+  - `prompts-8a5a5d/shard_00000.jsonl.gz` — 21KB
+  - `chosen-41661c/shard-00000.jsonl.gz` — 31KB
+  - `rejected-a966b4/shard-00000.jsonl.gz` — 30KB
+  - `preference_pairs-0abbf8/shard_00000.jsonl.gz` — 7KB
 - **Confidence:** `replicated` — pipeline validated 3 times across refactors with consistent results
 - **Next action:** Validate vLLM path when TPU capacity available. Run full 46-statement pipeline.
