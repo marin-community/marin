@@ -222,3 +222,29 @@ lib/marin/src/marin/alignment/
 - **Commit:** 9bdb3b892
 - **Verified:** Artifacts correctly written to GCS and contain full pipeline state
 - **Next action:** Validate vLLM path when TPU capacity available. Run full 46-statement pipeline.
+
+### 2026-03-21 — ALIGN-009: Simplify Round 1 + Zephyr Refactor
+- **Action:** Code review and cleanup:
+  - Deduplicated I/O helpers: `write_sharded_jsonl_gz` and `load_sharded_jsonl_gz` made public, shared across modules
+  - Replaced hand-rolled JSONL reading with `zephyr.load_jsonl` in `load_spec`, `load_sharded_jsonl_gz`, `_load_behavior_statements`
+  - `_generate_via_vllm` now uses `get_or_create_vllm_engine` from llm_client (was duplicating engine setup)
+  - Fixed shared mutable reference: `[{}] * N` → `[{} for _ in range(N)]`
+  - Pre-computed `combinations()` in coverage hot loop
+  - Removed dead `_load_spec` wrapper in judge.py
+  - Refactored `generate_responses` API path to use Zephyr pipeline (`Dataset.from_files → load_jsonl → map → write_jsonl`) instead of eager load + ThreadPoolExecutor
+  - Added TODO on judge `_load_responses` noting Zephyr lacks join/lookup primitive
+- **Validation job:** `/ahmed/iris-run-align_openai_spec_smoke-20260322-013808` (us-central1)
+- **Results:** 71 prompts → 71 chosen → 71 rejected → 13 preference pairs. All artifacts present.
+
+### 2026-03-21 — ALIGN-010: Simplify Round 2
+- **Action:** Second review pass:
+  - Replaced manual `__enter__`/`__exit__` with `contextlib.ExitStack` (fixed buggy identity check)
+  - Fixed quadratic per-axis counting in `compute_coverage_stats` → single pass O(C*A)
+  - Renamed `_get_or_create_vllm_engine` to public (was private but imported cross-module)
+  - Removed stale "Ported from bloom" comments from 7 files
+  - Extracted hardcoded `max_tokens=16000` into config fields (`concretize_max_tokens`, `extract_max_tokens`)
+  - Moved all non-guard imports to top of file
+- **Validation job:** `/ahmed/iris-run-align_openai_spec_smoke-20260322-020230` (us-central1)
+- **Results:** 72 prompts → 72 chosen → 72 rejected → 26 preference pairs (36% pass rate). All artifacts present.
+- **Confidence:** `replicated` — pipeline validated 3 times across refactors with consistent results
+- **Next action:** Validate vLLM path when TPU capacity available. Run full 46-statement pipeline.
