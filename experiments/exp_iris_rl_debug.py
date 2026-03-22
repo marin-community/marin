@@ -99,8 +99,8 @@ def main():
         n_generations_per_prompt=16,
         # Single worker for debugging
         num_rollout_workers=1,
-        train_tpu_type="v6e-8",
-        inference_tpu_type="v6e-8",
+        train_tpu_type="v6e-4",
+        inference_tpu_type="v6e-4",
         # Fast weight sync
         weight_transfer_sync_interval_steps=1,
         max_weight_transfer_wait_time=300,
