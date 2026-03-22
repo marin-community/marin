@@ -287,6 +287,25 @@ The v2 orchestration, coordinator job, host_actor(), and child job submission al
 - Arrow Flight weight transfer between trainer and rollout worker
 - Full RL training loop (rollout → train → weight sync → rollout)
 
+### BLOCKER 3: v6e-4 pool saturated — no capacity for both trainer + rollout
+
+The europe-west4-a v6e-4 pool has 98+ slices running. Our job needs 2 free v6e-4 slices (trainer + rollout) plus 1 for the outer/coordinator job (because vllm import forces it onto TPU). Total: 3 v6e-4 slices needed, only 2 available.
+
+Attempted solutions:
+- Run coordinator in-process on outer job (`_run_rl_coordinator()` directly): saves 1 CPU slot but outer job still consumes a v6e-4 for vllm import
+- Run coordinator as CPU job: fails because `RLJobConfig` serialization needs vllm types
+
+**Root cause**: `from vllm import SamplingParams` at config construction time forces every job in the chain to have vllm installed, which means every job must run on a TPU worker (vllm-tpu needs TPU/CUDA).
+
+**Proper fix** (for next session):
+1. Replace `vllm.SamplingParams` in `RLJobConfig` with a plain dict or our own dataclass
+2. Convert to `vllm.SamplingParams` inside the worker where vllm is available
+3. This decouples config construction from vllm, allowing the coordinator to run on CPU
+
+**Workaround** (for immediate testing):
+- Find a region with 3+ free v6e-4 slices
+- Or use v5p-8 which has more per-chip HBM (won't OOM on copy_and_flatten)
+
 ### BLOCKER 2 (resolved): vllm-tpu installs CUDA torch on TPU workers
 
 This is the same issue on-demand-rl hit — `bootstrap_rl.sh` solved it with constraint pinning. The `uv` extras system can't handle "install vllm-tpu but keep the existing TPU torch". Need to either:
