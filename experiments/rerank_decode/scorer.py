@@ -65,7 +65,7 @@ class VLLMLogprobScorer(Scorer):
         resp = self.client.completions.create(
             model=self.model,
             prompt=candidate_texts,
-            max_tokens=1,  # TODO: hack — we only want prompt logprobs, not generation
+            max_tokens=0,
             echo=True,
             logprobs=1,
         )
@@ -73,8 +73,8 @@ class VLLMLogprobScorer(Scorer):
         scores = []
         for choice in resp.choices:
             token_logprobs = choice.logprobs.token_logprobs
-            # Exclude the last logprob (from the spurious max_tokens=1 generation)
-            score = sum(lp for lp in token_logprobs[:-1] if lp is not None)
+            
+            score = sum(lp for lp in token_logprobs if lp is not None)
             scores.append(score)
 
         return scores
@@ -102,7 +102,7 @@ class GuidedDecodingScorer(Scorer):
                 prompt=prompt,
                 max_tokens=len(completion) * 4,  # upper bound on token count
                 logprobs=1,
-                temperature=0.0,
+                temperature=1.0,
                 extra_body={"guided_choice": [completion]},
             )
             choice = resp.choices[0]
