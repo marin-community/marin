@@ -278,4 +278,82 @@ lib/marin/src/marin/alignment/
   - `rejected-a966b4/shard-00000.jsonl.gz` — 30KB
   - `preference_pairs-0abbf8/shard_00000.jsonl.gz` — 7KB
 - **Confidence:** `replicated` — pipeline validated 3 times across refactors with consistent results
-- **Next action:** Validate vLLM path when TPU capacity available. Run full 46-statement pipeline.
+
+### 2026-03-22 — ALIGN-011: Codex Code Review Critique
+
+A parallel Codex agent reviewed the PR and identified 4 findings + 2 notes. All findings are valid. Below is the full critique, why each matters, and the agreed fix plan.
+
+#### Finding 1: Silent parse failures degrade dataset quality (HIGHEST RISK)
+
+**What Codex found:** The prompt generation pipeline depends on free-form LLM output parsed via regex/JSON, and parse failures are silently absorbed rather than surfaced:
+- **Stage 1** (`generate_prompts.py:96`): Expects raw JSON inside `<variation_axes>` XML tags, parsed via `json.loads()`. If the LLM returns malformed JSON, the statement fails silently.
+- **Stage 2** (`generate_prompts.py:190`): When `parse_concretize_response()` returns fewer scenarios than expected (LLM didn't produce all `<scenario>` tags), the code **pads with empty scenarios** `{"description": "", "rubric": ""}` and continues. These empty scenarios flow downstream — Stage 3 will drop them (empty description check at `generate_prompts.py:367`), but the covering array coverage is silently degraded.
+- **Stage 3** (`generate_prompts.py:289`): When `_parse_extraction_response()` can't find a `<scenario_N>` block, it inserts `{"system_prompt": "", "user_message": ""}`. The empty `user_message` records are filtered at line 367, but no metric tracks how many were lost.
+- **Statement-level failures** (`generate_prompts.py:434, 456, 476`): If an entire statement fails in any stage (network error, parse error, etc.), it's logged as a warning and the pipeline continues with fewer statements. No threshold check.
+- **Judge fallback** (`judge.py:100`): When the judge LLM response can't be parsed as JSON, `_judge_response` returns a synthetic `ComplianceResult(score=5, ...)`. Score 5 is a fake middle score — it can pass or fail quality thresholds depending on config, injecting noise into the preference dataset.
+- **`llm_client.py:54`**: The `llm_chat` function doesn't expose `response_format` / structured output, so there's no way to enforce JSON schema at the API level.
+
+**Why it matters:** At scale (46 statements × hundreds of prompts), silent degradation compounds. If 20% of Stage 2 scenarios are empty-padded, that's 20% of the covering array with no actual test scenarios — but the coverage stats still report 100% because the configs exist, just with empty content. The dataset looks complete but has holes. The judge fallback score is worse: a score=5 pair could survive filtering (`min_chosen_score=6.0` in smoke test), meaning the training data contains pairs where the judge couldn't even parse its own response.
+
+**Agreed fix plan:**
+- **This PR:** Add `max_stage_failure_rate: float` to `PromptGenConfig` (default 0.5). After each stage, compute `failure_rate = len(failures) / total` and abort if it exceeds the threshold. Add same to `JudgePairConfig`. Change judge fallback score from 5 → 0 so parse-failure pairs always get filtered out.
+- **Follow-up issue:** Add `response_format` / structured output support to `llm_chat` for stages that expect JSON. Track parse/drop metrics per stage as structured output (not just log lines).
+
+#### Finding 2: ExecutorStep spec path is inconsistent (BUG)
+
+**What Codex found:** In `align.py:190`, when `spec` is an `ExecutorStep`:
+```python
+spec_gcs_path = output_path_of(spec)  # returns directory, not file
+```
+But `load_spec()` at `generate_prompts.py:81` expects a JSONL file path. The string branch correctly uploads to `spec.jsonl` and passes `output_path_of(spec_step) / "spec.jsonl"` (line 207), but the ExecutorStep branch passes the bare directory.
+
+**Why it matters:** Anyone passing `spec=some_executor_step` (instead of a string path) gets a broken pipeline — `load_spec()` would try to read a directory as JSONL. This code path was never tested because all our experiments use string paths.
+
+**Agreed fix:** Change to `output_path_of(spec) / "spec.jsonl"` — establish convention that spec ExecutorSteps produce `spec.jsonl` at their output root.
+
+#### Finding 3: vLLM engine cache keyed only on model string (BUG)
+
+**What Codex found:** The global `_active_vllm_engine` cache at `llm_client.py:30` checks reuse via:
+```python
+_active_vllm_engine["model"] == config.model  # line 86
+```
+This means two `VLLMConfig`s with the same `model` but different `tensor_parallel_size`, `max_model_len`, or `gpu_memory_utilization` would incorrectly share one engine. Worse, `generate_prompts.py:396` opens both ideation and extract engines in one `ExitStack` — if they're different models, the second `vllm_engine()` context manager overwrites the global cache slot (line 147), silently breaking the first.
+
+**Why it matters:** If someone uses `VLLMConfig(model="llama-8b", max_model_len=2048)` for ideation and `VLLMConfig(model="llama-8b", max_model_len=8192)` for extraction, the extraction stage silently uses the 2048-length engine. The covering array prompts could be truncated without any error.
+
+**Agreed fix:** Key cache on full frozen config object (`config == cached_config`) instead of just model string. `VLLMConfig` is a frozen dataclass so `==` compares all fields.
+
+#### Finding 4: teacher_n > 1 wastes money (DESIGN BUG)
+
+**What Codex found:** `AlignConfig.teacher_n` is passed to the chosen step (line 252), generating N teacher responses per prompt. But `_process_prompt_pair` in `judge.py:133` only reads `chosen_responses[0]` — the first response. Extra teacher samples are generated, stored, and ignored.
+
+**Why it matters:** With `teacher_n=4` (hypothetical), you'd pay 4x the API cost for chosen responses with zero benefit. The field's existence implies it does something.
+
+**Agreed fix:** Keep `teacher_n` but make the judge actually use it — score all N teacher responses and pick the highest-scoring one as the chosen. This makes `teacher_n > 1` a genuine quality-vs-cost knob: more candidates → higher chance of a high-quality chosen response.
+
+#### Note: env_vars inconsistency
+
+**What Codex found:** `_llm_env_vars()` (forwarding `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) is added to prompts step (`align.py:216`) and judge step (`align.py:286`) but NOT to chosen step (`align.py:243`) or rejected step (`align.py:264`).
+
+**Why it works today:** The chosen/rejected steps use Zephyr, which spawns worker jobs. The parent job has the env var (passed via `-e` on submission). Zephyr workers may or may not inherit it — the smoke test succeeded, so empirically they do, but we don't have documentation confirming this is guaranteed behavior.
+
+**Agreed fix:** Add `env_vars=_llm_env_vars()` to all four `@remote` calls for consistency. Don't assume Zephyr's env inheritance is guaranteed.
+
+#### Note: Bloom naming leftover
+
+**What Codex found:** The Stage 1 system prompt at `understanding.py:62` still says "You are BloomUnderstanding" and references "Bloom Evals". The test at `test_alignment.py:619` asserts on "BloomUnderstanding".
+
+**Agreed fix:** Replace with generic naming ("AI alignment research assistant" / "this evaluation pipeline"). Update test.
+
+### Implementation Plan for ALIGN-012
+
+All fixes in priority order:
+1. **ExecutorStep spec path** → `output_path_of(spec) / "spec.jsonl"` (bug fix)
+2. **vLLM cache** → key on full config object (bug fix)
+3. **teacher_n** → judge picks best of N teacher responses (behavior fix)
+4. **Failure accounting** → `max_stage_failure_rate` in PromptGenConfig, `max_failure_rate` in JudgePairConfig, judge fallback score 5 → 0 (quality fix)
+5. **env_vars** → add `_llm_env_vars()` to chosen/rejected steps (consistency fix)
+6. **Bloom naming** → rename in prompt + test (cleanup)
+7. **Follow-up issue:** structured output / `response_format` support for JSON-expecting stages
+
+- **Next action:** Implement all fixes, re-run pipeline on Iris to validate.
