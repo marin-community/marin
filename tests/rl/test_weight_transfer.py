@@ -169,8 +169,9 @@ def test_multiple_weight_updates(weight_transfer_config, sample_params):
     assert update_2 is not None
     assert update_2.weight_id == 2
 
+    # bfloat16 round-trip is lossy (7-bit mantissa → ~0.78% max relative error)
     jax.tree.map(
-        lambda x, y: np.testing.assert_array_equal(x, y),
+        lambda x, y: np.testing.assert_allclose(x, y, rtol=4e-3, atol=4e-3),
         update_2.model,
         new_params,
     )
@@ -190,6 +191,7 @@ def test_concurrent_clients(weight_transfer_config, sample_params):
         config=weight_transfer_config,
         mesh=client_1.mesh,
         axis_mapping=client_1.axis_mapping,
+        coordinator_handle=client_1._coordinator if hasattr(client_1, "_coordinator") else None,
     )
 
     try:

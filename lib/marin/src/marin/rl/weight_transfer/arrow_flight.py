@@ -71,10 +71,45 @@ NUM_PARALLEL_SERVERS = max(1, _CPU_COUNT // 4)
 NUM_PARALLEL_RECEIVES = max(1, _CPU_COUNT // 4)
 
 
+def _resolve_advertise_host() -> str:
+    """Resolve the host address for Arrow Flight server advertisement.
+
+    On GCP TPU VMs, queries the metadata server for the internal IP (which is
+    routable within the VPC). Elsewhere, falls back to the hostname if it's not
+    a .local mDNS name (gRPC's c-ares resolver can't handle mDNS), or localhost.
+    """
+    # Try GCP metadata server first (works on TPU VMs)
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(
+            "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip",
+            headers={"Metadata-Flavor": "Google"},
+        )
+        with urllib.request.urlopen(req, timeout=1) as resp:
+            ip = resp.read().decode().strip()
+            logger.info("Resolved advertise host via GCP metadata: %s", ip)
+            return ip
+    except Exception:
+        pass
+
+    hostname = socket.gethostname()
+    # gRPC's c-ares DNS resolver can't handle .local (mDNS) hostnames
+    if hostname.endswith(".local"):
+        return "localhost"
+    return hostname
+
+
 def _create_binary_array(buffer_data: np.ndarray) -> pa.Array:
-    """Construct a single element Arrow LargeBinary array from numpy buffer data without copies"""
-    # buffer_info = buffer_data.__array_interface__
-    # block = pa.foreign_buffer(buffer_info["data"][0], buffer_data.nbytes, base=buffer_data)
+    """Construct a single element Arrow LargeBinary array from numpy buffer data without copies.
+
+    Handles bfloat16 arrays by viewing them as uint8 — PyArrow's py_buffer doesn't
+    support bfloat16 via the Python buffer protocol.
+    """
+    # bfloat16 (from ml_dtypes/jax) isn't supported by PyArrow's buffer protocol.
+    # View as raw bytes instead — the dtype is stored separately in the schema metadata.
+    if hasattr(buffer_data, "dtype") and buffer_data.dtype.name == "bfloat16":
+        buffer_data = np.ascontiguousarray(buffer_data).view(np.uint8)
     block = pa.py_buffer(buffer_data)
     return pa.Array.from_buffers(
         pa.large_binary(),
@@ -369,7 +404,7 @@ class ArrowFlightServer(WeightTransferServer):
         self._server_threads = []
         self._server_locations = []
 
-        actual_host = config.flight_host if config.flight_host != "0.0.0.0" else socket.gethostname()
+        actual_host = config.flight_host if config.flight_host != "0.0.0.0" else _resolve_advertise_host()
 
         for i in range(num_servers):
             # Use port 0 to auto-assign for all servers
@@ -421,7 +456,9 @@ class ArrowFlightServer(WeightTransferServer):
 
                 # Update coordinator with weight info and server locations
                 param_names = list(params_dict.keys())
-                actual_host = self.config.flight_host if self.config.flight_host != "0.0.0.0" else socket.gethostname()
+                actual_host = (
+                    self.config.flight_host if self.config.flight_host != "0.0.0.0" else _resolve_advertise_host()
+                )
                 server_locations = [(actual_host, server.port) for server in self._flight_servers]
                 self._coordinator.update_server.remote(weight_id, param_names, server_locations).result()
                 update_time = time.time()
