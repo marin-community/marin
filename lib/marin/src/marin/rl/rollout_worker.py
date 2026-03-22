@@ -293,7 +293,11 @@ class RolloutWorker:
         # Infer model_axis_size from the actual TPU configuration now that JAX is initialized.
         # For inference servers, we shard across all local devices on a single host.
         if config.inference_type == "levanter":
-            self.tracker = levanter.current_tracker()
+            try:
+                self.tracker = levanter.current_tracker()
+            except RuntimeError:
+                # No global tracker set (e.g. in tests or standalone rollout workers)
+                self.tracker = RolloutTracker(config.tracker_config, config.run_id)
         else:
             # Initialize our own tracker to avoid JAX distributed initialization deadlocks.
             # Levanter's tracker calls jax.process_index() which forces JAX initialization.
@@ -471,6 +475,18 @@ class RolloutWorker:
         if not self._first_weights_received.is_set():
             logger.info("First weight transfer complete, inference can proceed")
             self._first_weights_received.set()
+
+    def _check_run_state(self) -> bool:
+        """Check if the RL run is still active. Returns False if should stop."""
+        try:
+            status = self._runtime.run_state.get_status.remote().result(timeout=5.0)
+            if status in ("completed", "failed"):
+                logger.info("Run state is '%s', stopping rollout worker", status)
+                self._running = False
+                return False
+        except Exception:
+            pass  # run_state check is best-effort; don't crash on transient failures
+        return True
 
     def _sync_weights(self):
         """Attempt to receive updated weights, optionally waiting for them."""
@@ -686,6 +702,10 @@ class RolloutWorker:
 
             while self._running:
                 step_start = time.time()
+
+                # Check if training is done before generating more rollouts
+                if not self._check_run_state():
+                    break
 
                 # Synchronize weights on main thread unless using inflight weight updates
                 if not self.config.inflight_weight_updates:
