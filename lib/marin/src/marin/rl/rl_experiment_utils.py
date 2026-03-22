@@ -230,5 +230,4 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
         description=f"Async RL training: {name}",
         fn=RLJob.make_step_fn(),
         config=job_config,
-        pip_dependency_groups=["vllm", "math"],
     )
