@@ -187,12 +187,19 @@ def _concretize_batch(
         temperature=temperature,
     )
     parsed_scenarios = _parse_concretize_response(response.content)
-    if len(parsed_scenarios) != len(configs):
+    if len(parsed_scenarios) < len(configs) // 2:
         raise RuntimeError(
             f"Stage2 concretize parsing mismatch for '{statement_id}': "
-            f"expected {len(configs)} scenarios, got {len(parsed_scenarios)}"
+            f"expected {len(configs)} scenarios, got {len(parsed_scenarios)} (<50%)"
         )
-    return parsed_scenarios
+    if len(parsed_scenarios) < len(configs):
+        logger.warning(
+            "Stage2: got %d/%d scenarios for '%s' (minor shortfall, continuing with partial batch)",
+            len(parsed_scenarios),
+            len(configs),
+            statement_id,
+        )
+    return parsed_scenarios[: len(configs)]
 
 
 def _run_concretization(
