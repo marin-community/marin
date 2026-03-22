@@ -7,6 +7,8 @@ These tests focus on integration and behavioral validation, particularly
 the snapshot test which ensures reproducibility of config generation.
 """
 
+from dataclasses import dataclass
+
 import jax.numpy as jnp
 
 from marin.scaling_laws.isoflop_analysis import (
@@ -15,6 +17,20 @@ from marin.scaling_laws.isoflop_analysis import (
     fit_scaling_laws,
     robust_quad_logx,
 )
+
+
+@dataclass
+class FakeWandbRun:
+    name: str
+    group: str
+    tags: list[str]
+    summary: dict
+    config: dict
+    state: str = "finished"
+    path: list[str] | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
 
 # --- Run name parsing tests ---
 
@@ -210,3 +226,119 @@ def test_end_to_end_analysis_pipeline():
     # At ~1e19: raw data optimal at 8B tokens (loss=0.98)
     assert abs(minima_by_flops[bucket_1e19].optimal_tokens - 8.8e9) < 0.2e9
     assert abs(minima_by_flops[bucket_1e19].loss_at_optimal - 0.98) < 0.01
+
+
+def test_iteration_02_summary_parses_irregular_rerun_name():
+    from experiments.grug.moe_scaling_iteration_02.summary.summary import _run_to_cell
+
+    run = FakeWandbRun(
+        name="isoflop-moe-adamh-gatednorm-v5p16-eval16-r1-1e+19-d2048",
+        group="isoflop-moe-adamh-gatednorm-v5p16-eval16-r1",
+        tags=[
+            "grug",
+            "iteration-02",
+            "isoflop",
+            "attn-mlp-lmh-adamh",
+            "gatednorm",
+            "gated_norm_rank=16",
+            "budget=1e+19",
+            "d=2048",
+        ],
+        summary={
+            "eval/paloma/c4_en/bpb": 1.031,
+            "_step": 1000,
+            "parameter_count": 123456789,
+        },
+        config={},
+        path=["marin-community", "dial_moe", "abc123"],
+        updated_at="2026-03-22T06:11:03Z",
+    )
+
+    row = _run_to_cell(run, "eval/paloma/c4_en/bpb")
+
+    assert row is not None
+    assert row.variant == "gatednorm"
+    assert row.budget == 1e19
+    assert row.hidden_dim == 2048
+    assert row.metric == 1.031
+    assert row.path == "marin-community/dial_moe/abc123"
+
+
+def test_iteration_02_summary_parses_legacy_adamh_family_name():
+    from experiments.grug.moe_scaling_iteration_02.summary.summary import _run_to_cell
+
+    run = FakeWandbRun(
+        name="ifv3-it02-attnmlplmh-ahscale-xp1-3e+18-d1024",
+        group="ifv3-it02-attnmlplmh-ahscale-xp1",
+        tags=[
+            "grug",
+            "isoflop",
+            "attn-mlp-lmh-adamh",
+            "budget=3e+18",
+            "d=1024",
+        ],
+        summary={"eval/paloma/c4_en/bpb": 1.0482, "_step": 1000, "parameter_count": 4.0e8},
+        config={},
+        path=["marin-community", "dial_moe", "legacy"],
+        updated_at="2026-03-20T20:00:00Z",
+    )
+
+    row = _run_to_cell(run, "eval/paloma/c4_en/bpb")
+
+    assert row is not None
+    assert row.variant == "adamh"
+    assert row.budget == 3e18
+    assert row.hidden_dim == 1024
+    assert row.metric == 1.0482
+
+
+def test_iteration_02_summary_selects_best_duplicate():
+    from experiments.grug.moe_scaling_iteration_02.summary.summary import _run_to_cell, select_best_runs
+
+    canonical_failed = FakeWandbRun(
+        name="isoflop-moe-adamh-r3-gatedschema-1e+19-d1536-v5p16",
+        group="isoflop-moe-adamh-r3-gatedschema",
+        tags=[
+            "grug",
+            "iteration-02",
+            "isoflop",
+            "attn-mlp-lmh-adamh",
+            "budget=1e+19",
+            "d=1536",
+        ],
+        summary={"eval/paloma/c4_en/bpb": 1.02, "_step": 1000, "parameter_count": 1.0e9},
+        config={},
+        state="failed",
+        path=["marin-community", "dial_moe", "old"],
+        updated_at="2026-03-21T21:00:00Z",
+    )
+    retry_finished = FakeWandbRun(
+        name="isoflop-moe-adamh-r3-gatedschema-v5p8-retry2-missing-1e+19-d1536",
+        group="isoflop-moe-adamh-r3-gatedschema-v5p8-retry2-missing",
+        tags=[
+            "grug",
+            "iteration-02",
+            "isoflop",
+            "attn-mlp-lmh-adamh",
+            "retry",
+            "retry2",
+            "source=isoflop-moe-adamh-r3-gatedschema",
+            "budget=1e+19",
+            "d=1536",
+        ],
+        summary={"eval/paloma/c4_en/bpb": 1.01, "_step": 1000, "parameter_count": 1.0e9},
+        config={},
+        state="finished",
+        path=["marin-community", "dial_moe", "new"],
+        updated_at="2026-03-22T21:00:00Z",
+    )
+
+    rows = [
+        _run_to_cell(canonical_failed, "eval/paloma/c4_en/bpb"),
+        _run_to_cell(retry_finished, "eval/paloma/c4_en/bpb"),
+    ]
+    selected, grouped = select_best_runs([row for row in rows if row is not None])
+
+    assert len(grouped) == 1
+    assert len(selected) == 1
+    assert selected[0].name == retry_finished.name
