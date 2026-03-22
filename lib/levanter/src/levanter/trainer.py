@@ -580,9 +580,9 @@ class Trainer:
         self.add_hook(levanter.callbacks.log_step_info(self.config.num_train_steps), every=1)
         # engine.add_hook(callbacks.log_memory_usage(), every=1)
         checkpointer = self.config.checkpointer.create(self.run_id)
-        
-        def checkpoint_hook(info, force=False):                                                                                               
-            checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force) 
+
+        def checkpoint_hook(info, force=False):
+            checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
 
         self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency
 
