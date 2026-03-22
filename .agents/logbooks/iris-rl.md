@@ -212,7 +212,9 @@
 
 | Priority | Issue | Status |
 |----------|-------|--------|
-| P1 | Handle `tracker_config=None` in RolloutTracker fallback | TODO |
-| P1 | Use spawn context for sympy multiprocessing on TPU | TODO |
-| P2 | Re-check run_state after `_sync_weights()` | TODO |
-| P3 | Update `test_llama_small.py` caller | TODO |
+| P1 | Handle `tracker_config=None` in RolloutTracker fallback | DONE — added `_NoOpTracker` |
+| P1 | Use spawn context for sympy multiprocessing on TPU | DONE — `get_context("spawn")` |
+| P2 | Re-check run_state after `_sync_weights()` | DONE — second `_check_run_state()` call |
+| P3 | Update `test_llama_small.py` caller | DONE — marked as outdated |
+
+All fixes in commit `84cbb2528`.
