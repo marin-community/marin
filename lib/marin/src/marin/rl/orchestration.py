@@ -43,6 +43,8 @@ def submit_rl_job(config: RLJobConfig) -> JobHandle:
     env = {"EQX_ON_ERROR": "nan"}
     env = _add_run_env_variables(env)
 
+    # Use pip_packages instead of extras to avoid uv re-resolving the full dependency
+    # tree and replacing TPU torch with CUDA torch (vllm-tpu pulls in CUDA deps).
     return client.submit(
         JobRequest(
             name=f"rl-{config.run_id}",
@@ -50,7 +52,7 @@ def submit_rl_job(config: RLJobConfig) -> JobHandle:
             resources=ResourceConfig.with_cpu(preemptible=False),
             environment=create_environment(
                 env_vars=env,
-                extras=config.pip_dependency_groups,
+                pip_packages=["vllm-tpu==0.13.2.post6", "sympy", "pylatexenc", "math-verify"],
             ),
             max_retries_failure=0,
             max_retries_preemption=0,
