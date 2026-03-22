@@ -28,6 +28,7 @@ Key skills and their triggers:
 | Profiling JAX training | `agent-profiling` |
 | Running / monitoring ferries | `ferries` |
 | Babysitting any Ray/Iris job | `babysit-job` |
+| Cron-driven multi-run monitoring | `dispatch-monitor` |
 | Babysitting Zephyr jobs | `babysit-zephyr` |
 | Debugging Zephyr pipelines | `debug-zephyr` |
 | Debugging Iris controller | `debug-iris-controller` |
