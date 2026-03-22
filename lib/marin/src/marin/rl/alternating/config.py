@@ -13,6 +13,7 @@ from levanter.utils.fsspec_utils import join_path
 
 DEFAULT_TRAINING_COMPILATION_CACHE_DIR = "/home/levanter/compilation-cache/train"
 DEFAULT_SAMPLING_COMPILATION_CACHE_DIR = "/home/levanter/compilation-cache/vllm"
+DEFAULT_LOCAL_ARTIFACT_ROOT = "/home/levanter/alternating-rl"
 
 SAMPLER_CONTAINER_NAME = "marin-alt-sampler"
 MATERIALIZER_CONTAINER_NAME = "marin-alt-materializer"
@@ -28,6 +29,19 @@ class AlternatingMode(StrEnum):
     MATERIALIZE = "materialize"
     TRAIN_PHASE = "train-phase"
     EXPORT_POLICY = "export-policy"
+
+
+class BootstrapCheckpointDType(StrEnum):
+    """Optional dtype for an inference-only bootstrap sidecar checkpoint."""
+
+    BF16 = "bfloat16"
+
+
+class BootstrapCheckpointStorage(StrEnum):
+    """Where the optional inference-only bootstrap sidecar should be written."""
+
+    SHARED = "shared"
+    LOCAL = "local"
 
 
 @dataclass(frozen=True)
@@ -141,6 +155,9 @@ class AlternatingRLConfig:
     initial_checkpoint: str | None = None
     vocab_size: int | None = None
     system_prompt: str | None = None
+    bootstrap_checkpoint_dtype: BootstrapCheckpointDType | None = None
+    bootstrap_checkpoint_storage: BootstrapCheckpointStorage = BootstrapCheckpointStorage.SHARED
+    local_artifact_root: str = DEFAULT_LOCAL_ARTIFACT_ROOT
     env: dict[str, str] = field(default_factory=dict)
     caches: AlternatingCacheConfig = field(default_factory=AlternatingCacheConfig)
 
@@ -154,6 +171,15 @@ class AlternatingRLConfig:
             raise ValueError("image_digest must be set")
         if not self.tokenizer_name:
             raise ValueError("tokenizer_name must be set")
+        if self.bootstrap_checkpoint_dtype not in (None, BootstrapCheckpointDType.BF16):
+            raise ValueError(
+                "bootstrap_checkpoint_dtype must be None or BootstrapCheckpointDType.BF16, "
+                f"got {self.bootstrap_checkpoint_dtype}"
+            )
+        if not self.local_artifact_root:
+            raise ValueError("local_artifact_root must be set")
+        if self.bootstrap_checkpoint_storage is BootstrapCheckpointStorage.LOCAL and self.cluster.num_hosts != 1:
+            raise ValueError("bootstrap_checkpoint_storage=LOCAL is only supported for single-host alternating runs")
 
         self.cluster.validate()
         self.quotas.validate()

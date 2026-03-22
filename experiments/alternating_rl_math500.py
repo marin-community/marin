@@ -17,6 +17,8 @@ from marin.rl.alternating import (
     AlternatingPhaseQuotaConfig,
     AlternatingRLConfig,
     AlternatingRunPaths,
+    BootstrapCheckpointDType,
+    BootstrapCheckpointStorage,
     ExistingPodPhaseHooks,
     resolve_container_image,
     run_controller,
@@ -241,6 +243,13 @@ def _build_controller_config(args: argparse.Namespace) -> AlternatingRLConfig:
         tokenizer_name=job_config.tokenizer,
         initial_checkpoint=job_config.initial_checkpoint,
         vocab_size=job_config.vocab_size,
+        bootstrap_checkpoint_dtype=(
+            BootstrapCheckpointDType(args.bootstrap_checkpoint_dtype)
+            if args.bootstrap_checkpoint_dtype is not None
+            else None
+        ),
+        bootstrap_checkpoint_storage=BootstrapCheckpointStorage(args.bootstrap_checkpoint_storage),
+        local_artifact_root=args.local_artifact_root,
         env=_pass_through_env(),
     )
 
@@ -279,6 +288,17 @@ def build_parser() -> argparse.ArgumentParser:
     controller.add_argument("--max-input-tokens", type=int, default=None)
     controller.add_argument("--max-output-tokens", type=int, default=None)
     controller.add_argument("--inference-gpu-memory-utilization", type=float, default=None)
+    controller.add_argument(
+        "--bootstrap-checkpoint-dtype",
+        choices=[dtype.value for dtype in BootstrapCheckpointDType],
+        default=None,
+    )
+    controller.add_argument(
+        "--bootstrap-checkpoint-storage",
+        choices=[storage.value for storage in BootstrapCheckpointStorage],
+        default=BootstrapCheckpointStorage.SHARED.value,
+    )
+    controller.add_argument("--local-artifact-root", default="/home/levanter/alternating-rl")
 
     for subcommand in ("prepare-sampling", "materialize", "train-phase", "export-policy"):
         subparser = subparsers.add_parser(subcommand)

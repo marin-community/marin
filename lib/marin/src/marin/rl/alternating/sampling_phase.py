@@ -100,7 +100,11 @@ def _sampling_inference_config(config: AlternatingRLConfig, policy_manifest, *, 
     )
 
     if policy_manifest.bootstrap_format == PolicyBootstrapFormat.LEVANTER_CHECKPOINT:
-        checkpoint_path = policy_manifest.levanter_checkpoint_path or policy_manifest.policy_path
+        checkpoint_path = (
+            policy_manifest.bootstrap_checkpoint_path
+            or policy_manifest.levanter_checkpoint_path
+            or policy_manifest.policy_path
+        )
         if checkpoint_path is None:
             raise ValueError("checkpoint-native policy manifest is missing a checkpoint path")
 

@@ -3568,3 +3568,539 @@ uv run python experiments/alternating_rl_math500.py controller \
     - `phase_id=2`
     - `policy_version=2`
     - `source_global_step=2`
+
+## 2026-03-21 23:56 UTC — `OPT-1B` result: checkpoint-native manifest consumed successfully in phase 1
+
+- Run:
+  - `alt-tpu-opt1b-v5p-2phase`
+- TPU:
+  - `alt-v5p-probe-001`
+  - `v5p-8`
+  - `us-east5-a`
+- Image digest:
+  - `us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:94aa894cd0d74262cd84146d742315dfa2864492fa8fb3ecc2d40474a6dead01`
+- Final durable state (`state/run_state.json`):
+  - `status=completed`
+  - `phase_id=2`
+  - `policy_version=2`
+  - `source_global_step=2`
+  - `last_completed_phase=1`
+  - `current_policy_manifest_path=gs://marin-us-east5/alternating-rl/alt-tpu-opt1b-v5p-2phase/policies/policy_0002/manifest.json`
+  - `current_levanter_checkpoint_path=gs://marin-us-east5/alternating-rl/alt-tpu-opt1b-v5p-2phase/levanter_checkpoints/alt-tpu-opt1b-v5p-2phase-alternating-train/step-2`
+- Policy manifests:
+  - `policy_0001/manifest.json`:
+    - `bootstrap_format=levanter_checkpoint`
+    - `policy_path == levanter_checkpoint_path == .../step-1`
+  - `policy_0002/manifest.json`:
+    - `bootstrap_format=levanter_checkpoint`
+    - `policy_path == levanter_checkpoint_path == .../step-2`
+- Phase 0 timings (`phase_0000.json`):
+  - `prepare_sampling_seconds`:
+    - `71.651`
+  - `sampling_seconds`:
+    - `71.073`
+  - `curriculum_update_seconds`:
+    - `1.458`
+  - `materialization_seconds`:
+    - `38.948`
+  - `training_seconds`:
+    - `158.988`
+  - `export_seconds`:
+    - `0.288`
+  - total:
+    - `342.406s`
+- Phase 1 timings (`phase_0001.json`):
+  - `prepare_sampling_seconds`:
+    - `161.171`
+  - `sampling_seconds`:
+    - `177.722`
+  - `curriculum_update_seconds`:
+    - `1.597`
+  - `materialization_seconds`:
+    - `37.993`
+  - `training_seconds`:
+    - `209.594`
+  - `export_seconds`:
+    - `0.281`
+  - total:
+    - `588.357s`
+- End-to-end 2-phase wall clock:
+  - `930.762s`
+- Interpretation:
+  - this is the actual correctness proof for `OPT-1`
+  - phase 1 successfully consumed `policy_0001/manifest.json` with `bootstrap_format=levanter_checkpoint`
+  - full HF export is no longer required either to publish or to consume the next policy
+  - the remaining boundary costs are now:
+    - sampling
+    - trainer cold start / restore
+    - materialization
+    - checkpoint commit latency
+- Compositional follow-up:
+  - `OPT-2` should be layered *on top of* `OPT-1`, not as a fallback to the old HF path
+  - the right `OPT-2` is an inference-only `bf16` bootstrap sidecar while keeping the full Levanter checkpoint as the durable recovery artifact
+
+## 2026-03-22 00:06 UTC — `OPT-2` planned: compositional `bf16` bootstrap sidecar on top of `OPT-1`
+
+- Experiment contract:
+  - keep `OPT-1` checkpoint-native manifests and full trainer checkpoints unchanged
+  - add an optional inference-only bootstrap sidecar checkpoint in `bf16`
+  - sampling should prefer `bootstrap_checkpoint_path` when present
+  - recovery should still use `levanter_checkpoint_path`
+- Why this composes cleanly:
+  - `OPT-1B` already proved the next phase can consume checkpoint-native manifests
+  - phase-1 bootstrap logs showed the current checkpoint-native path loads tensors as `float32` and then casts them into the TPU vLLM engine as `bfloat16`
+  - a `bf16` sidecar should reduce bytes read during bootstrap without weakening durable resume semantics
+- Planned hardware comparison:
+  - baseline:
+    - `OPT-1B`
+    - run id `alt-tpu-opt1b-v5p-2phase`
+  - additive run:
+    - `alt-tpu-opt2-v5p-bf16`
+  - same shape as baseline:
+    - `v5p-8`
+    - `alt-v5p-probe-001`
+    - `steps_per_phase=1`
+    - `num_train_steps=2`
+  - only new flag:
+    - `--bootstrap-checkpoint-dtype bfloat16`
+- Metrics to compare:
+  - phase-0 export time increase from writing the sidecar
+  - phase-1 prepare-sampling and sampling bootstrap time decrease from reading `bf16`
+  - total 2-phase wall clock delta versus `OPT-1B`
+
+## 2026-03-22 00:11 UTC — `OPT-2` image built and hardware launch prepared
+
+- Local validation:
+  - `uv run pytest tests/rl/test_alternating_state.py tests/rl/test_alternating_training_phase.py tests/rl/test_alternating_math500_experiment.py -o addopts=`
+  - `./infra/pre-commit.py --all-files --fix`
+- Exact image build:
+  - `uv run python lib/levanter/infra/push_docker.py --docker_target gcp --project hai-gcp-models --region us-east5 --repository levanter --image levanter-ahmed --tag alt-rl-1774137814 --docker_file lib/levanter/docker/tpu/Dockerfile.incremental`
+- Pushed image:
+  - `us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed:alt-rl-1774137814`
+  - `sha256:77c6e71ba9f337905f2a710061a0ff0192371e5441e18bc756538b9627b941d1`
+- Planned hardware command:
+
+```bash
+uv run python experiments/alternating_rl_math500.py controller \
+  --run-id alt-tpu-opt2-v5p-bf16 \
+  --shared-root gs://marin-us-east5/alternating-rl \
+  --image us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:77c6e71ba9f337905f2a710061a0ff0192371e5441e18bc756538b9627b941d1 \
+  --tpu-name alt-v5p-probe-001 \
+  --tpu-type v5p-8 \
+  --zone us-east5-a \
+  --num-hosts 1 \
+  --local-tensor-parallel-size 4 \
+  --capacity-type spot \
+  --runtime-version v2-alpha-tpuv5 \
+  --steps-per-phase 1 \
+  --num-train-steps 2 \
+  --train-batch-size 64 \
+  --n-prompts 4 \
+  --n-generations-per-prompt 16 \
+  --eval-examples-per-lesson 8 \
+  --max-input-tokens 512 \
+  --max-output-tokens 256 \
+  --inference-gpu-memory-utilization 0.92 \
+  --bootstrap-checkpoint-dtype bfloat16
+```
+
+## 2026-03-22 00:26 UTC — `OPT-2` mid-run update after user interruption
+
+- Verified live state after interruption:
+  - the local wait command was interrupted, but the hardware run itself continued
+  - `state/run_state.json` currently shows:
+    - `status=training`
+    - `phase_id=1`
+    - `policy_version=1`
+    - `source_global_step=1`
+    - `current_policy_manifest_path=gs://marin-us-east5/alternating-rl/alt-tpu-opt2-v5p-bf16/policies/policy_0001/manifest.json`
+- `policy_0001/manifest.json` confirms the compositional sidecar contract:
+  - `bootstrap_format=levanter_checkpoint`
+  - `levanter_checkpoint_path=.../levanter_checkpoints/.../step-1`
+  - `bootstrap_checkpoint_dtype=bfloat16`
+  - `bootstrap_checkpoint_path=gs://marin-us-east5/alternating-rl/alt-tpu-opt2-v5p-bf16/policies/policy_0001/bootstrap_checkpoint_bfloat16`
+- Phase 0 complete (`phase_0000.json`):
+  - `prepare_sampling_seconds`:
+    - `68.559`
+  - `sampling_seconds`:
+    - `71.696`
+  - `curriculum_update_seconds`:
+    - `1.553`
+  - `materialization_seconds`:
+    - `38.844`
+  - `training_seconds`:
+    - `250.184`
+  - `export_seconds`:
+    - `78.879`
+  - total:
+    - `509.716s`
+- Comparison vs `OPT-1B` phase 0:
+  - old total:
+    - `342.406s`
+  - new total:
+    - `509.716s`
+  - delta:
+    - `+167.310s`
+  - old export:
+    - `0.288s`
+  - new export:
+    - `78.879s`
+  - interpretation:
+    - the additive `bf16` sidecar is materially expensive to publish
+- Phase 1 partial timings so far (`phase_0001.json`, run still active):
+  - `prepare_sampling_seconds`:
+    - `125.916`
+  - `sampling_seconds`:
+    - `108.989`
+  - `curriculum_update_seconds`:
+    - `1.832`
+  - `materialization_seconds`:
+    - `37.409`
+  - `training_seconds`:
+    - not recorded yet
+  - `export_seconds`:
+    - not recorded yet
+- Comparison vs `OPT-1B` phase 1 *so far*:
+  - old `prepare_sampling_seconds`:
+    - `161.171`
+  - new `prepare_sampling_seconds`:
+    - `125.916`
+  - delta:
+    - `-35.255s`
+  - old `sampling_seconds`:
+    - `177.722`
+  - new `sampling_seconds`:
+    - `108.989`
+  - delta:
+    - `-68.733s`
+- Important evidence from phase-1 bootstrap logs:
+  - the vLLM bootstrap path is reading source tensors as `bfloat16`, not `float32`
+  - this confirms phase 1 is actually consuming the new sidecar artifact rather than falling back to the full checkpoint
+- Current read:
+  - `OPT-2` is functionally correct and the sidecar is being used
+  - the sidecar gives a real phase-1 bootstrap/sampling speedup
+  - it also adds a large phase-0 publication cost
+  - final judgment depends on the completed phase-1 training/export total
+
+## 2026-03-22 00:31 UTC — `OPT-2` result: functionally correct, net slower over 2 phases
+
+- Final durable state:
+  - `status=completed`
+  - `phase_id=2`
+  - `policy_version=2`
+  - `source_global_step=2`
+  - `last_completed_phase=1`
+  - `current_policy_manifest_path=gs://marin-us-east5/alternating-rl/alt-tpu-opt2-v5p-bf16/policies/policy_0002/manifest.json`
+  - `current_levanter_checkpoint_path=gs://marin-us-east5/alternating-rl/alt-tpu-opt2-v5p-bf16/levanter_checkpoints/alt-tpu-opt2-v5p-bf16-alternating-train/step-2`
+- Final policy manifest confirms the sidecar persisted through phase 1:
+  - `policy_0002/manifest.json`
+    - `bootstrap_checkpoint_dtype=bfloat16`
+    - `bootstrap_checkpoint_path=.../policy_0002/bootstrap_checkpoint_bfloat16`
+    - `levanter_checkpoint_path=.../step-2`
+- Phase 1 complete (`phase_0001.json`):
+  - `prepare_sampling_seconds`:
+    - `125.916`
+  - `sampling_seconds`:
+    - `108.989`
+  - `curriculum_update_seconds`:
+    - `1.832`
+  - `materialization_seconds`:
+    - `37.409`
+  - `training_seconds`:
+    - `223.620`
+  - `export_seconds`:
+    - `74.708`
+  - total:
+    - `572.475s`
+- Comparison vs `OPT-1B` phase 1:
+  - old total:
+    - `588.357s`
+  - new total:
+    - `572.475s`
+  - delta:
+    - `-15.881s`
+  - old `prepare_sampling_seconds`:
+    - `161.171`
+  - new `prepare_sampling_seconds`:
+    - `125.916`
+  - delta:
+    - `-35.255s`
+  - old `sampling_seconds`:
+    - `177.722`
+  - new `sampling_seconds`:
+    - `108.989`
+  - delta:
+    - `-68.733s`
+- 2-phase comparison vs `OPT-1B`:
+  - old total (`342.406 + 588.357`):
+    - `930.762s`
+  - new total (`509.716 + 572.475`):
+    - `1082.191s`
+  - net delta:
+    - `+151.429s`
+  - net speed:
+    - `0.86x` of the `OPT-1B` baseline
+- Interpretation:
+  - the compositional `bf16` sidecar is **correct**
+  - it materially speeds up the next phase bootstrap path
+  - but when the sidecar itself is written back to GCS each phase, the end-to-end 2-phase run is still slower overall
+  - this means `OPT-2` by itself is not a win on this small config
+- Implication for `OPT-3`:
+  - if we continue this branch, the obvious next move is to keep the checkpoint-native manifest contract from `OPT-1` and the `bf16` sidecar from `OPT-2`, but make the sidecar transient and local on `/home/levanter`
+  - that would try to keep the phase-1 bootstrap gain while removing most of the per-phase GCS write tax that made `OPT-2` lose overall
+
+## 2026-03-22 00:34 UTC — `OPT-3` planned: localize the compositional `bf16` sidecar
+
+- Experiment contract:
+  - keep `OPT-1` checkpoint-native manifests
+  - keep `OPT-2` `bf16` bootstrap sidecar
+  - change only the sidecar storage location from shared GCS to the shared local TPU volume mounted at `/home/levanter`
+- Why this is the right compositional next step:
+  - `OPT-2` proved the sidecar artifact is functionally correct and beneficial at bootstrap time
+  - `OPT-2` lost overall because publishing the sidecar back to GCS cost about `75-79s` per phase
+  - on single-host `v5p-8`, the trainer and sampler containers already share the same Docker volume at `/home/levanter`
+- Planned hardware comparison:
+  - baseline:
+    - `OPT-2`
+    - run id `alt-tpu-opt2-v5p-bf16`
+  - additive run:
+    - `alt-tpu-opt3-v5p-local-bf16`
+  - same shape as `OPT-2`:
+    - `v5p-8`
+    - `alt-v5p-probe-001`
+    - `steps_per_phase=1`
+    - `num_train_steps=2`
+  - only new behavioral flag on top of `OPT-2`:
+    - `--bootstrap-checkpoint-storage local`
+- Success criterion:
+  - phase 1 still bootstraps from a `bfloat16` sidecar
+  - phase totals improve enough that the 2-phase run beats `OPT-2`
+
+## 2026-03-22 00:41 UTC — `OPT-3` image built and launch prepared
+
+- Code state:
+  - `OPT-3` is intentionally compositional on top of `OPT-2`
+  - no behavior changed except the storage location of the optional `bf16` bootstrap sidecar
+  - the durable recovery artifact remains the shared Levanter checkpoint published by `OPT-1`
+- New knobs added for `OPT-3`:
+  - `bootstrap_checkpoint_storage=local|shared`
+  - `local_artifact_root=/home/levanter/alternating-rl`
+- Local validation:
+  - `uv run pytest tests/rl/test_alternating_training_phase.py tests/rl/test_alternating_math500_experiment.py -o addopts=`
+  - `./infra/pre-commit.py --all-files --fix`
+- Built image:
+  - tag:
+    - `alt-rl-1774139637`
+  - digest:
+    - `us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:adc7ef8f5e52ab79789ffcb9d724717e98ec500b300b601f62776b5dd41aa163`
+- Planned hardware run:
+  - run id:
+    - `alt-tpu-opt3-v5p-local-bf16`
+  - TPU:
+    - `alt-v5p-probe-001`
+  - zone:
+    - `us-east5-a`
+  - flags layered on top of `OPT-2`:
+    - `--bootstrap-checkpoint-dtype bfloat16`
+    - `--bootstrap-checkpoint-storage local`
+- Measurement goal:
+  - compare `OPT-3` directly against `OPT-2`
+  - key question:
+    - does localizing the sidecar remove enough per-phase write overhead to recover the bootstrap win and beat the `930.762s` 2-phase `OPT-1B` baseline?
+
+## 2026-03-22 00:48 UTC — `OPT-3` launched on `alt-v5p-probe-001`
+
+- Run id:
+  - `alt-tpu-opt3-v5p-local-bf16`
+- Command shape:
+  - identical to `OPT-2` except:
+    - image:
+      - `us-east5-docker.pkg.dev/hai-gcp-models/levanter/levanter-ahmed@sha256:adc7ef8f5e52ab79789ffcb9d724717e98ec500b300b601f62776b5dd41aa163`
+    - `--bootstrap-checkpoint-storage local`
+- Early launch status:
+  - controller W&B run started:
+    - `alt-tpu-opt3-v5p-local-bf16-alternating-controller`
+  - shared-root durable state initialized:
+    - `status=sampling`
+    - `phase_id=0`
+    - `policy_version=0`
+    - `source_global_step=0`
+  - initial manifests published:
+    - `policies/policy_0000/manifest.json`
+    - `sampling/phase_0000/manifest.json`
+- What to measure once phase 0 and phase 1 finish:
+  - whether `policy_0001/manifest.json` now points to a local sidecar path under `/home/levanter/alternating-rl/...`
+  - whether phase 1 still logs `bfloat16` tensor ingestion during checkpoint-native bootstrap
+  - phase timing deltas against:
+    - `OPT-2` total:
+      - `1082.191s`
+    - `OPT-1B` total:
+      - `930.762s`
+
+## 2026-03-22 00:51 UTC — `OPT-3` interim result: local sidecar is being used, but phase 0 is slower
+
+- Current durable state:
+  - `status=sampling`
+  - `phase_id=1`
+  - `policy_version=1`
+  - `source_global_step=1`
+- Confirmed artifact contract:
+  - `policy_0001/manifest.json` was published successfully
+  - it points at a **local** bootstrap sidecar path:
+    - `bootstrap_checkpoint_path=/home/levanter/alternating-rl/alt-tpu-opt3-v5p-local-bf16/policies/policy_0001/bootstrap_checkpoint_bfloat16`
+  - shared durable recovery path remains:
+    - `levanter_checkpoint_path=gs://marin-us-east5/alternating-rl/alt-tpu-opt3-v5p-local-bf16/levanter_checkpoints/alt-tpu-opt3-v5p-local-bf16-alternating-train/step-1`
+- Phase 0 complete (`phase_0000.json`):
+  - `prepare_sampling_seconds`:
+    - `97.283`
+  - `sampling_seconds`:
+    - `107.842`
+  - `curriculum_update_seconds`:
+    - `1.534`
+  - `materialization_seconds`:
+    - `38.361`
+  - `training_seconds`:
+    - `186.130`
+  - `export_seconds`:
+    - `110.889`
+  - total:
+    - `542.038s`
+- Phase-0 comparison vs `OPT-2`:
+  - old total:
+    - `509.716s`
+  - new total:
+    - `542.038s`
+  - delta:
+    - `+32.322s`
+  - old `export_seconds`:
+    - `78.879`
+  - new `export_seconds`:
+    - `110.889`
+  - delta:
+    - `+32.010s`
+- Phase-0 comparison vs `OPT-1B`:
+  - old total:
+    - `342.406s`
+  - new total:
+    - `542.038s`
+  - delta:
+    - `+199.632s`
+- Interpretation so far:
+  - `OPT-3` is functionally correct:
+    - the local sidecar path is being published and the controller advanced into phase 1
+  - but on phase 0 it is already **worse** than both `OPT-2` and `OPT-1B`
+  - this means localizing the sidecar did **not** remove the extra write cost enough to make the sidecar branch attractive on this config
+  - unless phase 1 shows an unexpectedly large bootstrap win, the `bf16` sidecar branch is probably not worth carrying forward
+
+## 2026-03-22 01:03 UTC — `OPT-3` final result: sidecar branch is dead
+
+- Final durable state:
+  - `status=completed`
+  - `phase_id=2`
+  - `policy_version=2`
+  - `source_global_step=2`
+- Final artifact check:
+  - `policy_0002/manifest.json` confirms the local sidecar branch remained active through phase 1:
+    - `bootstrap_checkpoint_path=/home/levanter/alternating-rl/alt-tpu-opt3-v5p-local-bf16/policies/policy_0002/bootstrap_checkpoint_bfloat16`
+    - `bootstrap_format=levanter_checkpoint`
+  - phase-1 bootstrap logs showed `bfloat16` tensors being ingested during checkpoint-native weight sync
+- Phase 1 complete (`phase_0001.json`):
+  - `prepare_sampling_seconds`:
+    - `106.479`
+  - `sampling_seconds`:
+    - `142.165`
+  - `curriculum_update_seconds`:
+    - `1.511`
+  - `materialization_seconds`:
+    - `37.448`
+  - `training_seconds`:
+    - `193.996`
+  - `export_seconds`:
+    - `110.020`
+  - total:
+    - `591.619s`
+- 2-phase total for `OPT-3`:
+  - phase 0:
+    - `542.038s`
+  - phase 1:
+    - `591.619s`
+  - total:
+    - `1133.657s`
+- Comparison vs `OPT-2`:
+  - old total:
+    - `1082.191s`
+  - new total:
+    - `1133.657s`
+  - net delta:
+    - `+51.466s`
+  - phase 1 delta:
+    - `+19.144s`
+- Comparison vs `OPT-1B`:
+  - old total:
+    - `930.762s`
+  - new total:
+    - `1133.657s`
+  - net delta:
+    - `+202.895s`
+  - net speed:
+    - `0.82x` of the `OPT-1B` baseline
+- What this means:
+  - `OPT-3` proved the local-sidecar idea is **not** rescuing the `bf16` sidecar branch
+  - the branch is compositional and functionally correct, but it is slower than both:
+    - raw checkpoint-native `OPT-1B`
+    - GCS-sidecar `OPT-2`
+  - the extra sidecar write cost remains large even on the local Docker volume
+- Decision:
+  - keep `OPT-1`
+  - stop pursuing `OPT-2` and `OPT-3`
+  - remove the `bf16` sidecar branch from the optimization queue
+  - next optimization work should target different costs:
+    - phase process startup / `uv run` churn
+    - sampling/bootstrap path itself
+    - larger `steps_per_phase` after correctness gates
+
+## 2026-03-22 01:08 UTC — Next steps after `OPT-3`
+
+- Optimization decision:
+  - `OPT-1` is the only optimization from this branch that should be carried forward
+  - the `bf16` sidecar branch (`OPT-2` / `OPT-3`) is closed
+- Immediate optimization queue on the spare single-host `v5p-8`:
+  - `OPT-4A`: add finer phase-internal timers
+    - split current coarse buckets into:
+      - training restore / model-init time
+      - first-step compile time
+      - train-step execution time
+      - checkpoint commit time
+      - vLLM init / bootstrap time
+      - actual generation time
+    - goal:
+      - avoid guessing about compiler caches and identify the real dominant sub-costs
+  - `OPT-4B`: remove `uv run` / wheel-reinstall churn from remote phase entrypoints
+    - evidence:
+      - every alternating phase container still shows package uninstall/install output before phase work begins
+    - goal:
+      - cut repeated process startup overhead from `prepare-sampling`, `materialize`, and `train-phase`
+    - success criterion:
+      - 2-phase single-host rerun with identical workload beats the `930.762s` `OPT-1B` baseline
+  - `OPT-5`: optimize checkpoint-native sampling/bootstrap directly
+    - only after `OPT-4A` clarifies which sub-cost dominates inside `prepare_sampling_seconds`
+    - likely targets:
+      - checkpoint load path
+      - Levanter->NNX conversion path
+      - vLLM bootstrap / sync path
+- Correctness queue remains in parallel:
+  - `ALT-TPU-003`:
+    - minimal 2-host, 1-phase correctness gate
+  - `ALT-TPU-004`:
+    - minimal 2-host, 2-phase correctness gate
+- Deferred until correctness gates pass:
+  - `OPT-6`: `steps_per_phase` sweep on the best single-host baseline
+    - first values to test:
+      - `4`
+      - `8`
+      - `16`
+    - reason:
+      - boundary amortization only matters once the multi-host path is known-correct
+- Current recommendation:
+  - do `OPT-4A` and `OPT-4B` on the live `v5p-8`
+  - keep waiting for `ALT-TPU-003` capacity on `v5p-16`

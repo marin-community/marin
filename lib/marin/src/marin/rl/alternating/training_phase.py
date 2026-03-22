@@ -8,21 +8,27 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import os
 import time
 
 import haliax as hax
 import jax
+import jax.numpy as jnp
 import jax.random as jrandom
 import levanter
 from levanter.utils.fsspec_utils import exists
 from haliax import Axis
-from levanter.checkpoint import discover_latest_checkpoint
+from levanter.checkpoint import discover_latest_checkpoint, save_checkpoint
 from levanter.trainer import Trainer
 from levanter.utils.jax_utils import barrier_sync
 from iris.marin_fs import url_to_fs
 from transformers import AutoTokenizer
 
-from marin.rl.alternating.config import AlternatingRLConfig
+from marin.rl.alternating.config import (
+    AlternatingRLConfig,
+    BootstrapCheckpointDType,
+    BootstrapCheckpointStorage,
+)
 from marin.rl.alternating.io import read_pickle
 from marin.rl.alternating.state import (
     AlternatingRunPaths,
@@ -259,6 +265,7 @@ def _publish_policy_manifest(
     source_global_step: int,
     policy_version: int,
     checkpoint_path: str,
+    bootstrap_checkpoint_path: str | None = None,
 ) -> str:
     if jax.process_index() == 0:
         policy_manifest_path = paths.policy_manifest_path(policy_version)
@@ -270,6 +277,8 @@ def _publish_policy_manifest(
                 source_global_step=source_global_step,
                 policy_path=checkpoint_path,
                 levanter_checkpoint_path=checkpoint_path,
+                bootstrap_checkpoint_path=bootstrap_checkpoint_path,
+                bootstrap_checkpoint_dtype=config.bootstrap_checkpoint_dtype,
                 model_name=config.inference.model_name,
                 tokenizer_name=config.tokenizer_name,
                 enable_fast_bootstrap=True,
@@ -279,6 +288,53 @@ def _publish_policy_manifest(
         )
     barrier_sync()
     return paths.policy_manifest_path(policy_version)
+
+
+def _cast_model_for_bootstrap_checkpoint(model, dtype: BootstrapCheckpointDType):
+    if dtype is BootstrapCheckpointDType.BF16:
+        return jax.tree.map(
+            lambda leaf: (
+                leaf.astype(jnp.bfloat16)
+                if hasattr(leaf, "dtype") and jnp.issubdtype(leaf.dtype, jnp.floating)
+                else leaf
+            ),
+            model,
+            is_leaf=lambda leaf: isinstance(leaf, hax.NamedArray),
+        )
+
+    raise ValueError(f"Unsupported bootstrap checkpoint dtype {dtype}")
+
+
+def _save_bootstrap_checkpoint(
+    config: AlternatingRLConfig,
+    paths: AlternatingRunPaths,
+    *,
+    policy_version: int,
+    source_global_step: int,
+    model,
+) -> str | None:
+    bootstrap_dtype = config.bootstrap_checkpoint_dtype
+    if bootstrap_dtype is None:
+        return None
+
+    if config.bootstrap_checkpoint_storage is BootstrapCheckpointStorage.LOCAL:
+        checkpoint_path = os.path.join(
+            config.local_artifact_root,
+            config.run_id,
+            "policies",
+            f"policy_{policy_version:04d}",
+            f"bootstrap_checkpoint_{bootstrap_dtype.value}",
+        )
+    else:
+        checkpoint_path = paths.policy_bootstrap_checkpoint_path(policy_version, bootstrap_dtype)
+    bootstrap_model = _cast_model_for_bootstrap_checkpoint(model, bootstrap_dtype)
+    save_checkpoint(
+        {"model": bootstrap_model},
+        step=source_global_step,
+        checkpoint_path=checkpoint_path,
+        is_temporary=False,
+    )
+    return checkpoint_path
 
 
 def export_policy_only(
@@ -327,12 +383,13 @@ def export_policy_only(
         )
 
     export_start = time.time()
+    next_policy_version = manifest.policy_version + 1
     policy_manifest_path = _publish_policy_manifest(
         config,
         paths,
         phase_id=state.phase_id,
         source_global_step=target_step,
-        policy_version=manifest.policy_version + 1,
+        policy_version=next_policy_version,
         checkpoint_path=latest_checkpoint,
     )
     phase_metrics = update_phase_metrics(
@@ -396,7 +453,7 @@ def run_training_phase(
             sample_previews=lambda: loader._last_sample_previews,
         )
         training_start = time.time()
-        trainer.train(initial_state, loader)
+        final_info = trainer.train(initial_state, loader)
         tracker = getattr(trainer, "tracker", None)
     training_seconds = time.time() - training_start
     phase_metrics = update_phase_metrics(
@@ -412,13 +469,22 @@ def run_training_phase(
     )
 
     export_start = time.time()
+    next_policy_version = manifest.policy_version + 1
+    bootstrap_checkpoint_path = _save_bootstrap_checkpoint(
+        config,
+        paths,
+        policy_version=next_policy_version,
+        source_global_step=target_step,
+        model=final_info.state.model,
+    )
     policy_manifest_path = _publish_policy_manifest(
         config,
         paths,
         phase_id=state.phase_id,
         source_global_step=target_step,
-        policy_version=manifest.policy_version + 1,
+        policy_version=next_policy_version,
         checkpoint_path=latest_checkpoint,
+        bootstrap_checkpoint_path=bootstrap_checkpoint_path,
     )
     phase_metrics = update_phase_metrics(
         paths.phase_metrics_path(state.phase_id),

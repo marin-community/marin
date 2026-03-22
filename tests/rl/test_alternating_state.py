@@ -15,6 +15,7 @@ from marin.rl.alternating import (
     AlternatingRLConfig,
     AlternatingRunPaths,
     AlternatingRunState,
+    BootstrapCheckpointDType,
     HostPhaseStatus,
     MaterializedBatchesManifest,
     PhaseMetricsManifest,
@@ -137,6 +138,8 @@ def test_run_state_and_manifest_roundtrip(tmp_path):
         source_global_step=9,
         policy_path=paths.policy_dir(3),
         levanter_checkpoint_path=f"{paths.levanter_checkpoints_root}/step-9",
+        bootstrap_checkpoint_path=paths.policy_bootstrap_checkpoint_path(3, BootstrapCheckpointDType.BF16),
+        bootstrap_checkpoint_dtype=BootstrapCheckpointDType.BF16,
         model_name="meta-llama/Llama-3.1-8B-Instruct",
         tokenizer_name="meta-llama/Llama-3.1-8B-Instruct",
         enable_fast_bootstrap=True,
@@ -298,3 +301,5 @@ def test_policy_manifest_defaults_bootstrap_format_for_old_payloads(tmp_path):
     manifest = read_policy_manifest(paths.policy_manifest_path(1))
 
     assert manifest.bootstrap_format == PolicyBootstrapFormat.HF_EXPORT
+    assert manifest.bootstrap_checkpoint_path is None
+    assert manifest.bootstrap_checkpoint_dtype is None

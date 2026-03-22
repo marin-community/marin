@@ -7,11 +7,13 @@ from types import SimpleNamespace
 
 from experiments.alternating_rl_math500 import (
     ALTERNATING_WANDB_PROJECT,
+    _build_controller_config,
     _experiment_config_from_args,
     _default_experiment_config,
     build_parser,
     create_math_curriculum,
 )
+from marin.rl.alternating import BootstrapCheckpointDType, BootstrapCheckpointStorage
 
 
 def test_experiment_overrides_support_small_smoke_profile():
@@ -98,6 +100,12 @@ def test_controller_parser_accepts_smoke_override_flags():
             "256",
             "--inference-gpu-memory-utilization",
             "0.95",
+            "--bootstrap-checkpoint-dtype",
+            "bfloat16",
+            "--bootstrap-checkpoint-storage",
+            "local",
+            "--local-artifact-root",
+            "/tmp/alt-local",
         ]
     )
 
@@ -108,6 +116,50 @@ def test_controller_parser_accepts_smoke_override_flags():
     assert args.max_input_tokens == 512
     assert args.max_output_tokens == 256
     assert args.inference_gpu_memory_utilization == 0.95
+    assert args.bootstrap_checkpoint_dtype == "bfloat16"
+    assert args.bootstrap_checkpoint_storage == "local"
+    assert args.local_artifact_root == "/tmp/alt-local"
+
+
+def test_controller_config_supports_optional_bootstrap_checkpoint_dtype(monkeypatch):
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "controller",
+            "--run-id",
+            "alt-tpu-opt2-smoke",
+            "--shared-root",
+            "gs://example/alternating-rl",
+            "--image",
+            "example/image:tag",
+            "--tpu-name",
+            "alt-v5p-probe-001",
+            "--tpu-type",
+            "v5p-8",
+            "--zone",
+            "us-east5-a",
+            "--num-hosts",
+            "1",
+            "--steps-per-phase",
+            "1",
+            "--num-train-steps",
+            "1",
+            "--bootstrap-checkpoint-dtype",
+            "bfloat16",
+            "--bootstrap-checkpoint-storage",
+            "local",
+            "--local-artifact-root",
+            "/tmp/alt-local",
+        ]
+    )
+
+    monkeypatch.setattr("experiments.alternating_rl_math500.resolve_container_image", lambda image: image)
+
+    config = _build_controller_config(args)
+
+    assert config.bootstrap_checkpoint_dtype == BootstrapCheckpointDType.BF16
+    assert config.bootstrap_checkpoint_storage == BootstrapCheckpointStorage.LOCAL
+    assert config.local_artifact_root == "/tmp/alt-local"
 
 
 def test_alternating_math500_uses_dedicated_wandb_project():

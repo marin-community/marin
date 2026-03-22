@@ -14,6 +14,8 @@ from marin.rl.alternating import (
     AlternatingRLConfig,
     AlternatingRunPaths,
     AlternatingRunState,
+    BootstrapCheckpointDType,
+    BootstrapCheckpointStorage,
     MaterializedBatchesManifest,
     PolicyBootstrapFormat,
     PolicyManifest,
@@ -221,6 +223,7 @@ def test_training_phase_uses_full_run_optimizer_schedule_and_run_specific_checkp
 
         def train(self, initial_state, loader):
             del initial_state, loader
+            return SimpleNamespace(state=SimpleNamespace(model="trained-model"))
 
     monkeypatch.setattr("marin.rl.alternating.training_phase.Trainer", FakeTrainer)
 
@@ -240,6 +243,8 @@ def test_training_phase_uses_full_run_optimizer_schedule_and_run_specific_checkp
     assert policy_manifest.source_global_step == 7
     assert policy_manifest.policy_path == f"{expected_checkpoint_root}/step-7"
     assert policy_manifest.levanter_checkpoint_path == f"{expected_checkpoint_root}/step-7"
+    assert policy_manifest.bootstrap_checkpoint_path is None
+    assert policy_manifest.bootstrap_checkpoint_dtype is None
     assert policy_manifest.bootstrap_format == PolicyBootstrapFormat.LEVANTER_CHECKPOINT
 
 
@@ -316,6 +321,7 @@ def test_training_phase_waits_for_checkpoint_visibility_before_export(monkeypatc
 
         def train(self, initial_state, loader):
             del initial_state, loader
+            return SimpleNamespace(state=SimpleNamespace(model="trained-model"))
 
     monkeypatch.setattr("marin.rl.alternating.training_phase.Trainer", FakeTrainer)
 
@@ -324,7 +330,190 @@ def test_training_phase_waits_for_checkpoint_visibility_before_export(monkeypatc
     policy_manifest = read_policy_manifest(policy_manifest_path)
     assert policy_manifest.policy_path == f"{trainer_checkpoint_root}/step-1"
     assert policy_manifest.levanter_checkpoint_path == f"{trainer_checkpoint_root}/step-1"
+    assert policy_manifest.bootstrap_checkpoint_path is None
     assert policy_manifest.bootstrap_format == PolicyBootstrapFormat.LEVANTER_CHECKPOINT
+
+
+def test_training_phase_publishes_optional_bf16_bootstrap_sidecar(monkeypatch, tmp_path):
+    optimizer = RecordingOptimizer()
+    config = replace(_make_config(tmp_path, optimizer), bootstrap_checkpoint_dtype=BootstrapCheckpointDType.BF16)
+    paths = AlternatingRunPaths.from_config(config)
+    state = AlternatingRunState(
+        run_id=config.run_id,
+        status=RunStatus.TRAINING,
+        phase_id=1,
+        policy_version=1,
+        source_global_step=0,
+        num_hosts=1,
+        tpu_name=config.cluster.tpu_name,
+        tpu_type=config.cluster.tpu_type,
+        zone=config.cluster.zone,
+        image_digest=config.image_digest,
+        current_policy_manifest_path=paths.policy_manifest_path(1),
+        current_levanter_checkpoint_path=None,
+        current_sampling_manifest=paths.sampling_manifest_path(1),
+        current_materialized_manifest=paths.materialized_manifest_path(1),
+        last_completed_phase=0,
+    )
+    manifest = MaterializedBatchesManifest(
+        phase_id=1,
+        policy_version=1,
+        input_rollout_paths=[],
+        num_rollout_groups=1,
+        num_individual_rollouts=4,
+        num_training_batches=1,
+        global_batch_size=config.global_batch_size,
+        max_seq_len=128,
+        batch_paths=[paths.materialized_batch_path(1, 0)],
+    )
+    saved_bootstrap_paths: list[tuple[int, int, object]] = []
+
+    monkeypatch.setattr("marin.rl.alternating.training_phase.levanter.initialize", lambda trainer_config: None)
+    monkeypatch.setattr(
+        "marin.rl.alternating.training_phase.AutoTokenizer.from_pretrained",
+        lambda _name: FakeTokenizer(),
+    )
+    monkeypatch.setattr(
+        "marin.rl.alternating.training_phase._build_reference_model",
+        lambda config, trainer_config, tokenizer, resume_checkpoint_path: object(),
+    )
+    monkeypatch.setattr("marin.rl.alternating.training_phase.barrier_sync", lambda: None)
+    monkeypatch.setattr("marin.rl.alternating.training_phase.jax.process_index", lambda: 0)
+    monkeypatch.setattr("marin.rl.alternating.training_phase.discover_latest_checkpoint", lambda _path: None)
+    monkeypatch.setattr("marin.rl.alternating.training_phase._checkpoint_metadata_exists", lambda _path: True)
+    monkeypatch.setattr(
+        "marin.rl.alternating.training_phase._save_bootstrap_checkpoint",
+        lambda config, paths, policy_version, source_global_step, model: (
+            saved_bootstrap_paths.append((policy_version, source_global_step, model))
+            or paths.policy_bootstrap_checkpoint_path(policy_version, BootstrapCheckpointDType.BF16)
+        ),
+    )
+
+    class FakeTrainer:
+        def __init__(self, *, config, optimizer, loss_fn):
+            del optimizer, loss_fn
+            self.config = config
+            self.tracker = None
+
+        def add_hook(self, fn, *, every=1):
+            del fn, every
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def initial_state(self, training_key, model):
+            del training_key, model
+            return "initial-state"
+
+        def train(self, initial_state, loader):
+            del initial_state, loader
+            return SimpleNamespace(state=SimpleNamespace(model="trained-model"))
+
+    monkeypatch.setattr("marin.rl.alternating.training_phase.Trainer", FakeTrainer)
+
+    policy_manifest_path = run_training_phase(config, paths, state, manifest)
+    policy_manifest = read_policy_manifest(policy_manifest_path)
+
+    assert saved_bootstrap_paths == [(2, 1, "trained-model")]
+    assert policy_manifest.bootstrap_checkpoint_path == paths.policy_bootstrap_checkpoint_path(
+        2, BootstrapCheckpointDType.BF16
+    )
+    assert policy_manifest.bootstrap_checkpoint_dtype == BootstrapCheckpointDType.BF16
+
+
+def test_training_phase_can_publish_bootstrap_sidecar_to_local_volume(monkeypatch, tmp_path):
+    optimizer = RecordingOptimizer()
+    config = replace(
+        _make_config(tmp_path, optimizer),
+        bootstrap_checkpoint_dtype=BootstrapCheckpointDType.BF16,
+        bootstrap_checkpoint_storage=BootstrapCheckpointStorage.LOCAL,
+        local_artifact_root="/home/levanter/alternating-local",
+    )
+    paths = AlternatingRunPaths.from_config(config)
+    state = AlternatingRunState(
+        run_id=config.run_id,
+        status=RunStatus.TRAINING,
+        phase_id=1,
+        policy_version=1,
+        source_global_step=0,
+        num_hosts=1,
+        tpu_name=config.cluster.tpu_name,
+        tpu_type=config.cluster.tpu_type,
+        zone=config.cluster.zone,
+        image_digest=config.image_digest,
+        current_policy_manifest_path=paths.policy_manifest_path(1),
+        current_levanter_checkpoint_path=None,
+        current_sampling_manifest=paths.sampling_manifest_path(1),
+        current_materialized_manifest=paths.materialized_manifest_path(1),
+        last_completed_phase=0,
+    )
+    manifest = MaterializedBatchesManifest(
+        phase_id=1,
+        policy_version=1,
+        input_rollout_paths=[],
+        num_rollout_groups=1,
+        num_individual_rollouts=4,
+        num_training_batches=1,
+        global_batch_size=config.global_batch_size,
+        max_seq_len=128,
+        batch_paths=[paths.materialized_batch_path(1, 0)],
+    )
+
+    monkeypatch.setattr("marin.rl.alternating.training_phase.levanter.initialize", lambda trainer_config: None)
+    monkeypatch.setattr(
+        "marin.rl.alternating.training_phase.AutoTokenizer.from_pretrained",
+        lambda _name: FakeTokenizer(),
+    )
+    monkeypatch.setattr(
+        "marin.rl.alternating.training_phase._build_reference_model",
+        lambda config, trainer_config, tokenizer, resume_checkpoint_path: object(),
+    )
+    monkeypatch.setattr("marin.rl.alternating.training_phase.barrier_sync", lambda: None)
+    monkeypatch.setattr("marin.rl.alternating.training_phase.jax.process_index", lambda: 0)
+    monkeypatch.setattr("marin.rl.alternating.training_phase.discover_latest_checkpoint", lambda _path: None)
+    monkeypatch.setattr("marin.rl.alternating.training_phase._checkpoint_metadata_exists", lambda _path: True)
+    monkeypatch.setattr(
+        "marin.rl.alternating.training_phase._save_bootstrap_checkpoint",
+        lambda config, paths, policy_version, source_global_step, model: (
+            f"{config.local_artifact_root}/{config.run_id}/policies/policy_{policy_version:04d}"
+            f"/bootstrap_checkpoint_{config.bootstrap_checkpoint_dtype.value}"
+        ),
+    )
+
+    class FakeTrainer:
+        def __init__(self, *, config, optimizer, loss_fn):
+            del optimizer, loss_fn
+            self.config = config
+            self.tracker = None
+
+        def add_hook(self, fn, *, every=1):
+            del fn, every
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def initial_state(self, training_key, model):
+            del training_key, model
+            return "initial-state"
+
+        def train(self, initial_state, loader):
+            del initial_state, loader
+            return SimpleNamespace(state=SimpleNamespace(model="trained-model"))
+
+    monkeypatch.setattr("marin.rl.alternating.training_phase.Trainer", FakeTrainer)
+
+    policy_manifest_path = run_training_phase(config, paths, state, manifest)
+    policy_manifest = read_policy_manifest(policy_manifest_path)
+
+    assert policy_manifest.bootstrap_checkpoint_path == (
+        "/home/levanter/alternating-local/alt-train-phase-test/policies/policy_0002/bootstrap_checkpoint_bfloat16"
+    )
 
 
 def test_training_phase_sets_distinct_alternating_wandb_run_metadata(monkeypatch, tmp_path):
@@ -415,6 +604,7 @@ def test_training_phase_sets_distinct_alternating_wandb_run_metadata(monkeypatch
 
         def train(self, initial_state, loader):
             del initial_state, loader
+            return SimpleNamespace(state=SimpleNamespace(model="trained-model"))
 
     monkeypatch.setattr("marin.rl.alternating.training_phase.Trainer", FakeTrainer)
 
@@ -531,6 +721,7 @@ def test_training_phase_installs_async_rl_metric_hooks(monkeypatch, tmp_path):
 
         def train(self, initial_state, loader):
             del initial_state, loader
+            return SimpleNamespace(state=SimpleNamespace(model="trained-model"))
 
     monkeypatch.setattr("marin.rl.alternating.training_phase.Trainer", FakeTrainer)
 
@@ -618,6 +809,7 @@ def test_training_phase_finishes_tracker_after_logging_phase_metrics(monkeypatch
 
         def train(self, initial_state, loader):
             del initial_state, loader
+            return SimpleNamespace(state=SimpleNamespace(model="trained-model"))
 
     monkeypatch.setattr("marin.rl.alternating.training_phase.Trainer", FakeTrainer)
 
@@ -717,6 +909,7 @@ def test_export_only_recovery_writes_policy_manifest_from_latest_checkpoint(monk
     assert policy_manifest.phase_id == state.phase_id
     assert policy_manifest.source_global_step == 6
     assert policy_manifest.policy_path == f"{paths.levanter_checkpoints_root}/{config.run_id}-alternating-train/step-6"
+    assert policy_manifest.bootstrap_checkpoint_path is None
     assert policy_manifest.bootstrap_format == PolicyBootstrapFormat.LEVANTER_CHECKPOINT
 
 

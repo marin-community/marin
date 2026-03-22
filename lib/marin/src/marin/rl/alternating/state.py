@@ -15,7 +15,7 @@ from typing import Any
 from iris.marin_fs import url_to_fs
 from levanter.utils.fsspec_utils import exists, join_path
 
-from marin.rl.alternating.config import AlternatingRLConfig
+from marin.rl.alternating.config import AlternatingRLConfig, BootstrapCheckpointDType
 
 POLICY_DIGITS = 4
 PHASE_DIGITS = 4
@@ -120,6 +120,9 @@ class AlternatingRunPaths:
     def policy_manifest_path(self, policy_version: int) -> str:
         return join_path(self.policy_dir(policy_version), MANIFEST_BASENAME)
 
+    def policy_bootstrap_checkpoint_path(self, policy_version: int, dtype: BootstrapCheckpointDType) -> str:
+        return join_path(self.policy_dir(policy_version), f"bootstrap_checkpoint_{dtype.value}")
+
     def sampling_phase_dir(self, phase_id: int) -> str:
         return _join(self.run_root, SAMPLING_DIRNAME, f"phase_{phase_id:0{PHASE_DIGITS}d}")
 
@@ -211,6 +214,8 @@ class PolicyManifest:
     tokenizer_name: str
     enable_fast_bootstrap: bool
     created_at: str
+    bootstrap_checkpoint_path: str | None = None
+    bootstrap_checkpoint_dtype: BootstrapCheckpointDType | None = None
     bootstrap_format: PolicyBootstrapFormat = PolicyBootstrapFormat.HF_EXPORT
 
     def to_dict(self) -> dict[str, Any]:
@@ -224,6 +229,12 @@ class PolicyManifest:
             source_global_step=data["source_global_step"],
             policy_path=data["policy_path"],
             levanter_checkpoint_path=data.get("levanter_checkpoint_path"),
+            bootstrap_checkpoint_path=data.get("bootstrap_checkpoint_path"),
+            bootstrap_checkpoint_dtype=(
+                BootstrapCheckpointDType(data["bootstrap_checkpoint_dtype"])
+                if data.get("bootstrap_checkpoint_dtype") is not None
+                else None
+            ),
             model_name=data["model_name"],
             tokenizer_name=data["tokenizer_name"],
             enable_fast_bootstrap=data["enable_fast_bootstrap"],
@@ -362,10 +373,21 @@ class PhaseMetricsManifest:
 
     phase_id: int
     prepare_sampling_seconds: float | None = None
+    prepare_sampling_inference_init_seconds: float | None = None
+    prepare_sampling_eval_seconds: float | None = None
     sampling_seconds: float | None = None
+    sampling_max_inference_init_seconds: float | None = None
+    sampling_max_generation_seconds: float | None = None
     curriculum_update_seconds: float | None = None
     materialization_seconds: float | None = None
+    materialization_spill_seconds: float | None = None
+    materialization_batch_build_seconds: float | None = None
     training_seconds: float | None = None
+    training_container_wall_seconds: float | None = None
+    training_setup_seconds: float | None = None
+    training_first_step_seconds: float | None = None
+    training_total_step_seconds: float | None = None
+    training_checkpoint_wait_seconds: float | None = None
     export_seconds: float | None = None
     last_updated_at: str = ""
 
@@ -377,10 +399,21 @@ class PhaseMetricsManifest:
         return cls(
             phase_id=data["phase_id"],
             prepare_sampling_seconds=data.get("prepare_sampling_seconds"),
+            prepare_sampling_inference_init_seconds=data.get("prepare_sampling_inference_init_seconds"),
+            prepare_sampling_eval_seconds=data.get("prepare_sampling_eval_seconds"),
             sampling_seconds=data.get("sampling_seconds"),
+            sampling_max_inference_init_seconds=data.get("sampling_max_inference_init_seconds"),
+            sampling_max_generation_seconds=data.get("sampling_max_generation_seconds"),
             curriculum_update_seconds=data.get("curriculum_update_seconds"),
             materialization_seconds=data.get("materialization_seconds"),
+            materialization_spill_seconds=data.get("materialization_spill_seconds"),
+            materialization_batch_build_seconds=data.get("materialization_batch_build_seconds"),
             training_seconds=data.get("training_seconds"),
+            training_container_wall_seconds=data.get("training_container_wall_seconds"),
+            training_setup_seconds=data.get("training_setup_seconds"),
+            training_first_step_seconds=data.get("training_first_step_seconds"),
+            training_total_step_seconds=data.get("training_total_step_seconds"),
+            training_checkpoint_wait_seconds=data.get("training_checkpoint_wait_seconds"),
             export_seconds=data.get("export_seconds"),
             last_updated_at=data.get("last_updated_at", ""),
         )
@@ -390,17 +423,19 @@ class PhaseMetricsManifest:
         return float(
             sum(
                 value
-                for value in (
-                    self.prepare_sampling_seconds,
-                    self.sampling_seconds,
-                    self.curriculum_update_seconds,
-                    self.materialization_seconds,
-                    self.training_seconds,
-                    self.export_seconds,
-                )
+                for value in (getattr(self, field_name) for field_name in COARSE_PHASE_TIMING_FIELDS)
                 if value is not None
             )
         )
+
+
+def phase_timing_values(phase_metrics: PhaseMetricsManifest) -> dict[str, float]:
+    """Return every populated coarse/sub-phase timing field."""
+    return {
+        field_name: value
+        for field_name in PHASE_TIMING_FIELDS
+        if (value := getattr(phase_metrics, field_name)) is not None
+    }
 
 
 def _ensure_parent_dir(path: str) -> tuple[Any, str]:
@@ -500,10 +535,21 @@ def update_phase_metrics(
     *,
     phase_id: int,
     prepare_sampling_seconds: float | None = None,
+    prepare_sampling_inference_init_seconds: float | None = None,
+    prepare_sampling_eval_seconds: float | None = None,
     sampling_seconds: float | None = None,
+    sampling_max_inference_init_seconds: float | None = None,
+    sampling_max_generation_seconds: float | None = None,
     curriculum_update_seconds: float | None = None,
     materialization_seconds: float | None = None,
+    materialization_spill_seconds: float | None = None,
+    materialization_batch_build_seconds: float | None = None,
     training_seconds: float | None = None,
+    training_container_wall_seconds: float | None = None,
+    training_setup_seconds: float | None = None,
+    training_first_step_seconds: float | None = None,
+    training_total_step_seconds: float | None = None,
+    training_checkpoint_wait_seconds: float | None = None,
     export_seconds: float | None = None,
 ) -> PhaseMetricsManifest:
     """Merge one or more per-phase timing fields into the durable metrics manifest."""
@@ -516,10 +562,21 @@ def update_phase_metrics(
 
     updates = {
         "prepare_sampling_seconds": prepare_sampling_seconds,
+        "prepare_sampling_inference_init_seconds": prepare_sampling_inference_init_seconds,
+        "prepare_sampling_eval_seconds": prepare_sampling_eval_seconds,
         "sampling_seconds": sampling_seconds,
+        "sampling_max_inference_init_seconds": sampling_max_inference_init_seconds,
+        "sampling_max_generation_seconds": sampling_max_generation_seconds,
         "curriculum_update_seconds": curriculum_update_seconds,
         "materialization_seconds": materialization_seconds,
+        "materialization_spill_seconds": materialization_spill_seconds,
+        "materialization_batch_build_seconds": materialization_batch_build_seconds,
         "training_seconds": training_seconds,
+        "training_container_wall_seconds": training_container_wall_seconds,
+        "training_setup_seconds": training_setup_seconds,
+        "training_first_step_seconds": training_first_step_seconds,
+        "training_total_step_seconds": training_total_step_seconds,
+        "training_checkpoint_wait_seconds": training_checkpoint_wait_seconds,
         "export_seconds": export_seconds,
     }
     for key, value in list(updates.items()):
@@ -537,3 +594,27 @@ def sampling_host_statuses_exist(paths: AlternatingRunPaths, manifest: SamplingM
         exists(paths.sampling_host_status_path(manifest.phase_id, assignment.host_ordinal))
         for assignment in manifest.host_assignments
     )
+
+
+COARSE_PHASE_TIMING_FIELDS = (
+    "prepare_sampling_seconds",
+    "sampling_seconds",
+    "curriculum_update_seconds",
+    "materialization_seconds",
+    "training_seconds",
+    "export_seconds",
+)
+SUBPHASE_TIMING_FIELDS = (
+    "prepare_sampling_inference_init_seconds",
+    "prepare_sampling_eval_seconds",
+    "sampling_max_inference_init_seconds",
+    "sampling_max_generation_seconds",
+    "materialization_spill_seconds",
+    "materialization_batch_build_seconds",
+    "training_container_wall_seconds",
+    "training_setup_seconds",
+    "training_first_step_seconds",
+    "training_total_step_seconds",
+    "training_checkpoint_wait_seconds",
+)
+PHASE_TIMING_FIELDS = COARSE_PHASE_TIMING_FIELDS + SUBPHASE_TIMING_FIELDS

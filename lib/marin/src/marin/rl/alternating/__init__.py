@@ -14,6 +14,8 @@ from marin.rl.alternating.config import (
     AlternatingMode,
     AlternatingPhaseQuotaConfig,
     AlternatingRLConfig,
+    BootstrapCheckpointDType,
+    BootstrapCheckpointStorage,
 )
 from marin.rl.alternating.controller import (
     AlternatingPhaseHooks,
@@ -76,6 +78,8 @@ __all__ = [
     "AlternatingRLConfig",
     "AlternatingRunPaths",
     "AlternatingRunState",
+    "BootstrapCheckpointDType",
+    "BootstrapCheckpointStorage",
     "ExistingPodPhaseHooks",
     "HostPhaseStatus",
     "MaterializedBatchesManifest",
