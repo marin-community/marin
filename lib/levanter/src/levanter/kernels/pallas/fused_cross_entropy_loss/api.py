@@ -485,6 +485,9 @@ def _autotune_block_sizes_on_miss(
 ) -> BlockSizes:
     if not _autotune_enabled():
         return inferred
+    if _is_tracer(x) or _is_tracer(labels) or _is_tracer(w):
+        logger.debug("Fused CE autotune skipped: inputs are JAX tracers (e.g. inside shard_map).")
+        return inferred
     _ensure_autotune_cache_loaded()
     cache_key = _autotune_cache_key(
         impl_name=impl_name,

@@ -1885,3 +1885,69 @@ def test_fused_cross_entropy_pallas_backward_matches_xla_infer_blocks(implementa
 
     assert jnp.allclose(gx_linear_ce, gx_xla, atol=1e-4, rtol=1e-4)
     assert jnp.allclose(gw_linear_ce, gw_xla, atol=1e-4, rtol=1e-4)
+
+
+def test_autotune_skips_for_tracer_inputs():
+    """Autotune must return inferred block sizes when inputs are JAX tracers (e.g. inside shard_map)."""
+    inferred = fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512)
+
+    def fake_impl(x_raw, labels_raw, w_raw, **kwargs):
+        batch = x_raw.shape[0]
+        return jnp.zeros((batch,), dtype=jnp.float32), jnp.zeros((batch,), dtype=jnp.float32)
+
+    mesh = Mesh(jax.devices()[:1], ("data",))
+    x = jax.device_put(
+        jnp.ones((4, 8), dtype=jnp.float32),
+        NamedSharding(mesh, P("data", None)),
+    )
+    labels = jax.device_put(
+        jnp.zeros((4,), dtype=jnp.int32),
+        NamedSharding(mesh, P("data")),
+    )
+    w = jax.device_put(
+        jnp.ones((8, 16), dtype=jnp.float32),
+        NamedSharding(mesh, P(None, None)),
+    )
+
+    results: list[fused_api.BlockSizes] = []
+
+    def run_autotune_inside_shard_map(x_shard, labels_shard, w_shard):
+        result = fused_api._autotune_block_sizes_on_miss(
+            impl_name="pallas_tpu",
+            fn=fake_impl,
+            x=x_shard,
+            labels=labels_shard,
+            w=w_shard,
+            inferred=inferred,
+            dtype=jnp.float32,
+            logit_soft_cap=None,
+            precision=None,
+            return_argmax=False,
+        )
+        results.append(result)
+        return jnp.zeros((), dtype=jnp.float32)
+
+    mapped = jax.shard_map(
+        run_autotune_inside_shard_map,
+        mesh=mesh,
+        in_specs=(P("data", None), P("data"), P(None, None)),
+        out_specs=P(),
+        check_vma=False,
+    )
+    mapped(x, labels, w)
+
+    assert len(results) == 1
+    assert results[0] is inferred
+
+
+def test_es3r2_shape_gets_tuned_bucket_match():
+    """The es3r2 local shard shape B=20480, H=4096, V=128256 must match a tuned bucket."""
+    bucket = tuned_block_sizes.shape_bucket_name(20480, 4096, 128256)
+    assert bucket == "mid-batch-llama3-ish"
+
+    block_sizes, has_tuned = tuned_block_sizes.infer_block_sizes_with_tuned_match(
+        20480, 4096, 128256, dtype=jnp.bfloat16, device_kind="TPU v5p"
+    )
+    assert has_tuned
+    assert 20480 % block_sizes.b_block_size == 0
+    assert 4096 % block_sizes.h_block_size == 0
