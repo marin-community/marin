@@ -7,7 +7,6 @@ use arrow::pyarrow::PyArrowType;
 use arrow::record_batch::RecordBatch;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use std::borrow::Borrow;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -97,11 +96,7 @@ impl Transformation {
 
     #[staticmethod]
     #[pyo3(name = "MinHashLSH")]
-    fn min_hash_lsh(
-        input_col: String,
-        output_col: String,
-        num_bands: usize,
-    ) -> Transformation {
+    fn min_hash_lsh(input_col: String, output_col: String, num_bands: usize) -> Transformation {
         Self::MinHashLSH {
             input_col,
             output_col,
@@ -156,7 +151,7 @@ fn apply_transformation(batch: RecordBatch, step: &Transformation) -> PyResult<R
             let input_arr = ops::get_string_array(&batch, input_col)?;
             let signature_arr =
                 minhash_ops::compute_minhash(&input_arr, *num_perms, *ngram_size, *seed)?;
-            ops::add_column(&batch, output_col, signature_arr.into())
+            ops::add_column(&batch, output_col, signature_arr)
         }
 
         Transformation::MinHashLSH {
@@ -168,7 +163,7 @@ fn apply_transformation(batch: RecordBatch, step: &Transformation) -> PyResult<R
                 PyRuntimeError::new_err(format!("Column '{}' missing", input_col))
             })?;
             let buckets_arr = minhash_ops::compute_lsh(input_arr.as_ref(), *num_bands)?;
-            ops::add_column(&batch, output_col, buckets_arr.into())
+            ops::add_column(&batch, output_col, buckets_arr)
         }
     }
 }
@@ -181,7 +176,7 @@ pub fn transform(
 ) -> PyResult<PyArrowType<RecordBatch>> {
     let rust_steps: Vec<Transformation> = steps.iter().map(|step| (**step).clone()).collect();
 
-    py.allow_threads(move || {
+    py.detach(move || {
         let mut current_batch = batch.0;
         for step in &rust_steps {
             current_batch = apply_transformation(current_batch, step)?;

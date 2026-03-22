@@ -619,6 +619,7 @@ class Worker:
                                 exit_code=task_proto.exit_code,
                                 error=task_proto.error or "",
                                 log_entries=log_entries,
+                                container_id=task_proto.container_id or "",
                             )
                             if task.status in self._TERMINAL_STATES:
                                 entry.finished_at.CopyFrom(task_proto.finished_at)
@@ -774,6 +775,25 @@ class Worker:
         if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
             raise ValueError(f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})")
         return attempt.profile(duration_seconds, profile_type)
+
+    def exec_in_container(
+        self, task_id: str, command: list[str], timeout_seconds: int = 60
+    ) -> cluster_pb2.Worker.ExecInContainerResponse:
+        """Execute a command in a running task's container.
+
+        Delegates to the container handle's underlying runtime (docker exec, subprocess, kubectl exec).
+        """
+        attempt = self._get_current_attempt(task_id)
+        if not attempt:
+            return cluster_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} not found")
+        if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
+            return cluster_pb2.Worker.ExecInContainerResponse(
+                error=f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})"
+            )
+        container_id = attempt.container_id
+        if not container_id:
+            return cluster_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} has no container")
+        return attempt.exec_in_container(command, timeout_seconds)
 
     @property
     def url(self) -> str:

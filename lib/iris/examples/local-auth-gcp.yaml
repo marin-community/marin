@@ -26,6 +26,7 @@ scale_groups:
       disk: 100GB
       device_type: cpu
       device_variant: cpu
+      preemptible: false
     min_slices: 1
     max_slices: 4
     slice_template:

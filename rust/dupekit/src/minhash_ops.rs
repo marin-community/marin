@@ -129,7 +129,7 @@ pub fn compute_lsh(input_col: &dyn Array, num_bands: usize) -> PyResult<Arc<dyn 
             continue;
         }
 
-        if sig_len % num_bands != 0 {
+        if !sig_len.is_multiple_of(num_bands) {
             return Err(PyValueError::new_err(format!(
                 "Signature length {} is not divisible by num_bands {}",
                 sig_len, num_bands
@@ -146,7 +146,7 @@ pub fn compute_lsh(input_col: &dyn Array, num_bands: usize) -> PyResult<Arc<dyn 
             let band_bytes: &[u8] = unsafe {
                 std::slice::from_raw_parts(
                     band_data.as_ptr() as *const u8,
-                    band_data.len() * std::mem::size_of::<u64>(),
+                    std::mem::size_of_val(band_data),
                 )
             };
             let bucket_hash = xxh3::xxh3_64(band_bytes);

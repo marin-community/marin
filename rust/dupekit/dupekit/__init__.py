@@ -22,7 +22,8 @@ try:
 except ImportError:
     _INSTALL_MSG = (
         "dupekit native extension is not installed. "
-        "Build it with: cd lib/dupekit && uv sync && maturin develop --release"
+        "Run 'uv sync --all-packages' to install the pre-built wheel. "
+        "For source builds (requires Cargo), run 'make rust-dev' first."
     )
 
     class _StubModule(types.ModuleType):

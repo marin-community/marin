@@ -65,7 +65,6 @@ from iris.cluster.controller.transitions import (
     Assignment,
     ClusterCapacity,
     ControllerTransitions,
-    DispatchBatch,
     HeartbeatAction,
     ReservationClaim,
     SchedulingEvent,
@@ -733,7 +732,7 @@ class Controller:
         if db is not None:
             self._db = db
         else:
-            self._db = ControllerDB(db_path=config.local_state_dir / "controller.sqlite3")
+            self._db = ControllerDB(db_dir=config.local_state_dir / "db")
         self._log_store = LogStore(
             log_dir=config.local_state_dir / "logs",
             remote_log_dir=f"{config.remote_state_dir.rstrip('/')}/logs",
@@ -1459,11 +1458,7 @@ class Controller:
 
         # Phase 1: drain dispatch for all healthy workers.
         with slow_log(logger, "provider sync phase 1 (snapshot)", threshold_ms=100):
-            batches: list[DispatchBatch] = []
-            for w in healthy_active_workers_with_attributes(self._db):
-                batch = self._transitions.drain_dispatch(w.worker_id)
-                if batch:
-                    batches.append(batch)
+            batches = self._transitions.drain_dispatch_all()
 
         if not batches:
             return
@@ -1475,15 +1470,26 @@ class Controller:
         fail_count = 0
         failed_workers: list[str] = []
         with slow_log(logger, "provider sync phase 3 (apply results)", threshold_ms=500):
+            # Separate successes from failures so we can batch the common case.
+            success_reqs = []
+            failure_entries = []
             for batch, apply_req, error in results:
                 if apply_req is not None:
-                    result = self._transitions.apply_heartbeat(apply_req)
-                    action = result.action
-                    if result.tasks_to_kill:
-                        self.kill_tasks_on_workers(result.tasks_to_kill)
+                    success_reqs.append(apply_req)
                 else:
-                    logger.debug("Sync error for %s: %s", batch.worker_id, error)
-                    action = self._transitions.fail_heartbeat(batch, error or "unknown error")
+                    failure_entries.append((batch, error or "unknown error"))
+
+            # Batch all successful heartbeats in one transaction.
+            all_tasks_to_kill: set[JobName] = set()
+            if success_reqs:
+                batch_results = self._transitions.apply_heartbeats_batch(success_reqs)
+                for result in batch_results:
+                    all_tasks_to_kill.update(result.tasks_to_kill)
+
+            # Handle failures individually (rare, need per-worker side effects).
+            for batch, error in failure_entries:
+                logger.debug("Sync error for %s: %s", batch.worker_id, error)
+                action = self._transitions.fail_heartbeat(batch, error)
 
                 if action == HeartbeatAction.WORKER_FAILED:
                     fail_count += 1
@@ -1516,6 +1522,9 @@ class Controller:
                 elif action == HeartbeatAction.TRANSIENT_FAILURE:
                     fail_count += 1
                     failed_workers.append(batch.worker_id)
+
+            if all_tasks_to_kill:
+                self.kill_tasks_on_workers(all_tasks_to_kill)
 
         elapsed = round_timer.elapsed_ms()
         level = logging.WARNING if elapsed > _SLOW_HEARTBEAT_MS else logging.DEBUG

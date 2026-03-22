@@ -14,8 +14,14 @@ Usage:
     # Run specific benchmark group
     uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only scheduling
     uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only dashboard
+    uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only heartbeat
+
+    # Compare with/without ANALYZE statistics
+    uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only heartbeat
+    uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only heartbeat --no-analyze
 """
 
+import shutil
 import time
 from pathlib import Path
 
@@ -27,6 +33,7 @@ from iris.cluster.controller.controller import (
     _schedulable_tasks,
 )
 from iris.cluster.controller.db import (
+    ACTIVE_TASK_STATES,
     JOBS,
     ControllerDB,
     EndpointQuery,
@@ -309,6 +316,184 @@ def benchmark_dashboard(db: ControllerDB, iterations: int) -> list[tuple[str, fl
     return results
 
 
+def benchmark_heartbeat(db: ControllerDB, iterations: int) -> list[tuple[str, float, float]]:
+    """Benchmark heartbeat/provider-sync queries."""
+    results: list[tuple[str, float, float]] = []
+
+    workers = healthy_active_workers_with_attributes(db)
+    worker_ids = {w.worker_id for w in workers}
+
+    if not workers:
+        print("  (skipped, no workers)")
+        return results
+
+    sample_worker_id = str(workers[0].worker_id)
+    active_states = tuple(ACTIVE_TASK_STATES)
+
+    # Single-worker running tasks query (simulates drain_dispatch inner query)
+    def _single_worker_running_tasks():
+        with db.read_snapshot() as q:
+            q.raw(
+                "SELECT t.task_id, t.current_attempt_id "
+                "FROM tasks t "
+                "JOIN task_attempts ta ON t.task_id = ta.task_id AND t.current_attempt_id = ta.attempt_id "
+                "JOIN jobs j ON j.job_id = t.job_id "
+                "WHERE ta.worker_id = ? AND t.state IN (?, ?, ?) AND j.is_reservation_holder = 0 "
+                "ORDER BY t.task_id ASC",
+                (sample_worker_id, *active_states),
+            )
+
+    p50, p95 = bench("drain_dispatch running_tasks (1 worker)", _single_worker_running_tasks, iterations=iterations)
+    results.append(("drain_dispatch running_tasks (1 worker)", p50, p95))
+    print_result("drain_dispatch running_tasks (1 worker)", p50, p95)
+
+    # Full loop: running tasks for ALL workers (simulates phase 1)
+    def _all_workers_running_tasks():
+        for w in workers:
+            with db.read_snapshot() as q:
+                q.raw(
+                    "SELECT t.task_id, t.current_attempt_id "
+                    "FROM tasks t "
+                    "JOIN task_attempts ta ON t.task_id = ta.task_id AND t.current_attempt_id = ta.attempt_id "
+                    "JOIN jobs j ON j.job_id = t.job_id "
+                    "WHERE ta.worker_id = ? AND t.state IN (?, ?, ?) AND j.is_reservation_holder = 0 "
+                    "ORDER BY t.task_id ASC",
+                    (str(w.worker_id), *active_states),
+                )
+
+    p50, p95 = bench(f"drain_dispatch loop ({len(workers)} workers)", _all_workers_running_tasks, iterations=iterations)
+    results.append((f"drain_dispatch loop ({len(workers)} workers)", p50, p95))
+    print_result(f"drain_dispatch loop ({len(workers)} workers)", p50, p95)
+
+    # Batch running_tasks_by_worker (the db.py helper)
+    p50, p95 = bench("running_tasks_by_worker", lambda: running_tasks_by_worker(db, worker_ids), iterations=iterations)
+    results.append(("running_tasks_by_worker", p50, p95))
+    print_result("running_tasks_by_worker", p50, p95)
+
+    # --- Phase 3 simulation: per-worker vs batched transactions ---
+    # Collect (worker_id, task_id, attempt_id) tuples for running tasks.
+    running_tasks_per_worker: dict[str, list[tuple[str, int]]] = {}
+    for w in workers:
+        wid = str(w.worker_id)
+        rows = db.fetchall(
+            "SELECT t.task_id, t.current_attempt_id "
+            "FROM tasks t "
+            "JOIN task_attempts ta ON t.task_id = ta.task_id AND t.current_attempt_id = ta.attempt_id "
+            "WHERE ta.worker_id = ? AND t.state IN (?, ?, ?)",
+            (wid, *active_states),
+        )
+        if rows:
+            running_tasks_per_worker[wid] = [(str(r["task_id"]), int(r["current_attempt_id"])) for r in rows]
+
+    total_tasks = sum(len(v) for v in running_tasks_per_worker.values())
+    print(f"  (phase 3 simulation: {len(running_tasks_per_worker)} workers, {total_tasks} running tasks)")
+
+    if running_tasks_per_worker:
+        now_ms = int(time.time() * 1000)
+        resource_blob = b"\x00" * 64  # dummy resource snapshot
+
+        # Collect unique job_ids for recompute simulation
+        job_ids_for_tasks: dict[str, str] = {}  # task_id -> job_id
+        for _wid, task_list in running_tasks_per_worker.items():
+            for task_id, _ in task_list:
+                rows = db.fetchall("SELECT job_id FROM tasks WHERE task_id = ?", (task_id,))
+                if rows:
+                    job_ids_for_tasks[task_id] = str(rows[0]["job_id"])
+        unique_job_ids = set(job_ids_for_tasks.values())
+
+        def _apply_per_worker_old(copy_db: ControllerDB):
+            """Old behavior: per-worker txns, per-task recompute, no skip."""
+            for wid, task_list in running_tasks_per_worker.items():
+                with copy_db.transaction() as cur:
+                    cur.execute("SELECT * FROM workers WHERE worker_id = ?", (wid,))
+                    cur.execute(
+                        "UPDATE workers SET healthy = 1, active = 1, consecutive_failures = 0, "
+                        "last_heartbeat_ms = ?, resource_snapshot_proto = ? WHERE worker_id = ?",
+                        (now_ms, resource_blob, wid),
+                    )
+                    cur.execute(
+                        "INSERT INTO worker_resource_history(worker_id, snapshot_proto, timestamp_ms) VALUES (?, ?, ?)",
+                        (wid, resource_blob, now_ms),
+                    )
+                    for task_id, attempt_id in task_list:
+                        cur.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,))
+                        cur.execute(
+                            "SELECT * FROM task_attempts WHERE task_id = ? AND attempt_id = ?",
+                            (task_id, attempt_id),
+                        )
+                        cur.execute(
+                            "UPDATE task_attempts SET state = ?, started_at_ms = COALESCE(started_at_ms, ?) "
+                            "WHERE task_id = ? AND attempt_id = ?",
+                            (cluster_pb2.TASK_STATE_RUNNING, now_ms, task_id, attempt_id),
+                        )
+                        cur.execute(
+                            "UPDATE tasks SET state = ?, started_at_ms = COALESCE(started_at_ms, ?) "
+                            "WHERE task_id = ?",
+                            (cluster_pb2.TASK_STATE_RUNNING, now_ms, task_id),
+                        )
+                        # Per-task job recompute (old behavior)
+                        jid = job_ids_for_tasks.get(task_id)
+                        if jid:
+                            cur.execute("SELECT state FROM jobs WHERE job_id = ?", (jid,))
+                            cur.execute("SELECT state, COUNT(*) AS c FROM tasks WHERE job_id = ? GROUP BY state", (jid,))
+
+        def _apply_batched_optimized(copy_db: ControllerDB):
+            """New behavior: single txn, skip no-ops, deduplicated job recompute."""
+            with copy_db.transaction() as cur:
+                for wid, task_list in running_tasks_per_worker.items():
+                    cur.execute("SELECT * FROM workers WHERE worker_id = ?", (wid,))
+                    cur.execute(
+                        "UPDATE workers SET healthy = 1, active = 1, consecutive_failures = 0, "
+                        "last_heartbeat_ms = ?, resource_snapshot_proto = ? WHERE worker_id = ?",
+                        (now_ms, resource_blob, wid),
+                    )
+                    cur.execute(
+                        "INSERT INTO worker_resource_history(worker_id, snapshot_proto, timestamp_ms) VALUES (?, ?, ?)",
+                        (wid, resource_blob, now_ms),
+                    )
+                    for task_id, _attempt_id in task_list:
+                        # Skip: task already RUNNING, heartbeat reports RUNNING, no new data
+                        cur.execute("SELECT state FROM tasks WHERE task_id = ?", (task_id,))
+                # Deduplicated job recompute (once per job, not per task)
+                for jid in unique_job_ids:
+                    cur.execute("SELECT state FROM jobs WHERE job_id = ?", (jid,))
+                    cur.execute("SELECT state, COUNT(*) AS c FROM tasks WHERE job_id = ? GROUP BY state", (jid,))
+
+        # Create two copies up front — one for each strategy.
+        per_worker_path = db.db_path.with_suffix(".bench_per_worker.sqlite3")
+        batched_path = db.db_path.with_suffix(".bench_batched.sqlite3")
+        shutil.copy2(db.db_path, per_worker_path)
+        shutil.copy2(db.db_path, batched_path)
+        per_worker_db = ControllerDB(per_worker_path)
+        batched_db = ControllerDB(batched_path)
+
+        try:
+            p50, p95 = bench(
+                "phase3 old (per-worker, per-task recompute)",
+                lambda: _apply_per_worker_old(per_worker_db),
+                iterations=iterations,
+            )
+            results.append(("phase3 old (per-worker, per-task recompute)", p50, p95))
+            print_result("phase3 old (per-worker, per-task recompute)", p50, p95)
+
+            p50, p95 = bench(
+                f"phase3 new (batched, skip, {len(unique_job_ids)} recomputes)",
+                lambda: _apply_batched_optimized(batched_db),
+                iterations=iterations,
+            )
+            results.append((f"phase3 new (batched, skip, {len(unique_job_ids)} recomputes)", p50, p95))
+            print_result(f"phase3 new (batched, skip, {len(unique_job_ids)} recomputes)", p50, p95)
+        finally:
+            per_worker_db.close()
+            batched_db.close()
+            for p in (per_worker_path, batched_path):
+                p.unlink(missing_ok=True)
+                p.with_suffix(".sqlite3-wal").unlink(missing_ok=True)
+                p.with_suffix(".sqlite3-shm").unlink(missing_ok=True)
+
+    return results
+
+
 def print_summary(results: list[tuple[str, float, float]]) -> None:
     print("\n" + "=" * 75)
     print(f"  {'Query':45s}  {'p50':>10s}  {'p95':>10s}")
@@ -330,11 +515,24 @@ def print_db_stats(db: ControllerDB) -> None:
 @click.command()
 @click.argument("db_path", type=click.Path(exists=True, path_type=Path))
 @click.option("--iterations", "-n", default=20, help="Number of iterations per benchmark")
-@click.option("--only", "only_group", type=click.Choice(["scheduling", "dashboard"]), help="Run only this group")
-def main(db_path: Path, iterations: int, only_group: str | None) -> None:
+@click.option(
+    "--only",
+    "only_group",
+    type=click.Choice(["scheduling", "dashboard", "heartbeat"]),
+    help="Run only this group",
+)
+@click.option("--no-analyze", is_flag=True, help="Skip ANALYZE to test unoptimized query plans")
+def main(db_path: Path, iterations: int, only_group: str | None, no_analyze: bool) -> None:
     """Benchmark Iris controller DB queries against a local checkpoint."""
-    db = ControllerDB(db_path)
+    db = ControllerDB(db_dir=db_path.parent)
     db.apply_migrations()
+    if no_analyze:
+        print("Dropping sqlite_stat1 to test unoptimized query plans...")
+        db.fetchall("DROP TABLE IF EXISTS sqlite_stat1")
+        print()
+    else:
+        print("ANALYZE statistics present (default). Use --no-analyze to compare without.")
+
     print(f"Benchmarking {db_path} ({iterations} iterations per query)")
     print_db_stats(db)
     print()
@@ -349,6 +547,11 @@ def main(db_path: Path, iterations: int, only_group: str | None) -> None:
     if only_group is None or only_group == "dashboard":
         print("[dashboard]")
         all_results.extend(benchmark_dashboard(db, iterations))
+        print()
+
+    if only_group is None or only_group == "heartbeat":
+        print("[heartbeat]")
+        all_results.extend(benchmark_heartbeat(db, iterations))
 
     print_summary(all_results)
     db.close()
