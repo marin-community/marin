@@ -53,13 +53,10 @@ class RunConfig:
     """Number of TPU slices for training worker"""
 
     max_retries_failure: int = 3
-    """Maximum retries on worker failure"""
+    """Maximum retries on worker failure (task code crashes, OOM, etc.)"""
 
     max_retries_preemption: int = 100
-    """Maximum retries on preemption"""
-
-    env_vars: dict[str, str] = field(default_factory=dict)
-    """Custom environment variables for workers"""
+    """Maximum retries on preemption (spot TPU lost, worker node died)"""
 
 
 @dataclass
@@ -117,7 +114,7 @@ class RLJobConfig:
 
     # Deployment configuration
     run_config: RunConfig | None = None
-    """Configuration for TPU pod deployment. If None, uses simple Ray actors."""
+    """Configuration for TPU pod deployment."""
 
     # Inference server (auto-configured by default)
     inference_config: InferenceServerConfig | vLLMInferenceContextConfig | None = None
