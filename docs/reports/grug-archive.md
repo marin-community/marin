@@ -37,3 +37,11 @@ This file is the paper trail for grug experiments.
 - Status: deleted
 - Purpose: historical head-to-head comparison.
 - Superseded by: template-first workflow centered on `experiments/grug/base/`.
+
+### grug-moe-latent
+- Path: `experiments/grug/moe_rwe_latent/`
+- Introduced: TBD
+- Last known-good: TBD
+- Status: active
+- Purpose: latent MoE variant compressing expert input dim (D->L) to reduce sorting memory.
+- Issue: https://github.com/marin-community/marin/issues/3976
