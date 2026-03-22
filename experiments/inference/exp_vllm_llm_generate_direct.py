@@ -28,7 +28,11 @@ os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", required=True, help="Model path (gs:// or local)")
+    parser.add_argument(
+        "--model",
+        required=True,
+        help="Model path (gs://...) or model name for auto-regional resolution",
+    )
     parser.add_argument("--prompt", default="Write a short haiku about TPUs.")
     parser.add_argument("--max-tokens", type=int, default=128)
     parser.add_argument("--max-model-len", type=int, default=4096)
@@ -36,8 +40,15 @@ def main():
     parser.add_argument("--tp", type=int, default=1, help="Tensor parallel size")
     args = parser.parse_args()
 
+    # Auto-resolve model path to same-region bucket if not a full gs:// path
+    model_path = args.model
+    if not model_path.startswith("gs://") and not model_path.startswith("/"):
+        from experiments.inference.regional_model_path import resolve_regional_model_path
+
+        model_path = resolve_regional_model_path(model_path)
+
     print(f"MODEL_IMPL_TYPE={os.environ.get('MODEL_IMPL_TYPE', '<not set>')}")
-    print(f"model={args.model}")
+    print(f"model={model_path}")
     print(f"load_format={args.load_format}")
     print(f"tp={args.tp}")
     sys.stdout.flush()
@@ -49,7 +60,7 @@ def main():
     # Create LLM — this does model loading through tpu-inference's get_model()
     t0 = time.time()
     llm = LLM(
-        model=args.model,
+        model=model_path,
         load_format=args.load_format,
         trust_remote_code=True,
         max_model_len=args.max_model_len,
