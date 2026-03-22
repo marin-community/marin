@@ -18,11 +18,13 @@ dependencies = [
     "zephyr",
     # top level deps. try to keep these small.
     "watchdog",
+    "dupekit >= 0.1.0",
     "kaleido==0.2.1",
 ]
 
 [tool.uv]
 fork-strategy = "fewest"
+find-links = ["https://github.com/marin-community/marin/releases/expanded_assets/dupekit-0.1.0-099386c"]
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
     "antlr4-python3-runtime==4.11",
@@ -49,10 +51,12 @@ haliax = { workspace = true }
 levanter = { workspace = true }
 marin = { workspace = true }
 zephyr = { workspace = true }
-# NOTE: dupekit and harbor are optional dependencies (not workspace members).
+# NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
-dupekit = { path = "lib/dupekit", editable = true }
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
+# ### BEGIN RUST-DEV SOURCES ###
+# ### END RUST-DEV SOURCES ###
+
 
 [tool.black]
 line-length = 121

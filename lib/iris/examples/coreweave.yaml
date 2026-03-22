@@ -79,6 +79,7 @@ scale_groups:
       ram: 256GB
       disk: 1TB
       device_type: cpu
+      preemptible: false
     worker:
       attributes:
         region: US-WEST-04A
@@ -101,6 +102,7 @@ scale_groups:
       device_type: gpu
       device_variant: H100
       device_count: 8
+      preemptible: false
     worker:
       attributes:
         region: US-WEST-04A
@@ -123,6 +125,7 @@ scale_groups:
       device_type: gpu
       device_variant: H100
       device_count: 8
+      preemptible: false
     worker:
       attributes:
         region: US-WEST-04A

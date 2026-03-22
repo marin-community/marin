@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -30,7 +31,7 @@ def test_filter(zephyr_ctx):
     assert sorted(results) == [4, 5]
 
 
-def test_shared_data(fray_client, tmp_path):
+def test_shared_data(integration_client, tmp_path):
     """Workers can access shared data via zephyr_worker_ctx().
 
     Shared data is serialized to disk by put() and loaded lazily by workers.
@@ -41,7 +42,7 @@ def test_shared_data(fray_client, tmp_path):
         return x * multiplier
 
     zctx = ZephyrContext(
-        client=fray_client,
+        client=integration_client,
         max_workers=1,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=str(tmp_path / "chunks"),
@@ -61,10 +62,10 @@ def test_multi_stage(zephyr_ctx):
     assert sorted(results) == [6, 8, 10]
 
 
-def test_context_manager(fray_client):
+def test_context_manager(local_client):
     """ZephyrContext works without context manager."""
     zctx = ZephyrContext(
-        client=fray_client,
+        client=local_client,
         max_workers=1,
         resources=ResourceConfig(cpu=1, ram="512m"),
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
@@ -111,11 +112,11 @@ def test_empty_dataset(zephyr_ctx):
     assert results == []
 
 
-def test_chunk_cleanup(fray_client, tmp_path):
+def test_chunk_cleanup(local_client, tmp_path):
     """Verify chunks are cleaned up after execution."""
     chunk_prefix = str(tmp_path / "chunks")
     ctx = ZephyrContext(
-        client=fray_client,
+        client=local_client,
         max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
@@ -209,7 +210,7 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
     assert len(coord._task_queue) == 1  # task was requeued
 
 
-def test_no_duplicate_results_on_heartbeat_timeout(actor_context, fray_client, tmp_path):
+def test_no_duplicate_results_on_heartbeat_timeout(actor_context, tmp_path):
     """When a task is requeued after heartbeat timeout, the original worker's
     stale result (from a previous attempt) is rejected by the coordinator."""
     from zephyr.execution import Shard, ShardTask, TaskResult, ZephyrCoordinator
@@ -437,7 +438,7 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
     # In a background thread, re-register the worker and complete the task
     # after a short delay (simulating recovery before timeout expires)
     def recover_and_complete():
-        time.sleep(0.3)
+        time.sleep(0.1)
         coord.register_worker("worker-0", MagicMock())
         pulled = coord.pull_task("worker-0")
         assert pulled is not None and pulled != "SHUTDOWN"
@@ -454,12 +455,12 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
     assert coord._completed_shards == 1
 
 
-def test_fresh_actors_per_execute(fray_client, tmp_path):
+def test_fresh_actors_per_execute(integration_client, tmp_path):
     """Each execute() creates and tears down its own coordinator and workers."""
     chunk_prefix = str(tmp_path / "chunks")
 
     zctx = ZephyrContext(
-        client=fray_client,
+        client=integration_client,
         max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
@@ -482,7 +483,7 @@ def test_fresh_actors_per_execute(fray_client, tmp_path):
     assert zctx._pipeline_id == 1
 
 
-def test_fatal_errors_fail_fast(fray_client, tmp_path):
+def test_fatal_errors_fail_fast(local_client, tmp_path):
     """Application errors (e.g. ValueError) cause immediate failure, no retries."""
     from zephyr.execution import ZephyrWorkerError
 
@@ -492,7 +493,7 @@ def test_fatal_errors_fail_fast(fray_client, tmp_path):
         raise ValueError(f"bad value: {x}")
 
     zctx = ZephyrContext(
-        client=fray_client,
+        client=local_client,
         max_workers=1,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
@@ -509,11 +510,11 @@ def test_fatal_errors_fail_fast(fray_client, tmp_path):
     assert elapsed < 15.0, f"Took {elapsed:.1f}s, expected fast failure"
 
 
-def test_chunk_storage_with_join(fray_client, tmp_path):
+def test_chunk_storage_with_join(integration_client, tmp_path):
     """Verify chunk storage works with join operations."""
     chunk_prefix = str(tmp_path / "chunks")
     ctx = ZephyrContext(
-        client=fray_client,
+        client=integration_client,
         max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
@@ -537,11 +538,11 @@ def test_chunk_storage_with_join(fray_client, tmp_path):
     assert results[1] == {"id": 2, "a": "y", "b": "q"}
 
 
-def test_workers_capped_to_shard_count(fray_client, tmp_path):
+def test_workers_capped_to_shard_count(local_client, tmp_path):
     """When max_workers > num_shards, only num_shards workers are created."""
     ds = Dataset.from_list([1, 2, 3])  # 3 shards
     ctx = ZephyrContext(
-        client=fray_client,
+        client=local_client,
         max_workers=10,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=str(tmp_path / "chunks"),
@@ -554,10 +555,10 @@ def test_workers_capped_to_shard_count(fray_client, tmp_path):
     assert ctx._pipeline_id == 0
 
 
-def test_pipeline_id_increments(fray_client, tmp_path):
+def test_pipeline_id_increments(local_client, tmp_path):
     """Pipeline ID increments after each execute(), ensuring unique actor names."""
     ctx = ZephyrContext(
-        client=fray_client,
+        client=local_client,
         max_workers=10,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=str(tmp_path / "chunks"),
@@ -619,8 +620,6 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
 
 def test_run_pipeline_rejects_concurrent_calls(actor_context, tmp_path):
     """Calling run_pipeline while another is already running raises RuntimeError."""
-    import threading
-
     from unittest.mock import MagicMock
 
     from zephyr.execution import ZephyrCoordinator
@@ -641,7 +640,7 @@ def test_run_pipeline_rejects_concurrent_calls(actor_context, tmp_path):
 
     def blocking_wait():
         first_entered.set()
-        time.sleep(0.5)
+        time.sleep(0.1)
         coord._fatal_error = "test: forced exit"
         try:
             original_wait()
@@ -659,6 +658,35 @@ def test_run_pipeline_rejects_concurrent_calls(actor_context, tmp_path):
         coord.run_pipeline(plan, "exec-2", hints)
 
     t.join(timeout=10.0)
+    coord.shutdown()
+
+
+def test_execute_stops_coordinator_thread(local_client, tmp_path):
+    """execute() tears down the hosted coordinator loop before returning."""
+    chunk_prefix = str(tmp_path / "chunks")
+    baseline = sum(t.is_alive() and t.name == "zephyr-coordinator-loop" for t in threading.enumerate())
+
+    ctx = ZephyrContext(
+        client=local_client,
+        max_workers=1,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=chunk_prefix,
+        name=f"test-execution-{uuid.uuid4().hex[:8]}",
+    )
+
+    results = list(ctx.execute(Dataset.from_list([1, 2, 3]).map(lambda x: x + 1)))
+    assert sorted(results) == [2, 3, 4]
+
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        alive = sum(t.is_alive() and t.name == "zephyr-coordinator-loop" for t in threading.enumerate())
+        if alive == baseline:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("zephyr-coordinator-loop thread remained alive after execute() returned")
+
+    ctx.shutdown()
 
 
 def test_execute_retries_on_coordinator_death(tmp_path):
@@ -709,7 +737,7 @@ def test_execute_retries_on_coordinator_death(tmp_path):
     client.shutdown(wait=True)
 
 
-def test_execute_does_not_retry_worker_errors(fray_client, tmp_path):
+def test_execute_does_not_retry_worker_errors(local_client, tmp_path):
     """ZephyrWorkerError (application errors) are never retried."""
     from zephyr.execution import ZephyrWorkerError
 
@@ -719,7 +747,7 @@ def test_execute_does_not_retry_worker_errors(fray_client, tmp_path):
         raise ValueError(f"bad value: {x}")
 
     ctx = ZephyrContext(
-        client=fray_client,
+        client=local_client,
         max_workers=1,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
@@ -735,3 +763,16 @@ def test_execute_does_not_retry_worker_errors(fray_client, tmp_path):
 
     # Should fail fast — no retries for application errors
     assert elapsed < 15.0, f"Took {elapsed:.1f}s, expected fast failure (no retries)"
+
+
+# --- Integration tests (all backends) ---
+
+
+def test_simple_map_integration(integration_ctx):
+    ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
+    assert sorted(integration_ctx.execute(ds)) == [2, 4, 6]
+
+
+def test_multi_stage_integration(integration_ctx):
+    ds = Dataset.from_list([1, 2, 3, 4, 5]).map(lambda x: x * 2).filter(lambda x: x > 5)
+    assert sorted(integration_ctx.execute(ds)) == [6, 8, 10]

@@ -257,10 +257,11 @@ def test_run_iris_job_adds_zone_constraint(monkeypatch):
     assert exit_code == 0
     constraints = captured["constraints"]
     assert constraints is not None
-    assert len(constraints) == 1
-    assert constraints[0].key == WellKnownAttribute.ZONE
-    assert constraints[0].op == ConstraintOp.EQ
-    assert constraints[0].value == "us-central2-b"
+
+    zone_constraints = [c for c in constraints if c.key == WellKnownAttribute.ZONE]
+    assert len(zone_constraints) == 1
+    assert zone_constraints[0].op == ConstraintOp.EQ
+    assert zone_constraints[0].value == "us-central2-b"
 
 
 def test_run_iris_job_passes_reservation(monkeypatch):
@@ -312,7 +313,6 @@ def test_run_iris_job_adds_region_and_zone_constraints(monkeypatch):
     assert exit_code == 0
     constraints = captured["constraints"]
     assert constraints is not None
-    assert len(constraints) == 2
 
     region_constraints = [c for c in constraints if c.key == WellKnownAttribute.REGION]
     assert len(region_constraints) == 1

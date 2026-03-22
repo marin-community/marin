@@ -25,7 +25,13 @@ from iris.cli.bug_report import file_github_issue, format_bug_report, gather_bug
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
-from iris.cluster.constraints import Constraint, WellKnownAttribute, region_constraint, zone_constraint
+from iris.cluster.constraints import (
+    Constraint,
+    WellKnownAttribute,
+    infer_preemptible_constraint,
+    region_constraint,
+    zone_constraint,
+)
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -467,6 +473,15 @@ def run_iris_job(
         constraints.append(region_constraint(list(regions)))
     if zone:
         constraints.append(zone_constraint(zone))
+
+    # Executor heuristic: small CPU-only CLI jobs (no accelerators, 1 replica,
+    # CPU ≤ 0.5 cores, RAM ≤ 4 GiB) are auto-tagged as non-preemptible so
+    # coordinators survive spot reclamation.
+    resources_proto = resources.to_proto()
+    preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    if preemptible is not None:
+        constraints.append(preemptible)
+        logger.info("Executor heuristic: auto-tagging job as non-preemptible")
 
     reservation: list[ReservationEntry] | None = None
     if reserve:

@@ -13,6 +13,7 @@ from iris.cluster.k8s.provider import (
     _LABEL_TASK_HASH,
     _POD_NOT_FOUND_GRACE_CYCLES,
     KubernetesProvider,
+    _kubectl_log_line_to_log_entry,
     _pod_name,
     _sanitize_label_value,
     _task_hash,
@@ -908,3 +909,28 @@ def test_configmap_cleaned_up_on_delete(provider, mock_kubectl):
     assert mock_kubectl.delete.call_count == 2
     mock_kubectl.delete.assert_any_call("pod", "iris-pod-1")
     mock_kubectl.delete.assert_any_call("configmap", "iris-pod-1-wf")
+
+
+# ---------------------------------------------------------------------------
+# _kubectl_log_line_to_log_entry: log level parsing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "data,expected_level",
+    [
+        ("I20260321 02:16:18 iris.test.verbose step 0: processing data batch", 2),  # LOG_LEVEL_INFO
+        ("W20260321 02:16:18 iris.test.verbose step 1: slow operation", 3),  # LOG_LEVEL_WARNING
+        ("E20260321 02:16:18 iris.test.verbose step 2: validation failed", 4),  # LOG_LEVEL_ERROR
+        ("just some random output without a level prefix", 0),  # LOG_LEVEL_UNKNOWN
+    ],
+)
+def test_kubectl_log_line_to_log_entry_parses_level(data, expected_level):
+    """Log entries from kubectl should have level parsed from the line prefix."""
+    ts = datetime(2026, 3, 21, 2, 16, 18, tzinfo=timezone.utc)
+    kll = KubectlLogLine(stream="stdout", data=data, timestamp=ts)
+    entry = _kubectl_log_line_to_log_entry(kll, attempt_id=1)
+    assert entry.level == expected_level
+    assert entry.data == data
+    assert entry.source == "stdout"
+    assert entry.attempt_id == 1

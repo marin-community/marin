@@ -287,6 +287,29 @@ def _derive_slice_config_from_resources(config: config_pb2.IrisClusterConfig) ->
             template.disk_size_gb = resources.disk_bytes // (1024**3)
 
 
+def _validate_provider_platform_compat(config: config_pb2.IrisClusterConfig) -> None:
+    """Reject unsupported provider + platform combinations.
+
+    CoreweavePlatform no longer manages slices; configs that use
+    ``platform.coreweave`` must use ``kubernetes_provider``.
+    """
+    is_coreweave = config.platform.WhichOneof("platform") == "coreweave"
+    uses_worker_provider = config.WhichOneof("provider") == "worker_provider"
+    if is_coreweave and uses_worker_provider:
+        raise ValueError(
+            "CoreWeave platform does not support worker_provider (CoreweavePlatform no longer "
+            "manages slices). Use kubernetes_provider instead."
+        )
+
+    uses_k8s_provider = config.WhichOneof("provider") == "kubernetes_provider"
+    if uses_k8s_provider and not config.kubernetes_provider.controller_address:
+        raise ValueError(
+            "kubernetes_provider.controller_address is required. Task pods need it to fetch "
+            "bundles from the controller. Set it to the in-cluster service URL, e.g. "
+            "http://iris-controller-svc.<namespace>.svc.cluster.local:<port>"
+        )
+
+
 def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     """Validate cluster config.
 
@@ -299,6 +322,7 @@ def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     Raises:
         ValueError: If any validation constraint is violated
     """
+    _validate_provider_platform_compat(config)
     _validate_accelerator_types(config)
     _validate_scale_group_resources(config)
     _validate_slice_templates(config)
@@ -1158,3 +1182,12 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
         "    default_image: ...\n"
         "to your cluster config."
     )
+
+
+def clear_remote_state(remote_state_dir: str) -> None:
+    """Remove all files under the remote state dir so the controller starts fresh."""
+    import fsspec
+
+    fs, path = fsspec.core.url_to_fs(remote_state_dir)
+    if fs.exists(path):
+        fs.rm(path, recursive=True)

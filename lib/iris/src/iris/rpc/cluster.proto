@@ -245,6 +245,7 @@ message TaskStatus {
   string pending_reason = 16;         // Why task can't be scheduled (empty if schedulable)
   bool can_be_scheduled = 17;         // Whether task is currently schedulable
   // field 18 was log_directory, removed
+  string container_id = 19;           // Platform container identifier (Docker container ID, K8s pod name)
 }
 
 // Record of a single task execution attempt
@@ -468,6 +469,15 @@ enum ConstraintOp {
   CONSTRAINT_OP_IN = 8;         // Attribute value is in the provided set (disjunction)
 }
 
+// Whether a constraint is hard (required) or soft (preferred).
+// Hard constraints filter workers: non-matching workers are excluded.
+// Soft constraints rank workers: matching workers are preferred but
+// non-matching workers are still eligible.
+enum ConstraintMode {
+  CONSTRAINT_MODE_REQUIRED = 0;  // Hard constraint (default, backwards-compatible)
+  CONSTRAINT_MODE_PREFERRED = 1; // Soft constraint: prefer matching, allow non-matching
+}
+
 // Constraint for filtering workers by attribute.
 // Used in LaunchJobRequest to specify which workers can run a job.
 message Constraint {
@@ -475,6 +485,7 @@ message Constraint {
   ConstraintOp op = 2;      // Comparison operator
   AttributeValue value = 3; // Value to compare against (ignored for EXISTS/NOT_EXISTS)
   repeated AttributeValue values = 4; // Set of values for IN operator
+  ConstraintMode mode = 5;  // Hard (default) or soft
 }
 
 // Coscheduling configuration for multi-host jobs.
@@ -686,6 +697,20 @@ message Controller {
     repeated TaskStatus tasks = 1;
   }
 
+  // --- Exec in Container (proxied to worker) ---
+  message ExecInContainerRequest {
+    string task_id = 1;             // Task whose container to exec into
+    repeated string command = 2;     // Command to execute (e.g. ["bash", "-c", "ls"])
+    int32 timeout_seconds = 3;      // Command timeout in seconds (0 = default 60s)
+  }
+
+  message ExecInContainerResponse {
+    int32 exit_code = 1;
+    string stdout = 2;
+    string stderr = 3;
+    string error = 4;               // Non-empty if exec setup failed
+  }
+
   // --- Worker Management ---
   message WorkerInfo {
     string worker_id = 1;
@@ -707,6 +732,7 @@ message Controller {
     ResourceUsage resource_usage = 8;
     // Delta log entries since last heartbeat (capped per heartbeat)
     repeated iris.logging.LogEntry log_entries = 9;
+    string container_id = 10;         // Platform container identifier (Docker container ID, K8s pod name)
   }
 
 
@@ -992,6 +1018,20 @@ message Worker {
     int32 running_tasks = 3;        // Renamed from running_jobs
   }
 
+  // --- Exec in Container ---
+  message ExecInContainerRequest {
+    string task_id = 1;             // Task whose container to exec into
+    repeated string command = 2;     // Command to execute (e.g. ["bash", "-c", "ls"])
+    int32 timeout_seconds = 3;      // Command timeout in seconds (0 = default 60s)
+  }
+
+  message ExecInContainerResponse {
+    int32 exit_code = 1;
+    string stdout = 2;
+    string stderr = 3;
+    string error = 4;               // Non-empty if exec setup failed
+  }
+
 }
 
 // ============================================================================
@@ -1067,6 +1107,9 @@ service ControllerService {
   // Profiling (proxied to worker)
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
 
+  // Exec in container (proxied to worker)
+  rpc ExecInContainer(Controller.ExecInContainerRequest) returns (Controller.ExecInContainerResponse);
+
   // Unified worker detail (VM + worker + logs in one call)
   rpc GetWorkerStatus(Controller.GetWorkerStatusRequest) returns (Controller.GetWorkerStatusResponse);
 
@@ -1104,4 +1147,7 @@ service WorkerService {
 
   // Process status (local process info + recent logs)
   rpc GetProcessStatus(GetProcessStatusRequest) returns (GetProcessStatusResponse);
+
+  // Exec in container
+  rpc ExecInContainer(Worker.ExecInContainerRequest) returns (Worker.ExecInContainerResponse);
 }
