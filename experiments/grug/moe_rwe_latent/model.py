@@ -317,12 +317,8 @@ class MoEMLP(eqx.Module):
         w_latent_up = None
         if cfg.latent_dim is not None:
             # D -> L projection before dispatch, L -> D projection after experts
-            w_latent_down = reshard(
-                _init_weight(k_latent_down, (d, l), cfg.initializer_std), P("data", "model")
-            )
-            w_latent_up = reshard(
-                _init_weight(k_latent_up, (l, d), cfg.initializer_std), P("model", "data")
-            )
+            w_latent_down = reshard(_init_weight(k_latent_down, (d, l), cfg.initializer_std), P("data", "model"))
+            w_latent_up = reshard(_init_weight(k_latent_up, (l, d), cfg.initializer_std), P("model", "data"))
 
         return MoEMLP(
             # Router always operates in hidden_dim (before latent projection)
