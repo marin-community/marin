@@ -1364,3 +1364,65 @@
   - Keep the reshape-first chunk packing and the explicit chunk-major materialization in the SISO attention-style path.
   - The improvement is real but modest.
   - `chunked_public` remains the performance default; the attention-style path is still meaningfully slower on TPU.
+
+## 2026-03-21: Full-block TPU comparison vs Splash attention at long sequence length
+
+- Goal:
+  - Move from kernel-only comparisons to block-level training comparisons that include the input/output projections around the core attention or Mamba kernel.
+  - Check whether the current Mamba-3 TPU implementation remains competitive when compared against a Llama-3-8B-like attention block rather than just against Splash in isolation.
+- Setup:
+  - hardware: `v5p-8`
+  - dtype: `bf16`
+  - batch size: `4`
+  - hidden width: `4096`
+  - full-block benchmark:
+    - one fused input projection
+    - core attention or Mamba kernel
+    - one output projection
+  - attention variants:
+    - `attention_gqa16`: `32` query heads, `16` KV heads, `head_dim=128`
+    - `attention_mha32`: `32` query heads, `32` KV heads, `head_dim=128`
+    - both use Splash causal attention with `block_size=1024`
+  - Mamba variants:
+    - `mamba3_siso`: `groups=32`, `value_dim=128`, `state_dim=32`, `chunk_size=512`
+    - `mamba3_mimo_r4`: `groups=32`, `value_dim=128`, `state_dim=8`, `rank=4`, `chunk_size=256`
+- Parameter counts:
+  - `attention_gqa16`: `50.33M`
+  - `attention_mha32`: `67.11M`
+  - `mamba3_siso`: `42.34M`
+  - `mamba3_mimo_r4`: `59.12M`
+- Results:
+  - `seq_len=4096`
+    - `attention_gqa16`: `7.83M / 2.53M tok/s` forward/backward
+    - `attention_mha32`: `6.86M / 2.29M`
+    - `mamba3_siso`: `10.40M / 3.93M`
+    - `mamba3_mimo_r4`: `4.94M / 0.99M`
+  - `seq_len=8192`
+    - `attention_gqa16`: `7.03M / 1.77M tok/s`
+    - `attention_mha32`: `6.01M / 1.65M`
+    - `mamba3_siso`: `11.84M / 4.22M`
+    - `mamba3_mimo_r4`: `4.81M / 1.01M`
+  - `seq_len=32768`
+    - `attention_gqa16`: `3.30M / 0.62M tok/s`
+    - `attention_mha32`: `3.02M / 0.60M`
+    - `mamba3_siso`: `12.98M / 4.48M`
+    - `mamba3_mimo_r4`: `5.27M / 1.02M`
+- Interpretation:
+  - SISO is ahead of both attention baselines at all three lengths despite the slightly smaller parameter budget.
+  - MIMO `r=4` is worse than attention at `4096` and `8192`, but scales better with length and overtakes both attention baselines by `32768`.
+  - `attention_gqa16` is consistently faster than `attention_mha32`, so increasing KV heads did not improve throughput on this TPU slice.
+  - The training-side systems case for the current Mamba-3 implementation is strongest at long sequence lengths:
+    - SISO is already clearly competitive.
+    - MIMO becomes competitive once context is long enough.
+- Caveats:
+  - These are block-level numbers, not full model-layer numbers:
+    - no norm
+    - no FFN/MLP
+    - no residual path
+    - no RoPE
+  - The MIMO comparison is still only approximately parameter-matched:
+    - `attention_gqa16` is the nearest lower-bracket baseline
+    - `attention_mha32` is the upper-bracket baseline
+- Decision:
+  - The current XLA Mamba-3 implementation is reasonably competitive for training, especially at long sequence lengths.
+  - If representational quality holds up, the TPU performance story is good enough to justify shipping and iterating on model quality rather than blocking on another kernel rewrite first.
