@@ -33,6 +33,7 @@ from levanter.data.text import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig, RayConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
+from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 
@@ -313,3 +314,47 @@ def test_grug_iteration_02_gated_norm_one_step_contract_lowers() -> None:
     assert "train/loss" in out_metrics_shape
     assert out_metrics_shape["train/loss"].shape == ()
     assert out_watch_shape is None
+
+
+def test_grug_iteration_02_launch_preserves_trainer_parallelism_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    launch_module = importlib.import_module("experiments.grug.moe_scaling_iteration_02.launch")
+
+    captured: dict[str, object] = {}
+
+    def fake_run_grug(run_config) -> None:
+        captured["run_config"] = run_config
+
+    monkeypatch.setattr(launch_module, "run_grug", fake_run_grug)
+
+    trainer_override = TrainerConfig(
+        per_device_parallelism=2,
+        per_device_eval_parallelism=8,
+        distributed=DistributedConfig(initialize_jax_distributed=False),
+        ray=RayConfig(auto_start_cluster=False),
+        require_accelerator=False,
+    )
+    config = launch_module.GrugMoeLaunchConfig(
+        model=launch_module._build_model_config(512),
+        data=launch_module.NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+        output_path=str(tmp_path),
+        run_id="test-lowparallelism-override",
+        resources=ResourceConfig.with_tpu("v5p-8"),
+        steps=123,
+        batch_size=64,
+        seed=7,
+        mp="params=float32,compute=bfloat16,output=bfloat16",
+        tracker=JsonLoggerConfig(logger_name="test_grug_launch_parallelism"),
+        optimizer=AdamConfig(learning_rate=1e-3),
+        grug_trainer=launch_module.GrugTrainerConfig(trainer=trainer_override, log_every=1),
+    )
+
+    launch_module.run_grug_moe_trial(config)
+
+    run_config = captured["run_config"]
+    assert run_config.trainer.trainer.per_device_parallelism == 2
+    assert run_config.trainer.trainer.per_device_eval_parallelism == 8
+    assert run_config.trainer.trainer.train_batch_size == 64
+    assert run_config.trainer.trainer.num_train_steps == 123

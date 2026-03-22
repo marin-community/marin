@@ -62,7 +62,8 @@ def _mesh_expert_axis(resources: ResourceConfig) -> int:
 
 
 def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
-    trainer = TrainerConfig(
+    trainer = dataclasses.replace(
+        config.grug_trainer.trainer,
         id=config.run_id,
         seed=config.seed,
         train_batch_size=config.batch_size,
