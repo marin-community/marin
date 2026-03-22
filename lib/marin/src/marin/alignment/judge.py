@@ -42,6 +42,7 @@ class JudgePairConfig:
 
     workers: int = 64
     judge_max_tokens: int = 1000
+    max_failure_rate: float = 0.2
 
 
 def _load_responses(path: str) -> dict[str, dict[str, Any]]:
@@ -103,7 +104,7 @@ def _judge_response(
     except (json.JSONDecodeError, KeyError) as exc:
         logger.warning("Failed to parse judge response: %s", exc)
         return ComplianceResult(
-            score=5,
+            score=0,
             compliant=False,
             confidence=0.0,
             explanation=f"Parse failure: {exc}",
@@ -129,26 +130,38 @@ def _process_prompt_pair(
     rubric = chosen_record.get("rubric")
     system_prompt = chosen_record.get("system_prompt", "")
 
-    # Score the chosen (teacher) response
+    # Score all teacher (chosen) responses and pick the best
     chosen_responses = chosen_record.get("responses", [])
     if not chosen_responses:
         return None
-    chosen_text = chosen_responses[0].get("content", "")
 
-    chosen_result = _judge_response(
-        statement=statement,
-        user_message=user_message,
-        model_response=chosen_text,
-        rubric=rubric,
-        judge_model=config.judge_model,
-        max_tokens=config.judge_max_tokens,
-    )
+    best_chosen_text = ""
+    best_chosen_score = -1.0
 
-    if chosen_result.score < config.min_chosen_score:
+    for resp in chosen_responses:
+        resp_text = resp.get("content", "")
+        if not resp_text:
+            continue
+        result = _judge_response(
+            statement=statement,
+            user_message=user_message,
+            model_response=resp_text,
+            rubric=rubric,
+            judge_model=config.judge_model,
+            max_tokens=config.judge_max_tokens,
+        )
+        if result.score > best_chosen_score:
+            best_chosen_score = result.score
+            best_chosen_text = resp_text
+
+    if not best_chosen_text:
+        return None
+
+    if best_chosen_score < config.min_chosen_score:
         logger.debug(
             "Filtering out %s: chosen score %.1f < min %.1f",
             prompt_id,
-            chosen_result.score,
+            best_chosen_score,
             config.min_chosen_score,
         )
         return None
@@ -181,14 +194,14 @@ def _process_prompt_pair(
         return None
 
     # Check gap
-    gap = chosen_result.score - worst_rejected_score
+    gap = best_chosen_score - worst_rejected_score
     if gap < config.min_gap:
         logger.debug(
             "Filtering out %s: gap %.1f < min %.1f (chosen=%.1f, rejected=%.1f)",
             prompt_id,
             gap,
             config.min_gap,
-            chosen_result.score,
+            best_chosen_score,
             worst_rejected_score,
         )
         return None
@@ -203,7 +216,7 @@ def _process_prompt_pair(
         rejected_messages.append({"role": "system", "content": system_prompt})
 
     chosen_messages.append({"role": "user", "content": user_message})
-    chosen_messages.append({"role": "assistant", "content": chosen_text})
+    chosen_messages.append({"role": "assistant", "content": best_chosen_text})
 
     rejected_messages.append({"role": "user", "content": user_message})
     rejected_messages.append({"role": "assistant", "content": worst_rejected_text})
@@ -277,6 +290,15 @@ def _judge_and_build_pairs_inner(config: JudgePairConfig) -> None:
         filtered_count,
         len(failures),
     )
+
+    total = len(common_ids)
+    if failures:
+        failure_rate = len(failures) / total if total > 0 else 0
+        if failure_rate > config.max_failure_rate:
+            raise RuntimeError(
+                f"Judge failure rate {failure_rate:.0%} exceeds threshold "
+                f"{config.max_failure_rate:.0%}: {len(failures)}/{total} pairs failed"
+            )
 
     # Write output as sharded JSONL.GZ (supports both local and GCS paths)
     write_sharded_jsonl_gz(pairs, config.output_path, shard_size=5000)

@@ -188,14 +188,10 @@ def _concretize_batch(
     )
     parsed_scenarios = _parse_concretize_response(response.content)
     if len(parsed_scenarios) != len(configs):
-        logger.warning(
-            "Stage2 concretize parsing mismatch for '%s': expected %d scenarios, got %d. Padding with empty scenarios.",
-            statement_id,
-            len(configs),
-            len(parsed_scenarios),
+        raise RuntimeError(
+            f"Stage2 concretize parsing mismatch for '{statement_id}': "
+            f"expected {len(configs)} scenarios, got {len(parsed_scenarios)}"
         )
-        while len(parsed_scenarios) < len(configs):
-            parsed_scenarios.append({"description": "", "rubric": ""})
     return parsed_scenarios
 
 
@@ -288,9 +284,7 @@ def _parse_extraction_response(
         idx = batch_start_idx + i
         match = re.search(rf"<scenario_{idx}>(.*?)</scenario_{idx}>", content, re.DOTALL)
         if not match:
-            logger.warning("Stage3: missing <scenario_%d> block, using empty", idx)
-            out.append({"system_prompt": "", "user_message": ""})
-            continue
+            raise RuntimeError(f"Stage3: missing <scenario_{idx}> block in extraction response")
         block = match.group(1)
         if include_system_prompt:
             sp_match = re.search(r"<system_prompt>(.*?)</system_prompt>", block, re.DOTALL)
@@ -432,7 +426,8 @@ def _generate_prompts_inner(config: PromptGenConfig) -> None:
                 logger.error("Stage1 failed for '%s': %s", sid, exc)
 
     if failures:
-        logger.warning("Stage1 failed for %d statements, continuing with %d", len(failures), len(understandings))
+        detail = "; ".join(f"{sid}: {msg}" for sid, msg in failures)
+        raise RuntimeError(f"Stage 1 failed for {len(failures)} statement(s): {detail}")
 
     # Stage 2: Concretization (parallel across statements)
     logger.info("Stage 2: Concretizing %d statements", len(understandings))
@@ -454,7 +449,8 @@ def _generate_prompts_inner(config: PromptGenConfig) -> None:
                 logger.error("Stage2 failed for '%s': %s", sid, exc)
 
     if failures:
-        logger.warning("Stage2 failed for %d statements, continuing with %d", len(failures), len(ideations))
+        detail = "; ".join(f"{sid}: {msg}" for sid, msg in failures)
+        raise RuntimeError(f"Stage 2 failed for {len(failures)} statement(s): {detail}")
 
     # Stage 3: Extraction (parallel across statements)
     logger.info("Stage 3: Extracting prompts from %d statements", len(ideations))
@@ -474,7 +470,8 @@ def _generate_prompts_inner(config: PromptGenConfig) -> None:
                 logger.error("Stage3 failed for '%s': %s", sid, exc)
 
     if failures:
-        logger.warning("Stage3 failed for %d statements", len(failures))
+        detail = "; ".join(f"{sid}: {msg}" for sid, msg in failures)
+        raise RuntimeError(f"Stage 3 failed for {len(failures)} statement(s): {detail}")
 
     logger.info("Total prompts generated: %d", len(all_prompts))
 

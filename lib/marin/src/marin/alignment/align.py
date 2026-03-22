@@ -189,7 +189,7 @@ def align(
     # downstream jobs can read it reliably.
     if isinstance(spec, ExecutorStep):
         spec_step = spec
-        spec_gcs_path = output_path_of(spec)
+        spec_gcs_path = output_path_of(spec) / "spec.jsonl"
     else:
         spec_step = ExecutorStep(
             name=f"align/{name}/spec",
@@ -244,6 +244,7 @@ def align(
             generate_responses,
             resources=teacher_model.resources,
             pip_dependency_groups=["cpu"] if teacher_model.is_api else [],
+            env_vars=_llm_env_vars(),
         ),
         config=ResponseGenConfig(
             prompts_path=output_path_of(prompts_step),
@@ -265,6 +266,7 @@ def align(
             generate_responses,
             resources=rejected_model.resources,
             pip_dependency_groups=["cpu"] if rejected_model.is_api else [],
+            env_vars=_llm_env_vars(),
         ),
         config=ResponseGenConfig(
             prompts_path=output_path_of(prompts_step),

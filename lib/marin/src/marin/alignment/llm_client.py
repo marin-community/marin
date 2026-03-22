@@ -26,8 +26,9 @@ logger = logging.getLogger(__name__)
 # Suppress litellm's verbose logging
 litellm.suppress_debug_info = True
 
-# Module-level vLLM engine cache — set by VLLMEngine context manager
-_active_vllm_engine: dict | None = None
+# Module-level vLLM engine cache keyed by full frozen VLLMConfig.
+# Supports multiple simultaneous engines (e.g. ideation + extraction).
+_vllm_engine_cache: dict[VLLMConfig, tuple] = {}
 
 
 @dataclass
@@ -80,11 +81,13 @@ def _chat_litellm(
 
 
 def get_or_create_vllm_engine(config: VLLMConfig):
-    """Get cached vLLM engine or create a new one."""
-    global _active_vllm_engine
+    """Get cached vLLM engine or create a new one.
 
-    if _active_vllm_engine is not None and _active_vllm_engine["model"] == config.model:
-        return _active_vllm_engine["llm"], _active_vllm_engine["tokenizer"]
+    The cache is keyed by the full frozen VLLMConfig, so configs with the
+    same model but different parameters (e.g. max_model_len) get separate engines.
+    """
+    if config in _vllm_engine_cache:
+        return _vllm_engine_cache[config]
 
     try:
         from vllm import LLM
@@ -99,6 +102,7 @@ def get_or_create_vllm_engine(config: VLLMConfig):
         gpu_memory_utilization=config.gpu_memory_utilization,
     )
     tokenizer = llm.get_tokenizer()
+    _vllm_engine_cache[config] = (llm, tokenizer)
     return llm, tokenizer
 
 
@@ -125,10 +129,6 @@ def _chat_vllm(
     for completion in outputs[0].outputs:
         results.append(LLMResponse(content=completion.text, model=config.model))
 
-    # Only clean up if there's no active context manager holding the engine
-    if _active_vllm_engine is None:
-        del llm
-
     return results
 
 
@@ -136,21 +136,21 @@ def _chat_vllm(
 def vllm_engine(config: VLLMConfig):
     """Context manager that keeps a vLLM engine alive for multiple calls.
 
+    Adds the engine to the module-level cache on entry and removes it on exit.
+    Multiple simultaneous contexts with different configs each get their own engine.
+
     Usage:
         with vllm_engine(config) as engine_config:
             # All llm_chat_single calls within this block reuse the same engine
             for prompt in prompts:
                 response = llm_chat_single(config=engine_config, ...)
     """
-    global _active_vllm_engine
-
-    llm, tokenizer = get_or_create_vllm_engine(config)
-    _active_vllm_engine = {"llm": llm, "tokenizer": tokenizer, "model": config.model}
+    llm, _tokenizer = get_or_create_vllm_engine(config)
 
     try:
         yield config
     finally:
-        _active_vllm_engine = None
+        _vllm_engine_cache.pop(config, None)
         del llm
 
 

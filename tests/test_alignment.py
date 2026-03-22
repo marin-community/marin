@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -370,11 +371,8 @@ class TestPromptParsing:
 
     def test_parse_extraction_response_missing_scenario(self):
         content = "<scenario_0><system_prompt>Hi</system_prompt><user_message>Hello</user_message></scenario_0>"
-        results = _parse_extraction_response(content, batch_size=2, batch_start_idx=0)
-        assert len(results) == 2
-        assert results[0]["user_message"] == "Hello"
-        assert results[1]["system_prompt"] == ""
-        assert results[1]["user_message"] == ""
+        with pytest.raises(RuntimeError, match="missing <scenario_1>"):
+            _parse_extraction_response(content, batch_size=2, batch_start_idx=0)
 
 
 # ===========================================================================
@@ -616,8 +614,8 @@ class TestLLMClient:
 class TestPromptTemplates:
     def test_understanding_system_prompt(self):
         prompt = make_understanding_system_prompt()
-        assert "BloomUnderstanding" in prompt
-        assert "alignment" in prompt.lower()
+        assert "alignment research assistant" in prompt
+        assert "BloomUnderstanding" not in prompt
 
     def test_behavior_understanding_prompt(self):
         prompt = make_behavior_understanding_prompt("honesty", "The model should be honest.")
@@ -752,31 +750,34 @@ class TestPromptGenerationE2E:
             model="openai/gpt-4.1",
         )
 
-        # Stage 3: Extraction response
-        stage3_response = LLMResponse(
-            content=(
-                "<scenario_0>\n"
-                "<system_prompt>You are a math tutor.</system_prompt>\n"
-                "<user_message>Can you help me with fractions?</user_message>\n"
-                "</scenario_0>\n"
-            ),
-            model="openai/gpt-4.1-mini",
-        )
-
         # Dispatch mock based on system_prompt content:
-        # - Stage 1: understanding system prompt contains "BloomUnderstanding"
+        # - Stage 1: understanding system prompt contains "alignment research assistant"
         # - Stage 2: concretize system prompt contains "scenario designer"
-        # - Stage 3: extraction system prompt contains "extraction assistant"
+        # - Stage 3: extraction — returns <scenario_N> with correct index
 
         def mock_side_effect(**kwargs):
             sys_prompt = kwargs.get("system_prompt") or ""
+            messages = kwargs.get("messages") or []
 
-            if "BloomUnderstanding" in sys_prompt:
+            if "alignment research assistant" in sys_prompt:
                 return stage1_response
             elif "scenario designer" in sys_prompt:
                 return stage2_response
             else:
-                return stage3_response
+                # Extraction: parse the batch start index from the user prompt
+                # The extraction prompt contains "Scenario N:" lines
+                user_content = messages[0]["content"] if messages else ""
+                idx_match = re.search(r"Scenario (\d+)", user_content)
+                idx = int(idx_match.group(1)) if idx_match else 0
+                return LLMResponse(
+                    content=(
+                        f"<scenario_{idx}>\n"
+                        "<system_prompt>You are a math tutor.</system_prompt>\n"
+                        "<user_message>Can you help me with fractions?</user_message>\n"
+                        f"</scenario_{idx}>\n"
+                    ),
+                    model="openai/gpt-4.1-mini",
+                )
 
         mock_llm.side_effect = mock_side_effect
 
@@ -788,6 +789,8 @@ class TestPromptGenerationE2E:
             ideation_model="openai/gpt-4.1",
             extract_model="openai/gpt-4.1-mini",
             covering_strength=2,
+            concretize_batch_size=1,
+            extract_batch_size=1,
             ideation_workers=1,
             concretize_workers=1,
             extract_workers=1,
