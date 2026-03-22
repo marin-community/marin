@@ -13,6 +13,7 @@ __all__ = [
     # config
     "AdamConfig",
     "AdamHConfig",
+    "AdamHRConfig",
     "LionConfig",
     "OptimizerConfig",
     # kron
@@ -23,6 +24,7 @@ __all__ = [
     # muon
     "MuonConfig",
     "MuonHConfig",
+    "MuonHRConfig",
     "ScaleByMuonState",
     "GrugMuonConfig",
     "NamoConfig",
@@ -47,11 +49,13 @@ from .adopt import AdoptConfig, ScaleByAdoptState
 from .cautious import CautiousConfig
 from .config import AdamConfig, LionConfig, OptimizerConfig
 from .adamh import AdamHConfig
+from .adamhr import AdamHRConfig
 from .kron import KronConfig
 from .mars import MarsConfig, ScaleByMarsState
 from .muon import MuonConfig, ScaleByMuonState
 from .grugmuon import GrugMuonConfig
 from .muonh import MuonHConfig
+from .muonhr import MuonHRConfig
 from .namo import NamoConfig, NamoDConfig
 from .rmsprop import RMSPropMomentumConfig, ScaleByRMSPropMomState
 from .scion import ScaleByScionState, ScionConfig

@@ -71,6 +71,7 @@ class LlamaConfig(HFCompatConfig):
         False  # if set to True, this will add an additional layer norm after the key and query projections
     )
     input_embedding_norm: bool = False
+    use_embedding_gain: bool = False  # learned post-embedding gain for constrained-radius optimizers
 
     # Attention-related config
     upcast_attn: bool = False
@@ -473,10 +474,14 @@ class LlamaEmbedding(ModuleWithStateDictSerialization, eqx.Module):
     """Similar to GPT2 Embedding, except that:
     - Llama doesn't have position embedding in the Embedding layer.
     - Llama doesn't use dropout.
+    - Optionally has a learned post-embedding gain (scalar per embed dim)
+      so that magnitude control can live in a separate Euclidean parameter
+      when the embedding weights are constrained to fixed radius.
     """
 
     token_embeddings: hnn.Embedding
     norm: Optional[hnn.RmsNorm] = None
+    embedding_gain: Optional[NamedArray] = None
 
     @staticmethod
     def init(Vocab: Axis, config: LlamaConfig, *, key) -> "LlamaEmbedding":
@@ -484,7 +489,10 @@ class LlamaEmbedding(ModuleWithStateDictSerialization, eqx.Module):
         norm = None
         if config.input_embedding_norm:
             norm = config.mk_LayerNorm(config.Embed)
-        return LlamaEmbedding(token_embeddings, norm)
+        embedding_gain = None
+        if getattr(config, "use_embedding_gain", False):
+            embedding_gain = hax.ones(config.Embed)
+        return LlamaEmbedding(token_embeddings, norm, embedding_gain)
 
     @property
     def Vocab(self) -> Axis:
@@ -499,6 +507,8 @@ class LlamaEmbedding(ModuleWithStateDictSerialization, eqx.Module):
         input_embeds = self.token_embeddings(input_ids)
         if self.norm is not None:
             input_embeds = self.norm(input_embeds)
+        if self.embedding_gain is not None:
+            input_embeds = input_embeds * self.embedding_gain
         return input_embeds
 
     def unembed(self, x: NamedArray):
