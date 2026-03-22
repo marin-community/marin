@@ -145,7 +145,7 @@ def main():
         run_config=RunConfig(
             train_tpu_type="v6e-4",
             num_rollout_workers=1,
-            inference_tpu_type="v6e-4",
+            inference_tpu_type="v5e-4",
         ),
         rollout_tracker=RolloutTrackerConfig(
             project="marin_iris_rl_debug",
