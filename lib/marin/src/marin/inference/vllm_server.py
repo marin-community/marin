@@ -758,8 +758,9 @@ def _start_vllm_docker_server(
 def _vllm_jax_env() -> dict[str, str | Any]:
     env: dict[str, str | Any] = {
         "TOKENIZERS_PARALLELISM": "false",
-        # See `_vllm_env`.
-        "MODEL_IMPL_TYPE": os.environ.get("MODEL_IMPL_TYPE", "vllm"),
+        # Let tpu-inference's auto-routing pick flax_nnx for supported
+        # architectures (e.g. Llama) and fall back to vllm for others.
+        "MODEL_IMPL_TYPE": os.environ.get("MODEL_IMPL_TYPE", "auto"),
         "JAX_ENABLE_COMPILATION_CACHE": os.environ.get("JAX_ENABLE_COMPILATION_CACHE", "1"),
         "JAX_COMPILATION_CACHE_DIR": os.environ.get(
             "JAX_COMPILATION_CACHE_DIR",
@@ -792,10 +793,9 @@ def _default_jax_compilation_cache_dir() -> str:
 
 def _vllm_env() -> dict[str, str]:
     env = dict(os.environ)
-    # tpu_inference defaults MODEL_IMPL_TYPE=auto, which selects flax_nnx for many
-    # architectures. flax_nnx currently fails without an auto mesh context, so
-    # default to the vllm implementation unless the user overrides it.
-    env.setdefault("MODEL_IMPL_TYPE", "vllm")
+    # Let tpu-inference's auto-routing pick flax_nnx for supported
+    # architectures (e.g. Llama) and fall back to vllm for others.
+    env.setdefault("MODEL_IMPL_TYPE", "auto")
     # Reduce TPU runtime logging noise by default (match training defaults).
     env.setdefault("TPU_MIN_LOG_LEVEL", "3")
     env.setdefault("TPU_STDERR_LOG_LEVEL", "3")

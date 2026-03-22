@@ -412,9 +412,101 @@ Fallback: any failure → subprocess `vllm serve` + runai_streamer (original pat
   Fix applied 2026-03-19: `VLLM_ENABLE_V1_MULTIPROCESSING=0` added to `_configure_async_vllm_environment()`
   to run engine in-process (matching RL path). Awaiting TPU validation via Iris job `vllm-async-no-mp-v1`.
 
+---
+
+### 2026-03-21 — Fork-native fsspec streaming weight loader (Claude Opus session)
+
+#### Motivation
+
+The previous approaches (in-process, async-native) loaded weights *outside* of
+tpu-inference by using Marin-side machinery (Levanter fsspec, vllm_inprocess.py,
+`sync_weights`, WorkerExtension RPCs). This worked but required complex Marin-side
+orchestration and couldn't benefit `vllm serve` directly.
+
+This session took a different approach: implement fsspec streaming *inside* the
+tpu-inference fork, plugging into the existing weight-loading seam. This means
+both `LLM.generate()` and `vllm serve` get fast loading through one unified path.
+
+#### What was done
+
+1. **New file: `tpu_inference/models/jax/streaming_weights.py`**
+   - Ported from Levanter's `fsspec_safetensor.py` (header parsing, chunk building,
+     dtype map, shard discovery)
+   - `fsspec_weights_iterator(model_path)` yields `(str, jax.Array)` pairs
+   - Sequential chunk-by-chunk streaming, peak host RAM ≈ chunk_size (~2 GiB)
+   - All arrays materialized on CPU via `jax.default_device(cpu_device)`
+   - Per-shard timing + peak RSS logging
+   - Uses `gcsfs` for `gs://` paths, plain fsspec for local
+
+2. **Extended `TpuBootstrapConfig`** with `weight_loader` field:
+   - `"default"` — existing RunAI/file-based path
+   - `"fsspec_streamer"` — new fsspec path
+   - CLI: `--additional-config '{"tpu_bootstrap": {"model_bootstrap": "abstract_load", "weight_loader": "fsspec_streamer"}}'`
+
+3. **New branch in `_build_abstract_model_and_load_weights()`**:
+   - `fsspec_streamer` branch creates iterator, sets `model_weights_iterator`,
+     calls `model.load_weights(rng)`, cleans up — same pattern as RunAI branch
+
+4. **Widened `load_hf_weights()` iterator path**:
+   - Lazy `torchax.default_env()` init — only when a `torch.Tensor` is encountered
+   - `jax.Array` passes through directly (no torch→jax copy)
+   - `np.ndarray` raises `TypeError`
+
+5. **Dependencies**: added `fsspec>=2024.1.0`, `gcsfs>=2024.1.0` to requirements.txt
+
+6. **Tests**:
+   - `tests/models/jax/test_streaming_weights.py`: header parsing, chunk building,
+     shard discovery, end-to-end iterator, CPU pinning, BF16 roundtrip, stable ordering
+   - `tests/models/common/test_model_loader.py`: config parsing, invalid values,
+     fsspec_streamer dispatch mock, ndarray rejection
+
+7. **Marin-side fix: `MODEL_IMPL_TYPE` default changed from `"vllm"` to `"auto"`**
+   in `vllm_server.py` (both `_vllm_jax_env()` and `_vllm_env()`).
+   The `"vllm"` default was set by David Hall in PR #2320 (Jan 2026) as a defensive
+   measure when flax_nnx lacked reliable mesh initialization. tpu-inference's
+   `tpu_runner.py` now sets up the mesh correctly, and the `auto` default lets
+   tpu-inference route supported architectures (Llama) to flax_nnx while falling
+   back to vllm for unsupported ones.
+
+#### Wheel and pin
+
+- Fork branch: `marin-community/tpu-inference` `marin` branch
+- Wheel release: `marin-ecc13081`
+- Marin pin: `pyproject.toml` + `uv.lock` updated on `vllm_load_fast` branch
+
+#### Smoke test: `/ahmed/vllm-smoke-fsspec`
+
+- **Failed**: `MODEL_IMPL_TYPE=vllm` was hardcoded in `vllm_server.py`, forcing
+  the vLLM PyTorch path. The fsspec code (flax_nnx path only) was never reached.
+  RunAI loaded weights instead, OOM'd at 16GB.
+- **Root cause identified and fixed**: changed default to `"auto"`.
+- **Pending resubmission** after this commit.
+
+#### Key files (fork)
+
+| File | Repo | Action |
+|------|------|--------|
+| `tpu_inference/models/jax/streaming_weights.py` | fork | **New**: fsspec iterator |
+| `tpu_inference/models/common/model_loader.py` | fork | Extended config + fsspec branch |
+| `tpu_inference/models/jax/utils/weight_utils.py` | fork | jax.Array dispatch + lazy torchax |
+| `requirements.txt` | fork | Added fsspec, gcsfs |
+| `tests/models/jax/test_streaming_weights.py` | fork | **New**: iterator unit tests |
+| `tests/models/common/test_model_loader.py` | fork | Config + dispatch tests |
+
+#### Key files (marin)
+
+| File | Action |
+|------|--------|
+| `lib/marin/src/marin/inference/vllm_server.py` | Changed MODEL_IMPL_TYPE default to "auto" |
+| `pyproject.toml` | Updated wheel pin to marin-ecc13081 |
+| `uv.lock` | Updated for new wheel |
+
+---
+
 ## Future Work
 
-- **Validate async-native startup hang fix on TPU** (Iris job `vllm-async-no-mp-v1`)
+- **Resubmit fsspec smoke test** with `MODEL_IMPL_TYPE=auto` fix
+- Concurrent chunk downloads (v2 of streaming_weights.py)
 - Expand model family mapping inference to generic Llama/Qwen in `vllm_utils.py`
 - Performance regression tests (load MB/s, time-to-first-token) in CI
 - Benchmark with `enforce_eager=False` to measure XLA compilation + inference throughput
