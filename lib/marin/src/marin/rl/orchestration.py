@@ -94,6 +94,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
         run_config.train_tpu_type,
         slice_count=run_config.num_train_slices,
         preemptible=False,
+        ram="16g",
     )
     rollout_resources = ResourceConfig.with_tpu(inference_tpu_type, ram="16g")
 

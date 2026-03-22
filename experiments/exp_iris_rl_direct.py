@@ -143,7 +143,7 @@ def main():
         run_id=name,
         log_freq=1,
         run_config=RunConfig(
-            train_tpu_type="v6e-4",
+            train_tpu_type="v5litepod-4",
             num_rollout_workers=1,
             inference_tpu_type="v5litepod-4",
         ),
