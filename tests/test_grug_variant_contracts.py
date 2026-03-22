@@ -26,6 +26,7 @@ import pytest
 from fray.cluster import ResourceConfig
 from jax._src import config as jax_config
 from jax.sharding import use_abstract_mesh
+from marin.execution.executor import VersionedValue
 
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
@@ -358,3 +359,27 @@ def test_grug_iteration_02_launch_preserves_trainer_parallelism_overrides(
     assert run_config.trainer.trainer.per_device_eval_parallelism == 8
     assert run_config.trainer.trainer.train_batch_size == 64
     assert run_config.trainer.trainer.num_train_steps == 123
+
+
+def test_grug_iteration_02_v4_256_scaleup_launcher_bakes_expected_schedule() -> None:
+    launch_module = importlib.import_module(
+        "experiments.grug.moe_scaling_iteration_02.launch_isoflop_moe_adamh_gatednorm_v4_256_1e21_d2304_scaleup"
+    )
+
+    step = launch_module.scaleup_step
+    config = step.config
+
+    assert config.run_id == "isoflop-moe-adamh-gatednorm-v4-256-scaleup-r1-1e21-d2304"
+    assert isinstance(config.resources, VersionedValue)
+    assert config.resources.value.device.variant == "v4-256"
+    assert isinstance(config.batch_size, VersionedValue)
+    assert config.batch_size.value == 2048
+    assert isinstance(config.steps, VersionedValue)
+    assert config.steps.value == 9286
+    assert isinstance(config.grug_trainer, VersionedValue)
+    assert config.grug_trainer.value.trainer.per_device_parallelism == 2
+    assert isinstance(config.eval, VersionedValue)
+    assert config.eval.value.eval_batch_size == 64
+    assert isinstance(config.model, VersionedValue)
+    assert config.model.value.hidden_dim == 2304
+    assert config.model.value.gated_norm_rank == 16
