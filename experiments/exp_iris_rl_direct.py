@@ -45,7 +45,10 @@ def main():
 
     hf_config = AutoConfig.from_pretrained(MODEL_NAME)
     model_config = LlamaConfig.from_hf_config(hf_config)
-    model_config = model_config.replace(
+    import dataclasses as dc
+
+    model_config = dc.replace(
+        model_config,
         max_seq_len=1024,
         tokenizer=MODEL_NAME,
         attn_backend=AttentionBackend.SPLASH,
