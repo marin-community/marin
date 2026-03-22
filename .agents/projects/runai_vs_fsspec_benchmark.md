@@ -472,35 +472,91 @@ measured under different caching conditions.
 - Concurrent chunk downloads (Levanter pattern) improved fsspec throughput
   from 109-121 MiB/s to 170-196 MiB/s (1.4-1.7x).
 
-## What Still Needs Proof
+## What Still Needs Proof: The Confound Proof Matrix
 
-1. **Phase-timed breakdown of `get_vllm_model()` vs `get_flax_model()`.**
-   Instrumentation committed (fork `4abb68f4`) but not yet run. Need to
-   identify which sub-phase (vllm_get_model, shard_model_to_tpu, jit_step_func,
-   etc.) accounts for the 366s vs 151s total difference.
+The post-mortem explains what we think went wrong. To prove it, we need
+three runs that isolate the variables. Do NOT benchmark old commits —
+use current scripts and force old behavior explicitly.
 
-2. **Cold-cache RunAI download speed.** All March 22 tests ran on workers that
-   may have had warm GCS caches. The historical 42.7 MiB/s from March 18
-   (subprocess comparison) is the closest to a cold-cache RunAI measurement.
-   To control for cache without cross-region reads (which are expensive and
-   confound throughput measurements), options are:
-   - Use a model checkpoint that hasn't been accessed recently on that worker
-   - Wait long enough between runs for any page cache to be evicted
-   - Compare the RunAI streamer's own timing log (which reports download
-     speed) against the end-to-end phase timing to see if download dominates
+### Archaeological reference (read-only, do not run)
 
-3. **Reconcile the 53 MiB/s number.** The original issue says "RunAI downloads
-   at 53 MiB/s" and the stress test comparison says 42.7 MiB/s. The A/B test
-   shows ~1 GiB/s. These could be:
-   - Different metrics (download vs pipeline vs end-to-end)
-   - Different cache states (cold vs warm)
-   - Different RunAI versions or configurations
-   Until isolated, the "53 MiB/s" baseline should be treated as uncertain.
+| Commit | What to look at | Purpose |
+|--------|----------------|---------|
+| `dbeddbd45` | `vllm_inprocess.py`, `exp_vllm_inprocess_direct.py` | Original fast path implementation |
+| `3f1420e8d` | `vllm_server.py` line 624/651 | Where `MODEL_IMPL_TYPE=vllm` was hardcoded |
+| `8f83e3692` | `vllm_server.py` | Later fix to `MODEL_IMPL_TYPE=auto` |
 
-4. **LLM.generate() mode test.** The original experiment used direct
-   `LLM.generate()`, not `vllm serve`. Current benchmarks all go through
-   `vllm serve` (subprocess). A direct LLM.generate() comparison would be
-   closer to the original setup.
+### Proof runs needed
+
+All same-region (`gs://marin-us-east1/...`, zone `us-east1-d`), all using
+current instrumented wheel (`marin-4abb68f4`).
+
+**Run A: Forced old PyTorch path, direct LLM.generate()**
+
+Reproduces the old `MODEL_IMPL_TYPE=vllm` behavior but with direct
+`LLM.generate()` (not subprocess). Same timing boundary as our fast path.
+
+```bash
+uv run iris --config=lib/iris/examples/marin.yaml job run \
+  --tpu v6e-4 --memory 64GB --zone us-east1-d \
+  --extra tpu --extra vllm \
+  --job-name confound-llm-vllm \
+  --no-wait \
+  -e MODEL_IMPL_TYPE vllm \
+  -- python experiments/inference/exp_vllm_llm_generate_direct.py \
+    --model gs://marin-us-east1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f \
+    --load-format runai_streamer
+```
+
+**Run B: Corrected JAX path, direct LLM.generate()**
+
+Already done as `vllm-sr-llm-direct-v4`. Isolates PyTorch vs JAX path
+with the same timing boundary as Run A.
+
+**Run C: Historical-style subprocess baseline**
+
+Reproduces the original measurement shape: subprocess `vllm serve` with
+`MODEL_IMPL_TYPE=vllm`. Measures server startup time (the timing boundary
+that produced the original "53 MiB/s" number).
+
+```bash
+uv run iris --config=lib/iris/examples/marin.yaml job run \
+  --tpu v6e-4 --memory 64GB --zone us-east1-d \
+  --extra tpu --extra vllm --extra eval \
+  --job-name confound-subprocess-vllm \
+  --no-wait \
+  -e MARIN_VLLM_MODE native \
+  -e MODEL_IMPL_TYPE vllm \
+  -- python -m marin.inference.vllm_smoke_test \
+    --model gs://marin-us-east1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f \
+    --mode native --max-model-len 4096 \
+    --load-format runai_streamer \
+    --local
+```
+
+### What the proof matrix will show
+
+| Comparison | What it isolates |
+|-----------|-----------------|
+| A vs B | PyTorch vs JAX path, same timing boundary (LLM.generate) |
+| B vs C | LLM.generate vs subprocess, same JAX... wait, C forces vllm. So: |
+| A vs C | Direct LLM() vs subprocess `vllm serve`, both PyTorch path |
+| Run 1 vs A | vllm serve vs LLM.generate, both PyTorch path |
+
+If A and B both show model init in low tens of seconds but C is much
+larger, the confound is proven: the old "53 MiB/s" was subprocess
+startup overhead, not raw weight transport.
+
+### Completed runs (can serve as Run B)
+
+| Run | Job | Result |
+|-----|-----|--------|
+| B | `vllm-sr-llm-direct-v4` | ✅ model load 11.2s, RunAI 2.1 GiB/s, total 291s |
+
+### Remaining runs
+
+- [ ] Run A: `confound-llm-vllm` — direct LLM.generate with MODEL_IMPL_TYPE=vllm
+- [ ] Run C: `confound-subprocess-vllm` — subprocess vllm serve with MODEL_IMPL_TYPE=vllm
 
 ## Same-Region Experiment Plan (March 22, late session)
 
