@@ -13,7 +13,6 @@ import draccus
 import fsspec
 import requests
 from cachetools import TTLCache
-from iris.marin_fs import filesystem as marin_filesystem
 import zstandard as zstd
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_limiter import Limiter
@@ -68,7 +67,7 @@ class Server:
         # Lazily instantiate remote filesystems to avoid triggering cloud
         # auth during local-only development.
         self._fs_cache = {
-            None: marin_filesystem("local"),
+            None: fsspec.filesystem("file"),
         }
         self._fs_lock = threading.Lock()
 
@@ -84,11 +83,11 @@ class Server:
         with self._fs_lock:
             if protocol not in self._fs_cache:
                 if protocol == "gs":
-                    self._fs_cache[protocol] = marin_filesystem("gcs")
+                    self._fs_cache[protocol] = fsspec.filesystem("gcs")
                 elif protocol == "s3":
-                    self._fs_cache[protocol] = marin_filesystem("s3")
+                    self._fs_cache[protocol] = fsspec.filesystem("s3")
                 else:
-                    self._fs_cache[protocol] = marin_filesystem("local")
+                    self._fs_cache[protocol] = fsspec.filesystem("file")
             return self._fs_cache[protocol]
 
     def get_dir(self, key: str):
