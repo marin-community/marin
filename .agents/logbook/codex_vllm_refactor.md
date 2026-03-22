@@ -3054,3 +3054,243 @@ Bottom line:
 
 - the best short-term bridge is explicit small KV sizing from Marin
 - the best long-term production answer is first-class TPU KV bootstrap control in `tpu-inference` / `vllm-tpu`
+
+### Plan doc added: minimal `tpu-inference` source change for fast model loading
+
+I wrote a concrete plan here:
+
+- `.agents/projects/tpu_inference_minimal_fast_loading_plan.md`
+
+Key conclusion:
+
+- the smallest upstream `tpu-inference` change for fast model loading is to replace the current concrete random-init `dummy` branch in `_get_nnx_model(...)` with an opt-in abstract-state bootstrap path, gated by `model_loader_extra_config`
+- this is sufficient for the model-loading layer
+- it is not sufficient by itself for full async-native server readiness, because KV-cache initialization is a separate later bottleneck
+
+### Unified plan doc added
+
+I wrote a broader plan here:
+
+- `.agents/projects/vllm_fast_loading_unified_plan.md`
+
+This is the unified design for fast model loading across:
+
+- direct `generate()` / sync usage
+- async-native server startup
+
+Key conclusion:
+
+- both modes should share the same TPU dummy-bootstrap contract via `model_loader_extra_config`
+- Marin should keep its existing shard streaming + weight injection behavior
+- the dependency change should stay scoped to the loader seam in `_get_nnx_model(...)`
+- KV-cache bootstrap remains a separate later problem, not part of the model-loading fix
+
+### Plan rewrite: end-to-end fast startup, not just fast loader
+
+I rewrote `.agents/projects/vllm_fast_loading_unified_plan.md` to reflect the
+actual experiment results instead of only the loader subproblem.
+
+New scope of the plan:
+
+- model bootstrap
+- bootstrap-safe RNG initialization
+- bootstrap-aware architecture routing for Qwen3 / Qwen3-MoE
+- explicit small-KV bootstrap for async-native readiness
+
+Key correction:
+
+- the old plan was a good model-loading plan, but not a complete async-serving
+  startup plan
+- the revised doc treats fast startup as a single TPU bootstrap contract shared
+  by direct `generate()` and async-native server startup
+
+### Unified plan expanded with concrete `tpu-inference` fork patch list
+
+I expanded `.agents/projects/vllm_fast_loading_unified_plan.md` with a
+file-by-file subsection for the dependency fork.
+
+The new section now spells out concrete patches for:
+
+- `tpu_inference/models/common/model_loader.py`
+- `tpu_inference/runner/tpu_runner.py`
+- `tpu_inference/runner/kv_cache_manager.py`
+- test files already covering these seams
+
+Important clarification captured in the doc:
+
+- small-KV bootstrap should use the existing `vllm` concept of
+  `num_gpu_blocks_override` / bootstrap-sized `KVCacheConfig`
+- `tpu-inference` should own the TPU-side bootstrap and reinitialize behavior,
+  but it should not invent a second independent cache-sizing mechanism
+
+### Plan refreshed against the actual `tpu-inference` fork
+
+I re-grounded `.agents/projects/vllm_fast_loading_unified_plan.md` against the
+actual fork at `/Users/ahmed/code/tpu-inference` (clean tree, `HEAD=7f0436b5`).
+
+Important corrections made in the doc:
+
+- references now point to the real fork instead of the earlier inspection checkout
+- `LlamaForCausalLM` is explicitly called out as the non-`LoadableWithIterator`
+  model that needs a new abstract-dummy bootstrap branch
+- `Qwen3ForCausalLM` and `Qwen3MoeForCausalLM` are explicitly called out as
+  already implementing `LoadableWithIterator`, so the fork work for them is
+  primarily bootstrap-aware routing rather than a new loader branch
+- the KV section now explicitly points at upstream `vllm` ownership of
+  `num_gpu_blocks_override`, with `tpu-inference` consuming that policy rather
+  than inventing a second cache-sizing mechanism
+
+### Plan updated for forking-policy compliance
+
+I read `docs/dev-guide/forking-policy.md` and updated
+`.agents/projects/vllm_fast_loading_unified_plan.md` accordingly.
+
+Most important correction:
+
+- the plan now explicitly covers how Marin will consume the forked dependency,
+  not just how the forked code changes
+- today Marin still resolves `tpu-inference==0.13.2.post6` from PyPI through
+  `vllm-tpu`
+- the compliant end state is: keep the fork in `marin-community/tpu-inference`,
+  build wheels automatically on push to `main`, and pin the fork from Marin via
+  a versioned wheel URL or pinned git revision in `tool.uv.sources`
+
+### Unified plan rewritten as a detailed execution handoff
+
+I rewrote `.agents/projects/vllm_fast_loading_unified_plan.md` from a design
+summary into a detailed implementation plan.
+
+Most important changes:
+
+- added an explicit bridge contract using `model_loader_extra_config["marin_tpu_bootstrap"]`
+- split the work into Deliverable A (fork-only, implementable now) and
+  Deliverable B (optional later `vllm-tpu` coordination for dual-KV promotion)
+- made the key boundary explicit: use upstream `num_gpu_blocks_override` for the
+  first fast-startup path instead of inventing a second KV sizing mechanism in
+  `tpu-inference`
+- added exact per-file patch guidance, exact Marin integration work, exact test
+  plan, cluster validation matrix, implementation order, and done criteria
+
+### Review of `feat/fast-tpu-bootstrap` in `/Users/ahmed/code/vllm_tpu_multi/tpu-inference`
+
+I reviewed local branch `feat/fast-tpu-bootstrap` at commit `690e8048`.
+
+Verdict:
+
+- directionally aligned with the current plan on three core ideas:
+  - opt-in abstract dummy bootstrap in `model_loader.py`
+  - bootstrap-aware routing for Qwen3-MoE
+  - bootstrap-safe sampling RNG in `tpu_runner.py`
+- not fully aligned on KV policy and architecture scope
+
+Main mismatches:
+
+- the branch adds `kv_bootstrap_blocks` inside `tpu_bootstrap` and clamps
+  blocks locally in `KVCacheManager.initialize_kv_cache()`, instead of using
+  upstream `vllm` `num_gpu_blocks_override` / bootstrap-sized `KVCacheConfig`
+  and keeping scheduler + worker in sync
+- the branch includes `Qwen3ForCausalLM` and `Qwen3MoeForCausalLM` in
+  `_ABSTRACT_BOOTSTRAP_ARCHITECTURES` even though they already implement
+  `LoadableWithIterator`; my current plan is to keep their existing iterator-
+  based JAX path and only change routing so they actually reach `flax_nnx`
+- the branch adds no tests
+
+Bottom line:
+
+- good direction
+- I would keep the loader/routing/RNG parts
+- I would change the KV part to rely on upstream `num_gpu_blocks_override`
+  instead of local clamping in `kv_cache_manager.py`
+- I would narrow the new abstract-dummy branch to non-iterator models first
+  (notably Llama)
+
+## 2026-03-21 Code Review of marin-community/tpu-inference `marin` branch
+
+Reviewed local checkout `/Users/ahmed/code/vllm_tpu_multi/tpu-inference` on branch `marin` at `03eb4529`.
+
+Findings:
+1. `prefer_jax_for_bootstrap` is broader than the intended fast-startup routing override. In `resolve_model_architecture()` it forces `flax_nnx` for any JAX-registered architecture, not just the vetted bootstrap targets. That will also reroute `GptOssForCausalLM` away from its explicitly preferred `vllm` path whenever the flag is set.
+2. `_use_abstract_dummy_bootstrap()` only checks `hf_config.quantization_config`, not `model_config.quantization` / computed TPU quantization config. A model with TPU quantization enabled through `model_config.quantization` can still enter the abstract-dummy path even though the code comments say quantized models should be excluded.
+
+Also verified that the original review items were actually addressed in this branch:
+- no local KV clamp remains
+- abstract bootstrap is narrowed to `LlamaForCausalLM`
+- `TpuBootstrapConfig` dataclass exists
+- tests were added in `tests/models/common/test_model_loader.py`
+
+## 2026-03-21 Follow-up review of marin-community/tpu-inference `marin` branch
+
+Re-reviewed local checkout `/Users/ahmed/code/vllm_tpu_multi/tpu-inference` after follow-up commits `29745906` / `00f5efc1`.
+
+Confirmed fixes:
+- `prefer_jax_for_bootstrap` now uses `_BOOTSTRAP_JAX_ROUTING_ALLOWLIST`, so the reroute is no longer a blanket override for all JAX-registered architectures.
+- `_use_abstract_dummy_bootstrap()` now rejects both HF quantization config and `model_config.quantization`.
+- Added tests for the new routing allowlist behavior and TPU quantization guard.
+
+Current review status: no new correctness findings from the updated diff. Residual note: I could not execute the fork's pytest file directly from this workspace because this checkout is not configured as a standalone uv project here and the active Python env does not have pytest installed.
+
+## 2026-03-21 Packaging assessment after reading `tpu_inference_fork.md`
+
+The blocker has shifted from algorithmic startup work to packaging/ABI compatibility. The logbook's main conclusion is correct: stock `vllm` on TPU is the wrong target for immediate integration because `vllm-tpu` is a curated TPU distribution, not a thin metapackage. Best near-term path is to rebase the `tpu-inference` fork onto the released `vllm-tpu`/`tpu-inference` version family we actually intend to ship against, port the fast-bootstrap patches there, and pin that exact pair in Marin. Long-term, if newer upstream `vllm` features are required, the right artifact to own is a TPU-specific `vllm-tpu` build, not stock `vllm` plus ad-hoc dependency overrides.
+
+## 2026-03-21 Corrected architecture split after re-reading fast-load paths
+
+The `tpu-inference` fork only makes dummy bootstrap cheap. It does NOT and should NOT replace Marin's real weight-injection path by itself.
+
+Important correction:
+- Old `vllm_inprocess.py` already had the right semantic model: dummy bootstrap, then stream real checkpoint shards from object storage, convert via `levanter_state_dict_to_nnx_state_on_cpu`, and inject via `sync_weights`.
+- Deleted `vllm_async.py` had the async-native analog: cheap bootstrap, then `collective_rpc_async("update_weight", ...)` through `WorkerExtension`.
+- Current subprocess-native `vllm_server.py` can pass `model_loader_extra_config`, but it has no injection channel. So the fork alone is insufficient for fast-loading real weights in the async path.
+
+Conclusion: the minimal correct PR shape is generic bootstrap fixes in `tpu-inference` plus restored Marin-side async weight injection. Moving Levanter checkpoint loading into `tpu-inference` should only be considered if we explicitly decide to support black-box subprocess `vllm serve` with no Marin-managed engine handle.
+
+## 2026-03-21 Corrected dependency-side fast-loading plan for `vllm serve`
+
+If `vllm serve` itself must own the fast path, the right place is the existing JAX `load_weights` / `load_hf_weights` seam in `tpu-inference`, not Marin's deleted `sync_weights` injector.
+
+Key observation:
+- `load_hf_weights()` in `tpu_inference/models/jax/utils/weight_utils.py` already supports a streamed iterator path via `model_config.model_weights_iterator`.
+- `RunaiModelStreamerLoader` in upstream vLLM already constructs such an iterator for object-store safetensors.
+- JAX models like Llama/Qwen3 already call `load_hf_weights(...)` from their `load_weights(...)` methods.
+
+Therefore the missing feature is not "port Levanter loading into the fork". The missing feature is: abstract bootstrap must continue into the normal real-weight loading path instead of returning an empty model.
+
+Correct end-state for black-box `vllm serve`:
+1. Keep real `load_format` (`runai_streamer` or equivalent), not `dummy`.
+2. Add bootstrap policy in `tpu-inference` that chooses abstract model construction before weight loading.
+3. After abstract construction, invoke the existing loader path (`get_model_loader(...); loader/model.load_weights(...)`).
+4. Let JAX native `load_hf_weights()` map streamed HF tensors directly into NNX state.
+
+This would make both `generate()` and `vllm serve` use the same dependency-owned fast-loading path, with Marin only passing config.
+
+## 2026-03-21 Exact fork patch target for real fast loading in `vllm serve`
+
+Reviewed `/Users/ahmed/code/tpu-inference` on `feat/fast-tpu-bootstrap-v0.13.2` (`92ceeb0c`).
+
+Exact bug: `tpu_inference/models/common/model_loader.py` still returns early from the abstract bootstrap branch at lines 196-205. That makes bootstrap cheap but never enters the existing real JAX weight-loading path.
+
+Exact intended fix:
+- Add a new bootstrap mode for dependency-owned real loading (e.g. `abstract_load`).
+- Keep `abstract_dummy` only for external/manual injection flows.
+- Reuse the existing abstract+real-load tail already present in `_get_nnx_model()` lines 263-300.
+- Do NOT port `levanter_state_dict_to_nnx_state_on_cpu` into the fork. JAX models already load real weights through `load_hf_weights()` and `model_weights_iterator`.
+
+## 2026-03-21 Review of Claude `abstract_load` plan
+
+Claude's plan is mostly correct on code shape: the right fix is to stop early-returning from the abstract bootstrap branch and reuse the existing abstract+real-load tail in `_get_nnx_model()`.
+
+Important correction:
+- For Marin's current object-store model flow, do not rely on `load_format=auto` to select `runai_streamer`. In the checked vLLM config code, the auto-override only triggers when `model_config.model_weights` is a RunAI object-store URI. Marin appears to pass the object-store path via `model`, not `model_weights`. So the first real validation should use explicit `--load-format runai_streamer` for GCS/S3 model paths.
+
+Scope note:
+- On the current v0.13.2 rebase, `_BOOTSTRAP_JAX_ROUTING_ALLOWLIST` is empty because Qwen3Moe is not in this registry. The immediate implementation is therefore a Llama-focused fast-load path, not an end-to-end Qwen3Moe solution on this release line.
+
+## 2026-03-21 Final review of `abstract_load` implementation plan
+
+The plan is now architecturally correct for `vllm serve`: use dependency-owned abstract bootstrap plus the existing real JAX loader path. Remaining gap is test coverage on behavior, not design. Before coding, add explicit behavioral tests that `abstract_load` does not early-return and that `model_weights_iterator` is cleaned up on both success and failure.
+
+## 2026-03-21 Review of `abstract_load` implementation draft in `/Users/ahmed/code/tpu-inference`
+
+Findings:
+1. `model_loader.py` still uses `hasattr(vllm_config.model_config, "model_weights")` before selecting the RunAI path target. In vLLM `ModelConfig.model_weights` exists by default and defaults to the empty string, so this can override a valid `model` path with `""`. The code should check truthiness (`if vllm_config.model_config.model_weights:`) rather than existence.
+2. The new behavioral tests exercise `_build_abstract_model_and_load_weights()` directly, but they do not actually test `_get_nnx_model()` dispatch. That leaves the original early-return regression only indirectly covered.
