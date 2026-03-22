@@ -59,44 +59,115 @@ time, weight pipeline time, total cold start) and made unproven causal claims.
 This logbook tracks every run with exact commands, exact metrics, and exact
 code paths so we can reach defensible conclusions.
 
-## Open Questions
+## Post-Mortem: How the Original Comparison Got Confounded
 
-1. **Where does time go in `MODEL_IMPL_TYPE=vllm` vs `auto`?** The A/B test
-   shows 366s vs 151s total but RunAI download speed is similar (~1 GiB/s both).
-   The slow phase is somewhere *after* download, likely in `vllm_get_model()` or
-   `shard_model_to_tpu()`. Phase-timed instrumentation is pending.
+### What we thought we were comparing
 
-2. **What was the original 53 MiB/s?** The issue body says "RunAI downloads via
-   single-threaded HTTP at ~53 MiB/s." The negative results section says "RunAI
-   concurrency parameter (up to 16) has no effect — throughput stays at 53 MiB/s."
-   Our A/B test shows RunAI downloading at ~1 GiB/s on both paths. These are
-   probably different metrics or different conditions. Not yet reconciled.
+> RunAI weight download (53 MiB/s) vs fsspec weight download (154 MiB/s) → "3x faster"
 
-3. **Cache warmth confound.** The A/B test ran on the same worker, same model,
-   back-to-back. GCS or RunAI caching could explain the ~1 GiB/s download speed.
-   Need a cold-cache test to rule this out.
+### What we actually compared
 
-4. **Is the original in-process speedup still valid?** The original experiment
-   used `LLM(load_format="dummy")` + Levanter fsspec + `sync_weights()`, which
-   bypassed RunAI entirely. That path's value was real: fast startup + low memory.
-   But the *baseline it was compared against* (53 MiB/s) may have been confounded
-   by `MODEL_IMPL_TYPE=vllm` forcing the PyTorch path (commit `3f1420e8d`).
+Two completely different things with different timing boundaries, different
+code paths, and different measurement methods:
+
+**Our "fast path" (in-process, commit `dbeddbd45`):**
+- Direct `LLM(load_format="dummy")` — no RunAI involved at all
+- Levanter `read_safetensors_fsspec()` for downloading
+- `sync_weights()` for injection
+- **Explicitly timed** our own weight pipeline phases
+
+**The "baseline" (subprocess `vllm serve`):**
+- `vllm serve` launched as subprocess
+- `load_format=runai_streamer`
+- `MODEL_IMPL_TYPE=vllm` forced by Marin (commit `3f1420e8d`) → PyTorch path
+- **Timing derived from server startup logs**, not a clean download timer
+
+### The two confounds
+
+**1. Different timing boundaries.**
+The fast path explicitly timed `download → reshape → convert → inject`.
+The baseline's "weight loading" number was derived from subprocess startup
+logs — it measured `vllm_get_model()` end-to-end, which includes RunAI
+download + PyTorch model construction + CPU tensor materialization + whatever
+else happens inside vLLM's model loader. These are not the same measurement.
+
+**2. Different model implementation paths.**
+The fast path used `load_format="dummy"` + external injection (RunAI never
+ran). The baseline used the PyTorch `get_vllm_model()` path because Marin
+forced `MODEL_IMPL_TYPE=vllm`. We were not comparing RunAI vs fsspec
+download speed. We were comparing:
+- (fsspec download + reshape + NNX convert + sync_weights)
+- vs (RunAI download + PyTorch model construction + CPU materialization +
+  shard_model_to_tpu + everything else in the PyTorch startup path)
+
+### Where the "53 MiB/s" came from
+
+From `FAST_VLLM_LOAD_TPU.md` (commit `dbeddbd45`), appendix:
+
+> Tested `--model-loader-extra-config '{"concurrency": 16, "memory_limit":
+> 5368709120}'` on 8B model. Result: 51.5 MiB/s
+
+A prior agent (Codex) ran `vllm serve` with RunAI and observed 51.5 MiB/s.
+But this was likely not pure network transport — it was the RunAI progress bar
+rate during `vllm_get_model()`, which includes CPU-side model construction.
+The number was then used as if it were a raw download speed to project
+70B loading time: 131 GiB / 53 MiB/s = 41 min.
+
+Our new same-region phase-timed measurements show:
+- RunAI raw download: 7.08s for 15 GiB = **2.1 GiB/s**
+- `vllm_get_model()` total: 17.0s (includes download + construction)
+- If you divided model size by `vllm_get_model()` time: 15 GiB / 17s = 900 MiB/s
+
+Even the broadest measurement (full `get_vllm_model` including JIT setup)
+gives 900 MiB/s, not 53 MiB/s. The original 53 MiB/s was likely measured
+under different conditions (different infrastructure, different RunAI version,
+cold GCS cache, or cross-region reads). We cannot reproduce it.
+
+### Did the queue-based HTTP wrapper affect weight loading?
+
+No. The queue wrapper made **serving throughput** worse (serialized
+`LLM.generate()` calls, hurt request batching). But model loading happens
+before the server becomes ready. The queue did not slow RunAI downloads.
+
+### What was real vs what was overstated
+
+**Real:**
+- The in-process fsspec + sync_weights path produced working weight injection
+- Shard-streaming reduced host RAM from 131 GiB to ~15 GiB for 70B
+- The fsspec path enables 70B at 32GB where RunAI OOMs
+- The old subprocess PyTorch path was genuinely slower end-to-end (but for
+  reasons beyond just weight download speed)
+
+**Overstated:**
+- "RunAI is slow at 53 MiB/s" — RunAI transport is actually 2.1+ GiB/s
+- "3x faster weight loading" — we compared different timing boundaries
+- "fsspec download speed is the key improvement" — the speed improvement was
+  mostly from bypassing the PyTorch path overhead, not from faster downloads
+
+### Correct mental model
+
+- RunAI transport itself is fast (~2 GiB/s same-region)
+- fsspec's strongest durable value is **bounded host RAM** (15-17 GiB peak)
+- The real cold-start cost is post-load: XLA compilation, KV cache init,
+  startup path differences
+- Model loading (either path) is 11-18s for 8B — not the bottleneck
 
 ---
 
 ## Historical Metrics (from issue #3768 and comments)
 
-These are the numbers as originally reported. Metric boundaries are not always
-clear from the original text.
+These are the numbers as originally reported. Metric boundaries were not
+clear at the time and are now understood to have been confounded (see
+post-mortem above).
 
 ### Original issue body (filed ~March 12-15)
 
-| Claimed metric | Value | What it probably measures |
+| Claimed metric | Value | What it actually measured |
 |----------------|-------|--------------------------|
-| "RunAI downloads via single-threaded HTTP" | 53 MiB/s | Unclear — could be download only, or end-to-end throughput including weight materialization |
-| "RunAI concurrency (up to 16) no effect" | 53 MiB/s | Same as above |
-| "70B weight download at 53 MiB/s" | 41 min | 131 GiB / 53 MiB/s ≈ 41 min. Matches if 53 MiB/s is sustained download |
-| "Cold start exceeds 1 hour" | >60 min | Download (41 min) + XLA compilation (20-30 min) |
+| "RunAI downloads via single-threaded HTTP" | 53 MiB/s | RunAI progress bar rate during `vllm_get_model()` on PyTorch path — includes model construction, not just download |
+| "RunAI concurrency (up to 16) no effect" | 51.5 MiB/s | Same — concurrency parameter didn't help because download was already fast; the 51.5 MiB/s reflected total `vllm_get_model` throughput |
+| "70B weight download at 53 MiB/s" | 41 min | Projected from 53 MiB/s assumption: 131 GiB / 53 MiB/s ≈ 41 min |
+| "Cold start exceeds 1 hour" | >60 min | Projected: 41 min download + 20-30 min XLA compilation |
 
 ### Original in-process results (commit `dbeddbd45`, March 15-16)
 
