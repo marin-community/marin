@@ -19,12 +19,11 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from transformers import AutoConfig
-from vllm import SamplingParams
 
 from marin.rl.curriculum import CurriculumConfig, LessonConfig
 from marin.rl.curriculum import SamplingParams as CurriculumSamplingParams
 from marin.rl.environments import EnvConfig
-from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
+from marin.rl.environments.inference_ctx import VLLMSamplingConfig, vLLMInferenceContextConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
@@ -119,7 +118,7 @@ def main():
             max_model_len=1024,
             tensor_parallel_size=4,
             gpu_memory_utilization=0.90,
-            sampling_params=SamplingParams(
+            sampling_params=VLLMSamplingConfig(
                 temperature=1.0,
                 n=8,
                 max_tokens=512,

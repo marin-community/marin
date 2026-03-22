@@ -17,7 +17,7 @@ from levanter.utils.mesh import MeshConfig
 
 from marin.execution.executor import ExecutorStep, OutputName
 from marin.rl.curriculum import CurriculumConfig
-from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
+from marin.rl.environments.inference_ctx import VLLMSamplingConfig, vLLMInferenceContextConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLLossModule
@@ -112,8 +112,6 @@ def get_stop_tokens(model_type: str) -> list[str]:
 
 
 def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumConfig) -> ExecutorStep:
-    from vllm import SamplingParams
-
     hf_config = AutoConfig.from_pretrained(config.model_config.name)
     model_config_cls = config.model_config.config_class.from_hf_config(hf_config)
 
@@ -192,7 +190,7 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
             max_model_len=config.max_input_tokens + config.max_output_tokens,
             tensor_parallel_size=config.inference_tensor_parallel_size,
             gpu_memory_utilization=config.inference_gpu_memory_utilization,
-            sampling_params=SamplingParams(
+            sampling_params=VLLMSamplingConfig(
                 temperature=1.0,
                 n=config.inference_n,
                 max_tokens=config.max_output_tokens,
