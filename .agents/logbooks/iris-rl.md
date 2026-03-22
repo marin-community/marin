@@ -266,6 +266,27 @@ Fixed by switching from `create_actor()` (separate jobs) to `host_actor()` (in-p
 
 The v2 orchestration, coordinator job, host_actor(), and child job submission all work. Waiting for a second v6e-4 slice for the trainer.
 
+**Rollout worker logs confirm correct behavior:**
+- Arrow Flight client polling: `receive_weights: polling for step > -2`
+- No server info yet (trainer not started): `No Arrow Flight server info available from coordinator`
+- Dummy weight guard prevents rollout generation: stays in SYNC_WEIGHTS phase
+- Phase logging, faulthandler watchdogs all operational
+
+**Validated so far on Iris:**
+- v2 job submission via `submit_rl_job()` ✅
+- Coordinator child job creation ✅
+- `host_actor()` for curriculum, run_state, Arrow Flight coordinator ✅
+- Worker child job submission with `pip_packages` (not extras) ✅
+- Rollout worker startup on v6e-4 ✅
+- Arrow Flight client polling coordinator ✅
+- Dummy weight guard ✅
+- Phase logging ✅
+
+**Not yet validated** (waiting for trainer TPU):
+- Trainer startup and weight serving
+- Arrow Flight weight transfer between trainer and rollout worker
+- Full RL training loop (rollout → train → weight sync → rollout)
+
 ### BLOCKER 2 (resolved): vllm-tpu installs CUDA torch on TPU workers
 
 This is the same issue on-demand-rl hit — `bootstrap_rl.sh` solved it with constraint pinning. The `uv` extras system can't handle "install vllm-tpu but keep the existing TPU torch". Need to either:
