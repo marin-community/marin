@@ -38,7 +38,7 @@ from typing import Literal
 
 from levanter.utils.mesh import MeshConfig
 from marin.rl.curriculum import CurriculumConfig
-from marin.rl.orchestration import RLRuntimeHandles
+from marin.rl.runtime import RLRuntimeHandles
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
 from marin.rl.environments.inference_ctx import (

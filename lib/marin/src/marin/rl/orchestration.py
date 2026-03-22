@@ -10,10 +10,8 @@ proper job hierarchy, cascading cleanup, and region inheritance.
 
 import dataclasses
 import logging
-from dataclasses import dataclass
 
 from fray.v2 import (
-    ActorHandle,
     Client,
     Entrypoint,
     JobHandle,
@@ -26,34 +24,12 @@ from fray.v2 import (
 from iris.logging import configure_logging
 from marin.rl.rl_job import RLJob, RLJobConfig
 from marin.rl.run_state import RLRunState
+from marin.rl.runtime import RLRuntimeHandles, WeightTransferRuntime
 from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
 from marin.training.training import _add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class WeightTransferRuntime:
-    """Runtime handles for weight transfer coordination.
-
-    Separate from WeightTransferConfig (which stays pure config, serializable, hashable).
-    """
-
-    arrow_flight_coordinator: ActorHandle | None = None
-
-
-@dataclass(frozen=True)
-class RLRuntimeHandles:
-    """Runtime handles passed to RL workers.
-
-    Created by the coordinator, passed to workers explicitly.
-    Workers never call get_default_job_ctx() or discover actors by name.
-    """
-
-    curriculum: ActorHandle
-    run_state: ActorHandle
-    weight_transfer: WeightTransferRuntime
 
 
 def submit_rl_job(config: RLJobConfig) -> JobHandle:

@@ -39,7 +39,7 @@ from transformers import AutoTokenizer
 
 from fray.v2 import current_client
 from marin.rl.curriculum import Curriculum
-from marin.rl.orchestration import RLRuntimeHandles, WeightTransferRuntime
+from marin.rl.runtime import RLRuntimeHandles, WeightTransferRuntime
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig

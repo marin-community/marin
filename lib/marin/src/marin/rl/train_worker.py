@@ -31,7 +31,7 @@ from transformers import PreTrainedTokenizer
 from marin.rl import weight_transfer
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.model_utils import load_model_from_checkpoint
-from marin.rl.orchestration import RLRuntimeHandles
+from marin.rl.runtime import RLRuntimeHandles
 from marin.rl.weight_transfer import WeightTransferConfig
 
 from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader, RolloutWithCount
