@@ -93,4 +93,24 @@
 
 **Commit**: `a1080fdb3`
 
+### 2026-03-21 — Drop all fray v1 from core RL pipeline
+
+**Decision**: User said "I don't ever want to use Ray anymore." Removed all v1 fallback paths.
+
+**What changed**:
+- `TrainWorker(config, runtime)` — `runtime` is now required, not optional
+- `RolloutWorker(config, runtime)` — same
+- Arrow Flight server/client — `coordinator_handle` passed directly, no v1 fallback
+- `rl_job.py` — delegates to `orchestration.submit_rl_job()`, removed all v1 imports
+- `curriculum.py` — deleted `get_or_create_curriculum_actor()` and `fray.v1.job` import
+- Removed `_call_actor()` helper, `.options(enable_task_events=False)` — all calls use `.remote().result()` now
+
+**Remaining v1 (deferred)**:
+- `weight_transfer/jax.py` — JAX transfer mode, not used in production
+- `scripts/evaluate_environment.py` — standalone script
+
+**Commit**: `3984f3793`
+
+**v1 import count in `lib/marin/src/marin/rl/`**: 0 in core pipeline (3 in deferred files).
+
 **Next**: B-10 (test fixtures), C (RunConfig drift), D (integration tests).
