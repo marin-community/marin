@@ -345,15 +345,31 @@ This means two `VLLMConfig`s with the same `model` but different `tensor_paralle
 
 **Agreed fix:** Replace with generic naming ("AI alignment research assistant" / "this evaluation pipeline"). Update test.
 
-### Implementation Plan for ALIGN-012
+### Implementation Plan for ALIGN-012 (revised per user feedback)
+
+**Key design decision:** Stages 1-3 (understanding, concretization, extraction) must **hard-fail on parse errors**. The rationale: these stages produce the foundation of the dataset. If the LLM can't produce parseable output (valid XML tags, valid JSON variation axes, correct scenario count), the covering array is broken and everything downstream is garbage. Silent degradation (padding with empty scenarios, inserting empty records, warn-and-continue) was the Bloom pipeline's approach for robustness, but it hides model inadequacy. The right signal is: crash, tell the user why, and let them either fix the prompt or switch to a stronger model. No silent dataset degradation.
+
+The **judge** is different: individual unparseable judge responses out of hundreds are tolerable. But the fallback score must be 0 (auto-filtered), not 5 (fake mid-score that might pass quality thresholds and inject noise).
 
 All fixes in priority order:
-1. **ExecutorStep spec path** → `output_path_of(spec) / "spec.jsonl"` (bug fix)
-2. **vLLM cache** → key on full config object (bug fix)
-3. **teacher_n** → judge picks best of N teacher responses (behavior fix)
-4. **Failure accounting** → `max_stage_failure_rate` in PromptGenConfig, `max_failure_rate` in JudgePairConfig, judge fallback score 5 → 0 (quality fix)
-5. **env_vars** → add `_llm_env_vars()` to chosen/rejected steps (consistency fix)
-6. **Bloom naming** → rename in prompt + test (cleanup)
-7. **Follow-up issue:** structured output / `response_format` support for JSON-expecting stages
+
+1. **Hard-fail Stages 1-3 on parse errors** (quality — highest priority)
+   - **Stage 1**: `_run_understanding` currently catches exceptions and warns (`generate_prompts.py:434`). Remove the try/except — let `_parse_variation_axes` raise propagate. One failed statement kills the run.
+   - **Stage 2**: `_concretize_batch` currently pads with empty scenarios on count mismatch (`generate_prompts.py:190`). **Raise RuntimeError instead.** If the LLM returned 3 scenarios when we asked for 10, the model can't follow instructions.
+   - **Stage 3**: `_parse_extraction_response` currently inserts empty records on missing `<scenario_N>` blocks (`generate_prompts.py:289`). **Raise RuntimeError instead.**
+   - **Statement-level**: Remove warn-and-continue pattern in `_generate_prompts_inner` (`generate_prompts.py:434, 456, 476`). All statements must succeed or the pipeline fails with a clear error message listing which statements failed and why.
+   - **Judge**: Keep warn-and-continue (individual pair failures are tolerable). Change fallback score from 5 → 0 so parse-failure pairs always get filtered out. Add `max_failure_rate: float = 0.5` to `JudgePairConfig` — abort if more than half of judge calls fail.
+
+2. **ExecutorStep spec path** → `output_path_of(spec) / "spec.jsonl"` (bug fix at `align.py:190`)
+
+3. **vLLM cache** → key on full frozen config object instead of just model string (bug fix at `llm_client.py:86`)
+
+4. **teacher_n** → judge picks best of N teacher responses instead of always reading `responses[0]` (behavior fix at `judge.py:133`). Makes `teacher_n > 1` a genuine quality-vs-cost knob.
+
+5. **env_vars** → add `_llm_env_vars()` to chosen/rejected `@remote` calls (consistency fix at `align.py:243, 264`)
+
+6. **Bloom naming** → replace "BloomUnderstanding"/"Bloom Evals" in Stage 1 system prompt with generic names. Update test assertion.
+
+7. **Follow-up issue:** structured output / `response_format` support in `llm_chat` for JSON-expecting stages (Stage 1 variation axes, judge scoring). This is the proper long-term fix for Finding 1 but can be a separate PR.
 
 - **Next action:** Implement all fixes, re-run pipeline on Iris to validate.
