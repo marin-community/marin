@@ -240,4 +240,16 @@ All fixes in commit `84cbb2528`.
 **Attempt 2** (`/ahmed/iris-rl-debug-2`): FAILED — `libcublas.so not found` — `--extra vllm` installed CUDA vllm on CPU worker.
 **Attempt 3** (`/ahmed/iris-rl-debug-3`): KILLED — removed vllm extra but `rl_experiment_utils.py` has top-level `from vllm import SamplingParams`.
 **Fix**: Made vllm import lazy in `make_rl_step()` (commit `391331f29`). But `make_rl_step` is called at step construction time on the outer job, and it calls `SamplingParams(...)`, so the outer job still needs vllm.
-**Attempt 4** (`/ahmed/iris-rl-debug-4`): Submitted outer job on v6e-8 TPU so vllm imports work. PENDING.
+**Attempt 4** (`/ahmed/iris-rl-debug-4`): v6e-8 TPU — PENDING then killed (no v6e-8 capacity: "need 8, available 0").
+**Attempt 5** (`/ahmed/iris-rl-debug-5`): v6e-4, no extras — `ModuleNotFoundError: No module named 'vllm'`.
+**Attempt 6** (`/ahmed/iris-rl-debug-6`): v6e-4, no extras — same.
+**Attempt 7** (`/ahmed/iris-rl-debug-7`): v6e-4, `--extra tpu --extra vllm --extra math` — outer job ran! But hit `pip_dependency_groups` kwarg error. Fixed in `c11db6cca`.
+**Attempt 8** (`/ahmed/iris-rl-debug-8`): v6e-4, with fix — outer job ran, executor submitted coordinator child job, **but child job failed with `libcublas.so not found`**. The child job inherits `extras=["vllm", "math"]` from `RLJobConfig.pip_dependency_groups`, and `vllm-tpu` pulls in CUDA torch which conflicts with the TPU worker's JAX.
+
+### BLOCKER: vllm-tpu installs CUDA torch on TPU workers
+
+This is the same issue on-demand-rl hit — `bootstrap_rl.sh` solved it with constraint pinning. The `uv` extras system can't handle "install vllm-tpu but keep the existing TPU torch". Need to either:
+1. Fix the vllm-tpu dependency to not pull in CUDA torch
+2. Use constraint files in the Iris worker
+3. Pre-install vllm-tpu in the Iris Docker image
+4. Use `--no-deps` + explicit installs like bootstrap_rl.sh did
