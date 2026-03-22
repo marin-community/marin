@@ -296,12 +296,17 @@ class vLLMInferenceContext(BaseInferenceContext):
         )
 
     def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> LmHeadModel | None:
+        t0 = time.time()
+        logger.info("reload_model: starting prefix cache reset")
         # Reset prefix cache before syncing weights to free up memory
         self.llm.llm_engine.reset_prefix_cache()
         gc.collect()
 
+        logger.info("reload_model: converting state dict")
         # TODO(chris): levanter to vllm state dict
         nnx_state = levanter_state_dict_to_nnx_state_on_cpu(state_dict)
+        t1 = time.time()
+        logger.info("reload_model: calling sync_weights (%d params, %.1fs so far)", len(nnx_state), t1 - t0)
         self.llm.llm_engine.model_executor.driver_worker.sync_weights(
             nnx_state,
             mappings=MODEL_MAPPINGS[self.model_name],
@@ -309,7 +314,10 @@ class vLLMInferenceContext(BaseInferenceContext):
             reshard_fn=None,
         )
 
+        t2 = time.time()
+        logger.info("reload_model: sync_weights done in %.1fs, resetting prefix cache", t2 - t1)
         self.llm.llm_engine.reset_prefix_cache()  # Reset prefix cache because of new weights
+        logger.info("reload_model: complete in %.1fs", time.time() - t0)
         return model
 
     def start_server(self, model: LmHeadModel) -> None:
@@ -380,7 +388,10 @@ class vLLMInferenceContext(BaseInferenceContext):
         if TokensPrompt is None:
             raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
         prompts_for_vllm = [TokensPrompt(prompt_token_ids=tokens) for tokens in prompt_token_ids]
+        logger.info("generate: starting, %d prompts, max_tokens=%d", len(prompts_for_vllm), sampling_params.max_tokens)
+        t0 = time.time()
         outputs = self.llm.generate(prompts_for_vllm, sampling_params)
+        logger.info("generate: done in %.1fs", time.time() - t0)
 
         # Convert vLLM outputs to OpenAI ChatCompletion format
         return [self._convert_vllm_to_openai(output) for output in outputs]

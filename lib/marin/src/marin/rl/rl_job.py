@@ -205,27 +205,31 @@ class RLJob:
 
         def train_worker_task():
             with remove_tpu_lockfile_on_exit():
-
                 configure_logging(level=logging.INFO)
-                worker = TrainWorker(config=train_worker_config)
-                worker.train()
+                try:
+                    worker = TrainWorker(config=train_worker_config)
+                    worker.train()
+                except Exception:
+                    logger.exception("TRAIN WORKER CRASHED (rl_job entrypoint)")
+                    raise
 
         def make_inference_task(worker_idx: int):
             def inference_worker_task():
                 with remove_tpu_lockfile_on_exit():
-
                     configure_logging(level=logging.INFO)
-                    # use deterministic seed based on worker index
+                    try:
+                        config = dataclasses.replace(
+                            rollout_worker_config,
+                            seed=rollout_worker_config.seed + worker_idx,
+                            run_id=f"{rollout_worker_config.run_id}-rollout-{worker_idx}",
+                            worker_index=worker_idx,
+                        )
 
-                    config = dataclasses.replace(
-                        rollout_worker_config,
-                        seed=rollout_worker_config.seed + worker_idx,
-                        run_id=f"{rollout_worker_config.run_id}-rollout-{worker_idx}",
-                        worker_index=worker_idx,
-                    )
-
-                    worker = RolloutWorker(config=config)
-                    worker.run()
+                        worker = RolloutWorker(config=config)
+                        worker.run()
+                    except Exception:
+                        logger.exception("ROLLOUT WORKER CRASHED (rl_job entrypoint)")
+                        raise
 
             return inference_worker_task
 

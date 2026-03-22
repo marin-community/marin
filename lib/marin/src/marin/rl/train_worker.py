@@ -10,6 +10,7 @@ checkpoints are read by the rollout workers to update their models.
 """
 
 import dataclasses
+import faulthandler
 import logging
 import time
 from dataclasses import dataclass
@@ -113,6 +114,9 @@ class StreamingRolloutLoader:
 
     def __iter__(self):
         """Yield batches continuously from the replay buffer."""
+        cumulative_wait = 0.0
+        max_cumulative_wait = 3600.0  # 1 hour
+
         while True:
             fetch_start = time.time()
             rollouts = self.data_loader.get_rollouts(timeout=self.timeout)
@@ -121,8 +125,16 @@ class StreamingRolloutLoader:
             self._last_rollouts = rollouts
 
             if not rollouts:
-                logger.warning("No rollouts received from data loader within timeout, retrying...")
+                cumulative_wait += fetch_time
+                if cumulative_wait >= max_cumulative_wait:
+                    raise TimeoutError(f"No rollouts received after {cumulative_wait:.0f}s total wait")
+                logger.warning(
+                    "No rollouts received from data loader within timeout (cumulative_wait=%.0fs), retrying...",
+                    cumulative_wait,
+                )
                 continue
+
+            cumulative_wait = 0.0
 
             # Measure batch creation time
             batch_start = time.time()
@@ -280,37 +292,49 @@ class TrainWorker:
 
     def train(self):
         """Main training method using Levanter's standard train_lm infrastructure."""
+        faulthandler.enable()
         logger.info("Starting RLOO training with Levanter...")
 
-        config = self.config
-        optimizer = config.optimizer.build(config.trainer.num_train_steps)
-        loss_fn = self.loss_module.create_loss_fn(self.reference_model, None)
+        try:
+            config = self.config
+            optimizer = config.optimizer.build(config.trainer.num_train_steps)
+            loss_fn = self.loss_module.create_loss_fn(self.reference_model, None)
 
-        @jax.jit
-        def _loss_function(model, batch, key):
-            return loss_fn(model, batch, key)
+            @jax.jit
+            def _loss_function(model, batch, key):
+                return loss_fn(model, batch, key)
 
-        with (
-            Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function) as trainer,
-            self.replay_loader,
-        ):
-            _, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 2)
-            state = trainer.initial_state(training_key, model=self.reference_model)
+            with (
+                Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function) as trainer,
+                self.replay_loader,
+            ):
+                _, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 2)
+                state = trainer.initial_state(training_key, model=self.reference_model)
 
-            # Always transfer initial weights to rollout workers before we attempt to start training
-            self.transfer_server.serve_weights(-1, state.model)
-            self.replay_buffer.set_current_step(-1)
+                # Always transfer initial weights to rollout workers before we attempt to start training
+                self.transfer_server.serve_weights(-1, state.model)
+                self.replay_buffer.set_current_step(-1)
 
-            # Wait for initial rollouts to ensure we have baseline measurements
-            if not self._wait_for_initial_rollouts():
-                raise RuntimeError("Timed out waiting for initial rollouts; aborting training.")
+                # Wait for initial rollouts to ensure we have baseline measurements
+                if not self._wait_for_initial_rollouts():
+                    raise RuntimeError("Timed out waiting for initial rollouts; aborting training.")
 
-            self._configure_training_hooks(trainer)
+                self._configure_training_hooks(trainer)
 
+                try:
+                    trainer.train(state, self.data_loader)
+                except StopTrainerException:
+                    pass
+        except StopTrainerException:
+            pass
+        except Exception:
+            logger.exception("TRAIN WORKER CRASHED")
+            raise
+        finally:
             try:
-                trainer.train(state, self.data_loader)
-            except StopTrainerException:
-                pass
+                self.stop()
+            except Exception:
+                logger.exception("Failed to stop train worker during cleanup")
 
     def _configure_training_hooks(self, trainer):
         def _weight_transfer_hook(info: levanter.callbacks.StepInfo):
