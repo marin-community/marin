@@ -89,7 +89,7 @@ def _make_collection(name: str = "test") -> MonitoringCollection:
 @patch("marin.dispatch.tick.cleanup_worktree")
 @patch("marin.dispatch.tick.append_logbook")
 @patch("marin.dispatch.tick.commit_and_push", return_value=True)
-@patch("marin.dispatch.tick.post_issue_comment")
+@patch("marin.dispatch.tick.post_progress_comment")
 @patch("marin.dispatch.tick.post_escalation")
 def test_process_tick_success(
     mock_escalation, mock_comment, mock_push, mock_append, mock_cleanup, mock_worktree, mock_status, tmp_path
@@ -145,3 +145,48 @@ def test_process_tick_paused_collection(mock_status, tmp_path):
     outcome = process_tick("test", TickEventKind.SCHEDULED_POLL, agent, tmp_path)
     assert outcome.dispatched == 0
     assert len(agent.calls) == 0
+
+
+@patch("marin.dispatch.tick.query_run_status", return_value=RunStatus.SUCCEEDED)
+@patch("marin.dispatch.tick.setup_worktree")
+@patch("marin.dispatch.tick.cleanup_worktree")
+@patch("marin.dispatch.tick.append_logbook")
+@patch("marin.dispatch.tick.commit_and_push", return_value=True)
+@patch("marin.dispatch.tick.post_progress_comment")
+@patch("marin.dispatch.tick.post_escalation")
+def test_process_tick_completed_run_next_step(
+    mock_escalation,
+    mock_comment,
+    mock_push,
+    mock_append,
+    mock_cleanup,
+    mock_worktree,
+    mock_status,
+    tmp_path,
+):
+    """When a run transitions RUNNING -> SUCCEEDED, agent is dispatched for next step."""
+    mock_worktree.return_value = tmp_path / "wt"
+    (tmp_path / "wt").mkdir()
+
+    save_collection(tmp_path, _make_collection())
+    save_state(tmp_path, "test", [RunState(last_status=RunStatus.RUNNING)])
+
+    agent = MockAgent(
+        AgentResult(
+            success=True,
+            logbook_entry="## Run completed\nSubmitting eval run.",
+            issue_comment="Run succeeded, starting eval.",
+        )
+    )
+    outcome = process_tick("test", TickEventKind.SCHEDULED_POLL, agent, tmp_path)
+
+    assert outcome.dispatched == 1
+    assert outcome.succeeded == 1
+    assert len(agent.calls) == 1
+    # Verify the agent saw SUCCEEDED status change.
+    event = agent.calls[0][0]
+    assert event.kind == TickEventKind.SCHEDULED_POLL
+    mock_append.assert_called_once()
+    mock_push.assert_called_once()
+    mock_comment.assert_called_once()
+    mock_escalation.assert_not_called()

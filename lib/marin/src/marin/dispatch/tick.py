@@ -12,7 +12,7 @@ from pathlib import Path
 
 from marin.dispatch.agent_adapter import AgentResult, AgentSession
 from marin.dispatch.git_ops import append_logbook, cleanup_worktree, commit_and_push, setup_worktree
-from marin.dispatch.github_ops import post_escalation, post_issue_comment
+from marin.dispatch.github_ops import post_escalation, post_progress_comment
 from marin.dispatch.schema import (
     RayRunConfig,
     RunPointer,
@@ -221,9 +221,15 @@ def _handle_result(
         outcome.failed += 1
 
     if result.issue_comment:
-        post_issue_comment(event.issue, result.issue_comment)
+        post_progress_comment(
+            event.issue,
+            result.issue_comment,
+            event.collection_name,
+            event.branch,
+            event.logbook,
+        )
 
     if result.escalate or state.consecutive_failures >= ESCALATION_THRESHOLD:
         error = result.error or state.last_error or "repeated failures"
-        post_escalation(event.issue, event.collection_name, error)
+        post_escalation(event.issue, event.collection_name, error, event.branch)
         outcome.escalated += 1
