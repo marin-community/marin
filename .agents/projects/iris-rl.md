@@ -1,8 +1,16 @@
 # Iris RL: Migrate RL Pipeline from Fray v1 (Ray) to Fray v2 (Iris)
 
-**Status**: Planning
+**Status**: In progress
 **Branch**: `iris_rl`
+**Logbook**: [.agents/logbooks/iris-rl.md](../logbooks/iris-rl.md)
 **Related**: [fray-lite-design.md](../../lib/fray/docs/fray-lite-design.md) Phase 5+6, [on-demand-rl.md](on-demand-rl.md), [iris-rl-codex.md](iris-rl-codex.md)
+
+## Decisions (locked)
+
+- **In-cluster coordinator**: Mandatory. Client submits one coordinator job; coordinator creates child jobs. No client-side orchestration.
+- **Arrow Flight first**: Primary weight transfer mode. JAX transfer deferred to follow-up.
+- **Graceful shutdown**: Via dedicated `RLRunState` actor, not bolted onto weight transfer coordinator.
+- **No backwards compatibility**: Update all call sites and tests together.
 
 ## Problem
 
