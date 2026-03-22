@@ -33,7 +33,7 @@
 | B-7 | Update curriculum.py: delete get_or_create_curriculum_actor | DEFERRED (kept for v1 compat) |
 | B-8 | Update weight_transfer/arrow_flight.py: accept coordinator handle | DONE |
 | B-9 | Update weight_transfer/__init__.py: thread handles through factories | DONE |
-| B-10 | Migrate test fixtures (conftest.py, test_weight_transfer.py) | TODO |
+| B-10 | Migrate test fixtures (conftest.py, test_weight_transfer.py) | DONE |
 | C-1 | Fix RunConfig drift (slice_count, retries, env_vars) | |
 | C-2 | Add region support to RunConfig | |
 | D-1 | Integration test on LocalClient | |
@@ -114,3 +114,17 @@
 **v1 import count in `lib/marin/src/marin/rl/`**: 0 in core pipeline (3 in deferred files).
 
 **Next**: B-10 (test fixtures), C (RunConfig drift), D (integration tests).
+
+### 2026-03-21 — Step B-10: Migrate test fixtures to v2 LocalClient
+
+**What changed**:
+- `tests/conftest.py`: `set_current_cluster(create_cluster("local"))` → `set_current_client(LocalClient())`
+- `tests/rl/test_weight_transfer.py`: `create_job_ctx("threadpool")` → `LocalClient()` + `create_actor(ArrowFlightCoordinator)` for Arrow Flight tests
+- `tests/rl/integration/config.py`: Added `create_test_runtime()` helper that creates all actors via v2. `TrainWorkerRunner` and `RolloutWorkerRunner` auto-create runtime when not provided.
+- `tests/download/conftest.py`, `tests/transform/conftest.py`: Removed `flow_backend_ctx` v1 fixture (global conftest covers it)
+
+**v1 reference count**: 0 in `tests/`, 0 in core RL pipeline, 2 files deferred (`jax.py`, `evaluate_environment.py`)
+
+**Commit**: `5a5edf949`
+
+**Next**: C (RunConfig drift), D (integration tests).
