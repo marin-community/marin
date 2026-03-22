@@ -185,3 +185,40 @@ lib/marin/src/marin/alignment/
 - **Removed:** `_is_api_model()` heuristic, `isinstance(model, str)` checks in `align.py`, vLLM params from `ResponseGenConfig`
 - **Tests:** 65 total (7 new InferenceConfig tests + 1 new string-config test)
 - **Next action:** End-to-end validation on a small spec subset (5-10 statements). Consider adding `generate_prompts` caching via executor fingerprinting.
+
+### 2026-03-21 — ALIGN-006: End-to-End Validation on Iris (API path)
+- **Action:** Ran full pipeline on Iris cluster with 1 statement (`ask_clarifying_questions`), GPT-4.1-mini for all roles, pairwise covering.
+- **Job:** `/ahmed/iris-run-align_openai_spec_smoke-20260322-001645` (us-central1, CPU only)
+- **Results (confidence: replicated — ran multiple times during debugging):**
+  - Stage 1: 8 variation axes (6 behavior-specific + 2 demographic)
+  - Stage 2: 72 pairwise covering configs, 688/688 tuples covered
+  - Stage 3: 74 prompts extracted
+  - Chosen: 74 responses (with spec guidance)
+  - Rejected: 74 responses (without spec guidance)
+  - Judge: 15 preference pairs after filtering (20% pass rate)
+  - All artifacts saved to GCS: understanding.json, ideation.json, summary.json
+  - Output: `gs://marin-us-central1/align/openai_spec_smoke/`
+- **Bugs found and fixed during validation:**
+  1. `_load_behavior_statements` crashed on JSONL spec files (`json.load` vs JSONL)
+  2. All file I/O used `Path()` which doesn't work with `gs://` paths — switched to `iris.marin_fs.url_to_fs` + `zephyr.write_jsonl_file`
+  3. Spec file not uploaded to GCS — added spec upload ExecutorStep
+  4. `_load_responses` indentation bug → `UnboundLocalError` on empty shards
+  5. `model_id=` kwarg not renamed to `config=` after InferenceConfig refactor (4 call sites)
+  6. `tenacity` missing in remote Iris jobs — added as explicit dep
+  7. `OPENAI_API_KEY` not forwarded to child Iris jobs — added `_llm_env_vars()` to `@remote` env_vars
+- **Confidence:** `replicated` — pipeline ran successfully multiple times after fixes
+
+### 2026-03-21 — ALIGN-007: VLLMConfig for All Model Roles
+- **Action:** Extended InferenceConfig support to ideation/extract/judge models (not just teacher/rejected). Added `vllm_engine()` context manager for efficient engine reuse across multiple calls within a step. Auto-selects TPU resources and single-threaded execution for vLLM.
+- **Commit:** 2a493aa6a
+- **Debug script:** `experiments/align_debug_vllm.py` — uses Llama 3.1 8B Instruct via vLLM for all roles
+- **Status:** Not yet validated — no TPU capacity available during testing. Job queued but killed.
+
+### 2026-03-21 — ALIGN-008: Intermediate Artifact Persistence
+- **Action:** Pipeline now saves per-statement artifacts alongside prompts:
+  - `artifacts/<stmt>/understanding.json` — Stage 1 output (axes, understanding, motivation)
+  - `artifacts/<stmt>/ideation.json` — Stage 2 output (covering plan, scenarios, rubrics)
+  - `artifacts/summary.json` — overview with axis names, config counts, coverage stats
+- **Commit:** 9bdb3b892
+- **Verified:** Artifacts correctly written to GCS and contain full pipeline state
+- **Next action:** Validate vLLM path when TPU capacity available. Run full 46-statement pipeline.
