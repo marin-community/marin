@@ -38,6 +38,7 @@ from typing import Literal
 
 from levanter.utils.mesh import MeshConfig
 from marin.rl.curriculum import CurriculumConfig
+from marin.rl.orchestration import RLRuntimeHandles
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
 from marin.rl.environments.inference_ctx import (
@@ -286,7 +287,7 @@ class RolloutWorker:
     _environments: dict[str, MarinEnv]
     tracker: Any  # levanter.Tracker or RolloutTracker
 
-    def __init__(self, config: RolloutWorkerConfig, runtime=None):
+    def __init__(self, config: RolloutWorkerConfig, runtime: RLRuntimeHandles):
         config.trainer.id = f"{config.run_id}-rollout"
 
         # Infer model_axis_size from the actual TPU configuration now that JAX is initialized.
@@ -322,26 +323,18 @@ class RolloutWorker:
         self._build_models()
         self._policy_ctx.start_server(self._policy_model)
 
-        coordinator_handle = runtime.weight_transfer.arrow_flight_coordinator if runtime else None
         self._transfer_client = create_weight_transfer_client(
             config.weight_transfer,
             mesh=self._policy_ctx.mesh,
             axis_mapping=self._policy_ctx.axis_mapping,
-            coordinator_handle=coordinator_handle,
+            coordinator_handle=runtime.weight_transfer.arrow_flight_coordinator,
         )
 
         # TODO(power) -- replace this with a wait_until_ready() on the levanter inference server
         time.sleep(1.0)
 
         self._environments = {}
-
-        # Curriculum actor: use runtime handle if available, fall back to v1 discovery
-        if runtime:
-            self._curriculum_actor = runtime.curriculum
-        else:
-            from marin.rl.curriculum import get_or_create_curriculum_actor
-
-            self._curriculum_actor = get_or_create_curriculum_actor(self.config.curriculum_config)
+        self._curriculum_actor = runtime.curriculum
 
         self.weight_transfer_thread: threading.Thread | None = None
         if self.config.inflight_weight_updates:
@@ -351,15 +344,6 @@ class RolloutWorker:
                 daemon=True,
             )
             self.weight_transfer_thread.start()
-
-    def _call_actor(self, future):
-        """Resolve an actor future. Works with both v1 and v2 actors."""
-        if self._runtime:
-            return future.result()
-        else:
-            from fray.v1.job import get_default_job_ctx
-
-            return get_default_job_ctx().get(future)
 
     def _load_environment(self, lesson_id: str) -> MarinEnv:
         """Load environment from lesson ID."""
@@ -631,15 +615,9 @@ class RolloutWorker:
         logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, self._current_weight_step, metrics)
         # only update curriculum for full evals
         if eval_type == "eval":
-            if self._runtime:
-                future = self._curriculum_actor.update_lesson_stats.remote(
-                    stats.rollout_stats, mode="eval", current_step=self._current_weight_step
-                )
-            else:
-                future = self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
-                    stats.rollout_stats, mode="eval", current_step=self._current_weight_step
-                )
-            self._call_actor(future)
+            self._curriculum_actor.update_lesson_stats.remote(
+                stats.rollout_stats, mode="eval", current_step=self._current_weight_step
+            ).result()
         return stats
 
     def _evaluate_curriculum(self, rng, step: int) -> dict:
@@ -737,7 +715,7 @@ class RolloutWorker:
 
                 try:
                     future = self._curriculum_actor.sample_lesson.remote(seed)
-                    lesson_id = self._call_actor(future)
+                    lesson_id = future.result()
                 except Exception as e:
                     logger.warning(f"Failed to sample lesson from curriculum: {e}, will try again...")
                     time.sleep(10.0)
@@ -814,15 +792,9 @@ class RolloutWorker:
                 self._rollout_writer.write_batch(rollout_batch)
 
                 stats = _compute_batch_stats(rollout_batch, lesson_id)
-                if self._runtime:
-                    future = self._curriculum_actor.update_lesson_stats.remote(
-                        stats.rollout_stats, mode="training", current_step=self._current_weight_step
-                    )
-                else:
-                    future = self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
-                        stats.rollout_stats, mode="training", current_step=self._current_weight_step
-                    )
-                self._call_actor(future)
+                self._curriculum_actor.update_lesson_stats.remote(
+                    stats.rollout_stats, mode="training", current_step=self._current_weight_step
+                ).result()
                 eval_metrics = self._build_eval_metrics(
                     prefix="rollout",
                     lesson_id=lesson_id,

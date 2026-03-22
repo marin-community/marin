@@ -26,7 +26,6 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import partial
-from typing import Any
 
 import haliax as hax
 import haliax.state_dict as hsd
@@ -392,23 +391,7 @@ class ArrowFlightServer(WeightTransferServer):
             logger.info(f"Arrow Flight server {i} started at {server_location}")
 
         self.metrics = WeightTransferServerMetrics()
-        self._ctx: Any = None
-
-        if coordinator_handle is not None:
-            # v2 path: coordinator handle passed explicitly from orchestrator
-            self._coordinator = coordinator_handle
-        else:
-            # v1 fallback: discover coordinator via fray v1 job context
-            from fray.v1.job.context import get_default_job_ctx
-
-            self._ctx = get_default_job_ctx()
-            self._coordinator = self._ctx.create_actor(
-                ArrowFlightCoordinator,
-                name=self.config.coordinator_name,
-                get_if_exists=True,
-                preemptible=False,
-                num_cpus=0,
-            )
+        self._coordinator = coordinator_handle
         logger.info("Started Arrow Flight weight transfer with config: %s", self.config)
 
     def serve_weights(self, weight_id: int, model: PyTree) -> None:
@@ -440,11 +423,7 @@ class ArrowFlightServer(WeightTransferServer):
                 param_names = list(params_dict.keys())
                 actual_host = self.config.flight_host if self.config.flight_host != "0.0.0.0" else socket.gethostname()
                 server_locations = [(actual_host, server.port) for server in self._flight_servers]
-                future = self._coordinator.update_server.remote(weight_id, param_names, server_locations)
-                if self._ctx is not None:
-                    self._ctx.get(future)
-                else:
-                    future.result()
+                self._coordinator.update_server.remote(weight_id, param_names, server_locations).result()
                 update_time = time.time()
 
                 self.metrics.successful_transfers += 1
@@ -507,21 +486,7 @@ class ArrowFlightClient(WeightTransferClient):
 
         self.metrics = WeightTransferClientMetrics()
         self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_RECEIVES)
-        self._ctx: Any = None
-
-        if coordinator_handle is not None:
-            self._coordinator = coordinator_handle
-        else:
-            from fray.v1.job.context import get_default_job_ctx
-
-            self._ctx = get_default_job_ctx()
-            self._coordinator = self._ctx.create_actor(
-                ArrowFlightCoordinator,
-                name=self.config.coordinator_name,
-                get_if_exists=True,
-                preemptible=False,
-                num_cpus=0,
-            )
+        self._coordinator = coordinator_handle
 
     def _connect_to_servers(self, new_locations) -> bool:
         """Connect to all Arrow Flight servers."""
@@ -579,11 +544,7 @@ class ArrowFlightClient(WeightTransferClient):
             logger.info("receive_weights: polling for step > %s", self._last_weight_id)
 
             # Fetch server info from coordinator
-            future = self._coordinator.fetch_server.remote()
-            if self._ctx is not None:
-                server_info = self._ctx.get(future)
-            else:
-                server_info = future.result()
+            server_info = self._coordinator.fetch_server.remote().result()
 
             if not server_info:
                 logger.info("No Arrow Flight server info available from coordinator.")
