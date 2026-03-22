@@ -95,7 +95,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
         slice_count=run_config.num_train_slices,
         preemptible=False,
     )
-    rollout_resources = ResourceConfig.with_tpu(inference_tpu_type)
+    rollout_resources = ResourceConfig.with_tpu(inference_tpu_type, ram="16g")
 
     # Submit child jobs
     jobs: list[JobHandle] = []
