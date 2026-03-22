@@ -9,7 +9,9 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
+import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -837,23 +839,37 @@ def _start_vllm_native_server(
     log_dir = tempfile.mkdtemp(prefix="vllm_server_")
     stdout_path = os.path.join(log_dir, "stdout.log")
     stderr_path = os.path.join(log_dir, "stderr.log")
-    stdout_f = open(stdout_path, "w")
-    stderr_f = open(stderr_path, "w")
     native_env = _vllm_env()
     logger.info(
         "Starting vLLM native server with "
         f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "
         f"TPU_STDERR_LOG_LEVEL={native_env.get('TPU_STDERR_LOG_LEVEL')}"
     )
-    process = subprocess.Popen(cmd, stdout=stdout_f, stderr=stderr_f, text=True, env=native_env)
+    # Tee subprocess output to both log files AND parent stdout/stderr so
+    # Iris can capture vLLM's detailed logs (architecture, weight loading, etc.)
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=native_env)
+    stdout_f = open(stdout_path, "w")
+    stderr_f = open(stderr_path, "w")
+
+    def _tee(src, log_file, dest):
+        """Read from src line by line, writing to both log_file and dest."""
+        for line in src:
+            log_file.write(line)
+            log_file.flush()
+            dest.write(line)
+            dest.flush()
+        log_file.close()
+
+    threading.Thread(target=_tee, args=(process.stdout, stdout_f, sys.stdout), daemon=True).start()
+    threading.Thread(target=_tee, args=(process.stderr, stderr_f, sys.stderr), daemon=True).start()
 
     server_url: str = f"http://{host}:{resolved_port}/v1"
     start_time: float = time.time()
 
     while True:
         if process.poll() is not None:
-            stdout_f.close()
-            stderr_f.close()
+            # Give tee threads a moment to flush remaining output
+            time.sleep(0.5)
             logs = _native_logs_tail(log_dir)
             raise RuntimeError(
                 "vLLM server process exited before becoming ready.\n"
