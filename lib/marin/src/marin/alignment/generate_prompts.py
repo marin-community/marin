@@ -502,6 +502,9 @@ def _generate_prompts_inner(config: PromptGenConfig) -> None:
     # Write output as sharded JSONL.GZ
     _write_sharded_jsonl_gz(all_prompts, config.output_path, shard_size=5000)
 
+    # Save intermediate artifacts for reproducibility and inspection
+    _save_artifacts(config.output_path, statements, understandings, ideations)
+
 
 def _write_sharded_jsonl_gz(records: list[dict[str, Any]], output_path: str, shard_size: int = 5000) -> None:
     """Write records as sharded JSONL.GZ files. Supports both local and GCS paths."""
@@ -512,3 +515,70 @@ def _write_sharded_jsonl_gz(records: list[dict[str, Any]], output_path: str, sha
         write_jsonl_file(shard, shard_file)
 
     logger.info("Wrote %d records to %d shards in %s", len(records), (len(records) // shard_size) + 1, output_path)
+
+
+def _save_artifacts(
+    output_path: str,
+    statements: dict[str, Statement],
+    understandings: dict[str, dict[str, Any]],
+    ideations: dict[str, dict[str, Any]],
+) -> None:
+    """Save intermediate pipeline artifacts for reproducibility and inspection.
+
+    Writes per-statement JSON files:
+      artifacts/<statement_id>/understanding.json  — Stage 1: axes, understanding, motivation
+      artifacts/<statement_id>/ideation.json       — Stage 2: covering plan, scenarios, rubrics
+      artifacts/summary.json                       — overview with statement list and counts
+    """
+    fs, base_path = url_to_fs(output_path)
+
+    for sid, understanding in understandings.items():
+        serializable = dict(understanding)
+        if not isinstance(serializable.get("model"), str):
+            serializable["model"] = str(serializable.get("model", ""))
+        artifact_dir = f"{base_path}/artifacts/{sid}"
+        fs.makedirs(artifact_dir, exist_ok=True)
+        with fs.open(f"{artifact_dir}/understanding.json", "w", encoding="utf-8") as f:
+            f.write(json.dumps(serializable, indent=2, ensure_ascii=False))
+
+    for sid, ideation in ideations.items():
+        serializable = dict(ideation)
+        if not isinstance(serializable.get("model"), str):
+            serializable["model"] = str(serializable.get("model", ""))
+        artifact_dir = f"{base_path}/artifacts/{sid}"
+        fs.makedirs(artifact_dir, exist_ok=True)
+        with fs.open(f"{artifact_dir}/ideation.json", "w", encoding="utf-8") as f:
+            f.write(json.dumps(serializable, indent=2, ensure_ascii=False))
+
+    # Write summary
+    fs.makedirs(f"{base_path}/artifacts", exist_ok=True)
+    summary = {
+        "statements": sorted(statements.keys()),
+        "num_statements": len(statements),
+        "num_understandings": len(understandings),
+        "num_ideations": len(ideations),
+        "understandings": {
+            sid: {
+                "num_axes": len(u.get("variation_axes", [])),
+                "axes": [ax.get("axis") for ax in u.get("variation_axes", [])],
+            }
+            for sid, u in understandings.items()
+        },
+        "ideations": {
+            sid: {
+                "num_configs": idn.get("num_configs", 0),
+                "covering_strength": idn.get("covering_strength", 0),
+                "coverage_stats": idn.get("coverage_stats", {}),
+            }
+            for sid, idn in ideations.items()
+        },
+    }
+    summary_path = f"{base_path}/artifacts/summary.json"
+    with fs.open(summary_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(summary, indent=2, ensure_ascii=False))
+
+    logger.info(
+        "Saved artifacts for %d statements to %s/artifacts/",
+        len(understandings),
+        output_path,
+    )
