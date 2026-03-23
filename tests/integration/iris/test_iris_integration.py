@@ -63,7 +63,7 @@ def test_cancel_job_releases_resources(integration_cluster):
 
     Regression test for #3553.
     """
-    heavy_cpu = 8 if integration_cluster.is_remote else 900
+    heavy_cpu = 8
     job = integration_cluster.submit(sleep, "itest-cancel-heavy", 30, cpu=heavy_cpu)
     integration_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=integration_cluster.job_timeout)
 
@@ -221,8 +221,6 @@ def test_region_constrained_routing(integration_cluster):
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="py-spy ptrace can segfault worker threads in CI")
 def test_profile_running_task(integration_cluster):
     """Profile a running task, verify data returned."""
-    if integration_cluster.is_remote:
-        pytest.skip("py-spy races with short-lived containers in remote mode")
     job = integration_cluster.submit(busy_loop, name="itest-profile")
 
     last_state = "unknown"
