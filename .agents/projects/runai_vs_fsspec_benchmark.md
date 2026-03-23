@@ -722,8 +722,10 @@ infrastructure reproduces anything near 53 MiB/s for raw weight transport.
 The original fsspec prototype's speed improvement was real in the sense that
 it produced a faster end-to-end startup. But the framing — "RunAI downloads
 at 53 MiB/s, fsspec downloads at 154 MiB/s, therefore 3x faster" — was
-comparing different timing boundaries and different code paths. The actual
-transport speeds are similar (~2 GiB/s for RunAI, ~200 MiB/s for fsspec).
+comparing different timing boundaries and different code paths. In the
+same-region reruns, both transport paths are far above the historical
+53 MiB/s claim (~2 GiB/s for RunAI, ~200 MiB/s for fsspec), so raw
+transport was not the bottleneck in those measurements.
 
 **The fsspec path's durable value is host memory behavior, not download speed.**
 
@@ -996,3 +998,184 @@ gcloud storage cp -r \
 Then use `gs://marin-us-east1/models/...` in all benchmark commands.
 
 Track which models have been copied where in the table above.
+
+---
+
+## Forensic Repro: What Did RunAI Actually Report on the Old Subprocess Path?
+
+### Motivation
+
+The forensic provenance investigation (above) proved that "53 MiB/s" and
+"42.7 MiB/s" were post-hoc calculations, not RunAI-reported metrics. But the
+original Iris job logs expired before anyone captured what RunAI *did* report
+on that old subprocess path. One rerun of the old subprocess baseline code
+(commit `3d1349064`) with the tee fix (commit `3ad8a9269`) closes this gap by
+capturing the actual RunAI progress bar and summary lines.
+
+### Setup
+
+- Worktree: `/Users/ahmed/code/marin-old-3d134` at commit `3d1349064`
+- Cherry-picked: tee fix from `3ad8a9269` (tees vLLM subprocess stdout/stderr
+  to Iris logs)
+- Same-region: model in `gs://marin-us-central1`, worker in `us-central1-a`
+- Job: `/ahmed/old-baseline-subprocess`
+- Submitted: 2026-03-23T01:50:42Z
+
+### What to inspect in logs
+
+1. RunAI progress bar line (expect `it/s`, not `MiB/s`)
+2. RunAI summary line (expect `GiB/s`)
+3. Server startup time from `exp_vllm_baseline_comparison.py`
+
+### Results: `/ahmed/old-baseline-subprocess` ✅
+
+**Worker:** `marin-tpu_v5p_8-us-central1-a-20260322-2314-4805e27f` (v5p-8, us-central1-a)
+**Model:** `gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f` (same-region ✅)
+**Code:** commit `3d1349064` + tee fix from `3ad8a9269`
+**Submitted:** 2026-03-23T01:50:42Z | **Started:** 2026-03-23T01:52:10Z | **Completed:** 2026-03-23T01:55:25Z
+
+#### RunAI output (verbatim from Iris logs)
+
+**Progress bar (stderr):**
+```
+Loading safetensors using Runai Model Streamer:   0% Completed | 0/291 [00:00<?, ?it/s]
+Loading safetensors using Runai Model Streamer:   4% Completed | 12/291 [00:02<00:47, 5.82it/s]
+Loading safetensors using Runai Model Streamer:  43% Completed | 126/291 [00:04<00:04, 35.53it/s]
+Loading safetensors using Runai Model Streamer: 100% Completed | 291/291 [00:06<00:00, 55.62it/s]
+Loading safetensors using Runai Model Streamer: 100% Completed | 291/291 [00:06<00:00, 47.25it/s]
+```
+
+**Summary line (stdout):**
+```
+[RunAI Streamer] Overall time to stream 15.0 GiB of all files to cpu: 6.4s, 2.3 GiB/s
+```
+
+**Additional throughput line (stdout):**
+```
+Read throughput is 4.02 GB per second
+```
+
+**Model loader path:**
+```
+Loading model with MODEL_IMPL_TYPE=vllm
+```
+
+#### Key observations
+
+1. **RunAI progress bar reports `it/s` (tensors/sec)**, not MiB/s: `47.25 it/s`
+2. **RunAI summary reports `GiB/s`**, not MiB/s: `2.3 GiB/s`
+3. **Neither RunAI output format ever produces a MiB/s number**
+4. Model loaded via `MODEL_IMPL_TYPE=vllm` (PyTorch path) — same as historical baseline
+5. RunAI download: **6.4s for 15.0 GiB = 2.3 GiB/s** (same-region, matches all prior measurements)
+
+#### Baseline results
+
+| Metric | Value |
+|--------|-------|
+| Server startup | 155.2s |
+| Total prompts | 50 |
+| Successful | 50 |
+| Errors | 0 |
+| Total inference time | 16.6s |
+| Requests/sec | 3.01 |
+| Total tokens | 6400 |
+| Aggregate tok/s | 384.8 |
+| Latency p50 | 1.242s |
+| Latency p95 | 1.740s |
+| Avg tok/s per request | 100.7 |
+
+**GCS artifacts:**
+- Results: `gs://marin-us-central1/inference/meta-llama--Llama-3-1-8B-Instruct--0e9e39f/stress_test/baseline_results_20260323-015524.json`
+- Samples: `gs://marin-us-central1/inference/meta-llama--Llama-3-1-8B-Instruct--0e9e39f/stress_test/baseline_samples_20260323-015524.jsonl`
+
+#### Interpretation
+
+This definitively closes the evidence gap from the forensic provenance section:
+
+1. **RunAI never reported MiB/s.** Its two output formats are `it/s` (tensors/sec
+   on the progress bar) and `GiB/s` (on the summary line). The historical
+   "53 MiB/s" and "42.7 MiB/s" were not copied from RunAI output.
+
+2. **RunAI transport is fast on the old code path too.** Even at commit `3d1349064`
+   with `MODEL_IMPL_TYPE=vllm`, RunAI reports 2.3 GiB/s same-region — matching
+   all our current measurements. The old code did not make RunAI slower.
+
+3. **Server startup is 155s, not 2053s.** The historical `server_startup_sec: 2052.6`
+   from the March 18 baseline was on a different infrastructure configuration
+   (or included XLA compilation that this run avoided). This run's 155s startup
+   is consistent with the current PyTorch path measurements (~137s on v6e-4).
+
+4. **The historical "359s at 42.7 MiB/s" remains unrecoverable.** The "359s" was
+   reportedly extracted from vLLM subprocess stdout during the March 18 run,
+   but those logs expired. On this rerun, RunAI's own timing shows 6.4s for the
+   download. Even if "359s" referred to the full server startup (2053s in the
+   original, 155s here), `15 GiB / 155s = 99 MiB/s` — still not 42.7 MiB/s.
+   The most parsimonious explanation remains that the original timing window
+   included XLA compilation or other non-download work.
+
+#### Comparison with historical March 18 baseline
+
+| Metric | March 18 (original) | March 23 (this rerun) |
+|--------|--------------------|-----------------------|
+| Server startup | 2052.6s (34 min) | 155.2s (2.6 min) |
+| RunAI download | unknown (logs expired) | 6.4s at 2.3 GiB/s |
+| Aggregate tok/s | 360.0 | 384.8 |
+| Latency p50 | — | 1.242s |
+| Code commit | `3d1349064` | `3d1349064` + tee fix |
+| MODEL_IMPL_TYPE | `vllm` | `vllm` |
+
+The 13x difference in server startup (2053s vs 155s) between the original March 18
+run and this rerun — same code, same model, same load_format — suggests the
+original run hit XLA compilation or cold-cache conditions that this run did not.
+This further supports the hypothesis that the "359s" timing window included
+non-download work.
+
+#### Retrospective: how the original agent likely arrived at "53 MiB/s"
+
+**What the agent could NOT see:** Before the tee fix (commit `3ad8a9269`), the
+vLLM subprocess stdout/stderr went to temp files on the worker, invisible in
+Iris logs. That means the agent never saw RunAI's own output:
+```
+[RunAI Streamer] Overall time to stream 15.0 GiB of all files to cpu: 6.4s, 2.3 GiB/s
+Loading safetensors using Runai Model Streamer: 100% | 291/291 [00:06, 47.25it/s]
+```
+If comparable RunAI summary lines had been visible in the historical run, they
+would have provided a direct transport metric instead of forcing inference from
+broader startup timings.
+
+**What the agent DID see:** The baseline script outputs exactly one timing:
+`server_startup_sec`. On March 18 that was 2052.6s. The script records no
+weight-loading metric, no download duration, no MiB/s — nothing about download
+speed.
+
+**The arithmetic:** The `FAST_VLLM_LOAD_TPU.md` doc (commit `dbeddbd45`) says:
+> Tested `--model-loader-extra-config '{"concurrency": 16, "memory_limit":
+> 5368709120}'` on 8B model. Result: 51.5 MiB/s
+
+Working backwards: `15 GiB / 51.5 MiB/s ≈ 298s`. This is close to the "300s"
+in the issue body ("vs RunAI 300s"). Separately, `15 GiB / 359s = 42.7 MiB/s`.
+`42.7 MiB/s` is therefore a confirmed post-hoc division. `51.5/53 MiB/s` is
+best explained as a similar derived number, but the exact duration used remains
+unknown.
+
+**What the rerun shows about the missing ~300s hypothesis:** Our forensic rerun
+does not recover the original timing window, but it does bound what that window
+could have meant:
+
+- In the historical-style rerun, RunAI reported `6.4s` to stream `15.0 GiB`
+  (`2.3 GiB/s`).
+- That same rerun still took `155s` for full server startup, so even under warm
+  rerun conditions there were roughly `149s` of non-download work after bytes
+  arrived.
+- The original March 18 run took `2053s` for full server startup, which shows
+  that startup time was highly sensitive to conditions outside raw transport
+  (for example compile/cache state).
+
+So the missing `~300s` window, whatever its exact boundaries, must have
+included substantial non-download work. It cannot have been a direct RunAI
+transport metric on the historical-style path we reran.
+
+**Root cause of the error:** A timing boundary problem compounded by invisible
+subprocess output. The agent did not have a direct transport metric in the
+captured logs, so a much broader startup phase was attributed to "download
+time."
