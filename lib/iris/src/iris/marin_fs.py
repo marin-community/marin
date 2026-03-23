@@ -375,7 +375,18 @@ def _normalize_path_like(path: str | os.PathLike) -> str:
 # ---------------------------------------------------------------------------
 
 MARIN_CROSS_REGION_OVERRIDE_ENV: str = "MARIN_I_WILL_PAY_FOR_ALL_FEES"
-CROSS_REGION_TRANSFER_LIMIT_BYTES: int = 10 * 1024 * 1024 * 1024  # 10 GB
+MARIN_MIRROR_BUDGET_ENV: str = "MARIN_MIRROR_BUDGET_GB"
+_DEFAULT_TRANSFER_LIMIT_GB: int = 10
+
+
+def _transfer_limit_bytes() -> int:
+    raw = os.environ.get(MARIN_MIRROR_BUDGET_ENV, "")
+    if raw:
+        return int(float(raw) * 1024 * 1024 * 1024)
+    return _DEFAULT_TRANSFER_LIMIT_GB * 1024 * 1024 * 1024
+
+
+CROSS_REGION_TRANSFER_LIMIT_BYTES: int = _transfer_limit_bytes()
 
 # GCS multi-region bucket locations are returned as "us", "eu", or "asia"
 # rather than a specific region like "us-central1".  European regions use the
@@ -785,27 +796,38 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         info["name"] = path
         return info
 
+    @staticmethod
+    def _stripped_prefix(bucket_prefix: str) -> str:
+        """Return the bucket prefix without scheme, with trailing slash."""
+        return bucket_prefix.rstrip("/").replace("gs://", "").replace("file://", "") + "/"
+
     def ls(self, path: str, detail: bool = True, **kwargs: Any) -> list[Any]:
         path = self._strip_protocol(path)
-        local_url = self._local_url(path)
-        fs, fspath = self._get_fs_and_path(local_url)
-        try:
-            results = fs.ls(fspath, detail=detail, **kwargs)
-        except FileNotFoundError:
-            results = []
+        # Union listings from local + all remote prefixes so that glob()
+        # discovers files that only exist in other regions.  Local entries
+        # take precedence when a relative path appears in multiple buckets.
+        seen: dict[str, dict[str, Any]] = {}
 
-        prefix = self._local_prefix.rstrip("/") + "/"
-        # For GCS, fsspec strips the scheme, so the prefix in results won't have gs://
-        stripped_prefix = prefix.replace("gs://", "").replace("file://", "")
+        for prefix in [self._local_prefix, *self._remote_prefixes]:
+            url = f"{prefix}/{path}"
+            fs, fspath = self._get_fs_and_path(url)
+            try:
+                entries = fs.ls(fspath, detail=True, **kwargs)
+            except FileNotFoundError:
+                continue
 
+            stripped = self._stripped_prefix(prefix)
+            for entry in entries:
+                rel_name = entry["name"]
+                if rel_name.startswith(stripped):
+                    rel_name = rel_name[len(stripped) :]
+                if rel_name not in seen:
+                    seen[rel_name] = {**entry, "name": rel_name}
+
+        results = list(seen.values())
         if detail:
-            for entry in results:
-                name = entry["name"]
-                if name.startswith(stripped_prefix):
-                    entry["name"] = name[len(stripped_prefix) :]
             return results
-        else:
-            return [r[len(stripped_prefix) :] if r.startswith(stripped_prefix) else r for r in results]
+        return [e["name"] for e in results]
 
     def exists(self, path: str, **kwargs: Any) -> bool:
         path = self._strip_protocol(path)

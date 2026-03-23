@@ -644,6 +644,8 @@ def resolve_executor_step(
     deps: list[StepSpec] | None = None,
     dag_tpu_regions: list[str] | None = None,
     forced_region: str | None = None,
+    mirrored_paths: list[tuple[str, float]] | None = None,
+    prefix: str | None = None,
 ) -> StepSpec:
     """Convert an ExecutorStep into a StepSpec.
 
@@ -679,8 +681,12 @@ def resolve_executor_step(
     # output_path parameter that StepRunner passes.
     captured_fn = step_fn
     captured_config = config
+    captured_mirrored = mirrored_paths or []
+    captured_prefix = prefix
 
     def resolved_fn(output_path):
+        if captured_mirrored and captured_prefix:
+            _ensure_mirrored_data(captured_mirrored, captured_prefix)
         return captured_fn(captured_config)
 
     # If the original fn was decorated with @remote, propagate the
@@ -878,6 +884,8 @@ def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:
     """
 
     def recurse(obj: Any):
+        if isinstance(obj, MirroredValue):
+            return recurse(obj.value)
         if isinstance(obj, VersionedValue):
             return recurse(obj.value)
         if isinstance(obj, OutputName | InputName | ExecutorStep):
@@ -895,6 +903,28 @@ def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:
         return obj
 
     return recurse(value)  # type: ignore
+
+
+@dataclass(frozen=True)
+class MirroredValue(Generic[T_co]):
+    """Wraps a path value to signal that it should be mirrored from any marin regional bucket.
+
+    At config instantiation time, the path is resolved to the local marin prefix.
+    Before step execution, the executor copies the data from whichever region has it.
+    """
+
+    value: T_co
+    budget_gb: float = 10
+
+
+def mirrored(value: str | VersionedValue[str], budget_gb: float = 10) -> MirroredValue:
+    """Mark a path for cross-region mirroring with a transfer budget.
+
+    Usage: input_path=mirrored(versioned("documents/stackexchange/..."), budget_gb=50)
+    """
+    if isinstance(value, MirroredValue):
+        raise ValueError("Can't nest MirroredValue")
+    return MirroredValue(value=value, budget_gb=budget_gb)
 
 
 ############################################################
@@ -1007,6 +1037,10 @@ def collect_dependencies_and_version(obj: Any) -> _Dependencies:
         if isinstance(obj, ExecutorStep):
             obj = output_path_of(obj, None)
 
+        if isinstance(obj, MirroredValue):
+            recurse(obj.value, prefix)
+            return
+
         if isinstance(obj, VersionedValue):
             version[prefix] = obj.value
         elif isinstance(obj, InputName):
@@ -1041,6 +1075,107 @@ def collect_dependencies_and_version(obj: Any) -> _Dependencies:
     return _Dependencies(dependencies, pseudo_dependencies, version)
 
 
+def collect_mirrored_paths(config: Any) -> list[tuple[str, float]]:
+    """Extract (relative_path, budget_gb) pairs from MirroredValue entries in a config."""
+    results: list[tuple[str, float]] = []
+
+    def recurse(obj: Any) -> None:
+        if obj is None:
+            return
+        if isinstance(obj, MirroredValue):
+            inner = obj.value
+            while isinstance(inner, VersionedValue):
+                inner = inner.value
+            if isinstance(inner, str):
+                results.append((inner, obj.budget_gb))
+            return
+        if isinstance(obj, VersionedValue):
+            recurse(obj.value)
+            return
+        if isinstance(obj, InputName | ExecutorStep):
+            return
+        if is_dataclass(obj):
+            for field in fields(obj):
+                recurse(getattr(obj, field.name))
+        elif isinstance(obj, list):
+            for x in obj:
+                recurse(x)
+        elif isinstance(obj, dict):
+            for x in obj.values():
+                recurse(x)
+
+    recurse(config)
+    return results
+
+
+def _ensure_mirrored_data(mirrored_paths: list[tuple[str, float]], prefix: str) -> None:
+    """Copy mirrored paths from remote regions to the local prefix if they don't exist locally.
+
+    Each (relative_path, budget_gb) pair is checked: if the data doesn't exist at
+    prefix/relative_path, scan all other marin regional buckets and copy from the first match.
+    """
+    if not mirrored_paths:
+        return
+
+    import fsspec
+
+    from iris.marin_fs import REGION_TO_DATA_BUCKET, TransferBudget
+
+    for relative_path, budget_gb in mirrored_paths:
+        local_url = os.path.join(prefix, relative_path)
+
+        # Check if already exists locally
+        fs, fspath = fsspec.core.url_to_fs(local_url)
+        if fs.exists(fspath):
+            logger.info("Mirrored path %s already exists at %s", relative_path, local_url)
+            continue
+
+        # Scan other regional buckets
+        source_url = None
+        for bucket in REGION_TO_DATA_BUCKET.values():
+            candidate = f"gs://{bucket}/{relative_path}"
+            cfs, cfspath = fsspec.core.url_to_fs(candidate)
+            if cfs.exists(cfspath):
+                source_url = candidate
+                break
+
+        if source_url is None:
+            raise FileNotFoundError(
+                f"Mirrored path {relative_path!r} not found in any marin regional bucket. "
+                f"Searched: {list(REGION_TO_DATA_BUCKET.values())}"
+            )
+
+        budget = TransferBudget(limit_bytes=int(budget_gb * 1024 * 1024 * 1024))
+        src_fs, src_path = fsspec.core.url_to_fs(source_url)
+        dst_fs, dst_path = fsspec.core.url_to_fs(local_url)
+
+        if src_fs.isdir(src_path):
+            all_files = src_fs.find(src_path)
+            total_size = sum(src_fs.size(f) for f in all_files)
+            budget.record(total_size, source_url)
+            logger.info(
+                "Mirroring %s → %s (%.1f GB, budget %.0f GB)",
+                source_url,
+                local_url,
+                total_size / (1024**3),
+                budget_gb,
+            )
+            for f in all_files:
+                rel = f[len(src_path.rstrip("/")) :]
+                dest = dst_path.rstrip("/") + rel
+                parent = dest.rsplit("/", 1)[0]
+                dst_fs.makedirs(parent, exist_ok=True)
+                src_fs.copy(f, dest)
+        else:
+            size = src_fs.size(src_path)
+            if size is not None:
+                budget.record(size, source_url)
+            logger.info("Mirroring %s → %s", source_url, local_url)
+            parent = dst_path.rsplit("/", 1)[0]
+            dst_fs.makedirs(parent, exist_ok=True)
+            src_fs.copy(src_path, dst_path)
+
+
 def instantiate_config(
     config: dataclass, output_path: str, output_paths: dict[ExecutorStep, str], prefix: str
 ) -> dataclass:
@@ -1061,6 +1196,10 @@ def instantiate_config(
 
         if isinstance(obj, ExecutorStep):
             obj = output_path_of(obj)
+
+        if isinstance(obj, MirroredValue):
+            inner = recurse(obj.value)
+            return _make_prefix_absolute_path(prefix, inner)
 
         if isinstance(obj, InputName):
             if obj.step is None:
@@ -1116,6 +1255,7 @@ class Executor:
         self.version_strs: dict[ExecutorStep, str] = {}
         self.version_str_to_step: dict[str, ExecutorStep] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
+        self.mirrored_paths: dict[ExecutorStep, list[tuple[str, float]]] = {}
         self.steps: list[ExecutorStep] = []
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
@@ -1207,6 +1347,8 @@ class Executor:
                 deps=dep_stubs_by_step[step],
                 dag_tpu_regions=dag_tpu_regions_by_step[step],
                 forced_region=forced_region_by_step[step],
+                mirrored_paths=self.mirrored_paths.get(step, []),
+                prefix=self.prefix,
             )
         # Second pass: rebuild with deps pointing to resolved StepSpecs
         result = []
@@ -1347,6 +1489,7 @@ class Executor:
             output_paths=self.output_paths,
             prefix=self.prefix,
         )
+        self.mirrored_paths[step] = collect_mirrored_paths(step.config)
         self.dependencies[step] = list(map(self.canonicalize, computed_deps.dependencies))
         self.versions[step] = version
         self.version_strs[step] = version_str

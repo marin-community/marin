@@ -19,6 +19,9 @@ from marin.execution.executor import (
     InputName,
     _get_info_path,
     collect_dependencies_and_version,
+    collect_mirrored_paths,
+    instantiate_config,
+    mirrored,
     output_path_of,
     this_output_path,
     versioned,
@@ -611,6 +614,67 @@ def test_parent_will_run_if_some_child_is_not_skippable():
 
         # make sure parent ran
         assert os.path.exists(os.path.join(executor.output_paths[parent], "dummy", "done.txt"))
+
+
+def test_mirrored_versioning():
+    """MirroredValue wrapping VersionedValue should version the inner value."""
+
+    @dataclass(frozen=True)
+    class Cfg:
+        input_path: str
+        output_path: str
+
+    deps = collect_dependencies_and_version(
+        Cfg(input_path=mirrored(versioned("some/path"), budget_gb=50), output_path="out")
+    )
+    assert deps.version == {"input_path": "some/path"}
+
+
+def test_mirrored_instantiate_config():
+    """MirroredValue should resolve to prefix/relative_path."""
+
+    @dataclass(frozen=True)
+    class Cfg:
+        input_path: str
+        output_path: str
+
+    cfg = Cfg(input_path=mirrored(versioned("documents/data"), budget_gb=10), output_path="out")
+    resolved = instantiate_config(cfg, output_path="/out", output_paths={}, prefix="/bucket")
+    assert resolved.input_path == "/bucket/documents/data"
+
+
+def test_collect_mirrored_paths():
+    """collect_mirrored_paths should extract relative paths and budgets."""
+
+    @dataclass(frozen=True)
+    class Cfg:
+        a: str
+        b: str
+        c: str
+
+    cfg = Cfg(
+        a=mirrored(versioned("path/a"), budget_gb=50),
+        b="plain_string",
+        c=mirrored("path/c", budget_gb=10),
+    )
+    paths = collect_mirrored_paths(cfg)
+    assert sorted(paths) == [("path/a", 50), ("path/c", 10)]
+
+
+def test_mirrored_nesting_raises():
+    with pytest.raises(ValueError, match="nest"):
+        mirrored(mirrored("x"))
+
+
+def test_mirrored_changes_version():
+    """Changing the path inside mirrored() should change the version hash."""
+    deps1 = collect_dependencies_and_version(
+        MyConfig(input_path=mirrored(versioned("data/v1")), output_path="out", n=versioned(1), m=1)
+    )
+    deps2 = collect_dependencies_and_version(
+        MyConfig(input_path=mirrored(versioned("data/v2")), output_path="out", n=versioned(1), m=1)
+    )
+    assert deps1.version != deps2.version
 
 
 def test_status_file_takeover_stale_lock_then_refresh(tmp_path):

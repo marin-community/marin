@@ -104,3 +104,62 @@ def test_second_read_uses_local_cache(mirror_fs, mirror_env):
 def test_read_finds_file_in_second_remote(mirror_fs, mirror_env):
     _write_file(mirror_env["remote2"], "data/remote2.txt", b"from-remote2")
     assert mirror_fs.cat_file("data/remote2.txt") == b"from-remote2"
+
+
+# ---------------------------------------------------------------------------
+# ls / glob tests
+# ---------------------------------------------------------------------------
+
+
+def test_ls_returns_local_entries(mirror_fs, mirror_env):
+    _write_file(mirror_env["local_dir"], "data/a.jsonl", b"a")
+    _write_file(mirror_env["local_dir"], "data/b.jsonl", b"b")
+
+    entries = mirror_fs.ls("data", detail=False)
+    assert sorted(entries) == ["data/a.jsonl", "data/b.jsonl"]
+
+
+def test_ls_discovers_remote_only_entries(mirror_fs, mirror_env):
+    _write_file(mirror_env["remote1"], "data/remote.jsonl", b"r")
+
+    entries = mirror_fs.ls("data", detail=False)
+    assert "data/remote.jsonl" in entries
+
+
+def test_ls_unions_local_and_remote(mirror_fs, mirror_env):
+    _write_file(mirror_env["local_dir"], "data/local.jsonl", b"l")
+    _write_file(mirror_env["remote1"], "data/remote.jsonl", b"r")
+
+    entries = mirror_fs.ls("data", detail=False)
+    assert sorted(entries) == ["data/local.jsonl", "data/remote.jsonl"]
+
+
+def test_ls_local_takes_precedence(mirror_fs, mirror_env):
+    _write_file(mirror_env["local_dir"], "data/file.jsonl", b"local-version")
+    _write_file(mirror_env["remote1"], "data/file.jsonl", b"remote-version")
+
+    entries = mirror_fs.ls("data", detail=True)
+    assert len(entries) == 1
+    assert entries[0]["name"] == "data/file.jsonl"
+
+
+def test_ls_unions_multiple_remotes(mirror_fs, mirror_env):
+    _write_file(mirror_env["remote1"], "data/from_r1.jsonl", b"r1")
+    _write_file(mirror_env["remote2"], "data/from_r2.jsonl", b"r2")
+
+    entries = mirror_fs.ls("data", detail=False)
+    assert sorted(entries) == ["data/from_r1.jsonl", "data/from_r2.jsonl"]
+
+
+def test_ls_empty_when_path_missing_everywhere(mirror_fs):
+    entries = mirror_fs.ls("nonexistent/path", detail=False)
+    assert entries == []
+
+
+def test_glob_discovers_remote_files(mirror_fs, mirror_env):
+    _write_file(mirror_env["remote1"], "docs/a.jsonl.gz", b"a")
+    _write_file(mirror_env["remote1"], "docs/b.jsonl.gz", b"b")
+    _write_file(mirror_env["remote1"], "docs/skip.txt", b"skip")
+
+    matched = mirror_fs.glob("docs/*.jsonl.gz")
+    assert sorted(matched) == ["docs/a.jsonl.gz", "docs/b.jsonl.gz"]
