@@ -622,13 +622,18 @@ class ZephyrCoordinator:
         last_log_time = 0.0
 
         while not self._shutdown_event.is_set():
-            self.check_heartbeats()
-            self._check_worker_group()
+            try:
+                self.check_heartbeats()
+                self._check_worker_group()
 
-            now = time.monotonic()
-            if self._has_active_execution() and now - last_log_time > 5.0:
-                self._log_status()
-                last_log_time = now
+                now = time.monotonic()
+                if self._has_active_execution() and now - last_log_time > 5.0:
+                    self._log_status()
+                    last_log_time = now
+            except Exception:
+                logger.exception("Coordinator loop crashed, aborting pipeline")
+                self.abort("Coordinator loop crashed unexpectedly")
+                return
 
             self._shutdown_event.wait(timeout=0.5)
 
@@ -649,8 +654,10 @@ class ZephyrCoordinator:
         return self._execution_id != "" and self._total_shards > 0 and self._completed_shards < self._total_shards
 
     def _log_status(self) -> None:
-        alive = sum(1 for s in self._worker_states.values() if s in {WorkerState.READY, WorkerState.BUSY})
-        dead = sum(1 for s in self._worker_states.values() if s in {WorkerState.FAILED, WorkerState.DEAD})
+        with self._lock:
+            states = list(self._worker_states.values())
+        alive = sum(1 for s in states if s in {WorkerState.READY, WorkerState.BUSY})
+        dead = sum(1 for s in states if s in {WorkerState.FAILED, WorkerState.DEAD})
         logger.info(
             "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead",
             self._execution_id,
