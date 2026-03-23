@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "f53f670eed02",
+  "session_id": "80373e1d-df82-43b5-b329-48bc6d3fca34",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-18T22:08:22.626760957Z",
+  "branch": "kevin/sft",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "experiments/exp3490b_sft_nemotron_terminal_corpus_qwen3_8b.py",
+    "experiments/posttrain/instruction_datasets.py",
+    "lib/marin/src/marin/transform/conversation/transform_conversation.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e65e3ecd2093",
+  "transcript_identifier_at_start": "a4281093-81df-4f52-942e-a0a3a1bdf776",
+  "checkpoint_transcript_start": 4061,
+  "transcript_lines_at_start": 4061,
+  "token_usage": {
+    "input_tokens": 4849,
+    "cache_creation_tokens": 1307633,
+    "cache_read_tokens": 33664412,
+    "output_tokens": 130269,
+    "api_call_count": 343
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-18T22:08:17.770621932Z",
+    "agent_lines": 0,
+    "human_added": 294,
+    "human_modified": 10,
+    "human_removed": 0,
+    "total_committed": 294,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-home-kevin-marin-agentic-sft/80373e1d-df82-43b5-b329-48bc6d3fca34.jsonl"
+}
