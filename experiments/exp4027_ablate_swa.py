@@ -10,18 +10,11 @@ Tracking issue: https://github.com/marin-community/marin/issues/4027
 Parent gate: https://github.com/marin-community/marin/issues/4013
 """
 
-import dataclasses
-import os
 from dataclasses import replace
 
-import jmp
 from fray.cluster import ResourceConfig
-from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LmDataConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
-from levanter.trainer import TrainerConfig
-from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
