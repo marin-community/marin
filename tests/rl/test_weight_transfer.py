@@ -184,6 +184,28 @@ def test_multiple_weight_updates(weight_transfer_config, sample_params):
     client.cleanup()
 
 
+def test_arrow_flight_coordinator_accepts_rollback_weight_ids():
+    from fray.v2 import current_client
+    from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
+
+    client = current_client()
+    coordinator = client.create_actor(
+        ArrowFlightCoordinator,
+        name=f"test_coordinator_{uuid.uuid4().hex[:8]}",
+    )
+
+    param_names = ["param"]
+    first_server_locations = [("127.0.0.1", 5001)]
+    rollback_server_locations = [("127.0.0.1", 5002)]
+
+    coordinator.update_server.remote(1, param_names, first_server_locations).result()
+    coordinator.update_server.remote(-1, param_names, rollback_server_locations).result()
+    server_info = coordinator.fetch_server.remote().result()
+
+    assert server_info.weight_id == -1
+    assert server_info.server_addresses == ["grpc://127.0.0.1:5002"]
+
+
 def test_concurrent_clients(weight_transfer_config, sample_params):
     server, client_1 = create_test_weight_transfer_pair(weight_transfer_config)
 

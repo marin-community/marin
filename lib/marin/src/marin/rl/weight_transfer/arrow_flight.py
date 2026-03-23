@@ -242,13 +242,13 @@ class ArrowFlightCoordinator:
         self._server_info = None
 
     def update_server(self, weight_id: int, param_names: list[str], server_locations: list[tuple[str, int]]) -> None:
-
-        # Accept weight_id=-1 (initial weights) even if coordinator already has it.
-        # This allows a restarted trainer to re-serve initial weights without being
-        # rejected as stale. Only reject truly stale updates (same non-initial ID).
+        # Accept both forward updates and rollback updates.
+        # Rollbacks happen when the trainer restarts from an earlier checkpoint
+        # (or re-initializes to -1) after a failure.
+        # We only ignore exact duplicates to reduce redundant client fetch work.
         current_weight_id = self._server_info.weight_id if self._server_info is not None else None
-        if current_weight_id is not None and weight_id < current_weight_id:
-            logger.warning(f"Ignoring stale weight update: {weight_id} < {current_weight_id}")
+        if current_weight_id is not None and weight_id == current_weight_id:
+            logger.info("Ignoring duplicate weight update: %s", weight_id)
             return
 
         self._server_info = ServerInfo(
