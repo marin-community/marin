@@ -47,7 +47,7 @@ def main():
 
     model_config = dc.replace(
         model_config,
-        max_seq_len=1024,
+        max_seq_len=2048,
         tokenizer=MODEL_NAME,
         attn_backend=AttentionBackend.SPLASH,
     )
@@ -63,18 +63,18 @@ def main():
                 dependencies=[],
                 sampling_params=CurriculumSamplingParams(
                     temperature=1.0,
-                    n_prompts=4,
+                    n_prompts=64,
                     n_generations_per_prompt=16,
-                    max_output_tokens=512,
+                    max_output_tokens=1024,
                     top_k=4096,
                 ),
             ),
         },
-        eval_frequency=5,
+        eval_frequency=1,
         micro_eval_frequency=9999999,
         actor_name=f"curriculum-{name}",
-        eval_n_examples=10,
-        max_seq_len=1024,
+        eval_n_examples=500,
+        max_seq_len=2048,
     )
 
     job_config = RLJobConfig(
@@ -83,9 +83,9 @@ def main():
         trainer=TrainerConfig(
             tracker=WandbConfig(project="marin_iris_rl_debug", name=name, tags=["rl", "iris-debug"]),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
-            train_batch_size=64,
+            train_batch_size=1024,
             per_device_parallelism=16,
-            num_train_steps=5,
+            num_train_steps=500,
             steps_per_eval=100,
             checkpointer=CheckpointerConfig(
                 base_path=f"gs://marin-us-central2/checkpoints/{name}",
@@ -108,20 +108,20 @@ def main():
                 do_overlong_filtering=True,
                 vocab_tile_size=32064,
             ),
-            replay_buffer=ReplayBufferConfig(capacity=4096, alpha=3.0, max_samples=1, max_rollout_step_delay=0),
+            replay_buffer=ReplayBufferConfig(capacity=4096, alpha=3.0, max_samples=1, max_rollout_step_delay=1),
         ),
         curriculum=curriculum,
         tokenizer=MODEL_NAME,
         inference_type="vllm",
         inference_config=vLLMInferenceContextConfig(
             model_name=MODEL_NAME,
-            max_model_len=1024,
+            max_model_len=2048,
             tensor_parallel_size=4,
             gpu_memory_utilization=0.90,
             sampling_params=VLLMSamplingConfig(
                 temperature=1.0,
                 n=8,
-                max_tokens=512,
+                max_tokens=1024,
                 stop=["<|eot_id|>"],
                 include_stop_str_in_output=True,
                 logprobs=1,
