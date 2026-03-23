@@ -13,6 +13,7 @@ bugs where orphaned coordinators and workers consume resources indefinitely.
 
 from __future__ import annotations
 
+import concurrent.futures
 import functools
 import json
 import enum
@@ -39,6 +40,7 @@ import pyarrow.compute as pc
 import pyarrow.dataset as pad
 import pyarrow.parquet as pq
 from iris.marin_fs import open_url, url_to_fs
+from iris import resource_utils as iris_resource_utils
 from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from fray.v2.client import JobHandle
 from fray.v2.types import Entrypoint, JobRequest
@@ -159,7 +161,7 @@ _SCATTER_MANIFEST_NAME = "scatter_metadata"
 
 
 @functools.cache
-def _get_scatter_read_fs(num_files: int, sample_path: str, memory_fraction: float = 0.8) -> pa.fs.FileSystem:
+def _get_scatter_read_fs(num_files: int, sample_path: str, memory_fraction: float = 0.05) -> pa.fs.FileSystem:
     """Return a pyarrow filesystem with per-file block_size budgeted from available memory.
 
     Caps total fsspec buffer memory at ``memory_fraction`` of the worker's RAM,
@@ -215,7 +217,7 @@ class ScatterParquetIterator:
         for chunk_iter in self.get_chunk_iterators():
             yield from chunk_iter
 
-    def get_chunk_iterators(self) -> Iterator[Iterator]:
+    def get_chunk_iterators(self, batch_size: int = 1024) -> Iterator[Iterator]:
         """Yield one lazy iterator per sorted chunk.
 
         Opens the file once via ``pyarrow.dataset`` and creates a Scanner
@@ -233,12 +235,42 @@ class ScatterParquetIterator:
                     (pc.field(_ZEPHYR_SHUFFLE_SHARD_IDX_COL) == self.shard_idx)
                     & (pc.field(_ZEPHYR_SHUFFLE_CHUNK_IDX_COL) == chunk_idx)
                 ),
-                batch_size=8192,
+                batch_size=batch_size,
                 use_threads=False,
                 # batch_readahead=0,
                 # fragment_readahead=0,
             )
             yield self._iter_scanner(scanner, col)
+
+    def probe_item_bytes(self) -> int:
+        """Estimate bytes per deserialized item by reading a small probe batch.
+
+        Opens a fresh scanner for the first chunk and measures the pickled size
+        of _SCATTER_PROBE_BATCH_SIZE items. Used by ScatterShard to compute a
+        safe batch_size before initializing the k-way merge.
+        """
+        _, fs_path = url_to_fs(self.path)
+        dataset: pad.FileSystemDataset = pad.dataset(fs_path, format="parquet", filesystem=self.filesystem)
+        col = _ZEPHYR_SHUFFLE_PICKLED_COL if self.is_pickled else _ZEPHYR_SHUFFLE_ITEM_COL
+        scanner = dataset.scanner(
+            columns=[col],
+            filter=(
+                (pc.field(_ZEPHYR_SHUFFLE_SHARD_IDX_COL) == self.shard_idx)
+                & (pc.field(_ZEPHYR_SHUFFLE_CHUNK_IDX_COL) == self.chunk_offset)
+            ),
+            batch_size=_SCATTER_PROBE_BATCH_SIZE,
+            use_threads=False,
+        )
+        try:
+            batch = next(iter(scanner.to_batches()))
+        except StopIteration:
+            return 200  # fallback if no data
+        if batch.num_rows == 0:
+            return 200
+        items = batch.column(col).to_pylist()
+        if self.is_pickled:
+            items = [pickle.loads(b) for b in items]
+        return max(1, len(pickle.dumps(items)) // batch.num_rows)
 
     def _iter_scanner(self, scanner: pad.Scanner, col: str) -> Iterator:
         for batch in scanner.to_batches():
@@ -265,8 +297,41 @@ class ScatterShard:
             yield from it
 
     def get_iterators(self) -> Iterator[Iterator]:
+        batch_size = self._compute_batch_size()
         for it in self.iterators:
-            yield from it.get_chunk_iterators()
+            yield from it.get_chunk_iterators(batch_size=batch_size)
+
+    def _compute_batch_size(self) -> int:
+        """Compute a safe batch_size that keeps scatter read buffers within budget.
+
+        With N total chunk iterators in the k-way merge, each holding one
+        batch of batch_size deserialized items in memory simultaneously,
+        the total buffer footprint is N * batch_size * bytes_per_item.
+        We cap this at _SCATTER_READ_BUFFER_FRACTION of the worker's memory limit.
+        """
+        total_chunks = sum(it.chunk_count for it in self.iterators)
+        if total_chunks == 0:
+            return 1024
+
+        probe_it = next((it for it in self.iterators if it.chunk_count > 0), None)
+        if probe_it is None:
+            return 1024
+
+        bytes_per_item = probe_it.probe_item_bytes()
+        memory_limit = iris_resource_utils.get_memory_limit()
+        # NOTE: use 10% of total memory for the read buffers
+        buffer_budget = int(memory_limit * 0.1)
+        safe = max(1, buffer_budget // (total_chunks * bytes_per_item))
+        safe = min(safe, 8192)
+        logger.info(
+            "ScatterShard batch_size=%d (total_chunks=%d, bytes_per_item=%d, " "buffer_budget=%dMB, memory_limit=%dMB)",
+            safe,
+            total_chunks,
+            bytes_per_item,
+            buffer_budget // (1024 * 1024),
+            memory_limit // (1024 * 1024),
+        )
+        return safe
 
 
 # ---------------------------------------------------------------------------
@@ -399,24 +464,39 @@ def _read_scatter_meta(parquet_path: str) -> dict:
     return _scatter_meta_cache[meta_path]
 
 
+_SCATTER_META_READ_CONCURRENCY = 256
+# Probe batch size for estimating item memory in _compute_scatter_read_batch_size
+_SCATTER_PROBE_BATCH_SIZE = 100
+# Fraction of total memory limit to budget for scatter read buffers
+_SCATTER_READ_BUFFER_FRACTION = 0.25
+
+
 def _write_scatter_manifest(scatter_paths: list[str], output_path: str) -> None:
     """Write a consolidated scatter manifest combining all sidecar metadata.
 
     The manifest is a JSON array of objects, each containing a scatter file
     path alongside its chunk_counts, chunk_offsets, and is_pickled metadata.
     Reducers read this single file instead of N individual sidecars.
+
+    Sidecar reads are parallelised via a thread pool since each is an
+    independent GCS fetch (I/O bound, O(N) sequential latency otherwise).
     """
-    entries = []
-    for path in scatter_paths:
+
+    def _read_entry(path: str) -> tuple[str, dict]:
         meta = _read_scatter_meta(path)
-        entries.append(
-            {
-                "path": path,
-                "chunk_counts": meta["chunk_counts"],
-                "chunk_offsets": meta["chunk_offsets"],
-                "is_pickled": meta["is_pickled"],
-            }
-        )
+        return path, {
+            "path": path,
+            "chunk_counts": meta["chunk_counts"],
+            "chunk_offsets": meta["chunk_offsets"],
+            "is_pickled": meta["is_pickled"],
+        }
+
+    results: dict[str, dict] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_SCATTER_META_READ_CONCURRENCY) as pool:
+        for path, entry in pool.map(_read_entry, scatter_paths):
+            results[path] = entry
+
+    entries = [results[path] for path in scatter_paths]
 
     ensure_parent_dir(output_path)
     payload = json.dumps(entries)
@@ -592,26 +672,15 @@ def _write_parquet_scatter(
             _write_buffer(target, buffers[target])
             buffers[target] = []
 
-    # Flush remaining buffers — concat into a single row group to avoid many tiny writes
+    # Flush remaining buffers — write each shard as its own row group so PyArrow
+    # can use min/max statistics on shard_idx to skip non-matching row groups on read.
     with log_time(f"Flushing remaining buffers for {parquet_path}"):
         _flush_pending()
-
-        enveloped_rows: list[dict] = []
-        shard_counts: dict[int, int] = {}
         for target, buf in sorted(buffers.items()):
             if not buf:
                 continue
-            enveloped_rows.extend(_prepare_batch(target, buf))
-            shard_counts[target] = shard_counts.get(target, 0) + 1
-
-        if enveloped_rows:
-            combined = pa.RecordBatch.from_pylist(enveloped_rows)
-            write_schema = _ensure_writer(combined.schema)
-            if combined.schema != write_schema:
-                combined = combined.cast(write_schema)
-            writer.write_batch(combined)
-            for target, count in shard_counts.items():
-                seg_shard_counts[seg_idx][target] = seg_shard_counts[seg_idx].get(target, 0) + count
+            _write_buffer(target, buf)
+        _flush_pending()
 
     if writer is not None:
         writer.close()
@@ -1196,6 +1265,7 @@ class ZephyrCoordinator:
 
                 # Build and submit tasks
                 tasks = _compute_tasks_from_shards(shards, stage, aux_per_shard, stage_name=stage_label)
+                output_stage_name = tasks[0].stage_name if tasks else stage_label
                 logger.info("[%s] Starting stage %s with %d tasks", self._execution_id, stage_label, len(tasks))
                 self._start_stage(stage_label, tasks, is_last_stage=(stage_idx == last_worker_stage_idx))
 
@@ -1210,7 +1280,7 @@ class ZephyrCoordinator:
                     len(shards),
                     output_shard_count=stage.output_shards,
                     is_scatter=stage_is_scatter,
-                    scatter_manifest_dir=f"{self._chunk_prefix}/{self._execution_id}/{stage_label}",
+                    scatter_manifest_dir=f"{self._chunk_prefix}/{self._execution_id}/{output_stage_name}",
                 )
 
             # Flatten final results
@@ -1248,6 +1318,7 @@ class ZephyrCoordinator:
 
                 join_stage_label = f"join-right-{parent_stage_idx}-{i}-stage{stage_idx}"
                 right_tasks = _compute_tasks_from_shards(right_refs, right_stage, stage_name=join_stage_label)
+                join_output_stage_name = right_tasks[0].stage_name if right_tasks else join_stage_label
                 self._start_stage(join_stage_label, right_tasks)
                 self._wait_for_stage()
                 raw = self._collect_results()
@@ -1257,7 +1328,7 @@ class ZephyrCoordinator:
                     len(right_refs),
                     output_shard_count=right_stage.output_shards,
                     is_scatter=right_is_scatter,
-                    scatter_manifest_dir=f"{self._chunk_prefix}/{self._execution_id}/{join_stage_label}",
+                    scatter_manifest_dir=f"{self._chunk_prefix}/{self._execution_id}/{join_output_stage_name}",
                 )
 
             if len(shard_refs) != len(right_refs):
@@ -1723,9 +1794,6 @@ class ZephyrContext:
             min(max_workers, num_shards), computed at first execute(). If None,
             defaults to os.cpu_count() for LocalClient, or 128 for distributed clients.
         resources: Resource config per worker.
-        coordinator_resources: Resource config for the coordinator job. The coordinator
-            accumulates scatter manifests for all shards in memory; increase ram for
-            large pipelines (many shards). Defaults to 4 GB.
         chunk_storage_prefix: Storage prefix for intermediate chunks. If None, defaults
             to MARIN_PREFIX/tmp/zephyr or /tmp/zephyr.
         name: Descriptive name for this context, used in actor group names for debugging.
@@ -1740,7 +1808,6 @@ class ZephyrContext:
     client: Client | None = None
     max_workers: int | None = None
     resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="1g"))
-    coordinator_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="5g"))
     chunk_storage_prefix: str | None = None
     name: str = ""
     no_workers_timeout: float | None = None
@@ -1872,7 +1939,7 @@ class ZephyrContext:
                                 _run_coordinator_job,
                                 args=(config, result_path),
                             ),
-                            resources=self.coordinator_resources,
+                            resources=ResourceConfig(cpu=1, ram="1g"),
                         )
                     )
 
