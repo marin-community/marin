@@ -10,6 +10,7 @@ checkpoints are read by the rollout workers to update their models.
 """
 
 import dataclasses
+import faulthandler
 import logging
 import time
 from dataclasses import dataclass
@@ -28,9 +29,9 @@ from levanter.trainer import Trainer, TrainerConfig
 from transformers import PreTrainedTokenizer
 
 from marin.rl import weight_transfer
-from fray.v1.job import get_default_job_ctx
-from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
+from marin.rl.curriculum import CurriculumConfig
 from marin.rl.model_utils import load_model_from_checkpoint
+from marin.rl.runtime import RLRuntimeHandles
 from marin.rl.weight_transfer import WeightTransferConfig
 
 from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader, RolloutWithCount
@@ -113,6 +114,9 @@ class StreamingRolloutLoader:
 
     def __iter__(self):
         """Yield batches continuously from the replay buffer."""
+        cumulative_wait = 0.0
+        max_cumulative_wait = 3600.0  # 1 hour
+
         while True:
             fetch_start = time.time()
             rollouts = self.data_loader.get_rollouts(timeout=self.timeout)
@@ -121,8 +125,16 @@ class StreamingRolloutLoader:
             self._last_rollouts = rollouts
 
             if not rollouts:
-                logger.warning("No rollouts received from data loader within timeout, retrying...")
+                cumulative_wait += fetch_time
+                if cumulative_wait >= max_cumulative_wait:
+                    raise TimeoutError(f"No rollouts received after {cumulative_wait:.0f}s total wait")
+                logger.warning(
+                    "No rollouts received from data loader within timeout (cumulative_wait=%.0fs), retrying...",
+                    cumulative_wait,
+                )
                 continue
+
+            cumulative_wait = 0.0
 
             # Measure batch creation time
             batch_start = time.time()
@@ -170,11 +182,14 @@ class TrainWorker:
     def __init__(
         self,
         config: TrainWorkerConfig,
+        runtime: RLRuntimeHandles,
     ):
         """Initialize training worker.
 
         Args:
             config: Training worker configuration with Levanter components.
+            runtime: RLRuntimeHandles with actor handles for curriculum, run_state,
+                     and weight transfer.
         """
 
         print("Run id: ", config.run_id)
@@ -183,6 +198,7 @@ class TrainWorker:
         levanter.initialize(config.trainer)
 
         self.config = config
+        self._runtime = runtime
         self._should_stop = False
         self.tokenizer = config.tokenizer
         self.loss_module = config.loss
@@ -207,17 +223,20 @@ class TrainWorker:
             self.replay_loader,
             config,
         )
+
         self.transfer_server = weight_transfer.create_weight_transfer_server(
             config.weight_transfer,
             mesh=self.config.trainer.device_mesh,
             axis_mapping=self.config.trainer.compute_axis_mapping,
+            coordinator_handle=runtime.weight_transfer.arrow_flight_coordinator,
         )
 
-        # Create curriculum actor with auto-restore from checkpoint
+        self._curriculum_actor = runtime.curriculum
         checkpoint_dir = config.trainer.checkpointer.expanded_path(config.run_id)
-        self._curriculum_actor = get_or_create_curriculum_actor(
-            self.config.curriculum_config, checkpoint_path=checkpoint_dir
-        )
+        try:
+            self._curriculum_actor.restore_checkpoint.remote(checkpoint_dir).result()
+        except Exception as e:
+            logger.warning("Failed to restore curriculum checkpoint from %s: %s, starting fresh", checkpoint_dir, e)
 
         logger.info("Connected to curriculum actor: %s", config.curriculum_config.actor_name)
 
@@ -249,11 +268,12 @@ class TrainWorker:
 
         self.reference_model = _load_model()
 
-    def _wait_for_initial_rollouts(self, max_wait_time: float = 1200.0, poll_interval: float = 5.0) -> bool:
+    def _wait_for_initial_rollouts(self, max_wait_time: float = 7200.0, poll_interval: float = 5.0) -> bool:
         """Wait for initial rollouts from step -1 to be received.
 
         Args:
-            max_wait_time: Maximum time to wait in seconds (default: 20 minutes)
+            max_wait_time: Maximum time to wait in seconds (default: 2 hours).
+                On Iris, rollout workers may take a long time to get scheduled.
             poll_interval: How often to check for rollouts in seconds (default: 5 seconds)
 
         Returns:
@@ -280,37 +300,49 @@ class TrainWorker:
 
     def train(self):
         """Main training method using Levanter's standard train_lm infrastructure."""
+        faulthandler.enable()
         logger.info("Starting RLOO training with Levanter...")
 
-        config = self.config
-        optimizer = config.optimizer.build(config.trainer.num_train_steps)
-        loss_fn = self.loss_module.create_loss_fn(self.reference_model, None)
+        try:
+            config = self.config
+            optimizer = config.optimizer.build(config.trainer.num_train_steps)
+            loss_fn = self.loss_module.create_loss_fn(self.reference_model, None)
 
-        @jax.jit
-        def _loss_function(model, batch, key):
-            return loss_fn(model, batch, key)
+            @jax.jit
+            def _loss_function(model, batch, key):
+                return loss_fn(model, batch, key)
 
-        with (
-            Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function) as trainer,
-            self.replay_loader,
-        ):
-            _, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 2)
-            state = trainer.initial_state(training_key, model=self.reference_model)
+            with (
+                Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function) as trainer,
+                self.replay_loader,
+            ):
+                _, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 2)
+                state = trainer.initial_state(training_key, model=self.reference_model)
 
-            # Always transfer initial weights to rollout workers before we attempt to start training
-            self.transfer_server.serve_weights(-1, state.model)
-            self.replay_buffer.set_current_step(-1)
+                # Always transfer initial weights to rollout workers before we attempt to start training
+                self.transfer_server.serve_weights(-1, state.model)
+                self.replay_buffer.set_current_step(-1)
 
-            # Wait for initial rollouts to ensure we have baseline measurements
-            if not self._wait_for_initial_rollouts():
-                raise RuntimeError("Timed out waiting for initial rollouts; aborting training.")
+                # Wait for initial rollouts to ensure we have baseline measurements
+                if not self._wait_for_initial_rollouts():
+                    raise RuntimeError("Timed out waiting for initial rollouts; aborting training.")
 
-            self._configure_training_hooks(trainer)
+                self._configure_training_hooks(trainer)
 
+                try:
+                    trainer.train(state, self.data_loader)
+                except StopTrainerException:
+                    pass
+        except StopTrainerException:
+            pass
+        except Exception:
+            logger.exception("TRAIN WORKER CRASHED")
+            raise
+        finally:
             try:
-                trainer.train(state, self.data_loader)
-            except StopTrainerException:
-                pass
+                self.stop()
+            except Exception:
+                logger.exception("Failed to stop train worker during cleanup")
 
     def _configure_training_hooks(self, trainer):
         def _weight_transfer_hook(info: levanter.callbacks.StepInfo):
@@ -383,8 +415,7 @@ class TrainWorker:
         def _curriculum_checkpoint_hook(info: levanter.callbacks.StepInfo):
             checkpoint_dir = self.config.trainer.checkpointer.expanded_path(self.config.run_id)
             try:
-                future = self._curriculum_actor.save_checkpoint.remote(checkpoint_dir)
-                get_default_job_ctx().get(future)
+                self._curriculum_actor.save_checkpoint.remote(checkpoint_dir).result()
             except Exception as e:
                 logger.error(f"Failed to save curriculum checkpoint: {e}")
 

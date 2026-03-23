@@ -48,6 +48,38 @@ class InferenceMode(StrEnum):
 
 
 @dataclass
+class VLLMSamplingConfig:
+    """Serializable sampling config that doesn't depend on vllm.
+
+    Replaces vllm.SamplingParams in config objects so they can be
+    serialized/deserialized on CPU workers without vllm installed.
+    Converted to vllm.SamplingParams inside the inference context.
+    """
+
+    temperature: float = 1.0
+    n: int = 1
+    max_tokens: int = 512
+    top_k: int = -1
+    stop: list[str] | None = None
+    include_stop_str_in_output: bool = False
+    logprobs: int | None = 1
+
+    def to_vllm(self):
+        """Convert to vllm.SamplingParams. Must be called where vllm is available."""
+        if SamplingParams is None:
+            raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
+        return SamplingParams(
+            temperature=self.temperature,
+            n=self.n,
+            max_tokens=self.max_tokens,
+            top_k=self.top_k,
+            stop=self.stop,
+            include_stop_str_in_output=self.include_stop_str_in_output,
+            logprobs=self.logprobs,
+        )
+
+
+@dataclass
 class vLLMInferenceContextConfig:
     """Configuration for vLLM engine and sampling parameters."""
 
@@ -55,7 +87,7 @@ class vLLMInferenceContextConfig:
     max_model_len: int
     tensor_parallel_size: int
     gpu_memory_utilization: float
-    sampling_params: SamplingParams
+    sampling_params: VLLMSamplingConfig
     mode: InferenceMode = InferenceMode.SYNC
     load_format: str = "auto"
     enforce_eager: bool = True
@@ -80,13 +112,11 @@ class vLLMInferenceContext(BaseInferenceContext):
         self.axis_mapping = {}
         self.tokenizer = AutoTokenizer.from_pretrained(inference_config.model_name)
         self.model_name = inference_config.model_name
-        self.sampling_params = inference_config.sampling_params
+        self.sampling_config = inference_config.sampling_params
+        self._use_final_only = inference_config.mode == InferenceMode.ASYNC
 
         # Initialize the appropriate renderer based on model type
         self.renderer = self._get_renderer(inference_config.model_name, self.tokenizer)
-
-        if inference_config.mode == InferenceMode.ASYNC:
-            self.sampling_params.output_kind = RequestOutputKind.FINAL_ONLY
 
     @staticmethod
     def _get_renderer(model_name: str, tokenizer) -> Renderer:
@@ -296,12 +326,17 @@ class vLLMInferenceContext(BaseInferenceContext):
         )
 
     def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> LmHeadModel | None:
+        t0 = time.time()
+        logger.info("reload_model: starting prefix cache reset")
         # Reset prefix cache before syncing weights to free up memory
         self.llm.llm_engine.reset_prefix_cache()
         gc.collect()
 
+        logger.info("reload_model: converting state dict")
         # TODO(chris): levanter to vllm state dict
         nnx_state = levanter_state_dict_to_nnx_state_on_cpu(state_dict)
+        t1 = time.time()
+        logger.info("reload_model: calling sync_weights (%d params, %.1fs so far)", len(nnx_state), t1 - t0)
         self.llm.llm_engine.model_executor.driver_worker.sync_weights(
             nnx_state,
             mappings=MODEL_MAPPINGS[self.model_name],
@@ -309,7 +344,10 @@ class vLLMInferenceContext(BaseInferenceContext):
             reshard_fn=None,
         )
 
+        t2 = time.time()
+        logger.info("reload_model: sync_weights done in %.1fs, resetting prefix cache", t2 - t1)
         self.llm.llm_engine.reset_prefix_cache()  # Reset prefix cache because of new weights
+        logger.info("reload_model: complete in %.1fs", time.time() - t0)
         return model
 
     def start_server(self, model: LmHeadModel) -> None:
@@ -340,17 +378,18 @@ class vLLMInferenceContext(BaseInferenceContext):
         """
         if SamplingParams is None:
             raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
-        sampling_params = SamplingParams(
-            temperature=temperature,
-            n=n,
-            # NOTE(chris): We allow the override to take precedence over the default sampling params.
-            max_tokens=max_tokens or self.sampling_params.max_tokens,
-            top_k=top_k or self.sampling_params.top_k,
-            stop=stop or self.sampling_params.stop,
-            logprobs=1,
-            include_stop_str_in_output=self.sampling_params.include_stop_str_in_output,
-            output_kind=self.sampling_params.output_kind,
-        )
+        kwargs = {
+            "temperature": temperature,
+            "n": n,
+            "max_tokens": max_tokens or self.sampling_config.max_tokens,
+            "top_k": top_k or self.sampling_config.top_k,
+            "stop": stop or self.sampling_config.stop,
+            "logprobs": 1,
+            "include_stop_str_in_output": self.sampling_config.include_stop_str_in_output,
+        }
+        if self._use_final_only and RequestOutputKind is not None:
+            kwargs["output_kind"] = RequestOutputKind.FINAL_ONLY
+        sampling_params = SamplingParams(**kwargs)
 
         # Convert prompts to message lists if they aren't already
         message_lists: list[list[Message]] = []
@@ -380,7 +419,10 @@ class vLLMInferenceContext(BaseInferenceContext):
         if TokensPrompt is None:
             raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
         prompts_for_vllm = [TokensPrompt(prompt_token_ids=tokens) for tokens in prompt_token_ids]
+        logger.info("generate: starting, %d prompts, max_tokens=%d", len(prompts_for_vllm), sampling_params.max_tokens)
+        t0 = time.time()
         outputs = self.llm.generate(prompts_for_vllm, sampling_params)
+        logger.info("generate: done in %.1fs", time.time() - t0)
 
         # Convert vLLM outputs to OpenAI ChatCompletion format
         return [self._convert_vllm_to_openai(output) for output in outputs]

@@ -133,7 +133,7 @@ def test_llama_math_integration(tmp_path):
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=opt_config,
-            rl_loss=RLOOLoss(kl_coef=0.01, clip_epsilon=0.2),
+            rl_loss=RLOOLoss(kl_coef=0.01, clip_epsilon_low=0.2, clip_epsilon_high=0.2),
             replay_buffer=ReplayBufferConfig(
                 capacity=2048,
                 alpha=3.0,

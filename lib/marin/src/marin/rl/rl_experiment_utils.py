@@ -17,15 +17,13 @@ from levanter.utils.mesh import MeshConfig
 
 from marin.execution.executor import ExecutorStep, OutputName
 from marin.rl.curriculum import CurriculumConfig
-from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
+from marin.rl.environments.inference_ctx import VLLMSamplingConfig, vLLMInferenceContextConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutTrackerConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
-
-from vllm import SamplingParams
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +86,7 @@ class RLExperimentConfig:
 
     # weight transfer
     weight_transfer_sync_interval_steps: int = 1
-    max_weight_transfer_wait_time: int = 300
+    max_weight_transfer_wait_time: int = 0
 
     # inference context
     inference_tensor_parallel_size: int = 4
@@ -192,7 +190,7 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
             max_model_len=config.max_input_tokens + config.max_output_tokens,
             tensor_parallel_size=config.inference_tensor_parallel_size,
             gpu_memory_utilization=config.inference_gpu_memory_utilization,
-            sampling_params=SamplingParams(
+            sampling_params=VLLMSamplingConfig(
                 temperature=1.0,
                 n=config.inference_n,
                 max_tokens=config.max_output_tokens,
@@ -230,5 +228,4 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
         description=f"Async RL training: {name}",
         fn=RLJob.make_step_fn(),
         config=job_config,
-        pip_dependency_groups=["vllm", "math"],
     )
