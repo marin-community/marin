@@ -18,7 +18,7 @@ This is the API documentation for the executor framework.
 ::: marin.execution.output_path_of
 ::: marin.execution.this_output_path
 ::: marin.execution.OutputName
-::: marin.execution.THIS_OUTPUT_PATH
+::: ::: marin.execution.executor.
 
 
 ## Versioning
