@@ -154,7 +154,7 @@ def test_tensorstore_gpt2_mlp():
             )
 
 
-def test_tensorstore_ok_with_nones():
+def test_tensorstore_ok_with_nones(caplog):
     with use_test_mesh():
         A = hax.Axis("A", 10)
 
@@ -170,6 +170,7 @@ def test_tensorstore_ok_with_nones():
             m3 = tree_deserialize_leaves_tensorstore(tmpdir, m2)
             assert m3.a is None
             assert hax.all(m3.b == hax.zeros(A))
+        assert "Unknown leaf type <class 'NoneType'>" not in caplog.text
 
         m3 = MyModule(a=hax.zeros(A), b=hax.ones(A))
         with TemporaryDirectory() as tmpdir:

@@ -172,7 +172,9 @@ def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Shard
                 return jax.sharding.NamedSharding(concrete_mesh, sharding.spec)
         return sharding
 
-    if is_named_array(leaf):
+    if leaf is None:
+        return None
+    elif is_named_array(leaf):
         if not is_jax_array_like(leaf.array):
             return None
         return hax.partitioning.sharding_for_axis(leaf.axes, axis_mapping, mesh)
