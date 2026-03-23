@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+from iris.cluster.providers.types import CommandResult
 from iris.cluster.tunnel import (
     TunnelConfig,
     TunnelHandle,
@@ -21,6 +22,7 @@ from iris.cluster.tunnel import (
     start_tunnel,
     stop_tunnel,
 )
+from iris.time_utils import Duration
 
 TUNNEL_MODULE = "iris.cluster.tunnel"
 
@@ -108,8 +110,6 @@ def test_find_dns_record_returns_match():
 
 def test_upsert_dns_record_creates_new():
     client = MagicMock()
-    # First call: no existing record
-    # Second call: create succeeds
     client.request.side_effect = [
         _make_cf_response([]),  # find_dns_record returns empty
         _make_cf_response({"id": "rec-new"}),  # create returns new record
@@ -142,14 +142,33 @@ def test_configure_tunnel_ingress():
 
 
 # ---------------------------------------------------------------------------
+# Fake VM for testing remote cloudflared launch
+# ---------------------------------------------------------------------------
+
+
+class FakeRemoteVM:
+    """Minimal fake implementing run_command for tunnel tests."""
+
+    def __init__(self, healthy: bool = True):
+        self.commands: list[str] = []
+        self._healthy = healthy
+
+    def run_command(self, command: str, timeout: Duration | None = None, on_line=None) -> CommandResult:
+        self.commands.append(command)
+        if "pgrep" in command and self._healthy:
+            return CommandResult(returncode=0, stdout="12345", stderr="")
+        return CommandResult(returncode=0, stdout="", stderr="")
+
+
+# ---------------------------------------------------------------------------
 # start_tunnel / stop_tunnel integration (mocked)
 # ---------------------------------------------------------------------------
 
 
-@patch(f"{TUNNEL_MODULE}._launch_cloudflared")
+@patch(f"{TUNNEL_MODULE}._launch_cloudflared_on_vm")
 @patch(f"{TUNNEL_MODULE}.httpx.Client")
 def test_start_tunnel_full_flow(mock_client_cls, mock_launch):
-    """start_tunnel creates tunnel, configures ingress, sets DNS, launches cloudflared."""
+    """start_tunnel creates tunnel, configures ingress, sets DNS, launches cloudflared on VM."""
     client = MagicMock()
     mock_client_cls.return_value.__enter__ = MagicMock(return_value=client)
     mock_client_cls.return_value.__exit__ = MagicMock(return_value=False)
@@ -163,10 +182,7 @@ def test_start_tunnel_full_flow(mock_client_cls, mock_launch):
         _make_cf_response({"id": "rec-xyz"}),  # create dns record
     ]
 
-    mock_proc = MagicMock()
-    mock_proc.pid = 12345
-    mock_launch.return_value = mock_proc
-
+    vm = FakeRemoteVM()
     config = TunnelConfig(
         enabled=True,
         domain="iris-ops.dev",
@@ -176,41 +192,39 @@ def test_start_tunnel_full_flow(mock_client_cls, mock_launch):
         cluster_name="test-cluster",
     )
 
-    handle = start_tunnel(config, controller_port=10000)
+    handle = start_tunnel(config, controller_port=10000, vm=vm)
 
     assert handle.tunnel_id == "tun-abc"
     assert handle.dns_record_id == "rec-xyz"
     assert handle.public_url == config.public_url
-    assert handle.process is mock_proc
-    mock_launch.assert_called_once()
+    mock_launch.assert_called_once_with(vm, "tunnel-token-string")
 
 
 def test_start_tunnel_validates_required_fields():
+    vm = FakeRemoteVM()
     config = TunnelConfig(enabled=True, api_token="", cloudflare_account_id="", cloudflare_zone_id="")
     with pytest.raises(ValueError, match="api_token"):
-        start_tunnel(config, controller_port=10000)
+        start_tunnel(config, controller_port=10000, vm=vm)
 
     config2 = TunnelConfig(enabled=True, api_token="tok", cloudflare_account_id="", cloudflare_zone_id="")
     with pytest.raises(ValueError, match="account_id"):
-        start_tunnel(config2, controller_port=10000)
+        start_tunnel(config2, controller_port=10000, vm=vm)
 
 
-def test_stop_tunnel_terminates_process():
-    proc = MagicMock()
-    proc.poll.return_value = None  # still running
+def test_stop_tunnel_kills_cloudflared_on_vm():
+    vm = FakeRemoteVM()
     handle = TunnelHandle(
         tunnel_id="tun-1",
         tunnel_token="tok",
         dns_record_id="rec-1",
         public_url="https://test.iris-ops.dev",
-        process=proc,
     )
     config = TunnelConfig(api_token="fake", cloudflare_account_id="acct", cloudflare_zone_id="zone")
 
-    stop_tunnel(handle, config, delete_tunnel=False)
+    stop_tunnel(handle, config, vm=vm, delete_tunnel=False)
 
-    proc.terminate.assert_called_once()
-    proc.wait.assert_called_once()
+    # Should have issued a pkill command
+    assert any("pkill" in cmd for cmd in vm.commands)
 
 
 @patch(f"{TUNNEL_MODULE}.httpx.Client")
@@ -230,10 +244,9 @@ def test_stop_tunnel_with_cleanup(mock_client_cls):
         tunnel_token="tok",
         dns_record_id="rec-1",
         public_url="https://test.iris-ops.dev",
-        process=None,
     )
     config = TunnelConfig(api_token="fake", cloudflare_account_id="acct", cloudflare_zone_id="zone")
 
-    stop_tunnel(handle, config, delete_tunnel=True)
+    stop_tunnel(handle, config, vm=None, delete_tunnel=True)
 
     assert client.request.call_count == 2

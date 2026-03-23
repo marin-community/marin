@@ -7,27 +7,36 @@ Creates a Cloudflare Tunnel and DNS CNAME so the controller dashboard is
 accessible at ``marin-<nonce>.iris-ops.dev`` without a public IP address or
 SSH port-forwarding.
 
+Architecture:
+    - Cloudflare API calls (create tunnel, DNS, get token) run **client-side**
+      (on the machine running ``iris cluster start``).
+    - ``cloudflared`` runs **inside the controller container** (installed in the
+      Docker image). The container uses ``--network=host``, so
+      ``localhost:<port>`` reaches the controller.  It is launched via
+      ``docker exec`` from the client over SSH.
+
 Lifecycle:
-    1. ``start_tunnel()`` — create tunnel, set DNS CNAME, launch ``cloudflared``.
-    2. ``stop_tunnel()``  — kill ``cloudflared``, delete DNS record, delete tunnel.
+    1. ``start_tunnel()`` — create tunnel, set DNS CNAME, launch cloudflared in container.
+    2. ``stop_tunnel()``  — kill cloudflared in container, optionally delete DNS/tunnel.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
-import subprocess
-import time
 from dataclasses import dataclass
 
 import httpx
+
+from iris.cluster.providers.types import RemoteWorkerHandle
+from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
 
 CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4"
 
-# How long to wait for cloudflared to establish the tunnel connection.
-TUNNEL_HEALTH_TIMEOUT_SECONDS = 30
+# Name of the cloudflared container on the controller VM.
+CLOUDFLARED_CONTAINER_NAME = "iris-cloudflared"
 
 
 @dataclass
@@ -66,7 +75,6 @@ class TunnelHandle:
     tunnel_token: str
     dns_record_id: str
     public_url: str
-    process: subprocess.Popen | None = None
 
 
 def _cf_headers(api_token: str) -> dict[str, str]:
@@ -120,7 +128,6 @@ def _create_tunnel(
     api_token: str,
 ) -> dict:
     """Create a new Cloudflare Tunnel. Returns the tunnel object."""
-    # Generate a tunnel secret (32 bytes, base64-encoded by Cloudflare)
     import secrets
 
     tunnel_secret = secrets.token_urlsafe(32)
@@ -273,34 +280,54 @@ def _delete_tunnel(
     logger.info("Deleted tunnel %s", tunnel_id)
 
 
-def _launch_cloudflared(tunnel_token: str) -> subprocess.Popen:
-    """Launch ``cloudflared`` as a background subprocess."""
-    cmd = [
-        "cloudflared",
-        "tunnel",
-        "--no-autoupdate",
-        "run",
-        "--token",
-        tunnel_token,
-    ]
-    logger.info("Starting cloudflared tunnel connector")
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+CONTROLLER_CONTAINER_NAME = "iris-controller"
+
+
+def _launch_cloudflared_on_vm(vm: RemoteWorkerHandle, tunnel_token: str) -> None:
+    """Launch ``cloudflared`` inside the controller container via ``docker exec``.
+
+    cloudflared is installed in the controller Docker image.  The container
+    uses ``--network=host``, so it can reach the controller at localhost.
+    """
+    # Kill any existing cloudflared inside the container
+    vm.run_command(
+        f"sudo docker exec {CONTROLLER_CONTAINER_NAME} pkill -f 'cloudflared tunnel' || true",
+        timeout=Duration.from_seconds(10),
     )
-    # Give cloudflared a moment to start and fail fast if binary is missing
-    time.sleep(2)
-    if proc.poll() is not None:
-        stderr = proc.stderr.read().decode() if proc.stderr else ""
-        raise RuntimeError(f"cloudflared exited immediately (rc={proc.returncode}): {stderr}")
-    logger.info("cloudflared started (pid=%d)", proc.pid)
-    return proc
+
+    # Launch cloudflared in the background inside the container.
+    cmd = (
+        f"sudo docker exec -d {CONTROLLER_CONTAINER_NAME} "
+        f"cloudflared tunnel --no-autoupdate run --token {tunnel_token}"
+    )
+    result = vm.run_command(cmd, timeout=Duration.from_seconds(15))
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to start cloudflared in container: {result.stderr}")
+
+    # Verify it's running
+    check = vm.run_command(
+        f"sudo docker exec {CONTROLLER_CONTAINER_NAME} pgrep -f 'cloudflared tunnel' || true",
+        timeout=Duration.from_seconds(5),
+    )
+    if not check.stdout.strip():
+        raise RuntimeError("cloudflared failed to start inside controller container")
+
+    logger.info("cloudflared started inside controller container")
 
 
-def start_tunnel(config: TunnelConfig, controller_port: int) -> TunnelHandle:
-    """Create a Cloudflare Tunnel and DNS record, then launch cloudflared.
+def _stop_cloudflared_on_vm(vm: RemoteWorkerHandle) -> None:
+    """Stop cloudflared inside the controller container."""
+    vm.run_command(
+        f"sudo docker exec {CONTROLLER_CONTAINER_NAME} pkill -f 'cloudflared tunnel' || true",
+        timeout=Duration.from_seconds(10),
+    )
+    logger.info("cloudflared stopped inside controller container")
 
+
+def start_tunnel(config: TunnelConfig, controller_port: int, vm: RemoteWorkerHandle) -> TunnelHandle:
+    """Create a Cloudflare Tunnel and DNS record, then launch cloudflared on the VM.
+
+    Cloudflare API calls run client-side; cloudflared runs on the controller VM.
     Idempotent: reuses an existing tunnel with the same name if present.
     """
     if not config.api_token:
@@ -340,8 +367,8 @@ def start_tunnel(config: TunnelConfig, controller_port: int) -> TunnelHandle:
         # 4. Upsert DNS CNAME
         dns_record_id = _upsert_dns_record(client, config.cloudflare_zone_id, fqdn, tunnel_id, config.api_token)
 
-    # 5. Launch cloudflared
-    proc = _launch_cloudflared(tunnel_token)
+    # 5. Launch cloudflared on the controller VM
+    _launch_cloudflared_on_vm(vm, tunnel_token)
 
     public_url = config.public_url
     logger.info("Tunnel active: %s", public_url)
@@ -351,31 +378,27 @@ def start_tunnel(config: TunnelConfig, controller_port: int) -> TunnelHandle:
         tunnel_token=tunnel_token,
         dns_record_id=dns_record_id,
         public_url=public_url,
-        process=proc,
     )
 
 
 def stop_tunnel(
     handle: TunnelHandle,
     config: TunnelConfig,
+    vm: RemoteWorkerHandle | None = None,
     delete_tunnel: bool = False,
 ) -> None:
-    """Stop cloudflared and optionally clean up DNS/tunnel.
+    """Stop cloudflared on the VM and optionally clean up DNS/tunnel.
 
     By default, DNS records and the tunnel are preserved so the same URL keeps
     working across controller restarts. Pass ``delete_tunnel=True`` for full
     cleanup (e.g. on ``iris cluster stop``).
     """
-    # Kill cloudflared process
-    if handle.process and handle.process.poll() is None:
-        logger.info("Stopping cloudflared (pid=%d)", handle.process.pid)
-        handle.process.terminate()
+    # Kill cloudflared on the VM
+    if vm is not None:
         try:
-            handle.process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            handle.process.kill()
-            handle.process.wait()
-        logger.info("cloudflared stopped")
+            _stop_cloudflared_on_vm(vm)
+        except Exception:
+            logger.warning("Failed to stop cloudflared on VM", exc_info=True)
 
     if not delete_tunnel:
         return

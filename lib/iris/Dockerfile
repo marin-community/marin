@@ -77,6 +77,11 @@ FROM deps AS controller
 
 LABEL org.opencontainers.image.description="Iris controller image"
 
+# cloudflared for Cloudflare Tunnel (public dashboard access without SSH)
+RUN curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+        -o /usr/local/bin/cloudflared \
+    && chmod +x /usr/local/bin/cloudflared
+
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:10000/health || exit 1
 

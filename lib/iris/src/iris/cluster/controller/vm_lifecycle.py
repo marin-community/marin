@@ -380,7 +380,7 @@ def start_controller(
         if wait_healthy(existing_vm, port, timeout=health_check_timeout):
             address = f"http://{existing_vm.internal_address}:{port}"
             logger.info("Existing controller at %s is healthy", address)
-            tunnel_handle = _maybe_start_tunnel(config, port)
+            tunnel_handle = _maybe_start_tunnel(config, port, existing_vm)
             return address, existing_vm, tunnel_handle
         logger.info("Existing controller is unhealthy, terminating and recreating")
         existing_vm.terminate()
@@ -410,7 +410,7 @@ def start_controller(
     vm.set_metadata({labels.iris_controller_address: address})
 
     # Start tunnel if configured
-    tunnel_handle = _maybe_start_tunnel(config, port)
+    tunnel_handle = _maybe_start_tunnel(config, port, vm)
 
     logger.info("Controller started at %s", address)
     if tunnel_handle:
@@ -421,13 +421,14 @@ def start_controller(
 def _maybe_start_tunnel(
     config: config_pb2.IrisClusterConfig,
     port: int,
+    vm: StandaloneWorkerHandle,
 ) -> TunnelHandle | None:
     """Start a Cloudflare Tunnel if configured. Returns None if disabled."""
     tunnel_config = _build_tunnel_config(config)
     if tunnel_config is None:
         return None
     try:
-        return start_tunnel(tunnel_config, port)
+        return start_tunnel(tunnel_config, port, vm)
     except Exception:
         logger.warning("Failed to start Cloudflare Tunnel — controller is still accessible via SSH", exc_info=True)
         return None
@@ -462,7 +463,7 @@ def restart_controller(
     if not wait_healthy(vm, port, timeout=health_check_timeout):
         raise RuntimeError(f"Controller at {address} failed health check after restart")
 
-    tunnel_handle = _maybe_start_tunnel(config, port)
+    tunnel_handle = _maybe_start_tunnel(config, port, vm)
 
     logger.info("Controller container restarted at %s", address)
     if tunnel_handle:
