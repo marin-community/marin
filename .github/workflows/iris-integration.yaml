@@ -59,7 +59,7 @@ jobs:
             sleep 1
           done
 
-          if [ -z "${IRIS_CONTROLLER_URL:-}" ]; then
+          if [ -z "${URL:-}" ]; then
             echo "Cluster failed to start within timeout"
             cat /tmp/iris-cluster.log
             exit 1
