@@ -90,12 +90,16 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
 
     # Resource configs
     inference_tpu_type = run_config.inference_tpu_type or run_config.train_tpu_type
-    # All Iris compute is preemptible — never set preemptible=False
+    # All Iris compute is preemptible — never set preemptible=False.
+    # Explicitly set regions to avoid inheriting the coordinator's region
+    # (coordinator may land in a region that has no TPU scale groups).
+    tpu_regions = ["us-central1", "us-east5"]
     train_resources = ResourceConfig.with_tpu(
         run_config.train_tpu_type,
         slice_count=run_config.num_train_slices,
+        regions=tpu_regions,
     )
-    rollout_resources = ResourceConfig.with_tpu(inference_tpu_type)
+    rollout_resources = ResourceConfig.with_tpu(inference_tpu_type, regions=tpu_regions)
 
     # Submit child jobs
     jobs: list[JobHandle] = []
