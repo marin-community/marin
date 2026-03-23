@@ -384,6 +384,9 @@ class CoreweavePlatform:
                 "nodeLabels": {
                     self._iris_labels.iris_managed: "true",
                     self._iris_labels.iris_scale_group: scale_group_name,
+                    # Pin Konnectivity agents and monitoring pods to always-on nodes
+                    # so GPU NodePools can safely scale to zero.
+                    **({"cks.coreweave.cloud/system-critical": "true"} if min_nodes > 0 else {}),
                 },
             },
         }
