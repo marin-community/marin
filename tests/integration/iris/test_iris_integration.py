@@ -13,13 +13,12 @@ import os
 import subprocess
 import time
 import uuid
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from iris.client.client import IrisClient
 from iris.cluster.config import connect_cluster, load_config, make_local_config
-from iris.cluster.constraints import ConstraintOp, region_constraint
+from iris.cluster.constraints import region_constraint
 from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.types import (
     Entrypoint,
