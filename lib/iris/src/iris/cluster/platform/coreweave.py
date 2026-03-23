@@ -207,6 +207,11 @@ class CoreweavePlatform:
                 },
                 {
                     "apiGroups": [""],
+                    "resources": ["events"],
+                    "verbs": ["get", "list", "watch"],
+                },
+                {
+                    "apiGroups": [""],
                     "resources": ["configmaps"],
                     "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
                 },
