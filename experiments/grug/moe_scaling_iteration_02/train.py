@@ -59,6 +59,7 @@ def _run_forced_cleanup(
     last_loss: float | jax.Array,
     last_step_duration: float,
     checkpointer: Any | None,
+    checkpoint_enabled: bool,
     loop_error: BaseException | None,
     run_id: str,
 ) -> None:
@@ -77,7 +78,7 @@ def _run_forced_cleanup(
         if loop_error is None:
             raise
 
-    if checkpointer is None:
+    if checkpointer is None or not checkpoint_enabled:
         return
 
     try:
@@ -100,6 +101,7 @@ class GrugTrainerConfig:
 
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(use_explicit_mesh_axes=True))
     train_batch_pspec: P = field(default_factory=lambda: P(("data", "expert")))
+    checkpoint_min_step: int = 0
     data_seed: int | None = None
     log_every: int = 1
     ema_beta: float | None = None
@@ -489,6 +491,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         profiler_num_steps = profiler_cfg.resolve_num_profile_steps(num_train_steps=trainer.num_train_steps)
         profiler_enabled = profiler_cfg.is_enabled and profiler_num_steps > 0
 
+        checkpoint_min_step = max(0, config.trainer.checkpoint_min_step)
         log_every = max(1, config.trainer.log_every)
         iterator = LoadingTimeTrackerIterator(train_loader.iter_from_step(int(state.step)))
 
@@ -570,7 +573,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
 
-                if checkpointer is not None:
+                if checkpointer is not None and int(state.step) >= checkpoint_min_step:
                     checkpointer.on_step(tree={"train_state": state}, step=int(state.step))
         except BaseException as exc:
             loop_error = exc
@@ -587,6 +590,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 last_loss=last_loss,
                 last_step_duration=last_step_duration,
                 checkpointer=checkpointer,
+                checkpoint_enabled=int(state.step) >= checkpoint_min_step,
                 loop_error=loop_error,
                 run_id=run_id,
             )

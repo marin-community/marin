@@ -32,6 +32,7 @@ TRAIN_STEPS = 17822
 TRAIN_PER_DEVICE_PARALLELISM = 2
 EVAL_PER_DEVICE_PARALLELISM = 1
 EVAL_BATCH_SIZE = 128
+CHECKPOINT_MIN_STEP = TRAIN_STEPS + 1
 MAX_RETRIES_FAILURE = 25
 RUN_ID = "isoflop-moe-adamh-gatednorm-v5p64-r2-1e20-d1536-retry25"
 GROUP = "isoflop-moe-adamh-gatednorm-v5p64-r2"
@@ -111,6 +112,7 @@ def create_scaleup_step() -> ExecutorStep:
                 f"batch_size={TRAIN_BATCH_SIZE}",
                 f"train_steps={TRAIN_STEPS}",
                 f"max_retries_failure={MAX_RETRIES_FAILURE}",
+                f"checkpoint_min_step={CHECKPOINT_MIN_STEP}",
                 f"per_device_parallelism={TRAIN_PER_DEVICE_PARALLELISM}",
                 f"per_device_eval_parallelism={EVAL_PER_DEVICE_PARALLELISM}",
                 f"eval_batch_size={EVAL_BATCH_SIZE}",
@@ -139,6 +141,7 @@ def create_scaleup_step() -> ExecutorStep:
                     per_device_parallelism=TRAIN_PER_DEVICE_PARALLELISM,
                     per_device_eval_parallelism=EVAL_PER_DEVICE_PARALLELISM,
                 ),
+                checkpoint_min_step=CHECKPOINT_MIN_STEP,
                 z_loss_weight=1e-4,
                 ema_beta=None,
                 log_every=1,

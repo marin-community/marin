@@ -416,6 +416,11 @@ class _RecordingCheckpointer:
         self.calls.append(("wait_until_finished",))
 
 
+class _NoopCleanupRunner:
+    def run(self, *args, **kwargs):
+        return None
+
+
 def test_grug_iteration_02_forced_cleanup_raises_without_loop_error() -> None:
     train_module = importlib.import_module("experiments.grug.moe_scaling_iteration_02.train")
 
@@ -427,6 +432,7 @@ def test_grug_iteration_02_forced_cleanup_raises_without_loop_error() -> None:
             last_loss=0.0,
             last_step_duration=0.0,
             checkpointer=_RecordingCheckpointer(),
+            checkpoint_enabled=True,
             loop_error=None,
             run_id="test-cleanup-no-loop-error",
         )
@@ -443,6 +449,7 @@ def test_grug_iteration_02_forced_cleanup_preserves_loop_error(caplog: pytest.Lo
         last_loss=0.0,
         last_step_duration=0.0,
         checkpointer=checkpointer,
+        checkpoint_enabled=True,
         loop_error=RuntimeError("original train loop failure"),
         run_id="test-cleanup-with-loop-error",
     )
@@ -453,6 +460,24 @@ def test_grug_iteration_02_forced_cleanup_preserves_loop_error(caplog: pytest.Lo
     assert checkpointer.calls[0][1] == 11
     assert checkpointer.calls[0][2] is True
     assert checkpointer.calls[1] == ("wait_until_finished",)
+
+
+def test_grug_iteration_02_forced_cleanup_skips_checkpoint_when_disabled() -> None:
+    train_module = importlib.import_module("experiments.grug.moe_scaling_iteration_02.train")
+
+    checkpointer = _RecordingCheckpointer()
+    train_module._run_forced_cleanup(
+        state_callbacks=_NoopCleanupRunner(),
+        state=SimpleNamespace(step=jnp.array(13)),
+        last_loss=0.0,
+        last_step_duration=0.0,
+        checkpointer=checkpointer,
+        checkpoint_enabled=False,
+        loop_error=None,
+        run_id="test-cleanup-checkpoint-disabled",
+    )
+
+    assert checkpointer.calls == []
 
 
 def test_grug_iteration_02_v4_256_scaleup_launcher_bakes_expected_schedule() -> None:
@@ -549,6 +574,8 @@ def test_grug_iteration_02_v5p64_1e20_d1536_launcher_schedule_is_valid() -> None
     assert config.batch_size.value == 256
     assert isinstance(config.steps, VersionedValue)
     assert config.steps.value == 17822
+    assert isinstance(config.grug_trainer, VersionedValue)
+    assert config.grug_trainer.value.checkpoint_min_step == 17823
     assert isinstance(config.grug_trainer, VersionedValue)
     assert config.grug_trainer.value.trainer.per_device_parallelism == 2
     assert config.grug_trainer.value.trainer.per_device_eval_parallelism == 1
