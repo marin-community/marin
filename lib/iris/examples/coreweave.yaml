@@ -29,7 +29,7 @@
 #   export KUBECONFIG=~/.kube/coreweave-iris
 
 platform:
-  label_prefix: iris-cw-dev
+  label_prefix: coreweave
   coreweave:
     region: US-WEST-04A
     namespace: iris
@@ -37,7 +37,7 @@ platform:
     object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
 
 storage:
-  remote_state_dir: s3://marin-na/iris/coreweave-dev/state
+  remote_state_dir: s3://marin-na/iris/coreweave/state
 
 kubernetes_provider:
   namespace: iris
@@ -85,8 +85,8 @@ scale_groups:
       attributes:
         region: US-WEST-04A
         pool: cpu-erapids
-    min_slices: 2
-    max_slices: 2
+    min_slices: 1
+    max_slices: 4
     priority: 50
     slice_template:
       num_vms: 1
