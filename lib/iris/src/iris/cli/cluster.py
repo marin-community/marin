@@ -300,10 +300,10 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
     _build_cluster_images(config, verbose=verbose)
 
     iris_config = IrisConfig(config)
-    platform = iris_config.platform()
+    bundle = iris_config.provider_bundle()
 
     try:
-        platform.stop_all(config)
+        bundle.controller.stop_all(config)
     except Exception:
         click.echo("No existing cluster to stop, continuing")
 
@@ -314,7 +314,7 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
             clear_remote_state(remote_state_dir)
 
     click.echo("Starting controller...")
-    address = platform.start_controller(config)
+    address = bundle.controller.start_controller(config)
     click.echo(f"Controller at {address}")
 
     stop_event = threading.Event()
@@ -323,7 +323,7 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
         signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
 
     try:
-        with platform.tunnel(address) as url:
+        with bundle.controller.tunnel(address) as url:
             click.echo(f"Tunnel ready: {url}")
 
             client = cluster_connect.ControllerServiceClientSync(url, timeout_ms=30000)

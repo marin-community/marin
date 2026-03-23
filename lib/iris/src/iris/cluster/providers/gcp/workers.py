@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import threading
+from collections.abc import Callable
 import time
 import urllib.error
 import urllib.request
@@ -49,6 +50,24 @@ from iris.rpc import config_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
+
+
+def _spawn_bootstrap_thread(
+    handle: GcpSliceHandle | GcpVmSliceHandle,
+    bootstrap_fn: Callable[[], None],
+) -> None:
+    """Launch a daemon thread that runs bootstrap_fn, marking the handle FAILED on error."""
+
+    def _run():
+        try:
+            bootstrap_fn()
+        except Exception as e:
+            logger.error("Bootstrap failed for slice %s: %s", handle.slice_id, e)
+            with handle._bootstrap_lock:
+                handle._bootstrap_state = CloudSliceState.FAILED
+
+    threading.Thread(target=_run, name=f"bootstrap-{handle.slice_id}", daemon=True).start()
+
 
 DEFAULT_MACHINE_TYPE = "n2-standard-4"
 DEFAULT_BOOT_DISK_SIZE_GB = 50
@@ -291,20 +310,10 @@ class GcpWorkerProvider:
         )
 
         if worker_config:
-
-            def _bootstrap_worker():
-                try:
-                    _run_tpu_bootstrap(self._gcp, self._project_id, handle, worker_config)
-                except Exception as e:
-                    logger.error("Bootstrap failed for slice %s: %s", handle.slice_id, e)
-                    with handle._bootstrap_lock:
-                        handle._bootstrap_state = CloudSliceState.FAILED
-
-            threading.Thread(
-                target=_bootstrap_worker,
-                name=f"bootstrap-{handle.slice_id}",
-                daemon=True,
-            ).start()
+            _spawn_bootstrap_thread(
+                handle,
+                lambda: _run_tpu_bootstrap(self._gcp, self._project_id, handle, worker_config),
+            )
 
         return handle
 
@@ -365,20 +374,10 @@ class GcpWorkerProvider:
         )
 
         if worker_config:
-
-            def _bootstrap_worker():
-                try:
-                    _run_vm_slice_bootstrap(self._gcp, handle, worker_config)
-                except Exception as e:
-                    logger.error("Bootstrap failed for VM slice %s: %s", handle.slice_id, e)
-                    with handle._bootstrap_lock:
-                        handle._bootstrap_state = CloudSliceState.FAILED
-
-            threading.Thread(
-                target=_bootstrap_worker,
-                name=f"bootstrap-{handle.slice_id}",
-                daemon=True,
-            ).start()
+            _spawn_bootstrap_thread(
+                handle,
+                lambda: _run_vm_slice_bootstrap(self._gcp, handle, worker_config),
+            )
 
         return handle
 
