@@ -321,3 +321,49 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     ]
     for key in required_keys:
         assert key in summary
+
+
+def test_great_10t_first_k_dense_sweep_generates_valid_configs():
+    """Verify the first-k-dense isoflop sweep produces well-formed configs."""
+    from experiments.grug.moe.great_10t_first_k_dense import (
+        ALL_STEPS,
+        FLOP_BUDGETS,
+        HIDDEN_DIMS,
+        NUM_DENSE_LAYERS_VALUES,
+        _build_model_config,
+        _compute_num_layers,
+        _flops_per_token_for_config,
+    )
+
+    # Must generate at least one step per budget.
+    assert len(ALL_STEPS) > len(FLOP_BUDGETS)
+
+    # Verify no duplicate step names.
+    names = [s.name for s in ALL_STEPS]
+    assert len(names) == len(set(names)), f"Duplicate step names: {[n for n in names if names.count(n) > 1]}"
+
+    # Check that every generated config is valid and has positive batch/steps.
+    for step in ALL_STEPS:
+        cfg = step.config
+        assert cfg.batch_size > 0
+        assert cfg.steps > 0
+        model = cfg.model
+        assert model.num_dense_layers <= model.num_layers
+        assert model.num_dense_layers in NUM_DENSE_LAYERS_VALUES or model.num_dense_layers < max(NUM_DENSE_LAYERS_VALUES)
+
+    # Verify dense layers that exceed num_layers are skipped.
+    for hidden_dim in HIDDEN_DIMS:
+        num_layers = _compute_num_layers(hidden_dim)
+        for nd in NUM_DENSE_LAYERS_VALUES:
+            if nd > num_layers:
+                matching = [s for s in ALL_STEPS if s.config.model.hidden_dim == hidden_dim and f"dense{nd}" in s.name]
+                assert len(matching) == 0, f"Should skip dense{nd} for hidden_dim={hidden_dim} (layers={num_layers})"
+
+    # Spot-check: num_dense_layers=0 model should have same FLOPs as baseline.
+    baseline = _build_model_config(1024, 0)
+    with_dense = _build_model_config(1024, 2)
+    assert baseline.num_dense_layers == 0
+    assert with_dense.num_dense_layers == 2
+    # Different num_dense_layers should yield different FLOP counts
+    # (dense layers have no router overhead and no shared expert).
+    assert _flops_per_token_for_config(baseline) != _flops_per_token_for_config(with_dense)
