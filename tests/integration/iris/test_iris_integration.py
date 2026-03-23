@@ -3,9 +3,8 @@
 
 """Iris integration tests exercising job lifecycle, scheduling, and cluster features.
 
-These tests replace the "cloud smoke test" and run against either a local in-process
-cluster (default) or an existing controller via --controller-url. No dashboard
-screenshots are taken here; those remain in lib/iris/tests/e2e/test_smoke.py.
+These tests run against an existing controller specified via --controller-url.
+No dashboard screenshots are taken here; those remain in lib/iris/tests/e2e/test_smoke.py.
 """
 
 import logging

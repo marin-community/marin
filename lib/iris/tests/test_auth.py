@@ -2,37 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """Auth tests for Iris controller with static token authentication."""
 
-from pathlib import Path
-
 import pytest
-from iris.cluster.config import load_config, make_local_config
 from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
-IRIS_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
+from .conftest import _make_controller_only_config
 
 _AUTH_TOKEN = "e2e-test-token"
 _AUTH_USER = "test-user"
-
-
-def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
-    """Build a local config with no auto-scaled workers."""
-    config = load_config(DEFAULT_CONFIG)
-    config.scale_groups.clear()
-    sg = config.scale_groups["placeholder"]
-    sg.name = "placeholder"
-    sg.num_vms = 1
-    sg.min_slices = 0
-    sg.max_slices = 0
-    sg.resources.cpu_millicores = 1000
-    sg.resources.memory_bytes = 1 * 1024**3
-    sg.resources.disk_bytes = 10 * 1024**3
-    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
-    sg.slice_template.local.SetInParent()
-    return make_local_config(config)
 
 
 def _login_for_jwt(url: str, identity_token: str) -> str:
