@@ -8,11 +8,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pandas as pd
-
 from experiments.domain_phase_mix.config import WeightConfig
 from experiments.domain_phase_mix.nextgen.import_sources import NamedWandbRunImportSource
 from experiments.domain_phase_mix.nextgen.utils import normalize_phase_weights
+from experiments.domain_phase_mix.two_phase_many_observed_runs import load_two_phase_many_phase_weights
 
 DSRE_BASELINES_SOURCE_EXPERIMENT = "pinlin_calvin_xu/data_mixture/ngd3dm2_dsre_bpb"
 DSRE_OBJECTIVE_METRIC = "lm_eval/mmlu_5shot/bpb"
@@ -30,8 +29,6 @@ DSRE_OBSERVED_CONSENSUS_ACTUAL_BPB = 2.16427828392407
 _THIS_DIR = Path(__file__).resolve().parent
 _EXPLORATORY_DIR = _THIS_DIR / "exploratory" / "two_phase_many"
 _ENSEMBLE_CANDIDATES_PATH = _EXPLORATORY_DIR / "dsre_ceq_debug" / "dsre_ceq_ensemble_candidates.json"
-_TWO_PHASE_MANY_CSV_PATH = _EXPLORATORY_DIR / "two_phase_many.csv"
-_PHASE_PREFIXES = ("phase_0_", "phase_1_")
 
 
 def _load_ensemble_phase_weights() -> dict[str, dict[str, float]]:
@@ -43,28 +40,8 @@ def _load_ensemble_phase_weights() -> dict[str, dict[str, float]]:
     return normalize_phase_weights(mean_phase_weights)
 
 
-def _load_phase_weights_from_observed_run(run_name: str) -> dict[str, dict[str, float]]:
-    frame = pd.read_csv(_TWO_PHASE_MANY_CSV_PATH)
-    matched = frame.loc[frame["run_name"] == run_name]
-    if len(matched) != 1:
-        raise ValueError(f"Expected exactly one row for observed run {run_name!r}, found {len(matched)}")
-
-    row = matched.iloc[0]
-    phase_weights: dict[str, dict[str, float]] = {"phase_0": {}, "phase_1": {}}
-    for prefix in _PHASE_PREFIXES:
-        phase_name = prefix.removesuffix("_")
-        for column, value in row.items():
-            if not column.startswith(prefix):
-                continue
-            if pd.isna(value):
-                continue
-            domain_name = column.removeprefix(prefix)
-            phase_weights[phase_name][domain_name] = float(value)
-    return normalize_phase_weights(phase_weights)
-
-
 DSRE_ENSEMBLE_PHASE_WEIGHTS = _load_ensemble_phase_weights()
-DSRE_OBSERVED_CONSENSUS_PHASE_WEIGHTS = _load_phase_weights_from_observed_run(DSRE_OBSERVED_CONSENSUS_SOURCE_RUN_NAME)
+DSRE_OBSERVED_CONSENSUS_PHASE_WEIGHTS = load_two_phase_many_phase_weights(DSRE_OBSERVED_CONSENSUS_SOURCE_RUN_NAME)
 
 
 def create_dsre_ensemble_weight_config(run_id: int = DSRE_ENSEMBLE_RUN_ID) -> WeightConfig:
