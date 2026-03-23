@@ -43,6 +43,7 @@ import fsspec.core
 
 from iris.cluster.config import IrisConfig, load_config
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.platform.coreweave import configure_client_s3
 from iris.rpc import cluster_connect, cluster_pb2
 
 logger = logging.getLogger("controller-restart")
@@ -57,7 +58,7 @@ def trigger_checkpoint(controller_url: str) -> cluster_pb2.Controller.BeginCheck
     """Call BeginCheckpoint RPC on the running controller."""
     client = cluster_connect.ControllerServiceClientSync(controller_url)
     try:
-        return client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest())
+        return client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest(), timeout_ms=60_000)
     finally:
         client.close()
 
@@ -71,7 +72,7 @@ def verify_controller_health(controller_url: str, timeout_sec: float = 120) -> b
         try:
             client = cluster_connect.ControllerServiceClientSync(controller_url)
             try:
-                resp = client.get_process_status(cluster_pb2.GetProcessStatusRequest())
+                resp = client.get_process_status(cluster_pb2.GetProcessStatusRequest(), timeout_ms=10_000)
                 click.echo(f"  Healthy: process up, pid={resp.process_info.pid}")
                 return True
             finally:
@@ -103,12 +104,7 @@ def main(
     )
 
     config = load_config(Path(config_path))
-
-    # Configure S3 env vars for fsspec (R2 → AWS mapping) so checkpoint
-    # verification works for s3:// storage URIs.
-    from iris.cli.main import _configure_client_s3
-
-    _configure_client_s3(config)
+    configure_client_s3(config)
 
     iris_config = IrisConfig(config)
     platform = iris_config.platform()
