@@ -67,6 +67,7 @@ class GrugModelConfig:
     load_balancing_loss_coef: float | None = 0.01
     router_z_loss_coef: float | None = 0.001
     moe_implementation: MoeImplementation | None = None
+    sliding_window: int | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -92,6 +93,8 @@ class GrugModelConfig:
             raise ValueError("load_balancing_loss_coef must be non-negative when set")
         if self.router_z_loss_coef is not None and self.router_z_loss_coef < 0:
             raise ValueError("router_z_loss_coef must be non-negative when set")
+        if self.sliding_window is not None and self.sliding_window <= 0:
+            raise ValueError(f"sliding_window must be positive when set, got {self.sliding_window}")
 
     @property
     def inferred_head_dim(self) -> int:
@@ -419,7 +422,7 @@ class Transformer(eqx.Module):
         mask: AttentionMask | jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
-            mask = AttentionMask.causal()
+            mask = AttentionMask.causal(sliding_window=self.config.sliding_window)
 
         batch_spec = _batch_spec()
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
