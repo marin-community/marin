@@ -1111,12 +1111,10 @@ class Autoscaler:
                 wc.gpu_count = resources.device_count
             wc.preemptible = resources.preemptible
 
-        # Worker settings from scale group
+        # Worker attributes from scale group
         if group.config.HasField("worker"):
             for k, v in group.config.worker.attributes.items():
                 wc.worker_attributes[k] = v
-            for k, v in group.config.worker.env.items():
-                wc.default_task_env[k] = v
 
         if group.config.name:
             wc.worker_attributes["scale-group"] = group.config.name
