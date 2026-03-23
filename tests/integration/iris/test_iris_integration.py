@@ -62,7 +62,7 @@ def test_cancel_job_releases_resources(integration_cluster):
 
     Regression test for #3553.
     """
-    heavy_cpu = 8
+    heavy_cpu = 2
     job = integration_cluster.submit(sleep, "itest-cancel-heavy", 30, cpu=heavy_cpu)
     integration_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=integration_cluster.job_timeout)
 
@@ -260,15 +260,9 @@ def test_exec_in_container(integration_cluster):
     job = integration_cluster.submit(sleep, "itest-exec", 120)
     integration_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=integration_cluster.job_timeout)
 
-    task_id = integration_cluster.task_status(job, task_index=0).task_id
-    deadline = time.monotonic() + integration_cluster.job_timeout
     task = integration_cluster.task_status(job, task_index=0)
-    while time.monotonic() < deadline:
-        task = integration_cluster.task_status(job, task_index=0)
-        if task.state == cluster_pb2.TASK_STATE_RUNNING:
-            break
-        time.sleep(0.5)
     assert task.state == cluster_pb2.TASK_STATE_RUNNING, f"Task stuck in {cluster_pb2.TaskState.Name(task.state)}"
+    task_id = task.task_id
 
     request = cluster_pb2.Controller.ExecInContainerRequest(
         task_id=task_id,

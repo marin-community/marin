@@ -70,6 +70,7 @@ jobs:
           uv run pytest tests/integration/iris/ \
             --controller-url "$IRIS_CONTROLLER_URL" \
             -v --tb=short --timeout=600 \
+            -o "addopts=" \
             -x
         env:
           WANDB_MODE: disabled
