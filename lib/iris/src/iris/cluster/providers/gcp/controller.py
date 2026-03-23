@@ -62,7 +62,7 @@ class GcpControllerProvider:
         return f"{vms[0].internal_address}:{port}"
 
     def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
-        address, _vm = vm_start_controller(
+        address, _vm, _tunnel = vm_start_controller(
             self.worker_provider,
             config,
             resolve_image=self.worker_provider.resolve_image,
@@ -70,7 +70,7 @@ class GcpControllerProvider:
         return address
 
     def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
-        address, _vm = vm_restart_controller(
+        address, _vm, _tunnel = vm_restart_controller(
             self.worker_provider,
             config,
             resolve_image=self.worker_provider.resolve_image,

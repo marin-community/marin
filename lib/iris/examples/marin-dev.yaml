@@ -25,6 +25,13 @@ storage:
 
 worker_provider: {}
 
+tunnel:
+  enabled: true
+  domain: iris-ops.dev
+  cloudflare_account_id: a5a1f66f973e2196a26bae21c81b899b
+  cloudflare_zone_id: 724e28dbaf5c4dc5c21424dbe56fc2f1
+  cloudflare_api_token_secret: CLOUDFLARE_IRIS_API_TOKEN
+
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   gcp:

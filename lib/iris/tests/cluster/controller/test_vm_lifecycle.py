@@ -221,7 +221,7 @@ def test_start_controller_fresh(config):
     new_vm = FakeWorkerHandle(vm_id="ctrl-new", internal_address="10.0.0.5")
     platform = FakePlatform(existing_vms=[], vm_to_create=new_vm)
 
-    address, vm = start_controller(platform, config)
+    address, vm, _tunnel = start_controller(platform, config)
 
     assert address == "http://10.0.0.5:10000"
     assert vm is new_vm
@@ -236,7 +236,7 @@ def test_start_controller_reuses_healthy_existing(config):
     existing = FakeWorkerHandle(vm_id="ctrl-existing", internal_address="10.0.0.2")
     platform = FakePlatform(existing_vms=[existing])
 
-    address, vm = start_controller(platform, config)
+    address, vm, _tunnel = start_controller(platform, config)
 
     assert address == "http://10.0.0.2:10000"
     assert vm is existing
@@ -251,7 +251,7 @@ def test_start_controller_replaces_unhealthy_existing(config):
     replacement = FakeWorkerHandle(vm_id="ctrl-new", internal_address="10.0.0.6")
     platform = FakePlatform(existing_vms=[unhealthy], vm_to_create=replacement)
 
-    address, vm = start_controller(platform, config, health_check_timeout=_TEST_HEALTH_CHECK_TIMEOUT)
+    address, vm, _tunnel = start_controller(platform, config, health_check_timeout=_TEST_HEALTH_CHECK_TIMEOUT)
 
     assert unhealthy.terminated
     assert vm is replacement

@@ -402,6 +402,18 @@ message KubernetesProviderConfig {
 }
 
 // ============================================================================
+// TUNNEL CONFIGURATION (Cloudflare Tunnel for public access)
+// ============================================================================
+
+message TunnelConfig {
+  bool enabled = 1;
+  string domain = 2;                         // Base domain, e.g. "iris-ops.dev"
+  string cloudflare_account_id = 3;          // Cloudflare account ID
+  string cloudflare_zone_id = 4;             // Cloudflare zone ID for the domain
+  string cloudflare_api_token_secret = 5;    // GCP Secret Manager secret name for API token
+}
+
+// ============================================================================
 // ROOT CLUSTER CONFIGURATION
 // ============================================================================
 
@@ -423,6 +435,9 @@ message IrisClusterConfig {
 
   // Authentication (optional — when absent, no auth is required)
   AuthConfig auth = 60;
+
+  // Cloudflare Tunnel (optional — when absent, no public URL)
+  TunnelConfig tunnel = 65;
 
   // Task provider — required. Exactly one must be set.
   oneof provider {
