@@ -362,7 +362,7 @@ The platform detects fatal errors before the full timeout expires:
 ### Cluster startup (`iris cluster start`)
 
 `CoreweavePlatform.start_controller()` orchestrates the full startup sequence.
-See `lib/iris/src/iris/cluster/platform/coreweave.py`.
+See `lib/iris/src/iris/providers/k8s/coreweave.py`.
 
 1. Apply RBAC prerequisites (Namespace, ServiceAccount, ClusterRole `iris-controller-{ns}`, ClusterRoleBinding `iris-controller-{ns}`)
 2. Create S3 credentials Secret (if S3 storage configured)
@@ -579,8 +579,8 @@ instantly. Fix in config and redeploy.
 
 | File | Description |
 |------|-------------|
-| `lib/iris/src/iris/cluster/platform/coreweave.py` | CoreWeave platform implementation (includes `ensure_rbac()`) |
+| `lib/iris/src/iris/providers/k8s/coreweave.py` | CoreWeave platform implementation (includes `ensure_rbac()`) |
 | `lib/iris/src/iris/cluster/runtime/kubernetes.py` | KubernetesRuntime (Pod-per-task) |
-| `lib/iris/src/iris/cluster/k8s/kubectl.py` | Kubectl CLI wrapper |
+| `lib/iris/src/iris/providers/k8s/service.py` | Kubectl CLI wrapper |
 | `lib/iris/examples/coreweave.yaml` | Example cluster config |
 | `lib/iris/AGENTS.md` | CoreWeave integration notes for agents |

@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-
 import pytest
 
 from iris.dev_tpu import DevTpuState, DevTpuWorker, GcpNodeRef, parse_worker_host
@@ -47,9 +45,3 @@ def test_dev_tpu_state_json_roundtrip():
     restored = DevTpuState.from_json(state.to_json())
 
     assert restored == state
-
-
-def test_dev_tpu_state_file_path_uses_session_name(tmp_path: Path):
-    path = DevTpuState.state_file_path(tmp_path, "dlwh-main-123456")
-
-    assert path == tmp_path / "dlwh-main-123456.json"

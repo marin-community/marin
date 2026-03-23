@@ -13,7 +13,6 @@ from iris.rpc import cluster_pb2, logging_pb2
 from iris.time_utils import Timestamp
 
 from .conftest import (
-    make_controller_state,
     make_direct_job_request,
     query_attempt,
     query_task,
@@ -51,9 +50,8 @@ class FakeDirectProvider:
 # =============================================================================
 
 
-def test_drain_pending_creates_attempt_rows():
+def test_drain_pending_creates_attempt_rows(state):
     """Pending tasks are promoted to ASSIGNED with NULL worker_id and an attempt row is created."""
-    state = make_controller_state()
     [task_id] = submit_direct_job(state, "drain-pending")
 
     task_before = query_task(state, task_id)
@@ -74,9 +72,8 @@ def test_drain_pending_creates_attempt_rows():
     assert attempt.worker_id is None
 
 
-def test_drain_skips_already_assigned():
+def test_drain_skips_already_assigned(state):
     """Already ASSIGNED tasks appear in running_tasks, not tasks_to_run."""
-    state = make_controller_state()
     [task_id] = submit_direct_job(state, "drain-skip")
 
     # First drain promotes to ASSIGNED.
@@ -91,9 +88,8 @@ def test_drain_skips_already_assigned():
     assert batch2.running_tasks[0].task_id == task_id
 
 
-def test_drain_kill_queue():
+def test_drain_kill_queue(state):
     """Kill requests buffered via buffer_direct_kill appear in tasks_to_kill."""
-    state = make_controller_state()
     [task_id] = submit_direct_job(state, "drain-kill")
 
     # Promote to ASSIGNED first.
@@ -110,9 +106,8 @@ def test_drain_kill_queue():
 # =============================================================================
 
 
-def test_apply_running():
+def test_apply_running(state):
     """ASSIGNED -> RUNNING via direct provider update."""
-    state = make_controller_state()
     [task_id] = submit_direct_job(state, "apply-running")
     batch = state.drain_for_direct_provider()
     attempt_id = batch.tasks_to_run[0].attempt_id
@@ -128,9 +123,8 @@ def test_apply_running():
     assert not result.tasks_to_kill
 
 
-def test_apply_succeeded():
+def test_apply_succeeded(state):
     """RUNNING -> SUCCEEDED via direct provider update."""
-    state = make_controller_state()
     [task_id] = submit_direct_job(state, "apply-succeeded")
     batch = state.drain_for_direct_provider()
     attempt_id = batch.tasks_to_run[0].attempt_id
@@ -154,9 +148,8 @@ def test_apply_succeeded():
     assert task.exit_code == 0
 
 
-def test_apply_failed_with_retry():
+def test_apply_failed_with_retry(state):
     """FAILED with retries remaining returns task to PENDING."""
-    state = make_controller_state()
     jid = JobName.root("test-user", "retry-job")
     req = make_direct_job_request("retry-job")
     req.max_retries_failure = 2
@@ -187,9 +180,8 @@ def test_apply_failed_with_retry():
     assert task.failure_count == 1
 
 
-def test_apply_failed_no_retry():
+def test_apply_failed_no_retry(state):
     """FAILED with no retries remaining stays terminal."""
-    state = make_controller_state()
     jid = JobName.root("test-user", "no-retry-job")
     req = make_direct_job_request("no-retry-job")
     req.max_retries_failure = 0
@@ -219,9 +211,8 @@ def test_apply_failed_no_retry():
     assert task.failure_count == 1
 
 
-def test_apply_worker_failed_from_running_retries():
+def test_apply_worker_failed_from_running_retries(state):
     """WORKER_FAILED from RUNNING with retries remaining returns to PENDING."""
-    state = make_controller_state()
     jid = JobName.root("test-user", "wf-retry")
     req = make_direct_job_request("wf-retry")
     req.max_retries_preemption = 5
@@ -251,9 +242,8 @@ def test_apply_worker_failed_from_running_retries():
     assert task.preemption_count == 1
 
 
-def test_apply_worker_failed_from_assigned():
+def test_apply_worker_failed_from_assigned(state):
     """WORKER_FAILED from ASSIGNED returns to PENDING without incrementing preemption_count."""
-    state = make_controller_state()
     [task_id] = submit_direct_job(state, "wf-assigned")
     batch = state.drain_for_direct_provider()
     attempt_id = batch.tasks_to_run[0].attempt_id
@@ -270,9 +260,8 @@ def test_apply_worker_failed_from_assigned():
     assert task.preemption_count == 0
 
 
-def test_buffer_direct_kill():
+def test_buffer_direct_kill(state):
     """buffer_direct_kill inserts a kill entry with NULL worker_id."""
-    state = make_controller_state()
     state.buffer_direct_kill("some-task-id")
 
     rows = state._db.fetchall(
@@ -290,9 +279,8 @@ def test_buffer_direct_kill():
 # =============================================================================
 
 
-def test_drain_multiple_tasks():
+def test_drain_multiple_tasks(state):
     """Multiple pending tasks are all promoted in a single drain call."""
-    state = make_controller_state()
     task_ids = submit_direct_job(state, "multi-task", replicas=3)
     assert len(task_ids) == 3
 
@@ -304,9 +292,8 @@ def test_drain_multiple_tasks():
     assert promoted_ids == expected_ids
 
 
-def test_apply_ignores_stale_attempt():
+def test_apply_ignores_stale_attempt(state):
     """Updates with a mismatched attempt_id are silently skipped."""
-    state = make_controller_state()
     [task_id] = submit_direct_job(state, "stale-attempt")
     batch = state.drain_for_direct_provider()
     attempt_id = batch.tasks_to_run[0].attempt_id
@@ -324,9 +311,8 @@ def test_apply_ignores_stale_attempt():
     assert not result.tasks_to_kill
 
 
-def test_apply_ignores_finished_task():
+def test_apply_ignores_finished_task(state):
     """Updates to already-finished tasks are silently skipped."""
-    state = make_controller_state()
     [task_id] = submit_direct_job(state, "finished-task")
     batch = state.drain_for_direct_provider()
     attempt_id = batch.tasks_to_run[0].attempt_id

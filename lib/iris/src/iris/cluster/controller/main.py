@@ -65,9 +65,9 @@ def serve(
     from iris.cluster.controller.autoscaler import Autoscaler
     from iris.cluster.controller.checkpoint import download_checkpoint_to_local
     from iris.cluster.controller.db import ControllerDB
-    from iris.cluster.k8s.provider import KubernetesProvider
+    from iris.cluster.providers.k8s.tasks import K8sTaskProvider
     from iris.cluster.config import load_config, create_autoscaler, make_provider
-    from iris.cluster.platform.factory import create_platform
+    from iris.cluster.providers.factory import create_provider_bundle
 
     configure_logging(level=getattr(logging, log_level))
 
@@ -127,23 +127,26 @@ def serve(
     # --- Create autoscaler (only for WorkerProvider; KubernetesProvider manages its own pods) ---
     autoscaler: Autoscaler | None = None
     base_worker_config = None
-    if not isinstance(provider, KubernetesProvider):
+    if not isinstance(provider, K8sTaskProvider):
         try:
-            platform = create_platform(
+            bundle = create_provider_bundle(
                 platform_config=cluster_config.platform,
                 ssh_config=cluster_config.defaults.ssh,
             )
-            logger.info("Platform created")
+            workers = bundle.workers
+            logger.info("Provider bundle created")
 
             if cluster_config.defaults.worker.docker_image:
                 base_worker_config = config_pb2.WorkerConfig()
                 base_worker_config.CopyFrom(cluster_config.defaults.worker)
                 if not base_worker_config.controller_address:
-                    base_worker_config.controller_address = platform.discover_controller(cluster_config.controller)
+                    base_worker_config.controller_address = bundle.controller.discover_controller(
+                        cluster_config.controller
+                    )
                 base_worker_config.platform.CopyFrom(cluster_config.platform)
 
             autoscaler = create_autoscaler(
-                platform=platform,
+                platform=workers,
                 autoscaler_config=cluster_config.defaults.autoscaler,
                 scale_groups=cluster_config.scale_groups,
                 label_prefix=cluster_config.platform.label_prefix or "iris",
@@ -155,7 +158,7 @@ def serve(
             # Restore autoscaler state (tracked slices/workers/backoff) from the DB
             # so restarted controllers don't lose cloud resource tracking and
             # scale up duplicates.
-            autoscaler.restore_from_db(db, platform)
+            autoscaler.restore_from_db(db, workers)
             logger.info("Autoscaler state restored from DB")
         except Exception as e:
             logger.exception("Failed to create autoscaler from config")

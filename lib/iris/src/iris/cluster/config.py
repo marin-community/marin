@@ -25,7 +25,8 @@ import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.k8s.provider import KubernetesProvider
+from iris.cluster.providers.k8s.tasks import K8sTaskProvider
+from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.types import parse_memory_string
 from iris.managed_thread import ThreadContainer, get_thread_container
@@ -261,10 +262,10 @@ def _validate_worker_settings(config: config_pb2.IrisClusterConfig) -> None:
 def _derive_slice_config_from_resources(config: config_pb2.IrisClusterConfig) -> None:
     """Derive SliceConfig fields from ScaleGroupResources.
 
-    Platform modules (gcp.py, local.py) read accelerator_type, accelerator_variant,
+    Provider modules (gcp.py, local.py) read accelerator_type, accelerator_variant,
     preemptible, and gpu_count from SliceConfig when calling cloud APIs. These fields
     are now the canonical source in resources; this function populates SliceConfig
-    so platform modules continue to work without modification.
+    so provider modules continue to work without modification.
 
     Also derives disk_size_gb from resources.disk_bytes.
     """
@@ -960,7 +961,7 @@ class ScaleGroupSpec:
 class IrisConfig:
     """Lightweight wrapper for IrisClusterConfig proto with component factories.
 
-    Provides clean interface for creating Platform, Autoscaler, and other
+    Provides clean interface for creating provider bundles, autoscalers, and other
     components from configuration without scattering factory logic across CLI.
 
     The proto is processed with apply_defaults() on construction, ensuring all
@@ -968,10 +969,10 @@ class IrisConfig:
 
     Example:
         config = IrisConfig.load("cluster.yaml")
-        platform = config.platform()
+        bundle = config.provider_bundle()
 
         # Use tunnel for connection
-        with platform.tunnel(controller_address) as url:
+        with bundle.controller.tunnel(controller_address) as url:
             client = IrisClient.remote(url)
     """
 
@@ -1001,16 +1002,24 @@ class IrisConfig:
         """Access underlying proto (read-only)."""
         return self._proto
 
-    def platform(self):
-        """Create Platform instance from config.
+    def workers(self):
+        """Create WorkerInfraProvider instance from config.
 
         Returns:
-            Platform implementation (GCP, Manual, or Local)
+            WorkerInfraProvider implementation (GCP, Manual, or Local).
+            None for K8s/CoreWeave deployments.
         """
-        # Local import: platform.factory imports config.py, creating a circular dependency.
-        from iris.cluster.platform.factory import create_platform
+        return self.provider_bundle().workers
 
-        return create_platform(
+    def provider_bundle(self):
+        """Create ControllerProvider + WorkerInfraProvider bundle from config.
+
+        Returns:
+            ProviderBundle with controller and optional workers
+        """
+        from iris.cluster.providers.factory import create_provider_bundle
+
+        return create_provider_bundle(
             platform_config=self._proto.platform,
             ssh_config=self._proto.defaults.ssh,
         )
@@ -1048,7 +1057,7 @@ def connect_cluster(config: config_pb2.IrisClusterConfig) -> Iterator[str]:
     is_local = config.controller.WhichOneof("controller") == "local"
 
     if is_local:
-        from iris.cluster.local_cluster import LocalCluster
+        from iris.cluster.providers.local.cluster import LocalCluster
 
         cluster = LocalCluster(config)
         address = cluster.start()
@@ -1058,18 +1067,18 @@ def connect_cluster(config: config_pb2.IrisClusterConfig) -> Iterator[str]:
             cluster.close()
     else:
         iris_config = IrisConfig(config)
-        platform = iris_config.platform()
-        address = platform.start_controller(config)
+        bundle = iris_config.provider_bundle()
+        address = bundle.controller.start_controller(config)
         try:
-            with platform.tunnel(address) as tunnel_url:
+            with bundle.controller.tunnel(address) as tunnel_url:
                 yield tunnel_url
         finally:
-            platform.stop_controller(config)
-            platform.shutdown()
+            bundle.controller.stop_controller(config)
+            bundle.controller.shutdown()
 
 
 def create_autoscaler(
-    platform,
+    platform: WorkerInfraProvider,
     autoscaler_config: config_pb2.AutoscalerConfig,
     scale_groups: dict[str, config_pb2.ScaleGroupConfig],
     label_prefix: str,
@@ -1077,10 +1086,10 @@ def create_autoscaler(
     threads: ThreadContainer | None = None,
     db: "ControllerDB | None" = None,  # noqa: F821, UP037 — circular import
 ):
-    """Create autoscaler from Platform and explicit config.
+    """Create autoscaler from WorkerInfraProvider and explicit config.
 
     Args:
-        platform: Platform instance for creating/discovering slices
+        platform: WorkerInfraProvider instance for creating/discovering slices
         autoscaler_config: Autoscaler settings (already resolved with defaults)
         scale_groups: Map of scale group name to config
         label_prefix: Prefix for labels on managed resources
@@ -1149,23 +1158,23 @@ def create_autoscaler(
     )
 
 
-def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvider | KubernetesProvider:
+def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvider | K8sTaskProvider:
     """Create a TaskProvider from cluster configuration.
 
-    Returns a KubernetesProvider when `kubernetes_provider` is configured,
+    Returns a K8sTaskProvider when `kubernetes_provider` is configured,
     or a WorkerProvider when `worker_provider` is configured.
     Raises ValueError if no provider is set.
     """
     which = cluster_config.WhichOneof("provider")
     if which == "kubernetes_provider":
-        from iris.cluster.k8s.kubectl import Kubectl
+        from iris.cluster.providers.k8s.service import CloudK8sService
 
         kp = cluster_config.kubernetes_provider
         namespace = kp.namespace or "iris"
         label_prefix = cluster_config.platform.label_prefix
         managed_label = f"iris-{label_prefix}-managed" if label_prefix else ""
-        return KubernetesProvider(
-            kubectl=Kubectl(namespace=namespace, kubeconfig_path=kp.kubeconfig or None),
+        return K8sTaskProvider(
+            kubectl=CloudK8sService(namespace=namespace, kubeconfig_path=kp.kubeconfig or None),
             namespace=namespace,
             default_image=kp.default_image,
             colocation_topology_key=kp.colocation_topology_key or "coreweave.cloud/spine",

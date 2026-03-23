@@ -65,7 +65,7 @@ def create_client_token_provider(
 
 def _configure_client_s3(config) -> None:
     """Configure S3 env vars for fsspec access. Delegates to the canonical implementation."""
-    from iris.cluster.platform.coreweave import configure_client_s3
+    from iris.cluster.providers.k8s.controller import configure_client_s3
 
     configure_client_s3(config)
 
@@ -87,11 +87,11 @@ def require_controller_url(ctx: click.Context) -> str:
         from iris.cluster.config import IrisConfig
 
         iris_config = IrisConfig(config)
-        platform = iris_config.platform()
-        ctx.obj["platform"] = platform
+        bundle = iris_config.provider_bundle()
+        ctx.obj["provider_bundle"] = bundle
 
         if iris_config.proto.controller.WhichOneof("controller") == "local":
-            from iris.cluster.local_cluster import LocalCluster
+            from iris.cluster.providers.local.cluster import LocalCluster
 
             cluster = LocalCluster(iris_config.proto)
             controller_address = cluster.start()
@@ -99,12 +99,12 @@ def require_controller_url(ctx: click.Context) -> str:
         else:
             controller_address = iris_config.controller_address()
             if not controller_address:
-                controller_address = platform.discover_controller(iris_config.proto.controller)
+                controller_address = bundle.controller.discover_controller(iris_config.proto.controller)
 
         # Establish tunnel and keep it alive for command duration
         try:
             logger.info("Establishing tunnel to controller...")
-            tunnel_cm = platform.tunnel(address=controller_address)
+            tunnel_cm = bundle.controller.tunnel(address=controller_address)
             tunnel_url = tunnel_cm.__enter__()
             ctx.obj["controller_url"] = tunnel_url
             # Clean up tunnel when context closes

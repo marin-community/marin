@@ -242,7 +242,7 @@ def cluster_start(ctx, local: bool):
     click.echo("Starting controller...")
     try:
         if is_local:
-            from iris.cluster.local_cluster import LocalCluster
+            from iris.cluster.providers.local.cluster import LocalCluster
 
             cluster = LocalCluster(config)
             address = cluster.start()
@@ -260,8 +260,8 @@ def cluster_start(ctx, local: bool):
             cluster.wait()
         else:
             iris_config = IrisConfig(config)
-            platform = iris_config.platform()
-            address = platform.start_controller(config)
+            bundle = iris_config.provider_bundle()
+            address = bundle.controller.start_controller(config)
             click.echo(f"Controller started at {address}")
             click.echo("\nController is running with integrated autoscaler.")
             click.echo("Use 'iris --config=... cluster status' to check cluster state.")
@@ -300,10 +300,10 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
     _build_cluster_images(config, verbose=verbose)
 
     iris_config = IrisConfig(config)
-    platform = iris_config.platform()
+    bundle = iris_config.provider_bundle()
 
     try:
-        platform.stop_all(config)
+        bundle.controller.stop_all(config)
     except Exception:
         click.echo("No existing cluster to stop, continuing")
 
@@ -314,7 +314,7 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
             clear_remote_state(remote_state_dir)
 
     click.echo("Starting controller...")
-    address = platform.start_controller(config)
+    address = bundle.controller.start_controller(config)
     click.echo(f"Controller at {address}")
 
     stop_event = threading.Event()
@@ -323,7 +323,7 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
         signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
 
     try:
-        with platform.tunnel(address) as url:
+        with bundle.controller.tunnel(address) as url:
             click.echo(f"Tunnel ready: {url}")
 
             client = cluster_connect.ControllerServiceClientSync(url, timeout_ms=30000)
@@ -366,11 +366,11 @@ def cluster_stop(ctx, dry_run: bool, label_override: str | None):
 
     try:
         iris_config = IrisConfig(config)
-        platform = iris_config.platform()
+        bundle = iris_config.provider_bundle()
         try:
-            names = platform.stop_all(config, dry_run=dry_run, label_prefix=label_override)
+            names = bundle.controller.stop_all(config, dry_run=dry_run, label_prefix=label_override)
         finally:
-            platform.shutdown()
+            bundle.controller.shutdown()
     except Exception as e:
         click.echo(f"Failed to stop cluster: {e}", err=True)
         raise SystemExit(1) from e
@@ -604,9 +604,9 @@ def controller_checkpoint(ctx, stop: bool):
         from iris.cluster.config import IrisConfig
 
         iris_config = IrisConfig(config)
-        platform = iris_config.platform()
+        bundle = iris_config.provider_bundle()
         try:
-            platform.stop_controller(config)
+            bundle.controller.stop_controller(config)
             click.echo("Controller stopped.")
         except Exception as e:
             click.echo(f"Failed to stop controller: {e}", err=True)
@@ -634,7 +634,7 @@ def controller_restart(ctx):
         )
 
     iris_config = IrisConfig(config)
-    platform = iris_config.platform()
+    bundle = iris_config.provider_bundle()
 
     # Try to discover existing controller for checkpoint + restart.
     # If none exists, fall back to a fresh start (idempotent).
@@ -650,7 +650,7 @@ def controller_restart(ctx):
             for name, tag in built.items():
                 click.echo(f"  {name}: {tag}")
         try:
-            address = platform.start_controller(config)
+            address = bundle.controller.start_controller(config)
         except Exception as e:
             click.echo(f"Failed to start controller: {e}", err=True)
             raise SystemExit(1) from e
@@ -678,7 +678,7 @@ def controller_restart(ctx):
             click.echo(f"  {name}: {tag}")
 
     try:
-        address = platform.restart_controller(config)
+        address = bundle.controller.restart_controller(config)
     except Exception as e:
         click.echo(f"Failed to restart controller: {e}", err=True)
         raise SystemExit(1) from e

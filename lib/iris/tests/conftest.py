@@ -58,14 +58,11 @@ def _ensure_logging_health():
     """
     # Before test: remove any closed handlers from previous tests
     for handler in logging.root.handlers[:]:
-        if hasattr(handler, "stream"):
+        if isinstance(handler, logging.StreamHandler):
             try:
-                # Test if stream is writable
-                handler.stream.closed  # noqa: B018
                 if handler.stream.closed:
                     logging.root.removeHandler(handler)
-            except (AttributeError, ValueError):
-                # Handler doesn't have a stream or stream is invalid
+            except ValueError:
                 pass
 
     yield
