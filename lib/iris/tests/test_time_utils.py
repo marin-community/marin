@@ -33,26 +33,31 @@ def test_log_time_custom_level(caplog):
 
 
 def test_deadline_expires():
-    """Deadline with short timeout expires after sleeping."""
-    deadline = Deadline.from_seconds(0.1)
-    time.sleep(0.15)
-    assert deadline.expired()
+    """Deadline with short timeout expires after the duration elapses."""
+    t0 = Timestamp.from_ms(1_000_000)
+    deadline = Deadline.after(t0, Duration.from_ms(100))
+    assert not deadline.expired(now=t0)
+    assert not deadline.expired(now=t0.add_ms(99))
+    assert deadline.expired(now=t0.add_ms(100))
+    assert deadline.expired(now=t0.add_ms(200))
 
 
 def test_deadline_raise_if_expired():
     """Expired deadline raises TimeoutError."""
-    deadline = Deadline.from_seconds(0.05)
-    time.sleep(0.1)
+    t0 = Timestamp.from_ms(1_000_000)
+    deadline = Deadline.after(t0, Duration.from_ms(50))
+    deadline.raise_if_expired("Should not fire", now=t0)
     with pytest.raises(TimeoutError, match="Test timeout"):
-        deadline.raise_if_expired("Test timeout")
+        deadline.raise_if_expired("Test timeout", now=t0.add_ms(100))
 
 
 def test_deadline_from_now_with_duration():
-    """Deadline.from_now works with Duration."""
-    deadline = Deadline.from_now(Duration.from_ms(100))
-    assert not deadline.expired()
-    time.sleep(0.15)
-    assert deadline.expired()
+    """Deadline.after works with Duration."""
+    t0 = Timestamp.from_ms(1_000_000)
+    deadline = Deadline.after(t0, Duration.from_ms(100))
+    assert not deadline.expired(now=t0)
+    assert not deadline.expired(now=t0.add_ms(50))
+    assert deadline.expired(now=t0.add_ms(150))
 
 
 def test_timestamp_proto_roundtrip():
@@ -116,10 +121,10 @@ def test_duration_proto_roundtrip():
 def test_rate_limiter_throttles():
     """RateLimiter prevents running too frequently."""
     limiter = RateLimiter(interval_seconds=0.2)
-    assert limiter.should_run()
-    assert not limiter.should_run()
-    time.sleep(0.25)
-    assert limiter.should_run()
+    t0 = 1000.0
+    assert limiter.should_run(now=t0)
+    assert not limiter.should_run(now=t0 + 0.1)
+    assert limiter.should_run(now=t0 + 0.25)
 
 
 def test_rate_limiter_wait_blocks_for_interval():
@@ -186,9 +191,11 @@ def test_rate_limiter_mark_run_resets_interval():
     limiter = RateLimiter(interval_seconds=0.2)
     assert limiter.time_until_next() == 0.0  # No previous run
 
-    limiter.mark_run()
-    remaining = limiter.time_until_next()
-    assert 0.15 < remaining <= 0.2
+    t0 = 1000.0
+    limiter.mark_run(now=t0)
+    assert limiter.time_until_next(now=t0) == 0.2
+    assert limiter.time_until_next(now=t0 + 0.05) == pytest.approx(0.15)
+    assert limiter.time_until_next(now=t0 + 0.2) == 0.0
 
 
 # Additional integration tests from test_time_integration.py
@@ -209,67 +216,64 @@ def test_timestamp_uses_wall_clock():
     assert age_ms >= 20
 
 
-def test_deadline_uses_monotonic_time():
-    """Deadline uses monotonic time (immune to clock changes)."""
-    # Create a deadline 100ms in the future
-    deadline = Deadline.from_ms(100)
+def test_deadline_expiry_progression():
+    """Deadline transitions from not-expired to expired as time advances."""
+    t0 = Timestamp.from_ms(1_000_000)
+    deadline = Deadline.after(t0, Duration.from_ms(100))
 
-    # Should not be expired immediately
-    assert not deadline.expired()
-
-    # Sleep for 50ms - still not expired
-    time.sleep(0.05)
-    assert not deadline.expired()
-
-    # Sleep for another 60ms - should be expired now (total 110ms)
-    time.sleep(0.06)
-    assert deadline.expired()
+    assert not deadline.expired(now=t0)
+    assert not deadline.expired(now=t0.add_ms(50))
+    assert deadline.expired(now=t0.add_ms(110))
 
 
 def test_deadline_remaining_time():
     """Deadline correctly reports remaining time."""
-    deadline = Deadline.from_seconds(1.0)
+    t0 = Timestamp.from_ms(1_000_000)
+    deadline = Deadline.after(t0, Duration.from_seconds(1))
 
-    # Initially should have close to 1 second remaining
-    remaining = deadline.remaining_seconds()
-    assert 0.95 < remaining <= 1.0
+    assert deadline.remaining_seconds(now=t0) == 1.0
+    assert deadline.remaining_ms(now=t0) == 1000
 
-    # After sleeping, remaining time should decrease
-    time.sleep(0.1)
-    remaining_after = deadline.remaining_seconds()
-    assert remaining_after < remaining
-    assert 0.85 < remaining_after < 0.95
+    assert deadline.remaining_seconds(now=t0.add_ms(100)) == pytest.approx(0.9)
+    assert deadline.remaining_ms(now=t0.add_ms(100)) == 900
+
+    # After expiry, remaining is zero
+    assert deadline.remaining_seconds(now=t0.add_ms(1500)) == 0.0
+    assert deadline.remaining_ms(now=t0.add_ms(1500)) == 0
 
 
 def test_deadline_timeout_integration():
-    """Deadline can be used to enforce timeouts in operations."""
-    deadline = Deadline.from_seconds(0.2)  # 200ms timeout
+    """Deadline can be used to enforce timeouts in a loop."""
+    t0 = Timestamp.from_ms(1_000_000)
+    deadline = Deadline.after(t0, Duration.from_ms(200))
     iterations = 0
+    now = t0
 
-    while not deadline.expired():
+    while not deadline.expired(now=now):
         iterations += 1
-        time.sleep(0.05)  # 50ms per iteration
+        now = now.add_ms(50)
 
-    # Should have run ~4 iterations (200ms / 50ms)
-    assert 3 <= iterations <= 5
+    assert iterations == 4
 
 
 def test_deadline_remaining_prevents_overshoot():
     """Using deadline.remaining_seconds() prevents sleeping past deadline."""
-    deadline = Deadline.from_seconds(0.15)  # 150ms deadline
+    t0 = Timestamp.from_ms(1_000_000)
+    deadline = Deadline.after(t0, Duration.from_ms(150))
 
-    # First sleep - full 100ms
-    sleep_time = min(0.1, deadline.remaining_seconds())
-    time.sleep(sleep_time)
-    assert not deadline.expired()
+    now = t0
+    # First step: min(100ms, remaining) = 100ms
+    step = min(100, deadline.remaining_ms(now=now))
+    assert step == 100
+    now = now.add_ms(step)
+    assert not deadline.expired(now=now)
 
-    # Second sleep - should only sleep ~50ms to not exceed deadline
-    sleep_time = min(0.1, deadline.remaining_seconds())
-    time.sleep(sleep_time)
+    # Second step: min(100ms, remaining=50ms) = 50ms
+    step = min(100, deadline.remaining_ms(now=now))
+    assert step == 50
+    now = now.add_ms(step)
 
-    # Should be very close to deadline or just expired
-    remaining = deadline.remaining_seconds()
-    assert remaining <= 0.02  # Within 20ms of deadline
+    assert deadline.expired(now=now)
 
 
 def test_zero_duration():
@@ -287,20 +291,22 @@ def test_zero_duration():
 
 def test_zero_deadline_expires_immediately():
     """Deadline with zero timeout expires immediately."""
-    deadline = Deadline.from_ms(0)
-    assert deadline.expired()
-    assert deadline.remaining_ms() == 0
-    assert deadline.remaining_seconds() == 0.0
+    t0 = Timestamp.from_ms(1_000_000)
+    deadline = Deadline.after(t0, Duration.from_ms(0))
+    assert deadline.expired(now=t0)
+    assert deadline.remaining_ms(now=t0) == 0
+    assert deadline.remaining_seconds(now=t0) == 0.0
 
 
 def test_expired_deadline_remaining_is_zero():
     """Expired deadline returns zero for remaining time."""
-    deadline = Deadline.from_ms(10)
-    time.sleep(0.02)  # 20ms - definitely expired
+    t0 = Timestamp.from_ms(1_000_000)
+    deadline = Deadline.after(t0, Duration.from_ms(10))
 
-    assert deadline.expired()
-    assert deadline.remaining_ms() == 0
-    assert deadline.remaining_seconds() == 0.0
+    now = t0.add_ms(20)
+    assert deadline.expired(now=now)
+    assert deadline.remaining_ms(now=now) == 0
+    assert deadline.remaining_seconds(now=now) == 0.0
 
 
 def test_exponential_backoff_does_not_overflow_at_high_attempt_counts():

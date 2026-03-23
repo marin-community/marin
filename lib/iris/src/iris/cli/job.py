@@ -746,10 +746,10 @@ def run(
             token_provider=ctx.obj.get("token_provider"),
         )
     except Exception:
-        platform = ctx.obj.get("platform")
-        if platform is not None:
+        bundle = ctx.obj.get("provider_bundle")
+        if bundle is not None:
             try:
-                platform.debug_report()
+                bundle.controller.debug_report()
             except Exception:
                 logger.debug("Controller post-mortem failed", exc_info=True)
         raise

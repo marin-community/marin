@@ -16,8 +16,8 @@ from pathlib import Path
 from iris.client import IrisClient
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
-from iris.cluster.local_cluster import LocalCluster
-from iris.cluster.platform.base import find_free_port
+from iris.cluster.providers.local.cluster import LocalCluster
+from iris.cluster.providers.types import find_free_port
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.cluster.bundle import BundleStore

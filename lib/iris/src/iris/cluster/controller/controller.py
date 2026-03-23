@@ -48,7 +48,7 @@ from iris.cluster.controller.db import (
     running_tasks_by_worker,
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.k8s.provider import KubernetesProvider
+from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.scheduler import (
     JobRequirements,
@@ -712,7 +712,7 @@ class Controller:
     def __init__(
         self,
         config: ControllerConfig,
-        provider: TaskProvider | KubernetesProvider,
+        provider: TaskProvider | K8sTaskProvider,
         autoscaler: "Autoscaler | None" = None,
         threads: ThreadContainer | None = None,
         db: ControllerDB | None = None,
@@ -724,7 +724,7 @@ class Controller:
             )
 
         self._config = config
-        self._provider: TaskProvider | KubernetesProvider = provider
+        self._provider: TaskProvider | K8sTaskProvider = provider
         self._provider_scheduling_events: list[SchedulingEvent] = []
         self._provider_capacity: ClusterCapacity | None = None
 
@@ -831,7 +831,7 @@ class Controller:
     def start(self) -> None:
         """Start main controller loop, dashboard server, and optionally autoscaler."""
         self._started = True
-        if isinstance(self._provider, KubernetesProvider):
+        if isinstance(self._provider, K8sTaskProvider):
             self._heartbeat_thread = self._threads.spawn(self._run_direct_provider_loop, name="provider-loop")
         else:
             self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
@@ -986,7 +986,7 @@ class Controller:
                 logger.exception("Provider sync round failed, will retry next interval")
 
     def _run_direct_provider_loop(self, stop_event: threading.Event) -> None:
-        """Provider sync loop for KubernetesProvider: no scheduling, no workers."""
+        """Provider sync loop for K8sTaskProvider: no scheduling, no workers."""
         limiter = RateLimiter(interval_seconds=self._config.heartbeat_interval.to_seconds())
         while not stop_event.is_set():
             self._heartbeat_event.wait(timeout=limiter.time_until_next())
@@ -1002,7 +1002,7 @@ class Controller:
                 logger.exception("Direct provider sync round failed, will retry next interval")
 
     def _sync_direct_provider(self) -> None:
-        assert isinstance(self._provider, KubernetesProvider)
+        assert isinstance(self._provider, K8sTaskProvider)
         provider = self._provider
         with self._heartbeat_lock:
             batch = self._transitions.drain_for_direct_provider()
@@ -1392,7 +1392,7 @@ class Controller:
         Called after state has marked tasks as killed. For each task that had
         a worker assigned, buffers the kill request for delivery via the next
         heartbeat to that worker. Tasks without a worker assignment are routed
-        to the direct kill queue when a KubernetesProvider is configured.
+        to the direct kill queue when a K8sTaskProvider is configured.
         """
         any_buffered = False
         mapping = _task_worker_mapping(self._db, task_ids)
@@ -1405,7 +1405,7 @@ class Controller:
             any_buffered = True
 
         # Route kills for tasks without worker assignment to the direct kill queue.
-        if isinstance(self._provider, KubernetesProvider):
+        if isinstance(self._provider, K8sTaskProvider):
             for task_id in task_ids:
                 if task_id not in mapping:
                     self._transitions.buffer_direct_kill(task_id.to_wire())
@@ -1425,7 +1425,7 @@ class Controller:
         short-circuits that by failing any worker that hasn't heartbeated in
         HEARTBEAT_STALENESS_THRESHOLD (15 minutes).
         """
-        if isinstance(self._provider, KubernetesProvider):
+        if isinstance(self._provider, K8sTaskProvider):
             return
         threshold_ms = HEARTBEAT_STALENESS_THRESHOLD.to_ms()
         workers = healthy_active_workers_with_attributes(self._db)
@@ -1629,12 +1629,12 @@ class Controller:
         return self._transitions
 
     @property
-    def provider(self) -> TaskProvider | KubernetesProvider:
+    def provider(self) -> TaskProvider | K8sTaskProvider:
         return self._provider
 
     @property
     def has_direct_provider(self) -> bool:
-        return isinstance(self._provider, KubernetesProvider)
+        return isinstance(self._provider, K8sTaskProvider)
 
     @property
     def provider_scheduling_events(self) -> list[SchedulingEvent]:
