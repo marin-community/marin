@@ -130,6 +130,7 @@ class TaskUpdate:
     exit_code: int | None = None
     resource_usage: cluster_pb2.ResourceUsage | None = None
     log_entries: list[logging_pb2.LogEntry] = field(default_factory=list)
+    container_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1756,6 +1757,7 @@ class ControllerTransitions:
                     exit_code=entry.exit_code if entry.HasField("exit_code") else None,
                     resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
                     log_entries=list(entry.log_entries),
+                    container_id=entry.container_id or None,
                 )
             )
         result = self.apply_heartbeat(
@@ -2081,6 +2083,11 @@ class ControllerTransitions:
                     cur.execute(
                         "UPDATE tasks SET resource_usage_proto = ? WHERE task_id = ?",
                         (usage_payload, update.task_id.to_wire()),
+                    )
+                if update.container_id is not None:
+                    cur.execute(
+                        "UPDATE tasks SET container_id = ? WHERE task_id = ?",
+                        (update.container_id, update.task_id.to_wire()),
                     )
 
                 terminal_ms: int | None = None

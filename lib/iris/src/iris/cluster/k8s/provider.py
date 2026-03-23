@@ -25,6 +25,7 @@ from iris.cluster.k8s.constants import CW_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_T
 from iris.cluster.k8s.kubectl import Kubectl, KubectlLogLine
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
 from iris.cluster.types import JobName, get_gpu_count
+from iris.logging import parse_log_level, str_to_log_level
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.time_utils import Timestamp
 
@@ -357,6 +358,12 @@ def _build_pod_manifest(
                     limits["rdma/ib"] = str(gpu_count)
         if limits:
             resources["limits"] = limits
+            # Set requests = limits for CPU/memory so K8s schedules based on
+            # actual resource needs. GPU/RDMA are excluded (K8s treats GPU
+            # limits as implicit requests).
+            requests = {k: v for k, v in limits.items() if k in ("cpu", "memory")}
+            if requests:
+                resources.setdefault("requests", {}).update(requests)
         if res.disk_bytes:
             disk_gi = max(1, res.disk_bytes // (1024**3))
             resources.setdefault("requests", {})["ephemeral-storage"] = f"{disk_gi}Gi"
@@ -459,7 +466,9 @@ def _build_pod_manifest(
 
 
 def _kubectl_log_line_to_log_entry(kll: KubectlLogLine, attempt_id: int) -> logging_pb2.LogEntry:
-    entry = logging_pb2.LogEntry(source=kll.stream, data=kll.data, attempt_id=attempt_id)
+    level_name = parse_log_level(kll.data)
+    level = str_to_log_level(level_name) if level_name else 0
+    entry = logging_pb2.LogEntry(source=kll.stream, data=kll.data, attempt_id=attempt_id, level=level)
     entry.timestamp.CopyFrom(Timestamp.from_seconds(kll.timestamp.timestamp()).to_proto())
     return entry
 

@@ -94,6 +94,7 @@ export interface TaskStatus {
   attempts?: TaskAttempt[]
   pendingReason?: string
   canBeScheduled?: boolean
+  containerId?: string
 }
 
 // -- Jobs --

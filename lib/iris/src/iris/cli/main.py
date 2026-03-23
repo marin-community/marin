@@ -90,7 +90,22 @@ def _configure_client_s3(config) -> None:
         fsspec_conf: dict = {"endpoint_url": endpoint}
         if _needs_virtual_host_addressing(endpoint):
             fsspec_conf["config_kwargs"] = {"s3": {"addressing_style": "virtual"}}
+        if ".r2.cloudflarestorage.com" in endpoint:
+            fsspec_conf.setdefault("client_kwargs", {})["region_name"] = "auto"
         os.environ["FSSPEC_S3"] = json.dumps(fsspec_conf)
+
+    # Flush fsspec/s3fs cached instances so they pick up the new config.
+    # Without this, any S3FileSystem created before this point (e.g. at import
+    # time) will ignore FSSPEC_S3.
+    import fsspec.config
+
+    fsspec.config.set_conf_env(fsspec.config.conf)
+    try:
+        import s3fs
+
+        s3fs.S3FileSystem.clear_instance_cache()
+    except ImportError:
+        pass
 
 
 def require_controller_url(ctx: click.Context) -> str:
@@ -363,10 +378,12 @@ from iris.cli.job import job  # noqa: E402
 from iris.cli.process_status import register_process_status_commands  # noqa: E402
 from iris.cli.query import query_cmd  # noqa: E402
 from iris.cli.rpc import register_rpc_commands  # noqa: E402
+from iris.cli.task import task  # noqa: E402
 
 iris.add_command(cluster)
 iris.add_command(build)
 iris.add_command(job)
+iris.add_command(task)
 iris.add_command(query_cmd)
 register_rpc_commands(iris)
 register_process_status_commands(iris)
