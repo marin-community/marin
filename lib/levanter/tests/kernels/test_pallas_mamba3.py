@@ -658,14 +658,13 @@ def test_mamba3_siso_attentionish_prepacked_matches_attentionish_api():
     )
     batch, seq_len, heads, state_dim = q.shape
     num_chunks = seq_len // 8
-    q_chunked = q.reshape(batch, num_chunks, 8, heads, state_dim).transpose(0, 3, 1, 2, 4)
-    k_chunked = k.reshape(batch, num_chunks, 8, heads, state_dim).transpose(0, 3, 1, 2, 4)
-    v_chunked = v.reshape(batch, num_chunks, 8, heads, v.shape[-1]).transpose(0, 3, 1, 2, 4)
+    q_head_major = q.transpose(0, 2, 1, 3)
+    k_head_major = k.transpose(0, 2, 1, 3)
+    v_head_major = v.transpose(0, 2, 1, 3)
     src_scale, out_correction = prepare_mamba3_chunked_scales(
         dt.reshape(batch, heads, num_chunks, 8),
         jax.nn.sigmoid(trap).reshape(batch, heads, num_chunks, 8),
     )
-    a_log_cumsum_chunked = a_log_cumsum.reshape(batch, heads, num_chunks, 8)
 
     y_old, state_old = mamba3_attentionish_forward(
         q,
@@ -682,15 +681,16 @@ def test_mamba3_siso_attentionish_prepacked_matches_attentionish_api():
         implementation="reference",
     )
     y_new, state_new = mamba3_attentionish_forward_prepacked_from_transformed(
-        q_chunked,
-        k_chunked,
-        v_chunked,
+        q_head_major,
+        k_head_major,
+        v_head_major,
         q_bias=q_bias,
         k_bias=k_bias,
         d=d,
-        a_log_cumsum=a_log_cumsum_chunked,
-        src_scale=src_scale,
-        out_correction=out_correction,
+        a_log_cumsum=a_log_cumsum.reshape(batch, heads, seq_len),
+        src_scale=src_scale.reshape(batch, heads, seq_len),
+        out_correction=out_correction.reshape(batch, heads, seq_len),
+        chunk_size=8,
         return_final_state=True,
         implementation="reference",
     )

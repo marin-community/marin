@@ -150,20 +150,21 @@ def _attentionish_prepacked_inputs(
     x: jax.Array,
 ) -> tuple[jax.Array, ...]:
     groups, num_chunks, chunk_size = dt.shape
+    seq_len = num_chunks * chunk_size
     a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
     src_scale, out_correction = prepare_mamba3_chunked_scales(dt, lam)
-    q_chunked = c.reshape(groups, 1, num_chunks, chunk_size, c.shape[-1])
-    k_chunked = b.reshape(groups, 1, num_chunks, chunk_size, b.shape[-1])
-    v_chunked = x.reshape(groups, 1, num_chunks, chunk_size, x.shape[-1])
+    q_head_major = c.reshape(groups, 1, seq_len, c.shape[-1])
+    k_head_major = b.reshape(groups, 1, seq_len, b.shape[-1])
+    v_head_major = x.reshape(groups, 1, seq_len, x.shape[-1])
     return (
-        q_chunked,
-        k_chunked,
-        v_chunked,
+        q_head_major,
+        k_head_major,
+        v_head_major,
         None,
         None,
-        a_log_cumsum.reshape(groups, 1, num_chunks, chunk_size),
-        src_scale.reshape(groups, 1, num_chunks, chunk_size),
-        out_correction.reshape(groups, 1, num_chunks, chunk_size),
+        a_log_cumsum.reshape(groups, 1, seq_len),
+        src_scale.reshape(groups, 1, seq_len),
+        out_correction.reshape(groups, 1, seq_len),
     )
 
 
@@ -275,9 +276,9 @@ def _benchmark(
         attentionish_inputs = _attentionish_prepacked_inputs(*inputs)
 
         def forward_attentionish_prepacked(
-            q_chunked,
-            k_chunked,
-            v_chunked,
+            q_packed,
+            k_packed,
+            v_packed,
             q_bias,
             k_bias,
             a_log_cumsum,
@@ -285,21 +286,22 @@ def _benchmark(
             out_correction,
         ):
             return mamba3_attentionish_forward_prepacked_from_transformed(
-                q_chunked,
-                k_chunked,
-                v_chunked,
+                q_packed,
+                k_packed,
+                v_packed,
                 q_bias=q_bias,
                 k_bias=k_bias,
                 a_log_cumsum=a_log_cumsum,
                 src_scale=src_scale,
                 out_correction=out_correction,
+                chunk_size=shape.chunk_size,
                 implementation="xla",
             )
 
         def backward_attentionish_prepacked(
-            q_chunked,
-            k_chunked,
-            v_chunked,
+            q_packed,
+            k_packed,
+            v_packed,
             q_bias,
             k_bias,
             a_log_cumsum,
@@ -308,9 +310,9 @@ def _benchmark(
         ):
             return jnp.sum(
                 forward_attentionish_prepacked(
-                    q_chunked,
-                    k_chunked,
-                    v_chunked,
+                    q_packed,
+                    k_packed,
+                    v_packed,
                     q_bias,
                     k_bias,
                     a_log_cumsum,

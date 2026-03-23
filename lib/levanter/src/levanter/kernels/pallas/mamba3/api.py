@@ -486,7 +486,7 @@ def _package_attentionish_outputs(
     return output
 
 
-def mamba3_attentionish_forward_prepacked_from_transformed(
+def _mamba3_attentionish_forward_chunked_from_transformed(
     q_chunked: Float[Array, "batch heads chunks chunk state"],
     k_chunked: Float[Array, "batch heads chunks chunk state"],
     v_chunked: Float[Array, "batch heads chunks chunk value"],
@@ -500,13 +500,7 @@ def mamba3_attentionish_forward_prepacked_from_transformed(
     return_final_state: bool = False,
     implementation: Implementation | Sequence[Implementation] | None = None,
 ) -> jax.Array | tuple[jax.Array, jax.Array]:
-    """Run the attention-style SISO kernel from already chunk-packed transformed inputs.
-
-    This is the thin TPU-facing entrypoint for model code that can precompute the
-    chunk-major `q/k/v` layout and transformed scalar schedules outside the hot
-    kernel path, avoiding the sequence-major packing overhead of the convenience
-    attention-style wrapper.
-    """
+    """Run the attention-style SISO kernel from chunk-packed transformed inputs."""
 
     if q_chunked.shape != k_chunked.shape:
         raise ValueError(
@@ -585,6 +579,61 @@ def mamba3_attentionish_forward_prepacked_from_transformed(
         return output, formatted_final_state
 
 
+def mamba3_attentionish_forward_prepacked_from_transformed(
+    q: Float[Array, "batch heads seq state"],
+    k: Float[Array, "batch heads seq state"],
+    v: Float[Array, "batch heads seq value"],
+    *,
+    a_log_cumsum: Float[Array, "batch heads seq"],
+    src_scale: Float[Array, "batch heads seq"],
+    out_correction: Float[Array, "batch heads seq"],
+    chunk_size: int,
+    q_bias: Float[Array, "heads state"] | None = None,
+    k_bias: Float[Array, "heads state"] | None = None,
+    d: Float[Array, "heads"] | None = None,
+    return_final_state: bool = False,
+    implementation: Implementation | Sequence[Implementation] | None = None,
+) -> jax.Array | tuple[jax.Array, jax.Array]:
+    """Run the thin head-major SISO API on transformed inputs.
+
+    This path keeps sequence flat in head-major layout and only reshapes to
+    `[B, H, K, C, ...]` internally, avoiding the expensive sequence-major to
+    chunk-major transpose in the convenience attention-style wrapper.
+    """
+
+    if q.shape != k.shape:
+        raise ValueError(f"`q` and `k` must have the same shape, got {q.shape} and {k.shape}.")
+    if q.ndim != 4 or v.ndim != 4:
+        raise ValueError("Expected `q/k` with shape `[B, H, S, N]` and `v` with shape `[B, H, S, P]`.")
+    batch, heads, seq_len, state_dim = q.shape
+    if v.shape[:3] != (batch, heads, seq_len):
+        raise ValueError("`v` must share batch, head, and sequence axes with `q`.")
+    if seq_len % chunk_size != 0:
+        raise ValueError(f"`seq`={seq_len} must be divisible by `chunk_size`={chunk_size}.")
+    if a_log_cumsum.shape != (batch, heads, seq_len):
+        raise ValueError("`a_log_cumsum` must have shape `[B, H, S]`.")
+    if src_scale.shape != a_log_cumsum.shape or out_correction.shape != a_log_cumsum.shape:
+        raise ValueError("`src_scale` and `out_correction` must match `a_log_cumsum`.")
+
+    num_chunks = seq_len // chunk_size
+    q_chunked = q.reshape(batch, heads, num_chunks, chunk_size, state_dim)
+    k_chunked = k.reshape(batch, heads, num_chunks, chunk_size, state_dim)
+    v_chunked = v.reshape(batch, heads, num_chunks, chunk_size, v.shape[-1])
+    return _mamba3_attentionish_forward_chunked_from_transformed(
+        q_chunked,
+        k_chunked,
+        v_chunked,
+        q_bias=q_bias,
+        k_bias=k_bias,
+        d=d,
+        a_log_cumsum=a_log_cumsum.reshape(batch, heads, num_chunks, chunk_size),
+        src_scale=src_scale.reshape(batch, heads, num_chunks, chunk_size),
+        out_correction=out_correction.reshape(batch, heads, num_chunks, chunk_size),
+        return_final_state=return_final_state,
+        implementation=implementation,
+    )
+
+
 def mamba3_attentionish_forward_from_transformed(
     q: Float[Array, "batch seq heads state"],
     k: Float[Array, "batch seq heads state"],
@@ -651,53 +700,31 @@ def mamba3_attentionish_forward_from_transformed(
             src_scale = _materialize_chunked_layout(src_scale)
             out_correction = _materialize_chunked_layout(out_correction)
 
-        groups = batch * heads
-        flat_c = q_chunked.reshape(groups, num_chunks, chunk_size, state_dim)
-        flat_b = k_chunked.reshape(groups, num_chunks, chunk_size, state_dim)
-        flat_v = v_chunked.reshape(groups, num_chunks, chunk_size, v.shape[-1])
-        flat_a_log_cumsum = a_log_cumsum.reshape(groups, num_chunks, chunk_size)
-        flat_src_scale = src_scale.reshape(groups, num_chunks, chunk_size)
-        flat_out_correction = out_correction.reshape(groups, num_chunks, chunk_size)
+        output_or_output_state = _mamba3_attentionish_forward_chunked_from_transformed(
+            q_chunked,
+            k_chunked,
+            v_chunked,
+            q_bias=q_bias,
+            k_bias=k_bias,
+            d=d,
+            a_log_cumsum=a_log_cumsum,
+            src_scale=src_scale,
+            out_correction=out_correction,
+            return_final_state=return_final_state,
+            implementation=implementation,
+        )
+        if return_final_state:
+            output, formatted_final_state = cast(tuple[jax.Array, jax.Array], output_or_output_state)
+        else:
+            output = cast(jax.Array, output_or_output_state)
+            formatted_final_state = None
 
-        with jax.named_scope("chunked_core"):
-            if implementation == "reference":
-                output_chunked, final_state = mamba3_chunked_forward_reference_batched(
-                    flat_a_log_cumsum,
-                    flat_src_scale,
-                    flat_out_correction,
-                    flat_b,
-                    flat_c,
-                    flat_v,
-                )
-            else:
-                output_chunked, final_state = mamba3_chunked_forward_xla_batched(
-                    flat_a_log_cumsum,
-                    flat_src_scale,
-                    flat_out_correction,
-                    flat_b,
-                    flat_c,
-                    flat_v,
-                )
-
-        with jax.named_scope("diagonal_skip"):
-            if d is not None:
-                flat_d = jnp.broadcast_to(d[None, :], (batch, heads)).reshape(groups)
-                output_chunked = output_chunked + flat_d[:, None, None, None] * flat_v
-
-        with jax.named_scope("package_output"):
-            output = output_chunked.reshape(batch, heads, num_chunks, chunk_size, v.shape[-1]).transpose(0, 2, 3, 1, 4)
-            output = output.reshape(batch, seq_len, heads, v.shape[-1])
-            formatted_final_state = (
-                final_state.reshape(batch, heads, final_state.shape[-2], final_state.shape[-1]).transpose(0, 1, 3, 2)
-                if return_final_state
-                else None
-            )
-            formatted_final_k = None
-            if return_final_k:
-                final_k = jnp.take(k, seq_len - 1, axis=1)
-                if k_bias is not None:
-                    final_k = final_k + k_bias[None, ...]
-                formatted_final_k = final_k
+        formatted_final_k = None
+        if return_final_k:
+            final_k = jnp.take(k, seq_len - 1, axis=1)
+            if k_bias is not None:
+                final_k = final_k + k_bias[None, ...]
+            formatted_final_k = final_k
 
         return _package_attentionish_outputs(
             output,
