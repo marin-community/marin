@@ -268,11 +268,12 @@ class TrainWorker:
 
         self.reference_model = _load_model()
 
-    def _wait_for_initial_rollouts(self, max_wait_time: float = 1200.0, poll_interval: float = 5.0) -> bool:
+    def _wait_for_initial_rollouts(self, max_wait_time: float = 7200.0, poll_interval: float = 5.0) -> bool:
         """Wait for initial rollouts from step -1 to be received.
 
         Args:
-            max_wait_time: Maximum time to wait in seconds (default: 20 minutes)
+            max_wait_time: Maximum time to wait in seconds (default: 2 hours).
+                On Iris, rollout workers may take a long time to get scheduled.
             poll_interval: How often to check for rollouts in seconds (default: 5 seconds)
 
         Returns:
