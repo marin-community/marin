@@ -105,18 +105,24 @@ class Deadline:
             )
         return self._timestamp
 
-    def raise_if_expired(self, message: str = "Deadline exceeded") -> None:
+    def raise_if_expired(self, message: str = "Deadline exceeded", now: "Timestamp | None" = None) -> None:
         """Raise TimeoutError if deadline has passed."""
-        if self.expired():
+        if self.expired(now=now):
             raise TimeoutError(message)
 
-    def remaining_ms(self) -> int:
+    def remaining_ms(self, now: "Timestamp | None" = None) -> int:
         """Get remaining milliseconds until deadline (0 if expired)."""
+        if self._timestamp is not None:
+            if now is None:
+                now = Timestamp.now()
+            return max(0, self._timestamp._epoch_ms - now._epoch_ms)
         remaining_seconds = self._deadline - time.monotonic()
         return max(0, int(remaining_seconds * 1000))
 
-    def remaining_seconds(self) -> float:
+    def remaining_seconds(self, now: "Timestamp | None" = None) -> float:
         """Get remaining seconds until deadline (0.0 if expired)."""
+        if self._timestamp is not None:
+            return self.remaining_ms(now=now) / 1000.0
         return max(0.0, self._deadline - time.monotonic())
 
     def __repr__(self) -> str:
@@ -365,28 +371,29 @@ class RateLimiter:
         self._interval = interval_seconds
         self._last_run: float | None = None
 
-    def should_run(self) -> bool:
+    def should_run(self, now: float | None = None) -> bool:
         """Check if enough time has passed; updates last run time if True."""
-        now = time.monotonic()
+        now = now if now is not None else time.monotonic()
         if self._last_run is None or (now - self._last_run >= self._interval):
             self._last_run = now
             return True
         return False
 
-    def time_until_next(self) -> float:
+    def time_until_next(self, now: float | None = None) -> float:
         """Get seconds until next allowed run (0.0 if can run now)."""
         if self._last_run is None:
             return 0.0
-        elapsed = time.monotonic() - self._last_run
+        now = now if now is not None else time.monotonic()
+        elapsed = now - self._last_run
         return max(0.0, self._interval - elapsed)
 
-    def mark_run(self) -> None:
+    def mark_run(self, now: float | None = None) -> None:
         """Record that an iteration is starting now.
 
         Use this when composing the limiter with an external wait mechanism
         (e.g., threading.Event.wait) instead of using the built-in wait().
         """
-        self._last_run = time.monotonic()
+        self._last_run = now if now is not None else time.monotonic()
 
     def wait(self, cancel: threading.Event | None = None) -> bool:
         """Block until the rate limit interval has elapsed since the last run.

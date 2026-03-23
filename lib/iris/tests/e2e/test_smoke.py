@@ -670,7 +670,7 @@ def test_checkpoint_restore():
     Phase 2 — restart the controller and verify the job is still SUCCEEDED
               and the cluster can accept new work.
     """
-    from iris.cluster.local_cluster import LocalCluster
+    from iris.cluster.providers.local.cluster import LocalCluster
 
     config = load_config(DEFAULT_CONFIG)
     config = make_local_config(config)
@@ -846,7 +846,7 @@ def test_dashboard_login_flow():
     full browser auth flow: redirect to login, paste token, verify RPC data loads,
     then logout back to the login page.
     """
-    from iris.cluster.local_cluster import LocalCluster
+    from iris.cluster.providers.local.cluster import LocalCluster
 
     try:
         import playwright.sync_api as pw
@@ -942,7 +942,7 @@ def _login_for_jwt(url: str, identity_token: str) -> str:
 
 def test_static_auth_rpc_access():
     """Static auth rejects unauthenticated and wrong-token RPCs, accepts valid JWT."""
-    from iris.cluster.local_cluster import LocalCluster
+    from iris.cluster.providers.local.cluster import LocalCluster
     from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 
     config = _make_controller_only_config()
@@ -984,7 +984,7 @@ def test_static_auth_job_ownership():
     PENDING). Verifies user-b gets PERMISSION_DENIED when trying to terminate
     it, while user-a can terminate their own job.
     """
-    from iris.cluster.local_cluster import LocalCluster
+    from iris.cluster.providers.local.cluster import LocalCluster
     from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 
     _TOKEN_A = "token-user-a"

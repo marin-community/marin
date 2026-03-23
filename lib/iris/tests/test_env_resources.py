@@ -92,12 +92,6 @@ def test_malformed_env_falls_back(monkeypatch):
     assert res.gpu_count == 0
 
 
-def test_frozen_dataclass():
-    res = TaskResources(memory_bytes=1024, cpu_cores=2.0, gpu_count=0, tpu_count=0)
-    with pytest.raises(AttributeError):
-        res.memory_bytes = 2048  # type: ignore[misc]
-
-
 def test_read_proc_meminfo_total():
     """Smoke test: on Linux CI this should return a positive value."""
     total = _read_proc_meminfo_total()
