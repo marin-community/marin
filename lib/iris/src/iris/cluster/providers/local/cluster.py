@@ -214,7 +214,6 @@ class LocalCluster:
                 auth_verifier=auth.verifier,
                 auth_provider=auth.provider,
                 auth=auth,
-                auth_optional=auth.optional,
             ),
             provider=WorkerProvider(stub_factory=RpcWorkerStubFactory()),
             autoscaler=self._autoscaler,

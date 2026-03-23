@@ -39,7 +39,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, static_files_mount
-from iris.rpc.auth import SESSION_COOKIE, AuthInterceptor, NullAuthInterceptor, TokenVerifier, extract_bearer_token
+from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
 
@@ -86,11 +86,15 @@ class _RouteAuthMiddleware:
     @public / @requires_auth annotation. Routes without an annotation are
     denied (default-deny). RPC Mount routes and static file mounts are
     skipped (they have their own auth).
+
+    Uses resolve_auth() — the same policy function as the gRPC interceptor —
+    so HTTP and gRPC layers agree on allow/deny for every token state.
     """
 
-    def __init__(self, app: Starlette, verifier: TokenVerifier):
+    def __init__(self, app: Starlette, verifier: TokenVerifier, optional: bool = False):
         self._app = app
         self._verifier = verifier
+        self._optional = optional
         self._router = app.router
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -134,15 +138,13 @@ class _RouteAuthMiddleware:
 
     async def _check_auth(self, scope: Scope, receive: Receive, send: Send) -> None:
         token = _extract_token_from_scope(scope)
-        if token is None:
+        try:
+            identity = resolve_auth(token, self._verifier, self._optional)
+        except ValueError:
             response = JSONResponse({"error": "authentication required"}, status_code=401)
             return await response(scope, receive, send)
-        try:
-            identity = self._verifier.verify(token)
-        except ValueError:
-            response = JSONResponse({"error": "invalid session"}, status_code=401)
-            return await response(scope, receive, send)
-        scope["auth_identity"] = identity
+        if identity is not None:
+            scope["auth_identity"] = identity
         return await self._app(scope, receive, send)
 
 
@@ -168,44 +170,46 @@ def _check_csrf(request: Request) -> bool:
     return origin == expected_origin
 
 
-class _SelectiveAuthInterceptor:
-    """Auth interceptor that skips authentication for specific RPC methods."""
+class _DashboardAuthInterceptor:
+    """RPC auth interceptor that uses resolve_auth() — same policy as HTTP middleware.
 
-    def __init__(self, verifier: TokenVerifier):
-        self._inner = AuthInterceptor(verifier)
-
-    def intercept_unary_sync(self, call_next, request, ctx):
-        if ctx.method().name in _UNAUTHENTICATED_RPCS:
-            return call_next(request, ctx)
-        return self._inner.intercept_unary_sync(call_next, request, ctx)
-
-
-class _OptionalAuthInterceptor:
-    """Auth interceptor for optional/gradual-adoption mode.
-
-    Token-bearing requests are fully authenticated: valid tokens resolve to the
-    real identity with its actual role; invalid tokens are rejected. Requests
-    without a token fall through as anonymous/admin so existing unauthenticated
-    clients keep working during the transition.
-
-    Login and GetAuthInfo are always unauthenticated (same as mandatory mode).
+    Login and GetAuthInfo RPCs are always unauthenticated. All other RPCs go
+    through resolve_auth(token, verifier, optional) which:
+    - token present + valid → authenticated identity
+    - token present + invalid → rejected
+    - no token + optional → anonymous/admin fallback via NullAuthInterceptor
+    - no token + required → rejected
     """
 
-    def __init__(self, verifier: TokenVerifier):
-        self._inner = AuthInterceptor(verifier)
+    def __init__(self, verifier: TokenVerifier, optional: bool = False):
+        self._verifier = verifier
+        self._optional = optional
         self._null = NullAuthInterceptor(verifier=verifier)
 
     def intercept_unary_sync(self, call_next, request, ctx):
+        from iris.rpc.auth import _verified_identity
+
         if ctx.method().name in _UNAUTHENTICATED_RPCS:
             return call_next(request, ctx)
 
         token = extract_bearer_token(ctx.request_headers())
-        if token:
-            # Token present — full auth (reject on failure).
-            return self._inner.intercept_unary_sync(call_next, request, ctx)
+        try:
+            identity = resolve_auth(token, self._verifier, self._optional)
+        except ValueError as exc:
+            from connectrpc.code import Code
+            from connectrpc.errors import ConnectError
 
-        # No token — anonymous fallback for gradual adoption.
-        return self._null.intercept_unary_sync(call_next, request, ctx)
+            raise ConnectError(Code.UNAUTHENTICATED, str(exc)) from exc
+
+        if identity is None:
+            # Optional mode, no token — anonymous fallback.
+            return self._null.intercept_unary_sync(call_next, request, ctx)
+
+        reset_token = _verified_identity.set(identity)
+        try:
+            return call_next(request, ctx)
+        finally:
+            _verified_identity.reset(reset_token)
 
 
 class ControllerDashboard:
@@ -244,12 +248,8 @@ class ControllerDashboard:
 
     def _create_app(self) -> ASGIApp:
         interceptors = [RequestTimingInterceptor(include_traceback=bool(os.environ.get("IRIS_DEBUG")))]
-        if self._auth_provider is not None and not self._auth_optional:
-            interceptors.insert(0, _SelectiveAuthInterceptor(self._auth_verifier))
-        elif self._auth_optional and self._auth_verifier is not None:
-            # Optional mode: authenticate token-bearing requests fully (reject
-            # invalid tokens), but allow unauthenticated requests through.
-            interceptors.insert(0, _OptionalAuthInterceptor(self._auth_verifier))
+        if self._auth_provider is not None and self._auth_verifier is not None:
+            interceptors.insert(0, _DashboardAuthInterceptor(self._auth_verifier, optional=self._auth_optional))
         else:
             # Null-auth mode: no provider configured. Verify worker tokens
             # when present but treat everything as anonymous/admin.
@@ -271,8 +271,8 @@ class ControllerDashboard:
             static_files_mount(),
         ]
         app: Starlette | _RouteAuthMiddleware = Starlette(routes=routes)
-        if self._auth_verifier is not None and self._auth_provider is not None and not self._auth_optional:
-            app = _RouteAuthMiddleware(app, self._auth_verifier)
+        if self._auth_verifier is not None and self._auth_provider is not None:
+            app = _RouteAuthMiddleware(app, self._auth_verifier, optional=self._auth_optional)
         return app
 
     @public

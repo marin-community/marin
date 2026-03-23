@@ -39,11 +39,12 @@ class _RecordingClusterClient:
     captured_env: dict = field(default_factory=dict)
     captured_constraints: list = field(default_factory=list)
 
-    def submit_job(self, *, environment=None, constraints=None, **kwargs):
+    def submit_job(self, *, job_id=None, environment=None, constraints=None, **kwargs) -> JobName:
         if environment:
             self.captured_env = dict(environment.env_vars)
         if constraints:
             self.captured_constraints = list(constraints)
+        return job_id or JobName.root("test", "dummy")
 
     def shutdown(self, wait: bool = True) -> None:
         pass
