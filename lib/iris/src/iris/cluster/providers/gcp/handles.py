@@ -56,8 +56,13 @@ _GCE_NAME_EDGE_RE = re.compile(r"^-+|-+$")
 _GCE_VM_SLICE_SSH_USER = "iris"
 
 
-def _build_vm_slice_id(name_prefix: str, suffix: str) -> str:
-    """Build a bounded VM slice id valid for both GCE instance names and labels."""
+def _build_gce_resource_name(name_prefix: str, suffix: str) -> str:
+    """Build a GCE-valid resource name from a prefix and suffix.
+
+    Normalizes the prefix to lowercase alphanumeric + hyphens (GCE naming rules),
+    truncates to fit within the 63-char GCE limit, and appends the suffix.
+    Used for both TPU slice names and VM instance names.
+    """
     max_prefix_len = _GCE_NAME_MAX_LEN - len(suffix) - 1
     if max_prefix_len <= 0:
         raise ValueError("Timestamp suffix leaves no room for VM slice id prefix")

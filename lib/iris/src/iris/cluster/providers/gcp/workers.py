@@ -29,7 +29,7 @@ from iris.cluster.providers.gcp.handles import (
     GcpStandaloneWorkerHandle,
     GcpVmSliceHandle,
     _ACTIVE_VM_SLICE_STATES,
-    _build_vm_slice_id,
+    _build_gce_resource_name,
 )
 from iris.cluster.providers.gcp.service import (
     CloudGcpService,
@@ -255,7 +255,7 @@ class GcpWorkerProvider:
         worker_config: config_pb2.WorkerConfig | None = None,
     ) -> SliceHandle:
         """Create a local slice via InMemoryGcpService(LOCAL)."""
-        slice_id = f"{config.name_prefix}-{generate_slice_suffix()}"
+        slice_id = _build_gce_resource_name(config.name_prefix, generate_slice_suffix())
         return self._gcp.create_local_slice(slice_id, config, worker_config)
 
     def _create_tpu_slice(
@@ -270,7 +270,7 @@ class GcpWorkerProvider:
         boot. Bootstrap progress is monitored via health endpoint polling.
         """
         gcp = config.gcp
-        slice_id = f"{config.name_prefix}-{generate_slice_suffix()}"
+        slice_id = _build_gce_resource_name(config.name_prefix, generate_slice_suffix())
 
         metadata: dict[str, str] = {}
         if worker_config:
@@ -328,7 +328,7 @@ class GcpWorkerProvider:
         startup-script metadata so the VM self-bootstraps on first boot.
         """
         gcp = config.gcp
-        slice_id = _build_vm_slice_id(config.name_prefix, generate_slice_suffix())
+        slice_id = _build_gce_resource_name(config.name_prefix, generate_slice_suffix())
         vm_name = slice_id
         machine_type = gcp.machine_type or DEFAULT_MACHINE_TYPE
         boot_disk_size = config.disk_size_gb or DEFAULT_BOOT_DISK_SIZE_GB

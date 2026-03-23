@@ -17,7 +17,7 @@ from dataclasses import dataclass
 import pytest
 
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
-from iris.cluster.providers.gcp.handles import _build_vm_slice_id
+from iris.cluster.providers.gcp.handles import _build_gce_resource_name
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider, _validate_slice_config
 from iris.cluster.providers.manual.provider import ManualControllerProvider, ManualWorkerProvider
 from iris.cluster.providers.types import (
@@ -300,9 +300,9 @@ def test_gcp_create_vm_slice_mode_produces_single_worker_slice():
     assert handle.slice_id not in {s.slice_id for s in listed_after}
 
 
-def test_gcp_build_vm_slice_id_bounds_and_normalizes():
+def test_gcp_build_gce_resource_name_bounds_and_normalizes():
     suffix = "20260307-1755-a3b1c9d2"
-    slice_id = _build_vm_slice_id(
+    slice_id = _build_gce_resource_name(
         "smoke-cpu_vm_e2_standard_4_ondemand-europe-west4-b",
         suffix,
     )
