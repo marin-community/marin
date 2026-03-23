@@ -9,12 +9,10 @@ correctly when dispatched through the Iris cluster.
 """
 
 import logging
-import os
 
 import pytest
 from iris.rpc import cluster_pb2
 
-from .conftest import IrisIntegrationCluster
 from .jobs import IntegrationJobs
 
 logger = logging.getLogger(__name__)
