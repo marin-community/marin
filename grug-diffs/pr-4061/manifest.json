@@ -1,0 +1,22 @@
+{
+  "added_variants": [
+    "moe_resid_bottleneck"
+  ],
+  "base_sha": "a243fe5628532f8213860b1668c0259275a37774",
+  "head_sha": "0c2a4a9c5edfb7971fcd148ea9698700f1d94d7d",
+  "report_count": 1,
+  "reports": [
+    {
+      "closest_variant": "moe",
+      "distance_score": 123,
+      "report_relpath": "moe_resid_bottleneck/index.html",
+      "status_counts": {
+        "added": 0,
+        "changed": 4,
+        "removed": 0,
+        "unchanged": 0
+      },
+      "variant": "moe_resid_bottleneck"
+    }
+  ]
+}
