@@ -1,10 +1,9 @@
-# Iris reference configuration for CoreWeave CKS clusters.
+# Iris development cluster configuration for CoreWeave CKS.
 #
 # Architecture: KubernetesProvider dispatches task pods directly to the k8s API.
 # No worker daemons are needed. CoreWeave NodePool autoscaling provisions nodes
 # on demand; when pods are deleted, NodePools scale to zero automatically.
-# Multi-VM gang-scheduled jobs use pod affinity to co-locate sibling tasks on
-# the same spine switch for InfiniBand connectivity.
+# CPU nodes are kept always-on (min_slices=2) for monitoring software.
 #
 # Workflow:
 #
@@ -30,7 +29,7 @@
 #   export KUBECONFIG=~/.kube/coreweave-iris
 
 platform:
-  label_prefix: iris
+  label_prefix: iris-cw-dev
   coreweave:
     region: US-WEST-04A
     namespace: iris
@@ -38,7 +37,7 @@ platform:
     object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
 
 storage:
-  remote_state_dir: s3://marin-na/iris/state
+  remote_state_dir: s3://marin-na/iris/coreweave-dev/state
 
 kubernetes_provider:
   namespace: iris
@@ -84,8 +83,8 @@ scale_groups:
       attributes:
         region: US-WEST-04A
         pool: cpu-erapids
-    min_slices: 0
-    max_slices: 1
+    min_slices: 2
+    max_slices: 2
     priority: 50
     slice_template:
       num_vms: 1
@@ -108,34 +107,10 @@ scale_groups:
         region: US-WEST-04A
         pool: h100-8x
     min_slices: 0
-    max_slices: 1
+    max_slices: 8
     priority: 100
     slice_template:
       num_vms: 1
-      coreweave:
-        region: US-WEST-04A
-        instance_type: gd-8xh100ib-i128
-
-  h100-16x:
-    num_vms: 2
-    resources:
-      cpu: 128
-      ram: 2048GB
-      disk: 1TB
-      device_type: gpu
-      device_variant: H100
-      device_count: 8
-      preemptible: false
-    worker:
-      attributes:
-        region: US-WEST-04A
-        pool: h100-16x
-        backend.coreweave.cloud/superpod: same-slice
-    min_slices: 0
-    max_slices: 1
-    priority: 100
-    slice_template:
-      num_vms: 2
       coreweave:
         region: US-WEST-04A
         instance_type: gd-8xh100ib-i128
