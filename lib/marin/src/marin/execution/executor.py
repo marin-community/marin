@@ -541,6 +541,14 @@ def _iris_worker_region_pin() -> str | None:
     return job_info.worker_region
 
 
+def _step_output_is_cached(output_path: str) -> bool:
+    """Return True if the step already completed successfully (cache hit).
+
+    Used to skip region validation for steps that need no compute.
+    """
+    return StatusFile(output_path, worker_id()).status == STATUS_SUCCESS
+
+
 def _maybe_attach_inferred_region_constraint(
     *,
     step_name: str,
@@ -585,6 +593,14 @@ def _maybe_attach_inferred_region_constraint(
         if inherited_region_pin is not None and allowed_regions is not None:
             pinned_region = inherited_region_pin.lower()
             if pinned_region not in allowed_regions:
+                if _step_output_is_cached(output_path):
+                    logger.info(
+                        "Skipping region validation for cached step %s " "(inherited pin %s, inferred %s)",
+                        step_name,
+                        pinned_region,
+                        sorted(allowed_regions),
+                    )
+                    return remote_fn
                 raise ValueError(
                     f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
                     f"but inferred regions are {sorted(allowed_regions)}."
@@ -597,6 +613,14 @@ def _maybe_attach_inferred_region_constraint(
     if inherited_region_pin is not None:
         pinned_region = inherited_region_pin.lower()
         if pinned_region not in allowed_regions:
+            if _step_output_is_cached(output_path):
+                logger.info(
+                    "Skipping region validation for cached step %s " "(inherited pin %s, inferred %s)",
+                    step_name,
+                    pinned_region,
+                    sorted(allowed_regions),
+                )
+                return remote_fn
             raise ValueError(
                 f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
                 f"but inferred regions are {sorted(allowed_regions)}."
