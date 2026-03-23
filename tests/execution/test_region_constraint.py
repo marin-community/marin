@@ -24,9 +24,7 @@ def _make_remote_fn(regions: list[str] | None = None) -> RemoteCallable:
 
 # Patch targets: skip the Iris backend check so logic runs in unit tests,
 # and control the worker region pin and GCS region inference.
-_PATCH_IRIS_ACTIVE = patch(
-    "marin.execution.executor._iris_backend_is_active", return_value=True
-)
+_PATCH_IRIS_ACTIVE = patch("marin.execution.executor._iris_backend_is_active", return_value=True)
 _BASE = "marin.execution.executor"
 
 
