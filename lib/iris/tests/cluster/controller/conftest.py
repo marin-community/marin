@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from iris.cluster.controller.db import ATTEMPTS, TASKS, ControllerDB
-from iris.cluster.controller.provider import ProviderUnsupportedError
+from iris.cluster.controller.provider import ProviderSyncOutcome, ProviderUnsupportedError
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.log_store import LogStore
 from iris.cluster.types import JobName
@@ -18,12 +18,23 @@ from iris.time_utils import Timestamp
 
 
 class FakeProvider:
-    """Minimal TaskProvider for tests that only exercise transitions, not RPCs."""
+    """Minimal TaskProvider for tests that only exercise transitions, not RPCs.
 
-    def sync(self, batches):
-        return [(b, None, "no stub") for b in batches]
+    Implements the unified TaskProvider protocol. sync() always returns an
+    empty outcome (no-op) since these tests focus on transition logic.
+    """
 
-    def fetch_live_logs(self, worker_id, address, task_id, attempt_id, cursor, max_lines):
+    @property
+    def has_workers(self) -> bool:
+        return True
+
+    def sync(self, transitions):
+        return ProviderSyncOutcome()
+
+    def kill_unmapped_tasks(self, task_ids, transitions):
+        return False
+
+    def fetch_live_logs(self, task_id, attempt_id, cursor, max_lines, worker_id=None, address=None):
         raise ProviderUnsupportedError("fake")
 
     def fetch_process_logs(self, worker_id, address, request):
@@ -35,8 +46,57 @@ class FakeProvider:
     def on_worker_failed(self, worker_id, address):
         pass
 
-    def profile_task(self, address, request, timeout_ms):
+    def profile_task(self, task_id, attempt_id, address, request, timeout_ms):
         raise ProviderUnsupportedError("fake")
+
+    def exec_in_container(self, address, request, timeout_seconds):
+        raise ProviderUnsupportedError("fake")
+
+    def get_cluster_status(self):
+        return cluster_pb2.Controller.GetKubernetesClusterStatusResponse()
+
+    def close(self):
+        pass
+
+
+class FakeDirectProvider:
+    """Minimal direct TaskProvider for tests that exercise direct provider paths.
+
+    has_workers=False, so the controller treats it as a direct provider.
+    """
+
+    @property
+    def has_workers(self) -> bool:
+        return False
+
+    def sync(self, transitions):
+        return ProviderSyncOutcome()
+
+    def kill_unmapped_tasks(self, task_ids, transitions):
+        for task_id in task_ids:
+            transitions.buffer_direct_kill(task_id.to_wire())
+        return bool(task_ids)
+
+    def fetch_live_logs(self, task_id, attempt_id, cursor, max_lines, worker_id=None, address=None):
+        return [], cursor
+
+    def fetch_process_logs(self, worker_id, address, request):
+        raise ProviderUnsupportedError("direct provider has no worker processes")
+
+    def get_process_status(self, worker_id, address, request):
+        raise ProviderUnsupportedError("direct provider has no worker processes")
+
+    def on_worker_failed(self, worker_id, address):
+        pass
+
+    def profile_task(self, task_id, attempt_id, address, request, timeout_ms):
+        raise ProviderUnsupportedError("fake")
+
+    def exec_in_container(self, address, request, timeout_seconds):
+        raise ProviderUnsupportedError("direct provider does not support exec_in_container")
+
+    def get_cluster_status(self):
+        return cluster_pb2.Controller.GetKubernetesClusterStatusResponse()
 
     def close(self):
         pass

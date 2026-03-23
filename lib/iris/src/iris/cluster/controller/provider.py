@@ -1,13 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""TaskProvider protocol: abstraction over a task execution backend."""
+"""TaskProvider protocol: unified abstraction over task execution backends.
 
+Two implementations:
+- WorkerProviderAdapter: wraps WorkerProvider (worker-daemon heartbeat RPC model)
+- DirectProviderAdapter: wraps KubernetesProvider (direct-pod model, no workers)
+"""
+
+import logging
+from dataclasses import dataclass, field
 from typing import Protocol
 
-from iris.cluster.controller.transitions import DispatchBatch, HeartbeatApplyRequest
-from iris.cluster.types import WorkerId
+from iris.cluster.controller.transitions import (
+    ClusterCapacity,
+    ControllerTransitions,
+    SchedulingEvent,
+)
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, logging_pb2
+
+logger = logging.getLogger(__name__)
 
 
 class ProviderError(Exception):
@@ -18,47 +31,92 @@ class ProviderUnsupportedError(ProviderError):
     """Operation not supported by this provider implementation."""
 
 
-class TaskProvider(Protocol):
-    """Abstraction over a task execution backend.
+@dataclass(frozen=True)
+class FailedWorker:
+    """A worker that failed during a sync cycle."""
 
-    The controller calls sync() in a loop. The provider is responsible for
-    submitting/cancelling tasks and collecting their state. It returns
-    HeartbeatApplyRequest batches which the controller applies via
-    ControllerTransitions.apply_heartbeat().
+    worker_id: WorkerId
+    address: str | None
+    is_permanent: bool  # True = WORKER_FAILED, False = TRANSIENT_FAILURE
 
-    Log fetching for live tasks is provider-specific. Completed task logs are
-    always available from the controller's local LogStore (written via
-    HeartbeatApplyRequest log_entries), so the protocol only covers live
-    log streaming.
+
+@dataclass(frozen=True)
+class ProviderSyncOutcome:
+    """Unified result from a provider sync cycle.
+
+    Returned by TaskProvider.sync(). The controller uses this to handle
+    side effects (autoscaler notification, sibling failure, kill dispatch).
     """
+
+    tasks_to_kill: set[JobName] = field(default_factory=set)
+    scheduling_events: list[SchedulingEvent] = field(default_factory=list)
+    capacity: ClusterCapacity | None = None
+    failed_workers: list[FailedWorker] = field(default_factory=list)
+    batch_count: int = 0
+    error_count: int = 0
+    error_worker_ids: list[str] = field(default_factory=list)
+
+
+class TaskProvider(Protocol):
+    """Unified abstraction over a task execution backend.
+
+    The controller calls sync() in a loop. The provider drains work from
+    the controller's transitions, syncs with the execution backend, applies
+    results, and returns a ProviderSyncOutcome.
+
+    Two execution models share this protocol:
+    - Worker-daemon (WorkerProviderAdapter): per-worker heartbeat RPC fanout
+    - Direct-pod (DirectProviderAdapter): cluster-wide pod management
+    """
+
+    @property
+    def has_workers(self) -> bool:
+        """Whether this provider uses persistent worker daemons.
+
+        When True, the controller spawns scheduling and profiling threads.
+        When False, the provider handles scheduling internally (e.g. k8s API).
+        """
+        ...
 
     def sync(
         self,
-        batches: list[DispatchBatch],
-    ) -> list[tuple[DispatchBatch, HeartbeatApplyRequest | None, str | None]]:
-        """Sync task state with the execution backend.
+        transitions: ControllerTransitions,
+    ) -> ProviderSyncOutcome:
+        """Execute a complete drain -> sync -> apply cycle.
 
-        Args:
-            batches: One DispatchBatch per active execution unit, drained from the DB.
+        Drains pending work from transitions, syncs with the execution backend,
+        applies results back to transitions, and returns the outcome.
+        """
+        ...
 
-        Returns:
-            For each batch: (batch, apply_request | None, error_str | None).
-            apply_request is None on communication failure (caller uses fail_heartbeat).
+    def kill_unmapped_tasks(
+        self,
+        task_ids: set[JobName],
+        transitions: ControllerTransitions,
+    ) -> bool:
+        """Kill tasks that have no worker mapping.
+
+        For worker-backed providers, this is a no-op (unmapped tasks are not yet
+        assigned). For direct providers, buffers kills in the dispatch queue.
+
+        Returns True if any kills were buffered.
         """
         ...
 
     def fetch_live_logs(
         self,
-        worker_id: WorkerId,
-        address: str | None,
         task_id: str,
         attempt_id: int,
         cursor: int,
         max_lines: int,
+        worker_id: WorkerId | None = None,
+        address: str | None = None,
     ) -> tuple[list[logging_pb2.LogEntry], int]:
         """Fetch live logs for a running task from the execution backend.
 
         Returns (entries, next_cursor). Raises ProviderError on backend failure.
+        Worker-backed providers use worker_id/address to route the request.
+        Direct providers ignore worker_id/address and route via task_id.
         """
         ...
 
@@ -80,7 +138,7 @@ class TaskProvider(Protocol):
         address: str | None,
         request: cluster_pb2.GetProcessStatusRequest,
     ) -> cluster_pb2.GetProcessStatusResponse:
-        """Fetch full process status (pid, memory, CPU, logs) from an execution unit.
+        """Fetch full process status from an execution unit.
 
         Returns GetProcessStatusResponse. Raises ProviderUnsupportedError if not applicable.
         """
@@ -92,11 +150,33 @@ class TaskProvider(Protocol):
 
     def profile_task(
         self,
-        address: str,
+        task_id: str,
+        attempt_id: int,
+        address: str | None,
         request: cluster_pb2.ProfileTaskRequest,
         timeout_ms: int,
     ) -> cluster_pb2.ProfileTaskResponse:
-        """Profile a task via RPC. Raises ProviderUnsupportedError if not applicable."""
+        """Profile a task.
+
+        Worker-backed providers route via address.
+        Direct providers route via task_id/attempt_id.
+        """
+        ...
+
+    def exec_in_container(
+        self,
+        address: str,
+        request: cluster_pb2.Worker.ExecInContainerRequest,
+        timeout_seconds: int,
+    ) -> cluster_pb2.Worker.ExecInContainerResponse:
+        """Execute a command in a running task's container via worker RPC.
+
+        Raises ProviderUnsupportedError for direct providers.
+        """
+        ...
+
+    def get_cluster_status(self) -> cluster_pb2.Controller.GetKubernetesClusterStatusResponse:
+        """Get Kubernetes cluster status. Returns empty response for non-k8s providers."""
         ...
 
     def close(self) -> None:

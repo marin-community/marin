@@ -25,8 +25,7 @@ import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.k8s.provider import KubernetesProvider
-from iris.cluster.controller.worker_provider import WorkerProvider
+from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.types import parse_memory_string
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
@@ -1143,22 +1142,25 @@ def create_autoscaler(
     )
 
 
-def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvider | KubernetesProvider:
-    """Create a TaskProvider from cluster configuration.
+def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> TaskProvider:
+    """Create a TaskProvider adapter from cluster configuration.
 
-    Returns a KubernetesProvider when `kubernetes_provider` is configured,
-    or a WorkerProvider when `worker_provider` is configured.
+    Returns a DirectProviderAdapter (wrapping KubernetesProvider) when
+    `kubernetes_provider` is configured, or a WorkerProviderAdapter
+    (wrapping WorkerProvider) when `worker_provider` is configured.
     Raises ValueError if no provider is set.
     """
     which = cluster_config.WhichOneof("provider")
     if which == "kubernetes_provider":
+        from iris.cluster.controller.provider_adapters import DirectProviderAdapter
         from iris.cluster.k8s.kubectl import Kubectl
+        from iris.cluster.k8s.provider import KubernetesProvider
 
         kp = cluster_config.kubernetes_provider
         namespace = kp.namespace or "iris"
         label_prefix = cluster_config.platform.label_prefix
         managed_label = f"iris-{label_prefix}-managed" if label_prefix else ""
-        return KubernetesProvider(
+        inner = KubernetesProvider(
             kubectl=Kubectl(namespace=namespace, kubeconfig_path=kp.kubeconfig or None),
             namespace=namespace,
             default_image=kp.default_image,
@@ -1169,10 +1171,13 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
             controller_address=kp.controller_address or None,
             managed_label=managed_label,
         )
+        return DirectProviderAdapter(_inner=inner)
     if which == "worker_provider":
-        from iris.cluster.controller.worker_provider import RpcWorkerStubFactory
+        from iris.cluster.controller.provider_adapters import WorkerProviderAdapter
+        from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 
-        return WorkerProvider(stub_factory=RpcWorkerStubFactory())
+        inner = WorkerProvider(stub_factory=RpcWorkerStubFactory())
+        return WorkerProviderAdapter(_inner=inner)
     raise ValueError(
         "IrisClusterConfig.provider must be set. Add either:\n"
         "  worker_provider: {}\n"

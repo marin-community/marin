@@ -15,6 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 from iris.client import IrisClient
 from iris.cluster.controller.controller import Controller, ControllerConfig
+from iris.cluster.controller.provider_adapters import WorkerProviderAdapter
 from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.platform.base import find_free_port
@@ -141,7 +142,7 @@ class E2ECluster:
         )
         self._controller = Controller(
             config=controller_config,
-            provider=WorkerProvider(stub_factory=RpcWorkerStubFactory()),
+            provider=WorkerProviderAdapter(_inner=WorkerProvider(stub_factory=RpcWorkerStubFactory())),
         )
         self._controller.start()
 
