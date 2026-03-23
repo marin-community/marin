@@ -585,7 +585,7 @@ def controller_checkpoint(ctx, stop: bool):
     controller_url = require_controller_url(ctx)
     client = cluster_connect.ControllerServiceClientSync(controller_url)
     try:
-        resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest())
+        resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest(), timeout_ms=60_000)
     except Exception as e:
         click.echo(f"Checkpoint failed: {e}", err=True)
         raise SystemExit(1) from e
@@ -638,7 +638,7 @@ def controller_restart(ctx):
     # Checkpoint
     client = cluster_connect.ControllerServiceClientSync(controller_url)
     try:
-        resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest())
+        resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest(), timeout_ms=60_000)
     except Exception as e:
         click.echo(f"Checkpoint failed: {e}", err=True)
         raise SystemExit(1) from e
