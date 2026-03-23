@@ -177,7 +177,6 @@ message ScaleGroupResources {
 
 message WorkerSettings {
   map<string, string> attributes = 1;
-  map<string, string> env = 2;
 }
 
 // Configuration for a scale group
@@ -241,7 +240,7 @@ message WorkerConfig {
 
   // Task defaults
   string default_task_image = 9;
-  map<string, string> default_task_env = 10;
+  map<string, string> task_env = 10;
   string runtime = 11;                       // "docker" or "kubernetes"
 
   // Accelerator (from scale group resources, not env vars)
@@ -354,6 +353,7 @@ message DefaultsConfig {
   reserved 4;  // was: BootstrapConfig bootstrap
   reserved 5;  // was: string default_task_image
   WorkerConfig worker = 6;
+  map<string, string> task_env = 7;  // Env vars injected into every task container
 }
 
 // ============================================================================

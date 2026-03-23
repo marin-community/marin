@@ -101,7 +101,7 @@ In this guide, we’ll walk through adding an [AdaMax](https://optax.readthedocs
     and use it in `TrainLmConfig`:
 
     ```python
-    from levanter.trainer import TrainLmConfig
+    from levanter.main.train_lm import TrainLmConfig
 
     trainer_config = TrainLmConfig(
         ...

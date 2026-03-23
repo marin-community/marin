@@ -27,9 +27,12 @@ Key skills and their triggers:
 | Adding a HF dataset | `add-dataset` |
 | Profiling JAX training | `agent-profiling` |
 | Running / monitoring ferries | `ferries` |
-| Babysitting any Ray/Iris job | `babysit-job` |
-| Babysitting Zephyr jobs | `babysit-zephyr` |
-| Debugging Zephyr pipelines | `debug-zephyr` |
+| Babysitting any job (generic practices) | `babysit-job` |
+| Babysitting Ray jobs specifically | `babysit-ray-job` |
+| Babysitting Iris jobs specifically | `babysit-iris-job` |
+| Babysitting Zephyr jobs specifically | `babysit-zephyr` |
+| Debugging Iris jobs (task exec) | `debug-iris-job` |
+| Debugging Zephyr pipelines | `debug-zephyr-job` |
 | Debugging Iris controller | `debug-iris-controller` |
 | TPU bad-node recovery | `debug-tpu` |
 

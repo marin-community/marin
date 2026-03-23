@@ -4,32 +4,45 @@ on:
     branches:
       - main
   pull_request:
-    paths:
-      - lib/zephyr/**
-      # Iris is being actively developed, to avoid bugs sneaking into zephyr, we trigger zephyr tests on iris change
-      - lib/iris/**
-      - uv.lock
-      - .github/workflows/zephyr-unit-tests.yaml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  cpu-unit-test:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      should_run: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'lib/zephyr/**'
+              # Iris is being actively developed, to avoid bugs sneaking into zephyr, we trigger zephyr tests on iris change
+              - 'lib/iris/**'
+              - 'uv.lock'
+              - '.github/workflows/zephyr-unit-tests.yaml'
+
+  zephyr-tests:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    strategy:
-      matrix:
-        python-version: ["3.12"]
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python 3.12
         uses: actions/setup-python@v4
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

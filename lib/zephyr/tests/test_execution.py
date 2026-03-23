@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -617,10 +618,33 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
     assert result == "SHUTDOWN"
 
 
+def test_coordinator_loop_crash_aborts_pipeline(actor_context, tmp_path):
+    """Coordinator loop crash sets _fatal_error instead of dying silently. #3996."""
+    from zephyr.execution import ZephyrCoordinator
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    crashed = threading.Event()
+    original = coord.check_heartbeats
+
+    def crashing_heartbeats(*a, **kw):
+        if not crashed.is_set():
+            crashed.set()
+            raise RuntimeError("dictionary changed size during iteration")
+        return original(*a, **kw)
+
+    coord.check_heartbeats = crashing_heartbeats
+
+    t = threading.Thread(target=coord._coordinator_loop, daemon=True, name="zephyr-coordinator-loop")
+    t.start()
+    assert crashed.wait(timeout=5.0)
+    t.join(timeout=2.0)
+    assert coord._fatal_error is not None
+
+
 def test_run_pipeline_rejects_concurrent_calls(actor_context, tmp_path):
     """Calling run_pipeline while another is already running raises RuntimeError."""
-    import threading
-
     from unittest.mock import MagicMock
 
     from zephyr.execution import ZephyrCoordinator
@@ -659,6 +683,35 @@ def test_run_pipeline_rejects_concurrent_calls(actor_context, tmp_path):
         coord.run_pipeline(plan, "exec-2", hints)
 
     t.join(timeout=10.0)
+    coord.shutdown()
+
+
+def test_execute_stops_coordinator_thread(local_client, tmp_path):
+    """execute() tears down the hosted coordinator loop before returning."""
+    chunk_prefix = str(tmp_path / "chunks")
+    baseline = sum(t.is_alive() and t.name == "zephyr-coordinator-loop" for t in threading.enumerate())
+
+    ctx = ZephyrContext(
+        client=local_client,
+        max_workers=1,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=chunk_prefix,
+        name=f"test-execution-{uuid.uuid4().hex[:8]}",
+    )
+
+    results = list(ctx.execute(Dataset.from_list([1, 2, 3]).map(lambda x: x + 1)))
+    assert sorted(results) == [2, 3, 4]
+
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        alive = sum(t.is_alive() and t.name == "zephyr-coordinator-loop" for t in threading.enumerate())
+        if alive == baseline:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("zephyr-coordinator-loop thread remained alive after execute() returned")
+
+    ctx.shutdown()
 
 
 def test_execute_retries_on_coordinator_death(tmp_path):

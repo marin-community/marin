@@ -17,19 +17,16 @@ makes the control flow easy to follow and debug.
 
 from __future__ import annotations
 
-import contextlib
 import dataclasses
 import json
 import logging
 import os
 import time
 import uuid
-from collections.abc import Generator, Iterable
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
-from threading import Event, Thread
 
 import levanter.utils.fsspec_utils as fsspec_utils
-from iris.distributed_lock import HEARTBEAT_INTERVAL, LeaseLostError
 from iris.marin_fs import open_url, url_to_fs
 
 from fray.v2.client import JobHandle, JobStatus
@@ -39,14 +36,16 @@ from marin.execution.executor_step_status import (
     STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_SUCCESS,
+    StepAlreadyDone,
     StatusFile,
+    step_lock,
 )
 from marin.execution.remote import RemoteCallable
 from marin.execution.step_spec import StepSpec
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 # Re-export for backward compatibility
-from marin.execution.executor_step_status import PreviousTaskFailedError, should_run, worker_id
+from marin.execution.executor_step_status import PreviousTaskFailedError, worker_id
 
 logger = logging.getLogger(__name__)
 
@@ -264,48 +263,6 @@ def check_cache(output_path: str) -> bool:
     return False
 
 
-@contextlib.contextmanager
-def step_lock(output_path: str, step_label: str, *, force_run_failed: bool = True) -> Generator[StatusFile, None, None]:
-    """Context manager that acquires a distributed lock with heartbeat refresh.
-
-    Acquires the lock, starts a daemon heartbeat thread, yields the
-    ``StatusFile``, then tears down the heartbeat and releases the lock.
-
-    Raises ``StepAlreadyDone`` if another worker completed the step
-    while we waited for the lock.
-    """
-    from marin.execution.executor_step_status import StepAlreadyDone
-
-    status_file = StatusFile(output_path, worker_id())
-    if not should_run(status_file, step_label, force_run_failed=force_run_failed):
-        raise StepAlreadyDone(output_path)
-
-    # Start heartbeat — LeaseLostError is fatal and signals the main thread.
-    stop_event = Event()
-    lease_lost_event = Event()
-
-    def _heartbeat():
-        while not stop_event.wait(HEARTBEAT_INTERVAL):
-            try:
-                status_file.refresh_lock()
-            except LeaseLostError:
-                logger.error("Lease lost for %s — step must terminate", output_path, exc_info=True)
-                lease_lost_event.set()
-                return
-
-    heartbeat_thread = Thread(target=_heartbeat, daemon=True)
-    heartbeat_thread.start()
-
-    try:
-        yield status_file
-    finally:
-        stop_event.set()
-        heartbeat_thread.join(timeout=5)
-        if lease_lost_event.is_set():
-            raise LeaseLostError(f"Lease was lost during execution of {output_path}")
-        status_file.release_lock()
-
-
 def run_step(step: StepSpec) -> None:
     """Execute a single step with explicit cache check, locking, heartbeat, and artifact saving.
 
@@ -321,8 +278,6 @@ def run_step(step: StepSpec) -> None:
         return
 
     # 2. Acquire distributed lock with heartbeat (blocks until lock obtained or step done)
-    from marin.execution.executor_step_status import StepAlreadyDone
-
     try:
         with step_lock(output_path, step_label) as status_file:
             # 3. Run the function

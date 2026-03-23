@@ -6,9 +6,7 @@
 Defines the ``iris`` Click group and registers all subcommands.
 """
 
-import json
 import logging as _logging_module
-import os
 import sys
 
 import click
@@ -66,46 +64,10 @@ def create_client_token_provider(
 
 
 def _configure_client_s3(config) -> None:
-    """Configure S3 env vars for fsspec access (e.g. bundle downloads).
+    """Configure S3 env vars for fsspec access. Delegates to the canonical implementation."""
+    from iris.cluster.platform.coreweave import configure_client_s3
 
-    fsspec needs AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (mapped from
-    R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY), AWS_ENDPOINT_URL, and FSSPEC_S3
-    with the correct endpoint.
-    """
-    from iris.cluster.platform.coreweave import _needs_virtual_host_addressing
-
-    endpoint = config.platform.coreweave.object_storage_endpoint
-    if not endpoint:
-        return
-
-    r2_key = os.environ.get("R2_ACCESS_KEY_ID", "")
-    r2_secret = os.environ.get("R2_SECRET_ACCESS_KEY", "")
-    if r2_key and r2_secret:
-        os.environ.setdefault("AWS_ACCESS_KEY_ID", r2_key)
-        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", r2_secret)
-
-    os.environ.setdefault("AWS_ENDPOINT_URL", endpoint)
-
-    if "FSSPEC_S3" not in os.environ:
-        fsspec_conf: dict = {"endpoint_url": endpoint}
-        if _needs_virtual_host_addressing(endpoint):
-            fsspec_conf["config_kwargs"] = {"s3": {"addressing_style": "virtual"}}
-        if ".r2.cloudflarestorage.com" in endpoint:
-            fsspec_conf.setdefault("client_kwargs", {})["region_name"] = "auto"
-        os.environ["FSSPEC_S3"] = json.dumps(fsspec_conf)
-
-    # Flush fsspec/s3fs cached instances so they pick up the new config.
-    # Without this, any S3FileSystem created before this point (e.g. at import
-    # time) will ignore FSSPEC_S3.
-    import fsspec.config
-
-    fsspec.config.set_conf_env(fsspec.config.conf)
-    try:
-        import s3fs
-
-        s3fs.S3FileSystem.clear_instance_cache()
-    except ImportError:
-        pass
+    configure_client_s3(config)
 
 
 def require_controller_url(ctx: click.Context) -> str:

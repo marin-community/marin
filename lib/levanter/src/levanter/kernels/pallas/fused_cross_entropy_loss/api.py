@@ -439,13 +439,18 @@ def _benchmark_block_sizes_candidate(
     )
     jitted = jax.jit(benchmark_fn)
 
-    abstract_args = (
-        _shape_dtype_struct_for_benchmark(x),
-        _shape_dtype_struct_for_benchmark(labels),
-        _shape_dtype_struct_for_benchmark(w),
+    use_tracer_lowering = _is_tracer(x) or _is_tracer(labels) or _is_tracer(w)
+    lowering_args = (
+        (x, labels, w)
+        if use_tracer_lowering
+        else (
+            _shape_dtype_struct_for_benchmark(x),
+            _shape_dtype_struct_for_benchmark(labels),
+            _shape_dtype_struct_for_benchmark(w),
+        )
     )
     start = time.perf_counter()
-    lowered = jitted.lower(*abstract_args)
+    lowered = jitted.lower(*lowering_args)
     lowered.compile()
     compile_time = time.perf_counter() - start
     if compile_time <= _AUTOTUNE_COMPILE_HIT_THRESHOLD_S:

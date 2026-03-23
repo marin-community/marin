@@ -2375,16 +2375,16 @@ class TestPerGroupWorkerConfig:
     """Tests for _per_group_worker_config merging worker attributes into WorkerConfig."""
 
     def test_merges_worker_attributes(self):
-        """Worker attributes, env, and scale group name are merged into WorkerConfig."""
+        """Worker attributes and scale group name are merged into WorkerConfig."""
         base_wc = config_pb2.WorkerConfig(
             docker_image="test:latest",
             port=10001,
             controller_address="controller:10000",
         )
+        base_wc.task_env["MARIN_PREFIX"] = "s3://bucket/marin"
         sg_config = make_scale_group_config(name="west-group", max_slices=5)
         sg_config.worker.attributes[WellKnownAttribute.REGION] = "us-west4"
         sg_config.worker.attributes[WellKnownAttribute.PREEMPTIBLE] = "true"
-        sg_config.worker.env["IRIS_REGION"] = "us-west4"
 
         group = ScalingGroup(sg_config, make_mock_platform())
         autoscaler = make_autoscaler({"west-group": group}, base_worker_config=base_wc)
@@ -2395,7 +2395,7 @@ class TestPerGroupWorkerConfig:
         assert wc.docker_image == "test:latest"
         assert wc.worker_attributes[WellKnownAttribute.REGION] == "us-west4"
         assert wc.worker_attributes[WellKnownAttribute.PREEMPTIBLE] == "true"
-        assert wc.default_task_env["IRIS_REGION"] == "us-west4"
+        assert wc.task_env["MARIN_PREFIX"] == "s3://bucket/marin"
         assert wc.worker_attributes["scale-group"] == "west-group"
         assert wc.accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
         assert wc.accelerator_variant == "v5p-8"

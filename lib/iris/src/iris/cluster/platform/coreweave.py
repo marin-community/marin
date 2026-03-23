@@ -86,6 +86,45 @@ def _needs_virtual_host_addressing(endpoint_url: str) -> bool:
     return any(hostname == domain or hostname.endswith("." + domain) for domain in _VIRTUAL_HOST_ONLY_S3_DOMAINS)
 
 
+def configure_client_s3(config: config_pb2.IrisClusterConfig) -> None:
+    """Configure S3 env vars for fsspec access on CoreWeave (R2 → AWS mapping).
+
+    Maps R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY to their AWS equivalents and
+    sets FSSPEC_S3 with the correct endpoint and addressing style. No-op if the
+    config has no CoreWeave object storage endpoint.
+    """
+    endpoint = config.platform.coreweave.object_storage_endpoint
+    if not endpoint:
+        return
+
+    r2_key = os.environ.get("R2_ACCESS_KEY_ID", "")
+    r2_secret = os.environ.get("R2_SECRET_ACCESS_KEY", "")
+    if r2_key and r2_secret:
+        os.environ.setdefault("AWS_ACCESS_KEY_ID", r2_key)
+        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", r2_secret)
+
+    os.environ.setdefault("AWS_ENDPOINT_URL", endpoint)
+
+    if "FSSPEC_S3" not in os.environ:
+        fsspec_conf: dict = {"endpoint_url": endpoint}
+        if _needs_virtual_host_addressing(endpoint):
+            fsspec_conf["config_kwargs"] = {"s3": {"addressing_style": "virtual"}}
+        if ".r2.cloudflarestorage.com" in endpoint:
+            fsspec_conf.setdefault("client_kwargs", {})["region_name"] = "auto"
+        os.environ["FSSPEC_S3"] = json.dumps(fsspec_conf)
+
+    # Flush fsspec/s3fs cached instances so they pick up the new config.
+    import fsspec.config
+
+    fsspec.config.set_conf_env(fsspec.config.conf)
+    try:
+        import s3fs
+
+        s3fs.S3FileSystem.clear_instance_cache()
+    except ImportError:
+        pass
+
+
 _COREWEAVE_TOPOLOGY_LABEL_PREFIXES = (
     "backend.coreweave.cloud/",
     "ib.coreweave.cloud/",
@@ -203,6 +242,11 @@ class CoreweavePlatform:
                 {
                     "apiGroups": [""],
                     "resources": ["nodes"],
+                    "verbs": ["get", "list", "watch"],
+                },
+                {
+                    "apiGroups": [""],
+                    "resources": ["events"],
                     "verbs": ["get", "list", "watch"],
                 },
                 {
@@ -340,6 +384,9 @@ class CoreweavePlatform:
                 "nodeLabels": {
                     self._iris_labels.iris_managed: "true",
                     self._iris_labels.iris_scale_group: scale_group_name,
+                    # Pin Konnectivity agents and monitoring pods to always-on nodes
+                    # so GPU NodePools can safely scale to zero.
+                    **({"cks.coreweave.cloud/system-critical": "true"} if min_nodes > 0 else {}),
                 },
             },
         }
