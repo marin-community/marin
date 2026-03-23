@@ -199,7 +199,10 @@ class _DashboardAuthInterceptor:
             from connectrpc.code import Code
             from connectrpc.errors import ConnectError
 
-            raise ConnectError(Code.UNAUTHENTICATED, str(exc)) from exc
+            if token is None:
+                raise ConnectError(Code.UNAUTHENTICATED, str(exc)) from exc
+            logger.warning("Authentication failed: %s", exc)
+            raise ConnectError(Code.UNAUTHENTICATED, "Authentication failed") from exc
 
         if identity is None:
             # Optional mode, no token — anonymous fallback.
