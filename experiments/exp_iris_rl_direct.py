@@ -63,7 +63,7 @@ def main():
                 dependencies=[],
                 sampling_params=CurriculumSamplingParams(
                     temperature=1.0,
-                    n_prompts=64,
+                    n_prompts=16,
                     n_generations_per_prompt=16,
                     max_output_tokens=1024,
                     top_k=4096,
