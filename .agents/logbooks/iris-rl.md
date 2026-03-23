@@ -357,6 +357,17 @@ Job `/ahmed/iris-rl-direct-13` has been running for 5+ hours:
 
 The entire Iris cluster is saturated across all TPU types (v6e-4, v6e-8, v5litepod-4). No TPU freed up in 5 hours of monitoring.
 
+### 2026-03-22 18:30 UTC — Root causes found and fixed
+
+**7+ hours wasted on two Iris misunderstandings:**
+
+1. **`preemptible=False`** filtered out ALL workers (entire cluster is preemptible). Fixed in `dd1f9402d`.
+2. **Region inheritance** — child jobs inherit coordinator's region (europe-west4 CPU), but v5p-8 only exists in us-central1/us-east5. Fixed with explicit `regions=` in `c938fa0f3`.
+
+After both fixes, **trainer is RUNNING on v5p-8** for the first time (`/ahmed/iris-rl-v5p-3`). Rollout worker pending on second v5p-8 slot.
+
+**Trainer timeout risk**: `_wait_for_initial_rollouts` had a 20-min timeout — too short when rollout worker is waiting for TPU. Bumped to 2 hours in `01ca3fe1b`. Rollout worker side is already resilient (dummy weight guard loops indefinitely).
+
 **For the user when they wake up**:
 1. The v2 orchestration code is working end-to-end on Iris — coordinator, actors, child jobs, actor resolution, weight polling
 2. The only thing blocking full e2e validation is cluster TPU capacity
