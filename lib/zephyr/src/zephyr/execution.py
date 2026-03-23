@@ -870,7 +870,7 @@ class ZephyrCoordinator:
 
             # Checked after completion so a clean shutdown racing the final
             # task can never false-positive — only true crashes reach here.
-            if not self._coordinator_thread.is_alive():
+            if self._coordinator_thread is not None and not self._coordinator_thread.is_alive():
                 raise ZephyrWorkerError(
                     "Coordinator thread is no longer alive. "
                     "Check logs for 'Coordinator loop crashed' for the root cause."
