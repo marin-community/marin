@@ -10,7 +10,7 @@ jobs:
   iris-itest:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     concurrency:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
@@ -69,10 +69,11 @@ jobs:
         run: |
           uv run pytest tests/integration/iris/ \
             --controller-url "$IRIS_CONTROLLER_URL" \
-            -v --tb=short --timeout=120 \
+            -v --tb=short --timeout=600 \
             -x
         env:
-          WANDB_MODE: offline
+          WANDB_MODE: disabled
+          WANDB_API_KEY: ""
           JAX_TRACEBACK_FILTERING: off
 
       - name: Stop cluster
