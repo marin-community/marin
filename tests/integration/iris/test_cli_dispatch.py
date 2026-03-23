@@ -3,9 +3,11 @@
 """CLI dispatch integration tests — submit jobs via 'iris job run' subprocess."""
 
 import json
+import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 from iris.cluster.types import is_job_finished
@@ -14,9 +16,20 @@ from iris.rpc import cluster_pb2
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 
+def _find_iris_executable() -> str:
+    """Locate the ``iris`` entry-point script in the current venv."""
+    venv_bin = Path(sys.executable).parent / "iris"
+    if venv_bin.exists():
+        return str(venv_bin)
+    found = shutil.which("iris")
+    if found:
+        return found
+    raise FileNotFoundError("Cannot find 'iris' CLI entry point")
+
+
 def _run_iris_cli(controller_url: str, *args: str, timeout: float = 60) -> subprocess.CompletedProcess:
     """Run an iris CLI command as a subprocess."""
-    cmd = [sys.executable, "-m", "iris.cli.main", "--controller-url", controller_url, *args]
+    cmd = [_find_iris_executable(), "--controller-url", controller_url, *args]
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
 
