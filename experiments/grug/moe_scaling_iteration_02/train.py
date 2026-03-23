@@ -1,13 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import dataclasses
 import functools
 import logging
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 import equinox as eqx
 import jax
@@ -25,7 +24,6 @@ import levanter.callbacks as callbacks
 import levanter.tracker
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.checkpoint import load_checkpoint
 from levanter.data import AsyncDataset, DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
 from levanter.data.text import GrugLmExample, LmDataConfig
@@ -39,10 +37,61 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
+from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_scaling_iteration_02.model import GrugModelConfig, Transformer
 
 logger = logging.getLogger(__name__)
+
+
+def _format_state_step_for_logging(step: jax.Array) -> str:
+    try:
+        next_step = int(step)
+    except Exception:
+        return repr(step)
+    return f"next_step={next_step} completed_step={next_step - 1}"
+
+
+def _run_forced_cleanup(
+    *,
+    state_callbacks: StateCallbackRunner,
+    state: Any,
+    last_loss: float | jax.Array,
+    last_step_duration: float,
+    checkpointer: Any | None,
+    loop_error: BaseException | None,
+    run_id: str,
+) -> None:
+    step_context = _format_state_step_for_logging(state.step)
+    handling_suffix = " while handling an earlier training-loop exception" if loop_error is not None else ""
+
+    try:
+        state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
+    except BaseException:
+        logger.exception(
+            "Forced callbacks during cleanup failed for run %s at %s%s.",
+            run_id,
+            step_context,
+            handling_suffix,
+        )
+        if loop_error is None:
+            raise
+
+    if checkpointer is None:
+        return
+
+    try:
+        checkpointer.on_step(tree={"train_state": state}, step=int(state.step), force=True)
+        checkpointer.wait_until_finished()
+    except BaseException:
+        logger.exception(
+            "Forced checkpoint cleanup failed for run %s at %s%s.",
+            run_id,
+            step_context,
+            handling_suffix,
+        )
+        if loop_error is None:
+            raise
 
 
 @dataclass(frozen=True)
@@ -413,23 +462,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         checkpoint_path = trainer.load_checkpoint_path
         if checkpoint_path is None and checkpointer is not None:
             checkpoint_path = trainer.checkpointer.expanded_path(run_id)
-        if checkpoint_path is None:
-            if trainer.load_checkpoint:
-                raise FileNotFoundError("load_checkpoint=True but no checkpoint path is configured.")
-        elif trainer.load_checkpoint is not False:
-            try:
-                state = load_checkpoint(
-                    state,
-                    checkpoint_path,
-                    discover_latest=True,
-                    axis_mapping=None,
-                    mesh=mesh,
-                    allow_partial=trainer.allow_partial_checkpoint,
-                )
-            except FileNotFoundError:
-                if trainer.load_checkpoint is True:
-                    raise
-                logger.info(f"Checkpoint not found at {checkpoint_path}. Starting from scratch.")
+        state = restore_grug_state_from_checkpoint(
+            state,
+            checkpoint_path=checkpoint_path,
+            load_checkpoint_setting=trainer.load_checkpoint,
+            mesh=mesh,
+            allow_partial=trainer.allow_partial_checkpoint,
+        )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
@@ -492,6 +531,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
+        loop_error: BaseException | None = None
         try:
             while int(state.step) < trainer.num_train_steps:
                 with jax.profiler.TraceAnnotation("load_batch"):
@@ -532,11 +572,24 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 if checkpointer is not None:
                     checkpointer.on_step(tree={"train_state": state}, step=int(state.step))
+        except BaseException as exc:
+            loop_error = exc
+            logger.exception(
+                "Unhandled exception in grug train loop for run %s at %s. Entering forced cleanup.",
+                run_id,
+                _format_state_step_for_logging(state.step),
+            )
+            raise
         finally:
-            state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
-            if checkpointer is not None:
-                checkpointer.on_step(tree={"train_state": state}, step=int(state.step), force=True)
-                checkpointer.wait_until_finished()
+            _run_forced_cleanup(
+                state_callbacks=state_callbacks,
+                state=state,
+                last_loss=last_loss,
+                last_step_duration=last_step_duration,
+                checkpointer=checkpointer,
+                loop_error=loop_error,
+                run_id=run_id,
+            )
 
     levanter.tracker.current_tracker().finish()
 

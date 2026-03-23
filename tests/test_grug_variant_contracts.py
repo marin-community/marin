@@ -16,6 +16,7 @@ import uuid
 from io import StringIO
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import equinox as eqx
 import jax
@@ -394,6 +395,64 @@ def test_grug_iteration_02_run_grug_passes_failure_retry_budget(monkeypatch: pyt
 
     assert captured["run_id"] == "test-grug-retry-budget"
     assert captured["max_retries_failure"] == 17
+
+
+class _FailingCleanupRunner:
+    def __init__(self, exc: BaseException):
+        self._exc = exc
+
+    def run(self, *args, **kwargs):
+        raise self._exc
+
+
+class _RecordingCheckpointer:
+    def __init__(self):
+        self.calls: list[tuple[str, object]] = []
+
+    def on_step(self, *, tree, step: int, force: bool) -> None:
+        self.calls.append(("on_step", step, force, tree))
+
+    def wait_until_finished(self) -> None:
+        self.calls.append(("wait_until_finished",))
+
+
+def test_grug_iteration_02_forced_cleanup_raises_without_loop_error() -> None:
+    train_module = importlib.import_module("experiments.grug.moe_scaling_iteration_02.train")
+
+    cleanup_exc = RuntimeError("cleanup callbacks exploded")
+    with pytest.raises(RuntimeError, match="cleanup callbacks exploded"):
+        train_module._run_forced_cleanup(
+            state_callbacks=_FailingCleanupRunner(cleanup_exc),
+            state=SimpleNamespace(step=jnp.array(7)),
+            last_loss=0.0,
+            last_step_duration=0.0,
+            checkpointer=_RecordingCheckpointer(),
+            loop_error=None,
+            run_id="test-cleanup-no-loop-error",
+        )
+
+
+def test_grug_iteration_02_forced_cleanup_preserves_loop_error(caplog: pytest.LogCaptureFixture) -> None:
+    train_module = importlib.import_module("experiments.grug.moe_scaling_iteration_02.train")
+
+    caplog.set_level(logging.ERROR, logger="experiments.grug.moe_scaling_iteration_02.train")
+    checkpointer = _RecordingCheckpointer()
+    train_module._run_forced_cleanup(
+        state_callbacks=_FailingCleanupRunner(RuntimeError("cleanup callbacks exploded")),
+        state=SimpleNamespace(step=jnp.array(11)),
+        last_loss=0.0,
+        last_step_duration=0.0,
+        checkpointer=checkpointer,
+        loop_error=RuntimeError("original train loop failure"),
+        run_id="test-cleanup-with-loop-error",
+    )
+
+    assert "Forced callbacks during cleanup failed" in caplog.text
+    assert "while handling an earlier training-loop exception" in caplog.text
+    assert checkpointer.calls[0][0] == "on_step"
+    assert checkpointer.calls[0][1] == 11
+    assert checkpointer.calls[0][2] is True
+    assert checkpointer.calls[1] == ("wait_until_finished",)
 
 
 def test_grug_iteration_02_v4_256_scaleup_launcher_bakes_expected_schedule() -> None:
