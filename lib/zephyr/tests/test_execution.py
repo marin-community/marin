@@ -618,6 +618,31 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
     assert result == "SHUTDOWN"
 
 
+def test_coordinator_loop_crash_aborts_pipeline(actor_context, tmp_path):
+    """Coordinator loop crash sets _fatal_error instead of dying silently. #3996."""
+    from zephyr.execution import ZephyrCoordinator
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    crashed = threading.Event()
+    original = coord.check_heartbeats
+
+    def crashing_heartbeats(*a, **kw):
+        if not crashed.is_set():
+            crashed.set()
+            raise RuntimeError("dictionary changed size during iteration")
+        return original(*a, **kw)
+
+    coord.check_heartbeats = crashing_heartbeats
+
+    t = threading.Thread(target=coord._coordinator_loop, daemon=True, name="zephyr-coordinator-loop")
+    t.start()
+    assert crashed.wait(timeout=5.0)
+    t.join(timeout=2.0)
+    assert coord._fatal_error is not None
+
+
 def test_run_pipeline_rejects_concurrent_calls(actor_context, tmp_path):
     """Calling run_pipeline while another is already running raises RuntimeError."""
     from unittest.mock import MagicMock
