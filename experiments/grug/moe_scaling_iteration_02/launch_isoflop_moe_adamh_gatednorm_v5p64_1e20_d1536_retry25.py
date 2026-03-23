@@ -14,7 +14,6 @@ from marin.execution.executor import ExecutorStep, executor_main, versioned
 
 from experiments.grug.moe_scaling_iteration_02.launch import (
     NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
-    GrugEvalConfig,
     GrugMoeLaunchConfig,
     GrugTrainerConfig,
     _build_model_config,
@@ -150,15 +149,7 @@ def create_scaleup_step() -> ExecutorStep:
                 log_every=1,
             )
         ),
-        eval=versioned(
-            GrugEvalConfig(
-                eval_batch_size=EVAL_BATCH_SIZE,
-                steps_per_eval=1000,
-                max_eval_batches=8,
-                eval_current=True,
-                eval_ema=False,
-            )
-        ),
+        eval=None,
     )
 
     return ExecutorStep(

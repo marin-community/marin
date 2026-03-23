@@ -320,15 +320,30 @@ def cb_tagged_evaluate(
         if last_eval_step == step_count:
             return
 
-        if eval_current:
-            log_dict = eval_model(evaluator, step.model, prefix=prefix)
-            levanter.tracker.log(log_dict, step=step_count)
+        try:
+            if jax.process_index() == 0:
+                logger.info(
+                    "Starting tagged eval callback at completed_step=%s prefix=%s eval_current=%s eval_ema=%s",
+                    step_count,
+                    prefix,
+                    eval_current,
+                    eval_ema,
+                )
 
-        if eval_ema:
-            log_dict = eval_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
-            levanter.tracker.log(log_dict, step=step_count)
+            if eval_current:
+                log_dict = eval_model(evaluator, step.model, prefix=prefix)
+                levanter.tracker.log(log_dict, step=step_count)
 
-        last_eval_step = step_count
+            if eval_ema:
+                log_dict = eval_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
+                levanter.tracker.log(log_dict, step=step_count)
+
+            if jax.process_index() == 0:
+                logger.info("Finished tagged eval callback at completed_step=%s prefix=%s", step_count, prefix)
+            last_eval_step = step_count
+        except BaseException:
+            logger.exception("Tagged eval callback failed at completed_step=%s prefix=%s", step_count, prefix)
+            raise
 
     return eval_callback
 

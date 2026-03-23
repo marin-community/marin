@@ -634,6 +634,7 @@ def test_grug_iteration_02_v5p64_1e20_d1536_retry25_launcher_schedule_is_valid()
     assert config.batch_size.value == 256
     assert isinstance(config.steps, VersionedValue)
     assert config.steps.value == 17822
+    assert config.eval is None
 
 
 def test_grug_iteration_02_v5p64_1e20_d1536_v2steps_retry25_launcher_schedule_is_valid() -> None:
