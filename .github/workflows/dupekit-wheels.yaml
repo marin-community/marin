@@ -138,7 +138,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Update pyproject.toml with pinned dupekit release
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Update pyproject.toml and uv.lock with pinned dupekit release
         run: |
           set -euo pipefail
 
@@ -154,6 +156,9 @@ jobs:
 
           # Update dupekit version pin in dependencies
           sed -i 's|^\(\s*\)"dupekit[^"]*"|    "dupekit >= '"${VERSION}"'"|' pyproject.toml
+
+          # Regenerate uv.lock so devs don't get dirty lockfile diffs
+          uv lock
 
       - uses: peter-evans/create-pull-request@v7
         with:
