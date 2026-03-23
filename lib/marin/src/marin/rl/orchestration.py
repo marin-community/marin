@@ -90,13 +90,12 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
 
     # Resource configs
     inference_tpu_type = run_config.inference_tpu_type or run_config.train_tpu_type
+    # All Iris compute is preemptible — never set preemptible=False
     train_resources = ResourceConfig.with_tpu(
         run_config.train_tpu_type,
         slice_count=run_config.num_train_slices,
-        preemptible=False,
-        ram="16g",
     )
-    rollout_resources = ResourceConfig.with_tpu(inference_tpu_type, ram="16g")
+    rollout_resources = ResourceConfig.with_tpu(inference_tpu_type)
 
     # Submit child jobs
     jobs: list[JobHandle] = []

@@ -1,5 +1,15 @@
 # Iris RL Migration: Logbook
 
+## ALL COMPUTE ON IRIS IS PREEMPTIBLE. ALWAYS SET preemptible=True.
+## ALL COMPUTE ON IRIS IS PREEMPTIBLE. ALWAYS SET preemptible=True.
+## ALL COMPUTE ON IRIS IS PREEMPTIBLE. ALWAYS SET preemptible=True.
+
+Setting `preemptible=False` in ResourceConfig filters out ALL Iris workers because
+the entire Iris cluster uses preemptible/spot TPUs. This caused 7+ hours of jobs
+stuck in PENDING with "No worker matches constraints." NEVER use `preemptible=False`
+for TPU jobs on Iris. The retry mechanism (`max_retries_preemption=100`) handles
+preemption recovery automatically.
+
 ## Scope
 - **Goal**: Migrate RL pipeline from Fray v1 (Ray) to Fray v2 (Iris) with proper in-cluster coordinator topology.
 - **Primary metric(s)**: exp2039_rl_math500.py runs end-to-end on Iris with Arrow Flight weight transfer.
