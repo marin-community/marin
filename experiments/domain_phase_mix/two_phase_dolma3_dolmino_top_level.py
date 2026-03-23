@@ -9,6 +9,7 @@ import os
 from dataclasses import dataclass, replace
 from functools import cache, partial
 
+from levanter.main.train_lm import LmConfig
 from levanter.optim import MuonHConfig
 from fray.cluster import ResourceConfig
 
@@ -332,6 +333,7 @@ def create_two_phase_dolma3_dolmino_top_level_experiment(
     batch_size: int = BATCH_SIZE,
     seq_len: int = SEQ_LEN,
     eval_datasets_cache_path: str | None = EVAL_DATASETS_CACHE_PATH,
+    model_config: LmConfig | None = None,
     resources: ResourceConfig | None = None,
 ) -> MixtureExperiment:
     """Create the top-level Dolma 3 + Dolmino two-phase nextgen experiment."""
@@ -349,7 +351,7 @@ def create_two_phase_dolma3_dolmino_top_level_experiment(
         name=name,
         domains=build_top_level_domains(),
         phase_schedule=phase_schedule,
-        model_config=regmix_60m_proxy,
+        model_config=model_config or regmix_60m_proxy,
         batch_size=batch_size,
         seq_len=seq_len,
         num_train_steps=experiment_budget // (batch_size * seq_len),

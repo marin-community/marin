@@ -67,6 +67,7 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     create_two_phase_dolma3_dolmino_top_level_experiment,
     resolve_two_phase_wsd_boundary_schedule,
 )
+from experiments.domain_phase_mix.proxy_sweep import olmo3_30m_proxy
 from experiments.domain_phase_mix.two_phase_many_olmix_loglinear import (
     OLMIX_LOGLINEAR_PREDICTED_BPB,
     OLMIX_LOGLINEAR_RUN_NAME,
@@ -369,6 +370,28 @@ def test_top_level_experiment_uses_linear_80_20_wsd():
     assert len(experiment.initial_fixed_weight_configs) == 3
     assert experiment.initial_fixed_weight_configs[2].run_name == OLMIX_LOGLINEAR_RUN_NAME
     assert OLMIX_LOGLINEAR_PREDICTED_BPB < 2.2
+
+
+def test_top_level_experiment_allows_budget_and_model_override():
+    experiment_budget = 3_000_000_000
+    experiment = create_two_phase_dolma3_dolmino_top_level_experiment(
+        name="unit-test-30m-3b",
+        experiment_budget=experiment_budget,
+        model_config=olmo3_30m_proxy,
+    )
+    schedule = resolve_two_phase_wsd_boundary_schedule(
+        experiment_budget=experiment_budget,
+        phase_schedule=experiment.phase_schedule,
+    )
+
+    assert experiment.model_config == olmo3_30m_proxy
+    assert experiment.num_train_steps == 11_444
+    assert experiment.experiment_budget == 11_444 * 128 * 2048
+    assert experiment.target_budget is not None
+    assert experiment.phase_schedule.phases[1].start_fraction == 0.8
+    assert experiment.optimizer_config.lr_schedule == "linear"
+    assert experiment.optimizer_config.warmup == schedule.warmup_steps
+    assert experiment.optimizer_config.decay == schedule.decay_steps
 
 
 def test_top_level_baseline_steps_keep_distinct_checkpoint_names_under_wandb_truncation():
