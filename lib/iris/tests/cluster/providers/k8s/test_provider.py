@@ -42,13 +42,31 @@ def test_sync_applies_pods_for_tasks_to_run(provider, k8s):
     assert result.updates == []
 
 
-def test_sync_propagates_kubectl_failure(provider, k8s):
+def test_sync_propagates_non_kubectl_failure(provider, k8s):
     k8s.inject_failure("apply_json", RuntimeError("kubectl down"))
     req = make_run_req("/test-job/0")
     batch = make_batch(tasks_to_run=[req])
 
     with pytest.raises(RuntimeError, match="kubectl down"):
         provider.sync(batch)
+
+
+def test_sync_catches_kubectl_error_and_returns_task_failure(provider, k8s):
+    from iris.cluster.providers.k8s.types import KubectlError
+
+    k8s.inject_failure(
+        "apply_json",
+        KubectlError("kubectl apply failed: Error from server (RequestEntityTooLarge): limit is 3145728"),
+    )
+    req = make_run_req("/test-job/0")
+    batch = make_batch(tasks_to_run=[req])
+
+    result = provider.sync(batch)
+
+    assert len(result.updates) == 1
+    update = result.updates[0]
+    assert update.new_state == cluster_pb2.TASK_STATE_FAILED
+    assert "RequestEntityTooLarge" in update.error
 
 
 # ---------------------------------------------------------------------------
