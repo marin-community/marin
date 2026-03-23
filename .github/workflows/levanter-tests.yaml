@@ -11,7 +11,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      should_run: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'lib/levanter/**'
+              - 'lib/haliax/**'
+              - 'uv.lock'
+              - '.github/workflows/levanter-tests.yaml'
+
   cpu-unit-tests:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -44,6 +65,8 @@ jobs:
           PYTHONPATH=tests:src:. uv run --package levanter --frozen --with "jax[cpu]==${{ matrix.jax-version }}" pytest tests -m "not entry and not slow and not ray and not tpu" --durations=20
 
   cpu-ray-tests:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -74,6 +97,8 @@ jobs:
           PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "ray" --durations=20
 
   cpu-entry-tests:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -104,6 +129,8 @@ jobs:
           PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "entry" --durations=20
 
   cpu-torch-tests:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -167,7 +194,8 @@ jobs:
 #          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. uv run --package levanter --frozen --extra torch_test pytest tests -m "torch" --durations=20
 
   tpu-tests:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [tpu-ci]
     timeout-minutes: 15
     strategy:

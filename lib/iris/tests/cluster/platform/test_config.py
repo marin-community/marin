@@ -681,6 +681,7 @@ scale_groups:
         iris_root = Path(__file__).parent.parent.parent.parent
         example_configs = [
             iris_root / "examples" / "marin.yaml",
+            iris_root / "examples" / "marin-dev.yaml",
             iris_root / "examples" / "test.yaml",
         ]
 
