@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -936,6 +936,7 @@ def test_simulated_epoching_train_respects_experiment_budget_override(monkeypatc
     class _FakeDataConfig:
         target_budget: int | None = None
         experiment_budget: int | None = None
+        simulated_epoch_subset_seed: int | None = None
 
     class _FakeTrainConfig:
         train_batch_size = 4

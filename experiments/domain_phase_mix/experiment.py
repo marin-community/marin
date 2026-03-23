@@ -310,6 +310,7 @@ class MixtureExperiment:
         full_name = f"{prefix}/{run_name}"
 
         experiment_budget_override = train_kwargs.pop("experiment_budget_override", None)
+        simulated_epoch_subset_seed = train_kwargs.pop("simulated_epoch_subset_seed", None)
         mixture_config = self.create_mixture_config(weight_config)
         train_config = self.create_train_config(weight_config.run_id, **train_kwargs)
 
@@ -320,6 +321,7 @@ class MixtureExperiment:
                 model_config=self.model_config,
                 train_config=train_config,
                 target_budget=self.target_budget,
+                simulated_epoch_subset_seed=simulated_epoch_subset_seed,
                 experiment_budget_override=experiment_budget_override,
                 tags=[self.name, run_name],
                 use_default_validation=True,

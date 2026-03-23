@@ -270,6 +270,7 @@ def simulated_epoching_train(
     model_config: LmConfig,
     train_config: SimpleTrainConfig,
     target_budget: int,
+    simulated_epoch_subset_seed: int | None = None,
     experiment_budget_override: int | None = None,
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
@@ -287,6 +288,8 @@ def simulated_epoching_train(
         model_config: Levanter LmConfig for the model to train.
         train_config: SimpleTrainConfig for the training run.
         target_budget: Target token budget to simulate.
+        simulated_epoch_subset_seed: Optional seed used to freeze simulated-epoch
+            subset membership before applying any run-specific shuffle.
         experiment_budget_override: Optional explicit experiment token budget for
             simulated epoching. Use this when the trainer should stop at an
             intermediate step count but the dataset slicing must match a larger
@@ -308,7 +311,10 @@ def simulated_epoching_train(
         experiment_budget = train_config.train_batch_size * train_config.num_train_steps * train_length
 
     simulated_pretraining_data = dataclasses.replace(
-        pretraining_data, target_budget=target_budget, experiment_budget=experiment_budget
+        pretraining_data,
+        target_budget=target_budget,
+        experiment_budget=experiment_budget,
+        simulated_epoch_subset_seed=simulated_epoch_subset_seed,
     )
 
     logger.info(

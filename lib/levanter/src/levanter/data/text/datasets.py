@@ -588,6 +588,12 @@ def _stable_dataset_key(name: str, split: str) -> PRNGKeyArray:
     return jax.random.PRNGKey(seed)
 
 
+def _stable_simulated_epoch_subset_key(name: str, split: str, subset_seed: int) -> PRNGKeyArray:
+    base_key = jax.random.PRNGKey(subset_seed)
+    fold_value = zlib.crc32(f"simulated_epoch_subset:{name}:{split}".encode("utf-8")) & 0xFFFFFFFF
+    return jax.random.fold_in(base_key, fold_value)
+
+
 def _stable_child_order(name: str, split: str, child_names: Sequence[str]) -> list[str]:
     return sorted(
         child_names,
@@ -711,6 +717,7 @@ class LmDataConfig:
     stop_strategy: str = field(default=StopStrategy.RESTART_STRATEGY)
     target_budget: int | None = None
     experiment_budget: int | None = None
+    simulated_epoch_subset_seed: int | None = None
     mixture_block_size: int = 2048
     max_train_batches: dict[str, int] | None = None
     num_validation_sequences: dict[str, int] | None = None
@@ -1041,24 +1048,54 @@ class LmDataConfig:
                 ds = ds.era_shuffle(shuffle_cfg, key=k, perm_type=perm_type)
             return ds
 
-        if shuffle_cfg:
-            key_iter = key_iterator(key)
-            datasets = {name: shuffle_ds(ds, next(key_iter)) for name, ds in datasets.items()}
-
         if (
             self.experiment_budget is not None and self.target_budget is not None
         ) and self.experiment_budget > self.target_budget:
             raise ValueError(
                 f"Experiment budget should be smaller than target budget, got {self.experiment_budget} > {self.target_budget}"
             )
-        if self.experiment_budget is not None and self.target_budget is not None:
+
+        def slice_for_simulated_epoching(
+            ds_by_name: Mapping[str, AsyncDataset[GrugLmExample]],
+            *,
+            subset_seed: int | None,
+        ) -> dict[str, AsyncDataset[GrugLmExample]]:
+            assert self.experiment_budget is not None
+            assert self.target_budget is not None
+
             simulated_data_ratio = self.experiment_budget / self.target_budget
             sliced_datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
-            for name, ds in datasets.items():
+            for name, ds in ds_by_name.items():
+                subset_dataset = ds
+                if subset_seed is not None and shuffle_cfg:
+                    subset_dataset = shuffle_ds(
+                        ds,
+                        _stable_simulated_epoch_subset_key(name, "train", subset_seed),
+                    )
+
                 true_length_of_dataset = len(ds.as_sync_dataset())
                 simulated_length_of_dataset = int(true_length_of_dataset * simulated_data_ratio)
-                sliced_datasets[name] = ds.slice_dataset(end_index=simulated_length_of_dataset)
-            datasets = sliced_datasets
+                sliced_datasets[name] = subset_dataset.slice_dataset(end_index=simulated_length_of_dataset)
+
+            return sliced_datasets
+
+        if self.experiment_budget is not None and self.target_budget is not None:
+            if self.simulated_epoch_subset_seed is None:
+                if shuffle_cfg:
+                    key_iter = key_iterator(key)
+                    datasets = {name: shuffle_ds(ds, next(key_iter)) for name, ds in datasets.items()}
+                datasets = slice_for_simulated_epoching(datasets, subset_seed=None)
+            else:
+                datasets = slice_for_simulated_epoching(
+                    datasets,
+                    subset_seed=self.simulated_epoch_subset_seed,
+                )
+                if shuffle_cfg:
+                    key_iter = key_iterator(key)
+                    datasets = {name: shuffle_ds(ds, next(key_iter)) for name, ds in datasets.items()}
+        elif shuffle_cfg:
+            key_iter = key_iterator(key)
+            datasets = {name: shuffle_ds(ds, next(key_iter)) for name, ds in datasets.items()}
 
         if self.max_train_batches is not None:
             assert (

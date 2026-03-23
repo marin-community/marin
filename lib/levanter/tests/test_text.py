@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import json
 import os
 import tempfile
@@ -15,12 +16,14 @@ import pytest
 
 import haliax as hax
 
+from levanter.data import ListAsyncDataset
 import levanter.data.text.datasets as text_datasets
 from levanter.data.text import (
     BatchTokenizer,
     ChatLmDatasetFormat,
     ChatDataset,
     DatasetComponent,
+    DirectDatasetComponent,
     GrugLmExample,
     HierarchicalMixtureDatasetComponent,
     LmDataConfig,
@@ -398,6 +401,91 @@ def test_hierarchical_component_uses_token_counts_for_simulated_epoching_without
 
     assert train_sets["group"].is_finite()
     assert len(train_sets["group"].as_sync_dataset()) > 0
+
+
+def test_simulated_epoching_fixed_subset_seed_stabilizes_direct_dataset_membership():
+    direct = DirectDatasetComponent(datasets={"train": ListAsyncDataset(list(range(40)))})
+    config = LmDataConfig(
+        components={"group": direct},
+        train_weights={"group": 1.0},
+        tokenizer="passthrough",
+        vocab_size=64,
+        shuffle=True,
+        experiment_budget=20,
+        target_budget=40,
+    )
+    fixed_subset_config = dataclasses.replace(config, simulated_epoch_subset_seed=97)
+    Pos = hax.Axis("position", 4)
+
+    run0 = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))["group"].as_sync_dataset()
+    run1 = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(1))["group"].as_sync_dataset()
+    fixed_run0 = fixed_subset_config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))[
+        "group"
+    ].as_sync_dataset()
+    fixed_run1 = fixed_subset_config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(1))[
+        "group"
+    ].as_sync_dataset()
+
+    run0_values = [run0[i] for i in range(len(run0))]
+    run1_values = [run1[i] for i in range(len(run1))]
+    fixed_run0_values = [fixed_run0[i] for i in range(len(fixed_run0))]
+    fixed_run1_values = [fixed_run1[i] for i in range(len(fixed_run1))]
+
+    assert set(run0_values) != set(run1_values)
+    assert set(fixed_run0_values) == set(fixed_run1_values)
+    assert fixed_run0_values != fixed_run1_values
+
+
+def test_simulated_epoching_fixed_subset_seed_stabilizes_hierarchical_membership(monkeypatch):
+    hierarchical = HierarchicalMixtureDatasetComponent(
+        components={
+            "left": DatasetComponent(cache_dir="/tmp/does-not-exist-left"),
+            "right": DatasetComponent(cache_dir="/tmp/does-not-exist-right"),
+        },
+        train_weights={"left": 0.5, "right": 0.5},
+        token_counts={"left": 20, "right": 20},
+    )
+    config = LmDataConfig(
+        components={"group": hierarchical},
+        train_weights={"group": 1.0},
+        tokenizer="passthrough",
+        vocab_size=64,
+        shuffle=True,
+        experiment_budget=8,
+        target_budget=40,
+    )
+    fixed_subset_config = dataclasses.replace(config, simulated_epoch_subset_seed=97)
+    Pos = hax.Axis("position", 1)
+
+    original_build = text_datasets.LmDataConfig._build_token_dataset_for_component
+
+    def fake_build(self, name, component, Pos, *, split, caches):
+        if isinstance(component, DatasetComponent):
+            if name.endswith("/left"):
+                return ListAsyncDataset(list(range(100, 120)))
+            if name.endswith("/right"):
+                return ListAsyncDataset(list(range(200, 220)))
+        return original_build(self, name, component, Pos, split=split, caches=caches)
+
+    monkeypatch.setattr(text_datasets.LmDataConfig, "_build_token_dataset_for_component", fake_build)
+
+    run0 = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))["group"].as_sync_dataset()
+    run1 = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(1))["group"].as_sync_dataset()
+    fixed_run0 = fixed_subset_config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))[
+        "group"
+    ].as_sync_dataset()
+    fixed_run1 = fixed_subset_config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(1))[
+        "group"
+    ].as_sync_dataset()
+
+    run0_values = [run0[i] for i in range(len(run0))]
+    run1_values = [run1[i] for i in range(len(run1))]
+    fixed_run0_values = [fixed_run0[i] for i in range(len(fixed_run0))]
+    fixed_run1_values = [fixed_run1[i] for i in range(len(fixed_run1))]
+
+    assert set(run0_values) != set(run1_values)
+    assert set(fixed_run0_values) == set(fixed_run1_values)
+    assert fixed_run0_values != fixed_run1_values
 
 
 def test_hierarchical_component_uses_metadata_length_when_tiny_child_weight_rounds_to_zero(monkeypatch):

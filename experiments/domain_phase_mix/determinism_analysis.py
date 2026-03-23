@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from io import BytesIO
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,6 +16,7 @@ import fsspec
 import numpy as np
 import pandas as pd
 
+from experiments.defaults import _truncate_wandb_name
 from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
 
 logger = logging.getLogger(__name__)
@@ -29,6 +31,15 @@ TRAJECTORY_RAW_PARQUET = "trajectory_raw.parquet"
 RESULTS_CSV = "results.csv"
 SWARM_COMPARISON_JSON = "swarm_comparison.json"
 SWARM_COMPARISON_CSV = "swarm_comparison.csv"
+COMPUTE_SCALING_NOISE_SUMMARY_JSON = "compute_scaling_noise_summary.json"
+COMPUTE_SCALING_NOISE_SUMMARY_CSV = "compute_scaling_noise_summary.csv"
+MMLU_NOISE_VS_COMPUTE_PNG = "mmlu_noise_vs_compute.png"
+FIXED_SUBSET_NOISE_SUMMARY_JSON = "fixed_subset_noise_summary.json"
+FIXED_SUBSET_NOISE_SUMMARY_CSV = "fixed_subset_noise_summary.csv"
+MMLU_NOISE_FIXED_SUBSET_VS_ORIGINAL_PNG = "mmlu_noise_fixed_subset_vs_original.png"
+PANEL_VS_NOISE_SUMMARY_JSON = "panel_vs_noise_summary.json"
+PANEL_VS_NOISE_SUMMARY_CSV = "panel_vs_noise_summary.csv"
+MMLU_PANEL_VS_NOISE_PNG = "mmlu_panel_vs_noise.png"
 
 DEFAULT_BOOTSTRAP_SAMPLES = 2_000
 DEFAULT_BOOTSTRAP_SEED = 0
@@ -65,6 +76,53 @@ class CollectManifestResultsConfig:
     depends_on: tuple[InputName, ...] = ()
 
 
+@dataclass(frozen=True)
+class ComputeScalingNoiseReportConfig:
+    """Executor config for the compute-scaling noise comparison report."""
+
+    output_path: str
+    run_manifest_path: InputName | str
+    analysis_output_path: InputName | str
+    wandb_entity: str
+    wandb_project: str
+    baseline_manifest_json: str
+    primary_metrics: tuple[str, ...]
+    secondary_metrics: tuple[str, ...] = ()
+    bootstrap_samples: int = DEFAULT_BOOTSTRAP_SAMPLES
+    bootstrap_seed: int = DEFAULT_BOOTSTRAP_SEED
+
+
+@dataclass(frozen=True)
+class FixedSubsetNoiseReportConfig:
+    """Executor config for comparing fixed-subset seed jitter against the original seed study."""
+
+    output_path: str
+    analysis_output_path: InputName | str
+    wandb_entity: str
+    wandb_project: str
+    baseline_manifest_json: str
+    primary_metrics: tuple[str, ...]
+    secondary_metrics: tuple[str, ...] = ()
+    bootstrap_samples: int = DEFAULT_BOOTSTRAP_SAMPLES
+    bootstrap_seed: int = DEFAULT_BOOTSTRAP_SEED
+
+
+@dataclass(frozen=True)
+class PanelVsNoiseReportConfig:
+    """Executor config for comparing a fixed-subset observed-run panel against the fixed-subset noise floor."""
+
+    output_path: str
+    run_manifest_path: InputName | str
+    analysis_output_path: InputName | str
+    wandb_entity: str
+    wandb_project: str
+    baseline_manifest_json: str
+    primary_metrics: tuple[str, ...]
+    secondary_metrics: tuple[str, ...] = ()
+    bootstrap_samples: int = DEFAULT_BOOTSTRAP_SAMPLES
+    bootstrap_seed: int = DEFAULT_BOOTSTRAP_SEED
+
+
 def _maybe_int(value: object) -> int | None:
     if value is None or pd.isna(value):
         return None
@@ -79,68 +137,102 @@ def _phase_weights_to_columns(phase_weights: dict[str, dict[str, float]]) -> dic
     return columns
 
 
-def _resolve_wandb_run_for_name(run_rows: list[dict[str, Any]], run_name: str) -> dict[str, Any] | None:
+def _expected_wandb_run_name(experiment_name: str, run_name: str) -> str:
+    return _truncate_wandb_name(f"{experiment_name}/{run_name}")
+
+
+def _resolve_wandb_run_for_manifest_row(
+    run_rows: list[dict[str, Any]],
+    *,
+    experiment_name: str,
+    run_name: str,
+) -> dict[str, Any] | None:
+    expected_name = _expected_wandb_run_name(experiment_name, run_name)
+    exact_matches = [row for row in run_rows if str(row.get("wandb_run_name") or "") == expected_name]
+    if exact_matches:
+        finished = [row for row in exact_matches if row.get("status") == "finished"]
+        return finished[0] if finished else exact_matches[0]
+
     marker = f"/{run_name}"
-    matches = [row for row in run_rows if marker in str(row.get("wandb_run_name") or "")]
-    if not matches:
-        return None
-
-    finished = [row for row in matches if row.get("status") == "finished"]
-    if finished:
-        return finished[0]
-    return matches[0]
+    suffix_matches = [row for row in run_rows if marker in str(row.get("wandb_run_name") or "")]
+    if len(suffix_matches) == 1:
+        finished = [row for row in suffix_matches if row.get("status") == "finished"]
+        return finished[0] if finished else suffix_matches[0]
+    return None
 
 
-def collect_manifest_results(config: CollectManifestResultsConfig) -> None:
-    """Collect run summaries from W&B for the runs listed in a manifest."""
+def _collect_manifest_results_frame(
+    *,
+    manifest_payload: dict[str, Any],
+    wandb_entity: str,
+    wandb_project: str,
+    metric_prefixes: tuple[str, ...],
+    extra_metrics: tuple[str, ...] = (),
+) -> pd.DataFrame:
     from experiments.domain_phase_mix.analysis import query_wandb_runs, query_wandb_runs_by_name_substrings
-
-    with fsspec.open(str(config.run_manifest_path), "r") as f:
-        manifest_payload = json.load(f)
 
     experiment_name = str(manifest_payload["experiment_name"])
     run_rows = query_wandb_runs(
-        entity=config.wandb_entity,
-        project=config.wandb_project,
+        entity=wandb_entity,
+        project=wandb_project,
         tags=[experiment_name],
-        metrics=list(config.extra_metrics),
-        metric_prefixes=config.metric_prefixes,
+        metrics=list(extra_metrics),
+        metric_prefixes=metric_prefixes,
     )
-    missing_run_names = [
-        str(manifest_row["run_name"])
+    missing_expected_names = [
+        _expected_wandb_run_name(experiment_name, str(manifest_row["run_name"]))
         for manifest_row in manifest_payload["runs"]
-        if _resolve_wandb_run_for_name(run_rows, str(manifest_row["run_name"])) is None
+        if _resolve_wandb_run_for_manifest_row(
+            run_rows,
+            experiment_name=experiment_name,
+            run_name=str(manifest_row["run_name"]),
+        )
+        is None
     ]
-    if missing_run_names:
+    if missing_expected_names:
         logger.warning(
             "Tag-based W&B lookup missed %d/%d manifest runs; falling back to display-name lookup for %s",
-            len(missing_run_names),
+            len(missing_expected_names),
             len(manifest_payload["runs"]),
-            missing_run_names,
+            missing_expected_names,
         )
         run_rows.extend(
             query_wandb_runs_by_name_substrings(
-                entity=config.wandb_entity,
-                project=config.wandb_project,
-                name_substrings=missing_run_names,
-                metrics=list(config.extra_metrics),
-                metric_prefixes=config.metric_prefixes,
+                entity=wandb_entity,
+                project=wandb_project,
+                name_substrings=missing_expected_names,
+                metrics=list(extra_metrics),
+                metric_prefixes=metric_prefixes,
             )
         )
 
     collected_rows: list[dict[str, Any]] = []
     for manifest_row in manifest_payload["runs"]:
         run_name = str(manifest_row["run_name"])
-        wandb_row = _resolve_wandb_run_for_name(run_rows, run_name)
+        wandb_row = _resolve_wandb_run_for_manifest_row(
+            run_rows,
+            experiment_name=experiment_name,
+            run_name=run_name,
+        )
         row: dict[str, Any] = {
             "run_id": int(manifest_row["run_id"]),
             "run_name": run_name,
             "cohort": str(manifest_row["cohort"]),
             "trainer_seed": manifest_row.get("trainer_seed"),
             "data_seed": manifest_row.get("data_seed"),
+            "simulated_epoch_subset_seed": manifest_row.get("simulated_epoch_subset_seed"),
             "source_run_name": manifest_row.get("source_run_name"),
             **_phase_weights_to_columns(manifest_row["phase_weights"]),
         }
+
+        for extra_key in (
+            "ladder",
+            "model_family",
+            "experiment_budget",
+            "num_train_steps",
+        ):
+            if extra_key in manifest_row:
+                row[extra_key] = manifest_row[extra_key]
 
         if wandb_row is None:
             row.update(
@@ -161,11 +253,24 @@ def collect_manifest_results(config: CollectManifestResultsConfig) -> None:
             }
         )
         for key, value in wandb_row.items():
-            if isinstance(value, int | float) and any(key.startswith(prefix) for prefix in config.metric_prefixes):
+            if isinstance(value, int | float) and any(key.startswith(prefix) for prefix in metric_prefixes):
                 row[key] = float(value)
         collected_rows.append(row)
 
-    results_df = pd.DataFrame(collected_rows).sort_values("run_id").reset_index(drop=True)
+    return pd.DataFrame(collected_rows).sort_values("run_id").reset_index(drop=True)
+
+
+def collect_manifest_results(config: CollectManifestResultsConfig) -> None:
+    """Collect run summaries from W&B for the runs listed in a manifest."""
+    with fsspec.open(str(config.run_manifest_path), "r") as f:
+        manifest_payload = json.load(f)
+    results_df = _collect_manifest_results_frame(
+        manifest_payload=manifest_payload,
+        wandb_entity=config.wandb_entity,
+        wandb_project=config.wandb_project,
+        metric_prefixes=config.metric_prefixes,
+        extra_metrics=config.extra_metrics,
+    )
     fs, _, _ = fsspec.get_fs_token_paths(config.output_path)
     fs.makedirs(config.output_path, exist_ok=True)
     with fsspec.open(os.path.join(config.output_path, RESULTS_CSV), "w") as f:
@@ -455,6 +560,313 @@ def _metric_summary(values: np.ndarray) -> dict[str, float]:
     }
 
 
+def _statistic_value(values: np.ndarray, statistic: str) -> float:
+    values = np.asarray(values, dtype=np.float64)
+    if len(values) == 0:
+        return np.nan
+    if statistic == "variance":
+        return float(np.std(values, ddof=1) ** 2) if len(values) > 1 else 0.0
+    if statistic == "range":
+        return float(np.max(values) - np.min(values))
+    raise ValueError(f"Unsupported statistic {statistic!r}")
+
+
+def _bootstrap_ratio_ci(
+    numerator_values: np.ndarray,
+    denominator_values: np.ndarray,
+    *,
+    statistic: str,
+    n_boot: int,
+    seed: int,
+    alpha: float = 0.05,
+) -> tuple[float, float]:
+    numerator_values = np.asarray(numerator_values, dtype=np.float64)
+    denominator_values = np.asarray(denominator_values, dtype=np.float64)
+    if len(numerator_values) == 0 or len(denominator_values) == 0:
+        return np.nan, np.nan
+
+    rng = np.random.default_rng(seed)
+    num_idx = rng.integers(0, len(numerator_values), size=(n_boot, len(numerator_values)))
+    den_idx = rng.integers(0, len(denominator_values), size=(n_boot, len(denominator_values)))
+    ratios: list[float] = []
+    for boot_idx in range(n_boot):
+        numerator_stat = _statistic_value(numerator_values[num_idx[boot_idx]], statistic)
+        denominator_stat = _statistic_value(denominator_values[den_idx[boot_idx]], statistic)
+        if not np.isfinite(numerator_stat) or not np.isfinite(denominator_stat) or denominator_stat == 0.0:
+            continue
+        ratios.append(float(numerator_stat / denominator_stat))
+
+    if not ratios:
+        return np.nan, np.nan
+
+    low_q = alpha / 2
+    high_q = 1.0 - alpha / 2
+    return float(np.quantile(ratios, low_q)), float(np.quantile(ratios, high_q))
+
+
+def _build_compute_scaling_summary_rows(
+    *,
+    current_runs_df: pd.DataFrame,
+    baseline_runs_df: pd.DataFrame,
+    primary_metrics: tuple[str, ...],
+    secondary_metrics: tuple[str, ...],
+    bootstrap_samples: int,
+    bootstrap_seed: int,
+) -> list[dict[str, Any]]:
+    metrics = tuple(dict.fromkeys((*primary_metrics, *secondary_metrics)))
+    cohort_specs = (
+        ("baseline_1x", "regmix60m_1x", baseline_runs_df, "primary_baseline"),
+        (
+            "regmix60m_6b",
+            "regmix60m_6b",
+            current_runs_df[current_runs_df["ladder"] == "regmix60m_6b"].copy(),
+            "paired_continuation",
+        ),
+        (
+            "olmo3_30m_3b",
+            "olmo3_30m_3b",
+            current_runs_df[current_runs_df["ladder"] == "olmo3_30m_3b"].copy(),
+            "exploratory_cross_family",
+        ),
+    )
+
+    baseline_metric_values = {
+        metric: (
+            baseline_runs_df[metric].dropna().to_numpy(dtype=np.float64)
+            if metric in baseline_runs_df.columns
+            else np.array([])
+        )
+        for metric in metrics
+    }
+
+    rows: list[dict[str, Any]] = []
+    for cohort_idx, (cohort_key, cohort_label, cohort_df, role) in enumerate(cohort_specs):
+        for metric_idx, metric in enumerate(metrics):
+            if metric in cohort_df.columns:
+                values = cohort_df[metric].dropna().to_numpy(dtype=np.float64)
+            else:
+                values = np.array([])
+            stats = _metric_summary(values)
+            mean_ci, std_ci = _bootstrap_mean_and_std_ci(
+                values,
+                n_boot=bootstrap_samples,
+                seed=bootstrap_seed + cohort_idx * 1_000 + metric_idx,
+            )
+            row: dict[str, Any] = {
+                "cohort": cohort_key,
+                "cohort_label": cohort_label,
+                "cohort_role": role,
+                "metric": metric,
+                "is_primary_metric": metric in primary_metrics,
+                **stats,
+                "mean_ci_low": float(mean_ci[0]),
+                "mean_ci_high": float(mean_ci[1]),
+                "std_ci_low": float(std_ci[0]),
+                "std_ci_high": float(std_ci[1]),
+                "variance_ratio_vs_baseline_1x": np.nan,
+                "variance_ratio_ci_low": np.nan,
+                "variance_ratio_ci_high": np.nan,
+                "range_ratio_vs_baseline_1x": np.nan,
+                "range_ratio_ci_low": np.nan,
+                "range_ratio_ci_high": np.nan,
+            }
+            if cohort_key == "regmix60m_6b":
+                baseline_values = baseline_metric_values[metric]
+                baseline_variance = _statistic_value(baseline_values, "variance")
+                baseline_range = _statistic_value(baseline_values, "range")
+                current_variance = _statistic_value(values, "variance")
+                current_range = _statistic_value(values, "range")
+                if np.isfinite(current_variance) and np.isfinite(baseline_variance) and baseline_variance != 0.0:
+                    row["variance_ratio_vs_baseline_1x"] = float(current_variance / baseline_variance)
+                    ci_low, ci_high = _bootstrap_ratio_ci(
+                        values,
+                        baseline_values,
+                        statistic="variance",
+                        n_boot=bootstrap_samples,
+                        seed=bootstrap_seed + 10_000 + metric_idx,
+                    )
+                    row["variance_ratio_ci_low"] = ci_low
+                    row["variance_ratio_ci_high"] = ci_high
+                if np.isfinite(current_range) and np.isfinite(baseline_range) and baseline_range != 0.0:
+                    row["range_ratio_vs_baseline_1x"] = float(current_range / baseline_range)
+                    ci_low, ci_high = _bootstrap_ratio_ci(
+                        values,
+                        baseline_values,
+                        statistic="range",
+                        n_boot=bootstrap_samples,
+                        seed=bootstrap_seed + 20_000 + metric_idx,
+                    )
+                    row["range_ratio_ci_low"] = ci_low
+                    row["range_ratio_ci_high"] = ci_high
+            rows.append(row)
+    return rows
+
+
+def _build_fixed_subset_summary_rows(
+    *,
+    current_runs_df: pd.DataFrame,
+    baseline_runs_df: pd.DataFrame,
+    primary_metrics: tuple[str, ...],
+    secondary_metrics: tuple[str, ...],
+    bootstrap_samples: int,
+    bootstrap_seed: int,
+) -> list[dict[str, Any]]:
+    metrics = tuple(dict.fromkeys((*primary_metrics, *secondary_metrics)))
+    cohort_specs = (
+        ("baseline_1x", "original_seed_study", baseline_runs_df, "primary_baseline"),
+        ("fixed_subset_1x", "fixed_subset_1x", current_runs_df, "fixed_subset_variant"),
+    )
+
+    baseline_metric_values = {
+        metric: (
+            baseline_runs_df[metric].dropna().to_numpy(dtype=np.float64)
+            if metric in baseline_runs_df.columns
+            else np.array([])
+        )
+        for metric in metrics
+    }
+
+    rows: list[dict[str, Any]] = []
+    for cohort_idx, (cohort_key, cohort_label, cohort_df, role) in enumerate(cohort_specs):
+        for metric_idx, metric in enumerate(metrics):
+            if metric in cohort_df.columns:
+                values = cohort_df[metric].dropna().to_numpy(dtype=np.float64)
+            else:
+                values = np.array([])
+            stats = _metric_summary(values)
+            mean_ci, std_ci = _bootstrap_mean_and_std_ci(
+                values,
+                n_boot=bootstrap_samples,
+                seed=bootstrap_seed + cohort_idx * 1_000 + metric_idx,
+            )
+            row: dict[str, Any] = {
+                "cohort": cohort_key,
+                "cohort_label": cohort_label,
+                "cohort_role": role,
+                "metric": metric,
+                "is_primary_metric": metric in primary_metrics,
+                **stats,
+                "mean_ci_low": float(mean_ci[0]),
+                "mean_ci_high": float(mean_ci[1]),
+                "std_ci_low": float(std_ci[0]),
+                "std_ci_high": float(std_ci[1]),
+                "variance_ratio_vs_baseline_1x": np.nan,
+                "variance_ratio_ci_low": np.nan,
+                "variance_ratio_ci_high": np.nan,
+                "range_ratio_vs_baseline_1x": np.nan,
+                "range_ratio_ci_low": np.nan,
+                "range_ratio_ci_high": np.nan,
+            }
+            if cohort_key == "fixed_subset_1x":
+                baseline_values = baseline_metric_values[metric]
+                baseline_variance = _statistic_value(baseline_values, "variance")
+                baseline_range = _statistic_value(baseline_values, "range")
+                current_variance = _statistic_value(values, "variance")
+                current_range = _statistic_value(values, "range")
+                if np.isfinite(current_variance) and np.isfinite(baseline_variance) and baseline_variance != 0.0:
+                    row["variance_ratio_vs_baseline_1x"] = float(current_variance / baseline_variance)
+                    ci_low, ci_high = _bootstrap_ratio_ci(
+                        values,
+                        baseline_values,
+                        statistic="variance",
+                        n_boot=bootstrap_samples,
+                        seed=bootstrap_seed + 10_000 + metric_idx,
+                    )
+                    row["variance_ratio_ci_low"] = ci_low
+                    row["variance_ratio_ci_high"] = ci_high
+                if np.isfinite(current_range) and np.isfinite(baseline_range) and baseline_range != 0.0:
+                    row["range_ratio_vs_baseline_1x"] = float(current_range / baseline_range)
+                    ci_low, ci_high = _bootstrap_ratio_ci(
+                        values,
+                        baseline_values,
+                        statistic="range",
+                        n_boot=bootstrap_samples,
+                        seed=bootstrap_seed + 20_000 + metric_idx,
+                    )
+                    row["range_ratio_ci_low"] = ci_low
+                    row["range_ratio_ci_high"] = ci_high
+            rows.append(row)
+    return rows
+
+
+def _pairwise_absolute_differences(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float64)
+    if len(values) < 2:
+        return np.array([], dtype=np.float64)
+    pairwise = np.abs(values[:, None] - values[None, :])
+    tri_upper = np.triu_indices(len(values), k=1)
+    return pairwise[tri_upper]
+
+
+def _build_panel_vs_noise_summary_rows(
+    *,
+    panel_runs_df: pd.DataFrame,
+    baseline_runs_df: pd.DataFrame,
+    primary_metrics: tuple[str, ...],
+    secondary_metrics: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    metrics = tuple(dict.fromkeys((*primary_metrics, *secondary_metrics)))
+    rows: list[dict[str, Any]] = []
+    for metric in metrics:
+        panel_values = (
+            panel_runs_df[metric].dropna().to_numpy(dtype=np.float64)
+            if metric in panel_runs_df.columns
+            else np.array([])
+        )
+        baseline_values = (
+            baseline_runs_df[metric].dropna().to_numpy(dtype=np.float64)
+            if metric in baseline_runs_df.columns
+            else np.array([])
+        )
+        panel_stats = _metric_summary(panel_values)
+        baseline_stats = _metric_summary(baseline_values)
+        pairwise_diffs = _pairwise_absolute_differences(panel_values)
+        baseline_std = baseline_stats["std"]
+        baseline_range = baseline_stats["range"]
+        rows.append(
+            {
+                "metric": metric,
+                "is_primary_metric": metric in primary_metrics,
+                "panel_n": panel_stats["n"],
+                "panel_mean": panel_stats["mean"],
+                "panel_std": panel_stats["std"],
+                "panel_min": panel_stats["min"],
+                "panel_max": panel_stats["max"],
+                "panel_range": panel_stats["range"],
+                "panel_iqr": panel_stats["iqr"],
+                "baseline_n": baseline_stats["n"],
+                "baseline_std": baseline_std,
+                "baseline_range": baseline_range,
+                "panel_std_ratio_vs_noise": (
+                    float(panel_stats["std"] / baseline_std)
+                    if np.isfinite(panel_stats["std"]) and np.isfinite(baseline_std) and baseline_std != 0.0
+                    else np.nan
+                ),
+                "panel_range_ratio_vs_noise": (
+                    float(panel_stats["range"] / baseline_range)
+                    if np.isfinite(panel_stats["range"]) and np.isfinite(baseline_range) and baseline_range != 0.0
+                    else np.nan
+                ),
+                "pairwise_n": len(pairwise_diffs),
+                "pairwise_abs_diff_mean": float(np.mean(pairwise_diffs)) if len(pairwise_diffs) else np.nan,
+                "pairwise_abs_diff_median": float(np.median(pairwise_diffs)) if len(pairwise_diffs) else np.nan,
+                "pairwise_abs_diff_min": float(np.min(pairwise_diffs)) if len(pairwise_diffs) else np.nan,
+                "pairwise_abs_diff_max": float(np.max(pairwise_diffs)) if len(pairwise_diffs) else np.nan,
+                "frac_pairwise_gt_1x_noise_std": (
+                    float(np.mean(pairwise_diffs > baseline_std))
+                    if len(pairwise_diffs) and np.isfinite(baseline_std)
+                    else np.nan
+                ),
+                "frac_pairwise_gt_2x_noise_std": (
+                    float(np.mean(pairwise_diffs > (2.0 * baseline_std)))
+                    if len(pairwise_diffs) and np.isfinite(baseline_std)
+                    else np.nan
+                ),
+            }
+        )
+    return rows
+
+
 def _build_swarm_comparison_rows(
     *,
     seed_runs_df: pd.DataFrame,
@@ -652,6 +1064,429 @@ def create_jitter_report(config: JitterReportConfig) -> None:
     )
 
 
+def _save_compute_scaling_plot(summary_df: pd.DataFrame, output_path: str, primary_metrics: tuple[str, ...]) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.cm as cm
+    import matplotlib.pyplot as plt
+
+    plot_df = summary_df[summary_df["metric"].isin(primary_metrics)].copy()
+    if plot_df.empty:
+        return
+
+    metric_labels = [metric.removeprefix("lm_eval/mmlu_5shot/") for metric in primary_metrics]
+    metric_to_x = {metric: idx for idx, metric in enumerate(primary_metrics)}
+    cohort_order = ["baseline_1x", "regmix60m_6b", "olmo3_30m_3b"]
+    cohort_labels = {
+        "baseline_1x": "60M / 1.2B",
+        "regmix60m_6b": "60M / 6B",
+        "olmo3_30m_3b": "30M / 3B",
+    }
+    colors = {
+        cohort: cm.get_cmap("RdYlGn_r")(position)
+        for cohort, position in zip(cohort_order, (0.15, 0.5, 0.85), strict=True)
+    }
+    offsets = {
+        "baseline_1x": -0.22,
+        "regmix60m_6b": 0.0,
+        "olmo3_30m_3b": 0.22,
+    }
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.8), constrained_layout=True)
+
+    for cohort in cohort_order:
+        cohort_df = plot_df[plot_df["cohort"] == cohort]
+        x = [metric_to_x[metric] + offsets[cohort] for metric in cohort_df["metric"]]
+        y = cohort_df["std"].to_numpy(dtype=np.float64)
+        yerr = np.vstack(
+            [
+                y - cohort_df["std_ci_low"].to_numpy(dtype=np.float64),
+                cohort_df["std_ci_high"].to_numpy(dtype=np.float64) - y,
+            ]
+        )
+        axes[0].errorbar(
+            x,
+            y,
+            yerr=yerr,
+            fmt="o",
+            color=colors[cohort],
+            capsize=4,
+            label=cohort_labels[cohort],
+        )
+    axes[0].set_xticks(range(len(primary_metrics)), metric_labels, rotation=15, ha="right")
+    axes[0].set_ylabel("Seed-jitter std")
+    axes[0].set_title("MMLU noise by compute ladder")
+    axes[0].grid(axis="y", alpha=0.3)
+    axes[0].legend(frameon=False)
+
+    ratio_df = plot_df[plot_df["cohort"] == "regmix60m_6b"].copy()
+    ratio_x = range(len(primary_metrics))
+    ratio_y = ratio_df["variance_ratio_vs_baseline_1x"].to_numpy(dtype=np.float64)
+    ratio_yerr = np.vstack(
+        [
+            ratio_y - ratio_df["variance_ratio_ci_low"].to_numpy(dtype=np.float64),
+            ratio_df["variance_ratio_ci_high"].to_numpy(dtype=np.float64) - ratio_y,
+        ]
+    )
+    axes[1].axhline(1.0, color="#444444", linestyle="--", linewidth=1)
+    axes[1].errorbar(
+        ratio_x,
+        ratio_y,
+        yerr=ratio_yerr,
+        fmt="o",
+        color=colors["regmix60m_6b"],
+        capsize=4,
+    )
+    axes[1].set_xticks(range(len(primary_metrics)), metric_labels, rotation=15, ha="right")
+    axes[1].set_ylabel("Variance ratio vs 60M / 1.2B")
+    axes[1].set_title("60M 6B vs 1.2B variance ratio")
+    axes[1].grid(axis="y", alpha=0.3)
+
+    buffer = BytesIO()
+    fig.savefig(buffer, format="png", dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    buffer.seek(0)
+    with fsspec.open(output_path, "wb") as f:
+        f.write(buffer.getvalue())
+
+
+def _save_fixed_subset_plot(summary_df: pd.DataFrame, output_path: str, primary_metrics: tuple[str, ...]) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.cm as cm
+    import matplotlib.pyplot as plt
+
+    plot_df = summary_df[summary_df["metric"].isin(primary_metrics)].copy()
+    if plot_df.empty:
+        return
+
+    metric_labels = [metric.removeprefix("lm_eval/mmlu_5shot/") for metric in primary_metrics]
+    metric_to_x = {metric: idx for idx, metric in enumerate(primary_metrics)}
+    cohort_order = ["baseline_1x", "fixed_subset_1x"]
+    cohort_labels = {
+        "baseline_1x": "Original 60M / 1.2B",
+        "fixed_subset_1x": "Fixed subset 60M / 1.2B",
+    }
+    colors = {
+        cohort: cm.get_cmap("RdYlGn_r")(position) for cohort, position in zip(cohort_order, (0.2, 0.8), strict=True)
+    }
+    offsets = {
+        "baseline_1x": -0.12,
+        "fixed_subset_1x": 0.12,
+    }
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.8), constrained_layout=True)
+
+    for cohort in cohort_order:
+        cohort_df = plot_df[plot_df["cohort"] == cohort]
+        x = [metric_to_x[metric] + offsets[cohort] for metric in cohort_df["metric"]]
+        y = cohort_df["std"].to_numpy(dtype=np.float64)
+        yerr = np.vstack(
+            [
+                y - cohort_df["std_ci_low"].to_numpy(dtype=np.float64),
+                cohort_df["std_ci_high"].to_numpy(dtype=np.float64) - y,
+            ]
+        )
+        axes[0].errorbar(
+            x,
+            y,
+            yerr=yerr,
+            fmt="o",
+            color=colors[cohort],
+            capsize=4,
+            label=cohort_labels[cohort],
+        )
+    axes[0].set_xticks(range(len(primary_metrics)), metric_labels, rotation=15, ha="right")
+    axes[0].set_ylabel("Seed-jitter std")
+    axes[0].set_title("MMLU noise: original vs fixed subset")
+    axes[0].grid(axis="y", alpha=0.3)
+    axes[0].legend(frameon=False)
+
+    ratio_df = plot_df[plot_df["cohort"] == "fixed_subset_1x"].copy()
+    ratio_x = range(len(primary_metrics))
+    ratio_y = ratio_df["variance_ratio_vs_baseline_1x"].to_numpy(dtype=np.float64)
+    ratio_yerr = np.vstack(
+        [
+            ratio_y - ratio_df["variance_ratio_ci_low"].to_numpy(dtype=np.float64),
+            ratio_df["variance_ratio_ci_high"].to_numpy(dtype=np.float64) - ratio_y,
+        ]
+    )
+    axes[1].axhline(1.0, color="#444444", linestyle="--", linewidth=1)
+    axes[1].errorbar(
+        ratio_x,
+        ratio_y,
+        yerr=ratio_yerr,
+        fmt="o",
+        color=colors["fixed_subset_1x"],
+        capsize=4,
+    )
+    axes[1].set_xticks(range(len(primary_metrics)), metric_labels, rotation=15, ha="right")
+    axes[1].set_ylabel("Variance ratio vs original")
+    axes[1].set_title("Fixed-subset variance ratio")
+    axes[1].grid(axis="y", alpha=0.3)
+
+    buffer = BytesIO()
+    fig.savefig(buffer, format="png", dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    buffer.seek(0)
+    with fsspec.open(output_path, "wb") as f:
+        f.write(buffer.getvalue())
+
+
+def _save_panel_vs_noise_plot(summary_df: pd.DataFrame, output_path: str, primary_metrics: tuple[str, ...]) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.cm as cm
+    import matplotlib.pyplot as plt
+
+    plot_df = summary_df[summary_df["metric"].isin(primary_metrics)].copy()
+    if plot_df.empty:
+        return
+
+    metric_labels = [metric.removeprefix("lm_eval/mmlu_5shot/") for metric in primary_metrics]
+    cmap = cm.get_cmap("RdYlGn_r")
+    colors = {
+        "baseline": cmap(0.25),
+        "panel": cmap(0.8),
+        "gt1": cmap(0.62),
+        "gt2": cmap(0.9),
+    }
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.8), constrained_layout=True)
+    x = np.arange(len(primary_metrics))
+    width = 0.32
+
+    baseline_std = [plot_df.loc[plot_df["metric"] == metric, "baseline_std"].iloc[0] for metric in primary_metrics]
+    panel_std = [plot_df.loc[plot_df["metric"] == metric, "panel_std"].iloc[0] for metric in primary_metrics]
+    axes[0].bar(x - width / 2, baseline_std, width=width, color=colors["baseline"], label="Fixed-subset noise std")
+    axes[0].bar(x + width / 2, panel_std, width=width, color=colors["panel"], label="10-run panel std")
+    axes[0].set_xticks(x, metric_labels, rotation=15, ha="right")
+    axes[0].set_ylabel("Std")
+    axes[0].set_title("Panel spread vs fixed-subset noise")
+    axes[0].grid(axis="y", alpha=0.3)
+    axes[0].legend(frameon=False)
+
+    frac_gt1 = [
+        plot_df.loc[plot_df["metric"] == metric, "frac_pairwise_gt_1x_noise_std"].iloc[0] for metric in primary_metrics
+    ]
+    frac_gt2 = [
+        plot_df.loc[plot_df["metric"] == metric, "frac_pairwise_gt_2x_noise_std"].iloc[0] for metric in primary_metrics
+    ]
+    axes[1].bar(x - width / 2, frac_gt1, width=width, color=colors["gt1"], label=">|1x noise std|")
+    axes[1].bar(x + width / 2, frac_gt2, width=width, color=colors["gt2"], label=">|2x noise std|")
+    axes[1].set_xticks(x, metric_labels, rotation=15, ha="right")
+    axes[1].set_ylim(0.0, 1.0)
+    axes[1].set_ylabel("Fraction of pairwise diffs")
+    axes[1].set_title("How often mix differences beat the noise floor")
+    axes[1].grid(axis="y", alpha=0.3)
+    axes[1].legend(frameon=False)
+
+    buffer = BytesIO()
+    fig.savefig(buffer, format="png", dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    buffer.seek(0)
+    with fsspec.open(output_path, "wb") as f:
+        f.write(buffer.getvalue())
+
+
+def create_compute_scaling_noise_report(config: ComputeScalingNoiseReportConfig) -> None:
+    """Compare seed-jitter noise across higher-compute ladders against the 1x reference study."""
+    with fsspec.open(str(config.run_manifest_path), "r") as f:
+        manifest_payload = json.load(f)
+    results_path = os.path.join(str(config.analysis_output_path), RESULTS_CSV)
+    merged = pd.read_csv(results_path)
+    merged["status"] = merged["status"].fillna("not_found")
+
+    completed_current = merged[(merged["status"] == "completed") & merged["wandb_run_id"].notna()].copy()
+    current_traj = _collect_trajectory_rows(
+        completed_current,
+        wandb_entity=config.wandb_entity,
+        wandb_project=config.wandb_project,
+        objective_metric=config.primary_metrics[0],
+    )
+    if not current_traj.empty:
+        trajectory_meta = completed_current[
+            ["run_id", "ladder", "model_family", "experiment_budget", "num_train_steps"]
+        ].drop_duplicates("run_id")
+        current_traj = current_traj.merge(trajectory_meta, on="run_id", how="left")
+
+    baseline_manifest_payload = json.loads(config.baseline_manifest_json)
+    baseline_results = _collect_manifest_results_frame(
+        manifest_payload=baseline_manifest_payload,
+        wandb_entity=config.wandb_entity,
+        wandb_project=config.wandb_project,
+        metric_prefixes=("eval/", "lm_eval/"),
+        extra_metrics=tuple(dict.fromkeys((*config.primary_metrics, *config.secondary_metrics))),
+    )
+    baseline_completed = baseline_results[
+        (baseline_results["status"] == "completed") & baseline_results["wandb_run_id"].notna()
+    ].copy()
+
+    summary_rows = _build_compute_scaling_summary_rows(
+        current_runs_df=completed_current,
+        baseline_runs_df=baseline_completed,
+        primary_metrics=config.primary_metrics,
+        secondary_metrics=config.secondary_metrics,
+        bootstrap_samples=config.bootstrap_samples,
+        bootstrap_seed=config.bootstrap_seed,
+    )
+    summary_df = pd.DataFrame(summary_rows)
+
+    fs, _, _ = fsspec.get_fs_token_paths(config.output_path)
+    fs.makedirs(config.output_path, exist_ok=True)
+
+    with fsspec.open(os.path.join(config.output_path, RUN_MANIFEST_FILE), "w") as f:
+        json.dump(manifest_payload, f, indent=2, sort_keys=True)
+    with fsspec.open(os.path.join(config.output_path, RESULTS_CSV), "w") as f:
+        merged.to_csv(f, index=False)
+    with fsspec.open(os.path.join(config.output_path, TRAJECTORY_RAW_PARQUET), "wb") as f:
+        current_traj.to_parquet(f, index=False)
+    with fsspec.open(os.path.join(config.output_path, COMPUTE_SCALING_NOISE_SUMMARY_CSV), "w") as f:
+        summary_df.to_csv(f, index=False)
+    with fsspec.open(os.path.join(config.output_path, COMPUTE_SCALING_NOISE_SUMMARY_JSON), "w") as f:
+        json.dump(
+            {
+                "primary_metrics": list(config.primary_metrics),
+                "secondary_metrics": list(config.secondary_metrics),
+                "baseline_experiment": baseline_manifest_payload["experiment_name"],
+                "rows": summary_rows,
+            },
+            f,
+            indent=2,
+            sort_keys=True,
+        )
+    _save_compute_scaling_plot(
+        summary_df,
+        os.path.join(config.output_path, MMLU_NOISE_VS_COMPUTE_PNG),
+        config.primary_metrics,
+    )
+
+
+def create_fixed_subset_noise_report(config: FixedSubsetNoiseReportConfig) -> None:
+    """Compare fixed-subset seed jitter against the original run_00097 seed study."""
+    analysis_path = str(config.analysis_output_path)
+    seed_runs_path = os.path.join(analysis_path, SEED_RUNS_CSV)
+    control_report_path = os.path.join(analysis_path, DETERMINISM_CONTROL_REPORT_JSON)
+
+    current_seed_runs = pd.read_csv(seed_runs_path)
+    current_seed_runs = current_seed_runs[
+        (current_seed_runs["status"] == "completed") & current_seed_runs["wandb_run_id"].notna()
+    ].copy()
+
+    baseline_manifest_payload = json.loads(config.baseline_manifest_json)
+    baseline_results = _collect_manifest_results_frame(
+        manifest_payload=baseline_manifest_payload,
+        wandb_entity=config.wandb_entity,
+        wandb_project=config.wandb_project,
+        metric_prefixes=("eval/", "lm_eval/"),
+        extra_metrics=tuple(dict.fromkeys((*config.primary_metrics, *config.secondary_metrics))),
+    )
+    baseline_completed = baseline_results[
+        (baseline_results["status"] == "completed") & baseline_results["wandb_run_id"].notna()
+    ].copy()
+
+    summary_rows = _build_fixed_subset_summary_rows(
+        current_runs_df=current_seed_runs,
+        baseline_runs_df=baseline_completed,
+        primary_metrics=config.primary_metrics,
+        secondary_metrics=config.secondary_metrics,
+        bootstrap_samples=config.bootstrap_samples,
+        bootstrap_seed=config.bootstrap_seed,
+    )
+    summary_df = pd.DataFrame(summary_rows)
+
+    control_report: dict[str, Any] | None = None
+    control_fs, _, _ = fsspec.get_fs_token_paths(control_report_path)
+    if control_fs.exists(control_report_path):
+        with fsspec.open(control_report_path, "r") as f:
+            control_report = json.load(f)
+
+    fs, _, _ = fsspec.get_fs_token_paths(config.output_path)
+    fs.makedirs(config.output_path, exist_ok=True)
+
+    with fsspec.open(os.path.join(config.output_path, FIXED_SUBSET_NOISE_SUMMARY_CSV), "w") as f:
+        summary_df.to_csv(f, index=False)
+    with fsspec.open(os.path.join(config.output_path, FIXED_SUBSET_NOISE_SUMMARY_JSON), "w") as f:
+        json.dump(
+            {
+                "primary_metrics": list(config.primary_metrics),
+                "secondary_metrics": list(config.secondary_metrics),
+                "baseline_experiment": baseline_manifest_payload["experiment_name"],
+                "current_seed_runs_path": seed_runs_path,
+                "control_report": control_report,
+                "rows": summary_rows,
+            },
+            f,
+            indent=2,
+            sort_keys=True,
+        )
+    _save_fixed_subset_plot(
+        summary_df,
+        os.path.join(config.output_path, MMLU_NOISE_FIXED_SUBSET_VS_ORIGINAL_PNG),
+        config.primary_metrics,
+    )
+
+
+def create_panel_vs_noise_report(config: PanelVsNoiseReportConfig) -> None:
+    """Compare a fixed-subset observed-run panel against the fixed-subset noise baseline."""
+    with fsspec.open(str(config.run_manifest_path), "r") as f:
+        manifest_payload = json.load(f)
+    results_path = os.path.join(str(config.analysis_output_path), RESULTS_CSV)
+    merged = pd.read_csv(results_path)
+    merged["status"] = merged["status"].fillna("not_found")
+    panel_completed = merged[(merged["status"] == "completed") & merged["wandb_run_id"].notna()].copy()
+
+    baseline_manifest_payload = json.loads(config.baseline_manifest_json)
+    baseline_results = _collect_manifest_results_frame(
+        manifest_payload=baseline_manifest_payload,
+        wandb_entity=config.wandb_entity,
+        wandb_project=config.wandb_project,
+        metric_prefixes=("eval/", "lm_eval/"),
+        extra_metrics=tuple(dict.fromkeys((*config.primary_metrics, *config.secondary_metrics))),
+    )
+    baseline_completed = baseline_results[
+        (baseline_results["status"] == "completed") & baseline_results["wandb_run_id"].notna()
+    ].copy()
+
+    summary_rows = _build_panel_vs_noise_summary_rows(
+        panel_runs_df=panel_completed,
+        baseline_runs_df=baseline_completed,
+        primary_metrics=config.primary_metrics,
+        secondary_metrics=config.secondary_metrics,
+    )
+    summary_df = pd.DataFrame(summary_rows)
+
+    fs, _, _ = fsspec.get_fs_token_paths(config.output_path)
+    fs.makedirs(config.output_path, exist_ok=True)
+
+    with fsspec.open(os.path.join(config.output_path, RUN_MANIFEST_FILE), "w") as f:
+        json.dump(manifest_payload, f, indent=2, sort_keys=True)
+    with fsspec.open(os.path.join(config.output_path, RESULTS_CSV), "w") as f:
+        merged.to_csv(f, index=False)
+    with fsspec.open(os.path.join(config.output_path, PANEL_VS_NOISE_SUMMARY_CSV), "w") as f:
+        summary_df.to_csv(f, index=False)
+    with fsspec.open(os.path.join(config.output_path, PANEL_VS_NOISE_SUMMARY_JSON), "w") as f:
+        json.dump(
+            {
+                "primary_metrics": list(config.primary_metrics),
+                "secondary_metrics": list(config.secondary_metrics),
+                "baseline_experiment": baseline_manifest_payload["experiment_name"],
+                "rows": summary_rows,
+            },
+            f,
+            indent=2,
+            sort_keys=True,
+        )
+    _save_panel_vs_noise_plot(
+        summary_df,
+        os.path.join(config.output_path, MMLU_PANEL_VS_NOISE_PNG),
+        config.primary_metrics,
+    )
+
+
 def create_determinism_report_step(
     *,
     name_prefix: str,
@@ -677,6 +1512,91 @@ def create_determinism_report_step(
             analysis_output_path=output_path_of(analysis_step),
             swarm_results_csv_path=swarm_results_csv_path,
             comparison_metrics=comparison_metrics,
+        ),
+    )
+
+
+def create_compute_scaling_noise_report_step(
+    *,
+    name_prefix: str,
+    run_manifest_step: ExecutorStep,
+    analysis_step: ExecutorStep,
+    wandb_entity: str,
+    wandb_project: str,
+    baseline_manifest_json: str,
+    primary_metrics: tuple[str, ...],
+    secondary_metrics: tuple[str, ...] = (),
+) -> ExecutorStep:
+    """Create an ExecutorStep for the run_00097 compute-scaling noise report."""
+    return ExecutorStep(
+        name=f"{name_prefix}/compute_scaling_noise_report",
+        description="Compare MMLU seed-jitter noise across higher-compute run_00097 ladders",
+        fn=create_compute_scaling_noise_report,
+        config=ComputeScalingNoiseReportConfig(
+            output_path=this_output_path(),
+            run_manifest_path=output_path_of(run_manifest_step, RUN_MANIFEST_FILE),
+            analysis_output_path=output_path_of(analysis_step),
+            wandb_entity=wandb_entity,
+            wandb_project=wandb_project,
+            baseline_manifest_json=baseline_manifest_json,
+            primary_metrics=primary_metrics,
+            secondary_metrics=secondary_metrics,
+        ),
+    )
+
+
+def create_fixed_subset_noise_report_step(
+    *,
+    name_prefix: str,
+    analysis_step: ExecutorStep,
+    wandb_entity: str,
+    wandb_project: str,
+    baseline_manifest_json: str,
+    primary_metrics: tuple[str, ...],
+    secondary_metrics: tuple[str, ...] = (),
+) -> ExecutorStep:
+    """Create an ExecutorStep for the fixed-subset vs original seed-study noise report."""
+    return ExecutorStep(
+        name=f"{name_prefix}/fixed_subset_noise_report",
+        description="Compare fixed-subset MMLU seed jitter against the original run_00097 study",
+        fn=create_fixed_subset_noise_report,
+        config=FixedSubsetNoiseReportConfig(
+            output_path=this_output_path(),
+            analysis_output_path=output_path_of(analysis_step),
+            wandb_entity=wandb_entity,
+            wandb_project=wandb_project,
+            baseline_manifest_json=baseline_manifest_json,
+            primary_metrics=primary_metrics,
+            secondary_metrics=secondary_metrics,
+        ),
+    )
+
+
+def create_panel_vs_noise_report_step(
+    *,
+    name_prefix: str,
+    run_manifest_step: ExecutorStep,
+    analysis_step: ExecutorStep,
+    wandb_entity: str,
+    wandb_project: str,
+    baseline_manifest_json: str,
+    primary_metrics: tuple[str, ...],
+    secondary_metrics: tuple[str, ...] = (),
+) -> ExecutorStep:
+    """Create an ExecutorStep for comparing an observed fixed-subset panel against the fixed-subset noise floor."""
+    return ExecutorStep(
+        name=f"{name_prefix}/panel_vs_noise_report",
+        description="Compare observed-mix panel spread against fixed-subset MMLU noise",
+        fn=create_panel_vs_noise_report,
+        config=PanelVsNoiseReportConfig(
+            output_path=this_output_path(),
+            run_manifest_path=output_path_of(run_manifest_step, RUN_MANIFEST_FILE),
+            analysis_output_path=output_path_of(analysis_step),
+            wandb_entity=wandb_entity,
+            wandb_project=wandb_project,
+            baseline_manifest_json=baseline_manifest_json,
+            primary_metrics=primary_metrics,
+            secondary_metrics=secondary_metrics,
         ),
     )
 
