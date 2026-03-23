@@ -137,11 +137,15 @@ def pbar_logger(iterable=None, desc="train", **tqdm_mkwargs):
     if "iterable" not in kwargs:
         kwargs["iterable"] = iterable
 
-    _tqdm_logging_one_time_setup()
-    pbar = tqdm(**kwargs)
+    pbar = None
 
     def update_pbar(step: StepInfo):
-        pbar.update(step.next_step - pbar.n)
+        nonlocal pbar
+        if pbar is None:
+            _tqdm_logging_one_time_setup()
+            pbar = tqdm(initial=step.next_step, **kwargs)
+        else:
+            pbar.update(step.next_step - pbar.n)
         pbar.set_postfix(loss=jnp_to_python(step.loss))
 
     return update_pbar

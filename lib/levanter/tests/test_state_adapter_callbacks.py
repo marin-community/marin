@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import jax.numpy as jnp
 
+import levanter.callbacks._metrics as callback_metrics
 from levanter.callbacks.state_adapter import StateCallbackRunner
 
 
@@ -69,3 +70,45 @@ def test_state_callback_runner_supports_grug_style_state_and_force_flag():
 
     runner.run(state, loss=1.0, step_duration=0.1, force=True)
     assert calls == [1]
+
+
+def test_pbar_logger_initializes_from_resumed_step(monkeypatch):
+    created: list[object] = []
+
+    class _FakeTqdm:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.n = kwargs.get("initial", 0)
+            self.update_calls: list[int] = []
+            self.postfixes: list[object] = []
+            created.append(self)
+
+        def update(self, amount: int):
+            self.update_calls.append(amount)
+            self.n += amount
+
+        def set_postfix(self, **kwargs):
+            self.postfixes.append(kwargs)
+
+    monkeypatch.setattr(callback_metrics, "tqdm", _FakeTqdm)
+    monkeypatch.setattr(callback_metrics, "_tqdm_logging_one_time_setup", lambda: None)
+
+    callback = callback_metrics.pbar_logger(total=100)
+
+    class _FakeStep:
+        def __init__(self, step: int, loss: float):
+            self.step = step
+            self.next_step = step + 1
+            self.loss = loss
+
+    callback(_FakeStep(step=9, loss=1.25))
+
+    assert len(created) == 1
+    assert created[0].kwargs["initial"] == 10
+    assert created[0].update_calls == []
+    assert created[0].postfixes == [{"loss": 1.25}]
+
+    callback(_FakeStep(step=10, loss=1.0))
+
+    assert created[0].update_calls == [1]
+    assert created[0].n == 11
