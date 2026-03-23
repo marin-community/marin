@@ -13,7 +13,7 @@ import logging
 import pytest
 from iris.rpc import cluster_pb2
 
-from .jobs import IntegrationJobs
+from .jobs import quick
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ def test_marin_data_pipeline_on_iris(integration_cluster):
 def test_multi_step_pipeline_on_iris(integration_cluster):
     """Submit multiple sequential jobs simulating a multi-step Marin pipeline."""
     # Step 1: data prep
-    job1 = integration_cluster.submit(IntegrationJobs.quick, "itest-pipeline-step1")
+    job1 = integration_cluster.submit(quick, "itest-pipeline-step1")
     status1 = integration_cluster.wait(job1, timeout=integration_cluster.job_timeout)
     assert status1.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
@@ -95,6 +95,6 @@ def test_multi_step_pipeline_on_iris(integration_cluster):
     assert status2.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     # Step 3: validation
-    job3 = integration_cluster.submit(IntegrationJobs.quick, "itest-pipeline-step3")
+    job3 = integration_cluster.submit(quick, "itest-pipeline-step3")
     status3 = integration_cluster.wait(job3, timeout=integration_cluster.job_timeout)
     assert status3.state == cluster_pb2.JOB_STATE_SUCCEEDED
