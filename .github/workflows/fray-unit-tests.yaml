@@ -4,16 +4,31 @@ on:
     branches:
       - main
   pull_request:
-    paths:
-      - lib/fray/**
-      - .github/workflows/fray-unit-tests.yaml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      should_run: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'lib/fray/**'
+              - '.github/workflows/fray-unit-tests.yaml'
+
   cpu-test:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -39,9 +54,10 @@ jobs:
           cd lib/fray && uv run --group=fray-test pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/
 
   tpu-test:
+    needs: changes
     runs-on: [tpu-ci]
     timeout-minutes: 10
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: needs.changes.outputs.should_run == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
