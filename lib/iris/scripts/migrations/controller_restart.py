@@ -103,6 +103,13 @@ def main(
     )
 
     config = load_config(Path(config_path))
+
+    # Configure S3 env vars for fsspec (R2 → AWS mapping) so checkpoint
+    # verification works for s3:// storage URIs.
+    from iris.cli.main import _configure_client_s3
+
+    _configure_client_s3(config)
+
     iris_config = IrisConfig(config)
     platform = iris_config.platform()
 

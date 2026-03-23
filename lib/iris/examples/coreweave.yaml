@@ -63,6 +63,8 @@ defaults:
       milliseconds: 300000
     startup_grace_period:
       milliseconds: 2400000    # 40 min — covers autoscaler node provisioning + Pod startup
+  task_env:
+    MARIN_PREFIX: s3://marin-na/marin
   worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001

@@ -216,6 +216,7 @@ class PodConfig:
     host_network: bool = False
     controller_address: str | None = None
     managed_label: str = ""
+    task_env: dict[str, str] = field(default_factory=dict)
 
 
 def _build_task_script(run_req: cluster_pb2.Worker.RunTaskRequest) -> str:
@@ -327,7 +328,7 @@ def _build_pod_manifest(
         ports=run_req.ports,
         resources=run_req.resources if run_req.HasField("resources") else None,
     )
-    combined = {**dict(run_req.environment.env_vars), **iris_env}
+    combined = {**config.task_env, **dict(run_req.environment.env_vars), **iris_env}
     env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]
     # Pod IP via downward API — not expressible as a static value.
     env_list.append(
@@ -612,6 +613,7 @@ class KubernetesProvider:
     host_network: bool = False
     controller_address: str | None = None
     managed_label: str = ""
+    task_env: dict[str, str] = field(default_factory=dict)
     _log_cursors: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
 
@@ -906,6 +908,7 @@ class KubernetesProvider:
             host_network=self.host_network,
             controller_address=self.controller_address,
             managed_label=self.managed_label,
+            task_env=self.task_env,
         )
 
     def _apply_pod(self, run_req: cluster_pb2.Worker.RunTaskRequest) -> None:
