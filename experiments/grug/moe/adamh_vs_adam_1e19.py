@@ -10,22 +10,13 @@ batch size, and training budget so the only variable is the optimizer.
 Part of #4024 / #4013.
 """
 
-import dataclasses
 import math
 import os
-from dataclasses import field
-from datetime import timedelta
 
-import jmp
 from fray.cluster import ResourceConfig
-from levanter.callbacks.profiler import ProfilerConfig
-from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LmDataConfig
 from levanter.optim import AdamConfig, GrugAdamHConfig, OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
-from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
-from levanter.utils.mesh import MeshConfig
 
 from experiments.defaults import default_validation_sets
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, run_grug_moe

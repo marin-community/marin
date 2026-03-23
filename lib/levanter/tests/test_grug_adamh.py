@@ -12,16 +12,16 @@ from levanter.optim.grug_adamh import GrugAdamHConfig
 def _make_fake_grug_params():
     """Minimal pytree mimicking grug MoE parameter structure."""
     return {
-        "embed": jnp.zeros((128, 64)),       # embedding: 2D but name contains "embed"
+        "embed": jnp.zeros((128, 64)),  # embedding: 2D but name contains "embed"
         "layers": {
             "attn_w_q": jnp.zeros((64, 64)),  # weight matrix
             "attn_w_k": jnp.zeros((64, 64)),  # weight matrix
-            "mlp_w1": jnp.zeros((64, 192)),   # weight matrix
-            "mlp_w2": jnp.zeros((192, 64)),   # weight matrix
-            "norm_weight": jnp.zeros((64,)),   # 1D norm scale
+            "mlp_w1": jnp.zeros((64, 192)),  # weight matrix
+            "mlp_w2": jnp.zeros((192, 64)),  # weight matrix
+            "norm_weight": jnp.zeros((64,)),  # 1D norm scale
         },
         "router_weight": jnp.zeros((64, 8)),  # router: 2D but name contains "router"
-        "lm_head": jnp.zeros((64, 128)),      # weight matrix
+        "lm_head": jnp.zeros((64, 128)),  # weight matrix
     }
 
 
