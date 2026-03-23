@@ -43,5 +43,5 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          uv run python lib/iris/scripts/migrations/controller_restart.py \
-            --config lib/iris/examples/coreweave.yaml
+          uv run iris --config lib/iris/examples/coreweave.yaml \
+            cluster controller restart
