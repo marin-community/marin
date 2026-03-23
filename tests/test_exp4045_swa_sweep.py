@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 
 from experiments.grug.moe.exp4045_ablate_swa_sweep import (
     ALL_STEPS,
@@ -42,9 +41,7 @@ def test_flop_budgets_are_close_to_target():
             num_steps = steps_for_budget(fpt, budget)
             total = 3 * fpt * num_steps * BATCH_SIZE * SEQ_LEN
             ratio = total / budget
-            assert 0.9 <= ratio <= 1.1, (
-                f"budget={budget:.0e} swa={swa}: total={total:.2e} ratio={ratio:.3f}"
-            )
+            assert 0.9 <= ratio <= 1.1, f"budget={budget:.0e} swa={swa}: total={total:.2e} ratio={ratio:.3f}"
 
 
 def test_swa_same_flops_as_full():

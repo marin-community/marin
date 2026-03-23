@@ -11,8 +11,6 @@ Tracking issue: https://github.com/marin-community/marin/issues/4045
 Parent gate: https://github.com/marin-community/marin/issues/4014
 """
 
-import dataclasses
-
 from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
