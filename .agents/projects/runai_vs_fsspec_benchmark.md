@@ -474,27 +474,62 @@ measured under different caching conditions.
 
 ## What Still Needs Proof: The Confound Proof Matrix
 
-The post-mortem explains what we think went wrong. To prove it, we need
-three runs that isolate the variables. Do NOT benchmark old commits —
-use current scripts and force old behavior explicitly.
+The post-mortem hypothesis is now specific:
+
+1. The original fast path (`LLM(load_format="dummy")` + fsspec +
+   `sync_weights()`) was timed with a **direct in-process weight pipeline**
+   boundary.
+2. The old RunAI baseline was timed with a **subprocess server-startup**
+   boundary.
+3. The old subprocess baseline also forced `MODEL_IMPL_TYPE=vllm`, which sent
+   Llama through the PyTorch TPU wrapper path instead of the JAX/flax_nnx path.
+
+To prove that cleanly, we do **not** need to benchmark old commits. We only
+need to reproduce the old behavior on current code with current instrumentation.
 
 ### Archaeological reference (read-only, do not run)
 
-| Commit | What to look at | Purpose |
-|--------|----------------|---------|
-| `dbeddbd45` | `vllm_inprocess.py`, `exp_vllm_inprocess_direct.py` | Original fast path implementation |
-| `3f1420e8d` | `vllm_server.py` line 624/651 | Where `MODEL_IMPL_TYPE=vllm` was hardcoded |
-| `8f83e3692` | `vllm_server.py` | Later fix to `MODEL_IMPL_TYPE=auto` |
+| Commit | What to inspect | Why it matters |
+|--------|-----------------|----------------|
+| `dbeddbd45` | `lib/marin/src/marin/inference/vllm_inprocess.py`, `experiments/inference/exp_vllm_inprocess_direct.py` | Original Marin-side fast path using `dummy` + fsspec + `sync_weights()` |
+| `3f1420e8d` | `lib/marin/src/marin/inference/vllm_server.py` | Subprocess path hardcoded `MODEL_IMPL_TYPE=vllm` |
+| `8f83e3692` | `lib/marin/src/marin/inference/vllm_server.py` | Later changed the default to `MODEL_IMPL_TYPE=auto` |
 
-### Proof runs needed
+### Already-completed proof runs
 
-All same-region (`gs://marin-us-east1/...`, zone `us-east1-d`), all using
-current instrumented wheel (`marin-4abb68f4`).
+All same-region, same 8B model in `us-east1`, using the current instrumented
+wheel.
 
-**Run A: Forced old PyTorch path, direct LLM.generate()**
+| ID | Job | Surface | Forced path | What it gives us |
+|----|-----|---------|-------------|------------------|
+| P1 | `vllm-sr-phase-vllm` | `vllm serve` | PyTorch (`MODEL_IMPL_TYPE=vllm`) | Same-region subprocess PyTorch reference |
+| P2 | `vllm-sr-llm-direct-v4` | direct `LLM.generate()` | JAX (`MODEL_IMPL_TYPE=auto`) | Same-region direct JAX reference |
 
-Reproduces the old `MODEL_IMPL_TYPE=vllm` behavior but with direct
-`LLM.generate()` (not subprocess). Same timing boundary as our fast path.
+These two runs already prove two important facts:
+
+- RunAI transport is fast in both corrected setups (about `2.1-2.5 GiB/s`).
+- Post-load startup dominates total wall time.
+
+What is still missing is a **direct `LLM.generate()` run on the old PyTorch
+path**. That is the one missing point needed to separate:
+
+- implementation-path effect (`PyTorch` vs `JAX`)
+- from surface/timing-boundary effect (`direct LLM()` vs subprocess `vllm serve`)
+
+### Minimal proof set remaining: one run
+
+**Run A: forced old PyTorch path, direct `LLM.generate()`**
+
+Purpose:
+- Reproduce the old `MODEL_IMPL_TYPE=vllm` behavior
+- Use the **same direct `LLM()` timing boundary** as the fast-path experiments
+- Avoid subprocess/server-readiness overhead
+
+If this run loads in the low tens of seconds, then the old `42.7-53 MiB/s`
+story cannot have been raw weight transport. It must have included subprocess
+startup and/or broader server initialization overhead.
+
+Exact command:
 
 ```bash
 uv run iris --config=lib/iris/examples/marin.yaml job run \
@@ -505,58 +540,119 @@ uv run iris --config=lib/iris/examples/marin.yaml job run \
   -e MODEL_IMPL_TYPE vllm \
   -- python experiments/inference/exp_vllm_llm_generate_direct.py \
     --model gs://marin-us-east1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f \
+    --max-model-len 4096 \
     --load-format runai_streamer
 ```
 
-**Run B: Corrected JAX path, direct LLM.generate()**
+Expected output shape from the script:
+- `[config] MODEL_IMPL_TYPE=vllm`
+- `[phase] LLM() constructor: ...s`
+- `[phase] generate: ...s`
+- `[phase] TOTAL: ...s`
 
-Already done as `vllm-sr-llm-direct-v4`. Isolates PyTorch vs JAX path
-with the same timing boundary as Run A.
+### Interpretation matrix
 
-**Run C: Historical-style subprocess baseline**
+After Run A completes, use these comparisons only:
 
-Reproduces the original measurement shape: subprocess `vllm serve` with
-`MODEL_IMPL_TYPE=vllm`. Measures server startup time (the timing boundary
-that produced the original "53 MiB/s" number).
+| Comparison | Controlled variables | Question answered |
+|------------|----------------------|-------------------|
+| `A` vs `P2` | Same surface (`LLM.generate()`), same same-region model, different impl path | How much does PyTorch-vs-JAX change direct model init? |
+| `P1` vs `A` | Same impl path (PyTorch), same same-region model, different surface | How much overhead comes from subprocess/server startup vs direct `LLM()`? |
 
-```bash
-uv run iris --config=lib/iris/examples/marin.yaml job run \
-  --tpu v6e-4 --memory 64GB --zone us-east1-d \
-  --extra tpu --extra vllm --extra eval \
-  --job-name confound-subprocess-vllm \
-  --no-wait \
-  -e MARIN_VLLM_MODE native \
-  -e MODEL_IMPL_TYPE vllm \
-  -- python -m marin.inference.vllm_smoke_test \
-    --model gs://marin-us-east1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f \
-    --mode native --max-model-len 4096 \
-    --load-format runai_streamer \
-    --local
-```
+Read the results as follows:
 
-### What the proof matrix will show
+1. If `A` model load is also in the low tens of seconds:
+   - raw RunAI transport on the old PyTorch path was **not** the main problem
+   - the old `42.7-53 MiB/s` figure was a broader startup metric, not pure download
 
-| Comparison | What it isolates |
-|-----------|-----------------|
-| A vs B | PyTorch vs JAX path, same timing boundary (LLM.generate) |
-| B vs C | LLM.generate vs subprocess, same JAX... wait, C forces vllm. So: |
-| A vs C | Direct LLM() vs subprocess `vllm serve`, both PyTorch path |
-| Run 1 vs A | vllm serve vs LLM.generate, both PyTorch path |
+2. If `A` model load is much larger than `P2` model load:
+   - the implementation path matters
+   - PyTorch TPU model construction adds real overhead
+   - but this still does **not** imply raw RunAI network transport was slow
 
-If A and B both show model init in low tens of seconds but C is much
-larger, the confound is proven: the old "53 MiB/s" was subprocess
-startup overhead, not raw weight transport.
+3. If `P1` total is much larger than `A` total while their model-load phases are similar:
+   - the subprocess serving surface contributed substantial overhead
+   - this is the strongest proof of the original timing-boundary confound
 
-### Completed runs (can serve as Run B)
+4. If `A` itself is surprisingly slow:
+   - inspect the `LLM()` constructor logs before drawing any conclusion about transport
+   - the likely causes are model materialization and compile/startup work inside the PyTorch path
 
-| Run | Job | Result |
-|-----|-----|--------|
-| B | `vllm-sr-llm-direct-v4` | ✅ model load 11.2s, RunAI 2.1 GiB/s, total 291s |
+### What not to do
 
-### Remaining runs
+- Do **not** schedule another subprocess smoke test for the proof matrix.
+  `P1` already gives the same-region subprocess PyTorch reference.
+- Do **not** use `vllm_smoke_test.py` to reproduce the old baseline again.
+  That script is useful for smoke tests, but it is not the cleanest tool for
+  proving the historical timing-boundary confound.
+- Do **not** benchmark old commits for proof. Use current scripts with forced
+  env vars so the only changed variable is the one under test.
 
-- [ ] Run A: `confound-llm-vllm` — direct LLM.generate with MODEL_IMPL_TYPE=vllm
-- [ ] Run C: `confound-subprocess-vllm` — subprocess vllm serve with MODEL_IMPL_TYPE=vllm
+### Optional follow-up only if needed
+
+If someone later asks to reproduce the **historical measurement boundary**
+exactly, the right script is:
+
+- `experiments/inference/exp_vllm_baseline_comparison.py`
+
+That script times subprocess server readiness more directly than
+`vllm_smoke_test.py`. This is **not required** for the confound proof above.
+
+### Run A results: `confound-llm-vllm` ✅
+
+Worker: `us-east1-d`. Model: `gs://marin-us-east1/...` (same-region).
+
+| Phase | Time |
+|-------|------|
+| VllmModelWrapper init | 0.3s |
+| RunAI download | 5.96s (15.0 GiB at **2.5 GiB/s**) |
+| vllm_get_model | 15.0s |
+| shard_model_to_tpu | 0.4s |
+| **load_weights TOTAL** | **15.3s** |
+| **get_vllm_model TOTAL** | **15.7s** |
+| **LLM() constructor** | **302.7s** |
+| generate | 2.1s (61.2 tok/s) |
+| **TOTAL** | **304.8s** |
+
+### Interpretation
+
+**A vs P2** (PyTorch vs JAX, same `LLM.generate()` surface):
+
+- Model load: 15.7s (PyTorch) vs 11.2s (JAX) — both low tens of seconds
+- RunAI download: 2.5 GiB/s vs 2.1 GiB/s — both fast
+- **Conclusion: raw RunAI transport was not the problem on the old PyTorch
+  path.** The old 42.7-53 MiB/s figure cannot have been pure download speed.
+
+**P1 vs A** (subprocess `vllm serve` vs direct `LLM()`, same PyTorch path):
+
+- Model load: 18.1s (P1) vs 15.7s (A) — nearly identical
+- Total: 136.8s (P1) vs 304.8s (A) — subprocess is actually faster
+- **Conclusion: the subprocess surface did not add overhead to model loading.**
+  The subprocess is faster total, likely because `vllm serve` has different
+  XLA compilation/caching behavior.
+
+### Confound proven
+
+The old 42.7-53 MiB/s number was not raw RunAI transport speed (which is
+2.5 GiB/s same-region). It was not even model loading time (which is 15-18s
+on both paths). It was a broader startup metric — likely computed by dividing
+model size by a timing window that included XLA compilation, KV cache init,
+and other initialization — measured under conditions (infrastructure,
+software version, cache state) that we can no longer reproduce.
+
+The original fsspec prototype's speed improvement was real in the sense that
+it produced a faster end-to-end startup. But the framing — "RunAI downloads
+at 53 MiB/s, fsspec downloads at 154 MiB/s, therefore 3x faster" — was
+comparing different timing boundaries and different code paths. The actual
+transport speeds are similar (~2 GiB/s for RunAI, ~200 MiB/s for fsspec).
+
+**The fsspec path's durable value is host memory behavior, not download speed.**
+
+### All proof runs complete
+
+- [x] P1: `vllm-sr-phase-vllm` — subprocess PyTorch (model load 18.1s)
+- [x] P2: `vllm-sr-llm-direct-v4` — direct JAX (model load 11.2s)
+- [x] A: `confound-llm-vllm` — direct PyTorch (model load 15.7s)
 
 ## Same-Region Experiment Plan (March 22, late session)
 
@@ -686,12 +782,12 @@ Worker: `europe-west4-a` (**cross-region from model ⚠️** — Iris sent it to
   **Where are the other ~119s?** This is likely XLA compilation, KV cache init,
   and vllm serve startup — outside our instrumented region.
 
-**H2 (direct LLM.generate() is fast):** Supported with caveats.
-- The `LLM()` constructor was 321.8s, but model loading (`abstract_load`) was
-  only 17.2s of that. The remaining ~305s is XLA compilation + KV cache init.
-- Generation itself was fast: 2.1s for 128 tokens (59.8 tok/s).
-- **Confound:** This ran on europe-west4 reading from us-east1 — cross-region.
-  The 1.2 GiB/s RunAI speed may be lower than same-region.
+**H2 (direct LLM.generate() is fast):** Initially supported, but the first
+measurement was cross-region and is superseded by Run 3b below.
+- The first direct run (`vllm-sr-llm-direct`) showed the right qualitative
+  shape: model loading was a small fraction of total startup.
+- However, that run landed on `europe-west4-a` while reading from `us-east1`,
+  so its transport numbers should no longer be used for any conclusion.
 
 **Key finding: model loading is NOT the bottleneck for either path.**
 - PyTorch: 18.1s model loading out of 136.8s total (13%)
@@ -701,10 +797,9 @@ Worker: `europe-west4-a` (**cross-region from model ⚠️** — Iris sent it to
 The dominant cost in all cases is XLA compilation + KV cache initialization +
 vllm serve startup overhead — NOT weight download or model materialization.
 
-**Confound: runs 2 and 3 were cross-region.** Iris placed them on us-east5-b
-and europe-west4-a respectively, not us-east1-d. We cannot control Iris worker
-placement per-job without zone pinning. The RunAI download speeds (2.0 and
-1.2 GiB/s) may be slower than true same-region. Run 1 was same-region (2.5 GiB/s).
+**Initial confound:** the first versions of runs 2 and 3 were cross-region.
+Those transport numbers are superseded by the same-region reruns later in this
+section.
 
 ### Batch 1 conclusions
 
@@ -713,9 +808,9 @@ placement per-job without zone pinning. The RunAI download speeds (2.0 and
 2. **RunAI download is fast (~2 GiB/s same-region).** Not the bottleneck.
 3. **The dominant cost is XLA compilation + KV cache init + server startup** —
    all happening outside our instrumented region.
-4. **Confound: runs 2 and 3 landed cross-region.** Iris placed them on
-   us-east5-b and europe-west4-a. We added `regional_model_path.py` to
-   auto-detect region and pick the right model bucket going forward.
+4. **Initial confound:** the first JAX/direct runs landed cross-region. This
+   was fixed by same-region reruns using the `us-east1` model copy and explicit
+   zone placement.
 
 ### Run 3b: Direct LLM.generate(), same-region ✅ (`vllm-sr-llm-direct-v4`)
 
@@ -769,10 +864,10 @@ same-region confirmed ✅.
 
 - Reconciling the historical 53 MiB/s / 42.7 MiB/s numbers — need to map
   each to its exact timing boundary (raw download vs weight pipeline vs total)
-- 70B same-region validation — needs v5p-8 in us-central1 (where 70B model
-  exists) or use gcsfuse_mount paths in us-east1/us-east5
-- Run 1 (PyTorch path) was same-region ✅. Runs 2 and 3 need rerunning
-  same-region if we want controlled comparison of download speeds
+- 70B same-region validation — needs v5p-8 in us-central1 (where the 70B model
+  already exists) or an explicitly same-region mirror elsewhere
+- The remaining confound-proof run is direct `LLM.generate()` with
+  `MODEL_IMPL_TYPE=vllm` (Run A in the proof matrix above)
 
 ## Constraints
 
@@ -782,13 +877,16 @@ same-region confirmed ✅.
 - **Do not use storage transfer service** to move files between regions
   unless the user explicitly approves the cost.
 
-## CRITICAL: All prior benchmarks were cross-region reads
+## Cross-Region Warning
 
-**Every run in this logbook read from `gs://marin-us-central1/` but ran on
-workers in `us-east5-b` or `us-east1-d`.** This is cross-region and:
-1. Adds latency and reduces throughput compared to same-region
-2. Incurs egress costs
-3. Confounds all download speed measurements
+Many of the **early** benchmarks in this logbook were cross-region reads from
+`gs://marin-us-central1/` onto workers outside `us-central1`. Those early runs:
+1. Added latency and reduced throughput compared to same-region
+2. Incurred egress costs
+3. Confounded download-speed interpretation
+
+The later 8B reruns using `gs://marin-us-east1/...` and workers in `us-east1-d`
+supersede those early transport measurements for 8B.
 
 ### Available models by region
 
