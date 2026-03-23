@@ -12,6 +12,7 @@ Dashboard assets are built separately via ``iris build dashboard`` or
 ``_ensure_dashboard_dist()`` in the Docker image build pipeline.
 """
 
+import hashlib
 import logging
 import shutil
 import subprocess
@@ -62,13 +63,35 @@ def _has_missing_outputs(root: Path, source_globs: list[str]) -> bool:
     return False
 
 
-def _needs_rebuild(root: Path, source_globs: list[str], output_globs: list[str]) -> bool:
-    """Return True if any source file is strictly newer than the oldest output file.
+_CHECKSUM_FILE = "build/.proto_checksum"
 
-    Uses a 60-second tolerance because zip archives (used by task bundles)
-    can extract files with slightly different timestamps, causing spurious
-    rebuilds.
+
+def _source_digest(root: Path, source_globs: list[str]) -> str:
+    """SHA-256 digest of all proto source contents, sorted by path for stability."""
+    h = hashlib.sha256()
+    paths = sorted(p for pattern in source_globs for p in root.glob(pattern) if p.is_file())
+    for p in paths:
+        h.update(p.relative_to(root).as_posix().encode())
+        h.update(p.read_bytes())
+    return h.hexdigest()
+
+
+def _needs_rebuild(root: Path, source_globs: list[str], output_globs: list[str]) -> bool:
+    """Return True if proto sources have changed since the last generation.
+
+    Uses a content-hash checksum file rather than mtime comparison, because
+    git does not preserve file timestamps — after a pull both source and
+    output files get the same mtime, hiding real staleness.
+
+    Falls back to mtime comparison (with a 60-second tolerance for zip
+    extraction jitter) when no checksum file exists yet.
     """
+    checksum_path = root / _CHECKSUM_FILE
+    current_digest = _source_digest(root, source_globs)
+    if checksum_path.exists():
+        return checksum_path.read_text().strip() != current_digest
+
+    # No checksum file — fall back to mtime comparison for backwards compat
     source_newest = _newest_mtime(root, source_globs)
     output_oldest = _oldest_mtime(root, output_globs)
     return source_newest > output_oldest + 60.0
@@ -117,4 +140,8 @@ class CustomBuildHook(BuildHookInterface):
         )
         if result.returncode != 0:
             raise RuntimeError(f"Protobuf generation failed:\n{result.stdout}\n{result.stderr}")
+        # Write checksum so future builds can detect when sources change
+        checksum_path = root / _CHECKSUM_FILE
+        checksum_path.parent.mkdir(parents=True, exist_ok=True)
+        checksum_path.write_text(_source_digest(root, _PROTO_SOURCE_GLOBS) + "\n")
         logger.info("Protobuf generation complete")
