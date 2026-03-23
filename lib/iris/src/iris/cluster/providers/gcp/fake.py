@@ -336,7 +336,12 @@ class InMemoryGcpService:
         config: config_pb2.SliceConfig,
         worker_config: config_pb2.WorkerConfig | None = None,
     ) -> LocalSliceHandle:
-        """Create a local slice, spawning real Worker threads if controller_address is set."""
+        """Create a local slice, spawning real Worker threads if controller_address is set.
+
+        Validates the slice_id against GCE naming rules so local tests catch
+        naming issues that would fail on real GCP infrastructure.
+        """
+        validate_resource_name(slice_id, "local slice")
         num_vms = config.num_vms or 1
 
         if self._controller_address is not None:
