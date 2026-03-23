@@ -37,6 +37,7 @@ from iris.cluster.providers.types import (
 from iris.cluster.providers.gcp.bootstrap import (
     build_controller_bootstrap_script_from_config,
 )
+from iris.cluster.tunnel import TunnelConfig, TunnelHandle, start_tunnel, stop_tunnel
 from iris.rpc import config_pb2
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timer
 
@@ -246,6 +247,41 @@ def wait_healthy(
     return False
 
 
+def _build_tunnel_config(config: config_pb2.IrisClusterConfig) -> TunnelConfig | None:
+    """Build a TunnelConfig from the cluster config, or None if disabled."""
+    if not config.HasField("tunnel") or not config.tunnel.enabled:
+        return None
+
+    tunnel_pb = config.tunnel
+    api_token = _fetch_tunnel_api_token(tunnel_pb.cloudflare_api_token_secret)
+
+    return TunnelConfig(
+        enabled=True,
+        domain=tunnel_pb.domain or "iris-ops.dev",
+        cloudflare_account_id=tunnel_pb.cloudflare_account_id,
+        cloudflare_zone_id=tunnel_pb.cloudflare_zone_id,
+        api_token=api_token,
+        cluster_name=config.name,
+    )
+
+
+def _fetch_tunnel_api_token(secret_name: str) -> str:
+    """Fetch the Cloudflare API token from GCP Secret Manager."""
+    import subprocess as _sp
+
+    if not secret_name:
+        raise ValueError("tunnel.cloudflare_api_token_secret is required when tunnel is enabled")
+    result = _sp.run(
+        ["gcloud", "secrets", "versions", "access", "latest", f"--secret={secret_name}"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to fetch secret {secret_name!r}: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
 def _controller_port(config: config_pb2.IrisClusterConfig) -> int:
     """Extract the controller port from config."""
     which = config.controller.WhichOneof("controller")
@@ -322,12 +358,13 @@ def start_controller(
     config: config_pb2.IrisClusterConfig,
     resolve_image: Callable[[str, str | None], str] | None = None,
     health_check_timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS,
-) -> tuple[str, StandaloneWorkerHandle]:
-    """Start or discover existing controller. Returns (address, vm_handle).
+) -> tuple[str, StandaloneWorkerHandle, TunnelHandle | None]:
+    """Start or discover existing controller. Returns (address, vm_handle, tunnel_handle).
 
     1. Try to discover an existing healthy controller
     2. If found and healthy, return it
     3. Otherwise, create a new VM and bootstrap it
+    4. Optionally start a Cloudflare Tunnel for public access
 
     For GCP: creates a GCE instance, SSHs in, bootstraps the controller container.
     For Manual: allocates a host, SSHs in, bootstraps.
@@ -343,7 +380,8 @@ def start_controller(
         if wait_healthy(existing_vm, port, timeout=health_check_timeout):
             address = f"http://{existing_vm.internal_address}:{port}"
             logger.info("Existing controller at %s is healthy", address)
-            return address, existing_vm
+            tunnel_handle = _maybe_start_tunnel(config, port)
+            return address, existing_vm, tunnel_handle
         logger.info("Existing controller is unhealthy, terminating and recreating")
         existing_vm.terminate()
 
@@ -371,8 +409,28 @@ def start_controller(
     vm.set_labels({labels.iris_controller: "true"})
     vm.set_metadata({labels.iris_controller_address: address})
 
+    # Start tunnel if configured
+    tunnel_handle = _maybe_start_tunnel(config, port)
+
     logger.info("Controller started at %s", address)
-    return address, vm
+    if tunnel_handle:
+        logger.info("Public URL: %s", tunnel_handle.public_url)
+    return address, vm, tunnel_handle
+
+
+def _maybe_start_tunnel(
+    config: config_pb2.IrisClusterConfig,
+    port: int,
+) -> TunnelHandle | None:
+    """Start a Cloudflare Tunnel if configured. Returns None if disabled."""
+    tunnel_config = _build_tunnel_config(config)
+    if tunnel_config is None:
+        return None
+    try:
+        return start_tunnel(tunnel_config, port)
+    except Exception:
+        logger.warning("Failed to start Cloudflare Tunnel — controller is still accessible via SSH", exc_info=True)
+        return None
 
 
 def restart_controller(
@@ -380,7 +438,7 @@ def restart_controller(
     config: config_pb2.IrisClusterConfig,
     resolve_image: Callable[[str, str | None], str] | None = None,
     health_check_timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS,
-) -> tuple[str, StandaloneWorkerHandle]:
+) -> tuple[str, StandaloneWorkerHandle, TunnelHandle | None]:
     """Restart controller container in-place on existing VM.
 
     Re-runs the bootstrap script on the existing controller VM, which stops the
@@ -404,17 +462,32 @@ def restart_controller(
     if not wait_healthy(vm, port, timeout=health_check_timeout):
         raise RuntimeError(f"Controller at {address} failed health check after restart")
 
+    tunnel_handle = _maybe_start_tunnel(config, port)
+
     logger.info("Controller container restarted at %s", address)
-    return address, vm
+    if tunnel_handle:
+        logger.info("Public URL: %s", tunnel_handle.public_url)
+    return address, vm, tunnel_handle
 
 
-def stop_controller(platform: WorkerInfraProvider, config: config_pb2.IrisClusterConfig) -> None:
+def stop_controller(
+    platform: WorkerInfraProvider,
+    config: config_pb2.IrisClusterConfig,
+    tunnel_handle: TunnelHandle | None = None,
+) -> None:
     """Find and terminate the controller VM.
 
     GCE instance deletion is synchronous (no --async), so the VM is fully gone
     when this returns. This prevents the dying controller from writing stale
     checkpoints after remote state is cleared.
+
+    If a tunnel_handle is provided, the tunnel is stopped and cleaned up.
     """
+    # Stop tunnel first
+    if tunnel_handle:
+        tunnel_config = _build_tunnel_config(config)
+        stop_tunnel(tunnel_handle, tunnel_config, delete_tunnel=True)
+
     label_prefix = config.platform.label_prefix or "iris"
     vm = _discover_controller_vm(platform, label_prefix)
     if vm:

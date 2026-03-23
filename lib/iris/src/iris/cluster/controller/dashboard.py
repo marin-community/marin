@@ -196,12 +196,14 @@ class ControllerDashboard:
         port: int = 8080,
         auth_verifier: TokenVerifier | None = None,
         auth_provider: str | None = None,
+        public_url: str | None = None,
     ):
         self._service = service
         self._host = host
         self._port = port
         self._auth_verifier = auth_verifier
         self._auth_provider = auth_provider
+        self._public_url = public_url
         self._app = self._create_app()
 
     @property
@@ -322,10 +324,21 @@ class ControllerDashboard:
         response.delete_cookie(SESSION_COOKIE, path="/")
         return response
 
+    @property
+    def public_url(self) -> str | None:
+        return self._public_url
+
+    @public_url.setter
+    def public_url(self, url: str | None) -> None:
+        self._public_url = url
+
     @public
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""
-        return JSONResponse({"status": "ok"})
+        result: dict = {"status": "ok"}
+        if self._public_url:
+            result["public_url"] = self._public_url
+        return JSONResponse(result)
 
     @public
     def _bundle_download(self, request: Request) -> Response:

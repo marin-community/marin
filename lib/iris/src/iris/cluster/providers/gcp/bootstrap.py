@@ -283,6 +283,16 @@ else
     echo "[iris-controller] [1/5] Docker already installed: $(docker --version)"
 fi
 
+# Install cloudflared for Cloudflare Tunnel support (idempotent)
+if ! command -v cloudflared &> /dev/null; then
+    echo "[iris-controller] Installing cloudflared..."
+    curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+        -o /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared
+    echo "[iris-controller] cloudflared installed: $(cloudflared --version)"
+else
+    echo "[iris-controller] cloudflared already installed: $(cloudflared --version)"
+fi
+
 echo "[iris-controller] [2/5] Ensuring Docker daemon is running..."
 sudo systemctl start docker || true
 if sudo docker info > /dev/null 2>&1; then
