@@ -682,6 +682,7 @@ scale_groups:
         example_configs = [
             iris_root / "examples" / "marin.yaml",
             iris_root / "examples" / "marin-dev.yaml",
+            iris_root / "examples" / "coreweave.yaml",
             iris_root / "examples" / "test.yaml",
         ]
 
@@ -691,7 +692,7 @@ scale_groups:
 
             # Load the config
             config = load_config(config_path)
-            assert config.platform.WhichOneof("platform") in ["gcp", "manual"]
+            assert config.platform.WhichOneof("platform") in ["gcp", "manual", "coreweave"]
             assert config.defaults.autoscaler.evaluation_interval.milliseconds > 0
 
             # Transform to local

@@ -58,7 +58,7 @@ def test_build_worker_bootstrap_script_requires_controller_address() -> None:
 def test_build_worker_bootstrap_script_embeds_worker_config_json() -> None:
     """WorkerConfig fields appear in the embedded JSON in the generated script."""
     cfg = _worker_config()
-    cfg.default_task_env["IRIS_SCALE_GROUP"] = "west-group"
+    cfg.task_env["IRIS_SCALE_GROUP"] = "west-group"
 
     script = build_worker_bootstrap_script(cfg)
 

@@ -616,11 +616,11 @@ def test_port_env_vars_set(worker, mock_runtime):
 
 
 def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
-    """Job-level env vars win over default_task_env, which wins over iris system vars.
+    """Job-level env vars win over task_env, which wins over iris system vars.
 
     The merge order in _create_container is:
       1. iris system vars (IRIS_TASK_ID, etc.)
-      2. default_task_env (worker-level defaults, overrides iris vars)
+      2. task_env (worker-level defaults, overrides iris vars)
       3. job-level env_vars (from the request, wins over everything user-visible)
 
     This test verifies the observable precedence: job > default > absent.
@@ -631,7 +631,7 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
         poll_interval=Duration.from_seconds(0.1),
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
-        default_task_env={"SHARED_KEY": "default_value", "DEFAULT_ONLY": "from_default"},
+        task_env={"SHARED_KEY": "default_value", "DEFAULT_ONLY": "from_default"},
     )
     w = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
 
@@ -658,9 +658,9 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     assert mock_runtime.create_container.called
     env = mock_runtime.create_container.call_args[0][0].env
 
-    # Job-level wins over default_task_env.
+    # Job-level wins over task_env.
     assert env["SHARED_KEY"] == "job_value"
-    # default_task_env key present when job doesn't override it.
+    # task_env key present when job doesn't override it.
     assert env["DEFAULT_ONLY"] == "from_default"
     # Job-only key propagates.
     assert env["JOB_ONLY"] == "from_job"
