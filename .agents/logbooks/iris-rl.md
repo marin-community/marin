@@ -360,7 +360,24 @@ Systematic review of all on-demand-rl findings before 500-step run:
 **Not integrated (acceptable for now):**
 - `copy_and_flatten` OOM: only affects v6e (31 GiB/chip). v5p-8 has 95 GiB/chip. Not a blocker.
 - Optimal concurrency (n_prompts=256): exp2039 uses 64. Can tune later.
-- `inflight_weight_updates`: on-demand-rl found EngineCore crashes with inflight on. Keep off.
+
+**Inflight weight updates: DISABLED. Future work.**
+
+We are NOT using inflight weight updates (`inflight_weight_updates=False`). Without inflight,
+the rollout worker stops generating, syncs weights (~9s for 15GB), then resumes. With inflight,
+a background thread hot-swaps weights into vLLM mid-generation — no idle gap.
+
+On-demand-rl found that inflight mode crashes: `AsyncvLLMInferenceContext` uses `collective_rpc("update_weights")`
+to the vLLM EngineCore subprocess. After the weight update + XLA recompilation, the EngineCore
+segfaults (native crash, no Python traceback). The sync path (`vLLMInferenceContext`) calls
+`driver_worker.sync_weights()` directly in-process and works reliably.
+
+The 9s idle gap per weight sync is acceptable for now. With `max_weight_transfer_wait_time=0`,
+the rollout worker only pauses when new weights are actually available — otherwise it checks
+and immediately moves on.
+
+**To enable inflight in the future**: fix the vLLM EngineCore segfault after `update_weights` RPC.
+This is a vLLM-TPU bug, not a Marin bug. Track in vLLM upstream.
 
 ### 2026-03-22 02:00-03:20 UTC — Cluster capacity exhaustion
 
