@@ -366,6 +366,19 @@ The entire Iris cluster is saturated across all TPU types (v6e-4, v6e-8, v5litep
 
 After both fixes, **trainer is RUNNING on v5p-8** for the first time (`/ahmed/iris-rl-v5p-3`). Rollout worker pending on second v5p-8 slot.
 
+### 2026-03-22 ~19:00 UTC — END-TO-END RL TRAINING ON IRIS WORKING
+
+Job `/ahmed/iris-rl-v5p-3` — full RL loop validated:
+- **Trainer**: 4/5 steps completed, loss decreasing (-0.00015 → 0.00003)
+- **Rollout worker**: generating rollouts at 2,435 tok/s, writing to GCS
+- **Arrow Flight**: weight transfer working cross-host (8.9s for 15.3GB, 291 params)
+- **GCP metadata IP**: `10.128.15.193` — `_resolve_advertise_host()` works on v5p
+- **Iris actors**: curriculum, run_state, wt-coord all hosted in-process on CPU coordinator, resolved by TPU workers via Iris endpoint registry
+- **Phase logging**: SYNC_WEIGHTS → GENERATE → WRITE_ROLLOUT → IDLE all visible
+- **Replay buffer**: collecting batches, reward mean 0.9375
+
+This is the first successful end-to-end RL training run on Iris with Fray v2.
+
 **Trainer timeout risk**: `_wait_for_initial_rollouts` had a 20-min timeout — too short when rollout worker is waiting for TPU. Bumped to 2 hours in `01ca3fe1b`. Rollout worker side is already resilient (dummy weight guard loops indefinitely).
 
 **For the user when they wake up**:
