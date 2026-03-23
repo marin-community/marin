@@ -90,7 +90,22 @@ def _configure_client_s3(config) -> None:
         fsspec_conf: dict = {"endpoint_url": endpoint}
         if _needs_virtual_host_addressing(endpoint):
             fsspec_conf["config_kwargs"] = {"s3": {"addressing_style": "virtual"}}
+        if ".r2.cloudflarestorage.com" in endpoint:
+            fsspec_conf.setdefault("client_kwargs", {})["region_name"] = "auto"
         os.environ["FSSPEC_S3"] = json.dumps(fsspec_conf)
+
+    # Flush fsspec/s3fs cached instances so they pick up the new config.
+    # Without this, any S3FileSystem created before this point (e.g. at import
+    # time) will ignore FSSPEC_S3.
+    import fsspec.config
+
+    fsspec.config.set_conf_env(fsspec.config.conf)
+    try:
+        import s3fs
+
+        s3fs.S3FileSystem.clear_instance_cache()
+    except ImportError:
+        pass
 
 
 def require_controller_url(ctx: click.Context) -> str:
