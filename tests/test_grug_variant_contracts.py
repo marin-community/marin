@@ -263,3 +263,28 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     ]
     for key in required_keys:
         assert key in summary
+
+
+def test_moe_summarize_router_metrics_includes_overflow():
+    """Capacity overflow metrics must appear in summarized router output."""
+    from experiments.grug.moe.model import _summarize_router_metrics
+
+    num_layers = 2
+    num_experts = 4
+    router_metrics = {
+        "routing_entropy_per_layer": jnp.ones(num_layers),
+        "routing_counts_per_layer": jnp.ones((num_layers, num_experts)),
+        "load_balancing_loss_per_layer": jnp.ones(num_layers),
+        "router_z_loss_per_layer": jnp.ones(num_layers),
+        "dropped_count_per_layer": jnp.array([10, 5], dtype=jnp.int32),
+        "overflow_fraction_per_layer": jnp.array([0.1, 0.05], dtype=jnp.float32),
+    }
+    out = _summarize_router_metrics(router_metrics)
+
+    assert "train/router/dropped_count_total" in out
+    assert "train/router/overflow_fraction_mean" in out
+    assert float(out["train/router/dropped_count_total"]) == 15.0
+    assert abs(float(out["train/router/overflow_fraction_mean"]) - 0.075) < 1e-6
+    for i in range(num_layers):
+        assert f"train/router/layer_{i}/dropped_count" in out
+        assert f"train/router/layer_{i}/overflow_fraction" in out
