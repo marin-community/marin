@@ -28,7 +28,7 @@ import fsspec
 import openai
 from transformers import AutoTokenizer
 
-from experiments.rerank_decode.scorer import GuidedDecodingScorer, VLLMLogprobScorer
+from experiments.rerank_decode.scorer import VLLMLogprobScorer
 from experiments.rerank_decode.serve import launch_vllm_servers, shutdown_servers
 from experiments.rerank_decode.utils import rerank
 

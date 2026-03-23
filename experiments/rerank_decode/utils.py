@@ -70,12 +70,14 @@ def rerank(
 
         best_idx = max(range(len(scores)), key=lambda i: scores[i])
 
-        generated += completions[best_idx].text
+        best_text = completions[best_idx].text
+        generated += best_text
 
         if completions[best_idx].finish_reason == "stop":
             break
 
+        scorer.accept(current_prompt, best_text)
         remaining_tokens -= effective_chunk_size
-        current_prompt = current_prompt + completions[best_idx].text
+        current_prompt = current_prompt + best_text
 
     return generated
