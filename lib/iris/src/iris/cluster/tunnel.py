@@ -15,7 +15,6 @@ Lifecycle:
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import subprocess
 import time
@@ -336,14 +335,10 @@ def start_tunnel(config: TunnelConfig, controller_port: int) -> TunnelHandle:
         )
 
         # 3. Get tunnel token for cloudflared
-        tunnel_token = _get_tunnel_token(
-            client, config.cloudflare_account_id, tunnel_id, config.api_token
-        )
+        tunnel_token = _get_tunnel_token(client, config.cloudflare_account_id, tunnel_id, config.api_token)
 
         # 4. Upsert DNS CNAME
-        dns_record_id = _upsert_dns_record(
-            client, config.cloudflare_zone_id, fqdn, tunnel_id, config.api_token
-        )
+        dns_record_id = _upsert_dns_record(client, config.cloudflare_zone_id, fqdn, tunnel_id, config.api_token)
 
     # 5. Launch cloudflared
     proc = _launch_cloudflared(tunnel_token)
