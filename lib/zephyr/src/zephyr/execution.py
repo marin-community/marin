@@ -1144,7 +1144,7 @@ class _CoordinatorJobConfig:
     pipeline_id: int
 
 
-def _run_coordinator_job(config: _CoordinatorJobConfig, result_path: str) -> None:
+def _run_coordinator_job(config_path: str, result_path: str) -> None:
     """Entrypoint for the coordinator job.
 
     Hosts the coordinator actor in-process via host_actor(), creates
@@ -1153,6 +1153,10 @@ def _run_coordinator_job(config: _CoordinatorJobConfig, result_path: str) -> Non
     maintenance loop (no separate watchdog thread).
     """
     from fray.v2.client import current_client
+
+    logger.info("Loading coordinator config from %s", config_path)
+    with open_url(config_path, "rb") as f:
+        config: _CoordinatorJobConfig = cloudpickle.loads(f.read())
 
     logger.info(
         "Coordinator job starting: name=%s, execution_id=%s, pipeline=%d",
@@ -1370,6 +1374,7 @@ class ZephyrContext:
                 "Starting zephyr pipeline: %s (pipeline %d, attempt %d)", execution_id, self._pipeline_id, attempt
             )
 
+            config_path = f"{self.chunk_storage_prefix}/{execution_id}/job-config.pkl"
             result_path = f"{self.chunk_storage_prefix}/{execution_id}/results.pkl"
 
             try:
@@ -1385,6 +1390,9 @@ class ZephyrContext:
                     name=self.name,
                     pipeline_id=self._pipeline_id,
                 )
+                ensure_parent_dir(config_path)
+                with open_url(config_path, "wb") as f:
+                    f.write(cloudpickle.dumps(config))
 
                 job_name = f"zephyr-{self.name}-p{self._pipeline_id}-a{attempt}"
                 # The wrapper job just blocks on child actors; real
@@ -1399,7 +1407,7 @@ class ZephyrContext:
                             name=job_name,
                             entrypoint=Entrypoint.from_callable(
                                 _run_coordinator_job,
-                                args=(config, result_path),
+                                args=(config_path, result_path),
                             ),
                             resources=ResourceConfig(cpu=1, ram="1g"),
                         )

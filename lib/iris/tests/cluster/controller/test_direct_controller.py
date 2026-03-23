@@ -211,6 +211,28 @@ def test_apply_failed_no_retry(state):
     assert task.failure_count == 1
 
 
+def test_apply_failed_directly_from_assigned(state):
+    """ASSIGNED -> FAILED without going through RUNNING (e.g. ConfigMap too large)."""
+    [task_id] = submit_direct_job(state, "fail-on-apply")
+    batch = state.drain_for_direct_provider()
+    attempt_id = batch.tasks_to_run[0].attempt_id
+
+    state.apply_direct_provider_updates(
+        [
+            TaskUpdate(
+                task_id=task_id,
+                attempt_id=attempt_id,
+                new_state=cluster_pb2.TASK_STATE_FAILED,
+                error="kubectl apply failed: RequestEntityTooLarge",
+            ),
+        ]
+    )
+
+    task = query_task(state, task_id)
+    assert task.state == cluster_pb2.TASK_STATE_FAILED
+    assert task.error == "kubectl apply failed: RequestEntityTooLarge"
+
+
 def test_apply_worker_failed_from_running_retries(state):
     """WORKER_FAILED from RUNNING with retries remaining returns to PENDING."""
     jid = JobName.root("test-user", "wf-retry")
