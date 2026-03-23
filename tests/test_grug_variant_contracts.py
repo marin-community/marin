@@ -179,6 +179,64 @@ def test_grug_variant_initial_state_only_stores_ema_when_enabled(variant: str):
     assert with_ema_state_shape.ema_params is not None
 
 
+def test_grug_moe_dense_block_lowers_with_num_dense_layers():
+    """DenseBlock is used for the first num_dense_layers layers and produces zero router stats."""
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_config_cls = model_module.GrugModelConfig
+    mesh_fn = model_module.debug_mesh_and_token_pspec
+
+    cfg = model_config_cls(vocab_size=1024, num_dense_layers=1, num_layers=3)
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+    train_step = train_module._make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
+    mesh, token_pspec = mesh_fn(num_devices=4)
+    batch = GrugLmExample(
+        tokens=jnp.zeros((8, 4), dtype=jnp.int32),
+        loss_weight=jnp.ones((8, 4), dtype=jnp.float32),
+        attn_mask=GrugAttentionMask.causal(),
+    )
+
+    def one_step():
+        sharded_batch = dataclasses.replace(
+            batch,
+            tokens=jax.sharding.reshard(batch.tokens, token_pspec),
+            loss_weight=jax.sharding.reshard(batch.loss_weight, token_pspec),
+        )
+        state = train_module.initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
+        return train_step(state, sharded_batch, compute_watch=False)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        out_state_shape, out_metrics_shape, _out_watch_shape = eqx.filter_eval_shape(one_step)
+
+    assert out_state_shape.step.shape == ()
+    assert "train/loss" in out_metrics_shape
+    assert out_metrics_shape["train/loss"].shape == ()
+
+    # Verify the model has the expected block types.
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        model_shape = eqx.filter_eval_shape(lambda: model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0)))
+    assert isinstance(model_shape.blocks[0], model_module.DenseBlock)
+    assert isinstance(model_shape.blocks[1], model_module.Block)
+    assert isinstance(model_shape.blocks[2], model_module.Block)
+
+
+def test_grug_moe_num_dense_layers_validation():
+    """Validate that num_dense_layers must be <= num_layers."""
+    from experiments.grug.moe.model import GrugModelConfig
+
+    with pytest.raises(ValueError, match="num_dense_layers must be <= num_layers"):
+        GrugModelConfig(vocab_size=1024, num_layers=4, num_dense_layers=5)
+
+    # Zero dense layers should be accepted (default behavior).
+    cfg = GrugModelConfig(vocab_size=1024, num_layers=4, num_dense_layers=0)
+    assert cfg.num_dense_layers == 0
+
+    # All dense layers should be accepted.
+    cfg = GrugModelConfig(vocab_size=1024, num_layers=4, num_dense_layers=4)
+    assert cfg.num_dense_layers == 4
+
+
 def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     train_module = importlib.import_module("experiments.grug.base.train")
     model_module = importlib.import_module("experiments.grug.base.model")

@@ -182,11 +182,14 @@ def _compute_flops(
     *,
     model_config: GrugModelConfig,
 ) -> tuple[float, dict[str, float]]:
-    flops_per_token = lm_flops_per_token(
+    num_moe_layers = model_config.num_layers - model_config.num_dense_layers
+
+    # FLOPs for MoE layers (routed experts + shared expert).
+    moe_flops_per_token = lm_flops_per_token(
         hidden_dim=model_config.hidden_dim,
         intermediate_dim=model_config.intermediate_dim,
         shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
-        num_layers=model_config.num_layers,
+        num_layers=num_moe_layers,
         num_kv_heads=model_config.num_kv_heads,
         num_heads=model_config.num_heads,
         seq_len=model_config.max_seq_len,
@@ -196,6 +199,27 @@ def _compute_flops(
         num_shared_experts=1 if model_config.shared_expert_intermediate_dim > 0 else 0,
         num_experts_per_tok=model_config.num_experts_per_token,
     )
+
+    # FLOPs for dense-only layers (no MoE routing, no shared expert).
+    if model_config.num_dense_layers > 0:
+        dense_flops_per_token = lm_flops_per_token(
+            hidden_dim=model_config.hidden_dim,
+            intermediate_dim=model_config.resolved_dense_intermediate_dim,
+            shared_intermediate_dim=0,
+            num_layers=model_config.num_dense_layers,
+            num_kv_heads=model_config.num_kv_heads,
+            num_heads=model_config.num_heads,
+            seq_len=model_config.max_seq_len,
+            vocab_size=model_config.vocab_size,
+            glu=True,
+            num_experts=1,
+            num_shared_experts=0,
+            num_experts_per_tok=1,
+        )
+    else:
+        dense_flops_per_token = 0.0
+
+    flops_per_token = moe_flops_per_token + dense_flops_per_token
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
 
     flops_summary: dict[str, float] = {

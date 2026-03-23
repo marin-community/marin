@@ -64,10 +64,19 @@ class GrugModelConfig:
     max_seq_len: int = 4096
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
+    num_dense_layers: int = 0
+    dense_intermediate_dim: int | None = None
     load_balancing_loss_coef: float | None = 0.01
     router_z_loss_coef: float | None = 0.001
     moe_implementation: MoeImplementation | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+
+    @property
+    def resolved_dense_intermediate_dim(self) -> int:
+        """Intermediate dim for dense-only layers (defaults to ``intermediate_dim``)."""
+        if self.dense_intermediate_dim is not None:
+            return self.dense_intermediate_dim
+        return self.intermediate_dim
 
     def __post_init__(self) -> None:
         if self.moe_implementation is not None and self.moe_implementation not in get_args(MoeImplementation):
@@ -88,6 +97,12 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.num_dense_layers < 0:
+            raise ValueError("num_dense_layers must be non-negative")
+        if self.num_dense_layers > self.num_layers:
+            raise ValueError("num_dense_layers must be <= num_layers")
+        if self.dense_intermediate_dim is not None and self.dense_intermediate_dim <= 0:
+            raise ValueError("dense_intermediate_dim must be positive when set")
         if self.load_balancing_loss_coef is not None and self.load_balancing_loss_coef < 0:
             raise ValueError("load_balancing_loss_coef must be non-negative when set")
         if self.router_z_loss_coef is not None and self.router_z_loss_coef < 0:
@@ -382,10 +397,56 @@ class Block(eqx.Module):
         return x, router_stats
 
 
+class DenseBlock(eqx.Module):
+    """Transformer block with a dense FFN instead of MoE routing.
+
+    Used for the first ``num_dense_layers`` layers.  Returns zero router
+    stats so that ``Transformer`` can aggregate uniformly across layers.
+    """
+
+    rms_attn: RMSNorm
+    attn: CausalSelfAttention
+    rms_mlp: RMSNorm
+    mlp: DenseMLP
+    num_experts: int = eqx.field(static=True)
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "DenseBlock":
+        attn_key, mlp_key = random.split(key, 2)
+        return DenseBlock(
+            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            attn=CausalSelfAttention.init(cfg, key=attn_key),
+            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            mlp=DenseMLP.init(
+                cfg.hidden_dim,
+                cfg.resolved_dense_intermediate_dim,
+                cfg.initializer_std,
+                key=mlp_key,
+            ),
+            num_experts=cfg.num_experts,
+        )
+
+    @named_call
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        x = x + self.attn(self.rms_attn(x), mask)
+        x = x + self.mlp(self.rms_mlp(x), activation=ActivationFunctionEnum.silu)
+        zero_stats: dict[str, jax.Array] = {
+            "routing_counts": jnp.zeros(self.num_experts, dtype=jnp.float32),
+            "routing_entropy": jnp.array(0.0),
+            "load_balancing_loss": jnp.array(0.0),
+            "router_z_loss": jnp.array(0.0),
+        }
+        return x, zero_stats
+
+
 class Transformer(eqx.Module):
     token_embed: jax.Array
     output_proj: jax.Array
-    blocks: tuple[Block, ...]
+    blocks: tuple[Block | DenseBlock, ...]
     final_norm: RMSNorm
     config: GrugModelConfig = eqx.field(static=True)
 
@@ -401,7 +462,10 @@ class Transformer(eqx.Module):
             _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std),
             lm_head_pspec(batch_axis),
         )
-        blocks = tuple(Block.init(cfg, key=layer_key) for layer_key in block_keys)
+        blocks = tuple(
+            DenseBlock.init(cfg, key=k) if i < cfg.num_dense_layers else Block.init(cfg, key=k)
+            for i, k in enumerate(block_keys)
+        )
         final_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
 
         return Transformer(
@@ -517,6 +581,7 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
 __all__ = [
     "Block",
     "CausalSelfAttention",
+    "DenseBlock",
     "DenseMLP",
     "GrugModelConfig",
     "MoEMLP",
