@@ -53,7 +53,7 @@ from the loss by default.
 ## Configuring the DPO Run
 
 ```python
-model_config = llama_3_1_8b()
+model_config = llama_3_1_8b
 
 dpo_config = SimpleDPOConfig(
     resources=ResourceConfig.with_tpu("v5p-32"),
