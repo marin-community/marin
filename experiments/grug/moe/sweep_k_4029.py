@@ -227,6 +227,7 @@ def create_sweep_k_steps() -> list[ExecutorStep]:
                     optimizer=versioned(
                         AdamConfig(
                             learning_rate=lr,
+                            beta2=beta2,
                             weight_decay=0.1,
                             lr_schedule="cosine",
                             decay=0.2,
