@@ -97,17 +97,3 @@ def validate_ports():
         raise ValueError(f"Ports not set: {info.ports}")
     assert info.ports["http"] > 0
     assert info.ports["grpc"] > 0
-
-
-def validate_job_context():
-    """Validate job context via get_job_info() in a coscheduled job."""
-    import logging
-
-    from iris.cluster.client import get_job_info
-
-    logger = logging.getLogger("iris.test.context")
-    info = get_job_info()
-    if info is None:
-        raise RuntimeError("Not running in an Iris job context")
-    logger.info(f"Task {info.task_index} of {info.num_tasks} on worker {info.worker_id}")
-    return f"Task {info.task_index} done"

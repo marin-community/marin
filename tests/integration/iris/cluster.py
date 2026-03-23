@@ -33,6 +33,7 @@ class IrisIntegrationCluster:
     url: str
     client: IrisClient
     controller_client: ControllerServiceClientSync
+    is_remote: bool = False
     job_timeout: float = 60.0
 
     def submit(
