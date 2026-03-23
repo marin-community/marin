@@ -67,6 +67,7 @@ class GrugModelConfig:
     load_balancing_loss_coef: float | None = 0.01
     router_z_loss_coef: float | None = 0.001
     moe_implementation: MoeImplementation | None = None
+    gated_norm_rank: int | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -92,6 +93,8 @@ class GrugModelConfig:
             raise ValueError("load_balancing_loss_coef must be non-negative when set")
         if self.router_z_loss_coef is not None and self.router_z_loss_coef < 0:
             raise ValueError("router_z_loss_coef must be non-negative when set")
+        if self.gated_norm_rank is not None and self.gated_norm_rank <= 0:
+            raise ValueError("gated_norm_rank must be positive when set")
 
     @property
     def inferred_head_dim(self) -> int:
@@ -154,6 +157,32 @@ class RMSNorm(eqx.Module):
         variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
         normed = x * jax.lax.rsqrt(variance + self.eps)
         return (normed * weight).astype(dtype)
+
+
+class GatedNorm(eqx.Module):
+    """Low-rank self-gating applied after RMSNorm.
+
+    Computes: x * sigmoid(up(silu(down(x)))), where down projects from
+    hidden_dim to rank and up projects back.
+    """
+
+    w_down: jax.Array
+    w_up: jax.Array
+
+    @staticmethod
+    def init(hidden_dim: int, rank: int, initializer_std: float, *, key: PRNGKeyArray) -> "GatedNorm":
+        k_down, k_up = random.split(key)
+        return GatedNorm(
+            w_down=reshard(_init_weight(k_down, (hidden_dim, rank), initializer_std), P(None, None)),
+            w_up=reshard(_init_weight(k_up, (rank, hidden_dim), initializer_std), P(None, None)),
+        )
+
+    @named_call
+    def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
+        gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
+        gate_hidden = jax.nn.silu(gate_hidden)
+        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
+        return x * gate.astype(x.dtype)
 
 
 class DenseMLP(eqx.Module):
@@ -343,14 +372,16 @@ class MoEMLP(eqx.Module):
 
 class Block(eqx.Module):
     rms_attn: RMSNorm
+    gated_norm_attn: GatedNorm | None
     attn: CausalSelfAttention
     rms_mlp: RMSNorm
+    gated_norm_mlp: GatedNorm | None
     mlp: MoEMLP
     shared: DenseMLP | None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
-        attn_key, mlp_key, shared_key = random.split(key, 3)
+        attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
             shared = DenseMLP.init(
@@ -359,10 +390,17 @@ class Block(eqx.Module):
                 cfg.initializer_std,
                 key=shared_key,
             )
+        gated_norm_attn = None
+        gated_norm_mlp = None
+        if cfg.gated_norm_rank is not None:
+            gated_norm_attn = GatedNorm.init(cfg.hidden_dim, cfg.gated_norm_rank, cfg.initializer_std, key=gn_attn_key)
+            gated_norm_mlp = GatedNorm.init(cfg.hidden_dim, cfg.gated_norm_rank, cfg.initializer_std, key=gn_mlp_key)
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            gated_norm_attn=gated_norm_attn,
             attn=CausalSelfAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            gated_norm_mlp=gated_norm_mlp,
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
         )
@@ -373,8 +411,13 @@ class Block(eqx.Module):
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        x = x + self.attn(self.rms_attn(x), mask)
+        attn_in = self.rms_attn(x)
+        if self.gated_norm_attn is not None:
+            attn_in = self.gated_norm_attn(attn_in)
+        x = x + self.attn(attn_in, mask)
         mlp_in = self.rms_mlp(x)
+        if self.gated_norm_mlp is not None:
+            mlp_in = self.gated_norm_mlp(mlp_in)
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
@@ -518,6 +561,7 @@ __all__ = [
     "Block",
     "CausalSelfAttention",
     "DenseMLP",
+    "GatedNorm",
     "GrugModelConfig",
     "MoEMLP",
     "MoeActivation",
