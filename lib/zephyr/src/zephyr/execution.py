@@ -622,13 +622,18 @@ class ZephyrCoordinator:
         last_log_time = 0.0
 
         while not self._shutdown_event.is_set():
-            self.check_heartbeats()
-            self._check_worker_group()
+            try:
+                self.check_heartbeats()
+                self._check_worker_group()
 
-            now = time.monotonic()
-            if self._has_active_execution() and now - last_log_time > 5.0:
-                self._log_status()
-                last_log_time = now
+                now = time.monotonic()
+                if self._has_active_execution() and now - last_log_time > 5.0:
+                    self._log_status()
+                    last_log_time = now
+            except Exception:
+                logger.exception("Coordinator loop crashed, aborting pipeline")
+                self.abort("Coordinator loop crashed unexpectedly")
+                return
 
             self._shutdown_event.wait(timeout=0.5)
 
@@ -649,8 +654,10 @@ class ZephyrCoordinator:
         return self._execution_id != "" and self._total_shards > 0 and self._completed_shards < self._total_shards
 
     def _log_status(self) -> None:
-        alive = sum(1 for s in self._worker_states.values() if s in {WorkerState.READY, WorkerState.BUSY})
-        dead = sum(1 for s in self._worker_states.values() if s in {WorkerState.FAILED, WorkerState.DEAD})
+        with self._lock:
+            states = list(self._worker_states.values())
+        alive = sum(1 for s in states if s in {WorkerState.READY, WorkerState.BUSY})
+        dead = sum(1 for s in states if s in {WorkerState.FAILED, WorkerState.DEAD})
         logger.info(
             "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead",
             self._execution_id,
@@ -1413,6 +1420,9 @@ class ZephyrContext:
             min(max_workers, num_shards), computed at first execute(). If None,
             defaults to os.cpu_count() for LocalClient, or 128 for distributed clients.
         resources: Resource config per worker.
+        coordinator_resources: Resource config for the coordinator job. The coordinator
+            accumulates scatter manifests for all shards in memory; increase ram for
+            large pipelines (many shards). Defaults to 4 GB.
         chunk_storage_prefix: Storage prefix for intermediate chunks. If None, defaults
             to MARIN_PREFIX/tmp/zephyr or /tmp/zephyr.
         name: Descriptive name for this context, used in actor group names for debugging.
@@ -1427,6 +1437,7 @@ class ZephyrContext:
     client: Client | None = None
     max_workers: int | None = None
     resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="1g"))
+    coordinator_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="5g"))
     chunk_storage_prefix: str | None = None
     name: str = ""
     no_workers_timeout: float | None = None
@@ -1560,7 +1571,7 @@ class ZephyrContext:
                                 _run_coordinator_job,
                                 args=(config, result_path),
                             ),
-                            resources=ResourceConfig(cpu=1, ram="1g"),
+                            resources=self.coordinator_resources,
                         )
                     )
 

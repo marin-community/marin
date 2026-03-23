@@ -426,10 +426,11 @@ def _deep_merge_defaults(target: config_pb2.DefaultsConfig, source: config_pb2.D
     if source.HasField("worker"):
         _merge_proto_fields(target.worker, source.worker)
         # Merge map fields separately (map fields don't support HasField)
-        for key, value in source.worker.default_task_env.items():
-            target.worker.default_task_env[key] = value
         for key, value in source.worker.worker_attributes.items():
             target.worker.worker_attributes[key] = value
+    # task_env is a top-level map on DefaultsConfig
+    for key, value in source.task_env.items():
+        target.task_env[key] = value
 
 
 def _validate_autoscaler_config(config: config_pb2.AutoscalerConfig, context: str = "autoscaler") -> None:
@@ -494,6 +495,11 @@ def apply_defaults(config: config_pb2.IrisClusterConfig) -> config_pb2.IrisClust
         _deep_merge_defaults(result_defaults, config.defaults)
 
     merged.defaults.CopyFrom(result_defaults)
+
+    # Populate the wire-format WorkerConfig.task_env from defaults.task_env.
+    # Workers receive this via the autoscaler's base_worker_config.
+    for key, value in merged.defaults.task_env.items():
+        merged.defaults.worker.task_env[key] = value
 
     # Apply controller defaults
     if not merged.controller.HasField("heartbeat_failure_threshold"):
@@ -1168,6 +1174,7 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
             cache_dir=kp.cache_dir or "/cache",
             controller_address=kp.controller_address or None,
             managed_label=managed_label,
+            task_env=dict(cluster_config.defaults.task_env),
         )
     if which == "worker_provider":
         from iris.cluster.controller.worker_provider import RpcWorkerStubFactory

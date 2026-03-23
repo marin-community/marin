@@ -50,5 +50,5 @@ jobs:
 
       - name: Restart dev controller
         run: |
-          uv run python lib/iris/scripts/migrations/controller_restart.py \
-            --config lib/iris/examples/marin-dev.yaml
+          uv run iris --config lib/iris/examples/marin-dev.yaml \
+            cluster controller restart

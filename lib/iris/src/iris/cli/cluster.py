@@ -585,7 +585,7 @@ def controller_checkpoint(ctx, stop: bool):
     controller_url = require_controller_url(ctx)
     client = cluster_connect.ControllerServiceClientSync(controller_url)
     try:
-        resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest())
+        resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest(), timeout_ms=60_000)
     except Exception as e:
         click.echo(f"Checkpoint failed: {e}", err=True)
         raise SystemExit(1) from e
@@ -633,12 +633,34 @@ def controller_restart(ctx):
             "Stop and restart the 'iris cluster start --local' process instead."
         )
 
-    controller_url = require_controller_url(ctx)
+    iris_config = IrisConfig(config)
+    platform = iris_config.platform()
+
+    # Try to discover existing controller for checkpoint + restart.
+    # If none exists, fall back to a fresh start (idempotent).
+    try:
+        controller_url = require_controller_url(ctx)
+    except (RuntimeError, click.ClickException):
+        click.echo("No existing controller found. Starting fresh...")
+        _pin_latest_images(config)
+        verbose = ctx.obj.get("verbose", False)
+        built = _build_cluster_images(config, verbose=verbose)
+        if built:
+            click.echo("Built image tags:")
+            for name, tag in built.items():
+                click.echo(f"  {name}: {tag}")
+        try:
+            address = platform.start_controller(config)
+        except Exception as e:
+            click.echo(f"Failed to start controller: {e}", err=True)
+            raise SystemExit(1) from e
+        click.echo(f"Controller started at {address}")
+        return
 
     # Checkpoint
     client = cluster_connect.ControllerServiceClientSync(controller_url)
     try:
-        resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest())
+        resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest(), timeout_ms=60_000)
     except Exception as e:
         click.echo(f"Checkpoint failed: {e}", err=True)
         raise SystemExit(1) from e
@@ -655,9 +677,6 @@ def controller_restart(ctx):
         for name, tag in built.items():
             click.echo(f"  {name}: {tag}")
 
-    # Restart controller in-place (re-runs bootstrap on existing VM)
-    iris_config = IrisConfig(config)
-    platform = iris_config.platform()
     try:
         address = platform.restart_controller(config)
     except Exception as e:
