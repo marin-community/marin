@@ -30,6 +30,7 @@ from iris.cluster.controller.controller import (
     Controller,
     ControllerConfig,
 )
+from iris.cluster.controller.provider_adapters import WorkerProviderAdapter
 from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.vm_lifecycle import ControllerStatus
@@ -207,7 +208,7 @@ class LocalCluster:
                 auth_provider=auth.provider,
                 auth=auth,
             ),
-            provider=WorkerProvider(stub_factory=RpcWorkerStubFactory()),
+            provider=WorkerProviderAdapter(_inner=WorkerProvider(stub_factory=RpcWorkerStubFactory())),
             autoscaler=self._autoscaler,
             threads=controller_threads,
             db=db,

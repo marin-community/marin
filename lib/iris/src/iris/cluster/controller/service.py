@@ -69,7 +69,7 @@ from iris.cluster.controller.query import execute_raw_query
 from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.transitions import ControllerTransitions
-from iris.cluster.controller.provider import ProviderError
+from iris.cluster.controller.provider import ProviderError, TaskProvider
 from iris.cluster.log_store import LogStore, task_log_key
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
@@ -623,7 +623,7 @@ class ControllerProtocol(Protocol):
     def autoscaler(self) -> AutoscalerProtocol | None: ...
 
     @property
-    def provider(self) -> Any: ...
+    def provider(self) -> TaskProvider: ...
 
     @property
     def has_direct_provider(self) -> bool: ...
@@ -1316,13 +1316,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Get Kubernetes cluster status: node counts, capacity, and recent pod statuses."""
-        if not self._controller.has_direct_provider:
-            return cluster_pb2.Controller.GetKubernetesClusterStatusResponse()
-
-        # KubernetesProvider exposes get_cluster_status().
-        # Access via the provider after the guard.
-        provider = self._controller.provider
-        return provider.get_cluster_status()  # type: ignore[union-attr]
+        return self._controller.provider.get_cluster_status()
 
     # --- VM Logs ---
 
@@ -1477,23 +1471,19 @@ class ControllerServiceImpl:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.target} not found")
 
         task_worker_id = task.worker_id
-        if not task_worker_id:
-            if self._controller.has_direct_provider:
-                provider = self._controller.provider
-                attempt_id = target.attempt_id if target.attempt_id is not None else task.current_attempt_id
-                resp = provider.profile_task(task.task_id.to_wire(), attempt_id, request)
-                return cluster_pb2.ProfileTaskResponse(
-                    profile_data=resp.profile_data,
-                    error=resp.error,
-                )
+        attempt_id = target.attempt_id if target.attempt_id is not None else task.current_attempt_id
+        address: str | None = None
+
+        if task_worker_id:
+            worker = _read_worker(self._db, task_worker_id)
+            if not worker or not worker.healthy:
+                raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
+            address = worker.address
+        elif not self._controller.has_direct_provider:
             raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not yet assigned to a worker")
 
-        worker = _read_worker(self._db, task_worker_id)
-        if not worker or not worker.healthy:
-            raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
-
         timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
-        resp = self._controller.provider.profile_task(worker.address, request, timeout_ms)
+        resp = self._controller.provider.profile_task(task.task_id.to_wire(), attempt_id, address, request, timeout_ms)
         return cluster_pb2.ProfileTaskResponse(
             profile_data=resp.profile_data,
             error=resp.error,

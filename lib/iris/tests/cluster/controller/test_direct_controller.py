@@ -1,15 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for KubernetesProvider integration with controller and transitions."""
+"""Tests for direct provider integration with controller and transitions."""
 
-from iris.cluster.controller.transitions import (
-    DirectProviderBatch,
-    DirectProviderSyncResult,
-    TaskUpdate,
-)
+from iris.cluster.controller.transitions import TaskUpdate
 from iris.cluster.types import JobName
-from iris.rpc import cluster_pb2, logging_pb2
+from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
 from .conftest import (
@@ -19,32 +15,6 @@ from .conftest import (
     query_task,
     submit_direct_job,
 )
-
-
-class FakeDirectProvider:
-    """Minimal KubernetesProvider-like implementation for testing."""
-
-    def __init__(self):
-        self.sync_calls: list[DirectProviderBatch] = []
-        self.sync_result = DirectProviderSyncResult()
-        self.closed = False
-
-    def sync(self, batch: DirectProviderBatch) -> DirectProviderSyncResult:
-        self.sync_calls.append(batch)
-        return self.sync_result
-
-    def fetch_live_logs(
-        self,
-        task_id: str,
-        attempt_id: int,
-        cursor: int,
-        max_lines: int,
-    ) -> tuple[list[logging_pb2.LogEntry], int]:
-        return [], cursor
-
-    def close(self) -> None:
-        self.closed = True
-
 
 # =============================================================================
 # Transition-level tests: drain_for_direct_provider
