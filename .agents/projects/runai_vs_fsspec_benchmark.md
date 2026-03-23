@@ -100,28 +100,77 @@ download speed. We were comparing:
 - vs (RunAI download + PyTorch model construction + CPU materialization +
   shard_model_to_tpu + everything else in the PyTorch startup path)
 
-### Where the "53 MiB/s" came from
+### Forensic provenance of the "42.7 MiB/s" and "53 MiB/s" numbers
 
-From `FAST_VLLM_LOAD_TPU.md` (commit `dbeddbd45`), appendix:
+Both numbers were post-hoc calculations, not metrics produced by any code or
+tool. Neither RunAI nor the baseline script ever output a "MiB/s" figure.
 
-> Tested `--model-loader-extra-config '{"concurrency": 16, "memory_limit":
-> 5368709120}'` on 8B model. Result: 51.5 MiB/s
+#### "42.7 MiB/s" — traced as far as possible
 
-A prior agent (Codex) ran `vllm serve` with RunAI and observed 51.5 MiB/s.
-But this was likely not pure network transport — it was the RunAI progress bar
-rate during `vllm_get_model()`, which includes CPU-side model construction.
-The number was then used as if it were a raw download speed to project
-70B loading time: 131 GiB / 53 MiB/s = 41 min.
+**Confirmed (artifacts checked):**
+1. The baseline script (`experiments/inference/exp_vllm_baseline_comparison.py`)
+   does NOT compute weight-loading throughput. It records only
+   `server_startup_sec`, `total_time_sec`, `aggregate_tokens_per_sec`, and
+   latency percentiles. No MiB/s metric exists in the code.
+2. The GCS artifact (`baseline_results_20260318-194349.json`) contained
+   `server_startup_sec: 2052.6`. No weight-loading metric, no MiB/s field.
+   (This artifact is no longer in the repo — it was a transient GCS upload.)
+3. "42.7 MiB/s" was a post-hoc division: `15 GiB / 359s = 42.7 MiB/s`.
+   No code ever computed this number.
 
-Our new same-region phase-timed measurements show:
-- RunAI raw download: 7.08s for 15 GiB = **2.1 GiB/s**
-- `vllm_get_model()` total: 17.0s (includes download + construction)
-- If you divided model size by `vllm_get_model()` time: 15 GiB / 17s = 900 MiB/s
+**Unknown (evidence expired):**
+4. The exact source of "359s" cannot be confirmed. The original Iris job logs
+   for `/ahmed/vllm-baseline-8b-v3` have expired — only Iris tunnel metadata
+   remains. The vLLM subprocess output went to temp files on the worker
+   (before the tee fix), so Iris never captured it.
+5. "359s" was most likely read from the vLLM subprocess stdout at the time
+   by the agent that posted the issue comment. But we cannot cite the exact
+   log line because those logs no longer exist.
+
+#### "53 MiB/s" / "51.5 MiB/s" — partially traced
+
+**Confirmed (artifacts checked):**
+1. Documented in `FAST_VLLM_LOAD_TPU.md` appendix (commit `dbeddbd45`,
+   deleted in commit `aa7d817f1`). Exact text:
+   > Tested `--model-loader-extra-config '{"concurrency": 16, "memory_limit":
+   > 5368709120}'` on 8B model. Result: 51.5 MiB/s
+2. The same document's commit message (commit `dbeddbd45`) states:
+   "Replace slow RunAI streamer (53 MiB/s)". The number was treated as a
+   known fact from that point forward.
+3. RunAI's progress bar shows `it/s` (tensors/sec), NOT MiB/s. Example from
+   our own logs:
+   `Loading safetensors using Runai Model Streamer: 100% | 291/291 [00:05, 50.85it/s]`
+4. RunAI's summary log shows GiB/s, NOT MiB/s:
+   `[RunAI Streamer] Overall time to stream 15.0 GiB: 5.92s, 2.5 GiB/s`
+5. Neither RunAI output format produces a "MiB/s" number directly.
+
+**Unknown (evidence unavailable):**
+6. The exact measurement method used by the Codex agent that wrote
+   `FAST_VLLM_LOAD_TPU.md`. The session logs are not available. "51.5 MiB/s"
+   was most likely hand-computed: `model_size / some_phase_duration`. But we
+   cannot prove which duration was used (RunAI-reported download time,
+   `vllm_get_model` duration, or broader subprocess startup phase).
+
+#### What the numbers were NOT
+
+Both numbers were NOT:
+- Direct RunAI transport speed (which is 2.1–2.5 GiB/s same-region)
+- A metric produced by any code in the repo
+- The RunAI progress bar rate (which shows it/s, i.e., tensors/sec)
+- The RunAI summary throughput (which shows GiB/s)
+
+#### Reconciliation with current measurements
+
+Our same-region phase-timed measurements show:
+- RunAI raw download: 5.92–7.21s for 15 GiB = **2.1–2.5 GiB/s**
+- `vllm_get_model()` total: 15.0–17.0s (includes download + construction)
+- If you divide model size by `vllm_get_model()` time: 15 GiB / 17s ≈ 900 MiB/s
 
 Even the broadest measurement (full `get_vllm_model` including JIT setup)
-gives 900 MiB/s, not 53 MiB/s. The original 53 MiB/s was likely measured
-under different conditions (different infrastructure, different RunAI version,
-cold GCS cache, or cross-region reads). We cannot reproduce it.
+gives ~900 MiB/s, not 53 MiB/s. The original 53 MiB/s cannot be reproduced
+under current same-region conditions. The most likely explanations (none
+confirmed, all inferred) are: different infrastructure at the time, cross-region
+reads, cold GCS cache, or a timing window that included XLA compilation.
 
 ### Did the queue-based HTTP wrapper affect weight loading?
 
@@ -152,6 +201,30 @@ before the server becomes ready. The queue did not slow RunAI downloads.
   startup path differences
 - Model loading (either path) is 11-18s for 8B — not the bottleneck
 
+### Forensic trail
+
+Artifacts checked during the March 22 provenance investigation, for
+reproducibility:
+
+| Artifact | Location | Status | What it confirmed |
+|----------|----------|--------|-------------------|
+| `exp_vllm_baseline_comparison.py` | `experiments/inference/` | Exists | Records `server_startup_sec`, `total_time_sec`, `aggregate_tokens_per_sec`, latency percentiles. Does NOT compute MiB/s. |
+| `baseline_results_20260318-194349.json` | Was a transient GCS upload | Not in repo | Contained `server_startup_sec: 2052.6`. No weight-loading metric. |
+| `FAST_VLLM_LOAD_TPU.md` | Deleted in commit `aa7d817f1` | Recoverable via `git show aa7d817f1^:FAST_VLLM_LOAD_TPU.md` | Contains the "51.5 MiB/s" appendix entry. No description of measurement method. |
+| Commit `dbeddbd45` message | git history | Exists | States "Replace slow RunAI streamer (53 MiB/s)" — treated the number as established fact. |
+| Iris job logs for `/ahmed/vllm-baseline-8b-v3` | Iris | Expired | Would have contained the vLLM subprocess stdout with the "359s" timing. Not recoverable. |
+| Codex agent session logs | External | Not available | Would have documented how "51.5 MiB/s" was computed. |
+| RunAI progress bar format | Observed in current logs | Confirmed | Shows `it/s` (tensors/sec), not MiB/s. |
+| RunAI summary log format | Observed in current logs | Confirmed | Shows GiB/s, not MiB/s. |
+| Same-region proof runs P1/P2/A | This logbook, "Confound proven" section | Complete | RunAI transport is 2.1–2.5 GiB/s; model load is 11–18s on all paths. |
+
+**Evidence gap:** We can confirm what the numbers were NOT (not RunAI output,
+not code-computed, not reproducible under current conditions). We cannot
+confirm exactly how they were computed because the Codex session logs and the
+Iris job stdout are both unavailable. The most parsimonious explanation is a
+hand division of model size by a broad timing window that included more than
+raw network transport.
+
 ---
 
 ## Historical Metrics (from issue #3768 and comments)
@@ -164,8 +237,8 @@ post-mortem above).
 
 | Claimed metric | Value | What it actually measured |
 |----------------|-------|--------------------------|
-| "RunAI downloads via single-threaded HTTP" | 53 MiB/s | RunAI progress bar rate during `vllm_get_model()` on PyTorch path — includes model construction, not just download |
-| "RunAI concurrency (up to 16) no effect" | 51.5 MiB/s | Same — concurrency parameter didn't help because download was already fast; the 51.5 MiB/s reflected total `vllm_get_model` throughput |
+| "RunAI downloads via single-threaded HTTP" | 53 MiB/s | Documented in `FAST_VLLM_LOAD_TPU.md` appendix (commit `dbeddbd45`, deleted in `aa7d817f1`). Measurement method undocumented — not a RunAI-reported metric (RunAI reports it/s and GiB/s, not MiB/s). Most likely a post-hoc division of model size by an unspecified phase duration. Codex session logs unavailable. |
+| "RunAI concurrency (up to 16) no effect" | 51.5 MiB/s | Same document, same unknown measurement method. The concurrency parameter may not have helped because download was already fast and the observed rate reflected a broader phase than raw transport. |
 | "70B weight download at 53 MiB/s" | 41 min | Projected from 53 MiB/s assumption: 131 GiB / 53 MiB/s ≈ 41 min |
 | "Cold start exceeds 1 hour" | >60 min | Projected: 41 min download + 20-30 min XLA compilation |
 
@@ -240,11 +313,14 @@ Same in-process path but loading one shard at a time instead of all at once.
 | Aggregate tok/s | 360.0 | 34.1 |
 | Memory | 64 GB | 24 GB |
 
-**Key:** The subprocess baseline weight loading was 359s at 42.7 MiB/s. This
-is close to the original 53 MiB/s claim. The subprocess path used
+**Key:** The subprocess baseline weight loading was reported as 359s at
+42.7 MiB/s. This was a post-hoc division (`15 GiB / 359s`). The source of
+"359s" is expired Iris job logs for `/ahmed/vllm-baseline-8b-v3` — the vLLM
+subprocess stdout went to temp files on the worker (before the tee fix), so
+Iris never captured it. The baseline comparison script
+(`exp_vllm_baseline_comparison.py`) records only `server_startup_sec` and
+inference metrics, not weight-loading throughput. The subprocess path used
 `MODEL_IMPL_TYPE=vllm` (commit `3f1420e8d`) which forces the PyTorch path.
-This is the closest we have to an actual measurement of "RunAI at 53 MiB/s" —
-it was 42.7 MiB/s in the subprocess comparison.
 
 ### Temperature=0 comparison (March 18, issue comment 4)
 
@@ -633,12 +709,15 @@ Worker: `us-east1-d`. Model: `gs://marin-us-east1/...` (same-region).
 
 ### Confound proven
 
-The old 42.7-53 MiB/s number was not raw RunAI transport speed (which is
-2.5 GiB/s same-region). It was not even model loading time (which is 15-18s
-on both paths). It was a broader startup metric — likely computed by dividing
-model size by a timing window that included XLA compilation, KV cache init,
-and other initialization — measured under conditions (infrastructure,
-software version, cache state) that we can no longer reproduce.
+The old 42.7–53 MiB/s number was not raw RunAI transport speed (which is
+2.1–2.5 GiB/s same-region). It was not even model loading time (which is
+11–18s on all paths tested). Neither number was produced by any code in the
+repo or by RunAI's own output (which reports it/s and GiB/s, not MiB/s).
+Both were post-hoc divisions of model size by an unspecified timing window.
+The exact computation method is not recoverable — the Codex session logs
+and the Iris job stdout that would document it have expired (see Forensic
+Trail above). What we can prove: no same-region measurement on current
+infrastructure reproduces anything near 53 MiB/s for raw weight transport.
 
 The original fsspec prototype's speed improvement was real in the sense that
 it produced a faster end-to-end startup. But the framing — "RunAI downloads
