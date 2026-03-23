@@ -354,8 +354,22 @@ Systematic review of all on-demand-rl findings before 500-step run:
 - VLLMSamplingConfig decoupling ✅
 
 **Fixed now (pre-500-step):**
-- `weight_id` preemption fix: `<=` → `<` in `ArrowFlightCoordinator.update_server()`. Without this, a restarted trainer can't re-serve `weight_id=-1` because the coordinator rejects it as stale.
-- `max_weight_transfer_wait_time=0`: non-blocking weight sync. On-demand-rl found this gives 1.7x throughput (sampler doesn't block waiting for new weights, just uses whatever's latest). Safe because the dummy weight guard still prevents generation with uninitialized weights.
+- `max_weight_transfer_wait_time=0`: non-blocking weight sync.
+
+**BUG INTRODUCED AND FIXED: coordinator stale-weight rejection caused livelock**
+
+Root cause timeline:
+1. Trainer ran, served weight_id=-1, 0, 1
+2. Trainer OOM-killed at step 1, Iris auto-retried (max_retries_failure=3)
+3. Restarted trainer re-served weight_id=-1
+4. Coordinator rejected it (`-1 < 1`) — my `<=` → `<` fix was WRONG, it only helped same-step re-serves, not rollbacks from higher steps
+5. Rollout worker stayed pinned on weight_step=1
+6. Restarted trainer at current_step=0, replay buffer rejected rollout_step=1 as future → LIVELOCK
+
+My `max_step = current_step + delay` workaround masked the real bug. Codex found the correct fix:
+- Coordinator accepts ALL weight updates including rollbacks, only ignores exact duplicates
+- Replay buffer stays strict: no future rollouts
+- Added regression test: `test_arrow_flight_coordinator_accepts_rollback_weight_ids`
 
 **Not integrated (acceptable for now):**
 - `copy_and_flatten` OOM: only affects v6e (31 GiB/chip). v5p-8 has 95 GiB/chip. Not a blocker.
