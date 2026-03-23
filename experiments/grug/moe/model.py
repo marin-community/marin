@@ -66,6 +66,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     load_balancing_loss_coef: float | None = 0.01
     router_z_loss_coef: float | None = 0.001
+    capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR
     moe_implementation: MoeImplementation | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -92,6 +93,8 @@ class GrugModelConfig:
             raise ValueError("load_balancing_loss_coef must be non-negative when set")
         if self.router_z_loss_coef is not None and self.router_z_loss_coef < 0:
             raise ValueError("router_z_loss_coef must be non-negative when set")
+        if self.capacity_factor <= 0:
+            raise ValueError("capacity_factor must be positive")
 
     @property
     def inferred_head_dim(self) -> int:
@@ -334,7 +337,7 @@ class MoEMLP(eqx.Module):
             activation=ActivationFunctionEnum.silu,
             implementation=self.cfg.moe_implementation,
             mesh=get_abstract_mesh(),
-            capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+            capacity_factor=self.cfg.capacity_factor,
         )
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
