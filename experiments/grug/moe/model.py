@@ -11,7 +11,7 @@ grug copy-first workflow in `.agents/skills/change-grug/`.
 import dataclasses
 
 from dataclasses import dataclass
-from typing import get_args
+from typing import Literal, get_args
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -67,6 +67,7 @@ class GrugModelConfig:
     load_balancing_loss_coef: float | None = 0.01
     router_z_loss_coef: float | None = 0.001
     moe_implementation: MoeImplementation | None = None
+    attention_gate: Literal["none", "headwise"] = "none"
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -92,6 +93,8 @@ class GrugModelConfig:
             raise ValueError("load_balancing_loss_coef must be non-negative when set")
         if self.router_z_loss_coef is not None and self.router_z_loss_coef < 0:
             raise ValueError("router_z_loss_coef must be non-negative when set")
+        if self.attention_gate not in ("none", "headwise"):
+            raise ValueError(f"attention_gate must be 'none' or 'headwise', got {self.attention_gate!r}")
 
     @property
     def inferred_head_dim(self) -> int:
@@ -109,17 +112,22 @@ class CausalSelfAttention(eqx.Module):
     w_k: Float[Array, "D MH"]
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
+    w_gate: Float[Array, "D N"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
-        k_q, k_k, k_v, k_o = random.split(key, 4)
+        k_q, k_k, k_v, k_o, k_g = random.split(key, 5)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        w_gate = None
+        if cfg.attention_gate == "headwise":
+            w_gate = reshard(_init_weight(k_g, (d, n), cfg.initializer_std), P("data", "model"))
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
+            w_gate=w_gate,
             cfg=cfg,
         )
 
@@ -134,6 +142,11 @@ class CausalSelfAttention(eqx.Module):
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         attn_out = attention(q, k, v, mask)
+        if self.w_gate is not None:
+            # Headwise gating: sigmoid(x @ w_gate) produces one scalar per head,
+            # broadcast across head_dim.  Shape: (B, S, N, 1).
+            gate = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.w_gate))[..., None]
+            attn_out = attn_out * gate
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
