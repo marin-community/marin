@@ -23,6 +23,8 @@ Cross-region transfer budget:
   the ``MARIN_I_WILL_PAY_FOR_ALL_FEES`` env var to override the guard.
 """
 
+import contextlib
+import contextvars
 import dataclasses
 import functools
 import logging
@@ -33,7 +35,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Generator, Sequence
 from pathlib import PurePath
 from typing import Any
 
@@ -461,6 +463,34 @@ class TransferBudget:
 
 _global_transfer_budget = TransferBudget()
 
+_mirror_budget_ctx: contextvars.ContextVar[TransferBudget | None] = contextvars.ContextVar(
+    "_mirror_budget_ctx", default=None
+)
+
+
+def set_mirror_budget(budget_gb: float) -> contextvars.Token:
+    """Set the MirrorFileSystem transfer budget for the current context.
+
+    Returns a token that can be used to reset the budget.
+    """
+    budget = TransferBudget(limit_bytes=int(budget_gb * 1024 * 1024 * 1024))
+    return _mirror_budget_ctx.set(budget)
+
+
+def reset_mirror_budget(token: contextvars.Token) -> None:
+    """Reset the MirrorFileSystem transfer budget to its previous value."""
+    _mirror_budget_ctx.reset(token)
+
+
+@contextlib.contextmanager
+def mirror_budget(budget_gb: float) -> Generator[None, None, None]:
+    """Context manager to scope a MirrorFileSystem transfer budget."""
+    token = set_mirror_budget(budget_gb)
+    try:
+        yield
+    finally:
+        reset_mirror_budget(token)
+
 
 @functools.lru_cache(maxsize=1)
 def _cached_marin_region() -> str | None:
@@ -695,6 +725,15 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         self._budget = budget if budget is not None else _global_transfer_budget
         self._worker_id = default_worker_id()
 
+    # -- budget resolution ----------------------------------------------------
+
+    def _active_budget(self) -> TransferBudget:
+        """Return the contextvar budget if set, otherwise the instance budget."""
+        ctx_budget = _mirror_budget_ctx.get()
+        if ctx_budget is not None:
+            return ctx_budget
+        return self._budget
+
     # -- underlying fs helpers ------------------------------------------------
 
     def _get_fs_and_path(self, url: str) -> tuple[Any, str]:
@@ -766,7 +805,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
 
             size = self._fs_size(remote_url)
             if size is not None:
-                self._budget.record(size, remote_url)
+                self._active_budget().record(size, remote_url)
 
             logger.info("Mirror: copying %s → %s", remote_url, local_url)
             self._fs_copy(remote_url, local_url)

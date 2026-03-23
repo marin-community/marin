@@ -19,7 +19,6 @@ from marin.execution.executor import (
     InputName,
     _get_info_path,
     collect_dependencies_and_version,
-    collect_mirrored_paths,
     instantiate_config,
     mirrored,
     output_path_of,
@@ -631,7 +630,7 @@ def test_mirrored_versioning():
 
 
 def test_mirrored_instantiate_config():
-    """MirroredValue should resolve to prefix/relative_path."""
+    """MirroredValue should resolve to mirror:// path."""
 
     @dataclass(frozen=True)
     class Cfg:
@@ -640,25 +639,7 @@ def test_mirrored_instantiate_config():
 
     cfg = Cfg(input_path=mirrored(versioned("documents/data"), budget_gb=10), output_path="out")
     resolved = instantiate_config(cfg, output_path="/out", output_paths={}, prefix="/bucket")
-    assert resolved.input_path == "/bucket/documents/data"
-
-
-def test_collect_mirrored_paths():
-    """collect_mirrored_paths should extract relative paths and budgets."""
-
-    @dataclass(frozen=True)
-    class Cfg:
-        a: str
-        b: str
-        c: str
-
-    cfg = Cfg(
-        a=mirrored(versioned("path/a"), budget_gb=50),
-        b="plain_string",
-        c=mirrored("path/c", budget_gb=10),
-    )
-    paths = collect_mirrored_paths(cfg)
-    assert sorted(paths) == [("path/a", 50), ("path/c", 10)]
+    assert resolved.input_path == "mirror://documents/data"
 
 
 def test_mirrored_nesting_raises():
