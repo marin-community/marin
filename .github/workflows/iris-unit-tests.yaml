@@ -16,6 +16,7 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: read
     outputs:
       should_run: ${{ steps.filter.outputs.relevant }}
