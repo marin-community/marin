@@ -227,6 +227,8 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     routing_counts = router_metrics["routing_counts_per_layer"]
     load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
     router_z_loss = router_metrics["router_z_loss_per_layer"]
+    dropped_count = router_metrics["dropped_count_per_layer"]
+    overflow_fraction = router_metrics["overflow_fraction_per_layer"]
     num_layers = int(routing_entropy.shape[0])
     aux_loss_per_layer = load_balancing_loss + router_z_loss
 
@@ -238,12 +240,17 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         "train/router/router_z_loss": jnp.mean(router_z_loss),
         # Keep aux loss as a per-step aggregate while exposing mean terms above.
         "train/router/aux_loss": jnp.sum(aux_loss_per_layer),
+        # Capacity overflow: total dropped assignments and fraction across all layers.
+        "train/router/dropped_count_total": jnp.sum(dropped_count),
+        "train/router/overflow_fraction_mean": jnp.mean(overflow_fraction),
     }
     for i in range(num_layers):
         out[f"train/router/layer_{i}/routing_entropy"] = routing_entropy[i]
         out[f"train/router/layer_{i}/load_balancing_loss"] = load_balancing_loss[i]
         out[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
         out[f"train/router/layer_{i}/routing_hist"] = _histogram_from_expert_counts(routing_counts[i])
+        out[f"train/router/layer_{i}/dropped_count"] = dropped_count[i]
+        out[f"train/router/layer_{i}/overflow_fraction"] = overflow_fraction[i]
     return out
 
 
@@ -325,7 +332,7 @@ class MoEMLP(eqx.Module):
             num_experts_per_token=self.cfg.num_experts_per_token,
         )
 
-        routed_flat = moe_mlp(
+        routed_flat, dropped_count = moe_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
@@ -335,7 +342,11 @@ class MoEMLP(eqx.Module):
             implementation=self.cfg.moe_implementation,
             mesh=get_abstract_mesh(),
             capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+            report_capacity_overflow=True,
         )
+        total_assignments = x_flat.shape[0] * self.cfg.num_experts_per_token
+        router_stats["dropped_count"] = dropped_count
+        router_stats["overflow_fraction"] = dropped_count.astype(jnp.float32) / max(total_assignments, 1)
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
         return routed, router_stats
@@ -433,6 +444,8 @@ class Transformer(eqx.Module):
             "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in all_router_stats], axis=0),
             "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in all_router_stats], axis=0),
             "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in all_router_stats], axis=0),
+            "dropped_count_per_layer": jnp.stack([s["dropped_count"] for s in all_router_stats], axis=0),
+            "overflow_fraction_per_layer": jnp.stack([s["overflow_fraction"] for s in all_router_stats], axis=0),
         }
         return self.final_norm(hidden), router_metrics
 
