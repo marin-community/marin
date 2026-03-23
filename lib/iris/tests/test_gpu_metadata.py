@@ -16,7 +16,7 @@ from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Duration
 
-from .test_auth import _make_controller_only_config
+from .conftest import _make_controller_only_config
 
 _NVIDIA_SMI_H100_8X = "\n".join(["NVIDIA H100 80GB HBM3, 81559"] * 8)
 

@@ -28,14 +28,14 @@ pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 
 @pytest.mark.timeout(600)
-def test_marin_pipeline_on_iris(integration_cluster):
+def test_marin_pipeline_on_iris(integration_cluster, monkeypatch):
     """Run the full marin data pipeline dispatched through Iris."""
     prefix = tempfile.mkdtemp(prefix="iris-marin-itest-")
     try:
-        os.environ["MARIN_PREFIX"] = prefix
-        os.environ.setdefault("WANDB_MODE", "disabled")
-        os.environ.setdefault("WANDB_API_KEY", "")
-        os.environ.setdefault("JAX_TRACEBACK_FILTERING", "off")
+        monkeypatch.setenv("MARIN_PREFIX", prefix)
+        monkeypatch.setenv("WANDB_MODE", "disabled")
+        monkeypatch.setenv("WANDB_API_KEY", "")
+        monkeypatch.setenv("JAX_TRACEBACK_FILTERING", "off")
 
         iris_client = FrayIrisClient(
             controller_address=integration_cluster.url,
