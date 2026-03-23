@@ -3,22 +3,34 @@ on:
   push:
     branches:
       - main
-    paths:
-      - rust/dupekit/**
-      - pyproject.toml
-      - .github/workflows/dupekit-unit-tests.yaml
   pull_request:
-    paths:
-      - rust/dupekit/**
-      - pyproject.toml
-      - .github/workflows/dupekit-unit-tests.yaml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      should_run: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'rust/dupekit/**'
+              - 'uv.lock'
+              - '.github/workflows/dupekit-unit-tests.yaml'
+
   check-user-mode:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
@@ -33,6 +45,8 @@ jobs:
           fi
 
   unit-test:
+    needs: [changes, check-user-mode]
+    if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -58,6 +72,8 @@ jobs:
           cd rust/dupekit && uv run --frozen --group test pytest tests/ -v
 
   rust-checks:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
