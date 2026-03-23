@@ -619,18 +619,25 @@ class ZephyrCoordinator:
 
     def _coordinator_loop(self) -> None:
         """Background loop for heartbeat checking and worker job monitoring."""
+        logger.info("Coordinator loop started (thread=%s)", threading.current_thread().name)
         last_log_time = 0.0
 
-        while not self._shutdown_event.is_set():
-            self.check_heartbeats()
-            self._check_worker_group()
+        try:
+            while not self._shutdown_event.is_set():
+                self.check_heartbeats()
+                self._check_worker_group()
 
-            now = time.monotonic()
-            if self._has_active_execution() and now - last_log_time > 5.0:
-                self._log_status()
-                last_log_time = now
+                now = time.monotonic()
+                if self._has_active_execution() and now - last_log_time > 5.0:
+                    self._log_status()
+                    last_log_time = now
 
-            self._shutdown_event.wait(timeout=0.5)
+                self._shutdown_event.wait(timeout=0.5)
+
+            logger.info("Coordinator loop exiting: shutdown event set")
+        except Exception:
+            logger.error("Coordinator loop crashed with unhandled exception", exc_info=True)
+            self._fatal_error = "Coordinator thread crashed — see logs for traceback"
 
     def _check_worker_group(self) -> None:
         """Abort the pipeline if the worker job has permanently terminated."""
@@ -860,6 +867,14 @@ class ZephyrCoordinator:
                 else:
                     # Workers are alive — reset the dead timer
                     all_dead_since = None
+
+            # Checked after completion so a clean shutdown racing the final
+            # task can never false-positive — only true crashes reach here.
+            if not self._coordinator_thread.is_alive():
+                raise ZephyrWorkerError(
+                    "Coordinator thread is no longer alive. "
+                    "Check logs for 'Coordinator loop crashed' for the root cause."
+                )
 
             if completed != last_log_completed:
                 logger.info("[%s] %d/%d tasks completed", self._stage_name, completed, total)
