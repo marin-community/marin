@@ -137,7 +137,7 @@ def main():
         weight_transfer=WeightTransferConfig(
             mode=WeightTransferMode.ARROW_FLIGHT,
             sync_interval_steps=1,
-            max_weight_transfer_wait_time=300,
+            max_weight_transfer_wait_time=0,
             coordinator_name=f"wt-coord-{name}",
         ),
         run_id=name,

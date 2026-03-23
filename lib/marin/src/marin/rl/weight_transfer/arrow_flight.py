@@ -243,11 +243,12 @@ class ArrowFlightCoordinator:
 
     def update_server(self, weight_id: int, param_names: list[str], server_locations: list[tuple[str, int]]) -> None:
 
-        # TODO(chris): how about when trainer dies? we should reset the server info.
-        # Only accept if newer than current
+        # Accept weight_id=-1 (initial weights) even if coordinator already has it.
+        # This allows a restarted trainer to re-serve initial weights without being
+        # rejected as stale. Only reject truly stale updates (same non-initial ID).
         current_weight_id = self._server_info.weight_id if self._server_info is not None else None
-        if current_weight_id is not None and weight_id <= current_weight_id:
-            logger.warning(f"Ignoring stale weight update: {weight_id} <= {current_weight_id}")
+        if current_weight_id is not None and weight_id < current_weight_id:
+            logger.warning(f"Ignoring stale weight update: {weight_id} < {current_weight_id}")
             return
 
         self._server_info = ServerInfo(

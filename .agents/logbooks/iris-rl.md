@@ -336,6 +336,32 @@ Fixed by creating `VLLMSamplingConfig` — a plain dataclass that replaces `vllm
 4. Child TPU jobs submitted with pip_packages ✅
 5. Waiting for TPU capacity to validate: trainer startup, Arrow Flight weight transfer, full RL loop
 
+### 2026-03-22 — Pre-launch review: on-demand-rl lessons cross-check
+
+Systematic review of all on-demand-rl findings before 500-step run:
+
+**Integrated:**
+- Faulthandler watchdogs + phase logging ✅
+- Trainer cumulative timeout (1 hour) ✅
+- Dummy weight guard (weight_step < -1) ✅
+- Top-level exception handlers ✅
+- SymPy grading timeout (10s, spawn context) ✅
+- Timing logs (vllm, arrow_flight) ✅
+- `_resolve_advertise_host()` (GCP metadata) ✅
+- Graceful shutdown (RLRunState actor) ✅
+- `pip_dependency_groups` removal ✅
+- First-weight timeout fix ✅
+- VLLMSamplingConfig decoupling ✅
+
+**Fixed now (pre-500-step):**
+- `weight_id` preemption fix: `<=` → `<` in `ArrowFlightCoordinator.update_server()`. Without this, a restarted trainer can't re-serve `weight_id=-1` because the coordinator rejects it as stale.
+- `max_weight_transfer_wait_time=0`: non-blocking weight sync. On-demand-rl found this gives 1.7x throughput (sampler doesn't block waiting for new weights, just uses whatever's latest). Safe because the dummy weight guard still prevents generation with uninitialized weights.
+
+**Not integrated (acceptable for now):**
+- `copy_and_flatten` OOM: only affects v6e (31 GiB/chip). v5p-8 has 95 GiB/chip. Not a blocker.
+- Optimal concurrency (n_prompts=256): exp2039 uses 64. Can tune later.
+- `inflight_weight_updates`: on-demand-rl found EngineCore crashes with inflight on. Keep off.
+
 ### 2026-03-22 02:00-03:20 UTC — Cluster capacity exhaustion
 
 Tried v6e-4 (europe-west4, 98+ slices running), v6e-8 (0 available), v5litepod-4 (all scale groups saturated). Every attempt gets the rollout worker running but the trainer stays PENDING.

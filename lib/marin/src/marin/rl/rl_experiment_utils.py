@@ -86,7 +86,7 @@ class RLExperimentConfig:
 
     # weight transfer
     weight_transfer_sync_interval_steps: int = 1
-    max_weight_transfer_wait_time: int = 300
+    max_weight_transfer_wait_time: int = 0
 
     # inference context
     inference_tensor_parallel_size: int = 4
