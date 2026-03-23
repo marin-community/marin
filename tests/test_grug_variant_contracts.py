@@ -263,3 +263,42 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     ]
     for key in required_keys:
         assert key in summary
+
+
+def test_great_10t_sweep_expert_count_generates_valid_configs():
+    """Verify the great 10T expert count sweep produces well-formed configs."""
+    from experiments.grug.moe.great_10t_sweep_expert_count import (
+        ALL_STEPS,
+        EXPERT_COUNTS,
+        FLOP_BUDGETS,
+        HIDDEN_DIMS,
+        _build_model_config,
+    )
+
+    expected_count = len(FLOP_BUDGETS) * len(HIDDEN_DIMS) * len(EXPERT_COUNTS)
+    assert len(ALL_STEPS) == expected_count
+
+    # No duplicate step names.
+    names = [s.name for s in ALL_STEPS]
+    assert len(names) == len(set(names)), f"Duplicate step names: {[n for n in names if names.count(n) > 1]}"
+
+    # Every config has positive batch/steps and correct expert count.
+    seen_expert_counts: set[int] = set()
+    for step in ALL_STEPS:
+        cfg = step.config
+        assert cfg.batch_size.value > 0
+        assert cfg.steps.value > 0
+        model = cfg.model.value
+        assert model.num_experts in EXPERT_COUNTS
+        assert model.num_experts_per_token == 4
+        seen_expert_counts.add(model.num_experts)
+
+    assert seen_expert_counts == set(EXPERT_COUNTS)
+
+    # Different expert counts at same hidden dim yield same layer count but different expert count.
+    m128 = _build_model_config(1024, 128)
+    m512 = _build_model_config(1024, 512)
+    assert m128.num_experts == 128
+    assert m512.num_experts == 512
+    assert m128.num_layers == m512.num_layers
+    assert m128.intermediate_dim == m512.intermediate_dim
