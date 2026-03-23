@@ -152,6 +152,21 @@ class DupCounters:
         }
 
 
+def group_files(files: list[str], num_groups: int) -> list[list[str]]:
+    """Group files into at most num_groups buckets deterministically.
+
+    Files are sorted then distributed round-robin, so the same set of files always
+    produces the same grouping. Use this to cap Zephyr shard count when
+    num_files >> max_parallelism.
+    """
+    sorted_files = sorted(files)
+    n = min(num_groups, len(sorted_files))
+    groups: list[list[str]] = [[] for _ in range(n)]
+    for i, f in enumerate(sorted_files):
+        groups[i % n].append(f)
+    return groups
+
+
 def _collect_input_files(*, input_paths: str | list[str], filetypes: list[str]) -> list[str]:
     """Given an input path or list of paths, collect all matching files"""
     input_paths = input_paths if isinstance(input_paths, list) else [input_paths]

@@ -15,6 +15,7 @@ from marin.processing.classification.deduplication.dedup_commons import (
     _get_extension,
     _init_wandb,
     _load_batches,
+    group_files,
 )
 from fray.v2 import ResourceConfig
 from marin.processing.classification.deduplication.connected_components import connected_components
@@ -100,9 +101,16 @@ def dedup_fuzzy_document(
         max_workers=max_parallelism,
         resources=worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
     )
-    doc_minhash_lsh = Dataset.from_list(input_files).flat_map(
-        lambda path: (
+    # Group input files into at most max_parallelism shards so shard count <= worker count.
+    # Each shard processes a group of files sequentially, reducing coordinator overhead
+    # when num_files >> max_parallelism (e.g. 13k files with 2k workers).
+    file_groups: list[list[str]] = (
+        group_files(input_files, max_parallelism) if max_parallelism else [[f] for f in sorted(input_files)]
+    )
+    doc_minhash_lsh = Dataset.from_list(file_groups).flat_map(
+        lambda paths: (
             {**record, "file_idx": path_to_idx[path]}
+            for path in paths
             for batch in _load_batches(path, columns=[text_field, "id"])
             for record in compute_minhash_lsh_batches(batch)
         )
