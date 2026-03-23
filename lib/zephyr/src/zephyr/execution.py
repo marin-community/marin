@@ -45,6 +45,7 @@ from zephyr.plan import (
     PhysicalOp,
     PhysicalPlan,
     Scatter,
+    Shard,
     SourceItem,
     StageContext,
     StageType,
@@ -54,23 +55,6 @@ from zephyr.plan import (
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Shard protocol and implementations
-# ---------------------------------------------------------------------------
-
-
-class Shard(Protocol):
-    """Protocol for a shard of data assigned to a single worker.
-
-    Implementations:
-    - ListShard: backed by iterable references (source data, non-scatter)
-    - ScatterShard: backed by scatter Parquet files with predicate pushdown
-    """
-
-    def __iter__(self) -> Iterator: ...
-    def get_iterators(self) -> Iterator[Iterator]: ...
 
 
 @dataclass(frozen=True)

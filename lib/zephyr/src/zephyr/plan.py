@@ -19,7 +19,7 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from itertools import groupby, islice
-from typing import Any
+from typing import Any, Protocol
 
 import msgspec
 from iris.env_resources import TaskResources as _TaskResources
@@ -49,6 +49,23 @@ from zephyr.readers import InputFileSpec
 from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Shard protocol
+# ---------------------------------------------------------------------------
+
+
+class Shard(Protocol):
+    """Protocol for a shard of data assigned to a single worker.
+
+    Implementations:
+    - ListShard: backed by iterable references (source data, non-scatter)
+    - ScatterShard: backed by scatter Parquet files with predicate pushdown
+    """
+
+    def __iter__(self) -> Iterator: ...
+    def get_iterators(self) -> Iterator[Iterator]: ...
 
 
 @dataclass
@@ -568,7 +585,7 @@ def make_windows(
 
 
 def _merge_sorted_chunks(
-    shard, key_fn: Callable, sort_fn: Callable | None = None, external_sort_dir: str | None = None
+    shard: Shard, key_fn: Callable, sort_fn: Callable | None = None, external_sort_dir: str | None = None
 ) -> Iterator[tuple[object, Iterator]]:
     """Merge sorted chunks using k-way merge, yielding (key, items_iterator) groups.
 
@@ -598,10 +615,11 @@ def _merge_sorted_chunks(
 
     # Check if external sort is needed BEFORE materializing all iterators.
     # ScatterShard can decide using manifest stats (no file opens needed).
+    from zephyr.shuffle import ScatterShard
+
     use_external = (
         external_sort_dir is not None
-        and hasattr(shard, "needs_external_sort")
-        and hasattr(shard, "get_iterators")
+        and isinstance(shard, ScatterShard)
         and shard.needs_external_sort(_TaskResources.from_environment().memory_bytes)
     )
 
