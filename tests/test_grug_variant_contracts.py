@@ -623,6 +623,9 @@ def test_grug_iteration_02_v5p64_1e20_d1536_retry25_launcher_schedule_is_valid()
     config = step.config
 
     assert config.run_id == "isoflop-moe-adamh-gatednorm-v5p64-r2-1e20-d1536-retry25"
+    assert config.output_path == (
+        "gs://marin-us-central1/grug/isoflop-moe-adamh-gatednorm-v5p64-r2-1e20-d1536-retry25-445042"
+    )
     assert config.max_retries_failure == 25
     assert isinstance(config.resources, VersionedValue)
     assert config.resources.value.device.variant == "v5p-64"

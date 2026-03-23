@@ -10,7 +10,7 @@ from fray.cluster import ResourceConfig
 from levanter.optim import GrugAttentionMlpLmHeadAdamHConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, versioned
 
 from experiments.grug.moe_scaling_iteration_02.launch import (
     NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
@@ -36,6 +36,7 @@ CHECKPOINT_MIN_STEP = TRAIN_STEPS + 1
 MAX_RETRIES_FAILURE = 25
 RUN_ID = "isoflop-moe-adamh-gatednorm-v5p64-r2-1e20-d1536-retry25"
 GROUP = "isoflop-moe-adamh-gatednorm-v5p64-r2"
+RESUME_OUTPUT_PATH = "gs://marin-us-central1/grug/isoflop-moe-adamh-gatednorm-v5p64-r2-1e20-d1536-retry25-445042"
 
 REFERENCE_BUDGET = 1e18
 REFERENCE_HIDDEN_DIM = 512
@@ -81,7 +82,9 @@ def create_scaleup_step() -> ExecutorStep:
     config = GrugMoeLaunchConfig(
         model=versioned(model_cfg),
         data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
-        output_path=this_output_path(),
+        # Keep the original executor output prefix so fresh Iris parents can
+        # resume the same checkpoint tree instead of silently starting over.
+        output_path=RESUME_OUTPUT_PATH,
         run_id=RUN_ID,
         resources=versioned(ResourceConfig.with_tpu(TPU_VARIANT, regions=REGIONS)),
         max_retries_failure=MAX_RETRIES_FAILURE,
