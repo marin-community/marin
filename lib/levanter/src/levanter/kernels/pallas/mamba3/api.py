@@ -579,61 +579,6 @@ def _mamba3_attentionish_forward_chunked_from_transformed(
         return output, formatted_final_state
 
 
-def mamba3_attentionish_forward_prepacked_from_transformed(
-    q: Float[Array, "batch heads seq state"],
-    k: Float[Array, "batch heads seq state"],
-    v: Float[Array, "batch heads seq value"],
-    *,
-    a_log_cumsum: Float[Array, "batch heads seq"],
-    src_scale: Float[Array, "batch heads seq"],
-    out_correction: Float[Array, "batch heads seq"],
-    chunk_size: int,
-    q_bias: Float[Array, "heads state"] | None = None,
-    k_bias: Float[Array, "heads state"] | None = None,
-    d: Float[Array, "heads"] | None = None,
-    return_final_state: bool = False,
-    implementation: Implementation | Sequence[Implementation] | None = None,
-) -> jax.Array | tuple[jax.Array, jax.Array]:
-    """Run the thin head-major SISO API on transformed inputs.
-
-    This path keeps sequence flat in head-major layout and only reshapes to
-    `[B, H, K, C, ...]` internally, avoiding the expensive sequence-major to
-    chunk-major transpose in the convenience attention-style wrapper.
-    """
-
-    if q.shape != k.shape:
-        raise ValueError(f"`q` and `k` must have the same shape, got {q.shape} and {k.shape}.")
-    if q.ndim != 4 or v.ndim != 4:
-        raise ValueError("Expected `q/k` with shape `[B, H, S, N]` and `v` with shape `[B, H, S, P]`.")
-    batch, heads, seq_len, state_dim = q.shape
-    if v.shape[:3] != (batch, heads, seq_len):
-        raise ValueError("`v` must share batch, head, and sequence axes with `q`.")
-    if seq_len % chunk_size != 0:
-        raise ValueError(f"`seq`={seq_len} must be divisible by `chunk_size`={chunk_size}.")
-    if a_log_cumsum.shape != (batch, heads, seq_len):
-        raise ValueError("`a_log_cumsum` must have shape `[B, H, S]`.")
-    if src_scale.shape != a_log_cumsum.shape or out_correction.shape != a_log_cumsum.shape:
-        raise ValueError("`src_scale` and `out_correction` must match `a_log_cumsum`.")
-
-    num_chunks = seq_len // chunk_size
-    q_chunked = q.reshape(batch, heads, num_chunks, chunk_size, state_dim)
-    k_chunked = k.reshape(batch, heads, num_chunks, chunk_size, state_dim)
-    v_chunked = v.reshape(batch, heads, num_chunks, chunk_size, v.shape[-1])
-    return _mamba3_attentionish_forward_chunked_from_transformed(
-        q_chunked,
-        k_chunked,
-        v_chunked,
-        q_bias=q_bias,
-        k_bias=k_bias,
-        d=d,
-        a_log_cumsum=a_log_cumsum.reshape(batch, heads, num_chunks, chunk_size),
-        src_scale=src_scale.reshape(batch, heads, num_chunks, chunk_size),
-        out_correction=out_correction.reshape(batch, heads, num_chunks, chunk_size),
-        return_final_state=return_final_state,
-        implementation=implementation,
-    )
-
-
 def mamba3_attentionish_forward_from_transformed(
     q: Float[Array, "batch seq heads state"],
     k: Float[Array, "batch seq heads state"],

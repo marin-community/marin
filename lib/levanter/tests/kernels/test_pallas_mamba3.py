@@ -13,7 +13,6 @@ from levanter.kernels.pallas.mamba3 import (
     HybridModeConfig,
     mamba3_attentionish_forward,
     mamba3_attentionish_forward_from_transformed,
-    mamba3_attentionish_forward_prepacked_from_transformed,
     mamba3_chunk_state,
     mamba3_chunk_state_reference_batched,
     mamba3_chunked_forward,
@@ -645,58 +644,6 @@ def test_mamba3_siso_attentionish_api_matches_chunked_api():
     assert jnp.allclose(
         state_new, state_old, atol=MAMBA3_ATTENTIONISH_PARITY_ATOL, rtol=MAMBA3_ATTENTIONISH_PARITY_RTOL
     )
-
-
-def test_mamba3_siso_attentionish_prepacked_matches_attentionish_api():
-    dt, lam, a, _b, _c, _x, q, k, v, q_bias, k_bias, d, a_log_cumsum, trap = _headed_siso_attentionish_fixture(
-        batch=1,
-        heads=3,
-        num_chunks=2,
-        chunk_size=8,
-        state_dim=4,
-        value_dim=5,
-    )
-    batch, seq_len, heads, state_dim = q.shape
-    num_chunks = seq_len // 8
-    q_head_major = q.transpose(0, 2, 1, 3)
-    k_head_major = k.transpose(0, 2, 1, 3)
-    v_head_major = v.transpose(0, 2, 1, 3)
-    src_scale, out_correction = prepare_mamba3_chunked_scales(
-        dt.reshape(batch, heads, num_chunks, 8),
-        jax.nn.sigmoid(trap).reshape(batch, heads, num_chunks, 8),
-    )
-
-    y_old, state_old = mamba3_attentionish_forward(
-        q,
-        k,
-        v,
-        q_bias=q_bias,
-        k_bias=k_bias,
-        d=d,
-        da_cs=a_log_cumsum,
-        dt=dt.reshape(batch, heads, seq_len),
-        trap=trap,
-        chunk_size=8,
-        return_final_state=True,
-        implementation="reference",
-    )
-    y_new, state_new = mamba3_attentionish_forward_prepacked_from_transformed(
-        q_head_major,
-        k_head_major,
-        v_head_major,
-        q_bias=q_bias,
-        k_bias=k_bias,
-        d=d,
-        a_log_cumsum=a_log_cumsum.reshape(batch, heads, seq_len),
-        src_scale=src_scale.reshape(batch, heads, seq_len),
-        out_correction=out_correction.reshape(batch, heads, seq_len),
-        chunk_size=8,
-        return_final_state=True,
-        implementation="reference",
-    )
-
-    assert jnp.allclose(y_new, y_old, atol=1e-5, rtol=1e-5)
-    assert jnp.allclose(state_new, state_old, atol=1e-5, rtol=1e-5)
 
 
 def test_mamba3_siso_attentionish_final_k_matches_last_key_plus_bias():

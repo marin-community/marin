@@ -20,13 +20,11 @@ from levanter.kernels.pallas.mamba3 import (
     intra_chunk_log_alpha_cumsum,
     local_log_alpha,
     mamba3_attentionish_forward,
-    mamba3_attentionish_forward_prepacked_from_transformed,
     mamba3_chunked_forward,
-    prepare_mamba3_chunked_scales,
 )
 
 
-ApiVariant = Literal["chunked_public", "chunked_packaged", "attentionish_public", "attentionish_prepacked"]
+ApiVariant = Literal["chunked_public", "attentionish_public"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,33 +139,6 @@ def _attentionish_inputs(
     return q, k, v, q_bias, k_bias, da_cs, dt_seq, trap
 
 
-def _attentionish_prepacked_inputs(
-    dt: jax.Array,
-    lam: jax.Array,
-    a: jax.Array,
-    b: jax.Array,
-    c: jax.Array,
-    x: jax.Array,
-) -> tuple[jax.Array, ...]:
-    groups, num_chunks, chunk_size = dt.shape
-    seq_len = num_chunks * chunk_size
-    a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
-    src_scale, out_correction = prepare_mamba3_chunked_scales(dt, lam)
-    q_head_major = c.reshape(groups, 1, seq_len, c.shape[-1])
-    k_head_major = b.reshape(groups, 1, seq_len, b.shape[-1])
-    v_head_major = x.reshape(groups, 1, seq_len, x.shape[-1])
-    return (
-        q_head_major,
-        k_head_major,
-        v_head_major,
-        None,
-        None,
-        a_log_cumsum.reshape(groups, 1, seq_len),
-        src_scale.reshape(groups, 1, seq_len),
-        out_correction.reshape(groups, 1, seq_len),
-    )
-
-
 def _time_jitted(fn, *args, steps: int, warmup: int) -> tuple[float, float]:
     start = time.perf_counter()
     out = fn(*args)
@@ -231,24 +202,7 @@ def _benchmark(
         )
         forward_args = inputs
         backward_args = inputs
-    elif api == "chunked_packaged":
-
-        # Diagnostic control: isolates output repackaging from the attention-style wrapper cost.
-        def forward_chunked_packaged(*xs):
-            y_chunked, _ = mamba3_chunked_forward(*xs, implementation="xla")
-            groups, num_chunks, chunk_size, value_dim = y_chunked.shape
-            return y_chunked.reshape(groups, num_chunks * chunk_size, 1, value_dim)
-
-        forward_fn = jax.jit(forward_chunked_packaged)
-        backward_fn = jax.jit(
-            jax.grad(
-                lambda *xs: jnp.sum(forward_chunked_packaged(*xs).astype(jnp.float32) ** 2),
-                argnums=5,
-            )
-        )
-        forward_args = inputs
-        backward_args = inputs
-    elif api == "attentionish_public":
+    else:
         attentionish_inputs = _attentionish_inputs(*inputs)
 
         def forward_attentionish(q, k, v, q_bias, k_bias, da_cs, dt_seq, trap):
@@ -270,60 +224,6 @@ def _benchmark(
 
         forward_fn = jax.jit(forward_attentionish)
         backward_fn = jax.jit(jax.grad(backward_attentionish, argnums=2))
-        forward_args = attentionish_inputs
-        backward_args = attentionish_inputs
-    else:
-        attentionish_inputs = _attentionish_prepacked_inputs(*inputs)
-
-        def forward_attentionish_prepacked(
-            q_packed,
-            k_packed,
-            v_packed,
-            q_bias,
-            k_bias,
-            a_log_cumsum,
-            src_scale,
-            out_correction,
-        ):
-            return mamba3_attentionish_forward_prepacked_from_transformed(
-                q_packed,
-                k_packed,
-                v_packed,
-                q_bias=q_bias,
-                k_bias=k_bias,
-                a_log_cumsum=a_log_cumsum,
-                src_scale=src_scale,
-                out_correction=out_correction,
-                chunk_size=shape.chunk_size,
-                implementation="xla",
-            )
-
-        def backward_attentionish_prepacked(
-            q_packed,
-            k_packed,
-            v_packed,
-            q_bias,
-            k_bias,
-            a_log_cumsum,
-            src_scale,
-            out_correction,
-        ):
-            return jnp.sum(
-                forward_attentionish_prepacked(
-                    q_packed,
-                    k_packed,
-                    v_packed,
-                    q_bias,
-                    k_bias,
-                    a_log_cumsum,
-                    src_scale,
-                    out_correction,
-                ).astype(jnp.float32)
-                ** 2
-            )
-
-        forward_fn = jax.jit(forward_attentionish_prepacked)
-        backward_fn = jax.jit(jax.grad(backward_attentionish_prepacked, argnums=2))
         forward_args = attentionish_inputs
         backward_args = attentionish_inputs
 
@@ -382,7 +282,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--api",
         type=str,
-        default="chunked_public,attentionish_public,attentionish_prepacked",
+        default="chunked_public,attentionish_public",
     )
     parser.add_argument("--steps", type=int, default=10)
     parser.add_argument("--warmup", type=int, default=2)
