@@ -1646,10 +1646,13 @@ wheels = [
 [[package]]
 name = "dupekit"
 version = "0.1.0"
-source = { registry = "https://github.com/marin-community/marin/releases/expanded_assets/dupekit-0.1.0-41b51df" }
-sdist = { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-41b51df/dupekit-0.1.0.tar.gz" }
+source = { registry = "https://github.com/marin-community/marin/releases/expanded_assets/dupekit-0.1.0-099386c" }
+sdist = { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-099386c/dupekit-0.1.0.tar.gz" }
 wheels = [
-    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-41b51df/dupekit-0.1.0-cp311-abi3-manylinux_2_34_x86_64.whl" },
+    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-099386c/dupekit-0.1.0-cp311-abi3-manylinux_2_28_aarch64.whl" },
+    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-099386c/dupekit-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl" },
+    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-099386c/dupekit-0.1.0-cp311-abi3-macosx_10_12_x86_64.whl" },
+    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-099386c/dupekit-0.1.0-cp311-abi3-macosx_11_0_arm64.whl" },
 ]
 
 [[package]]
