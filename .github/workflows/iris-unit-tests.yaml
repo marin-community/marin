@@ -27,6 +27,7 @@ jobs:
           filters: |
             relevant:
               - 'lib/iris/**'
+              - 'uv.lock'
               - '.github/workflows/iris-unit-tests.yaml'
 
   cpu-test:

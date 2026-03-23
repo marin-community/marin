@@ -24,6 +24,7 @@ jobs:
           filters: |
             relevant:
               - 'lib/fray/**'
+              - 'uv.lock'
               - '.github/workflows/fray-unit-tests.yaml'
 
   cpu-test:
