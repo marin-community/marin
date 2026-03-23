@@ -31,6 +31,7 @@ from levanter.tracker.histogram import Histogram
 from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
+_ATTN_GATE_INPUT_DIM = 12
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -67,6 +68,7 @@ class GrugModelConfig:
     load_balancing_loss_coef: float | None = 0.01
     router_z_loss_coef: float | None = 0.001
     moe_implementation: MoeImplementation | None = None
+    use_attention_gate: bool = False
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -109,17 +111,22 @@ class CausalSelfAttention(eqx.Module):
     w_k: Float[Array, "D MH"]
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
+    attn_gate: Float[Array, "G N"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        attn_gate = None
+        if cfg.use_attention_gate:
+            attn_gate = reshard(jnp.zeros((_ATTN_GATE_INPUT_DIM, n), dtype=jnp.float32), P(None, None))
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
+            attn_gate=attn_gate,
             cfg=cfg,
         )
 
@@ -134,6 +141,11 @@ class CausalSelfAttention(eqx.Module):
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         attn_out = attention(q, k, v, mask)
+        if self.attn_gate is not None:
+            # Per-head gate: 2 * sigmoid(x[:GATE_INPUT_DIM] @ gate) -> [B, S, N]
+            gate_input = x[..., :_ATTN_GATE_INPUT_DIM]
+            gate = 2 * jax.nn.sigmoid(jnp.einsum("bsg,gn->bsn", gate_input, self.attn_gate, out_sharding=batch_spec))
+            attn_out = gate[..., None] * attn_out
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 

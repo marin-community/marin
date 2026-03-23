@@ -263,3 +263,47 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     ]
     for key in required_keys:
         assert key in summary
+
+
+def test_grug_moe_attention_gate_lowers():
+    """Verify that use_attention_gate=True lowers without error and produces different shapes than gate off."""
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    train_module = importlib.import_module("experiments.grug.moe.train")
+
+    mesh_fn = model_module.debug_mesh_and_token_pspec
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+    mesh, token_pspec = mesh_fn(num_devices=4)
+    batch = GrugLmExample(
+        tokens=jnp.zeros((8, 4), dtype=jnp.int32),
+        loss_weight=jnp.ones((8, 4), dtype=jnp.float32),
+        attn_mask=GrugAttentionMask.causal(),
+    )
+
+    def one_step(use_gate: bool):
+        cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
+        cfg = dataclasses.replace(cfg, use_attention_gate=use_gate)
+        train_step = train_module._make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
+        sharded_batch = dataclasses.replace(
+            batch,
+            tokens=jax.sharding.reshard(batch.tokens, token_pspec),
+            loss_weight=jax.sharding.reshard(batch.loss_weight, token_pspec),
+        )
+        state = train_module.initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
+        return train_step(state, sharded_batch, compute_watch=False)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        gate_off_shapes = eqx.filter_eval_shape(lambda: one_step(False))
+        gate_on_shapes = eqx.filter_eval_shape(lambda: one_step(True))
+
+    # Both should produce valid loss shapes.
+    assert gate_off_shapes[1]["train/loss"].shape == ()
+    assert gate_on_shapes[1]["train/loss"].shape == ()
+
+    # Gate-on model should have attn_gate arrays in its state; gate-off should not.
+    gate_on_state = gate_on_shapes[0]
+    gate_off_state = gate_off_shapes[0]
+    first_block_on = gate_on_state.params.blocks[0]
+    first_block_off = gate_off_state.params.blocks[0]
+    assert first_block_on.attn.attn_gate is not None
+    assert first_block_off.attn.attn_gate is None
