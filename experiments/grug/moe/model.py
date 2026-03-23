@@ -11,6 +11,7 @@ grug copy-first workflow in `.agents/skills/change-grug/`.
 import dataclasses
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import get_args
 import equinox as eqx
 import jax
@@ -31,6 +32,11 @@ from levanter.tracker.histogram import Histogram
 from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
+
+
+class GatingFunction(StrEnum):
+    SOFTMAX = "softmax"
+    SIGMOID = "sigmoid"
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -64,6 +70,7 @@ class GrugModelConfig:
     max_seq_len: int = 4096
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
+    gating_fn: GatingFunction = GatingFunction.SOFTMAX
     load_balancing_loss_coef: float | None = 0.01
     router_z_loss_coef: float | None = 0.001
     moe_implementation: MoeImplementation | None = None
@@ -316,7 +323,11 @@ class MoEMLP(eqx.Module):
         )
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
-        combine_weights = jax.nn.softmax(topk_logits, axis=-1).astype(x.dtype)
+        if self.cfg.gating_fn == GatingFunction.SIGMOID:
+            topk_weights = jax.nn.sigmoid(topk_logits)
+            combine_weights = (topk_weights / jnp.sum(topk_weights, axis=-1, keepdims=True)).astype(x.dtype)
+        else:
+            combine_weights = jax.nn.softmax(topk_logits, axis=-1).astype(x.dtype)
         router_stats = _routing_stats(
             selected_experts,
             router_probs,
