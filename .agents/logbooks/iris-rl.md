@@ -10,6 +10,13 @@ stuck in PENDING with "No worker matches constraints." NEVER use `preemptible=Fa
 for TPU jobs on Iris. The retry mechanism (`max_retries_preemption=100`) handles
 preemption recovery automatically.
 
+## IRIS CHILD JOBS INHERIT PARENT REGION. SET EXPLICIT REGIONS ON TPU JOBS.
+
+The coordinator lands on a CPU worker (e.g. europe-west4). Child TPU jobs inherit
+that region. But v5p-8 TPUs only exist in us-central1 and us-east5 — so child jobs
+get "no groups in region europe-west4" and stay PENDING forever. ALWAYS set explicit
+`regions=` on child TPU ResourceConfig to override inheritance.
+
 ## Scope
 - **Goal**: Migrate RL pipeline from Fray v1 (Ray) to Fray v2 (Iris) with proper in-cluster coordinator topology.
 - **Primary metric(s)**: exp2039_rl_math500.py runs end-to-end on Iris with Arrow Flight weight transfer.
