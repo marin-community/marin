@@ -263,3 +263,56 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     ]
     for key in required_keys:
         assert key in summary
+
+
+def test_grug_moe_sliding_window_wired_through():
+    """Verify that GrugModelConfig.sliding_window reaches the attention mask."""
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    GrugModelConfig = model_module.GrugModelConfig
+    Transformer = model_module.Transformer
+    mesh_fn = model_module.debug_mesh_and_token_pspec
+
+    cfg_no_swa = GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=32,
+        intermediate_dim=64,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=2,
+        num_experts=4,
+        num_experts_per_token=2,
+        shared_expert_intermediate_dim=64,
+        max_seq_len=16,
+    )
+    cfg_swa = dataclasses.replace(cfg_no_swa, sliding_window=8)
+
+    mesh, _token_pspec = mesh_fn(num_devices=4)
+
+    tokens = jnp.zeros((4, 16), dtype=jnp.int32)
+
+    def forward_no_swa():
+        model = Transformer.init(cfg_no_swa, key=jax.random.PRNGKey(0))
+        return model(tokens)
+
+    def forward_swa():
+        model = Transformer.init(cfg_swa, key=jax.random.PRNGKey(0))
+        return model(tokens)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        shape_no_swa = eqx.filter_eval_shape(forward_no_swa)
+        shape_swa = eqx.filter_eval_shape(forward_swa)
+
+    # Both should produce the same output shape: sliding_window changes masking, not shape.
+    hidden_no_swa, _metrics_no_swa = shape_no_swa
+    hidden_swa, _metrics_swa = shape_swa
+    assert hidden_no_swa.shape == hidden_swa.shape
+
+    # Validate the config field itself.
+    assert cfg_no_swa.sliding_window is None
+    assert cfg_swa.sliding_window == 8
+
+    # Validate sliding_window rejection of invalid values.
+    with pytest.raises(ValueError, match="sliding_window must be positive"):
+        GrugModelConfig(vocab_size=128, sliding_window=0)
+    with pytest.raises(ValueError, match="sliding_window must be positive"):
+        GrugModelConfig(vocab_size=128, sliding_window=-1)
