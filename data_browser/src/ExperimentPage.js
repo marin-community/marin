@@ -200,20 +200,6 @@ function renderRaw2JsonStep({step, steps}) {
   return {name: "raw2json", description};
 }
 
-function renderFastTextTransformStep({step, steps}) {
-  const description = renderPath({path: step.config.input_path, steps});
-  return {name: "fasttext2json", description};
-}
-
-function renderConvertEvalToDolmaStep({step, steps}) {
-  const description = <table>
-    <tbody>
-        <tr><td>Input:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
-    </tbody>
-  </table>;
-  return {name: "eval2dolma", description};
-}
-
 function renderRunClassificationInferenceStep({step, steps}) {
   const description = <table>
     <tbody>
@@ -517,9 +503,6 @@ const stepRenderers = {
   "marin.download.nemotron_cc.download_nemotron_cc.download_nemotron_cc": renderDownloadNemotronCCStep,
   "marin.transform.huggingface.dataset_to_eval.hf_dataset_to_jsonl": renderRaw2JsonStep,
   "marin.transform.conversation.transform_conversation.transform_hf_dataset": renderRaw2JsonStep,
-  "marin.transform.fasttext.transform.main": renderFastTextTransformStep,
-  "marin.transform.evaluation.eval_to_dolma.convert_eval_to_dolma": renderConvertEvalToDolmaStep,
-
   // Inference for data filtering
   "marin.processing.classification.inference.run_inference": renderRunClassificationInferenceStep,
   "marin.generation.inference.run_inference": renderRunGenerationInferenceStep,
