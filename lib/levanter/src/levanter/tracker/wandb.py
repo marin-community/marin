@@ -1,13 +1,14 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
+import inspect
+import json
 import logging
 import os
 import tempfile
 import typing
 import warnings
-import json
-import hashlib
 from dataclasses import dataclass
 from typing import Any, List, Optional, Union
 
@@ -35,6 +36,18 @@ WandbRun = Union["wandb.sdk.wandb_run.Run", "wandb.sdk.lib.disabled.RunDisabled"
 
 
 _WANDB_ARTIFACT_NAME_MAX_LENGTH = 128
+_WANDB_STALE_STEP_WARNING_INTERVAL = 500
+_WANDB_STALE_STEP_KEY_LIMIT = 8
+
+
+def _format_stale_step_callsite() -> str:
+    """Return a short caller summary for stale-step logging warnings."""
+    for frame in inspect.stack()[2:8]:
+        filename = frame.filename.replace(os.getcwd() + os.sep, "")
+        if filename.endswith("wandb.py"):
+            continue
+        return f"{filename}:{frame.lineno} in {frame.function}"
+    return "<unknown>"
 
 
 class WandbTracker(Tracker):
@@ -67,12 +80,19 @@ class WandbTracker(Tracker):
             step = self.run.step
 
         if step < self.run.step:
-            if step - self._last_warning_step > 500:
+            if step - self._last_warning_step > _WANDB_STALE_STEP_WARNING_INTERVAL:
+                metric_keys = list(metrics.keys())[:_WANDB_STALE_STEP_KEY_LIMIT]
                 logger.warning(
-                    f"Step {step} is less than the current step {self.run.step}. Cowardly refusing to log metrics."
+                    "Step %s is less than the current step %s. "
+                    "Clamping resumed W&B log forward to preserve logging. "
+                    "metric_keys=%s caller=%s",
+                    step,
+                    self.run.step,
+                    metric_keys,
+                    _format_stale_step_callsite(),
                 )
                 self._last_warning_step = step
-            return
+            step = self.run.step
 
         step = int(step)
 
