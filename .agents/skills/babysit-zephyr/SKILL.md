@@ -65,8 +65,22 @@ A healthy zephyr job has:
 
 The coordinator logs a progress line every 5s:
 ```
-[stage0-Map → Scatter] 347/1964 complete, 1617 in-flight, 0 queued, 1828/1891 workers alive, 63 dead
+[stage0-Map → Scatter] 347/1964 complete, 1617 in-flight, 0 queued, 1828/1891 workers alive, 63 dead, counters: bytes_written=4831838208 documents_processed=1200000
 ```
+
+### User-Defined Counters
+
+Zephyr pipelines can report user-defined counters via `zephyr.counters.increment()`. Counters are aggregated across all workers and appear in:
+- **Coordinator progress logs**: appended to the periodic status line (grep for `counters:`)
+- **`get_status()` RPC**: `JobStatus.counters` dict, accessible programmatically
+
+To check counters from task code, use:
+```python
+from zephyr import counters
+counters.increment("documents_processed", batch_size)
+```
+
+Counters are sent to the coordinator via the worker heartbeat (every 5s) and only transmitted when values change — no overhead for idle workers.
 
 Fetch via the Iris CLI:
 ```bash
@@ -115,10 +129,15 @@ After submitting, monitor in escalating stages:
 3. Get the run command (or reuse the previous one).
 4. Submit and resume monitoring.
 
+## Monitoring Counters
+
+When babysitting a Zephyr job, check coordinator logs for counter lines. Counters give you insight into pipeline throughput (e.g. `documents_processed`, `bytes_written`, `validation_errors`). If counters stop advancing while shards are still in-flight, this may indicate a straggler or stuck worker — escalate to debug-zephyr-job.
+
 ## When to Escalate
 
 Escalate to **debug-zephyr-job** when:
 - A stage is stuck (no shard progress for an extended period)
 - Stragglers are holding up a stage (few in-flight, 0 queued, most workers idle)
 - Workers are failing repeatedly with the same error
+- Counters stop advancing while tasks remain in-flight
 - For controller issues (e.g., RPCs timing out), use the **debug-iris-controller** skill

@@ -293,6 +293,8 @@ _NON_RETRYABLE_ERRORS = (ZephyrWorkerError, ValueError, TypeError, KeyError, Att
 
 class WorkerContext(Protocol):
     def get_shared(self, name: str) -> Any: ...
+    def increment_counter(self, name: str, value: int = 1) -> None: ...
+    def get_counter_snapshot(self) -> dict[str, int]: ...
 
 
 _worker_ctx_var: ContextVar[ZephyrWorker | None] = ContextVar("zephyr_worker_ctx", default=None)
@@ -322,6 +324,7 @@ class JobStatus:
     done: bool
     fatal_error: str
     workers: dict[str, dict[str, Any]]
+    counters: dict[str, int] = field(default_factory=dict)
 
 
 class ZephyrCoordinator:
@@ -351,6 +354,11 @@ class ZephyrCoordinator:
         self._chunk_prefix: str = ""
         self._execution_id: str = ""
         self._no_workers_timeout: float = 60.0
+        # User-defined counters: per-task snapshots from workers, keyed by
+        # (worker_id -> latest counters for the task that worker is running).
+        # Completed task counters are stored in _completed_counters.
+        self._worker_counters: dict[str, dict[str, int]] = {}
+        self._completed_counters: dict[int, dict[str, int]] = {}  # shard_idx -> counters
 
         # Worker management state (workers self-register via register_worker)
         self._worker_handles: dict[str, ActorHandle] = {}
@@ -463,10 +471,18 @@ class ZephyrCoordinator:
     def _log_status(self) -> None:
         with self._lock:
             states = list(self._worker_states.values())
+            # Aggregate counters for the log line
+            total_counters: dict[str, int] = {}
+            for ctrs in itertools.chain(self._completed_counters.values(), self._worker_counters.values()):
+                for name, value in ctrs.items():
+                    total_counters[name] = total_counters.get(name, 0) + value
         alive = sum(1 for s in states if s in {WorkerState.READY, WorkerState.BUSY})
         dead = sum(1 for s in states if s in {WorkerState.FAILED, WorkerState.DEAD})
+        counters_str = ""
+        if total_counters:
+            counters_str = ", counters: " + " ".join(f"{k}={v}" for k, v in sorted(total_counters.items()))
         logger.info(
-            "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead",
+            "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead%s",
             self._execution_id,
             self._stage_name,
             self._completed_shards,
@@ -476,6 +492,7 @@ class ZephyrCoordinator:
             alive,
             len(self._worker_handles),
             dead,
+            counters_str,
         )
 
     def _maybe_requeue_worker_task(self, worker_id: str) -> None:
@@ -565,6 +582,10 @@ class ZephyrCoordinator:
             self._completed_shards += 1
             self._in_flight.pop(worker_id, None)
             self._worker_states[worker_id] = WorkerState.READY
+            # Snapshot final counters for this task from the worker
+            worker_ctrs = self._worker_counters.pop(worker_id, {})
+            if worker_ctrs:
+                self._completed_counters[shard_idx] = worker_ctrs
 
     def report_error(self, worker_id: str, shard_idx: int, error_info: str) -> None:
         """Worker reports a task failure. All errors are fatal."""
@@ -575,13 +596,24 @@ class ZephyrCoordinator:
             self._fatal_error = error_info
             self._worker_states[worker_id] = WorkerState.DEAD
 
-    def heartbeat(self, worker_id: str) -> None:
-        # No lock needed: _last_seen is only read by _check_worker_heartbeats
+    def heartbeat(self, worker_id: str, counters: dict[str, int] | None = None) -> None:
+        # No lock needed for _last_seen: only read by _check_worker_heartbeats
         # (which holds the lock), and monotonic float writes are atomic on CPython.
         self._last_seen[worker_id] = time.monotonic()
+        if counters:
+            with self._lock:
+                self._worker_counters[worker_id] = counters
 
     def get_status(self) -> JobStatus:
         with self._lock:
+            # Aggregate counters across completed tasks and in-flight workers
+            total_counters: dict[str, int] = {}
+            for ctrs in self._completed_counters.values():
+                for name, value in ctrs.items():
+                    total_counters[name] = total_counters.get(name, 0) + value
+            for ctrs in self._worker_counters.values():
+                for name, value in ctrs.items():
+                    total_counters[name] = total_counters.get(name, 0) + value
             return JobStatus(
                 stage=self._stage_name,
                 completed=self._completed_shards,
@@ -598,6 +630,7 @@ class ZephyrCoordinator:
                     }
                     for wid, state in self._worker_states.items()
                 },
+                counters=total_counters,
             )
 
     def get_fatal_error(self) -> str | None:
@@ -628,6 +661,8 @@ class ZephyrCoordinator:
             self._task_attempts = {task.shard_idx: 0 for task in tasks}
             self._fatal_error = None
             self._is_last_stage = is_last_stage
+            self._worker_counters = {}
+            self._completed_counters = {}
 
     def _wait_for_stage(self) -> None:
         """Block until current stage completes or error occurs."""
@@ -876,6 +911,8 @@ class ZephyrWorker:
         self._shutdown_event = threading.Event()
         self._chunk_prefix: str = ""
         self._execution_id: str = ""
+        self._counters: dict[str, int] = {}
+        self._counters_lock = threading.Lock()
 
         # Build descriptive worker ID from actor context
         actor_ctx = current_actor()
@@ -911,6 +948,21 @@ class ZephyrWorker:
             )
         return self._shared_data_cache[name]
 
+    def increment_counter(self, name: str, value: int = 1) -> None:
+        """Increment a named counter. Thread-safe, called from task code."""
+        with self._counters_lock:
+            self._counters[name] = self._counters.get(name, 0) + value
+
+    def get_counter_snapshot(self) -> dict[str, int]:
+        """Return a snapshot of current counters."""
+        with self._counters_lock:
+            return dict(self._counters)
+
+    def _reset_counters(self) -> None:
+        """Clear counters for a new task."""
+        with self._counters_lock:
+            self._counters.clear()
+
     def _run_polling(self, coordinator: ActorHandle) -> None:
         """Main polling loop. Runs in a background thread started by __init__."""
         logger.info("[%s] Starting polling loop", self._worker_id)
@@ -942,7 +994,16 @@ class ZephyrWorker:
             try:
                 # Block on result to avoid congesting the coordinator RPC pipe
                 # with fire-and-forget heartbeats.
-                coordinator.heartbeat.remote(self._worker_id).result()
+                # Send counters only when they've changed to avoid unnecessary
+                # coordinator state updates.
+                from zephyr.counters import counters_changed_since_last_report
+
+                snapshot = self.get_counter_snapshot()
+                send_counters = counters_changed_since_last_report(self._worker_id, snapshot)
+                coordinator.heartbeat.remote(
+                    self._worker_id,
+                    snapshot if send_counters else None,
+                ).result()
                 heartbeat_count += 1
                 consecutive_failures = 0
                 if heartbeat_count % 10 == 1:
@@ -1048,6 +1109,9 @@ class ZephyrWorker:
         # Update config for this execution
         self._chunk_prefix = config["chunk_prefix"]
         self._execution_id = config["execution_id"]
+
+        # Reset counters for the new task
+        self._reset_counters()
 
         _worker_ctx_var.set(self)
 

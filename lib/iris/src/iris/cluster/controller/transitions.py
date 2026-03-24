@@ -141,7 +141,6 @@ class TaskUpdate:
     resource_usage: cluster_pb2.ResourceUsage | None = None
     log_entries: list[logging_pb2.LogEntry] = field(default_factory=list)
     container_id: str | None = None
-    counters: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1024,7 +1023,6 @@ class ControllerTransitions:
                 or update.exit_code is not None
                 or update.resource_usage is not None
                 or update.log_entries
-                or update.counters
             )
             if update.new_state == prior_state and not has_new_data:
                 continue
@@ -1049,12 +1047,6 @@ class ControllerTransitions:
                     "UPDATE tasks SET resource_usage_proto = ? WHERE task_id = ?",
                     (usage_payload, update.task_id.to_wire()),
                 )
-            if update.counters:
-                cur.execute(
-                    "UPDATE tasks SET counters_json = ? WHERE task_id = ?",
-                    (json.dumps(update.counters), update.task_id.to_wire()),
-                )
-
             terminal_ms: int | None = None
             started_ms: int | None = None
             task_state = prior_state
@@ -1103,15 +1095,6 @@ class ControllerTransitions:
                 ):
                     task_state = cluster_pb2.TASK_STATE_PENDING
                     terminal_ms = None
-
-            # Clear stale counters when the task is retried so that
-            # get_job_status() does not double-count values from the
-            # previous attempt.
-            if task_state == cluster_pb2.TASK_STATE_PENDING:
-                cur.execute(
-                    "UPDATE tasks SET counters_json = NULL WHERE task_id = ?",
-                    (update.task_id.to_wire(),),
-                )
 
             cur.execute(
                 "UPDATE task_attempts SET state = ?, started_at_ms = COALESCE(started_at_ms, ?), "
@@ -2138,11 +2121,6 @@ class ControllerTransitions:
                         "UPDATE tasks SET resource_usage_proto = ? WHERE task_id = ?",
                         (usage_payload, update.task_id.to_wire()),
                     )
-                if update.counters:
-                    cur.execute(
-                        "UPDATE tasks SET counters_json = ? WHERE task_id = ?",
-                        (json.dumps(update.counters), update.task_id.to_wire()),
-                    )
                 if update.container_id is not None:
                     cur.execute(
                         "UPDATE tasks SET container_id = ? WHERE task_id = ?",
@@ -2201,15 +2179,6 @@ class ControllerTransitions:
                     ):
                         task_state = cluster_pb2.TASK_STATE_PENDING
                         terminal_ms = None
-
-                # Clear stale counters when the task is retried so that
-                # get_job_status() does not double-count values from the
-                # previous attempt.
-                if task_state == cluster_pb2.TASK_STATE_PENDING:
-                    cur.execute(
-                        "UPDATE tasks SET counters_json = NULL WHERE task_id = ?",
-                        (update.task_id.to_wire(),),
-                    )
 
                 cur.execute(
                     "UPDATE task_attempts SET state = ?, started_at_ms = COALESCE(started_at_ms, ?), "

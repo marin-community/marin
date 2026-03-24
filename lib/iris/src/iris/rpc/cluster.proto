@@ -246,7 +246,6 @@ message TaskStatus {
   bool can_be_scheduled = 17;         // Whether task is currently schedulable
   // field 18 was log_directory, removed
   string container_id = 19;           // Platform container identifier (Docker container ID, K8s pod name)
-  map<string, int64> counters = 20;   // User-defined counters aggregated from task code
 }
 
 // Record of a single task execution attempt
@@ -337,8 +336,6 @@ message JobStatus {
 
   // Diagnostic message for pending/failed jobs (e.g., "No workers match constraint: gpu=true")
   string pending_reason = 31;
-  // User-defined counters summed across all tasks
-  map<string, int64> counters = 32;
 }
 
 // JobAttempt message removed: Jobs don't have attempts - tasks do.
@@ -736,7 +733,6 @@ message Controller {
     // Delta log entries since last heartbeat (capped per heartbeat)
     repeated iris.logging.LogEntry log_entries = 9;
     string container_id = 10;         // Platform container identifier (Docker container ID, K8s pod name)
-    map<string, int64> counters = 11; // User-defined counters reported by task code
   }
 
 

@@ -87,7 +87,6 @@ def _apply_request_from_response(
                 resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
                 log_entries=list(entry.log_entries),
                 container_id=entry.container_id or None,
-                counters=dict(entry.counters) if entry.counters else {},
             )
         )
     return HeartbeatApplyRequest(

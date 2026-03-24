@@ -103,6 +103,13 @@ data loading issues, unclear multi-file stack traces.
   or unsatisfied resources -> mark `degraded` and notify user.
 - If same error repeats after one fix attempt, do not retry blindly; report to user.
 
+### Zephyr Counters
+
+Zephyr pipelines support user-defined counters (e.g. `documents_processed`, `bytes_written`).
+Counters appear in coordinator progress logs and in `JobStatus.counters`. When babysitting
+a Zephyr job, monitor counter advancement as an additional throughput signal. See
+**babysit-zephyr** for details.
+
 ### When to Escalate
 
 - Debug Zephyr pipeline issues -> **debug-zephyr-job**
