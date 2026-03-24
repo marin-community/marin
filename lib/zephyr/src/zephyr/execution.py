@@ -293,11 +293,24 @@ _NON_RETRYABLE_ERRORS = (ZephyrWorkerError, ValueError, TypeError, KeyError, Att
 
 class WorkerContext(Protocol):
     def get_shared(self, name: str) -> Any: ...
-    def increment_counter(self, name: str, value: int = 1) -> None: ...
-    def get_counter_snapshot(self) -> dict[str, int]: ...
+    def _increment_counter(self, name: str, value: int = 1) -> None: ...
+    def _get_counter_snapshot(self) -> dict[str, int]: ...
 
 
 _worker_ctx_var: ContextVar[ZephyrWorker | None] = ContextVar("zephyr_worker_ctx", default=None)
+
+_report_lock = threading.Lock()
+_last_reported: dict[str, dict[str, int]] = {}
+
+
+def _counters_changed_since_last_report(worker_id: str, current: dict[str, int]) -> bool:
+    """Return True if *current* differs from the last snapshot we reported for *worker_id*."""
+    with _report_lock:
+        prev = _last_reported.get(worker_id)
+        if prev == current:
+            return False
+        _last_reported[worker_id] = dict(current)
+        return True
 
 
 def zephyr_worker_ctx() -> WorkerContext:
@@ -939,12 +952,12 @@ class ZephyrWorker:
             )
         return self._shared_data_cache[name]
 
-    def increment_counter(self, name: str, value: int = 1) -> None:
+    def _increment_counter(self, name: str, value: int = 1) -> None:
         """Increment a named counter. Thread-safe, called from task code."""
         with self._counters_lock:
             self._counters[name] = self._counters.get(name, 0) + value
 
-    def get_counter_snapshot(self) -> dict[str, int]:
+    def _get_counter_snapshot(self) -> dict[str, int]:
         """Return a snapshot of current counters."""
         with self._counters_lock:
             return dict(self._counters)
@@ -987,10 +1000,8 @@ class ZephyrWorker:
                 # with fire-and-forget heartbeats.
                 # Send counters only when they've changed to avoid unnecessary
                 # coordinator state updates.
-                from zephyr.counters import counters_changed_since_last_report
-
-                snapshot = self.get_counter_snapshot()
-                send_counters = counters_changed_since_last_report(self._worker_id, snapshot)
+                snapshot = self._get_counter_snapshot()
+                send_counters = _counters_changed_since_last_report(self._worker_id, snapshot)
                 coordinator.heartbeat.remote(
                     self._worker_id,
                     snapshot if send_counters else None,
