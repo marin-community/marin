@@ -2958,3 +2958,425 @@ Run `E3` as the first topology-only change after two green direct baselines:
 Decision rule:
 - if `E3` fails while `E2b` passes, the first clean divergence is executor topology / executor-managed runtime pathing
 - if `E3` also passes, the remaining divergence is likely in the production envelope (`500` steps, checkpoint cadence, or resource pressure), not in GCS model loading or basic topology
+
+## 2026-03-24T20:02Z — TODO RESOLVE: why does rollout/vLLM resolve `MistralForCausalLM` for a Llama 3.1 8B artifact?
+
+This is still unresolved and should **not** be forgotten just because `E2b` succeeded.
+
+### The contradiction
+
+For the successful direct GCS probe, rollout logs still reported:
+- `INFO ... Resolved architecture: MistralForCausalLM`
+
+But the actual staged / source model metadata says the opposite:
+- GCS artifact:
+  - `gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f/config.json`
+- confirmed contents:
+  - `"architectures": ["LlamaForCausalLM"]`
+  - `"model_type": "llama"`
+
+Meanwhile the direct HF probe behaved differently:
+- direct HF small (`E1`) rollout logs reported:
+  - `Resolved architecture: LlamaForCausalLM`
+
+So we have a real loader-path discrepancy:
+1. HF model-id path -> `LlamaForCausalLM`
+2. GCS / staged-local-metadata path -> `MistralForCausalLM`
+
+### Why this is not closed
+
+It is true that:
+- `E2b` completed successfully
+- Marin currently patches `MistralForCausalLM -> LlamaForCausalLM` in the TPU inference registry
+- the presence of `MistralForCausalLM` did **not** correlate with immediate failure on `E2b`
+
+But that does **not** mean this is benign or understood.
+
+It still indicates one of the following:
+1. vLLM/tpu_inference is normalizing the local/staged metadata path onto a Mistral backend architecture key for Llama-family checkpoints.
+2. the `runai_streamer` / object-store path and the staged-local metadata path are not preserving architecture identity in the same way as the HF repo-id path.
+3. some upstream vLLM or TPU inference heuristic is keying off local path layout or a transformed config object rather than the raw HF `config.json` fields we inspected.
+
+Any of those could matter later for:
+- executor-topology runs
+- larger envelopes
+- future checkpoint families
+- correctness of hot-reload behavior
+- silent model-family mismatches that happen to "work" today
+
+### Current best evidence
+
+What is known:
+1. The artifact itself is correct Llama metadata.
+2. The direct GCS probe now stages metadata locally before inflight vLLM startup:
+   - [_prepare_vllm_inference_config](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/rollout_worker.py:300)
+   - rewrites remote `gs://...` to a local staged directory
+   - rewrites `load_format` from `runai_streamer` to `dummy`
+3. Even after that rewrite, rollout still logs `Resolved architecture: MistralForCausalLM`.
+4. The trainer-side Levanter config remains Llama because it is derived from the same HF metadata.
+5. Our own patch layer explicitly assumes this alias may occur:
+   - [vllm.py:160](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/environments/inference_ctx/vllm.py:160)
+   - [test_inference_ctx.py:346](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/tests/rl/test_inference_ctx.py:346)
+
+### Required follow-up work
+
+This is a **must-investigate-later** item, not background noise.
+
+Concrete next checks:
+1. Add explicit rollout startup logging of:
+   - staged local `config.json`
+   - `model_type`
+   - `architectures`
+   - `canonical_model_name`
+   - final `inference_config.model_name`
+   - final `load_format`
+2. Inspect the upstream vLLM / TPU inference model-selection code path that emits `Resolved architecture: ...` and determine exactly what input causes `MistralForCausalLM` to be selected.
+3. Compare the exact startup config object between:
+   - `E1` direct HF small
+   - `E2b` direct GCS small
+4. Determine whether the alias is:
+   - a harmless backend implementation choice, or
+   - a semantically incorrect architecture remap that only happens to work for this run.
+5. If the alias is harmless, codify that with a targeted test and an explanatory comment.
+6. If the alias is not harmless, fix the startup path so Llama artifacts resolve as Llama consistently across HF and GCS-backed launch paths.
+
+### Operational guidance for the next agent
+
+Do **not** reopen the already-fixed `E2b` regression based solely on this log line.
+
+Do treat this as a high-priority unresolved architecture-identity question that needs its own focused investigation once the main divergence matrix advances to `E3`.
+
+## 2026-03-24T20:04Z — launching E3 (`executor + GCS + small`) as the next clean topology probe
+
+User explicitly requested:
+1. kill any currently running RL jobs
+2. launch `E3`
+
+Cluster sweep result before launch:
+- no live `/ahmed/iris-rl-*` jobs were running
+- recent RL jobs under `/ahmed/iris-rl-*` are all terminal (`succeeded`, `failed`, or `killed`)
+- unrelated non-RL jobs were left untouched
+
+Purpose of `E3`:
+- change only launch topology relative to the now-green `E2b`
+- keep:
+  - regional GCS-backed model artifact
+  - small 5-step envelope
+  - `v5p-8` train/rollout placement
+  - the same Llama 3.1 8B instruct artifact and canonical model name
+- change:
+  - direct root/coordinator launch -> executor-wrapped RL step
+
+Planned `E3` configuration:
+- model source:
+  - `experiments.models.llama_3_1_8b_instruct`
+- topology:
+  - `executor_main(...)`
+  - `make_rl_step(...)`
+- trainer / rollout envelope:
+  - `num_train_steps=5`
+  - `train_batch_size=64`
+  - `per_device_parallelism=16`
+  - `max_input_tokens=512`
+  - `max_output_tokens=512`
+  - `n_prompts=4`
+  - `n_generations_per_prompt=16`
+  - `num_rollout_workers=1`
+  - `weight_transfer_sync_interval_steps=1`
+  - `max_weight_transfer_wait_time=300`
+  - `inflight_weight_updates=False`
+- TPU placement:
+  - `train_tpu_type="v5p-8"`
+  - `inference_tpu_type="v5p-8"`
+- launcher region:
+  - explicit root submit in `us-central1`
+  - executor helper should keep the inner step and RL workers in the same concrete RL region
+
+Success criteria:
+1. root executor job starts
+2. model artifact prereq resolves / reuses cache
+3. nested RL coordinator starts
+4. train child starts
+5. rollout child starts
+6. first weight transfer completes
+7. first rollout writes
+8. trainer advances at least one step
+
+Failure interpretation rule:
+- if `E3` fails while `E2b` passed, the first clean divergence is executor topology / executor-managed runtime pathing, not GCS artifact loading itself
+
+Submission details:
+- root job id:
+  - `/ahmed/iris-rl-e3-exec-gcs-small-20260324-130512`
+- root submit command:
+  - `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name iris-rl-e3-exec-gcs-small-20260324-130512 --region us-central1 -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- uv run python experiments/exp_iris_rl_regression_executor_gcs_small.py`
+- monitoring state file:
+  - `scratch/20260324-1305_e3_state.json`
+
+Immediate post-submit state:
+- root job exists and is currently `JOB_STATE_PENDING`
+- current pending reason:
+  - `Scheduler: Insufficient CPU (need 0.5 cores, available 0 cores) - 1 worker(s)`
+  - constraints include `region`, `preemptible`, `reservation-job`
+  - autoscaler detail:
+    - `no_capacity: cpu_vm_e2_highmem_2_ondemand-us-central1-a=at_max_slices`
+
+Interpretation:
+- this is the same class of launcher-capacity wait seen earlier on `E1`
+- no code-level signal yet
+- nested executor/coordinator/train/rollout jobs do not exist yet because the root launcher has not started
+
+Next check:
+1. wait for the root CPU launcher to clear placement
+2. once it starts, verify whether the executor step reuses the cached model artifact and materializes the nested RL coordinator
+
+## 2026-03-24T20:22Z — E3 cleared the root barrier and reached the nested coordinator boundary
+
+First real monitor cadence after launch changed the picture materially.
+
+Current live job tree:
+- root `/ahmed/iris-rl-e3-exec-gcs-small-20260324-130512`:
+  - `JOB_STATE_RUNNING`
+- executor child:
+  - `/ahmed/iris-rl-e3-exec-gcs-small-20260324-130512/rl_testing-exec-gcs-small-20260324-201951_dbbb33f0-b01858e8`
+  - `JOB_STATE_RUNNING`
+  - `preemption_count=1`
+- nested RL coordinator:
+  - `/ahmed/iris-rl-e3-exec-gcs-small-20260324-130512/rl_testing-exec-gcs-small-20260324-201951_dbbb33f0-b01858e8/rl-exec-gcs-small-20260324-201951`
+  - `JOB_STATE_PENDING`
+
+Current pending reason on the nested coordinator:
+- `Scheduler: Insufficient CPU (need 1 cores, available 0.5 cores)`
+- constraints still include `region`, `preemptible`, `reservation-job`
+- autoscaler detail remains:
+  - `no_capacity: cpu_vm_e2_highmem_2_ondemand-us-central1-a=at_max_slices`
+
+Interpretation:
+- `E3` has already passed the first executor-topology boundary:
+  - root launcher started
+  - executor step materialized
+  - nested RL coordinator job was submitted
+- so the current blocker is no longer the outer root launcher
+- the next startup barrier is the nested RL coordinator CPU placement
+
+What is not known yet:
+- whether the model artifact prereq has already been resolved/reused inside the executor child
+- whether the nested coordinator will start cleanly once CPU capacity clears
+- whether the executor-wrapped small path will diverge after this point relative to the green `E2b` direct path
+
+Next monitor target:
+1. nested RL coordinator transitions from `PENDING` -> `RUNNING`
+2. then verify appearance of train / rollout TPU child jobs
+
+## 2026-03-24T20:43Z — E3 progressed again: nested coordinator is now running; train and rollout exist but are TPU-capacity blocked
+
+Fresh Iris queries show that the earlier dashboard confusion was partly timing.
+
+Current live tree:
+- root:
+  - `/ahmed/iris-rl-e3-exec-gcs-small-20260324-130512`
+  - `running`
+- executor child:
+  - `/ahmed/iris-rl-e3-exec-gcs-small-20260324-130512/rl_testing-exec-gcs-small-20260324-201951_dbbb33f0-b01858e8`
+  - `running`
+- nested RL coordinator:
+  - `/ahmed/iris-rl-e3-exec-gcs-small-20260324-130512/rl_testing-exec-gcs-small-20260324-201951_dbbb33f0-b01858e8/rl-exec-gcs-small-20260324-201951`
+  - `running`
+- train child:
+  - `/ahmed/iris-rl-e3-exec-gcs-small-20260324-130512/rl_testing-exec-gcs-small-20260324-201951_dbbb33f0-b01858e8/rl-exec-gcs-small-20260324-201951/rl-exec-gcs-small-20260324-201951-train`
+  - `pending`
+- rollout child:
+  - `/ahmed/iris-rl-e3-exec-gcs-small-20260324-130512/rl_testing-exec-gcs-small-20260324-201951_dbbb33f0-b01858e8/rl-exec-gcs-small-20260324-201951/rl-exec-gcs-small-20260324-201951-rollout-0`
+  - `pending`
+
+Current train / rollout pending reason:
+- `Scheduler: Insufficient TPUs (need 4, available 0)`
+- `Autoscaler: no_capacity: tpu_v5p_8-us-central1-a=backoff`
+
+Important interpretation:
+- the earlier screenshot that showed no train / rollout children was not evidence that executor topology removed them
+- at that moment, the tree had simply not progressed far enough yet
+- now the executor-wrapped RL path has reached the exact point where the nested coordinator has submitted both TPU children
+
+One additional live signal from the executor-step bug report:
+- executor child had one earlier worker failure:
+  - `Worker ... failed: Request timed out`
+- Iris retried it and the current attempt is healthy
+- this is the same class of transient launcher retry already seen on earlier RL runs and is not, by itself, the current blocker
+
+Next monitor target:
+1. TPU capacity clears for train / rollout
+2. verify first weight transfer and first rollout generation on the executor-wrapped small path
+
+## 2026-03-24T21:02Z — E3 postmortem: the RL run itself succeeded; the executor wrapper failed afterward while trying to serialize an `IrisJobHandle`
+
+Final terminal state:
+- root `/ahmed/iris-rl-e3-exec-gcs-small-20260324-130512`:
+  - `failed`
+  - root error:
+    - `RuntimeError: 1 step(s) failed`
+- executor child:
+  - `/ahmed/iris-rl-e3-exec-gcs-small-20260324-130512/rl_testing-exec-gcs-small-20260324-201951_dbbb33f0-b01858e8`
+  - `failed`
+  - real executor-child error:
+    - `TypeError: Object of type IrisJobHandle is not JSON serializable`
+
+Critical descendant facts:
+- nested RL coordinator:
+  - `succeeded`
+- train child:
+  - `succeeded`
+- rollout child:
+  - `succeeded`
+
+This means the executor-wrapped small probe reached full end-to-end RL success:
+- model artifact cache reuse worked
+- executor topology worked
+- nested coordinator ran successfully
+- train finished
+- rollout finished
+
+The only thing that failed was the executor step's post-run artifact-save behavior.
+
+### Exact failure chain
+
+The executor remote wrapper expects the remote step function to return a JSON-serializable artifact.
+
+Relevant code path:
+- [_run_rl_experiment_step](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/rl_experiment_utils.py:320)
+  - currently returns:
+    - `RLJob(job_config).run(config.name)`
+- [RLJob.run](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/rl_job.py:189)
+  - returns the Iris/Fray job handle after waiting:
+    - `return handle`
+- [_run_remote_step](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/execution/step_runner.py:355)
+  - wraps the remote fn and always does:
+    - `result = raw_fn(out_path)`
+    - `Artifact.save(result, out_path)`
+- [Artifact.save](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/execution/artifact.py:43)
+  - falls back to `json.dumps(artifact)` for non-dataclass, non-pydantic objects
+
+So the executor step returned an `IrisJobHandle`, and then the wrapper attempted:
+- `json.dumps(IrisJobHandle(...))`
+- which raised:
+  - `TypeError: Object of type IrisJobHandle is not JSON serializable`
+
+### Why this matters for the experiment matrix
+
+This is a strong result, even though the root job is marked failed.
+
+`E3` should be interpreted as:
+- RL runtime / topology result:
+  - **pass**
+- executor artifact contract result:
+  - **fail**
+
+In other words:
+- executor topology did **not** introduce a train/rollout runtime regression on the small GCS-backed path
+- the first executor-only divergence is narrower:
+  - the executor step contract currently assumes the step returns a serializable artifact
+  - the RL step returns a live job handle object instead
+
+### Scope of the bug
+
+This failure is not:
+- a GCS model-loading failure
+- a rollout startup failure
+- a train/rollout orchestration failure
+- a TPU runtime failure
+
+This failure **is**:
+- an executor-step return-value bug at the remote artifact-save boundary
+
+### Immediate next fix
+
+Smallest correct fix:
+1. change [_run_rl_experiment_step](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/rl_experiment_utils.py:320) so it does **not** return the live `JobHandle`
+2. instead return a serializable artifact, for example:
+   - `PathMetadata(config.output_path)`, or
+   - `{"status": "completed", "run_id": config.name}`, or
+   - `None` if the executor framework treats that sanely
+
+The key requirement is:
+- executor-managed RL steps must not return `IrisJobHandle` objects across the artifact-save boundary
+
+### Updated matrix interpretation after E3
+
+`E1` direct + HF + small:
+- pass
+
+`E2b` direct + GCS + small:
+- pass
+
+`E3` executor + GCS + small:
+- RL runtime path passes
+- executor wrapper fails after success because of handle serialization
+
+So the first clean executor-only bug is:
+- **step return artifact contract**, not RL orchestration/runtime correctness
+
+### Plain-English restatement
+
+What happened in `E3` was **not**:
+- "train or rollout crashed"
+- "the coordinator failed to run RL"
+- "executor topology broke RL itself"
+
+What happened was:
+1. the executor child launched the RL coordinator job
+2. the RL coordinator launched train + rollout
+3. train + rollout both finished successfully
+4. the RL coordinator finished successfully
+5. control returned back to the executor child
+6. the executor child then tried to save the *return value* of the RL step as a JSON artifact
+7. that return value was an `IrisJobHandle`
+8. JSON serialization of `IrisJobHandle` failed
+9. therefore the executor child was marked failed
+10. therefore the root executor job was marked failed
+
+So:
+- the **RL work** succeeded
+- the **executor bookkeeping after RL completed** failed
+
+### Concrete timeline
+
+These timestamps make the sequencing explicit:
+
+1. Train finished successfully:
+   - `2026-03-24T20:56:04.047Z`
+2. Rollout finished successfully:
+   - `2026-03-24T20:56:04.368Z`
+3. Nested RL coordinator finished successfully:
+   - `2026-03-24T20:56:14.810Z`
+4. Executor child hit the serialization traceback:
+   - logs show traceback at about `2026-03-24T20:56:17Z`
+5. Executor child reached terminal failed state:
+   - `2026-03-24T20:56:19.813Z`
+6. Root executor job then failed because one step failed:
+   - `2026-03-24T20:56:34.807Z`
+
+This ordering matters:
+- if train/rollout had been the real failure, they would have finished **after** the executor-child failure or would themselves be marked failed
+- instead, they both finished **before** the executor-child failure and are marked `succeeded`
+
+### Why W&B looked healthy while Iris root looked failed
+
+The W&B runs correspond to the nested RL subtree:
+- `exec-gcs-small-20260324-201951-train`
+- `exec-gcs-small-20260324-201951-rollout-0`
+
+Those runs are healthy because the RL subtree really was healthy.
+
+The Iris root job looked failed because Iris was reporting the outer executor wrapper job, which failed after RL completion when it tried to serialize the returned handle.
+
+So the apparent contradiction:
+- "W&B looks successful"
+- "Iris root says failed"
+
+is explained by two different layers finishing in two different states:
+- inner RL layer: success
+- outer executor wrapper layer: failure
+
+### Most precise single-sentence summary
+
+`E3` proved that executor-wrapped RL works on the small GCS-backed path, but the executor step is currently unusable because it returns a non-serializable `IrisJobHandle` and then crashes while saving that return value as an artifact.
