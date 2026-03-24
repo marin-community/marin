@@ -103,5 +103,4 @@ def fuzzy_dedup_steps() -> list[StepSpec]:
 
 if __name__ == "__main__":
     configure_logging(logging.INFO)
-    # StepRunner().run(fuzzy_dedup_steps())
     StepRunner().run(exact_dedup_steps())
