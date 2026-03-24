@@ -13,11 +13,11 @@
 # limitations under the License.
 
 """
-Fine-tunes Qwen3-4B (Qwen/Qwen3-4B) on the self-instilled OpenThoughts4 Science dataset
-(teetone/qwen3_4b_openthoughts4_science26K_instill_n8_valredundancy3_round1).
+Fine-tunes Qwen3-4B (Qwen/Qwen3-4B) on the self-instilled OpenThoughts3 Math dataset
+(teetone/qwen3_4b_openthoughts3_math53K_instill_n8_valredundancy5_round1).
 
-This is a self-distillation experiment using Qwen3-4B's own generations on science problems,
-with n=8 generations per question and validation redundancy 3.
+This is a self-distillation experiment using Qwen3-4B's own generations on math problems,
+with n=8 generations per question and validation redundancy 5.
 """
 import dataclasses
 import math
@@ -37,24 +37,24 @@ from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
-EXPERIMENT_NAME = "exp_sft_qwen3_4b_selfinstill_ot4_science26k_n8_vr3_round1"
+EXPERIMENT_NAME = "exp_sft_qwen3_4b_selfinstill_ot3_math53k_n8_vr5_round1"
 
 # Dataset configuration
-DATASET_ID = "teetone/qwen3_4b_openthoughts4_science26K_instill_n8_valredundancy3_round1"
-DATASET_SHORT_NAME = "qwen3_4b_ot4_science26k_n8_vr3_round1"
-DATASET_SIZE = 22_403
+DATASET_ID = "teetone/qwen3_4b_openthoughts3_math53K_instill_n8_valredundancy5_round1"
+DATASET_SHORT_NAME = "qwen3_4b_ot3_math53k_n8_vr5_round1"
+DATASET_SIZE = 21_098
 
 dataset_config = INSTRUCTION_DATASET_NAME_TO_CONFIG[DATASET_ID]
 dataset = get_instruction_dataset(DATASET_ID, splits=dataset_config.splits)
 
-tokenized_selfinstill_science = default_tokenize(
+tokenized_selfinstill_math = default_tokenize(
     name=f"{DATASET_SHORT_NAME}_qwen3_4b_tokenizer",
     dataset=dataset / "**/*.jsonl.gz",
     tokenizer=qwen3_4b_tokenizer,
     format=ChatLmDatasetFormat(chat_template=QWEN_3_CHAT_TEMPLATE),
 )
 
-tokenized_datasets = {DATASET_SHORT_NAME: tokenized_selfinstill_science}
+tokenized_datasets = {DATASET_SHORT_NAME: tokenized_selfinstill_math}
 mixture_weights = {DATASET_SHORT_NAME: DATASET_SIZE}
 
 # Training configuration
@@ -68,7 +68,6 @@ NUM_TRAIN_STEPS = 4000
 
 # RESOURCES = ResourceConfig.with_tpu("v5p-16")
 RESOURCES = ResourceConfig.with_tpu("v4-64")
-# RESOURCES = ResourceConfig.with_tpu("v4-32")
 
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,
@@ -110,14 +109,14 @@ qwen3_4b_32k_tokens = dataclasses.replace(
     cross_entropy_block_size=32000,  # Process vocab in chunks to reduce memory during loss computation
 )
 
-exp_instilloracle_sft_qwen3_4b_selfinstill_ot4_science26k_n8_vr3_round1 = default_sft(
+exp_instilloracle_sft_qwen3_4b_selfinstill_ot3_math53k_n8_vr5_round1 = default_sft(
     name=EXPERIMENT_NAME,
     tokenized=mixture_config,
     model_config=qwen3_4b_32k_tokens,
     sft_config=mixture_sft_config,
-    tags=["qwen", "qwen3-4b", "openthoughts4", "science", "sft", "self-distillation"],
+    tags=["qwen", "qwen3-4b", "openthoughts3", "math", "sft", "self-distillation"],
 )
 
 
 if __name__ == "__main__":
-    executor_main(steps=[exp_instilloracle_sft_qwen3_4b_selfinstill_ot4_science26k_n8_vr3_round1])
+    executor_main(steps=[exp_instilloracle_sft_qwen3_4b_selfinstill_ot3_math53k_n8_vr5_round1])
