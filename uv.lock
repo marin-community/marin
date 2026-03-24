@@ -5252,7 +5252,7 @@ requires-dist = [
     { name = "jax", extras = ["tpu"], marker = "extra == 'tpu'", specifier = "==0.8.0" },
     { name = "jaxopt", specifier = ">=0.8.3" },
     { name = "levanter", extras = ["serve"], editable = "lib/levanter" },
-    { name = "litellm", specifier = ">=1.0.0" },
+    { name = "litellm", specifier = "==1.81.5" },
     { name = "lm-eval", extras = ["math"], marker = "extra == 'evalchemy'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "lm-eval", extras = ["math", "api"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "lxml", extras = ["html-clean"] },

@@ -75,17 +75,25 @@ class VLLMConfig(InferenceConfig):
 
     Args:
         model: Path to model checkpoint or HuggingFace model ID for local loading.
+            Remote object-store URIs like `gs://...` are also supported.
         tensor_parallel_size: Number of GPUs/TPUs for tensor parallelism.
         max_model_len: Maximum sequence length for vLLM.
         gpu_memory_utilization: Fraction of GPU memory to use.
+        load_format: Optional vLLM load format override. If unset, remote object-store
+            model URIs default to `runai_streamer`.
         tpu_type: TPU type for resource allocation (e.g. "v6e-8").
+        disk: Ephemeral disk request for TPU workers (e.g. "200g").
+        ram: Memory request for TPU workers (e.g. "256g").
     """
 
     tensor_parallel_size: int = 1
     max_model_len: int = 4096
     gpu_memory_utilization: float = 0.9
+    load_format: str | None = None
     tpu_type: str = "v6e-8"
+    disk: str = "50g"
+    ram: str = "128g"
 
     @property
     def resources(self) -> ResourceConfig:
-        return ResourceConfig.with_tpu(self.tpu_type)
+        return ResourceConfig.with_tpu(self.tpu_type, disk=self.disk, ram=self.ram)

@@ -8,11 +8,14 @@ from __future__ import annotations
 import gzip
 import json
 import re
+import sys
+import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import marin.alignment.llm_client as llm_client_module
 from marin.alignment.coverage import (
     compute_coverage_stats,
     generate_covering_configs,
@@ -470,6 +473,7 @@ class TestInferenceConfig:
         assert config.tensor_parallel_size == 1
         assert config.max_model_len == 4096
         assert config.gpu_memory_utilization == 0.9
+        assert config.load_format is None
 
     def test_vllm_config_custom(self):
         config = VLLMConfig(model="my-model", tensor_parallel_size=4, max_model_len=8192, tpu_type="v5p-32")
@@ -604,6 +608,42 @@ class TestLLMClient:
         assert len(responses) == 2
         assert responses[0].content == "Response 1"
         assert responses[1].content == "Response 2"
+
+    def test_get_or_create_vllm_engine_defaults_remote_models_to_runai_streamer(self, monkeypatch):
+        captured_kwargs = {}
+
+        class FakeLLM:
+            def __init__(self, **kwargs):
+                captured_kwargs.update(kwargs)
+
+            def get_tokenizer(self):
+                return MagicMock()
+
+        monkeypatch.setattr(llm_client_module, "_vllm_engine_cache", {})
+        monkeypatch.setitem(sys.modules, "vllm", types.SimpleNamespace(LLM=FakeLLM))
+
+        llm_client_module.get_or_create_vllm_engine(VLLMConfig(model="gs://bucket/model"))
+
+        assert captured_kwargs["load_format"] == "runai_streamer"
+
+    def test_get_or_create_vllm_engine_preserves_explicit_load_format(self, monkeypatch):
+        captured_kwargs = {}
+
+        class FakeLLM:
+            def __init__(self, **kwargs):
+                captured_kwargs.update(kwargs)
+
+            def get_tokenizer(self):
+                return MagicMock()
+
+        monkeypatch.setattr(llm_client_module, "_vllm_engine_cache", {})
+        monkeypatch.setitem(sys.modules, "vllm", types.SimpleNamespace(LLM=FakeLLM))
+
+        llm_client_module.get_or_create_vllm_engine(
+            VLLMConfig(model="gs://bucket/model", load_format="runai_streamer_sharded")
+        )
+
+        assert captured_kwargs["load_format"] == "runai_streamer_sharded"
 
 
 # ===========================================================================

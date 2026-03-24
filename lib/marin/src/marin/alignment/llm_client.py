@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 import litellm
 
@@ -94,16 +95,30 @@ def get_or_create_vllm_engine(config: VLLMConfig):
     except ImportError as exc:
         raise ImportError("vLLM is required for local model inference. Install with: pip install vllm") from exc
 
+    llm_kwargs = {
+        "model": config.model,
+        "max_model_len": config.max_model_len,
+        "tensor_parallel_size": config.tensor_parallel_size,
+        "gpu_memory_utilization": config.gpu_memory_utilization,
+    }
+    load_format = _resolve_vllm_load_format(config)
+    if load_format is not None:
+        llm_kwargs["load_format"] = load_format
+
     logger.info("Creating vLLM engine for model: %s", config.model)
-    llm = LLM(
-        model=config.model,
-        max_model_len=config.max_model_len,
-        tensor_parallel_size=config.tensor_parallel_size,
-        gpu_memory_utilization=config.gpu_memory_utilization,
-    )
+    llm = LLM(**llm_kwargs)
     tokenizer = llm.get_tokenizer()
     _vllm_engine_cache[config] = (llm, tokenizer)
     return llm, tokenizer
+
+
+def _resolve_vllm_load_format(config: VLLMConfig) -> str | None:
+    if config.load_format is not None:
+        return config.load_format
+    parsed = urlparse(config.model)
+    if parsed.scheme in {"gs", "s3"}:
+        return "runai_streamer"
+    return None
 
 
 def _chat_vllm(

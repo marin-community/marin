@@ -27,6 +27,7 @@ from marin.utils import get_directory_friendly_name
 class ModelConfig:
     hf_repo_id: str
     hf_revision: str
+    zephyr_max_parallelism: int = 8
 
 
 MODEL_OUTPUT_SUBDIR = "models"
@@ -44,6 +45,7 @@ def download_model_step(model_config: ModelConfig) -> ExecutorStep:
             gcs_output_path=this_output_path(),
             wait_for_completion=True,
             hf_repo_type_prefix="",
+            zephyr_max_parallelism=model_config.zephyr_max_parallelism,
         ),
         # must override because it because if we don't then it will end in a hash
         # if it ends in a hash, then we cannot determine the local path
@@ -93,6 +95,22 @@ llama_3_3_70b_instruct = download_model_step(
     ModelConfig(
         hf_repo_id="meta-llama/Llama-3.3-70B-Instruct",
         hf_revision="6f6073b",
+    )
+)
+
+mixtral_8x7b = download_model_step(
+    ModelConfig(
+        hf_repo_id="mistralai/Mixtral-8x7B-v0.1",
+        hf_revision="fc7ac94",
+        zephyr_max_parallelism=2,
+    )
+)
+
+mixtral_8x7b_instruct = download_model_step(
+    ModelConfig(
+        hf_repo_id="mistralai/Mixtral-8x7B-Instruct-v0.1",
+        hf_revision="eba9230",
+        zephyr_max_parallelism=2,
     )
 )
 

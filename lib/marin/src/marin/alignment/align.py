@@ -48,7 +48,13 @@ def _model_name(model: InferenceConfig | str) -> str:
 def _llm_env_vars() -> dict[str, str]:
     """Collect LLM API keys from the environment for forwarding to child jobs."""
     env_vars: dict[str, str] = {}
-    for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+    for key in (
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "HF_HOME",
+        "HF_HUB_CACHE",
+        "HUGGINGFACE_HUB_CACHE",
+    ):
         val = os.environ.get(key)
         if val:
             env_vars[key] = val
@@ -65,6 +71,11 @@ def _serialize_inference_config(config: InferenceConfig) -> dict:
     else:
         raise ValueError(f"Unknown InferenceConfig type: {type(config)}")
     return d
+
+
+def _inference_dependency_groups(model: InferenceConfig) -> list[str]:
+    """Dependency groups required for a given inference backend."""
+    return ["cpu"] if model.is_api else ["vllm", "tpu"]
 
 
 @dataclass(frozen=True)
@@ -216,7 +227,7 @@ def align(
         fn=remote(
             generate_prompts_from_spec,
             resources=prompts_resources,
-            pip_dependency_groups=["cpu"] if not ideation_is_local else [],
+            pip_dependency_groups=["cpu"] if not ideation_is_local else ["vllm", "tpu"],
             env_vars=_llm_env_vars(),
         ),
         config=PromptGenConfig(
@@ -243,7 +254,7 @@ def align(
         fn=remote(
             generate_responses,
             resources=teacher_model.resources,
-            pip_dependency_groups=["cpu"] if teacher_model.is_api else [],
+            pip_dependency_groups=_inference_dependency_groups(teacher_model),
             env_vars=_llm_env_vars(),
         ),
         config=ResponseGenConfig(
@@ -265,7 +276,7 @@ def align(
         fn=remote(
             generate_responses,
             resources=rejected_model.resources,
-            pip_dependency_groups=["cpu"] if rejected_model.is_api else [],
+            pip_dependency_groups=_inference_dependency_groups(rejected_model),
             env_vars=_llm_env_vars(),
         ),
         config=ResponseGenConfig(
@@ -288,7 +299,7 @@ def align(
         fn=remote(
             judge_and_build_pairs,
             resources=judge_resources,
-            pip_dependency_groups=["cpu"] if not judge_is_local else [],
+            pip_dependency_groups=["cpu"] if not judge_is_local else ["vllm", "tpu"],
             env_vars=_llm_env_vars(),
         ),
         config=JudgePairConfig(
