@@ -1229,6 +1229,35 @@ class ControllerDB:
             )
             return rows[0].role if rows else "user"
 
+    def set_user_gcp_email(self, user_id: str, gcp_email: str) -> None:
+        """Store the GCP email from OAuth login."""
+        self.execute("UPDATE users SET gcp_email = ? WHERE user_id = ?", (gcp_email, user_id))
+
+    def get_user_gcp_email(self, user_id: str) -> str | None:
+        with self.snapshot() as q:
+            rows = q.raw(
+                "SELECT gcp_email FROM users WHERE user_id = ?",
+                (user_id,),
+                decoders={"gcp_email": lambda x: str(x) if x is not None else None},
+            )
+            return rows[0].gcp_email if rows else None
+
+    def set_user_service_account(self, user_id: str, service_account: str) -> None:
+        """Set the GCP service account for task impersonation."""
+        self.execute(
+            "UPDATE users SET gcp_service_account = ? WHERE user_id = ?",
+            (service_account or None, user_id),
+        )
+
+    def get_user_service_account(self, user_id: str) -> str | None:
+        with self.snapshot() as q:
+            rows = q.raw(
+                "SELECT gcp_service_account FROM users WHERE user_id = ?",
+                (user_id,),
+                decoders={"gcp_service_account": lambda x: str(x) if x is not None else None},
+            )
+            return rows[0].gcp_service_account if rows else None
+
     def next_sequence(self, key: str, *, cur: TransactionCursor) -> int:
         row = cur.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
         if row is None:
