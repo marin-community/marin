@@ -71,6 +71,7 @@ function ViewPage() {
   const reverse = urlParams.get("reverse");
   const highlights = parseHighlights(urlParams.get("highlights"));
   const showOnlyHighlights = urlParams.get("showOnlyHighlights");
+  const layout = urlParams.get("layout") || "stacked"; // "stacked" or "columns"
 
   // State
   const [error, setError] = useState(null);
@@ -84,10 +85,15 @@ function ViewPage() {
     }
   }, [pathsResult.error]);
 
+  // Stable key for paths to avoid infinite re-render from array identity changes
+  const pathsKey = JSON.stringify(paths);
+
   // Fetch data from backend (payload for each path)
+  // Only refetch when paths, offset, or count change — not on layout/filter/sort changes
   useEffect(() => {
     const fetchData = async () => {
-      const promises = paths.map(async (path) => {
+      const currentPaths = JSON.parse(pathsKey);
+      const promises = currentPaths.map(async (path) => {
         try {
           const response = await axios.get(apiViewUrl({path, offset, count}));
           const payload = checkJsonResponse(response, setError);
@@ -103,8 +109,7 @@ function ViewPage() {
       await Promise.all(promises);
     };
     fetchData();
-    // TODO: For some reason, `paths` causes infinite rendering loop, so we have to use `location`
-  }, [location, offset, count]);
+  }, [pathsKey, offset, count]);
 
   if (error) {
     return renderError(error);
@@ -126,8 +131,9 @@ function ViewPage() {
     {renderSort(sort, reverse, updateUrlParams)}
     {renderHighlights(highlights, showOnlyHighlights, updateUrlParams)}
     {renderPaths({paths, payloads, updateUrlParams})}
+    {paths.length > 1 && renderLayoutToggle(layout, updateUrlParams)}
     <hr />
-    {renderPayloads({paths, payloads, offset, filters, sort, reverse, highlights, showOnlyHighlights, updateUrlParams})}
+    {renderPayloads({paths, payloads, offset, filters, sort, reverse, highlights, showOnlyHighlights, updateUrlParams, layout})}
   </div>);
 }
 
@@ -577,8 +583,63 @@ function highlightsMatches(highlights, itemKey) {
  * Recursively render `item`, which is an arbitrary JSON object.
  * `key` references `item`, so that when people click on part of an item, we can modify the key.
  */
+function CollapsibleObject({ item, itemKey, highlights, showOnlyHighlights, updateUrlParams, depth, startCollapsed }) {
+  const [collapsed, setCollapsed] = React.useState(startCollapsed);
+
+  if (collapsed) {
+    const keyCount = Object.keys(item).length;
+    const preview = Array.isArray(item) ? `[${keyCount} items]` : `{${keyCount} keys}`;
+    return (
+      <span
+        onClick={() => setCollapsed(false)}
+        style={{ cursor: "pointer", color: "#1976d2", fontSize: 13 }}
+        title="Click to expand"
+      >
+        {preview} &#x25B6;
+      </span>
+    );
+  }
+
+  const rows = Object.entries(item).map(([key, value], i) => {
+    const newItemKey = itemKey.concat([key]);
+
+    if (showOnlyHighlights && !highlightsMatches(highlights, newItemKey)) {
+      return null;
+    }
+
+    const renderedKey = Array.isArray(item) ? `[${key}]` : key;
+
+    return (<tr key={i}>
+      <td>{renderedKey}</td>
+      <td>:</td>
+      <td>{renderItem({item: value, itemKey: newItemKey, highlights, showOnlyHighlights, updateUrlParams, depth: depth + 1})}</td>
+    </tr>);
+  });
+
+  return (
+    <table className="item-table"><tbody>
+      {depth > 0 && (
+        <tr>
+          <td colSpan={3}>
+            <span
+              onClick={() => setCollapsed(true)}
+              style={{ cursor: "pointer", color: "#888", fontSize: 12 }}
+              title="Click to collapse"
+            >
+              &#x25BC; collapse
+            </span>
+          </td>
+        </tr>
+      )}
+      {rows}
+    </tbody></table>
+  );
+}
+
+const COLLAPSE_DEPTH = 4;
+
 function renderItem(args) {
-  const {item, itemKey, highlights, showOnlyHighlights, updateUrlParams} = args;
+  const {item, itemKey, highlights, showOnlyHighlights, updateUrlParams, depth = 0} = args;
 
   if (item === null) {
     return "<null>";
@@ -603,24 +664,18 @@ function renderItem(args) {
   }
 
   if (typeof item === "object") {
-    const rows = Object.entries(item).map(([key, value], i) => {
-      const newItemKey = itemKey.concat([key]);
-
-      // Only show if this is consistent with some path in highlight
-      if (showOnlyHighlights && !highlightsMatches(highlights, newItemKey)) {
-        return null;
-      }
-
-      const renderedKey = Array.isArray(item) ? `[${key}]` : key;
-
-      return (<tr key={i}>
-        <td>{renderedKey}</td>
-        <td>:</td>
-        <td>{renderItem({item: value, itemKey: newItemKey, highlights, showOnlyHighlights, updateUrlParams})}</td>
-      </tr>);
-    });
-
-    return <table className="item-table"><tbody>{rows}</tbody></table>;
+    const shouldCollapse = depth >= COLLAPSE_DEPTH;
+    return (
+      <CollapsibleObject
+        item={item}
+        itemKey={itemKey}
+        highlights={highlights}
+        showOnlyHighlights={showOnlyHighlights}
+        updateUrlParams={updateUrlParams}
+        depth={depth}
+        startCollapsed={shouldCollapse}
+      />
+    );
   }
 
   // Fallback - raw string
@@ -776,8 +831,28 @@ function renderItems(args) {
 /**
  * Render everything (assume Case 3).
  */
+function renderLayoutToggle(layout, updateUrlParams) {
+  const options = [
+    { value: "stacked", label: "Stacked" },
+    { value: "columns", label: "Side by side" },
+  ];
+  return (
+    <ButtonGroup size="small" style={{ marginTop: 8 }}>
+      {options.map(opt => (
+        <Button
+          key={opt.value}
+          variant={layout === opt.value ? "contained" : "outlined"}
+          onClick={() => updateUrlParams({ layout: opt.value })}
+        >
+          {opt.label}
+        </Button>
+      ))}
+    </ButtonGroup>
+  );
+}
+
 function renderPayloads(args) {
-  const {paths, payloads, offset, filters, sort, reverse, highlights, showOnlyHighlights, updateUrlParams} = args;
+  const {paths, payloads, offset, filters, sort, reverse, highlights, showOnlyHighlights, updateUrlParams, layout} = args;
 
   const rendered = [];
 
@@ -812,6 +887,66 @@ function renderPayloads(args) {
   const table = renderItems({paths, payloads, offset, filters, sort, reverse, highlights, showOnlyHighlights, updateUrlParams});
   if (table) {
     rendered.push(table);
+  }
+
+  const useColumns = layout === "columns" && rendered.length > 1;
+
+  if (useColumns) {
+    // Short label for each panel
+    const panelLabels = paths.slice(0, rendered.length).map(p => {
+      const parts = p.replace(/^gs:\/\//, "").split("/");
+      return parts.length > 1 ? parts.slice(0, 2).join("/") : parts[0];
+    });
+
+    return (
+      <div>
+        {/* Panel jump tabs */}
+        <div style={{
+          display: "flex",
+          gap: 4,
+          marginBottom: 8,
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}>
+          <span style={{ fontSize: 13, color: "#888", marginRight: 4 }}>Panels:</span>
+          {panelLabels.map((label, i) => (
+            <Chip
+              key={i}
+              label={`${i + 1}. ${label}`}
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                const el = document.getElementById(`side-panel-${i}`);
+                if (el) el.scrollIntoView({ behavior: "smooth", inline: "start", block: "nearest" });
+              }}
+              style={{ cursor: "pointer" }}
+            />
+          ))}
+          {rendered.length > 2 && (
+            <span style={{ fontSize: 12, color: "#aaa", marginLeft: 4 }}>
+              scroll horizontally to see all {rendered.length} panels
+            </span>
+          )}
+        </div>
+        {/* Scrollable panel container */}
+        <div className="side-by-side-container" style={{
+          display: "flex",
+          gap: 12,
+          alignItems: "stretch",
+          overflowX: "auto",
+          paddingBottom: 8,
+        }}>
+          {rendered.map((item, i) => (
+            <Paper className="block" id={`side-panel-${i}`} key={i} style={{
+              flex: "1 0 45vw",
+              minWidth: 500,
+              maxHeight: "80vh",
+              overflow: "auto",
+            }}>{item}</Paper>
+          ))}
+        </div>
+      </div>
+    );
   }
 
   return rendered.map((item, i) => <Paper className="block" key={i}>{item}</Paper>);
