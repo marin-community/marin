@@ -342,7 +342,11 @@ def _get_running_tasks_with_band_and_value(
                 task_id=row.task_id,
                 worker_id=wid,
                 band_sort_key=row.priority_band,
-                resource_value=resource_value(request.resources),
+                resource_value=resource_value(
+                    request.resources.cpu_millicores,
+                    request.resources.memory_bytes,
+                    get_gpu_count(request.resources.device) + get_tpu_count(request.resources.device),
+                ),
                 is_coscheduled=request.HasField("coscheduling"),
                 resources=request.resources,
             )
