@@ -127,11 +127,11 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     run_grug(run_config)
 
 
-RESOLVED_RUN_ID = _resolve_run_id("03_23_baseline_moe")
+RESOLVED_RUN_ID = _resolve_run_id("03_24_baseline_moe")
 
 
 baseline_moe = ExecutorStep(
-    name="grug/03_23_baseline_moe",
+    name="grug/03_24_baseline_moe",
     fn=run_grug_moe_trial,
     config=GrugMoeLaunchConfig(
         model=versioned(GRUG_MOE_TRIAL_MODEL),

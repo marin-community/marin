@@ -38,7 +38,6 @@ from levanter.utils.activation import ActivationFunctionEnum
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
 _GATED_NORM_RANK = 128
 _NUM_DENSE_LAYERS = 2
-_ROUTER_Z_LOSS_COEF = 0.001
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -71,6 +70,7 @@ class GrugModelConfig:
     num_kv_heads: int = 16
     head_dim: int | None = None
     max_seq_len: int = 4096
+    sliding_window: int = 4096
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.0
@@ -499,12 +499,18 @@ class Transformer(eqx.Module):
             mask = AttentionMask.causal()
 
         batch_spec = _batch_spec()
+        cfg = self.config
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
+        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
+        long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+
         moe_router_stats: list[dict[str, jax.Array]] = []
-        for block in self.blocks:
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, mask)
+        for i, block in enumerate(self.blocks):
+            layer_mask = long_mask if i % 4 == 3 else short_mask
+            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
             if router_stats:
                 moe_router_stats.append(router_stats)
 
@@ -555,7 +561,7 @@ class Transformer(eqx.Module):
         # No load-balancing loss; router z-loss only.
         num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
         rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
-        aux_loss = _ROUTER_Z_LOSS_COEF * rzl
+        aux_loss = self.config.router_z_loss_coef * rzl
         loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
         if return_router_metrics:
             summarized_metrics = _summarize_router_metrics(router_metrics)
