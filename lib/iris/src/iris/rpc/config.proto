@@ -363,8 +363,8 @@ message DefaultsConfig {
 message GcpAuthConfig {
   string project_id = 1;  // GCP project ID — users must have access to this project to log in
   // When true, non-admin users' tasks run with impersonated credentials
-  // scoped to their gcp_service_account. The worker VM's SA must have
-  // roles/iam.serviceAccountTokenCreator on each target SA.
+  // scoped to their GCP login email. The worker VM's SA must have
+  // roles/iam.serviceAccountTokenCreator on each target identity.
   bool enable_task_impersonation = 2;
 }
 

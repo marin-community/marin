@@ -328,7 +328,6 @@ def _build_pod_manifest(
         constraints=run_req.constraints,
         ports=run_req.ports,
         resources=run_req.resources if run_req.HasField("resources") else None,
-        impersonate_service_account=run_req.impersonate_service_account,
     )
     combined = {**config.task_env, **dict(run_req.environment.env_vars), **iris_env}
     env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]

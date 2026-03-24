@@ -81,14 +81,7 @@ message GetCurrentUserResponse {
   string role = 2;
   string display_name = 3;
   string gcp_email = 4;              // GCP email from OAuth login
-  string gcp_service_account = 5;    // SA to impersonate for tasks
 }
-
-message SetUserServiceAccountRequest {
-  string user_id = 1;
-  string gcp_service_account = 2;    // Empty string to clear
-}
-message SetUserServiceAccountResponse {}
 
 // --- Profiling ---
 // Shared by both ControllerService and WorkerService (controller proxies to worker).
@@ -1135,7 +1128,6 @@ service ControllerService {
   rpc RevokeApiKey(RevokeApiKeyRequest) returns (Empty);
   rpc ListApiKeys(ListApiKeysRequest) returns (ListApiKeysResponse);
   rpc GetCurrentUser(GetCurrentUserRequest) returns (GetCurrentUserResponse);
-  rpc SetUserServiceAccount(SetUserServiceAccountRequest) returns (SetUserServiceAccountResponse);
 
   // Provider status (direct-dispatch providers)
   rpc GetProviderStatus(Controller.GetProviderStatusRequest) returns (Controller.GetProviderStatusResponse);

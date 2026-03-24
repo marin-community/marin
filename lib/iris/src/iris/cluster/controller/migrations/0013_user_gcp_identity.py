@@ -8,6 +8,5 @@ def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
         ALTER TABLE users ADD COLUMN gcp_email TEXT;
-        ALTER TABLE users ADD COLUMN gcp_service_account TEXT;
     """
     )
