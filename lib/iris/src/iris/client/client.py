@@ -132,8 +132,7 @@ class JobFailedError(Exception):
 class JobAlreadyExists(Exception):
     """Raised when a job with the same name is already running."""
 
-    def __init__(self, job: "Job", message: str):
-        self.job = job
+    def __init__(self, message: str):
         super().__init__(message)
 
 
@@ -723,7 +722,7 @@ class IrisClient:
             )
         except ConnectError as e:
             if e.code == Code.ALREADY_EXISTS:
-                raise JobAlreadyExists(Job(self, job_id), str(e)) from e
+                raise JobAlreadyExists(str(e)) from e
             raise
 
         return Job(self, canonical_id)
