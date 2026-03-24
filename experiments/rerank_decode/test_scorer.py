@@ -73,6 +73,19 @@ def ground_truth_logprobs(reference_model, tokenizer, prompt: str, completion: s
     return total
 
 
+def prompt_logprobs(reference_model, tokenizer, prompt: str) -> float:
+    """Compute logprobs for prompt tokens (excluding the first, which has no conditioning)."""
+    ids = tokenizer.encode(prompt, add_special_tokens=False)
+    input_ids = torch.tensor([ids])
+    with torch.no_grad():
+        logits = reference_model(input_ids).logits[0]
+    log_probs = F.log_softmax(logits, dim=-1)
+    total = 0.0
+    for i in range(1, len(ids)):
+        total += log_probs[i - 1, ids[i]].item()
+    return total
+
+
 def test_single_completion(reference_model, tokenizer, kv_scorer):
     prompt = "The capital of France is"
     completion = " Paris, a beautiful city."
@@ -165,10 +178,9 @@ def test_vllm_single_completion(reference_model, tokenizer, vllm_scorer):
     completion = " Paris, a beautiful city."
 
     expected = ground_truth_logprobs(reference_model, tokenizer, prompt, completion)
-    actual = vllm_scorer.score(prompt, [completion])[0]
+    actual = vllm_scorer.score(prompt, [completion])[0] - prompt_logprobs(reference_model, tokenizer, prompt)
 
     assert abs(expected - actual) < 1.0, f"expected {expected:.4f}, got {actual:.4f}"
-
 
 
 @pytest.mark.timeout(600)
@@ -181,10 +193,10 @@ def test_vllm_multiple_completions(reference_model, tokenizer, vllm_scorer):
         for c in completions
     ]
     actual = vllm_scorer.score(prompt, completions)
+    offset = prompt_logprobs(reference_model, tokenizer, prompt)
 
     for i, (e, a) in enumerate(zip(expected, actual)):
-        assert abs(e - a) < 1.0, f"completion {i}: expected {e:.4f}, got {a:.4f}"
-
+        assert abs(e - (a - offset)) < 1.0, f"completion {i}: expected {e:.4f}, got {a - offset:.4f}"
 
 
 @pytest.mark.timeout(600)
@@ -194,10 +206,9 @@ def test_vllm_eos_token(reference_model, tokenizer, vllm_scorer):
     completion = eos
 
     expected = ground_truth_logprobs(reference_model, tokenizer, prompt, completion)
-    actual = vllm_scorer.score(prompt, [completion])[0]
+    actual = vllm_scorer.score(prompt, [completion])[0] - prompt_logprobs(reference_model, tokenizer, prompt)
 
     assert abs(expected - actual) < 1.0, f"expected {expected:.4f}, got {actual:.4f}"
-
 
 
 @pytest.mark.timeout(600)
@@ -207,10 +218,9 @@ def test_vllm_completion_with_eos(reference_model, tokenizer, vllm_scorer):
     completion = " 4" + eos
 
     expected = ground_truth_logprobs(reference_model, tokenizer, prompt, completion)
-    actual = vllm_scorer.score(prompt, [completion])[0]
+    actual = vllm_scorer.score(prompt, [completion])[0] - prompt_logprobs(reference_model, tokenizer, prompt)
 
     assert abs(expected - actual) < 1.0, f"expected {expected:.4f}, got {actual:.4f}"
-
 
 
 @pytest.mark.timeout(600)
@@ -224,15 +234,15 @@ def test_vllm_accept_then_score(reference_model, tokenizer, vllm_server):
     chunk1 = " time there"
     chunk2 = " was a dragon"
 
-    score1 = scorer.score(prompt, [chunk1])[0]
+    score1 = scorer.score(prompt, [chunk1])[0] - prompt_logprobs(reference_model, tokenizer, prompt)
     expected1 = ground_truth_logprobs(reference_model, tokenizer, prompt, chunk1)
     assert abs(expected1 - score1) < 1.0, f"chunk1: expected {expected1:.4f}, got {score1:.4f}"
 
     scorer.accept(prompt, chunk1)
-    score2 = scorer.score(prompt + chunk1, [chunk2])[0]
-    expected2 = ground_truth_logprobs(reference_model, tokenizer, prompt + chunk1, chunk2)
+    prompt2 = prompt + chunk1
+    score2 = scorer.score(prompt2, [chunk2])[0] - prompt_logprobs(reference_model, tokenizer, prompt2)
+    expected2 = ground_truth_logprobs(reference_model, tokenizer, prompt2, chunk2)
     assert abs(expected2 - score2) < 1.0, f"chunk2: expected {expected2:.4f}, got {score2:.4f}"
-
 
 
 @pytest.mark.timeout(600)
@@ -247,7 +257,7 @@ def test_vllm_accept_multiple_chunks(reference_model, tokenizer, vllm_server):
 
     current_prompt = prompt
     for chunk in chunks:
-        score = scorer.score(current_prompt, [chunk])[0]
+        score = scorer.score(current_prompt, [chunk])[0] - prompt_logprobs(reference_model, tokenizer, current_prompt)
         expected = ground_truth_logprobs(reference_model, tokenizer, current_prompt, chunk)
         assert abs(expected - score) < 1.0, f"'{chunk}': expected {expected:.4f}, got {score:.4f}"
 
