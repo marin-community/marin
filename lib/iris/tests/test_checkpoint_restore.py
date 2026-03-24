@@ -6,6 +6,7 @@ from pathlib import Path
 
 import time
 
+import pytest
 from iris.client.client import IrisClient, Job
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.providers.local.cluster import LocalCluster
@@ -59,6 +60,7 @@ class _IrisTestHelper:
         raise TimeoutError(f"Job {job.job_id} did not finish within {timeout}s")
 
 
+@pytest.mark.slow
 def test_checkpoint_restore():
     """Controller restart resumes from checkpoint: completed jobs visible, cluster functional."""
     config = load_config(DEFAULT_CONFIG)

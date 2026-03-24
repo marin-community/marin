@@ -17,6 +17,7 @@ makes the control flow easy to follow and debug.
 
 from __future__ import annotations
 
+import contextvars
 import dataclasses
 import json
 import logging
@@ -113,6 +114,15 @@ class StepRunner:
         if max_workers < 1:
             raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
 
+        # Capture the fray client on the calling thread so worker threads can
+        # inherit it explicitly.  This is more robust than contextvars.copy_context()
+        # alone because it survives process/thread-pool boundary edge cases.
+        from fray.v2.client import _current_client_var
+
+        caller_fray_client = _current_client_var.get()
+        if caller_fray_client is not None:
+            logger.info("StepRunner: captured fray client %s for worker threads", type(caller_fray_client).__name__)
+
         local_pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="marin-step-runner")
 
         # Keyed by output_path (guaranteed unique)
@@ -173,7 +183,13 @@ class StepRunner:
 
         def _do_launch(step: StepSpec) -> None:
             path = step.output_path
-            handle = self._launch_step(step, force_run_failed=force_run_failed, dry_run=dry_run, local_pool=local_pool)
+            handle = self._launch_step(
+                step,
+                force_run_failed=force_run_failed,
+                dry_run=dry_run,
+                local_pool=local_pool,
+                fray_client=caller_fray_client,
+            )
             if handle is not None:
                 running[path] = handle
             else:
@@ -214,7 +230,13 @@ class StepRunner:
             raise RuntimeError(f"{len(failures)} step(s) failed") from failures[0]
 
     def _launch_step(
-        self, step: StepSpec, *, force_run_failed: bool, dry_run: bool, local_pool: ThreadPoolExecutor
+        self,
+        step: StepSpec,
+        *,
+        force_run_failed: bool,
+        dry_run: bool,
+        local_pool: ThreadPoolExecutor,
+        fray_client: object | None = None,
     ) -> JobHandle | None:
         """Launch a single step. Returns None if skipped."""
         output_path = step.output_path
@@ -239,13 +261,27 @@ class StepRunner:
         if step.fn is None:
             raise ValueError(f"Step {step_name} has no callable fn")
 
+        # Explicitly propagate the fray client into worker threads.
+        # We use set_current_client() inside the worker rather than relying
+        # solely on contextvars.copy_context(), because the latter can
+        # silently lose state across certain thread-pool reuse patterns.
+        captured_client = fray_client
+
         def worker_fn():
-            run_step(step)
+            if captured_client is not None:
+                from fray.v2.client import set_current_client
+
+                with set_current_client(captured_client):
+                    run_step(step)
+            else:
+                run_step(step)
 
         worker_fn.__qualname__ = step_name
         worker_fn.__name__ = step_name
 
-        future = local_pool.submit(worker_fn)
+        # Also copy the full context for any other context vars (not just fray).
+        ctx = contextvars.copy_context()
+        future = local_pool.submit(ctx.run, worker_fn)
         return LocalJobHandle(f"local-{step_name}", future)
 
 
