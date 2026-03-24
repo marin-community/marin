@@ -21,6 +21,13 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
+from iris.cluster.controller.budget import (
+    BAND_FROM_PROTO,
+    BAND_FROM_SORT_KEY,
+    BAND_SORT_KEY,
+    PriorityBand,
+    compute_user_spend,
+)
 from iris.cluster.controller.auth import (
     DEFAULT_JWT_TTL_SECONDS,
     ControllerAuth,
@@ -85,6 +92,13 @@ DEFAULT_TRANSACTION_LIMIT = 50
 # Pattern for env var keys that contain secrets and should be redacted in API responses.
 _SENSITIVE_ENV_KEY_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL", re.IGNORECASE)
 REDACTED_VALUE = "**REDACTED**"
+
+# PriorityBand → proto enum value
+_BAND_TO_PROTO: dict[PriorityBand, int] = {
+    PriorityBand.PRODUCTION: cluster_pb2.PRIORITY_BAND_PRODUCTION,
+    PriorityBand.INTERACTIVE: cluster_pb2.PRIORITY_BAND_INTERACTIVE,
+    PriorityBand.BATCH: cluster_pb2.PRIORITY_BAND_BATCH,
+}
 
 
 def redact_request_env_vars(
@@ -736,6 +750,20 @@ class ControllerServiceImpl:
         # For non-root jobs, verify the caller owns the parent hierarchy
         if self._auth.provider and verified_user is not None and not job_id.is_root:
             self._authorize_job_owner(job_id)
+
+        # Priority band validation: PRODUCTION requires MANAGE_BUDGETS permission,
+        # and user's max_band from budget table must allow the requested band.
+        band = BAND_FROM_PROTO.get(request.priority_band, PriorityBand.INTERACTIVE)
+        if band == PriorityBand.PRODUCTION and self._auth.provider:
+            authorize(AuthzAction.MANAGE_BUDGETS)
+        if self._auth.provider and verified_user is not None:
+            user_budget = self._db.get_user_budget(job_id.user)
+            if user_budget is not None and BAND_SORT_KEY[band] < user_budget.max_band:
+                raise ConnectError(
+                    Code.PERMISSION_DENIED,
+                    f"User {job_id.user} cannot submit {band} jobs (max band: "
+                    f"{BAND_FROM_SORT_KEY.get(user_budget.max_band, PriorityBand.INTERACTIVE)})",
+                )
 
         # Reject submissions if the parent job has already terminated
         if job_id.parent:
@@ -1909,18 +1937,70 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.SetUserBudgetRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.SetUserBudgetResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "SetUserBudget not yet implemented")
+        """Set budget limit and max band for a user. Admin-only."""
+        authorize(AuthzAction.MANAGE_BUDGETS)
+        if not request.user_id:
+            raise ConnectError(Code.INVALID_ARGUMENT, "user_id is required")
+        max_band_key = BAND_SORT_KEY.get(BAND_FROM_PROTO.get(request.max_band, PriorityBand.INTERACTIVE))
+        if max_band_key is None:
+            raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid max_band: {request.max_band}")
+        now = Timestamp.now()
+        # Ensure the user row exists (FK on user_budgets → users)
+        self._db.execute(
+            "INSERT OR IGNORE INTO users(user_id, created_at_ms) VALUES (?, ?)",
+            (request.user_id, now.epoch_ms()),
+        )
+        self._db.set_user_budget(
+            user_id=request.user_id,
+            budget_limit=request.budget_limit,
+            max_band=max_band_key,
+            now=now,
+        )
+        return cluster_pb2.Controller.SetUserBudgetResponse()
 
     def get_user_budget(
         self,
         request: cluster_pb2.Controller.GetUserBudgetRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.GetUserBudgetResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "GetUserBudget not yet implemented")
+        """Get budget config and current spend for a user."""
+        require_identity()
+        if not request.user_id:
+            raise ConnectError(Code.INVALID_ARGUMENT, "user_id is required")
+        budget = self._db.get_user_budget(request.user_id)
+        if budget is None:
+            raise ConnectError(Code.NOT_FOUND, f"No budget found for user {request.user_id}")
+        with self._db.snapshot() as snap:
+            spend = compute_user_spend(snap)
+        band_enum = BAND_FROM_SORT_KEY.get(budget.max_band, PriorityBand.INTERACTIVE)
+        proto_band = _BAND_TO_PROTO[band_enum]
+        return cluster_pb2.Controller.GetUserBudgetResponse(
+            user_id=budget.user_id,
+            budget_limit=budget.budget_limit,
+            budget_spent=spend.get(request.user_id, 0),
+            max_band=proto_band,
+        )
 
     def list_user_budgets(
         self,
         request: cluster_pb2.Controller.ListUserBudgetsRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.ListUserBudgetsResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "ListUserBudgets not yet implemented")
+        """List all user budgets with current spend."""
+        require_identity()
+        budgets = self._db.list_user_budgets()
+        with self._db.snapshot() as snap:
+            spend = compute_user_spend(snap)
+        users = []
+        for b in budgets:
+            band_enum = BAND_FROM_SORT_KEY.get(b.max_band, PriorityBand.INTERACTIVE)
+            proto_band = _BAND_TO_PROTO[band_enum]
+            users.append(
+                cluster_pb2.Controller.GetUserBudgetResponse(
+                    user_id=b.user_id,
+                    budget_limit=b.budget_limit,
+                    budget_spent=spend.get(b.user_id, 0),
+                    max_band=proto_band,
+                )
+            )
+        return cluster_pb2.Controller.ListUserBudgetsResponse(users=users)
