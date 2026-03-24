@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
@@ -39,6 +40,17 @@ BAND_FROM_SORT_KEY: dict[int, PriorityBand] = {v: k for k, v in BAND_SORT_KEY.it
 
 # Task states that count as "active" for budget spend
 _ACTIVE_TASK_STATES = (2, 3, 9)  # BUILDING, RUNNING, ASSIGNED
+
+
+@dataclass
+class UserBudgetDefaults:
+    """Defaults for new user budget rows created at job submission time."""
+
+    budget_limit: int = 0
+    """Max budget value (0 = unlimited)."""
+
+    max_band: str = "interactive"
+    """Default max band for new users."""
 
 
 def resource_value(cpu_millicores: int, memory_bytes: int, accelerator_count: int) -> int:

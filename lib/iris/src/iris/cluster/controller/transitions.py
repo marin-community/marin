@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
+from iris.cluster.controller.budget import BAND_SORT_KEY, PriorityBand, UserBudgetDefaults
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     EXECUTING_TASK_STATES,
@@ -403,10 +404,12 @@ class ControllerTransitions:
         db: ControllerDB,
         log_store: LogStore,
         heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD,
+        user_budget_defaults: UserBudgetDefaults | None = None,
     ):
         self._db = db
         self._log_store = log_store
         self._heartbeat_failure_threshold = heartbeat_failure_threshold
+        self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
 
     def _record_transaction(
         self,
@@ -566,6 +569,28 @@ class ControllerTransitions:
                 "INSERT OR IGNORE INTO users(user_id, created_at_ms) VALUES (?, ?)",
                 (job_id.user, effective_submission_ms),
             )
+            # Create default user budget row alongside user creation.
+            budget_defaults = self._user_budget_defaults
+            cur.execute(
+                "INSERT OR IGNORE INTO user_budgets(user_id, budget_limit, max_band, updated_at_ms) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    job_id.user,
+                    budget_defaults.budget_limit,
+                    BAND_SORT_KEY[budget_defaults.max_band],
+                    effective_submission_ms,
+                ),
+            )
+
+            # Resolve priority band: inherit from parent, or default to INTERACTIVE.
+            band_sort_key = BAND_SORT_KEY[PriorityBand.INTERACTIVE]
+            if parent_job_id is not None:
+                parent_band_row = cur.execute(
+                    "SELECT priority_band FROM tasks WHERE job_id = ? LIMIT 1",
+                    (parent_job_id,),
+                ).fetchone()
+                if parent_band_row is not None:
+                    band_sort_key = parent_band_row["priority_band"]
 
             replicas = int(request.replicas)
             validation_error: str | None = None
@@ -612,8 +637,8 @@ class ControllerTransitions:
                         "task_id, job_id, task_index, state, error, exit_code, submitted_at_ms, started_at_ms, "
                         "finished_at_ms, max_retries_failure, max_retries_preemption, failure_count, preemption_count, "
                         "resource_usage_proto, current_attempt_id, priority_neg_depth, priority_root_submitted_ms, "
-                        "priority_insertion"
-                        ") VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, ?, ?, 0, 0, NULL, -1, ?, ?, ?)",
+                        "priority_insertion, priority_band"
+                        ") VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, ?, ?, 0, 0, NULL, -1, ?, ?, ?, ?)",
                         (
                             task_id,
                             job_id.to_wire(),
@@ -625,6 +650,7 @@ class ControllerTransitions:
                             -job_id.depth,
                             root_submitted_ms,
                             insertion_base + idx,
+                            band_sort_key,
                         ),
                     )
                 if request.HasField("reservation") and request.reservation.entries:
@@ -673,8 +699,8 @@ class ControllerTransitions:
                             "finished_at_ms, max_retries_failure, max_retries_preemption, "
                             "failure_count, preemption_count, "
                             "resource_usage_proto, current_attempt_id, priority_neg_depth, priority_root_submitted_ms, "
-                            "priority_insertion"
-                            ") VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, ?, ?, 0, 0, NULL, -1, ?, ?, ?)",
+                            "priority_insertion, priority_band"
+                            ") VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, ?, ?, 0, 0, NULL, -1, ?, ?, ?, ?)",
                             (
                                 holder_id.task(idx).to_wire(),
                                 holder_id.to_wire(),
@@ -686,6 +712,7 @@ class ControllerTransitions:
                                 -holder_id.depth,
                                 root_submitted_ms,
                                 holder_base + idx,
+                                band_sort_key,
                             ),
                         )
 
