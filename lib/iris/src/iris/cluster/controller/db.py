@@ -503,6 +503,7 @@ TERMINAL_TASK_STATES: frozenset[int] = frozenset(
         cluster_pb2.TASK_STATE_KILLED,
         cluster_pb2.TASK_STATE_UNSCHEDULABLE,
         cluster_pb2.TASK_STATE_WORKER_FAILED,
+        cluster_pb2.TASK_STATE_PREEMPTED,
     }
 )
 
@@ -537,6 +538,7 @@ FAILURE_TASK_STATES: frozenset[int] = frozenset(
     {
         cluster_pb2.TASK_STATE_FAILED,
         cluster_pb2.TASK_STATE_WORKER_FAILED,
+        cluster_pb2.TASK_STATE_PREEMPTED,
     }
 )
 
@@ -559,7 +561,7 @@ class Attempt:
 
     @property
     def is_worker_failure(self) -> bool:
-        return self.state == cluster_pb2.TASK_STATE_WORKER_FAILED
+        return self.state in (cluster_pb2.TASK_STATE_WORKER_FAILED, cluster_pb2.TASK_STATE_PREEMPTED)
 
 
 @db_row_model
@@ -634,7 +636,7 @@ class Task:
             return True
         if self.state == cluster_pb2.TASK_STATE_FAILED:
             return self.failure_count > self.max_retries_failure
-        if self.state == cluster_pb2.TASK_STATE_WORKER_FAILED:
+        if self.state in (cluster_pb2.TASK_STATE_WORKER_FAILED, cluster_pb2.TASK_STATE_PREEMPTED):
             return self.preemption_count > self.max_retries_preemption
         return False
 
@@ -677,7 +679,7 @@ class Task:
     def is_retry_exhausted(self) -> bool:
         if self.state == cluster_pb2.TASK_STATE_FAILED:
             return self.failure_count > self.max_retries_failure
-        if self.state == cluster_pb2.TASK_STATE_WORKER_FAILED:
+        if self.state in (cluster_pb2.TASK_STATE_WORKER_FAILED, cluster_pb2.TASK_STATE_PREEMPTED):
             return self.preemption_count > self.max_retries_preemption
         return False
 

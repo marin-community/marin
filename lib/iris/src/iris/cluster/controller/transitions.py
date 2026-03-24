@@ -383,6 +383,28 @@ def _resolve_preemption_policy(cur: Any, job_id: JobName) -> int:
     return cluster_pb2.JOB_PREEMPTION_POLICY_PRESERVE_CHILDREN
 
 
+def _resolve_task_failure_state(
+    prior_state: int,
+    preemption_count: int,
+    max_preemptions: int,
+    terminal_state: int,
+) -> tuple[int, int]:
+    """Determine new task state after a worker failure or preemption.
+
+    Assigned tasks always retry. Executing tasks retry if preemption budget remains,
+    otherwise go to the given terminal state.
+
+    Returns (new_task_state, updated_preemption_count).
+    """
+    if prior_state == cluster_pb2.TASK_STATE_ASSIGNED:
+        return cluster_pb2.TASK_STATE_PENDING, preemption_count
+    if prior_state in EXECUTING_TASK_STATES:
+        preemption_count += 1
+        if preemption_count <= max_preemptions:
+            return cluster_pb2.TASK_STATE_PENDING, preemption_count
+    return terminal_state, preemption_count
+
+
 # =============================================================================
 # Controller Transitions
 # =============================================================================
@@ -461,7 +483,8 @@ class ControllerTransitions:
             new_state = cluster_pb2.JOB_STATE_KILLED
         elif (
             total > 0
-            and counts.get(cluster_pb2.TASK_STATE_WORKER_FAILED, 0) > 0
+            and (counts.get(cluster_pb2.TASK_STATE_WORKER_FAILED, 0) + counts.get(cluster_pb2.TASK_STATE_PREEMPTED, 0))
+            > 0
             and all(s in TERMINAL_TASK_STATES for s in counts)
         ):
             new_state = cluster_pb2.JOB_STATE_WORKER_FAILED
@@ -1317,22 +1340,19 @@ class ControllerTransitions:
                 for task_row in task_rows:
                     tid = str(task_row["task_id"])
                     prior_state = int(task_row["state"])
-                    preemption_count = int(task_row["preemption_count"])
-                    max_preemptions = int(task_row["max_retries_preemption"])
                     is_reservation_holder = bool(int(task_row["is_reservation_holder"]))
-                    new_task_state = cluster_pb2.TASK_STATE_WORKER_FAILED
-                    finished_ms: int | None = now_ms
                     if is_reservation_holder:
                         new_task_state = cluster_pb2.TASK_STATE_PENDING
-                        finished_ms = None
-                    elif prior_state == cluster_pb2.TASK_STATE_ASSIGNED:
-                        new_task_state = cluster_pb2.TASK_STATE_PENDING
-                        finished_ms = None
-                    elif prior_state in EXECUTING_TASK_STATES:
-                        preemption_count += 1
-                        if preemption_count <= max_preemptions:
-                            new_task_state = cluster_pb2.TASK_STATE_PENDING
-                            finished_ms = None
+                        finished_ms: int | None = None
+                        preemption_count = int(task_row["preemption_count"])
+                    else:
+                        new_task_state, preemption_count = _resolve_task_failure_state(
+                            prior_state,
+                            int(task_row["preemption_count"]),
+                            int(task_row["max_retries_preemption"]),
+                            cluster_pb2.TASK_STATE_WORKER_FAILED,
+                        )
+                        finished_ms = None if new_task_state == cluster_pb2.TASK_STATE_PENDING else now_ms
                     if is_reservation_holder:
                         cur.execute(
                             "DELETE FROM task_attempts WHERE task_id = ? AND attempt_id = ?",
@@ -1445,9 +1465,9 @@ class ControllerTransitions:
         return TxResult()
 
     def preempt_task(self, task_id: JobName, reason: str) -> TxResult:
-        """Preempt a running task, transitioning it through the worker-failed retry path.
+        """Preempt a running task, consuming from preemption retry budget.
 
-        Marks the task as WORKER_FAILED (consuming from preemption retry budget),
+        Marks the task as PREEMPTED (or retries as PENDING if budget remains),
         decommits its resources from the worker, and cascades to children if needed.
         """
         tasks_to_kill: set[JobName] = set()
@@ -1466,29 +1486,21 @@ class ControllerTransitions:
             if prior_state not in ACTIVE_TASK_STATES:
                 return TxResult()
 
-            preemption_count = int(row["preemption_count"])
             now_ms = Timestamp.now().epoch_ms()
-
-            # Only count against preemption budget if task was executing
-            if prior_state in EXECUTING_TASK_STATES:
-                preemption_count += 1
-
-            if prior_state == cluster_pb2.TASK_STATE_ASSIGNED:
-                new_state = cluster_pb2.TASK_STATE_PENDING
-                finished_ms = None
-            elif prior_state in EXECUTING_TASK_STATES and preemption_count <= int(row["max_retries_preemption"]):
-                new_state = cluster_pb2.TASK_STATE_PENDING
-                finished_ms = None
-            else:
-                new_state = cluster_pb2.TASK_STATE_WORKER_FAILED
-                finished_ms = now_ms
+            new_state, preemption_count = _resolve_task_failure_state(
+                prior_state,
+                int(row["preemption_count"]),
+                int(row["max_retries_preemption"]),
+                cluster_pb2.TASK_STATE_PREEMPTED,
+            )
+            finished_ms = None if new_state == cluster_pb2.TASK_STATE_PENDING else now_ms
 
             # Update attempt
             cur.execute(
                 "UPDATE task_attempts SET state = ?, finished_at_ms = COALESCE(finished_at_ms, ?), error = ? "
                 "WHERE task_id = ? AND attempt_id = ?",
                 (
-                    cluster_pb2.TASK_STATE_WORKER_FAILED,
+                    cluster_pb2.TASK_STATE_PREEMPTED,
                     now_ms,
                     reason,
                     task_id.to_wire(),
@@ -1498,7 +1510,7 @@ class ControllerTransitions:
 
             # Update task
             cur.execute(
-                "UPDATE tasks SET state = ?, error = ?, finished_at_ms = ?, preemption_count = ? " "WHERE task_id = ?",
+                "UPDATE tasks SET state = ?, error = ?, finished_at_ms = ?, preemption_count = ? WHERE task_id = ?",
                 (new_state, reason, finished_ms, preemption_count, task_id.to_wire()),
             )
 
@@ -1524,7 +1536,7 @@ class ControllerTransitions:
                 if policy == cluster_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
                     tasks_to_kill.update(_cascade_children(cur, job_id, now_ms, reason))
 
-            if new_state == cluster_pb2.TASK_STATE_WORKER_FAILED:
+            if new_state == cluster_pb2.TASK_STATE_PREEMPTED:
                 tasks_to_kill.add(task_id)
 
             self._record_transaction(cur, "preempt_task", [("task_preempted", task_id.to_wire(), {"reason": reason})])
