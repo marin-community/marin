@@ -403,10 +403,12 @@ class ControllerTransitions:
         db: ControllerDB,
         log_store: LogStore,
         heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD,
+        enable_task_impersonation: bool = False,
     ):
         self._db = db
         self._log_store = log_store
         self._heartbeat_failure_threshold = heartbeat_failure_threshold
+        self._enable_task_impersonation = enable_task_impersonation
 
     def _record_transaction(
         self,
@@ -890,6 +892,13 @@ class ControllerTransitions:
                     )
                     if job.request.timeout.milliseconds > 0:
                         run_request.timeout.CopyFrom(job.request.timeout)
+                    if self._enable_task_impersonation:
+                        job_user = task.job_id.user
+                        user_role = self._db.get_user_role(job_user)
+                        if user_role != "admin":
+                            sa = self._db.get_user_service_account(job_user)
+                            if sa:
+                                run_request.impersonate_service_account = sa
                     cur.execute(
                         "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
                         "VALUES (?, 'run', ?, NULL, ?)",

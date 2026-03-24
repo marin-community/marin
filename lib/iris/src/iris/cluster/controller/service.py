@@ -1729,6 +1729,8 @@ class ControllerServiceImpl:
 
         now = Timestamp.now()
         self._db.ensure_user(username, now)
+        if self._auth.provider == "gcp":
+            self._db.set_user_gcp_email(username, username)
         role = self._db.get_user_role(username)
 
         # Revoke old login keys and propagate to in-memory revocation set
@@ -1836,6 +1838,17 @@ class ControllerServiceImpl:
             )
         return cluster_pb2.ListApiKeysResponse(keys=key_infos)
 
+    def set_user_service_account(
+        self,
+        request: cluster_pb2.SetUserServiceAccountRequest,
+        ctx: Any,
+    ) -> cluster_pb2.SetUserServiceAccountResponse:
+        authorize(AuthzAction.MANAGE_OTHER_KEYS)
+        if not request.user_id:
+            raise ConnectError(Code.INVALID_ARGUMENT, "user_id is required")
+        self._db.set_user_service_account(request.user_id, request.gcp_service_account)
+        return cluster_pb2.SetUserServiceAccountResponse()
+
     def get_current_user(
         self,
         request: cluster_pb2.GetCurrentUserRequest,
@@ -1844,9 +1857,13 @@ class ControllerServiceImpl:
         identity = get_verified_identity()
         if identity is None:
             return cluster_pb2.GetCurrentUserResponse(user_id="anonymous", role="")
+        gcp_email = self._db.get_user_gcp_email(identity.user_id) or ""
+        gcp_service_account = self._db.get_user_service_account(identity.user_id) or ""
         return cluster_pb2.GetCurrentUserResponse(
             user_id=identity.user_id,
             role=identity.role,
+            gcp_email=gcp_email,
+            gcp_service_account=gcp_service_account,
         )
 
     def exec_in_container(
