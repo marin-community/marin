@@ -894,11 +894,16 @@ class ControllerTransitions:
                         run_request.timeout.CopyFrom(job.request.timeout)
                     if self._enable_task_impersonation:
                         job_user = task.job_id.user
-                        user_role = self._db.get_user_role(job_user)
-                        if user_role != "admin":
-                            sa = self._db.get_user_service_account(job_user)
-                            if sa:
-                                run_request.impersonate_service_account = sa
+                        user_row = cur.execute(
+                            "SELECT role, gcp_service_account FROM users WHERE user_id = ?",
+                            (job_user,),
+                        ).fetchone()
+                        if user_row is not None:
+                            user_role = str(user_row["role"]) if user_row["role"] else "user"
+                            if user_role != "admin":
+                                sa = str(user_row["gcp_service_account"]) if user_row["gcp_service_account"] else None
+                                if sa:
+                                    run_request.impersonate_service_account = sa
                     cur.execute(
                         "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
                         "VALUES (?, 'run', ?, NULL, ?)",

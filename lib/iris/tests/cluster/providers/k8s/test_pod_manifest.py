@@ -773,3 +773,25 @@ def test_init_container_bundle_and_workdir_files():
     assert "IRIS_WORKDIR_FILES_SRC" in env_by_name
     assert configmap_name is not None
     assert len(extra_volumes) == 1
+
+
+# ---------------------------------------------------------------------------
+# GCP impersonation env var in pod manifest
+# ---------------------------------------------------------------------------
+
+
+def test_impersonation_env_in_pod():
+    """Pod manifest includes CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT."""
+    req = make_run_req("/test-job/0")
+    req.impersonate_service_account = "sa@project.iam.gserviceaccount.com"
+    manifest = _build_pod_manifest(req, pod_config())
+    env = {e["name"]: e.get("value") for e in manifest["spec"]["containers"][0]["env"]}
+    assert env["CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT"] == "sa@project.iam.gserviceaccount.com"
+
+
+def test_no_impersonation_env_when_empty():
+    """Pod manifest omits CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT when not set."""
+    req = make_run_req("/test-job/0")
+    manifest = _build_pod_manifest(req, pod_config())
+    env_names = {e["name"] for e in manifest["spec"]["containers"][0]["env"]}
+    assert "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT" not in env_names
