@@ -58,7 +58,6 @@ def test_ring_buffer_query_limit(ring_buffer):
 
 
 def test_handler_captures_log_records():
-    """RingBufferHandler captures formatted log records from Python logging."""
     buf = LogRingBuffer()
     handler = RingBufferHandler(buf)
     handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
@@ -78,7 +77,6 @@ def test_handler_captures_log_records():
 
 
 def test_slow_log_emits_warning_when_slow(caplog):
-    """slow_log emits a WARNING when the block exceeds the threshold."""
     log = logging.getLogger("iris.test.slow_log")
     with caplog.at_level(logging.WARNING, logger="iris.test.slow_log"):
         with slow_log(log, "test-op", threshold_ms=0):
@@ -87,7 +85,6 @@ def test_slow_log_emits_warning_when_slow(caplog):
 
 
 def test_slow_log_silent_when_fast(caplog):
-    """slow_log emits nothing when the block completes within budget."""
     log = logging.getLogger("iris.test.slow_log")
     with caplog.at_level(logging.DEBUG, logger="iris.test.slow_log"):
         with slow_log(log, "fast-op", threshold_ms=60_000):
@@ -96,7 +93,6 @@ def test_slow_log_silent_when_fast(caplog):
 
 
 def test_configure_logging_captures_records():
-    """configure_logging installs a ring buffer handler that captures log records."""
     import iris.logging as iris_logging
 
     iris_logging._configured = False
