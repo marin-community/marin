@@ -7,6 +7,7 @@ import logging
 from marin.utils import rebase_file_path
 import pyarrow as pa
 from marin.processing.classification.deduplication.dedup_commons import (
+    DEFAULT_COORDINATOR_RESOURCES,
     DEFAULT_FILETYPES,
     DedupMode,
     DupCounters,
@@ -101,7 +102,7 @@ def dedup_fuzzy_document(
         name="fuzzy-dedup",
         max_workers=max_parallelism,
         resources=worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
-        coordinator_resources=coordinator_resources or ResourceConfig(cpu=1, ram="5g"),
+        coordinator_resources=coordinator_resources or DEFAULT_COORDINATOR_RESOURCES,
     )
     # Group input files into at most max_parallelism shards so shard count <= worker count.
     # Each shard processes a group of files sequentially, reducing coordinator overhead

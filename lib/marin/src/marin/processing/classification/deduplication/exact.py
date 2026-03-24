@@ -5,6 +5,7 @@ from typing import Any, TypeVar
 
 from collections.abc import Iterator
 from marin.processing.classification.deduplication.dedup_commons import (
+    DEFAULT_COORDINATOR_RESOURCES,
     DEFAULT_FILETYPES,
     DedupMode,
     DupCounters,
@@ -79,7 +80,7 @@ def dedup_exact_paragraph(
         name="exact-para-dedup",
         max_workers=max_parallelism,
         resources=worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
-        coordinator_resources=coordinator_resources or ResourceConfig(cpu=1, ram="5g"),
+        coordinator_resources=coordinator_resources or DEFAULT_COORDINATOR_RESOURCES,
     )
 
     def aggregate_and_write_to_corresponding_files(file_idx: int, records: Iterator[dict]) -> dict:
@@ -151,9 +152,7 @@ def dedup_exact_paragraph(
                 "file_idx": item["file_idx"],
             }
 
-    file_groups: list[list[str]] = (
-        group_files(input_files, max_parallelism) if max_parallelism else [[f] for f in sorted(input_files)]
-    )
+    file_groups = group_files(input_files, max_parallelism)
     shard_results = list(
         ctx.execute(
             Dataset.from_list(file_groups)
@@ -221,7 +220,7 @@ def dedup_exact_document(
         name="exact-doc-dedup",
         max_workers=max_parallelism,
         resources=worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
-        coordinator_resources=coordinator_resources or ResourceConfig(cpu=1, ram="5g"),
+        coordinator_resources=coordinator_resources or DEFAULT_COORDINATOR_RESOURCES,
     )
 
     def aggregate_and_write_to_corresponding_files(file_idx: int, records: Iterator[dict[str, Any]]) -> dict:
@@ -274,9 +273,7 @@ def dedup_exact_document(
                 "file_idx": item["file_idx"],
             }
 
-    file_groups: list[list[str]] = (
-        group_files(input_files, max_parallelism) if max_parallelism else [[f] for f in sorted(input_files)]
-    )
+    file_groups = group_files(input_files, max_parallelism)
     shard_results = list(
         ctx.execute(
             Dataset.from_list(file_groups)

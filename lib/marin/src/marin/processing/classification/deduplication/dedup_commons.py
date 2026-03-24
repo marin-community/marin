@@ -18,6 +18,7 @@ from zephyr.readers import SUPPORTED_EXTENSIONS, open_file
 logger = logging.getLogger(__name__)
 
 DEFAULT_FILETYPES: list[str] = ["jsonl", "jsonl.gz", "jsonl.zst", "parquet"]
+DEFAULT_COORDINATOR_RESOURCES: ResourceConfig = ResourceConfig(cpu=1, ram="5g")
 
 
 class DedupMode(StrEnum):
@@ -72,7 +73,7 @@ class DedupConfig:
     # Coordinator resource sizing notes:
     # - RAM: increase when the coordinator OOMs during large pipelines; it accumulates scatter
     #   metadata proportional to num_shards * num_reduce_buckets.
-    coordinator_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="5g"))
+    coordinator_resources: ResourceConfig = field(default_factory=lambda: DEFAULT_COORDINATOR_RESOURCES)
     # MinHash LSH parameters (only used for FUZZY_DOCUMENT mode)
     fuzzy_minhash_num_perms: int = 286
     fuzzy_minhash_num_bands: int = 26
@@ -159,14 +160,16 @@ class DupCounters:
         }
 
 
-def group_files(files: list[str], num_groups: int) -> list[list[str]]:
+def group_files(files: list[str], num_groups: int | None) -> list[list[str]]:
     """Group files into at most num_groups buckets deterministically.
 
     Files are sorted then distributed round-robin, so the same set of files always
     produces the same grouping. Use this to cap Zephyr shard count when
-    num_files >> max_parallelism.
+    num_files >> max_parallelism. If num_groups is None, each file gets its own group.
     """
     sorted_files = sorted(files)
+    if num_groups is None:
+        return [[f] for f in sorted_files]
     n = min(num_groups, len(sorted_files))
     groups: list[list[str]] = [[] for _ in range(n)]
     for i, f in enumerate(sorted_files):
