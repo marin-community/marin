@@ -16,6 +16,7 @@ import equinox as eqx
 import jax
 from equinox import is_array, module_update_wrapper
 from jax import shard_map as jax_shard_map
+from jax._src.tree_util import GetAttrKey
 from jax.sharding import reshard
 from jax.lax import with_sharding_constraint
 from jax.sharding import AbstractMesh, NamedSharding, Mesh, PartitionSpec, get_abstract_mesh, AxisType
@@ -63,6 +64,35 @@ class _ResourceMappingHolder:
 
 _mapping_holder = _ResourceMappingHolder()
 _JAX_SHARD_MAP_PARAMETER_NAMES = frozenset(inspect.signature(jax_shard_map).parameters.keys())
+
+
+def _tree_flatten_one_level_with_keys(
+    pytree: PyTree,
+) -> tuple[list[tuple[GetAttrKey | None, PyTree]], jax.tree_util.PyTreeDef]:
+    seen_pytree = False
+
+    def is_leaf(node):
+        nonlocal seen_pytree
+        if node is pytree:
+            if seen_pytree:
+                raise ValueError(f"PyTree node of type `{type(pytree).__name__}` is immediately self-referential.")
+            seen_pytree = True
+            return False
+        return True
+
+    leaves_with_paths, treedef = jax.tree_util.tree_flatten_with_path(pytree, is_leaf=is_leaf)
+    children: list[tuple[GetAttrKey | None, PyTree]] = []
+
+    for path, value in leaves_with_paths:
+        if not path:
+            return [(None, value)], treedef
+
+        assert len(path) == 1, "Only one level of flattening is supported"
+        key = path[0]
+        assert isinstance(key, GetAttrKey), f"Unexpected eqx.Module child key {key!r}"
+        children.append((key, value))
+
+    return children, treedef
 
 
 @contextlib.contextmanager
@@ -293,29 +323,22 @@ def pspec_for(
             return pspec_for_axis(node.axis_names, resource_mapping)
         elif isinstance(node, eqx.Module):
             # handle eqx.Module explicitly so that we can look at axis_names metadata
-            updates: dict[str, typing.Any] = {}
-            for field in dataclasses.fields(node):
-                if field.metadata.get("static", False):
-                    continue
+            fields_by_name = {field.name: field for field in dataclasses.fields(node)}
+            children_with_keys, treedef = _tree_flatten_one_level_with_keys(node)
+            updated_children: list[typing.Any] = []
 
-                value = getattr(node, field.name)
+            for key, value in children_with_keys:
+                assert key is not None
+                field = fields_by_name[key.name]
                 axis_names = field.metadata.get("axis_names") if field.metadata is not None else None
                 if axis_names is not None and is_jax_array_like(value):
-                    updates[field.name] = pspec_for_axis(axis_names, resource_mapping)
+                    updated_children.append(pspec_for_axis(axis_names, resource_mapping))
                 else:
-                    updates[field.name] = htu.tree_map(
-                        partition_spec, value, is_leaf=lambda x: isinstance(x, eqx.Module)
+                    updated_children.append(
+                        htu.tree_map(partition_spec, value, is_leaf=lambda x: isinstance(x, eqx.Module))
                     )
 
-            new_node = object.__new__(type(node))
-            for field in dataclasses.fields(node):
-                object.__setattr__(
-                    new_node,
-                    field.name,
-                    updates.get(field.name, getattr(node, field.name)),
-                )
-
-            return new_node
+            return jax.tree_util.tree_unflatten(treedef, updated_children)
         elif is_jax_array_like(node):
             tpe = jax.typeof(node)
             type_pspec = tpe.sharding.spec

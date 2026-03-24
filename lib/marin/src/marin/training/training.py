@@ -27,6 +27,7 @@ from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 
 from iris.marin_fs import check_gcs_paths_same_region, marin_temp_bucket
+from marin.execution.remote import _sanitize_job_name
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,10 @@ TrainOnPodConfigT = TypeVar("TrainOnPodConfigT", TrainLmOnPodConfig, TrainDpoOnP
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
+
+
+def _train_job_name(run_id: str) -> str:
+    return _sanitize_job_name(f"train_lm-{run_id}")
 
 
 def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodConfigT:
@@ -291,10 +296,9 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     elif isinstance(config.resources.device, GpuConfig):
         extras.append("gpu")
 
-    # Note: Using a constant job name allows restarts to adopt the existing job handle
-    # instead of raising a duplicate name error (adopt_existing=True is the default).
+    job_name = _train_job_name(train_config.trainer.id)
     job_request = JobRequest(
-        name="train_lm",
+        name=job_name,
         entrypoint=Entrypoint.from_callable(train_lm.main, args=[train_config]),
         resources=config.resources,
         environment=create_environment(env_vars=env, extras=extras),
