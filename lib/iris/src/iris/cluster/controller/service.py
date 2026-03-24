@@ -120,6 +120,7 @@ USER_TASK_STATES = (
     cluster_pb2.TASK_STATE_KILLED,
     cluster_pb2.TASK_STATE_UNSCHEDULABLE,
     cluster_pb2.TASK_STATE_WORKER_FAILED,
+    cluster_pb2.TASK_STATE_PREEMPTED,
 )
 USER_JOB_STATES = (
     cluster_pb2.JOB_STATE_PENDING,

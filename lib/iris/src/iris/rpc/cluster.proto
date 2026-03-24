@@ -218,6 +218,7 @@ enum TaskState {
   TASK_STATE_WORKER_FAILED = 7;
   TASK_STATE_UNSCHEDULABLE = 8;
   TASK_STATE_ASSIGNED = 9;
+  TASK_STATE_PREEMPTED = 10;
 }
 
 // Status of a single task within a job

@@ -602,6 +602,7 @@ def is_task_finished(state: int) -> bool:
             cluster_pb2.TASK_STATE_FAILED,
             cluster_pb2.TASK_STATE_KILLED,
             cluster_pb2.TASK_STATE_WORKER_FAILED,
+            cluster_pb2.TASK_STATE_PREEMPTED,
             cluster_pb2.TASK_STATE_UNSCHEDULABLE,
         }
     )

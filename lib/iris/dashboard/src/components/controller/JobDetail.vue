@@ -23,7 +23,7 @@ const props = defineProps<{
   jobId: string
 }>()
 
-const TERMINAL_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'unschedulable'])
+const TERMINAL_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'preempted', 'unschedulable'])
 
 // -- State --
 
@@ -176,6 +176,7 @@ const SEGMENT_COLORS: Record<string, string> = {
   assigned: 'bg-status-orange',
   failed: 'bg-status-danger',
   worker_failed: 'bg-status-danger',
+  preempted: 'bg-status-warning',
   killed: 'bg-text-muted',
   pending: 'bg-surface-border',
 }
@@ -196,8 +197,9 @@ function progressSegments(j: JobStatus): ProgressSegment[] {
   const assigned = counts['assigned'] ?? 0
   const failed = counts['failed'] ?? 0
   const workerFailed = counts['worker_failed'] ?? 0
+  const preempted = counts['preempted'] ?? 0
   const killed = counts['killed'] ?? 0
-  const pending = total - succeeded - running - building - assigned - failed - workerFailed - killed
+  const pending = total - succeeded - running - building - assigned - failed - workerFailed - preempted - killed
   return [
     { count: succeeded, colorClass: SEGMENT_COLORS['succeeded'], label: 'succeeded' },
     { count: running, colorClass: SEGMENT_COLORS['running'], label: 'running' },
@@ -205,6 +207,7 @@ function progressSegments(j: JobStatus): ProgressSegment[] {
     { count: assigned, colorClass: SEGMENT_COLORS['assigned'], label: 'assigned' },
     { count: failed, colorClass: SEGMENT_COLORS['failed'], label: 'failed' },
     { count: workerFailed, colorClass: SEGMENT_COLORS['worker_failed'], label: 'worker_failed' },
+    { count: preempted, colorClass: SEGMENT_COLORS['preempted'], label: 'preempted' },
     { count: killed, colorClass: SEGMENT_COLORS['killed'], label: 'killed' },
     { count: Math.max(0, pending), colorClass: SEGMENT_COLORS['pending'], label: 'pending' },
   ].filter(s => s.count > 0)
@@ -242,7 +245,7 @@ const taskCounts = computed(() => {
     else if (state === 'building') counts.building++
     else if (state === 'assigned') counts.assigned++
     else if (state === 'pending') counts.pending++
-    else if (state === 'failed' || state === 'worker_failed') counts.failed++
+    else if (state === 'failed' || state === 'worker_failed' || state === 'preempted') counts.failed++
   }
   return counts
 })
@@ -275,7 +278,7 @@ const diskDisplay = computed(() => {
 
 const STATE_SORT_ORDER: Record<string, number> = {
   running: 0, building: 1, assigned: 2, pending: 3,
-  succeeded: 4, killed: 5, failed: 6, worker_failed: 7, unschedulable: 8,
+  succeeded: 4, killed: 5, failed: 6, worker_failed: 7, preempted: 8, unschedulable: 9,
 }
 
 function taskDurationMs(t: TaskStatus): number {

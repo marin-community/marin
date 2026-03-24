@@ -217,6 +217,7 @@ const SEGMENT_COLORS: Record<string, string> = {
   assigned: 'bg-status-orange',
   failed: 'bg-status-danger',
   worker_failed: 'bg-status-danger',
+  preempted: 'bg-status-warning',
   killed: 'bg-text-muted',
   pending: 'bg-surface-border',
 }
@@ -232,8 +233,9 @@ function progressSegments(job: JobStatus): ProgressSegment[] {
   const assigned = counts['assigned'] ?? 0
   const failed = counts['failed'] ?? 0
   const workerFailed = counts['worker_failed'] ?? 0
+  const preempted = counts['preempted'] ?? 0
   const killed = counts['killed'] ?? 0
-  const pending = total - succeeded - running - building - assigned - failed - workerFailed - killed
+  const pending = total - succeeded - running - building - assigned - failed - workerFailed - preempted - killed
 
   return [
     { count: succeeded, colorClass: SEGMENT_COLORS['succeeded'], label: 'succeeded' },
@@ -242,6 +244,7 @@ function progressSegments(job: JobStatus): ProgressSegment[] {
     { count: assigned, colorClass: SEGMENT_COLORS['assigned'], label: 'assigned' },
     { count: failed, colorClass: SEGMENT_COLORS['failed'], label: 'failed' },
     { count: workerFailed, colorClass: SEGMENT_COLORS['worker_failed'], label: 'worker_failed' },
+    { count: preempted, colorClass: SEGMENT_COLORS['preempted'], label: 'preempted' },
     { count: killed, colorClass: SEGMENT_COLORS['killed'], label: 'killed' },
     { count: Math.max(0, pending), colorClass: SEGMENT_COLORS['pending'], label: 'pending' },
   ].filter(s => s.count > 0)

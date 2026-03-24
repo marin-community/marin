@@ -271,7 +271,7 @@ def test_preempted_task_retries():
 
 
 def test_preempted_task_exhausted_retries():
-    """Preempted task transitions to WORKER_FAILED when preemption budget exhausted."""
+    """Preempted task transitions to PREEMPTED when preemption budget exhausted."""
     with make_controller_state() as state:
         harness = ControllerTestHarness(state)
         w1 = harness.add_worker("w1", cpu=4)
@@ -290,7 +290,7 @@ def test_preempted_task_exhausted_retries():
         state.preempt_task(task.task_id, reason="preempted")
 
         updated = query_task(state, task.task_id)
-        assert updated.state == cluster_pb2.TASK_STATE_WORKER_FAILED
+        assert updated.state == cluster_pb2.TASK_STATE_PREEMPTED
         assert updated.preemption_count == 1
 
 
