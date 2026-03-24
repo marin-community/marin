@@ -195,6 +195,8 @@ class GatedNorm(eqx.Module):
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
         gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
+        # TODO: silu activation here isn't explored, just cargo-culted from Qwen. Likely low-hanging ablation fruit
+        # (e.g. compare no activation, relu, etc.).
         gate_hidden = jax.nn.silu(gate_hidden)
         gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
         return x * gate.astype(x.dtype)
