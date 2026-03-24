@@ -84,7 +84,7 @@ jobs:
         run: |
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
-            --memory=16G --disk=16G --cpu=1 --extra=cpu \
+            --gpu H100x8 --cpu=32 --memory=256G --disk=256G --extra=cpu \
             -e MARIN_PREFIX s3://marin-na/marin/ \
             -e RUN_ID "$RUN_ID" \
             -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
@@ -160,10 +160,19 @@ jobs:
       - name: Capture failure diagnostics
         if: failure()
         run: |
+          echo "=== Controller logs ==="
           kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
             logs -l app=iris-controller --tail=500 || true
+          echo "=== Controller pod describe ==="
           kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
             describe pod -l app=iris-controller || true
+          echo "=== Task pod logs ==="
+          kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
+            logs -l iris.managed=true --tail=200 || true
+          echo "=== Task pod describe ==="
+          kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
+            describe pod -l iris.managed=true || true
+          echo "=== Warning events ==="
           kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
             get events --sort-by='.lastTimestamp' --field-selector type!=Normal || true
 
