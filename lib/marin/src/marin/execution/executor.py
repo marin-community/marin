@@ -87,7 +87,7 @@ import re
 import subprocess
 import time
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -359,6 +359,17 @@ def _regions_for_tpu_variants_from_iris(
             return None
         inferred_regions |= cached
     return inferred_regions
+
+
+def infer_tpu_variant_regions_from_iris(variants: Sequence[str]) -> list[str] | None:
+    """Return sorted TPU-capable regions for the requested variants, if known."""
+    inferred_regions = _regions_for_tpu_variants_from_iris(
+        list(variants),
+        variant_region_cache={},
+    )
+    if not inferred_regions:
+        return None
+    return sorted(inferred_regions)
 
 
 def _tpu_regions_for_remote_callable(

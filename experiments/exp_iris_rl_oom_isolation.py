@@ -14,24 +14,35 @@ import datetime
 import logging
 import os
 
+from experiments.models import llama_3_1_8b_instruct
 from levanter.models.llama import LlamaConfig
 from marin.execution.executor import executor_main
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 from marin.rl.environments import EnvConfig
-from marin.rl.rl_experiment_utils import ModelConfig, RLExperimentConfig, make_rl_step
-from marin.rl.rl_experiment_utils import executor_main_config_for_rl_experiment
+from marin.rl.rl_experiment_utils import (
+    ModelConfig,
+    RLExperimentConfig,
+    config_class_path,
+    executor_main_config_for_rl_experiment,
+    make_rl_step,
+)
 from marin.rl.rl_losses import RLOOLoss
 
 logger = logging.getLogger(__name__)
 
 MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
+MODEL_SHORT_NAME = "l31-8bi"
+CASE_SHORT_NAMES = {
+    "baseline_ckpt_120": "b120",
+    "no_ckpt": "nockpt",
+    "reduced_batch_ckpt_120": "rb120",
+}
 
 llama_3_1_8b = ModelConfig(
     name=MODEL_NAME,
     type="llama",
-    tokenizer=MODEL_NAME,
-    checkpoint=MODEL_NAME,
-    config_class=LlamaConfig,
+    artifact=llama_3_1_8b_instruct,
+    config_class_path=config_class_path(LlamaConfig),
 )
 
 
@@ -118,12 +129,12 @@ def main():
     case = os.environ.get("OOM_CASE", "baseline_ckpt_120")
     config = build_case_config(case)
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    model_base_name = config.model_config.name.split("/")[-1].lower().replace("-instruct", "i")
-    name = f"{model_base_name}-{config.experiment_name_suffix}-{datestamp}"
+    case_short_name = CASE_SHORT_NAMES[case]
+    name = f"{MODEL_SHORT_NAME}-{case_short_name}-{datestamp}"
     curriculum = create_math_curriculum(name, config)
 
     executor_main(
-        config=executor_main_config_for_rl_experiment(config),
+        executor_main_config_for_rl_experiment(config),
         steps=[make_rl_step(name=name, config=config, curriculum=curriculum)],
         description=f"Iris RL OOM isolation case={case}",
     )

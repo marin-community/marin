@@ -923,3 +923,165 @@ Net result:
 - operational launch rule remains unchanged:
   - use `--region us-central1` by default for root submission,
   - or `--zone us-east5-a` when intentionally choosing the east5 path.
+
+## 2026-03-23 PT / 2026-03-24 UTC — Generic single-region pinning + short-name relaunch plan
+
+Code changes prepared before relaunch:
+- generalized RL region pinning beyond `v5p`:
+  - added `lib/marin/src/marin/rl/placement.py` to resolve a concrete launcher region from requested TPU variants plus current launcher region.
+  - outer RL executor step now pins to that concrete region for any requested TPU variant, not just `v5p`.
+  - `ExecutorMainConfig.prefix` now follows the same concrete region via the canonical Marin bucket for that region.
+  - `RunConfig` now carries `regions`, and `orchestration.py` uses the same single-region placement for train/rollout TPU children.
+- behavior change:
+  - if the root Iris launcher is in a region incompatible with the requested TPU type and autoscaler info is available, RL launch now fails fast instead of silently drifting.
+- isolation-driver naming was shortened to avoid the prior `/dev/shm/iris/workdirs/job__...` path-length failure:
+  - model/run name now uses short form `l31-8bi-<case>-<timestamp>`.
+
+Validation before relaunch:
+- `uv run pytest -q tests/rl/test_rl_experiment_utils.py` -> `4 passed`.
+- `./infra/pre-commit.py --fix ...` on touched files -> `OK`.
+
+Planned relaunch command:
+```bash
+uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait \
+  --user ahmed \
+  --job-name iris-rl-oom-b120-uc1 \
+  --region us-central1 \
+  --cpu 2 \
+  --memory 8GB \
+  -e OOM_CASE baseline_ckpt_120 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -e HF_TOKEN "$HF_TOKEN" \
+  -e MARIN_PREFIX gs://marin-us-central1 \
+  -- uv run python experiments/exp_iris_rl_oom_isolation.py
+```
+
+### Relaunch attempt 1 (`/ahmed/iris-rl-oom-b120-uc1`) — placement corrected, entrypoint bug exposed
+
+Observed result:
+- root job was submitted with explicit `--region us-central1` and `MARIN_PREFIX=gs://marin-us-central1`.
+- parent landed on `marin-tpu_v5p_8-us-central1-a-...-worker-0`, confirming the control-plane / launcher placement fix worked.
+- job failed early before nested RL child submission with:
+  - `TypeError: executor_main() got multiple values for argument 'config'`
+
+Root cause:
+- `executor_main` is draccus-wrapped and expects its config as the first positional argument.
+- the earlier helper integration passed `config=...` as a keyword in the RL experiment entrypoints.
+
+Fix applied immediately after this failed attempt:
+- updated these entrypoints to pass `executor_main_config_for_rl_experiment(...)` positionally:
+  - `experiments/exp2039_rl_math500.py`
+  - `experiments/exp_iris_rl_oom_isolation.py`
+  - `experiments/exp_iris_rl_debug.py`
+- re-ran `./infra/pre-commit.py --fix ...` on the touched entrypoints.
+
+Interpretation:
+- region placement is now behaving as intended.
+- the next relaunch should test the remaining hypothesis of interest: whether the shortened naming envelope clears the prior `File name too long` failure.
+
+### Relaunch attempt 2 (`/ahmed/iris-rl-oom-b120-uc1-r2`) — region + naming fixes held, new HF quota blocker
+
+Observed result:
+- root job launched with explicit `--region us-central1` and `MARIN_PREFIX=gs://marin-us-central1`.
+- root job started successfully and remained in the intended region.
+- prior blockers did **not** recur in this attempt:
+  - no Europe / `v6e` control-plane drift,
+  - no `executor_main(... config=...)` wrapper error,
+  - no `/dev/shm/iris/workdirs/... File name too long` failure before child creation.
+
+New failure:
+- root job failed during experiment construction in `make_rl_step()` when resolving the HF model config:
+  - `AutoConfig.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")`
+  - upstream error was `429 Client Error: Too Many Requests` from Hugging Face for `config.json`.
+- final surfaced exception:
+  - `OSError: We couldn't connect to 'https://huggingface.co' to load the files, and couldn't find them in the cached files.`
+
+Interpretation:
+- the placement and naming fixes are now validated by absence of the earlier failure modes.
+- current blocker has shifted back to dependency/model bootstrap:
+  - root launcher needs either a warm local HF cache, a retry/backoff path, or an alternate way to materialize the model config without hitting fresh HF resolver requests.
+- this failure occurs before nested RL child jobs are submitted, so it does not yet validate end-to-end RL worker startup under the shortened naming envelope.
+
+## 2026-03-23 PT / 2026-03-24 UTC — Correction: executor-managed model artifacts already exist
+
+Follow-up on the new root-launcher failure from `/ahmed/iris-rl-oom-b120-uc1-r2`:
+- the problem is **not** that Marin lacks a GCP-hosted copy of `meta-llama/Llama-3.1-8B-Instruct`.
+- `experiments/models.py` already defines this model as an executor-managed download step:
+  - `llama_3_1_8b_instruct = download_model_step(ModelConfig(hf_repo_id="meta-llama/Llama-3.1-8B-Instruct", hf_revision="0e9e39f"))`
+- that step is intentionally wired to produce a stable, region-local GCS artifact rather than an opaque hashed path:
+  - `gcs_output_path=this_output_path()` means the download writes into the step's resolved output directory.
+  - `override_output_path=f"models/{model_name}--{model_revision}"` forces a deterministic final path under the executor prefix.
+  - `versioned(model_config.hf_revision)` keeps the revision in the executor version graph.
+- executor resolution then turns that into a concrete regional path under the current Marin prefix. For the us-central1 case, the intended artifact path is:
+  - `gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f`
+
+Cross-check with existing downstream usage:
+- `experiments/evals/evals.py` already treats downloaded models as executor artifacts and resolves them via `output_path_of(step, "hf")`.
+- so the framework already has the right abstraction for "use the region-local downloaded model artifact".
+
+Updated interpretation of the HF 429 blocker:
+- the RL stack is bypassing that abstraction.
+- current RL experiment code still hardcodes the raw HF repo string in `ModelConfig` / checkpoint / tokenizer fields and then performs launcher-time HF resolution in `make_rl_step()`:
+  - `AutoConfig.from_pretrained(config.model_config.name)`
+- this causes the root Iris job to contact Hugging Face during experiment construction, which is why `/ahmed/iris-rl-oom-b120-uc1-r2` failed before any nested RL child jobs were submitted.
+
+Implication for the next fix:
+- do **not** add retries/backoff around fresh HF reads as the primary solution.
+- instead, make RL consume the executor-managed downloaded model artifact (or its resolved GCS path) for config/tokenizer/checkpoint bootstrap, so root launch no longer depends on live HF access.
+
+## 2026-03-23 PT / 2026-03-24 UTC — RL launcher now depends on cached regional model artifact
+
+Implemented follow-up fix for the Hugging Face launcher dependency:
+- `make_rl_step()` no longer calls `AutoConfig.from_pretrained(...)` during root experiment construction.
+- RL model bootstrap now happens inside the executor step runtime.
+- the RL step depends directly on the executor-managed model download step from `experiments.models.llama_3_1_8b_instruct`.
+- because the model download is an executor dependency, cached regional artifacts are reused automatically and the RL step no longer requires a live HF lookup at root launch.
+
+Additional runtime/path changes:
+- stopped serializing the `LlamaConfig` class object into executor metadata; RL runtime now stores a dotted config-class import path and resolves it inside the worker.
+- normalized RL tokenizer loading to `levanter.compat.hf_checkpoints.load_tokenizer(...)`.
+- taught RL checkpoint detection to recognize HF exports on `gs://...` and local paths by checking for HF marker files.
+- corrected the model artifact path for `download_model_step(...)` outputs: the HF export lives at the step root for these model download steps, not under `/hf`.
+
+Validation in repo:
+- `uv run pytest -q tests/rl/test_rl_experiment_utils.py` -> `6 passed`
+- `./infra/pre-commit.py --fix ...` on touched RL files -> `OK`
+
+Relaunch sequence after this fix:
+
+### Attempt `r3` — executor config still contained raw config class objects
+- `/ahmed/iris-rl-oom-b120-uc1-r3`
+- root placement remained correct in `us-central1` on `v5p-8`.
+- failed before step launch because executor dependency/version traversal hit `AttributeError: type object 'LlamaConfig' has no attribute 'rope'` while walking the class object.
+
+### Attempt `r4` — version traversal fixed, metadata serialization still broken on class object
+- `/ahmed/iris-rl-oom-b120-uc1-r4`
+- executor reached dependency discovery and identified both steps.
+- failed while writing executor metadata because the class object was still present in serialized step config.
+
+### Attempt `r5` — class serialization fixed, wrong model subpath exposed
+- `/ahmed/iris-rl-oom-b120-uc1-r5`
+- executor launched two steps as intended:
+  - `models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f` (skipped as already succeeded in `us-central1`)
+  - `rl_testing/l31-8bi-b120-...`
+- RL step reached runtime bootstrap, proving the HF launcher dependency was removed.
+- new failure: tokenizer bootstrap used the wrong subpath (`.../hf`) for this download step layout and failed inside `AutoTokenizer` with `AttributeError: 'NoneType' object has no attribute 'endswith'`.
+
+### Attempt `r6` — first healthy launch through cached model-step path
+- `/ahmed/iris-rl-oom-b120-uc1-r6`
+- root job is `RUNNING` in `us-central1`.
+- nested executor child `/ahmed/iris-rl-oom-b120-uc1-r6/rl_testing-l31-8bi-b120-20260324-065718_d700d4fc-a5b2ef1c` is also `RUNNING`.
+- observed behavior confirms the intended DAG/caching behavior:
+  - executor discovered two steps,
+  - skipped the cached model download step in `gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f`,
+  - launched the RL step afterward.
+- the RL step now gets materially deeper into startup than prior attempts (past root construction, past class serialization, past model-step resolution, past the bad `/hf` tokenizer path).
+- latest visible logs show the nested RL step still running after model/bootstrap setup; no new hard failure captured yet at logbook update time.
+
+Interpretation:
+- the original requested fix is now working:
+  - no fresh HF read in the launcher,
+  - regional model artifact is part of the executor DAG,
+  - cached model download results are reused automatically in-region,
+  - region pinning remains in force for root and RL step launch.
+- remaining runtime investigation, if needed, should now focus on actual RL worker startup behavior rather than HF/bootstrap pathing.

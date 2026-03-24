@@ -1,16 +1,34 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+
+import pytest
 from levanter.models.llama import LlamaConfig
+from marin.execution.executor import ExecutorStep, output_path_of
+from marin.rl.curriculum import CurriculumConfig
+from marin.rl.model_utils import is_hf_checkpoint
 from marin.rl.rl_experiment_utils import (
     ModelConfig,
     RLExperimentConfig,
+    config_class_path,
     executor_main_config_for_rl_experiment,
     executor_step_resources_for_rl_experiment,
+    launcher_region_for_rl_experiment,
+    make_rl_step,
 )
 from marin.rl.rl_losses import RLOOLoss
 
 MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
+
+
+@dataclasses.dataclass(frozen=True)
+class _EmptyConfig:
+    pass
+
+
+def _noop(_config: _EmptyConfig) -> None:
+    return None
 
 
 def _test_config(*, train_tpu_type: str, inference_tpu_type: str) -> RLExperimentConfig:
@@ -18,9 +36,8 @@ def _test_config(*, train_tpu_type: str, inference_tpu_type: str) -> RLExperimen
         model_config=ModelConfig(
             name=MODEL_NAME,
             type="llama",
-            tokenizer=MODEL_NAME,
-            checkpoint=MODEL_NAME,
-            config_class=LlamaConfig,
+            artifact=MODEL_NAME,
+            config_class_path=config_class_path(LlamaConfig),
         ),
         rl_loss=RLOOLoss(
             kl_coef=0.0,
@@ -38,23 +55,38 @@ def _test_config(*, train_tpu_type: str, inference_tpu_type: str) -> RLExperimen
     )
 
 
-def test_v5p_executor_step_regions_are_us_central1_or_us_east5():
+def _test_curriculum() -> CurriculumConfig:
+    return CurriculumConfig(
+        lessons={},
+        eval_frequency=1,
+        micro_eval_frequency=1,
+        actor_name="curriculum-test",
+        eval_n_examples=1,
+        max_seq_len=16,
+    )
+
+
+def test_executor_step_regions_follow_current_launcher_region(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-east5")
+
     resources = executor_step_resources_for_rl_experiment(
         _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8")
     )
 
-    assert resources.regions == ["us-central1", "us-east5"]
+    assert resources.regions == ["us-east5"]
 
 
-def test_non_v5p_executor_step_regions_are_unset():
+def test_non_v5p_executor_step_regions_follow_current_launcher_region(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-eu-west4")
+
     resources = executor_step_resources_for_rl_experiment(
         _test_config(train_tpu_type="v6e-4", inference_tpu_type="v6e-4")
     )
 
-    assert resources.regions is None
+    assert resources.regions == ["europe-west4"]
 
 
-def test_v5p_executor_main_config_uses_allowed_env_region(monkeypatch):
+def test_executor_main_config_uses_current_launcher_region_prefix(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-east5")
 
     executor_config = executor_main_config_for_rl_experiment(
@@ -64,11 +96,42 @@ def test_v5p_executor_main_config_uses_allowed_env_region(monkeypatch):
     assert executor_config.prefix == "gs://marin-us-east5"
 
 
-def test_v5p_executor_main_config_defaults_to_us_central1_outside_allowed_regions(monkeypatch):
+def test_launcher_region_raises_when_root_region_conflicts_with_requested_compute(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-eu-west4")
 
-    executor_config = executor_main_config_for_rl_experiment(
-        _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8")
+    monkeypatch.setattr(
+        "marin.rl.placement.infer_tpu_variant_regions_from_iris",
+        lambda variants: ["us-central1", "us-east5"],
     )
 
-    assert executor_config.prefix == "gs://marin-us-central1"
+    with pytest.raises(ValueError, match="current launcher region"):
+        launcher_region_for_rl_experiment(_test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"))
+
+
+def test_make_rl_step_uses_model_step_artifact_root_as_dependency(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
+    model_step = ExecutorStep(name="models/test-llama", fn=_noop, config=_EmptyConfig())
+    config = dataclasses.replace(
+        _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
+        model_config=ModelConfig(
+            name=MODEL_NAME,
+            type="llama",
+            artifact=model_step,
+            config_class_path=config_class_path(LlamaConfig),
+        ),
+    )
+
+    step = make_rl_step(name="rl-test", config=config, curriculum=_test_curriculum())
+
+    assert step.config.model_path == output_path_of(model_step)
+    assert step.config.experiment_config.model_config.artifact == output_path_of(model_step)
+
+
+def test_is_hf_checkpoint_recognizes_gcs_hf_exports(monkeypatch):
+    hf_files = {
+        "gs://marin-us-central1/models/test-model/hf/config.json",
+    }
+    monkeypatch.setattr("marin.rl.model_utils.fsspec_exists", lambda path: path in hf_files)
+
+    assert is_hf_checkpoint("gs://marin-us-central1/models/test-model/hf")
+    assert not is_hf_checkpoint("gs://marin-us-central1/checkpoints/test-run")

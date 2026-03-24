@@ -7,6 +7,7 @@ import datetime
 import logging
 import os
 
+from experiments.models import llama_3_1_8b_instruct
 from levanter.models.llama import LlamaConfig
 from marin.execution.executor import executor_main
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
@@ -16,6 +17,7 @@ from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rl_experiment_utils import (
     ModelConfig,
     RLExperimentConfig,
+    config_class_path,
     executor_main_config_for_rl_experiment,
     make_rl_step,
 )
@@ -26,9 +28,8 @@ logger = logging.getLogger(__name__)
 llama_3_1_8b = ModelConfig(
     name="meta-llama/Llama-3.1-8B-Instruct",
     type="llama",
-    tokenizer="meta-llama/Llama-3.1-8B-Instruct",
-    checkpoint="meta-llama/Llama-3.1-8B-Instruct",
-    config_class=LlamaConfig,
+    artifact=llama_3_1_8b_instruct,
+    config_class_path=config_class_path(LlamaConfig),
 )
 
 
@@ -117,7 +118,7 @@ def main():
         )
 
     executor_main(
-        config=executor_main_config_for_rl_experiment(llama_8b),
+        executor_main_config_for_rl_experiment(llama_8b),
         steps=experiments,
         description="Async RL math training experiments",
     )

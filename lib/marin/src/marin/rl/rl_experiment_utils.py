@@ -3,25 +3,25 @@
 
 import dataclasses
 import datetime
+import importlib
 import logging
 
 import jmp
-from iris.marin_fs import marin_region
 from fray.v2.types import ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.layers.attention import AttentionBackend
-from levanter.compat.hf_checkpoints import HFCompatConfig
 from levanter.distributed import RayConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from transformers import AutoConfig
 from levanter.utils.mesh import MeshConfig
 
-from marin.execution.executor import ExecutorMainConfig, ExecutorStep, OutputName
+from marin.execution.executor import ExecutorMainConfig, ExecutorStep, InputName, OutputName, output_path_of
 from marin.execution.remote import remote
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.environments.inference_ctx import VLLMSamplingConfig, vLLMInferenceContextConfig
+from marin.rl.placement import marin_prefix_for_region, resolve_launcher_region, singleton_region_list
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLLossModule
@@ -32,26 +32,32 @@ from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 logger = logging.getLogger(__name__)
 
 RL_EXECUTOR_STEP_RESOURCES = ResourceConfig.with_cpu(cpu=1, ram="4g", disk="64g")
-V5P_ALLOWED_REGIONS = ("us-central1", "us-east5")
-DEFAULT_V5P_REGION = "us-central1"
-REGION_TO_MARIN_PREFIX = {
-    "us-central1": "gs://marin-us-central1",
-    "us-east5": "gs://marin-us-east5",
-}
+
+
+ModelArtifact = ExecutorStep | InputName | str
 
 
 @dataclasses.dataclass
 class ModelConfig:
     name: str
     type: str
-    tokenizer: str
-    checkpoint: str
-    config_class: type[HFCompatConfig]
+    artifact: ModelArtifact
+    config_class_path: str
     pip_dependency_groups: list[str] | None = None
 
     @property
     def safe_name(self) -> str:
         return self.name.replace("/", "-").lower()
+
+
+@dataclasses.dataclass
+class RLStepConfig:
+    """Runtime config for an RL executor step."""
+
+    name: str
+    experiment_config: "RLExperimentConfig"
+    curriculum: CurriculumConfig
+    model_path: str
 
 
 @dataclasses.dataclass
@@ -113,31 +119,23 @@ class RLExperimentConfig:
     num_rollout_workers: int = 1
 
 
-def _uses_v5p(config: RLExperimentConfig) -> bool:
-    return config.train_tpu_type.startswith("v5p") or config.inference_tpu_type.startswith("v5p")
+def launcher_region_for_rl_experiment(config: RLExperimentConfig) -> str:
+    """Return the concrete region that should host the RL launcher and workers."""
+    return resolve_launcher_region(config.train_tpu_type, config.inference_tpu_type)
 
 
 def executor_step_resources_for_rl_experiment(config: RLExperimentConfig) -> ResourceConfig:
-    """Return executor-step resources, pinning v5p RL runs to US TPU regions."""
-    if not _uses_v5p(config):
-        return RL_EXECUTOR_STEP_RESOURCES
-
+    """Return executor-step resources pinned to the RL launch region."""
     return dataclasses.replace(
         RL_EXECUTOR_STEP_RESOURCES,
-        regions=list(V5P_ALLOWED_REGIONS),
+        regions=singleton_region_list(launcher_region_for_rl_experiment(config)),
     )
 
 
 def executor_main_config_for_rl_experiment(config: RLExperimentConfig) -> ExecutorMainConfig:
-    """Return executor config with a region-local US prefix for v5p RL runs."""
-    if not _uses_v5p(config):
-        return ExecutorMainConfig()
-
-    region = marin_region()
-    if region not in REGION_TO_MARIN_PREFIX:
-        region = DEFAULT_V5P_REGION
-
-    return ExecutorMainConfig(prefix=REGION_TO_MARIN_PREFIX[region])
+    """Return executor config with a region-local Marin prefix."""
+    region = launcher_region_for_rl_experiment(config)
+    return ExecutorMainConfig(prefix=marin_prefix_for_region(region))
 
 
 def get_stop_tokens(model_type: str) -> list[str]:
@@ -150,14 +148,47 @@ def get_stop_tokens(model_type: str) -> list[str]:
         raise ValueError(f"Unknown model_type: {model_type}")
 
 
-def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumConfig) -> ExecutorStep:
-    hf_config = AutoConfig.from_pretrained(config.model_config.name)
-    model_config_cls = config.model_config.config_class.from_hf_config(hf_config)
+def _resolve_model_artifact_path(artifact: ModelArtifact) -> InputName | str:
+    if isinstance(artifact, ExecutorStep):
+        return output_path_of(artifact)
+
+    return artifact
+
+
+def config_class_path(config_class: type[HFCompatConfig]) -> str:
+    return f"{config_class.__module__}.{config_class.__qualname__}"
+
+
+def _resolve_config_class(config_class_path: str) -> type[HFCompatConfig]:
+    module_name, _, qualname = config_class_path.rpartition(".")
+    if not module_name or not qualname:
+        raise ValueError(f"Invalid config class path: {config_class_path}")
+
+    obj = importlib.import_module(module_name)
+    for attr in qualname.split("."):
+        obj = getattr(obj, attr)
+
+    if not isinstance(obj, type):
+        raise TypeError(f"Resolved config class is not a type: {config_class_path}")
+
+    return obj
+
+
+def _build_rl_job_config(
+    name: str, config: RLExperimentConfig, curriculum: CurriculumConfig, model_path: str
+) -> RLJobConfig:
+    model_config_class = _resolve_config_class(config.model_config.config_class_path)
+    converter = HFCheckpointConverter(
+        LevConfigClass=model_config_class,
+        reference_checkpoint=model_path,
+        tokenizer=model_path,
+    )
+    model_config_cls = model_config_class.from_hf_config(converter.default_hf_config)
 
     model_config = dataclasses.replace(
         model_config_cls,
         max_seq_len=config.max_input_tokens + config.max_output_tokens,
-        tokenizer=config.model_config.tokenizer,
+        tokenizer=model_path,
         attn_backend=AttentionBackend.SPLASH,
     )
 
@@ -209,7 +240,7 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
     # Create RLJobConfig using the unified interface
     job_config = RLJobConfig(
         model=model_config,
-        vocab_size=hf_config.vocab_size,
+        vocab_size=converter.default_hf_config.vocab_size,
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=opt_config,
@@ -222,10 +253,10 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
             ),
         ),
         curriculum=curriculum,
-        tokenizer=config.model_config.tokenizer,
+        tokenizer=model_path,
         inference_type="vllm",
         inference_config=vLLMInferenceContextConfig(
-            model_name=config.model_config.name,
+            model_name=model_path,
             max_model_len=config.max_input_tokens + config.max_output_tokens,
             tensor_parallel_size=config.inference_tensor_parallel_size,
             gpu_memory_utilization=config.inference_gpu_memory_utilization,
@@ -240,7 +271,7 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
             ),
             load_format="dummy",
         ),
-        initial_checkpoint=config.model_config.checkpoint,
+        initial_checkpoint=model_path,
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
         run_id=name,
@@ -250,6 +281,7 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
             num_train_slices=config.num_train_slices,
             num_rollout_workers=config.num_rollout_workers,
             inference_tpu_type=config.inference_tpu_type,
+            regions=singleton_region_list(launcher_region_for_rl_experiment(config)),
         ),
         inflight_weight_updates=config.inflight_weight_updates,
         rollout_tracker=RolloutTrackerConfig(
@@ -262,9 +294,32 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
         ),
     )
 
+    return job_config
+
+
+def _run_rl_experiment_step(config: RLStepConfig):
+    job_config = _build_rl_job_config(
+        name=config.name,
+        config=config.experiment_config,
+        curriculum=config.curriculum,
+        model_path=config.model_path,
+    )
+    return RLJob(job_config).run(config.name)
+
+
+def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumConfig) -> ExecutorStep:
+    model_path = _resolve_model_artifact_path(config.model_config.artifact)
+    runtime_model_config = dataclasses.replace(config.model_config, artifact=model_path)
+    runtime_config = dataclasses.replace(config, model_config=runtime_model_config)
+
     return ExecutorStep(
         name=f"rl_testing/{name}",
         description=f"Async RL training: {name}",
-        fn=remote(resources=executor_step_resources_for_rl_experiment(config))(RLJob.make_step_fn()),
-        config=job_config,
+        fn=remote(resources=executor_step_resources_for_rl_experiment(config))(_run_rl_experiment_step),
+        config=RLStepConfig(
+            name=name,
+            experiment_config=runtime_config,
+            curriculum=curriculum,
+            model_path=model_path,
+        ),
     )

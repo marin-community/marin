@@ -4,25 +4,26 @@
 import gc
 import logging
 import os
-import time
 import re
+import time
+from dataclasses import dataclass
+from enum import StrEnum
+
 import jax
 import jax.numpy as jnp
 import numpy as np
-from enum import StrEnum
-from dataclasses import dataclass
+from levanter.compat.hf_checkpoints import load_tokenizer
+from levanter.models.lm_model import LmHeadModel
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.completion_usage import CompletionUsage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob, TopLogprob
-from levanter.models.lm_model import LmHeadModel
-from transformers import AutoTokenizer
-from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
-from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 from marin.rl.environments.inference_ctx.render import Llama3Renderer, Qwen3Renderer, Renderer, Message
+from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
+from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +111,7 @@ class vLLMInferenceContext(BaseInferenceContext):
         # )
         self.mesh = None
         self.axis_mapping = {}
-        self.tokenizer = AutoTokenizer.from_pretrained(inference_config.model_name)
+        self.tokenizer = load_tokenizer(inference_config.model_name)
         self.model_name = inference_config.model_name
         self.sampling_config = inference_config.sampling_params
         self._use_final_only = inference_config.mode == InferenceMode.ASYNC

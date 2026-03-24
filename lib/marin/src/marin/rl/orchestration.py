@@ -22,6 +22,7 @@ from fray.v2 import (
     wait_all,
 )
 from iris.logging import configure_logging
+from marin.rl.placement import resolve_launcher_region, singleton_region_list
 from marin.rl.rl_job import RLJob, RLJobConfig
 from marin.rl.run_state import RLRunState
 from marin.rl.runtime import RLRuntimeHandles, WeightTransferRuntime
@@ -117,9 +118,13 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
     # Resource configs
     inference_tpu_type = run_config.inference_tpu_type or run_config.train_tpu_type
     # All Iris compute is preemptible — never set preemptible=False.
-    # Explicitly set regions to avoid inheriting the coordinator's region
-    # (coordinator may land in a region that has no TPU scale groups).
-    tpu_regions = ["us-central1", "us-east5"]
+    # Use one concrete region for the whole RL run so CPU/driver and TPU
+    # layers stay co-located. Fall back to resolving from the current launcher
+    # region for older callers that do not set run_config.regions.
+    if run_config.regions:
+        tpu_regions = list(run_config.regions)
+    else:
+        tpu_regions = singleton_region_list(resolve_launcher_region(run_config.train_tpu_type, inference_tpu_type))
     train_resources = ResourceConfig.with_tpu(
         run_config.train_tpu_type,
         slice_count=run_config.num_train_slices,

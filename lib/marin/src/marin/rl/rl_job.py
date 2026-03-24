@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from fray.v2 import JobHandle
+from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
 from levanter.models.lm_model import LmConfig
@@ -31,7 +32,7 @@ from marin.rl.rollout_worker import RolloutWorkerConfig, RolloutTrackerConfig
 from marin.rl.train_worker import TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
 from marin.utilities.json_encoder import CustomJsonEncoder
-from transformers import AutoTokenizer, PreTrainedTokenizer
+from transformers import PreTrainedTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,9 @@ class RunConfig:
 
     num_train_slices: int = 1
     """Number of TPU slices for training worker"""
+
+    regions: list[str] | None = None
+    """Concrete region(s) to use for all RL worker jobs."""
 
     max_retries_failure: int = 3
     """Maximum retries on worker failure (task code crashes, OOM, etc.)"""
@@ -78,7 +82,7 @@ class TrainParams:
 
 def make_tokenizer(tokenizer: str | PreTrainedTokenizer) -> PreTrainedTokenizer:
     if isinstance(tokenizer, str):
-        return AutoTokenizer.from_pretrained(tokenizer)
+        return load_tokenizer(tokenizer)
     return tokenizer
 
 
