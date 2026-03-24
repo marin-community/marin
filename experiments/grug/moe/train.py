@@ -24,7 +24,7 @@ import levanter.callbacks as callbacks
 import levanter.tracker
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.checkpoint import load_checkpoint
+from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from levanter.data import AsyncDataset, DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
 from levanter.data.text import GrugLmExample, LmDataConfig
@@ -389,23 +389,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         checkpoint_path = trainer.load_checkpoint_path
         if checkpoint_path is None and checkpointer is not None:
             checkpoint_path = trainer.checkpointer.expanded_path(run_id)
-        if checkpoint_path is None:
-            if trainer.load_checkpoint:
-                raise FileNotFoundError("load_checkpoint=True but no checkpoint path is configured.")
-        elif trainer.load_checkpoint is not False:
-            try:
-                state = load_checkpoint(
-                    state,
-                    checkpoint_path,
-                    discover_latest=True,
-                    axis_mapping=None,
-                    mesh=mesh,
-                    allow_partial=trainer.allow_partial_checkpoint,
-                )
-            except FileNotFoundError:
-                if trainer.load_checkpoint is True:
-                    raise
-                logger.info(f"Checkpoint not found at {checkpoint_path}. Starting from scratch.")
+        state = restore_grug_state_from_checkpoint(
+            state,
+            checkpoint_path=checkpoint_path,
+            load_checkpoint_setting=trainer.load_checkpoint,
+            mesh=mesh,
+            allow_partial=trainer.allow_partial_checkpoint,
+        )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
@@ -513,11 +503,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         levanter.tracker.log(watch_stats, step=step)
 
                 if checkpointer is not None:
-                    checkpointer.on_step(tree={"train_state": state}, step=int(state.step))
+                    checkpointer.on_step(tree=state, step=int(state.step))
         finally:
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
-                checkpointer.on_step(tree={"train_state": state}, step=int(state.step), force=True)
+                checkpointer.on_step(tree=state, step=int(state.step), force=True)
                 checkpointer.wait_until_finished()
 
     levanter.tracker.current_tracker().finish()
