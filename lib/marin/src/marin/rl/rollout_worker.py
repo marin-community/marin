@@ -10,6 +10,7 @@ and writes the rollout data to files for training workers to consume.
 
 import dataclasses
 import faulthandler
+import hashlib
 import logging
 import os
 import random
@@ -18,15 +19,18 @@ import socket
 import sys
 import threading
 import time
+import tempfile
 from dataclasses import dataclass, field
 from collections.abc import Mapping
 from typing import Any
 import wandb
+from urllib.parse import urlparse
 
 import equinox as eqx
 import haliax as hax
 import jax
 import jax.random as jrandom
+from iris.marin_fs import url_to_fs
 import levanter
 from jax.experimental import multihost_utils
 from levanter.inference.openai import InferenceServer
@@ -63,6 +67,18 @@ from .weight_transfer.base import WeightUpdate
 from .weight_transfer import WeightTransferClient, WeightTransferConfig, create_weight_transfer_client
 
 logger = logging.getLogger(__name__)
+
+_VLLM_METADATA_CACHE_ROOT = os.path.join(tempfile.gettempdir(), "marin-rl-vllm-metadata")
+_VLLM_METADATA_FILES = (
+    "config.json",
+    "generation_config.json",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "tokenizer.model",
+    "tokenizer_config.json",
+    "model.safetensors.index.json",
+    "params.json",
+)
 
 
 class _NoOpTracker:
@@ -273,11 +289,52 @@ def create_inference_context(
             inference_config=inference_config,
         )
     elif inference_type == "vllm" and inflight_weight_updates:
+        inference_config = _prepare_vllm_inference_config(inference_config)
         return AsyncvLLMInferenceContext(
             inference_config=inference_config,
         )
 
     raise ValueError(f"Invalid inference type: {inference_type}")
+
+
+def _prepare_vllm_inference_config(inference_config: vLLMInferenceContextConfig) -> vLLMInferenceContextConfig:
+    model_path = inference_config.model_name
+    if urlparse(model_path).scheme not in {"gs", "s3"}:
+        return inference_config
+
+    local_model_path = _stage_vllm_metadata_locally(model_path)
+    logger.info(
+        "Using local staged vLLM metadata for inflight rollout startup: %s -> %s",
+        model_path,
+        local_model_path,
+    )
+    return dataclasses.replace(
+        inference_config,
+        model_name=local_model_path,
+        load_format="dummy",
+    )
+
+
+def _stage_vllm_metadata_locally(model_path: str) -> str:
+    fs, fs_path = url_to_fs(model_path)
+    cache_key = hashlib.sha256(model_path.encode("utf-8")).hexdigest()[:16]
+    local_dir = os.path.join(_VLLM_METADATA_CACHE_ROOT, cache_key)
+    os.makedirs(local_dir, exist_ok=True)
+
+    for filename in _VLLM_METADATA_FILES:
+        remote_path = os.path.join(fs_path, filename)
+        local_path = os.path.join(local_dir, filename)
+        if os.path.exists(local_path):
+            continue
+        if not fs.exists(remote_path):
+            continue
+        fs.get(remote_path, local_path)
+
+    config_path = os.path.join(local_dir, "config.json")
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Failed to stage config.json for vLLM metadata from {model_path}")
+
+    return local_dir
 
 
 class RolloutWorker:

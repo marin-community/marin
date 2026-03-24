@@ -5,6 +5,7 @@ import dataclasses
 import datetime
 import importlib
 import logging
+from urllib.parse import urlparse
 
 import jmp
 from fray.v2.types import ResourceConfig
@@ -157,6 +158,16 @@ def _resolve_model_artifact_path(artifact: ModelArtifact) -> InputName | str:
     return artifact
 
 
+def _vllm_load_format_for_model_path(model_path: str) -> str:
+    if urlparse(model_path).scheme in {"gs", "s3"}:
+        # vLLM requires the streaming loader for object-store checkpoints.
+        # `dummy` works for some local/HF cases where weights arrive later via
+        # Arrow Flight, but remote object-store paths now fail validation.
+        return "runai_streamer"
+
+    return "dummy"
+
+
 def config_class_path(config_class: type[HFCompatConfig]) -> str:
     return f"{config_class.__module__}.{config_class.__qualname__}"
 
@@ -265,6 +276,7 @@ def _build_rl_job_config(
         inference_type="vllm",
         inference_config=vLLMInferenceContextConfig(
             model_name=model_path,
+            canonical_model_name=config.model_config.name,
             max_model_len=config.max_input_tokens + config.max_output_tokens,
             tensor_parallel_size=config.inference_tensor_parallel_size,
             gpu_memory_utilization=config.inference_gpu_memory_utilization,
@@ -277,7 +289,7 @@ def _build_rl_job_config(
                 logprobs=1,
                 top_k=config.inference_top_k,
             ),
-            load_format="dummy",
+            load_format=_vllm_load_format_for_model_path(model_path),
         ),
         initial_checkpoint=model_path,
         rollout_storage=rollout_storage,

@@ -162,11 +162,11 @@ class WorkerExtension:
         # Deserialize from (bytes, dtype, shape) tuples back to numpy arrays
         deserialized_state_dict = deserialize_state_dict_from_rpc(new_state_dict)
         new_state = levanter_state_dict_to_nnx_state_on_cpu(deserialized_state_dict)
-        self.model_runner._sync_weights(
+        self.sync_weights(
             new_state,
-            MODEL_MAPPINGS[model_name],
-            MODEL_TRANSPOSE_KEYS[model_name],
-            None,
+            mappings=MODEL_MAPPINGS[model_name],
+            transpose_keys=MODEL_TRANSPOSE_KEYS[model_name],
+            reshard_fn=None,
         )
 
 

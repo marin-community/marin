@@ -1140,3 +1140,755 @@ Tests / validation:
 
 Additional local debug artifact:
 - `docs/debug-log-iris-rl-failure-surfacing.md` captures the live cluster diagnosis and reasoning for the coordinator/process-liveness bug.
+
+## 2026-03-24 UTC — Live relaunch `r7` after surfacing/runtime-path fixes
+
+Operator action:
+- checked live `/ahmed/` jobs before relaunch; there were no running `iris-rl-*` jobs left to kill.
+- unrelated active jobs were only model-download / Zephyr download jobs and were left untouched.
+- launched:
+  - `/ahmed/iris-rl-oom-b120-uc1-r7`
+  - with explicit root placement `--region us-central1` and `MARIN_PREFIX=gs://marin-us-central1`
+
+Observed startup behavior:
+- root job launched on `marin-tpu_v5p_8-us-central1-a-20260324-0544-c021e7c8-worker-0`.
+- executor again discovered exactly two top-level steps:
+  - cached model download `gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f`
+  - RL step `gs://marin-us-central1/rl_testing/l31-8bi-b120-20260324-072435-268031`
+- cached model step was skipped as already succeeded in-region.
+- the previous RL runtime-path bug did **not** recur:
+  - no `AttributeError: 'OutputName' object has no attribute 'rstrip'`
+
+Observed Iris surfacing behavior:
+- root `iris job bug-report /ahmed/iris-rl-oom-b120-uc1-r7` immediately showed descendant jobs, confirming the descendant-summary patch is active.
+- descendant tree progressed as:
+  - root launcher
+  - executor child `.../rl_testing-l31-8bi-b120-20260324-072435_796d02a9-e14db7d9`
+  - RL coordinator `.../rl-l31-8bi-b120-20260324-072435`
+  - later, train and rollout child jobs became visible from the root bug report:
+    - `.../rl-l31-8bi-b120-20260324-072435-train`
+    - `.../rl-l31-8bi-b120-20260324-072435-rollout-0`
+
+New transient infra issue observed during live monitor:
+- the RL coordinator's first CPU task attempt hit:
+  - `Worker marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260324-0657-eaf8c875-worker-0 failed: Request timed out`
+- Iris retried that coordinator task automatically onto a fresh worker:
+  - `marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260324-0725-35ada24a-worker-0`
+- bug report for the coordinator showed:
+  - attempt `0`: `worker_failed`
+  - attempt `1`: progressed from `building` to `running`
+
+State at `2026-03-24T07:29:56Z`:
+- root job `/ahmed/iris-rl-oom-b120-uc1-r7`: `running`
+- RL executor child: `running`
+- RL coordinator: `running` on retry attempt `1`
+- train child: `pending`
+- rollout child: `pending`
+
+Interpretation:
+- the requested code fixes are behaving as intended so far:
+  - root bug reports now expose descendant RL jobs,
+  - RL runtime config now uses concrete output paths,
+  - the old hidden-failure + `OutputName` crash path has not reappeared in `r7`.
+- the current blocker, if this run later fails, is likely separate:
+  - transient CPU worker instability / timeout during coordinator placement or later downstream child startup,
+  - not the previously fixed RL config/surfacing bugs.
+
+## 2026-03-24 UTC — Active research goal and handoff contract
+
+Active goal for this thread:
+- get the Iris RL path stable enough to run the 500-step case end-to-end.
+- this is now the top-level success criterion, superseding "migration landed" as the practical target.
+
+Operational stop criteria:
+- stop only when a 500-step RL run completes successfully with the intended train/rollout topology, or when a blocker is proven unrecoverable without a broader design change.
+- do not stop at first child-job creation, first W&B link, or first short successful startup.
+
+Current monitoring owner:
+- Codex agent in `iris_rl` worktree, using `agent-research` + `babysit-job`.
+
+Current live monitor metadata:
+- track: `iris`
+- active root job: `/ahmed/iris-rl-oom-b120-uc1-r7`
+- Iris config: `lib/iris/examples/marin.yaml`
+- monitoring state file:
+  - `scratch/20260324-0033_monitoring_state.json`
+- current resubmit command on disk:
+  - `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name iris-rl-oom-b120-uc1-r7 --region us-central1 --cpu 2 --memory 8GB -e OOM_CASE baseline_ckpt_120 -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -e MARIN_PREFIX gs://marin-us-central1 -- uv run python experiments/exp_iris_rl_oom_isolation.py`
+
+Current live interpretation:
+- `r7` has validated the recent code fixes further than prior attempts:
+  - descendant jobs now surface in root bug reports,
+  - concrete output-path fix held,
+  - cached regional model artifact dependency held.
+- the active failure mode is now infra/startup-adjacent:
+  - first RL coordinator CPU worker attempt timed out,
+  - Iris retried onto a fresh CPU worker,
+  - train and rollout child jobs are now present but still pending at latest check.
+
+Next-agent contract after context compaction:
+- resume from `scratch/20260324-0033_monitoring_state.json`.
+- continue append-only updates in this logbook with:
+  - exact UTC timestamp,
+  - exact Iris command(s),
+  - current job tree state,
+  - failure signatures and recovery steps,
+  - decision for next action.
+- if `r7` reaches a terminal failure:
+  - inspect descendant bug reports first,
+  - apply only small/local code fixes automatically,
+  - for complex failures, log the exact signature and choose the narrowest next debug path,
+  - then stop the failed job and resubmit using the saved command or an explicitly updated replacement command.
+- if `r7` runs long enough to produce meaningful train progress:
+  - capture progress as `~<current>/500`,
+  - record W&B link if visible,
+  - keep monitoring until terminal success or clear failure.
+
+## 2026-03-24T07:35Z — `r7` reached live train startup; rollout blocked on TPU capacity
+
+Exact monitor commands:
+- `uv run iris --config=lib/iris/examples/marin.yaml job bug-report /ahmed/iris-rl-oom-b120-uc1-r7/rl_testing-l31-8bi-b120-20260324-072435_796d02a9-e14db7d9/rl-l31-8bi-b120-20260324-072435/rl-l31-8bi-b120-20260324-072435-train`
+- `uv run iris --config=lib/iris/examples/marin.yaml job bug-report /ahmed/iris-rl-oom-b120-uc1-r7/rl_testing-l31-8bi-b120-20260324-072435_796d02a9-e14db7d9/rl-l31-8bi-b120-20260324-072435/rl-l31-8bi-b120-20260324-072435-rollout-0`
+
+Observed state:
+- trainer child is now `running` on:
+  - `marin-tpu_v5p_8-us-central1-a-20260324-0729-b4b205de-worker-0`
+- rollout child is still `pending`.
+
+Useful concrete evidence from train logs:
+- W&B run created successfully:
+  - project: `https://wandb.ai/marin-community/marin_iris_rl_debug`
+  - run: `https://wandb.ai/marin-community/marin_iris_rl_debug/runs/l31-8bi-b120-20260324-072435-train`
+- rollout storage reader initialized successfully at:
+  - `gs://marin-us-central1/rl_testing/l31-8bi-b120-20260324-072435-268031/rollouts`
+- Arrow Flight servers started successfully on the trainer host.
+
+Rollout pending reason:
+- `Scheduler: Insufficient TPUs (need 4, available 0)`
+- autoscaler detail:
+  - waiting for workers in scale group `tpu_v5p_8-us-central1-a` to become ready
+
+Interpretation:
+- the previously fixed startup path is now validated more strongly:
+  - trainer startup reached JAX distributed init, W&B init, rollout-storage init, and Arrow Flight server startup.
+- current blocker is scheduler capacity, not an RL code exception:
+  - train is alive,
+  - rollout is waiting for a `v5p-8` worker in `us-central1`.
+
+Next action:
+- continue babysit loop without resubmitting while rollout remains in scheduler-capacity wait.
+- if rollout later fails terminally or trainer emits a real traceback/OOM/HBM error, switch from passive monitor back to active debugging.
+
+## 2026-03-24T07:36Z — Autoscaler evidence for rollout stall
+
+Exact monitor commands:
+- `uv run iris --config=lib/iris/examples/marin.yaml rpc controller get-autoscaler-status`
+- `uv run iris --config=lib/iris/examples/marin.yaml query -f json "SELECT job_id, name, state, error FROM jobs WHERE job_id LIKE '/ahmed/iris-rl-oom-b120-uc1-r7%' ORDER BY submitted_at_ms ASC"`
+
+Relevant autoscaler facts for the live `r7` rollout wait:
+- active unscheduled task is:
+  - `/ahmed/iris-rl-oom-b120-uc1-r7/.../rl-l31-8bi-b120-20260324-072435-rollout-0/0`
+- routed scale group is:
+  - `tpu_v5p_8-us-central1-a`
+- one `v5p-8` slice for the trainer was created and became ready:
+  - `marin-tpu_v5p_8-us-central1-a-20260324-0729-b4b205de`
+- the second `v5p-8` slice needed for rollout failed once at GCP allocation time:
+  - `There is no more capacity in the zone "us-central1-a"`
+- latest autoscaler action still shows another scale-up attempt for the same group as `pending`.
+
+Interpretation:
+- rollout is blocked by real zone capacity in `us-central1-a`, not by an RL code exception or unresolved dependency.
+- this is compatible with the earlier design decision to keep driver/CPU and TPU children in one concrete region.
+- if the pending rollout wait does not clear, the likely recovery path is not code editing first; it is a placement decision:
+  - either keep waiting for `us-central1-a`,
+  - or relaunch the whole root job in `us-east5` so the entire RL tree stays region-coherent there instead.
+
+## 2026-03-24T07:37Z — Both TPU children allocated; trainer is waiting on first rollout batch
+
+Exact monitor commands:
+- `uv run iris --config=lib/iris/examples/marin.yaml job bug-report /ahmed/iris-rl-oom-b120-uc1-r7/.../rl-l31-8bi-b120-20260324-072435-rollout-0`
+- `uv run iris --config=lib/iris/examples/marin.yaml job logs --since-seconds 600 --include-children /ahmed/iris-rl-oom-b120-uc1-r7 | rg -i ...`
+
+Observed state:
+- rollout child is now `running` on:
+  - `marin-tpu_v5p_8-us-central1-a-20260324-0732-2552ab5f-worker-0`
+- trainer child remained `running`.
+
+Important train-side evidence:
+- trainer loaded the regional base checkpoint successfully from:
+  - `gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f`
+- trainer entered training setup and published initial Arrow Flight weights:
+  - `Serialized model to Arrow ... total size 15316.51 MB`
+  - `Served weights for weight_id -1`
+- trainer then blocked in the expected place:
+  - `Waiting for initial rollouts from step -1...`
+  - repeated status: `buffer size: 0`
+
+Interpretation:
+- there is still no RL-code exception in the hot path after both TPU children were created.
+- current gating condition is now rollout-worker startup / first rollout generation, not scheduling.
+- next thing to watch:
+  - rollout worker init,
+  - first rollout write into `gs://.../rollouts`,
+  - trainer exiting the `Waiting for initial rollouts` loop,
+  - then actual train-step progress.
+
+## 2026-03-24T07:40Z — Rollout vLLM bootstrap failure identified, patched, and relaunched as `r8`
+
+Failure observed in live `r7` rollout logs:
+- rollout child crashed during async vLLM engine init with:
+  - `pydantic_core._pydantic_core.ValidationError`
+  - `To load a model from S3, 'load_format' must be 'runai_streamer' or 'runai_streamer_sharded', but got 'dummy'`
+- trainer behavior during this failure was consistent:
+  - kept waiting for initial rollouts with `buffer size: 0`
+
+Diagnosis:
+- RL experiment setup still hardcoded `load_format="dummy"` for rollout-side vLLM startup.
+- that assumption no longer holds for object-store-backed model artifacts (`gs://...`) now used by the RL path.
+- existing Marin inference code already handles this class of path by switching to `runai_streamer`.
+
+Code changes prepared locally:
+- `lib/marin/src/marin/rl/rl_experiment_utils.py`
+  - added object-store-aware vLLM load-format selection:
+    - `gs://` / `s3://` -> `runai_streamer`
+    - non-object-store paths -> `dummy`
+- `tests/rl/test_rl_experiment_utils.py`
+  - added assertions for both branches
+- debug log:
+  - `docs/debug-log-iris-rl-rollout-vllm-load-format.md`
+
+Validation:
+- `uv run pytest -q tests/rl/test_rl_experiment_utils.py` -> `8 passed`
+- `./infra/pre-commit.py --fix ...` on touched files -> `OK`
+
+Operational recovery:
+- stopped stale root job:
+  - `/ahmed/iris-rl-oom-b120-uc1-r7`
+- relaunched patched bundle as:
+  - `/ahmed/iris-rl-oom-b120-uc1-r8`
+- updated monitor state file:
+  - `scratch/20260324-0033_monitoring_state.json`
+  - `restart_count: 1`
+
+Next action:
+- babysit `r8` through the same startup sequence and verify that rollout no longer dies in vLLM init.
+- only after that is confirmed should the thread move back to 500-step runtime/OOM behavior.
+
+## 2026-03-24T07:43Z — `r8` clears the rollout bootstrap regression; both child runs are live
+
+Exact monitor commands:
+- `uv run iris --config=lib/iris/examples/marin.yaml job bug-report /ahmed/iris-rl-oom-b120-uc1-r8`
+- `uv run iris --config=lib/iris/examples/marin.yaml job bug-report /ahmed/iris-rl-oom-b120-uc1-r8/rl_testing-l31-8bi-b120-20260324-074116_9fa5ded0-be6ed9d9/rl-l31-8bi-b120-20260324-074116/rl-l31-8bi-b120-20260324-074116-train`
+- `uv run iris --config=lib/iris/examples/marin.yaml job bug-report /ahmed/iris-rl-oom-b120-uc1-r8/rl_testing-l31-8bi-b120-20260324-074116_9fa5ded0-be6ed9d9/rl-l31-8bi-b120-20260324-074116/rl-l31-8bi-b120-20260324-074116-rollout-0`
+- `uv run iris --config=lib/iris/examples/marin.yaml job logs --since-seconds 900 --include-children /ahmed/iris-rl-oom-b120-uc1-r8 | rg -i -n "wandb|step|rollout|waiting for initial rollouts|buffer size|loss|checkpoint|oom|traceback|exception|error|saved"`
+
+Observed state:
+- root job `r8` is `running`.
+- descendant RL step job is `running`.
+- trainer child is `running` on `marin-tpu_v5p_8-us-central1-a-20260324-0729-b4b205de-worker-0`.
+- rollout child is `running` on `marin-tpu_v5p_8-us-central1-a-20260324-0732-2552ab5f-worker-0`.
+
+Important evidence that the latest fix worked:
+- rollout no longer dies with the previous vLLM validation error:
+  - no `load_format ... got 'dummy'` traceback in `r8`.
+- rollout W&B run started successfully:
+  - `https://wandb.ai/marin-community/marin_iris_rl_debug/runs/l31-8bi-b120-20260324-074116-rollout-0`
+- trainer W&B run started successfully:
+  - `https://wandb.ai/marin-community/marin_iris_rl_debug/runs/l31-8bi-b120-20260324-074116-train`
+- rollout storage writer initialized successfully at:
+  - `gs://marin-us-central1/rl_testing/l31-8bi-b120-20260324-074116-3c262a/rollouts`
+
+New watch item from rollout startup:
+- rollout logs contain:
+  - `Tensorflow library not found, tensorflow.io.gfile operations will use native shim calls. GCS paths (i.e. 'gs://...') cannot be accessed.`
+- this did not prevent rollout startup or rollout-writer initialization, so it is not yet a confirmed blocker.
+- if rollout later fails while loading model weights or tokenizer assets from `gs://...`, this warning becomes the first hypothesis.
+
+Interpretation:
+- the object-store-aware `runai_streamer` fix is validated live.
+- the thread is now past the earlier startup regressions:
+  - region/prefix mismatch,
+  - HF config fetch on launcher,
+  - `OutputName.rstrip` rollout storage path bug,
+  - rollout `load_format='dummy'` crash.
+- next gate is no longer process startup; it is whether rollout produces the first samples and trainer begins real step advancement.
+
+Next action:
+- continue babysitting `r8` until either:
+  - trainer exits the initial wait and step counters advance, or
+  - a new concrete failure signature appears.
+
+## 2026-03-24T07:48Z — `r8` hits the next rollout-side bug after first weight transfer
+
+Exact monitor command:
+- `uv run iris --config=lib/iris/examples/marin.yaml job logs --since-seconds 300 --include-children /ahmed/iris-rl-oom-b120-uc1-r8 | tail -n 500`
+
+Critical live sequence observed:
+- rollout async vLLM engine initialized successfully
+- rollout loaded initial policy checkpoint path:
+  - `gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f`
+- trainer served initial Arrow Flight weights for `weight_id -1`
+- rollout fetched those weights successfully:
+  - `Received 291 params for weight_id -1 via Arrow Flight`
+- failure happened only when applying the weights into the vLLM worker:
+  - `KeyError: 'No MODEL_MAPPING registered for model: gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f'`
+
+Interpretation:
+- the previous `runai_streamer` fix is confirmed good.
+- the new failure is a separate regression introduced by using executor-managed regional model artifacts.
+- weight-transfer tensor remapping still keys off the canonical HF model id, but rollout now passes the concrete `gs://...` artifact path into that lookup.
+- result:
+  - rollout background weight sync loop crashes,
+  - rollout main thread keeps waiting for first weight transfer,
+  - trainer keeps waiting for initial rollouts with `buffer size: 0`.
+
+Local fix prepared:
+- `lib/marin/src/marin/rl/environments/inference_ctx/vllm.py`
+  - added `canonical_model_name` to the config
+  - keep `model_name` as the real checkpoint path
+  - use `canonical_model_name` for renderer and tensor-mapping lookups
+- `lib/marin/src/marin/rl/environments/inference_ctx/async_vllm.py`
+  - async weight updates now send `canonical_model_name`
+- `lib/marin/src/marin/rl/rl_experiment_utils.py`
+  - RL job builder now sets `canonical_model_name=config.model_config.name`
+- tests:
+  - `tests/rl/test_rl_experiment_utils.py`
+  - `tests/rl/test_inference_ctx.py`
+
+Validation:
+- `uv run pytest -q tests/rl/test_rl_experiment_utils.py tests/rl/test_inference_ctx.py` -> `17 passed`
+- `uv run python -m compileall ...` on the touched RL files -> success
+
+Next action:
+- run pre-commit on the touched files,
+- stop broken `r8`,
+- relaunch with this canonical-model-name fix,
+- continue babysitting until either first rollout batch lands or the next concrete failure appears.
+
+## 2026-03-24T07:49Z — Stopped `r8`, relaunched as `r9`
+
+Operational actions:
+- stopped the broken job tree:
+  - `/ahmed/iris-rl-oom-b120-uc1-r8`
+- relaunched with the canonical-model-name fix as:
+  - `/ahmed/iris-rl-oom-b120-uc1-r9`
+- updated monitor state file:
+  - `scratch/20260324-0033_monitoring_state.json`
+  - `restart_count: 2`
+
+Validated local bundle before relaunch:
+- `uv run pytest -q tests/rl/test_rl_experiment_utils.py tests/rl/test_inference_ctx.py` -> `17 passed`
+- `./infra/pre-commit.py --fix ...` on touched files -> `OK`
+
+Next action:
+- perform the startup-stabilization babysit check on `r9`
+- verify that rollout gets past first weight application this time
+- only after that return to actual rollout generation / train-step progress
+
+## 2026-03-24T07:52Z — `r9` clears the canonical-model-name regression
+
+Startup-stabilization check:
+- `uv run iris --config=lib/iris/examples/marin.yaml job bug-report /ahmed/iris-rl-oom-b120-uc1-r9`
+- `uv run iris --config=lib/iris/examples/marin.yaml job logs --since-seconds 300 --include-children /ahmed/iris-rl-oom-b120-uc1-r9 | tail -n 500`
+
+Observed live state:
+- root job `r9`: `running`
+- RL step job: `running`
+- trainer child: `running`
+- rollout child: `running`
+
+Important evidence that the latest fix worked:
+- rollout async engine initialized successfully
+- rollout streamed the regional model artifact with RunAI Streamer
+- trainer served initial Arrow Flight weights for `weight_id -1`
+- rollout fetched and applied those weights without the previous `MODEL_MAPPING` KeyError:
+  - `Received 291 params for weight_id -1 via Arrow Flight`
+  - `receive_weights: update_model complete, total=12.4s`
+  - `Received new weights from step -1`
+
+Interpretation:
+- the canonical-model-name fix is validated live.
+- the thread is now past another startup blocker:
+  - rollout no longer crashes when applying the first trainer weights.
+- the next gate is finally the real RL handshake:
+  - rollout must start generating samples,
+  - trainer must stop reporting `buffer size: 0`,
+  - then step counters need to advance toward the actual 500-step target.
+
+Next action:
+- continue babysitting `r9` until either first rollout files appear and trainer advances, or a new concrete failure signature appears.
+
+## 2026-03-24T07:56Z — `r9` finds the next async weight-update bug after first successful mapping lookup
+
+Exact monitor commands:
+- `uv run iris --config=lib/iris/examples/marin.yaml job logs --since-seconds 240 --include-children /ahmed/iris-rl-oom-b120-uc1-r9 | rg -i -n ...`
+- `uv run iris --config=lib/iris/examples/marin.yaml job logs --since-seconds 600 --include-children /ahmed/iris-rl-oom-b120-uc1-r9 | nl -ba | sed -n '185,200p'`
+- `gcloud storage cat gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f/config.json`
+
+Critical new facts:
+- the GCS model artifact itself is correct:
+  - `architectures: ["LlamaForCausalLM"]`
+  - `model_type: "llama"`
+- rollout gets past the previous `MODEL_MAPPING` failure and receives the first weight payload.
+- the next crash happens deeper inside async vLLM worker-side weight application:
+  - `AttributeError: 'dict' object has no attribute 'flat_state'`
+- live traceback shows the failing call chain:
+  - `WorkerExtension.update_weight`
+  - `self.model_runner._sync_weights(...)`
+  - `transfer_state_with_mappings`
+  - `tgt_state.flat_state()`
+
+Useful rollout-side context from the same logs:
+- vLLM resolves the streamed model as:
+  - `Resolved architecture: MistralForCausalLM`
+- then `tpu_inference` logs:
+  - `Model architectures ['MistralForCausalLM'] not registered in tpu-inference. Falling back to vLLM-native Pytorch definition.`
+
+Interpretation:
+- the canonical-model-name fix is working.
+- the new blocker is specific to the async worker extension implementation, not to regional model artifacts.
+- `WorkerExtension.update_weight` was using the internal `_sync_weights` entry point.
+- the safer/public contract already used elsewhere is `sync_weights(...)`; using the internal method appears to bypass logic needed for the current backend state.
+
+Local fix prepared:
+- `lib/marin/src/marin/rl/environments/inference_ctx/inflight/worker.py`
+  - switched from `self.model_runner._sync_weights(...)` to public `self.sync_weights(...)`
+- `tests/rl/test_inference_ctx.py`
+  - added a regression test that verifies `WorkerExtension.update_weight` delegates to public `sync_weights` with an `nnx.State`
+
+Validation:
+- `uv run pytest -q tests/rl/test_inference_ctx.py tests/rl/test_rl_experiment_utils.py` -> `18 passed`
+- `uv run python -m compileall lib/marin/src/marin/rl/environments/inference_ctx/inflight/worker.py tests/rl/test_inference_ctx.py` -> success
+
+Next action:
+- run pre-commit on the touched files,
+- stop broken `r9`,
+- relaunch with this worker-extension fix,
+- keep babysitting toward actual rollout generation and then 500-step stability.
+
+## 2026-03-24T07:59Z — Stopped `r9`, relaunched as `r10`
+
+Operational actions:
+- stopped the broken job tree:
+  - `/ahmed/iris-rl-oom-b120-uc1-r9`
+- relaunched with the public `sync_weights` worker-extension fix as:
+  - `/ahmed/iris-rl-oom-b120-uc1-r10`
+- updated monitor state file:
+  - `scratch/20260324-0033_monitoring_state.json`
+  - `restart_count: 3`
+
+Validated local bundle before relaunch:
+- `uv run pytest -q tests/rl/test_inference_ctx.py tests/rl/test_rl_experiment_utils.py` -> `18 passed`
+- `./infra/pre-commit.py --fix ...` on touched files -> `OK`
+
+Next action:
+- perform the startup-stabilization babysit check on `r10`
+- verify whether the first rollout weight application now completes end-to-end
+- keep pushing until rollout generation and trainer-step progress are real, not just startup-clean
+
+## 2026-03-24T08:02Z — `r10` is currently blocked by TPU capacity before the next code path is exercised
+
+Startup-stabilization evidence:
+- root `/ahmed/iris-rl-oom-b120-uc1-r10`: `running`
+- trainer child: `running`
+- rollout child: `pending`
+
+Autoscaler evidence:
+- unmet entry is the rollout task:
+  - `/ahmed/iris-rl-oom-b120-uc1-r10/.../rl-l31-8bi-b120-20260324-075919-rollout-0/0`
+- routing reason:
+  - `no_capacity: tpu_v5p_8-us-central1-a=backoff`
+- most recent scale-up failure for the same group:
+  - `There is no more capacity in the zone "us-central1-a"`
+
+Interpretation:
+- `r10` has not yet reached the previous async weight-update failure boundary.
+- the current gate is scheduler capacity in `us-central1-a`, not a fresh RL traceback.
+- once rollout TPU allocation clears, the next thing to verify is whether the public `sync_weights` worker-extension fix survives the first trainer->rollout weight application.
+
+Next action:
+- continue babysitting `r10` until rollout TPU allocation succeeds or the capacity backoff makes another relaunch decision necessary.
+
+## 2026-03-24T08:14Z — `r10` rollout postmortem after capacity cleared
+
+Primary goal for this thread:
+- get the Iris RL path stable through a real 500-step run.
+- do not stop at startup-clean; the bar is trainer step advancement plus sustained rollout/trainer weight exchange.
+
+What actually happened after `us-central1-a` capacity cleared:
+- rollout TPU worker started and initialized async vLLM.
+- rollout loaded the regional cached checkpoint:
+  - `gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f`
+- trainer served the initial Arrow Flight payload for `weight_id -1`.
+- rollout fetched that payload successfully:
+  - `Received 291 params for weight_id -1 via Arrow Flight`
+  - `Received new weights from step -1`
+- rollout then crashed in the background weight-sync loop before it could mark the first weight transfer complete.
+- the foreground rollout thread kept waiting on the "first weight transfer" event, so the process looked alive while being functionally dead.
+
+Exact failing traceback:
+- `rollout_worker._sync_weights_loop`
+- `AsyncvLLMInferenceContext.reload_model`
+- `SyncVLLMWrapper.update_weights`
+- `engine_core.collective_rpc_async("update_weight", ...)`
+- worker-side `TPUWorker.sync_weights(...)`
+- `TPURunner._sync_weights(...)`
+- `AttributeError: 'dict' object has no attribute 'flat_state'`
+
+Important current interpretation:
+- this is still a rollout-side bug, not a trainer-side bug.
+- this is not evidence that the GCS artifact contains the wrong weights.
+- the first trainer->rollout transfer succeeded over Arrow Flight; the failure is in rollout-side application of those weights inside vLLM/tpu_inference.
+
+Why this can break now even though a previous run worked:
+- the previous successful run used the Hugging Face repo id directly in the rollout model loader path.
+- the current path uses a regional GCS-exported Hugging Face artifact.
+- that should be equivalent semantically, but it is clearly not equivalent in the vLLM/tpu_inference architecture-resolution path.
+- so the most likely explanation is not "the weights changed"; it is "the model-loading backend takes a different code path when the model comes from `gs://...`".
+
+What is definitely known vs still speculative:
+- known:
+  - the cached GCS artifact's `config.json` is correct for Llama:
+    - `architectures: ["LlamaForCausalLM"]`
+    - `model_type: "llama"`
+  - rollout logs still show:
+    - `Resolved architecture: MistralForCausalLM`
+  - `tpu_inference` then reports:
+    - `Model architectures ['MistralForCausalLM'] not registered in tpu-inference. Falling back to vLLM-native Pytorch definition.`
+  - the crash happens after that, during weight application.
+- not yet proven:
+  - whether `MistralForCausalLM` is the direct cause of the `flat_state` failure, or just a second symptom of the same wrong model-loader path.
+  - whether the plain `dict` is introduced by Marin before the vLLM RPC boundary, or inside `tpu_inference` after our worker extension hands off an `nnx.State`.
+
+Postmortem on the previous local fix attempt:
+- local patch switched `WorkerExtension.update_weight()` to call public `self.sync_weights(...)` instead of the internal `_sync_weights(...)`.
+- that did not resolve the live failure.
+- live stack still goes through `TPUWorker.sync_weights(...)` and then hits `TPURunner._sync_weights(...)` with a plain `dict`.
+- conclusion:
+  - the prior patch was directionally reasonable but incomplete.
+  - the bad type is being introduced deeper than the simple wrapper change accounted for.
+
+Live operational wrinkle discovered while debugging:
+- the first `r10` subtree died because the root worker itself was preempted/timed out:
+  - descendant jobs show `Parent task preempted`
+- Iris automatically retried the root task on a fresh worker.
+- current active subtree is:
+  - `/ahmed/iris-rl-oom-b120-uc1-r10/rl_testing-l31-8bi-b120-20260324-081324_077ed54f-a96952fc/...`
+
+Working hypotheses, ordered by value:
+1. GCS-path model loading is selecting the wrong vLLM/tpu_inference architecture path.
+   - strongest evidence: correct Llama config in GCS, but runtime resolves `MistralForCausalLM`.
+   - likely mechanism: `vllm-tpu` architecture inference differs for `gs://` model ids vs canonical HF ids.
+2. The rollout async `collective_rpc` path still serializes/deserializes into a plain nested dict somewhere inside `tpu_inference`.
+   - strongest evidence: `TPURunner._sync_weights()` receives something without `.flat_state()`.
+   - this could be independent of the architecture mismatch, or architecture mismatch could force a fallback model runner that expects a different object shape.
+3. The prior successful run never exercised this exact backend combination.
+   - possible differences:
+     - HF repo id vs `gs://` artifact
+     - sync vs async vLLM subpath
+     - slightly different `vllm-tpu` / `tpu_inference` behavior around model registration/fallback
+4. The unconditional Qwen2 registry patch is noise, not root cause.
+   - logs show Qwen2 registration because Marin patches that class on import.
+   - there is no current evidence that Qwen2 registration is what turns Llama into Mistral.
+   - keep this lower priority unless source inspection proves registry collision.
+
+Concrete experiments to run next:
+1. Inspect pinned `vllm-tpu==0.13.2.post6` and `tpu-inference==0.13.2.post6` source for:
+   - model architecture resolution from local/GCS HF exports
+   - `collective_rpc("update_weight")`
+   - `TPUWorker.sync_weights`
+   - `TPURunner._sync_weights`
+2. Add rollout-worker instrumentation before the failing handoff:
+   - log `type(new_state)`
+   - log `hasattr(new_state, "flat_state")`
+   - log a compact `repr(type(self))`
+   - log canonical model name vs model path
+3. Add worker-side instrumentation inside `WorkerExtension.update_weight()`:
+   - confirm the converted object is actually `nnx.State` on the remote worker just before `self.sync_weights(...)`.
+4. Compare architecture resolution explicitly:
+   - minimal local or remote probe that loads:
+     - `meta-llama/Llama-3.1-8B-Instruct`
+     - `gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f`
+   - record what `vllm-tpu` resolves as the architecture in each case.
+5. If GCS path is the discriminator, force canonical HF config resolution while keeping GCS weights/checkpoint bytes.
+   - target outcome: preserve regional cached model artifact but stop vLLM from misclassifying the architecture.
+6. Only after the above: relaunch and re-babysit toward the first real rollout batch and trainer step advance.
+
+Current plan for the next agent after compaction:
+- continue updating this logbook only after each verified live observation or code change.
+- keep babysitting the active job tree and preserve exact job ids.
+- prioritize source inspection + logging instrumentation over speculative refactors.
+- success condition remains unchanged:
+  - rollout survives the first trainer weight update,
+  - rollout writes real batches,
+  - trainer consumes them and advances,
+  - then keep pushing toward a sustained 500-step run.
+
+## 2026-03-24T08:18Z — stronger root-cause diagnosis from upstream source inspection
+
+New verified facts from source inspection and artifact inspection:
+- upstream `tpu_inference` `TPUWorker.sync_weights(...)` is a thin wrapper:
+  - it forwards directly to `self.model_runner._sync_weights(updated_weights=..., mappings=..., transpose_keys=..., reshard_fn=...)`
+- upstream `TPURunner._sync_weights(...)` then calls:
+  - `transfer_state_with_mappings(src_state=updated_weights, tgt_state=self.state, ...)`
+- upstream `transfer_state_with_mappings(...)` requires both:
+  - `src_state.flat_state()`
+  - `tgt_state.flat_state()`
+
+Implication:
+- the live `AttributeError: 'dict' object has no attribute 'flat_state'` can come from either:
+  - the incoming RL update state, or
+  - the model runner's existing `self.state`
+- the traceback text from the worker shows the failure is on `tgt_state.flat_state()`.
+- therefore the bad object is most likely `self.state`, not the trainer weight payload.
+
+This materially changes the diagnosis:
+- the local `WorkerExtension.update_weight -> self.sync_weights(...)` patch was not enough because the incoming update object was probably not the main problem.
+- the real problem is that the rollout worker booted a model runner whose `self.state` is not a JAX `nnx.State`.
+
+Why that matters:
+- the same rollout logs show:
+  - `Resolved architecture: MistralForCausalLM`
+  - `Resolved MODEL_IMPL_TYPE 'auto' to 'flax_nnx'`
+  - then:
+    - `Model architectures ['MistralForCausalLM'] not registered in tpu-inference. Falling back to vLLM-native Pytorch definition.`
+- if the worker falls back to the vLLM-native PyTorch path, RL hot-reload is no longer targeting the JAX `flax_nnx` state shape that `_sync_weights(...)` expects.
+- this cleanly explains why the trainer keeps working while rollout dies at first weight apply.
+
+What this rules out:
+- not a corrupted model artifact in GCS:
+  - `gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f/config.json` is correct and says:
+    - `architectures: ["LlamaForCausalLM"]`
+    - `model_type: "llama"`
+  - the artifact also contains tokenizer/config/params files, not just safetensors.
+- not primarily an Arrow Flight transport issue:
+  - rollout fetches the initial weight payload successfully before dying.
+
+Current best hypothesis:
+1. GCS-backed `runai_streamer` model loading is causing `vllm-tpu` to infer the wrong architecture (`MistralForCausalLM`) from the streamed local cache path.
+2. That wrong architecture triggers the PyTorch fallback path in `tpu_inference`.
+3. RL hot-reload then fails because `_sync_weights(...)` expects JAX `nnx.State` for the runner state, but the fallback runner state is a plain dict-like object.
+
+Important operational observation:
+- for `inference_type == "vllm"`, the rollout worker does not actually load the initial checkpoint into a Levanter model.
+- `_build_models()` logs the checkpoint path, but then sets:
+  - `self._policy_model = None`
+- this means the rollout worker fundamentally relies on the first Arrow Flight update to populate usable weights.
+
+Consequence for fix design:
+- we do not need full model weights from GCS at rollout startup.
+- we need only correct model metadata/config/tokenizer so vLLM boots the right architecture.
+- that suggests a cleaner path than `runai_streamer` for RL:
+  - stage only the HF metadata files locally from the cached GCS artifact,
+  - start vLLM with `load_format="dummy"` against that local metadata directory,
+  - then let the first Arrow Flight update populate actual weights.
+
+Next experiment/fix candidate:
+1. stop using `runai_streamer` for RL rollout startup.
+2. for object-store cached model artifacts, stage a small local metadata directory containing:
+   - `config.json`
+   - tokenizer files
+   - generation config / special tokens files as needed
+3. point vLLM `model_name` and tokenizer at that local metadata dir.
+4. use `load_format="dummy"` so startup does not depend on object-store weight loading.
+5. relaunch and verify:
+   - architecture resolves as `LlamaForCausalLM`, not `MistralForCausalLM`
+   - no PyTorch fallback warning
+   - first trainer weight update completes
+   - rollout starts producing batches.
+
+## 2026-03-24T08:24Z — rollout-startup patch prepared to bypass `runai_streamer` in the RL hot-reload path
+
+Code change landed locally:
+- `lib/marin/src/marin/rl/rollout_worker.py`
+  - added a narrow rollout-side startup path for `inference_type == "vllm"` with `inflight_weight_updates=True`:
+    - if `model_name` is an object-store URI (`gs://` or `s3://`),
+    - copy only small HF metadata files from the cached model artifact into a local temp cache:
+      - `config.json`
+      - tokenizer files
+      - generation / special-tokens metadata
+      - small index / params metadata
+    - replace the vLLM startup config with:
+      - `model_name=<local_metadata_dir>`
+      - `load_format="dummy"`
+- rationale:
+  - rollout startup does not need full checkpoint weights because vLLM rollout workers in this RL path start with `self._policy_model = None` and wait for the first Arrow Flight update anyway.
+  - avoiding `runai_streamer` should avoid the GCS-streamed architecture misclassification and the resulting PyTorch fallback path.
+
+Validation:
+- `python3 -m compileall lib/marin/src/marin/rl/rollout_worker.py tests/rl/test_rollout_worker.py` -> success
+- `uv run pytest -q tests/rl/test_rollout_worker.py tests/rl/test_inference_ctx.py tests/rl/test_rl_experiment_utils.py` -> `20 passed`
+- `./infra/pre-commit.py --fix lib/marin/src/marin/rl/rollout_worker.py tests/rl/test_rollout_worker.py .agents/logbooks/iris-rl-codex.md` -> `OK`
+
+New unit coverage:
+- `tests/rl/test_rollout_worker.py`
+  - verifies the metadata staging helper copies HF metadata files from a mocked remote model artifact.
+  - verifies inflight remote vLLM startup rewrites config to local metadata + `load_format="dummy"`.
+
+Immediate next action:
+- stop stale live job tree `r10` because it does not include this patch.
+- relaunch a fresh isolation run.
+- verify in the new rollout logs:
+  - no `Resolved architecture: MistralForCausalLM`
+  - no `Falling back to vLLM-native Pytorch definition`
+  - first trainer weight update completes and unblocks rollout generation.
+
+## 2026-03-24T08:29Z — `r11` live result: local metadata startup patch deployed, but rollout still falls back to PyTorch and dies on first hot-reload
+
+Live job under observation:
+- root: `/ahmed/iris-rl-oom-b120-uc1-r11`
+- status at observation time: root/coordinator/train/rollout all still `RUNNING`
+- important nuance: this is not a healthy state; rollout remains alive only because the foreground thread is still waiting for the first weight transfer after the background sync loop has already crashed.
+
+What was verified live in the rollout logs:
+- the new rollout-startup patch is definitely deployed:
+  - `Using local staged vLLM metadata for inflight rollout startup: gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f -> /tmp/marin-rl-vllm-metadata/fa6f62475ed0ccd0`
+- despite that patch, vLLM still resolves the model as:
+  - `Resolved architecture: MistralForCausalLM`
+- that still triggers the same TPU-inference fallback:
+  - `Model architectures ['MistralForCausalLM'] not registered in tpu-inference. Falling back to vLLM-native Pytorch definition.`
+- the rollout worker then successfully receives the initial trainer payload:
+  - `Received new weights from step -1`
+- but the first hot-reload still crashes in the background sync loop with the same core failure:
+  - `tgt_state.flat_state()`
+  - `AttributeError: 'dict' object has no attribute 'flat_state'`
+  - `Background weight sync loop crashed`
+- after that crash, the rollout foreground thread keeps logging:
+  - `Still waiting for first weight transfer ...`
+
+What this means:
+- the local-metadata + `load_format="dummy"` patch changed the startup path, but it did not fix the architecture selection problem.
+- this strongly weakens the earlier hypothesis that `runai_streamer` or direct GCS weight streaming was the primary source of the misclassification.
+- the more robust diagnosis is now:
+  1. something in the rollout vLLM startup path is still causing the engine to pick `MistralForCausalLM` for a Llama 3.1 8B artifact,
+  2. that architecture is not registered in `tpu_inference`'s JAX-native path,
+  3. vLLM therefore falls back to the native PyTorch runner,
+  4. RL hot-reload later calls into `_sync_weights(...)`, which expects JAX `nnx.State` on the target side,
+  5. the target runner state is dict-like instead, so the first hot-reload dies on `tgt_state.flat_state()`.
+
+Postmortem on the user question "how could this regress if the run worked before?":
+- the evidence no longer supports the simple story "switching from HF to cached GCS broke rollout loading".
+- the GCS artifact is still correct and contains a proper Llama config.
+- the stronger explanation is that this RL rollout path was already relying on a fragile architecture-detection / model-registry interaction inside `vllm-tpu` + `tpu_inference`.
+- once we changed startup behavior around cached model resolution, we started exercising that fragile path consistently enough to expose it.
+- the trainer continues to work because the trainer side uses the Levanter/JAX stack directly; the failure is specifically in the rollout-side inference engine bootstrap + hot-reload path.
+
+Current ranked hypotheses:
+1. most likely: Marin's local patching of the TPU inference registry is incomplete for this rollout path, and `MistralForCausalLM` needs to be explicitly aliased to the JAX Llama implementation used for hot-reload.
+2. possible: some vLLM-side config canonicalization rewrites the local staged Llama metadata into a Mistral architecture before `tpu_inference` sees it.
+3. less likely: the model registry is correct, but the rollout inflight worker constructs the wrong target state object for JAX hot-reload after fallback.
+
+Concrete next experiments:
+1. inspect `marin.rl.environments.inference_ctx.vllm` and upstream patch hooks to see exactly where `Qwen2ForCausalLM` is registered today and whether `MistralForCausalLM` can be safely mapped to the same JAX Llama implementation.
+2. add explicit instrumentation or a narrow unit test around the registry patch so we can prove whether `MistralForCausalLM` is absent before engine startup.
+3. if the alias is technically sound, patch the rollout startup path to register or coerce `MistralForCausalLM` onto the JAX-native Llama implementation before engine init.
+4. relaunch and verify the decisive success criteria:
+   - no `Resolved architecture: MistralForCausalLM`, or at minimum no JAX-registry fallback warning,
+   - no `Falling back to vLLM-native Pytorch definition`,
+   - no `tgt_state.flat_state()` crash,
+   - rollout actually leaves `Waiting for first weight transfer` and starts generating batches.
+
+Operational note for the next agent after compaction:
+- `r11` is still running but is already logically broken.
+- do not treat the current all-`RUNNING` Iris state as success.
+- the decisive signal is the rollout log sequence above, not the root job state.

@@ -89,6 +89,7 @@ class vLLMInferenceContextConfig:
     tensor_parallel_size: int
     gpu_memory_utilization: float
     sampling_params: VLLMSamplingConfig
+    canonical_model_name: str | None = None
     mode: InferenceMode = InferenceMode.SYNC
     load_format: str = "auto"
     enforce_eager: bool = True
@@ -113,11 +114,12 @@ class vLLMInferenceContext(BaseInferenceContext):
         self.axis_mapping = {}
         self.tokenizer = load_tokenizer(inference_config.model_name)
         self.model_name = inference_config.model_name
+        self.canonical_model_name = inference_config.canonical_model_name or inference_config.model_name
         self.sampling_config = inference_config.sampling_params
         self._use_final_only = inference_config.mode == InferenceMode.ASYNC
 
         # Initialize the appropriate renderer based on model type
-        self.renderer = self._get_renderer(inference_config.model_name, self.tokenizer)
+        self.renderer = self._get_renderer(self.canonical_model_name, self.tokenizer)
 
     @staticmethod
     def _get_renderer(model_name: str, tokenizer) -> Renderer:
@@ -321,7 +323,7 @@ class vLLMInferenceContext(BaseInferenceContext):
             id=request_output.request_id,
             choices=choices,
             created=int(time.time()),
-            model=self.model_name,
+            model=self.canonical_model_name,
             object="chat.completion",
             usage=usage,
         )
@@ -340,8 +342,8 @@ class vLLMInferenceContext(BaseInferenceContext):
         logger.info("reload_model: calling sync_weights (%d params, %.1fs so far)", len(nnx_state), t1 - t0)
         self.llm.llm_engine.model_executor.driver_worker.sync_weights(
             nnx_state,
-            mappings=MODEL_MAPPINGS[self.model_name],
-            transpose_keys=MODEL_TRANSPOSE_KEYS[self.model_name],
+            mappings=MODEL_MAPPINGS[self.canonical_model_name],
+            transpose_keys=MODEL_TRANSPOSE_KEYS[self.canonical_model_name],
             reshard_fn=None,
         )
 

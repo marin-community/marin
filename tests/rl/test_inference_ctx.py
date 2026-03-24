@@ -4,6 +4,7 @@
 """Tests for InferenceContext utilities and chat template handling."""
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -12,7 +13,16 @@ from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
 from transformers import AutoTokenizer
 
-from marin.rl.environments.inference_ctx import LevanterInferenceContext, LevanterInferenceContextConfig
+from marin.rl.environments.inference_ctx import (
+    LevanterInferenceContext,
+    LevanterInferenceContextConfig,
+    MODEL_MAPPINGS,
+    MODEL_TRANSPOSE_KEYS,
+    VLLMSamplingConfig,
+    vLLMInferenceContext,
+    vLLMInferenceContextConfig,
+)
+from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
 
 
 @dataclass
@@ -235,3 +245,61 @@ def test_create_rollout_from_choice_end_to_end(inference_ctx, llama3_tokenizer):
     # Verify token rewards
     assert len(rollout.token_rewards) == len(expected_response_tokens)
     np.testing.assert_array_equal(rollout.token_rewards, np.full(len(expected_response_tokens), reward))
+
+
+def test_vllm_inference_context_uses_canonical_model_name(monkeypatch):
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_llm_engine",
+        staticmethod(lambda _config: object()),
+    )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
+        lambda _path: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_renderer",
+        staticmethod(lambda model_name, _tokenizer: model_name),
+    )
+
+    ctx = vLLMInferenceContext(
+        vLLMInferenceContextConfig(
+            model_name="gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f",
+            canonical_model_name="meta-llama/Llama-3.1-8B-Instruct",
+            max_model_len=1024,
+            tensor_parallel_size=4,
+            gpu_memory_utilization=0.9,
+            sampling_params=VLLMSamplingConfig(),
+        )
+    )
+
+    assert ctx.model_name == "gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f"
+    assert ctx.canonical_model_name == "meta-llama/Llama-3.1-8B-Instruct"
+    assert ctx.renderer == "meta-llama/Llama-3.1-8B-Instruct"
+
+
+def test_worker_extension_uses_public_sync_weights():
+    calls = {}
+
+    class _FakeWorker:
+        def sync_weights(self, new_state, *, mappings, transpose_keys, reshard_fn):
+            calls["new_state"] = new_state
+            calls["mappings"] = mappings
+            calls["transpose_keys"] = transpose_keys
+            calls["reshard_fn"] = reshard_fn
+
+    serialized_state = {
+        "model.layers.0.input_layernorm.weight": (
+            np.zeros((2,), dtype=np.float32).tobytes(),
+            "float32",
+            (2,),
+        ),
+    }
+
+    WorkerExtension.update_weight(_FakeWorker(), serialized_state, "meta-llama/Llama-3.1-8B-Instruct")
+
+    assert hasattr(calls["new_state"], "flat_state")
+    assert calls["mappings"] == MODEL_MAPPINGS["meta-llama/Llama-3.1-8B-Instruct"]
+    assert calls["transpose_keys"] == MODEL_TRANSPOSE_KEYS["meta-llama/Llama-3.1-8B-Instruct"]
+    assert calls["reshard_fn"] is None

@@ -168,3 +168,25 @@ def test_build_rl_job_config_resolves_runtime_output_paths(monkeypatch):
 
     assert job_config.trainer.checkpointer.base_path == "gs://marin-us-central1/rl_testing/rl-test/checkpoints"
     assert job_config.rollout_storage.path == "gs://marin-us-central1/rl_testing/rl-test/rollouts"
+    assert job_config.inference_config.load_format == "runai_streamer"
+    assert job_config.inference_config.canonical_model_name == MODEL_NAME
+
+
+def test_build_rl_job_config_uses_dummy_load_format_for_non_object_store_model_path(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+
+    job_config = _build_rl_job_config(
+        name="rl-test",
+        config=_test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
+        curriculum=_test_curriculum(),
+        model_path=MODEL_NAME,
+        output_path="gs://marin-us-central1/rl_testing/rl-test",
+    )
+
+    assert job_config.inference_config.load_format == "dummy"
+    assert job_config.inference_config.canonical_model_name == MODEL_NAME
