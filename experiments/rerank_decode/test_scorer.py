@@ -24,7 +24,7 @@ def tokenizer():
 
 @pytest.fixture(scope="module")
 def reference_model():
-    model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.float32)
+    model = AutoModelForCausalLM.from_pretrained(MODEL, torch_dtype=torch.bfloat16)
     model.eval()
     return model
 
@@ -159,7 +159,7 @@ def test_accept_multiple_chunks(reference_model, tokenizer):
 # --- VLLMLogprobScorer tests ---
 
 
-
+@pytest.mark.timeout(600)
 def test_vllm_single_completion(reference_model, tokenizer, vllm_scorer):
     prompt = "The capital of France is"
     completion = " Paris, a beautiful city."
@@ -171,6 +171,7 @@ def test_vllm_single_completion(reference_model, tokenizer, vllm_scorer):
 
 
 
+@pytest.mark.timeout(600)
 def test_vllm_multiple_completions(reference_model, tokenizer, vllm_scorer):
     prompt = "Hello"
     completions = [", world!", " there!", " everyone, how are you?"]
@@ -186,6 +187,7 @@ def test_vllm_multiple_completions(reference_model, tokenizer, vllm_scorer):
 
 
 
+@pytest.mark.timeout(600)
 def test_vllm_eos_token(reference_model, tokenizer, vllm_scorer):
     prompt = "Hello, world!"
     eos = tokenizer.eos_token
@@ -198,6 +200,7 @@ def test_vllm_eos_token(reference_model, tokenizer, vllm_scorer):
 
 
 
+@pytest.mark.timeout(600)
 def test_vllm_completion_with_eos(reference_model, tokenizer, vllm_scorer):
     prompt = "What is 2+2?"
     eos = tokenizer.eos_token
@@ -210,6 +213,7 @@ def test_vllm_completion_with_eos(reference_model, tokenizer, vllm_scorer):
 
 
 
+@pytest.mark.timeout(600)
 def test_vllm_accept_then_score(reference_model, tokenizer, vllm_server):
     scorer = VLLMLogprobScorer(
         client=openai.Client(base_url=f"http://localhost:{VLLM_PORT}/v1", api_key="none"),
@@ -231,6 +235,7 @@ def test_vllm_accept_then_score(reference_model, tokenizer, vllm_server):
 
 
 
+@pytest.mark.timeout(600)
 def test_vllm_accept_multiple_chunks(reference_model, tokenizer, vllm_server):
     scorer = VLLMLogprobScorer(
         client=openai.Client(base_url=f"http://localhost:{VLLM_PORT}/v1", api_key="none"),
