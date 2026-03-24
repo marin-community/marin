@@ -1444,6 +1444,93 @@ class ControllerTransitions:
             )
         return TxResult()
 
+    def preempt_task(self, task_id: JobName, reason: str) -> TxResult:
+        """Preempt a running task, transitioning it through the worker-failed retry path.
+
+        Marks the task as WORKER_FAILED (consuming from preemption retry budget),
+        decommits its resources from the worker, and cascades to children if needed.
+        """
+        tasks_to_kill: set[JobName] = set()
+        with self._db.transaction() as cur:
+            row = cur.execute(
+                "SELECT t.task_id, t.job_id, t.state, t.current_attempt_id, "
+                "t.preemption_count, t.max_retries_preemption, j.request_proto "
+                "FROM tasks t JOIN jobs j ON j.job_id = t.job_id "
+                "WHERE t.task_id = ?",
+                (task_id.to_wire(),),
+            ).fetchone()
+            if row is None:
+                return TxResult()
+
+            prior_state = int(row["state"])
+            if prior_state not in ACTIVE_TASK_STATES:
+                return TxResult()
+
+            preemption_count = int(row["preemption_count"])
+            now_ms = Timestamp.now().epoch_ms()
+
+            # Only count against preemption budget if task was executing
+            if prior_state in EXECUTING_TASK_STATES:
+                preemption_count += 1
+
+            if prior_state == cluster_pb2.TASK_STATE_ASSIGNED:
+                new_state = cluster_pb2.TASK_STATE_PENDING
+                finished_ms = None
+            elif prior_state in EXECUTING_TASK_STATES and preemption_count <= int(row["max_retries_preemption"]):
+                new_state = cluster_pb2.TASK_STATE_PENDING
+                finished_ms = None
+            else:
+                new_state = cluster_pb2.TASK_STATE_WORKER_FAILED
+                finished_ms = now_ms
+
+            # Update attempt
+            cur.execute(
+                "UPDATE task_attempts SET state = ?, finished_at_ms = COALESCE(finished_at_ms, ?), error = ? "
+                "WHERE task_id = ? AND attempt_id = ?",
+                (
+                    cluster_pb2.TASK_STATE_WORKER_FAILED,
+                    now_ms,
+                    reason,
+                    task_id.to_wire(),
+                    int(row["current_attempt_id"]),
+                ),
+            )
+
+            # Update task
+            cur.execute(
+                "UPDATE tasks SET state = ?, error = ?, finished_at_ms = ?, preemption_count = ? " "WHERE task_id = ?",
+                (new_state, reason, finished_ms, preemption_count, task_id.to_wire()),
+            )
+
+            # Decommit worker resources
+            attempt_row = cur.execute(
+                "SELECT worker_id FROM task_attempts WHERE task_id = ? AND attempt_id = ?",
+                (task_id.to_wire(), int(row["current_attempt_id"])),
+            ).fetchone()
+            if attempt_row and attempt_row["worker_id"]:
+                job_req = cluster_pb2.Controller.LaunchJobRequest()
+                job_req.ParseFromString(row["request_proto"])
+                _decommit_worker_resources(cur, str(attempt_row["worker_id"]), job_req.resources)
+
+            cur.execute("DELETE FROM endpoints WHERE task_id = ?", (task_id.to_wire(),))
+
+            # Recompute job state and cascade if terminal
+            job_id = JobName.from_wire(str(row["job_id"]))
+            new_job_state = self._recompute_job_state(cur, job_id)
+            if new_job_state is not None and new_job_state in TERMINAL_JOB_STATES:
+                tasks_to_kill.update(_cascade_terminal_job(cur, job_id, now_ms, reason))
+            elif new_state == cluster_pb2.TASK_STATE_PENDING:
+                policy = _resolve_preemption_policy(cur, job_id)
+                if policy == cluster_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
+                    tasks_to_kill.update(_cascade_children(cur, job_id, now_ms, reason))
+
+            if new_state == cluster_pb2.TASK_STATE_WORKER_FAILED:
+                tasks_to_kill.add(task_id)
+
+            self._record_transaction(cur, "preempt_task", [("task_preempted", task_id.to_wire(), {"reason": reason})])
+
+        return TxResult(tasks_to_kill=tasks_to_kill)
+
     def drain_dispatch(self, worker_id: WorkerId) -> DispatchBatch | None:
         """Drain buffered dispatches and snapshot worker running tasks."""
         with self._db.transaction() as cur:
