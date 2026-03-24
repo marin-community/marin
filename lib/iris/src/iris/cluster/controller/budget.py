@@ -7,11 +7,20 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any
+from typing import Generic, TypeVar
 
 from iris.cluster.controller.db import ACTIVE_TASK_STATES, JOBS, TASKS, QuerySnapshot
 from iris.cluster.types import get_gpu_count, get_tpu_count
 from iris.rpc import cluster_pb2
+
+T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class UserTask(Generic[T]):
+    user_id: str
+    task: T
+
 
 # Task states that count as "active" for budget spend (re-exported from db for local use)
 _ACTIVE_TASK_STATES = tuple(ACTIVE_TASK_STATES)
@@ -65,25 +74,25 @@ def compute_user_spend(snapshot: QuerySnapshot) -> dict[str, int]:
 
 
 def interleave_by_user(
-    tasks: list[tuple[str, Any]],
+    tasks: list[UserTask[T]],
     user_spend: dict[str, int],
-) -> list[Any]:
+) -> list[T]:
     """Round-robin tasks across users, ordered by ascending budget spend.
 
-    ``tasks`` is a list of ``(user_id, task_object)`` pairs.  The returned list
+    ``tasks`` is a list of :class:`UserTask` entries. The returned list
     contains only the task objects (user_id is stripped).
 
     Users who have spent less get their tasks earlier in each round.
     Must be called separately for each priority band to avoid cross-band
     reordering.
     """
-    by_user: dict[str, list[Any]] = defaultdict(list)
-    for user_id, task in tasks:
-        by_user[user_id].append(task)
+    by_user: dict[str, list[T]] = defaultdict(list)
+    for ut in tasks:
+        by_user[ut.user_id].append(ut.task)
 
     sorted_users = sorted(by_user.keys(), key=lambda u: user_spend.get(u, 0))
 
-    result: list[Any] = []
+    result: list[T] = []
     round_idx = 0
     while True:
         added = False

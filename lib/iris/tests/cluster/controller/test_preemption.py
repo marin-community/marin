@@ -5,6 +5,7 @@
 
 
 from iris.cluster.controller.controller import (
+    PreemptionCandidate,
     RunningTaskInfo,
     _get_running_tasks_with_band_and_value,
     _run_preemption_pass,
@@ -76,7 +77,7 @@ def test_production_preempts_batch():
 
     preemptor_id = JobName.from_wire("/bob/prod-job:0")
     unscheduled = [
-        (preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_PRODUCTION),
+        PreemptionCandidate(preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
     preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
@@ -107,7 +108,7 @@ def test_interactive_preempts_batch():
 
     preemptor_id = JobName.from_wire("/bob/interactive-job:0")
     unscheduled = [
-        (preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_INTERACTIVE),
+        PreemptionCandidate(preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_INTERACTIVE),
     ]
 
     preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
@@ -138,7 +139,7 @@ def test_interactive_does_not_preempt_production():
 
     preemptor_id = JobName.from_wire("/bob/interactive-job:0")
     unscheduled = [
-        (preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_INTERACTIVE),
+        PreemptionCandidate(preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_INTERACTIVE),
     ]
 
     preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
@@ -169,7 +170,7 @@ def test_batch_never_preempts():
 
     preemptor_id = JobName.from_wire("/bob/batch-job:0")
     unscheduled = [
-        (preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_BATCH),
+        PreemptionCandidate(preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_BATCH),
     ]
 
     preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
@@ -199,7 +200,7 @@ def test_same_band_no_preemption():
 
     preemptor_id = JobName.from_wire("/bob/job-b:0")
     unscheduled = [
-        (preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_INTERACTIVE),
+        PreemptionCandidate(preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_INTERACTIVE),
     ]
 
     preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
@@ -229,7 +230,7 @@ def test_coscheduled_not_preempted():
 
     preemptor_id = JobName.from_wire("/bob/prod-job:0")
     unscheduled = [
-        (preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_PRODUCTION),
+        PreemptionCandidate(preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
     preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
@@ -318,7 +319,7 @@ def test_preemption_skips_if_capacity_available():
 
     preemptor_id = JobName.from_wire("/bob/prod-job:0")
     unscheduled = [
-        (preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_PRODUCTION),
+        PreemptionCandidate(preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
     # Should not preempt since capacity is available
@@ -357,7 +358,7 @@ def test_preemption_picks_cheapest_victim():
 
     preemptor_id = JobName.from_wire("/bob/prod-job:0")
     unscheduled = [
-        (preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_PRODUCTION),
+        PreemptionCandidate(preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
     preemptions = _run_preemption_pass(unscheduled, [expensive_victim, cheap_victim], ctx)

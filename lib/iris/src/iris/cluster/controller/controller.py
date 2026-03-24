@@ -49,6 +49,7 @@ from iris.cluster.controller.db import (
 )
 from iris.cluster.controller.budget import (
     UserBudgetDefaults,
+    UserTask,
     compute_user_spend,
     interleave_by_user,
     resource_value,
@@ -119,6 +120,15 @@ class RunningTaskInfo:
     is_coscheduled: bool
     resources: cluster_pb2.ResourceSpecProto
     already_preempted: bool = False
+
+
+@dataclass(frozen=True)
+class PreemptionCandidate:
+    """An unscheduled task that may preempt running work."""
+
+    job_name: JobName
+    requirements: JobRequirements
+    band: int  # proto PriorityBand value
 
 
 def job_requirements_from_job(job: Job) -> JobRequirements:
@@ -353,13 +363,11 @@ def _get_running_tasks_with_band_and_value(
 
 
 def _run_preemption_pass(
-    unscheduled_tasks: list[tuple[JobName, JobRequirements, int]],
+    unscheduled_tasks: list[PreemptionCandidate],
     running_tasks_info: list[RunningTaskInfo],
     context: SchedulingContext,
 ) -> list[tuple[JobName, JobName]]:
     """Find tasks to preempt for higher-priority unscheduled work.
-
-    Each entry in unscheduled_tasks is (task_id, requirements, band_sort_key).
 
     Rules:
     - PRODUCTION preempts INTERACTIVE and BATCH.
@@ -373,7 +381,8 @@ def _run_preemption_pass(
     # Sort victims: lowest priority first (highest band_sort_key), then cheapest
     victims = sorted(running_tasks_info, key=lambda t: (-t.band_sort_key, t.resource_value))
 
-    for task_id, req, task_band_key in unscheduled_tasks:
+    for candidate in unscheduled_tasks:
+        task_id, req, task_band_key = candidate.job_name, candidate.requirements, candidate.band
         # Batch never preempts
         if task_band_key >= cluster_pb2.PRIORITY_BAND_BATCH:
             continue
@@ -1428,8 +1437,8 @@ class Controller:
         interleaved: list[JobName] = []
         for band_key in sorted(tasks_by_band.keys()):
             band_tasks = tasks_by_band[band_key]
-            user_task_pairs = [(tid.user, tid) for tid in band_tasks]
-            interleaved.extend(interleave_by_user(user_task_pairs, user_spend))
+            user_tasks = [UserTask(user_id=tid.user, task=tid) for tid in band_tasks]
+            interleaved.extend(interleave_by_user(user_tasks, user_spend))
         schedulable_task_ids = interleaved
 
         # Per-user cap: limit how many tasks a single user can have considered
@@ -1482,7 +1491,11 @@ class Controller:
         # higher-priority unscheduled work.
         assigned_ids = {task_id for task_id, _ in all_assignments}
         unscheduled = [
-            (tid, jobs[tid.parent], task_band_map.get(tid, cluster_pb2.PRIORITY_BAND_INTERACTIVE))
+            PreemptionCandidate(
+                job_name=tid,
+                requirements=jobs[tid.parent],
+                band=task_band_map.get(tid, cluster_pb2.PRIORITY_BAND_INTERACTIVE),
+            )
             for tid in schedulable_task_ids
             if tid not in assigned_ids and tid.parent is not None and tid.parent in jobs
         ]
@@ -1490,8 +1503,8 @@ class Controller:
             claimed_workers = set(claims.keys())
             running_info = _get_running_tasks_with_band_and_value(self._db, claimed_workers)
             preemptions = _run_preemption_pass(unscheduled, running_info, context)
-            for preemptor_id, victim_id in preemptions:
-                preempt_result = self._transitions.preempt_task(victim_id, reason=f"Preempted by {preemptor_id}")
+            for preemptor_name, victim_id in preemptions:
+                preempt_result = self._transitions.preempt_task(victim_id, reason=f"Preempted by {preemptor_name}")
                 self.kill_tasks_on_workers(preempt_result.tasks_to_kill)
             if preemptions:
                 logger.info("Preemption pass: %d tasks preempted", len(preemptions))

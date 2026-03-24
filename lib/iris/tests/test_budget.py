@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from iris.cluster.controller.budget import interleave_by_user, resource_value
+from iris.cluster.controller.budget import UserTask, interleave_by_user, resource_value
 from iris.rpc import cluster_pb2
 from iris.rpc.proto_utils import PRIORITY_BAND_VALUES, priority_band_name, priority_band_value
 
@@ -34,13 +34,13 @@ def test_resource_value_truncates_fractional():
 
 
 def test_interleave_by_user_single_user():
-    tasks = [("alice", "t1"), ("alice", "t2"), ("alice", "t3")]
+    tasks = [UserTask("alice", "t1"), UserTask("alice", "t2"), UserTask("alice", "t3")]
     result = interleave_by_user(tasks, user_spend={})
     assert result == ["t1", "t2", "t3"]
 
 
 def test_interleave_by_user_two_users_equal_spend():
-    tasks = [("alice", "a1"), ("alice", "a2"), ("bob", "b1"), ("bob", "b2")]
+    tasks = [UserTask("alice", "a1"), UserTask("alice", "a2"), UserTask("bob", "b1"), UserTask("bob", "b2")]
     result = interleave_by_user(tasks, user_spend={"alice": 100, "bob": 100})
     # Equal spend: stable sort by user name, then round-robin
     assert result == ["a1", "b1", "a2", "b2"] or result == ["b1", "a1", "b2", "a2"]
@@ -49,10 +49,10 @@ def test_interleave_by_user_two_users_equal_spend():
 
 def test_interleave_by_user_spend_ordering():
     tasks = [
-        ("alice", "a1"),
-        ("alice", "a2"),
-        ("bob", "b1"),
-        ("bob", "b2"),
+        UserTask("alice", "a1"),
+        UserTask("alice", "a2"),
+        UserTask("bob", "b1"),
+        UserTask("bob", "b2"),
     ]
     # Bob has spent less, so his tasks should come first in each round
     result = interleave_by_user(tasks, user_spend={"alice": 8000, "bob": 1000})
@@ -60,7 +60,7 @@ def test_interleave_by_user_spend_ordering():
 
 
 def test_interleave_by_user_unequal_task_counts():
-    tasks = [("alice", "a1"), ("alice", "a2"), ("alice", "a3"), ("bob", "b1")]
+    tasks = [UserTask("alice", "a1"), UserTask("alice", "a2"), UserTask("alice", "a3"), UserTask("bob", "b1")]
     result = interleave_by_user(tasks, user_spend={"alice": 0, "bob": 0})
     # Round 0: a1, b1; Round 1: a2; Round 2: a3
     assert result[0] in ("a1", "b1")
@@ -75,7 +75,7 @@ def test_interleave_by_user_empty():
 
 
 def test_interleave_by_user_missing_spend_defaults_to_zero():
-    tasks = [("alice", "a1"), ("bob", "b1")]
+    tasks = [UserTask("alice", "a1"), UserTask("bob", "b1")]
     # Alice has no spend entry → defaults to 0, Bob has 5000
     result = interleave_by_user(tasks, user_spend={"bob": 5000})
     assert result == ["a1", "b1"]

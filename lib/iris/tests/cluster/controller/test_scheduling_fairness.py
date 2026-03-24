@@ -5,7 +5,7 @@
 
 from collections import defaultdict
 
-
+from iris.cluster.controller.budget import UserTask, compute_user_spend, interleave_by_user
 from iris.cluster.controller.controller import _schedulable_tasks
 from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
@@ -85,8 +85,6 @@ def test_single_task_user_beats_hundred_task_user():
     When User B has higher budget spend, A's task should come first in the
     interleaved order since interleave_by_user sorts users by ascending spend.
     """
-    from iris.cluster.controller.budget import interleave_by_user
-
     with make_controller_state() as state:
         # User B submits 10 tasks first
         _submit_user_job(state, "user-b", "big-batch", replicas=10)
@@ -106,8 +104,8 @@ def test_single_task_user_beats_hundred_task_user():
         interleaved: list[JobName] = []
         for band_key in sorted(tasks_by_band.keys()):
             band_tasks = tasks_by_band[band_key]
-            user_task_pairs = [(t.task_id.user, t.task_id) for t in band_tasks]
-            interleaved.extend(interleave_by_user(user_task_pairs, user_spend))
+            user_tasks = [UserTask(user_id=t.task_id.user, task=t.task_id) for t in band_tasks]
+            interleaved.extend(interleave_by_user(user_tasks, user_spend))
 
         # User A (lower spend) should have their task first
         a_task_ids = {t.task_id for t in a_tasks}
@@ -119,8 +117,6 @@ def test_single_task_user_beats_hundred_task_user():
 
 def test_per_user_cap():
     """max_tasks_per_user_per_cycle limits how many tasks per user are scheduled."""
-    from iris.cluster.controller.budget import compute_user_spend, interleave_by_user
-
     with make_controller_state() as state:
         cap = 3
         # User submits 10 tasks
@@ -137,8 +133,8 @@ def test_per_user_cap():
         interleaved: list[JobName] = []
         for band_key in sorted(tasks_by_band.keys()):
             band_tasks = tasks_by_band[band_key]
-            user_task_pairs = [(t.task_id.user, t.task_id) for t in band_tasks]
-            interleaved.extend(interleave_by_user(user_task_pairs, user_spend))
+            user_tasks = [UserTask(user_id=t.task_id.user, task=t.task_id) for t in band_tasks]
+            interleaved.extend(interleave_by_user(user_tasks, user_spend))
 
         # Apply cap
         tasks_per_user: dict[str, int] = defaultdict(int)
