@@ -63,13 +63,17 @@ async function copyJobName() {
 
 // -- Fetch --
 
+let fetchGeneration = 0
+
 async function fetchData() {
+  const gen = ++fetchGeneration
   error.value = null
   try {
     const [jobResp, tasksResp] = await Promise.all([
       controllerRpcCall<GetJobStatusResponse>('GetJobStatus', { jobId: props.jobId }),
       controllerRpcCall<ListTasksResponse>('ListTasks', { jobId: props.jobId }),
     ])
+    if (gen !== fetchGeneration) return  // superseded by a newer fetchData()
     if (!jobResp.job) {
       error.value = 'Job not found'
       return
@@ -85,6 +89,7 @@ async function fetchData() {
         nameFilter: jobName,
         limit: 500,
       })
+      if (gen !== fetchGeneration) return  // superseded by a newer fetchData()
       // Filter to direct children only: name starts with "jobName/" and has no further "/"
       const prefix = jobName + '/'
       childJobs.value = (childResp.jobs ?? []).filter(j => {
@@ -96,9 +101,12 @@ async function fetchData() {
       childJobs.value = []
     }
   } catch (e) {
+    if (gen !== fetchGeneration) return  // superseded by a newer fetchData()
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
-    loading.value = false
+    if (gen === fetchGeneration) {
+      loading.value = false
+    }
   }
 }
 
@@ -111,10 +119,22 @@ const isTerminal = computed(() => {
   return TERMINAL_STATES.has(stateToName(job.value.state))
 })
 
-const { stop: stopRefresh } = useAutoRefresh(fetchData, 10_000)
+const { stop: stopRefresh, start: startRefresh } = useAutoRefresh(fetchData, 10_000)
 
 watch(isTerminal, (terminal) => {
   if (terminal) stopRefresh()
+})
+
+// Re-fetch when navigating between jobs (Vue Router reuses the component).
+watch(() => props.jobId, () => {
+  loading.value = true
+  job.value = null
+  jobRequest.value = null
+  tasks.value = []
+  childJobs.value = []
+  error.value = null
+  fetchData()
+  startRefresh()
 })
 
 // -- Formatting helpers --
