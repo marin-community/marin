@@ -1342,6 +1342,11 @@ class ControllerDB:
         with self.snapshot() as q:
             return q.select(USER_BUDGETS)
 
+    def get_all_user_budget_limits(self) -> dict[str, int]:
+        """Return ``{user_id: budget_limit}`` for every user with a budget row."""
+        rows = self.list_user_budgets()
+        return {row.user_id: row.budget_limit for row in rows}
+
 
 # ---------------------------------------------------------------------------
 # Shared read-only query helpers

@@ -4,6 +4,7 @@
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
 
+from iris.cluster.controller.budget import compute_effective_band
 from iris.cluster.controller.controller import (
     PreemptionCandidate,
     RunningTaskInfo,
@@ -387,3 +388,72 @@ def test_get_running_tasks_skips_claimed_workers():
         task_ids = {r.task_id for r in running}
         assert tasks2[0].task_id in task_ids
         assert tasks1[0].task_id not in task_ids
+
+
+def test_over_budget_user_tasks_preemptible():
+    """Over-budget user's INTERACTIVE running tasks become BATCH victims for preemption."""
+    w1 = WorkerId("w1")
+    cap = WorkerCapacity(
+        worker_id=w1,
+        available_cpu_millicores=0,
+        available_memory=0,
+        available_gpus=0,
+        available_tpus=0,
+    )
+    ctx = _make_simple_context([cap])
+
+    # Alice is over budget — her INTERACTIVE task should have effective band BATCH
+    user_spend = {"alice": 10000}
+    user_budget_limits = {"alice": 5000}
+    effective = compute_effective_band(cluster_pb2.PRIORITY_BAND_INTERACTIVE, "alice", user_spend, user_budget_limits)
+    assert effective == cluster_pb2.PRIORITY_BAND_BATCH
+
+    victim = RunningTaskInfo(
+        task_id=JobName.from_wire("/alice/interactive-job:0"),
+        worker_id=w1,
+        band_sort_key=effective,  # BATCH due to budget
+        resource_value=1000,
+        is_coscheduled=False,
+        resources=_cpu_resources(1),
+    )
+
+    # Bob's INTERACTIVE task should be able to preempt alice's downgraded task
+    preemptor_id = JobName.from_wire("/bob/interactive-job:0")
+    unscheduled = [
+        PreemptionCandidate(preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_INTERACTIVE),
+    ]
+
+    preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
+    assert len(preemptions) == 1
+    assert preemptions[0] == (preemptor_id, victim.task_id)
+
+
+def test_over_budget_production_not_preemptible():
+    """Over-budget user's PRODUCTION tasks are NOT downgraded and stay non-preemptible by INTERACTIVE."""
+    user_spend = {"alice": 10000}
+    user_budget_limits = {"alice": 5000}
+    effective = compute_effective_band(cluster_pb2.PRIORITY_BAND_PRODUCTION, "alice", user_spend, user_budget_limits)
+    assert effective == cluster_pb2.PRIORITY_BAND_PRODUCTION
+
+
+def test_running_tasks_use_effective_band():
+    """_get_running_tasks_with_band_and_value applies budget down-weighting to running tasks."""
+    with make_controller_state() as state:
+        harness = ControllerTestHarness(state)
+        w1 = harness.add_worker("w1", cpu=4)
+
+        # Submit an INTERACTIVE job for alice
+        tasks = harness.submit("/alice/interactive-job", cpu=1)
+        harness.dispatch(tasks[0], w1)
+
+        # Set alice's budget: over budget
+        user_spend = {"alice": 10000}
+        user_budget_limits = {"alice": 5000}
+
+        running = _get_running_tasks_with_band_and_value(
+            state._db, set(), user_spend=user_spend, user_budget_limits=user_budget_limits
+        )
+
+        assert len(running) == 1
+        # Should be downgraded to BATCH
+        assert running[0].band_sort_key == cluster_pb2.PRIORITY_BAND_BATCH

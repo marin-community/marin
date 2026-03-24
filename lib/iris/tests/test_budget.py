@@ -1,9 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from iris.cluster.controller.budget import UserTask, interleave_by_user, resource_value
+from iris.cluster.controller.budget import UserTask, compute_effective_band, interleave_by_user, resource_value
 from iris.rpc import cluster_pb2
 from iris.rpc.proto_utils import PRIORITY_BAND_VALUES, priority_band_name, priority_band_value
+
+PRODUCTION = cluster_pb2.PRIORITY_BAND_PRODUCTION
+INTERACTIVE = cluster_pb2.PRIORITY_BAND_INTERACTIVE
+BATCH = cluster_pb2.PRIORITY_BAND_BATCH
 
 GiB = 1024**3
 
@@ -79,6 +83,48 @@ def test_interleave_by_user_missing_spend_defaults_to_zero():
     # Alice has no spend entry → defaults to 0, Bob has 5000
     result = interleave_by_user(tasks, user_spend={"bob": 5000})
     assert result == ["a1", "b1"]
+
+
+def test_effective_band_over_budget_becomes_batch():
+    """INTERACTIVE task becomes BATCH when user exceeds budget."""
+    spend = {"alice": 10000}
+    limits = {"alice": 5000}
+    assert compute_effective_band(INTERACTIVE, "alice", spend, limits) == BATCH
+
+
+def test_effective_band_within_budget_keeps_band():
+    """INTERACTIVE task stays INTERACTIVE when user is within budget."""
+    spend = {"alice": 3000}
+    limits = {"alice": 5000}
+    assert compute_effective_band(INTERACTIVE, "alice", spend, limits) == INTERACTIVE
+
+
+def test_effective_band_production_never_downgraded():
+    """PRODUCTION tasks are never downgraded, even when over budget."""
+    spend = {"alice": 10000}
+    limits = {"alice": 5000}
+    assert compute_effective_band(PRODUCTION, "alice", spend, limits) == PRODUCTION
+
+
+def test_effective_band_zero_budget_means_unlimited():
+    """budget_limit=0 means no down-weighting regardless of spend."""
+    spend = {"alice": 999999}
+    limits = {"alice": 0}
+    assert compute_effective_band(INTERACTIVE, "alice", spend, limits) == INTERACTIVE
+
+
+def test_effective_band_no_budget_row_means_unlimited():
+    """User with no budget row is treated as unlimited."""
+    spend = {"alice": 999999}
+    limits = {}  # no row for alice
+    assert compute_effective_band(INTERACTIVE, "alice", spend, limits) == INTERACTIVE
+
+
+def test_effective_band_batch_stays_batch_when_over_budget():
+    """Already-BATCH task stays BATCH (max of requested and BATCH)."""
+    spend = {"alice": 10000}
+    limits = {"alice": 5000}
+    assert compute_effective_band(BATCH, "alice", spend, limits) == BATCH
 
 
 def test_priority_band_name_roundtrip():

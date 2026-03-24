@@ -5,7 +5,7 @@
 
 from collections import defaultdict
 
-from iris.cluster.controller.budget import UserTask, compute_user_spend, interleave_by_user
+from iris.cluster.controller.budget import UserTask, compute_effective_band, compute_user_spend, interleave_by_user
 from iris.cluster.controller.controller import _schedulable_tasks
 from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
@@ -240,3 +240,76 @@ def test_default_band_is_interactive():
         for t in tasks:
             task = query_task(state, t.task_id)
             assert task.priority_band == cluster_pb2.PRIORITY_BAND_INTERACTIVE
+
+
+def test_user_over_budget_tasks_become_batch():
+    """User exceeding budget has INTERACTIVE tasks treated as BATCH in scheduling order."""
+    with make_controller_state() as state:
+        # Submit interactive tasks for alice (over budget) and bob (within budget)
+        alice_tasks = _submit_user_job(
+            state, "alice", "alice-job", replicas=2, band=cluster_pb2.PRIORITY_BAND_INTERACTIVE
+        )
+        bob_tasks = _submit_user_job(state, "bob", "bob-job", replicas=2, band=cluster_pb2.PRIORITY_BAND_INTERACTIVE)
+
+        schedulable = _schedulable_tasks(state._db)
+
+        # Simulate alice being over budget
+        user_spend = {"alice": 10000, "bob": 1000}
+        user_budget_limits = {"alice": 5000, "bob": 50000}
+
+        # Compute effective bands — alice's tasks should become BATCH
+        tasks_by_band: dict[int, list[JobName]] = defaultdict(list)
+        for task in schedulable:
+            band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
+            tasks_by_band[band].append(task.task_id)
+
+        alice_ids = {t.task_id for t in alice_tasks}
+        bob_ids = {t.task_id for t in bob_tasks}
+
+        # Bob's tasks should be INTERACTIVE, alice's should be BATCH
+        interactive_ids = set(tasks_by_band.get(cluster_pb2.PRIORITY_BAND_INTERACTIVE, []))
+        batch_ids = set(tasks_by_band.get(cluster_pb2.PRIORITY_BAND_BATCH, []))
+        assert bob_ids <= interactive_ids, "Bob's tasks should remain INTERACTIVE"
+        assert alice_ids <= batch_ids, "Alice's tasks should be downgraded to BATCH"
+
+
+def test_user_within_budget_keeps_interactive():
+    """User within budget keeps INTERACTIVE band."""
+    with make_controller_state() as state:
+        _submit_user_job(state, "alice", "within-budget", replicas=2, band=cluster_pb2.PRIORITY_BAND_INTERACTIVE)
+
+        schedulable = _schedulable_tasks(state._db)
+        user_spend = {"alice": 3000}
+        user_budget_limits = {"alice": 50000}
+
+        for task in schedulable:
+            band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
+            assert band == cluster_pb2.PRIORITY_BAND_INTERACTIVE
+
+
+def test_production_never_downgraded_by_budget():
+    """PRODUCTION tasks are never downgraded even when user exceeds budget."""
+    with make_controller_state() as state:
+        _submit_user_job(state, "alice", "prod-job", replicas=1, band=cluster_pb2.PRIORITY_BAND_PRODUCTION)
+
+        schedulable = _schedulable_tasks(state._db)
+        user_spend = {"alice": 999999}
+        user_budget_limits = {"alice": 100}
+
+        for task in schedulable:
+            band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
+            assert band == cluster_pb2.PRIORITY_BAND_PRODUCTION
+
+
+def test_zero_budget_means_unlimited():
+    """budget_limit=0 means no down-weighting regardless of spend."""
+    with make_controller_state() as state:
+        _submit_user_job(state, "alice", "unlimited", replicas=1, band=cluster_pb2.PRIORITY_BAND_INTERACTIVE)
+
+        schedulable = _schedulable_tasks(state._db)
+        user_spend = {"alice": 999999}
+        user_budget_limits = {"alice": 0}
+
+        for task in schedulable:
+            band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
+            assert band == cluster_pb2.PRIORITY_BAND_INTERACTIVE

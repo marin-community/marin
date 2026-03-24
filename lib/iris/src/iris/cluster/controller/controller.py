@@ -50,6 +50,7 @@ from iris.cluster.controller.db import (
 from iris.cluster.controller.budget import (
     UserBudgetDefaults,
     UserTask,
+    compute_effective_band,
     compute_user_spend,
     interleave_by_user,
     resource_value,
@@ -319,10 +320,14 @@ def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, J
 def _get_running_tasks_with_band_and_value(
     db: ControllerDB,
     claimed_workers: set[WorkerId],
+    user_spend: dict[str, int] | None = None,
+    user_budget_limits: dict[str, int] | None = None,
 ) -> list[RunningTaskInfo]:
     """Query running tasks with band, worker, resource spec, and coscheduling status.
 
     Skips tasks on reservation-claimed workers since those workers are spoken for.
+    When ``user_spend`` and ``user_budget_limits`` are provided, the effective band
+    is computed so over-budget users' tasks are treated as BATCH for preemption.
     """
     with db.snapshot() as q:
         rows = q.raw(
@@ -338,6 +343,8 @@ def _get_running_tasks_with_band_and_value(
                 "worker_id": WorkerId,
             },
         )
+    _spend = user_spend or {}
+    _limits = user_budget_limits or {}
     result: list[RunningTaskInfo] = []
     for row in rows:
         wid = row.worker_id
@@ -345,11 +352,12 @@ def _get_running_tasks_with_band_and_value(
             continue
         request = cluster_pb2.Controller.LaunchJobRequest()
         request.ParseFromString(row.request_proto)
+        band = compute_effective_band(row.priority_band, row.task_id.user, _spend, _limits)
         result.append(
             RunningTaskInfo(
                 task_id=row.task_id,
                 worker_id=wid,
-                band_sort_key=row.priority_band,
+                band_sort_key=band,
                 resource_value=resource_value(
                     request.resources.cpu_millicores,
                     request.resources.memory_bytes,
@@ -1426,12 +1434,18 @@ class Controller:
 
         # Per-band interleaving: group tasks by priority band, round-robin
         # users within each band ordered by ascending budget spend.
+        # Budget down-weighting: users over budget have non-PRODUCTION tasks
+        # treated as BATCH for both scheduling order and preemption eligibility.
         with self._db.snapshot() as budget_snapshot:
             user_spend = compute_user_spend(budget_snapshot)
-        task_band_map: dict[JobName, int] = {task.task_id: task.priority_band for task in pending_tasks}
+        user_budget_limits = self._db.get_all_user_budget_limits()
+        task_band_map: dict[JobName, int] = {
+            task.task_id: compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
+            for task in pending_tasks
+        }
         tasks_by_band: dict[int, list[JobName]] = defaultdict(list)
         for task_id in schedulable_task_ids:
-            band = task_band_map.get(task_id, 2)
+            band = task_band_map.get(task_id, cluster_pb2.PRIORITY_BAND_INTERACTIVE)
             tasks_by_band[band].append(task_id)
 
         interleaved: list[JobName] = []
@@ -1501,7 +1515,9 @@ class Controller:
         ]
         if unscheduled:
             claimed_workers = set(claims.keys())
-            running_info = _get_running_tasks_with_band_and_value(self._db, claimed_workers)
+            running_info = _get_running_tasks_with_band_and_value(
+                self._db, claimed_workers, user_spend=user_spend, user_budget_limits=user_budget_limits
+            )
             preemptions = _run_preemption_pass(unscheduled, running_info, context)
             for preemptor_name, victim_id in preemptions:
                 preempt_result = self._transitions.preempt_task(victim_id, reason=f"Preempted by {preemptor_name}")

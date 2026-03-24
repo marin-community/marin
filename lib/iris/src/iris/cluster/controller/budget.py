@@ -73,6 +73,21 @@ def compute_user_spend(snapshot: QuerySnapshot) -> dict[str, int]:
     return dict(spend)
 
 
+def compute_effective_band(
+    task_band: int, user_id: str, user_spend: dict[str, int], user_budgets: dict[str, int]
+) -> int:
+    """Downgrade task to BATCH if its user exceeds their budget.
+
+    PRODUCTION tasks are never downgraded.  A budget_limit of 0 means unlimited.
+    """
+    if task_band == cluster_pb2.PRIORITY_BAND_PRODUCTION:
+        return task_band
+    limit = user_budgets.get(user_id, 0)
+    if limit > 0 and user_spend.get(user_id, 0) > limit:
+        return max(task_band, cluster_pb2.PRIORITY_BAND_BATCH)
+    return task_band
+
+
 def interleave_by_user(
     tasks: list[UserTask[T]],
     user_spend: dict[str, int],
