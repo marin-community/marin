@@ -612,9 +612,16 @@ class RayActorGroup:
         return False
 
     def shutdown(self) -> None:
-        """Kill all Ray actors."""
+        """Gracefully terminate all Ray actors.
+
+        Uses __ray_terminate__ instead of ray.kill() so that in-flight tasks
+        finish before the actor exits.  ray.kill() races with task completion
+        callbacks in Ray's C++ task_manager, triggering a fatal assertion
+        (ray-project/ray#54260).  __ray_terminate__ queues behind pending
+        tasks and escalates to a force-kill after 30 s.
+        """
         for handle in self._handles:
             try:
-                ray.kill(handle._actor_ref)
+                handle._actor_ref.__ray_terminate__.remote()
             except Exception as e:
-                logger.warning("Failed to kill Ray actor: %s", e)
+                logger.warning("Failed to terminate Ray actor: %s", e)
