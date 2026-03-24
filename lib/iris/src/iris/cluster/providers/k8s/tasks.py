@@ -621,8 +621,7 @@ class K8sTaskProvider:
                         error=str(exc),
                     )
                 )
-        for task_id in batch.tasks_to_kill:
-            self._delete_pods_by_task_id(task_id)
+        self._bulk_delete_task_pods(batch.tasks_to_kill)
         updates = apply_failures + self._poll_pods(batch.running_tasks)
         capacity = self._query_capacity()
         scheduling_events = self._fetch_scheduling_events()
@@ -959,6 +958,31 @@ class K8sTaskProvider:
             task_id,
             run_req.attempt_id,
         )
+
+    def _bulk_delete_task_pods(self, task_ids: list[str]) -> None:
+        """Delete pods and configmaps for multiple tasks via one kubectl call per job."""
+        # Group by job_id (task_id format: /{user}/{job}/{task_index})
+        jobs: dict[str, list[str]] = {}
+        for task_id in task_ids:
+            job_id, _, _ = task_id.rpartition("/")
+            assert job_id, f"malformed task_id (expected /<user>/<job>/<index>): {task_id}"
+            jobs.setdefault(job_id, []).append(task_id)
+
+        for job_id, job_task_ids in jobs.items():
+            labels = {
+                _LABEL_MANAGED: "true",
+                _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+                _LABEL_JOB_ID: _sanitize_label_value(job_id),
+            }
+            pod_count = self.kubectl.delete_by_labels("pods", labels, wait=False)
+            cm_count = self.kubectl.delete_by_labels("configmaps", labels, wait=False)
+            logger.info(
+                "Bulk deleted %d pods, %d configmaps for job %s (%d tasks)",
+                pod_count,
+                cm_count,
+                job_id,
+                len(job_task_ids),
+            )
 
     def _delete_pods_by_task_id(self, task_id: str) -> None:
         """Delete all pods for a given task_id (any attempt).

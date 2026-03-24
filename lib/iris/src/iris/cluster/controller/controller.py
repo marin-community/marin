@@ -1006,7 +1006,9 @@ class Controller:
         assert isinstance(self._provider, K8sTaskProvider)
         provider = self._provider
         with self._heartbeat_lock:
-            batch = self._transitions.drain_for_direct_provider()
+            batch = self._transitions.drain_for_direct_provider(
+                capacity=self._provider_capacity,
+            )
             if not batch.tasks_to_run and not batch.running_tasks and not batch.tasks_to_kill:
                 return
             result = provider.sync(batch)

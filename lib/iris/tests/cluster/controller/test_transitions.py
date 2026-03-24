@@ -29,6 +29,7 @@ from iris.cluster.controller.db import (
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.transitions import (
     Assignment,
+    ClusterCapacity,
     ControllerTransitions,
     HEARTBEAT_FAILURE_THRESHOLD,
     HeartbeatApplyRequest,
@@ -3228,6 +3229,49 @@ def test_drain_skips_already_assigned(state):
     assert len(batch2.running_tasks) == 1
     assert batch2.running_tasks[0].task_id == task_id
     assert batch2.running_tasks[0].attempt_id == 0
+
+
+def test_drain_caps_promotions_and_refills_after_completion(state):
+    """Promotions are capped per cycle; completing tasks frees budget for the remainder."""
+    _submit_job_direct(state, "/user/big-job", replicas=74)
+
+    batch1 = state.drain_for_direct_provider()
+    assert len(batch1.tasks_to_run) == 64
+
+    # Budget exhausted — second drain promotes nothing.
+    assert len(state.drain_for_direct_provider().tasks_to_run) == 0
+
+    # Complete all promoted tasks → budget freed.
+    for req in batch1.tasks_to_run:
+        state.apply_direct_provider_updates(
+            [
+                TaskUpdate(
+                    task_id=JobName.from_wire(req.task_id),
+                    attempt_id=req.attempt_id,
+                    new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
+                )
+            ]
+        )
+    batch2 = state.drain_for_direct_provider()
+    assert len(batch2.tasks_to_run) == 10
+
+
+def test_drain_capacity_limits_promotions(state):
+    """With capacity, budget is schedulable_nodes * OVERCOMMIT; active tasks reduce it."""
+    capacity = ClusterCapacity(
+        schedulable_nodes=100,
+        total_cpu_millicores=400000,
+        available_cpu_millicores=200000,
+        total_memory_bytes=800 * 1024**3,
+        available_memory_bytes=400 * 1024**3,
+    )
+    _submit_job_direct(state, "/user/cap-job", replicas=250)
+
+    batch1 = state.drain_for_direct_provider(capacity=capacity)
+    assert len(batch1.tasks_to_run) == 200  # 100 nodes * 2
+
+    # 200 active → budget exhausted.
+    assert len(state.drain_for_direct_provider(capacity=capacity).tasks_to_run) == 0
 
 
 def test_drain_kill_queue(state):

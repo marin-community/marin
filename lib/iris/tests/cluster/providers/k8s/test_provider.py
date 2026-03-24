@@ -10,6 +10,7 @@ import pytest
 from iris.cluster.controller.transitions import ClusterCapacity, RunningTaskEntry, SchedulingEvent
 from iris.cluster.providers.k8s.tasks import (
     K8sTaskProvider,
+    _LABEL_JOB_ID,
     _LABEL_MANAGED,
     _LABEL_RUNTIME,
     _LABEL_TASK_HASH,
@@ -80,7 +81,7 @@ def test_sync_deletes_pods_for_tasks_to_kill(provider, k8s):
         k8s,
         "iris-test-job-0-0",
         "Running",
-        labels={_LABEL_TASK_HASH: _task_hash(task_id)},
+        labels={_LABEL_TASK_HASH: _task_hash(task_id), _LABEL_JOB_ID: _sanitize_label_value("/test-job")},
     )
     batch = make_batch(tasks_to_kill=[task_id])
 

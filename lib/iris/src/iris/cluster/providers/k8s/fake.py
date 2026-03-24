@@ -688,6 +688,29 @@ class InMemoryK8sService:
         if normalized == "pod":
             self._release_pod_resources(name)
 
+    def delete_by_labels(
+        self,
+        resource: str,
+        labels: dict[str, str],
+        *,
+        cluster_scoped: bool = False,
+        wait: bool = False,
+    ) -> int:
+        self._check_failure("delete_by_labels")
+        normalized = _normalize_resource(resource)
+        to_delete = []
+        for (kind, name), manifest in self._resources.items():
+            if kind != normalized:
+                continue
+            res_labels = manifest.get("metadata", {}).get("labels", {})
+            if all(res_labels.get(k) == v for k, v in labels.items()):
+                to_delete.append(name)
+        for name in to_delete:
+            self._resources.pop((normalized, name), None)
+            if normalized == "pod":
+                self._release_pod_resources(name)
+        return len(to_delete)
+
     def logs(self, pod_name: str, *, container: str | None = None, tail: int = 50, previous: bool = False) -> str:
         self._check_failure("logs")
         text = self._logs.get(pod_name, "")

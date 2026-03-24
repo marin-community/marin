@@ -81,6 +81,12 @@ WORKER_TASK_HISTORY_RETENTION = 500
 WORKER_RESOURCE_HISTORY_RETENTION = 500
 """Maximum worker_resource_history rows retained per worker."""
 
+DIRECT_PROVIDER_BOOTSTRAP_BATCH = 64
+"""Max tasks promoted per sync cycle when no capacity info is available yet."""
+
+DIRECT_PROVIDER_NODE_OVERCOMMIT = 2
+"""Pods per schedulable node allowed for the direct provider scheduler."""
+
 
 @dataclass(frozen=True)
 class PruneResult:
@@ -380,6 +386,14 @@ def _resolve_preemption_policy(cur: Any, job_id: JobName) -> int:
     if req.replicas <= 1:
         return cluster_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
     return cluster_pb2.JOB_PREEMPTION_POLICY_PRESERVE_CHILDREN
+
+
+def _compute_max_promotions(capacity: ClusterCapacity | None, active_count: int) -> int:
+    """Max new tasks to promote, given cluster capacity and already-active count."""
+    if capacity is None:
+        return max(DIRECT_PROVIDER_BOOTSTRAP_BATCH - active_count, 0)
+    target = max(capacity.schedulable_nodes * DIRECT_PROVIDER_NODE_OVERCOMMIT, DIRECT_PROVIDER_BOOTSTRAP_BATCH)
+    return max(target - active_count, 0)
 
 
 # =============================================================================
@@ -1936,17 +1950,33 @@ class ControllerTransitions:
     # Direct provider methods
     # =========================================================================
 
-    def drain_for_direct_provider(self) -> DirectProviderBatch:
+    def drain_for_direct_provider(
+        self,
+        capacity: ClusterCapacity | None = None,
+    ) -> DirectProviderBatch:
         """Drain pending tasks and snapshot running tasks for a direct provider sync cycle.
 
-        Promotes all schedulable PENDING tasks to ASSIGNED (NULL worker_id),
+        Promotes schedulable PENDING tasks to ASSIGNED (NULL worker_id),
         builds RunTaskRequest for each, and collects:
         - Newly promoted tasks -> tasks_to_run
         - Already ASSIGNED/BUILDING/RUNNING tasks with NULL worker_id -> running_tasks
         - Kill entries with NULL worker_id -> tasks_to_kill (deleted from queue)
+
+        When ``capacity`` is provided, limits promotions to cluster size.
         """
         with self._db.transaction() as cur:
             now_ms = Timestamp.now().epoch_ms()
+
+            active_states = tuple(sorted(ACTIVE_TASK_STATES))
+            active_placeholders = ",".join("?" * len(active_states))
+            (active_count,) = cur.execute(
+                "SELECT COUNT(*) FROM tasks t "
+                "JOIN task_attempts ta ON t.task_id = ta.task_id AND t.current_attempt_id = ta.attempt_id "
+                f"WHERE ta.worker_id IS NULL AND t.state IN ({active_placeholders})",
+                active_states,
+            ).fetchone()
+
+            max_promotions = _compute_max_promotions(capacity, active_count)
 
             # Any PENDING task is schedulable (first attempt or retry).
             pending_rows = cur.execute(
@@ -1960,6 +1990,9 @@ class ControllerTransitions:
             tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest] = []
 
             for row in pending_rows:
+                if len(tasks_to_run) >= max_promotions:
+                    break
+
                 task_id = str(row["task_id"])
                 attempt_id = int(row["current_attempt_id"]) + 1
                 job_req = cluster_pb2.Controller.LaunchJobRequest()
