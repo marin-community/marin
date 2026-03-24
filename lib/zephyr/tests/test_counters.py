@@ -20,11 +20,11 @@ class FakeWorker:
     def get_shared(self, name: str):
         raise NotImplementedError
 
-    def _increment_counter(self, name: str, value: int = 1) -> None:
+    def increment_counter(self, name: str, value: int = 1) -> None:
         with self._counters_lock:
             self._counters[name] = self._counters.get(name, 0) + value
 
-    def _get_counter_snapshot(self) -> dict[str, int]:
+    def get_counter_snapshot(self) -> dict[str, int]:
         with self._counters_lock:
             return dict(self._counters)
 

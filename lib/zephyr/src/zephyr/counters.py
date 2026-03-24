@@ -35,7 +35,7 @@ def increment(name: str, value: int = 1) -> None:
     worker = _worker_ctx_var.get()
     if worker is None:
         return
-    worker._increment_counter(name, value)
+    worker.increment_counter(name, value)
 
 
 def get_counters() -> dict[str, int]:
@@ -46,4 +46,4 @@ def get_counters() -> dict[str, int]:
     worker = _worker_ctx_var.get()
     if worker is None:
         return {}
-    return worker._get_counter_snapshot()
+    return worker.get_counter_snapshot()

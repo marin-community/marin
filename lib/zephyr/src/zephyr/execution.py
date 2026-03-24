@@ -293,8 +293,8 @@ _NON_RETRYABLE_ERRORS = (ZephyrWorkerError, ValueError, TypeError, KeyError, Att
 
 class WorkerContext(Protocol):
     def get_shared(self, name: str) -> Any: ...
-    def _increment_counter(self, name: str, value: int = 1) -> None: ...
-    def _get_counter_snapshot(self) -> dict[str, int]: ...
+    def increment_counter(self, name: str, value: int = 1) -> None: ...
+    def get_counter_snapshot(self) -> dict[str, int]: ...
 
 
 _worker_ctx_var: ContextVar[ZephyrWorker | None] = ContextVar("zephyr_worker_ctx", default=None)
@@ -940,13 +940,11 @@ class ZephyrWorker:
             )
         return self._shared_data_cache[name]
 
-    def _increment_counter(self, name: str, value: int = 1) -> None:
-        """Increment a named counter. Thread-safe, called from task code."""
+    def increment_counter(self, name: str, value: int = 1) -> None:
         with self._counters_lock:
             self._counters[name] = self._counters.get(name, 0) + value
 
-    def _get_counter_snapshot(self) -> dict[str, int]:
-        """Return a snapshot of current counters."""
+    def get_counter_snapshot(self) -> dict[str, int]:
         with self._counters_lock:
             return dict(self._counters)
 
@@ -996,7 +994,7 @@ class ZephyrWorker:
                 # Block on result to avoid congesting the coordinator RPC pipe
                 # with fire-and-forget heartbeats. Only send counter snapshot
                 # when values have changed.
-                snapshot = self._get_counter_snapshot() if self._counters_changed() else None
+                snapshot = self.get_counter_snapshot() if self._counters_changed() else None
                 coordinator.heartbeat.remote(
                     self._worker_id,
                     snapshot,
