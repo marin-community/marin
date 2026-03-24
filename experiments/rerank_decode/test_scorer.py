@@ -163,8 +163,16 @@ def test_accept_multiple_chunks(reference_model, tokenizer, kv_scorer):
         current_prompt += chunk
 
 
-def test_reuse_across_prompts(reference_model, tokenizer, kv_scorer):
-    """Test that a scorer produces correct results when reused across different prompts."""
+def test_reuse_across_prompts_asserts(reference_model, tokenizer, kv_scorer):
+    """Test that reusing a scorer across prompts without reset raises AssertionError."""
+    kv_scorer.score("The capital of France is", [" Paris"])
+
+    with pytest.raises(AssertionError):
+        kv_scorer.score("Hello", [", world!"])
+
+
+def test_reuse_across_prompts_with_reset(reference_model, tokenizer, kv_scorer):
+    """Test that a scorer produces correct results when reset between prompts."""
     prompts_and_completions = [
         ("The capital of France is", " Paris"),
         ("Hello", ", world!"),
@@ -172,6 +180,7 @@ def test_reuse_across_prompts(reference_model, tokenizer, kv_scorer):
     ]
 
     for prompt, completion in prompts_and_completions:
+        kv_scorer.reset()
         score = kv_scorer.score(prompt, [completion])[0]
         expected = ground_truth_logprobs(reference_model, tokenizer, prompt, completion)
         assert abs(expected - score) < 0.5, f"prompt={prompt!r}: expected {expected:.4f}, got {score:.4f}"
@@ -272,6 +281,21 @@ def test_vllm_reuse_across_prompts(reference_model, tokenizer, vllm_scorer):
     ]
 
     for prompt, completion in prompts_and_completions:
+        score = vllm_scorer.score(prompt, [completion])[0] - prompt_logprobs(reference_model, tokenizer, prompt)
+        expected = ground_truth_logprobs(reference_model, tokenizer, prompt, completion)
+        assert abs(expected - score) < 1.0, f"prompt={prompt!r}: expected {expected:.4f}, got {score:.4f}"
+
+
+@pytest.mark.timeout(600)
+def test_vllm_reuse_across_prompts_with_reset(reference_model, tokenizer, vllm_scorer):
+    prompts_and_completions = [
+        ("The capital of France is", " Paris"),
+        ("Hello", ", world!"),
+        ("Once upon a", " time there was"),
+    ]
+
+    for prompt, completion in prompts_and_completions:
+        vllm_scorer.reset()
         score = vllm_scorer.score(prompt, [completion])[0] - prompt_logprobs(reference_model, tokenizer, prompt)
         expected = ground_truth_logprobs(reference_model, tokenizer, prompt, completion)
         assert abs(expected - score) < 1.0, f"prompt={prompt!r}: expected {expected:.4f}, got {score:.4f}"
