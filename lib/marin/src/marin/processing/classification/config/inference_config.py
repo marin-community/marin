@@ -34,14 +34,14 @@ class InferenceConfig:
     model_type: str | None = None
     output_path: str | None = None
 
-    # Ray runtime config.
+    # Resource config for per-file processing jobs.
     runtime: RuntimeConfig = field(
         default_factory=lambda: RuntimeConfig(
             memory_limit_gb=0.1,
         )
     )
 
-    # Ray task config.
+    # Task config (max_in_flight controls concurrent file-level parallelism).
     task: TaskConfig = field(default_factory=TaskConfig)
 
     # The filetype of the input data.

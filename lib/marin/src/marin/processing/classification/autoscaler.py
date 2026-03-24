@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-from typing import Any
+import queue
 import time
-import ray
-from threading import Thread, Lock
-from multiprocessing import Event
-from dataclasses import dataclass
-from ray.exceptions import RayActorError
-from ray.util.queue import Queue
+import uuid
+from dataclasses import dataclass, field
+from threading import Event, Lock, Thread
+from typing import Any
+
+from fray.v2 import ActorFuture, ActorHandle, ResourceConfig, current_client
 
 from marin.processing.classification.classifier import BaseClassifier
 
@@ -20,29 +20,26 @@ logger = logging.getLogger(__name__)
 class AutoscalingActorPoolConfig:
     """Config for the autoscaling actor pool."""
 
-    min_actors: int
-    max_actors: int
-    scale_up_threshold: float
-    scale_down_threshold: float
-    scale_check_interval: float
-    actor_kwargs: dict | None
-    actor_options: dict | None
+    min_actors: int = 1
+    max_actors: int = 1
+    scale_up_threshold: float = 0.8
+    scale_down_threshold: float = 0.2
+    scale_check_interval: float = 1.0
+    actor_kwargs: dict | None = None
+    actor_resources: ResourceConfig = field(default_factory=ResourceConfig)
 
 
-DEFAULT_AUTOSCALING_ACTOR_POOL_CONFIG = AutoscalingActorPoolConfig(
-    min_actors=1,
-    max_actors=1,  # No autoscaling since min=max
-    scale_up_threshold=0.8,
-    scale_down_threshold=0.2,
-    scale_check_interval=1.0,
-    actor_kwargs={},
-    actor_options={},
-)
+DEFAULT_AUTOSCALING_ACTOR_POOL_CONFIG = AutoscalingActorPoolConfig()
 
 
 class AutoscalingActorPool:
-    """
-    Autoscaling actor pool that manages BaseClassifier actors and distributes tasks.
+    """Autoscaling actor pool that manages BaseClassifier actors via Fray and distributes tasks.
+
+    Coordinates batch classification work across a pool of Fray actors. Responsible for:
+    1. Accepting tasks from the client (e.g. inference.py) and dispatching to available actors.
+    2. Scaling up and down the number of actors based on load.
+    3. Collecting results from actors and returning them to the client.
+    4. Requeuing tasks to available actors when an actor fails.
     """
 
     NUM_ACTORS_TO_SCALE_UP = 1
@@ -53,44 +50,10 @@ class AutoscalingActorPool:
         model_name_or_path: str,
         attribute_name: str,
         model_type: str,
-        task_queue: Queue,
-        result_queue: Queue,
+        task_queue: queue.Queue,
+        result_queue: queue.Queue,
         autoscaler_config: AutoscalingActorPoolConfig,
     ):
-        """
-        The autoscaling actor pool is repsonsible for creating, managing and scaling actors to handle tasks.
-        We can think of the autoscaling actor pool as essentially the coordinator in the "MapReduce" pattern.
-        It is responsible for:
-        1. Accepting tasks from the client (e.g. inference.py) and dispatching these tasks
-        to the available actors.
-        2. Scaling up and down the number of actors based on the load.
-        3. Collecting results from the actors and returning them to the client.
-        4. Requeuing tasks to available actors when an actor fails.
-
-        To communicate between the client and the autoscaling actor pool, we use a task queue and a result queue.
-        To detect actor failures, we periodically ping the actors and remove the actors if we do not receive a response.
-        Furthermore, if the coordinator is ray.wait'ing on a future that had an actor failure, the subsequent ray.get on
-        that task will fail with ray.exceptions.ActorDiedError,
-        which prompts this autoscaler to requeue the task to a new actor.
-
-        There are three different threads that are responsible for these tasks:
-        1. Autoscaling monitor thread: This thread is responsible for monitoring the load
-        and scaling the number of actors.
-        2. Dispatcher thread: This thread is responsible for dispatching tasks to the available actors.
-        3. Result collector thread: This thread is responsible for collecting results from the actors
-        and returning them to the client.
-
-        Args:
-            actor_class: The Ray actor class to use. This needs to be a subclass of AutoClassifierRayActor
-            or a class that implements a ping method so that the autoscaler can check if the actor is alive.
-            min_actors: Minimum number of actors to maintain
-            max_actors: Maximum number of actors allowed
-            scale_up_threshold: Queue utilization threshold to trigger scale up
-            scale_down_threshold: Queue utilization threshold to trigger scale down
-            scale_check_interval: Interval in seconds between scaling checks
-            actor_kwargs: Additional keyword arguments to pass to actor initialization
-            actor_health_check_interval: Interval between actor health probes
-        """
         self.actor_class = actor_class
         self.model_name_or_path = model_name_or_path
         self.attribute_name = attribute_name
@@ -101,28 +64,28 @@ class AutoscalingActorPool:
         self.scale_down_threshold = autoscaler_config.scale_down_threshold
         self.scale_check_interval = autoscaler_config.scale_check_interval
         self.actor_kwargs = autoscaler_config.actor_kwargs or {}
+        self.actor_resources = autoscaler_config.actor_resources
         self.task_queue = task_queue
         self.result_queue = result_queue
 
-        # Actor management
-        self.actors = []
-        self.actor_futures = {}  # Track ongoing tasks per actor
-        self.future_to_actor = {}
-        self.future_to_task = {}
-        self.actor_options = autoscaler_config.actor_options or {}
+        self.client = current_client()
+        self._pool_id = uuid.uuid4().hex[:8]
+        self._actor_counter = 0
+
+        # Actor management: keyed by actor handle identity
+        self.actors: list[ActorHandle] = []
+        self.actor_futures: dict[int, list[ActorFuture]] = {}
+        self.future_to_actor: dict[int, ActorHandle] = {}
+        self.future_to_task: dict[int, Any] = {}
 
         self.actor_task_metadata_lock = Lock()
-        """Lock to protect the actor and task metadata mappings
-        (e.g. actors, actor_futures, future_to_actor, future_to_task)"""
 
         # Statistics
         self.total_processed = 0
         self.total_submitted = 0
 
-        # Initialize minimum number of actors
         self._initialize_actors()
 
-        # Start autoscaling monitor, dispatcher, and result collector
         self._monitor_stop_event: Event = Event()
         self._monitor_thread: Thread = Thread(target=self._autoscaling_monitor_loop, daemon=True)
         self._monitor_thread.start()
@@ -143,37 +106,50 @@ class AutoscalingActorPool:
         logger.info(f"Initialized {len(self.actors)} actors")
 
     def _create_and_register_actor(self):
-        """Create one actor and wait until it's ready before adding to pool."""
+        """Create one Fray actor and wait until it's ready before adding to pool."""
         NUM_RETRIES = 3
-        for _ in range(NUM_RETRIES):
+        actor = None
+        name = f"classifier-{self._pool_id}-{self._actor_counter}"
+        self._actor_counter += 1
+
+        for attempt in range(NUM_RETRIES):
             try:
-                actor = self.actor_class.options(**self.actor_options).remote(
-                    self.model_name_or_path, self.attribute_name, self.model_type, **self.actor_kwargs
+                actor = self.client.create_actor(
+                    self.actor_class,
+                    self.model_name_or_path,
+                    self.attribute_name,
+                    self.model_type,
+                    name=name if attempt == 0 else f"{name}-retry{attempt}",
+                    resources=self.actor_resources,
+                    **self.actor_kwargs,
                 )
                 break
             except Exception as e:
-                logger.warning(f"Actor creation failed: {e}")
+                logger.warning(f"Actor creation failed (attempt {attempt + 1}): {e}")
                 time.sleep(1)
+
+        if actor is None:
+            raise RuntimeError(f"Failed to create actor after {NUM_RETRIES} attempts")
+
         try:
-            # Ensure the actor is scheduled and ready before exposing to dispatch
-            ray.get(actor.ping.remote())
+            actor.ping.remote().result(timeout=30)
         except Exception as e:
             logger.warning(f"Actor readiness check failed: {e}")
+
         self.actors.append(actor)
-        self.actor_futures[actor] = []
+        self.actor_futures[id(actor)] = []
 
     def _autoscaling_monitor_loop(self):
-        """Start a background thread that monitors the load and scales the number of actors accordingly."""
+        """Background thread that monitors load and scales actors."""
         while not self._monitor_stop_event.is_set():
             try:
                 time.sleep(self.scale_check_interval)
                 self._check_and_scale()
             except Exception:
-                # Best-effort; do not crash the monitor
                 pass
 
     def _dispatcher_loop(self):
-        """Start a background dispatcher that pulls tasks and dispatches work."""
+        """Background dispatcher that pulls tasks and dispatches work."""
         while not self._dispatch_stop_event.is_set():
             if len(self.actors) == 0:
                 logger.debug("Dispatcher waiting for actors to come online")
@@ -181,10 +157,10 @@ class AutoscalingActorPool:
                 continue
 
             dispatched_any = False
-            for _ in range(4):  # cap per-iteration dispatch volume
+            for _ in range(4):
                 try:
                     task = self.task_queue.get(timeout=1)
-                except Exception:
+                except queue.Empty:
                     break
 
                 self.total_submitted += 1
@@ -192,7 +168,6 @@ class AutoscalingActorPool:
                     self._dispatch_task(task)
                     dispatched_any = True
                 except RuntimeError:
-                    # No actor available; put task back and wait before retrying
                     try:
                         self.task_queue.put(task)
                     except Exception:
@@ -205,10 +180,8 @@ class AutoscalingActorPool:
                 time.sleep(1)
 
     def _result_collector_loop(self):
-        """Start a background thread that collects completed futures."""
-
+        """Background thread that collects completed futures."""
         while not self._result_stop_event.is_set():
-            futures_snapshot = []
             with self.actor_task_metadata_lock:
                 futures_snapshot = list(self.future_to_actor.keys())
 
@@ -216,56 +189,71 @@ class AutoscalingActorPool:
                 time.sleep(0.05)
                 continue
 
-            ready_refs, _ = ray.wait(futures_snapshot, num_returns=len(futures_snapshot), timeout=0)
+            completed_any = False
+            for future_id in futures_snapshot:
+                with self.actor_task_metadata_lock:
+                    # Look up the actual future object from our tracking
+                    future_obj = None
+                    for _actor_id, futures in self.actor_futures.items():
+                        for f in futures:
+                            if id(f) == future_id:
+                                future_obj = f
+                                break
+                        if future_obj is not None:
+                            break
 
-            if not ready_refs:
-                time.sleep(0.05)
-                continue
+                if future_obj is None:
+                    continue
 
-            for ref in ready_refs:
-                self._handle_completed_future(ref)
-
-    def _handle_completed_future(self, future: ray.ObjectRef) -> None:
-        task_to_retry = None
-        try:
-            result = ray.get(future, timeout=1)
-            self.total_processed += 1
-
-            if self.result_queue is not None:
                 try:
-                    self.result_queue.put(result)
-                except Exception as e:
-                    logger.error(f"Failed to put result in results queue! {e}")
-        except (RayActorError, ray.exceptions.ActorDiedError):
-            with self.actor_task_metadata_lock:
-                task_to_retry = self.future_to_task.get(future)
-            if task_to_retry is not None and self.task_queue is not None:
-                try:
-                    self.task_queue.put(task_to_retry)
+                    result = future_obj.result(timeout=0)
+                    self._handle_success(future_id, result)
+                    completed_any = True
+                except TimeoutError:
+                    pass
                 except Exception:
-                    logger.error("Failed to requeue task after actor failure")
-        except Exception:
-            logger.exception("Error retrieving future result")
-        finally:
-            with self.actor_task_metadata_lock:
-                actor = self.future_to_actor.pop(future, None)
-                self.future_to_task.pop(future, None)
-                if actor is not None and actor in self.actor_futures:
-                    try:
-                        self.actor_futures[actor].remove(future)
-                    except ValueError:
-                        logger.error("Failed to remove future from actor futures!")
+                    self._handle_failure(future_id)
+                    completed_any = True
+
+            if not completed_any:
+                time.sleep(0.05)
+
+    def _handle_success(self, future_id: int, result: Any) -> None:
+        self.total_processed += 1
+        if self.result_queue is not None:
+            try:
+                self.result_queue.put(result)
+            except Exception as e:
+                logger.error(f"Failed to put result in results queue! {e}")
+        self._cleanup_future(future_id)
+
+    def _handle_failure(self, future_id: int) -> None:
+        task_to_retry = None
+        with self.actor_task_metadata_lock:
+            task_to_retry = self.future_to_task.get(future_id)
+        if task_to_retry is not None and self.task_queue is not None:
+            try:
+                self.task_queue.put(task_to_retry)
+            except Exception:
+                logger.error("Failed to requeue task after actor failure")
+        self._cleanup_future(future_id)
+
+    def _cleanup_future(self, future_id: int) -> None:
+        with self.actor_task_metadata_lock:
+            actor = self.future_to_actor.pop(future_id, None)
+            self.future_to_task.pop(future_id, None)
+            if actor is not None and id(actor) in self.actor_futures:
+                self.actor_futures[id(actor)] = [f for f in self.actor_futures[id(actor)] if id(f) != future_id]
 
     def _check_and_scale(self):
         """Check current load and scale actors accordingly."""
         with self.actor_task_metadata_lock:
             current_actors = len(self.actors)
             try:
-                pending_count = int(self.task_queue.qsize())
+                pending_count = self.task_queue.qsize()
             except Exception:
                 pending_count = 0
 
-            # Calculate total active tasks
             active_tasks = sum(len(futures) for futures in self.actor_futures.values())
         total_load = pending_count + active_tasks
 
@@ -276,16 +264,13 @@ class AutoscalingActorPool:
             f"Active: {active_tasks}, Utilization: {utilization:.2%}"
         )
 
-        # Scale up if needed
         if (
             utilization > self.scale_up_threshold and current_actors < self.max_actors
         ) or current_actors < self.min_actors:
             self._scale_up(self.NUM_ACTORS_TO_SCALE_UP)
 
-        # Scale down if needed
         elif utilization < self.scale_down_threshold and current_actors > self.min_actors:
-            # Only scale down idle actors
-            idle_actors = [actor for actor, futures in self.actor_futures.items() if len(futures) == 0]
+            idle_actors = [actor for actor in self.actors if len(self.actor_futures.get(id(actor), [])) == 0]
             if idle_actors:
                 remove_count = min(len(idle_actors), current_actors - self.min_actors)
                 self._scale_down(remove_count)
@@ -303,22 +288,21 @@ class AutoscalingActorPool:
             removed = 0
             actors_to_remove = []
 
-            for actor, futures in list(self.actor_futures.items()):
+            for actor in self.actors:
                 if removed >= count:
                     break
-                if len(futures) == 0 and len(self.actors) > self.min_actors:
+                if len(self.actor_futures.get(id(actor), [])) == 0 and len(self.actors) > self.min_actors:
                     actors_to_remove.append(actor)
                     removed += 1
 
             for actor in actors_to_remove:
                 self.actors.remove(actor)
-                del self.actor_futures[actor]
-                ray.kill(actor)
+                self.actor_futures.pop(id(actor), None)
 
             if removed > 0:
                 logger.info(f"Scaled down: removed {removed} actors. Pool size now: {len(self.actors)}")
 
-    def _get_least_loaded_actor(self):
+    def _get_least_loaded_actor(self) -> ActorHandle | None:
         """Get the actor with the least number of pending tasks."""
         if not self.actors:
             return None
@@ -327,87 +311,55 @@ class AutoscalingActorPool:
         with self.actor_task_metadata_lock:
             alive_actors = []
             for actor in self.actors:
-                ping_received = actor.ping.remote()
-                logger.debug(f"Pinging actor: {actor}")
-                ping_received_ready, _ = ray.wait([ping_received], num_returns=1, timeout=1.0)
-
-                logger.debug("Ping wait result", extra={"actor": str(actor), "ready": bool(ping_received_ready)})
-                if ping_received_ready:
-                    try:
-                        result = ray.get(ping_received_ready, timeout=5.0)
-                        if result:
-                            logger.debug(f"Ping received from actor: {actor}")
-                            alive_actors.append(actor)
-                    except Exception as e:
-                        logger.error(f"Error received trying to ping actor: {e}")
+                try:
+                    result = actor.ping.remote().result(timeout=5.0)
+                    if result:
+                        logger.debug("Ping received from actor")
+                        alive_actors.append(actor)
+                except Exception as e:
+                    logger.error(f"Error received trying to ping actor: {e}")
 
             self.actors = alive_actors
-            alive_actor_futures = {}
-            for actor, futures in self.actor_futures.items():
-                alive_actor_futures[actor] = futures
-
-            self.actor_futures = alive_actor_futures
-            available_actors = [actor for actor, futures in self.actor_futures.items() if len(futures) == 0]
+            self.actor_futures = {id(actor): self.actor_futures.get(id(actor), []) for actor in alive_actors}
+            available_actors = [actor for actor in self.actors if len(self.actor_futures.get(id(actor), [])) == 0]
 
         if not available_actors:
             return None
 
-        return min(available_actors, key=lambda a: len(self.actor_futures.get(a, [])))
+        return min(available_actors, key=lambda a: len(self.actor_futures.get(id(a), [])))
 
-    def _dispatch_task(self, task: list[dict[str, Any]]) -> ray.ObjectRef:
+    def _dispatch_task(self, task: list[dict[str, Any]]) -> ActorFuture:
         """Dispatch a single task to an available actor."""
-
         actor = self._get_least_loaded_actor()
         if actor is None:
             raise RuntimeError("No actors available")
 
         with self.actor_task_metadata_lock:
-            current_load = len(self.actor_futures.get(actor, []))
-            if current_load >= 1:  # Don't assign to actor since it already has a task
+            current_load = len(self.actor_futures.get(id(actor), []))
+            if current_load >= 1:
                 raise RuntimeError("Actor saturated")
 
-            future = actor.__call__.remote(task)
-            self.actor_futures[actor] = [*self.actor_futures.get(actor, []), future]
-            self.future_to_actor[future] = actor
-            self.future_to_task[future] = task
-            logger.debug(f"Assigning to actor: {actor} for task: {task}")
+            future = actor.classify.remote(task)
+            self.actor_futures[id(actor)] = [*self.actor_futures.get(id(actor), []), future]
+            self.future_to_actor[id(future)] = actor
+            self.future_to_task[id(future)] = task
+            logger.debug("Assigning task to actor")
             return future
-
-    def _cleanup_completed_futures(self):
-        """Remove completed futures from tracking."""
-        with self.actor_task_metadata_lock:
-            for actor in self.actors:
-                if actor in self.actor_futures:
-                    # Filter out completed futures
-                    pending = []
-                    for future in self.actor_futures[actor]:
-                        ready, _ = ray.wait([future], timeout=0)
-                        if not ready:
-                            pending.append(future)
-                        else:
-                            self.future_to_actor.pop(future, None)
-                            self.future_to_task.pop(future, None)
-                    self.actor_futures[actor] = pending
 
     def shutdown(self):
         """Shutdown the actor pool and clean up resources."""
         logger.info("Shutting down actor pool...")
 
-        # Stop the autoscaling monitor thread
         self._monitor_stop_event.set()
         self._monitor_thread.join(timeout=5)
 
-        # Stop dispatcher thread
         self._dispatch_stop_event.set()
         self._dispatch_thread.join(timeout=5)
 
         self._result_stop_event.set()
         self._result_thread.join(timeout=5)
 
-        # Kill all actors
         with self.actor_task_metadata_lock:
-            for actor in self.actors:
-                ray.kill(actor)
             self.actors.clear()
             self.actor_futures.clear()
 
