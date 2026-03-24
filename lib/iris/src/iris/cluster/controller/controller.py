@@ -760,6 +760,7 @@ class Controller:
             port=config.port,
             auth_verifier=config.auth_verifier,
             auth_provider=config.auth_provider,
+            auth_optional=config.auth.optional if config.auth else False,
         )
 
         # Ingest process logs into the LogStore so they are available via FetchLogs.

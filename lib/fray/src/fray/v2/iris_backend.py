@@ -508,6 +508,7 @@ class FrayIrisClient:
         replicas = request.replicas or 1
         coscheduling = resolve_coscheduling(request.resources.device, replicas)
 
+        policy = cluster_pb2.EXISTING_JOB_POLICY_KEEP if adopt_existing else cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED
         try:
             job = self._iris.submit(
                 entrypoint=iris_entrypoint,
@@ -519,12 +520,10 @@ class FrayIrisClient:
                 replicas=replicas,
                 max_retries_failure=request.max_retries_failure,
                 max_retries_preemption=request.max_retries_preemption,
+                existing_job_policy=policy,
             )
         except IrisJobAlreadyExists as e:
-            if adopt_existing:
-                logger.info("Job %s already exists, adopting existing job", request.name)
-                return IrisJobHandle(e.job)
-            raise FrayJobAlreadyExists(request.name, handle=IrisJobHandle(e.job)) from e
+            raise FrayJobAlreadyExists(request.name) from e
         return IrisJobHandle(job)
 
     def host_actor(
