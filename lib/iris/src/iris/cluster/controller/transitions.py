@@ -1982,20 +1982,21 @@ class ControllerTransitions:
 
             max_promotions = _compute_max_promotions(capacity, active_count)
 
-            # Any PENDING task is schedulable (first attempt or retry).
-            pending_rows = cur.execute(
-                "SELECT t.task_id, t.current_attempt_id, j.request_proto, j.num_tasks, j.is_reservation_holder "
-                "FROM tasks t JOIN jobs j ON j.job_id = t.job_id "
-                "WHERE t.state = ? AND j.is_reservation_holder = 0",
-                (cluster_pb2.TASK_STATE_PENDING,),
-            ).fetchall()
-
             newly_promoted: set[str] = set()
             tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest] = []
 
+            if max_promotions == 0:
+                pending_rows = []
+            else:
+                pending_rows = cur.execute(
+                    "SELECT t.task_id, t.current_attempt_id, j.request_proto, j.num_tasks, j.is_reservation_holder "
+                    "FROM tasks t JOIN jobs j ON j.job_id = t.job_id "
+                    "WHERE t.state = ? AND j.is_reservation_holder = 0 "
+                    "LIMIT ?",
+                    (cluster_pb2.TASK_STATE_PENDING, max_promotions),
+                ).fetchall()
+
             for row in pending_rows:
-                if len(tasks_to_run) >= max_promotions:
-                    break
 
                 task_id = str(row["task_id"])
                 attempt_id = int(row["current_attempt_id"]) + 1

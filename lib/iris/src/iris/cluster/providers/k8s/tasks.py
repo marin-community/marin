@@ -961,6 +961,8 @@ class K8sTaskProvider:
 
     def _bulk_delete_task_pods(self, task_ids: list[str]) -> None:
         """Delete pods and configmaps for multiple tasks in one kubectl call per resource type."""
+        if not task_ids:
+            return
         task_hashes = {_task_hash(tid) for tid in task_ids}
 
         all_pods = self.kubectl.list_json(
