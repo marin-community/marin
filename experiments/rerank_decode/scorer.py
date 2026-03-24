@@ -58,6 +58,13 @@ class Scorer(abc.ABC):
             completion: The selected completion text.
         """
 
+    def reset(self) -> None:
+        """Reset internal state for a new prompt.
+
+        Stateful scorers should clear cached state (e.g., KV cache).
+        The default implementation is a no-op.
+        """
+
 
 class VLLMLogprobScorer(Scorer):
     """Scores completions by log-likelihood under a vLLM server.
@@ -117,6 +124,10 @@ class KVCacheScorer(Scorer):
         self._past_key_values: DynamicCache | None = None
         self._prefix_tokens: list[int] = []
 
+    def reset(self) -> None:
+        self._past_key_values = None
+        self._prefix_tokens = []
+
     def _prefill(self, prompt: str) -> None:
         tokens = self.tokenizer.encode(prompt, add_special_tokens=False)
         input_ids = torch.tensor([tokens], dtype=torch.long, device=self.device)
@@ -151,6 +162,12 @@ class KVCacheScorer(Scorer):
     def score(self, prompt: str, completions: list[str]) -> list[float]:
         if self._past_key_values is None:
             self._prefill(prompt)
+
+        assert prompt == self.tokenizer.decode(self._prefix_tokens, skip_special_tokens=False), (
+            f"Prompt does not match cached prefix. "
+            f"Expected: {self.tokenizer.decode(self._prefix_tokens, skip_special_tokens=False)!r}, "
+            f"Got: {prompt!r}"
+        )
 
         bsz = len(completions)
 

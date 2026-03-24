@@ -108,6 +108,7 @@ def run_rerank_decode(config: RerankDecodeConfig):
         results = []
         timings = []
         for i, prompt in enumerate(prompts):
+            scorer.reset()
             start = time.monotonic()
             result = rerank(
                 proposal_client=proposal_client,

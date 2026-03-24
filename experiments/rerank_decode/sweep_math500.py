@@ -101,6 +101,7 @@ def run_single_eval(
     # -- generation (replaces llm.generate) --
     generations = []
     for i, prompt in enumerate(prompts):
+        scorer.reset()
         if (i + 1) % 50 == 0:
             logger.info("  %d/%d", i + 1, len(prompts))
         generations.append(
