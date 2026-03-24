@@ -81,6 +81,16 @@ WORKER_TASK_HISTORY_RETENTION = 500
 WORKER_RESOURCE_HISTORY_RETENTION = 500
 """Maximum worker_resource_history rows retained per worker."""
 
+DIRECT_PROVIDER_BOOTSTRAP_BATCH = 64
+"""Max tasks promoted per sync cycle when no capacity info is available yet."""
+
+DIRECT_PROVIDER_NODE_OVERCOMMIT = 16
+"""Pods per schedulable node allowed for the direct provider scheduler.
+
+Matches the worker provider's tasks-per-worker ratio so that the direct
+provider can keep a similar number of tasks in-flight relative to cluster size.
+"""
+
 
 @dataclass(frozen=True)
 class PruneResult:
@@ -380,6 +390,14 @@ def _resolve_preemption_policy(cur: Any, job_id: JobName) -> int:
     if req.replicas <= 1:
         return cluster_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
     return cluster_pb2.JOB_PREEMPTION_POLICY_PRESERVE_CHILDREN
+
+
+def _compute_max_promotions(capacity: ClusterCapacity | None, active_count: int) -> int:
+    """Max new tasks to promote, given cluster capacity and already-active count."""
+    if capacity is None:
+        return max(DIRECT_PROVIDER_BOOTSTRAP_BATCH - active_count, 0)
+    target = max(capacity.schedulable_nodes * DIRECT_PROVIDER_NODE_OVERCOMMIT, DIRECT_PROVIDER_BOOTSTRAP_BATCH)
+    return max(target - active_count, 0)
 
 
 # =============================================================================
@@ -1936,30 +1954,50 @@ class ControllerTransitions:
     # Direct provider methods
     # =========================================================================
 
-    def drain_for_direct_provider(self) -> DirectProviderBatch:
+    def drain_for_direct_provider(
+        self,
+        capacity: ClusterCapacity | None = None,
+    ) -> DirectProviderBatch:
         """Drain pending tasks and snapshot running tasks for a direct provider sync cycle.
 
-        Promotes all schedulable PENDING tasks to ASSIGNED (NULL worker_id),
+        Promotes schedulable PENDING tasks to ASSIGNED (NULL worker_id),
         builds RunTaskRequest for each, and collects:
         - Newly promoted tasks -> tasks_to_run
         - Already ASSIGNED/BUILDING/RUNNING tasks with NULL worker_id -> running_tasks
         - Kill entries with NULL worker_id -> tasks_to_kill (deleted from queue)
+
+        When ``capacity`` is provided, limits promotions to cluster size.
         """
         with self._db.transaction() as cur:
             now_ms = Timestamp.now().epoch_ms()
 
-            # Any PENDING task is schedulable (first attempt or retry).
-            pending_rows = cur.execute(
-                "SELECT t.task_id, t.current_attempt_id, j.request_proto, j.num_tasks, j.is_reservation_holder "
-                "FROM tasks t JOIN jobs j ON j.job_id = t.job_id "
-                "WHERE t.state = ? AND j.is_reservation_holder = 0",
-                (cluster_pb2.TASK_STATE_PENDING,),
-            ).fetchall()
+            active_states = tuple(sorted(ACTIVE_TASK_STATES))
+            active_placeholders = ",".join("?" * len(active_states))
+            (active_count,) = cur.execute(
+                "SELECT COUNT(*) FROM tasks t "
+                "JOIN task_attempts ta ON t.task_id = ta.task_id AND t.current_attempt_id = ta.attempt_id "
+                f"WHERE ta.worker_id IS NULL AND t.state IN ({active_placeholders})",
+                active_states,
+            ).fetchone()
+
+            max_promotions = _compute_max_promotions(capacity, active_count)
 
             newly_promoted: set[str] = set()
             tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest] = []
 
+            if max_promotions == 0:
+                pending_rows = []
+            else:
+                pending_rows = cur.execute(
+                    "SELECT t.task_id, t.current_attempt_id, j.request_proto, j.num_tasks, j.is_reservation_holder "
+                    "FROM tasks t JOIN jobs j ON j.job_id = t.job_id "
+                    "WHERE t.state = ? AND j.is_reservation_holder = 0 "
+                    "LIMIT ?",
+                    (cluster_pb2.TASK_STATE_PENDING, max_promotions),
+                ).fetchall()
+
             for row in pending_rows:
+
                 task_id = str(row["task_id"])
                 attempt_id = int(row["current_attempt_id"]) + 1
                 job_req = cluster_pb2.Controller.LaunchJobRequest()
