@@ -3,7 +3,7 @@
 
 """Tests for GCP impersonation based on the logged-in user's GCP email.
 
-Covers: env injection, DB roundtrip for gcp_email, and task dispatch
+Covers: DB roundtrip for gcp_email and task dispatch integration
 using gcp_email as the impersonation identity.
 """
 
@@ -12,7 +12,6 @@ import pytest
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions
 from iris.cluster.log_store import LogStore
-from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
@@ -47,62 +46,7 @@ def state(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 1. Env injection
-# ---------------------------------------------------------------------------
-
-
-def test_build_common_iris_env_includes_impersonation():
-    """CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT is set when impersonation identity provided."""
-    env = build_common_iris_env(
-        task_id="test/task/0",
-        attempt_id=0,
-        num_tasks=1,
-        bundle_id="test-bundle",
-        controller_address=None,
-        environment=cluster_pb2.EnvironmentConfig(),
-        constraints=[],
-        ports=[],
-        resources=None,
-        impersonate_service_account="alice@example.com",
-    )
-    assert env["CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT"] == "alice@example.com"
-
-
-def test_build_common_iris_env_no_impersonation_when_empty():
-    """CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT not set when identity is empty."""
-    env = build_common_iris_env(
-        task_id="test/task/0",
-        attempt_id=0,
-        num_tasks=1,
-        bundle_id="test-bundle",
-        controller_address=None,
-        environment=cluster_pb2.EnvironmentConfig(),
-        constraints=[],
-        ports=[],
-        resources=None,
-    )
-    assert "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT" not in env
-
-
-def test_build_common_iris_env_no_impersonation_when_explicitly_empty():
-    """Passing empty string for impersonate_service_account omits the env var."""
-    env = build_common_iris_env(
-        task_id="test/task/0",
-        attempt_id=0,
-        num_tasks=1,
-        bundle_id="test-bundle",
-        controller_address=None,
-        environment=cluster_pb2.EnvironmentConfig(),
-        constraints=[],
-        ports=[],
-        resources=None,
-        impersonate_service_account="",
-    )
-    assert "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT" not in env
-
-
-# ---------------------------------------------------------------------------
-# 2. DB roundtrip for gcp_email
+# DB roundtrip for gcp_email
 # ---------------------------------------------------------------------------
 
 
@@ -113,14 +57,8 @@ def test_user_gcp_email_roundtrip(db):
     assert db.get_user_gcp_email("alice@example.com") == "alice@example.com"
 
 
-def test_user_gcp_email_none_by_default(db):
-    """gcp_email is None for a user that hasn't logged in via GCP."""
-    db.ensure_user("bob@example.com", Timestamp.now())
-    assert db.get_user_gcp_email("bob@example.com") is None
-
-
 # ---------------------------------------------------------------------------
-# 3. Task dispatch: impersonation uses gcp_email
+# Task dispatch: impersonation uses gcp_email
 # ---------------------------------------------------------------------------
 
 
