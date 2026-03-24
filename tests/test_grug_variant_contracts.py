@@ -179,6 +179,54 @@ def test_grug_variant_initial_state_only_stores_ema_when_enabled(variant: str):
     assert with_ema_state_shape.ema_params is not None
 
 
+def test_grug_moe_gated_norm_lowers():
+    """Verify that the MoE variant with gated_norm_rank lowers without error."""
+    from experiments.grug.moe.model import GrugModelConfig, debug_mesh_and_token_pspec
+    from experiments.grug.moe.train import initial_state as moe_initial_state, _make_train_step
+
+    cfg = GrugModelConfig(
+        vocab_size=1024,
+        hidden_dim=32,
+        intermediate_dim=64,
+        shared_expert_intermediate_dim=64,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=2,
+        max_seq_len=4,
+        gated_norm_rank=8,
+    )
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+    train_step = _make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
+    mesh, token_pspec = debug_mesh_and_token_pspec(num_devices=4)
+    batch = GrugLmExample(
+        tokens=jnp.zeros((8, 4), dtype=jnp.int32),
+        loss_weight=jnp.ones((8, 4), dtype=jnp.float32),
+        attn_mask=GrugAttentionMask.causal(),
+    )
+
+    def one_step():
+        sharded_batch = dataclasses.replace(
+            batch,
+            tokens=jax.sharding.reshard(batch.tokens, token_pspec),
+            loss_weight=jax.sharding.reshard(batch.loss_weight, token_pspec),
+        )
+        state = moe_initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
+        return train_step(state, sharded_batch, compute_watch=False)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        out_state_shape, out_metrics_shape, _out_watch_shape = eqx.filter_eval_shape(one_step)
+
+    assert out_state_shape.step.shape == ()
+    assert "train/loss" in out_metrics_shape
+    # Verify gated norm params exist in the model tree
+    block = out_state_shape.params.blocks[0]
+    assert block.gated_norm_attn is not None
+    assert block.gated_norm_mlp is not None
+
+
 def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     train_module = importlib.import_module("experiments.grug.base.train")
     model_module = importlib.import_module("experiments.grug.base.model")
