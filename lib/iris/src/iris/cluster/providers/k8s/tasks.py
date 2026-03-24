@@ -621,8 +621,7 @@ class K8sTaskProvider:
                         error=str(exc),
                     )
                 )
-        for task_id in batch.tasks_to_kill:
-            self._delete_pods_by_task_id(task_id)
+        self._bulk_delete_task_pods(batch.tasks_to_kill)
         updates = apply_failures + self._poll_pods(batch.running_tasks)
         capacity = self._query_capacity()
         scheduling_events = self._fetch_scheduling_events()
@@ -959,6 +958,45 @@ class K8sTaskProvider:
             task_id,
             run_req.attempt_id,
         )
+
+    def _bulk_delete_task_pods(self, task_ids: list[str]) -> None:
+        """Delete pods and configmaps for multiple tasks in one kubectl call per resource type."""
+        if not task_ids:
+            return
+        task_hashes = {_task_hash(tid) for tid in task_ids}
+
+        all_pods = self.kubectl.list_json(
+            "pods",
+            labels={
+                _LABEL_MANAGED: "true",
+                _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+            },
+        )
+        pod_names = [
+            p["metadata"]["name"]
+            for p in all_pods
+            if p.get("metadata", {}).get("labels", {}).get(_LABEL_TASK_HASH) in task_hashes
+        ]
+
+        all_cms = self.kubectl.list_json(
+            "configmaps",
+            labels={
+                _LABEL_MANAGED: "true",
+                _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+            },
+        )
+        cm_names = [
+            c["metadata"]["name"]
+            for c in all_cms
+            if c.get("metadata", {}).get("labels", {}).get(_LABEL_TASK_HASH) in task_hashes
+        ]
+
+        if pod_names:
+            self.kubectl.delete_many("pods", pod_names, wait=False)
+        if cm_names:
+            self.kubectl.delete_many("configmaps", cm_names, wait=False)
+
+        logger.info("Deleted %d pods, %d configmaps for %d tasks", len(pod_names), len(cm_names), len(task_ids))
 
     def _delete_pods_by_task_id(self, task_id: str) -> None:
         """Delete all pods for a given task_id (any attempt).

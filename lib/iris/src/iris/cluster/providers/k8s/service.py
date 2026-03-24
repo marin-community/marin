@@ -57,6 +57,10 @@ class K8sService(Protocol):
         self, resource: str, name: str, *, cluster_scoped: bool = False, force: bool = False, wait: bool = True
     ) -> None: ...
 
+    def delete_many(self, resource: str, names: list[str], *, cluster_scoped: bool = False, wait: bool = False) -> None:
+        """Delete multiple resources by name in a single kubectl call."""
+        ...
+
     def logs(self, pod_name: str, *, container: str | None = None, tail: int = 50, previous: bool = False) -> str: ...
 
     def stream_logs(
@@ -228,6 +232,17 @@ class CloudK8sService:
         )
         if result.returncode != 0:
             raise KubectlError(f"kubectl delete {resource}/{name} failed: {result.stderr.strip()}")
+
+    def delete_many(self, resource: str, names: list[str], *, cluster_scoped: bool = False, wait: bool = False) -> None:
+        """Delete multiple resources by name in a single kubectl call."""
+        if not names:
+            return
+        args = ["delete", resource, *names, "--ignore-not-found"]
+        if not wait:
+            args.append("--wait=false")
+        result = self._run(args, namespaced=not cluster_scoped)
+        if result.returncode != 0:
+            raise KubectlError(f"kubectl delete {resource} failed: {result.stderr.strip()}")
 
     def set_image(self, resource: str, name: str, container: str, image: str, *, namespaced: bool = False) -> None:
         """Set the container image on a resource via ``kubectl set image``."""

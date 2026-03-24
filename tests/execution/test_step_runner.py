@@ -968,3 +968,66 @@ def test_step_without_remote_is_plain_fn():
     resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
 
     assert not isinstance(resolved.fn, RemoteCallable)
+
+
+def test_runner_propagates_context_vars(tmp_path):
+    """StepRunner must propagate contextvars to worker threads.
+
+    This ensures that fray's ``set_current_client`` is visible inside step
+    functions dispatched by the thread pool, so ZephyrContext (and anything
+    else that calls ``current_client()``) picks up the correct client.
+    """
+    import contextvars
+
+    test_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("test_var", default=None)
+    observed: list[str | None] = []
+
+    def capture_ctx(output_path: str):
+        observed.append(test_var.get())
+        return PathMetadata(path=output_path)
+
+    step = StepSpec(
+        name="ctx_check",
+        override_output_path=(tmp_path / "ctx_check").as_posix(),
+        fn=capture_ctx,
+    )
+
+    test_var.set("from_parent")
+    runner = StepRunner()
+    runner.run([step])
+
+    assert observed == ["from_parent"], f"Expected context var to propagate, got {observed}"
+
+
+def test_runner_propagates_fray_client(tmp_path):
+    """StepRunner explicitly propagates the fray v2 client to worker threads.
+
+    This tests the explicit client capture path (not just generic contextvars)
+    to ensure current_client() returns the correct client inside step functions.
+    """
+    from fray.v2.client import current_client, set_current_client
+
+    class FakeClient:
+        """Marker client to verify propagation."""
+
+        pass
+
+    observed_clients: list[type] = []
+
+    def check_client(output_path: str):
+        client = current_client()
+        observed_clients.append(type(client))
+        return PathMetadata(path=output_path)
+
+    step = StepSpec(
+        name="fray_check",
+        override_output_path=(tmp_path / "fray_check").as_posix(),
+        fn=check_client,
+    )
+
+    fake = FakeClient()
+    with set_current_client(fake):
+        runner = StepRunner()
+        runner.run([step])
+
+    assert observed_clients == [FakeClient], f"Expected FakeClient in worker thread, got {observed_clients}"
