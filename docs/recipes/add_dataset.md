@@ -7,25 +7,24 @@ This recipe guides agents and humans in inspecting Hugging Face dataset schemas 
 - Install the [Hugging Face `datasets` library](https://huggingface.co/docs/datasets/) (e.g., `pip install datasets`).
 - For YAML output, install `pyyaml` (e.g., `pip install pyyaml`).
 - Ensure access to the dataset: Hugging Face Hub ID, local path, or other supported formats.
-- Use `uv run lib/marin/tools/get_hf_dataset_schema.py` for direct execution, or install Marin with `uv sync` for CLI access.
+- Use `uv run lib/marin/src/marin/tools/get_hf_dataset_schema.py` for direct execution, or install Marin with `uv sync` for CLI access.
 
 ## Guidelines for Humans
 
 ### Command Line Usage
 ```sh
-uv run lib/marin/tools/get_hf_dataset_schema.py <dataset_name> [options]
+uv run lib/marin/src/marin/tools/get_hf_dataset_schema.py <dataset_name> [options]
 ```
 
 ### Python Import
 ```python
-from marin.tools.get_hf_dataset_schema import get_schema
-schema = get_schema(dataset_name="wikitext", config_name="wikitext-103-v1")
+from marin.tools.get_hf_dataset_schema import sample_dataset, estimate_tokens
+result = sample_dataset("roneneldan/TinyStories", n=5)  # returns raw row dicts in result["samples"]
 ```
 
 ### Common Workflows
-1. **Basic inspection**: `uv run lib/marin/tools/get_hf_dataset_schema.py roneneldan/TinyStories`
-2. **Multi-config dataset**: First try without config, then use the suggested config from the error
-3. **Remote code datasets**: Add `--trust_remote_code` flag when needed
+1. **Basic inspection**: `uv run lib/marin/src/marin/tools/get_hf_dataset_schema.py roneneldan/TinyStories`
+2. **Token estimation**: `uv run lib/marin/src/marin/tools/get_hf_dataset_schema.py roneneldan/TinyStories --text_field text --estimate_tokens`
 
 ## Rules for Agents
 
@@ -41,10 +40,10 @@ schema = get_schema(dataset_name="wikitext", config_name="wikitext-103-v1")
 - Select an appropriate config based on the available options
 
 ### 2. Text Field Selection
+- `sample_dataset()` returns raw row dicts — examine them to identify the right fields
 - Prioritize fields named exactly 'text'
 - Fall back to fields containing 'text' in their name
 - Consider string-type fields if no obvious text field exists
-- Examine sample_row to verify field contents
 
 ### 3. Error Handling
 - Handle common error cases:
@@ -79,58 +78,37 @@ The tool returns a JSON object with:
 
 ## Examples
 
-### Basic Usage
+### Sample a Dataset
 ```sh
-$ uv run lib/marin/tools/get_hf_dataset_schema.py roneneldan/TinyStories
+$ uv run lib/marin/src/marin/tools/get_hf_dataset_schema.py roneneldan/TinyStories --n 3
 {
-  "splits": ["train", "validation"],
-  "text_field_candidates": ["text"],
-  "features": {"text": "string"},
-  "sample_row": {"text": "Once upon a time..."}
+  "dataset": "roneneldan/TinyStories",
+  "config": "default",
+  "split": "train",
+  "schema": ["text"],
+  "num_rows": 2119719,
+  "seed": 42,
+  "num_samples": 3,
+  "samples": [
+    {"text": "Once upon a time..."},
+    {"text": "There was a little girl..."},
+    {"text": "One day, a boy found..."}
+  ]
 }
 ```
 
-### Dataset with Config
+### Estimate Tokens
+
+Estimate token counts by sampling random rows, tokenizing with Llama 3, and extrapolating by total row count:
+
 ```sh
-$ uv run lib/marin/tools/get_hf_dataset_schema.py wikitext
-{
-  "error": "Config name is required.",
-  "available_configs": ["wikitext-103-raw-v1", "wikitext-103-v1", ...]
-}
-
-$ uv run lib/marin/tools/get_hf_dataset_schema.py wikitext --config_name wikitext-103-v1
-{
-  "splits": ["train", "validation", "test"],
-  "text_field_candidates": ["text"],
-  "features": {"text": "string"},
-  "sample_row": {"text": "Article content..."}
-}
+$ uv run lib/marin/src/marin/tools/get_hf_dataset_schema.py common-pile/pubmed_filtered \
+    --text_field text --estimate_tokens
 ```
-
-### Dataset with Remote Code
-```sh
-$ uv run lib/marin/tools/get_hf_dataset_schema.py c4 --config_name en --trust_remote_code
-{
-  "splits": ["train", "validation"],
-  "text_field_candidates": ["text"],
-  "features": {"text": "string", "url": "string", "timestamp": "string"},
-  "sample_row": {"text": "Web content..."}
-}
-```
-
-## Example Agent Prompt
-To test with an AI agent:
-> "Follow the dataset schema inspection recipe. Inspect the schema for 'roneneldan/TinyStories' using the get_hf_dataset_schema tool. Apply all rules and output the full schema as JSON."
-
-## Testing and Validation
-- **Human Testing:** Run the examples above and verify the output matches your expectations. Cross-check with Hugging Face's dataset viewer for accuracy.
-- **Agent Testing:** Input this recipe into tools like Claude or Cursor, using the example prompt. Report issues or successes in the Marin Discord (#coding-roombas) or GitHub issues.
-- **Integration Testing:** Ensure the schema output integrates with Marin's pipelines (e.g., feed into token estimation tools in future steps).
 
 ## Next Steps
-Once the schema is inspected and the dataset is registered (for example in [`experiments/pretraining_datasets/__init__.py`](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/__init__.py) or in a dedicated file), the goal is to cargo-cult existing dataset configs for tokenization:
+Once the schema is inspected, the quality is reviewed, and the dataset is registered (for example in [`experiments/pretraining_datasets/__init__.py`](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/__init__.py) or in a dedicated file), the goal is to cargo-cult existing dataset configs for tokenization:
 - Apply transformations (e.g., field mapping).
-- Estimate token counts and file sizes.
 - Find similar dataset configurations in Marin's existing experiments.
 - Copy and adapt tokenization configs from similar datasets.
 - Run ablations or trials.
@@ -138,5 +116,5 @@ Once the schema is inspected and the dataset is registered (for example in [`exp
 These will be detailed in expanded recipes or subsequent PRs.
 
 ## See Also
-- [get_hf_dataset_schema.py on GitHub](https://github.com/marin-community/marin/blob/main/lib/marin/tools/get_hf_dataset_schema.py)
+- [get_hf_dataset_schema.py](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/tools/get_hf_dataset_schema.py) — dataset inspection tool (sample, estimate tokens)
 - [Hugging Face datasets documentation](https://huggingface.co/docs/datasets/)
