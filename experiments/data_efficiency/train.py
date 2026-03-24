@@ -54,6 +54,7 @@ class DataEfficiencyConfig:
     val_name: str | None | list[str] = None
     teacher_data_name: str | None = None
     teacher_data_weight: float = 0.0
+    teacher_data_weights: dict[str, float] | None = None
 
     block_cross_document_attention: bool = True
 
@@ -89,20 +90,18 @@ class DataEfficiencyConfig:
     eval_harness_tasks: list[EvalTaskConfig] | None = None
     eval_harness_steps: int | None = None
     effective_train_seq_len: int = field(init=False)
+    resolved_teacher_data_weights: dict[str, float] = field(init=False)
+    total_teacher_weight: float = field(init=False)
 
     def __post_init__(self):
         assert self.lr_cooldown_duration is None, "Cooldown duration is not supported for data efficiency experiments"
-
-        if self.teacher_data_name is not None:
-            assert self.teacher_data_weight > 0.0, "Teacher data weight must be greater than 0.0"
-
-        if self.teacher_data_weight > 0.0:
-            assert (
-                self.teacher_data_name is not None
-            ), "Teacher data name must be specified if teacher data weight is greater than 0.0"
+        self.resolved_teacher_data_weights = self._resolve_teacher_data_weights()
+        self.total_teacher_weight = sum(self.resolved_teacher_data_weights.values())
+        if self.total_teacher_weight >= 1.0:
+            raise ValueError(f"Teacher data weights must sum to < 1.0, got {self.total_teacher_weight}")
 
         self.model_config = model_dict[self.model_name]
-        self.total_train_steps = int(self.base_train_steps * self.epochs / (1.0 - self.teacher_data_weight))
+        self.total_train_steps = int(self.base_train_steps * self.epochs / (1.0 - self.total_teacher_weight))
         self.effective_train_seq_len = (
             self.model_config.max_seq_len if self.train_seq_len is None else self.train_seq_len
         )
@@ -130,12 +129,48 @@ class DataEfficiencyConfig:
         self.one_epoch_tokens = self.effective_train_seq_len * self.base_train_steps * self.train_batch_size
         self.total_tokens = self.one_epoch_tokens * self.epochs
 
+    def _resolve_teacher_data_weights(self) -> dict[str, float]:
+        resolved_teacher_data_weights = {}
+
+        if self.teacher_data_weights is not None:
+            resolved_teacher_data_weights.update(self.teacher_data_weights)
+
+        if self.teacher_data_weight < 0.0:
+            raise ValueError(f"Teacher data weight must be non-negative, got {self.teacher_data_weight}")
+
+        if self.teacher_data_name is not None:
+            if self.teacher_data_weight <= 0.0:
+                raise ValueError("Teacher data weight must be greater than 0.0 when teacher data name is specified")
+            if self.teacher_data_name in resolved_teacher_data_weights:
+                existing_teacher_weight = resolved_teacher_data_weights[self.teacher_data_name]
+                if existing_teacher_weight != self.teacher_data_weight:
+                    raise ValueError(
+                        f"Conflicting teacher weight for {self.teacher_data_name}: "
+                        f"{existing_teacher_weight} in teacher_data_weights vs "
+                        f"{self.teacher_data_weight} in teacher_data_weight"
+                    )
+            resolved_teacher_data_weights[self.teacher_data_name] = self.teacher_data_weight
+        elif self.teacher_data_weight > 0.0:
+            raise ValueError("Teacher data name must be specified if teacher data weight is greater than 0.0")
+
+        for teacher_data_name, teacher_data_weight in resolved_teacher_data_weights.items():
+            if teacher_data_name == self.data_name:
+                raise ValueError(f"Teacher data name {teacher_data_name} cannot match base data name")
+            if teacher_data_weight <= 0.0:
+                raise ValueError(f"Teacher data weight for {teacher_data_name} must be > 0.0")
+            if teacher_data_name not in data_dict:
+                raise ValueError(f"Teacher data name {teacher_data_name} not found in data_dict")
+
+        return resolved_teacher_data_weights
+
     def build_name(self) -> str:
         data_str = f"{self.format_num_tokens()}x{self.epochs}-{self.data_name}"
-        if self.teacher_data_name is not None and self.teacher_data_weight > 0.0:
-            data_str += f"+{self.teacher_data_name}^{self.teacher_data_weight}"
+        for teacher_data_name, teacher_data_weight in sorted(self.resolved_teacher_data_weights.items()):
+            data_str += f"+{teacher_data_name}^{teacher_data_weight}"
+        batch_size_suffix = f"-bs{self.train_batch_size}" if self.bs_in_name else ""
         name = (
-            f"{self.model_name}{'cda' if not self.block_cross_document_attention else ''}-{data_str}-{self.format_lr_schedule()}{f'-bs{self.train_batch_size}' if self.bs_in_name else ''}{self.nametag}"
+            f"{self.model_name}{'cda' if not self.block_cross_document_attention else ''}"
+            f"-{data_str}-{self.format_lr_schedule()}{batch_size_suffix}{self.nametag}"
         )
         assert len(name) <= 64, f"Name is too long with length {len(name)}: {name}"
         return name
@@ -158,12 +193,13 @@ class DataEfficiencyConfig:
 
         max_train_batches = {self.data_name: self.base_train_steps}
 
-        if self.teacher_data_name is not None and self.teacher_data_weight > 0.0:
-            components[self.teacher_data_name] = data_dict[self.teacher_data_name]
-            weights[self.teacher_data_name] = self.teacher_data_weight
-            weights[self.data_name] = 1.0 - self.teacher_data_weight
-            if not validation_only_components:
-                num_validation_sequences[self.teacher_data_name] = 1024
+        if self.resolved_teacher_data_weights:
+            for teacher_data_name, teacher_data_weight in self.resolved_teacher_data_weights.items():
+                components[teacher_data_name] = data_dict[teacher_data_name]
+                weights[teacher_data_name] = teacher_data_weight
+                if not validation_only_components:
+                    num_validation_sequences[teacher_data_name] = 1024
+            weights[self.data_name] = 1.0 - self.total_teacher_weight
 
         data_config = lm_mixture_data_config(
             components=components,

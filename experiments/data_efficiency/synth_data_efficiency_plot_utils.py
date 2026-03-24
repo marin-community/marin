@@ -53,7 +53,7 @@ TOKEN_STR_TO_STEPS = {
 SYNTH_STREAM_TOKENS: dict[str, int] = {
     # Fill in: data-stream code -> total number of tokens in that synthetic stream
     "w2s": 398_936_730,
-    "w2": 398_936_730,
+    "w2": 398_936_730, 
     "b4": 556_032_327,
     "s4": 556_032_327,
     "b8": 967_660_703,
@@ -82,72 +82,123 @@ PARAM_STR_COLOR_DICT = {
 }
 DATA_STREAM_COLOR_DICT: dict[str, str] = {
     "sdn": VIRIDIAN,
-    # # Sorted streams (warm gradient: dark crimson → amber)
+    # # Stitched streams (warm gradient: dark crimson → amber)
     # "b32": "#7B241C",
     # "b16": "#C0392B",
     # "b8": "#E25822",
     # "b4": "#E67E22",
     # "w2": "#F1C40F",
-    # # Shuffled streams (cool gradient: deep plum → wisteria)
+    # # Simple streams (cool gradient: deep plum → wisteria)
     # "s32": "#4A235A",
     # "s16": "#6C3483",
     # "s8": "#884EA0",
     # "s4": "#A569BD",
     # "w2s": "#BB8FCE",
-    # Sorted streams
+    # Stitched streams
     "b32": CRAYOLA_BLUE,
     "b16": CRAYOLA_BLUE,
     "b8": CRAYOLA_BLUE,
     "b4": CRAYOLA_BLUE,
     "w2": CRAYOLA_BLUE,
-    # Shuffled streams
+    # Simple streams
     "s32": "#E67E22",
     "s16": "#E67E22",
     "s8": "#E67E22",
     "s4": "#E67E22",
     "w2s": "#E67E22",
+
+    # latent thoughts
+    "z2": "#34495E",
+    "z4": "#34495E",
+    "z8": "#34495E",
+    "z16": "#34495E",
+    "z32": "#34495E",
     
     # Special
     "w2f": CRAYOLA_BLUE,
-    "n8": "#4A235A",
-    "n8s": "#8B3800",
+    "f8": CRAYOLA_BLUE,
+    "n8": CRAYOLA_BLUE,
+    "n8s": "#E67E22",
     "l16": "#34495E",
 }
 
-DATA_STREAM_NAMES: dict[str, str] = {
-    "b32": "Sorted WRAP (32 Rephrases)",
-    "s32": "Shuffled WRAP (32 Rephrases)",
-    "b16": "Sorted WRAP (16 Rephrases)",
-    "s16": "Shuffled WRAP (16 Rephrases)",
-    "b8": "Sorted WRAP (8 Rephrases)",
-    "s8": "Shuffled WRAP (8 Rephrases)",
-    "b4": "Sorted WRAP (4 Rephrases)",
-    "s4": "Shuffled WRAP (4 Rephrases)",
-    "w2": "Sorted WRAP (2 Rephrases)",
-    "w2s": "Shuffled WRAP (2 Rephrases)",
-    "w2f": "Front Sorted WRAP (2 Rephrases)",
-    "l16": "Latent Thoughts (16 Latents)",
-    "sdn": "Self-Distill",
-    "n8": "Sorted WRAP, No Real Data (8 Rephrases)",
-    "n8s": "Shuffled WRAP, No Real Data (8 Rephrases)",
+# Optional per-stream styling used by bar plots.
+# Colors live in DATA_STREAM_COLOR_DICT; this map encodes pattern variants for
+# streams that intentionally share a base color.
+DATA_STREAM_BAR_STYLE_DICT: dict[str, dict[str, str | float]] = {
+    # No-real-data variants.
+    "n8": {"hatch": "///", "edgecolor": "white", "linewidth": 0.0, "alpha": 0.95},
+    "n8s": {"hatch": "///", "edgecolor": "white", "linewidth": 0.0, "alpha": 0.95},
+    # Front-Stitched variant.
+    "f8": {"hatch": "xx", "edgecolor": "white", "linewidth": 0.0, "alpha": 0.95},
 }
 
+DATA_STREAM_NAMES: dict[str, tuple[str, str | None]] = {
+    "b32": ("Stitched Rephrasing", "G=32"),
+    "s32": ("Simple Rephrasing", "G=32"),
+    "b16": ("Stitched Rephrasing", "G=16"),
+    "s16": ("Simple Rephrasing", "G=16"),
+    "b8": ("Real Data Last Stitched Rephrasing", "G=8"),
+    "s8": ("Simple Rephrasing", "G=8"),
+    "b4": ("Stitched Rephrasing", "G=4"),
+    "s4": ("Simple Rephrasing", "G=4"),
+    "w2": ("Stitched Rephrasing", "G=2"),
+    "w2s": ("Simple Rephrasing", "G=2"),
+    "w2f": ("Real Data First Stitched Rephrasing", "G=2"),
+    "f8": ("Real Data First Stitched Rephrasing", "G=8"),
+    "l16": ("Latent Thoughts", "G=16"),
+    "sdn": ("Self-Distill", None),
+    "n8": ("Stitched Rephrasing, No Real Data", "G=8"),
+    "n8s": ("Simple Rephrasing, No Real Data", "G=8"),
+    "z2": ("Latent Thoughts", "G=2"),
+    "z4": ("Latent Thoughts", "G=4"),
+    "z8": ("Latent Thoughts", "G=8"),
+    "z16": ("Latent Thoughts", "G=16"),
+    "z32": ("Latent Thoughts", "G=32"),
+}
+
+
+def stream_display_name(ds: str) -> str:
+    """Full display name with generation count in parentheses, e.g. 'Stitched Rephrasing (G=32)'."""
+    entry = DATA_STREAM_NAMES.get(ds)
+    if entry is None:
+        return ds
+    name, gen = entry
+    return f"{name} ({gen})" if gen else name
+
+
+def stream_legend(ds: str, loss: float, fmt: str = ".2f") -> str:
+    """Legend label: 'Stitched Rephrasing: 3.45 @ G=32'."""
+    entry = DATA_STREAM_NAMES.get(ds)
+    if entry is None:
+        return f"{ds}: {loss:{fmt}}"
+    name, gen = entry
+    if gen:
+        return f"{name}: {loss:{fmt}} at {gen}"
+    return f"{name}: {loss:{fmt}}"
+
 DATA_STREAM_SHORT_NAMES: dict[str, str] = {
-    "b32": "Sorted (32x)",
-    "s32": "Shuffled (32x)",
-    "b16": "Sorted (16x)",
-    "s16": "Shuffled (16x)",
-    "b8": "Sorted (8x)",
-    "s8": "Shuffled (8x)",
-    "b4": "Sorted (4x)",
-    "s4": "Shuffled (4x)",
-    "w2": "Sorted (2x)",
-    "w2s": "Shuffled (2x)",
-    "w2f": "Front Sorted (2x)",
+    "b32": "Stitched (32x)",
+    "s32": "Simple (32x)",
+    "b16": "Stitched (16x)",
+    "s16": "Simple (16x)",
+    "b8": "Real Data Last Stitched (8x)",
+    "s8": "Simple (8x)",
+    "b4": "Stitched (4x)",
+    "s4": "Simple (4x)",
+    "w2": "Stitched (2x)",
+    "w2s": "Simple (2x)",
+    "w2f": "Real Data First Stitched (2x)",
+    "f8": "Real Data First Stitched (8x)",
     "l16": "Latent (16x)",
     "sdn": "Self-Distill",
-    "n8": "Sorted, No Real (8x)",
-    "n8s": "Shuffled, No Real (8x)",
+    "n8": "Stitched, No Real (8x)",
+    "n8s": "Simple, No Real (8x)",
+    "z2": "Latent (2x)",
+    "z4": "Latent (4x)",
+    "z8": "Latent (8x)",
+    "z16": "Latent (16x)",
+    "z32": "Latent (32x)",
 }
 
 PRETTY_NAME_DICT = {

@@ -18,20 +18,7 @@ from experiments.data_efficiency.utils import get_bounding_box
 from marin.execution.executor import executor_main
 
 val_name_dict = {
-    "dcr": ["dc_t10x_val", "dc_t10x_val_shuffled", "dc_1k_val_normal"],
-    "b32": ["dc_1k_val_normal"],
-    "s32": ["dc_1k_val_normal"],
-    "b16": ["dc_1k_val_normal"],
-    "s16": ["dc_1k_val_normal"],
-    "b8": ["dc_1k_val_normal"],
-    "s8": ["dc_1k_val_normal"],
-    "hqr": ["dc_1k_val_normal"],
-    "hqs": ["dc_1k_val_normal"],
-    "b4": ["dc_1k_val_normal"],
-    "s4": ["dc_1k_val_normal"],
     "w2": ["dc_1k_val_normal"],
-    "w2s": ["dc_1k_val_normal"],
-    "f8": ["dc_1k_val_normal"],
 }
 
 train_steps = [
@@ -40,8 +27,6 @@ train_steps = [
             DataEfficiencyConfig(
                 data_name=train_data_name,
                 val_name=val_name_dict[train_data_name],
-                teacher_data_name=synthetic_data_name,
-                teacher_data_weight=synthetic_data_weight,
                 block_cross_document_attention=block_cross_document_attention,
                 epochs=epochs,
                 base_train_steps=base_train_steps,
@@ -53,7 +38,7 @@ train_steps = [
                 model_name=model_name,
                 tpu_type="v4-64",
                 nametag=nametag,
-                wandb_additional_tags=["synth_data_efficiency", "effective_context"] + (["cda"] if not block_cross_document_attention else []),
+                wandb_additional_tags=["synth_data_efficiency"] + (["cda"] if not block_cross_document_attention else []),
                 initialize_from_hf=None,
             )
         )
@@ -66,28 +51,17 @@ train_steps = [
 
     ## Standard mode
     ]
-    for base_train_steps, epochs, lr, weight_decay, model_name, batch_size, train_seq_len, synthetic_data_name, synthetic_data_weight in [
+    for base_train_steps, epochs, lr, weight_decay, model_name, batch_size, train_seq_len in [
+        (1521, 4, 3e-3, 0.4, "300m4k", 64, 4096),
+        (1521, 4, 3e-3, 0.8, "300m4k", 64, 4096),
+        (1521, 4, 3e-3, 1.6, "300m4k", 64, 4096),
 
-    ###### Pick which data to train with ######
-    ## Wrap ICPT
-        # (777, 32, 3e-3, 0.4, "300m4k", 64, 4096, "b32", 0.9),
-        # (777, 64, 3e-3, 0.4, "300m4k", 64, 4096, "b32", 0.75),
-        # (777, 32, 3e-3, 0.1, "300m4k", 64, 4096, "b32", 0.75),
-        # (777, 16, 3e-3, 0.4, "300m4k", 64, 4096, "s32", 0.9),
-        # (777, 16, 3e-3, 0.1, "300m4k", 64, 4096, "s32", 0.75),
-        # (777, 32, 3e-3, 0.4, "300m4k", 64, 4096, "b8", 0.75),
-        # (777, 16, 3e-3, 0.1, "300m4k", 64, 4096, "b8", 0.75),
-        # (777, 8, 3e-3, 1.6, "300m4k", 64, 4096, "s8", 0.75),
-        # (777, 8, 3e-3, 0.4, "300m4k", 64, 4096, "b4", 0.9),
-        # (777, 8, 3e-3, 0.8, "300m4k", 64, 4096, "s4", 0.9),
-        # (777, 8, 3e-3, 0.1, "300m4k", 64, 4096, "b4", 0.75),
-        # (777, 8, 3e-3, 1.6, "300m4k", 64, 4096, "s4", 0.75),
-        # (777, 8, 3e-3, 0.8, "300m4k", 64, 4096, "w2", 0.9),
-        # (777, 4, 3e-3, 0.8, "300m4k", 64, 4096, "w2s", 0.9),
-        (777, 8, 3e-3, 0.4, "300m4k", 64, 4096, "f8", 0.9),
-        (777, 8, 3e-3, 0.1, "300m4k", 64, 4096, "f8", 0.75),
+        (1521, 8, 3e-3, 0.4, "300m4k", 64, 4096),
+        (1521, 8, 3e-3, 0.8, "300m4k", 64, 4096),
+        (1521, 8, 3e-3, 1.6, "300m4k", 64, 4096),
+
     ]
-    for train_data_name in ["dcr"]
+    for train_data_name in ["w2"]
     for block_cross_document_attention, nametag in [
         (False, ""),
         # (True, ""),

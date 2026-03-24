@@ -595,6 +595,38 @@ cot_l16_cpr1_sorted_tokenized = tokenize_data_efficiency_dataset(
     "a272507",
 )
 
+# new cot data
+
+cot_l2_shuffled_tokenized = tokenize_data_efficiency_dataset(
+    "cot_l2_shuffled",
+    "konwoo/dclm-164k-512cot-l2-shuffled",
+    "0451a6b",
+)
+
+cot_l4_shuffled_tokenized = tokenize_data_efficiency_dataset(
+    "cot_l4_shuffled",
+    "konwoo/dclm-164k-512cot-l4-shuffled",
+    "d4552c0",
+)
+
+cot_l8_shuffled_tokenized = tokenize_data_efficiency_dataset(
+    "cot_l8_shuffled",
+    "konwoo/dclm-164k-512cot-l8-shuffled",
+    "802c316",
+)
+
+cot_l16_shuffled_tokenized = tokenize_data_efficiency_dataset(
+    "cot_l16_shuffled",
+    "konwoo/dclm-164k-512cot-l16-shuffled",
+    "2171191",
+)
+
+cot_l32_shuffled_tokenized = tokenize_data_efficiency_dataset(
+    "cot_l32_shuffled",
+    "konwoo/dclm-164k-512cot-l32-shuffled",
+    "a833858",
+)
+
 # sd 
 
 sd_c128_new_tokenized = tokenize_data_efficiency_dataset(
@@ -603,6 +635,86 @@ sd_c128_new_tokenized = tokenize_data_efficiency_dataset(
     "0ba4f19",
     window_size_bytes=512 * 1024 * 1024,
 )
+
+
+# merged ones
+merged_g1_nodoc_tokenized = tokenize_data_efficiency_dataset(
+    "merged_g1_nodoc",
+    "konwoo/wicpt-512cot-merged-nodoc-cpr1",
+    "9a28cca",
+)
+
+merged_g1_doc_tokenized = tokenize_data_efficiency_dataset(
+    "merged_g1_doc",
+    "konwoo/wicpt-512cot-merged-doc-cpr1",
+    "00aa7fb",
+)
+
+merged_g2_nodoc_tokenized = tokenize_data_efficiency_dataset(
+    "merged_g2_nodoc",
+    "konwoo/wicpt-512cot-merged-nodoc-cpr2",
+    "53e6be1",
+)
+
+merged_g2_doc_tokenized = tokenize_data_efficiency_dataset(
+    "merged_g2_doc",
+    "konwoo/wicpt-512cot-merged-doc-cpr2",
+    "670e84f",
+)
+
+merged_g4_nodoc_tokenized = tokenize_data_efficiency_dataset(
+    "merged_g4_nodoc",
+    "konwoo/wicpt-512cot-merged-nodoc-cpr4",
+    "078eea3",
+)
+
+merged_g4_doc_tokenized = tokenize_data_efficiency_dataset(
+    "merged_g4_doc",
+    "konwoo/wicpt-512cot-merged-doc-cpr4",
+    "125298a",
+)
+
+merged_g8_nodoc_tokenized = tokenize_data_efficiency_dataset(
+    "merged_g8_nodoc",
+    "konwoo/wicpt-512cot-merged-nodoc-cpr8",
+    "a49f3b3",
+)
+
+merged_g8_doc_tokenized = tokenize_data_efficiency_dataset(
+    "merged_g8_doc",
+    "konwoo/wicpt-512cot-merged-doc-cpr8",
+    "1cc9838",
+)
+
+merged_g16_nodoc_tokenized = tokenize_data_efficiency_dataset(
+    "merged_g16_nodoc",
+    "konwoo/wicpt-512cot-merged-nodoc-cpr16",
+    "b18eb23",
+)
+
+merged_g16_doc_tokenized = tokenize_data_efficiency_dataset(
+    "merged_g16_doc",
+    "konwoo/wicpt-512cot-merged-doc-cpr16",
+    "ef9cba0",
+)
+
+# short long val
+
+dclm_val_500_short_tokenized = tokenize_data_efficiency_dataset(
+    "dclm_val_500_short",
+    "konwoo/dclm-val-500-short",
+    "957c79b",
+    is_validation=True,
+)
+
+
+dclm_val_500_long_tokenized = tokenize_data_efficiency_dataset(
+    "dclm_val_500_long",
+    "konwoo/dclm-val-500-long",
+    "d38cffe",
+    is_validation=True,
+)
+
 
 
 data_dict = {
@@ -712,4 +824,24 @@ data_dict = {
     "l16": cot_l16_cpr1_sorted_tokenized,
     # new sd 
     "sdn": sd_c128_new_tokenized,
+    # new cot
+    "z2": cot_l2_shuffled_tokenized,
+    "z4": cot_l4_shuffled_tokenized,
+    "z8": cot_l8_shuffled_tokenized,
+    "z16": cot_l16_shuffled_tokenized,
+    "z32": cot_l32_shuffled_tokenized,
+    # new merges
+    "x1": merged_g1_nodoc_tokenized,
+    "m1": merged_g1_doc_tokenized,
+    "x2": merged_g2_nodoc_tokenized,
+    "m2": merged_g2_doc_tokenized,
+    "x4": merged_g4_nodoc_tokenized,
+    "m4": merged_g4_doc_tokenized,
+    "x8": merged_g8_nodoc_tokenized,
+    "m8": merged_g8_doc_tokenized,
+    "x16": merged_g16_nodoc_tokenized,
+    "m16": merged_g16_doc_tokenized,
+    # short and long vals 
+    "dc_500_val_short": dclm_val_500_short_tokenized,
+    "dc_500_val_long": dclm_val_500_long_tokenized,
 }

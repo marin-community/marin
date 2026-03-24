@@ -24,7 +24,6 @@ from experiments.data_efficiency.synth_data_efficiency_plot_utils import (
     BLACK,
     DATA_STREAM_BAR_STYLE_DICT,
     DATA_STREAM_COLOR_DICT,
-    DATA_STREAM_NAMES,
     DATA_STREAM_SHORT_NAMES,
     PARAM_STR_COLOR_DICT,
     PARAM_STR_TO_COUNT,
@@ -38,6 +37,8 @@ from experiments.data_efficiency.synth_data_efficiency_plot_utils import (
     PowerScalingLaw,
     setup_axes,
     setup_plot_style,
+    stream_display_name,
+    stream_legend,
 )
 
 
@@ -57,6 +58,13 @@ EvalRunPrefix = str | tuple[str, ...] | list[str]
 
 PLOT_DIR = "experiments/data_efficiency/plots/synth_data_efficiency/"
 SCALING_FIGSIZE = (6, 4.7)
+
+PRINT_RUNS = False
+
+
+def _log_point(plot_name: str, label: str, run_name: str | None, loss: float) -> None:
+    if PRINT_RUNS and run_name is not None:
+        print(f"  [{plot_name}] {label}: {run_name} -> {loss:.4f}")
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +230,83 @@ def _load_cache(path: str) -> dict | None:
         return pickle.load(handle)
 
 
+def _save_cache(path: str, payload: dict) -> None:
+    _ensure_parent_dir(path)
+    with open(path, "wb") as handle:
+        pickle.dump(payload, handle)
+
+
+def _make_json_safe(obj: object) -> object:
+    """Recursively convert wandb summary/config values to JSON-serializable primitives."""
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+    if isinstance(obj, dict):
+        return {str(k): _make_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_make_json_safe(v) for v in obj]
+    try:
+        json.dumps(obj)
+        return obj
+    except (TypeError, ValueError):
+        return str(obj)
+
+
+def fetch_matching_runs(project: str) -> list:
+    """Fetch all runs whose display name contains x{N}-dcr."""
+    import wandb
+
+    api = wandb.Api(timeout=120)
+    runs = list(api.runs(project, filters={"display_name": {"$regex": r"x\d+-dcr"}}, per_page=200))
+    runs.sort(key=lambda run: run.name or "")
+    return runs
+
+
+def _serialize_run(run: object) -> dict:
+    return {
+        "name": run.name,
+        "id": run.id,
+        "state": run.state,
+        "created_at": run.created_at,
+        "summary": _make_json_safe(dict(run.summary)),
+        "config": _make_json_safe(dict(run.config)),
+    }
+
+
+def _print_cached_runs(project: str, runs: list[dict]) -> None:
+    print(f"\n{'=' * 80}")
+    print(f"Project: {project}")
+    print(f"Matched runs: {len(runs)}")
+    print(f"{'=' * 80}")
+    for run in runs:
+        print(f"  {run['name']:<80s}  state={run['state']}")
+
+
+def build_cache(cache_path: str) -> dict:
+    """Pull all matching runs from both projects and save to cache."""
+    payload: dict[str, list[dict]] = {}
+    for project in PROJECTS:
+        print(f"Fetching runs from {project} ...")
+        runs = fetch_matching_runs(project)
+        serialized: list[dict] = []
+        ignored_multi_stream: list[str] = []
+        for run in runs:
+            name = run.name or ""
+            if _has_multiple_data_streams(name):
+                ignored_multi_stream.append(name)
+                continue
+            serialized.append(_serialize_run(run))
+        payload[project] = serialized
+        if ignored_multi_stream:
+            print(f"  Ignoring {len(ignored_multi_stream)} multi-stream runs from {project}")
+            for name in ignored_multi_stream:
+                print(f"    {name}")
+        _print_cached_runs(project, serialized)
+
+    _save_cache(cache_path, payload)
+    print(f"\nCache saved to {cache_path}")
+    return payload
+
+
 def _has_multiple_data_streams(name: str) -> bool:
     return len(DATA_STREAM_SPEC_PATTERN.findall(name)) > 1
 
@@ -230,6 +315,17 @@ def _matches_eval_run_prefix(name: str, eval_run_prefix: EvalRunPrefix) -> bool:
     if isinstance(eval_run_prefix, str):
         return name.startswith(eval_run_prefix)
     return any(name.startswith(prefix) for prefix in eval_run_prefix)
+
+
+def _filter_finished(payload: dict) -> dict:
+    """Keep only runs with state == 'finished', mutating the payload in place."""
+    for project, runs in payload.items():
+        before = len(runs)
+        runs[:] = [r for r in runs if r.get("state") == "finished"]
+        dropped = before - len(runs)
+        if dropped:
+            print(f"  Filtered out {dropped} non-finished runs from {project} ({len(runs)} remaining)")
+    return payload
 
 
 def build_name_to_summary(payload: dict, project: str) -> dict[str, dict]:
@@ -459,22 +555,27 @@ def plot_loss_vs(
             all_xs.append(getattr(c, x_attr))
             all_losses.append(loss)
 
+    pn = f"loss_vs_{x_attr}_{data_stream}"
     best_per_x: list[tuple[float, float]] = []
     for xv in x_values:
-        scored = [
-            get_loss(name_to_summary.get(c.name, {}))
-            for c in stream_runs if getattr(c, x_attr) == xv
-        ]
-        valid = [s for s in scored if s is not None]
-        if valid:
-            best_per_x.append((xv, min(valid)))
+        best_loss: float | None = None
+        best_run_name: str | None = None
+        for c in stream_runs:
+            if getattr(c, x_attr) != xv:
+                continue
+            loss = get_loss(name_to_summary.get(c.name, {}))
+            if loss is not None and (best_loss is None or loss < best_loss):
+                best_loss = loss
+                best_run_name = c.name
+        if best_loss is not None:
+            _log_point(pn, f"{x_attr}={xv}", best_run_name, best_loss)
+            best_per_x.append((xv, best_loss))
 
     if not best_per_x:
         return
 
     xs = [x for x, _ in best_per_x]
     losses = [l for _, l in best_per_x]
-    pretty_stream = DATA_STREAM_NAMES.get(data_stream, data_stream)
 
     setup_plot_style()
     fig, ax = plt.subplots(figsize=SCALING_FIGSIZE, dpi=300)
@@ -483,7 +584,7 @@ def plot_loss_vs(
                label=f"Real Data Only: {REGULARIZED_300M_LOSS:.2f}")
     ax.scatter(all_xs, all_losses, color=color, s=50, alpha=0.2, zorder=2)
     ax.scatter(xs, losses, color=color, s=50, zorder=5)
-    ax.plot(xs, losses, "--", color=color, label=f"{pretty_stream}: {min(losses):.2f}")
+    ax.plot(xs, losses, "--", color=color, label=stream_legend(data_stream, min(losses)))
 
     min_loss = min(losses)
     min_x = xs[losses.index(min_loss)]
@@ -497,7 +598,7 @@ def plot_loss_vs(
     ax.xaxis.set_minor_formatter(NullFormatter())
 
     xlabel = xlabel_defaults.get(x_attr, x_attr.replace("_", " ").title())
-    title = f"Loss vs {xlabel} \u2014 {pretty_stream}"
+    title = f"Loss vs {xlabel} \u2014 {stream_display_name(data_stream)}"
     setup_axes(ax, title=title, xlabel=xlabel, ylabel="IID Loss")
 
     plt.tight_layout()
@@ -527,6 +628,7 @@ def plot_compare_loss_vs_epochs(
     if stream_token_range is None:
         stream_token_range = {}
 
+    pn = f"compare_loss_vs_epochs({'_'.join(data_streams)})"
     setup_plot_style()
     fig, ax = plt.subplots(figsize=SCALING_FIGSIZE, dpi=300)
 
@@ -535,7 +637,6 @@ def plot_compare_loss_vs_epochs(
 
     for stream_idx, ds in enumerate(data_streams):
         color = DATA_STREAM_COLOR_DICT.get(ds, BLACK)
-        pretty = DATA_STREAM_NAMES.get(ds, ds)
         alpha = 0.45 if stream_idx == 0 else 1.0
 
         stream_runs = [
@@ -552,12 +653,16 @@ def plot_compare_loss_vs_epochs(
             continue
 
         if use_real_tokens:
-            by_x: dict[float, list[float]] = defaultdict(list)
+            by_x: dict[float, list[tuple[float, str]]] = defaultdict(list)
             for c in stream_runs:
                 loss = get_loss(name_to_summary.get(c.name, {}))
                 if loss is not None and loss < 5.0:
-                    by_x[c.get_real_tokens()].append(loss)
-            best_per_x = [(x, min(by_x[x])) for x in sorted(by_x)]
+                    by_x[c.get_real_tokens()].append((loss, c.name))
+            best_per_x: list[tuple[float, float]] = []
+            for x in sorted(by_x):
+                best_pair = min(by_x[x], key=lambda t: t[0])
+                _log_point(pn, f"{ds} tokens={x}", best_pair[1], best_pair[0])
+                best_per_x.append((x, best_pair[0]))
         else:
             epoch_counts = sorted({c.epochs for c in stream_runs})
             allowed = stream_epochs.get(ds)
@@ -565,13 +670,18 @@ def plot_compare_loss_vs_epochs(
                 epoch_counts = [e for e in epoch_counts if e in allowed]
             best_per_x: list[tuple[float, float]] = []
             for epoch in epoch_counts:
-                scored = [
-                    get_loss(name_to_summary.get(c.name, {}))
-                    for c in stream_runs if c.epochs == epoch
-                ]
-                valid = [s for s in scored if s is not None and s < 5.0]
-                if valid:
-                    best_per_x.append((float(epoch), min(valid)))
+                best_loss: float | None = None
+                best_run_name: str | None = None
+                for c in stream_runs:
+                    if c.epochs != epoch:
+                        continue
+                    loss = get_loss(name_to_summary.get(c.name, {}))
+                    if loss is not None and loss < 5.0 and (best_loss is None or loss < best_loss):
+                        best_loss = loss
+                        best_run_name = c.name
+                if best_loss is not None:
+                    _log_point(pn, f"{ds} epochs={epoch}", best_run_name, best_loss)
+                    best_per_x.append((float(epoch), best_loss))
 
         if not best_per_x:
             continue
@@ -582,7 +692,7 @@ def plot_compare_loss_vs_epochs(
 
         ax.set_xscale("log")
         ax.scatter(xs, losses, color=color, s=50, zorder=5, alpha=alpha)
-        ax.plot(xs, losses, "--", color=color, alpha=alpha, label=f"{pretty}: {min(losses):.2f}")
+        ax.plot(xs, losses, "--", color=color, alpha=alpha, label=stream_legend(ds, min(losses)))
 
         overall_best_loss = min(losses)
         overall_best_x = xs[losses.index(overall_best_loss)]
@@ -656,6 +766,7 @@ def plot_augmented_bar(
     """
     metric_map = {"iid": (METRIC_KEY, "IID Loss", ""), "arxiv": (ARXIV_METRIC_KEY, "Arxiv CS Loss", "_arxiv")}
     metric_key, ylabel, metric_suffix = metric_map[metric.lower()]
+    pn = f"augmented_bar({title}{metric_suffix})"
     use_eval = eval_runs is not None
     source_runs = [*augmented, *(seed_runs or [])]
     source_summary = eval_summary if use_eval else name_to_summary
@@ -669,7 +780,7 @@ def plot_augmented_bar(
     stream_ids: list[str] = []
 
     for ds in data_streams:
-        grouped: defaultdict[tuple, list[float]] = defaultdict(list)
+        grouped: defaultdict[tuple, list[tuple[float, str]]] = defaultdict(list)
         if use_eval:
             assert eval_runs is not None and source_summary is not None
             for c in eval_runs:
@@ -681,10 +792,10 @@ def plot_augmented_bar(
                     continue
                 loss = get_loss(source_summary.get(c.name, {}), metric_key=metric_key)
                 if loss is not None:
-                    grouped[_eval_config_key(c)].append(loss)
+                    grouped[_eval_config_key(c)].append((loss, c.name))
         else:
-            seed_groups: dict[tuple, list[float]] = defaultdict(list)
-            non_seed_groups: dict[tuple, list[float]] = defaultdict(list)
+            seed_groups: dict[tuple, list[tuple[float, str]]] = defaultdict(list)
+            non_seed_groups: dict[tuple, list[tuple[float, str]]] = defaultdict(list)
             for c in source_runs:
                 if c.data_stream != ds or c.model_size != "300m4k" or not c.cda:
                     continue
@@ -692,7 +803,7 @@ def plot_augmented_bar(
                 if loss is None:
                     continue
                 key = _seed_config_key(c)
-                (seed_groups if c.is_seed_run else non_seed_groups)[key].append(loss)
+                (seed_groups if c.is_seed_run else non_seed_groups)[key].append((loss, c.name))
 
             for key, vals in seed_groups.items():
                 grouped[key] = vals
@@ -703,11 +814,13 @@ def plot_augmented_bar(
         if not grouped:
             continue
 
-        best_group = min(grouped.values(), key=lambda v: float(np.mean(v)))
-        avg = float(np.mean(best_group))
-        std = float(np.std(best_group, ddof=1)) if len(best_group) > 1 else 0.0
+        best_group = min(grouped.values(), key=lambda v: float(np.mean([l for l, _ in v])))
+        for loss_val, rname in best_group:
+            _log_point(pn, f"stream={ds}", rname, loss_val)
+        avg = float(np.mean([l for l, _ in best_group]))
+        std = float(np.std([l for l, _ in best_group], ddof=1)) if len(best_group) > 1 else 0.0
 
-        labels.append(DATA_STREAM_NAMES.get(ds, ds))
+        labels.append(stream_display_name(ds))
         short_labels.append(DATA_STREAM_SHORT_NAMES.get(ds, ds))
         losses.append(avg)
         errors.append(std)
@@ -777,6 +890,7 @@ def plot_cda_bar(
     output_path: str | None = None,
 ) -> None:
     """Bar plot comparing best IID loss for each (cda, data_stream) query."""
+    pn = "cda_bar"
     legend_labels: list[str] = []
     tick_labels: list[str] = []
     losses: list[float] = []
@@ -786,6 +900,7 @@ def plot_cda_bar(
     for cda, data_stream in queries:
         pool = baselines if data_stream is None else augmented
         best: float | None = None
+        best_run_name: str | None = None
         for c in pool:
             if data_stream is None and (c.is_seed_run or not c.is_baseline):
                 continue
@@ -796,16 +911,18 @@ def plot_cda_bar(
             loss = get_loss(name_to_summary.get(c.name, {}))
             if loss is not None and (best is None or loss < best):
                 best = loss
+                best_run_name = c.name
 
         if best is None:
             continue
 
         cda_tag = "CDA" if cda else "No CDA"
+        _log_point(pn, f"cda={cda} stream={data_stream}", best_run_name, best)
         if data_stream is None:
             legend_labels.append(f"Real Data Only ({cda_tag})")
             tick_labels.append(f"Real Data Only ({cda_tag})")
         else:
-            legend_labels.append(f"{DATA_STREAM_NAMES.get(data_stream, data_stream)} ({cda_tag})")
+            legend_labels.append(f"{stream_display_name(data_stream)} ({cda_tag})")
             tick_labels.append(f"{DATA_STREAM_SHORT_NAMES.get(data_stream, data_stream)} ({cda_tag})")
         losses.append(best)
         colors.append(DATA_STREAM_COLOR_DICT.get(data_stream, REGULARIZED_COLOR) if data_stream else REGULARIZED_COLOR)
@@ -867,15 +984,19 @@ def plot_student_scaling(
     setup_plot_style()
     fig, ax = plt.subplots(figsize=WIDE_RECTANGLE_FIGSIZE, dpi=300)
 
+    pn = "student_scaling"
     all_losses: list[float] = []
     for bar_idx, (ds, label, color) in enumerate(streams):
         xs, ys = [], []
         for gi, ms in enumerate(model_sizes):
             if ds is None:
-                # Baseline: best CDA run with no data stream
-                loss, _ = _best_baseline_loss(baselines or [], name_to_summary, ms)
+                loss, bl_cfg = _best_baseline_loss(baselines or [], name_to_summary, ms)
+                if loss is not None:
+                    _log_point(pn, f"baseline model={ms}", bl_cfg.name if bl_cfg else None, loss)
             else:
-                loss, _, _ = _best_loss_for_stream(augmented, ds, name_to_summary, ms)
+                loss, best_name, _ = _best_loss_for_stream(augmented, ds, name_to_summary, ms)
+                if loss is not None:
+                    _log_point(pn, f"stream={ds} model={ms}", best_name, loss)
             if loss is not None:
                 xs.append(group_centers[gi] + bar_idx * bar_width)
                 ys.append(loss)
@@ -917,7 +1038,9 @@ def plot_iid_mixing_ablation(
     output_path: str | None = None,
 ) -> None:
     """Bar chart: seed-only vs stitched w/ seed vs stitched w/o seed."""
-    w2_loss, _, _ = _best_loss_for_stream(augmented, "w2", name_to_summary, "300m4k")
+    w2_loss, w2_name, _ = _best_loss_for_stream(augmented, "w2", name_to_summary, "300m4k")
+    if w2_loss is not None:
+        _log_point("iid_mixing_ablation", "stream=w2", w2_name, w2_loss)
     if w2_loss is None:
         print("  No w2 loss found for IID mixing ablation")
         return
@@ -963,12 +1086,14 @@ def get_hyper_table(
     output_path: str | None = None,
 ) -> dict[int, tuple[int, float | None, float, float]]:
     """Return and plot optimal 300M hyperparameters per generation count (by IID loss)."""
+    pn = f"hyper_table({mode})"
     stream_map = MODE_TO_STREAMS[mode]
     selected: dict[int, tuple[int, float | None, float, float]] = {}
 
     for copies, ds in stream_map.items():
-        _, _, cfg = _best_loss_for_stream(augmented, ds, name_to_summary, "300m4k")
-        if cfg is not None:
+        loss, best_name, cfg = _best_loss_for_stream(augmented, ds, name_to_summary, "300m4k")
+        if cfg is not None and loss is not None:
+            _log_point(pn, f"copies={copies} stream={ds}", best_name, loss)
             selected[copies] = (cfg.epochs, cfg.mix_ratio, cfg.lr, cfg.wd)
 
     if not selected:
@@ -1055,14 +1180,19 @@ def plot_generation_scaling(
     setup_plot_style()
     fig, ax = plt.subplots(figsize=SCALING_FIGSIZE, dpi=300)
 
+    plot_name = f"generation_scaling({output_path or 'default'})"
     bl_loss: float | None = None
     if include_baseline:
         if use_eval:
             assert eval_runs is not None and eval_summary is not None
-            bl_loss, _ = _best_eval_baseline_loss(eval_runs, eval_summary, "300m4k",
-                                                  metric_key=metric_key, run_prefix=eval_run_prefix)
+            bl_loss, bl_cfg = _best_eval_baseline_loss(eval_runs, eval_summary, "300m4k",
+                                                       metric_key=metric_key, run_prefix=eval_run_prefix)
+            if bl_loss is not None:
+                _log_point(plot_name, "baseline", bl_cfg.name if bl_cfg else None, bl_loss)
         elif baselines is not None:
-            bl_loss, _ = _best_baseline_loss(baselines, name_to_summary, "300m4k", metric_key=metric_key)
+            bl_loss, bl_cfg = _best_baseline_loss(baselines, name_to_summary, "300m4k", metric_key=metric_key)
+            if bl_loss is not None:
+                _log_point(plot_name, "baseline", bl_cfg.name if bl_cfg else None, bl_loss)
         if bl_loss is not None:
             bl_label = "Real Data Only (Kim et al., 2025)" if include_citation else "Real Data Only"
             ax.scatter(1, bl_loss, color=REGULARIZED_COLOR, s=50, zorder=5, marker="o",
@@ -1079,11 +1209,12 @@ def plot_generation_scaling(
                 continue
             if use_eval:
                 assert eval_runs is not None and eval_summary is not None
-                loss, _, _ = _best_eval_loss_for_stream(eval_runs, ds, eval_summary, "300m4k",
-                                                        metric_key=metric_key, run_prefix=eval_run_prefix)
+                loss, best_name, _ = _best_eval_loss_for_stream(eval_runs, ds, eval_summary, "300m4k",
+                                                                metric_key=metric_key, run_prefix=eval_run_prefix)
             else:
-                loss, _, _ = _best_loss_for_stream(augmented, ds, name_to_summary, "300m4k", metric_key=metric_key)
+                loss, best_name, _ = _best_loss_for_stream(augmented, ds, name_to_summary, "300m4k", metric_key=metric_key)
             if loss is not None:
+                _log_point(plot_name, f"{label} copies={copies} stream={ds}", best_name, loss)
                 xs.append(1 + copies)
                 ys.append(loss)
                 colors.append(DATA_STREAM_COLOR_DICT.get(ds, BLACK))
@@ -1096,8 +1227,8 @@ def plot_generation_scaling(
             ax.scatter(x, y, color=c, s=50, zorder=5)
 
         best_ds = ds_ids[ys.index(min(ys))]
-        legend = f"{DATA_STREAM_NAMES.get(best_ds, best_ds)}: {min(ys):.2f}"
-        ax.plot(xs, ys, "--", color=colors[0], alpha=0.4, zorder=3, label=legend)
+        ax.plot(xs, ys, "--", color=colors[0], alpha=0.4, zorder=3,
+                label=stream_legend(best_ds, min(ys)))
 
         if include_baseline and bl_loss is not None:
             ax.plot([1, xs[0]], [bl_loss, ys[0]], ":", color=colors[0], alpha=0.4, zorder=3)
@@ -1132,16 +1263,17 @@ def plot_generation_scaling_controlled(
     output_path: str | None = None,
 ) -> None:
     """Plot copy scaling where Stitched and Latent use the Simple-optimal hypers."""
+    pn = "generation_scaling_controlled"
     filtered = [c for c in augmented if c.bs == 64]
 
-    def _find(ds: str, epochs: int, mix_ratio: float | None, lr: float, wd: float) -> float | None:
+    def _find(ds: str, epochs: int, mix_ratio: float | None, lr: float, wd: float) -> tuple[float | None, str | None]:
         for c in filtered:
             if c.data_stream == ds and c.model_size == "300m4k" and c.cda:
                 if c.epochs == epochs and c.mix_ratio == mix_ratio and c.lr == lr and c.wd == wd:
                     loss = get_loss(name_to_summary.get(c.name, {}))
                     if loss is not None:
-                        return loss
-        return None
+                        return loss, c.name
+        return None, None
 
     # Find best Simple per copy count
     simple_hypers: dict[int, tuple[int, float | None, float, float]] = {}
@@ -1150,8 +1282,9 @@ def plot_generation_scaling_controlled(
         ds = SHUFFLED_COPY_STREAMS.get(copies)
         if ds is None:
             continue
-        loss, _, cfg = _best_loss_for_stream(filtered, ds, name_to_summary, "300m4k")
+        loss, best_name, cfg = _best_loss_for_stream(filtered, ds, name_to_summary, "300m4k")
         if loss is not None and cfg is not None:
+            _log_point(pn, f"Simple copies={copies} stream={ds}", best_name, loss)
             simple_xs.append(1 + copies)
             simple_ys.append(loss)
             simple_colors.append(DATA_STREAM_COLOR_DICT.get(ds, BLACK))
@@ -1166,8 +1299,9 @@ def plot_generation_scaling_controlled(
             if ds is None or copies not in simple_hypers:
                 continue
             ep, mr, lr, wd = simple_hypers[copies]
-            loss = _find(ds, ep, mr, lr, wd)
+            loss, run_name = _find(ds, ep, mr, lr, wd)
             if loss is not None:
+                _log_point(pn, f"{label} copies={copies} stream={ds}", run_name, loss)
                 xs.append(1 + copies)
                 ys.append(loss)
                 cols.append(DATA_STREAM_COLOR_DICT.get(ds, BLACK))
@@ -1178,8 +1312,9 @@ def plot_generation_scaling_controlled(
 
     bl_loss: float | None = None
     if baselines is not None:
-        bl_loss, _ = _best_baseline_loss(baselines, name_to_summary, "300m4k")
+        bl_loss, bl_cfg = _best_baseline_loss(baselines, name_to_summary, "300m4k")
         if bl_loss is not None:
+            _log_point(pn, "baseline", bl_cfg.name if bl_cfg else None, bl_loss)
             ax.scatter(1, bl_loss, color=REGULARIZED_COLOR, s=50, zorder=5, marker="o",
                        label=f"Real Data Only: {bl_loss:.2f}")
 
@@ -1195,8 +1330,8 @@ def plot_generation_scaling_controlled(
             ax.scatter(x, y, color=c, s=50, zorder=5)
         best_copies = COPY_COUNTS[[1 + c for c in COPY_COUNTS].index(xs[ys.index(min(ys))])]
         best_ds = smap[best_copies]
-        legend = f"{DATA_STREAM_NAMES.get(best_ds, best_ds)}: {min(ys):.2f}"
-        ax.plot(xs, ys, "--", color=colors[0], alpha=0.4, zorder=3, label=legend)
+        ax.plot(xs, ys, "--", color=colors[0], alpha=0.4, zorder=3,
+                label=stream_legend(best_ds, min(ys)))
         if bl_loss is not None:
             ax.plot([1, xs[0]], [bl_loss, ys[0]], ":", color=colors[0], alpha=0.4, zorder=3)
 
@@ -1227,13 +1362,16 @@ def plot_context_length_scaling(
         (SHORT_CONTEXT_METRIC_KEY, "Short Context Loss", " (Short Context)", "_short_context"),
         (LONG_CONTEXT_METRIC_KEY, "Long Context Loss", " (Long Context)", "_long_context"),
     ]:
-        prefix: EvalRunPrefix = "synth-data-var-models-"
+        pn = f"context_length_scaling{file_suffix}"
+        prefix: EvalRunPrefix = "synth-data-best-models-"
+
         setup_plot_style()
         fig, ax = plt.subplots(figsize=SCALING_FIGSIZE, dpi=300)
 
-        bl_loss, _ = _best_eval_baseline_loss(eval_runs, eval_summary, "300m4k",
-                                              metric_key=metric_key, run_prefix=prefix)
+        bl_loss, bl_cfg = _best_eval_baseline_loss(eval_runs, eval_summary, "300m4k",
+                                                   metric_key=metric_key, run_prefix=prefix)
         if bl_loss is not None:
+            _log_point(pn, "baseline", bl_cfg.name if bl_cfg else None, bl_loss)
             ax.scatter(1, bl_loss, color=REGULARIZED_COLOR, s=50, zorder=5, marker="o",
                        label=f"Real Data Only: {bl_loss:.2f}")
 
@@ -1243,9 +1381,10 @@ def plot_context_length_scaling(
                 ds = stream_map.get(copies)
                 if ds is None:
                     continue
-                loss, _, _ = _best_eval_loss_for_stream(eval_runs, ds, eval_summary, "300m4k",
-                                                        metric_key=metric_key, run_prefix=prefix)
+                loss, best_name, _ = _best_eval_loss_for_stream(eval_runs, ds, eval_summary, "300m4k",
+                                                                metric_key=metric_key, run_prefix=prefix)
                 if loss is not None:
+                    _log_point(pn, f"{label} copies={copies} stream={ds}", best_name, loss)
                     xs.append(1 + copies)
                     ys.append(loss)
                     colors.append(DATA_STREAM_COLOR_DICT.get(ds, BLACK))
@@ -1258,8 +1397,8 @@ def plot_context_length_scaling(
                 ax.scatter(x, y, color=c, s=50, zorder=5)
 
             best_ds = ds_ids[ys.index(min(ys))]
-            legend = f"{DATA_STREAM_NAMES.get(best_ds, best_ds)}: {min(ys):.2f}"
-            ax.plot(xs, ys, "--", color=colors[0], alpha=0.4, zorder=3, label=legend)
+            ax.plot(xs, ys, "--", color=colors[0], alpha=0.4, zorder=3,
+                    label=stream_legend(best_ds, min(ys)))
             if bl_loss is not None:
                 ax.plot([1, xs[0]], [bl_loss, ys[0]], ":", color=colors[0], alpha=0.4, zorder=3)
 
@@ -1326,8 +1465,10 @@ def plot_downstream_scaling(
     if not shuffled_only:
         series += [("Stitched", SORTED_COPY_STREAMS), ("Latent Thoughts", LATENT_COPY_STREAMS)]
 
+    pn = f"downstream_scaling({output_path})"
     reg_error: float | None = None
-    series_errors: dict[str, dict[int, float]] = {l: {} for l, _ in series}
+    reg_run_name: str | None = None
+    series_errors: dict[str, dict[int, tuple[float, str]]] = {l: {} for l, _ in series}
 
     for run_name, run_payload in payload.items():
         cfg = RunConfig.from_run_name(run_name)
@@ -1339,18 +1480,20 @@ def plot_downstream_scaling(
         if cfg.data_stream is None:
             if reg_error is None or err < reg_error:
                 reg_error = err
+                reg_run_name = run_name
             continue
         for label, smap in series:
             for copies, ds in smap.items():
                 if cfg.data_stream == ds:
                     prev = series_errors[label].get(copies)
-                    if prev is None or err < prev:
-                        series_errors[label][copies] = err
+                    if prev is None or err < prev[0]:
+                        series_errors[label][copies] = (err, run_name)
 
     setup_plot_style()
     fig, ax = plt.subplots(figsize=SCALING_FIGSIZE, dpi=300)
 
     if reg_error is not None:
+        _log_point(pn, "baseline", reg_run_name, reg_error)
         ax.scatter([1], [reg_error], color=REGULARIZED_COLOR, s=60, marker="o", zorder=6,
                    label=f"Real Data Only: {math.floor(reg_error * 100) / 100:.2f}")
 
@@ -1359,15 +1502,18 @@ def plot_downstream_scaling(
         present = [c for c in COPY_COUNTS if c in errs]
         if not present:
             continue
+        for c in present:
+            _log_point(pn, f"{label} copies={c}", errs[c][1], errs[c][0])
         xs = [1 + c for c in present]
-        ys = [errs[c] for c in present]
+        ys = [errs[c][0] for c in present]
         color = DATA_STREAM_COLOR_DICT.get(smap[present[0]], BLACK)
         best = min(ys)
         best_copies = present[ys.index(best)]
         best_ds = smap[best_copies]
-        legend = f"{DATA_STREAM_NAMES.get(best_ds, best_ds)}: {math.floor(best * 100) / 100:.2f}"
+        floored = math.floor(best * 100) / 100
         ax.scatter(xs, ys, color=color, s=50, zorder=5)
-        ax.plot(xs, ys, "--", color=color, alpha=0.8, zorder=4, label=legend)
+        ax.plot(xs, ys, "--", color=color, alpha=0.8, zorder=4,
+                label=stream_legend(best_ds, floored))
         if reg_error is not None:
             ax.plot([1, xs[0]], [reg_error, ys[0]], ":", color=color, alpha=0.5, zorder=3)
 
@@ -1401,6 +1547,7 @@ def plot_ensemble_scaling(
     output_path: str = "ensemble_scaling_cda_augmented_300m.png",
 ) -> None:
     """Plot ensemble member count vs loss with power-law fits."""
+    pn = "ensemble_scaling"
     setup_plot_style()
     fig, ax = plt.subplots(figsize=WIDE_RECTANGLE_FIGSIZE, dpi=300)
     plot_max = 10.0
@@ -1418,6 +1565,8 @@ def plot_ensemble_scaling(
 
     if opt_bl:
         sizes = sorted(opt_bl, key=lambda s: PARAM_STR_TO_COUNT[s])
+        for s in sizes:
+            _log_point(pn, f"baseline model={s}", opt_bl[s][0].name, opt_bl[s][1])
         rx = np.array([PARAM_STR_TO_COUNT[s] for s in sizes])
         ry = np.array([opt_bl[s][1] for s in sizes])
         ax.scatter(rx, ry, color=REGULARIZED_COLOR, s=50, zorder=5)
@@ -1438,7 +1587,7 @@ def plot_ensemble_scaling(
         color = DATA_STREAM_COLOR_DICT.get(ds, PARAM_STR_COLOR_DICT.get(ms, BLACK)) if ds else PARAM_STR_COLOR_DICT.get(ms, BLACK)
 
         pretty = PRETTY_NAME_DICT.get(ms, ms)
-        slabel = f"{pretty} {DATA_STREAM_NAMES.get(ds, ds)}" if ds else f"{pretty} Real Data Only"
+        slabel = f"{pretty} {stream_display_name(ds)}" if ds else f"{pretty} Real Data Only"
 
         matching = [
             e for e in ensemble_evals
@@ -1454,9 +1603,11 @@ def plot_ensemble_scaling(
             if loss is not None:
                 by_count[e.member_count].append((e, loss))
 
-        best_per: list[tuple[int, float]] = [
-            (cnt, min(vs, key=lambda t: t[1])[1]) for cnt, vs in sorted(by_count.items())
-        ]
+        best_per: list[tuple[int, float]] = []
+        for cnt, vs in sorted(by_count.items()):
+            best_e, best_l = min(vs, key=lambda t: t[1])
+            _log_point(pn, f"{slabel} members={cnt}", best_e.name, best_l)
+            best_per.append((cnt, best_l))
         if not best_per:
             continue
 
@@ -1496,13 +1647,24 @@ def plot_ensemble_scaling(
 
 
 def main() -> None:
+    global PRINT_RUNS
     parser = argparse.ArgumentParser(description="Final paper plots.")
     parser.add_argument("--cache_path", default=CACHE_PATH)
+    parser.add_argument("--build_cache", action="store_true",
+                        help="Fetch runs from wandb and rebuild the cache, then exit.")
+    parser.add_argument("--print-runs", action="store_true",
+                        help="Print the run name and loss for every plotted point.")
     args = parser.parse_args()
+    PRINT_RUNS = args.print_runs
+
+    if args.build_cache:
+        build_cache(args.cache_path)
+        return
 
     payload = _load_cache(args.cache_path)
     if payload is None:
-        raise FileNotFoundError(f"No cache at {args.cache_path}. Build with synth_data_efficiency_plots.py --build_cache first.")
+        raise FileNotFoundError(f"No cache at {args.cache_path}. Run with --build_cache first.")
+    _filter_finished(payload)
 
     configs, _ = parse_train_runs(payload)
     baselines, augmented, seed_runs = split_runs(configs)

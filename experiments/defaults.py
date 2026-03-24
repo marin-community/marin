@@ -113,6 +113,7 @@ def default_tokenize(
     *,
     sample_count: int | VersionedValue[int] | None = None,
     is_validation: bool = False,
+    window_size_bytes: int | VersionedValue[int] | None = None,
 ) -> ExecutorStep:
     """
     Tokenizes a dataset using the specified tokenizer and Levanter's tokenization infrastructure.
@@ -131,9 +132,16 @@ def default_tokenize(
             for more details.
         sample_count: Optional limit on the number of samples to tokenize per shard. If ``None``, tokenize everything.
         is_validation: Whether the dataset is a validation set. Doesn't do anything for HF datasets.
+        window_size_bytes: Optional max bytes per file group before tokenization. Smaller values increase the
+            number of tokenization shards and can improve parallelism for large datasets.
     Returns:
         An ExecutorStep that represents the tokenized dataset.
     """
+
+    resolved_sample_count = ensure_versioned(sample_count) if sample_count is not None else None
+    tokenize_kwargs: dict[str, Any] = {}
+    if window_size_bytes is not None:
+        tokenize_kwargs["window_size_bytes"] = ensure_versioned(window_size_bytes)
 
     # sniff out if it's a HuggingFace dataset
     if isinstance(dataset, HfDatasetSpec):
@@ -143,7 +151,8 @@ def default_tokenize(
             cache_path=this_output_path(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
-            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            sample_count=resolved_sample_count,
+            **tokenize_kwargs,
         )
     elif isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
         config = HfTokenizeConfig(
@@ -151,7 +160,8 @@ def default_tokenize(
             cache_path=this_output_path(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
-            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            sample_count=resolved_sample_count,
+            **tokenize_kwargs,
         )
     else:
         config = TokenizeConfig(
@@ -160,7 +170,8 @@ def default_tokenize(
             cache_path=this_output_path(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
-            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            sample_count=resolved_sample_count,
+            **tokenize_kwargs,
         )
 
     return ExecutorStep(

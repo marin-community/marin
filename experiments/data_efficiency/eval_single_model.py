@@ -36,7 +36,12 @@ from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 
 from experiments.data_efficiency.train import DataEfficiencyConfig
-from marin.evaluation.log_probs import EvalLmConfig, evaluate_lm_log_probs
+from marin.evaluation.log_probs import (
+    EvalEnsembleLmConfig,
+    EvalLmConfig,
+    evaluate_ensemble_log_probs,
+    evaluate_lm_log_probs,
+)
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.executor import ExecutorStep, InputName, executor_main, this_output_path
 
@@ -52,6 +57,10 @@ class EvalLatestHfLogProbsConfig:
     per_device_batch_size: int = 4
     max_samples_per_dataset: int | None = None
     checkpoint_is_hf: bool = True
+    use_ensemble_path: bool = False
+    ensemble_run_prefix: str = "ppl-eval"
+    ensemble_key: str | None = None
+    log_entropy: bool = True
     name: str | None = None
     wandb_tags: list[str] | None = None
     output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore
@@ -64,6 +73,25 @@ def evaluate_latest_hf_log_probs(config: EvalLatestHfLogProbsConfig) -> None:
         raise FileNotFoundError(f"No HF checkpoints found under {config.checkpoint_root}")
 
     latest_checkpoint = checkpoints[-1]
+    if config.use_ensemble_path:
+        evaluate_ensemble_log_probs(
+            EvalEnsembleLmConfig(
+                checkpoint_paths=[latest_checkpoint],
+                model=config.model,
+                datasets=config.datasets,
+                resource_config=config.resource_config,
+                per_device_batch_size=config.per_device_batch_size,
+                max_samples_per_dataset=config.max_samples_per_dataset,
+                checkpoint_is_hf=config.checkpoint_is_hf,
+                run_prefix=config.ensemble_run_prefix,
+                key=config.ensemble_key,
+                log_entropy=config.log_entropy,
+                wandb_tags=config.wandb_tags,
+                output_path=config.output_path,
+            )
+        )
+        return
+
     evaluate_lm_log_probs(
         EvalLmConfig(
             name=config.name,
@@ -74,6 +102,7 @@ def evaluate_latest_hf_log_probs(config: EvalLatestHfLogProbsConfig) -> None:
             per_device_batch_size=config.per_device_batch_size,
             max_samples_per_dataset=config.max_samples_per_dataset,
             checkpoint_is_hf=config.checkpoint_is_hf,
+            log_entropy=config.log_entropy,
             wandb_tags=config.wandb_tags,
             output_path=config.output_path,
         )
@@ -297,6 +326,10 @@ def data_efficiency_eval_latest_single_model(
     resource_config: ResourceConfig,
     eval_label: str = "tav",
     wandb_tags: list[str] | None = None,
+    use_ensemble_path: bool = False,
+    ensemble_run_prefix: str = "ppl-eval",
+    ensemble_key: str | None = None,
+    log_entropy: bool = True,
 ) -> ExecutorStep:
     """Create an Executor step that evals the latest HF checkpoint for a run."""
     checkpoint_root = InputName.hardcoded(f"checkpoints/data_efficiency/{run_name}/hf")
@@ -319,6 +352,10 @@ def data_efficiency_eval_latest_single_model(
             datasets=eval_data,
             resource_config=resource_config,
             checkpoint_is_hf=True,
+            use_ensemble_path=use_ensemble_path,
+            ensemble_run_prefix=ensemble_run_prefix,
+            ensemble_key=ensemble_key,
+            log_entropy=log_entropy,
             name=f"{eval_label}-eval-{run_name}",
             wandb_tags=wandb_tags,
         ),
@@ -435,4 +472,3 @@ if __name__ == "__main__":
         steps=eval_steps,
         description="Eval latest checkpoint(s) on dc_1k_val_normal + dc_1k_val_normal_doc",
     )
-
