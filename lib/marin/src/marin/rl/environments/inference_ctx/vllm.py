@@ -148,15 +148,25 @@ class vLLMInferenceContext(BaseInferenceContext):
 
     @staticmethod
     def _patch_tpu_inference_registry():
-        """Register Qwen2ForCausalLM in tpu_inference if not present."""
+        """Register architectures needed by RL hot-reload in tpu_inference."""
         try:
             from tpu_inference.models.common import model_loader
+            from tpu_inference.models.jax.llama3 import LlamaForCausalLM
+            from tpu_inference.models.jax.qwen2 import Qwen2ForCausalLM
 
-            if "Qwen2ForCausalLM" not in model_loader._MODEL_REGISTRY:
-                logger.info("Patching tpu_inference to support Qwen2ForCausalLM")
-                from tpu_inference.models.jax.qwen2 import Qwen2ForCausalLM
+            required_architectures = {
+                # Qwen2 is still missing in the pinned tpu_inference registry.
+                "Qwen2ForCausalLM": Qwen2ForCausalLM,
+                # vLLM already resolves Mistral onto the Llama implementation;
+                # keep tpu_inference on the same JAX-native path for RL reloads.
+                "MistralForCausalLM": LlamaForCausalLM,
+            }
 
-                model_loader.register_model("Qwen2ForCausalLM", Qwen2ForCausalLM)
+            for architecture_name, model_cls in required_architectures.items():
+                if architecture_name in model_loader._MODEL_REGISTRY:
+                    continue
+                logger.info("Patching tpu_inference to support %s", architecture_name)
+                model_loader.register_model(architecture_name, model_cls)
         except ImportError:
             logger.exception("Failed to patch tpu_inference registry")
             raise

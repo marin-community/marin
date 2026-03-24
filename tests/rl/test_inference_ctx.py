@@ -3,8 +3,10 @@
 
 """Tests for InferenceContext utilities and chat template handling."""
 
+import sys
 from dataclasses import dataclass
 from types import SimpleNamespace
+from types import ModuleType
 
 import numpy as np
 import pytest
@@ -303,3 +305,42 @@ def test_worker_extension_uses_public_sync_weights():
     assert calls["mappings"] == MODEL_MAPPINGS["meta-llama/Llama-3.1-8B-Instruct"]
     assert calls["transpose_keys"] == MODEL_TRANSPOSE_KEYS["meta-llama/Llama-3.1-8B-Instruct"]
     assert calls["reshard_fn"] is None
+
+
+def test_patch_tpu_inference_registry_registers_mistral_alias(monkeypatch):
+    registry = {}
+
+    def register_model(name, cls):
+        registry[name] = cls
+
+    tpu_inference_mod = ModuleType("tpu_inference")
+    models_mod = ModuleType("tpu_inference.models")
+    common_mod = ModuleType("tpu_inference.models.common")
+    jax_mod = ModuleType("tpu_inference.models.jax")
+    qwen2_mod = ModuleType("tpu_inference.models.jax.qwen2")
+    llama3_mod = ModuleType("tpu_inference.models.jax.llama3")
+
+    class FakeQwen2ForCausalLM:
+        pass
+
+    class FakeLlamaForCausalLM:
+        pass
+
+    common_mod.model_loader = SimpleNamespace(
+        _MODEL_REGISTRY=registry,
+        register_model=register_model,
+    )
+    qwen2_mod.Qwen2ForCausalLM = FakeQwen2ForCausalLM
+    llama3_mod.LlamaForCausalLM = FakeLlamaForCausalLM
+
+    monkeypatch.setitem(sys.modules, "tpu_inference", tpu_inference_mod)
+    monkeypatch.setitem(sys.modules, "tpu_inference.models", models_mod)
+    monkeypatch.setitem(sys.modules, "tpu_inference.models.common", common_mod)
+    monkeypatch.setitem(sys.modules, "tpu_inference.models.jax", jax_mod)
+    monkeypatch.setitem(sys.modules, "tpu_inference.models.jax.qwen2", qwen2_mod)
+    monkeypatch.setitem(sys.modules, "tpu_inference.models.jax.llama3", llama3_mod)
+
+    vLLMInferenceContext._patch_tpu_inference_registry()
+
+    assert registry["Qwen2ForCausalLM"] is FakeQwen2ForCausalLM
+    assert registry["MistralForCausalLM"] is FakeLlamaForCausalLM

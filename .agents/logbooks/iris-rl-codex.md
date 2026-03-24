@@ -1892,3 +1892,396 @@ Operational note for the next agent after compaction:
 - `r11` is still running but is already logically broken.
 - do not treat the current all-`RUNNING` Iris state as success.
 - the decisive signal is the rollout log sequence above, not the root job state.
+
+## 2026-03-24T08:37Z — next planned experiment after `r11`: inspect and patch the rollout-side JAX registry path
+
+Hypothesis:
+- the remaining live `r11` failure is not a transport bug and not a bad GCS artifact.
+- the likely bug is that Marin's TPU-inference registry patch layer is incomplete for this rollout path: `MistralForCausalLM` is not being kept on the JAX-native Llama implementation, so rollout falls back to the PyTorch path and then dies on first hot-reload.
+
+Planned work before the next relaunch:
+1. inspect `marin.rl.environments.inference_ctx.vllm` and related rollout inference code for current registry patch behavior.
+2. confirm whether Marin only patches `Qwen2ForCausalLM` today.
+3. if so, add a narrow experiment patch that keeps `MistralForCausalLM` on the JAX-native Llama implementation used by RL hot-reload.
+4. add a focused unit test around the registry patch contract.
+5. stop broken live run `r11`, relaunch, and verify whether rollout survives the first trainer weight update.
+
+Success criteria for this experiment:
+- no rollout-side fallback to `vLLM-native Pytorch definition`,
+- no `tgt_state.flat_state()` crash on first weight update,
+- rollout exits the `Waiting for first weight transfer` loop and begins producing batches.
+
+## 2026-03-24T08:45Z — registry-alignment patch prepared: keep `MistralForCausalLM` on the JAX Llama path
+
+Verified upstream facts before patching:
+- pinned packages in `uv.lock` are:
+  - `tpu-inference==0.13.2.post6`
+  - `vllm-tpu==0.13.2.post6`
+- source inspection of the pinned wheels showed:
+  - `vllm.model_executor.models.registry` already maps `MistralForCausalLM` to the Llama implementation on the vLLM side.
+  - `tpu_inference.models.common.model_loader._get_model_architecture(...)` only registers `LlamaForCausalLM` for the JAX-native Llama path, not `MistralForCausalLM`.
+- this explains the live behavior cleanly:
+  - vLLM accepts `MistralForCausalLM` as a Llama-family model,
+  - but `tpu_inference` rejects that architecture string and falls back to the PyTorch path,
+  - then RL hot-reload crashes because the target state is no longer the JAX `nnx.State` that `_sync_weights(...)` expects.
+
+Local patch prepared:
+- `lib/marin/src/marin/rl/environments/inference_ctx/vllm.py`
+  - widen the existing TPU-inference registry shim so Marin registers:
+    - `Qwen2ForCausalLM -> Qwen2ForCausalLM`
+    - `MistralForCausalLM -> LlamaForCausalLM`
+- rationale:
+  - this does not invent a new model mapping.
+  - it aligns Marin's JAX-side registry with the existing vLLM-side architecture routing in the pinned upstream wheel.
+
+Focused validation:
+- `uv run pytest -q tests/rl/test_inference_ctx.py tests/rl/test_rollout_worker.py tests/rl/test_rl_experiment_utils.py` -> `21 passed`
+- added unit coverage in `tests/rl/test_inference_ctx.py` proving the registry patch registers the Mistral alias.
+
+Immediate next action:
+1. stop broken live run `r11`.
+2. relaunch a fresh isolation run with this patch.
+3. verify the decisive rollout-side log deltas:
+   - no `Falling back to vLLM-native Pytorch definition`,
+   - no `tgt_state.flat_state()` crash,
+   - rollout leaves the first-weight wait loop and starts producing batches.
+
+## 2026-03-24T08:43Z — `r12` first live result: registry alignment changed the rollout path materially
+
+Live run:
+- `/ahmed/iris-rl-oom-b120-uc1-r12`
+
+Verified rollout-side deltas relative to `r11`:
+- `Resolved architecture: MistralForCausalLM` still appears. That line alone was not the true discriminant.
+- the important change is that rollout no longer emits:
+  - `Model architectures ['MistralForCausalLM'] not registered in tpu-inference. Falling back to vLLM-native Pytorch definition.`
+- instead, the rollout logs now show the new registry path is active:
+  - Marin patch log: `Patching tpu_inference to support MistralForCausalLM`
+  - vLLM/tpu_inference log: `Registered JAX model MistralForCausalLM with tpu_inference and vLLM registries.`
+  - model-loader log: `Resolved MODEL_IMPL_TYPE 'auto' to 'flax_nnx'`
+- the async engine initializes successfully after that, and rollout reaches:
+  - `Starting background weight sync loop`
+  - `Waiting for first weight transfer before starting inference ...`
+
+Interpretation:
+- this is the first live evidence that the prior root cause was real.
+- the JAX/PyTorch fallback mismatch was not just correlated noise; aligning the Mistral architecture registration changed the execution path exactly where expected.
+- `r12` has not yet proven full correctness, because the first live weight transfer still needs to complete without a new crash.
+
+Immediate next checkpoint:
+1. wait for train-side Arrow Flight server advertisement to become visible to rollout.
+2. verify rollout receives step `-1` or the first real trainer weight id.
+3. verify there is still no `flat_state` crash during hot-reload.
+4. only after that, judge whether the rollout-side bug is actually fixed.
+
+## 2026-03-24T08:44Z — `r12` passes the old first-weight crash boundary; possible next sync bug under observation
+
+New verified live fact:
+- `r12` cleared the exact boundary that killed `r10`/`r11`.
+- rollout logs now show:
+  - `Registered JAX model MistralForCausalLM with tpu_inference and vLLM registries.`
+  - `Received new weights from step -1`
+  - `receive_weights: update_model complete`
+- critically, there is still no:
+  - `Falling back to vLLM-native Pytorch definition`
+  - `AttributeError: 'dict' object has no attribute 'flat_state'`
+  - `Background weight sync loop crashed`
+
+Interpretation:
+- the previous rollout-side bug is very likely fixed.
+- the `MistralForCausalLM` registry alignment patch changed the behavior at the exact failing point, and the old `flat_state` crash did not recur on the first live weight application.
+
+Possible new issue now under observation:
+- after rollout receives step `-1`, the foreground thread still logs `Still waiting for first weight transfer ...`
+- if that persists, the next bug is probably a rollout-side synchronization/ready-signal issue rather than a model-loader bug.
+
+Next immediate check:
+1. determine whether rollout eventually logs a successful first-weight handoff and begins generating.
+2. if not, inspect the rollout worker's first-weight-ready/event signaling path.
+3. keep the run alive while this is still potentially recoverable; only stop it if the wait loop is clearly stuck.
+
+## 2026-03-24T08:45Z — `r12` clears the first live hot-reload handoff end-to-end
+
+Additional verified live result:
+- the temporary concern about rollout still waiting after receiving step `-1` resolved without intervention.
+- rollout eventually logged:
+  - `First weight transfer complete, inference can proceed`
+
+Combined with the earlier observations, `r12` has now cleared all of the rollout-side boundaries that were failing before:
+1. no JAX-registry fallback warning,
+2. no `flat_state` crash during first weight application,
+3. successful first live weight reception,
+4. successful first-weight-ready handoff back to the rollout foreground thread.
+
+Interpretation:
+- the Mistral-to-Llama JAX registry alignment patch appears to have fixed the previously dominant rollout-side bug.
+- the next remaining question is no longer rollout startup or first hot-reload correctness.
+- the next question is whether rollout actually generates batches and whether trainer consumes them and advances.
+
+Next immediate checkpoint:
+1. watch for rollout generation / rollout writer activity.
+2. watch for trainer log lines indicating initial rollouts were received.
+3. keep pushing this same run toward actual training-step advance before making any further code changes.
+
+## 2026-03-24T08:46Z — `r12` is alive past first hot-reload; rollout now appears generation/compile-bound
+
+Latest verified live state:
+- whole `r12` job tree is still `RUNNING`.
+- rollout has already crossed:
+  - first live JAX-model bootstrap,
+  - first Arrow Flight weight reception,
+  - first-weight-ready handoff,
+  - entry into the rollout inference loop.
+- trainer is still waiting on initial rollouts from step `-1`.
+
+Newest concrete signal from rollout logs:
+- after `Evaluating 1 lessons`, the logs show TPU/XLA memory-space-assignment warnings for `ragged_paged_attention.*`:
+  - requested scoped Vmem `104857600` bytes
+  - max valid bytes `67043328`
+  - runtime reports it is lowering the scoped Vmem rather than aborting
+- rollout remains alive after those warnings and continues polling for new weights with `step > -1`.
+
+Current interpretation:
+- the original rollout code bug appears fixed.
+- the run has progressed into a later stage where either:
+  1. generation is still compiling / warming up under TPU inference, or
+  2. there is a new rollout-generation stall unrelated to the original JAX/PyTorch registry mismatch.
+
+Immediate next checkpoint after compaction if needed:
+1. keep watching for the first actual rollout write / trainer batch receipt.
+2. if logs remain quiet while the job stays alive, inspect whether `ragged_paged_attention` scoped-vmem warnings are materially slowing or stalling first generation.
+3. only make further code changes after we can distinguish compile latency from a true silent stall.
+
+## 2026-03-24T17:24Z — `r12` terminal postmortem: rollout bug fixed, run ultimately died on train-side OOM
+
+Final verified Iris state for `/ahmed/iris-rl-oom-b120-uc1-r12`:
+- root job: `JOB_STATE_FAILED`
+- executor child `rl_testing-l31-8bi-b120-20260324-084018_9d319663-b292440b`: `JOB_STATE_FAILED`
+- coordinator child `rl-l31-8bi-b120-20260324-084018`: `JOB_STATE_FAILED`
+- train child `rl-l31-8bi-b120-20260324-084018-train`: `JOB_STATE_FAILED`
+- rollout child `rl-l31-8bi-b120-20260324-084018-rollout-0`: `JOB_STATE_KILLED`
+
+Verified root cause from `iris job bug-report` / descendant statuses:
+- the train child was OOM-killed with `Exit code 137: OOM killed (container exceeded memory limit)`.
+- after the train child failed, the coordinator failed because `...-train finished with status failed`.
+- then the executor child failed, and finally the root wrapper failed with `RuntimeError: 1 step(s) failed`.
+- the rollout child was killed afterward as cleanup / failure propagation, not as the primary root cause.
+
+Important interpretation:
+- W&B showing one rollout/trainer step is not contradictory.
+- `r12` made real progress before the terminal failure:
+  - rollout booted the JAX-backed vLLM path,
+  - first weight transfer completed,
+  - rollout entered inference / lesson evaluation,
+  - trainer and rollout both emitted live metrics.
+- this means the previously dominant rollout-side bug from `r10` / `r11` did not recur on `r12`.
+- the terminal blocker for `r12` is now back on the original train-side OOM axis.
+
+What the Iris dashboard page is showing:
+- the child-jobs page for the executor step correctly shows the wrapper child as `FAILED` with exit `1`.
+- that page is surfacing the step-level failure, not the deepest root cause directly.
+- the deeper root cause lives one level below that page in the nested train child, which failed with OOM.
+
+Revised working conclusion after `r12`:
+1. switching model bootstrap from live HF reads to the executor-managed GCS model artifact did not reintroduce the old rollout crash.
+2. the Mistral/JAX registry alignment patch materially fixed the rollout-side hot-reload bug.
+3. the active blocker for getting a stable 500-step run is again train-side memory behavior under the longer live path, not rollout model loading.
+
+Next experiments from this point:
+1. inspect train logs immediately before the `Exit 137` to determine whether the OOM is tied to checkpoint save, rollout consumption, or optimizer/state growth.
+2. compare `r12` train memory behavior against the earlier pre-GCS successful run once the exact reference run is identified.
+3. only revisit rollout if a later run shows a new rollout-side failure mode; `r12` no longer supports rollout-loader mismatch as the leading hypothesis.
+
+## 2026-03-24T17:32Z — old `/ahmed/iris-rl-v5p-3` success was a different launch topology and a much lighter envelope
+
+Verified from `iris job bug-report /ahmed/iris-rl-v5p-3`:
+- root job entrypoint was `python experiments/exp_iris_rl_direct.py`
+- root state is `killed` only because it was manually terminated later
+- descendant jobs:
+  - `/ahmed/iris-rl-v5p-3/rl-iris-rl-direct-20260323-013808-train`: `succeeded`
+  - `/ahmed/iris-rl-v5p-3/rl-iris-rl-direct-20260323-013808-rollout-0`: `succeeded`
+
+This explains the dashboard difference:
+- old screenshot: train + rollout appear directly under the root job because `exp_iris_rl_direct.py` ran the coordinator directly in the outer process.
+- current isolation runs: root job is an executor wrapper, so the tree is:
+  - root job
+  - executor child `rl_testing/...`
+  - coordinator child `rl-...`
+  - train / rollout children underneath that
+- so the train / rollout children are not gone; they moved one level deeper because the launch path changed.
+
+Relevant code-history boundary:
+- `9c7bef02d`: introduced `experiments/exp_iris_rl_direct.py`
+- `5d1d20d47`: changed it to run `_run_rl_coordinator(...)` directly in the outer job process
+- `7e5137314`: changed the direct script from the tiny debug envelope to a production-like 500-step envelope
+
+Important historical distinction:
+- the successful `/ahmed/iris-rl-v5p-3` run was against the *earlier* direct-script envelope, not the later 500-step direct script.
+- that successful version used:
+  - `num_train_steps=5`
+  - `train_batch_size=64`
+  - `max_seq_len=1024`
+  - `max_output_tokens=512`
+  - `n_prompts=4`
+  - `max_weight_transfer_wait_time=300` (blocking)
+  - direct HF repo names (`MODEL_NAME`) instead of executor-managed GCS artifacts
+- so `/ahmed/iris-rl-v5p-3` is not an apples-to-apples proof that the current 500-step executor/GCS path should work unchanged.
+
+Current interpretation after this history check:
+1. the dashboard topology change is expected from switching from `exp_iris_rl_direct.py` to executor-wrapped experiments.
+2. the old success mainly proves the small direct path worked end-to-end.
+3. the meaningful behavior boundaries to compare are:
+   - direct small run (`5d1d20d47` / `9c7bef02d` lineage),
+   - direct production-like run (`7e5137314` lineage),
+   - executor + GCS artifact run (`9d290793f` and later).
+4. `b8c0f42` is only a logbook commit, so it is not a useful bisect boundary by itself.
+
+## 2026-03-24T17:38Z — divergence-hunt experiment plan from old direct success to current executor/GCS runs
+
+Goal:
+- identify the first change that moves us from the old known-good direct 5-step run into the current failure regimes.
+- isolate three dimensions separately:
+  1. launch topology,
+  2. model bootstrap source,
+  3. runtime envelope / memory pressure.
+
+Non-negotiable rule for this hunt:
+- do not change more than one of those dimensions in a single experiment unless a previous experiment already proved the earlier dimensions are clean.
+
+### Controlled dimensions
+
+Reference A: old successful direct small run
+- topology: direct coordinator in outer job (`exp_iris_rl_direct.py` style)
+- model source: raw HF repo ids
+- envelope:
+  - `num_train_steps=5`
+  - `train_batch_size=64`
+  - `max_seq_len=1024`
+  - `max_output_tokens=512`
+  - `n_prompts=4`
+  - `max_weight_transfer_wait_time=300`
+
+Dimension 1: topology
+- `direct`: outer job runs `_run_rl_coordinator(...)` directly
+- `executor`: outer job runs `executor_main(...)` -> executor step -> coordinator
+
+Dimension 2: model source
+- `hf`: raw repo path / direct HF bootstrap
+- `gcs`: executor-managed regional model artifact path
+
+Dimension 3: envelope
+- `small`: old 5-step debug envelope
+- `prod`: 500-step / bs=1024 / 2048-token production-like envelope
+
+### Success criteria for each probe
+
+Minimum success:
+- train child and rollout child both start
+- first weight transfer completes
+- rollout writes at least one rollout batch
+- trainer advances at least one completed step
+- no terminal job failure before that point
+
+Strong success:
+- run finishes cleanly for small envelope
+- for production envelope, run survives long enough to cross the first checkpoint-save boundary without OOM
+
+### Experiment matrix
+
+E1. Direct + HF + small
+- purpose: re-validate the old success path on current HEAD.
+- expected value: if this fails now, the regression is in core RL runtime code, not executor/GCS.
+- interpretation:
+  - pass: current core runtime can still do the old known-good path.
+  - fail: bug was introduced after the original success, independent of executor/GCS.
+
+E2. Direct + GCS + small
+- change from E1: model source only.
+- purpose: isolate whether switching bootstrap/checkpoint/tokenizer from HF ids to regional GCS artifacts changes behavior even in the old small topology.
+- interpretation:
+  - pass: GCS artifact bootstrap is not the divergence by itself.
+  - fail: model artifact pathing/loading changed semantics and needs focused debugging.
+
+E3. Executor + GCS + small
+- change from E2: topology only.
+- purpose: isolate whether the executor wrapper / step indirection introduces a functional regression when the envelope is still tiny.
+- interpretation:
+  - pass: executor topology is not the divergence for small runs.
+  - fail: wrapper-step/runtime-path/job-tree behavior is the regression boundary.
+
+E4. Direct + GCS + prod
+- change from E2: envelope only.
+- purpose: isolate whether the heavy 500-step production-like envelope alone is sufficient to reproduce train-side OOM without executor topology.
+- interpretation:
+  - pass: production envelope can survive in direct topology, so executor layering or path differences still matter.
+  - fail: heavy envelope itself is enough to trigger the active OOM regime.
+
+E5. Executor + GCS + prod
+- this is the current family of failing runs.
+- purpose: only run after E3 and E4 to determine whether the failures are additive or already explained by one dimension.
+- interpretation:
+  - if E4 already fails the same way, executor is likely not the primary cause.
+  - if E4 passes but E5 fails, executor/topology/path resolution is still implicated.
+
+### Fast-follow experiments if E4 or E5 fail by OOM
+
+OOM-1. Direct + GCS + prod + checkpoint disabled
+- set `checkpointer_save_interval` very large.
+- purpose: test the standing checkpoint-coupled OOM hypothesis.
+
+OOM-2. Direct + GCS + prod + reduced batch
+- reduce `train_batch_size` from `1024` to `512`.
+- purpose: test whether train resident memory alone is already too high before checkpoint overlap.
+
+OOM-3. Direct + GCS + prod + blocking sync
+- set `max_weight_transfer_wait_time=300`.
+- purpose: test whether the non-blocking sync / restart churn regime is materially increasing memory pressure or instability.
+
+### Decision tree
+
+If E1 fails:
+- stop blaming executor/GCS.
+- bisect core RL runtime changes after the original direct success.
+
+If E1 passes and E2 fails:
+- focus on artifact-path semantics:
+  - config loading,
+  - tokenizer loading,
+  - vLLM load format,
+  - checkpoint metadata expectations on GCS.
+
+If E2 passes and E3 fails:
+- focus on executor wrapper effects:
+  - runtime path materialization,
+  - nested job environment differences,
+  - output-path / checkpoint-path indirection,
+  - failure propagation / resource differences between outer step and direct root.
+
+If E3 passes and E4 fails:
+- active blocker is the heavy production envelope itself.
+- prioritize checkpoint-coupled train memory investigation.
+
+If E4 passes and E5 fails:
+- executor/topology becomes the highest-value suspect again.
+
+### Concrete implementation tasks for next agent
+
+1. create a small direct-with-GCS probe script by adapting `exp_iris_rl_direct.py` to use the executor-managed model artifact path while keeping the old small envelope.
+2. create a small executor-with-GCS probe script by adapting `exp_iris_rl_debug.py` to keep the old small envelope and current GCS/bootstrap wiring.
+3. keep naming explicit so runs are self-identifying:
+   - `direct-hf-small`
+   - `direct-gcs-small`
+   - `exec-gcs-small`
+   - `direct-gcs-prod`
+   - `exec-gcs-prod`
+4. after each run, record:
+   - job tree topology,
+   - first weight transfer result,
+   - first rollout write,
+   - first trainer step,
+   - terminal cause if any.
+
+Current best hypothesis ordering before running this matrix:
+1. the old success primarily depended on the much smaller envelope.
+2. the current executor/GCS path fixed some rollout bugs but is not yet exonerated.
+3. checkpoint-coupled train OOM is still the leading blocker for production-like runs.
