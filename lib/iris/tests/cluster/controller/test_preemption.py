@@ -4,7 +4,6 @@
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
 
-from iris.cluster.controller.budget import BAND_SORT_KEY, PriorityBand
 from iris.cluster.controller.controller import (
     RunningTaskInfo,
     _get_running_tasks_with_band_and_value,
@@ -69,7 +68,7 @@ def test_production_preempts_batch():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-job:0"),
         worker_id=w1,
-        band_sort_key=BAND_SORT_KEY[PriorityBand.BATCH],
+        band_sort_key=cluster_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
         resources=_cpu_resources(1),
@@ -77,7 +76,7 @@ def test_production_preempts_batch():
 
     preemptor_id = JobName.from_wire("/bob/prod-job:0")
     unscheduled = [
-        (preemptor_id, _cpu_requirements(1), BAND_SORT_KEY[PriorityBand.PRODUCTION]),
+        (preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
     preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
@@ -100,7 +99,7 @@ def test_interactive_preempts_batch():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-job:0"),
         worker_id=w1,
-        band_sort_key=BAND_SORT_KEY[PriorityBand.BATCH],
+        band_sort_key=cluster_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
         resources=_cpu_resources(1),
@@ -108,7 +107,7 @@ def test_interactive_preempts_batch():
 
     preemptor_id = JobName.from_wire("/bob/interactive-job:0")
     unscheduled = [
-        (preemptor_id, _cpu_requirements(1), BAND_SORT_KEY[PriorityBand.INTERACTIVE]),
+        (preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_INTERACTIVE),
     ]
 
     preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
@@ -131,7 +130,7 @@ def test_interactive_does_not_preempt_production():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/prod-job:0"),
         worker_id=w1,
-        band_sort_key=BAND_SORT_KEY[PriorityBand.PRODUCTION],
+        band_sort_key=cluster_pb2.PRIORITY_BAND_PRODUCTION,
         resource_value=1000,
         is_coscheduled=False,
         resources=_cpu_resources(1),
@@ -139,7 +138,7 @@ def test_interactive_does_not_preempt_production():
 
     preemptor_id = JobName.from_wire("/bob/interactive-job:0")
     unscheduled = [
-        (preemptor_id, _cpu_requirements(1), BAND_SORT_KEY[PriorityBand.INTERACTIVE]),
+        (preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_INTERACTIVE),
     ]
 
     preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
@@ -162,7 +161,7 @@ def test_batch_never_preempts():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/interactive-job:0"),
         worker_id=w1,
-        band_sort_key=BAND_SORT_KEY[PriorityBand.INTERACTIVE],
+        band_sort_key=cluster_pb2.PRIORITY_BAND_INTERACTIVE,
         resource_value=1000,
         is_coscheduled=False,
         resources=_cpu_resources(1),
@@ -170,7 +169,7 @@ def test_batch_never_preempts():
 
     preemptor_id = JobName.from_wire("/bob/batch-job:0")
     unscheduled = [
-        (preemptor_id, _cpu_requirements(1), BAND_SORT_KEY[PriorityBand.BATCH]),
+        (preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_BATCH),
     ]
 
     preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
@@ -192,7 +191,7 @@ def test_same_band_no_preemption():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/job-a:0"),
         worker_id=w1,
-        band_sort_key=BAND_SORT_KEY[PriorityBand.INTERACTIVE],
+        band_sort_key=cluster_pb2.PRIORITY_BAND_INTERACTIVE,
         resource_value=1000,
         is_coscheduled=False,
         resources=_cpu_resources(1),
@@ -200,7 +199,7 @@ def test_same_band_no_preemption():
 
     preemptor_id = JobName.from_wire("/bob/job-b:0")
     unscheduled = [
-        (preemptor_id, _cpu_requirements(1), BAND_SORT_KEY[PriorityBand.INTERACTIVE]),
+        (preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_INTERACTIVE),
     ]
 
     preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
@@ -222,7 +221,7 @@ def test_coscheduled_not_preempted():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/gang-job:0"),
         worker_id=w1,
-        band_sort_key=BAND_SORT_KEY[PriorityBand.BATCH],
+        band_sort_key=cluster_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=True,
         resources=_cpu_resources(1),
@@ -230,7 +229,7 @@ def test_coscheduled_not_preempted():
 
     preemptor_id = JobName.from_wire("/bob/prod-job:0")
     unscheduled = [
-        (preemptor_id, _cpu_requirements(1), BAND_SORT_KEY[PriorityBand.PRODUCTION]),
+        (preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
     preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
@@ -311,7 +310,7 @@ def test_preemption_skips_if_capacity_available():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-job:0"),
         worker_id=w1,
-        band_sort_key=BAND_SORT_KEY[PriorityBand.BATCH],
+        band_sort_key=cluster_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
         resources=_cpu_resources(1),
@@ -319,7 +318,7 @@ def test_preemption_skips_if_capacity_available():
 
     preemptor_id = JobName.from_wire("/bob/prod-job:0")
     unscheduled = [
-        (preemptor_id, _cpu_requirements(1), BAND_SORT_KEY[PriorityBand.PRODUCTION]),
+        (preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
     # Should not preempt since capacity is available
@@ -342,7 +341,7 @@ def test_preemption_picks_cheapest_victim():
     expensive_victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/big-batch:0"),
         worker_id=w1,
-        band_sort_key=BAND_SORT_KEY[PriorityBand.BATCH],
+        band_sort_key=cluster_pb2.PRIORITY_BAND_BATCH,
         resource_value=5000,
         is_coscheduled=False,
         resources=_cpu_resources(4),
@@ -350,7 +349,7 @@ def test_preemption_picks_cheapest_victim():
     cheap_victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/small-batch:0"),
         worker_id=w1,
-        band_sort_key=BAND_SORT_KEY[PriorityBand.BATCH],
+        band_sort_key=cluster_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
         resources=_cpu_resources(1),
@@ -358,7 +357,7 @@ def test_preemption_picks_cheapest_victim():
 
     preemptor_id = JobName.from_wire("/bob/prod-job:0")
     unscheduled = [
-        (preemptor_id, _cpu_requirements(1), BAND_SORT_KEY[PriorityBand.PRODUCTION]),
+        (preemptor_id, _cpu_requirements(1), cluster_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
     preemptions = _run_preemption_pass(unscheduled, [expensive_victim, cheap_victim], ctx)

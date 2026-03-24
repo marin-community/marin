@@ -21,13 +21,8 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
-from iris.cluster.controller.budget import (
-    BAND_FROM_PROTO,
-    BAND_FROM_SORT_KEY,
-    BAND_SORT_KEY,
-    PriorityBand,
-    compute_user_spend,
-)
+from iris.cluster.controller.budget import compute_user_spend
+from iris.rpc.proto_utils import priority_band_name
 from iris.cluster.controller.auth import (
     DEFAULT_JWT_TTL_SECONDS,
     ControllerAuth,
@@ -92,13 +87,6 @@ DEFAULT_TRANSACTION_LIMIT = 50
 # Pattern for env var keys that contain secrets and should be redacted in API responses.
 _SENSITIVE_ENV_KEY_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL", re.IGNORECASE)
 REDACTED_VALUE = "**REDACTED**"
-
-# PriorityBand → proto enum value
-_BAND_TO_PROTO: dict[PriorityBand, int] = {
-    PriorityBand.PRODUCTION: cluster_pb2.PRIORITY_BAND_PRODUCTION,
-    PriorityBand.INTERACTIVE: cluster_pb2.PRIORITY_BAND_INTERACTIVE,
-    PriorityBand.BATCH: cluster_pb2.PRIORITY_BAND_BATCH,
-}
 
 
 def redact_request_env_vars(
@@ -753,16 +741,17 @@ class ControllerServiceImpl:
 
         # Priority band validation: PRODUCTION requires MANAGE_BUDGETS permission,
         # and user's max_band from budget table must allow the requested band.
-        band = BAND_FROM_PROTO.get(request.priority_band, PriorityBand.INTERACTIVE)
-        if band == PriorityBand.PRODUCTION and self._auth.provider:
+        # UNSPECIFIED (0) defaults to INTERACTIVE.
+        band = request.priority_band or cluster_pb2.PRIORITY_BAND_INTERACTIVE
+        if band == cluster_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
             authorize(AuthzAction.MANAGE_BUDGETS)
         if self._auth.provider and verified_user is not None:
             user_budget = self._db.get_user_budget(job_id.user)
-            if user_budget is not None and BAND_SORT_KEY[band] < user_budget.max_band:
+            if user_budget is not None and band < user_budget.max_band:
                 raise ConnectError(
                     Code.PERMISSION_DENIED,
-                    f"User {job_id.user} cannot submit {band} jobs (max band: "
-                    f"{BAND_FROM_SORT_KEY.get(user_budget.max_band, PriorityBand.INTERACTIVE)})",
+                    f"User {job_id.user} cannot submit {priority_band_name(band)} jobs (max band: "
+                    f"{priority_band_name(user_budget.max_band)})",
                 )
 
         # Reject submissions if the parent job has already terminated
@@ -1941,8 +1930,12 @@ class ControllerServiceImpl:
         authorize(AuthzAction.MANAGE_BUDGETS)
         if not request.user_id:
             raise ConnectError(Code.INVALID_ARGUMENT, "user_id is required")
-        max_band_key = BAND_SORT_KEY.get(BAND_FROM_PROTO.get(request.max_band, PriorityBand.INTERACTIVE))
-        if max_band_key is None:
+        max_band = request.max_band or cluster_pb2.PRIORITY_BAND_INTERACTIVE
+        if max_band not in (
+            cluster_pb2.PRIORITY_BAND_PRODUCTION,
+            cluster_pb2.PRIORITY_BAND_INTERACTIVE,
+            cluster_pb2.PRIORITY_BAND_BATCH,
+        ):
             raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid max_band: {request.max_band}")
         now = Timestamp.now()
         # Ensure the user row exists (FK on user_budgets → users)
@@ -1953,7 +1946,7 @@ class ControllerServiceImpl:
         self._db.set_user_budget(
             user_id=request.user_id,
             budget_limit=request.budget_limit,
-            max_band=max_band_key,
+            max_band=max_band,
             now=now,
         )
         return cluster_pb2.Controller.SetUserBudgetResponse()
@@ -1972,13 +1965,11 @@ class ControllerServiceImpl:
             raise ConnectError(Code.NOT_FOUND, f"No budget found for user {request.user_id}")
         with self._db.snapshot() as snap:
             spend = compute_user_spend(snap)
-        band_enum = BAND_FROM_SORT_KEY.get(budget.max_band, PriorityBand.INTERACTIVE)
-        proto_band = _BAND_TO_PROTO[band_enum]
         return cluster_pb2.Controller.GetUserBudgetResponse(
             user_id=budget.user_id,
             budget_limit=budget.budget_limit,
             budget_spent=spend.get(request.user_id, 0),
-            max_band=proto_band,
+            max_band=budget.max_band,
         )
 
     def list_user_budgets(
@@ -1993,14 +1984,12 @@ class ControllerServiceImpl:
             spend = compute_user_spend(snap)
         users = []
         for b in budgets:
-            band_enum = BAND_FROM_SORT_KEY.get(b.max_band, PriorityBand.INTERACTIVE)
-            proto_band = _BAND_TO_PROTO[band_enum]
             users.append(
                 cluster_pb2.Controller.GetUserBudgetResponse(
                     user_id=b.user_id,
                     budget_limit=b.budget_limit,
                     budget_spent=spend.get(b.user_id, 0),
-                    max_band=proto_band,
+                    max_band=b.max_band,
                 )
             )
         return cluster_pb2.Controller.ListUserBudgetsResponse(users=users)

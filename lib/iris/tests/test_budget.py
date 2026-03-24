@@ -1,16 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-
-from iris.cluster.controller.budget import (
-    BAND_FROM_PROTO,
-    BAND_FROM_SORT_KEY,
-    BAND_SORT_KEY,
-    PriorityBand,
-    interleave_by_user,
-    resource_value,
-)
+from iris.cluster.controller.budget import interleave_by_user, resource_value
+from iris.rpc import cluster_pb2
+from iris.rpc.proto_utils import PRIORITY_BAND_VALUES, priority_band_name, priority_band_value
 
 GiB = 1024**3
 
@@ -51,7 +44,6 @@ def test_interleave_by_user_two_users_equal_spend():
     result = interleave_by_user(tasks, user_spend={"alice": 100, "bob": 100})
     # Equal spend: stable sort by user name, then round-robin
     assert result == ["a1", "b1", "a2", "b2"] or result == ["b1", "a1", "b2", "a2"]
-    # Both users should appear in alternating fashion
     assert len(result) == 4
 
 
@@ -89,30 +81,13 @@ def test_interleave_by_user_missing_spend_defaults_to_zero():
     assert result == ["a1", "b1"]
 
 
-def test_band_from_proto_unspecified_defaults_to_interactive():
-    assert BAND_FROM_PROTO[0] == PriorityBand.INTERACTIVE
+def test_priority_band_name_roundtrip():
+    for band in PRIORITY_BAND_VALUES:
+        name = priority_band_name(band)
+        assert priority_band_value(name) == band
 
 
-def test_band_from_proto_all_values():
-    assert BAND_FROM_PROTO[1] == PriorityBand.PRODUCTION
-    assert BAND_FROM_PROTO[2] == PriorityBand.INTERACTIVE
-    assert BAND_FROM_PROTO[3] == PriorityBand.BATCH
-
-
-def test_band_sort_key_ordering():
-    assert BAND_SORT_KEY[PriorityBand.PRODUCTION] < BAND_SORT_KEY[PriorityBand.INTERACTIVE]
-    assert BAND_SORT_KEY[PriorityBand.INTERACTIVE] < BAND_SORT_KEY[PriorityBand.BATCH]
-
-
-def test_band_from_sort_key_roundtrip():
-    for band in PriorityBand:
-        assert BAND_FROM_SORT_KEY[BAND_SORT_KEY[band]] == band
-
-
-@pytest.mark.parametrize(
-    "band",
-    [PriorityBand.PRODUCTION, PriorityBand.INTERACTIVE, PriorityBand.BATCH],
-)
-def test_priority_band_is_str(band: PriorityBand):
-    assert isinstance(band, str)
-    assert band == band.value
+def test_priority_band_values_are_ordered():
+    """Proto enum values are ordered: PRODUCTION < INTERACTIVE < BATCH."""
+    assert cluster_pb2.PRIORITY_BAND_PRODUCTION < cluster_pb2.PRIORITY_BAND_INTERACTIVE
+    assert cluster_pb2.PRIORITY_BAND_INTERACTIVE < cluster_pb2.PRIORITY_BAND_BATCH

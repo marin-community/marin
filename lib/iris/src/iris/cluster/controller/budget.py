@@ -1,42 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Budget tracking: resource value function, priority bands, and per-user spend."""
+"""Budget tracking: resource value function and per-user spend."""
 
 from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Any
 
 from iris.cluster.controller.db import ACTIVE_TASK_STATES, JOBS, TASKS, QuerySnapshot
 from iris.cluster.types import get_gpu_count, get_tpu_count
-
-
-class PriorityBand(StrEnum):
-    PRODUCTION = "production"
-    INTERACTIVE = "interactive"
-    BATCH = "batch"
-
-
-# Map proto enum int value → PriorityBand
-BAND_FROM_PROTO: dict[int, PriorityBand] = {
-    0: PriorityBand.INTERACTIVE,  # UNSPECIFIED defaults to INTERACTIVE
-    1: PriorityBand.PRODUCTION,
-    2: PriorityBand.INTERACTIVE,
-    3: PriorityBand.BATCH,
-}
-
-# Band → integer sort key for DB (lower = higher priority)
-BAND_SORT_KEY: dict[PriorityBand, int] = {
-    PriorityBand.PRODUCTION: 1,
-    PriorityBand.INTERACTIVE: 2,
-    PriorityBand.BATCH: 3,
-}
-
-# Reverse: integer sort key → PriorityBand
-BAND_FROM_SORT_KEY: dict[int, PriorityBand] = {v: k for k, v in BAND_SORT_KEY.items()}
+from iris.rpc import cluster_pb2
 
 # Task states that count as "active" for budget spend (re-exported from db for local use)
 _ACTIVE_TASK_STATES = tuple(ACTIVE_TASK_STATES)
@@ -49,8 +24,8 @@ class UserBudgetDefaults:
     budget_limit: int = 0
     """Max budget value (0 = unlimited)."""
 
-    max_band: PriorityBand = PriorityBand.INTERACTIVE
-    """Default max band for new users."""
+    max_band: int = cluster_pb2.PRIORITY_BAND_INTERACTIVE
+    """Default max priority band (proto int) for new users."""
 
 
 def resource_value(cpu_millicores: int, memory_bytes: int, accelerator_count: int) -> int:

@@ -48,8 +48,6 @@ from iris.cluster.controller.db import (
     running_tasks_by_worker,
 )
 from iris.cluster.controller.budget import (
-    BAND_SORT_KEY,
-    PriorityBand,
     UserBudgetDefaults,
     compute_user_spend,
     interleave_by_user,
@@ -377,7 +375,7 @@ def _run_preemption_pass(
 
     for task_id, req, task_band_key in unscheduled_tasks:
         # Batch never preempts
-        if task_band_key >= BAND_SORT_KEY[PriorityBand.BATCH]:
+        if task_band_key >= cluster_pb2.PRIORITY_BAND_BATCH:
             continue
 
         for victim in victims:
@@ -1484,7 +1482,7 @@ class Controller:
         # higher-priority unscheduled work.
         assigned_ids = {task_id for task_id, _ in all_assignments}
         unscheduled = [
-            (tid, jobs[tid.parent], task_band_map.get(tid, BAND_SORT_KEY[PriorityBand.INTERACTIVE]))
+            (tid, jobs[tid.parent], task_band_map.get(tid, cluster_pb2.PRIORITY_BAND_INTERACTIVE))
             for tid in schedulable_task_ids
             if tid not in assigned_ids and tid.parent is not None and tid.parent in jobs
         ]

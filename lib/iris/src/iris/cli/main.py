@@ -13,8 +13,9 @@ import click
 
 from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token, store_token
 from iris.logging import configure_logging
-from iris.rpc import config_pb2
+from iris.rpc import cluster_pb2 as _cluster_pb2, config_pb2
 from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
+from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 
 logger = _logging_module.getLogger(__name__)
 
@@ -336,14 +337,6 @@ def key_revoke(ctx, key_id: str):
 # User budget management
 # ---------------------------------------------------------------------------
 
-BAND_CHOICES = ["production", "interactive", "batch"]
-_BAND_NAME_TO_PROTO: dict[str, int] = {
-    "production": 1,
-    "interactive": 2,
-    "batch": 3,
-}
-_PROTO_TO_BAND_NAME: dict[int, str] = {v: k for k, v in _BAND_NAME_TO_PROTO.items()}
-
 
 @iris.group()
 @click.pass_context
@@ -365,7 +358,7 @@ def budget(ctx):
 @click.option(
     "--max-band",
     required=True,
-    type=click.Choice(BAND_CHOICES),
+    type=click.Choice(PRIORITY_BAND_NAMES),
     help="Highest priority band this user can submit to",
 )
 @click.pass_context
@@ -374,15 +367,13 @@ def budget_set(ctx, user_id: str, budget_limit: int, max_band: str):
     controller_url = require_controller_url(ctx)
     token_provider = ctx.obj.get("token_provider")
 
-    from iris.rpc import cluster_pb2
-
     client = _make_authenticated_client(controller_url, token_provider)
     try:
         client.set_user_budget(
-            cluster_pb2.Controller.SetUserBudgetRequest(
+            _cluster_pb2.Controller.SetUserBudgetRequest(
                 user_id=user_id,
                 budget_limit=budget_limit,
-                max_band=_BAND_NAME_TO_PROTO[max_band],
+                max_band=priority_band_value(max_band),
             )
         )
     finally:
@@ -399,19 +390,16 @@ def budget_get(ctx, user_id: str):
     controller_url = require_controller_url(ctx)
     token_provider = ctx.obj.get("token_provider")
 
-    from iris.rpc import cluster_pb2
-
     client = _make_authenticated_client(controller_url, token_provider)
     try:
-        resp = client.get_user_budget(cluster_pb2.Controller.GetUserBudgetRequest(user_id=user_id))
+        resp = client.get_user_budget(_cluster_pb2.Controller.GetUserBudgetRequest(user_id=user_id))
     finally:
         client.close()
 
-    band_name = _PROTO_TO_BAND_NAME.get(resp.max_band, "interactive")
     click.echo(f"User:      {resp.user_id}")
     click.echo(f"Limit:     {resp.budget_limit}")
     click.echo(f"Spent:     {resp.budget_spent}")
-    click.echo(f"Max band:  {band_name}")
+    click.echo(f"Max band:  {priority_band_name(resp.max_band)}")
 
 
 @budget.command("list")
@@ -421,11 +409,9 @@ def budget_list(ctx):
     controller_url = require_controller_url(ctx)
     token_provider = ctx.obj.get("token_provider")
 
-    from iris.rpc import cluster_pb2
-
     client = _make_authenticated_client(controller_url, token_provider)
     try:
-        resp = client.list_user_budgets(cluster_pb2.Controller.ListUserBudgetsRequest())
+        resp = client.list_user_budgets(_cluster_pb2.Controller.ListUserBudgetsRequest())
     finally:
         client.close()
 
@@ -435,8 +421,7 @@ def budget_list(ctx):
 
     click.echo(f"{'USER':<30s} {'LIMIT':>10s} {'SPENT':>10s} {'MAX BAND':<15s}")
     for u in resp.users:
-        band_name = _PROTO_TO_BAND_NAME.get(u.max_band, "interactive")
-        click.echo(f"{u.user_id:<30s} {u.budget_limit:>10d} {u.budget_spent:>10d} {band_name:<15s}")
+        click.echo(f"{u.user_id:<30s} {u.budget_limit:>10d} {u.budget_spent:>10d} {priority_band_name(u.max_band):<15s}")
 
 
 # Register subcommand groups — imported at module level to ensure they are

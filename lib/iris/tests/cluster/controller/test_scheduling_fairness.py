@@ -6,7 +6,6 @@
 from collections import defaultdict
 
 
-from iris.cluster.controller.budget import BAND_SORT_KEY, PriorityBand
 from iris.cluster.controller.controller import _schedulable_tasks
 from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
@@ -37,10 +36,10 @@ def test_production_scheduled_before_interactive():
     with make_controller_state() as state:
         # Submit interactive tasks first
         interactive_tasks = _submit_user_job(
-            state, "alice", "interactive-job", replicas=3, band=BAND_SORT_KEY[PriorityBand.INTERACTIVE]
+            state, "alice", "interactive-job", replicas=3, band=cluster_pb2.PRIORITY_BAND_INTERACTIVE
         )
         # Submit production tasks second
-        prod_tasks = _submit_user_job(state, "bob", "prod-job", replicas=2, band=BAND_SORT_KEY[PriorityBand.PRODUCTION])
+        prod_tasks = _submit_user_job(state, "bob", "prod-job", replicas=2, band=cluster_pb2.PRIORITY_BAND_PRODUCTION)
 
         schedulable = _schedulable_tasks(state._db)
         task_ids = [t.task_id for t in schedulable]
@@ -63,9 +62,9 @@ def test_production_scheduled_before_interactive():
 def test_batch_scheduled_after_interactive():
     """BATCH band tasks appear after INTERACTIVE in schedulable order."""
     with make_controller_state() as state:
-        batch_tasks = _submit_user_job(state, "alice", "batch-job", replicas=2, band=BAND_SORT_KEY[PriorityBand.BATCH])
+        batch_tasks = _submit_user_job(state, "alice", "batch-job", replicas=2, band=cluster_pb2.PRIORITY_BAND_BATCH)
         interactive_tasks = _submit_user_job(
-            state, "bob", "interactive-job", replicas=2, band=BAND_SORT_KEY[PriorityBand.INTERACTIVE]
+            state, "bob", "interactive-job", replicas=2, band=cluster_pb2.PRIORITY_BAND_INTERACTIVE
         )
 
         schedulable = _schedulable_tasks(state._db)
@@ -201,7 +200,7 @@ def test_child_inherits_parent_band():
 
         # Set parent's band to PRODUCTION
         for t in parent_tasks:
-            set_task_band(state._db, t.task_id, BAND_SORT_KEY[PriorityBand.PRODUCTION])
+            set_task_band(state._db, t.task_id, cluster_pb2.PRIORITY_BAND_PRODUCTION)
 
         # Submit child job
         child_id = parent_id.child("child")
@@ -218,9 +217,9 @@ def test_child_inherits_parent_band():
         # Child should have inherited PRODUCTION band
         for ct in child_tasks:
             task = query_task(state, ct.task_id)
-            assert task.priority_band == BAND_SORT_KEY[PriorityBand.PRODUCTION], (
+            assert task.priority_band == cluster_pb2.PRIORITY_BAND_PRODUCTION, (
                 f"Child task {ct.task_id} has band {task.priority_band}, "
-                f"expected {BAND_SORT_KEY[PriorityBand.PRODUCTION]} (PRODUCTION)"
+                f"expected {cluster_pb2.PRIORITY_BAND_PRODUCTION} (PRODUCTION)"
             )
 
 
@@ -235,7 +234,7 @@ def test_user_budget_row_created_on_submit():
         )
         assert row is not None, "user_budgets row should be created on first job submission"
         assert row["budget_limit"] == 0  # default unlimited
-        assert row["max_band"] == BAND_SORT_KEY[PriorityBand.INTERACTIVE]  # default
+        assert row["max_band"] == cluster_pb2.PRIORITY_BAND_INTERACTIVE  # default
 
 
 def test_default_band_is_interactive():
@@ -244,4 +243,4 @@ def test_default_band_is_interactive():
         tasks = _submit_user_job(state, "alice", "default-band")
         for t in tasks:
             task = query_task(state, t.task_id)
-            assert task.priority_band == BAND_SORT_KEY[PriorityBand.INTERACTIVE]
+            assert task.priority_band == cluster_pb2.PRIORITY_BAND_INTERACTIVE

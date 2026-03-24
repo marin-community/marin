@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
-from iris.cluster.controller.budget import BAND_SORT_KEY, PriorityBand, UserBudgetDefaults
+from iris.cluster.controller.budget import UserBudgetDefaults
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     EXECUTING_TASK_STATES,
@@ -577,13 +577,13 @@ class ControllerTransitions:
                 (
                     job_id.user,
                     budget_defaults.budget_limit,
-                    BAND_SORT_KEY[budget_defaults.max_band],
+                    budget_defaults.max_band,
                     effective_submission_ms,
                 ),
             )
 
             # Resolve priority band: inherit from parent, or default to INTERACTIVE.
-            band_sort_key = BAND_SORT_KEY[PriorityBand.INTERACTIVE]
+            band_sort_key = cluster_pb2.PRIORITY_BAND_INTERACTIVE
             if parent_job_id is not None:
                 parent_band_row = cur.execute(
                     "SELECT priority_band FROM tasks WHERE job_id = ? LIMIT 1",
