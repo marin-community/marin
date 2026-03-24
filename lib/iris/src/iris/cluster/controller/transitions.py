@@ -1104,6 +1104,15 @@ class ControllerTransitions:
                     task_state = cluster_pb2.TASK_STATE_PENDING
                     terminal_ms = None
 
+            # Clear stale counters when the task is retried so that
+            # get_job_status() does not double-count values from the
+            # previous attempt.
+            if task_state == cluster_pb2.TASK_STATE_PENDING:
+                cur.execute(
+                    "UPDATE tasks SET counters_json = NULL WHERE task_id = ?",
+                    (update.task_id.to_wire(),),
+                )
+
             cur.execute(
                 "UPDATE task_attempts SET state = ?, started_at_ms = COALESCE(started_at_ms, ?), "
                 "finished_at_ms = COALESCE(finished_at_ms, ?), exit_code = COALESCE(?, exit_code), "
@@ -2192,6 +2201,15 @@ class ControllerTransitions:
                     ):
                         task_state = cluster_pb2.TASK_STATE_PENDING
                         terminal_ms = None
+
+                # Clear stale counters when the task is retried so that
+                # get_job_status() does not double-count values from the
+                # previous attempt.
+                if task_state == cluster_pb2.TASK_STATE_PENDING:
+                    cur.execute(
+                        "UPDATE tasks SET counters_json = NULL WHERE task_id = ?",
+                        (update.task_id.to_wire(),),
+                    )
 
                 cur.execute(
                     "UPDATE task_attempts SET state = ?, started_at_ms = COALESCE(started_at_ms, ?), "
