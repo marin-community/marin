@@ -99,6 +99,9 @@ class StepSpec:
         The resulting ``ExecutorStep`` preserves this step's output path and
         caching identity via ``override_output_path``.  Round-tripping through
         ``resolve_executor_step`` returns the original ``StepSpec``.
+
+        The exists to allow for incremental migration from ``ExecutorStep`` to ``StepSpec``:
+        steps can be authored as ``StepSpec`` and used in existing pipelines without modification.
         """
         from marin.execution.executor import ExecutorStep, VersionedValue, THIS_OUTPUT_PATH
 
