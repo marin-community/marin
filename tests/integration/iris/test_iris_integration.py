@@ -202,11 +202,14 @@ def test_region_constrained_routing(integration_cluster):
     task = integration_cluster.task_status(job, task_index=0)
     assert task.worker_id
 
+    # Re-fetch workers after job completes in case autoscaling added new nodes
+    # to satisfy the region constraint.
+    post_response = integration_cluster.controller_client.list_workers(request)
     worker = next(
-        (w for w in response.workers if w.worker_id == task.worker_id or w.address == task.worker_id),
+        (w for w in post_response.workers if w.worker_id == task.worker_id or w.address == task.worker_id),
         None,
     )
-    assert worker is not None
+    assert worker is not None, f"Worker {task.worker_id} not found in {[w.worker_id for w in post_response.workers]}"
     region_attr = worker.metadata.attributes.get(WellKnownAttribute.REGION)
     if region_attr and region_attr.HasField("string_value"):
         assert region_attr.string_value == target_region, f"Expected {target_region}, got {region_attr.string_value}"
