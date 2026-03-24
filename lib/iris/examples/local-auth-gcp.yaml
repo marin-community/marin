@@ -16,6 +16,7 @@ auth:
     project_id: hai-gcp-models  # GCP project ID — users must have access to log in
   admin_users:
     - russell.power@gmail.com  # Replace with actual admin email
+  optional: true
 
 scale_groups:
   cpu:

@@ -379,6 +379,13 @@ message AuthConfig {
     StaticAuthConfig static = 2;
   }
   repeated string admin_users = 3;
+
+  // When true, authentication is attempted but not required. Requests with
+  // valid tokens get the authenticated identity; requests without tokens
+  // fall through as anonymous admin. Invalid tokens are still rejected.
+  // This allows gradual rollout of auth on clusters that currently rely on
+  // SSH tunnels.
+  bool optional = 4;
 }
 
 // ============================================================================

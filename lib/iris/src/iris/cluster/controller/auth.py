@@ -260,6 +260,7 @@ class ControllerAuth:
     gcp_project_id: str | None = None
     jwt_manager: JwtTokenManager | None = None
     enable_task_impersonation: bool = False
+    optional: bool = False
 
 
 def create_controller_auth(
@@ -331,7 +332,14 @@ def create_controller_auth(
         static_tokens = dict(auth_config.static.tokens)
         login_verifier = StaticTokenVerifier(static_tokens)
 
-    logger.info("Auth enabled: provider=%s, db=%s, jwt=%s", provider, "yes" if db else "no", "yes" if jwt_mgr else "no")
+    optional = auth_config.optional
+    logger.info(
+        "Auth enabled: provider=%s, db=%s, jwt=%s, optional=%s",
+        provider,
+        "yes" if db else "no",
+        "yes" if jwt_mgr else "no",
+        optional,
+    )
     return ControllerAuth(
         verifier=verifier,
         provider=provider,
@@ -340,6 +348,7 @@ def create_controller_auth(
         gcp_project_id=gcp_project_id,
         jwt_manager=jwt_mgr,
         enable_task_impersonation=enable_task_impersonation,
+        optional=optional,
     )
 
 

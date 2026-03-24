@@ -23,7 +23,7 @@ from iris.cluster.controller.transitions import ClusterCapacity, DirectProviderS
 from iris.cluster.controller.transitions import DirectProviderBatch, RunningTaskEntry, TaskUpdate
 from iris.cluster.providers.k8s.constants import CW_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
-from iris.cluster.providers.k8s.types import KubectlLogLine, parse_k8s_quantity
+from iris.cluster.providers.k8s.types import KubectlError, KubectlLogLine, parse_k8s_quantity
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
 from iris.cluster.types import JobName, get_gpu_count
 from iris.logging import parse_log_level, str_to_log_level
@@ -607,11 +607,23 @@ class K8sTaskProvider:
 
     def sync(self, batch: DirectProviderBatch) -> DirectProviderSyncResult:
         """Sync task state: apply new pods, delete killed pods, poll running pods."""
+        apply_failures: list[TaskUpdate] = []
         for run_req in batch.tasks_to_run:
-            self._apply_pod(run_req)
+            try:
+                self._apply_pod(run_req)
+            except KubectlError as exc:
+                logger.error("Failed to apply pod for task %s: %s", run_req.task_id, exc)
+                apply_failures.append(
+                    TaskUpdate(
+                        task_id=JobName.from_wire(run_req.task_id),
+                        attempt_id=run_req.attempt_id,
+                        new_state=cluster_pb2.TASK_STATE_FAILED,
+                        error=str(exc),
+                    )
+                )
         for task_id in batch.tasks_to_kill:
             self._delete_pods_by_task_id(task_id)
-        updates = self._poll_pods(batch.running_tasks)
+        updates = apply_failures + self._poll_pods(batch.running_tasks)
         capacity = self._query_capacity()
         scheduling_events = self._fetch_scheduling_events()
         return DirectProviderSyncResult(updates=updates, scheduling_events=scheduling_events, capacity=capacity)
