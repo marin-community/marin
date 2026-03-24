@@ -11,6 +11,8 @@ from iris.client.worker_pool import (
 )
 from iris.cluster.types import ResourceSpec
 
+pytestmark = pytest.mark.e2e
+
 
 @pytest.fixture
 def local_client():

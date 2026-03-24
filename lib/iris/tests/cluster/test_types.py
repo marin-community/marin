@@ -20,6 +20,7 @@ from iris.cluster.types import (
     Entrypoint,
     JobName,
     TaskAttempt,
+    adjust_tpu_replicas,
     gpu_device,
     tpu_device,
 )
@@ -542,6 +543,34 @@ def test_merge_child_overrides_device_type():
     dt = [c for c in result if c.key == WellKnownAttribute.DEVICE_TYPE]
     assert len(dt) == 1
     assert dt[0].value == "gpu"
+
+
+# ---------------------------------------------------------------------------
+# adjust_tpu_replicas
+# ---------------------------------------------------------------------------
+
+
+def test_adjust_tpu_replicas_auto_scales_to_vm_count():
+    """replicas=1 auto-scales to vm_count for multi-host topologies."""
+    assert adjust_tpu_replicas(tpu_device("v6e-32"), replicas=1) == 8
+    assert adjust_tpu_replicas(tpu_device("v5litepod-16"), replicas=1) == 4
+
+
+def test_adjust_tpu_replicas_rejects_invalid_count():
+    with pytest.raises(ValueError, match="replicas must be a multiple of 4"):
+        adjust_tpu_replicas(tpu_device("v5litepod-16"), replicas=3)
+
+
+def test_adjust_tpu_replicas_correct_counts_pass_through():
+    assert adjust_tpu_replicas(tpu_device("v6e-32"), replicas=8) == 8
+    assert adjust_tpu_replicas(tpu_device("v6e-32"), replicas=16) == 16
+
+
+def test_adjust_tpu_replicas_single_host_and_edge_cases():
+    """Single-host, no device, and unknown topology return replicas unchanged."""
+    assert adjust_tpu_replicas(tpu_device("v6e-4"), replicas=1) == 1
+    assert adjust_tpu_replicas(None, replicas=1) == 1
+    assert adjust_tpu_replicas(tpu_device("v99-unknown", count=4), replicas=1) == 1
 
 
 def test_merge_auto_constraints_with_user_variant_override():

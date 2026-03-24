@@ -15,7 +15,7 @@ plain text — no markdown.
 
 **Title:** Short imperative sentence. Optional scope tag in brackets.
 
-**Body:** 1-3 sentences stating what changed and why. End with issue link.
+**Body:** 1-3 sentences stating what changed and why. End with issue link if one exists.
 
 **Hard rules — violations will be rejected:**
 
@@ -42,12 +42,14 @@ Fixes #1234
 
 ## Issue Linking
 
-Every PR references a GitHub issue:
+If the work originated from a GitHub issue, reference it:
 
 - `Fixes #NNNN` — auto-closes the issue on merge.
 - `Part of #NNNN` — for partial work.
 
-If no issue exists, create one with `gh issue create` before opening the PR.
+Do not create an issue solely to satisfy this rule. When there is no
+pre-existing issue (e.g., user-directed work in a conversation), omit the
+issue link.
 
 ## Pre-Push Checklist
 
@@ -89,7 +91,7 @@ gh pr create \
 
 - Add the `agent-generated` label.
 - Never credit yourself in commits or PR descriptions.
-- Include `Fixes #NNNN` when addressing an issue.
+- Include `Fixes #NNNN` when addressing a pre-existing issue.
 
 ## See Also
 
