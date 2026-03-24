@@ -258,10 +258,9 @@ def test_profile_running_task(integration_cluster):
 def test_exec_in_container(integration_cluster):
     """Exec a command in a running task's container."""
     job = integration_cluster.submit(sleep, "itest-exec", 120)
-    integration_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=integration_cluster.job_timeout)
-
-    task = integration_cluster.task_status(job, task_index=0)
-    assert task.state == cluster_pb2.TASK_STATE_RUNNING, f"Task stuck in {cluster_pb2.TaskState.Name(task.state)}"
+    task = integration_cluster.wait_for_task_state(
+        job, cluster_pb2.TASK_STATE_RUNNING, timeout=integration_cluster.job_timeout
+    )
     task_id = task.task_id
 
     request = cluster_pb2.Controller.ExecInContainerRequest(

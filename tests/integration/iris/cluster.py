@@ -107,6 +107,25 @@ class IrisIntegrationCluster:
             time.sleep(poll_interval)
         raise TimeoutError(f"Job {job.job_id} did not reach state {state} in {timeout}s (current: {status.state})")
 
+    def wait_for_task_state(
+        self,
+        job: Job,
+        state: int,
+        task_index: int = 0,
+        timeout: float = 60.0,
+        poll_interval: float = 0.5,
+    ) -> cluster_pb2.TaskStatus:
+        deadline = time.monotonic() + timeout
+        task = self.task_status(job, task_index)
+        while time.monotonic() < deadline:
+            task = self.task_status(job, task_index)
+            if task.state == state:
+                return task
+            time.sleep(poll_interval)
+        raise TimeoutError(
+            f"Task {task_index} of {job.job_id} did not reach state {state} " f"in {timeout}s (current: {task.state})"
+        )
+
     @contextmanager
     def launched_job(self, fn, name: str, *args, **kwargs):
         """Submit a job and guarantee it's killed on exit."""
