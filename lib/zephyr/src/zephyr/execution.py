@@ -299,19 +299,6 @@ class WorkerContext(Protocol):
 
 _worker_ctx_var: ContextVar[ZephyrWorker | None] = ContextVar("zephyr_worker_ctx", default=None)
 
-_report_lock = threading.Lock()
-_last_reported: dict[str, dict[str, int]] = {}
-
-
-def _counters_changed_since_last_report(worker_id: str, current: dict[str, int]) -> bool:
-    """Return True if *current* differs from the last snapshot we reported for *worker_id*."""
-    with _report_lock:
-        prev = _last_reported.get(worker_id)
-        if prev == current:
-            return False
-        _last_reported[worker_id] = dict(current)
-        return True
-
 
 def zephyr_worker_ctx() -> WorkerContext:
     """Get the current worker's context. Only valid inside a worker task."""
@@ -917,6 +904,7 @@ class ZephyrWorker:
         self._execution_id: str = ""
         self._counters: dict[str, int] = {}
         self._counters_lock = threading.Lock()
+        self._last_reported_counters: dict[str, int] = {}
 
         # Build descriptive worker ID from actor context
         actor_ctx = current_actor()
@@ -967,6 +955,15 @@ class ZephyrWorker:
         with self._counters_lock:
             self._counters.clear()
 
+    def _counters_changed(self) -> bool:
+        """Return True if counters have changed since the last heartbeat report."""
+        with self._counters_lock:
+            current = dict(self._counters)
+        if current == self._last_reported_counters:
+            return False
+        self._last_reported_counters = current
+        return True
+
     def _run_polling(self, coordinator: ActorHandle) -> None:
         """Main polling loop. Runs in a background thread started by __init__."""
         logger.info("[%s] Starting polling loop", self._worker_id)
@@ -997,14 +994,12 @@ class ZephyrWorker:
         while not self._shutdown_event.is_set():
             try:
                 # Block on result to avoid congesting the coordinator RPC pipe
-                # with fire-and-forget heartbeats.
-                # Send counters only when they've changed to avoid unnecessary
-                # coordinator state updates.
-                snapshot = self._get_counter_snapshot()
-                send_counters = _counters_changed_since_last_report(self._worker_id, snapshot)
+                # with fire-and-forget heartbeats. Only send counter snapshot
+                # when values have changed.
+                snapshot = self._get_counter_snapshot() if self._counters_changed() else None
                 coordinator.heartbeat.remote(
                     self._worker_id,
-                    snapshot if send_counters else None,
+                    snapshot,
                 ).result()
                 heartbeat_count += 1
                 consecutive_failures = 0

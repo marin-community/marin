@@ -15,6 +15,7 @@ class FakeWorker:
     def __init__(self):
         self._counters: dict[str, int] = {}
         self._counters_lock = threading.Lock()
+        self._last_reported_counters: dict[str, int] = {}
 
     def get_shared(self, name: str):
         raise NotImplementedError
@@ -26,6 +27,14 @@ class FakeWorker:
     def _get_counter_snapshot(self) -> dict[str, int]:
         with self._counters_lock:
             return dict(self._counters)
+
+    def _counters_changed(self) -> bool:
+        with self._counters_lock:
+            current = dict(self._counters)
+        if current == self._last_reported_counters:
+            return False
+        self._last_reported_counters = current
+        return True
 
 
 def test_counters_increment_and_snapshot():
@@ -53,15 +62,19 @@ def test_counters_noop_outside_worker():
         _worker_ctx_var.reset(token)
 
 
-def test_counters_changed_since_last_report():
-    """_counters_changed_since_last_report detects changes correctly."""
-    from zephyr.execution import _counters_changed_since_last_report, _last_reported, _report_lock
+def test_counters_changed():
+    """_counters_changed detects changes and deduplicates correctly."""
+    worker = FakeWorker()
+    token = _worker_ctx_var.set(worker)
+    try:
+        assert worker._counters_changed() is False  # empty → empty, no change
 
-    # Clean up any state from previous tests
-    with _report_lock:
-        _last_reported.pop("test-worker", None)
+        counters.increment("docs", 10)
+        assert worker._counters_changed() is True
+        assert worker._counters_changed() is False  # same value, no change
 
-    assert _counters_changed_since_last_report("test-worker", {"docs": 10}) is True
-    assert _counters_changed_since_last_report("test-worker", {"docs": 10}) is False
-    assert _counters_changed_since_last_report("test-worker", {"docs": 20}) is True
-    assert _counters_changed_since_last_report("test-worker", {"docs": 20}) is False
+        counters.increment("docs", 10)
+        assert worker._counters_changed() is True
+        assert worker._counters_changed() is False
+    finally:
+        _worker_ctx_var.reset(token)
