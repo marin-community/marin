@@ -312,3 +312,94 @@ def test_get_budget_not_found(state, mock_controller, tmp_path):
             None,
         )
     assert exc_info.value.code == Code.NOT_FOUND
+
+
+# ---------------------------------------------------------------------------
+# test_set_budget_invalid_max_band
+# ---------------------------------------------------------------------------
+
+
+def test_set_budget_invalid_max_band(state, mock_controller, tmp_path):
+    """Setting an invalid max_band value is rejected."""
+    service = _make_service(state, mock_controller, tmp_path)
+
+    with pytest.raises(ConnectError) as exc_info:
+        _as_admin(
+            service.set_user_budget,
+            cluster_pb2.Controller.SetUserBudgetRequest(
+                user_id="alice",
+                budget_limit=5000,
+                max_band=99,  # invalid
+            ),
+            None,
+        )
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+
+
+# ---------------------------------------------------------------------------
+# test_set_budget_empty_user_id
+# ---------------------------------------------------------------------------
+
+
+def test_set_budget_empty_user_id(state, mock_controller, tmp_path):
+    """Setting budget with empty user_id is rejected."""
+    service = _make_service(state, mock_controller, tmp_path)
+
+    with pytest.raises(ConnectError) as exc_info:
+        _as_admin(
+            service.set_user_budget,
+            cluster_pb2.Controller.SetUserBudgetRequest(
+                user_id="",
+                budget_limit=5000,
+                max_band=cluster_pb2.PRIORITY_BAND_INTERACTIVE,
+            ),
+            None,
+        )
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+
+
+# ---------------------------------------------------------------------------
+# test_default_band_submission
+# ---------------------------------------------------------------------------
+
+
+def test_unspecified_band_defaults_to_interactive(state, mock_controller, tmp_path):
+    """Submitting with UNSPECIFIED (0) band defaults to INTERACTIVE."""
+    auth = ControllerAuth(provider="static")
+    service = _make_service(state, mock_controller, tmp_path, auth=auth)
+
+    # Submit with band=0 (UNSPECIFIED)
+    request = _make_job_request("/alice/default-band-job", band=0)
+    resp = _as_user(service.launch_job, "alice", request, None)
+    assert resp.job_id == "/alice/default-band-job"
+
+
+# ---------------------------------------------------------------------------
+# test_user_can_read_own_budget
+# ---------------------------------------------------------------------------
+
+
+def test_user_can_read_own_budget(state, mock_controller, tmp_path):
+    """Non-admin users can read budget info (require_identity, not require admin)."""
+    service = _make_service(state, mock_controller, tmp_path)
+
+    # Set budget as admin first
+    _as_admin(
+        service.set_user_budget,
+        cluster_pb2.Controller.SetUserBudgetRequest(
+            user_id="alice",
+            budget_limit=5000,
+            max_band=cluster_pb2.PRIORITY_BAND_INTERACTIVE,
+        ),
+        None,
+    )
+
+    # Read as non-admin user
+    resp = _as_user(
+        service.get_user_budget,
+        "alice",
+        cluster_pb2.Controller.GetUserBudgetRequest(user_id="alice"),
+        None,
+    )
+    assert resp.user_id == "alice"
+    assert resp.budget_limit == 5000

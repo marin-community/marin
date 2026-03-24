@@ -1,9 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from iris.cluster.controller.budget import UserTask, compute_effective_band, interleave_by_user, resource_value
+from iris.cluster.controller.budget import (
+    UserTask,
+    compute_effective_band,
+    compute_user_spend,
+    interleave_by_user,
+    resource_value,
+)
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.transitions import ControllerTransitions
+from iris.cluster.log_store import LogStore
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.rpc.proto_utils import PRIORITY_BAND_VALUES, priority_band_name, priority_band_value
+from iris.time_utils import Timestamp
 
 PRODUCTION = cluster_pb2.PRIORITY_BAND_PRODUCTION
 INTERACTIVE = cluster_pb2.PRIORITY_BAND_INTERACTIVE
@@ -137,3 +148,132 @@ def test_priority_band_values_are_ordered():
     """Proto enum values are ordered: PRODUCTION < INTERACTIVE < BATCH."""
     assert cluster_pb2.PRIORITY_BAND_PRODUCTION < cluster_pb2.PRIORITY_BAND_INTERACTIVE
     assert cluster_pb2.PRIORITY_BAND_INTERACTIVE < cluster_pb2.PRIORITY_BAND_BATCH
+
+
+# ---------------------------------------------------------------------------
+# compute_user_spend — direct unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_compute_user_spend_empty(tmp_path):
+    """No active tasks → empty spend dict."""
+    db = ControllerDB(db_dir=tmp_path)
+    log_store = LogStore(log_dir=tmp_path / "logs")
+    try:
+        with db.snapshot() as snap:
+            spend = compute_user_spend(snap)
+        assert spend == {}
+    finally:
+        log_store.close()
+        db.close()
+
+
+def test_compute_user_spend_counts_running_tasks(tmp_path):
+    """Active tasks contribute to user spend based on resource value."""
+    db = ControllerDB(db_dir=tmp_path)
+    log_store = LogStore(log_dir=tmp_path / "logs")
+    state = ControllerTransitions(db=db, log_store=log_store)
+    try:
+        # Submit a job with 2 tasks
+        job_id = JobName.root("alice", "test-job")
+        request = cluster_pb2.Controller.LaunchJobRequest(
+            name=job_id.to_wire(),
+            entrypoint=cluster_pb2.RuntimeEntrypoint(),
+            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=4000, memory_bytes=16 * GiB),
+            environment=cluster_pb2.EnvironmentConfig(),
+            replicas=2,
+        )
+        request.entrypoint.run_command.argv[:] = ["echo", "hi"]
+        state.submit_job(job_id, request, Timestamp.now())
+
+        # Register worker and assign both tasks
+        w1 = WorkerId("w1")
+        state.register_or_refresh_worker(
+            worker_id=w1,
+            address="w1:8080",
+            metadata=cluster_pb2.WorkerMetadata(
+                hostname="w1",
+                ip_address="127.0.0.1",
+                cpu_count=16,
+                memory_bytes=64 * GiB,
+                disk_bytes=100 * GiB,
+            ),
+            ts=Timestamp.now(),
+        )
+
+        from iris.cluster.controller.transitions import Assignment, HeartbeatApplyRequest, TaskUpdate
+
+        for idx in range(2):
+            task_id = job_id.task(idx)
+            state.queue_assignments([Assignment(task_id=task_id, worker_id=w1)])
+            state.apply_task_updates(
+                HeartbeatApplyRequest(
+                    worker_id=w1,
+                    worker_resource_snapshot=None,
+                    updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING)],
+                )
+            )
+
+        with db.snapshot() as snap:
+            spend = compute_user_spend(snap)
+
+        # Each task: 4 cores (5*4=20) + 16 GiB (16) + 0 accelerators = 36
+        expected_per_task = resource_value(4000, 16 * GiB, 0)
+        assert spend["alice"] == expected_per_task * 2
+    finally:
+        log_store.close()
+        db.close()
+
+
+def test_compute_user_spend_only_counts_active_states(tmp_path):
+    """Completed tasks do not contribute to spend."""
+    db = ControllerDB(db_dir=tmp_path)
+    log_store = LogStore(log_dir=tmp_path / "logs")
+    state = ControllerTransitions(db=db, log_store=log_store)
+    try:
+        job_id = JobName.root("bob", "done-job")
+        request = cluster_pb2.Controller.LaunchJobRequest(
+            name=job_id.to_wire(),
+            entrypoint=cluster_pb2.RuntimeEntrypoint(),
+            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=8 * GiB),
+            environment=cluster_pb2.EnvironmentConfig(),
+            replicas=1,
+        )
+        request.entrypoint.run_command.argv[:] = ["echo", "hi"]
+        state.submit_job(job_id, request, Timestamp.now())
+
+        # Task is PENDING (not active for budget purposes since ACTIVE = ASSIGNED/BUILDING/RUNNING)
+        with db.snapshot() as snap:
+            spend = compute_user_spend(snap)
+        assert spend.get("bob", 0) == 0
+    finally:
+        log_store.close()
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# interleave_by_user — three-user round-robin
+# ---------------------------------------------------------------------------
+
+
+def test_interleave_by_user_three_users():
+    """Three users with different task counts and spend levels."""
+    tasks = [
+        UserTask("alice", "a1"),
+        UserTask("alice", "a2"),
+        UserTask("bob", "b1"),
+        UserTask("charlie", "c1"),
+        UserTask("charlie", "c2"),
+        UserTask("charlie", "c3"),
+    ]
+    spend = {"alice": 5000, "bob": 100, "charlie": 3000}
+    result = interleave_by_user(tasks, spend)
+    # Bob (100) → charlie (3000) → alice (5000) ordering
+    assert result[0] == "b1"
+    assert result[1] == "c1"
+    assert result[2] == "a1"
+    # Round 1: only charlie and alice have tasks left
+    assert result[3] == "c2"
+    assert result[4] == "a2"
+    # Round 2: only charlie left
+    assert result[5] == "c3"

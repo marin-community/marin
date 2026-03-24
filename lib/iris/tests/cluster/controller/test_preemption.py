@@ -5,6 +5,7 @@
 
 
 from iris.cluster.controller.budget import compute_effective_band
+from iris.cluster.controller.transitions import _resolve_task_failure_state
 from iris.cluster.controller.controller import (
     PreemptionCandidate,
     RunningTaskInfo,
@@ -14,6 +15,8 @@ from iris.cluster.controller.controller import (
 from iris.cluster.controller.scheduler import JobRequirements, WorkerCapacity
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
+
+from iris.cluster.controller.transitions import Assignment
 
 from .conftest import (
     ControllerTestHarness,
@@ -457,3 +460,215 @@ def test_running_tasks_use_effective_band():
         assert len(running) == 1
         # Should be downgraded to BATCH
         assert running[0].band_sort_key == cluster_pb2.PRIORITY_BAND_BATCH
+
+
+# ---------------------------------------------------------------------------
+# Additional preemption edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_preempted_assigned_task_always_retries():
+    """ASSIGNED task always retries on preemption regardless of preemption budget."""
+    with make_controller_state() as state:
+        harness = ControllerTestHarness(state)
+        w1 = harness.add_worker("w1", cpu=4)
+
+        # max_retries_preemption=0 — but ASSIGNED tasks always retry
+        tasks = harness.submit("/alice/assigned-job", cpu=1, replicas=1, max_retries_preemption=0)
+        task = tasks[0]
+
+        # Only assign, don't advance to RUNNING
+        state.queue_assignments([Assignment(task_id=task.task_id, worker_id=w1)])
+        assert query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_ASSIGNED
+
+        state.preempt_task(task.task_id, reason="preempted while assigned")
+
+        updated = query_task(state, task.task_id)
+        assert updated.state == cluster_pb2.TASK_STATE_PENDING, "ASSIGNED tasks should always retry on preemption"
+
+
+def test_preemption_multiple_victims_one_pass():
+    """Multiple preemptors can each preempt different victims in a single pass."""
+    w1 = WorkerId("w1")
+    cap = WorkerCapacity(
+        worker_id=w1,
+        available_cpu_millicores=0,
+        available_memory=0,
+        available_gpus=0,
+        available_tpus=0,
+    )
+    ctx = _make_simple_context([cap])
+
+    victim1 = RunningTaskInfo(
+        task_id=JobName.from_wire("/alice/batch-job-1:0"),
+        worker_id=w1,
+        band_sort_key=cluster_pb2.PRIORITY_BAND_BATCH,
+        resource_value=1000,
+        is_coscheduled=False,
+        resources=_cpu_resources(1),
+    )
+    victim2 = RunningTaskInfo(
+        task_id=JobName.from_wire("/alice/batch-job-2:0"),
+        worker_id=w1,
+        band_sort_key=cluster_pb2.PRIORITY_BAND_BATCH,
+        resource_value=2000,
+        is_coscheduled=False,
+        resources=_cpu_resources(1),
+    )
+
+    preemptor1 = PreemptionCandidate(
+        JobName.from_wire("/bob/prod-1:0"),
+        _cpu_requirements(1),
+        cluster_pb2.PRIORITY_BAND_PRODUCTION,
+    )
+    preemptor2 = PreemptionCandidate(
+        JobName.from_wire("/bob/prod-2:0"),
+        _cpu_requirements(1),
+        cluster_pb2.PRIORITY_BAND_PRODUCTION,
+    )
+
+    preemptions = _run_preemption_pass([preemptor1, preemptor2], [victim1, victim2], ctx)
+    assert len(preemptions) == 2
+    victims_preempted = {p[1] for p in preemptions}
+    assert victim1.task_id in victims_preempted
+    assert victim2.task_id in victims_preempted
+
+
+def test_preemption_across_multiple_workers():
+    """Preemption selects victims from different workers."""
+    w1 = WorkerId("w1")
+    w2 = WorkerId("w2")
+    cap1 = WorkerCapacity(
+        worker_id=w1,
+        available_cpu_millicores=0,
+        available_memory=0,
+        available_gpus=0,
+        available_tpus=0,
+    )
+    cap2 = WorkerCapacity(
+        worker_id=w2,
+        available_cpu_millicores=0,
+        available_memory=0,
+        available_gpus=0,
+        available_tpus=0,
+    )
+    ctx = _make_simple_context([cap1, cap2])
+
+    victim_w1 = RunningTaskInfo(
+        task_id=JobName.from_wire("/alice/batch-w1:0"),
+        worker_id=w1,
+        band_sort_key=cluster_pb2.PRIORITY_BAND_BATCH,
+        resource_value=1000,
+        is_coscheduled=False,
+        resources=_cpu_resources(1),
+    )
+    victim_w2 = RunningTaskInfo(
+        task_id=JobName.from_wire("/alice/batch-w2:0"),
+        worker_id=w2,
+        band_sort_key=cluster_pb2.PRIORITY_BAND_BATCH,
+        resource_value=500,
+        is_coscheduled=False,
+        resources=_cpu_resources(1),
+    )
+
+    # Preemptor needs 1 CPU — should pick cheapest victim (w2)
+    preemptor = PreemptionCandidate(
+        JobName.from_wire("/bob/prod:0"),
+        _cpu_requirements(1),
+        cluster_pb2.PRIORITY_BAND_PRODUCTION,
+    )
+
+    preemptions = _run_preemption_pass([preemptor], [victim_w1, victim_w2], ctx)
+    assert len(preemptions) == 1
+    assert preemptions[0][1] == victim_w2.task_id
+
+
+def test_preemption_nonexistent_task_is_noop():
+    """Preempting a non-existent task is a no-op."""
+    with make_controller_state() as state:
+        result = state.preempt_task(JobName.from_wire("/ghost/job:0"), reason="does not exist")
+        assert result.tasks_to_kill == set()
+
+
+def test_preemption_terminal_task_is_noop():
+    """Preempting an already-finished task is a no-op."""
+    with make_controller_state() as state:
+        harness = ControllerTestHarness(state)
+        w1 = harness.add_worker("w1", cpu=4)
+
+        tasks = harness.submit("/alice/done-job", cpu=1, replicas=1)
+        task = tasks[0]
+        harness.dispatch(task, w1)
+
+        # Succeed the task
+        harness.transition(task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
+        assert query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_SUCCEEDED
+
+        # Preempt should be no-op
+        state.preempt_task(task.task_id, reason="too late")
+        assert query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_SUCCEEDED
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for _resolve_task_failure_state
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_failure_assigned_always_retries():
+    """ASSIGNED tasks always retry regardless of preemption budget."""
+    new_state, count = _resolve_task_failure_state(
+        cluster_pb2.TASK_STATE_ASSIGNED,
+        preemption_count=0,
+        max_preemptions=0,
+        terminal_state=cluster_pb2.TASK_STATE_PREEMPTED,
+    )
+    assert new_state == cluster_pb2.TASK_STATE_PENDING
+    assert count == 0  # preemption_count not incremented for ASSIGNED
+
+
+def test_resolve_failure_running_retries_within_budget():
+    """RUNNING task retries when preemption budget remains."""
+    new_state, count = _resolve_task_failure_state(
+        cluster_pb2.TASK_STATE_RUNNING,
+        preemption_count=0,
+        max_preemptions=3,
+        terminal_state=cluster_pb2.TASK_STATE_PREEMPTED,
+    )
+    assert new_state == cluster_pb2.TASK_STATE_PENDING
+    assert count == 1
+
+
+def test_resolve_failure_running_terminal_when_budget_exhausted():
+    """RUNNING task goes terminal when preemption budget is exhausted."""
+    new_state, count = _resolve_task_failure_state(
+        cluster_pb2.TASK_STATE_RUNNING,
+        preemption_count=3,
+        max_preemptions=3,
+        terminal_state=cluster_pb2.TASK_STATE_PREEMPTED,
+    )
+    assert new_state == cluster_pb2.TASK_STATE_PREEMPTED
+    assert count == 4
+
+
+def test_resolve_failure_building_retries_within_budget():
+    """BUILDING task (executing state) retries when budget remains."""
+    new_state, count = _resolve_task_failure_state(
+        cluster_pb2.TASK_STATE_BUILDING,
+        preemption_count=0,
+        max_preemptions=1,
+        terminal_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+    )
+    assert new_state == cluster_pb2.TASK_STATE_PENDING
+    assert count == 1
+
+
+def test_resolve_failure_building_terminal_when_exhausted():
+    """BUILDING task goes terminal when preemption budget is exhausted."""
+    new_state, count = _resolve_task_failure_state(
+        cluster_pb2.TASK_STATE_BUILDING,
+        preemption_count=1,
+        max_preemptions=1,
+        terminal_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+    )
+    assert new_state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    assert count == 2
