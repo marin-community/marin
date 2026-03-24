@@ -34,6 +34,7 @@ import cloudpickle
 import pyarrow as pa
 from iris.marin_fs import open_url, url_to_fs
 from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
+from fray.v2.actor import request_shutdown
 from fray.v2.client import JobHandle
 from fray.v2.types import Entrypoint, JobRequest
 from iris.marin_fs import marin_temp_bucket
@@ -928,7 +929,8 @@ class ZephyrWorker:
         finally:
             self._shutdown_event.set()
             heartbeat_thread.join(timeout=5.0)
-            logger.debug("[%s] Polling loop ended", self._worker_id)
+            logger.debug("[%s] Polling loop ended, requesting host shutdown", self._worker_id)
+            request_shutdown()
 
     def _heartbeat_loop(
         self, coordinator: ActorHandle, interval: float = 5.0, max_consecutive_failures: int = 5
@@ -1259,6 +1261,9 @@ class ZephyrContext:
             min(max_workers, num_shards), computed at first execute(). If None,
             defaults to os.cpu_count() for LocalClient, or 128 for distributed clients.
         resources: Resource config per worker.
+        coordinator_resources: Resource config for the coordinator job. The coordinator
+            accumulates scatter manifests for all shards in memory; increase ram for
+            large pipelines (many shards). Defaults to 5 GB.
         chunk_storage_prefix: Storage prefix for intermediate chunks. If None, defaults
             to MARIN_PREFIX/tmp/zephyr or /tmp/zephyr.
         name: Descriptive name for this context, used in actor group names for debugging.
@@ -1273,6 +1278,7 @@ class ZephyrContext:
     client: Client | None = None
     max_workers: int | None = None
     resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="1g"))
+    coordinator_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="5g"))
     chunk_storage_prefix: str | None = None
     name: str = ""
     no_workers_timeout: float | None = None
@@ -1409,7 +1415,7 @@ class ZephyrContext:
                                 _run_coordinator_job,
                                 args=(config_path, result_path),
                             ),
-                            resources=ResourceConfig(cpu=1, ram="1g"),
+                            resources=self.coordinator_resources,
                         )
                     )
 
