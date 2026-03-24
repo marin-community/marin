@@ -24,7 +24,6 @@ import levanter.callbacks as callbacks
 import levanter.tracker
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from levanter.data import AsyncDataset, DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
 from levanter.data.text import GrugLmExample, LmDataConfig
@@ -39,8 +38,13 @@ from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
 import equinox as eqx
+from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import GrugModelConfig, Transformer
+
+# This file intentionally mirrors `experiments/grug/base/train.py` with
+# variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
+# `.agents/skills/change-grug/`.
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +57,8 @@ class GrugTrainerConfig:
     train_batch_pspec: P = field(default_factory=lambda: P(("data", "expert")))
     data_seed: int | None = None
     log_every: int = 1
-    ema_beta: float | None = None
-    z_loss_weight: float = 0.0
+    ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
+    z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
 
 
 @dataclass(frozen=True)
@@ -114,6 +118,7 @@ def build_train_loader(
     mesh: Mesh,
     batch_pspec: P = P(("data", "expert")),
 ) -> DataLoader[GrugLmExample]:
+    # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
     axis_resource = batch_pspec[0]
     return DataLoader(
         dataset,
@@ -181,6 +186,7 @@ def _compute_flops(
     flops_per_token = lm_flops_per_token(
         hidden_dim=model_config.hidden_dim,
         intermediate_dim=model_config.intermediate_dim,
+        shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
         num_layers=model_config.num_layers,
         num_kv_heads=model_config.num_kv_heads,
         num_heads=model_config.num_heads,
@@ -227,7 +233,22 @@ class GrugTrainState:
     step: jax.Array
     params: Transformer
     opt_state: optax.OptState
-    ema_params: Transformer
+    ema_params: Transformer | None
+
+
+def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
+    """Set router biases from QB betas (computed on previous step, applied on host)."""
+    new_blocks = list(model.blocks)
+    moe_idx = 0
+    for i, block in enumerate(model.blocks):
+        if block.mlp is None:
+            continue
+        new_bias = -qb_betas[moe_idx]
+        new_bias = new_bias - jnp.mean(new_bias)
+        new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, new_bias)
+        new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
+        moe_idx += 1
+    return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
 
 def initial_state(
@@ -236,13 +257,14 @@ def initial_state(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
     key: PRNGKeyArray,
+    ema_beta: float | None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
         opt_state=optimizer.init(params),
-        ema_params=params,
+        ema_params=params if ema_beta is not None else None,
     )
 
 
@@ -282,23 +304,11 @@ def _make_train_step(
         updates, opt_state = optimizer.update(grads, state.opt_state, state.params)
         params = optax.apply_updates(state.params, updates)
 
-        # Sharded QB: set router_bias = -(qb_beta - mean(qb_beta)) inside JIT.
-        qb_betas = summarized_metrics["qb_beta_per_layer"]
-        new_blocks = list(params.blocks)
-        moe_idx = 0
-        for i, block in enumerate(params.blocks):
-            if block.mlp is not None:
-                new_bias = -qb_betas[moe_idx]
-                new_bias = new_bias - jnp.mean(new_bias)
-                new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, new_bias)
-                new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
-                metrics[f"moe_bias/layer_{moe_idx}/bias_norm"] = jnp.linalg.norm(new_bias)
-                moe_idx += 1
-        params = eqx.tree_at(lambda t: t.blocks, params, tuple(new_blocks))
-
         if ema_beta is None:
-            ema_params = params
+            ema_params = None
         else:
+            if state.ema_params is None:
+                raise ValueError("ema_params must be initialized when ema_beta is set.")
             ema_params = jax.tree_util.tree_map(
                 lambda old, new: ema_beta * old + (1.0 - ema_beta) * new,
                 state.ema_params,
@@ -357,6 +367,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     if config.trainer.data_seed is not None:
         data_key = jax.random.PRNGKey(config.trainer.data_seed)
 
+    # Build data/model state under the trainer mesh so all arrays are sharded consistently.
     with trainer.use_device_mesh():
         mesh = trainer.device_mesh
         batch_schedule = trainer.batch_schedule
@@ -381,6 +392,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 optimizer=optimizer,
                 mp=trainer.mp,
                 key=model_rng,
+                ema_beta=config.trainer.ema_beta,
             )
 
         state = _init_state(model_key)
@@ -422,7 +434,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks = StateCallbackRunner[GrugTrainState](
             step_getter=lambda s: s.step,
             model_getter=lambda s: s.params,
-            eval_model_getter=lambda s: s.ema_params,
+            eval_model_getter=lambda s: s.ema_params if s.ema_params is not None else s.params,
             opt_state_getter=lambda s: s.opt_state,
         )
         state_callbacks.add_hook(
@@ -458,14 +470,27 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
+        pending_qb_betas: jax.Array | None = None
 
         # Main optimization loop.
         try:
             while int(state.step) < trainer.num_train_steps:
+                # QB: apply router bias updates from previous step (on host).
+                if pending_qb_betas is not None:
+                    state = dataclasses.replace(
+                        state,
+                        params=_apply_qb_betas(state.params, pending_qb_betas),
+                        ema_params=(
+                            _apply_qb_betas(state.ema_params, pending_qb_betas) if state.ema_params is not None else None
+                        ),
+                    )
+                    pending_qb_betas = None
+
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
                 step_start = time.perf_counter()
                 current_step = int(state.step)
+                # grad_watch runs only on its configured interval.
                 compute_watch = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
@@ -473,6 +498,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
+                pending_qb_betas = metrics["qb_beta_per_layer"]
 
                 if jnp.isnan(metrics["train/loss"]):
                     logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
@@ -488,8 +514,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     router_metrics = {
                         key: value
                         for key, value in metrics.items()
-                        if (key.startswith("train/router/") or key.startswith("moe/") or key.startswith("moe_bias/"))
-                        and key not in ("train/router/routing_counts_per_layer",)
+                        if (key.startswith("train/router/") or key.startswith("moe_bias/"))
+                        and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
                     }
                     if router_metrics:
                         levanter.tracker.log(router_metrics, step=step)
@@ -504,7 +530,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 if checkpointer is not None:
                     checkpointer.on_step(tree=state, step=int(state.step))
-        finally:
+        except BaseException:
+            logger.exception(
+                "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
+            )
+            raise
+        else:
+            # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
                 checkpointer.on_step(tree=state, step=int(state.step), force=True)
