@@ -2285,3 +2285,676 @@ Current best hypothesis ordering before running this matrix:
 1. the old success primarily depended on the much smaller envelope.
 2. the current executor/GCS path fixed some rollout bugs but is not yet exonerated.
 3. checkpoint-coupled train OOM is still the leading blocker for production-like runs.
+
+## 2026-03-24T17:49Z — launching E1 (`direct + HF + small`) as the first divergence probe
+
+User requested execution of `E1` now.
+
+Planned probe:
+- topology: direct coordinator in outer Iris job
+- model source: raw HF ids (`meta-llama/Llama-3.1-8B-Instruct`)
+- envelope:
+  - `num_train_steps=5`
+  - `train_batch_size=64`
+  - `max_seq_len=1024`
+  - `max_output_tokens=512`
+  - `n_prompts=4`
+  - `max_weight_transfer_wait_time=300`
+- root placement: explicit `--region us-central1`
+
+Implementation:
+- added `experiments/exp_iris_rl_regression_direct_hf_small.py`
+- this preserves the old direct topology by calling `_run_rl_coordinator(...)` directly
+- unlike the current `exp_iris_rl_direct.py`, it does not use the production-like 500-step envelope
+
+Monitor plan:
+- startup stabilization check after submission
+- then 5-minute cadence (`300s`) per user request
+- success criteria:
+  - train child starts
+  - rollout child starts
+  - first weight transfer completes
+  - rollout writes at least one batch
+  - trainer advances at least one step
+
+Submission details:
+- root job id: `/ahmed/iris-rl-e1-direct-hf-small-20260324-105133`
+- root submit command:
+  - `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name iris-rl-e1-direct-hf-small-20260324-105133 --region us-central1 -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- uv run python experiments/exp_iris_rl_regression_direct_hf_small.py`
+
+Immediate startup result:
+- root job did not start within the first stabilization window.
+- current state: `JOB_STATE_PENDING`
+- pending reason:
+  - `Scheduler: No worker matches constraints ... constraints=['region', 'preemptible', 'reservation-job']`
+  - `Autoscaler: Unsatisfied autoscaler demand: no_capacity: cpu_vm_e2_highmem_2_ondemand-us-central1-a=at_max_slices`
+
+Interpretation:
+- this is not yet a code failure in `E1`.
+- the blocker is root-job placement: Iris CLI auto-tagged the outer job as non-preemptible in `us-central1`, and there is currently no matching ondemand CPU capacity there.
+- child train / rollout jobs do not exist yet because the outer root coordinator process has not started.
+
+Next monitor action:
+1. keep the job pending under the user-requested 5-minute cadence.
+2. if capacity clears, re-evaluate the actual E1 runtime behavior.
+3. if capacity does not clear, consider changing only root placement semantics while keeping the direct/HF/small runtime path intact.
+
+## 2026-03-24T18:00Z — E1 cleared the root-capacity block and is now in live startup
+
+First 5-minute cadence check:
+- root `/ahmed/iris-rl-e1-direct-hf-small-20260324-105133`: `JOB_STATE_RUNNING`
+- child train job exists and is `JOB_STATE_RUNNING`
+- child rollout job exists and is `JOB_STATE_RUNNING`
+
+Observed startup logs:
+- outer root logged:
+  - `Running E1 direct + HF + small probe: direct-hf-small-20260324-175631`
+  - `Submitted 2 child jobs (1 trainer + 1 rollout workers)`
+- rollout startup has begun far enough to emit early vLLM import/runtime logs
+
+Interpretation:
+- the earlier pending state was pure root placement scarcity, not a structural failure of the direct/HF/small probe.
+- E1 has now crossed the first real topology boundary:
+  - direct root process started,
+  - coordinator executed in the outer job,
+  - train and rollout children materialized directly under the root job as expected.
+
+Next monitor focus:
+1. first weight transfer (`weight_id=-1` / server update).
+2. first rollout write.
+3. first trainer progress / completed step.
+
+## 2026-03-24T18:05Z — E1 behaves like the old good path through the first real RL boundary
+
+Second 5-minute cadence check shows `E1` is doing real work, not merely sitting in startup.
+
+Verified live signals:
+- trainer and rollout children both remain `JOB_STATE_RUNNING`
+- trainer emitted:
+  - `Progress on:train -/5 ...`
+  - later `Progress on:train 1.00it/5.00it ...`
+- Arrow Flight emitted:
+  - `Updated server: weight_id=-1, params=291, servers=52`
+- rollout emitted:
+  - `Received new weights from step -1`
+  - `First weight transfer complete, inference can proceed`
+  - `Generated rollout with 10 groups ... step -1`
+  - `Generated rollout with 4 groups ... step -1`
+
+Interpretation:
+- `E1` has already passed the core “old run was real” checkpoints on current HEAD.
+- this strongly suggests current core RL runtime is still capable of the old direct/HF/small success path.
+- therefore the first divergence is probably *not* in the basic direct small runtime itself.
+
+Implication for the experiment matrix:
+- if `E1` completes cleanly, the next highest-value probe is `E2` (`direct + GCS + small`), because that isolates model bootstrap/source while keeping the old successful topology and envelope.
+
+## 2026-03-24T18:11Z — E1 no longer looks clean: rollout is stuck on Arrow Flight reconnect errors after step 1
+
+Latest live status:
+- root: `JOB_STATE_RUNNING`
+- rollout child: `JOB_STATE_RUNNING`
+- train child: `JOB_STATE_RUNNING`, but `preemption_count=2`
+
+Verified progression before the new issue:
+- trainer completed at least through step 1:
+  - `Training step 0 completed ...`
+  - `Training step 1 completed ...`
+- weight transfer advanced through:
+  - `weight_id=-1`
+  - `weight_id=0`
+  - `weight_id=1`
+- rollout consumed updated weights and generated rollouts for:
+  - step `-1`
+  - step `0`
+  - step `1`
+
+New failure signal:
+- rollout is now looping on repeated `pyarrow._flight.FlightUnavailableError`
+- error shape:
+  - `failed to connect to all addresses`
+  - `tcp handshaker shutdown`
+  - failing against multiple old Arrow Flight ports on trainer host `10.128.0.56`
+- example affected trainer ports:
+  - `20313`
+  - `32685`
+  - `2493`
+  - `14463`
+
+Current leading interpretation:
+- this looks much more like trainer preemption/restart or Arrow Flight server churn than a model/bootstrap bug.
+- evidence:
+  - train child `preemption_count=2`
+  - rollout is still trying to fetch from the old trainer-advertised server list on `10.128.0.56`
+  - the old “small direct baseline always finishes cleanly” assumption is now false on current HEAD, at least under this run’s live preemption behavior.
+
+What this means for the divergence hunt:
+1. `E1` still proved that current HEAD can reproduce the old path through first weight transfer and multiple train steps.
+2. but it also exposed a new candidate divergence boundary:
+   - restart / preemption recovery under the direct small path may no longer be robust.
+3. this is not the same as the prior rollout model-loader mismatch.
+4. before moving to `E2`, we need to determine whether `E1` self-recovers after train preemption or remains permanently wedged on stale Arrow Flight clients.
+
+Immediate next monitor action:
+1. keep the job alive for one more cadence window to see if rollout reconnects after trainer recovery.
+2. if not, capture this as a preemption/reconnect regression against the old small direct baseline.
+
+## 2026-03-24T18:17Z — E1 did not self-recover; trainer restarted, rollout stayed wedged on stale Flight endpoints
+
+One more 5-minute recovery window was enough to answer the key question.
+
+Observed live facts:
+- root still `JOB_STATE_RUNNING`
+- train child still `JOB_STATE_RUNNING`
+- rollout child still `JOB_STATE_RUNNING`
+- train child still shows `preemption_count=2`
+- trainer logs now show a fresh restart signature:
+  - `Progress on:train -/5 ...` at `18:17:02Z`
+- rollout logs continue the same error loop without recovery:
+  - repeated `Failed to receive weights via Arrow Flight`
+  - repeated `FlightUnavailableError`
+  - repeated stale endpoint failures against old trainer host/ports on `10.128.0.56`
+
+Critical interpretation:
+- this is now strong evidence of a restart/preemption reconnect regression.
+- current HEAD can reproduce the old small direct path through:
+  - first weight transfer,
+  - multiple rollout writes,
+  - two completed train steps,
+  - but it does *not* appear to recover cleanly once the trainer disappears and restarts.
+- rollout keeps polling the old Arrow Flight client endpoints instead of switching to the trainer’s restarted server set quickly enough to continue.
+
+Implication for divergence plan:
+1. `E1` is partially successful:
+   - baseline direct/HF/small path still works *until* trainer preemption/restart.
+2. `E1` is also sufficient to expose a current regression:
+   - direct small path is no longer robust under trainer restart/preemption.
+3. this means the next highest-value work is probably not `E2` yet.
+4. instead, inspect the restart/reconnect boundary:
+   - how coordinator updates Arrow Flight server metadata after trainer restart,
+   - whether rollout refreshes `self._flight_clients` on changed server ids/hosts,
+   - whether preemption changed semantics compared with the old successful `/ahmed/iris-rl-v5p-3` run.
+
+## 2026-03-24T18:23Z — E1 ultimately recovered and finished; current HEAD still supports the old direct/HF/small success path
+
+Follow-up checks changed the interpretation materially. `E1` did not remain wedged permanently.
+
+Final Iris state:
+- root `/ahmed/iris-rl-e1-direct-hf-small-20260324-105133`: `JOB_STATE_SUCCEEDED`
+- train child: `JOB_STATE_SUCCEEDED`
+- rollout child: `JOB_STATE_SUCCEEDED`
+
+Important live facts:
+- train child finished successfully despite `preemption_count=2`
+- rollout resumed after the earlier Flight reconnect turbulence and completed cleanly
+- root coordinator finalized cleanly after both children finished
+- W&B captured both train and rollout runs; rollout summary still shows a high `inference.failed_receives`, but that did not prevent completion
+
+Terminal log signals:
+- trainer reached `Progress on:train 5.00it/5.00it`
+- rollout logged `Run state is 'completed', stopping rollout worker`
+- rollout logged `Inference worker completed after generating 9 rollouts`
+- coordinator logged `RL coordinator finished for run direct-hf-small-20260324-175631`
+
+Revised interpretation:
+- current HEAD can still execute the old successful topology and envelope:
+  - direct coordinator in the root job
+  - raw HF model identifiers
+  - small 5-step debug envelope
+- trainer preemption/restart causes visible Arrow Flight reconnect churn, but the system can recover well enough to finish this baseline run
+- this makes `E1` a pass, not a failure
+
+Implication for the divergence hunt:
+1. the core direct/HF/small baseline is still viable on current HEAD
+2. the next isolation target should move back to `E2` (`direct + GCS + small`)
+3. if `E2` fails while `E1` passes, the first clean divergence is the model source / artifact path change rather than the direct topology itself
+
+## 2026-03-24T18:26Z — Launch plan for E2 (`direct + GCS + small`)
+
+Next controlled probe:
+- topology: direct root/coordinator, same as `E1`
+- model source: switch from raw HF identifiers to the cached regional artifact
+- envelope: unchanged tiny 5-step debug run
+
+Concrete model artifact under test:
+- `gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f`
+
+Experiment goal:
+- isolate whether replacing raw HF identifiers with the GCS-backed HF export changes startup, model resolution, rollout behavior, or trainer/rollout compatibility when everything else stays fixed
+
+Execution note:
+- submit `E2` first
+- then re-check for any still-running `/ahmed/...rl...` job and stop it if one exists
+
+## 2026-03-24T18:27Z — E2 launched; no other running RL job remained to kill
+
+Submitted:
+- root job: `/ahmed/iris-rl-e2-direct-gcs-small-20260324-112640`
+- entrypoint: `uv run python experiments/exp_iris_rl_regression_direct_gcs_small.py`
+- region: `us-central1`
+
+Immediate post-submit state:
+- root entered `JOB_STATE_RUNNING`
+- task state was still `building` on the first status check
+
+Post-submit kill sweep:
+- explicitly searched for other `/ahmed/...rl...` jobs in `JOB_STATE_RUNNING`
+- excluded the newly launched `E2` root job from that sweep
+- result: `NO_OTHER_RUNNING_RL_JOBS`
+
+Interpretation:
+- the requested sequencing is satisfied:
+  1. `E2` was launched first
+  2. there was no second live RL job left to kill
+
+## 2026-03-24T18:41Z — E2 is currently infra-blocked on rollout TPU capacity, not rollout code
+
+Latest live status:
+- root: `JOB_STATE_RUNNING`
+- train child: `JOB_STATE_RUNNING`
+- rollout child: `JOB_STATE_RUNNING` at the job level, but its only task is still `pending`
+
+Observed behavior:
+- trainer successfully loaded the initial model from the regional GCS artifact:
+  - `gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f`
+- trainer served initial weights `weight_id=-1`
+- trainer is still waiting for initial rollouts with replay buffer size `0`
+- rollout has produced no user-code logs because it never actually started executing
+
+Rollout child bug report:
+- first attempt died before user code:
+  - `Worker marin-tpu_v5p_8-us-central1-a-20260324-1747-c9be5df2-worker-0 failed: Request timed out`
+- current pending reason:
+  - `Retrying (attempt 1, last: task_state_worker_failed)`
+
+Autoscaler/controller evidence:
+- unmet entry for rollout task:
+  - reason `no_capacity: tpu_v5p_8-us-central1-a=backoff`
+- `tpu_v5p_8-us-central1-a` has recent explicit create failures:
+  - `There is no more capacity in the zone "us-central1-a"`
+- `tpu_v5p_8-us-east5-a` is also blocked/backoff at the same time
+
+Interpretation:
+- `E2` is not yet a clean pass/fail on GCS-vs-HF behavior
+- the current blocker is rollout TPU placement capacity
+- because rollout never entered user code, this does not yet implicate the GCS-backed model path
+
+Next monitor focus:
+1. whether rollout retry eventually lands on capacity and starts logging
+2. whether Iris escalates this into terminal failure
+3. only after rollout actually starts can `E2` tell us whether GCS-backed startup diverges from `E1`
+
+## 2026-03-24T19:12Z — After 30 minutes, E2 exposed the first clean GCS-path rollout regression
+
+`E2` did eventually make progress beyond the initial capacity block.
+
+What changed after the wait:
+- rollout eventually obtained a TPU worker
+- rollout failure count increased to `1`
+- rollout child is currently still `JOB_STATE_RUNNING` because Iris is on a later retry attempt
+- train child is still `JOB_STATE_RUNNING`, but now with `preemption_count=2`
+
+Most important rollout bug-report evidence:
+- attempt `0`: worker-level timeout before user code
+- attempt `1`: real rollout process started and failed with:
+  - `KeyError: 'No MODEL_MAPPING registered for model: gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f'`
+- attempt `2`: currently running on a fresh TPU worker
+
+Why this matters:
+- this is the first actual code-level divergence unique to `E2`
+- `E1` (`direct + HF + small`) did not fail in rollout model resolution
+- `E2` (`direct + GCS + small`) does
+- therefore the GCS artifact path is not fully accepted by the rollout/vLLM/tpu-inference model-resolution layer
+
+Current live behavior on the latest retry:
+- rollout logs show it got far enough to:
+  - receive weights from step `-1`
+- but it then degrades into repeated Arrow Flight transport failures against trainer-hosted ports
+- trainer remains stuck waiting for initial rollouts and is not making train-step progress
+
+Interpretation:
+- `E2` is no longer just infra-blocked
+- it has now produced a real regression signal:
+  - rollout stack expects a canonical model identifier that maps through `MODEL_MAPPING`
+  - passing the raw `gs://...` model path breaks that assumption on at least one rollout startup path
+- later Flight errors are downstream noise once rollout/train are out of sync; the first meaningful bug is the `MODEL_MAPPING` failure
+
+Next debugging target:
+1. find where rollout/vLLM/tpu-inference derives architecture/model-name from `config.model_name`
+2. make the GCS-backed path carry explicit canonical model metadata instead of relying on the raw `gs://...` string
+3. rerun `E2` after that fix to see whether it then matches `E1`
+
+## 2026-03-24T19:20Z — Detailed postmortem on E2 rollout logs: GCS artifact metadata is correct; direct probe wiring is not
+
+Pulled the rollout `output.log` directly from W&B for:
+- `marin-community/marin_iris_rl_debug/direct-gcs-small-20260324-182801-rollout-0`
+- local copy: `scratch/wandb_e2/output.log`
+
+This produced the clearest causal sequence so far and separates two issues that were getting conflated.
+
+### 1. What the rollout W&B logs actually show
+
+Rollout startup sequence from W&B:
+- starts weight transfer client normally
+- initializes file rollout writer normally
+- patches TPU inference registry for:
+  - `Qwen2ForCausalLM`
+  - `MistralForCausalLM`
+- launches vLLM with:
+  - `model='gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f'`
+  - `load_format='runai_streamer'`
+- logs:
+  - `Resolved architecture: MistralForCausalLM`
+- streams the four safetensor shards successfully from GCS
+- initializes engine successfully
+- starts rollout worker successfully
+- performs first Arrow Flight receive successfully:
+  - `Received 291 params for weight_id -1`
+  - `Received new weights from step -1`
+- only then crashes during hot reload:
+  - `KeyError: 'No MODEL_MAPPING registered for model: gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f'`
+
+Critical takeaway:
+- GCS loading itself is not the first failure
+- `runai_streamer` does work for the initial model load
+- the first meaningful code failure is during rollout hot weight reload, not during base checkpoint bootstrap
+
+### 2. The GCS artifact metadata itself is correct Llama metadata
+
+Checked the actual model artifact config directly:
+- `gcloud storage cat gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f/config.json`
+
+Relevant contents:
+- `"architectures": ["LlamaForCausalLM"]`
+- `"model_type": "llama"`
+
+This matters because it rules out the most alarming hypothesis:
+- the GCS artifact is **not** mislabeled as Mistral
+- the model export itself is not obviously corrupted or semantically wrong
+
+### 3. Why rollout says `Resolved architecture: MistralForCausalLM`
+
+This does **not** appear to come from the GCS config metadata. It comes from the TPU vLLM / tpu_inference compatibility path.
+
+Repository evidence:
+- [vllm.py:160](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/environments/inference_ctx/vllm.py:160) explicitly documents:
+  - `vLLM already resolves Mistral onto the Llama implementation`
+- [vllm.py:162](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/environments/inference_ctx/vllm.py:162) registers:
+  - `"MistralForCausalLM": LlamaForCausalLM`
+- [test_inference_ctx.py:346](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/tests/rl/test_inference_ctx.py:346) tests exactly that behavior:
+  - `registry["MistralForCausalLM"] is FakeLlamaForCausalLM`
+
+So the current best interpretation is:
+- `MistralForCausalLM` in these rollout logs is a backend architecture alias inside TPU vLLM/tpu_inference
+- it is **not** evidence that we loaded Mixtral
+- it is **not** evidence that the underlying artifact stopped being Llama
+
+This also explains why the old successful direct/HF rollout and the new direct/GCS rollout can differ here:
+- `E1` used:
+  - canonical HF model id
+  - `load_format='dummy'`
+  - vLLM logged `Resolved architecture: LlamaForCausalLM`
+- `E2` used:
+  - GCS object-store path
+  - `load_format='runai_streamer'`
+  - TPU vLLM logged `Resolved architecture: MistralForCausalLM`
+
+So there are two different backend resolution paths:
+1. `HF repo id + dummy loader` -> `LlamaForCausalLM`
+2. `GCS path + runai_streamer` -> `MistralForCausalLM`
+
+That discrepancy is real and worth understanding, but it is still separate from the actual `MODEL_MAPPING` crash.
+
+### 4. The direct E2 probe has a wiring bug: it does not set `canonical_model_name`
+
+This is the most concrete bug found so far.
+
+In the direct `E2` probe:
+- [exp_iris_rl_regression_direct_gcs_small.py:128](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp_iris_rl_regression_direct_gcs_small.py:128)
+- we pass:
+  - `model_name=MODEL_PATH`
+  - but do **not** pass `canonical_model_name`
+
+In the inference context:
+- [vllm.py:117](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/environments/inference_ctx/vllm.py:117)
+- `self.canonical_model_name = inference_config.canonical_model_name or inference_config.model_name`
+
+So for `E2`, `canonical_model_name` becomes the raw GCS path:
+- `gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f`
+
+Then hot reload uses that canonical name for mapping lookup:
+- [vllm.py:355](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/environments/inference_ctx/vllm.py:355)
+- `mappings=MODEL_MAPPINGS[self.canonical_model_name]`
+
+But `MODEL_MAPPINGS` only contains canonical HF-style names such as:
+- `meta-llama/Llama-3.1-8B-Instruct`
+- [vllm_utils.py:89](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/environments/inference_ctx/vllm_utils.py:89)
+
+And the fallback matcher does not understand this GCS path:
+- [vllm_utils.py:110](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/environments/inference_ctx/vllm_utils.py:110)
+- it only special-cases `Qwen2.5`
+
+Therefore the `KeyError` is expected from current code once rollout hot reload reaches mapping lookup with the raw GCS path.
+
+### 5. Important scope boundary: the normal RL experiment path already does the right thing
+
+The direct `E2` probe bug above does **not** automatically mean the main executor-backed RL experiment path has the same exact bug.
+
+In the normal helper path:
+- [rl_experiment_utils.py:277](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/rl_experiment_utils.py:277)
+- we pass:
+  - `model_name=model_path`
+  - `canonical_model_name=config.model_config.name`
+- and that canonical name is the HF-style id:
+  - `meta-llama/Llama-3.1-8B-Instruct`
+
+So:
+- the direct `E2` probe definitely has a bug
+- the main executor-backed RL path may already avoid this particular one
+- this means `E2` still did its job as a regression probe, but its current failure is partly probe-construction-specific
+
+### 6. Updated interpretation for the experiment matrix
+
+What `E2` has proven so far:
+1. using the GCS-backed model path changes the vLLM/Tensor-TPU loader path compared with `E1`
+2. that path can resolve architecture labels differently (`MistralForCausalLM` vs `LlamaForCausalLM`)
+3. the direct probe currently fails because it did not preserve canonical model identity through hot reload
+
+What `E2` has **not** yet proven:
+1. that the underlying GCS model artifact is wrong
+2. that the executor-backed RL path has the exact same `MODEL_MAPPING` bug
+3. that `MistralForCausalLM` means the wrong family of weights was loaded
+
+### 7. Recommended next actions for the next agent
+
+Highest-value immediate next step:
+1. patch the direct `E2` probe to set:
+   - `canonical_model_name='meta-llama/Llama-3.1-8B-Instruct'`
+2. rerun `E2`
+3. check whether it now matches `E1` behavior through:
+   - first weight transfer
+   - first rollout write
+   - first train step
+
+After that:
+1. if patched `E2` passes, move to `E3`
+2. if patched `E2` still shows `MistralForCausalLM` but otherwise works, treat the architecture-name difference as a backend loader quirk, not a primary bug
+3. if patched `E2` still fails in another way, that next failure becomes the real GCS-path divergence
+
+## 2026-03-24T19:26Z — Killed stale E2 and patched the direct probe to preserve canonical model identity
+
+Executed user-requested cleanup first:
+- stopped `/ahmed/iris-rl-e2-direct-gcs-small-20260324-112640`
+- Iris terminated:
+  - root job
+  - train child
+  - rollout child
+
+Applied the narrow direct-probe fix:
+- file: [exp_iris_rl_regression_direct_gcs_small.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp_iris_rl_regression_direct_gcs_small.py)
+- added:
+  - `CANONICAL_MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"`
+- changed rollout vLLM config to pass:
+  - `model_name=MODEL_PATH`
+  - `canonical_model_name=CANONICAL_MODEL_NAME`
+
+Why this fix is correct:
+- it keeps the experimental variable intact:
+  - rollout still loads the base checkpoint from the regional GCS artifact via `runai_streamer`
+- but it removes the known probe-construction bug:
+  - hot reload will no longer use the raw `gs://...` path for `MODEL_MAPPINGS` / `MODEL_TRANSPOSE_KEYS`
+
+Expected effect on the next rerun:
+- if the previous `MODEL_MAPPING` failure was solely due to missing canonical identity, the rerun should get past:
+  - `Received new weights from step -1`
+  - `reload_model: calling sync_weights(...)`
+- if another failure appears after that, that next failure becomes the real post-fix `E2` divergence
+
+Fresh rerun submitted:
+- root job: `/ahmed/iris-rl-e2b-direct-gcs-small-20260324-122630`
+- purpose: retest `E2` after preserving canonical model identity while keeping GCS-backed checkpoint loading
+- next verification boundary:
+  - rollout should cross the old failure point after `Received new weights from step -1`
+
+## 2026-03-24T19:54Z — E2b succeeded end to end; direct GCS small is now a pass
+
+Checked the live Iris state for the fixed rerun:
+- command:
+  - `uv run iris --config=lib/iris/examples/marin.yaml job bug-report /ahmed/iris-rl-e2b-direct-gcs-small-20260324-122630`
+
+Terminal job states:
+- root job `/ahmed/iris-rl-e2b-direct-gcs-small-20260324-122630`:
+  - `State: succeeded`
+  - `Started: 2026-03-24T19:26:49Z`
+  - `Finished: 2026-03-24T19:48:49Z`
+  - `Duration: 22m 0s`
+- descendant `/ahmed/iris-rl-e2b-direct-gcs-small-20260324-122630/rl-direct-gcs-small-20260324-192752-train`:
+  - `succeeded`
+- descendant `/ahmed/iris-rl-e2b-direct-gcs-small-20260324-122630/rl-direct-gcs-small-20260324-192752-rollout-0`:
+  - `succeeded`
+
+This is the key result:
+- the fixed `E2b` probe passed with:
+  - direct topology
+  - GCS-backed base checkpoint loading via `runai_streamer`
+  - the same small 5-step envelope used for the old baseline
+
+### 1. What changed between failed `E2` and successful `E2b`
+
+The only intentional code change between the two direct GCS probes was preserving canonical model identity in the rollout inference config.
+
+In the fixed probe:
+- file: [exp_iris_rl_regression_direct_gcs_small.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp_iris_rl_regression_direct_gcs_small.py)
+- added:
+  - `CANONICAL_MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"`
+- rollout vLLM config now passes both:
+  - `model_name=MODEL_PATH`
+  - `canonical_model_name=CANONICAL_MODEL_NAME`
+
+Interpretation:
+- the earlier direct `E2` failure was caused by probe construction, not by a fundamental incompatibility between RL rollout and GCS-backed model artifacts
+- hot reload needed the canonical HF-style model identity for:
+  - `MODEL_MAPPINGS`
+  - transpose-key lookups
+  - architecture-specific reload behavior
+
+### 2. What E2b proved at runtime
+
+The successful rerun crossed the exact old failure boundary.
+
+Important rollout sequence from the successful run:
+- rollout started with the GCS-backed artifact
+- rollout received first weights:
+  - `Received new weights from step -1`
+- rollout hot reload crossed the previous crash site:
+  - `reload_model: starting prefix cache reset`
+  - `reload_model: converting state dict`
+  - `reload_model: calling sync_weights (...)`
+  - `reload_model: sync_weights done ...`
+  - `reload_model: complete ...`
+  - `First weight transfer complete, inference can proceed`
+
+After that, rollout generated actual batches:
+- `Generated rollout with 10 groups from lesson math_full at step -1`
+- `Generated rollout with 4 groups from lesson math_full at step -1`
+- `Generated rollout with 4 groups from lesson math_full at step 0`
+- `Generated rollout with 4 groups from lesson math_full at step 1`
+- `Generated rollout with 4 groups from lesson math_full at step 2`
+- `Generated rollout with 4 groups from lesson math_full at step 3`
+
+Trainer also made real progress and completed the run:
+- train advanced through the 5-step small envelope
+- both train and rollout exited successfully
+- coordinator/root job exited successfully
+
+### 3. How to interpret the remaining weirdness in the logs
+
+Even on the successful `E2b` run, the rollout path still reported:
+- `Resolved architecture: MistralForCausalLM`
+
+That means:
+- this architecture-name discrepancy is not by itself a fatal bug
+- it is most likely a TPU vLLM / `runai_streamer` loader-path quirk or aliasing behavior
+- it should not currently be treated as evidence that we loaded Mixtral or the wrong weights
+
+This conclusion is now stronger than before because:
+- the GCS artifact metadata is still known-good Llama metadata
+- the fixed direct GCS probe ran to completion with that same `MistralForCausalLM` log line present
+
+There was also a late Arrow Flight transport error near shutdown in the successful run:
+- connection refused while polling for another weight update
+- but it happened after the run had already reached completion and Iris marked the job tree `succeeded`
+
+Current interpretation of that late transport error:
+- teardown/shutdown race noise
+- not the primary failure mode for this branch
+
+### 4. Updated experiment-matrix interpretation
+
+Current state of the divergence matrix:
+
+`E1. Direct + HF + small`
+- status: pass
+- meaning:
+  - current HEAD still supports the old direct/HF/small baseline
+
+`E2. Direct + GCS + small`
+- original result: failed
+- revised interpretation:
+  - failure was a probe-specific wiring bug due to missing `canonical_model_name`
+
+`E2b. Direct + GCS + small (fixed canonical identity)`
+- status: pass
+- meaning:
+  - direct GCS-backed rollout + train works on current HEAD once canonical model identity is preserved
+  - switching from HF ids to regional GCS artifacts is not, by itself, the fundamental blocker
+
+This narrows the search space materially:
+- the main remaining divergence is no longer "HF vs GCS" in the direct small path
+- the next controlled comparison should be topology:
+  - `E3 = executor + GCS + small`
+
+### 5. Hard conclusions the next agent should rely on
+
+1. The old known-good direct path still works on current HEAD (`E1` pass).
+2. The direct GCS path also works on current HEAD once canonical model identity is preserved (`E2b` pass).
+3. The earlier `MODEL_MAPPING` error does **not** prove a fundamental GCS artifact bug.
+4. The presence of `Resolved architecture: MistralForCausalLM` in rollout logs does **not** currently correlate with failure; it also appears on the successful `E2b` run.
+5. The next discriminating experiment should be `E3`:
+   - executor topology
+   - GCS-backed model artifact
+   - small envelope
+6. Only after `E3` should we return to the 500-step/OOM branch, because otherwise topology and envelope remain confounded.
+
+### 6. Immediate next step
+
+Run `E3` as the first topology-only change after two green direct baselines:
+- keep:
+  - GCS-backed model artifact
+  - small envelope
+- change only:
+  - launch topology from direct coordinator to executor-wrapped step
+
+Decision rule:
+- if `E3` fails while `E2b` passes, the first clean divergence is executor topology / executor-managed runtime pathing
+- if `E3` also passes, the remaining divergence is likely in the production envelope (`500` steps, checkpoint cadence, or resource pressure), not in GCS model loading or basic topology
