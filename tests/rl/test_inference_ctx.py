@@ -10,9 +10,22 @@ import pytest
 from levanter.inference.openai import ChatMessage
 from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
-from transformers import AutoTokenizer
 
 from marin.rl.environments.inference_ctx import LevanterInferenceContext, LevanterInferenceContextConfig
+
+
+def _try_load_tokenizer(model_id: str):
+    """Attempt to load a tokenizer, return None on failure."""
+    try:
+        from transformers import AutoTokenizer
+
+        return AutoTokenizer.from_pretrained(model_id)
+    except Exception:
+        return None
+
+
+_llama3_tok = _try_load_tokenizer("NousResearch/Meta-Llama-3-8B-Instruct")
+_needs_llama3 = pytest.mark.skipif(_llama3_tok is None, reason="Llama-3 tokenizer not accessible (no HF connection)")
 
 
 @dataclass
@@ -37,13 +50,8 @@ class DummyInferenceServer:
 @pytest.fixture
 def llama3_tokenizer():
     """Llama 3 tokenizer with chat template (uses tiktoken, not sentencepiece)."""
-    return AutoTokenizer.from_pretrained("NousResearch/Meta-Llama-3-8B-Instruct")
-
-
-@pytest.fixture
-def gpt2_tokenizer():
-    """GPT-2 tokenizer without chat template (for fallback testing)."""
-    return AutoTokenizer.from_pretrained("gpt2")
+    assert _llama3_tok is not None
+    return _llama3_tok
 
 
 @pytest.fixture
@@ -94,6 +102,7 @@ def create_choice_with_logprobs(tokenizer, response_text: str, logprobs_values: 
     )
 
 
+@_needs_llama3
 def test_apply_chat_template(llama3_tokenizer):
     messages = [
         ChatMessage(role="system", content="You are a helpful assistant."),
@@ -108,6 +117,7 @@ def test_apply_chat_template(llama3_tokenizer):
     assert "<|start_header_id|>assistant<|end_header_id|>" in decoded  # Llama 3's generation prompt marker
 
 
+@_needs_llama3
 def test_bpe_round_trip_various_texts(llama3_tokenizer):
     """Validate BPE round-trip for diverse text patterns."""
     for text in ["!!}", "Hello world", "  spaces  ", "123", "\n\n"]:
@@ -116,6 +126,7 @@ def test_bpe_round_trip_various_texts(llama3_tokenizer):
             assert llama3_tokenizer.convert_tokens_to_ids(token_str) == token_id
 
 
+@_needs_llama3
 def test_tokenize_prompt_adds_special_tokens(inference_ctx, llama3_tokenizer):
     """Test that tokenize_prompt uses chat template and adds special tokens."""
     prompt = "What is 2+2?"
@@ -157,6 +168,7 @@ def test_tokenize_prompt_fallback_no_template(gpt2_tokenizer, dummy_server):
     assert prompt in decoded
 
 
+@_needs_llama3
 def test_response_tokens_from_choice(inference_ctx, llama3_tokenizer):
     """Test extracting token IDs from Choice using BPE round-trip."""
     response_text = "The answer is 42"
@@ -169,6 +181,7 @@ def test_response_tokens_from_choice(inference_ctx, llama3_tokenizer):
     np.testing.assert_array_equal(tokens, expected_tokens)
 
 
+@_needs_llama3
 def test_logprobs_from_choice(inference_ctx, llama3_tokenizer):
     """Test extracting logprobs array from Choice."""
     response_text = "The answer"
@@ -182,6 +195,7 @@ def test_logprobs_from_choice(inference_ctx, llama3_tokenizer):
     assert len(logprobs) == expected_length
 
 
+@_needs_llama3
 def test_missing_logprobs_raises(inference_ctx):
     """Test that missing logprobs raises ValueError."""
     choice = Choice(
@@ -198,6 +212,7 @@ def test_missing_logprobs_raises(inference_ctx):
         inference_ctx.logprobs_from_choice(choice)
 
 
+@_needs_llama3
 def test_create_rollout_from_choice_end_to_end(inference_ctx, llama3_tokenizer):
     """Test full rollout construction from prompt and choice."""
     prompt = "What is 2+2?"
