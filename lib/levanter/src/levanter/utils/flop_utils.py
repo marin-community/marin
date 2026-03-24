@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -14,9 +14,13 @@ def lm_flops_per_token(
     num_experts: int = 1,
     num_shared_experts: int = 0,
     num_experts_per_tok: int = 1,
+    shared_intermediate_dim: int | None = None,
 ):
     head_dim = hidden_dim / num_heads
-    mlp = 2 * (3 if glu else 2) * hidden_dim * intermediate_dim * (num_experts_per_tok + num_shared_experts)
+    shared_intermediate_dim = intermediate_dim if shared_intermediate_dim is None else shared_intermediate_dim
+    routed_mlp = 2 * (3 if glu else 2) * hidden_dim * intermediate_dim * num_experts_per_tok
+    shared_mlp = 2 * (3 if glu else 2) * hidden_dim * shared_intermediate_dim * num_shared_experts
+    mlp = routed_mlp + shared_mlp
     if num_experts > 1:
         mlp += 2 * hidden_dim * num_experts  # router layer
     qkv_proj = 2 * hidden_dim * (num_heads * head_dim + 2 * num_kv_heads * head_dim)

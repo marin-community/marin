@@ -1,13 +1,26 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+import logging
 import math
 import random
+import threading
 import time
-from collections.abc import Callable
-from datetime import datetime, timezone
+from collections.abc import Callable, Iterator
+from datetime import datetime, timedelta, timezone
 
 from iris.rpc import time_pb2
+
+logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def log_time(label: str, level: int = logging.INFO) -> Iterator[None]:
+    t_start = time.perf_counter()
+    yield
+    t_end = time.perf_counter()
+    logger.log(level, f"{label} took {timedelta(seconds=t_end - t_start)}")
 
 
 def _now_ms() -> int:
@@ -92,18 +105,24 @@ class Deadline:
             )
         return self._timestamp
 
-    def raise_if_expired(self, message: str = "Deadline exceeded") -> None:
+    def raise_if_expired(self, message: str = "Deadline exceeded", now: "Timestamp | None" = None) -> None:
         """Raise TimeoutError if deadline has passed."""
-        if self.expired():
+        if self.expired(now=now):
             raise TimeoutError(message)
 
-    def remaining_ms(self) -> int:
+    def remaining_ms(self, now: "Timestamp | None" = None) -> int:
         """Get remaining milliseconds until deadline (0 if expired)."""
+        if self._timestamp is not None:
+            if now is None:
+                now = Timestamp.now()
+            return max(0, self._timestamp._epoch_ms - now._epoch_ms)
         remaining_seconds = self._deadline - time.monotonic()
         return max(0, int(remaining_seconds * 1000))
 
-    def remaining_seconds(self) -> float:
+    def remaining_seconds(self, now: "Timestamp | None" = None) -> float:
         """Get remaining seconds until deadline (0.0 if expired)."""
+        if self._timestamp is not None:
+            return self.remaining_ms(now=now) / 1000.0
         return max(0.0, self._deadline - time.monotonic())
 
     def __repr__(self) -> str:
@@ -352,24 +371,101 @@ class RateLimiter:
         self._interval = interval_seconds
         self._last_run: float | None = None
 
-    def should_run(self) -> bool:
+    def should_run(self, now: float | None = None) -> bool:
         """Check if enough time has passed; updates last run time if True."""
-        now = time.monotonic()
+        now = now if now is not None else time.monotonic()
         if self._last_run is None or (now - self._last_run >= self._interval):
             self._last_run = now
             return True
         return False
 
-    def time_until_next(self) -> float:
+    def time_until_next(self, now: float | None = None) -> float:
         """Get seconds until next allowed run (0.0 if can run now)."""
         if self._last_run is None:
             return 0.0
-        elapsed = time.monotonic() - self._last_run
+        now = now if now is not None else time.monotonic()
+        elapsed = now - self._last_run
         return max(0.0, self._interval - elapsed)
+
+    def mark_run(self, now: float | None = None) -> None:
+        """Record that an iteration is starting now.
+
+        Use this when composing the limiter with an external wait mechanism
+        (e.g., threading.Event.wait) instead of using the built-in wait().
+        """
+        self._last_run = now if now is not None else time.monotonic()
+
+    def wait(self, cancel: threading.Event | None = None) -> bool:
+        """Block until the rate limit interval has elapsed since the last run.
+
+        Uses the time remaining from the last run to avoid drift: if the work
+        between calls takes longer than the interval, returns immediately so
+        the loop stays as close to the target cadence as possible.
+
+        Args:
+            cancel: Optional event that, when set, interrupts the wait early.
+
+        Returns:
+            True if the interval elapsed normally, False if cancelled.
+        """
+        remaining = self.time_until_next()
+        if remaining > 0:
+            if cancel is not None:
+                cancel.wait(timeout=remaining)
+                if cancel.is_set():
+                    return False
+            else:
+                time.sleep(remaining)
+        self.mark_run()
+        return True
 
     def reset(self) -> None:
         """Reset rate limiter to allow immediate run."""
         self._last_run = None
+
+
+class TokenBucket:
+    """Token bucket rate limiter with rolling replenishment.
+
+    Allows up to `capacity` actions per `refill_period`, with smooth
+    per-second refill. Thread-safe. Supports deterministic testing via
+    Timestamp-based `try_acquire(now=...)`.
+
+    Example:
+        bucket = TokenBucket(capacity=5, refill_period=Duration.from_minutes(1))
+        if bucket.try_acquire():
+            create_vm()
+    """
+
+    def __init__(self, capacity: int, refill_period: Duration):
+        self._capacity = capacity
+        self._tokens = float(capacity)
+        self._refill_rate = capacity / refill_period.to_seconds()  # tokens/sec
+        self._last_refill = Timestamp.from_ms(0)
+        self._lock = threading.Lock()
+
+    def try_acquire(self, n: int = 1, now: Timestamp | None = None) -> bool:
+        """Try to consume n tokens. Returns True if successful."""
+        now = now or Timestamp.now()
+        with self._lock:
+            self._refill(now)
+            if self._tokens >= n:
+                self._tokens -= n
+                return True
+            return False
+
+    def _refill(self, now: Timestamp) -> None:
+        elapsed_ms = now.epoch_ms() - self._last_refill.epoch_ms()
+        if elapsed_ms <= 0:
+            return
+        elapsed_seconds = elapsed_ms / 1000.0
+        self._tokens = min(self._capacity, self._tokens + elapsed_seconds * self._refill_rate)
+        self._last_refill = now
+
+    @property
+    def available(self) -> int:
+        """Current available tokens (approximate, no refill)."""
+        return int(self._tokens)
 
 
 class ExponentialBackoff:
@@ -432,6 +528,15 @@ class ExponentialBackoff:
 
     def reset(self) -> None:
         self._attempt = 0
+
+    def copy(self) -> "ExponentialBackoff":
+        """Create a fresh instance with the same configuration."""
+        return ExponentialBackoff(
+            initial=self._initial,
+            maximum=self._maximum,
+            factor=self._factor,
+            jitter=self._jitter,
+        )
 
     def wait_until(self, condition: Callable[[], bool], timeout: Duration) -> bool:
         """Wait for a condition to become true with exponential backoff.

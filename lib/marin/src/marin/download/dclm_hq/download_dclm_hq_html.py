@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -21,8 +21,8 @@ import os
 import re
 from dataclasses import dataclass
 
-import fsspec
 import requests
+from iris.marin_fs import open_url
 import warcio
 from marin.utils import fsspec_glob
 from tqdm import tqdm
@@ -30,7 +30,7 @@ from zephyr import Dataset, ZephyrContext
 from zephyr.writers import ensure_parent_dir
 
 CC_IDX_HOST_URL = "http://34.72.201.218:8080"
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -121,8 +121,8 @@ def process_file(task: FileTask) -> None:
     try:
         ensure_parent_dir(task.output_file_path)
         with (
-            fsspec.open(task.input_file_path, compression="zstd") as source,
-            fsspec.open(task.output_file_path, "wt", compression="gzip") as output,
+            open_url(task.input_file_path, compression="zstd") as source,
+            open_url(task.output_file_path, "wt", compression="gzip") as output,
         ):
             text_wrapper = io.TextIOWrapper(source, encoding="utf-8")
 

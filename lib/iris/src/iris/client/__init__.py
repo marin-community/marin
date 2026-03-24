@@ -1,11 +1,10 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """High-level client layer with automatic namespace management and job hierarchy."""
 
 from iris.actor.resolver import (
     FixedResolver,
-    GcsResolver,
     ResolvedEndpoint,
     Resolver,
     ResolveResult,
@@ -31,7 +30,6 @@ __all__ = [
     "ClusterResolver",
     "EndpointRegistry",
     "FixedResolver",
-    "GcsResolver",
     "IrisClient",
     "IrisContext",
     "Job",

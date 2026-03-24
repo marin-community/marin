@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import jax
 import jax.numpy as jnp
 import jmp
 import optax
+from fray.cluster import ResourceConfig
 from haliax import Axis
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -23,7 +24,6 @@ import levanter.callbacks as callbacks
 import levanter.tracker
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.checkpoint import load_checkpoint
 from levanter.data import AsyncDataset, DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
 from levanter.data.text import GrugLmExample, LmDataConfig
@@ -37,6 +37,8 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
+from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
+from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.base.model import GrugModelConfig, Transformer
 
 logger = logging.getLogger(__name__)
@@ -74,6 +76,7 @@ class GrugRunConfig:
 
     model: GrugModelConfig
     data: LmDataConfig
+    resources: ResourceConfig
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
@@ -148,7 +151,7 @@ def build_tagged_evaluator(
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
-        per_pos_loss = model.compute_next_token_loss(
+        per_pos_loss = model.next_token_loss(
             batch.tokens,
             batch.loss_weight,
             mask=batch.attn_mask,
@@ -221,7 +224,24 @@ class GrugTrainState:
     step: jax.Array
     params: Transformer
     opt_state: optax.OptState
-    ema_params: Transformer
+    ema_params: Transformer | None
+
+
+def initial_state(
+    model_config: GrugModelConfig,
+    *,
+    optimizer: optax.GradientTransformation,
+    mp: jmp.Policy,
+    key: PRNGKeyArray,
+    ema_beta: float | None,
+) -> GrugTrainState:
+    params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    return GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        opt_state=optimizer.init(params),
+        ema_params=params if ema_beta is not None else None,
+    )
 
 
 def _make_train_step(
@@ -246,7 +266,7 @@ def _make_train_step(
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
-            return compute_params.compute_next_token_loss(
+            return compute_params.next_token_loss(
                 batch.tokens,
                 batch.loss_weight,
                 mask=batch.attn_mask,
@@ -259,8 +279,10 @@ def _make_train_step(
         params = optax.apply_updates(state.params, updates)
 
         if ema_beta is None:
-            ema_params = params
+            ema_params = None
         else:
+            if state.ema_params is None:
+                raise ValueError("ema_params must be initialized when ema_beta is set.")
             ema_params = jax.tree_util.tree_map(
                 lambda old, new: ema_beta * old + (1.0 - ema_beta) * new,
                 state.ema_params,
@@ -295,7 +317,7 @@ def _make_train_step(
     return train_step
 
 
-def run_grug(config: GrugRunConfig) -> None:
+def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
     trainer.initialize()
@@ -339,12 +361,12 @@ def run_grug(config: GrugRunConfig) -> None:
 
         @jax.jit
         def _init_state(model_rng):
-            params = trainer.mp.cast_to_param(Transformer.init(config.model, key=model_rng))
-            return GrugTrainState(
-                step=jnp.array(0, dtype=jnp.int32),
-                params=params,
-                opt_state=optimizer.init(params),
-                ema_params=params,
+            return initial_state(
+                config.model,
+                optimizer=optimizer,
+                mp=trainer.mp,
+                key=model_rng,
+                ema_beta=config.trainer.ema_beta,
             )
 
         state = _init_state(model_key)
@@ -353,23 +375,13 @@ def run_grug(config: GrugRunConfig) -> None:
         checkpoint_path = trainer.load_checkpoint_path
         if checkpoint_path is None and checkpointer is not None:
             checkpoint_path = trainer.checkpointer.expanded_path(run_id)
-        if checkpoint_path is None:
-            if trainer.load_checkpoint:
-                raise FileNotFoundError("load_checkpoint=True but no checkpoint path is configured.")
-        elif trainer.load_checkpoint is not False:
-            try:
-                state = load_checkpoint(
-                    state,
-                    checkpoint_path,
-                    discover_latest=True,
-                    axis_mapping=None,
-                    mesh=mesh,
-                    allow_partial=trainer.allow_partial_checkpoint,
-                )
-            except FileNotFoundError:
-                if trainer.load_checkpoint is True:
-                    raise
-                logger.info(f"Checkpoint not found at {checkpoint_path}. Starting from scratch.")
+        state = restore_grug_state_from_checkpoint(
+            state,
+            checkpoint_path=checkpoint_path,
+            load_checkpoint_setting=trainer.load_checkpoint,
+            mesh=mesh,
+            allow_partial=trainer.allow_partial_checkpoint,
+        )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
@@ -396,7 +408,7 @@ def run_grug(config: GrugRunConfig) -> None:
         state_callbacks = StateCallbackRunner[GrugTrainState](
             step_getter=lambda s: s.step,
             model_getter=lambda s: s.params,
-            eval_model_getter=lambda s: s.ema_params,
+            eval_model_getter=lambda s: s.ema_params if s.ema_params is not None else s.params,
             opt_state_getter=lambda s: s.opt_state,
         )
         state_callbacks.add_hook(
@@ -436,7 +448,8 @@ def run_grug(config: GrugRunConfig) -> None:
         # Main optimization loop.
         try:
             while int(state.step) < trainer.num_train_steps:
-                batch = next(iterator)
+                with jax.profiler.TraceAnnotation("load_batch"):
+                    batch = next(iterator)
                 step_start = time.perf_counter()
                 current_step = int(state.step)
                 # grad_watch runs only on its configured interval.
@@ -449,25 +462,45 @@ def run_grug(config: GrugRunConfig) -> None:
                 jax.block_until_ready(metrics["train/loss"])
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
-                state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
-                last_loss = metrics["train/loss"]
-                last_step_duration = duration
-                levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
-                levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
+                with jax.profiler.TraceAnnotation("callbacks"):
+                    state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
+                    last_loss = metrics["train/loss"]
+                    last_step_duration = duration
+                    levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
+                    levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
 
-                if watch_stats is not None:
-                    levanter.tracker.log(watch_stats, step=step)
+                    if watch_stats is not None:
+                        levanter.tracker.log(watch_stats, step=step)
 
                 if checkpointer is not None:
-                    checkpointer.on_step(tree={"train_state": state}, step=int(state.step))
-        finally:
+                    checkpointer.on_step(tree=state, step=int(state.step))
+        except BaseException:
+            logger.exception(
+                "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
+            )
+            raise
+        else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
-                checkpointer.on_step(tree={"train_state": state}, step=int(state.step), force=True)
+                checkpointer.on_step(tree=state, step=int(state.step), force=True)
                 checkpointer.wait_until_finished()
 
     levanter.tracker.current_tracker().finish()
+
+
+def run_grug(config: GrugRunConfig) -> None:
+    """Dispatch grug training through Fray jobs."""
+    trainer = config.trainer.trainer
+    if trainer.id is None:
+        raise ValueError("trainer.id must be set before dispatching grug training.")
+
+    dispatch_grug_training_run(
+        run_id=trainer.id,
+        config=config,
+        local_entrypoint=_run_grug_local,
+        resources=config.resources,
+    )
 
 
 __all__ = [
@@ -475,5 +508,6 @@ __all__ = [
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "initial_state",
     "run_grug",
 ]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -10,19 +10,26 @@ using HfFileSystem for direct streaming of data transfer.
 import logging
 import os
 import random
+import socket
 import time
 from dataclasses import dataclass, field
 
 import draccus
-import fsspec
+import huggingface_hub
 from huggingface_hub import HfFileSystem
+from iris.marin_fs import open_url, url_to_fs
 from huggingface_hub.errors import HfHubHTTPError
+from packaging.version import Version
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
+
+HF_PROTOCOL_PREFIX = "hf://"
+HF_BUCKET_PATH_PREFIX = "buckets/"
 
 
 @dataclass(frozen=True)
@@ -54,13 +61,72 @@ class DownloadConfig:
         # spaces/ for spaces, and models do not need a prefix in the URL.
     )
 
-    zephyr_max_parallelism: int = 32
+    zephyr_max_parallelism: int = 8
     """Maximum parallelism of the Zephyr download job"""
+
+    read_timeout_seconds: float = 120.0
+    """Socket read timeout while streaming each HF file. Timeout failures trigger retries."""
+
+    progress_log_interval_seconds: float = 60.0
+    """Log a heartbeat for each in-flight shard every N seconds while bytes are flowing."""
+
+    read_chunk_size_mib: int = 8
+    """Chunk size for each streaming read from HF."""
+
+
+def _strip_hf_protocol(path: str) -> str:
+    return path.removeprefix(HF_PROTOCOL_PREFIX).lstrip("/")
+
+
+def _resolve_hf_source_path(cfg: DownloadConfig) -> str:
+    source_path = (
+        os.path.join(cfg.hf_repo_type_prefix, cfg.hf_dataset_id) if cfg.hf_repo_type_prefix else cfg.hf_dataset_id
+    )
+    return _strip_hf_protocol(source_path)
+
+
+def _assert_bucket_support_available(source_path: str) -> None:
+    if not source_path.startswith(HF_BUCKET_PATH_PREFIX):
+        return
+
+    if Version(huggingface_hub.__version__) < Version("1.6.0"):
+        raise RuntimeError(
+            f"Bucket paths require huggingface_hub>=1.6.0, found {huggingface_hub.__version__}. "
+            "Upgrade the runtime environment to a buckets-capable huggingface_hub version."
+        )
+
+
+def _relative_path_in_source(file_path: str, source_path: str) -> str:
+    normalized_file = _strip_hf_protocol(file_path)
+    normalized_source = _strip_hf_protocol(source_path).rstrip("/")
+
+    source_prefix = f"{normalized_source}/"
+    if normalized_file.startswith(source_prefix):
+        return normalized_file.removeprefix(source_prefix)
+
+    source_parts = [segment for segment in normalized_source.split("/") if segment]
+    file_parts = [segment for segment in normalized_file.split("/") if segment]
+
+    if len(file_parts) >= len(source_parts):
+        matches_source = True
+        for source_segment, file_segment in zip(source_parts, file_parts, strict=False):
+            if source_segment == file_segment:
+                continue
+            if file_segment.split("@", 1)[0] == source_segment:
+                continue
+            matches_source = False
+            break
+
+        if matches_source:
+            return "/".join(file_parts[len(source_parts) :])
+
+    # Backwards-compatible fallback for historical dataset path layout.
+    return normalized_file.split("/", 3)[-1]
 
 
 def ensure_fsspec_path_writable(output_path: str) -> None:
     """Check if the fsspec path is writable by trying to create and delete a temporary file."""
-    fs, _ = fsspec.core.url_to_fs(output_path)
+    fs, _ = url_to_fs(output_path)
     try:
         fs.mkdirs(output_path, exist_ok=True)
         test_path = os.path.join(output_path, "test_write_access")
@@ -71,7 +137,15 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
         raise ValueError(f"No write access to fsspec path: {output_path} ({e})") from e
 
 
-def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path: str, expected_size: int | None = None):
+def stream_file_to_fsspec(
+    gcs_output_path: str,
+    file_path: str,
+    fsspec_file_path: str,
+    expected_size: int | None = None,
+    read_timeout_seconds: float = 120.0,
+    progress_log_interval_seconds: float = 60.0,
+    read_chunk_size_mib: int = 8,
+):
     """Stream a file from HfFileSystem to another fsspec path using atomic write.
 
     Uses atomic_rename to write to a temp file first, then rename on success.
@@ -85,9 +159,8 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
             the download will fail if the downloaded size doesn't match.
     """
     hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
-    target_fs, _ = fsspec.core.url_to_fs(gcs_output_path)
-    # Use 256 MB chunk size for large files
-    chunk_size = 256 * 1024 * 1024
+    target_fs, _ = url_to_fs(gcs_output_path)
+    chunk_size = max(1, int(read_chunk_size_mib)) * 1024 * 1024
     max_retries = 20
     # 15 minutes max sleep
     max_sleep = 15 * 60
@@ -101,10 +174,38 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
             target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
             bytes_written = 0
             with atomic_rename(fsspec_file_path) as temp_path:
-                with hf_fs.open(file_path, "rb") as src_file, fsspec.open(temp_path, "wb") as dest_file:
-                    while chunk := src_file.read(chunk_size):
-                        dest_file.write(chunk)
-                        bytes_written += len(chunk)
+                previous_socket_timeout = socket.getdefaulttimeout()
+                socket.setdefaulttimeout(read_timeout_seconds)
+                try:
+                    with (
+                        hf_fs.open(file_path, "rb", block_size=chunk_size) as src_file,
+                        open_url(temp_path, "wb") as dest_file,
+                    ):
+                        start_time = time.monotonic()
+                        next_progress_log = start_time + progress_log_interval_seconds
+                        while True:
+                            try:
+                                chunk = src_file.read(chunk_size)
+                            except TimeoutError as timeout_error:
+                                raise TimeoutError(
+                                    f"Timed out reading from {file_path} after "
+                                    f"{read_timeout_seconds:.1f}s with {bytes_written} bytes written"
+                                ) from timeout_error
+                            if not chunk:
+                                break
+                            dest_file.write(chunk)
+                            bytes_written += len(chunk)
+                            now = time.monotonic()
+                            if progress_log_interval_seconds > 0 and now >= next_progress_log:
+                                elapsed = max(now - start_time, 1e-9)
+                                speed_mib_s = (bytes_written / (1024**2)) / elapsed
+                                logger.info(
+                                    f"Streaming {file_path}: {bytes_written / (1024**2):.1f} MiB written "
+                                    f"in {elapsed:.1f}s ({speed_mib_s:.2f} MiB/s)"
+                                )
+                                next_progress_log = now + progress_log_interval_seconds
+                finally:
+                    socket.setdefaulttimeout(previous_socket_timeout)
 
                 # Validate file size BEFORE atomic_rename commits the file
                 if expected_size is not None and bytes_written != expected_size:
@@ -152,7 +253,8 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
 
 
 def download_hf(cfg: DownloadConfig) -> None:
-    logging.basicConfig(level=logging.INFO)
+
+    configure_logging(level=logging.INFO)
 
     # Set cfg.append_sha_to_path=True to mimic the older behavior of writing to gcs_output_path/<revision>.
     # Some historical datasets were written that way, so this flag keeps backwards compatibility when needed.
@@ -168,16 +270,17 @@ def download_hf(cfg: DownloadConfig) -> None:
     # Initialize Hugging Face filesystem
     logger.info("Identifying files to download from HuggingFace...")
     hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
-    hf_repo_name_with_prefix = os.path.join(cfg.hf_repo_type_prefix, cfg.hf_dataset_id)
+    hf_source_path = _resolve_hf_source_path(cfg)
+    _assert_bucket_support_available(hf_source_path)
 
     if not cfg.hf_urls_glob:
         # We get all the files using find
-        files = hf_fs.find(hf_repo_name_with_prefix, revision=cfg.revision)
+        files = hf_fs.find(hf_source_path, revision=cfg.revision)
     else:
         # Get list of files directly from HfFileSystem matching the pattern
         files = []
         for hf_url_glob in cfg.hf_urls_glob:
-            pattern = os.path.join(hf_repo_name_with_prefix, hf_url_glob)
+            pattern = os.path.join(hf_source_path, hf_url_glob)
             files += hf_fs.glob(pattern, revision=cfg.revision)
 
     if not files:
@@ -198,10 +301,22 @@ def download_hf(cfg: DownloadConfig) -> None:
 
     for file in files:
         try:
-            fsspec_file_path = os.path.join(output_path, file.split("/", 3)[-1])  # Strip the dataset prefix
-            # Hf file paths are always of format : hf://[<repo_type_prefix>]<repo_id>[@<revision>]/<path/in/repo>
+            relative_file_path = _relative_path_in_source(file, hf_source_path)
+            if relative_file_path.startswith(".."):
+                raise ValueError(f"Computed path escapes source root: source={hf_source_path}, file={file}")
+            fsspec_file_path = os.path.join(output_path, relative_file_path)
             expected_size = file_sizes.get(file)
-            download_tasks.append((output_path, file, fsspec_file_path, expected_size))
+            download_tasks.append(
+                (
+                    output_path,
+                    file,
+                    fsspec_file_path,
+                    expected_size,
+                    cfg.read_timeout_seconds,
+                    cfg.progress_log_interval_seconds,
+                    cfg.read_chunk_size_mib,
+                )
+            )
         except Exception as e:
             logging.exception(f"Error preparing task for {file}: {e}")
 
@@ -216,7 +331,7 @@ def download_hf(cfg: DownloadConfig) -> None:
             f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
         )
     )
-    ctx = ZephyrContext(name="download-hf")
+    ctx = ZephyrContext(name="download-hf", max_workers=cfg.zephyr_max_parallelism)
     ctx.execute(pipeline)
 
     # Write Provenance JSON

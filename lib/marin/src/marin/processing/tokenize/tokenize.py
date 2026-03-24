@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -17,8 +17,8 @@ import time
 from collections.abc import Iterator, Sequence
 
 import draccus
-import fsspec
 import transformers
+from iris.marin_fs import open_url
 from datasets import load_dataset_builder
 from fray.v2 import ResourceConfig
 from fray.v2.local_backend import LocalClient
@@ -37,6 +37,7 @@ from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_size
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +65,7 @@ class TokenizeConfigBase(abc.ABC):
     """Base class for tokenize configs."""
 
     max_workers: int = 4096
-    worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="5g", disk="5g"))
-    writer_batch_size: int = 65536
-    """Larger values mean fewer, bigger writes to the Levanter cache, which reduces per-op
-    overhead. Too large a value increases memory usage and delays progress checkpointing."""
+    worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
 
     num_shards: int | None = None
     """Override the number tokenize shards. When set, files are grouped to produce approximately
@@ -375,12 +373,13 @@ def tokenize(config: TokenizeConfigBase):
             ds = ds.take_per_shard(config.sample_count)
 
         temp_shards = (
-            ds.window(config.writer_batch_size)
-            .map_shard(lambda batches: _tokenize_batches(config=config, batches=batches))
+            # NOTE: https://github.com/marin-community/marin/issues/2829#issuecomment-3963661943
+            # Window set to 64 ^
+            ds.window(64)
+            .map_shard(lambda batches, _: _tokenize_batches(config=config, batches=batches))
             .write_levanter_cache(
                 f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}",
                 metadata={},
-                batch_size=config.writer_batch_size,
                 skip_existing=True,
             )
         )
@@ -397,7 +396,7 @@ def tokenize(config: TokenizeConfigBase):
             Dataset.from_list(file_groups[0][0:1])
             .flat_map(load_file)
             .take_per_shard(1)
-            .map_shard(lambda example: _tokenize_batches(config=config, batches=[example])),
+            .map_shard(lambda example, _: _tokenize_batches(config=config, batches=[example])),
             verbose=False,
         )[0]
 
@@ -411,7 +410,7 @@ def tokenize(config: TokenizeConfigBase):
         total_tokens = store.tree["input_ids"].data_size if "input_ids" in store.tree else 0
 
         stats_path = os.path.join(prefix, ".stats.json")
-        with fsspec.open(stats_path, "w") as f:
+        with open_url(stats_path, "w") as f:
             json.dump({"total_tokens": total_tokens, "total_elements": total_elements}, f)
 
         pipeline_elapsed = time.monotonic() - pipeline_start
@@ -446,5 +445,6 @@ def tokenize(config: TokenizeConfigBase):
 
 @draccus.wrap()
 def main(config: TokenizeConfig):
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+    configure_logging(level=logging.INFO)
     tokenize(config)

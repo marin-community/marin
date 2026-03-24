@@ -1,42 +1,51 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Actor-based execution engine for Zephyr pipelines.
+"""Job-based execution engine for Zephyr pipelines.
 
-Workers pull tasks from the coordinator, execute shard operations, and report
-results back. This enables persistent worker state (caches, loaded models),
-transient error recovery, and backend-agnostic dispatch via fray v2's Client
-protocol.
+The coordinator runs as a fray *job* that internally creates coordinator and
+worker *actors* as child jobs. Workers pull tasks from the coordinator actor,
+execute shard operations, and report results back. Because actors are children
+of the coordinator job, Iris cascading termination automatically cleans them
+up when the coordinator exits or is killed — preventing stale-coordinator
+bugs where orphaned coordinators and workers consume resources indefinitely.
 """
 
 from __future__ import annotations
 
 import enum
+import itertools
 import logging
 import os
 import pickle
+import re
+from datetime import datetime, timezone
 import threading
 import time
 import uuid
 from collections import defaultdict, deque
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import cloudpickle
-import fsspec
+import pyarrow as pa
+from iris.marin_fs import open_url, url_to_fs
 from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
+from fray.v2.client import JobHandle
+from fray.v2.types import Entrypoint, JobRequest
 from iris.marin_fs import marin_temp_bucket
 from iris.time_utils import ExponentialBackoff
 
 from zephyr.dataset import Dataset
 from zephyr.plan import (
-    ExecutionHint,
     Join,
     PhysicalOp,
     PhysicalPlan,
+    Scatter,
+    Shard,
     SourceItem,
     StageContext,
     StageType,
@@ -48,13 +57,9 @@ from zephyr.writers import ensure_parent_dir
 logger = logging.getLogger(__name__)
 
 
-class Chunk(Protocol):
-    def __iter__(self) -> Iterator: ...
-
-
 @dataclass(frozen=True)
-class DiskChunk:
-    """Reference to a chunk stored on disk.
+class PickleDiskChunk:
+    """Reference to a pickle chunk stored on disk.
 
     Each write goes to a UUID-unique path to avoid collisions when multiple
     workers race on the same shard.  No coordinator-side rename is needed;
@@ -69,7 +74,7 @@ class DiskChunk:
         return iter(self.read())
 
     @classmethod
-    def write(cls, path: str, data: list) -> DiskChunk:
+    def write(cls, path: str, data: list) -> PickleDiskChunk:
         """Write *data* to a UUID-unique path derived from *path*.
 
         The UUID suffix avoids collisions when multiple workers race on
@@ -83,62 +88,54 @@ class DiskChunk:
         count = len(data)
 
         unique_path = unique_temp_path(path)
-        with fsspec.open(unique_path, "wb") as f:
+        with open_url(unique_path, "wb") as f:
             pickle.dump(data, f)
         return cls(path=unique_path, count=count)
 
     def read(self) -> list:
         """Load chunk data from disk."""
-        with fsspec.open(self.path, "rb") as f:
+        with open_url(self.path, "rb") as f:
             return pickle.load(f)
 
 
-@dataclass
-class MemChunk:
-    """In-memory chunk."""
+# ---------------------------------------------------------------------------
+# Scatter Parquet support (imported from shuffle.py)
+# ---------------------------------------------------------------------------
 
-    items: list[Any]
+from zephyr.shuffle import (  # noqa: E402
+    ListShard,
+    MemChunk,
+    ScatterParquetIterator,  # noqa: F401 — re-exported for external callers
+    ScatterShard,  # noqa: F401 — re-exported for plan.py and external callers
+    _build_scatter_shard_from_manifest,  # noqa: F401 — re-exported for plan.py
+    _make_envelope,
+    _write_parquet_scatter,
+    _write_scatter_manifest,
+    _SCATTER_MANIFEST_NAME,
+)
 
-    def __iter__(self) -> Iterator:
-        return iter(self.items)
-
-
-@dataclass
-class Shard:
-    """An ordered sequence of chunks assigned to a single worker."""
-
-    chunks: list[Chunk]
-
-    def __iter__(self) -> Iterator:
-        """Flatten iteration over all items, loading chunks as needed."""
-        for chunk in self.chunks:
-            yield from chunk
-
-    def iter_chunks(self) -> Iterator[list]:
-        """Yield each chunk as a materialized list. Used by k-way merge in Reduce."""
-        for chunk in self.chunks:
-            yield list(chunk)
-
-
-@dataclass
-class ResultChunk:
-    """Output chunk from a single worker task before resharding."""
-
-    source_shard: int
-    target_shard: int
-    data: Chunk
+# ---------------------------------------------------------------------------
+# Task result
+# ---------------------------------------------------------------------------
 
 
 @dataclass
 class TaskResult:
-    """Result of a single task."""
+    """Result of a single worker task.
 
-    chunks: list[ResultChunk]
+    Always contains a ListShard. For non-scatter stages, refs are
+    PickleDiskChunks. For scatter stages, refs contain file paths
+    (the actual metadata lives in ``.scatter_meta`` sidecar files
+    read lazily by reducers).
+    """
+
+    shard: ListShard
 
 
 def _generate_execution_id() -> str:
     """Generate unique ID for this execution to avoid conflicts."""
-    return uuid.uuid4().hex[:12]
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return f"{ts}-{uuid.uuid4().hex[:8]}"
 
 
 def _shared_data_path(prefix: str, execution_id: str, name: str) -> str:
@@ -146,30 +143,114 @@ def _shared_data_path(prefix: str, execution_id: str, name: str) -> str:
     return f"{prefix}/{execution_id}/shared/{name}.pkl"
 
 
-def _chunk_path(
-    prefix: str,
-    execution_id: str,
-    stage_name: str,
-    shard_idx: int,
-    chunk_idx: int,
-) -> str:
-    """Generate path for a chunk file.
-
-    Format: {prefix}/{execution_id}/{stage_name}/shard-{shard_idx:04d}/chunk-{chunk_idx:04d}.pkl
-    """
-    return f"{prefix}/{execution_id}/{stage_name}/shard-{shard_idx:04d}/chunk-{chunk_idx:04d}.pkl"
-
-
 def _cleanup_execution(prefix: str, execution_id: str) -> None:
     """Remove all chunk files for an execution."""
     exec_dir = f"{prefix}/{execution_id}"
-    fs = fsspec.core.url_to_fs(exec_dir)[0]
+    fs = url_to_fs(exec_dir)[0]
 
+    # TODO: use log_time util when possible
+    t_0 = time.monotonic()
     if fs.exists(exec_dir):
         try:
             fs.rm(exec_dir, recursive=True)
         except Exception as e:
             logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
+        finally:
+            elapsed = time.monotonic() - t_0
+            logger.info(f"Cleaned up execution directory {exec_dir} in {elapsed:.1f}s")
+
+
+def _write_pickle_chunks(
+    items: Iterator,
+    source_shard: int,
+    chunk_path_fn: Callable[[int], str],
+) -> ListShard:
+    """Batch a plain item stream into pickle chunk files.
+
+    Returns a ListShard containing PickleDiskChunk references.
+    """
+    # TODO: make chunk_size configurable per writer
+    chunk_size = 100_000
+    chunks: list[Iterable] = []
+    batch: list = []
+    pidx = 0
+
+    for item in items:
+        batch.append(item)
+        if chunk_size > 0 and len(batch) >= chunk_size:
+            chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), batch)
+            chunks.append(chunk_ref)
+            pidx += 1
+            batch = []
+            if pidx % 10 == 0:
+                logger.info(
+                    "[shard %d] Wrote %d pickle chunks so far (latest: %d items)",
+                    source_shard,
+                    pidx,
+                    chunk_ref.count,
+                )
+
+    if batch:
+        chunks.append(PickleDiskChunk.write(chunk_path_fn(pidx), batch))
+
+    return ListShard(refs=chunks)
+
+
+def _write_stage_output(
+    stage_gen: Iterator,
+    source_shard: int,
+    stage_dir: str,
+    shard_idx: int,
+    scatter_op: Scatter | None,
+    total_shards: int,
+) -> TaskResult:
+    """Write stage output to disk.
+
+    For scatter stages (``scatter_op`` is set), writes Parquet with envelope
+    wrapping and ``.scatter_meta`` sidecars. Returns TaskResult with compact
+    scatter metadata.
+
+    For non-scatter stages, batches items into pickle chunk files. Returns
+    TaskResult with a ListShard.
+    """
+    if scatter_op is not None:
+        # Peek first item to test Arrow serializability
+        first_item = next(stage_gen, None)
+        if first_item is None:
+            return TaskResult(shard=ListShard(refs=[]))
+
+        full_gen = itertools.chain([first_item], stage_gen)
+
+        use_pickle_envelope = False
+        try:
+            test_envelope = _make_envelope([first_item], 0, 0)
+            pa.RecordBatch.from_pylist(test_envelope)
+            logger.info("Using Parquet for scatter serialization for shard %d", source_shard)
+        except Exception:
+            use_pickle_envelope = True
+            logger.info(
+                "Using Parquet with pickle envelope for scatter serialization for shard %d",
+                source_shard,
+            )
+
+        num_output_shards = scatter_op.num_output_shards if scatter_op.num_output_shards > 0 else total_shards
+        parquet_path = f"{stage_dir}/shard-{shard_idx:04d}.parquet"
+        shard = _write_parquet_scatter(
+            full_gen,
+            source_shard,
+            parquet_path,
+            key_fn=scatter_op.key_fn,
+            num_output_shards=num_output_shards,
+            sort_fn=scatter_op.sort_fn,
+            combiner_fn=scatter_op.combiner_fn,
+            pickled=use_pickle_envelope,
+        )
+        return TaskResult(shard=shard)
+
+    def chunk_path_fn(idx: int) -> str:
+        return f"{stage_dir}/shard-{shard_idx:04d}/chunk-{idx:04d}.pkl"
+
+    return TaskResult(shard=_write_pickle_chunks(stage_gen, source_shard, chunk_path_fn))
 
 
 class WorkerState(enum.Enum):
@@ -186,7 +267,6 @@ class ShardTask:
 
     shard_idx: int
     total_shards: int
-    chunk_size: int
     shard: Shard
     operations: list[PhysicalOp]
     stage_name: str = "output"
@@ -273,10 +353,12 @@ class ZephyrCoordinator:
 
         # Worker management state (workers self-register via register_worker)
         self._worker_handles: dict[str, ActorHandle] = {}
+        self._worker_group: Any = None  # ActorGroup, set via set_worker_group()
         self._coordinator_thread: threading.Thread | None = None
-        self._shutdown: bool = False
+        self._shutdown_event = threading.Event()
         self._is_last_stage: bool = False
         self._initialized: bool = False
+        self._pipeline_running: bool = False
 
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
@@ -313,6 +395,10 @@ class ZephyrCoordinator:
         self._coordinator_thread.start()
         self._initialized = True
 
+    def set_worker_group(self, worker_group: Any) -> None:
+        """Set the worker ActorGroup so the coordinator can detect permanent worker death."""
+        self._worker_group = worker_group
+
     def register_worker(self, worker_id: str, worker_handle: ActorHandle) -> None:
         """Called by workers when they come online to register with coordinator.
 
@@ -338,35 +424,49 @@ class ZephyrCoordinator:
             logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_handles))
 
     def _coordinator_loop(self) -> None:
-        """Background loop for heartbeat checking only.
-
-        Workers register themselves via register_worker() - no polling needed.
-        """
+        """Background loop for heartbeat checking and worker job monitoring."""
         last_log_time = 0.0
 
-        while not self._shutdown:
-            # Check heartbeats, re-queue stale tasks.
-            # NOTE: we could use self._self_handle.check_heartbeats.remote() to
-            # serialize this with worker RPCs (pull_task, report_result) via the
-            # concurrency queue instead of running it inline.
-            self.check_heartbeats()
+        while not self._shutdown_event.is_set():
+            try:
+                self.check_heartbeats()
+                self._check_worker_group()
 
-            # Log status periodically during active execution
-            now = time.monotonic()
-            if self._has_active_execution() and now - last_log_time > 5.0:
-                self._log_status()
-                last_log_time = now
+                now = time.monotonic()
+                if self._has_active_execution() and now - last_log_time > 5.0:
+                    self._log_status()
+                    last_log_time = now
+            except Exception:
+                logger.exception("Coordinator loop crashed, aborting pipeline")
+                self.abort("Coordinator loop crashed unexpectedly")
+                return
 
-            time.sleep(0.5)
+            self._shutdown_event.wait(timeout=0.5)
+
+    def _check_worker_group(self) -> None:
+        """Abort the pipeline if the worker job has permanently terminated."""
+        if self._worker_group is None or self._fatal_error is not None:
+            return
+        try:
+            if self._worker_group.is_done():
+                self.abort(
+                    "Worker job terminated permanently (all retries exhausted). "
+                    "Workers likely crashed (OOM or other fatal error)."
+                )
+        except Exception:
+            logger.debug("Failed to check worker group status", exc_info=True)
 
     def _has_active_execution(self) -> bool:
         return self._execution_id != "" and self._total_shards > 0 and self._completed_shards < self._total_shards
 
     def _log_status(self) -> None:
-        alive = sum(1 for s in self._worker_states.values() if s in {WorkerState.READY, WorkerState.BUSY})
-        dead = sum(1 for s in self._worker_states.values() if s in {WorkerState.FAILED, WorkerState.DEAD})
+        with self._lock:
+            states = list(self._worker_states.values())
+        alive = sum(1 for s in states if s in {WorkerState.READY, WorkerState.BUSY})
+        dead = sum(1 for s in states if s in {WorkerState.FAILED, WorkerState.DEAD})
         logger.info(
-            "[%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead",
+            "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead",
+            self._execution_id,
             self._stage_name,
             self._completed_shards,
             self._total_shards,
@@ -408,7 +508,7 @@ class ZephyrCoordinator:
             self._last_seen[worker_id] = time.monotonic()
             self._worker_states[worker_id] = WorkerState.READY
 
-            if self._shutdown:
+            if self._shutdown_event.is_set():
                 self._worker_states[worker_id] = WorkerState.DEAD
                 return "SHUTDOWN"
 
@@ -488,7 +588,7 @@ class ZephyrCoordinator:
                 retries=self._retries,
                 in_flight=len(self._in_flight),
                 queue_depth=len(self._task_queue),
-                done=self._shutdown,
+                done=self._shutdown_event.is_set(),
                 fatal_error=self._fatal_error,
                 workers={
                     wid: {
@@ -502,6 +602,17 @@ class ZephyrCoordinator:
     def get_fatal_error(self) -> str | None:
         with self._lock:
             return self._fatal_error
+
+    def abort(self, reason: str) -> None:
+        """Set a fatal error that causes the current stage to fail immediately.
+
+        Called by the external worker watchdog when the worker job terminates
+        permanently (e.g. all retries exhausted after OOM).
+        """
+        with self._lock:
+            if self._fatal_error is None:
+                logger.error("Coordinator aborted: %s", reason)
+                self._fatal_error = reason
 
     def _start_stage(self, stage_name: str, tasks: list[ShardTask], is_last_stage: bool = False) -> None:
         """Load a new stage's tasks into the queue."""
@@ -519,11 +630,12 @@ class ZephyrCoordinator:
 
     def _wait_for_stage(self) -> None:
         """Block until current stage completes or error occurs."""
-        backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
+        backoff = ExponentialBackoff(initial=0.1, maximum=1.0)
         last_log_completed = -1
         start_time = time.monotonic()
         all_dead_since: float | None = None
         no_workers_timeout = self._no_workers_timeout
+        stage_done = threading.Event()
 
         while True:
             with self._lock:
@@ -567,7 +679,7 @@ class ZephyrCoordinator:
                 last_log_completed = completed
                 backoff.reset()
 
-            time.sleep(backoff.next_interval())
+            stage_done.wait(timeout=backoff.next_interval())
 
     def _collect_results(self) -> dict[int, TaskResult]:
         """Return results for the completed stage."""
@@ -578,63 +690,76 @@ class ZephyrCoordinator:
         self,
         plan: PhysicalPlan,
         execution_id: str,
-        hints: ExecutionHint,
     ) -> list:
         """Run complete pipeline, blocking until done. Returns flattened results."""
         with self._lock:
+            if self._pipeline_running:
+                self._fatal_error = "run_pipeline called while another pipeline is already running"
+                raise RuntimeError(self._fatal_error)
+            self._pipeline_running = True
             self._execution_id = execution_id
 
-        shards = _build_source_shards(plan.source_items)
-        if not shards:
-            return []
+        try:
+            shards = _build_source_shards(plan.source_items)
+            if not shards:
+                return []
 
-        # Identify the last stage that dispatches work to workers (non-RESHARD).
-        # On that stage, idle workers receive SHUTDOWN once all tasks are
-        # in-flight, so they exit eagerly instead of polling until
-        # coordinator.shutdown().
-        last_worker_stage_idx = max(
-            (i for i, s in enumerate(plan.stages) if s.stage_type != StageType.RESHARD),
-            default=-1,
-        )
+            # Identify the last stage that dispatches work to workers (non-RESHARD).
+            # On that stage, idle workers receive SHUTDOWN once all tasks are
+            # in-flight, so they exit eagerly instead of polling until
+            # coordinator.shutdown().
+            last_worker_stage_idx = max(
+                (i for i, s in enumerate(plan.stages) if s.stage_type != StageType.RESHARD),
+                default=-1,
+            )
 
-        for stage_idx, stage in enumerate(plan.stages):
-            stage_label = f"stage{stage_idx}-{stage.stage_name(max_length=40)}"
+            for stage_idx, stage in enumerate(plan.stages):
+                stage_label = f"stage{stage_idx}-{stage.stage_name(max_length=40)}"
 
-            if stage.stage_type == StageType.RESHARD:
-                shards = _reshard_refs(shards, stage.output_shards or len(shards))
-                continue
+                if stage.stage_type == StageType.RESHARD:
+                    shards = _reshard_refs(shards, stage.output_shards or len(shards))
+                    continue
 
-            # Compute aux data for joins
-            aux_per_shard = self._compute_join_aux(stage.operations, shards, hints, stage_idx)
+                # Compute aux data for joins
+                aux_per_shard = self._compute_join_aux(stage.operations, shards, stage_idx)
 
-            # Build and submit tasks
-            tasks = _compute_tasks_from_shards(shards, stage, hints, aux_per_shard, stage_name=stage_label)
-            logger.info("Starting stage %s with %d tasks", stage_label, len(tasks))
-            self._start_stage(stage_label, tasks, is_last_stage=(stage_idx == last_worker_stage_idx))
+                # Build and submit tasks
+                tasks = _compute_tasks_from_shards(shards, stage, aux_per_shard, stage_name=stage_label)
+                output_stage_name = tasks[0].stage_name if tasks else stage_label
+                logger.info("[%s] Starting stage %s with %d tasks", self._execution_id, stage_label, len(tasks))
+                self._start_stage(stage_label, tasks, is_last_stage=(stage_idx == last_worker_stage_idx))
 
-            # Wait for stage completion
-            self._wait_for_stage()
+                # Wait for stage completion
+                self._wait_for_stage()
 
-            # Collect and regroup results for next stage
-            result_refs = self._collect_results()
-            shards = _regroup_result_refs(result_refs, len(shards), output_shard_count=stage.output_shards)
+                # Collect and regroup results for next stage
+                result_refs = self._collect_results()
+                stage_is_scatter = any(isinstance(op, Scatter) for op in stage.operations)
+                shards = _regroup_result_refs(
+                    result_refs,
+                    len(shards),
+                    output_shard_count=stage.output_shards,
+                    is_scatter=stage_is_scatter,
+                    scatter_manifest_dir=f"{self._chunk_prefix}/{self._execution_id}/{output_stage_name}",
+                )
 
-        # Flatten final results
-        flat_result = []
-        for shard in shards:
-            for chunk in shard.chunks:
-                flat_result.extend(list(chunk))
+            # Flatten final results
+            flat_result = []
+            for shard in shards:
+                flat_result.extend(shard)
 
-        # Signal workers to shut down now that all stages are complete.
-        self.shutdown()
+            # Signal workers to shut down now that all stages are complete.
+            self.shutdown()
 
-        return flat_result
+            return flat_result
+        finally:
+            with self._lock:
+                self._pipeline_running = False
 
     def _compute_join_aux(
         self,
         operations: list[PhysicalOp],
         shard_refs: list[Shard],
-        hints: ExecutionHint,
         parent_stage_idx: int,
     ) -> list[dict[int, Shard]] | None:
         """Execute right sub-plans for join operations, returning aux refs per shard."""
@@ -652,11 +777,19 @@ class ZephyrCoordinator:
                     continue
 
                 join_stage_label = f"join-right-{parent_stage_idx}-{i}-stage{stage_idx}"
-                right_tasks = _compute_tasks_from_shards(right_refs, right_stage, hints, stage_name=join_stage_label)
+                right_tasks = _compute_tasks_from_shards(right_refs, right_stage, stage_name=join_stage_label)
+                join_output_stage_name = right_tasks[0].stage_name if right_tasks else join_stage_label
                 self._start_stage(join_stage_label, right_tasks)
                 self._wait_for_stage()
                 raw = self._collect_results()
-                right_refs = _regroup_result_refs(raw, len(right_refs), output_shard_count=right_stage.output_shards)
+                right_is_scatter = any(isinstance(op, Scatter) for op in right_stage.operations)
+                right_refs = _regroup_result_refs(
+                    raw,
+                    len(right_refs),
+                    output_shard_count=right_stage.output_shards,
+                    is_scatter=right_is_scatter,
+                    scatter_manifest_dir=f"{self._chunk_prefix}/{self._execution_id}/{join_output_stage_name}",
+                )
 
             if len(shard_refs) != len(right_refs):
                 raise ValueError(
@@ -679,7 +812,7 @@ class ZephyrCoordinator:
     def shutdown(self) -> None:
         """Signal workers to exit. Worker group is managed by ZephyrContext."""
         logger.info("[coordinator.shutdown] Starting shutdown")
-        self._shutdown = True
+        self._shutdown_event.set()
 
         # Wait for coordinator thread to exit
         if self._coordinator_thread is not None:
@@ -716,7 +849,7 @@ class ZephyrCoordinator:
 
     def signal_done(self) -> None:
         """Signal workers that no more stages will be submitted (legacy compat)."""
-        self._shutdown = True
+        self._shutdown_event.set()
 
 
 # ---------------------------------------------------------------------------
@@ -764,7 +897,7 @@ class ZephyrWorker:
             path = _shared_data_path(self._chunk_prefix, self._execution_id, name)
             logger.info("[%s] Loading shared data '%s' from %s", self._worker_id, name, path)
             t0 = time.monotonic()
-            with fsspec.open(path, "rb") as f:
+            with open_url(path, "rb") as f:
                 data = f.read()
             elapsed = time.monotonic() - t0
             self._shared_data_cache[name] = cloudpickle.loads(data)
@@ -835,7 +968,7 @@ class ZephyrWorker:
     def _poll_loop(self, coordinator: ActorHandle) -> None:
         """Pure polling loop. Exits on SHUTDOWN signal, coordinator death, or shutdown event."""
         task_count = 0
-        backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
+        backoff = ExponentialBackoff(initial=0.1, maximum=1.0)
 
         future: ActorFuture | None = None
         future_start = 0.0
@@ -917,11 +1050,11 @@ class ZephyrWorker:
         _worker_ctx_var.set(self)
 
         logger.info(
-            "[shard %d/%d] Starting stage=%s, %d input chunks, %d ops",
+            "[%s] [shard %d/%d] Starting stage=%s, %d ops",
+            self._execution_id,
             task.shard_idx,
             task.total_shards,
             task.stage_name,
-            len(task.shard.chunks),
             len(task.operations),
         )
 
@@ -929,41 +1062,23 @@ class ZephyrWorker:
             shard=task.shard,
             shard_idx=task.shard_idx,
             total_shards=task.total_shards,
-            chunk_size=task.chunk_size,
             aux_shards=task.aux_shards,
         )
 
-        results: list[ResultChunk] = []
-        chunk_idx = 0
+        stage_dir = f"{self._chunk_prefix}/{self._execution_id}/{task.stage_name}"
+        external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
+        scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
 
-        for stage_output in run_stage(stage_ctx, task.operations):
-            chunk_path = _chunk_path(
-                self._chunk_prefix,
-                self._execution_id,
-                task.stage_name,
-                task.shard_idx,
-                chunk_idx,
-            )
-            chunk = list(stage_output.chunk)
-            chunk_ref = DiskChunk.write(chunk_path, chunk)
-            results.append(
-                ResultChunk(
-                    source_shard=stage_output.source_shard,
-                    target_shard=stage_output.target_shard,
-                    data=chunk_ref,
-                )
-            )
-            chunk_idx += 1
-            if chunk_idx % 10 == 0:
-                logger.info(
-                    "[shard %d] Wrote %d chunks so far (latest: %d items)",
-                    task.shard_idx,
-                    chunk_idx,
-                    len(stage_output.chunk),
-                )
-
-        logger.info("[shard %d] Complete: %d chunks produced", task.shard_idx, chunk_idx)
-        return TaskResult(chunks=results)
+        result = _write_stage_output(
+            run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir),
+            source_shard=task.shard_idx,
+            stage_dir=stage_dir,
+            shard_idx=task.shard_idx,
+            scatter_op=scatter_op,
+            total_shards=task.total_shards,
+        )
+        logger.info("[shard %d] Complete: %d refs produced", task.shard_idx, len(result.shard.refs))
+        return result
 
     def __repr__(self) -> str:
         return f"ZephyrWorker(id={self._worker_id})"
@@ -979,29 +1094,164 @@ def _regroup_result_refs(
     result_refs: dict[int, TaskResult],
     input_shard_count: int,
     output_shard_count: int | None = None,
+    is_scatter: bool = False,
+    scatter_manifest_dir: str = "",
 ) -> list[Shard]:
-    """Regroup worker output refs by output shard index without loading data."""
-    output_by_shard: dict[int, list[Chunk]] = defaultdict(list)
+    """Regroup worker output refs by output shard index without loading data.
 
-    for _input_idx, result in result_refs.items():
-        for chunk in result.chunks:
-            output_by_shard[chunk.target_shard].append(chunk.data)
-
-    num_output = max(max(output_by_shard.keys(), default=0) + 1, input_shard_count)
+    Non-scatter: each worker's ListShard maps to its own index (identity).
+    Scatter: writes a consolidated scatter manifest combining all sidecar
+    metadata into a single file, then gives each reducer a shard containing
+    just the manifest path.
+    """
+    num_output = max(max(result_refs.keys(), default=0) + 1, input_shard_count)
     if output_shard_count is not None:
         num_output = max(num_output, output_shard_count)
-    return [Shard(chunks=output_by_shard.get(idx, [])) for idx in range(num_output)]
+
+    if is_scatter:
+        # Collect all scatter file paths from all workers
+        all_paths: list[str] = []
+        for result in result_refs.values():
+            all_paths.extend(result.shard)
+
+        # Write consolidated manifest and point reducers at it
+        manifest_path = f"{scatter_manifest_dir}/{_SCATTER_MANIFEST_NAME}"
+        _write_scatter_manifest(all_paths, manifest_path)
+        shared_refs = MemChunk(items=[manifest_path])
+
+        return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
+
+    # Non-scatter: each result's shard maps to its own index
+    return [result_refs[idx].shard if idx in result_refs else ListShard(refs=[]) for idx in range(num_output)]
+
+
+# ---------------------------------------------------------------------------
+# Coordinator-as-Job infrastructure
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _CoordinatorJobConfig:
+    """Serializable config for the coordinator job entrypoint."""
+
+    plan: PhysicalPlan
+    execution_id: str
+    chunk_storage_prefix: str
+    no_workers_timeout: float
+    max_workers: int
+    worker_resources: ResourceConfig
+    name: str
+    pipeline_id: int
+
+
+def _run_coordinator_job(config_path: str, result_path: str) -> None:
+    """Entrypoint for the coordinator job.
+
+    Hosts the coordinator actor in-process via host_actor(), creates
+    worker actors as child jobs, runs the pipeline, and writes results
+    to disk. The coordinator monitors worker job health directly in its
+    maintenance loop (no separate watchdog thread).
+    """
+    from fray.v2.client import current_client
+
+    logger.info("Loading coordinator config from %s", config_path)
+    with open_url(config_path, "rb") as f:
+        config: _CoordinatorJobConfig = cloudpickle.loads(f.read())
+
+    logger.info(
+        "Coordinator job starting: name=%s, execution_id=%s, pipeline=%d",
+        config.name,
+        config.execution_id,
+        config.pipeline_id,
+    )
+
+    client = current_client()
+
+    # Host coordinator actor in this process (no child job needed)
+    coord_name = f"zephyr-{config.name}-p{config.pipeline_id}-coord"
+    hosted = client.host_actor(
+        ZephyrCoordinator,
+        name=coord_name,
+        actor_config=ActorConfig(max_concurrency=100),
+    )
+    coordinator = hosted.handle
+    coordinator.initialize.remote(
+        config.chunk_storage_prefix,
+        coordinator,
+        config.no_workers_timeout,
+    ).result()
+
+    # Create workers (child jobs)
+    num_shards = config.plan.num_shards
+    actual_workers = min(config.max_workers, num_shards) if num_shards > 0 else 0
+    worker_group = None
+
+    if actual_workers > 0:
+        logger.info("Starting %d workers (max=%d, shards=%d)", actual_workers, config.max_workers, num_shards)
+        worker_group = client.create_actor_group(
+            ZephyrWorker,
+            coordinator,
+            name=f"zephyr-{config.name}-p{config.pipeline_id}-workers",
+            count=actual_workers,
+            resources=config.worker_resources,
+            actor_config=ActorConfig(max_task_retries=10),
+        )
+        worker_group.wait_ready(count=1, timeout=3600.0)
+
+        # Let the coordinator poll worker job health in its maintenance loop
+        coordinator.set_worker_group.remote(worker_group).result()
+
+    try:
+        results = coordinator.run_pipeline.remote(config.plan, config.execution_id).result()
+
+        ensure_parent_dir(result_path)
+        with open_url(result_path, "wb") as f:
+            f.write(cloudpickle.dumps(results))
+    except Exception as e:
+        # Persist the exception so the caller can recover the original type
+        # (important for non-retryable error detection).
+        with suppress(Exception):
+            ensure_parent_dir(result_path)
+            with open_url(result_path, "wb") as f:
+                f.write(cloudpickle.dumps(e))
+        raise
+    finally:
+        if worker_group is not None:
+            with suppress(Exception):
+                worker_group.shutdown()
+        with suppress(Exception):
+            coordinator.shutdown.remote().result()
+        with suppress(Exception):
+            hosted.shutdown()
+
+
+def _read_coordinator_result(result_path: str) -> Any:
+    """Read the coordinator job's result file. Returns the deserialized object."""
+    with open_url(result_path, "rb") as f:
+        return cloudpickle.loads(f.read())
+
+
+def _try_read_coordinator_result(result_path: str) -> Any:
+    """Best-effort read of the result file. Returns None if unreadable.
+
+    Used only in the retry error-recovery path where the coordinator job
+    may have crashed before writing the file.
+    """
+    try:
+        return _read_coordinator_result(result_path)
+    except Exception:
+        return None
 
 
 @dataclass
 class ZephyrContext:
     """Execution context for Zephyr pipelines.
 
-    Each execute() call creates a fresh coordinator and worker pool, runs
-    the pipeline, then tears everything down. Workers are sized to
-    min(max_workers, plan.num_shards) to avoid over-provisioning. Shared
-    data registered via put() is serialized to disk once and loaded lazily
-    by workers on first access.
+    Each execute() call submits a coordinator *job* that internally creates
+    coordinator and worker actors as child jobs. The coordinator job owns the
+    full lifecycle: it boots workers, runs the pipeline, writes results to
+    disk, and tears everything down. Iris cascading termination ensures that
+    if the coordinator job dies, its children are cleaned up automatically.
 
     Args:
         client: The fray client to use. If None, auto-detects using current_client().
@@ -1031,10 +1281,8 @@ class ZephyrContext:
 
     # Shared data staged by put(), uploaded to disk at the start of execute()
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
-    _coordinator: ActorHandle | None = field(default=None, repr=False)
-    _coordinator_group: Any = field(default=None, repr=False)
-    _worker_group: Any = field(default=None, repr=False)
-    _worker_count: int = field(default=0, repr=False)
+    # Handle to the coordinator job (for termination on retry/shutdown)
+    _coordinator_job: JobHandle | None = field(default=None, repr=False)
     # NOTE: execute calls increment this at the very beginning
     _pipeline_id: int = field(default=-1, repr=False)
 
@@ -1058,7 +1306,8 @@ class ZephyrContext:
             self.no_workers_timeout = 6 * 60 * 60  # 6 hours
 
         if self.chunk_storage_prefix is None:
-            self.chunk_storage_prefix = marin_temp_bucket(ttl_days=3, prefix="zephyr")
+            # TODO: consider increasing TTL for long-running pipelines (e.g. multi-day fuzzy dedup)
+            self.chunk_storage_prefix = marin_temp_bucket(ttl_days=1, prefix="zephyr")
 
         # make sure each context is unique
         self.name = f"{self.name}-{uuid.uuid4().hex[:8]}"
@@ -1083,7 +1332,7 @@ class ZephyrContext:
             t0 = time.monotonic()
             data = cloudpickle.dumps(obj)
             elapsed = time.monotonic() - t0
-            with fsspec.open(path, "wb") as f:
+            with open_url(path, "wb") as f:
                 f.write(data)
             logger.info(
                 "Shared data '%s' written to %s (serialized %d bytes in %.2fs)",
@@ -1096,19 +1345,18 @@ class ZephyrContext:
     def execute(
         self,
         dataset: Dataset,
-        hints: ExecutionHint = ExecutionHint(),
         verbose: bool = False,
         dry_run: bool = False,
     ) -> Sequence:
         """Execute a dataset pipeline.
 
-        Each call creates a fresh coordinator and worker pool, runs the
-        pipeline, then tears everything down. If the coordinator dies
-        mid-execution (e.g., VM preemption), the pipeline is retried
-        with fresh actors up to ``max_execution_retries`` times.
+        Submits a coordinator *job* that creates coordinator and worker
+        actors as child jobs, runs the pipeline, and writes results to
+        disk. If the coordinator job dies (e.g., VM preemption), the
+        pipeline is retried up to ``max_execution_retries`` times.
         Application errors (``ZephyrWorkerError``) are never retried.
         """
-        plan = compute_plan(dataset, hints)
+        plan = compute_plan(dataset)
         if verbose or dry_run:
             _print_plan(dataset.operations, plan)
         if dry_run:
@@ -1117,132 +1365,124 @@ class ZephyrContext:
         # NOTE: pipeline ID incremented on clean completion only
         self._pipeline_id += 1
         last_exception: Exception | None = None
+        # Backoff between retries to avoid hammering an overloaded controller.
+        # Starts at 2s, caps at 60s. Resets on successful pipeline startup.
+        backoff = ExponentialBackoff(initial=2.0, maximum=60.0, factor=2.0, jitter=0.1)
         for attempt in range(self.max_execution_retries + 1):
             execution_id = _generate_execution_id()
             logger.info(
                 "Starting zephyr pipeline: %s (pipeline %d, attempt %d)", execution_id, self._pipeline_id, attempt
             )
 
+            config_path = f"{self.chunk_storage_prefix}/{execution_id}/job-config.pkl"
+            result_path = f"{self.chunk_storage_prefix}/{execution_id}/results.pkl"
+
             try:
                 self._upload_shared_data(execution_id)
-                self._create_coordinator(attempt)
-                self._create_workers(plan.num_shards, attempt)
 
-                # Run pipeline on coordinator (blocking call).
-                # run_pipeline() calls coordinator.shutdown() at the end,
-                # which causes workers to receive SHUTDOWN on their next
-                # pull_task() call.
-                results = self._coordinator.run_pipeline.remote(plan, execution_id, hints).result()
+                config = _CoordinatorJobConfig(
+                    plan=plan,
+                    execution_id=execution_id,
+                    chunk_storage_prefix=self.chunk_storage_prefix,
+                    no_workers_timeout=self.no_workers_timeout,
+                    max_workers=self.max_workers,
+                    worker_resources=self.resources,
+                    name=self.name,
+                    pipeline_id=self._pipeline_id,
+                )
+                ensure_parent_dir(config_path)
+                with open_url(config_path, "wb") as f:
+                    f.write(cloudpickle.dumps(config))
 
-                return results
+                job_name = f"zephyr-{self.name}-p{self._pipeline_id}-a{attempt}"
+                # The wrapper job just blocks on child actors; real
+                # resources are requested by the coordinator/worker children.
+                # Set the context var so the coordinator job inherits self.client
+                # instead of auto-detecting (which may pick a different backend).
+                from fray.v2.client import set_current_client
+
+                with set_current_client(self.client):
+                    self._coordinator_job = self.client.submit(
+                        JobRequest(
+                            name=job_name,
+                            entrypoint=Entrypoint.from_callable(
+                                _run_coordinator_job,
+                                args=(config_path, result_path),
+                            ),
+                            resources=ResourceConfig(cpu=1, ram="1g"),
+                        )
+                    )
+
+                backoff.reset()
+                logger.info("Coordinator job submitted: %s (job_id=%s)", job_name, self._coordinator_job.job_id)
+
+                self._coordinator_job.wait(raise_on_failure=True)
+
+                # Read results written by the coordinator job.
+                # This must succeed — the job completed successfully.
+                result = _read_coordinator_result(result_path)
+                if isinstance(result, Exception):
+                    raise result
+                return result
 
             except _NON_RETRYABLE_ERRORS:
                 raise
 
             except Exception as e:
+                # The coordinator job may have persisted the original
+                # exception before failing. Recover it so non-retryable
+                # errors are detected correctly.
+                result = _try_read_coordinator_result(result_path)
+                if isinstance(result, _NON_RETRYABLE_ERRORS):
+                    raise result from None
+
                 last_exception = e
                 if attempt >= self.max_execution_retries:
                     raise
 
+                delay = backoff.next_interval()
                 logger.warning(
-                    "Pipeline attempt %d failed (%d retries left), retrying: %s",
+                    "Pipeline attempt %d failed (%d retries left), retrying in %.1fs: %s",
                     attempt,
                     self.max_execution_retries - attempt,
+                    delay,
                     e,
                 )
+                time.sleep(delay)
 
             finally:
-                # Tear down coordinator and workers for this pipeline
-                self.shutdown()
-                # Clean up chunks for this execution
+                # Kill coordinator job (cascade kills child actors)
+                self._terminate_coordinator_job()
                 _cleanup_execution(self.chunk_storage_prefix, execution_id)
 
         # Should be unreachable, but just in case
         raise last_exception  # type: ignore[misc]
 
-    def _create_coordinator(self, attempt: int = 0) -> None:
-        """Create a fresh coordinator actor."""
-        # max_concurrency allows workers to call pull_task/report_result
-        # while run_pipeline blocks.
-        logger.info("Starting coordinator for %s (pipeline %d, attempt %d)", self.name, self._pipeline_id, attempt)
-        coordinator_resources = ResourceConfig(cpu=1, ram="2g")
-        coordinator_actor_config = ActorConfig(max_concurrency=100)
-        self._coordinator_group = self.client.create_actor_group(
-            ZephyrCoordinator,
-            name=f"zephyr-{self.name}-p{self._pipeline_id}-a{attempt}-coord",
-            count=1,
-            resources=coordinator_resources,
-            actor_config=coordinator_actor_config,
-        )
-        self._coordinator = self._coordinator_group.wait_ready()[0]
-
-        self._coordinator.initialize.remote(
-            self.chunk_storage_prefix,
-            self._coordinator,
-            self.no_workers_timeout,
-        ).result()
-
-        logger.info("Coordinator initialized for %s", self.name)
-
-    def _create_workers(self, num_shards: int, attempt: int = 0) -> None:
-        """Create a fresh worker pool sized to demand.
-
-        The worker count is min(max_workers, num_shards) to avoid
-        over-provisioning when there are fewer shards than the cap.
-        """
-        if num_shards == 0:
-            return
-
-        assert self.max_workers is not None  # set by __post_init__
-        actual_workers = min(self.max_workers, num_shards)
-        logger.info(
-            "Starting worker group: %d workers (max_workers=%d, num_shards=%d, attempt=%d)",
-            actual_workers,
-            self.max_workers,
-            num_shards,
-            attempt,
-        )
-        self._worker_group = self.client.create_actor_group(
-            ZephyrWorker,
-            self._coordinator,  # Pass coordinator handle as init arg
-            name=f"zephyr-{self.name}-p{self._pipeline_id}-a{attempt}-workers",
-            count=actual_workers,
-            resources=self.resources,
-        )
-
-        self._worker_count = actual_workers
-
-        # Wait for at least one worker to be ready before proceeding
-        self._worker_group.wait_ready(count=1, timeout=3600.0)
-
-        logger.info("ZephyrContext initialized with coordinator and %d workers", actual_workers)
+    def _terminate_coordinator_job(self) -> None:
+        if self._coordinator_job is not None:
+            with suppress(Exception):
+                self._coordinator_job.terminate()
+            self._coordinator_job = None
 
     def shutdown(self) -> None:
-        """Shutdown coordinator and all workers."""
-        # Terminate worker group
-        if self._worker_group is not None:
-            with suppress(Exception):
-                self._worker_group.shutdown()
-
-        # Terminate coordinator actor group
-        if self._coordinator_group is not None:
-            with suppress(Exception):
-                self._coordinator_group.shutdown()
-
-        self._coordinator = None
-        self._coordinator_group = None
-        self._worker_group = None
+        """Shutdown the coordinator job and all child actors."""
+        self._terminate_coordinator_job()
 
 
 def _reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
-    """Reshard shard refs by output shard index without loading data."""
-    output_by_shard: dict[int, list[Chunk]] = defaultdict(list)
+    """Reshard shard refs by output shard index without loading data.
+
+    Only supported on ListShards (non-scatter data).
+    """
+    output_by_shard: dict[int, list[Iterable]] = defaultdict(list)
     output_idx = 0
     for shard in shards:
-        for chunk in shard.chunks:
+        if not isinstance(shard, ListShard):
+            raise ValueError("Reshard is only supported on ListShard (non-scatter data)")
+        for chunk in shard.refs:
             output_by_shard[output_idx].append(chunk)
             output_idx = (output_idx + 1) % num_shards
-    return [Shard(chunks=output_by_shard.get(idx, [])) for idx in range(num_shards)]
+    return [ListShard(refs=output_by_shard.get(idx, [])) for idx in range(num_shards)]
 
 
 def _build_source_shards(source_items: list[SourceItem]) -> list[Shard]:
@@ -1255,9 +1495,9 @@ def _build_source_shards(source_items: list[SourceItem]) -> list[Shard]:
         items_by_shard[item.shard_idx].append(item.data)
 
     num_shards = max(items_by_shard.keys()) + 1 if items_by_shard else 0
-    shards = []
+    shards: list[Shard] = []
     for i in range(num_shards):
-        shards.append(Shard(chunks=[MemChunk(items=items_by_shard.get(i, []))]))
+        shards.append(ListShard(refs=[MemChunk(items=items_by_shard.get(i, []))]))
 
     return shards
 
@@ -1265,14 +1505,15 @@ def _build_source_shards(source_items: list[SourceItem]) -> list[Shard]:
 def _compute_tasks_from_shards(
     shard_refs: list[Shard],
     stage,
-    hints: ExecutionHint,
     aux_per_shard: list[dict[int, Shard]] | None = None,
     stage_name: str | None = None,
 ) -> list[ShardTask]:
     """Convert shard references into ShardTasks for the coordinator."""
     total = len(shard_refs)
     tasks = []
-    output_stage_name = stage_name or stage.stage_name(max_length=60)
+    # Sanitize for use as a path component: replace non-alphanumeric runs with '-'
+    raw_name = stage_name or stage.stage_name(max_length=60)
+    output_stage_name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", raw_name).strip("-")
 
     for i, shard in enumerate(shard_refs):
         aux_shards = None
@@ -1283,7 +1524,6 @@ def _compute_tasks_from_shards(
             ShardTask(
                 shard_idx=i,
                 total_shards=total,
-                chunk_size=hints.chunk_size,
                 shard=shard,
                 operations=stage.operations,
                 stage_name=output_stage_name,

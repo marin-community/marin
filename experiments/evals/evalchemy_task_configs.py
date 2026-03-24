@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -17,6 +17,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 __all__ = [
     "AIME24",
     "AIME25",
+    "AIME26",
     "ALICE_IN_WONDERLAND",
     "AMC23",
     "BIGCODEBENCH",
@@ -33,8 +34,11 @@ __all__ = [
     "HUMANITYS_LAST_EXAM",
     "JEEBENCH",
     "LIVECODEBENCH",
+    "LIVECODEBENCH_V5_OFFICIAL",
+    "LIVECODEBENCH_V6_OFFICIAL",
     "MATH500",
     "MBPP_PLUS",
+    "OLYMPIADBENCH",
 ]
 
 # =============================================================================
@@ -48,10 +52,12 @@ __all__ = [
 # seeds from Marin instead, to avoid a hidden seeds x n_repeat multiplier on iteration count.
 AIME24 = EvalTaskConfig(name="AIME24", num_fewshot=0, task_alias="AIME24", task_kwargs={"n_repeat": 1})
 AIME25 = EvalTaskConfig(name="AIME25", num_fewshot=0, task_alias="AIME25", task_kwargs={"n_repeat": 1})
+AIME26 = EvalTaskConfig(name="AIME26", num_fewshot=0, task_alias="AIME26", task_kwargs={"n_repeat": 1})
 AMC23 = EvalTaskConfig(name="AMC23", num_fewshot=0, task_alias="AMC23", task_kwargs={"n_repeat": 1})
 
 MATH500 = EvalTaskConfig(name="MATH500", num_fewshot=0, task_alias="MATH500")
 HMMT = EvalTaskConfig(name="HMMT", num_fewshot=0, task_alias="HMMT", task_kwargs={"n_repeat": 1})
+OLYMPIADBENCH = EvalTaskConfig(name="OlympiadBench", num_fewshot=0, task_alias="OlympiadBench")
 
 # =============================================================================
 # Code tasks
@@ -60,6 +66,12 @@ HUMANEVAL_PLUS = EvalTaskConfig(name="HumanEvalPlus", num_fewshot=0, task_alias=
 MBPP_PLUS = EvalTaskConfig(name="MBPPPlus", num_fewshot=0, task_alias="MBPPPlus")
 LIVECODEBENCH = EvalTaskConfig(
     name="LiveCodeBench", num_fewshot=0, task_alias="LiveCodeBench", task_kwargs={"n_repeat": 1}
+)
+LIVECODEBENCH_V5_OFFICIAL = EvalTaskConfig(
+    name="LiveCodeBenchv5_official", num_fewshot=0, task_alias="LiveCodeBenchv5_official", task_kwargs={"n_repeat": 1}
+)
+LIVECODEBENCH_V6_OFFICIAL = EvalTaskConfig(
+    name="LiveCodeBenchv6_official", num_fewshot=0, task_alias="LiveCodeBenchv6_official", task_kwargs={"n_repeat": 1}
 )
 BIGCODEBENCH = EvalTaskConfig(name="BigCodeBench", num_fewshot=0, task_alias="BigCodeBench")
 CODEFORCES = EvalTaskConfig(name="CodeForces", num_fewshot=0, task_alias="CodeForces", task_kwargs={"n_repeat": 1})
@@ -75,15 +87,22 @@ JEEBENCH = EvalTaskConfig(name="JEEBench", num_fewshot=0, task_alias="JEEBench",
 # Reasoning tasks
 # =============================================================================
 ALICE_IN_WONDERLAND = EvalTaskConfig(name="AIW", num_fewshot=0, task_alias="AIW")
-HUMANITYS_LAST_EXAM = EvalTaskConfig(
-    name="HumanitysLastExam", num_fewshot=0, task_alias="HumanitysLastExam", task_kwargs={"n_repeat": 1}
-)
+HUMANITYS_LAST_EXAM = EvalTaskConfig(name="HLE", num_fewshot=0, task_alias="HLE", task_kwargs={"n_repeat": 1})
 
 # =============================================================================
 # Task groups
 # =============================================================================
-EVALCHEMY_MATH_TASKS = (AIME24, AIME25, AMC23, MATH500, HMMT)
-EVALCHEMY_CODE_TASKS = (HUMANEVAL_PLUS, MBPP_PLUS, LIVECODEBENCH, BIGCODEBENCH, CODEFORCES, CODEELO)
+EVALCHEMY_MATH_TASKS = (AIME24, AIME25, AIME26, AMC23, MATH500, HMMT, OLYMPIADBENCH)
+EVALCHEMY_CODE_TASKS = (
+    HUMANEVAL_PLUS,
+    MBPP_PLUS,
+    LIVECODEBENCH,
+    LIVECODEBENCH_V5_OFFICIAL,
+    LIVECODEBENCH_V6_OFFICIAL,
+    BIGCODEBENCH,
+    CODEFORCES,
+    CODEELO,
+)
 EVALCHEMY_SCIENCE_TASKS = (GPQA_DIAMOND, JEEBENCH)
 EVALCHEMY_REASONING_TASKS = (ALICE_IN_WONDERLAND, HUMANITYS_LAST_EXAM)
 

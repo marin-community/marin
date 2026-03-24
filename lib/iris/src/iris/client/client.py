@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """High-level client with automatic job hierarchy and namespace-based actor discovery.
@@ -31,20 +31,25 @@ from connectrpc.errors import ConnectError
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.cluster.client import (
     BundleCreator,
+    ClusterClient,
     JobInfo,
-    LocalClusterClient,
     RemoteClusterClient,
     get_job_info,
+    resolve_job_user,
 )
+from iris.rpc.auth import AuthTokenInjector, TokenProvider
+from iris.cluster.providers.local.cluster import LocalCluster, make_local_cluster_config
+from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
 from iris.cluster.types import (
-    Constraint,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
     JobName,
     Namespace,
+    ReservationEntry,
     ResourceSpec,
-    merge_constraints,
+    TaskAttempt,
+    adjust_tpu_replicas,
 )
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
@@ -127,8 +132,7 @@ class JobFailedError(Exception):
 class JobAlreadyExists(Exception):
     """Raised when a job with the same name is already running."""
 
-    def __init__(self, job: "Job", message: str):
-        self.job = job
+    def __init__(self, message: str):
         super().__init__(message)
 
 
@@ -273,6 +277,7 @@ class Job:
         raise_on_failure: bool = True,
         stream_logs: bool = False,
         include_children: bool = False,
+        min_level: str = "",
     ) -> cluster_pb2.JobStatus:
         """Wait for job to complete.
 
@@ -281,6 +286,7 @@ class Job:
             poll_interval: Maximum time between status checks
             raise_on_failure: If True, raise JobFailedError on any non-SUCCESS terminal state
             stream_logs: If True, stream logs from all tasks interleaved
+            min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
 
         Returns:
             Final JobStatus
@@ -292,7 +298,7 @@ class Job:
         if not stream_logs:
             status = self._client._cluster_client.wait_for_job(self._job_id, timeout, poll_interval)
         else:
-            status = self._wait_with_multi_task_streaming(timeout, poll_interval, include_children)
+            status = self._wait_with_multi_task_streaming(timeout, poll_interval, include_children, min_level)
 
         if raise_on_failure and status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
             raise JobFailedError(self._job_id, status)
@@ -304,11 +310,12 @@ class Job:
         timeout: float,
         poll_interval: float,
         include_children: bool,
+        min_level: str = "",
     ) -> cluster_pb2.JobStatus:
         """Wait while streaming logs from all tasks using batch log fetching.
 
         Uses a single batch RPC call per poll interval to fetch logs from all tasks,
-        rather than N individual calls. The batch API uses a global since_ms cursor
+        rather than N individual calls. The batch API uses an autoincrement id cursor
         for efficient incremental fetching.
         """
         return self._client._cluster_client.wait_for_job_with_streaming(
@@ -318,6 +325,7 @@ class Job:
             include_children=include_children,
             since_ms=0,
             state_logger=DefaultTaskStateLogger(),
+            min_level=min_level,
         )
 
     def terminate(self) -> None:
@@ -363,13 +371,13 @@ class NamespacedEndpointRegistry:
 
     def __init__(
         self,
-        cluster: LocalClusterClient | RemoteClusterClient,
+        cluster: ClusterClient,
         namespace: Namespace,
-        job_id: JobName,
+        task_attempt: TaskAttempt,
     ):
         self._cluster = cluster
         self._namespace = namespace
-        self._job_id = job_id
+        self._task_attempt = task_attempt
 
     def register(
         self,
@@ -395,7 +403,7 @@ class NamespacedEndpointRegistry:
         return self._cluster.register_endpoint(
             name=prefixed_name,
             address=address,
-            job_id=self._job_id,
+            task_attempt=self._task_attempt,
             metadata=metadata,
         )
 
@@ -411,7 +419,7 @@ class NamespacedEndpointRegistry:
 class NamespacedResolver:
     """Resolver that auto-prefixes names with namespace."""
 
-    def __init__(self, cluster: LocalClusterClient | RemoteClusterClient, namespace: Namespace | None = None):
+    def __init__(self, cluster: ClusterClient, namespace: Namespace | None = None):
         self._cluster = cluster
         self._namespace = namespace
 
@@ -434,14 +442,13 @@ class NamespacedResolver:
             prefixed_name = name
 
         logger.debug("NamespacedResolver resolving: %s", prefixed_name)
-        matches = self._cluster.list_endpoints(prefix=prefixed_name)
+        matches = self._cluster.list_endpoints(prefix=prefixed_name, exact=True)
         logger.debug(
             "NamespacedResolver %s => %s",
             prefixed_name,
             [{"name": ep.name, "id": ep.endpoint_id, "address": ep.address} for ep in matches],
         )
 
-        # Filter to exact matches
         endpoints = [
             ResolvedEndpoint(
                 url=ep.address,
@@ -449,7 +456,6 @@ class NamespacedResolver:
                 metadata=dict(ep.metadata),
             )
             for ep in matches
-            if ep.name == prefixed_name
         ]
 
         return ResolveResult(name=name, endpoints=endpoints)
@@ -484,16 +490,23 @@ class IrisClient:
                 print(entry.data)
     """
 
-    def __init__(self, cluster: LocalClusterClient | RemoteClusterClient, namespace: Namespace = Namespace("")):
+    def __init__(
+        self,
+        cluster: ClusterClient,
+        namespace: Namespace = Namespace(""),
+        controller: LocalCluster | None = None,
+    ):
         """Initialize IrisClient with a cluster client.
 
         Prefer using factory methods (local(), remote()) over direct construction.
 
         Args:
-            cluster: Low-level cluster client (LocalClusterClient or RemoteClusterClient)
+            cluster: Low-level cluster client (RemoteClusterClient)
+            controller: Optional LocalCluster to manage lifecycle for local mode.
         """
         self._cluster_client = cluster
         self._namespace = namespace
+        self._controller = controller
 
     @classmethod
     def local(cls, config: LocalClientConfig | None = None) -> "IrisClient":
@@ -503,11 +516,14 @@ class IrisClient:
             config: Configuration for local execution
 
         Returns:
-            IrisClient wrapping LocalClusterClient
+            IrisClient wrapping a RemoteClusterClient connected to a local controller.
         """
         cfg = config or LocalClientConfig()
-        cluster = LocalClusterClient.create(max_workers=cfg.max_workers)
-        return cls(cluster)
+        config_proto = make_local_cluster_config(cfg.max_workers)
+        controller = LocalCluster(config_proto)
+        address = controller.start()
+        cluster = RemoteClusterClient(controller_address=address, timeout_ms=30000)
+        return cls(cluster, controller=controller)
 
     @classmethod
     def remote(
@@ -515,8 +531,9 @@ class IrisClient:
         controller_address: str,
         *,
         workspace: Path | None = None,
-        bundle_gcs_path: str | None = None,
+        bundle_id: str | None = None,
         timeout_ms: int = 30000,
+        token_provider: TokenProvider | None = None,
     ) -> "IrisClient":
         """Create an IrisClient for RPC-based cluster execution.
 
@@ -525,9 +542,10 @@ class IrisClient:
             workspace: Path to workspace directory containing pyproject.toml.
                 If provided, this directory will be bundled and sent to workers.
                 Required for external job submission.
-            bundle_gcs_path: GCS path to workspace bundle for sub-job inheritance.
-                When set, sub-jobs use this path instead of creating new bundles.
+            bundle_id: Workspace bundle identifier for sub-job inheritance.
+                When set, sub-jobs use this bundle ID instead of creating new bundles.
             timeout_ms: RPC timeout in milliseconds
+            token_provider: When set, attaches bearer tokens to all outgoing RPCs.
 
         Returns:
             IrisClient wrapping RemoteClusterClient
@@ -538,11 +556,16 @@ class IrisClient:
             bundle_blob = creator.create_bundle()
             logger.info(f"Workspace bundle size: {len(bundle_blob) / 1024 / 1024:.1f} MB")
 
+        interceptors = []
+        if token_provider is not None:
+            interceptors.append(AuthTokenInjector(token_provider))
+
         cluster = RemoteClusterClient(
             controller_address=controller_address,
-            bundle_gcs_path=bundle_gcs_path,
+            bundle_id=bundle_id,
             bundle_blob=bundle_blob,
             timeout_ms=timeout_ms,
+            interceptors=interceptors,
         )
         return cls(cluster)
 
@@ -582,6 +605,10 @@ class IrisClient:
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
+        user: str | None = None,
+        reservation: list[ReservationEntry] | None = None,
+        preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
+        existing_job_policy: cluster_pb2.ExistingJobPolicy = cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -598,6 +625,8 @@ class IrisClient:
             max_retries_failure: Max retries per task on failure (default: 0)
             max_retries_preemption: Max retries per task on preemption (default: 100)
             timeout: Per-task timeout (None = no timeout)
+            user: Optional explicit user override for top-level jobs
+            reservation: Resource entries to pre-provision before scheduling (None = no reservation)
 
         Returns:
             Job handle for the submitted job
@@ -610,6 +639,7 @@ class IrisClient:
             raise ValueError("Job name cannot contain '/'")
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
+        replicas = adjust_tpu_replicas(resources.device, replicas)
 
         # Get parent job ID from context
         ctx = get_iris_ctx()
@@ -619,7 +649,7 @@ class IrisClient:
         if parent_job_id:
             job_id = parent_job_id.child(name)
         else:
-            job_id = JobName.root(name)
+            job_id = JobName.root(resolve_job_user(user), name)
 
         # If running inside a job, inherit env vars, extras, and pip_packages from parent.
         # Child-specified values take precedence over inherited ones.
@@ -652,14 +682,28 @@ class IrisClient:
             else:
                 constraints = merge_constraints(parent_constraints, constraints)
 
+            # Always inherit the parent's region unless the child already has
+            # an explicit region constraint.  This applies even when the caller
+            # passes constraints=[] to clear other inherited constraints —
+            # region pinning ensures children stay co-located with the
+            # reservation's claimed workers.
+            if job_info and job_info.worker_region and not any(c.key == WellKnownAttribute.REGION for c in constraints):
+                inherited_region = region_constraint([job_info.worker_region])
+                constraints = [*constraints, inherited_region]
+
         # Convert to wire format
         resources_proto = resources.to_proto()
         environment_proto = environment.to_proto() if environment else None
         constraints_proto = [c.to_proto() for c in constraints or []]
         coscheduling_proto = coscheduling.to_proto() if coscheduling else None
+        reservation_proto = None
+        if reservation:
+            reservation_proto = cluster_pb2.ReservationConfig(
+                entries=[e.to_proto() for e in reservation],
+            )
 
         try:
-            self._cluster_client.submit_job(
+            canonical_id = self._cluster_client.submit_job(
                 job_id=job_id,
                 entrypoint=entrypoint,
                 resources=resources_proto,
@@ -672,13 +716,16 @@ class IrisClient:
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
                 timeout=timeout,
+                reservation=reservation_proto,
+                preemption_policy=preemption_policy,
+                existing_job_policy=existing_job_policy,
             )
         except ConnectError as e:
             if e.code == Code.ALREADY_EXISTS:
-                raise JobAlreadyExists(Job(self, job_id), str(e)) from e
+                raise JobAlreadyExists(str(e)) from e
             raise
 
-        return Job(self, job_id)
+        return Job(self, canonical_id)
 
     def status(self, job_id: JobName) -> cluster_pb2.JobStatus:
         """Get job status.
@@ -734,7 +781,7 @@ class IrisClient:
         """Terminate all jobs matching a prefix.
 
         Args:
-            prefix: Job name prefix to match (e.g., JobName.root("my-experiment"))
+            prefix: Job name prefix to match (e.g., JobName.root("alice", "my-experiment"))
             exclude_finished: If True, skip jobs already in terminal states
 
         Returns:
@@ -786,8 +833,9 @@ class IrisClient:
         include_children: bool = False,
         start: Timestamp | None = None,
         max_lines: int = 0,
-        regex: str | None = None,
+        substring: str | None = None,
         attempt_id: int = -1,
+        min_level: str = "",
     ) -> list[TaskLogEntry]:
         """Fetch logs for a task or job.
 
@@ -796,8 +844,9 @@ class IrisClient:
             include_children: Include logs from child jobs (job ID only)
             start: Only return logs after this timestamp (None = from beginning)
             max_lines: Maximum number of log lines to return (0 = unlimited)
-            regex: Regex filter for log content
+            substring: Substring filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
+            min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
 
         Returns:
             List of TaskLogEntry objects, sorted by timestamp
@@ -807,8 +856,9 @@ class IrisClient:
             include_children=include_children,
             since_ms=start.epoch_ms() if start else 0,
             max_total_lines=max_lines,
-            regex=regex,
+            substring=substring,
             attempt_id=attempt_id,
+            min_level=min_level,
         )
 
         result: list[TaskLogEntry] = []
@@ -831,12 +881,14 @@ class IrisClient:
         return result
 
     def shutdown(self, wait: bool = True) -> None:
-        """Shutdown the client.
+        """Shutdown the client and, in local mode, the controller.
 
         Args:
             wait: If True, wait for pending jobs to complete (local mode only)
         """
         self._cluster_client.shutdown(wait=wait)
+        if self._controller is not None:
+            self._controller.close()
 
 
 @dataclass
@@ -848,14 +900,16 @@ class IrisContext:
 
     Attributes:
         job_id: Unique identifier for this job (hierarchical: "/root/parent/child")
-        attempt_id: Attempt number for this job execution (0-based)
+        task_attempt: Structured task identity (task_id + attempt_id). Used for endpoint
+            registration so the controller can associate endpoints with the
+            specific task and clean them up on retry.
         worker_id: Identifier for the worker executing this job (may be None)
         client: IrisClient for job operations (submit, status, wait, etc.)
         ports: Allocated ports by name (e.g., {"actor": 50001})
     """
 
     job_id: JobName | None
-    attempt_id: int = 0
+    task_attempt: TaskAttempt | None = None
     worker_id: str | None = None
     client: "IrisClient | None" = None
     ports: dict[str, int] | None = None
@@ -868,17 +922,20 @@ class IrisContext:
     def registry(self) -> NamespacedEndpointRegistry:
         """Endpoint registry for this job context. Creates on demand.
 
+        Passes the task_attempt so the controller can associate endpoints with
+        the specific task for retry cleanup.
+
         Raises:
-            RuntimeError: If no client is available
+            RuntimeError: If no client or task_attempt is available
         """
         if self.client is None:
             raise RuntimeError("No client available - ensure controller_address is set")
-        if self.job_id is None:
-            raise RuntimeError("No job id available - ensure IrisContext is initialized from a job")
+        if self.task_attempt is None:
+            raise RuntimeError("No task_attempt available - ensure IrisContext is initialized from a task")
         return NamespacedEndpointRegistry(
             self.client._cluster_client,
             self.namespace,
-            self.job_id,
+            self.task_attempt,
         )
 
     @property
@@ -951,7 +1008,7 @@ class IrisContext:
         """
         return IrisContext(
             job_id=info.job_id,
-            attempt_id=info.attempt_id,
+            task_attempt=info.task_attempt,
             worker_id=info.worker_id,
             client=client,
             ports=dict(info.ports),
@@ -998,19 +1055,16 @@ def get_iris_ctx() -> IrisContext | None:
     if job_info is None:
         return None
 
-    else:
-        # Set up client if controller address is available
-        client = None
-        if job_info.controller_address:
-            bundle_gcs_path = job_info.bundle_gcs_path
+    # Set up client if controller address is available
+    client = None
+    if job_info.controller_address:
+        bundle_id = job_info.bundle_id
+        client = IrisClient.remote(
+            controller_address=job_info.controller_address,
+            bundle_id=bundle_id,
+        )
 
-            # Create remote client for context use
-            client = IrisClient.remote(
-                controller_address=job_info.controller_address,
-                bundle_gcs_path=bundle_gcs_path,
-            )
-
-        ctx = IrisContext.from_job_info(job_info, client=client)
+    ctx = IrisContext.from_job_info(job_info, client=client)
     _iris_context.set(ctx)
     return ctx
 

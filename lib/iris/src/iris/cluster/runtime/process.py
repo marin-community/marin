@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Subprocess-based container runtime for local execution.
@@ -22,19 +22,20 @@ import ctypes.util
 import logging
 import os
 import select
-import signal
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import uuid
 import weakref
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from iris.cluster.runtime.env import build_device_env_vars
+from iris.cluster.bundle import BundleStore
+from iris.cluster.runtime.env import write_workdir_files
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
     build_memray_transform_cmd,
@@ -42,7 +43,15 @@ from iris.cluster.runtime.profile import (
     resolve_cpu_spec,
     resolve_memory_spec,
 )
-from iris.cluster.runtime.types import ContainerConfig, ContainerPhase, ContainerStats, ContainerStatus, RuntimeLogReader
+from iris.cluster.runtime.profile import run_pyspy_dump
+from iris.cluster.runtime.types import (
+    ContainerConfig,
+    ContainerPhase,
+    ContainerStats,
+    ContainerStatus,
+    MountKind,
+    RuntimeLogReader,
+)
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ManagedThread, get_thread_container
 from iris.rpc import cluster_pb2
@@ -73,67 +82,6 @@ atexit.register(_cleanup_all_runtimes)
 # =============================================================================
 # Process management utilities
 # =============================================================================
-
-
-def _read_proc_memory_mb(pid: int) -> int | None:
-    """Read RSS memory usage for a process, in megabytes.
-
-    On Linux, reads /proc/{pid}/statm directly (no external dependencies).
-    On macOS, shells out to `ps` since /proc is not available.
-    Returns None if the process doesn't exist or the read fails.
-    """
-    if sys.platform == "linux":
-        try:
-            with open(f"/proc/{pid}/statm") as f:
-                pages = int(f.read().split()[1])  # resident set size in pages
-            return (pages * 4096) // (1024 * 1024)
-        except (FileNotFoundError, ProcessLookupError, ValueError, IndexError):
-            return None
-    else:
-        try:
-            result = subprocess.run(
-                ["ps", "-o", "rss=", "-p", str(pid)],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode != 0:
-                return None
-            rss_kb = int(result.stdout.strip())
-            return rss_kb // 1024
-        except (subprocess.TimeoutExpired, ValueError, OSError):
-            return None
-
-
-def _read_proc_cpu_percent(pid: int, prev_total: float, prev_utime: float) -> tuple[int, float, float]:
-    """Read CPU usage percentage for a process since the last call.
-
-    On Linux, computes delta CPU usage from /proc/{pid}/stat and /proc/stat.
-    On macOS, returns 0 since /proc is not available.
-    Returns (cpu_percent, new_total, new_utime).
-    """
-    if sys.platform != "linux":
-        return (0, prev_total, prev_utime)
-
-    try:
-        with open(f"/proc/{pid}/stat") as f:
-            fields = f.read().split()
-        # utime (field 14) + stime (field 15), 1-indexed => 0-indexed 13, 14
-        proc_time = int(fields[13]) + int(fields[14])
-
-        with open("/proc/stat") as f:
-            cpu_line = f.readline()
-        total_time = sum(int(x) for x in cpu_line.split()[1:])
-
-        dt = total_time - prev_total
-        dp = proc_time - prev_utime
-        if dt <= 0 or prev_total == 0:
-            return (0, total_time, proc_time)
-
-        cpu_pct = int((dp / dt) * 100)
-        return (cpu_pct, total_time, proc_time)
-    except (FileNotFoundError, ProcessLookupError, ValueError, IndexError):
-        return (0, prev_total, prev_utime)
 
 
 def set_pdeathsig_preexec():
@@ -428,6 +376,31 @@ class ProcessLogReader:
         return list(self._logs)
 
 
+def _resolve_mount_map(config: ContainerConfig, cache_dir: Path | None = None) -> dict[str, str]:
+    """Build container_path -> host_path mapping for process runtime.
+
+    WORKDIR mounts resolve to config.workdir_host_path (set by task_attempt).
+    CACHE mounts resolve to shared subdirectories under cache_dir.
+    TMPFS mounts resolve to per-task temp directories under cache_dir for isolation.
+    """
+    result: dict[str, str] = {}
+    for mount in config.mounts:
+        if mount.kind == MountKind.WORKDIR:
+            if config.workdir_host_path:
+                result[mount.container_path] = str(config.workdir_host_path)
+        elif mount.kind == MountKind.CACHE:
+            if cache_dir:
+                host_dir = cache_dir / mount.container_path.strip("/").replace("/", "-")
+                host_dir.mkdir(parents=True, exist_ok=True)
+                result[mount.container_path] = str(host_dir)
+        elif mount.kind == MountKind.TMPFS:
+            if cache_dir:
+                prefix = mount.container_path.strip("/").replace("/", "-") + "-"
+                host_dir = Path(tempfile.mkdtemp(prefix=prefix, dir=cache_dir))
+                result[mount.container_path] = str(host_dir)
+    return result
+
+
 @dataclass
 class ProcessContainerHandle:
     """Process implementation of ContainerHandle.
@@ -442,8 +415,7 @@ class ProcessContainerHandle:
     _container_id: str | None = field(default=None, repr=False)
     _prev_cpu_total: float = field(default=0.0, repr=False)
     _prev_cpu_utime: float = field(default=0.0, repr=False)
-    _prev_cpu_total: float = field(default=0.0, repr=False)
-    _prev_cpu_utime: float = field(default=0.0, repr=False)
+    _tmpfs_dirs: list[Path] = field(default_factory=list, repr=False)
 
     @property
     def container_id(self) -> str | None:
@@ -466,11 +438,19 @@ class ProcessContainerHandle:
         config = self.config
 
         # Remap container paths to host paths in env vars
-        mount_map = {container_path: host_path for host_path, container_path, _ in config.mounts}
-        env = {**build_device_env_vars(config), **dict(config.env)}
+        mount_map = _resolve_mount_map(config, cache_dir=self.runtime._cache_dir)
+        env = dict(config.env)
         for key, value in env.items():
             if value in mount_map:
                 env[key] = mount_map[value]
+
+        # Track TMPFS dirs for cleanup and set TMPDIR so tempfile uses the mapped path
+        for mount in config.mounts:
+            if mount.kind == MountKind.TMPFS and mount.container_path in mount_map:
+                host_path = mount_map[mount.container_path]
+                self._tmpfs_dirs.append(Path(host_path))
+                if mount.container_path == "/tmp":
+                    env["TMPDIR"] = host_path
 
         # In local mode, resolve IRIS_PYTHON to the current interpreter so that
         # bash -c "exec $IRIS_PYTHON ..." works even when "python" isn't on PATH.
@@ -487,9 +467,6 @@ class ProcessContainerHandle:
                     arg = host_path + arg[len(container_path) :]
                     break
             remapped_cmd.append(arg)
-
-        # Create container with remapped environment and command
-        from dataclasses import replace
 
         updated_config = replace(config, env=env)
 
@@ -543,19 +520,27 @@ class ProcessContainerHandle:
             available=memory_mb is not None,
         )
 
+    def disk_usage_mb(self) -> int:
+        """Return used space in MB on the filesystem containing the workdir."""
+        if self.config.workdir_host_path and self.config.workdir_host_path.exists():
+            return int(shutil.disk_usage(self.config.workdir_host_path).used / (1024 * 1024))
+        return 0
+
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
-        """Profile the running process using py-spy (CPU) or memray (memory), with fallback stubs."""
+        """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
 
         if not self._container or not self._container._process:
             raise RuntimeError("Cannot profile: no running process")
 
-        # Dispatch to CPU or memory profiling
-        if profile_type.HasField("cpu"):
+        if profile_type.HasField("threads"):
+            pid = str(self._container._process.pid)
+            return run_pyspy_dump(pid, include_locals=profile_type.threads.locals)
+        elif profile_type.HasField("cpu"):
             return self._profile_cpu(duration_seconds, profile_type.cpu)
         elif profile_type.HasField("memory"):
             return self._profile_memory(duration_seconds, profile_type.memory)
         else:
-            raise RuntimeError("ProfileType must specify either cpu or memory profiler")
+            raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
     def _profile_cpu(self, duration_seconds: int, cpu_config: cluster_pb2.CpuProfile) -> bytes:
         """Profile CPU using py-spy, with fallback stub."""
@@ -564,8 +549,6 @@ class ProcessContainerHandle:
 
         output_path = None
         try:
-            import tempfile
-
             with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
                 output_path = f.name
 
@@ -573,8 +556,12 @@ class ProcessContainerHandle:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
             if result.returncode == 0:
                 return Path(output_path).read_bytes()
-        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, OSError):
-            logger.warning("py-spy profiling failed for PID %s; falling back to stub", pid, exc_info=True)
+        except FileNotFoundError:
+            logger.warning("py-spy not found; falling back to stub profile for PID %s", pid)
+        except subprocess.TimeoutExpired:
+            logger.warning("py-spy timed out; falling back to stub profile for PID %s", pid)
+        except PermissionError:
+            logger.warning("py-spy lacks permission to attach; falling back to stub profile for PID %s", pid)
         finally:
             if output_path is not None:
                 Path(output_path).unlink(missing_ok=True)
@@ -589,8 +576,6 @@ class ProcessContainerHandle:
         trace_path = None
         output_path = None
         try:
-            import tempfile
-
             with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
                 trace_path = f.name
 
@@ -615,8 +600,14 @@ class ProcessContainerHandle:
             else:
                 return result.stdout.encode("utf-8")
 
-        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, OSError, RuntimeError):
-            logger.warning("memray profiling failed for PID %s; falling back to stub", pid, exc_info=True)
+        except FileNotFoundError:
+            logger.warning("memray not found; falling back to stub profile for PID %s", pid)
+        except subprocess.TimeoutExpired:
+            logger.warning("memray timed out; falling back to stub profile for PID %s", pid)
+        except PermissionError:
+            logger.warning("memray lacks permission to attach; falling back to stub profile for PID %s", pid)
+        except RuntimeError:
+            logger.warning("memray failed for PID %s; falling back to stub", pid, exc_info=True)
         finally:
             if trace_path is not None:
                 Path(trace_path).unlink(missing_ok=True)
@@ -631,6 +622,9 @@ class ProcessContainerHandle:
             self._container.kill()
         self._container = None
         self._container_id = None
+        for tmpfs_dir in self._tmpfs_dirs:
+            shutil.rmtree(tmpfs_dir, ignore_errors=True)
+        self._tmpfs_dirs.clear()
 
 
 class ProcessRuntime:
@@ -640,7 +634,8 @@ class ProcessRuntime:
     Creates ProcessContainerHandle instances with the build/run lifecycle.
     """
 
-    def __init__(self):
+    def __init__(self, cache_dir: Path):
+        self._cache_dir = cache_dir
         self._handles: list[ProcessContainerHandle] = []
         _active_runtimes.add(self)
 
@@ -654,19 +649,21 @@ class ProcessRuntime:
         self._handles.append(handle)
         return handle
 
+    def prepare_workdir(self, workdir: Path, disk_bytes: int) -> None:
+        pass
+
     def stage_bundle(
         self,
         *,
-        bundle_gcs_path: str,
+        bundle_id: str,
         workdir: Path,
         workdir_files: dict[str, bytes],
-        fetch_bundle: Callable[[str], Path],
+        bundle_store: BundleStore,
     ) -> None:
         """Stage bundle and workdir files on worker-local filesystem."""
-        bundle_path = fetch_bundle(bundle_gcs_path)
-        shutil.copytree(bundle_path, workdir, dirs_exist_ok=True)
-        for name, data in workdir_files.items():
-            (workdir / name).write_bytes(data)
+        if bundle_id:
+            bundle_store.extract_bundle_to(bundle_id, workdir)
+        write_workdir_files(workdir, workdir_files)
 
     def list_containers(self) -> list[ProcessContainerHandle]:
         """List all managed container handles."""

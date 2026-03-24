@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -15,10 +15,17 @@ from typing import Any
 
 import jmp
 from fray.v2 import ResourceConfig
+from marin.execution.remote import remote
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LmDatasetFormatBase, LMMixtureDatasetConfig, PreferenceLmDataConfig, TextLmDatasetFormat
+from levanter.data.text import (
+    BlockShuffleConfig,
+    LmDatasetFormatBase,
+    LMMixtureDatasetConfig,
+    PreferenceLmDataConfig,
+    TextLmDatasetFormat,
+)
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
@@ -49,6 +56,7 @@ from marin.execution.executor import (
     ensure_versioned,
     this_output_path,
     unwrap_versioned_value,
+    versioned,
 )
 from marin.processing.tokenize import (
     HfDatasetSpec,
@@ -67,7 +75,29 @@ from marin.training.training import (
     run_levanter_train_lm,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
+
+
+HF_BUCKET_URI_PREFIX = "hf://buckets/"
+HF_BUCKET_PATH_PREFIX = "buckets/"
+
+
+def _is_hf_bucket_path(path: str) -> bool:
+    return path.startswith(HF_BUCKET_URI_PREFIX) or path.startswith(HF_BUCKET_PATH_PREFIX)
+
+
+def _normalize_hf_bucket_path(path: str) -> str:
+    if path.startswith(HF_BUCKET_URI_PREFIX):
+        return path.removeprefix("hf://")
+    return path
+
+
+DEFAULT_NEW_RUN_DATA_SHUFFLE = BlockShuffleConfig(
+    io_block_size=256,
+    window_blocks=512,
+    perm_type="feistel",
+)
+"""Hierarchical block-shuffle default for newly constructed training runs."""
 
 
 def _truncate_wandb_name(name: str) -> str:
@@ -109,7 +139,7 @@ def _validate_train_length(train_seq_len: int | None, model_config: LmConfig) ->
 def default_download(
     name: str,
     hf_dataset_id: str,
-    revision: str,
+    revision: str | None = None,
     override_output_path: str | None = None,
     **kwargs: Any,
 ) -> InputName:
@@ -119,25 +149,41 @@ def default_download(
     Args:
         name: The name of the Download step. It forms the basis of the output path
             unless override_output_path is explicitly specified.
-        hf_dataset_id: The HuggingFace dataset ID to download. As `$ORG/$DATASET` on HF Hub
-        revision: The revision of the dataset to download.
-            Short Commit Hash from HF Dataset Repo (7 characters)
+        hf_dataset_id: Hugging Face source. Either `$ORG/$DATASET` on HF Hub or `hf://buckets/...`.
+        revision: The revision of the dataset to download for Hub datasets.
+            Optional for bucket paths.
         override_output_path: Optional. The output path for the dataset.
         **kwargs: Additional keyword arguments that are passed to the download config.
 
     The final output data will reside in '{output_path}/{revision}'.
     """
 
+    download_kwargs = dict(kwargs)
+    hf_repo_type_prefix = download_kwargs.pop("hf_repo_type_prefix", None)
+    if _is_hf_bucket_path(hf_dataset_id):
+        normalized_dataset_id = _normalize_hf_bucket_path(hf_dataset_id)
+        description = f"Download {hf_dataset_id}"
+        resolved_hf_repo_type_prefix = "" if hf_repo_type_prefix is None else hf_repo_type_prefix
+        resolved_revision = "main" if revision is None else revision
+    else:
+        if revision is None:
+            raise ValueError("revision is required for non-bucket Hugging Face dataset downloads.")
+        normalized_dataset_id = hf_dataset_id
+        description = f"Download {hf_dataset_id} revision {revision}"
+        resolved_hf_repo_type_prefix = "datasets" if hf_repo_type_prefix is None else hf_repo_type_prefix
+        resolved_revision = revision
+
     step = ExecutorStep(
         name=name,
-        description=f"Download {hf_dataset_id} revision {revision}",
+        description=description,
         fn=download_hf,
         config=DownloadConfig(
-            hf_dataset_id=hf_dataset_id,
-            revision=revision,
+            hf_dataset_id=normalized_dataset_id,
+            revision=resolved_revision,
             gcs_output_path=this_output_path(),
             wait_for_completion=True,
-            **kwargs,
+            hf_repo_type_prefix=resolved_hf_repo_type_prefix,
+            **download_kwargs,
         ),
         override_output_path=override_output_path,
     )
@@ -185,7 +231,12 @@ def default_tokenize(
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
         )
-    elif isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
+    elif (
+        isinstance(dataset, str)
+        and not _is_hf_bucket_path(dataset)
+        and dataset.count("/") == 1
+        and not fsspec_utils.exists(dataset)
+    ):
         config = HfTokenizeConfig(
             id=dataset,
             cache_path=this_output_path(),
@@ -206,16 +257,18 @@ def default_tokenize(
     return ExecutorStep(
         name=os.path.join("tokenized", name),
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
-        fn=tokenize,
+        fn=remote(
+            tokenize,
+            resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
+            pip_dependency_groups=["cpu"],
+            env_vars={
+                "TRANSFORMERS_NO_TORCH": "1",
+                "TRANSFORMERS_NO_TORCHVISION": "1",
+                "USE_TORCH": "0",
+                "TORCH_DISABLE_GLOBAL_DEPS": "1",
+            },
+        ),
         config=config,
-        resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
-        pip_dependency_groups=["cpu"],
-        env_vars={
-            "TRANSFORMERS_NO_TORCH": "1",
-            "TRANSFORMERS_NO_TORCHVISION": "1",
-            "USE_TORCH": "0",
-            "TORCH_DISABLE_GLOBAL_DEPS": "1",
-        },
     )
 
 
@@ -363,12 +416,13 @@ def default_train(
             ),
             model_averaging=model_averaging,
             mesh=MeshConfig(
+                axes={"replica": 1, "data": -1, "model": train_config.tensor_parallel_size},
                 # Special axes for MoEs
                 # TODO: this is actually bad and we should remove, but keeping for now
                 compute_mapping={
                     "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
                     "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
-                }
+                },
             ),
             allow_partial_checkpoint=train_config.allow_partial_checkpoint,
             per_device_eval_parallelism=per_device_eval_parallelism,
@@ -429,6 +483,7 @@ def default_train(
         train_config=inner_config,
         resources=pod_config,
         output_path=this_output_path(),
+        env_vars=train_config.env_vars,
     )
 
     model_config = unwrap_versioned_value(model_config)
@@ -673,6 +728,7 @@ def _prepare_data_config(
         pretraining_data = lm_data_config(
             training_set=tokenized,
             validation_sets=validation_sets,
+            shuffle=versioned(DEFAULT_NEW_RUN_DATA_SHUFFLE),
         )
     else:
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures

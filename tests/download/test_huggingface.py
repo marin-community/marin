@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for HuggingFace download scripts."""
@@ -10,7 +10,12 @@ from unittest.mock import MagicMock, Mock, patch
 import pandas as pd
 import pytest
 
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
+from marin.download.huggingface.download_hf import (
+    DownloadConfig,
+    _relative_path_in_source,
+    download_hf,
+    stream_file_to_fsspec,
+)
 from marin.download.huggingface.stream_remove_columns import (
     DatasetConfig,
     prune_hf_dataset,
@@ -35,7 +40,7 @@ def mock_hf_fs():
 
         fs = MagicMock()
 
-        def mock_open(path, mode="rb"):
+        def mock_open(path, mode="rb", **_kwargs):
             if path in files:
                 return io.BytesIO(files[path])
             raise FileNotFoundError(f"File not found: {path}")
@@ -126,6 +131,30 @@ def test_download_hf_appends_sha_when_configured(mock_hf_fs, tmp_path):
     assert (target_output / "provenance.json").exists()
 
 
+def test_relative_path_in_source_supports_bucket_paths():
+    file_path = "hf://buckets/demo-user/demo-bucket/data/train/file1.txt"
+    source_path = "hf://buckets/demo-user/demo-bucket/data"
+    assert _relative_path_in_source(file_path, source_path) == "train/file1.txt"
+
+
+def test_relative_path_in_source_supports_revision_qualified_bucket_paths():
+    file_path = "hf://buckets/demo-user/demo-bucket/data@main/train/file1.txt"
+    source_path = "hf://buckets/demo-user/demo-bucket/data"
+    assert _relative_path_in_source(file_path, source_path) == "train/file1.txt"
+
+
+def test_download_hf_bucket_requires_newer_huggingface_hub(tmp_path):
+    cfg = DownloadConfig(
+        hf_dataset_id="buckets/demo-user/demo-bucket/data",
+        revision="main",
+        gcs_output_path=str(tmp_path),
+        hf_repo_type_prefix="",
+    )
+
+    with pytest.raises(RuntimeError, match=r"huggingface_hub>=1\.6\.0"):
+        download_hf(cfg)
+
+
 def test_prune_hf_dataset(tmp_path):
     """Test full dataset pruning pipeline."""
     # Create test parquet data
@@ -168,3 +197,50 @@ def test_prune_hf_dataset(tmp_path):
     assert output_file.exists()
     result_df = pd.read_parquet(output_file)
     assert list(result_df.columns) == ["id", "text"]
+
+
+def test_stream_file_to_fsspec_retries_on_timeout(tmp_path):
+    """A socket timeout while reading should trigger retry and then succeed."""
+    file_path = "datasets/test-org/test-dataset/data/file1.txt"
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    destination = output_path / "data" / "file1.txt"
+
+    content = b"retry me"
+
+    hf_fs = MagicMock()
+    read_attempts = {"count": 0}
+
+    class FlakyReader:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self, chunk_size):
+            read_attempts["count"] += 1
+            if read_attempts["count"] == 1:
+                raise TimeoutError("simulated timeout")
+            if read_attempts["count"] == 2:
+                return content
+            return b""
+
+    hf_fs.open.side_effect = lambda path, mode="rb", **_kwargs: FlakyReader()
+
+    with (
+        patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs),
+        patch("marin.download.huggingface.download_hf.time.sleep", return_value=None),
+    ):
+        result = stream_file_to_fsspec(
+            str(output_path),
+            file_path,
+            str(destination),
+            expected_size=len(content),
+            read_timeout_seconds=1.0,
+            progress_log_interval_seconds=0.0,
+        )
+
+    assert result["status"] == "success"
+    assert destination.read_bytes() == content
+    assert read_attempts["count"] >= 3

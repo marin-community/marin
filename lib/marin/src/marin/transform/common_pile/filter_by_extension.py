@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Utilities for filtering Common Pile datasets by metadata extensions.
@@ -18,7 +18,7 @@ from functools import cached_property
 
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def _normalize_extension(value: object, *, casefold: bool) -> str | None:

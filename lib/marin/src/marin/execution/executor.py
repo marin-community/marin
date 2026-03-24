@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -95,10 +95,18 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from urllib.parse import urlparse
 
 import draccus
-import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
-from fray.v2.types import ResourceConfig
+from fray.v2.client import current_client
+from fray.v2.iris_backend import FrayIrisClient
+from fray.v2.types import TpuConfig
+from iris.cluster.client.job_info import get_job_info
+from iris.cluster.constraints import WellKnownAttribute
+from iris.marin_fs import collect_gcs_paths
+from iris.marin_fs import get_bucket_location, open_url
 from iris.marin_fs import marin_prefix
+from iris.marin_fs import region_from_prefix
+from iris.marin_fs import split_gcs_path
+from iris.rpc import config_pb2
 
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_runner import StepRunner, worker_id
@@ -108,8 +116,9 @@ from marin.execution.executor_step_status import (
     StatusFile,
 )
 from marin.utilities.json_encoder import CustomJsonEncoder
+from iris.logging import configure_logging
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 _LOCAL_DATA_BROWSER_PORT_RE = re.compile(r"^\s*port\s*:\s*(\d+)\s*(?:#.*)?$")
 _LOCAL_DATA_BROWSER_CONFIG_REL = Path("data_browser") / "conf" / "local.conf"
@@ -152,6 +161,459 @@ T_co = TypeVar("T_co", covariant=True)
 ExecutorFunction = Callable | None
 
 
+_NON_REGIONAL_BUCKET_LOCATIONS = {"us", "eu", "asia", "nam4", "eur4", "asia1"}
+_GCP_REGION_PATTERN = re.compile(r"^[a-z]+-[a-z0-9]+[0-9]$")
+
+
+def _normalize_region(region: str, *, step_name: str, path: str) -> str:
+    normalized = region.lower()
+    if normalized in _NON_REGIONAL_BUCKET_LOCATIONS or "+" in normalized or not _GCP_REGION_PATTERN.match(normalized):
+        raise ValueError(
+            f"Executor step {step_name!r} references {path!r} in a non-regional bucket location "
+            f"({normalized!r}); cannot infer a single region pin."
+        )
+    return normalized
+
+
+def _is_bucket_location_permission_error(exc: Exception) -> bool:
+    return isinstance(exc, PermissionError) or exc.__class__.__name__ in {"Forbidden", "PermissionDenied"}
+
+
+def _region_for_gcs_path(path: str, *, step_name: str, bucket_region_cache: dict[str, str]) -> str | None:
+    region = region_from_prefix(path)
+    if region is not None:
+        return _normalize_region(region, step_name=step_name, path=path)
+
+    bucket, _ = split_gcs_path(path)
+    if bucket not in bucket_region_cache:
+        try:
+            bucket_region_cache[bucket] = get_bucket_location(path)
+        except Exception as e:
+            if _is_bucket_location_permission_error(e):
+                logger.warning(
+                    "Could not infer bucket location for %s due to permission error; "
+                    "skipping this path for region inference.",
+                    path,
+                    exc_info=True,
+                )
+                return None
+            raise
+    return _normalize_region(bucket_region_cache[bucket], step_name=step_name, path=path)
+
+
+def _infer_gcs_regions(
+    *,
+    step_name: str,
+    config: Any,
+    output_path: str,
+    deps: list[StepSpec] | None,
+    dag_tpu_regions: list[str] | None = None,
+) -> list[str] | None:
+    """Return inferred GCS regions referenced by config/deps/output, or None if no GCS paths."""
+    # label -> path evidence for useful error messages
+    path_to_labels: dict[str, list[str]] = {}
+
+    def add_path(label: str, path: str):
+        path_to_labels.setdefault(path, []).append(label)
+
+    for label, path in collect_gcs_paths(config, path_prefix="config"):
+        add_path(label, path)
+
+    for i, dep in enumerate(deps or []):
+        dep_path = dep.output_path
+        if dep_path.startswith("gs://"):
+            add_path(f"dependency[{i}]", dep_path)
+
+    if output_path.startswith("gs://"):
+        add_path("output_path", output_path)
+
+    gcs_regions: set[str] | None = None
+    region_to_evidence: dict[str, list[str]] = {}
+    if path_to_labels:
+        bucket_region_cache: dict[str, str] = {}
+        for path, labels in path_to_labels.items():
+            region = _region_for_gcs_path(path, step_name=step_name, bucket_region_cache=bucket_region_cache)
+            if region is None:
+                continue
+            region_to_evidence.setdefault(region, []).extend(f"{label}={path}" for label in labels)
+        if region_to_evidence:
+            gcs_regions = set(region_to_evidence)
+
+        if gcs_regions is not None and len(gcs_regions) > 1:
+            detail = "; ".join(
+                f"{region}: {', '.join(sorted(evidence)[:3])}" for region, evidence in sorted(region_to_evidence.items())
+            )
+            raise ValueError(
+                f"Executor step {step_name!r} has cross-region GCS dependencies. "
+                f"Found regions {{{', '.join(sorted(region_to_evidence))}}}. {detail}"
+            )
+
+    if dag_tpu_regions:
+        tpu_region_set = {r.lower() for r in dag_tpu_regions}
+        if gcs_regions is None:
+            gcs_regions = tpu_region_set
+        else:
+            intersection = gcs_regions & tpu_region_set
+            if intersection:
+                gcs_regions = intersection
+            else:
+                raise ValueError(
+                    f"Executor step {step_name!r} has no overlap between GCS regions {sorted(gcs_regions)} "
+                    f"and TPU-capable DAG regions {sorted(tpu_region_set)}."
+                )
+
+    if gcs_regions is None:
+        return None
+    return sorted(gcs_regions)
+
+
+def _allowed_regions_for_step(
+    *,
+    step_name: str,
+    remote_fn: RemoteCallable | None,
+    config: Any,
+    output_path: str,
+    deps: list[StepSpec] | None,
+    dag_tpu_regions: list[str] | None = None,
+) -> set[str] | None:
+    """Return the allowed regional placements for a step after combining all constraints."""
+    allowed_regions = _infer_gcs_regions(
+        step_name=step_name,
+        config=config,
+        output_path=output_path,
+        deps=deps,
+        dag_tpu_regions=dag_tpu_regions,
+    )
+    allowed = set(allowed_regions) if allowed_regions is not None else None
+
+    if remote_fn is None or remote_fn.resources.regions is None:
+        return allowed
+
+    explicit_regions = {region.lower() for region in remote_fn.resources.regions}
+    if not explicit_regions:
+        return allowed
+
+    if allowed is None:
+        return explicit_regions
+
+    intersection = allowed & explicit_regions
+    if intersection:
+        return intersection
+
+    raise ValueError(
+        f"Executor step {step_name!r} has no overlap between explicit regions {sorted(explicit_regions)} "
+        f"and inferred regions {sorted(allowed)}."
+    )
+
+
+def _regions_for_tpu_variant_from_iris(variant: str) -> set[str] | None:
+    try:
+        client = current_client()
+    except Exception:
+        return None
+    if not isinstance(client, FrayIrisClient):
+        return None
+
+    variant = variant.lower()
+    try:
+        # TODO: expose autoscaler status through a public Fray API.
+        autoscaler_status = client._iris._cluster_client.get_autoscaler_status()
+    except Exception:
+        logger.warning("Could not query Iris autoscaler status for TPU region inference", exc_info=True)
+        return None
+
+    regions: set[str] = set()
+    for group in autoscaler_status.status.groups:
+        resources = group.config.resources
+        if resources.device_type != config_pb2.ACCELERATOR_TYPE_TPU:
+            continue
+        group_variant = resources.device_variant.lower().strip()
+        if group_variant and group_variant != variant:
+            continue
+
+        attrs = group.config.worker.attributes
+        region = attrs.get(WellKnownAttribute.REGION, "").strip().lower()
+        if region:
+            regions.add(region)
+            continue
+
+        zone = attrs.get(WellKnownAttribute.ZONE, "").strip().lower()
+        if zone and "-" in zone:
+            regions.add(zone.rsplit("-", 1)[0])
+
+    return regions or None
+
+
+def _regions_for_tpu_variants_from_iris(
+    variants: list[str],
+    *,
+    variant_region_cache: dict[str, set[str] | None],
+) -> set[str] | None:
+    inferred_regions: set[str] = set()
+    for variant in variants:
+        normalized_variant = variant.lower()
+        if normalized_variant not in variant_region_cache:
+            variant_region_cache[normalized_variant] = _regions_for_tpu_variant_from_iris(normalized_variant)
+        cached = variant_region_cache[normalized_variant]
+        if cached is None:
+            return None
+        inferred_regions |= cached
+    return inferred_regions
+
+
+def _tpu_regions_for_remote_callable(
+    remote_fn: RemoteCallable,
+    *,
+    variant_region_cache: dict[str, set[str] | None],
+) -> set[str] | None:
+    if not isinstance(remote_fn.resources.device, TpuConfig):
+        return None
+    if remote_fn.resources.regions:
+        return {r.lower() for r in remote_fn.resources.regions}
+
+    variants = [remote_fn.resources.device.variant]
+    if remote_fn.resources.device_alternatives:
+        variants.extend(remote_fn.resources.device_alternatives)
+    return _regions_for_tpu_variants_from_iris(variants, variant_region_cache=variant_region_cache)
+
+
+def _dag_tpu_regions(steps: list["ExecutorStep"]) -> list[str] | None:
+    """Infer allowed regions for TPU steps in this DAG, if any."""
+    tpu_region_intersection: set[str] | None = None
+    tpu_variant_region_cache: dict[str, set[str] | None] = {}
+
+    for step in steps:
+        step_fn = step.fn
+        if not isinstance(step_fn, RemoteCallable):
+            continue
+        step_regions = _tpu_regions_for_remote_callable(step_fn, variant_region_cache=tpu_variant_region_cache)
+        if not step_regions:
+            continue
+
+        if tpu_region_intersection is None:
+            tpu_region_intersection = set(step_regions)
+        else:
+            tpu_region_intersection &= step_regions
+
+        if not tpu_region_intersection:
+            raise ValueError("No common region satisfies all TPU steps in this DAG.")
+
+    return sorted(tpu_region_intersection) if tpu_region_intersection else None
+
+
+def _step_dag_tpu_regions(
+    steps: list["ExecutorStep"],
+    dependencies: dict["ExecutorStep", list["ExecutorStep"]],
+) -> dict["ExecutorStep", list[str] | None]:
+    """Infer TPU-capable regions per step from downstream TPU consumers in the same component."""
+    dependents: dict[ExecutorStep, list[ExecutorStep]] = {step: [] for step in steps}
+    for step in steps:
+        for dep in dependencies.get(step, []):
+            if dep in dependents:
+                dependents[dep].append(step)
+
+    reachable_tpu_regions: dict[ExecutorStep, set[str] | None] = {}
+    variant_region_cache: dict[str, set[str] | None] = {}
+
+    def regions_for_step(step: ExecutorStep) -> set[str] | None:
+        if step in reachable_tpu_regions:
+            return reachable_tpu_regions[step]
+
+        step_regions: set[str] | None = None
+        step_fn = step.fn
+        if isinstance(step_fn, RemoteCallable):
+            step_regions = _tpu_regions_for_remote_callable(step_fn, variant_region_cache=variant_region_cache)
+
+        downstream_tpu_regions: set[str] | None = step_regions
+        for dependent in dependents[step]:
+            dependent_regions = regions_for_step(dependent)
+            if dependent_regions is None:
+                continue
+            if downstream_tpu_regions is None:
+                downstream_tpu_regions = set(dependent_regions)
+            else:
+                downstream_tpu_regions &= dependent_regions
+            if not downstream_tpu_regions:
+                raise ValueError(f"No common region satisfies TPU consumers downstream of executor step {step.name!r}.")
+
+        reachable_tpu_regions[step] = downstream_tpu_regions
+        return downstream_tpu_regions
+
+    return {
+        step: sorted(regions) if regions else None
+        for step, regions in ((step, regions_for_step(step)) for step in steps)
+    }
+
+
+def _component_tpu_pins(
+    steps: list["ExecutorStep"],
+    dependencies: dict["ExecutorStep", list["ExecutorStep"]],
+    *,
+    configs: dict["ExecutorStep", Any],
+    output_paths: dict["ExecutorStep", str],
+    dep_stubs_by_step: dict["ExecutorStep", list[StepSpec]],
+    dag_tpu_regions_by_step: dict["ExecutorStep", list[str] | None],
+) -> dict["ExecutorStep", str | None]:
+    relevant_steps = {step for step in steps if dag_tpu_regions_by_step[step] is not None}
+    if not relevant_steps:
+        return {step: None for step in steps}
+
+    adjacency: dict[ExecutorStep, set[ExecutorStep]] = {step: set() for step in relevant_steps}
+    for step in relevant_steps:
+        for dep in dependencies.get(step, []):
+            if dep in adjacency:
+                adjacency[step].add(dep)
+                adjacency[dep].add(step)
+
+    inherited_region_pin = _iris_worker_region_pin()
+    chosen_region_by_step: dict[ExecutorStep, str | None] = {step: None for step in steps}
+    visited: set[ExecutorStep] = set()
+
+    for step in relevant_steps:
+        if step in visited:
+            continue
+
+        stack = [step]
+        component: list[ExecutorStep] = []
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            component.append(current)
+            stack.extend(adjacency[current] - visited)
+
+        component_regions: set[str] | None = None
+        for component_step in component:
+            remote_fn = component_step.fn if isinstance(component_step.fn, RemoteCallable) else None
+            step_regions = _allowed_regions_for_step(
+                step_name=component_step.name,
+                remote_fn=remote_fn,
+                config=configs[component_step],
+                output_path=output_paths[component_step],
+                deps=dep_stubs_by_step[component_step],
+                dag_tpu_regions=dag_tpu_regions_by_step[component_step],
+            )
+            if step_regions is None:
+                continue
+            if component_regions is None:
+                component_regions = set(step_regions)
+            else:
+                component_regions &= step_regions
+            if not component_regions:
+                component_step_names = ", ".join(sorted(s.name for s in component))
+                raise ValueError(
+                    f"No common concrete region satisfies TPU-connected executor steps: {component_step_names}."
+                )
+
+        if not component_regions:
+            continue
+
+        if inherited_region_pin is not None:
+            chosen_region = inherited_region_pin.lower()
+            if chosen_region not in component_regions:
+                component_step_names = ", ".join(sorted(s.name for s in component))
+                raise ValueError(
+                    f"TPU-connected executor steps {component_step_names} require one of "
+                    f"{sorted(component_regions)}, but inherited Iris region is {chosen_region!r}."
+                )
+        else:
+            chosen_region = sorted(component_regions)[0]
+
+        for component_step in component:
+            chosen_region_by_step[component_step] = chosen_region
+
+    return chosen_region_by_step
+
+
+def _iris_backend_is_active() -> bool:
+    try:
+        client = current_client()
+    except Exception:
+        return False
+    return isinstance(client, FrayIrisClient)
+
+
+def _iris_worker_region_pin() -> str | None:
+    job_info = get_job_info()
+    if job_info is None:
+        return None
+    return job_info.worker_region
+
+
+def _maybe_attach_inferred_region_constraint(
+    *,
+    step_name: str,
+    remote_fn: RemoteCallable,
+    config: Any,
+    output_path: str,
+    deps: list[StepSpec] | None,
+    dag_tpu_regions: list[str] | None = None,
+    forced_region: str | None = None,
+) -> RemoteCallable:
+    if not _iris_backend_is_active():
+        return remote_fn
+
+    inherited_region_pin = _iris_worker_region_pin()
+
+    allowed_regions = _allowed_regions_for_step(
+        step_name=step_name,
+        remote_fn=remote_fn,
+        config=config,
+        output_path=output_path,
+        deps=deps,
+        dag_tpu_regions=dag_tpu_regions,
+    )
+    if forced_region is not None:
+        pinned_region = forced_region.lower()
+        if allowed_regions is not None and pinned_region not in allowed_regions:
+            raise ValueError(
+                f"Executor step {step_name!r} cannot be pinned to {pinned_region!r}; "
+                f"allowed regions are {sorted(allowed_regions)}."
+            )
+        if inherited_region_pin is not None and inherited_region_pin.lower() != pinned_region:
+            raise ValueError(
+                f"Executor step {step_name!r} must run in {pinned_region!r}, "
+                f"but inherited Iris region is {inherited_region_pin.lower()!r}."
+            )
+        return dataclasses.replace(
+            remote_fn,
+            resources=dataclasses.replace(remote_fn.resources, regions=[pinned_region]),
+        )
+
+    if remote_fn.resources.regions is not None:
+        if inherited_region_pin is not None and allowed_regions is not None:
+            pinned_region = inherited_region_pin.lower()
+            if pinned_region not in allowed_regions:
+                raise ValueError(
+                    f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
+                    f"but inferred regions are {sorted(allowed_regions)}."
+                )
+        return remote_fn
+
+    if allowed_regions is None:
+        return remote_fn
+
+    if inherited_region_pin is not None:
+        pinned_region = inherited_region_pin.lower()
+        if pinned_region not in allowed_regions:
+            raise ValueError(
+                f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
+                f"but inferred regions are {sorted(allowed_regions)}."
+            )
+        return remote_fn
+
+    logger.info(
+        "Inferred Iris region constraints %s for executor step %s from GCS path dependencies",
+        allowed_regions,
+        step_name,
+    )
+    return dataclasses.replace(
+        remote_fn,
+        resources=dataclasses.replace(remote_fn.resources, regions=sorted(allowed_regions)),
+    )
+
+
 def asdict_without_description(obj: dataclass) -> dict[str, Any]:
     """Return the dict form of a dataclass, but remove the `description` field."""
 
@@ -180,6 +642,8 @@ def resolve_executor_step(
     config: Any,
     output_path: str,
     deps: list[StepSpec] | None = None,
+    dag_tpu_regions: list[str] | None = None,
+    forced_region: str | None = None,
 ) -> StepSpec:
     """Convert an ExecutorStep into a StepSpec.
 
@@ -189,14 +653,24 @@ def resolve_executor_step(
     """
     import ray
 
-    step_fn = step.fn
-    if isinstance(step_fn, RemoteCallable):
-        step_fn = step_fn.fn
+    remote_callable = step.fn if isinstance(step.fn, RemoteCallable) else None
+    if remote_callable is not None:
+        remote_callable = _maybe_attach_inferred_region_constraint(
+            step_name=step.name,
+            remote_fn=remote_callable,
+            config=config,
+            output_path=output_path,
+            deps=deps,
+            dag_tpu_regions=dag_tpu_regions,
+            forced_region=forced_region,
+        )
+
+    step_fn = remote_callable.fn if remote_callable is not None else step.fn
     if isinstance(step_fn, ray.remote_function.RemoteFunction):
-        remote_fn = step_fn
+        ray_remote_fn = step_fn
 
         def step_fn(*args, **kw):
-            return ray.get(remote_fn.remote(*args, **kw))
+            return ray.get(ray_remote_fn.remote(*args, **kw))
 
     assert step_fn is not None, f"Step {step.name} has no callable"
 
@@ -209,18 +683,12 @@ def resolve_executor_step(
     def resolved_fn(output_path):
         return captured_fn(captured_config)
 
-    # Determine Fray config: explicit ExecutorStep.resources wins,
-    # then @remote on the original fn, then None (run locally).
+    # If the original fn was decorated with @remote, propagate the
+    # RemoteCallable wrapper (with updated inner fn) so Fray dispatch
+    # is preserved.  Plain functions run locally in-thread.
     final_fn: Callable = resolved_fn
-    if step.resources is not None:
-        final_fn = RemoteCallable(
-            fn=resolved_fn,
-            resources=step.resources,
-            env_vars=step.env_vars or {},
-            pip_dependency_groups=step.pip_dependency_groups or [],
-        )
-    elif isinstance(step.fn, RemoteCallable):
-        final_fn = dataclasses.replace(step.fn, fn=resolved_fn)
+    if remote_callable is not None:
+        final_fn = dataclasses.replace(remote_callable, fn=resolved_fn)
 
     return StepSpec(
         name=step.name,
@@ -265,15 +733,6 @@ class ExecutorStep(Generic[ConfigT]):
     override_output_path: str | None = None
     """Specifies the `output_path` that should be used.  Print warning if it
     doesn't match the automatically computed one."""
-
-    pip_dependency_groups: list[str] | None = None
-    """List of `extra` dependencies from pyproject.toml to include with this step."""
-
-    resources: ResourceConfig | None = None
-    """Resource requirements for this step (GPU, TPU, CPU). If None, defaults to CPU."""
-
-    env_vars: dict[str, str] | None = None
-    """Additional environment variables to set for this step."""
 
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
@@ -660,6 +1119,7 @@ class Executor:
         self.steps: list[ExecutorStep] = []
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
+        self._depth_cache: dict[ExecutorStep, int] = {}
 
     def run(
         self,
@@ -720,6 +1180,23 @@ class Executor:
 
     def _resolve_steps(self, steps: list[ExecutorStep]) -> list[StepSpec]:
         """Convert computed ExecutorStep state into a flat list of StepSpec."""
+        dag_tpu_regions_by_step = _step_dag_tpu_regions(steps, self.dependencies)
+        dep_stubs_by_step = {
+            step: [
+                StepSpec(name=dep.name, override_output_path=self.output_paths[dep])
+                for dep in self.dependencies[step]
+                if dep in self.output_paths
+            ]
+            for step in steps
+        }
+        forced_region_by_step = _component_tpu_pins(
+            steps,
+            self.dependencies,
+            configs=self.configs,
+            output_paths=self.output_paths,
+            dep_stubs_by_step=dep_stubs_by_step,
+            dag_tpu_regions_by_step=dag_tpu_regions_by_step,
+        )
         # First pass: create StepSpecs without deps so we have a mapping
         spec_by_step: dict[ExecutorStep, StepSpec] = {}
         for step in steps:
@@ -727,6 +1204,9 @@ class Executor:
                 step=step,
                 config=self.configs[step],
                 output_path=self.output_paths[step],
+                deps=dep_stubs_by_step[step],
+                dag_tpu_regions=dag_tpu_regions_by_step[step],
+                forced_region=forced_region_by_step[step],
             )
         # Second pass: rebuild with deps pointing to resolved StepSpecs
         result = []
@@ -817,15 +1297,19 @@ class Executor:
         # The version specifies precisely all the information that uniquely
         # identifies this step.  Note that the fn name is not part of the
         # version.
+        #
+        # For deep dependency chains (depth > 4), we use output_paths (which
+        # already encode the version hash) instead of the full nested version
+        # dicts to avoid exponential blowup of the version structure.
         version = {
             "name": step.name,
             "config": computed_deps.version,
-            "dependencies": [self.versions[dep] for dep in computed_deps.dependencies],
+            "dependencies": [self._dep_version(dep) for dep in computed_deps.dependencies],
         }
 
         if computed_deps.pseudo_dependencies:
             # don't put this in the literal to avoid changing the hash for runs without pseudo-deps
-            version["pseudo_dependencies"] = [self.versions[dep] for dep in computed_deps.pseudo_dependencies]
+            version["pseudo_dependencies"] = [self._dep_version(dep) for dep in computed_deps.pseudo_dependencies]
 
         # Compute output path
         version_str = json.dumps(version, sort_keys=True, cls=CustomJsonEncoder)
@@ -868,6 +1352,26 @@ class Executor:
         self.version_strs[step] = version_str
         self.output_paths[step] = output_path
         self.is_pseudo_dep[step] = is_pseudo_dep
+
+    _MAX_INLINE_DEPTH = 4
+
+    def _dep_depth(self, step: ExecutorStep) -> int:
+        """Return the maximum dependency chain depth for a step (cached)."""
+        if step in self._depth_cache:
+            return self._depth_cache[step]
+        deps = self.dependencies.get(step, [])
+        if not deps:
+            depth = 0
+        else:
+            depth = 1 + max(self._dep_depth(dep) for dep in deps)
+        self._depth_cache[step] = depth
+        return depth
+
+    def _dep_version(self, dep: ExecutorStep) -> dict[str, Any] | str:
+        """Full version dict for shallow deps, output path for deep ones."""
+        if self._dep_depth(dep) <= self._MAX_INLINE_DEPTH:
+            return self.versions[dep]
+        return self.output_paths[dep]
 
     def canonicalize(self, step: ExecutorStep) -> ExecutorStep:
         """Multiple instances of `ExecutorStep` might have the same version."""
@@ -916,8 +1420,6 @@ class Executor:
         """Output JSON files (one for the entire execution, one for each step)."""
 
         # Set executor_info_path based on hash and caller path name (e.g., 72_baselines-8c2f3a.json)
-        # import pdb; pdb.set_trace()
-
         # we pre-compute the asdict as it can be expensive.
         executor_info_dict = asdict_without_description(self.executor_info)
         step_infos = executor_info_dict["steps"]
@@ -944,12 +1446,12 @@ class Executor:
         for step, info in zip(self.steps, executor_info_dict["steps"], strict=True):
             info_path = _get_info_path(self.output_paths[step])
             fsspec_utils.mkdirs(os.path.dirname(info_path))
-            with fsspec.open(info_path, "w") as f:
+            with open_url(info_path, "w") as f:
                 print(json.dumps(info, indent=2, cls=CustomJsonEncoder), file=f)
 
         # Write out info for the entire execution
         fsspec_utils.mkdirs(os.path.dirname(self.executor_info_path))
-        with fsspec.open(self.executor_info_path, "w") as f:
+        with open_url(self.executor_info_path, "w") as f:
             print(json.dumps(executor_info_dict, indent=2, cls=CustomJsonEncoder), file=f)
 
 
@@ -1007,9 +1509,8 @@ class ExecutorMainConfig:
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+    configure_logging(level=logging.INFO)
     time_in = time.time()
 
     prefix = config.prefix or marin_prefix()

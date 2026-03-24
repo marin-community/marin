@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Actor protocols for fray v2.
@@ -33,6 +33,19 @@ class ActorContext:
 
     group_name: str
     """The name of the actor group this actor belongs to."""
+
+
+class HostedActor:
+    """An actor hosted in the current process. Holds handle + cleanup."""
+
+    def __init__(self, handle: ActorHandle, stop: Any = None):
+        self.handle = handle
+        self._stop = stop
+
+    def shutdown(self) -> None:
+        if self._stop is not None:
+            self._stop()
+            self._stop = None
 
 
 _current_actor_ctx: ContextVar[ActorContext | None] = ContextVar("actor_context", default=None)
@@ -102,6 +115,14 @@ class ActorGroup(Protocol):
         return the remaining handles as they become available. For LocalClient
         all handles are ready immediately, so this returns whatever wait_ready
         didn't return on its first call.
+        """
+        ...
+
+    def is_done(self) -> bool:
+        """Return True if the underlying job has permanently terminated.
+
+        When True, no new actors will ever come online — the group is dead.
+        Local backends always return False (in-process actors don't independently fail).
         """
         ...
 

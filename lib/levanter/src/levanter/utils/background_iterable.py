@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
@@ -89,6 +89,12 @@ class BackgroundIterator(Iterator[Ex]):
 
     def __del__(self):
         self.stop()
+
+    def qsize(self) -> int | None:
+        """Current number of items in the prefetch queue, or None if unbuffered."""
+        if self.thread is not None:
+            return self.q.qsize()
+        return None
 
     def stop(self, wait: bool = True):
         self._stop_event.set()

@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,8 +8,6 @@ from typing import Optional
 
 import equinox as eqx
 import jax
-import jax.numpy as jnp
-from jax.experimental.pallas.ops.tpu.megablox import gmm
 from jax.random import PRNGKey
 from jaxtyping import PRNGKeyArray
 
@@ -17,6 +15,7 @@ import haliax as hax
 
 
 from . import mup
+from .ragged_dot import ragged_dot
 from .mup import AbstractLinearReparam, ReparamEnabled, LinearStandardParam
 from .._src.state_dict import (
     Mod,
@@ -303,36 +302,10 @@ def _gmm(lhs, rhs, group_sizes, out_axes, sharded=False, ar=False):
     # Return a raw array from the shard_map body and wrap it with global axes after shard_map reassembles it.
 
     def gmm_impl(lhs, rhs, group_sizes):
-        return gmm_sharded(lhs.array, rhs.array, group_sizes.array, ar=ar)
+        return ragged_dot(lhs.array, rhs.array, group_sizes.array, ar=ar)
 
     if sharded:
         return hax.named(gmm_impl(lhs, rhs, group_sizes), out_axes)
 
     gmm_fn = shard_map(gmm_impl, out_specs=hax.partitioning.pspec_for_axis(out_axes), check_rep=False)
     return hax.named(gmm_fn(lhs, rhs, group_sizes), out_axes)
-
-
-def gmm_sharded(lhs_: jnp.ndarray, rhs_: jnp.ndarray, group_sizes_: jnp.ndarray, ar: bool = False) -> jnp.ndarray:
-    hs_shape = lhs_.shape
-    if hs_shape[0] % 512:
-        pad_length = 512 - hs_shape[0] % 512
-        lhs_ = jax.lax.pad(lhs_, 0.0, [(0, pad_length, 0), (0, 0, 0)])
-
-    tile_size = (512, 1024, 1024)  # (m, k, n)
-    m, k, n = lhs_.shape[0], lhs_.shape[1], rhs_.shape[2]
-    out = gmm(
-        lhs_,
-        rhs_,
-        group_sizes_,
-        preferred_element_type=lhs_.dtype,
-        tiling=(min(m, tile_size[0]), min(k, tile_size[1]), min(n, tile_size[2])),
-        interpret=jax.default_backend() == "cpu",
-    )
-
-    if ar:
-        out = jax.lax.psum(out, ResourceAxis.MODEL)
-
-    if hs_shape[0] % 512:
-        out = out[: hs_shape[0]]
-
-    return out
