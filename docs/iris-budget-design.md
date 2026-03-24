@@ -66,7 +66,7 @@ enum PriorityBand {
   message SetUserBudgetRequest {
     string user_id = 1;
     int64 budget_limit = 2;      // max budget value (0 = unlimited)
-    PriorityBand max_band = 3;   // highest band this user can submit to
+    PriorityBand max_band = 3;   // highest band this user can submit to (lower number = higher priority)
   }
   message SetUserBudgetResponse {}
 
@@ -104,9 +104,13 @@ ALTER TABLE tasks ADD COLUMN priority_band INTEGER NOT NULL DEFAULT 2;
 CREATE TABLE IF NOT EXISTS user_budgets (
     user_id TEXT PRIMARY KEY REFERENCES users(user_id),
     budget_limit INTEGER NOT NULL DEFAULT 0,   -- 0 = unlimited
-    max_band INTEGER NOT NULL DEFAULT 2,       -- highest band allowed (1=prod, 2=interactive, 3=batch)
+    max_band INTEGER NOT NULL DEFAULT 2,       -- highest band allowed; lower number = higher priority (1=prod, 2=interactive, 3=batch)
     updated_at_ms INTEGER NOT NULL
 );
+
+-- Seed user_budgets for all existing users with defaults
+INSERT OR IGNORE INTO user_budgets(user_id, budget_limit, max_band, updated_at_ms)
+SELECT user_id, 0, 2, created_at_ms FROM users;
 
 -- Update the pending-tasks index to include band as the primary sort key
 DROP INDEX IF EXISTS idx_tasks_pending;
@@ -207,11 +211,16 @@ This is handled entirely by the DB index — no application-level re-sorting nee
 ### Per-User Fairness Within a Band
 
 After reading pending tasks from DB (sorted by band + depth + time), the controller
-applies a **round-robin interleave** within each band:
+applies a **round-robin interleave** within each band. The call site must loop over
+bands explicitly to prevent cross-band reordering:
 
 ```python
 def interleave_by_user(tasks: list[Task], user_spend: dict[str, int]) -> list[JobName]:
-    """Round-robin tasks across users, ordered by ascending budget spend."""
+    """Round-robin tasks across users, ordered by ascending budget spend.
+
+    Must be called once per band — mixing bands in a single call would allow
+    a low-spend user's BATCH tasks to leapfrog another user's INTERACTIVE tasks.
+    """
     by_user: dict[str, list[Task]] = defaultdict(list)
     for task in tasks:
         by_user[task.user_id].append(task)
@@ -234,8 +243,23 @@ def interleave_by_user(tasks: list[Task], user_spend: dict[str, int]) -> list[Jo
     return result
 ```
 
-This runs within each band separately. A user with budget_spend=0 gets their tasks
-interleaved before a user with budget_spend=8000 (i.e., running 8 accelerators).
+**Call site** (in `_run_scheduling()`, after computing `user_spend`):
+
+```python
+# Group pending tasks by band, then interleave within each band separately.
+# This ensures band ordering is preserved — PRODUCTION tasks always come before
+# INTERACTIVE, regardless of per-user spend.
+tasks_by_band: dict[int, list[Task]] = defaultdict(list)
+for task in pending_tasks:
+    tasks_by_band[task.priority_band].append(task)
+
+interleaved: list[JobName] = []
+for band in sorted(tasks_by_band.keys()):  # 1=PRODUCTION, 2=INTERACTIVE, 3=BATCH
+    interleaved.extend(interleave_by_user(tasks_by_band[band], user_spend))
+```
+
+A user with budget_spend=0 gets their tasks interleaved before a user with
+budget_spend=8000 (i.e., running 8 accelerators) — but only within the same band.
 
 ### Per-User Scheduling Cap
 
@@ -314,7 +338,7 @@ def _run_preemption_pass(
     preemptions: list[tuple[JobName, JobName]] = []
     running = self._get_running_tasks_with_band_and_value()
 
-    # Sort victims: lowest band first, then lowest value (cheapest to preempt)
+    # Sort victims: lowest priority first (highest band number), then lowest value (cheapest to preempt)
     victims = sorted(running, key=lambda t: (-t.band_sort_key, t.resource_value))
 
     freed_capacity: dict[WorkerId, int] = defaultdict(int)
@@ -460,7 +484,44 @@ class ControllerConfig:
 ```
 
 When `ensure_user()` creates a new user, it also creates a `user_budgets` row with
-these defaults. Admins can override at runtime via the RPC.
+these defaults using `INSERT OR IGNORE` (idempotent if the row already exists from
+migration or a prior call):
+
+```python
+# In submit_job(), alongside the existing user INSERT (~transitions.py:565):
+cur.execute(
+    "INSERT OR IGNORE INTO users(user_id, created_at_ms) VALUES (?, ?)",
+    (job_id.user, effective_submission_ms),
+)
+cur.execute(
+    "INSERT OR IGNORE INTO user_budgets(user_id, budget_limit, max_band, updated_at_ms) "
+    "VALUES (?, ?, ?, ?)",
+    (job_id.user, defaults.budget_limit, BAND_SORT_KEY[defaults.max_band], effective_submission_ms),
+)
+```
+
+Admins can override at runtime via the RPC.
+
+### Band Inheritance for Child Jobs
+
+Child (nested) jobs inherit their parent's `priority_band` at submission time. When
+`launch_job()` processes a request with a `parent_job_id`, it reads the parent's band
+and propagates it to all children, ignoring any band specified in the child request:
+
+```python
+# In launch_job(), after resolving parent_job_id:
+if parent_job_id is not None:
+    parent_band = cur.execute(
+        "SELECT priority_band FROM tasks WHERE job_id = ? LIMIT 1",
+        (parent_job_id,),
+    ).fetchone()
+    if parent_band is not None:
+        band_sort_key = parent_band["priority_band"]
+    # else: parent has no tasks yet (shouldn't happen), fall back to request band
+```
+
+This ensures a PRODUCTION pipeline's subtasks remain PRODUCTION, and a BATCH
+pipeline cannot escalate child jobs to a higher band.
 
 ### Band Validation at Submission
 
@@ -514,6 +575,32 @@ by EXPLAIN QUERY PLAN.
 | `lib/iris/src/iris/cluster/controller/controller.py:604-678` | Add `max_tasks_per_user_per_cycle` and `user_budget_defaults` to `ControllerConfig` |
 | `lib/iris/src/iris/cluster/controller/controller.py:1199-1312` | Modify `_run_scheduling()`: compute user spend, apply per-user cap, interleave by user within band |
 | `lib/iris/src/iris/cluster/controller/transitions.py:523-622` | In `submit_job()`, write `priority_band` to tasks table. Read user's `max_band`, validate band. |
+
+**Task INSERT sketch** — add `priority_band` column to the task INSERT in `transitions.py:610-628`:
+
+```python
+cur.execute(
+    "INSERT INTO tasks("
+    "task_id, job_id, task_index, state, error, exit_code, submitted_at_ms, started_at_ms, "
+    "finished_at_ms, max_retries_failure, max_retries_preemption, failure_count, preemption_count, "
+    "resource_usage_proto, current_attempt_id, priority_neg_depth, priority_root_submitted_ms, "
+    "priority_insertion, priority_band"
+    ") VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, ?, ?, 0, 0, NULL, -1, ?, ?, ?, ?)",
+    (
+        task_id,
+        job_id.to_wire(),
+        idx,
+        cluster_pb2.TASK_STATE_PENDING,
+        effective_submission_ms,
+        int(request.max_retries_failure),
+        int(request.max_retries_preemption),
+        -job_id.depth,
+        root_submitted_ms,
+        insertion_base + idx,
+        band_sort_key,  # from BAND_SORT_KEY[resolved_band]
+    ),
+)
+```
 
 **Tests**: `lib/iris/tests/test_scheduling_fairness.py` — integration tests:
 - Two users, one with 1 task, one with 100 → verify the single-task user gets scheduled first.
