@@ -154,9 +154,9 @@ baseline_moe = ExecutorStep(
         optimizer=versioned(
             GrugMoeAdamHConfig(
                 learning_rate=0.003,
-                adam_lr=0.0015,
-                beta1=0.9,
-                beta2=0.999,
+                adam_lr=0.003,
+                beta1=0.96,
+                beta2=0.995,
                 epsilon=1e-15,
                 lr_schedule="linear",
                 decay=0.2,
