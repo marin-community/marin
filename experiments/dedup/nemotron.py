@@ -9,6 +9,7 @@ import os
 from typing import TypeVar
 from marin.execution.step_runner import StepRunner
 from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
+from fray.v2 import ResourceConfig
 from iris.marin_fs import marin_temp_bucket, region_from_metadata, check_path_in_region
 from marin.execution.step_spec import StepSpec
 
@@ -47,7 +48,7 @@ def exect_dedup_steps_10BT() -> list[StepSpec]:
     return [raw_data_step, dedup_step]
 
 
-def exect_dedup_steps() -> list[StepSpec]:
+def exact_dedup_steps() -> list[StepSpec]:
     raw_data_step = StepSpec(
         name="raw_nemotron",
         override_output_path="gs://marin-eu-west4/raw/nemotro-cc-eeb783/",
@@ -57,13 +58,14 @@ def exect_dedup_steps() -> list[StepSpec]:
     check_path_in_region(raw_data_step.name, raw_data_step.output_path, assert_not_none(region_from_metadata()))
 
     dedup_step = StepSpec(
-        name="exact_dedup_8",
-        output_path_prefix=marin_temp_bucket(ttl_days=1, prefix="rav"),
+        name="exact_dedup_high_medium_1",
+        output_path_prefix=marin_temp_bucket(ttl_days=2, prefix="rav"),
         deps=[raw_data_step],
         fn=lambda op: dedup_exact_paragraph(
-            input_paths=os.path.join(
-                raw_data_step.output_path, "contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=actual"
-            ),
+            input_paths=[
+                os.path.join(raw_data_step.output_path, "contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high"),
+                os.path.join(raw_data_step.output_path, "contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high"),
+            ],
             output_path=op,
             max_parallelism=2048,
         ),
@@ -83,7 +85,7 @@ def fuzzy_dedup_steps() -> list[StepSpec]:
 
     dedup_step = StepSpec(
         name="fuzzy_dedup_full",
-        output_path_prefix=marin_temp_bucket(ttl_days=1, prefix="rav"),
+        output_path_prefix=marin_temp_bucket(ttl_days=2, prefix="rav"),
         deps=[raw_data_step],
         fn=lambda op: dedup_fuzzy_document(
             input_paths=[
@@ -101,4 +103,5 @@ def fuzzy_dedup_steps() -> list[StepSpec]:
 
 if __name__ == "__main__":
     configure_logging(logging.INFO)
-    StepRunner().run(fuzzy_dedup_steps())
+    # StepRunner().run(fuzzy_dedup_steps())
+    StepRunner().run(exact_dedup_steps())
