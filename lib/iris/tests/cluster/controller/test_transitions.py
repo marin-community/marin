@@ -3498,3 +3498,241 @@ def test_job_cancel_marks_job_killed(harness) -> None:
     jid = JobName.root("test-user", "killed")
     harness.state.cancel_job(jid, reason="manual")
     assert harness.query_job(jid).state == cluster_pb2.JOB_STATE_KILLED
+
+
+# =============================================================================
+# Zephyr-like parent-child cascade and restart tests (#4093)
+# =============================================================================
+
+
+def test_coordinator_preempt_permanently_kills_worker_job(state):
+    """Zephyr topology: single-task coordinator with multi-task worker child.
+
+    When the coordinator's worker dies and the coordinator task is retried,
+    the worker job must be permanently killed (JOB_STATE_KILLED), not
+    just pre-empted.
+
+    Reproduces the topology from #4093.
+    """
+    w1 = register_worker(state, "w1", "host1:8080", make_worker_metadata())
+    w2 = register_worker(state, "w2", "host2:8080", make_worker_metadata())
+
+    # Coordinator: single-task job with preemption retries
+    coord_req = make_job_request("coord", max_retries_preemption=5)
+    coord_tasks = submit_job(state, "coord", coord_req)
+    dispatch_task(state, coord_tasks[0], w1)
+
+    # Worker job: multi-task child of coordinator (like Zephyr's 2048-worker job)
+    worker_req = make_job_request("workers", replicas=3)
+    worker_tasks = submit_job(state, "/test-user/coord/workers", worker_req)
+    for task in worker_tasks:
+        dispatch_task(state, task, w2)
+    for task in worker_tasks:
+        assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_RUNNING
+
+    # Coordinator's worker dies
+    fail_worker(state, w1, "VM preempted")
+
+    # Coordinator task retried (single-task → TERMINATE_CHILDREN policy)
+    coord_task = _query_task(state, coord_tasks[0].task_id)
+    assert coord_task.state == cluster_pb2.TASK_STATE_PENDING
+
+    # Worker job must be PERMANENTLY killed, not just pre-empted
+    worker_job = _query_job(state, JobName.from_string("/test-user/coord/workers"))
+    assert worker_job.state == cluster_pb2.JOB_STATE_KILLED
+    assert worker_job.error is not None  # Must have an error message
+
+    # All worker tasks must be killed
+    for task in worker_tasks:
+        t = _query_task(state, task.task_id)
+        assert t.state == cluster_pb2.TASK_STATE_KILLED
+
+
+def test_coordinator_retry_can_recreate_worker_job(state):
+    """After coordinator preemption kills workers, a retried coordinator
+    can create a new worker job with the same name.
+
+    This tests the full Zephyr restart cycle: preempt → cascade kill →
+    remove old job → submit new job.
+    """
+    w1 = register_worker(state, "w1", "host1:8080", make_worker_metadata())
+    w2 = register_worker(state, "w2", "host2:8080", make_worker_metadata())
+
+    # Coordinator with preemption retries
+    coord_req = make_job_request("coord", max_retries_preemption=5)
+    coord_tasks = submit_job(state, "coord", coord_req)
+    dispatch_task(state, coord_tasks[0], w1)
+
+    # First worker job
+    worker_req_v1 = make_job_request("workers", replicas=2)
+    worker_tasks_v1 = submit_job(state, "/test-user/coord/workers", worker_req_v1)
+    for task in worker_tasks_v1:
+        dispatch_task(state, task, w2)
+
+    # Coordinator's worker dies → cascade kills workers
+    fail_worker(state, w1, "VM preempted")
+
+    worker_job_id = JobName.from_string("/test-user/coord/workers")
+    worker_job = _query_job(state, worker_job_id)
+    assert worker_job.state == cluster_pb2.JOB_STATE_KILLED
+
+    # Simulate coordinator retry: remove finished job, submit new one
+    removed = state.remove_finished_job(worker_job_id)
+    assert removed, "Should be able to remove the killed worker job"
+
+    # New worker job with same name
+    worker_req_v2 = make_job_request("workers", replicas=2)
+    worker_tasks_v2 = submit_job(state, "/test-user/coord/workers", worker_req_v2)
+
+    # New worker job should be healthy (PENDING)
+    worker_job_v2 = _query_job(state, worker_job_id)
+    assert worker_job_v2.state == cluster_pb2.JOB_STATE_PENDING
+    assert len(worker_tasks_v2) == 2
+    for task in worker_tasks_v2:
+        assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_PENDING
+
+
+def test_cascade_kills_newly_created_child_on_concurrent_worker_failure(state):
+    """Race condition: coordinator creates child, then coordinator's worker
+    fails in the same heartbeat cycle.
+
+    Timeline:
+    1. Coordinator on w1 creates worker job
+    2. w1 heartbeat fails → cascade kills worker job
+    3. Coordinator code (still alive on w1) sees KILLED worker job
+
+    This reproduces the exact error from #4093:
+    "Actor job ... finished before all actors registered (0/1 ready).
+     Job state=6, error=unknown error"
+    """
+    w1 = register_worker(state, "w1", "host1:8080", make_worker_metadata())
+    register_worker(state, "w2", "host2:8080", make_worker_metadata())
+
+    # Coordinator with preemption retries
+    coord_req = make_job_request("coord", max_retries_preemption=5)
+    coord_tasks = submit_job(state, "coord", coord_req)
+    dispatch_task(state, coord_tasks[0], w1)
+
+    # Worker job just created (tasks still PENDING, no workers registered yet)
+    worker_req = make_job_request("workers", replicas=4)
+    worker_tasks = submit_job(state, "/test-user/coord/workers", worker_req)
+    # Workers are PENDING — none dispatched yet (mirrors Zephyr's wait_ready)
+
+    # Coordinator's worker dies BEFORE any worker tasks are dispatched
+    fail_worker(state, w1, "VM preempted")
+
+    # Coordinator task retried
+    coord_task = _query_task(state, coord_tasks[0].task_id)
+    assert coord_task.state == cluster_pb2.TASK_STATE_PENDING
+
+    # Worker job should be killed — this is the behavior the coordinator
+    # would see in wait_ready() (Job state=6 = KILLED)
+    worker_job = _query_job(state, JobName.from_string("/test-user/coord/workers"))
+    assert worker_job.state == cluster_pb2.JOB_STATE_KILLED
+
+    # All PENDING worker tasks should also be killed
+    for task in worker_tasks:
+        t = _query_task(state, task.task_id)
+        assert t.state == cluster_pb2.TASK_STATE_KILLED
+
+
+def test_multiple_preemptions_do_not_leak_worker_jobs(state):
+    """Multiple rapid preemptions of the coordinator should not leave
+    orphaned worker jobs.
+
+    Mirrors the #4093 scenario where the coordinator had 3 WORKER_FAILED
+    attempts before succeeding on attempt 4.
+    """
+    coord_req = make_job_request("coord", max_retries_preemption=10)
+    coord_tasks = submit_job(state, "coord", coord_req)
+    worker_job_id = JobName.from_string("/test-user/coord/workers")
+
+    for attempt in range(3):
+        # Fresh worker for each attempt
+        wid = register_worker(state, f"w-coord-{attempt}", f"host{attempt}:8080", make_worker_metadata())
+        w_worker = register_worker(state, f"w-worker-{attempt}", f"worker-host{attempt}:8080", make_worker_metadata())
+        dispatch_task(state, coord_tasks[0], wid)
+
+        # Coordinator creates worker job
+        # First, remove old finished job if it exists
+        state.remove_finished_job(worker_job_id)
+        worker_req = make_job_request("workers", replicas=2)
+        worker_tasks = submit_job(state, "/test-user/coord/workers", worker_req)
+        for t in worker_tasks:
+            dispatch_task(state, t, w_worker)
+
+        # Coordinator's worker dies
+        fail_worker(state, wid, f"VM preempted attempt {attempt}")
+
+        # Coordinator task should be retried
+        coord_task = _query_task(state, coord_tasks[0].task_id)
+        assert (
+            coord_task.state == cluster_pb2.TASK_STATE_PENDING
+        ), f"Attempt {attempt}: coordinator should be PENDING, got {coord_task.state}"
+
+        # Worker job should be killed
+        worker_job = _query_job(state, worker_job_id)
+        assert (
+            worker_job.state == cluster_pb2.JOB_STATE_KILLED
+        ), f"Attempt {attempt}: worker job should be KILLED, got {worker_job.state}"
+
+    # Final attempt succeeds
+    w_final = register_worker(state, "w-final", "final-host:8080", make_worker_metadata())
+    w_worker_final = register_worker(state, "w-worker-final", "worker-final:8080", make_worker_metadata())
+    dispatch_task(state, coord_tasks[0], w_final)
+
+    state.remove_finished_job(worker_job_id)
+    worker_req = make_job_request("workers", replicas=2)
+    final_worker_tasks = submit_job(state, "/test-user/coord/workers", worker_req)
+    for t in final_worker_tasks:
+        dispatch_task(state, t, w_worker_final)
+
+    # Everything should be running
+    coord_task = _query_task(state, coord_tasks[0].task_id)
+    assert coord_task.state == cluster_pb2.TASK_STATE_RUNNING
+
+    worker_job = _query_job(state, worker_job_id)
+    assert worker_job.state == cluster_pb2.JOB_STATE_RUNNING
+
+    for t in final_worker_tasks:
+        assert _query_task(state, t.task_id).state == cluster_pb2.TASK_STATE_RUNNING
+
+
+def test_sibling_worker_failure_cascades_coordinator_children(state):
+    """TPU slice failure: sibling worker on same slice fails, causing
+    force-removal of coordinator's worker and cascade to children.
+
+    This tests the rapid-kill path (force_remove=True) that bypasses the
+    heartbeat failure threshold, which could explain the ~11 second window
+    in #4093.
+    """
+    w_coord = register_worker(state, "w-coord", "coord:8080", make_worker_metadata())
+    w_worker = register_worker(state, "w-worker", "worker:8080", make_worker_metadata())
+
+    # Coordinator job
+    coord_req = make_job_request("coord", max_retries_preemption=5)
+    coord_tasks = submit_job(state, "coord", coord_req)
+    dispatch_task(state, coord_tasks[0], w_coord)
+
+    # Worker job (child)
+    worker_req = make_job_request("workers", replicas=2)
+    worker_tasks = submit_job(state, "/test-user/coord/workers", worker_req)
+    for t in worker_tasks:
+        dispatch_task(state, t, w_worker)
+
+    # Force-remove coordinator's worker (simulates slice failure / sibling crash)
+    batch = state.drain_dispatch(w_coord)
+    assert batch is not None
+    state.record_heartbeat_failure(w_coord, "sibling worker failed, slice terminated", batch, force_remove=True)
+
+    # Coordinator task should be retried
+    coord_task = _query_task(state, coord_tasks[0].task_id)
+    assert coord_task.state == cluster_pb2.TASK_STATE_PENDING
+
+    # Worker job should be permanently killed
+    worker_job = _query_job(state, JobName.from_string("/test-user/coord/workers"))
+    assert worker_job.state == cluster_pb2.JOB_STATE_KILLED
+
+    # Worker tasks killed
+    for t in worker_tasks:
+        assert _query_task(state, t.task_id).state == cluster_pb2.TASK_STATE_KILLED
