@@ -6,7 +6,6 @@ import functools
 import json
 import warnings
 import zlib
-from dataclasses import fields
 from typing import Any, Callable, Optional, TypeVar
 
 import equinox as eqx
@@ -20,6 +19,7 @@ from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceAxis, ResourceMapping
 from jax import numpy as jnp
 from jax._src.mesh import get_concrete_mesh
+from jax._src.tree_util import GetAttrKey
 from jax.experimental.multihost_utils import host_local_array_to_global_array
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 from jaxtyping import PRNGKeyArray, PyTree
@@ -229,23 +229,26 @@ def leaf_key_paths(
     elif isinstance(pytree, tuple):
         out = tuple(rec(v, str(i)) for i, v in enumerate(pytree))
     elif isinstance(pytree, eqx.Module):
-        names = []
-        rec_values = []
-        for field in fields(pytree):
-            if field.metadata.get("static", False):
-                continue
-            field_name = field.name
-            field_value = getattr(pytree, field_name)
-            names.append(field_name)
+        leaves_with_keys, tree_def = tree_flatten_one_level_with_keys(pytree)
+        key_map = (
+            pytree._state_dict_key_map() if use_state_dict_keys and hasattr(pytree, "_state_dict_key_map") else {}
+        )
+        out_leaves = []
+        for key, leaf in leaves_with_keys:
+            if key is None:
+                key_str = ""
+            else:
+                key_str = key_path_to_str([key])
+                if isinstance(key, GetAttrKey):
+                    key_str = key_map.get(key.name, key_str)
 
-            if use_state_dict_keys and hasattr(pytree, "_state_dict_key_map"):
-                field_name = pytree._state_dict_key_map().get(field_name, field_name)
+            out_leaves.append(
+                leaf_key_paths(
+                    leaf, join_key(prefix, key_str), is_leaf=is_leaf, use_state_dict_keys=use_state_dict_keys
+                )
+            )
 
-            rec_value = rec(field_value, field_name)
-            rec_values.append(rec_value)
-
-        _, tree_def = eqx.tree_flatten_one_level(pytree)
-        out = jax.tree_util.tree_unflatten(tree_def, rec_values)
+        out = jax.tree_util.tree_unflatten(tree_def, out_leaves)
     elif isinstance(pytree, hax.NamedArray):
         leaves, treedef = jax.tree_util.tree_flatten(pytree, is_leaf=is_leaf)
         out = jax.tree_util.tree_unflatten(treedef, [f"{prefix}"])

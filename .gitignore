@@ -239,3 +239,6 @@ scr/*
 lib/iris/src/iris/rpc/*_pb2.py
 lib/iris/src/iris/rpc/*_pb2.pyi
 lib/iris/src/iris/rpc/*_connect.py
+!lib/iris/src/iris/rpc/*_pb2.py
+!lib/iris/src/iris/rpc/*_pb2.pyi
+!lib/iris/src/iris/rpc/*_connect.py

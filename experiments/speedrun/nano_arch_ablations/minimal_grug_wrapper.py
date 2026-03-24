@@ -116,21 +116,22 @@ class WrapperLMHeadModel(
 
     transformer: eqx.Module
     loss_fn: GrugLossFn
+    grug_config: GrugConfigLike = eqx.field(static=True)
 
     @property
     def config(self) -> GrugConfigLike:
-        return self.transformer.config
+        return self.grug_config
 
     @property
     def Vocab(self) -> Axis:
-        return Axis("vocab", self.transformer.config.vocab_size)
+        return Axis("vocab", self.grug_config.vocab_size)
 
     @classmethod
     def init(
         cls, Vocab: Axis, config: GrugConfigLike, model_cls: eqx.Module, loss_fn: GrugLossFn, *, key
     ) -> "WrapperLMHeadModel":
         transformer = model_cls.init(config, key=key)
-        return WrapperLMHeadModel(transformer, loss_fn)
+        return WrapperLMHeadModel(transformer, loss_fn, config)
 
     def activations(
         self,
@@ -143,7 +144,7 @@ class WrapperLMHeadModel(
         del key, pos_ids  # unused in this lightweight wrapper
         mask = _mask_from_levanter(attn_mask)
         hidden = self.transformer(input_ids.array, mask)
-        axes = (*input_ids.axes, Axis("embed", self.transformer.config.hidden_dim))
+        axes = (*input_ids.axes, Axis("embed", self.grug_config.hidden_dim))
         return hax.named(hidden, axes)
 
     def compute_next_token_loss(
@@ -222,7 +223,7 @@ class WrapperLMHeadModel(
         return reduction(loss, axis=reduction_axis)
 
     def get_lm_head(self) -> hax.NamedArray:
-        return hax.named(self.transformer.output_proj, (Axis("embed", self.transformer.config.hidden_dim), self.Vocab))
+        return hax.named(self.transformer.output_proj, (Axis("embed", self.grug_config.hidden_dim), self.Vocab))
 
     def resize_vocab(self, new_size: int, key: PRNGKeyArray | None = None) -> "WrapperLMHeadModel":
         pass
