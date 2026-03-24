@@ -6,7 +6,7 @@
 import threading
 
 from zephyr import counters
-from zephyr.execution import JobStatus, WorkerContext, ZephyrWorker, _worker_ctx_var
+from zephyr.execution import JobStatus, _worker_ctx_var
 
 
 class FakeWorker:
