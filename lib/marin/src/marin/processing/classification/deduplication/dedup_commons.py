@@ -69,6 +69,10 @@ class DedupConfig:
     # - CPU: the Rust MinHash library (dupekit) releases the GIL and uses a Rayon thread pool,
     #   so workers can productively use 2+ CPUs even though the Python pipeline is single-threaded.
     worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=5, ram="32g", disk="5g"))
+    # Coordinator resource sizing notes:
+    # - RAM: increase when the coordinator OOMs during large pipelines; it accumulates scatter
+    #   metadata proportional to num_shards * num_reduce_buckets.
+    coordinator_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="5g"))
     # MinHash LSH parameters (only used for FUZZY_DOCUMENT mode)
     fuzzy_minhash_num_perms: int = 286
     fuzzy_minhash_num_bands: int = 26
@@ -87,6 +91,7 @@ def deduplicate(config: DedupConfig):
             text_field=config.text_field,
             filetypes=config.filetypes,
             worker_resources=config.worker_resources,
+            coordinator_resources=config.coordinator_resources,
         )
     elif config.mode == DedupMode.EXACT_DOCUMENT:
         from marin.processing.classification.deduplication.exact import dedup_exact_document
@@ -97,6 +102,7 @@ def deduplicate(config: DedupConfig):
             text_field=config.text_field,
             filetypes=config.filetypes,
             worker_resources=config.worker_resources,
+            coordinator_resources=config.coordinator_resources,
         )
     elif config.mode == DedupMode.FUZZY_DOCUMENT:
         from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
@@ -111,6 +117,7 @@ def deduplicate(config: DedupConfig):
             fuzzy_minhash_ngram_size=config.fuzzy_minhash_ngram_size,
             fuzzy_minhash_seed=config.fuzzy_minhash_seed,
             worker_resources=config.worker_resources,
+            coordinator_resources=config.coordinator_resources,
         )
     else:
         raise ValueError(f"Unknown mode {config.mode}")

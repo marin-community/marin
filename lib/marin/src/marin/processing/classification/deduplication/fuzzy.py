@@ -38,6 +38,7 @@ def dedup_fuzzy_document(
     fuzzy_minhash_seed: int = 42,
     max_parallelism: int | None = None,
     worker_resources: ResourceConfig | None = None,
+    coordinator_resources: ResourceConfig | None = None,
 ) -> dict:
     """Perform fuzzy document-level deduplication.
 
@@ -100,6 +101,7 @@ def dedup_fuzzy_document(
         name="fuzzy-dedup",
         max_workers=max_parallelism,
         resources=worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
+        coordinator_resources=coordinator_resources or ResourceConfig(cpu=1, ram="5g"),
     )
     # Group input files into at most max_parallelism shards so shard count <= worker count.
     # Each shard processes a group of files sequentially, reducing coordinator overhead
