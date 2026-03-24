@@ -84,8 +84,12 @@ WORKER_RESOURCE_HISTORY_RETENTION = 500
 DIRECT_PROVIDER_BOOTSTRAP_BATCH = 64
 """Max tasks promoted per sync cycle when no capacity info is available yet."""
 
-DIRECT_PROVIDER_NODE_OVERCOMMIT = 2
-"""Pods per schedulable node allowed for the direct provider scheduler."""
+DIRECT_PROVIDER_NODE_OVERCOMMIT = 16
+"""Pods per schedulable node allowed for the direct provider scheduler.
+
+Matches the worker provider's tasks-per-worker ratio so that the direct
+provider can keep a similar number of tasks in-flight relative to cluster size.
+"""
 
 
 @dataclass(frozen=True)

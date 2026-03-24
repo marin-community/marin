@@ -3259,18 +3259,18 @@ def test_drain_caps_promotions_and_refills_after_completion(state):
 def test_drain_capacity_limits_promotions(state):
     """With capacity, budget is schedulable_nodes * OVERCOMMIT; active tasks reduce it."""
     capacity = ClusterCapacity(
-        schedulable_nodes=100,
-        total_cpu_millicores=400000,
-        available_cpu_millicores=200000,
-        total_memory_bytes=800 * 1024**3,
-        available_memory_bytes=400 * 1024**3,
+        schedulable_nodes=10,
+        total_cpu_millicores=40000,
+        available_cpu_millicores=20000,
+        total_memory_bytes=80 * 1024**3,
+        available_memory_bytes=40 * 1024**3,
     )
     _submit_job_direct(state, "/user/cap-job", replicas=250)
 
     batch1 = state.drain_for_direct_provider(capacity=capacity)
-    assert len(batch1.tasks_to_run) == 200  # 100 nodes * 2
+    assert len(batch1.tasks_to_run) == 160  # 10 nodes * 16
 
-    # 200 active → budget exhausted.
+    # 160 active → budget exhausted.
     assert len(state.drain_for_direct_provider(capacity=capacity).tasks_to_run) == 0
 
 
