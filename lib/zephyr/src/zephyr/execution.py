@@ -324,7 +324,6 @@ class JobStatus:
     done: bool
     fatal_error: str
     workers: dict[str, dict[str, Any]]
-    counters: dict[str, int] = field(default_factory=dict)
 
 
 class ZephyrCoordinator:
@@ -354,11 +353,9 @@ class ZephyrCoordinator:
         self._chunk_prefix: str = ""
         self._execution_id: str = ""
         self._no_workers_timeout: float = 60.0
-        # User-defined counters: per-task snapshots from workers, keyed by
-        # (worker_id -> latest counters for the task that worker is running).
-        # Completed task counters are stored in _completed_counters.
+        # User-defined counters: in-flight per-worker snapshots and global accumulator.
         self._worker_counters: dict[str, dict[str, int]] = {}
-        self._completed_counters: dict[int, dict[str, int]] = {}  # shard_idx -> counters
+        self._global_counters: dict[str, int] = {}
 
         # Worker management state (workers self-register via register_worker)
         self._worker_handles: dict[str, ActorHandle] = {}
@@ -471,18 +468,10 @@ class ZephyrCoordinator:
     def _log_status(self) -> None:
         with self._lock:
             states = list(self._worker_states.values())
-            # Aggregate counters for the log line
-            total_counters: dict[str, int] = {}
-            for ctrs in itertools.chain(self._completed_counters.values(), self._worker_counters.values()):
-                for name, value in ctrs.items():
-                    total_counters[name] = total_counters.get(name, 0) + value
         alive = sum(1 for s in states if s in {WorkerState.READY, WorkerState.BUSY})
         dead = sum(1 for s in states if s in {WorkerState.FAILED, WorkerState.DEAD})
-        counters_str = ""
-        if total_counters:
-            counters_str = ", counters: " + " ".join(f"{k}={v}" for k, v in sorted(total_counters.items()))
         logger.info(
-            "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead%s",
+            "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead",
             self._execution_id,
             self._stage_name,
             self._completed_shards,
@@ -492,7 +481,6 @@ class ZephyrCoordinator:
             alive,
             len(self._worker_handles),
             dead,
-            counters_str,
         )
 
     def _maybe_requeue_worker_task(self, worker_id: str) -> None:
@@ -582,10 +570,9 @@ class ZephyrCoordinator:
             self._completed_shards += 1
             self._in_flight.pop(worker_id, None)
             self._worker_states[worker_id] = WorkerState.READY
-            # Snapshot final counters for this task from the worker
-            worker_ctrs = self._worker_counters.pop(worker_id, {})
-            if worker_ctrs:
-                self._completed_counters[shard_idx] = worker_ctrs
+            # Accumulate final counters for this task into the global total
+            for name, value in self._worker_counters.pop(worker_id, {}).items():
+                self._global_counters[name] = self._global_counters.get(name, 0) + value
 
     def report_error(self, worker_id: str, shard_idx: int, error_info: str) -> None:
         """Worker reports a task failure. All errors are fatal."""
@@ -606,14 +593,6 @@ class ZephyrCoordinator:
 
     def get_status(self) -> JobStatus:
         with self._lock:
-            # Aggregate counters across completed tasks and in-flight workers
-            total_counters: dict[str, int] = {}
-            for ctrs in self._completed_counters.values():
-                for name, value in ctrs.items():
-                    total_counters[name] = total_counters.get(name, 0) + value
-            for ctrs in self._worker_counters.values():
-                for name, value in ctrs.items():
-                    total_counters[name] = total_counters.get(name, 0) + value
             return JobStatus(
                 stage=self._stage_name,
                 completed=self._completed_shards,
@@ -630,8 +609,16 @@ class ZephyrCoordinator:
                     }
                     for wid, state in self._worker_states.items()
                 },
-                counters=total_counters,
             )
+
+    def get_counters(self) -> dict[str, int]:
+        """Return global counter totals: completed-task values plus current in-flight snapshots."""
+        with self._lock:
+            totals = dict(self._global_counters)
+            for ctrs in self._worker_counters.values():
+                for name, value in ctrs.items():
+                    totals[name] = totals.get(name, 0) + value
+            return totals
 
     def get_fatal_error(self) -> str | None:
         with self._lock:

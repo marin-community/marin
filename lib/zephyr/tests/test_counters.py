@@ -6,7 +6,7 @@
 import threading
 
 from zephyr import counters
-from zephyr.execution import JobStatus, _worker_ctx_var
+from zephyr.execution import _worker_ctx_var
 
 
 class FakeWorker:
@@ -65,36 +65,3 @@ def test_counters_changed_since_last_report():
     assert counters_changed_since_last_report("test-worker", {"docs": 10}) is False
     assert counters_changed_since_last_report("test-worker", {"docs": 20}) is True
     assert counters_changed_since_last_report("test-worker", {"docs": 20}) is False
-
-
-def test_job_status_has_counters():
-    """JobStatus dataclass includes counters field."""
-    status = JobStatus(
-        stage="stage0",
-        completed=5,
-        total=10,
-        retries=0,
-        in_flight=3,
-        queue_depth=2,
-        done=False,
-        fatal_error=None,
-        workers={},
-        counters={"docs": 100, "bytes": 5000},
-    )
-    assert status.counters == {"docs": 100, "bytes": 5000}
-
-
-def test_job_status_default_empty_counters():
-    """JobStatus.counters defaults to empty dict."""
-    status = JobStatus(
-        stage="stage0",
-        completed=0,
-        total=0,
-        retries=0,
-        in_flight=0,
-        queue_depth=0,
-        done=False,
-        fatal_error=None,
-        workers={},
-    )
-    assert status.counters == {}
