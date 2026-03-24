@@ -62,7 +62,9 @@ def test_cancel_job_releases_resources(integration_cluster):
 
     Regression test for #3553.
     """
-    heavy_cpu = 2
+    # Request enough CPU to saturate a single worker so the follow-up job
+    # cannot co-schedule until cancellation releases resources.
+    heavy_cpu = integration_cluster.worker_cpu_capacity()
     job = integration_cluster.submit(sleep, "itest-cancel-heavy", 30, cpu=heavy_cpu)
     integration_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=integration_cluster.job_timeout)
 
@@ -202,11 +204,14 @@ def test_region_constrained_routing(integration_cluster):
     task = integration_cluster.task_status(job, task_index=0)
     assert task.worker_id
 
+    # Re-fetch workers after job completes in case autoscaling added new nodes
+    # to satisfy the region constraint.
+    post_response = integration_cluster.controller_client.list_workers(request)
     worker = next(
-        (w for w in response.workers if w.worker_id == task.worker_id or w.address == task.worker_id),
+        (w for w in post_response.workers if w.worker_id == task.worker_id or w.address == task.worker_id),
         None,
     )
-    assert worker is not None
+    assert worker is not None, f"Worker {task.worker_id} not found in {[w.worker_id for w in post_response.workers]}"
     region_attr = worker.metadata.attributes.get(WellKnownAttribute.REGION)
     if region_attr and region_attr.HasField("string_value"):
         assert region_attr.string_value == target_region, f"Expected {target_region}, got {region_attr.string_value}"

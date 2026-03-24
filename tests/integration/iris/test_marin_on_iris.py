@@ -39,7 +39,7 @@ def test_marin_pipeline_on_iris(integration_cluster, monkeypatch):
 
         iris_client = FrayIrisClient(
             controller_address=integration_cluster.url,
-            workspace=REPO_ROOT / "lib" / "iris",
+            workspace=REPO_ROOT,
         )
 
         config = ExecutorMainConfig(
