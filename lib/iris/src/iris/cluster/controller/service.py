@@ -1903,3 +1903,24 @@ class ControllerServiceImpl:
             columns=result.columns,
             rows=result.rows,
         )
+
+    def set_user_budget(
+        self,
+        request: cluster_pb2.Controller.SetUserBudgetRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.SetUserBudgetResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "SetUserBudget not yet implemented")
+
+    def get_user_budget(
+        self,
+        request: cluster_pb2.Controller.GetUserBudgetRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetUserBudgetResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "GetUserBudget not yet implemented")
+
+    def list_user_budgets(
+        self,
+        request: cluster_pb2.Controller.ListUserBudgetsRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.ListUserBudgetsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "ListUserBudgets not yet implemented")

@@ -557,6 +557,13 @@ enum ExistingJobPolicy {
   EXISTING_JOB_POLICY_RECREATE = 3;
 }
 
+enum PriorityBand {
+  PRIORITY_BAND_UNSPECIFIED = 0;  // defaults to INTERACTIVE
+  PRIORITY_BAND_PRODUCTION = 1;   // admin-only, never preempted
+  PRIORITY_BAND_INTERACTIVE = 2;  // normal work, default
+  PRIORITY_BAND_BATCH = 3;        // opportunistic, preemptible
+}
+
 // ============================================================================
 // CONTROLLER SERVICE MESSAGES
 // ============================================================================
@@ -622,6 +629,7 @@ message Controller {
 
     JobPreemptionPolicy preemption_policy = 31;
     ExistingJobPolicy existing_job_policy = 32;
+    PriorityBand priority_band = 33;
   }
 
   message LaunchJobResponse {
@@ -975,6 +983,29 @@ message Controller {
     repeated NodePoolStatus node_pools = 8;
   }
 
+  // --- Budget Management ---
+  message SetUserBudgetRequest {
+    string user_id = 1;
+    int64 budget_limit = 2;      // max budget value (0 = unlimited)
+    PriorityBand max_band = 3;   // highest band this user can submit to (lower number = higher priority)
+  }
+  message SetUserBudgetResponse {}
+
+  message GetUserBudgetRequest {
+    string user_id = 1;
+  }
+  message GetUserBudgetResponse {
+    string user_id = 1;
+    int64 budget_limit = 2;
+    int64 budget_spent = 3;      // current running resource value
+    PriorityBand max_band = 4;
+  }
+
+  message ListUserBudgetsRequest {}
+  message ListUserBudgetsResponse {
+    repeated GetUserBudgetResponse users = 1;
+  }
+
 }
 
 // ============================================================================
@@ -1135,6 +1166,11 @@ service ControllerService {
 
   // Generic query API
   rpc ExecuteRawQuery(RawQueryRequest) returns (RawQueryResponse);
+
+  // Budget management
+  rpc SetUserBudget(Controller.SetUserBudgetRequest) returns (Controller.SetUserBudgetResponse);
+  rpc GetUserBudget(Controller.GetUserBudgetRequest) returns (Controller.GetUserBudgetResponse);
+  rpc ListUserBudgets(Controller.ListUserBudgetsRequest) returns (Controller.ListUserBudgetsResponse);
 }
 
 service WorkerService {
