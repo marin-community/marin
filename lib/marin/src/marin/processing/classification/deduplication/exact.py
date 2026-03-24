@@ -13,6 +13,7 @@ from marin.processing.classification.deduplication.dedup_commons import (
     _get_extension,
     _init_wandb,
     _load_batches,
+    group_files,
 )
 import dupekit
 from marin.utils import rebase_file_path
@@ -148,12 +149,16 @@ def dedup_exact_paragraph(
                 "file_idx": item["file_idx"],
             }
 
+    file_groups: list[list[str]] = (
+        group_files(input_files, max_parallelism) if max_parallelism else [[f] for f in sorted(input_files)]
+    )
     shard_results = list(
         ctx.execute(
-            Dataset.from_list(input_files)
+            Dataset.from_list(file_groups)
             .flat_map(
-                lambda path: (
+                lambda paths: (
                     {"file_idx": path_to_idx[path], "id": hash_record.pop("doc_id"), **hash_record}
+                    for path in paths
                     for batch in _load_batches(path)
                     for hash_record in compute_paragraph_hashes(batch).to_pylist()
                 )
@@ -265,12 +270,16 @@ def dedup_exact_document(
                 "file_idx": item["file_idx"],
             }
 
+    file_groups: list[list[str]] = (
+        group_files(input_files, max_parallelism) if max_parallelism else [[f] for f in sorted(input_files)]
+    )
     shard_results = list(
         ctx.execute(
-            Dataset.from_list(input_files)
+            Dataset.from_list(file_groups)
             .flat_map(
-                lambda path: (
+                lambda paths: (
                     {"file_idx": path_to_idx[path], **hash_record}
+                    for path in paths
                     for batch in _load_batches(path)
                     for hash_record in compute_document_hashes(batch).to_pylist()
                 )
