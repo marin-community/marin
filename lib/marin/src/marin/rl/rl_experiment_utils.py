@@ -15,9 +15,10 @@ from levanter.distributed import RayConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.fsspec_utils import join_path
 from levanter.utils.mesh import MeshConfig
 
-from marin.execution.executor import ExecutorMainConfig, ExecutorStep, InputName, OutputName, output_path_of
+from marin.execution.executor import ExecutorMainConfig, ExecutorStep, InputName, output_path_of, this_output_path
 from marin.execution.remote import remote
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.environments.inference_ctx import VLLMSamplingConfig, vLLMInferenceContextConfig
@@ -58,6 +59,7 @@ class RLStepConfig:
     experiment_config: "RLExperimentConfig"
     curriculum: CurriculumConfig
     model_path: str
+    output_path: str
 
 
 @dataclasses.dataclass
@@ -175,7 +177,11 @@ def _resolve_config_class(config_class_path: str) -> type[HFCompatConfig]:
 
 
 def _build_rl_job_config(
-    name: str, config: RLExperimentConfig, curriculum: CurriculumConfig, model_path: str
+    name: str,
+    config: RLExperimentConfig,
+    curriculum: CurriculumConfig,
+    model_path: str,
+    output_path: str,
 ) -> RLJobConfig:
     model_config_class = _resolve_config_class(config.model_config.config_class_path)
     converter = HFCheckpointConverter(
@@ -193,6 +199,8 @@ def _build_rl_job_config(
     )
 
     tags = [*config.tags, config.model_config.name.split("/")[-1]]
+    checkpoints_path = join_path(output_path, "checkpoints")
+    rollout_storage_path = join_path(output_path, "rollouts")
 
     trainer_config = TrainerConfig(
         tracker=WandbConfig(
@@ -208,7 +216,7 @@ def _build_rl_job_config(
         num_train_steps=config.num_train_steps,
         steps_per_eval=config.steps_per_eval,
         checkpointer=CheckpointerConfig(
-            base_path=OutputName("checkpoints"),
+            base_path=checkpoints_path,
             save_interval=datetime.timedelta(seconds=config.checkpointer_save_interval),
         ),
         mesh=MeshConfig(
@@ -228,7 +236,7 @@ def _build_rl_job_config(
 
     rollout_storage = RolloutStorageConfig(
         storage_type=StorageType.FILE,
-        path=OutputName("rollouts"),
+        path=rollout_storage_path,
     )
     weight_transfer = WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,
@@ -303,6 +311,7 @@ def _run_rl_experiment_step(config: RLStepConfig):
         config=config.experiment_config,
         curriculum=config.curriculum,
         model_path=config.model_path,
+        output_path=config.output_path,
     )
     return RLJob(job_config).run(config.name)
 
@@ -321,5 +330,6 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
             experiment_config=runtime_config,
             curriculum=curriculum,
             model_path=model_path,
+            output_path=this_output_path(),
         ),
     )

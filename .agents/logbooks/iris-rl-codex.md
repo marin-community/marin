@@ -1085,3 +1085,58 @@ Interpretation:
   - cached model download results are reused automatically in-region,
   - region pinning remains in force for root and RL step launch.
 - remaining runtime investigation, if needed, should now focus on actual RL worker startup behavior rather than HF/bootstrap pathing.
+
+## 2026-03-24 UTC — Failure surfacing fix + runtime output-path fix
+
+Observed after `r6`:
+- W&B showed repeated trainer crashes with `AttributeError: 'OutputName' object has no attribute 'rstrip'` in `rollout_storage.py`.
+- `iris job bug-report /ahmed/iris-rl-oom-b120-uc1-r6` still showed the root job as `running` with `Failures 0`, which hid the real RL failure from the root-level Iris view.
+
+Root causes split into two separate issues:
+
+1. RL runtime config still contained unresolved executor placeholders
+- `rl_experiment_utils._build_rl_job_config(...)` was constructing `CheckpointerConfig(base_path=OutputName("checkpoints"))` and `RolloutStorageConfig(path=OutputName("rollouts"))` inside the remote step runtime.
+- those `OutputName(...)` values were created *after* executor config instantiation, so they never became concrete strings.
+- train and rollout workers then crashed when file-based rollout storage called `.rstrip("/")` on an `OutputName` object.
+
+2. Coordinator failure did not surface because the process stayed alive after the main thread crashed
+- the RL coordinator correctly hit `wait_all(jobs, raise_on_failure=True)` and raised `fray.v2.client.JobFailed` once a child TPU job reached terminal failure.
+- however, the coordinator hosts in-process actors (`curriculum`, `run_state`, Arrow Flight coordinator) via `client.host_actor(...)`.
+- those actor servers own non-daemon managed threads/executors.
+- because Marin never called `HostedActor.shutdown()` on the error path, the coordinator main thread could die while the process stayed alive.
+- Iris only marks the task failed when the process exits, so the coordinator task and all ancestors stayed `RUNNING` even though logs already contained the traceback.
+
+Iris CLI surfacing gap:
+- `iris job bug-report` is shallow for the requested job ID.
+- before this fix, it did not summarize descendant job states/failures, so root bug reports hid failing train/rollout child jobs unless logs were queried with `--include-children` or descendant jobs were inspected directly.
+
+Applied fixes:
+
+### RL runtime path fix
+- `RLStepConfig` now carries the concrete step `output_path` resolved by executor config instantiation.
+- `_build_rl_job_config(...)` now builds concrete string paths under that output root:
+  - `.../checkpoints`
+  - `.../rollouts`
+- this removes the unresolved `OutputName` objects from runtime-built RL worker config.
+
+### Coordinator teardown fix
+- `orchestration._create_runtime_handles(...)` now returns both runtime handles and the hosted actor objects.
+- added `_shutdown_hosted_actors(...)` and call it in coordinator `finally` cleanup.
+- hosted actors are also cleaned up if runtime-handle creation itself fails partway through.
+- intended effect: once `wait_all(...)` raises, the coordinator process can actually exit, so Iris sees the task fail and parent jobs stop pretending to be healthy.
+
+### Iris bug-report surfacing fix
+- `iris.cli.bug_report` now fetches descendant job statuses using the existing `GetTaskLogs(... include_children=True)` plumbing.
+- bug reports now include:
+  - descendant job count,
+  - descendant failure count,
+  - a `Descendant Jobs` table with nested child job state/error.
+- `error_summary` now becomes `N descendant job(s) failed` when the root job itself is still `running` but nested jobs have already failed.
+
+Tests / validation:
+- `uv run pytest -q tests/rl/test_rl_experiment_utils.py tests/rl/test_orchestration.py` -> `8 passed`
+- `uv run pytest -q lib/iris/tests/cli/test_bug_report.py -o addopts= --import-mode=importlib` -> `1 passed`
+- `./infra/pre-commit.py --fix ...` on all touched files -> `OK`
+
+Additional local debug artifact:
+- `docs/debug-log-iris-rl-failure-surfacing.md` captures the live cluster diagnosis and reasoning for the coordinator/process-liveness bug.

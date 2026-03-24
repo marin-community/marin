@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+from types import SimpleNamespace
 
 import pytest
 from levanter.models.llama import LlamaConfig
@@ -11,6 +12,7 @@ from marin.rl.model_utils import is_hf_checkpoint
 from marin.rl.rl_experiment_utils import (
     ModelConfig,
     RLExperimentConfig,
+    _build_rl_job_config,
     config_class_path,
     executor_main_config_for_rl_experiment,
     executor_step_resources_for_rl_experiment,
@@ -25,6 +27,17 @@ MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 @dataclasses.dataclass(frozen=True)
 class _EmptyConfig:
     pass
+
+
+@dataclasses.dataclass(frozen=True)
+class _FakeRuntimeLmConfig:
+    max_seq_len: int = 0
+    tokenizer: str = ""
+    attn_backend: object | None = None
+
+    @classmethod
+    def from_hf_config(cls, _hf_config):
+        return cls()
 
 
 def _noop(_config: _EmptyConfig) -> None:
@@ -135,3 +148,23 @@ def test_is_hf_checkpoint_recognizes_gcs_hf_exports(monkeypatch):
 
     assert is_hf_checkpoint("gs://marin-us-central1/models/test-model/hf")
     assert not is_hf_checkpoint("gs://marin-us-central1/checkpoints/test-run")
+
+
+def test_build_rl_job_config_resolves_runtime_output_paths(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+
+    job_config = _build_rl_job_config(
+        name="rl-test",
+        config=_test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
+        curriculum=_test_curriculum(),
+        model_path="gs://marin-us-central1/models/test-model",
+        output_path="gs://marin-us-central1/rl_testing/rl-test",
+    )
+
+    assert job_config.trainer.checkpointer.base_path == "gs://marin-us-central1/rl_testing/rl-test/checkpoints"
+    assert job_config.rollout_storage.path == "gs://marin-us-central1/rl_testing/rl-test/rollouts"

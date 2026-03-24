@@ -21,11 +21,14 @@ from fray.v2 import (
     current_client,
     wait_all,
 )
+from fray.v2.actor import HostedActor
 from iris.logging import configure_logging
+from marin.rl.curriculum import Curriculum
 from marin.rl.placement import resolve_launcher_region, singleton_region_list
 from marin.rl.rl_job import RLJob, RLJobConfig
 from marin.rl.run_state import RLRunState
 from marin.rl.runtime import RLRuntimeHandles, WeightTransferRuntime
+from marin.rl.weight_transfer import WeightTransferMode
 from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
 from marin.training.training import _add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
@@ -33,6 +36,12 @@ from marin.utils import remove_tpu_lockfile_on_exit
 logger = logging.getLogger(__name__)
 
 RL_COORDINATOR_CPU_DISK = "100g"
+
+
+@dataclasses.dataclass(frozen=True)
+class _HostedRuntime:
+    runtime: RLRuntimeHandles
+    hosted_actors: list[HostedActor]
 
 
 def _coordinator_extras(config: RLJobConfig) -> list[str]:
@@ -95,123 +104,149 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
     rl_job = RLJob(config)
     train_config, rollout_config = rl_job.to_worker_configs()
     run_config = config.run_config
+    hosted_runtime: _HostedRuntime | None = None
 
-    # Create shared control-plane actors (non-preemptible, CPU-only)
-    runtime = _create_runtime_handles(client, config)
-    logger.info("Runtime handles created: curriculum, run_state, weight_transfer coordinator")
+    try:
+        # Create shared control-plane actors (non-preemptible, CPU-only)
+        hosted_runtime = _create_runtime_handles(client, config)
+        runtime = hosted_runtime.runtime
+        logger.info("Runtime handles created: curriculum, run_state, weight_transfer coordinator")
 
-    # Create worker environments.
-    train_extras = _train_worker_extras(config)
-    rollout_extras = _rollout_worker_extras(config)
+        # Create worker environments.
+        train_extras = _train_worker_extras(config)
+        rollout_extras = _rollout_worker_extras(config)
 
-    env = {"EQX_ON_ERROR": "nan"}
-    env = _add_run_env_variables(env)
-    train_worker_env = create_environment(
-        env_vars=env,
-        extras=train_extras,
-    )
-    rollout_worker_env = create_environment(
-        env_vars=env,
-        extras=rollout_extras,
-    )
-
-    # Resource configs
-    inference_tpu_type = run_config.inference_tpu_type or run_config.train_tpu_type
-    # All Iris compute is preemptible — never set preemptible=False.
-    # Use one concrete region for the whole RL run so CPU/driver and TPU
-    # layers stay co-located. Fall back to resolving from the current launcher
-    # region for older callers that do not set run_config.regions.
-    if run_config.regions:
-        tpu_regions = list(run_config.regions)
-    else:
-        tpu_regions = singleton_region_list(resolve_launcher_region(run_config.train_tpu_type, inference_tpu_type))
-    train_resources = ResourceConfig.with_tpu(
-        run_config.train_tpu_type,
-        slice_count=run_config.num_train_slices,
-        regions=tpu_regions,
-    )
-    rollout_resources = ResourceConfig.with_tpu(inference_tpu_type, regions=tpu_regions)
-
-    # Submit child jobs
-    jobs: list[JobHandle] = []
-
-    # Training worker
-    jobs.append(
-        client.submit(
-            JobRequest(
-                name=f"rl-{config.run_id}-train",
-                entrypoint=Entrypoint.from_callable(_train_worker_entry, args=(train_config, runtime)),
-                resources=train_resources,
-                environment=train_worker_env,
-                max_retries_failure=run_config.max_retries_failure,
-                max_retries_preemption=run_config.max_retries_preemption,
-            )
+        env = {"EQX_ON_ERROR": "nan"}
+        env = _add_run_env_variables(env)
+        train_worker_env = create_environment(
+            env_vars=env,
+            extras=train_extras,
         )
-    )
-
-    # Rollout workers
-    for i in range(run_config.num_rollout_workers):
-        worker_config = dataclasses.replace(
-            rollout_config,
-            seed=rollout_config.seed + i,
-            run_id=f"{rollout_config.run_id}-rollout-{i}",
-            worker_index=i,
+        rollout_worker_env = create_environment(
+            env_vars=env,
+            extras=rollout_extras,
         )
+
+        # Resource configs
+        inference_tpu_type = run_config.inference_tpu_type or run_config.train_tpu_type
+        # All Iris compute is preemptible — never set preemptible=False.
+        # Use one concrete region for the whole RL run so CPU/driver and TPU
+        # layers stay co-located. Fall back to resolving from the current launcher
+        # region for older callers that do not set run_config.regions.
+        if run_config.regions:
+            tpu_regions = list(run_config.regions)
+        else:
+            tpu_regions = singleton_region_list(resolve_launcher_region(run_config.train_tpu_type, inference_tpu_type))
+        train_resources = ResourceConfig.with_tpu(
+            run_config.train_tpu_type,
+            slice_count=run_config.num_train_slices,
+            regions=tpu_regions,
+        )
+        rollout_resources = ResourceConfig.with_tpu(inference_tpu_type, regions=tpu_regions)
+
+        # Submit child jobs
+        jobs: list[JobHandle] = []
+
+        # Training worker
         jobs.append(
             client.submit(
                 JobRequest(
-                    name=f"rl-{config.run_id}-rollout-{i}",
-                    entrypoint=Entrypoint.from_callable(_rollout_worker_entry, args=(worker_config, runtime)),
-                    resources=rollout_resources,
-                    environment=rollout_worker_env,
+                    name=f"rl-{config.run_id}-train",
+                    entrypoint=Entrypoint.from_callable(_train_worker_entry, args=(train_config, runtime)),
+                    resources=train_resources,
+                    environment=train_worker_env,
                     max_retries_failure=run_config.max_retries_failure,
                     max_retries_preemption=run_config.max_retries_preemption,
                 )
             )
         )
 
-    logger.info("Submitted %d child jobs (1 trainer + %d rollout workers)", len(jobs), run_config.num_rollout_workers)
+        # Rollout workers
+        for i in range(run_config.num_rollout_workers):
+            worker_config = dataclasses.replace(
+                rollout_config,
+                seed=rollout_config.seed + i,
+                run_id=f"{rollout_config.run_id}-rollout-{i}",
+                worker_index=i,
+            )
+            jobs.append(
+                client.submit(
+                    JobRequest(
+                        name=f"rl-{config.run_id}-rollout-{i}",
+                        entrypoint=Entrypoint.from_callable(_rollout_worker_entry, args=(worker_config, runtime)),
+                        resources=rollout_resources,
+                        environment=rollout_worker_env,
+                        max_retries_failure=run_config.max_retries_failure,
+                        max_retries_preemption=run_config.max_retries_preemption,
+                    )
+                )
+            )
 
-    wait_all(jobs, raise_on_failure=True)
-    logger.info("RL coordinator finished for run %s", config.run_id)
+        logger.info(
+            "Submitted %d child jobs (1 trainer + %d rollout workers)",
+            len(jobs),
+            run_config.num_rollout_workers,
+        )
+
+        wait_all(jobs, raise_on_failure=True)
+        logger.info("RL coordinator finished for run %s", config.run_id)
+    finally:
+        if hosted_runtime is not None:
+            _shutdown_hosted_actors(hosted_runtime.hosted_actors)
 
 
-def _create_runtime_handles(client: Client, config: RLJobConfig) -> RLRuntimeHandles:
+def _shutdown_hosted_actors(hosted_actors: list[HostedActor]) -> None:
+    for hosted_actor in reversed(hosted_actors):
+        try:
+            hosted_actor.shutdown()
+        except Exception:
+            logger.exception("Failed to shut down hosted actor")
+
+
+def _create_runtime_handles(client: Client, config: RLJobConfig) -> _HostedRuntime:
     """Create all shared actors for the RL run.
 
     Uses host_actor() to run lightweight actors in-process on the coordinator.
     This avoids needing separate CPU worker slots for each actor.
     """
-    from marin.rl.curriculum import Curriculum
+    hosted_actors: list[HostedActor] = []
 
-    # Host actors in-process on the coordinator (no separate jobs needed)
-    curriculum_hosted = client.host_actor(
-        Curriculum,
-        config.curriculum,
-        name=f"rl-{config.run_id}-curriculum",
-    )
-
-    run_state_hosted = client.host_actor(
-        RLRunState,
-        name=f"rl-{config.run_id}-run-state",
-    )
-
-    # Weight transfer coordinator (Arrow Flight)
-    from marin.rl.weight_transfer import WeightTransferMode
-
-    arrow_coordinator = None
-    if config.weight_transfer.mode == WeightTransferMode.ARROW_FLIGHT:
-        arrow_hosted = client.host_actor(
-            ArrowFlightCoordinator,
-            name=config.weight_transfer.coordinator_name or f"rl-{config.run_id}-wt-coord",
+    try:
+        # Host actors in-process on the coordinator (no separate jobs needed)
+        curriculum_hosted = client.host_actor(
+            Curriculum,
+            config.curriculum,
+            name=f"rl-{config.run_id}-curriculum",
         )
-        arrow_coordinator = arrow_hosted.handle
+        hosted_actors.append(curriculum_hosted)
 
-    return RLRuntimeHandles(
-        curriculum=curriculum_hosted.handle,
-        run_state=run_state_hosted.handle,
-        weight_transfer=WeightTransferRuntime(arrow_flight_coordinator=arrow_coordinator),
-    )
+        run_state_hosted = client.host_actor(
+            RLRunState,
+            name=f"rl-{config.run_id}-run-state",
+        )
+        hosted_actors.append(run_state_hosted)
+
+        # Weight transfer coordinator (Arrow Flight)
+        arrow_coordinator = None
+        if config.weight_transfer.mode == WeightTransferMode.ARROW_FLIGHT:
+            arrow_hosted = client.host_actor(
+                ArrowFlightCoordinator,
+                name=config.weight_transfer.coordinator_name or f"rl-{config.run_id}-wt-coord",
+            )
+            hosted_actors.append(arrow_hosted)
+            arrow_coordinator = arrow_hosted.handle
+
+        return _HostedRuntime(
+            runtime=RLRuntimeHandles(
+                curriculum=curriculum_hosted.handle,
+                run_state=run_state_hosted.handle,
+                weight_transfer=WeightTransferRuntime(arrow_flight_coordinator=arrow_coordinator),
+            ),
+            hosted_actors=hosted_actors,
+        )
+    except Exception:
+        _shutdown_hosted_actors(hosted_actors)
+        raise
 
 
 def _train_worker_entry(train_config, runtime: RLRuntimeHandles) -> None:

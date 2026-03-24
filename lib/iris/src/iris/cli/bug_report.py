@@ -18,6 +18,7 @@ from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
+_FAILED_JOB_STATES = {"failed", "worker_failed", "unschedulable"}
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +68,15 @@ class WorkerReport:
 
 
 @dataclass
+class DescendantJobReport:
+    job_id: str
+    state: str
+    exit_code: int
+    error: str
+    finished_at: str
+
+
+@dataclass
 class BugReport:
     job_id: str
     job_name: str
@@ -85,6 +95,7 @@ class BugReport:
     task_state_counts: dict[str, int]
     pending_reason: str
     tasks: list[TaskReport]
+    descendant_jobs: list[DescendantJobReport] = field(default_factory=list)
     workers: dict[str, WorkerReport] = field(default_factory=dict)
     entrypoint: str = ""
 
@@ -123,6 +134,7 @@ def _gather(
 
     # 2. List tasks
     tasks_resp = client.list_tasks(cluster_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire()))
+    descendant_jobs = _list_descendant_jobs(client, job_id)
 
     # 3. List workers, filter to those involved in this job
     workers_resp = client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
@@ -170,7 +182,13 @@ def _gather(
     # 8. Assemble — prefer ListTasks count over the JobStatus convenience field
     state_name = _job_state_name(job.state)
     error = job.error or ""
-    error_summary = error[:100] if error else state_name
+    failed_descendants = [descendant for descendant in descendant_jobs if descendant.state in _FAILED_JOB_STATES]
+    if error:
+        error_summary = error[:100]
+    elif failed_descendants:
+        error_summary = f"{len(failed_descendants)} descendant job(s) failed"
+    else:
+        error_summary = state_name
     task_count = len(task_reports) or job.task_count
 
     return BugReport(
@@ -191,6 +209,7 @@ def _gather(
         task_state_counts=dict(job.task_state_counts),
         pending_reason=job.pending_reason,
         tasks=task_reports,
+        descendant_jobs=descendant_jobs,
         workers=worker_reports,
         entrypoint=entrypoint_str,
     )
@@ -257,6 +276,39 @@ def _build_worker_report(
         tpu_info=tpu_info,
         memory=memory,
         zone=meta.gce_zone,
+    )
+
+
+def _list_descendant_jobs(
+    client: ControllerServiceClientSync,
+    job_id: JobName,
+) -> list[DescendantJobReport]:
+    if job_id.is_task:
+        return []
+
+    try:
+        log_resp = client.get_task_logs(
+            cluster_pb2.Controller.GetTaskLogsRequest(
+                id=job_id.to_wire(),
+                include_children=True,
+                max_total_lines=1,
+                tail=True,
+            )
+        )
+    except Exception:
+        logger.warning("Failed to fetch descendant job statuses for %s", job_id, exc_info=True)
+        return []
+
+    return [_build_descendant_job_report(job) for job in log_resp.child_job_statuses]
+
+
+def _build_descendant_job_report(job: cluster_pb2.JobStatus) -> DescendantJobReport:
+    return DescendantJobReport(
+        job_id=job.job_id,
+        state=_job_state_name(job.state),
+        exit_code=job.exit_code,
+        error=job.error,
+        finished_at=_format_timestamp(job.finished_at),
     )
 
 
@@ -364,6 +416,11 @@ def format_bug_report(report: BugReport) -> str:
 
     lines.append(f"| Failures | {report.failure_count} |")
     lines.append(f"| Preemptions | {report.preemption_count} |")
+    if report.descendant_jobs:
+        lines.append(f"| Descendant Jobs | {len(report.descendant_jobs)} |")
+        descendant_failures = [job for job in report.descendant_jobs if job.state in _FAILED_JOB_STATES]
+        if descendant_failures:
+            lines.append(f"| Descendant Failures | {len(descendant_failures)} |")
     lines.append(f"| Resources | {report.resources} |")
     if report.entrypoint:
         lines.append(f"| Entrypoint | `{report.entrypoint}` |")
@@ -412,6 +469,16 @@ def format_bug_report(report: BugReport) -> str:
             for log_line in t.recent_logs:
                 lines.append(log_line)
             lines.append("```\n")
+
+    if report.descendant_jobs:
+        lines.append("## Descendant Jobs\n")
+        lines.append("| Job | State | Exit | Error | Finished |")
+        lines.append("|-----|-------|------|-------|----------|")
+        for job in report.descendant_jobs:
+            error_col = _escape_md(job.error) if job.error else "-"
+            exit_col = _format_exit_code(job.exit_code)
+            lines.append(f"| `{job.job_id}` | {job.state} | {exit_col} | {error_col} | {job.finished_at} |")
+        lines.append("")
 
     # Involved Workers
     if report.workers:
