@@ -621,6 +621,7 @@ class Task:
         "resource_usage_proto",
         _nullable(_proto_decoder(cluster_pb2.ResourceUsage)),
     )
+    priority_band: int = db_field("priority_band", _decode_int, default=2)
     current_worker_id: WorkerId | None = db_field("current_worker_id", _nullable(_decode_worker_id), default=None)
     current_worker_address: str | None = db_field("current_worker_address", _nullable(_decode_str), default=None)
     container_id: str | None = db_field("container_id", _nullable(_decode_str), default=None)
@@ -769,6 +770,14 @@ class ApiKey:
     revoked_at: Timestamp | None = db_field("revoked_at_ms", _nullable(_decode_timestamp_ms), default=None)
 
 
+@db_row_model
+class UserBudget:
+    user_id: str = db_field("user_id", _decode_str)
+    budget_limit: int = db_field("budget_limit", _decode_int)
+    max_band: int = db_field("max_band", _decode_int)
+    updated_at: Timestamp = db_field("updated_at_ms", _decode_timestamp_ms)
+
+
 @dataclass(frozen=True)
 class EndpointQuery:
     endpoint_ids: tuple[str, ...] = ()
@@ -885,9 +894,11 @@ TASK_PROFILES = Table[tuple[str, str]](
         "captured_at_ms": Column("tp", "captured_at_ms", _decode_timestamp_ms),
     },
 )
+USER_BUDGETS = _table_for_model(UserBudget, "user_budgets", "ub")
 JOBS.columns["parent_job_id"] = Column("j", "parent_job_id", _nullable(JobName.from_wire))
 TASKS.columns["priority_neg_depth"] = Column("t", "priority_neg_depth", _decode_int)
 TASKS.columns["priority_root_submitted_ms"] = Column("t", "priority_root_submitted_ms", _decode_timestamp_ms)
+TASKS.columns["priority_band"] = Column("t", "priority_band", _decode_int)
 TASKS.columns["task_index"] = Column("t", "task_index", _decode_int)
 TASKS.columns.pop("current_worker_id", None)
 TASKS.columns.pop("current_worker_address", None)
@@ -1307,6 +1318,27 @@ class ControllerDB:
             return
         placeholders = ",".join("?" for _ in endpoint_ids)
         self.execute(f"DELETE FROM endpoints WHERE endpoint_id IN ({placeholders})", tuple(endpoint_ids))
+
+    # -- User budget accessors --------------------------------------------------
+
+    def set_user_budget(self, user_id: str, budget_limit: int, max_band: int, now: Timestamp) -> None:
+        """Insert or update a user's budget configuration."""
+        self.execute(
+            "INSERT INTO user_budgets(user_id, budget_limit, max_band, updated_at_ms) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET budget_limit=?, max_band=?, updated_at_ms=?",
+            (user_id, budget_limit, max_band, now.epoch_ms(), budget_limit, max_band, now.epoch_ms()),
+        )
+
+    def get_user_budget(self, user_id: str) -> UserBudget | None:
+        """Get budget config for a user. Returns None if user has no budget row."""
+        with self.snapshot() as q:
+            return q.one(USER_BUDGETS, where=USER_BUDGETS.c.user_id == user_id)
+
+    def list_user_budgets(self) -> list[UserBudget]:
+        """List all user budgets."""
+        with self.snapshot() as q:
+            return q.select(USER_BUDGETS)
 
 
 # ---------------------------------------------------------------------------

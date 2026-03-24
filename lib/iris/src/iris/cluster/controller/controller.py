@@ -47,6 +47,14 @@ from iris.cluster.controller.db import (
     insert_task_profile,
     running_tasks_by_worker,
 )
+from iris.cluster.controller.budget import (
+    BAND_SORT_KEY,
+    PriorityBand,
+    UserBudgetDefaults,
+    compute_user_spend,
+    interleave_by_user,
+    resource_value,
+)
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.controller.provider import TaskProvider
@@ -54,6 +62,7 @@ from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
     SchedulingContext,
+    WorkerCapacity,
     WorkerSnapshot,
 )
 from iris.cluster.controller.auth import ControllerAuth
@@ -75,6 +84,8 @@ from iris.cluster.types import (
     WorkerStatus,
     WorkerStatusMap,
     WorkerId,
+    get_gpu_count,
+    get_tpu_count,
 )
 from iris.logging import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
@@ -97,6 +108,19 @@ _HEALTH_SUMMARY_INTERVAL = RateLimiter(interval_seconds=30)
 # for this key; reservation jobs do not, so they naturally prefer claimed
 # workers (which appear first in the worker list).
 RESERVATION_TAINT_KEY = "reservation-job"
+
+
+@dataclass
+class RunningTaskInfo:
+    """Info about a running task used by the preemption pass."""
+
+    task_id: JobName
+    worker_id: WorkerId
+    band_sort_key: int  # 1=production, 2=interactive, 3=batch
+    resource_value: int
+    is_coscheduled: bool
+    resources: cluster_pb2.ResourceSpecProto
+    already_preempted: bool = False
 
 
 def job_requirements_from_job(job: Job) -> JobRequirements:
@@ -284,6 +308,117 @@ def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, J
     return {job.job_id: job for job in jobs}
 
 
+def _get_running_tasks_with_band_and_value(
+    db: ControllerDB,
+    claimed_workers: set[WorkerId],
+) -> list[RunningTaskInfo]:
+    """Query running tasks with band, worker, resource spec, and coscheduling status.
+
+    Skips tasks on reservation-claimed workers since those workers are spoken for.
+    """
+    with db.snapshot() as q:
+        rows = q.raw(
+            "SELECT t.task_id, t.priority_band, a.worker_id, j.request_proto "
+            "FROM tasks t "
+            "JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
+            "JOIN jobs j ON j.job_id = t.job_id "
+            "WHERE t.state = ? AND a.worker_id IS NOT NULL",
+            (cluster_pb2.TASK_STATE_RUNNING,),
+            decoders={
+                "task_id": JobName.from_wire,
+                "priority_band": int,
+                "worker_id": WorkerId,
+            },
+        )
+    result: list[RunningTaskInfo] = []
+    for row in rows:
+        wid = row.worker_id
+        if wid in claimed_workers:
+            continue
+        request = cluster_pb2.Controller.LaunchJobRequest()
+        request.ParseFromString(row.request_proto)
+        result.append(
+            RunningTaskInfo(
+                task_id=row.task_id,
+                worker_id=wid,
+                band_sort_key=row.priority_band,
+                resource_value=resource_value(
+                    request.resources.cpu_millicores,
+                    request.resources.memory_bytes,
+                    get_gpu_count(request.resources.device) + get_tpu_count(request.resources.device),
+                ),
+                is_coscheduled=request.HasField("coscheduling"),
+                resources=request.resources,
+            )
+        )
+    return result
+
+
+def _run_preemption_pass(
+    unscheduled_tasks: list[tuple[JobName, JobRequirements, int]],
+    running_tasks_info: list[RunningTaskInfo],
+    context: SchedulingContext,
+) -> list[tuple[JobName, JobName]]:
+    """Find tasks to preempt for higher-priority unscheduled work.
+
+    Each entry in unscheduled_tasks is (task_id, requirements, band_sort_key).
+
+    Rules:
+    - PRODUCTION preempts INTERACTIVE and BATCH.
+    - INTERACTIVE preempts BATCH only.
+    - BATCH never preempts.
+    - Within same band, no preemption (compete via scheduling order only).
+    - Coscheduled tasks are not preemptible (v1).
+    """
+    preemptions: list[tuple[JobName, JobName]] = []
+
+    # Sort victims: lowest priority first (highest band_sort_key), then cheapest
+    victims = sorted(running_tasks_info, key=lambda t: (-t.band_sort_key, t.resource_value))
+
+    for task_id, req, task_band_key in unscheduled_tasks:
+        # Batch never preempts
+        if task_band_key >= BAND_SORT_KEY[PriorityBand.BATCH]:
+            continue
+
+        for victim in victims:
+            if victim.already_preempted:
+                continue
+            if victim.is_coscheduled:
+                continue
+            # Can only preempt strictly lower priority (higher band_sort_key)
+            if victim.band_sort_key <= task_band_key:
+                continue
+
+            cap = context.capacities.get(victim.worker_id)
+            if cap is None:
+                continue
+
+            if not cap.matches_constraints(req.constraints):
+                continue
+
+            # If current capacity already fits, no preemption needed
+            if cap.can_fit(req) is None:
+                break
+
+            # Check if freeing the victim's resources would create enough capacity
+            hypothetical = WorkerCapacity(
+                worker_id=cap.worker_id,
+                available_cpu_millicores=cap.available_cpu_millicores + victim.resources.cpu_millicores,
+                available_memory=cap.available_memory + victim.resources.memory_bytes,
+                available_gpus=cap.available_gpus + get_gpu_count(victim.resources.device),
+                available_tpus=cap.available_tpus + get_tpu_count(victim.resources.device),
+                attributes=cap.attributes,
+                building_task_count=max(0, cap.building_task_count - 1),
+                max_building_tasks=cap.max_building_tasks,
+            )
+            if hypothetical.can_fit(req) is None:
+                preemptions.append((task_id, victim.task_id))
+                victim.already_preempted = True
+                break
+
+    return preemptions
+
+
 def _schedulable_tasks(queries: ControllerDB) -> list[Task]:
     # Only PENDING tasks can pass can_be_scheduled(); no need to fetch ASSIGNED/BUILDING/RUNNING.
     SCHEDULABLE_STATES = (cluster_pb2.TASK_STATE_PENDING,)
@@ -292,6 +427,7 @@ def _schedulable_tasks(queries: ControllerDB) -> list[Task]:
             TASKS,
             where=TASKS.c.state.in_(list(SCHEDULABLE_STATES)),
             order_by=(
+                TASKS.c.priority_band.asc(),
                 TASKS.c.priority_neg_depth.asc(),
                 TASKS.c.priority_root_submitted_ms.asc(),
                 TASKS.c.submitted_at_ms.asc(),
@@ -675,6 +811,13 @@ class ControllerConfig:
     auth: ControllerAuth | None = None
     """Full auth config passed to the service layer for login and API key management."""
 
+    max_tasks_per_user_per_cycle: int = 8
+    """Maximum tasks from a single user to consider per scheduling cycle.
+    Ensures fairness even without full interleaving. 0 = unlimited."""
+
+    user_budget_defaults: UserBudgetDefaults = field(default_factory=UserBudgetDefaults)
+    """Default budget settings applied when a new user is first seen."""
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
@@ -741,6 +884,7 @@ class Controller:
             db=self._db,
             log_store=self._log_store,
             heartbeat_failure_threshold=config.heartbeat_failure_threshold,
+            user_budget_defaults=config.user_budget_defaults,
         )
         self._scheduler = Scheduler()
 
@@ -1276,6 +1420,35 @@ class Controller:
             self._scheduling_diagnostics = {}
             return
 
+        # Per-band interleaving: group tasks by priority band, round-robin
+        # users within each band ordered by ascending budget spend.
+        with self._db.snapshot() as budget_snapshot:
+            user_spend = compute_user_spend(budget_snapshot)
+        task_band_map: dict[JobName, int] = {task.task_id: task.priority_band for task in pending_tasks}
+        tasks_by_band: dict[int, list[JobName]] = defaultdict(list)
+        for task_id in schedulable_task_ids:
+            band = task_band_map.get(task_id, 2)
+            tasks_by_band[band].append(task_id)
+
+        interleaved: list[JobName] = []
+        for band_key in sorted(tasks_by_band.keys()):
+            band_tasks = tasks_by_band[band_key]
+            user_task_pairs = [(tid.user, tid) for tid in band_tasks]
+            interleaved.extend(interleave_by_user(user_task_pairs, user_spend))
+        schedulable_task_ids = interleaved
+
+        # Per-user cap: limit how many tasks a single user can have considered
+        # per scheduling cycle, ensuring fairness.
+        user_cap = self._config.max_tasks_per_user_per_cycle
+        if user_cap > 0:
+            tasks_per_user: dict[str, int] = defaultdict(int)
+            capped: list[JobName] = []
+            for task_id in schedulable_task_ids:
+                if tasks_per_user[task_id.user] < user_cap:
+                    capped.append(task_id)
+                    tasks_per_user[task_id.user] += 1
+            schedulable_task_ids = capped
+
         # Inject reservation taints: claimed workers get a taint attribute,
         # non-reservation jobs get a NOT_EXISTS constraint for it.
         modified_workers = _inject_reservation_taints(workers, claims)
@@ -1309,6 +1482,24 @@ class Controller:
                 timer.elapsed_ms(),
                 state_read_ms,
             )
+
+        # Phase 3: preemption — evict lower-priority running tasks for
+        # higher-priority unscheduled work.
+        assigned_ids = {task_id for task_id, _ in all_assignments}
+        unscheduled = [
+            (tid, jobs[tid.parent], task_band_map.get(tid, BAND_SORT_KEY[PriorityBand.INTERACTIVE]))
+            for tid in schedulable_task_ids
+            if tid not in assigned_ids and tid.parent is not None and tid.parent in jobs
+        ]
+        if unscheduled:
+            claimed_workers = set(claims.keys())
+            running_info = _get_running_tasks_with_band_and_value(self._db, claimed_workers)
+            preemptions = _run_preemption_pass(unscheduled, running_info, context)
+            for preemptor_id, victim_id in preemptions:
+                preempt_result = self._transitions.preempt_task(victim_id, reason=f"Preempted by {preemptor_id}")
+                self.kill_tasks_on_workers(preempt_result.tasks_to_kill)
+            if preemptions:
+                logger.info("Preemption pass: %d tasks preempted", len(preemptions))
 
         # Cache diagnostics for jobs that still have unassigned tasks.
         # RPCs read from this cache instead of recomputing per request.
