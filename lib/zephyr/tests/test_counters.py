@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for Zephyr user-defined counters: worker API, heartbeat plumbing, and coordinator aggregation."""
+"""Tests for Zephyr user-defined counters: worker API and heartbeat plumbing."""
 
 import threading
 
@@ -15,7 +15,6 @@ class FakeWorker:
     def __init__(self):
         self._counters: dict[str, int] = {}
         self._counters_lock = threading.Lock()
-        self._last_reported_counters: dict[str, int] = {}
 
     def get_shared(self, name: str):
         raise NotImplementedError
@@ -27,14 +26,6 @@ class FakeWorker:
     def get_counter_snapshot(self) -> dict[str, int]:
         with self._counters_lock:
             return dict(self._counters)
-
-    def _counters_changed(self) -> bool:
-        with self._counters_lock:
-            current = dict(self._counters)
-        if current == self._last_reported_counters:
-            return False
-        self._last_reported_counters = current
-        return True
 
 
 def test_counters_increment_and_snapshot():
@@ -58,23 +49,5 @@ def test_counters_noop_outside_worker():
     try:
         counters.increment("anything", 999)  # should not raise
         assert counters.get_counters() == {}
-    finally:
-        _worker_ctx_var.reset(token)
-
-
-def test_counters_changed():
-    """_counters_changed detects changes and deduplicates correctly."""
-    worker = FakeWorker()
-    token = _worker_ctx_var.set(worker)
-    try:
-        assert worker._counters_changed() is False  # empty → empty, no change
-
-        counters.increment("docs", 10)
-        assert worker._counters_changed() is True
-        assert worker._counters_changed() is False  # same value, no change
-
-        counters.increment("docs", 10)
-        assert worker._counters_changed() is True
-        assert worker._counters_changed() is False
     finally:
         _worker_ctx_var.reset(token)

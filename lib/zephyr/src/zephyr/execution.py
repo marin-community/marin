@@ -653,7 +653,7 @@ class ZephyrCoordinator:
             self._fatal_error = None
             self._is_last_stage = is_last_stage
             self._worker_counters = {}
-            self._completed_counters = {}
+            self._global_counters = {}
 
     def _wait_for_stage(self) -> None:
         """Block until current stage completes or error occurs."""
