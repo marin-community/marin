@@ -48,19 +48,20 @@ def scale_by_adamh(
         )
         mu = otu.tree_cast(mu, mu_dtype)
 
+        def _scale_invariant_2d(p, u):
+            """Core update for a 2-D (matrix) parameter."""
+            p_norm = jnp.linalg.norm(p)
+            u_norm = jnp.linalg.norm(u)
+            new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
+            return new_p / jnp.linalg.norm(new_p) * p_norm - p
+
         def scale_invariant_update(p, u):
             if p is None:
                 return None
-            if p.ndim == 2:
-                new_p = p - learning_rate * u * jnp.linalg.norm(p) / jnp.maximum(jnp.linalg.norm(u), 1e-10)
-                return new_p / jnp.linalg.norm(new_p) * jnp.linalg.norm(p) - p
-            else:
-                axes = tuple(range(1, p.ndim))
-                p_norm = jnp.sqrt(jnp.sum(jnp.square(p), axis=axes, keepdims=True))
-                u_norm = jnp.sqrt(jnp.sum(jnp.square(u), axis=axes, keepdims=True))
-                new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
-                new_p_norm = jnp.sqrt(jnp.sum(jnp.square(new_p), axis=axes, keepdims=True))
-                return new_p / jnp.maximum(new_p_norm, 1e-10) * p_norm - p
+            if p.ndim <= 2:
+                return _scale_invariant_2d(p, u)
+            # For higher-rank tensors, vmap the 2-D logic over the leading axis.
+            return jax.vmap(_scale_invariant_2d)(p, u)
 
         adamh_updates = jax.tree_util.tree_map(
             scale_invariant_update,
