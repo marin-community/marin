@@ -54,6 +54,7 @@ def build_common_iris_env(
     constraints: Sequence[cluster_pb2.Constraint],
     ports: Sequence[str],
     resources: cluster_pb2.ResourceSpecProto | None,
+    impersonate_service_account: str = "",
 ) -> dict[str, str]:
     """Build the Iris system env vars shared by both worker and k8s paths.
 
@@ -130,5 +131,8 @@ def build_common_iris_env(
         # proto3 JSON omits zero-valued fields, so an empty proto yields "{}".
         if resource_json != "{}":
             env["IRIS_TASK_RESOURCES"] = resource_json
+
+    if impersonate_service_account:
+        env["CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT"] = impersonate_service_account
 
     return env
