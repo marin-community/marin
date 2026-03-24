@@ -3,7 +3,7 @@
 """Auth tests for Iris controller with static token authentication."""
 
 import pytest
-from iris.cluster.local_cluster import LocalCluster
+from iris.cluster.providers.local.cluster import LocalCluster
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync

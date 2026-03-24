@@ -8,7 +8,7 @@ import time
 
 from iris.client.client import IrisClient, Job
 from iris.cluster.config import load_config, make_local_config
-from iris.cluster.local_cluster import LocalCluster
+from iris.cluster.providers.local.cluster import LocalCluster
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
