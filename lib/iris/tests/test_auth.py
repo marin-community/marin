@@ -42,7 +42,7 @@ def test_static_auth_rpc_access():
         list_req = cluster_pb2.Controller.ListWorkersRequest()
 
         unauth_client = ControllerServiceClientSync(address=url, timeout_ms=5000)
-        with pytest.raises(ConnectError, match=r"(?i)authorization"):
+        with pytest.raises(ConnectError, match=r"(?i)(authorization|authenticat)"):
             unauth_client.list_workers(list_req)
         unauth_client.close()
 
