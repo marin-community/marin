@@ -7,6 +7,7 @@ This module encapsulates the full lifecycle of a single task execution attempt:
 bundle download -> image build -> container run -> monitor -> cleanup.
 """
 
+import json
 import logging
 import shutil
 import socket
@@ -158,6 +159,10 @@ def build_iris_env(
     for name, port in task.ports.items():
         env[f"IRIS_PORT_{name.upper()}"] = str(port)
 
+    # Counter file is written by task code and read by the monitor loop.
+    # /app is the container-side mount point for the workdir.
+    env["IRIS_COUNTER_FILE"] = "/app/iris_counters.json"
+
     return env
 
 
@@ -251,6 +256,9 @@ class TaskAttempt:
         self.current_cpu_percent: int = 0
         self.process_count: int = 0
         self.disk_mb: int = 0
+
+        # User-defined counters (read from iris_counters.json in workdir)
+        self.counters: dict[str, int] = {}
 
         # Build tracking
         self.build_started: Timestamp | None = None
@@ -444,6 +452,8 @@ class TaskAttempt:
             proto.build_metrics.build_started.CopyFrom(self.build_started.to_proto())
         if self.build_finished is not None:
             proto.build_metrics.build_finished.CopyFrom(self.build_finished.to_proto())
+        if self.counters:
+            proto.counters.update(self.counters)
 
         return proto
 
@@ -744,6 +754,7 @@ class TaskAttempt:
                 )
                 # Final log fetch before container stops
                 self._stream_logs(log_reader)
+                self._read_counters()
 
                 # Container has stopped
                 if status.error:
@@ -791,6 +802,8 @@ class TaskAttempt:
             except Exception:
                 logger.debug("Stats collection failed for task %s", self.task_id, exc_info=True)
 
+            self._read_counters()
+
             # Sleep before next poll
             time.sleep(self._poll_interval_seconds)
 
@@ -809,6 +822,18 @@ class TaskAttempt:
                 self._append_log(source=log_line.source, data=log_line.data)
         except Exception:
             logger.debug("Log streaming failed for task %s", self.task_id, exc_info=True)
+
+    def _read_counters(self) -> None:
+        """Read user-defined counters from iris_counters.json in the workdir."""
+        if self.workdir is None:
+            return
+        counter_file = self.workdir / "iris_counters.json"
+        if not counter_file.exists():
+            return
+        try:
+            self.counters = json.loads(counter_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            logger.debug("Counter file read failed for task %s", self.task_id, exc_info=True)
 
     def _cleanup(self) -> None:
         """Clean up task resources: container, ports, image protection, workdir.

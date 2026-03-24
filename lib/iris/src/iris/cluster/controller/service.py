@@ -173,6 +173,8 @@ def task_to_proto(task: Task, worker_address: str = "") -> cluster_pb2.TaskStatu
         proto.resource_usage.CopyFrom(task.resource_usage)
     if task.container_id:
         proto.container_id = task.container_id
+    if task.counters:
+        proto.counters.update(task.counters)
     # For pending tasks with prior terminal attempts, surface retry context.
     if task.state == cluster_pb2.TASK_STATE_PENDING and task.attempts and task.attempts[-1].is_terminal:
         last = task.attempts[-1]
@@ -841,9 +843,12 @@ class ControllerServiceImpl:
         task_statuses = []
         total_failure_count = 0
         total_preemption_count = 0
+        total_counters: dict[str, int] = {}
         for task in tasks:
             total_failure_count += task.failure_count
             total_preemption_count += task.preemption_count
+            for name, value in task.counters.items():
+                total_counters[name] = total_counters.get(name, 0) + value
 
             task_statuses.append(task_to_proto(task, worker_address=worker_addr_by_id.get(task.worker_id, "")))
 
@@ -869,6 +874,7 @@ class ControllerServiceImpl:
             tasks=task_statuses,
             name=job.request.name if job.request else "",
             pending_reason=pending_reason,
+            counters=total_counters,
         )
         if job.request:
             proto_job_status.resources.CopyFrom(job.request.resources)

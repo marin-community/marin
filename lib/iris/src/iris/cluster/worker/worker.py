@@ -625,6 +625,8 @@ class Worker:
                                 entry.finished_at.CopyFrom(task_proto.finished_at)
                             if task_proto.resource_usage.ByteSize() > 0:
                                 entry.resource_usage.CopyFrom(task_proto.resource_usage)
+                            if task_proto.counters:
+                                entry.counters.update(task_proto.counters)
                             tasks.append(entry)
 
                     # Kill tasks not in expected_tasks - the controller has decided these
