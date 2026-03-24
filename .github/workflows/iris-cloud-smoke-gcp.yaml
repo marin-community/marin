@@ -130,7 +130,7 @@ jobs:
             --worker-timeout 600 &
           START_PID=$!
           echo "START_PID=$START_PID" >> "$GITHUB_ENV"
-          for i in $(seq 1 360); do
+          for i in $(seq 1 900); do
             if [ -f /tmp/iris-controller-url ]; then
               echo "Cluster ready!"
               echo "IRIS_CONTROLLER_URL=$(cat /tmp/iris-controller-url)" >> "$GITHUB_ENV"
