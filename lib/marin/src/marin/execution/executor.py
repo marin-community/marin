@@ -650,7 +650,16 @@ def resolve_executor_step(
     ``config`` should already be instantiated (no InputName / OutputName /
     VersionedValue markers).  The old executor called ``fn(config)``; we wrap
     that into a ``fn(output_path)`` closure expected by ``StepRunner``.
+
+    If *step* was created by :meth:`StepSpec.as_executor_step`, the original
+    ``StepSpec`` is returned directly (with deps replaced by the resolved
+    versions), preserving round-trip identity.
     """
+    # Short-circuit for StepSpec -> ExecutorStep -> StepSpec round-trip.
+    original: StepSpec | None = getattr(step, "_original_step_spec", None)
+    if original is not None:
+        return dataclasses.replace(original, deps=deps or [])
+
     import ray
 
     remote_callable = step.fn if isinstance(step.fn, RemoteCallable) else None
