@@ -103,20 +103,6 @@ data loading issues, unclear multi-file stack traces.
   or unsatisfied resources -> mark `degraded` and notify user.
 - If same error repeats after one fix attempt, do not retry blindly; report to user.
 
-### Zephyr Counters
-
-Zephyr pipelines support user-defined counters (e.g. `documents_processed`, `bytes_written`).
-Counters appear in coordinator progress logs and in `JobStatus.counters`. When babysitting
-a Zephyr job, monitor counter advancement as an additional throughput signal.
-
-To access counters remotely (as a babysitting agent):
-1. Fetch coordinator logs via `rpc controller get-task-logs --id <COORD_JOB_ID> ...`
-2. Grep for `counters:` in log lines — the last match has the latest aggregate values
-3. Parse `key=value` pairs from the counter string
-
-If counters stop advancing while shards remain in-flight, this signals a stuck worker or straggler.
-See **babysit-zephyr** for the full counter access walkthrough and parsing examples.
-
 ### When to Escalate
 
 - Debug Zephyr pipeline issues -> **debug-zephyr-job**
