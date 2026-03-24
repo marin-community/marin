@@ -10,7 +10,6 @@ from iris.cluster.controller.controller import (
     _get_running_tasks_with_band_and_value,
     _run_preemption_pass,
 )
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.scheduler import JobRequirements, WorkerCapacity
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
@@ -20,11 +19,6 @@ from .conftest import (
     make_controller_state,
     query_task,
 )
-
-
-def _set_task_band(db: ControllerDB, task_id: JobName, band: int) -> None:
-    """Directly set priority_band on a task row for testing."""
-    db.execute("UPDATE tasks SET priority_band = ? WHERE task_id = ?", (band, task_id.to_wire()))
 
 
 def _make_simple_context(workers: list[WorkerCapacity]) -> "FakeSchedulingContext":

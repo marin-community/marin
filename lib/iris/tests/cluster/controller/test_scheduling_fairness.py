@@ -8,7 +8,6 @@ from collections import defaultdict
 
 from iris.cluster.controller.budget import BAND_SORT_KEY, PriorityBand
 from iris.cluster.controller.controller import _schedulable_tasks
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
@@ -18,13 +17,9 @@ from .conftest import (
     make_job_request,
     query_task,
     query_tasks_for_job,
+    set_task_band,
     submit_job,
 )
-
-
-def _set_task_band(db: ControllerDB, task_id: JobName, band: int) -> None:
-    """Directly set priority_band on a task row for testing."""
-    db.execute("UPDATE tasks SET priority_band = ? WHERE task_id = ?", (band, task_id.to_wire()))
 
 
 def _submit_user_job(state, user: str, name: str, replicas: int = 1, band: int | None = None) -> list:
@@ -33,7 +28,7 @@ def _submit_user_job(state, user: str, name: str, replicas: int = 1, band: int |
     tasks = submit_job(state, f"/{user}/{name}", req)
     if band is not None:
         for t in tasks:
-            _set_task_band(state._db, t.task_id, band)
+            set_task_band(state._db, t.task_id, band)
     return tasks
 
 
@@ -206,7 +201,7 @@ def test_child_inherits_parent_band():
 
         # Set parent's band to PRODUCTION
         for t in parent_tasks:
-            _set_task_band(state._db, t.task_id, BAND_SORT_KEY[PriorityBand.PRODUCTION])
+            set_task_band(state._db, t.task_id, BAND_SORT_KEY[PriorityBand.PRODUCTION])
 
         # Submit child job
         child_id = parent_id.child("child")

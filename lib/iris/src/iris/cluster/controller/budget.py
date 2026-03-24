@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from iris.cluster.controller.db import JOBS, TASKS, QuerySnapshot
+from iris.cluster.controller.db import ACTIVE_TASK_STATES, JOBS, TASKS, QuerySnapshot
 from iris.cluster.types import get_gpu_count, get_tpu_count
 
 
@@ -38,8 +38,8 @@ BAND_SORT_KEY: dict[PriorityBand, int] = {
 # Reverse: integer sort key → PriorityBand
 BAND_FROM_SORT_KEY: dict[int, PriorityBand] = {v: k for k, v in BAND_SORT_KEY.items()}
 
-# Task states that count as "active" for budget spend
-_ACTIVE_TASK_STATES = (2, 3, 9)  # BUILDING, RUNNING, ASSIGNED
+# Task states that count as "active" for budget spend (re-exported from db for local use)
+_ACTIVE_TASK_STATES = tuple(ACTIVE_TASK_STATES)
 
 
 @dataclass
@@ -49,7 +49,7 @@ class UserBudgetDefaults:
     budget_limit: int = 0
     """Max budget value (0 = unlimited)."""
 
-    max_band: str = "interactive"
+    max_band: PriorityBand = PriorityBand.INTERACTIVE
     """Default max band for new users."""
 
 

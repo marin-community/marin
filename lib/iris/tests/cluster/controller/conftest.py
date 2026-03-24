@@ -817,3 +817,8 @@ def advance_all_tpus(service: InMemoryGcpService, state: str = "READY") -> None:
     for name, zone in list(service._tpus.keys()):
         if service._tpus[(name, zone)].state != state:
             service.advance_tpu_state(name, zone, state)
+
+
+def set_task_band(db: ControllerDB, task_id: JobName, band: int) -> None:
+    """Directly set priority_band on a task row for testing."""
+    db.execute("UPDATE tasks SET priority_band = ? WHERE task_id = ?", (band, task_id.to_wire()))
