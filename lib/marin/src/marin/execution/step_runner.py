@@ -17,6 +17,7 @@ makes the control flow easy to follow and debug.
 
 from __future__ import annotations
 
+import contextvars
 import dataclasses
 import json
 import logging
@@ -245,7 +246,11 @@ class StepRunner:
         worker_fn.__qualname__ = step_name
         worker_fn.__name__ = step_name
 
-        future = local_pool.submit(worker_fn)
+        # Copy the current context so that context variables (e.g. fray's
+        # current_client) propagate into the worker thread.  ThreadPoolExecutor
+        # does not do this automatically.
+        ctx = contextvars.copy_context()
+        future = local_pool.submit(ctx.run, worker_fn)
         return LocalJobHandle(f"local-{step_name}", future)
 
 
