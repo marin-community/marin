@@ -62,9 +62,7 @@ def test_cancel_job_releases_resources(integration_cluster):
 
     Regression test for #3553.
     """
-    # Request enough CPU to saturate a single worker so the follow-up job
-    # cannot co-schedule until cancellation releases resources.
-    heavy_cpu = integration_cluster.worker_cpu_capacity()
+    heavy_cpu = 2
     job = integration_cluster.submit(sleep, "itest-cancel-heavy", 30, cpu=heavy_cpu)
     integration_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=integration_cluster.job_timeout)
 

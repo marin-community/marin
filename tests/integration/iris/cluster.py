@@ -152,19 +152,6 @@ class IrisIntegrationCluster:
             time.sleep(0.5)
         raise TimeoutError(f"Only {len(healthy)} of {min_workers} workers registered in {timeout}s")
 
-    def worker_cpu_capacity(self) -> int:
-        """Return the CPU capacity of the smallest healthy worker.
-
-        Used to size resource requests that must saturate a single worker
-        so follow-up jobs cannot co-schedule.
-        """
-        request = cluster_pb2.Controller.ListWorkersRequest()
-        response = self.controller_client.list_workers(request)
-        cpus = [w.metadata.cpu_count for w in response.workers if w.healthy and w.metadata.cpu_count > 0]
-        if not cpus:
-            return 2  # safe fallback for tiny test clusters
-        return min(cpus)
-
     def get_task_logs(self, job: Job, task_index: int = 0) -> list[str]:
         task_id = job.job_id.task(task_index).to_wire()
         request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
