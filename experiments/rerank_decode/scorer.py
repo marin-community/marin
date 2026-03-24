@@ -106,6 +106,8 @@ class KVCacheScorer(Scorer):
 
     def __init__(self, model_name: str, device: str = "cuda"):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.bfloat16,
