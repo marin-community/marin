@@ -24,6 +24,7 @@ import levanter.callbacks as callbacks
 import levanter.tracker
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.checkpoint import load_checkpoint
 from levanter.data import AsyncDataset, DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
 from levanter.data.text import GrugLmExample, LmDataConfig
@@ -37,13 +38,9 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
+import equinox as eqx
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import GrugModelConfig, Transformer
-
-# This file intentionally mirrors `experiments/grug/base/train.py` with
-# variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
-# `.agents/skills/change-grug/`.
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +53,8 @@ class GrugTrainerConfig:
     train_batch_pspec: P = field(default_factory=lambda: P(("data", "expert")))
     data_seed: int | None = None
     log_every: int = 1
-    ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
-    z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
+    ema_beta: float | None = None
+    z_loss_weight: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -117,7 +114,6 @@ def build_train_loader(
     mesh: Mesh,
     batch_pspec: P = P(("data", "expert")),
 ) -> DataLoader[GrugLmExample]:
-    # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
     axis_resource = batch_pspec[0]
     return DataLoader(
         dataset,
@@ -185,7 +181,6 @@ def _compute_flops(
     flops_per_token = lm_flops_per_token(
         hidden_dim=model_config.hidden_dim,
         intermediate_dim=model_config.intermediate_dim,
-        shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
         num_layers=model_config.num_layers,
         num_kv_heads=model_config.num_kv_heads,
         num_heads=model_config.num_heads,
@@ -232,7 +227,7 @@ class GrugTrainState:
     step: jax.Array
     params: Transformer
     opt_state: optax.OptState
-    ema_params: Transformer | None
+    ema_params: Transformer
 
 
 def initial_state(
@@ -241,14 +236,13 @@ def initial_state(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
     key: PRNGKeyArray,
-    ema_beta: float | None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
         opt_state=optimizer.init(params),
-        ema_params=params if ema_beta is not None else None,
+        ema_params=params,
     )
 
 
@@ -288,11 +282,23 @@ def _make_train_step(
         updates, opt_state = optimizer.update(grads, state.opt_state, state.params)
         params = optax.apply_updates(state.params, updates)
 
+        # Sharded QB: set router_bias = -(qb_beta - mean(qb_beta)) inside JIT.
+        qb_betas = summarized_metrics["qb_beta_per_layer"]
+        new_blocks = list(params.blocks)
+        moe_idx = 0
+        for i, block in enumerate(params.blocks):
+            if block.mlp is not None:
+                new_bias = -qb_betas[moe_idx]
+                new_bias = new_bias - jnp.mean(new_bias)
+                new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, new_bias)
+                new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
+                metrics[f"moe_bias/layer_{moe_idx}/bias_norm"] = jnp.linalg.norm(new_bias)
+                moe_idx += 1
+        params = eqx.tree_at(lambda t: t.blocks, params, tuple(new_blocks))
+
         if ema_beta is None:
-            ema_params = None
+            ema_params = params
         else:
-            if state.ema_params is None:
-                raise ValueError("ema_params must be initialized when ema_beta is set.")
             ema_params = jax.tree_util.tree_map(
                 lambda old, new: ema_beta * old + (1.0 - ema_beta) * new,
                 state.ema_params,
@@ -351,7 +357,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     if config.trainer.data_seed is not None:
         data_key = jax.random.PRNGKey(config.trainer.data_seed)
 
-    # Build data/model state under the trainer mesh so all arrays are sharded consistently.
     with trainer.use_device_mesh():
         mesh = trainer.device_mesh
         batch_schedule = trainer.batch_schedule
@@ -376,7 +381,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 optimizer=optimizer,
                 mp=trainer.mp,
                 key=model_rng,
-                ema_beta=config.trainer.ema_beta,
             )
 
         state = _init_state(model_key)
@@ -385,13 +389,23 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         checkpoint_path = trainer.load_checkpoint_path
         if checkpoint_path is None and checkpointer is not None:
             checkpoint_path = trainer.checkpointer.expanded_path(run_id)
-        state = restore_grug_state_from_checkpoint(
-            state,
-            checkpoint_path=checkpoint_path,
-            load_checkpoint_setting=trainer.load_checkpoint,
-            mesh=mesh,
-            allow_partial=trainer.allow_partial_checkpoint,
-        )
+        if checkpoint_path is None:
+            if trainer.load_checkpoint:
+                raise FileNotFoundError("load_checkpoint=True but no checkpoint path is configured.")
+        elif trainer.load_checkpoint is not False:
+            try:
+                state = load_checkpoint(
+                    state,
+                    checkpoint_path,
+                    discover_latest=True,
+                    axis_mapping=None,
+                    mesh=mesh,
+                    allow_partial=trainer.allow_partial_checkpoint,
+                )
+            except FileNotFoundError:
+                if trainer.load_checkpoint is True:
+                    raise
+                logger.info(f"Checkpoint not found at {checkpoint_path}. Starting from scratch.")
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
@@ -418,7 +432,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks = StateCallbackRunner[GrugTrainState](
             step_getter=lambda s: s.step,
             model_getter=lambda s: s.params,
-            eval_model_getter=lambda s: s.ema_params if s.ema_params is not None else s.params,
+            eval_model_getter=lambda s: s.ema_params,
             opt_state_getter=lambda s: s.opt_state,
         )
         state_callbacks.add_hook(
@@ -462,7 +476,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     batch = next(iterator)
                 step_start = time.perf_counter()
                 current_step = int(state.step)
-                # grad_watch runs only on its configured interval.
                 compute_watch = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
@@ -470,6 +483,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
+
+                if jnp.isnan(metrics["train/loss"]):
+                    logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
+                    break
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):
@@ -478,7 +495,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     last_step_duration = duration
                     levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
                     levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
-                    router_metrics = {key: value for key, value in metrics.items() if key.startswith("train/router/")}
+                    router_metrics = {
+                        key: value
+                        for key, value in metrics.items()
+                        if (key.startswith("train/router/") or key.startswith("moe/") or key.startswith("moe_bias/"))
+                        and key not in ("train/router/routing_counts_per_layer",)
+                    }
                     if router_metrics:
                         levanter.tracker.log(router_metrics, step=step)
                     if "train/cross_entropy_loss" in metrics:
@@ -491,17 +513,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         levanter.tracker.log(watch_stats, step=step)
 
                 if checkpointer is not None:
-                    checkpointer.on_step(tree=state, step=int(state.step))
-        except BaseException:
-            logger.exception(
-                "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
-            )
-            raise
-        else:
-            # Mirror classic trainer behavior: force callbacks on the last completed step.
+                    checkpointer.on_step(tree={"train_state": state}, step=int(state.step))
+        finally:
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
-                checkpointer.on_step(tree=state, step=int(state.step), force=True)
+                checkpointer.on_step(tree={"train_state": state}, step=int(state.step), force=True)
                 checkpointer.wait_until_finished()
 
     levanter.tracker.current_tracker().finish()
