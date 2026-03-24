@@ -3,7 +3,9 @@
 
 """Tests for user-defined counter support: task-side API, heartbeat plumbing, and job aggregation."""
 
+import json
 
+from iris import counters
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -38,8 +40,6 @@ def test_counters_increment_writes_file(tmp_path, monkeypatch):
     counter_file = tmp_path / "iris_counters.json"
     monkeypatch.setenv("IRIS_COUNTER_FILE", str(counter_file))
 
-    from iris import counters
-
     # Reset module-level state so previous tests don't leak.
     with counters._lock:
         counters._counters.clear()
@@ -56,8 +56,6 @@ def test_counters_increment_writes_file(tmp_path, monkeypatch):
     # Explicit flush writes to disk.
     counters.flush()
 
-    import json
-
     data = json.loads(counter_file.read_text())
     assert data == {"docs": 15, "errors": 1}
 
@@ -65,8 +63,6 @@ def test_counters_increment_writes_file(tmp_path, monkeypatch):
 def test_counters_noop_outside_task(monkeypatch):
     """increment() is a no-op when IRIS_COUNTER_FILE is not set."""
     monkeypatch.delenv("IRIS_COUNTER_FILE", raising=False)
-
-    from iris import counters
 
     # Reset module-level state so previous tests don't leak.
     with counters._lock:
