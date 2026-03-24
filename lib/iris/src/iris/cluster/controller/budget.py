@@ -64,15 +64,16 @@ def compute_user_spend(snapshot: QuerySnapshot) -> dict[str, int]:
     joined = TASKS.join(JOBS, on=TASKS.c.job_id == JOBS.c.job_id)
     rows = snapshot.select(
         joined,
-        columns=[JOBS.c.user_id, JOBS.c.request_proto],
+        columns=[JOBS.c.job_id, JOBS.c.request_proto],
         where=TASKS.c.state.in_(_ACTIVE_TASK_STATES),
     )
 
     spend: dict[str, int] = defaultdict(int)
     for row in rows:
+        user_id = row.job_id.user
         res = row.request_proto.resources
         accel = get_gpu_count(res.device) + get_tpu_count(res.device)
-        spend[row.user_id] += resource_value(res.cpu_millicores, res.memory_bytes, accel)
+        spend[user_id] += resource_value(res.cpu_millicores, res.memory_bytes, accel)
     return dict(spend)
 
 
