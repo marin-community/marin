@@ -1,5 +1,8 @@
 # Ising Tokenizer Project: Repo-Aligned Implementation Plan
 
+Issue: https://github.com/marin-community/marin/issues/4104
+Research Logbook: https://github.com/marin-community/marin/blob/research/ising-tokenizer/.agents/logbooks/ising-tokenizer.md
+
 ## Research Framing
 
 This is a controlled test of the TATT-style claim that trajectory statistics can

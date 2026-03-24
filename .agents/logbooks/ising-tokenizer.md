@@ -1,5 +1,8 @@
 # Ising Tokenizer: Research Logbook
 
+Issue: https://github.com/marin-community/marin/issues/4104
+Branch: https://github.com/marin-community/marin/tree/research/ising-tokenizer
+
 ## Scope
 
 - Goal: test whether a small temperature-conditioned transformer can learn tokenized 2D Ising BKL trajectories from synthetic off-critical data.
