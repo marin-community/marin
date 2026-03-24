@@ -4,7 +4,9 @@
 import dataclasses
 import datetime
 import logging
+
 import jmp
+from iris.marin_fs import marin_region
 from fray.v2.types import ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.layers.attention import AttentionBackend
@@ -16,7 +18,7 @@ from levanter.trainer import TrainerConfig
 from transformers import AutoConfig
 from levanter.utils.mesh import MeshConfig
 
-from marin.execution.executor import ExecutorStep, OutputName
+from marin.execution.executor import ExecutorMainConfig, ExecutorStep, OutputName
 from marin.execution.remote import remote
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.environments.inference_ctx import VLLMSamplingConfig, vLLMInferenceContextConfig
@@ -30,6 +32,12 @@ from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 logger = logging.getLogger(__name__)
 
 RL_EXECUTOR_STEP_RESOURCES = ResourceConfig.with_cpu(cpu=1, ram="4g", disk="64g")
+V5P_ALLOWED_REGIONS = ("us-central1", "us-east5")
+DEFAULT_V5P_REGION = "us-central1"
+REGION_TO_MARIN_PREFIX = {
+    "us-central1": "gs://marin-us-central1",
+    "us-east5": "gs://marin-us-east5",
+}
 
 
 @dataclasses.dataclass
@@ -103,6 +111,33 @@ class RLExperimentConfig:
     inference_tpu_type: str = "v5p-8"
     num_train_slices: int = 1
     num_rollout_workers: int = 1
+
+
+def _uses_v5p(config: RLExperimentConfig) -> bool:
+    return config.train_tpu_type.startswith("v5p") or config.inference_tpu_type.startswith("v5p")
+
+
+def executor_step_resources_for_rl_experiment(config: RLExperimentConfig) -> ResourceConfig:
+    """Return executor-step resources, pinning v5p RL runs to US TPU regions."""
+    if not _uses_v5p(config):
+        return RL_EXECUTOR_STEP_RESOURCES
+
+    return dataclasses.replace(
+        RL_EXECUTOR_STEP_RESOURCES,
+        regions=list(V5P_ALLOWED_REGIONS),
+    )
+
+
+def executor_main_config_for_rl_experiment(config: RLExperimentConfig) -> ExecutorMainConfig:
+    """Return executor config with a region-local US prefix for v5p RL runs."""
+    if not _uses_v5p(config):
+        return ExecutorMainConfig()
+
+    region = marin_region()
+    if region not in REGION_TO_MARIN_PREFIX:
+        region = DEFAULT_V5P_REGION
+
+    return ExecutorMainConfig(prefix=REGION_TO_MARIN_PREFIX[region])
 
 
 def get_stop_tokens(model_type: str) -> list[str]:
@@ -230,6 +265,6 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
     return ExecutorStep(
         name=f"rl_testing/{name}",
         description=f"Async RL training: {name}",
-        fn=remote(resources=RL_EXECUTOR_STEP_RESOURCES)(RLJob.make_step_fn()),
+        fn=remote(resources=executor_step_resources_for_rl_experiment(config))(RLJob.make_step_fn()),
         config=job_config,
     )

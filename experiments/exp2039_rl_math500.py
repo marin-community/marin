@@ -16,6 +16,7 @@ from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rl_experiment_utils import (
     ModelConfig,
     RLExperimentConfig,
+    executor_main_config_for_rl_experiment,
     make_rl_step,
 )
 
@@ -116,6 +117,7 @@ def main():
         )
 
     executor_main(
+        config=executor_main_config_for_rl_experiment(llama_8b),
         steps=experiments,
         description="Async RL math training experiments",
     )

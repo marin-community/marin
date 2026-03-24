@@ -868,3 +868,58 @@ Interpretation:
 
 Next action recorded:
 - shorten experiment/job/task naming envelope for the isolation driver and relaunch, so we can resume OOM-cause isolation on actual runtime behavior.
+
+## 2026-03-23 PT / 2026-03-24 UTC — Outer v5p placement drift diagnosed and fixed
+
+Live re-check of `/ahmed/iris-rl-oom-baseline-120-cpu2-20260323-215643`:
+- root parent remains `JOB_STATE_RUNNING`.
+- intermediate executor child and nested RL coordinator also remain `JOB_STATE_RUNNING`.
+- actual RL worker children are terminal-failed:
+  - train: `JOB_STATE_FAILED` after ~35s.
+  - rollout: `JOB_STATE_FAILED` after ~38s.
+- both RL worker children requested `v5p-8` resources (`32 cpu / 128 GiB / 50 GiB disk`) and each retried 4 times.
+
+Why the job looked "running but with no logs":
+- the failing exception is still the same Iris setup failure:
+  - `OSError: [Errno 36] File name too long`
+  - raised in `iris.cluster.worker.task_attempt.py` during `workdir.mkdir(...)`.
+- this happens before user train/rollout code starts, so there are no meaningful RL runtime logs to inspect.
+- the parent and intermediate wrapper jobs do not immediately transition terminal, so the tree can appear alive while all productive child work is already dead.
+
+Placement diagnosis from live bug-report triage:
+- the root parent bug report showed the outer launcher/executor task on worker:
+  - `marin-tpu_v6e_4-europe-west4-a-20260324-0320-e7b531ef-worker-0`
+- the same outer layer wrote executor metadata/output under:
+  - `gs://marin-eu-west4/...`
+- this Europe / `v6e` placement was **only** the outer launcher/executor layer.
+- the RL train/rollout children were **not** requesting `v6e`; they were requesting `v5p-8`.
+- root cause of the placement drift:
+  - trainer/rollout child jobs in `orchestration.py` already had explicit TPU regions `us-central1` and `us-east5`.
+  - but the outer RL executor step itself still used generic CPU resources and the experiment still allowed prefix resolution from worker metadata.
+  - when the parent landed in Europe, `marin_prefix()` followed that Europe worker, so the executor wrote to `gs://marin-eu-west4` and the outer layer drifted onto a Europe `v6e` worker.
+
+Code changes landed to prevent this for future `v5p` RL launches:
+- `lib/marin/src/marin/rl/rl_experiment_utils.py`
+  - added `executor_step_resources_for_rl_experiment()`:
+    - for `v5p` runs, pin the outer RL executor step to `us-central1` / `us-east5`.
+  - added `executor_main_config_for_rl_experiment()`:
+    - for `v5p` runs, choose a US Marin prefix from the current allowed region when available;
+    - otherwise default to `gs://marin-us-central1` instead of inheriting Europe.
+  - updated `make_rl_step()` to use the v5p-aware executor-step resources.
+- experiment entrypoints updated to use the helper config:
+  - `experiments/exp2039_rl_math500.py`
+  - `experiments/exp_iris_rl_oom_isolation.py`
+  - `experiments/exp_iris_rl_debug.py`
+- regression coverage added:
+  - `tests/rl/test_rl_experiment_utils.py`
+
+Validation for the placement fix:
+- `uv run pytest -q tests/rl/test_rl_experiment_utils.py` -> `4 passed`.
+- `./infra/pre-commit.py --fix ...` on touched files -> `OK`.
+
+Net result:
+- future `v5p` RL runs should no longer silently drift onto Europe / `v6e` at the outer executor layer.
+- this does **not** fix the current path-length blocker; relaunch still requires shortening the naming envelope.
+- operational launch rule remains unchanged:
+  - use `--region us-central1` by default for root submission,
+  - or `--zone us-east5-a` when intentionally choosing the east5 path.

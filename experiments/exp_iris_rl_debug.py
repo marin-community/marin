@@ -23,6 +23,7 @@ from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rl_experiment_utils import (
     ModelConfig,
     RLExperimentConfig,
+    executor_main_config_for_rl_experiment,
     make_rl_step,
 )
 
@@ -122,6 +123,7 @@ def main():
     )
 
     executor_main(
+        config=executor_main_config_for_rl_experiment(debug_config),
         steps=[step],
         description="Iris RL debug: 5 steps, 1 worker, small batches",
     )

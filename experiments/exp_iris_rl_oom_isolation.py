@@ -19,6 +19,7 @@ from marin.execution.executor import executor_main
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 from marin.rl.environments import EnvConfig
 from marin.rl.rl_experiment_utils import ModelConfig, RLExperimentConfig, make_rl_step
+from marin.rl.rl_experiment_utils import executor_main_config_for_rl_experiment
 from marin.rl.rl_losses import RLOOLoss
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,7 @@ def main():
     curriculum = create_math_curriculum(name, config)
 
     executor_main(
+        config=executor_main_config_for_rl_experiment(config),
         steps=[make_rl_step(name=name, config=config, curriculum=curriculum)],
         description=f"Iris RL OOM isolation case={case}",
     )
