@@ -1047,7 +1047,6 @@ class ControllerTransitions:
                     "UPDATE tasks SET resource_usage_proto = ? WHERE task_id = ?",
                     (usage_payload, update.task_id.to_wire()),
                 )
-
             terminal_ms: int | None = None
             started_ms: int | None = None
             task_state = prior_state

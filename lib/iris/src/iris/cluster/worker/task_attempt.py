@@ -444,7 +444,6 @@ class TaskAttempt:
             proto.build_metrics.build_started.CopyFrom(self.build_started.to_proto())
         if self.build_finished is not None:
             proto.build_metrics.build_finished.CopyFrom(self.build_finished.to_proto())
-
         return proto
 
     def _check_cancelled(self) -> None:
