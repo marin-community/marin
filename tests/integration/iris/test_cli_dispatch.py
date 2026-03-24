@@ -55,6 +55,8 @@ def _wait_for_job_state(
 
 def test_cli_submit_and_succeed(integration_cluster):
     """Submit a simple command via 'iris job run' CLI and verify it succeeds."""
+    # Use --cpu 2 to avoid the executor heuristic (≤1 CPU → non-preemptible),
+    # since test cluster workers are all preemptible.
     result = _run_iris_cli(
         integration_cluster.url,
         "job",
@@ -63,7 +65,7 @@ def test_cli_submit_and_succeed(integration_cluster):
         "--job-name",
         "itest-cli-ok",
         "--cpu",
-        "1",
+        "2",
         "--memory",
         "1g",
         "--",
@@ -89,7 +91,7 @@ def test_cli_submit_failing_command(integration_cluster):
         "--job-name",
         "itest-cli-fail",
         "--cpu",
-        "1",
+        "2",
         "--memory",
         "1g",
         "--",
