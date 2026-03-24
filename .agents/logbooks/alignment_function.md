@@ -2226,3 +2226,644 @@ uv run iris --config lib/iris/examples/marin.yaml job run \
 - Treat GCS staging for this run as verified.
 - Do **not** spend time debugging Hugging Face download paths for `/ahmed/generate-responses-llama-3-3-70b-gcs-us-central1`; that part is already fixed.
 - Focus next on the architecture-resolution mismatch before using this path as the basis for heterogeneous chosen/rejected alignment runs.
+
+### 2026-03-24 — ALIGN-053: `generate_responses` on GCS-Backed Llama 3.3 70B Succeeded; Startup Dominated Runtime
+
+- **Run:** `/ahmed/generate-responses-llama-3-3-70b-gcs-us-central1`
+- **Final state:** `JOB_STATE_SUCCEEDED`
+- **Result path:** `gs://marin-us-central1/align/debug_generate_responses_llama_3_3_70b_existing_prompts/responses-44d0c7`
+- **Experiment metadata:** `gs://marin-us-central1/experiments/generate_responses_llama_3_3_70b_existing_prompts-ac12f9.json`
+- **Records written:** `76` responses in `shard_00000.jsonl.gz`
+
+#### Timing methodology
+
+- Queue and active-runtime numbers below use Iris `submitted_at` / `started_at` / `finished_at` metadata and are precise to the millisecond.
+- Subphase timing inside the response worker uses log timestamps and should be treated as approximately `±1s`.
+- All wall-clock times in the tables below are in `UTC`.
+
+#### Whole job timeline
+
+| Phase | Start | End | Duration | Notes |
+| --- | --- | --- | ---: | --- |
+| Root job pending in scheduler | `19:35:11.360` | `19:53:15.190` | `1083.830s` | Iris root `submitted_at -> started_at` |
+| Root worker bootstrap + executor setup | `19:53:15.190` | `19:53:31` | `15.810s` | root start -> `### Launching 2 steps ###` |
+| Model dependency step total | `19:53:31` | `19:54:21` | `50.000s` | `models/...` step begin -> succeeded |
+| Model Zephyr streaming stage only | `19:53:57` | `19:54:20` | `23.000s` | `stage0-Map → Write` start -> provenance written |
+| Gap from model-step success to child submit | `19:54:21` | `19:54:22.215` | `1.215s` | executor bookkeeping |
+| Response child pending in scheduler | `19:54:22.215` | `20:04:22.427` | `600.212s` | Iris child `submitted_at -> started_at` |
+| Response child active runtime | `20:04:22.427` | `20:14:43.162` | `620.735s` | Iris child `started_at -> finished_at` |
+| Root finalize after child success | `20:14:43.162` | `20:15:03.310` | `20.148s` | executor shutdown + metadata write |
+| Root active runtime total | `19:53:15.190` | `20:15:03.310` | `1308.120s` | Iris root `started_at -> finished_at` |
+
+#### Response child step timeline
+
+| Phase | Start | End | Duration | Notes |
+| --- | --- | --- | ---: | --- |
+| Child bootstrap before first worker log | `20:04:22.427` | `20:04:28` | `5.573s` | child start -> first `syncing deps` |
+| Python/env bootstrap | `20:04:28` | `20:04:38` | `10.000s` | `syncing deps` -> `Using batch vLLM` |
+| Response setup and prompt scan | `20:04:38` | `20:04:51` | `13.000s` | `Using batch vLLM` -> `Loaded 76 prompts` |
+| Prompt load to engine call | `20:04:51` | `20:04:52` | `1.000s` | `Loaded 76 prompts` -> `Creating vLLM engine` |
+| Early engine setup | `20:04:52` | `20:05:19` | `27.000s` | engine call -> `Resolved architecture: MistralForCausalLM` |
+| GCS checkpoint streaming wall time | `20:04:52` | `20:06:49` | `117.000s` | engine call -> RunAI streamer completion log |
+| GCS streamer reported payload transfer | `20:05:35` | `20:06:49` | `73.87s` | `262.8 GiB` at `3.6 GiB/s` |
+| Post-stream setup before compile logs | `20:06:49` | `20:09:19` | `150.000s` | loader/setup gap before first precompile line |
+| Compile/warmup phase 1 | `20:09:19` | `20:10:33` | `74.000s` | sample precompiles + gather-logprobs setup |
+| Compile/warmup phase 2 | `20:10:33` | `20:13:58` | `205.000s` | kv-cache init + backbone/select precompiles |
+| Compile/warmup phase 3 | `20:13:58` | `20:14:03` | `5.000s` | `compute_logits` compile |
+| Compile/warmup phase 4 | `20:14:03` | `20:14:08` | `5.000s` | `structured_decoding` compile |
+| vLLM internal engine-init total | `20:09:19` | `20:14:08` | `289.01s` | matches `init engine (profile, create kv cache, warmup model) took 289.01 seconds` |
+| Full engine creation to ready | `20:04:52` | `20:14:08` | `556.000s` | full outer wall-clock from engine call -> ready |
+| Request enqueue | `20:14:08` | `20:14:11` | `3.000s` | engine ready -> `Adding requests 100%` |
+| Actual generation | `20:14:11` | `20:14:26` | `15.000s` wall-clock | progress bar reported `16s`; final estimated speeds `399.31` input toks/s and `728.16` output toks/s |
+| Persist responses and step wrap-up | `20:14:26` | `20:14:43.162` | `17.162s` | result shard write -> child success |
+
+#### Artifact verification
+
+- Output prefix contents:
+  - `.artifact`
+  - `.executor_info`
+  - `.executor_status`
+  - `shard_00000.jsonl.gz`
+- Verified `shard_00000.jsonl.gz` contains `76` JSONL rows.
+
+#### Interpretation
+
+- This run succeeded end-to-end using the staged `us-central1` GCS checkpoint.
+- Runtime was dominated by startup:
+  - about `556s` from `Creating vLLM engine` to engine-ready
+  - only about `15-16s` for actual generation across all `76` prompts
+- The queueing overhead was also material:
+  - about `18m04s` before the root job started
+  - about `10m00s` before the response child actually began executing
+
+#### Remaining caveats
+
+- The run still logged:
+  - `Resolved architecture: MistralForCausalLM`
+  - `Model architectures ['MistralForCausalLM'] not registered in tpu-inference. Falling back to vLLM-native Pytorch definition.`
+- Near the end, vLLM also logged:
+  - `Engine core proc EngineCore_DP0 died unexpectedly, shutting down client.`
+- Despite that teardown noise, the step wrote the response artifact and succeeded.
+
+#### Future-agent rule
+
+- Use this run as the current timing baseline for isolated `generate_responses.py` on staged Llama 3.3 70B in `us-central1`.
+- If optimizing throughput for future alignment runs, focus first on reducing startup/compile cost rather than generation speed.
+
+### 2026-03-24 — ALIGN-054: Added Separate `vllm serve` Comparison Experiment on the Same Prompt Artifact
+
+- **Reason for new experiment:** compare Marin's shared `VllmEnvironment` / `vllm serve` path against the direct `llm.generate(...)` path used by `lib/marin/src/marin/alignment/generate_responses.py`.
+- **Comparison target:** same prompt set, same staged `us-central1` Llama 3.3 70B checkpoint, same generation settings (`n=1`, `temperature=0.7`, `max_tokens=512`), but a different inference path.
+
+#### Code changes for this experiment
+
+- Added a new standalone experiment script:
+  - `experiments/generate_responses_llama_3_3_70b_existing_prompts_vllm_serve.py`
+- The script:
+  - reuses `gs://marin-us-central1/align/openai_spec_smoke/prompts-8a5a5d`
+  - reuses the regional GCS model artifact from `output_path_of(llama_3_3_70b_instruct)`
+  - starts `VllmEnvironment(..., mode="native")`
+  - sends the prompt set through `/v1/chat/completions`
+  - writes normal response shards plus a `timing.json` artifact and a `vllm_server_logs_tail.txt` artifact
+- Important timing rule baked into the script:
+  - the `timing.json` measurements start only after the remote worker is already running
+  - scheduler / TPU allocation wait is intentionally excluded from the experiment's own timing artifact
+
+#### Supporting fix
+
+- Updated `lib/marin/src/marin/inference/vllm_server.py` so `_engine_kwargs_to_cli_args(...)` now forwards:
+  - `tensor_parallel_size`
+- Why this mattered:
+  - without that fix, `VllmEnvironment` would not actually launch `vllm serve` with `--tensor-parallel-size 4`
+  - for a 70B model on `v5p-8`, that would make the comparison invalid
+- Added regression test:
+  - `tests/test_vllm_server.py`
+
+#### Submission
+
+- Submitted with explicit `us-central1` pinning:
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run \
+  --no-wait \
+  --job-name generate-responses-llama-3-3-70b-vllm-serve-gcs-us-central1 \
+  --extra marin:tpu \
+  --tpu v5p-8 \
+  --region us-central1 \
+  --zone us-central1-a \
+  -- python experiments/generate_responses_llama_3_3_70b_existing_prompts_vllm_serve.py
+```
+
+- Submitted job id:
+  - `/ahmed/generate-responses-llama-3-3-70b-vllm-serve-gcs-us-central1`
+
+#### First status check
+
+- Current state:
+  - `JOB_STATE_PENDING`
+- Pending reason:
+  - `Scheduler: Insufficient TPUs (need 4, available 0)`
+  - autoscaler backoff on `tpu_v5p_8-us-central1-a`
+
+#### Future-agent rule
+
+- Compare this new run against `ALIGN-053` only using the new script's internal `timing.json` artifact, not Iris scheduler timestamps.
+- The intended apples-to-apples comparison is:
+  - direct `llm.generate(...)` path from `ALIGN-053`
+  - native `vllm serve` path from this run
+- Keep the region pinned to `us-central1` for this comparison unless the user explicitly changes that constraint.
+
+### 2026-03-24 — ALIGN-055: `vllm serve` Comparison Run Completed; Roughly Matches Direct `llm.generate(...)`
+
+- **Run:** `/ahmed/generate-responses-llama-3-3-70b-vllm-serve-gcs-us-central1`
+- **Final state:** `JOB_STATE_SUCCEEDED`
+- **Response artifact:** `gs://marin-us-central1/align/debug_generate_responses_llama_3_3_70b_existing_prompts_vllm_serve/responses-0635ef`
+- **Experiment metadata:** `gs://marin-us-central1/experiments/generate_responses_llama_3_3_70b_existing_prompts_vllm_serve-683c67.json`
+- **Rows written:** `76`
+
+#### Internal timing artifact
+
+- Timing source for this run:
+  - `gs://marin-us-central1/align/debug_generate_responses_llama_3_3_70b_existing_prompts_vllm_serve/responses-0635ef/timing.json`
+- These timings intentionally exclude Iris scheduler wait and only measure work done inside the remote worker.
+
+#### `vllm serve` worker-side timings
+
+| Metric | Value |
+| --- | ---: |
+| `prompt_load_seconds` | `0.851s` |
+| `vllm_server_start_seconds` | `590.323s` |
+| `vllm_request_seconds` | `16.761s` |
+| `vllm_only_seconds` | `607.084s` |
+| `result_write_seconds` | `0.350s` |
+| `total_worker_seconds` | `608.520s` |
+
+#### Side-by-side comparison against `ALIGN-053`
+
+- Broad worker-body comparison:
+  - `vllm serve total_worker_seconds = 608.520s`
+  - direct `generate_responses.py` child runtime = `620.735s`
+  - delta = `-12.215s` (`-1.97%`)
+- Tighter comparison focused on the actual vLLM work:
+  - `vllm serve vllm_only_seconds = 607.084s`
+  - direct `create_engine -> child_finish = 591.162s`
+  - delta = `+15.922s` (`+2.69%`)
+- Even tighter comparison against direct `create_engine -> write_results`:
+  - `vllm serve vllm_only_seconds = 607.084s`
+  - direct `create_engine -> write_results = 574.000s`
+  - delta = `+33.084s` (`+5.76%`)
+- Request/inference-only comparison:
+  - `vllm serve vllm_request_seconds = 16.761s`
+  - direct generation wall time = `15.000s`
+  - delta = `+1.761s` (`+11.74%`)
+
+#### Interpretation
+
+- The run does **not** show a clear `vllm serve` win.
+- Best summary:
+  - `vllm serve` is in roughly the same range as the direct `llm.generate(...)` path
+  - depending on boundary choice, it is either very slightly faster overall or slightly slower for the actual model-serving work
+- The strongest conservative conclusion is:
+  - `vllm serve` approximately matches the direct path, but does not materially outperform it in this setup
+
+#### Additional observations from `vllm_server_logs_tail.txt`
+
+- The serve path still logged:
+  - `Resolved architecture: MistralForCausalLM`
+- RunAI streamer was somewhat slower than in `ALIGN-053`:
+  - `83.75s` here vs `73.87s` in the direct run
+- Internal engine init was somewhat faster than in `ALIGN-053`:
+  - `244.88s` here vs `289.01s` in the direct run
+- Net result:
+  - startup and request overhead largely cancel out any one clear advantage
+
+#### Future-agent rule
+
+- Treat `vllm serve` and direct `llm.generate(...)` as performance peers for this prompt-set scale on staged Llama 3.3 70B in `us-central1`.
+- Do not claim a meaningful throughput win for `vllm serve` based on this run alone.
+
+### 2026-03-24 — ALIGN-056: Current `vllm serve` Comparison Uses Per-Prompt Chat Requests; Tighter Batch Comparison Should Use `/v1/completions`
+
+- **Why this note exists:** clarify exactly how the `vllm serve` comparison in `ALIGN-054` / `ALIGN-055` is currently issuing requests, and what a more apples-to-apples batched serve comparison should look like.
+
+#### What the current script does
+
+- `experiments/generate_responses_llama_3_3_70b_existing_prompts_vllm_serve.py`:
+  - starts Marin `VllmEnvironment(..., mode="native")`
+  - posts directly to the local OpenAI-compatible HTTP server exposed by `vllm serve`
+  - uses `/v1/chat/completions`
+  - sends **one request per prompt** via a `ThreadPoolExecutor`
+- So when discussing the current serve comparison, "HTTP responses" means literal HTTP JSON request/response pairs against the local `vllm serve` endpoint.
+
+#### Why this is not the tightest batching comparison
+
+- The current chat-completions path is valid, but it is not the closest possible match to direct `llm.generate(all_prompts, ...)`.
+- It adds:
+  - per-request JSON serialization overhead
+  - per-request HTTP overhead
+  - client thread-pool overhead
+- The server can still batch internally as requests arrive, but that is not the same thing as one explicit client-side batch.
+
+#### Better next comparison shape
+
+- For a tighter `vllm serve` benchmark, use `/v1/completions` instead of `/v1/chat/completions`.
+- Pre-render the exact prompt strings locally using the same template logic as the direct `generate_responses.py` path.
+- Then submit a single batched request whose `prompt` field is a list of prompt strings.
+- Rationale:
+  - the OpenAI-compatible completions schema accepts `prompt` as a string **or an array of strings**
+  - that is much closer to `vllm.LLM.generate(prompts, ...)`
+
+#### Future-agent rule
+
+- Do **not** describe the current `ALIGN-055` serve experiment as a perfectly apples-to-apples client batching comparison.
+- If the user asks for a tighter serve-vs-direct benchmark, the next experiment should:
+  - keep `us-central1`
+  - keep the same staged GCS model path and prompt artifact
+  - switch the serve client to one batched `/v1/completions` request over pre-rendered prompt strings
+
+### 2026-03-24 — ALIGN-057: Prepare a Tighter `vllm serve` Benchmark Using One Batched `/v1/completions` Request
+
+- **Goal:** launch a second serve-based comparison that is closer to direct `llm.generate(all_prompt_texts, ...)` than the per-prompt chat-completions experiment in `ALIGN-055`.
+
+#### Planned experiment shape
+
+- New script:
+  - `experiments/generate_responses_llama_3_3_70b_existing_prompts_vllm_serve_batched.py`
+- Constraints held fixed:
+  - region: `us-central1`
+  - model artifact: staged Llama 3.3 70B GCS path from `output_path_of(llama_3_3_70b_instruct)`
+  - prompt artifact: `gs://marin-us-central1/align/openai_spec_smoke/prompts-8a5a5d`
+  - TPU/resources: `v5p-8`, `tp=4`, `max_model_len=4096`, `ram=256g`, `disk=500g`
+
+#### Key implementation difference from `ALIGN-055`
+
+- Instead of:
+  - `/v1/chat/completions`
+  - one request per prompt
+- Use:
+  - staged tokenizer files copied locally from the same `gs://...` model artifact
+  - local `apply_chat_template(..., add_generation_prompt=True)` to pre-render prompt strings
+  - one HTTP POST to `/v1/completions` with `prompt=[...]`
+
+#### Timing rule
+
+- As with `ALIGN-054` / `ALIGN-055`, the experiment's `timing.json` should measure worker-local work only and should exclude Iris scheduler wait.
+
+### 2026-03-24 — ALIGN-058: Batched `/v1/completions` Serve Experiment Added, Syntax-Checked, and Submitted in `us-central1`
+
+- **Script added:**
+  - `experiments/generate_responses_llama_3_3_70b_existing_prompts_vllm_serve_batched.py`
+- **What it does:**
+  - stages the tokenizer/config files locally from the same staged `gs://...` Llama 3.3 70B artifact
+  - re-renders the prompt strings with local `apply_chat_template(..., add_generation_prompt=True)`
+  - starts Marin `VllmEnvironment(..., mode="native")`
+  - sends one OpenAI-compatible batched request to `/v1/completions`
+  - writes normal response shards plus:
+    - `timing.json`
+    - `vllm_server_logs_tail.txt`
+
+#### Local validation
+
+- Syntax-check passed:
+  - `uv run python -m py_compile experiments/generate_responses_llama_3_3_70b_existing_prompts_vllm_serve_batched.py`
+
+#### Submission
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run \
+  --no-wait \
+  --job-name generate-responses-llama-3-3-70b-vllm-serve-batched-gcs-us-central1 \
+  --extra marin:tpu \
+  --tpu v5p-8 \
+  --region us-central1 \
+  --zone us-central1-a \
+  -- python experiments/generate_responses_llama_3_3_70b_existing_prompts_vllm_serve_batched.py
+```
+
+- Submitted job id:
+  - `/ahmed/generate-responses-llama-3-3-70b-vllm-serve-batched-gcs-us-central1`
+
+#### First status check
+
+- Current state:
+  - `JOB_STATE_PENDING`
+- Pending reason:
+  - `Scheduler: Insufficient TPUs (need 4, available 0)`
+  - autoscaler backoff on `tpu_v5p_8-us-central1-a`
+
+#### Future-agent rule
+
+- When this run finishes, compare it against:
+  - `ALIGN-053` direct `llm.generate(...)`
+  - `ALIGN-055` per-prompt `/v1/chat/completions` serve
+- Use only the new run's internal `timing.json` for serve-side timing comparisons.
+
+### 2026-03-24 — ALIGN-059: Killed the Blocked Batched Serve Run; Corrected Child Disk Request from `500g` to `5g`
+
+- **What happened:** the first batched `/v1/completions` serve run never reached vLLM startup because the child TPU step was stuck pending on an oversized disk request.
+- CLI/UI diagnosis matched:
+  - requested disk: `536,870,912,000` bytes (`500 GB`)
+  - available on the placement target: `107,374,182,400` bytes (`100 GB`)
+- That was a configuration error in the experiment script, not evidence that `vllm serve` itself needed `500 GB` of local disk.
+
+#### Corrective action
+
+- Terminated:
+  - `/ahmed/generate-responses-llama-3-3-70b-vllm-serve-batched-gcs-us-central1`
+  - `/ahmed/generate-responses-llama-3-3-70b-vllm-serve-batched-gcs-us-central1/align-debug_generate_responses_llama_3_3_70b_existing_prompts_vllm_serve_batched-responses_4de8b766-338e8351`
+- Updated:
+  - `experiments/generate_responses_llama_3_3_70b_existing_prompts_vllm_serve_batched.py`
+- Resource change:
+  - `disk="500g"` -> `disk="5g"`
+
+#### Rationale
+
+- The successful direct 70B run proved that this path does require substantial RAM and does use local vLLM asset paths.
+- But the logs did **not** prove that the entire checkpoint must be fully persisted to local disk.
+- The next experiment should therefore test the smallest practical disk request instead of cargo-culting `500g`.
+
+#### Future-agent rule
+
+- If the low-disk rerun fails, inspect the runtime failure mode before increasing disk again.
+- Do not assume any future 70B serve run needs `500g` disk unless logs show a concrete local-disk exhaustion signature.
+
+### 2026-03-24 — ALIGN-060: First `disk=5g` Rerun Started Immediately but Reused a Stale Executor Step Key
+
+- **What changed:** lowering the child disk request from `500g` to `5g` removed the TPU-placement bottleneck immediately.
+- Evidence:
+  - the new root job started effectively instantly instead of waiting on `insufficient_resources: disk`
+- **New blocker discovered:** the rerun reused the same executor step name and output path as the killed `ALIGN-058` attempt.
+- Result:
+  - the executor read the response step status as `RUNNING`
+  - it did not launch a fresh child step
+  - this would have left the root job waiting on stale executor state
+
+#### Corrective action
+
+- Terminated:
+  - `/ahmed/generate-responses-llama-3-3-70b-vllm-serve-batched-gcs-us-central1-disk5g`
+  - `/ahmed/generate-responses-llama-3-3-70b-vllm-serve-batched-gcs-us-central1-disk5g/align-debug_generate_responses_llama_3_3_70b_existing_prompts_vllm_serve_batched-responses_4de8b766-19f8b7af`
+- Updated the experiment script so the response step now uses a fresh output prefix:
+  - `align/debug_generate_responses_llama_3_3_70b_existing_prompts_vllm_serve_batched_disk5g/responses`
+
+#### Interpretation
+
+- This was not a resource failure.
+- It was a reproducibility / executor-state issue caused by reusing the same step key after killing the previous batched run mid-flight.
+
+#### Future-agent rule
+
+- After killing an in-flight executor experiment, do not reuse the same step/output key for the retry unless the previous step status is known to be cleaned up.
+- For experimental retries like this one, prefer a new step name / output prefix.
+
+### 2026-03-24 — ALIGN-061: Fresh `disk=5g` Batched Serve Retry Submitted; Disk Constraint Removed, Only TPU Capacity Wait Remains
+
+- **Fresh retry job:**
+  - `/ahmed/generate-responses-llama-3-3-70b-vllm-serve-batched-gcs-us-central1-disk5g-fresh`
+- **Why a second retry was needed:** after `ALIGN-060`, the script was updated to use a fresh response-step key/output prefix so the executor would not inherit stale `RUNNING` state from the previously killed attempt.
+
+#### Clean retry status
+
+- Root job:
+  - started immediately
+  - no disk-related scheduling issue on the lightweight executor process
+- Child TPU response step:
+  - `/ahmed/generate-responses-llama-3-3-70b-vllm-serve-batched-gcs-us-central1-disk5g-fresh/align-debug_generate_responses_llama_3_3_70b_existing_prompts_vllm_serve_batched_disk5g-responses_dad76bea-5d502e34`
+  - requests:
+    - `v5p-8`
+    - `ram=256g`
+    - `disk=5g`
+- Current child state:
+  - `JOB_STATE_PENDING`
+- Current pending reason:
+  - `Scheduler: Insufficient TPUs (need 4, available 0)`
+  - autoscaler backoff on `tpu_v5p_8-us-central1-a`
+
+#### Important interpretation
+
+- The previous `500g` disk over-request is no longer the blocker.
+- The current wait is now the expected pure TPU-capacity wait in `us-central1-a`.
+- This is the correct low-disk experiment setup for determining whether the serve path can actually run with only `5g` local disk.
+
+#### Future-agent rule
+
+- If this run starts and then fails at runtime, inspect whether the failure is:
+  - disk exhaustion
+  - tokenizer/config staging failure
+  - vLLM asset/temp-file failure
+  - something unrelated
+- Only increase disk after observing a concrete runtime disk failure signature.
+
+### 2026-03-24 — ALIGN-062: Batched `vllm serve` on `disk=5g` Succeeded; Materially Faster Than Per-Prompt Serve
+
+- **Run:** `/ahmed/generate-responses-llama-3-3-70b-vllm-serve-batched-gcs-us-central1-disk5g-fresh`
+- **Successful child:** `/ahmed/generate-responses-llama-3-3-70b-vllm-serve-batched-gcs-us-central1-disk5g-fresh/align-debug_generate_responses_llama_3_3_70b_existing_prompts_vllm_serve_batched_disk5g-responses_dad76bea-9308e1f8`
+- **Final state:** `JOB_STATE_SUCCEEDED`
+- **Response artifact:** `gs://marin-us-central1/align/debug_generate_responses_llama_3_3_70b_existing_prompts_vllm_serve_batched_disk5g/responses-5f5d97`
+- **Rows written:** `76`
+
+#### Worker-local timing (`timing.json`)
+
+| Metric | Value |
+| --- | ---: |
+| `prompt_load_seconds` | `1.085s` |
+| `prompt_render_seconds` | `1.554s` |
+| `vllm_server_start_seconds` | `445.316s` |
+| `vllm_request_seconds` | `16.217s` |
+| `vllm_only_seconds` | `461.533s` |
+| `result_write_seconds` | `0.434s` |
+| `total_worker_seconds` | `464.939s` |
+
+#### Iris timing
+
+| Phase | Value |
+| --- | ---: |
+| Child pending before TPU allocation | `257.339s` |
+| Child runtime after start | `533.328s` |
+
+#### vLLM / Run:ai details from server logs
+
+- Resolved architecture:
+  - `MistralForCausalLM`
+- Run:ai streaming:
+  - `262.8 GiB` in `83.48s` at `3.1 GiB/s`
+- CPU buffer line observed:
+  - `37.3 GiB`
+- Internal engine init:
+  - `init engine (profile, create kv cache, warmup model) took 110.51 seconds`
+- Request mode:
+  - one `POST /v1/completions`
+
+#### Comparison takeaway
+
+- `disk=5g` was sufficient for this successful batched serve run.
+- Compared with the earlier per-prompt `/v1/chat/completions` serve run (`ALIGN-055`):
+  - `total_worker_seconds`: `464.939s` vs `608.520s`
+  - `vllm_only_seconds`: `461.533s` vs `607.084s`
+  - both are about `24%` faster in favor of the batched `/v1/completions` path
+- The request wall time itself changed only slightly:
+  - `16.217s` vs `16.761s`
+- So most of the improvement came from faster startup / engine-init behavior in this run, not from the HTTP request stage alone.
+
+#### Future-agent rule
+
+- Treat batched `/v1/completions` as the best-performing `vllm serve` variant tested so far for this prompt-set scale.
+- Do not assume the improvement is purely due to client batching; startup variance still matters.
+
+### 2026-03-24 — ALIGN-063: Bottom-Line Comparison Matrix for the Three 70B Response Paths
+
+- **Purpose:** provide one clear, bottom-of-logbook matrix comparing:
+  - direct local `llm.generate(...)`
+  - `vllm serve` with many per-prompt HTTP chat requests
+  - `vllm serve` with one batched `/v1/completions` request
+- **Common setup across all three:**
+  - prompt count: `76`
+  - model artifact: staged `us-central1` Llama 3.3 70B GCS checkpoint
+  - TPU: `v5p-8`
+  - tensor parallelism: `4`
+  - max model len: `4096`
+
+#### Main comparison matrix
+
+| Path | Request shape | Child disk request | Worker-local total | Startup / server ready | Request / generation wall time | Prompt throughput | Generation throughput | Result write | Run:ai stream | Internal engine init | Output rows |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Direct `llm.generate(...)` | one in-process batch over all prompt texts | `500g` | `620.735s` child runtime | `556.000s` create-engine -> ready | `15.000s` | `399.31 toks/s` final progress estimate | `728.16 toks/s` final progress estimate | `17.162s` | `73.87s` @ `3.6 GiB/s` | `289.01s` | `76` |
+| `vllm serve` per-prompt HTTP | `76` concurrent `POST /v1/chat/completions` requests | `500g` | `608.520s` | `590.323s` `vllm_server_start_seconds` | `16.761s` | `613.6 tokens/s` APIServer avg | `941.0 tokens/s` APIServer avg | `0.350s` | `83.75s` @ `3.1 GiB/s` | `244.88s` | `76` |
+| `vllm serve` batched HTTP | one `POST /v1/completions` with `prompt=[76 rendered prompts]` | `5g` | `464.939s` | `445.316s` `vllm_server_start_seconds` | `16.217s` | `619.5 tokens/s` APIServer avg | `847.4 tokens/s` APIServer avg | `0.434s` | `83.48s` @ `3.1 GiB/s` | `110.51s` | `76` |
+
+- **Throughput note:** the direct path reports final progress-bar estimates (`est. speed input/output`), while the two `vllm serve` paths report APIServer average throughput lines. They are close enough to be useful, but they are not emitted by the exact same logger.
+
+#### Relative deltas
+
+| Comparison | Worker-local delta | Percent |
+| --- | ---: | ---: |
+| Batched serve vs per-prompt serve | `-143.581s` | `-23.60%` |
+| Batched serve vs direct `llm.generate(...)` | `-155.796s` | `-25.10%` if comparing full child runtime |
+| Batched serve `vllm_only` vs direct create-engine -> child-finish | `-129.629s` | `-21.93%` |
+| Batched serve request wall time vs per-prompt serve request wall time | `-0.545s` | `-3.25%` |
+
+#### Very clear takeaway
+
+- **Fastest path tested:** batched `vllm serve` via one `/v1/completions` request.
+- **Why it wins:** almost all of the gain came from startup / engine-init being lower in that run, not from the HTTP request itself.
+- **Important operational result:** the winning batched `vllm serve` run succeeded with only `disk=5g`.
+
+### 2026-03-24 — ALIGN-064: Recommendation for Open-Weight End-to-End Pipeline; Prefer Batched Local Inference
+
+- **Decision:** for local open-weight inference, standardize on **batched** inference, not per-prompt HTTP fanout.
+- **Reason for decision:** the tested request windows were nearly identical:
+  - per-prompt serve request wall time: `16.761s`
+  - batched serve request wall time: `16.217s`
+- So per-prompt serving did **not** show a meaningful steady-state generation advantage on this workload.
+- When there is no clear performance advantage, defer to **simplicity**:
+  - one batch request is simpler than a thread pool issuing one request per prompt
+  - one batch request matches the existing direct `llm.generate(all_prompt_texts, ...)` mental model
+  - one batch request is the cleaner primitive for offline dataset-generation jobs
+
+#### Stage-by-stage recommendation
+
+- **Chosen / rejected response generation:** batched.
+  - Current local implementation is already structured this way in `generate_responses.py` via one `llm.generate(all_prompt_texts, ...)`.
+- **Judge step:** move to batched / microbatched local inference.
+  - Current implementation is structurally per-response because `_judge_response(...)` calls `llm_chat_single(...)` once per scored response.
+  - This is a poor fit for local open-weight models because the judge step eagerly loads all prompt pairs anyway and local vLLM is pinned to `workers=1`.
+- **Prompt generation Stage 1 (understanding / axes):** microbatched across statements.
+  - This work is independent across statements, but local vLLM currently executes it sequentially with one worker.
+- **Prompt generation Stage 2 (concretization):** keep the current batch unit.
+  - This stage is already naturally batched because one request covers multiple covering-array configs.
+- **Prompt generation Stage 3 (extraction):** keep the current batch unit.
+  - This stage is already naturally batched because one request extracts multiple scenarios at once.
+
+#### Higher-priority architectural note
+
+- Before broad open-weight rollout, fix **one-model-at-a-time** execution.
+- Current pipeline still has major overlap risks:
+  - `align.py` schedules `chosen` and `rejected` as sibling steps
+  - `generate_prompts.py` can preload both local engines for ideation and extraction in the same process
+- That lifecycle issue matters more than per-prompt vs batched request shape.
+
+#### Exact experiment queue from here
+
+1. **Experiment A — Reusable batched local inference primitive for alignment**
+   - **Goal:** add one shared helper for local batched inference using `VllmEnvironment` + one batched `/v1/completions` request.
+   - **Scope:** this should become the common primitive for local response generation, local judge microbatches, and local prompt-gen microbatches.
+   - **Non-goal:** do **not** keep building separate ad hoc per-prompt serve paths.
+   - **Success criteria:**
+     - accepts a list of already-rendered prompt strings
+     - returns completions grouped by input prompt
+     - uses staged `gs://...` model paths only
+     - succeeds on `v5p-8` in `us-central1`
+     - still works with `disk=5g`
+
+2. **Experiment B — Swap local `generate_responses.py` onto the new batched serve primitive**
+   - **Goal:** replace the current direct local `llm.generate(...)` path with the shared batched serve primitive for `VLLMConfig`.
+   - **Validation workload:** the same succeeded `76`-prompt artifact already used in `ALIGN-052` through `ALIGN-063`.
+   - **Success criteria:**
+     - output schema unchanged
+     - output row count unchanged (`76`)
+     - no Hugging Face download path appears in logs
+     - worker-local timing remains in the same ballpark as the current best batched serve run
+
+3. **Experiment C — Add a batched local judge path**
+   - **Goal:** stop using one `llm_chat_single(...)` call per judged response when `judge_model` is local.
+   - **Implementation shape:** build judge prompts for a microbatch of response candidates, render them up front, then score them through the shared batched serve primitive.
+   - **Validation workload:** run on a small fixed chosen/rejected artifact pair first, not the whole spec.
+   - **Success criteria:**
+     - pair count is stable versus the old judge path on the same artifact
+     - parse failure rate does not regress
+     - local judge no longer spends nearly all its time in serial per-response calls
+
+4. **Experiment D — Add batched local prompt-generation paths**
+   - **Goal:** make local prompt generation use batch-shaped inference instead of repeated `llm_chat_single(...)` calls.
+   - **Stage plan:**
+     - Stage 1 understanding: microbatch across statements
+     - Stage 2 concretization: preserve current request shape, but route through the shared batched local primitive
+     - Stage 3 extraction: preserve current request shape, but route through the shared batched local primitive
+   - **Validation workload:** one-statement spec first.
+   - **Success criteria:**
+     - generated prompt schema unchanged
+     - same statement coverage and artifact structure
+     - no concurrent multi-engine loading inside one prompt-generation worker
+
+5. **Experiment E — Enforce one-model-at-a-time lifecycle in `align()`**
+   - **Goal:** make the heterogeneous Llama chosen / Mixtral rejected path safe under TPU memory constraints.
+   - **Required changes:**
+     - do not allow `chosen` and `rejected` local-model steps to run concurrently
+     - do not preload multiple local prompt-generation engines in the same process
+   - **Success criteria:**
+     - only one local model is active at a time per worker
+     - logs show clean teardown before the next model is started
+
+6. **Experiment F — `us-central1` one-statement full open-weight smoke**
+   - **Goal:** run the whole pipeline with open-weight models for all model roles after Experiments A-E land.
+   - **Target configuration:**
+     - ideation: Llama 3.3 70B
+     - extraction: Llama 3.3 70B
+     - chosen: Llama 3.3 70B
+     - rejected: Mixtral 8x7B Instruct
+     - judge: Llama 3.3 70B
+     - region: `us-central1`
+   - **Success criteria:**
+     - prompts generated
+     - chosen responses generated
+     - rejected responses generated
+     - preference pairs written
+     - no HF download path
+     - no simultaneous multi-model load
+
+7. **Experiment G — Separate `us-central1` full-spec runtime characterization**
+   - **Goal:** after smoke success, run the whole spec as a separate job to measure wall-clock behavior.
+   - **Purpose:** characterize runtime and bottlenecks, not DPO yet.
+   - **Success criteria:**
+     - full prompt-generation pass completes
+     - chosen / rejected / judge complete
+     - timing breakdown is recorded by stage
+     - outputs are separated from the smoke run
+
+#### Operational rule for future agents
+
+- Do **not** spend more time on the per-prompt `vllm serve` path unless a user explicitly asks for interactive-serving behavior.
+- For offline alignment dataset generation, the default local-model direction is now:
+  - **batched**
+  - **one-model-at-a-time**
+  - **`us-central1` staged `gs://...` artifacts only**
