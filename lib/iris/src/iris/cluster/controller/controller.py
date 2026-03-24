@@ -47,6 +47,7 @@ from iris.cluster.controller.db import (
     insert_task_profile,
     running_tasks_by_worker,
 )
+from iris.cluster.controller.budget import UserBudgetDefaults, compute_user_spend, interleave_by_user
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.controller.provider import TaskProvider
@@ -292,6 +293,7 @@ def _schedulable_tasks(queries: ControllerDB) -> list[Task]:
             TASKS,
             where=TASKS.c.state.in_(list(SCHEDULABLE_STATES)),
             order_by=(
+                TASKS.c.priority_band.asc(),
                 TASKS.c.priority_neg_depth.asc(),
                 TASKS.c.priority_root_submitted_ms.asc(),
                 TASKS.c.submitted_at_ms.asc(),
@@ -675,6 +677,13 @@ class ControllerConfig:
     auth: ControllerAuth | None = None
     """Full auth config passed to the service layer for login and API key management."""
 
+    max_tasks_per_user_per_cycle: int = 8
+    """Maximum tasks from a single user to consider per scheduling cycle.
+    Ensures fairness even without full interleaving. 0 = unlimited."""
+
+    user_budget_defaults: UserBudgetDefaults = field(default_factory=UserBudgetDefaults)
+    """Default budget settings applied when a new user is first seen."""
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
@@ -741,6 +750,7 @@ class Controller:
             db=self._db,
             log_store=self._log_store,
             heartbeat_failure_threshold=config.heartbeat_failure_threshold,
+            user_budget_defaults=config.user_budget_defaults,
         )
         self._scheduler = Scheduler()
 
@@ -1272,6 +1282,34 @@ class Controller:
         if not schedulable_task_ids:
             self._scheduling_diagnostics = {}
             return
+
+        # Per-band interleaving: group tasks by priority band, round-robin
+        # users within each band ordered by ascending budget spend.
+        user_spend = compute_user_spend(self._db)
+        task_band_map: dict[JobName, int] = {task.task_id: task.priority_band for task in pending_tasks}
+        tasks_by_band: dict[int, list[JobName]] = defaultdict(list)
+        for task_id in schedulable_task_ids:
+            band = task_band_map.get(task_id, 2)
+            tasks_by_band[band].append(task_id)
+
+        interleaved: list[JobName] = []
+        for band_key in sorted(tasks_by_band.keys()):
+            band_tasks = tasks_by_band[band_key]
+            user_task_pairs = [(tid.user, tid) for tid in band_tasks]
+            interleaved.extend(interleave_by_user(user_task_pairs, user_spend))
+        schedulable_task_ids = interleaved
+
+        # Per-user cap: limit how many tasks a single user can have considered
+        # per scheduling cycle, ensuring fairness.
+        user_cap = self._config.max_tasks_per_user_per_cycle
+        if user_cap > 0:
+            tasks_per_user: dict[str, int] = defaultdict(int)
+            capped: list[JobName] = []
+            for task_id in schedulable_task_ids:
+                if tasks_per_user[task_id.user] < user_cap:
+                    capped.append(task_id)
+                    tasks_per_user[task_id.user] += 1
+            schedulable_task_ids = capped
 
         # Inject reservation taints: claimed workers get a taint attribute,
         # non-reservation jobs get a NOT_EXISTS constraint for it.
