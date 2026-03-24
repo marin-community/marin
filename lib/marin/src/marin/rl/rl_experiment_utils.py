@@ -5,6 +5,7 @@ import dataclasses
 import datetime
 import logging
 import jmp
+from fray.v2.types import ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.layers.attention import AttentionBackend
 from levanter.compat.hf_checkpoints import HFCompatConfig
@@ -16,6 +17,7 @@ from transformers import AutoConfig
 from levanter.utils.mesh import MeshConfig
 
 from marin.execution.executor import ExecutorStep, OutputName
+from marin.execution.remote import remote
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.environments.inference_ctx import VLLMSamplingConfig, vLLMInferenceContextConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
@@ -26,6 +28,8 @@ from marin.rl.rollout_worker import RolloutTrackerConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 
 logger = logging.getLogger(__name__)
+
+RL_EXECUTOR_STEP_RESOURCES = ResourceConfig.with_cpu(cpu=1, ram="4g", disk="64g")
 
 
 @dataclasses.dataclass
@@ -226,6 +230,6 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
     return ExecutorStep(
         name=f"rl_testing/{name}",
         description=f"Async RL training: {name}",
-        fn=RLJob.make_step_fn(),
+        fn=remote(resources=RL_EXECUTOR_STEP_RESOURCES)(RLJob.make_step_fn()),
         config=job_config,
     )

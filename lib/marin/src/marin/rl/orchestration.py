@@ -31,6 +31,26 @@ from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
+RL_COORDINATOR_CPU_DISK = "100g"
+
+
+def _coordinator_extras(config: RLJobConfig) -> list[str]:
+    """Dependency extras for the CPU coordinator layer.
+
+    Keep this layer minimal: no vLLM and no TPU runtime package install.
+    """
+    return sorted(set(config.pip_dependency_groups) - {"vllm", "tpu"})
+
+
+def _train_worker_extras(config: RLJobConfig) -> list[str]:
+    """Dependency extras for trainer workers."""
+    return sorted({*config.pip_dependency_groups, "tpu"} - {"vllm"})
+
+
+def _rollout_worker_extras(config: RLJobConfig) -> list[str]:
+    """Dependency extras for rollout workers."""
+    return sorted({*config.pip_dependency_groups, "tpu", "vllm"})
+
 
 def submit_rl_job(config: RLJobConfig) -> JobHandle:
     """Submit an RL training job as a single coordinator job.
@@ -42,17 +62,18 @@ def submit_rl_job(config: RLJobConfig) -> JobHandle:
 
     env = {"EQX_ON_ERROR": "nan"}
     env = _add_run_env_variables(env)
+    coordinator_extras = _coordinator_extras(config)
 
-    # Use pip_packages instead of extras to avoid uv re-resolving the full dependency
-    # tree and replacing TPU torch with CUDA torch (vllm-tpu pulls in CUDA deps).
+    # Use extras so uv source rules in lib/marin/pyproject.toml apply.
+    # Coordinator stays lean to avoid large runtime package installs on CPU.
     return client.submit(
         JobRequest(
             name=f"rl-{config.run_id}",
             entrypoint=Entrypoint.from_callable(_run_rl_coordinator, args=(config,)),
-            resources=ResourceConfig.with_cpu(preemptible=False),
+            resources=ResourceConfig.with_cpu(preemptible=False, disk=RL_COORDINATOR_CPU_DISK),
             environment=create_environment(
                 env_vars=env,
-                pip_packages=["vllm-tpu==0.13.2.post6", "sympy", "pylatexenc", "math-verify"],
+                extras=coordinator_extras,
             ),
             max_retries_failure=0,
             max_retries_preemption=0,
@@ -78,14 +99,19 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
     runtime = _create_runtime_handles(client, config)
     logger.info("Runtime handles created: curriculum, run_state, weight_transfer coordinator")
 
-    # Create worker environment
-    # Use pip_packages instead of extras to avoid uv re-resolving the full dependency
-    # tree and replacing TPU torch with CUDA torch (vllm-tpu pulls in CUDA deps).
+    # Create worker environments.
+    train_extras = _train_worker_extras(config)
+    rollout_extras = _rollout_worker_extras(config)
+
     env = {"EQX_ON_ERROR": "nan"}
     env = _add_run_env_variables(env)
-    worker_env = create_environment(
+    train_worker_env = create_environment(
         env_vars=env,
-        pip_packages=["vllm-tpu==0.13.2.post6", "sympy", "pylatexenc", "math-verify"],
+        extras=train_extras,
+    )
+    rollout_worker_env = create_environment(
+        env_vars=env,
+        extras=rollout_extras,
     )
 
     # Resource configs
@@ -111,7 +137,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
                 name=f"rl-{config.run_id}-train",
                 entrypoint=Entrypoint.from_callable(_train_worker_entry, args=(train_config, runtime)),
                 resources=train_resources,
-                environment=worker_env,
+                environment=train_worker_env,
                 max_retries_failure=run_config.max_retries_failure,
                 max_retries_preemption=run_config.max_retries_preemption,
             )
@@ -132,7 +158,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
                     name=f"rl-{config.run_id}-rollout-{i}",
                     entrypoint=Entrypoint.from_callable(_rollout_worker_entry, args=(worker_config, runtime)),
                     resources=rollout_resources,
-                    environment=worker_env,
+                    environment=rollout_worker_env,
                     max_retries_failure=run_config.max_retries_failure,
                     max_retries_preemption=run_config.max_retries_preemption,
                 )
