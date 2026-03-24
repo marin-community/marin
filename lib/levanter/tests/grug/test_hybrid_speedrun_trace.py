@@ -21,9 +21,7 @@ from experiments.grug.hybrid_mamba3.model import (
     Mamba3SisoMixer,
     Transformer,
 )
-from experiments.grug.hybrid_mamba3.optimizer import HybridSplitAdamConfig
 from experiments.speedrun.grug_hybrid_mamba3_sweep import (
-    _build_grid_runs,
     _build_model_config,
     _build_sweep,
     _build_train_config,
@@ -253,26 +251,3 @@ def test_hybrid_linear3full1_mimo_uses_more_conservative_batch_and_optimizer():
     assert train_cfg.optimizer_config.warmup >= 1536
     assert train_cfg.optimizer_config.max_grad_norm <= 0.4
     assert train_cfg.optimizer_config.learning_rate == pytest.approx(0.000875)
-
-
-def test_hybrid_split_lr_ladder_builds_best_arch_grid(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("GRUG_HYBRID_WIDTHS", "d512")
-    monkeypatch.setenv("GRUG_HYBRID_PATTERNS", "swa-linear-swa-full")
-    monkeypatch.setenv("GRUG_HYBRID_LINEAR_MODES", "mimo")
-    monkeypatch.setenv("GRUG_HYBRID_SLIDING_WINDOWS", "2048")
-    monkeypatch.setenv("GRUG_HYBRID_SPLIT_LR_LADDER", "1e-3:1.5e-3,1e-3:2e-3,1e-3:3e-3,1.5e-3:3e-3")
-
-    run_specs = _build_grid_runs()
-    assert len(run_specs) == 4
-    run_names = [run_spec.run_name for run_spec in run_specs]
-    assert run_names == [
-        "grug-hybrid-d512-swa-linear-swa-full-mimo-sw2048-m1p0-t1p5",
-        "grug-hybrid-d512-swa-linear-swa-full-mimo-sw2048-m1p0-t2p0",
-        "grug-hybrid-d512-swa-linear-swa-full-mimo-sw2048-m1p0-t3p0",
-        "grug-hybrid-d512-swa-linear-swa-full-mimo-sw2048-m1p5-t3p0",
-    ]
-
-    for run_spec in run_specs:
-        assert isinstance(run_spec.train_cfg.optimizer_config, HybridSplitAdamConfig)
-        assert run_spec.train_cfg.train_batch_size == 192
-        assert run_spec.train_cfg.optimizer_config.max_grad_norm <= 0.5

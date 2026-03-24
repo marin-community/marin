@@ -47,7 +47,6 @@ from jaxtyping import Array, Float, Int, PRNGKeyArray
 from experiments.defaults import default_validation_sets
 from experiments.grug.hybrid_mamba3.launch import GrugHybridLaunchConfig, run_grug_hybrid_trial
 from experiments.grug.hybrid_mamba3.model import HybridModelConfig as NativeHybridModelConfig
-from experiments.grug.hybrid_mamba3.optimizer import HybridSplitAdamConfig
 from experiments.grug.hybrid_mamba3.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.pretraining_datasets import nemotron_mix_block_shuffle
@@ -835,40 +834,6 @@ def _optimizer_for_model(model_cfg: NativeHybridModelConfig) -> AdamConfig:
     )
 
 
-def _split_optimizer_for_model(
-    model_cfg: NativeHybridModelConfig,
-    *,
-    mamba_learning_rate: float,
-    transformer_learning_rate: float,
-) -> HybridSplitAdamConfig:
-    base_optimizer = _optimizer_for_model(model_cfg)
-    return HybridSplitAdamConfig(
-        learning_rate=transformer_learning_rate,
-        mamba_learning_rate=mamba_learning_rate,
-        weight_decay=base_optimizer.weight_decay,
-        min_lr_ratio=base_optimizer.min_lr_ratio,
-        warmup=base_optimizer.warmup,
-        decay=base_optimizer.decay,
-        rewarmup=base_optimizer.rewarmup,
-        cooldown=base_optimizer.cooldown,
-        cycle_length=base_optimizer.cycle_length,
-        cycles=base_optimizer.cycles,
-        lr_schedule=base_optimizer.lr_schedule,
-        haps=base_optimizer.haps,
-        weight_decay_modules=base_optimizer.weight_decay_modules,
-        default_weight_decay_mask=base_optimizer.default_weight_decay_mask,
-        beta1=base_optimizer.beta1,
-        beta2=base_optimizer.beta2,
-        epsilon=base_optimizer.epsilon,
-        max_grad_norm=base_optimizer.max_grad_norm,
-        nesterov=base_optimizer.nesterov,
-        update_rms_clipping=base_optimizer.update_rms_clipping,
-        clip_update_norm=base_optimizer.clip_update_norm,
-        skip_bad_steps=base_optimizer.skip_bad_steps,
-        adamc_weight_decay=base_optimizer.adamc_weight_decay,
-    )
-
-
 def _steps_for_budget(model_cfg: NativeHybridModelConfig, batch_size: int) -> int:
     tokens_per_step = batch_size * model_cfg.max_seq_len
     step_flops = model_cfg.flops_per_token * 3 * tokens_per_step
@@ -901,18 +866,13 @@ def _build_model_config(
     )
 
 
-def _build_train_config(
-    model_cfg: NativeHybridModelConfig,
-    *,
-    optimizer_override: AdamConfig | HybridSplitAdamConfig | None = None,
-) -> SimpleTrainConfig:
+def _build_train_config(model_cfg: NativeHybridModelConfig) -> SimpleTrainConfig:
     batch_size = _batch_size_for_model(model_cfg)
-    optimizer = optimizer_override or _optimizer_for_model(model_cfg)
-    learning_rate = getattr(optimizer, "learning_rate", _optimizer_for_model(model_cfg).learning_rate)
+    optimizer = _optimizer_for_model(model_cfg)
     return SimpleTrainConfig(
         resources=ResourceConfig.with_tpu("v5p-8"),
         train_batch_size=batch_size,
-        learning_rate=learning_rate,
+        learning_rate=optimizer.learning_rate,
         explicit_mesh_axes=True,
         profiler=ProfilerConfig(enabled=False),
         train_seq_len=model_cfg.max_seq_len,
@@ -973,34 +933,6 @@ def _selected_sliding_windows() -> list[int]:
     return [int(window.strip()) for window in requested.split(",") if window.strip()]
 
 
-def _selected_split_lr_ladder() -> list[tuple[float, float]]:
-    requested = os.environ.get("GRUG_HYBRID_SPLIT_LR_LADDER")
-    if requested is None or not requested.strip():
-        return []
-
-    pairs: list[tuple[float, float]] = []
-    for raw_pair in requested.split(","):
-        raw_pair = raw_pair.strip()
-        if not raw_pair:
-            continue
-        try:
-            mamba_lr, transformer_lr = raw_pair.split(":", 1)
-        except ValueError as exc:
-            raise ValueError(
-                "GRUG_HYBRID_SPLIT_LR_LADDER entries must be formatted as 'mamba_lr:transformer_lr'"
-            ) from exc
-        pairs.append((float(mamba_lr), float(transformer_lr)))
-    return pairs
-
-
-def _lr_label(lr: float) -> str:
-    return f"{lr * 1e3:.1f}".replace(".", "p")
-
-
-def _split_lr_suffix(*, mamba_lr: float, transformer_lr: float) -> str:
-    return f"-m{_lr_label(mamba_lr)}-t{_lr_label(transformer_lr)}"
-
-
 def _build_sweep() -> list[tuple[str, NativeHybridModelConfig]]:
     runs: list[tuple[str, NativeHybridModelConfig]] = []
     sliding_windows = _selected_sliding_windows()
@@ -1055,55 +987,6 @@ def _candidate_catalog() -> dict[str, NativeHybridModelConfig]:
     return {run_name: model_cfg for run_name, model_cfg in _build_sweep()}
 
 
-def _build_grid_runs() -> list[GridRunSpec]:
-    run_specs: list[GridRunSpec] = []
-    split_lr_ladder = _selected_split_lr_ladder()
-
-    for base_run_name, model_cfg in _build_sweep():
-        base_tags = (
-            "grug",
-            "hybrid",
-            "mamba3",
-            f"pattern={model_cfg.pattern_label}",
-            f"width={model_cfg.width_label}",
-            f"window={model_cfg.sliding_window}",
-            f"mode={model_cfg.linear_mode}",
-        )
-
-        if split_lr_ladder and "linear_attention" in model_cfg.layer_types:
-            for mamba_lr, transformer_lr in split_lr_ladder:
-                optimizer = _split_optimizer_for_model(
-                    model_cfg,
-                    mamba_learning_rate=mamba_lr,
-                    transformer_learning_rate=transformer_lr,
-                )
-                run_specs.append(
-                    GridRunSpec(
-                        run_name=f"{base_run_name}{_split_lr_suffix(mamba_lr=mamba_lr, transformer_lr=transformer_lr)}",
-                        model_cfg=model_cfg,
-                        train_cfg=_build_train_config(model_cfg, optimizer_override=optimizer),
-                        tags=(
-                            *base_tags,
-                            "split-lr",
-                            f"mamba_lr={mamba_lr}",
-                            f"transformer_lr={transformer_lr}",
-                        ),
-                    )
-                )
-            continue
-
-        run_specs.append(
-            GridRunSpec(
-                run_name=base_run_name,
-                model_cfg=model_cfg,
-                train_cfg=_build_train_config(model_cfg),
-                tags=base_tags,
-            )
-        )
-
-    return run_specs
-
-
 def _build_trial_train_config(
     model_cfg: NativeHybridModelConfig,
     parameters: Mapping[str, SearchValue],
@@ -1141,14 +1024,6 @@ class HybridLaunchConfig:
     wandb_group: str
     tags: tuple[str, ...]
     load_checkpoint_path: str | None = None
-
-
-@dataclass(frozen=True)
-class GridRunSpec:
-    run_name: str
-    model_cfg: NativeHybridModelConfig
-    train_cfg: SimpleTrainConfig
-    tags: tuple[str, ...]
 
 
 def _resume_existing_checkpoints_enabled() -> bool:
@@ -1705,19 +1580,29 @@ def _grid_main() -> None:
     _repoint_modules_for_ray(module_classes)
 
     steps: list[ExecutorStep] = []
-    for run_spec in _build_grid_runs():
+    for run_name, model_cfg in _build_sweep():
+        train_cfg = _build_train_config(model_cfg)
+        tags = (
+            "grug",
+            "hybrid",
+            "mamba3",
+            f"pattern={model_cfg.pattern_label}",
+            f"width={model_cfg.width_label}",
+            f"window={model_cfg.sliding_window}",
+            f"mode={model_cfg.linear_mode}",
+        )
         steps.append(
             ExecutorStep(
-                name=os.path.join("checkpoints", run_spec.run_name),
+                name=os.path.join("checkpoints", run_name),
                 fn=remote(run_hybrid_trial, resources=ResourceConfig.with_cpu()),
                 config=HybridLaunchConfig(
                     data=HYBRID_DATA_WITH_EVAL,
-                    model_cfg=run_spec.model_cfg,
-                    train_cfg=run_spec.train_cfg,
+                    model_cfg=model_cfg,
+                    train_cfg=train_cfg,
                     output_path=this_output_path(),
-                    run_name=run_spec.run_name,
+                    run_name=run_name,
                     wandb_group="grug-hybrid-mamba3-grid-3e18",
-                    tags=run_spec.tags,
+                    tags=tags,
                 ),
             )
         )
