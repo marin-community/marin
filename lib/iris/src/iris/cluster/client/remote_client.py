@@ -73,7 +73,7 @@ class RemoteClusterClient:
         reservation: cluster_pb2.ReservationConfig | None = None,
         preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: cluster_pb2.ExistingJobPolicy = cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
-    ) -> None:
+    ) -> JobName:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
         replicas = adjust_tpu_replicas(resources.device if resources.HasField("device") else None, replicas)
@@ -112,9 +112,10 @@ class RemoteClusterClient:
             request.reservation.CopyFrom(reservation)
 
         def _call():
-            self._client.launch_job(request)
+            return self._client.launch_job(request)
 
-        call_with_retry(f"launch_job({job_id})", _call)
+        response = call_with_retry(f"launch_job({job_id})", _call)
+        return JobName.from_wire(response.job_id)
 
     def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:
         def _call():

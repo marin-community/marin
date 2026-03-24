@@ -995,7 +995,7 @@ def test_static_auth_rpc_access():
 
         # Unauthenticated: should be rejected with 401
         unauth_client = ControllerServiceClientSync(address=url, timeout_ms=5000)
-        with pytest.raises(ConnectError, match=r"(?i)authorization"):
+        with pytest.raises(ConnectError, match=r"(?i)authenticat"):
             unauth_client.list_workers(list_req)
         unauth_client.close()
 
