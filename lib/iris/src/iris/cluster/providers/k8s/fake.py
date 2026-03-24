@@ -42,6 +42,7 @@ VALID_RESOURCE_TYPES = frozenset(
         "nvidia.com/gpu",
         "google.com/tpu",
         "ephemeral-storage",
+        "rdma/ib",
     }
 )
 
