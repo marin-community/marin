@@ -34,6 +34,7 @@ import cloudpickle
 import pyarrow as pa
 from iris.marin_fs import open_url, url_to_fs
 from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
+from fray.v2.actor import request_shutdown
 from fray.v2.client import JobHandle
 from fray.v2.types import Entrypoint, JobRequest
 from iris.marin_fs import marin_temp_bucket
@@ -928,7 +929,8 @@ class ZephyrWorker:
         finally:
             self._shutdown_event.set()
             heartbeat_thread.join(timeout=5.0)
-            logger.debug("[%s] Polling loop ended", self._worker_id)
+            logger.debug("[%s] Polling loop ended, requesting host shutdown", self._worker_id)
+            request_shutdown()
 
     def _heartbeat_loop(
         self, coordinator: ActorHandle, interval: float = 5.0, max_consecutive_failures: int = 5
