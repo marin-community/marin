@@ -3,15 +3,15 @@
     "hybrid_mamba3"
   ],
   "base_sha": "05d90800d74395cc66c689c230b19bea7f5ed941",
-  "head_sha": "f6f0c5b9aa0800cefc20b4cce8895d7b3c75461e",
+  "head_sha": "206c5f501f307bcecda863ecb40dce0df8bc3ce0",
   "report_count": 1,
   "reports": [
     {
       "closest_variant": "base",
-      "distance_score": 1127,
+      "distance_score": 1036,
       "report_relpath": "hybrid_mamba3/index.html",
       "status_counts": {
-        "added": 2,
+        "added": 1,
         "changed": 3,
         "removed": 0,
         "unchanged": 1
