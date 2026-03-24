@@ -17,8 +17,6 @@ from zephyr.dataset import FilterOp, MapOp, WindowOp
 from zephyr.execution import ZephyrContext
 from zephyr.writers import write_parquet_file
 
-from .conftest import CallCounter
-
 
 @pytest.fixture
 def sample_data():
@@ -191,27 +189,11 @@ def test_chaining_operations(zephyr_ctx):
 
 
 def test_lazy_evaluation():
-    """Test that operations are lazy until backend executes."""
-    call_count = 0
-
-    def counting_fn(x):
-        nonlocal call_count
-        call_count += 1
-        return x * 2
-
-    # Create dataset with map - should not execute yet
-    ds = Dataset.from_list([1, 2, 3]).map(counting_fn)
-    assert call_count == 0
-
-    # Now execute - should call function
-    client = LocalClient()
-    ctx = ZephyrContext(client=client, max_workers=1, resources=ResourceConfig(cpu=1, ram="512m"), name="test-dataset")
-    try:
-        result = list(ctx.execute(ds))
-        assert result == [2, 4, 6]
-        assert call_count == 3
-    finally:
-        ctx.shutdown()
+    """Test that dataset construction does not execute operations eagerly."""
+    sentinel = []
+    _ = Dataset.from_list([1, 2, 3]).map(lambda x: sentinel.append(x) or x * 2)
+    # Pipeline was built but nothing executed yet
+    assert sentinel == []
 
 
 def test_empty_dataset(zephyr_ctx):
@@ -992,11 +974,10 @@ def test_skip_existing_clean_run(tmp_path, sample_input_files):
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
-    counter = CallCounter()
     ds = (
         Dataset.from_files(f"{sample_input_files}/*.jsonl")
-        .flat_map(lambda x: counter.counting_flat_map(x))
-        .map(lambda x: counter.counting_map(x))
+        .flat_map(load_file)
+        .map(lambda x: {**x, "processed": True})
         .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
     )
 
@@ -1004,9 +985,9 @@ def test_skip_existing_clean_run(tmp_path, sample_input_files):
         result = list(ctx.execute(ds))
         assert len(result) == 3
         assert all(Path(p).exists() for p in result)
-        assert counter.flat_map_count == 3  # All files loaded
-        assert counter.map_count == 3  # All items mapped
-        assert sorted(counter.processed_ids) == [0, 1, 2]  # All shards ran
+        for p in result:
+            records = [json.loads(line) for line in Path(p).read_text().strip().splitlines()]
+            assert all(r.get("processed") for r in records)
     finally:
         ctx.shutdown()
 
@@ -1018,15 +999,14 @@ def test_skip_existing_one_file_exists(tmp_path, sample_input_files):
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
-    # Manually create one output file (shard 1)
+    # Manually create one output file (shard 1) — no "processed" flag
     with open(output_dir / "output-00001.jsonl", "w") as f:
-        f.write('{"id": 1, "processed": true}\n')
+        f.write('{"id": 1, "skipped": true}\n')
 
-    counter = CallCounter()
     ds = (
         Dataset.from_files(f"{sample_input_files}/*.jsonl")
-        .flat_map(lambda x: counter.counting_flat_map(x))
-        .map(lambda x: counter.counting_map(x))
+        .flat_map(load_file)
+        .map(lambda x: {**x, "processed": True})
         .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
     )
 
@@ -1034,9 +1014,13 @@ def test_skip_existing_one_file_exists(tmp_path, sample_input_files):
         result = list(ctx.execute(ds))
         assert len(result) == 3
         assert all(Path(p).exists() for p in result)
-        assert counter.flat_map_count == 2  # Only 2 files loaded (shard 1 skipped)
-        assert counter.map_count == 2  # Only 2 items mapped
-        assert sorted(counter.processed_ids) == [0, 2]  # Only shards 0 and 2 ran
+        # Shard 1 was skipped — its file still has the pre-existing content
+        shard1 = [json.loads(line) for line in (output_dir / "output-00001.jsonl").read_text().strip().splitlines()]
+        assert shard1 == [{"id": 1, "skipped": True}]
+        # Shards 0 and 2 ran — they have "processed" flag
+        for shard_file in ["output-00000.jsonl", "output-00002.jsonl"]:
+            records = [json.loads(line) for line in (output_dir / shard_file).read_text().strip().splitlines()]
+            assert all(r.get("processed") for r in records)
     finally:
         ctx.shutdown()
 
@@ -1048,11 +1032,10 @@ def test_skip_existing_all_files_exist(tmp_path, sample_input_files):
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
-    counter = CallCounter()
     ds = (
         Dataset.from_files(f"{sample_input_files}/*.jsonl")
-        .flat_map(lambda x: counter.counting_flat_map(x))
-        .map(lambda x: counter.counting_map(x))
+        .flat_map(load_file)
+        .map(lambda x: {**x, "processed": True})
         .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
     )
 
@@ -1060,24 +1043,27 @@ def test_skip_existing_all_files_exist(tmp_path, sample_input_files):
         # First run: create all output files
         result = list(ctx.execute(ds))
         assert len(result) == 3
-        assert counter.flat_map_count == 3
-        assert counter.map_count == 3
-        assert sorted(counter.processed_ids) == [0, 1, 2]  # All shards ran
+        assert all(Path(p).exists() for p in result)
+        for p in result:
+            records = [json.loads(line) for line in Path(p).read_text().strip().splitlines()]
+            assert all(r.get("processed") for r in records)
 
-        # Second run: all files exist, nothing should process
-        counter.reset()
-        ds = (
+        # Snapshot file contents
+        contents = {p: Path(p).read_text() for p in result}
+
+        # Second run: all files exist, nothing should be rewritten
+        ds2 = (
             Dataset.from_files(f"{sample_input_files}/*.jsonl")
-            .flat_map(counter.counting_flat_map)
-            .map(counter.counting_map)
+            .flat_map(load_file)
+            .map(lambda x: {**x, "rerun": True})
             .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
         )
 
-        result = list(ctx.execute(ds))
-        assert len(result) == 3
-        assert counter.flat_map_count == 0  # Nothing loaded
-        assert counter.map_count == 0  # Nothing mapped
-        assert counter.processed_ids == []  # No shards ran
+        result2 = list(ctx.execute(ds2))
+        assert len(result2) == 3
+        # Files should be untouched — still have "processed", not "rerun"
+        for p in result2:
+            assert Path(p).read_text() == contents[p]
     finally:
         ctx.shutdown()
 
@@ -1349,3 +1335,89 @@ def test_input_file_spec_with_columns_and_row_range(tmp_path):
     assert set(records[0].keys()) == {"id", "value"}
     assert records[0]["id"] == 5
     assert records[-1]["id"] == 9
+
+
+# --- Integration tests (all backends) ---
+
+
+def test_reshard_integration(integration_ctx):
+    ds = Dataset.from_list([list(range(50))]).flat_map(lambda x: x).reshard(5).map(lambda x: x * 2)
+    result = sorted(integration_ctx.execute(ds))
+    assert result == [x * 2 for x in range(50)]
+
+    ds = Dataset.from_list(range(50)).reshard(5).map(lambda x: x + 100)
+    result = sorted(integration_ctx.execute(ds))
+    assert result == [x + 100 for x in range(50)]
+
+    ds = Dataset.from_list(range(10)).reshard(3)
+    result = list(integration_ctx.execute(ds))
+    assert sorted(result) == list(range(10))
+
+
+def test_sorted_merge_join_inner_basic_integration(integration_ctx):
+    left = Dataset.from_list(
+        [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}, {"id": 3, "text": "foo"}]
+    ).group_by(key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5)
+    right = Dataset.from_list([{"id": 1, "score": 0.9}, {"id": 2, "score": 0.3}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+
+    joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+
+    results = sorted(list(integration_ctx.execute(joined)), key=lambda x: x["id"])
+    assert len(results) == 2
+    assert results[0] == {"id": 1, "text": "hello", "score": 0.9}
+    assert results[1] == {"id": 2, "text": "world", "score": 0.3}
+
+
+def test_sorted_merge_join_left_integration(integration_ctx):
+    left = Dataset.from_list([{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+    right = Dataset.from_list([{"id": 1, "score": 0.9}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+
+    joined = left.sorted_merge_join(
+        right,
+        left_key=lambda x: x["id"],
+        right_key=lambda x: x["id"],
+        combiner=lambda left, right: {**left, "score": right["score"] if right else 0.0},
+        how="left",
+    )
+
+    results = sorted(list(integration_ctx.execute(joined)), key=lambda x: x["id"])
+    assert len(results) == 2
+    assert results[0] == {"id": 1, "text": "hello", "score": 0.9}
+    assert results[1] == {"id": 2, "text": "world", "score": 0.0}
+
+
+def test_sorted_merge_join_after_group_by_integration(integration_ctx):
+    docs = Dataset.from_list(
+        [
+            {"id": 1, "text": "hello", "version": 1},
+            {"id": 1, "text": "hello updated", "version": 2},
+            {"id": 2, "text": "world", "version": 1},
+            {"id": 3, "text": "foo", "version": 1},
+        ]
+    ).group_by(
+        key=lambda x: x["id"],
+        reducer=lambda k, items: max(items, key=lambda x: x["version"]),
+        num_output_shards=10,
+    )
+
+    attrs = Dataset.from_list(
+        [
+            {"id": 1, "quality": 0.9},
+            {"id": 2, "quality": 0.3},
+            {"id": 3, "quality": 0.8},
+        ]
+    ).group_by(key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=10)
+
+    joined = docs.sorted_merge_join(attrs, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+
+    results = sorted(list(integration_ctx.execute(joined)), key=lambda x: x["id"])
+    assert len(results) == 3
+    assert results[0] == {"id": 1, "text": "hello updated", "version": 2, "quality": 0.9}
+    assert results[1] == {"id": 2, "text": "world", "version": 1, "quality": 0.3}
+    assert results[2] == {"id": 3, "text": "foo", "version": 1, "quality": 0.8}

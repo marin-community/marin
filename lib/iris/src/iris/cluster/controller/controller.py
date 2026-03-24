@@ -48,7 +48,7 @@ from iris.cluster.controller.db import (
     running_tasks_by_worker,
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.k8s.provider import KubernetesProvider
+from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.scheduler import (
     JobRequirements,
@@ -65,7 +65,6 @@ from iris.cluster.controller.transitions import (
     Assignment,
     ClusterCapacity,
     ControllerTransitions,
-    DispatchBatch,
     HeartbeatAction,
     ReservationClaim,
     SchedulingEvent,
@@ -713,7 +712,7 @@ class Controller:
     def __init__(
         self,
         config: ControllerConfig,
-        provider: TaskProvider | KubernetesProvider,
+        provider: TaskProvider | K8sTaskProvider,
         autoscaler: "Autoscaler | None" = None,
         threads: ThreadContainer | None = None,
         db: ControllerDB | None = None,
@@ -725,7 +724,7 @@ class Controller:
             )
 
         self._config = config
-        self._provider: TaskProvider | KubernetesProvider = provider
+        self._provider: TaskProvider | K8sTaskProvider = provider
         self._provider_scheduling_events: list[SchedulingEvent] = []
         self._provider_capacity: ClusterCapacity | None = None
 
@@ -733,7 +732,7 @@ class Controller:
         if db is not None:
             self._db = db
         else:
-            self._db = ControllerDB(db_path=config.local_state_dir / "controller.sqlite3")
+            self._db = ControllerDB(db_dir=config.local_state_dir / "db")
         self._log_store = LogStore(
             log_dir=config.local_state_dir / "logs",
             remote_log_dir=f"{config.remote_state_dir.rstrip('/')}/logs",
@@ -761,6 +760,7 @@ class Controller:
             port=config.port,
             auth_verifier=config.auth_verifier,
             auth_provider=config.auth_provider,
+            auth_optional=config.auth.optional if config.auth else False,
         )
 
         # Ingest process logs into the LogStore so they are available via FetchLogs.
@@ -832,7 +832,7 @@ class Controller:
     def start(self) -> None:
         """Start main controller loop, dashboard server, and optionally autoscaler."""
         self._started = True
-        if isinstance(self._provider, KubernetesProvider):
+        if isinstance(self._provider, K8sTaskProvider):
             self._heartbeat_thread = self._threads.spawn(self._run_direct_provider_loop, name="provider-loop")
         else:
             self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
@@ -987,7 +987,7 @@ class Controller:
                 logger.exception("Provider sync round failed, will retry next interval")
 
     def _run_direct_provider_loop(self, stop_event: threading.Event) -> None:
-        """Provider sync loop for KubernetesProvider: no scheduling, no workers."""
+        """Provider sync loop for K8sTaskProvider: no scheduling, no workers."""
         limiter = RateLimiter(interval_seconds=self._config.heartbeat_interval.to_seconds())
         while not stop_event.is_set():
             self._heartbeat_event.wait(timeout=limiter.time_until_next())
@@ -1003,10 +1003,12 @@ class Controller:
                 logger.exception("Direct provider sync round failed, will retry next interval")
 
     def _sync_direct_provider(self) -> None:
-        assert isinstance(self._provider, KubernetesProvider)
+        assert isinstance(self._provider, K8sTaskProvider)
         provider = self._provider
         with self._heartbeat_lock:
-            batch = self._transitions.drain_for_direct_provider()
+            batch = self._transitions.drain_for_direct_provider(
+                capacity=self._provider_capacity,
+            )
             if not batch.tasks_to_run and not batch.running_tasks and not batch.tasks_to_kill:
                 return
             result = provider.sync(batch)
@@ -1393,7 +1395,7 @@ class Controller:
         Called after state has marked tasks as killed. For each task that had
         a worker assigned, buffers the kill request for delivery via the next
         heartbeat to that worker. Tasks without a worker assignment are routed
-        to the direct kill queue when a KubernetesProvider is configured.
+        to the direct kill queue when a K8sTaskProvider is configured.
         """
         any_buffered = False
         mapping = _task_worker_mapping(self._db, task_ids)
@@ -1406,7 +1408,7 @@ class Controller:
             any_buffered = True
 
         # Route kills for tasks without worker assignment to the direct kill queue.
-        if isinstance(self._provider, KubernetesProvider):
+        if isinstance(self._provider, K8sTaskProvider):
             for task_id in task_ids:
                 if task_id not in mapping:
                     self._transitions.buffer_direct_kill(task_id.to_wire())
@@ -1426,7 +1428,7 @@ class Controller:
         short-circuits that by failing any worker that hasn't heartbeated in
         HEARTBEAT_STALENESS_THRESHOLD (15 minutes).
         """
-        if isinstance(self._provider, KubernetesProvider):
+        if isinstance(self._provider, K8sTaskProvider):
             return
         threshold_ms = HEARTBEAT_STALENESS_THRESHOLD.to_ms()
         workers = healthy_active_workers_with_attributes(self._db)
@@ -1459,11 +1461,7 @@ class Controller:
 
         # Phase 1: drain dispatch for all healthy workers.
         with slow_log(logger, "provider sync phase 1 (snapshot)", threshold_ms=100):
-            batches: list[DispatchBatch] = []
-            for w in healthy_active_workers_with_attributes(self._db):
-                batch = self._transitions.drain_dispatch(w.worker_id)
-                if batch:
-                    batches.append(batch)
+            batches = self._transitions.drain_dispatch_all()
 
         if not batches:
             return
@@ -1475,15 +1473,26 @@ class Controller:
         fail_count = 0
         failed_workers: list[str] = []
         with slow_log(logger, "provider sync phase 3 (apply results)", threshold_ms=500):
+            # Separate successes from failures so we can batch the common case.
+            success_reqs = []
+            failure_entries = []
             for batch, apply_req, error in results:
                 if apply_req is not None:
-                    result = self._transitions.apply_heartbeat(apply_req)
-                    action = result.action
-                    if result.tasks_to_kill:
-                        self.kill_tasks_on_workers(result.tasks_to_kill)
+                    success_reqs.append(apply_req)
                 else:
-                    logger.debug("Sync error for %s: %s", batch.worker_id, error)
-                    action = self._transitions.fail_heartbeat(batch, error or "unknown error")
+                    failure_entries.append((batch, error or "unknown error"))
+
+            # Batch all successful heartbeats in one transaction.
+            all_tasks_to_kill: set[JobName] = set()
+            if success_reqs:
+                batch_results = self._transitions.apply_heartbeats_batch(success_reqs)
+                for result in batch_results:
+                    all_tasks_to_kill.update(result.tasks_to_kill)
+
+            # Handle failures individually (rare, need per-worker side effects).
+            for batch, error in failure_entries:
+                logger.debug("Sync error for %s: %s", batch.worker_id, error)
+                action = self._transitions.fail_heartbeat(batch, error)
 
                 if action == HeartbeatAction.WORKER_FAILED:
                     fail_count += 1
@@ -1516,6 +1525,9 @@ class Controller:
                 elif action == HeartbeatAction.TRANSIENT_FAILURE:
                     fail_count += 1
                     failed_workers.append(batch.worker_id)
+
+            if all_tasks_to_kill:
+                self.kill_tasks_on_workers(all_tasks_to_kill)
 
         elapsed = round_timer.elapsed_ms()
         level = logging.WARNING if elapsed > _SLOW_HEARTBEAT_MS else logging.DEBUG
@@ -1620,12 +1632,12 @@ class Controller:
         return self._transitions
 
     @property
-    def provider(self) -> TaskProvider | KubernetesProvider:
+    def provider(self) -> TaskProvider | K8sTaskProvider:
         return self._provider
 
     @property
     def has_direct_provider(self) -> bool:
-        return isinstance(self._provider, KubernetesProvider)
+        return isinstance(self._provider, K8sTaskProvider)
 
     @property
     def provider_scheduling_events(self) -> list[SchedulingEvent]:

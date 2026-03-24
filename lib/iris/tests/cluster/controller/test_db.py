@@ -17,7 +17,7 @@ from iris.cluster.controller.db import _SqlPredicate
 
 @pytest.fixture
 def db(tmp_path: Path) -> ControllerDB:
-    return ControllerDB(tmp_path / "test.db")
+    return ControllerDB(db_dir=tmp_path)
 
 
 def _create_simple_table(db: ControllerDB) -> None:
@@ -297,6 +297,31 @@ def test_read_snapshot_pool_returns_connections(db: ControllerDB) -> None:
     assert db._read_pool.qsize() == pool_size
 
 
+def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
+    """replace_from() must re-attach the auth DB so auth tables remain accessible."""
+    db = ControllerDB(db_dir=tmp_path)
+
+    # Write to an auth table
+    db.execute(
+        "INSERT INTO auth.api_keys (key_id, key_hash, key_prefix, name, user_id, created_at_ms) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        ("id1", "hash1", "pfx", "test-key", "user1", 1000),
+    )
+
+    # Create a copy of the DB to replace from (replace_from expects a directory)
+    backup_dir = tmp_path / "backup"
+    backup_dir.mkdir()
+    db.backup_to(backup_dir / "controller.sqlite3")
+
+    db.replace_from(str(backup_dir))
+
+    # Auth tables should still be accessible after replace_from
+    rows = db.fetchall("SELECT name FROM auth.api_keys WHERE key_hash = 'hash1'")
+    assert len(rows) == 1
+    assert rows[0]["name"] == "test-key"
+    db.close()
+
+
 def test_migration_with_dml_does_not_leave_open_transaction(tmp_path: Path) -> None:
     """Migrations that issue DML (e.g. UPDATE) must not leave an implicit
     transaction open, which would cause the subsequent BEGIN IMMEDIATE for
@@ -304,7 +329,7 @@ def test_migration_with_dml_does_not_leave_open_transaction(tmp_path: Path) -> N
     # ControllerDB.__init__ already runs apply_migrations which applies all
     # standard migrations. Simulate adding a new migration with DML by
     # directly exercising the commit-after-migrate pattern on the raw conn.
-    db = ControllerDB(tmp_path / "test_dml.db")
+    db = ControllerDB(db_dir=tmp_path)
 
     # Insert a row so the UPDATE below has something to hit
     with db.transaction() as cur:

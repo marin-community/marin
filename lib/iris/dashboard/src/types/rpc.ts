@@ -94,6 +94,7 @@ export interface TaskStatus {
   attempts?: TaskAttempt[]
   pendingReason?: string
   canBeScheduled?: boolean
+  containerId?: string
 }
 
 // -- Jobs --
@@ -466,15 +467,3 @@ export interface ListApiKeysResponse {
   keys: ApiKeyInfo[]
 }
 
-// -- Generic Query API --
-
-/** Column metadata describing a single column in a query result set. */
-export interface ColumnMeta {
-  name: string
-  type: string
-}
-
-export interface RawQueryResponse {
-  columns: ColumnMeta[]
-  rows: string[]
-}

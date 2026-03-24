@@ -127,3 +127,23 @@ tr {
 .highlight, .path-link:hover {
   background-color: #e6f3ff;
 }
+
+/* Always show scrollbars in side-by-side panel container */
+.side-by-side-container {
+  scrollbar-width: auto;
+  scrollbar-color: #bbb #f0f0f0;
+}
+.side-by-side-container::-webkit-scrollbar {
+  height: 12px;
+}
+.side-by-side-container::-webkit-scrollbar-track {
+  background: #f0f0f0;
+  border-radius: 6px;
+}
+.side-by-side-container::-webkit-scrollbar-thumb {
+  background: #bbb;
+  border-radius: 6px;
+}
+.side-by-side-container::-webkit-scrollbar-thumb:hover {
+  background: #999;
+}

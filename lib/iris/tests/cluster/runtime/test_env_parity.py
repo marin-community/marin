@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from iris.cluster.k8s.provider import PodConfig, _build_pod_manifest
+from iris.cluster.providers.k8s.tasks import PodConfig, _build_pod_manifest
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.rpc import cluster_pb2
 

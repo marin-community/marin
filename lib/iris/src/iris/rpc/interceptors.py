@@ -6,7 +6,7 @@ import logging
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
-from iris.rpc.errors import connect_error_with_traceback
+from iris.rpc.errors import connect_error_sanitized, connect_error_with_traceback
 from iris.time_utils import Timer
 
 logger = logging.getLogger(__name__)
@@ -18,9 +18,18 @@ class RequestTimingInterceptor:
     """Logs method name + duration for every unary RPC.
 
     Also converts unhandled (non-ConnectError) exceptions into ConnectErrors
-    with full server-side tracebacks attached as ErrorDetails, so clients can
-    see exactly where the failure occurred.
+    with server-side tracebacks attached as ErrorDetails when include_traceback
+    is True. Tracebacks are always logged server-side regardless.
     """
+
+    def __init__(self, include_traceback: bool = False):
+        self._include_traceback = include_traceback
+
+    def _make_connect_error(self, method: str, exc: Exception) -> ConnectError:
+        message = f"RPC {method}: {exc}"
+        if self._include_traceback:
+            return connect_error_with_traceback(Code.INTERNAL, message, exc=exc)
+        return connect_error_sanitized(Code.INTERNAL, message, exc=exc)
 
     def intercept_unary_sync(self, call_next, request, ctx):
         method = ctx.method().name
@@ -38,7 +47,7 @@ class RequestTimingInterceptor:
             raise
         except Exception as e:
             logger.warning("RPC %s failed after %dms: %s", method, timer.elapsed_ms(), e, exc_info=True)
-            raise connect_error_with_traceback(Code.INTERNAL, f"RPC {method}: {e}", exc=e) from e
+            raise self._make_connect_error(method, e) from e
 
     async def intercept_unary(self, call_next, request, ctx):
         method = ctx.method().name
@@ -56,4 +65,4 @@ class RequestTimingInterceptor:
             raise
         except Exception as e:
             logger.warning("RPC %s failed after %dms: %s", method, timer.elapsed_ms(), e, exc_info=True)
-            raise connect_error_with_traceback(Code.INTERNAL, f"RPC {method}: {e}", exc=e) from e
+            raise self._make_connect_error(method, e) from e
