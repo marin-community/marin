@@ -359,6 +359,30 @@ def test_inv_sqrt_decay_lr_schedule():
     assert sched_fn(1000) > 0
 
 
+def test_inv_sqrt_decay_lr_schedule_honors_min_lr():
+    """InvSqrtDecayLrSchedule should clamp to min_lr when decay_constant is large."""
+    from levanter.optim.config import InvSqrtDecayLrSchedule
+
+    optimizer = AdamConfig(
+        learning_rate=1e-3,
+        weight_decay=0.0,
+        warmup=0.0,
+        min_lr_ratio=0.1,
+        lr_schedule=InvSqrtDecayLrSchedule(decay_constant=200.0),
+    )
+
+    sched_fn = optimizer.lr_scheduler(1000)
+    min_lr = 1e-3 * 0.1  # 1e-4
+
+    # Without clamping, lr at t=T would be 1e-3 / sqrt(1+200) ≈ 7.06e-5 < min_lr
+    unclamped = 1e-3 / np.sqrt(1 + 200.0)
+    assert unclamped < min_lr, "test precondition: unclamped value should be below min_lr"
+
+    # With clamping, schedule should never go below min_lr
+    assert np.isclose(sched_fn(1000), min_lr, atol=1e-7)
+    assert sched_fn(500) >= min_lr - 1e-10
+
+
 def test_warmup_longer_than_run_does_not_jump():
     optimizer = AdamConfig(
         learning_rate=3e-3,

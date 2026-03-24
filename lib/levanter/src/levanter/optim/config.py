@@ -114,9 +114,10 @@ class InvSqrtDecayLrSchedule(LrSchedule):
     def build(self, ctx: LrScheduleContext):
         c = self.decay_constant
         lr = ctx.learning_rate
+        min_lr = ctx.min_lr
 
         def schedule(count):
-            return lr / jnp.sqrt(1.0 + c * count / ctx.decay_steps)
+            return jnp.maximum(min_lr, lr / jnp.sqrt(1.0 + c * count / ctx.decay_steps))
 
         return schedule
 
