@@ -329,6 +329,9 @@ class MoEMLP(eqx.Module):
         d, e, i = cfg.hidden_dim, cfg.num_experts, cfg.intermediate_dim
         w_gate = _init_weight(k_gate, (e, d, i), cfg.initializer_std)
         w_up = _init_weight(k_up, (e, d, i), cfg.initializer_std)
+        # TODO: Explore whether concatenating gate/up at init (instead of keeping separate params)
+        # is (1) a meaningful MFU speedup and (2) a meaningful perf hit due to AdamH treating the
+        # concatenated tensor as a single parameter for its scale-invariant norm computation.
         w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)
 
         return MoEMLP(
