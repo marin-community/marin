@@ -11,17 +11,19 @@ from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_docu
 def build_steps() -> list[StepSpec]:
     raw = StepSpec(
         name="raw/fineweb-edu-sample-10bt",
-        override_output_path="raw/fineweb-edu-87f0914/sample/10BT",
+        # TODO: allow to override via relative override path in StepSpec
+        override_output_path=f"{marin_prefix()}/raw/fineweb-edu-87f0914/sample/10BT",
     )
     dedup = StepSpec(
         name="dedup_sample/10BT",
+        deps=[raw],
         fn=lambda op: dedup_fuzzy_document(
-            input_paths=f"{marin_prefix()}/{raw.output_path}",
+            input_paths=raw.output_path,
             output_path=op,
             max_parallelism=1024,
         ),
     )
-    return [dedup]
+    return [raw, dedup]
 
 
 if __name__ == "__main__":
