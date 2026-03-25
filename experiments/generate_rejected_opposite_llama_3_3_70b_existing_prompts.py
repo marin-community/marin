@@ -2,24 +2,28 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Run the refactored local `generate_responses.py` path on a known-good prompts artifact.
+Run standalone rejected-side opposite-mode response generation on a known-good prompts artifact.
 
-This verifies that alignment response generation now goes through batched
-`vllm serve` instead of direct `llm.generate(...)`, while preserving the output
-schema and using the staged `us-central1` GCS checkpoint.
+This validates the new fail-closed rejected-only `opposite` prompt strategy
+without involving the full alignment pipeline. The run uses the staged
+`us-central1` Llama 3.3 70B checkpoint and an existing prompt artifact that was
+generated successfully from the OpenAI model-spec smoke statement.
 
 Submit to Iris:
 
     uv run iris --config lib/iris/examples/marin.yaml job run \
         --no-wait \
-        --extra marin:tpu \
-        --tpu v5p-8 \
+        --job-name generate-rejected-opposite-llama-3-3-70b-existing-prompts \
+        --cpu 4 \
+        --memory 16GB \
+        --disk 10GB \
         --region us-central1 \
-        --zone us-central1-a \
-        -- python experiments/generate_responses_llama_3_3_70b_existing_prompts_refactored.py
+        -- python experiments/generate_rejected_opposite_llama_3_3_70b_existing_prompts.py
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 from experiments.models import llama_3_3_70b_instruct
 from marin.alignment.generate_responses import (
@@ -32,13 +36,11 @@ from marin.alignment.inference_config import VLLMConfig
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.execution.remote import remote
 
-PROMPTS_PATH = "gs://marin-us-central1/align/openai_spec_smoke/prompts-8a5a5d"
+PROMPTS_PATH = "gs://marin-us-central1/align/debug_generate_prompts_llama_3_3_70b_refactored/prompts-f29568"
+SPEC_PATH = str(Path(__file__).parent / "posttrain" / "specs" / "openai_model_spec.jsonl")
 MODEL_STEP = llama_3_3_70b_instruct
-JOB_DESCRIPTION = " ".join(
-    [
-        "Refactored generate_responses.py validation on succeeded prompts",
-        "with staged us-central1 Llama 3.3 70B",
-    ]
+DESCRIPTION = (
+    "Standalone rejected-only opposite-mode generation on existing prompts with staged us-central1 Llama 3.3 70B"
 )
 
 
@@ -53,8 +55,8 @@ llama_3_3_70b_vllm = VLLMConfig(
 )
 
 response_step = ExecutorStep(
-    name="align/debug_generate_responses_llama_3_3_70b_existing_prompts_refactored/responses",
-    description="Verify refactored generate_responses.py via batched vllm serve on succeeded prompts artifact",
+    name="align/debug_generate_rejected_opposite_llama_3_3_70b_existing_prompts/responses",
+    description="Generate rejected-only opposite-mode responses on a known-good prompts artifact",
     fn=remote(
         generate_responses,
         resources=llama_3_3_70b_vllm.resources,
@@ -66,10 +68,11 @@ response_step = ExecutorStep(
         output_path=this_output_path(),
         model_config=llama_3_3_70b_vllm,
         role=ResponseRole.REJECTED,
-        rejected_prompt_strategy=RejectedPromptStrategy.UNGUIDED,
+        rejected_prompt_strategy=RejectedPromptStrategy.OPPOSITE,
         n=1,
         temperature=0.7,
         max_tokens=512,
+        behavior_statements_path=SPEC_PATH,
     ),
 )
 
@@ -77,5 +80,5 @@ response_step = ExecutorStep(
 if __name__ == "__main__":
     executor_main(
         steps=[response_step],
-        description=JOB_DESCRIPTION,
+        description=DESCRIPTION,
     )

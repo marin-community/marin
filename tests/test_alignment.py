@@ -35,7 +35,10 @@ from marin.alignment.generate_prompts import (
     write_sharded_jsonl_gz,
 )
 from marin.alignment.generate_responses import (
-    _build_messages,
+    RejectedPromptStrategy,
+    ResponseRole,
+    _build_chosen_messages,
+    _build_rejected_messages,
     ResponsePairGenConfig,
     ResponseGenConfig,
     generate_response_pair,
@@ -502,28 +505,84 @@ class TestInferenceConfig:
 
 
 class TestResponseHelpers:
-    def test_build_messages_with_spec_guidance(self, sample_prompt):
+    def test_build_chosen_messages_with_spec_guidance(self, sample_prompt):
         behavior_statements = {"be_helpful": "Always be helpful and friendly."}
-        messages = _build_messages(sample_prompt, behavior_statements)
+        messages = _build_chosen_messages(sample_prompt, behavior_statements)
         assert len(messages) == 2
         assert messages[0]["role"] == "system"
         assert "customer service agent" in messages[0]["content"]
         assert "Always be helpful" in messages[0]["content"]
         assert messages[1]["role"] == "user"
 
-    def test_build_messages_without_spec_guidance(self, sample_prompt):
-        messages = _build_messages(sample_prompt, None)
+    def test_build_rejected_messages_without_spec_guidance(self, sample_prompt):
+        messages = _build_rejected_messages(sample_prompt, RejectedPromptStrategy.UNGUIDED, None)
         assert len(messages) == 2
         assert messages[0]["role"] == "system"
         assert "behavioral guideline" not in messages[0]["content"]
         assert messages[1]["role"] == "user"
 
-    def test_build_messages_no_system_prompt(self):
+    def test_build_rejected_messages_no_system_prompt(self):
         prompt = {"behavior_id": "x", "system_prompt": "", "user_message": "Hello"}
-        messages = _build_messages(prompt, None)
+        messages = _build_rejected_messages(prompt, RejectedPromptStrategy.UNGUIDED, None)
         assert len(messages) == 1
         assert messages[0]["role"] == "user"
 
+    def test_build_rejected_messages_opposite_mode(self, sample_prompt):
+        behavior_statements = {"be_helpful": "Always be helpful and friendly."}
+        messages = _build_rejected_messages(sample_prompt, RejectedPromptStrategy.OPPOSITE, behavior_statements)
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert "PRIMARY DIRECTIVE" in messages[0]["content"]
+        assert "Deliberately violate" in messages[0]["content"]
+        assert "Always be helpful and friendly." in messages[0]["content"]
+        assert "customer service agent" in messages[0]["content"]
+        assert messages[1]["role"] == "user"
+
+    def test_response_gen_config_rejects_chosen_with_rejected_strategy(self):
+        with pytest.raises(ValueError, match="Chosen responses cannot specify rejected_prompt_strategy"):
+            ResponseGenConfig(
+                prompts_path="gs://bucket/prompts",
+                output_path="gs://bucket/output",
+                model_config=LiteLLMConfig(model="openai/gpt-4.1"),
+                role=ResponseRole.CHOSEN,
+                rejected_prompt_strategy=RejectedPromptStrategy.OPPOSITE,
+                behavior_statements_path="gs://bucket/spec.jsonl",
+            )
+
+    def test_response_gen_config_rejects_rejected_opposite_without_spec(self):
+        with pytest.raises(ValueError, match="Rejected opposite responses require behavior_statements_path"):
+            ResponseGenConfig(
+                prompts_path="gs://bucket/prompts",
+                output_path="gs://bucket/output",
+                model_config=LiteLLMConfig(model="openai/gpt-4.1"),
+                role=ResponseRole.REJECTED,
+                rejected_prompt_strategy=RejectedPromptStrategy.OPPOSITE,
+            )
+
+    def test_response_gen_config_rejects_rejected_unguided_with_spec(self):
+        with pytest.raises(ValueError, match="Rejected unguided responses must not receive behavior_statements_path"):
+            ResponseGenConfig(
+                prompts_path="gs://bucket/prompts",
+                output_path="gs://bucket/output",
+                model_config=LiteLLMConfig(model="openai/gpt-4.1"),
+                role=ResponseRole.REJECTED,
+                rejected_prompt_strategy=RejectedPromptStrategy.UNGUIDED,
+                behavior_statements_path="gs://bucket/spec.jsonl",
+            )
+
+    def test_response_pair_gen_config_rejects_opposite_without_rejected_spec(self, sample_spec_jsonl):
+        with pytest.raises(ValueError, match="Rejected opposite responses require rejected_behavior_statements_path"):
+            ResponsePairGenConfig(
+                prompts_path="gs://bucket/prompts",
+                chosen_output_path="gs://bucket/output/chosen",
+                rejected_output_path="gs://bucket/output/rejected",
+                chosen_model_config=VLLMConfig(model="gs://bucket/model", tensor_parallel_size=4, tpu_type="v5p-8"),
+                rejected_model_config=VLLMConfig(model="gs://bucket/model", tensor_parallel_size=4, tpu_type="v5p-8"),
+                chosen_behavior_statements_path=str(sample_spec_jsonl),
+                rejected_prompt_strategy=RejectedPromptStrategy.OPPOSITE,
+            )
+
+    @patch("marin.alignment.generate_responses.write_vllm_metrics_artifact")
     @patch("marin.alignment.generate_responses.write_sharded_jsonl_gz")
     @patch("marin.alignment.generate_responses.load_sharded_jsonl_gz")
     @patch("marin.alignment.generate_responses.BatchedVllmServeSession")
@@ -532,16 +591,20 @@ class TestResponseHelpers:
         mock_session_cls,
         mock_load_shards,
         mock_write_shards,
+        mock_write_metrics,
         sample_prompt,
     ):
         mock_load_shards.return_value = [sample_prompt]
         mock_session = mock_session_cls.return_value.__enter__.return_value
         mock_session.generate_from_messages.return_value = [["Refactored response"]]
+        mock_session.metrics_snapshot.return_value = {"stages": {"rejected": {}}, "totals": {}}
 
         config = ResponseGenConfig(
             prompts_path="gs://bucket/prompts",
             output_path="gs://bucket/output",
             model_config=VLLMConfig(model="gs://bucket/model", tensor_parallel_size=4, tpu_type="v5p-8"),
+            role=ResponseRole.REJECTED,
+            rejected_prompt_strategy=RejectedPromptStrategy.UNGUIDED,
             n=1,
             temperature=0.7,
             max_tokens=512,
@@ -566,10 +629,16 @@ class TestResponseHelpers:
                 "behavior_id": "be_helpful",
                 "rubric": "GOOD: Helpful response. BAD: Dismissive.",
                 "model": "gs://bucket/model",
+                "response_role": "rejected",
+                "behavior_prompt_mode_resolved": "unguided",
+                "rejected_prompt_strategy": "unguided",
                 "responses": [{"content": "Refactored response", "index": 0}],
             }
         ]
+        mock_write_metrics.assert_called_once()
+        assert mock_write_metrics.call_args.kwargs["logical_stage"] == "response_generation"
 
+    @patch("marin.alignment.generate_responses.write_vllm_metrics_artifact")
     @patch("marin.alignment.generate_responses.write_sharded_jsonl_gz")
     @patch("marin.alignment.generate_responses.load_sharded_jsonl_gz")
     @patch("marin.alignment.generate_responses.BatchedVllmServeSession")
@@ -578,6 +647,7 @@ class TestResponseHelpers:
         mock_session_cls,
         mock_load_shards,
         mock_write_shards,
+        mock_write_metrics,
         sample_prompt,
         sample_spec_jsonl,
     ):
@@ -587,6 +657,7 @@ class TestResponseHelpers:
             [["Chosen response"]],
             [["Rejected response 1", "Rejected response 2"]],
         ]
+        mock_session.metrics_snapshot.return_value = {"stages": {"chosen": {}, "rejected": {}}, "totals": {}}
 
         model_config = VLLMConfig(model="gs://bucket/model", tensor_parallel_size=4, tpu_type="v5p-8")
         config = ResponsePairGenConfig(
@@ -602,6 +673,7 @@ class TestResponseHelpers:
             rejected_n=2,
             rejected_temperature=0.8,
             rejected_max_tokens=512,
+            rejected_prompt_strategy=RejectedPromptStrategy.UNGUIDED,
         )
 
         generate_response_pair(config)
@@ -619,7 +691,10 @@ class TestResponseHelpers:
         assert mock_write_shards.call_count == 2
         assert mock_write_shards.call_args_list[0].args[1] == "gs://bucket/output/chosen"
         assert mock_write_shards.call_args_list[1].args[1] == "gs://bucket/output/rejected"
+        mock_write_metrics.assert_called_once()
+        assert mock_write_metrics.call_args.args[0] == "gs://bucket/output/artifacts/vllm_metrics.json"
 
+    @patch("marin.alignment.generate_responses.write_vllm_metrics_artifact")
     @patch("marin.alignment.generate_responses.write_sharded_jsonl_gz")
     @patch("marin.alignment.generate_responses.load_sharded_jsonl_gz")
     @patch("marin.alignment.generate_responses.BatchedVllmServeSession")
@@ -628,6 +703,7 @@ class TestResponseHelpers:
         mock_session_cls,
         mock_load_shards,
         mock_write_shards,
+        mock_write_metrics,
         sample_prompt,
         sample_spec_jsonl,
     ):
@@ -638,6 +714,8 @@ class TestResponseHelpers:
         second_session = second_context.__enter__.return_value
         first_session.generate_from_messages.return_value = [["Chosen response"]]
         second_session.generate_from_messages.return_value = [["Rejected response"]]
+        first_session.metrics_snapshot.return_value = {"stages": {"chosen": {}}, "totals": {}}
+        second_session.metrics_snapshot.return_value = {"stages": {"rejected": {}}, "totals": {}}
         mock_session_cls.side_effect = [first_context, second_context]
 
         config = ResponsePairGenConfig(
@@ -653,6 +731,7 @@ class TestResponseHelpers:
             chosen_n=1,
             rejected_n=1,
             chosen_behavior_statements_path=str(sample_spec_jsonl),
+            rejected_prompt_strategy=RejectedPromptStrategy.UNGUIDED,
         )
 
         generate_response_pair(config)
@@ -661,6 +740,8 @@ class TestResponseHelpers:
         assert first_session.generate_from_messages.call_count == 1
         assert second_session.generate_from_messages.call_count == 1
         assert mock_write_shards.call_count == 2
+        mock_write_metrics.assert_called_once()
+        assert mock_write_metrics.call_args.args[0] == "gs://bucket/output/artifacts/vllm_metrics.json"
 
 
 # ===========================================================================
@@ -916,6 +997,36 @@ class TestAlignResponseOrchestration:
                     response_execution_mode=ResponseExecutionMode.REUSE_SAME_MODEL,
                 ),
             )
+
+    def test_align_opposite_strategy_sets_rejected_config_only(self, sample_spec_jsonl):
+        pretrained_step = ExecutorStep(
+            name="pretrained",
+            fn=remote(_noop_remote, resources=ResourceConfig.with_cpu(cpu=1, ram="4g", disk="4g")),
+            config={},
+        )
+        teacher_model = VLLMConfig(model="gs://bucket/model", tensor_parallel_size=4, tpu_type="v5p-8")
+
+        steps = align(
+            name="opposite-local",
+            pretrained_model=pretrained_step,
+            spec=str(sample_spec_jsonl),
+            model_config=object(),
+            teacher_model=teacher_model,
+            rejected_model=teacher_model,
+            align_config=AlignConfig(
+                ideation_model="openai/gpt-4.1",
+                extract_model="openai/gpt-4.1-mini",
+                judge_model="openai/gpt-4.1",
+                response_execution_mode=ResponseExecutionMode.REUSE_SAME_MODEL,
+                rejected_prompt_strategy=RejectedPromptStrategy.OPPOSITE,
+            ),
+        )
+
+        responses_step = steps[2]
+        assert responses_step.name == "align/opposite-local/responses"
+        assert responses_step.config.chosen_behavior_statements_path.step.name == "align/opposite-local/spec"
+        assert responses_step.config.rejected_prompt_strategy == RejectedPromptStrategy.OPPOSITE
+        assert responses_step.config.rejected_behavior_statements_path.step.name == "align/opposite-local/spec"
 
     def test_align_keeps_separate_response_steps_when_only_teacher_is_local(self, sample_spec_jsonl):
         pretrained_step = ExecutorStep(
@@ -1311,6 +1422,7 @@ class TestPromptGenerationE2E:
             def __init__(self, outputs):
                 self.outputs = list(outputs)
                 self.batch_sizes: list[int] = []
+                self.stage_names: list[str] = []
 
             def __enter__(self):
                 return self
@@ -1318,10 +1430,24 @@ class TestPromptGenerationE2E:
             def __exit__(self, exc_type, exc, tb):
                 return None
 
-            def generate_from_messages(self, message_batches, *, temperature, max_tokens, n):
+            def generate_from_messages(self, message_batches, *, stage_name, temperature, max_tokens, n):
                 self.batch_sizes.append(len(message_batches))
+                self.stage_names.append(stage_name)
                 next_outputs = self.outputs.pop(0)
                 return [[text] for text in next_outputs]
+
+            def metrics_snapshot(self):
+                return {
+                    "backend": "vllm_serve",
+                    "model": "gs://bucket/shared",
+                    "tensor_parallel_size": 4,
+                    "max_model_len": 4096,
+                    "tokenizer_load_seconds": 0.0,
+                    "server_start_seconds": 0.0,
+                    "session_enter_seconds": 0.0,
+                    "totals": {},
+                    "stages": {stage_name: {} for stage_name in self.stage_names},
+                }
 
         session_instances: list[FakeSession] = []
         stage1_content = (
@@ -1376,9 +1502,14 @@ class TestPromptGenerationE2E:
 
         assert mock_session_cls.call_count == 1
         assert session_instances[0].batch_sizes == [1, 1, 1]
+        assert session_instances[0].stage_names == ["understanding", "concretize", "extract"]
         prompts = load_sharded_jsonl_gz(output_path)
         assert len(prompts) == 1
         assert prompts[0]["behavior_id"] == "be_helpful"
+        metrics_path = Path(output_path) / "artifacts" / "vllm_metrics.json"
+        assert metrics_path.exists()
+        metrics_payload = json.loads(metrics_path.read_text())
+        assert metrics_payload["logical_stage"] == "prompt_generation"
 
     @patch("marin.alignment.generate_prompts.compute_coverage_stats", return_value={"covered": 1})
     @patch(
@@ -1398,6 +1529,7 @@ class TestPromptGenerationE2E:
             def __init__(self, outputs):
                 self.outputs = list(outputs)
                 self.batch_sizes: list[int] = []
+                self.stage_names: list[str] = []
 
             def __enter__(self):
                 return self
@@ -1405,10 +1537,24 @@ class TestPromptGenerationE2E:
             def __exit__(self, exc_type, exc, tb):
                 return None
 
-            def generate_from_messages(self, message_batches, *, temperature, max_tokens, n):
+            def generate_from_messages(self, message_batches, *, stage_name, temperature, max_tokens, n):
                 self.batch_sizes.append(len(message_batches))
+                self.stage_names.append(stage_name)
                 next_outputs = self.outputs.pop(0)
                 return [[text] for text in next_outputs]
+
+            def metrics_snapshot(self):
+                return {
+                    "backend": "vllm_serve",
+                    "model": "gs://bucket/fake",
+                    "tensor_parallel_size": 4,
+                    "max_model_len": 4096,
+                    "tokenizer_load_seconds": 0.0,
+                    "server_start_seconds": 0.0,
+                    "session_enter_seconds": 0.0,
+                    "totals": {},
+                    "stages": {stage_name: {} for stage_name in self.stage_names},
+                }
 
         session_instances: list[FakeSession] = []
         stage1_content = (
@@ -1460,6 +1606,9 @@ class TestPromptGenerationE2E:
         assert mock_session_cls.call_count == 2
         assert session_instances[0].batch_sizes == [1, 1]
         assert session_instances[1].batch_sizes == [1]
+        metrics_payload = json.loads((Path(output_path) / "artifacts" / "vllm_metrics.json").read_text())
+        session_names = {session["session_name"] for session in metrics_payload["sessions"]}
+        assert session_names == {"ideation", "extract"}
 
     @patch("marin.alignment.generate_prompts.compute_coverage_stats", return_value={"covered": 2})
     @patch(
@@ -1482,6 +1631,7 @@ class TestPromptGenerationE2E:
             def __init__(self, outputs):
                 self.outputs = list(outputs)
                 self.batch_sizes: list[int] = []
+                self.stage_names: list[str] = []
 
             def __enter__(self):
                 return self
@@ -1489,10 +1639,24 @@ class TestPromptGenerationE2E:
             def __exit__(self, exc_type, exc, tb):
                 return None
 
-            def generate_from_messages(self, message_batches, *, temperature, max_tokens, n):
+            def generate_from_messages(self, message_batches, *, stage_name, temperature, max_tokens, n):
                 self.batch_sizes.append(len(message_batches))
+                self.stage_names.append(stage_name)
                 next_outputs = self.outputs.pop(0)
                 return [[text] for text in next_outputs]
+
+            def metrics_snapshot(self):
+                return {
+                    "backend": "vllm_serve",
+                    "model": "gs://bucket/shared",
+                    "tensor_parallel_size": 4,
+                    "max_model_len": 4096,
+                    "tokenizer_load_seconds": 0.0,
+                    "server_start_seconds": 0.0,
+                    "session_enter_seconds": 0.0,
+                    "totals": {},
+                    "stages": {stage_name: {} for stage_name in self.stage_names},
+                }
 
         session_instances: list[FakeSession] = []
         stage1_content = (
@@ -1568,6 +1732,8 @@ class TestPromptGenerationE2E:
         ]
         assert ideation["variations"][1]["config_id"] == "cfg_001"
         assert ideation["variations"][1]["description"] == "A student asks a hard question."
+        metrics_payload = json.loads((Path(output_path) / "artifacts" / "vllm_metrics.json").read_text())
+        assert metrics_payload["logical_stage"] == "prompt_generation"
 
 
 # ===========================================================================
@@ -1611,6 +1777,17 @@ class TestJudgeE2E:
             ['{"score": 9, "confidence": 0.9, "explanation": "Helpful", "highlights": []}'],
             ['{"score": 1, "confidence": 0.9, "explanation": "Rude", "highlights": []}'],
         ]
+        mock_session.metrics_snapshot.return_value = {
+            "backend": "vllm_serve",
+            "model": "gs://bucket/model",
+            "tensor_parallel_size": 4,
+            "max_model_len": 4096,
+            "tokenizer_load_seconds": 0.0,
+            "server_start_seconds": 0.0,
+            "session_enter_seconds": 0.0,
+            "totals": {},
+            "stages": {"judge": {}},
+        }
 
         judge_responses(
             JudgeConfig(
@@ -1651,6 +1828,8 @@ class TestJudgeE2E:
         assert len(written_pairs) == 1
         assert written_pairs[0]["chosen"][2]["content"].startswith("Sure.")
         assert written_pairs[0]["rejected"][2]["content"].startswith("I will not help")
+        judgment_metrics = json.loads((judgments_path / "artifacts" / "vllm_metrics.json").read_text())
+        assert judgment_metrics["logical_stage"] == "judgments"
 
         filter_decisions = load_sharded_jsonl_gz(str(pairs_path / "artifacts" / "filter_decisions"))
         assert len(filter_decisions) == 1

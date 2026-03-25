@@ -42,7 +42,12 @@ from transformers import AutoTokenizer
 
 from experiments.models import llama_3_3_70b_instruct
 from marin.alignment.generate_prompts import load_sharded_jsonl_gz, write_sharded_jsonl_gz
-from marin.alignment.generate_responses import _build_messages, _make_response_record
+from marin.alignment.generate_responses import (
+    RejectedPromptStrategy,
+    ResponseRole,
+    _build_rejected_messages,
+    _make_response_record,
+)
 from marin.alignment.inference_config import VLLMConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.evaluators.lm_evaluation_harness_evaluator import LMEvaluationHarnessEvaluator
@@ -128,7 +133,7 @@ def generate_responses_via_vllm_serve_batched(config: VllmServeBatchedResponseGe
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir)
         prompt_texts = []
         for prompt in prompts:
-            messages = _build_messages(prompt, behavior_statements=None)
+            messages = _build_rejected_messages(prompt, RejectedPromptStrategy.UNGUIDED, None)
             text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             prompt_texts.append(text)
     timings["prompt_render_seconds"] = time.perf_counter() - render_start
@@ -178,7 +183,13 @@ def generate_responses_via_vllm_serve_batched(config: VllmServeBatchedResponseGe
                 grouped_responses = _group_completion_texts(choice_texts, prompt_count=len(prompts), n=config.n)
 
                 results = [
-                    _make_response_record(prompt, config.model_path, responses)
+                    _make_response_record(
+                        prompt,
+                        config.model_path,
+                        responses,
+                        role=ResponseRole.REJECTED,
+                        rejected_prompt_strategy=RejectedPromptStrategy.UNGUIDED,
+                    )
                     for prompt, responses in zip(prompts, grouped_responses, strict=True)
                 ]
 

@@ -23,7 +23,7 @@ from iris.marin_fs import url_to_fs
 from levanter.data.utils import batched
 from zephyr import load_jsonl, write_jsonl_file
 
-from marin.alignment.batched_vllm_serve import BatchedVllmServeSession
+from marin.alignment.batched_vllm_serve import BatchedVllmServeSession, write_vllm_metrics_artifact
 from marin.alignment.coverage import compute_coverage_stats, generate_covering_configs, make_tags
 from marin.alignment.inference_config import InferenceConfig, VLLMConfig
 from marin.alignment.llm_client import llm_chat_single
@@ -187,6 +187,7 @@ def _run_understanding_local(
     for statement_batch in batched(statements.items(), config.local_serve_batch_size):
         outputs = session.generate_from_messages(
             [_build_understanding_messages(statement) for _sid, statement in statement_batch],
+            stage_name="understanding",
             temperature=config.understanding_temperature,
             max_tokens=config.understanding_max_tokens,
             n=1,
@@ -397,6 +398,7 @@ def _run_concretize_round_local(
                 _build_concretize_messages(statement_id, understanding, axes, request_batch)
                 for request_batch in request_batch_group
             ],
+            stage_name="concretize",
             temperature=config.concretize_temperature,
             max_tokens=config.concretize_max_tokens,
             n=1,
@@ -703,6 +705,7 @@ def _run_extraction_local(
     for request_batch in batched(batches, config.local_serve_batch_size):
         outputs = session.generate_from_messages(
             [_build_extraction_messages(batch, batch_start) for batch_start, batch in request_batch],
+            stage_name="extract",
             temperature=0.0,
             max_tokens=config.extract_max_tokens,
             n=1,
@@ -764,6 +767,7 @@ def generate_prompts_from_spec(config: PromptGenConfig) -> None:
         statements = {sid: s for sid, s in statements.items() if sid in config.statement_ids}
         logger.info("Filtered to %d statements", len(statements))
 
+    metrics_sessions: list[tuple[str, dict[str, object]]] = []
     ideation_session: BatchedVllmServeSession | None = None
     if isinstance(config.ideation_model, VLLMConfig):
         with BatchedVllmServeSession(config.ideation_model) as active_ideation_session:
@@ -775,6 +779,12 @@ def generate_prompts_from_spec(config: PromptGenConfig) -> None:
                 all_prompts = _run_extraction_stage(ideations, config, ideation_session)
             else:
                 all_prompts = None
+        session_name = (
+            "ideation_extract_shared"
+            if isinstance(config.extract_model, VLLMConfig) and config.extract_model == config.ideation_model
+            else "ideation"
+        )
+        metrics_sessions.append((session_name, active_ideation_session.metrics_snapshot()))
     else:
         understandings = _run_understanding_stage(statements, config, None)
         ideations = _run_concretization_stage(understandings, config, None)
@@ -784,12 +794,19 @@ def generate_prompts_from_spec(config: PromptGenConfig) -> None:
         if isinstance(config.extract_model, VLLMConfig):
             with BatchedVllmServeSession(config.extract_model) as extract_session:
                 all_prompts = _run_extraction_stage(ideations, config, extract_session)
+            metrics_sessions.append(("extract", extract_session.metrics_snapshot()))
         else:
             all_prompts = _run_extraction_stage(ideations, config, None)
 
     logger.info("Total prompts generated: %d", len(all_prompts))
     write_sharded_jsonl_gz(all_prompts, config.output_path, shard_size=5000)
     _save_artifacts(config.output_path, statements, understandings, ideations)
+    if metrics_sessions:
+        write_vllm_metrics_artifact(
+            f"{config.output_path}/artifacts/vllm_metrics.json",
+            logical_stage="prompt_generation",
+            sessions=metrics_sessions,
+        )
 
 
 def _run_understanding_stage(

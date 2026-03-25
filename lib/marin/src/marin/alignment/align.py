@@ -33,8 +33,10 @@ from levanter.data.text.preference import PreferenceChatLmDatasetFormat
 
 from marin.alignment.generate_prompts import PromptGenConfig, generate_prompts_from_spec
 from marin.alignment.generate_responses import (
+    RejectedPromptStrategy,
     ResponseGenConfig,
     ResponsePairGenConfig,
+    ResponseRole,
     generate_response_pair,
     generate_responses,
 )
@@ -191,6 +193,8 @@ class AlignConfig:
         rejected_n: Number of responses per prompt from rejected model (judge picks worst).
         rejected_temperature: Sampling temperature for rejected model.
         rejected_max_tokens: Max tokens for rejected responses.
+        rejected_prompt_strategy: Rejected-side prompting policy. `unguided` preserves current
+            behavior; `opposite` explicitly instructs the rejected model to violate the statement.
         judge_min_chosen_score: Teacher response must score >= this (1-10 scale).
         judge_min_gap: chosen_score - worst_rejected_score must be >= this.
         judge_workers: Parallelism for judge API calls.
@@ -232,6 +236,7 @@ class AlignConfig:
     rejected_n: int = 4
     rejected_temperature: float = 0.7
     rejected_max_tokens: int = 2048
+    rejected_prompt_strategy: RejectedPromptStrategy = RejectedPromptStrategy.UNGUIDED
 
     # Judging & filtering
     judge_min_chosen_score: float = 7.0
@@ -400,7 +405,10 @@ def align(
                 rejected_n=align_config.rejected_n,
                 rejected_temperature=align_config.rejected_temperature,
                 rejected_max_tokens=align_config.rejected_max_tokens,
-                rejected_behavior_statements_path=None,
+                rejected_prompt_strategy=align_config.rejected_prompt_strategy,
+                rejected_behavior_statements_path=(
+                    spec_gcs_path if align_config.rejected_prompt_strategy == RejectedPromptStrategy.OPPOSITE else None
+                ),
             ),
         )
         chosen_responses_path = output_path_of(responses_step, "chosen")
@@ -420,6 +428,7 @@ def align(
                 prompts_path=output_path_of(prompts_step),
                 output_path=this_output_path(),
                 model_config=teacher_serialized,
+                role=ResponseRole.CHOSEN,
                 n=align_config.teacher_n,
                 temperature=align_config.teacher_temperature,
                 max_tokens=align_config.teacher_max_tokens,
@@ -439,10 +448,14 @@ def align(
                 prompts_path=output_path_of(prompts_step),
                 output_path=this_output_path(),
                 model_config=rejected_serialized,
+                role=ResponseRole.REJECTED,
+                rejected_prompt_strategy=align_config.rejected_prompt_strategy,
                 n=align_config.rejected_n,
                 temperature=align_config.rejected_temperature,
                 max_tokens=align_config.rejected_max_tokens,
-                behavior_statements_path=None,
+                behavior_statements_path=(
+                    spec_gcs_path if align_config.rejected_prompt_strategy == RejectedPromptStrategy.OPPOSITE else None
+                ),
                 dependency_path=(
                     output_path_of(chosen_step) if resolved_response_mode == ResponseExecutionMode.SERIALIZED else None
                 ),

@@ -22,7 +22,7 @@ from typing import Any
 
 from iris.marin_fs import url_to_fs
 
-from marin.alignment.batched_vllm_serve import BatchedVllmServeSession
+from marin.alignment.batched_vllm_serve import BatchedVllmServeSession, write_vllm_metrics_artifact
 from marin.alignment.generate_prompts import load_sharded_jsonl_gz, load_spec, write_sharded_jsonl_gz
 from marin.alignment.inference_config import InferenceConfig, VLLMConfig
 from marin.alignment.llm_client import llm_chat_single
@@ -179,6 +179,7 @@ def _judge_responses_local_batch(
     ]
     outputs = session.generate_from_messages(
         message_batches,
+        stage_name="judge",
         temperature=0.0,
         max_tokens=max_tokens,
         n=1,
@@ -381,6 +382,7 @@ def judge_responses(config: JudgeConfig) -> None:
     else:
         session_manager = contextlib.nullcontext(None)
 
+    session_metrics: dict[str, object] | None = None
     with session_manager as session:
         for start in range(0, len(common_ids), config.batch_size):
             batch_ids = common_ids[start : start + config.batch_size]
@@ -552,6 +554,8 @@ def judge_responses(config: JudgeConfig) -> None:
                         rejected_candidates=rejected_candidates,
                     )
                 )
+        if is_local and session is not None:
+            session_metrics = session.metrics_snapshot()
 
     write_sharded_jsonl_gz(judgments, config.output_path, shard_size=5000)
     summary = _judgments_summary(
@@ -562,6 +566,12 @@ def judge_responses(config: JudgeConfig) -> None:
         failure_messages=failure_messages,
     )
     _write_json(f"{config.output_path}/summary.json", summary)
+    if session_metrics is not None:
+        write_vllm_metrics_artifact(
+            f"{config.output_path}/artifacts/vllm_metrics.json",
+            logical_stage="judgments",
+            sessions=[("judge", session_metrics)],
+        )
     logger.info("Wrote %d judgment records to %s", len(judgments), config.output_path)
 
     if failure_messages:

@@ -4178,3 +4178,614 @@ uv run iris --config lib/iris/examples/marin.yaml job run \
     - no `InputName` transport regression after shallow config serialization
 - **Next queued experiment:**
   - F2: heterogeneous local-local smoke with `response_execution_mode=auto`, which should emit separate parallel `chosen` and `rejected` steps
+
+### 2026-03-25 — ALIGN-108: Fail-Closed Plan for Adding Rejected-Only `opposite` Mode
+
+- **Goal:**
+  - add a Bloom-style adversarial inversion mode for rejected response generation
+  - keep the API streamlined
+  - make it impossible to accidentally run chosen responses in `opposite` mode or rejected responses in a chosen-style mode
+
+- **Current state to replace:**
+  - chosen = spec guidance appended to the scenario system prompt
+  - rejected = no spec guidance
+  - there is currently no explicit adversarial inversion mode
+
+- **Fail-closed API design:**
+  - do **not** expose a generic free-form `statement_prompt_mode` on chosen/rejected step configs
+  - instead add one top-level rejected-only control to `AlignConfig`, something like:
+    - `rejected_prompt_strategy: RejectedPromptStrategy = "unguided" | "opposite"`
+  - keep chosen behavior implicit and fixed:
+    - chosen always means policy-following / standard guidance
+  - rejected is the only side allowed to vary:
+    - `unguided` = current behavior
+    - `opposite` = explicit adversarial inversion prompt
+
+- **Why this shape is safer than a generic mode flag:**
+  - there is no user-facing knob that can set chosen to `opposite`
+  - there is no user-facing knob that can set rejected to `standard`
+  - the good/bad polarity is derived from role, not from caller discipline
+
+- **Required internal types:**
+  - add `ResponseRole = CHOSEN | REJECTED`
+  - add `RejectedPromptStrategy = UNGUIDED | OPPOSITE`
+  - extend `ResponseGenConfig` and `ResponsePairGenConfig` with role-aware fields rather than generic mode strings
+
+- **Validation rules that must raise immediately:**
+  - chosen config must always satisfy:
+    - `role == CHOSEN`
+    - spec path is present
+    - rejected strategy is not set
+  - rejected config must always satisfy:
+    - `role == REJECTED`
+    - if strategy is `UNGUIDED`, no spec text is required
+    - if strategy is `OPPOSITE`, spec path is required
+  - any attempt to construct:
+    - chosen + opposite
+    - chosen + rejected strategy
+    - rejected + chosen-only semantics
+    - opposite without a spec path
+    - must raise before job launch
+  - duplicate these checks both:
+    - when building configs in `align.py`
+    - when resolving configs at runtime in `generate_responses.py`
+
+- **Prompt-builder design:**
+  - split the current `_build_messages(...)` into explicit role-aware builders:
+    - `_build_chosen_messages(...)`
+    - `_build_rejected_messages(...)`
+  - rejected builder should branch on `RejectedPromptStrategy`
+  - `opposite` prompt should:
+    - frame the task as a safety research / adversarial evaluation exercise
+    - include the exact behavior statement text
+    - set a primary directive to violate the statement’s intent
+    - treat any existing scenario system prompt as subordinate context to be inverted, not discarded
+  - keep this logic centralized in `generate_responses.py`; do not duplicate prompt text across experiments
+
+- **Recommended metadata/artifacts:**
+  - persist response-generation metadata in each output record:
+    - `response_role`
+    - `rejected_prompt_strategy` if applicable
+    - `behavior_prompt_mode_resolved = standard | opposite | unguided`
+  - this makes it auditable after the fact which side used inversion
+
+- **Executor / orchestration impact:**
+  - no change to `ResponseExecutionMode`
+  - same-model combined `/responses` should still work:
+    - chosen request batch uses standard prompt construction
+    - rejected request batch uses opposite prompt construction
+    - one shared `vllm serve` session is still valid because only the prompt text changes
+  - heterogeneous local-local and API paths continue to work unchanged at the orchestration layer
+
+- **Implementation plan:**
+  1. Add `ResponseRole` and `RejectedPromptStrategy` enums.
+  2. Add `rejected_prompt_strategy` to `AlignConfig` with default `UNGUIDED`.
+  3. Make `align()` derive role-specific response configs instead of exposing free-form prompt mode fields.
+  4. Replace generic `_build_messages(...)` with explicit chosen/rejected builders.
+  5. Add fail-fast validation in config constructors / resolvers.
+  6. Persist resolved prompt-mode metadata in response records.
+  7. Update same-model and heterogeneous smoke scripts to opt into `rejected_prompt_strategy="opposite"` where desired.
+
+- **Exact validation experiments:**
+  - **O1 — Unit/API guardrails**
+    - chosen config with opposite-like settings raises
+    - rejected opposite without spec path raises
+    - same-model combined response config preserves role polarity correctly
+  - **O2 — Standalone rejected-opposite response generation**
+    - run `generate_responses.py` on an existing prompt artifact
+    - chosen not involved
+    - verify response records log `response_role=rejected` and `behavior_prompt_mode_resolved=opposite`
+  - **O3 — Same-model `auto` smoke with opposite rejected**
+    - reuse the same-model Llama script
+    - set `rejected_prompt_strategy=opposite`
+    - verify one combined `/responses` step still succeeds
+  - **O4 — Heterogeneous smoke with opposite rejected**
+    - Llama chosen, Mixtral rejected
+    - first in `serialized` mode for reliability
+    - then in `auto` mode for parallel child validation
+  - **O5 — Artifact audit**
+    - confirm judgments / filter outputs are unchanged structurally
+    - confirm response artifacts clearly distinguish chosen-standard vs rejected-opposite
+
+- **Recommended rollout order:**
+  - implement + land O1 first
+  - then O2
+  - then O3
+  - then O4 serialized
+  - then O4 auto
+
+- **Bottom line:**
+  - the streamlined design is to make `opposite` a rejected-only strategy, not a generic mode
+  - role determines what is allowed
+  - any polarity inversion bug should raise immediately instead of silently generating mislabeled data
+
+### 2026-03-25 — ALIGN-109: O1 Implemented — Rejected-Only `opposite` Mode with Fail-Closed Validation
+
+- **Code changes landed locally:**
+  - `lib/marin/src/marin/alignment/generate_responses.py`
+  - `lib/marin/src/marin/alignment/align.py`
+  - `tests/test_alignment.py`
+- **New response-layer enums:**
+  - `ResponseRole = chosen | rejected`
+  - `RejectedPromptStrategy = unguided | opposite`
+- **Fail-closed behavior now enforced:**
+  - chosen responses require a spec path
+  - chosen responses cannot specify any rejected strategy
+  - rejected `unguided` responses must not receive a spec path
+  - rejected `opposite` responses require a spec path
+  - pair config validates the same polarity constraints
+- **Prompt-building refactor:**
+  - replaced generic message construction with explicit:
+    - `_build_chosen_messages(...)`
+    - `_build_rejected_messages(...)`
+  - rejected `opposite` now emits an adversarial safety-research system prompt that:
+    - includes the behavior statement
+    - instructs the model to violate it
+    - treats the original scenario system prompt as subordinate context to invert
+- **Response artifact metadata added:**
+  - `response_role`
+  - `behavior_prompt_mode_resolved`
+  - `rejected_prompt_strategy`
+- **Validation:**
+  - `uv run pytest tests/test_alignment.py -q`
+  - result: `86 passed`
+  - `./infra/pre-commit.py --fix ...` on all changed response/align files
+  - result: clean
+
+### 2026-03-25 — ALIGN-110: O2 Launched — Standalone Rejected-Only `opposite` Generation on Existing Prompts
+
+- **New experiment script:**
+  - `experiments/generate_rejected_opposite_llama_3_3_70b_existing_prompts.py`
+- **Experiment purpose:**
+  - validate rejected-only `opposite` prompting without involving the full alignment DAG
+  - reuse a known-good prompt artifact and the staged `us-central1` Llama 3.3 70B checkpoint
+- **Inputs:**
+  - prompts:
+    - `gs://marin-us-central1/align/debug_generate_prompts_llama_3_3_70b_refactored/prompts-f29568`
+  - spec:
+    - `experiments/posttrain/specs/openai_model_spec.jsonl`
+  - model:
+    - staged `us-central1` `meta-llama--Llama-3-3-70B-Instruct--6f6073b`
+- **Live run:**
+  - `/ahmed/generate-rejected-opposite-llama-3-3-70b-existing-prompts`
+- **Current state at handoff:**
+  - root is `JOB_STATE_RUNNING`
+  - no cache-hit skip has been observed yet
+- **Next check:**
+  - confirm the remote response step launches
+  - verify output rows carry:
+    - `response_role = rejected`
+    - `behavior_prompt_mode_resolved = opposite`
+    - `rejected_prompt_strategy = opposite`
+
+### 2026-03-25 — ALIGN-111: O2 Succeeded and Verified Opposite-Mode Response Metadata
+
+- **Completed run:**
+  - `/ahmed/generate-rejected-opposite-llama-3-3-70b-existing-prompts`
+- **Successful child:**
+  - `/ahmed/generate-rejected-opposite-llama-3-3-70b-existing-prompts/align-debug_generate_rejected_opposite_llama_3_3_70b_existing_prompts-responses_2f706d39-018b58fa`
+- **Logs confirmed the intended codepath:**
+  - `Loaded 46 behavior statements for rejected mode (opposite)`
+  - `Loaded 67 prompts for batched vLLM serve generation`
+  - `vLLM environment ready`
+  - one batched `/v1/completions` request for `67` prompts
+  - `Wrote 67 records to 1 shards in gs://marin-us-central1/align/debug_generate_rejected_opposite_llama_3_3_70b_existing_prompts/responses-f7b183`
+- **Verified output metadata from the written shard:**
+  - `response_role = rejected`
+  - `behavior_prompt_mode_resolved = opposite`
+  - `rejected_prompt_strategy = opposite`
+- **Output artifact:**
+  - `gs://marin-us-central1/align/debug_generate_rejected_opposite_llama_3_3_70b_existing_prompts/responses-f7b183`
+- **Interpretation:**
+  - O2 validates the fail-closed rejected-only opposite-mode path in isolation
+  - the standalone response primitive is now ready to use inside the full heterogeneous alignment smoke
+
+### 2026-03-25 — ALIGN-112: Launched F2 Heterogeneous `auto` Smoke with Rejected `opposite` Mode
+
+- **New experiment script:**
+  - `experiments/align_debug_vllm_70b_mixtral_rejected_opposite.py`
+- **Purpose:**
+  - skip O3 and go directly to heterogeneous local-local `auto`
+  - chosen = Llama 3.3 70B
+  - rejected = Mixtral 8x7B Instruct
+  - rejected prompting = `opposite`
+  - orchestration expectation = separate parallel `chosen` and `rejected` steps
+- **Live run:**
+  - `/ahmed/align-debug-vllm-70b-mixtral-rejected-opposite-auto`
+- **Next checks:**
+  - executor emits separate `chosen` and `rejected` children
+  - no serialized dependency between them
+  - chosen uses standard guidance and rejected uses opposite-mode prompting
+
+### 2026-03-25 — ALIGN-113: F2 Hit a Root Preemption During `prompts`, Then Recovered Automatically
+
+- **Affected run:**
+  - `/ahmed/align-debug-vllm-70b-mixtral-rejected-opposite-auto`
+- **What happened:**
+  - `spec` succeeded
+  - `prompts` started and reached active local `vllm serve` generation
+  - root job then incurred a preemption
+  - the in-flight `prompts` child was killed with:
+    - `Parent task preempted`
+- **Important detail:**
+  - this was not an application or prompt-construction failure
+  - logs before the preemption showed normal prompt-generation progress:
+    - `Loaded 46 statements from spec`
+    - `Filtered to 1 statements`
+    - `vLLM environment ready`
+    - batched `/v1/completions` calls for prompt-generation batches
+- **Recovery behavior observed:**
+  - the root remained alive with `preemption_count=1`
+  - Iris restarted the root task automatically
+  - the restarted root reused the completed `spec` artifact
+  - it then reattached to the still-running `prompts` step state with:
+    - `Status ... prompts ...: RUNNING`
+    - `Step ... has no active lock, taking over`
+    - `Acquired lock for ... prompts ...`
+- **Interpretation:**
+  - no manual resubmission was needed
+  - F2 is still the active run to babysit
+- **Next check:**
+  - wait for `prompts` to finish under the recovered root
+  - then verify heterogeneous `auto` emits separate sibling `chosen` and `rejected` children
+
+### 2026-03-25 — ALIGN-114: F2 Recovered `prompts` Successfully and Reached Parallel `chosen` / `rejected`
+
+- **Affected run:**
+  - `/ahmed/align-debug-vllm-70b-mixtral-rejected-opposite-auto`
+- **Recovered `prompts` outcome:**
+  - recovered child succeeded:
+    - `/ahmed/align-debug-vllm-70b-mixtral-rejected-opposite-auto/align-debug_vllm_70b_mixtral_rejected_opposite_auto_smoke-prompts_78d7e3c8-151faf78`
+  - output artifact:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke/prompts-e27535`
+  - logs confirmed:
+    - `Wrote 67 records to 1 shards in gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke/prompts-e27535`
+    - `Saved artifacts for 1 statements ...`
+- **Critical orchestration check passed:**
+  - after `prompts` succeeded, the executor emitted two separate response children:
+    - `chosen`: `/ahmed/align-debug-vllm-70b-mixtral-rejected-opposite-auto/align-debug_vllm_70b_mixtral_rejected_opposite_auto_smoke-chosen_b28ffc4b-a01dc0c1`
+    - `rejected`: `/ahmed/align-debug-vllm-70b-mixtral-rejected-opposite-auto/align-debug_vllm_70b_mixtral_rejected_opposite_auto_smoke-rejected_99ce7554-4b01f0bf`
+  - executor logs showed both locks being acquired independently, with no serialized dependency:
+    - `Attempting to acquire lock for ... chosen_b28ffc4b`
+    - `Attempting to acquire lock for ... rejected_99ce7554`
+    - `Acquired lock for ... chosen_b28ffc4b`
+    - `Acquired lock for ... rejected_99ce7554`
+- **Current state at this checkpoint:**
+  - `chosen` is `JOB_STATE_RUNNING`
+  - `rejected` is `JOB_STATE_PENDING` on TPU capacity
+  - this is still consistent with heterogeneous `auto` parallel scheduling; the delay is scheduler-side, not executor-side
+- **Interpretation:**
+  - F2 has now validated the intended `auto` orchestration policy for heterogeneous local-local runs
+  - the remaining live check is behavioral:
+    - chosen should use standard guided prompting
+    - rejected should start separately and log opposite-mode prompting once it gets TPU capacity
+
+### 2026-03-25 — ALIGN-115: F2 `chosen` Confirmed Standard Prompting; `rejected` Still Waiting on TPU Capacity
+
+- **Affected run:**
+  - `/ahmed/align-debug-vllm-70b-mixtral-rejected-opposite-auto`
+- **Chosen-side confirmation:**
+  - live `chosen` child:
+    - `/ahmed/align-debug-vllm-70b-mixtral-rejected-opposite-auto/align-debug_vllm_70b_mixtral_rejected_opposite_auto_smoke-chosen_b28ffc4b-a01dc0c1`
+  - logs now show:
+    - `Loaded 46 behavior statements for chosen mode (standard)`
+    - `Loaded 67 prompts for batched vLLM serve generation`
+    - `Starting vLLM environment`
+- **Rejected-side current blocker:**
+  - live `rejected` child:
+    - `/ahmed/align-debug-vllm-70b-mixtral-rejected-opposite-auto/align-debug_vllm_70b_mixtral_rejected_opposite_auto_smoke-rejected_99ce7554-4b01f0bf`
+  - current state:
+    - `JOB_STATE_PENDING`
+  - scheduler reason:
+    - `Insufficient TPUs (need 4, available 0)`
+    - `Insufficient memory (need 256.0GB, available 32.8GB)`
+    - autoscaler waiting for `tpu_v5p_8-us-central1-a`
+- **Interpretation:**
+  - F2 has now proven both:
+    - heterogeneous `auto` creates separate sibling response jobs
+    - the `chosen` side preserves standard guided prompting under the new opposite-mode plumbing
+  - the final remaining F2 validation is the `rejected` child actually starting and logging:
+    - rejected role
+    - opposite-mode behavior prompt resolution
+
+### 2026-03-25 — ALIGN-116: F2 `rejected` Started and Confirmed Live Opposite-Mode Prompting
+
+- **Affected run:**
+  - `/ahmed/align-debug-vllm-70b-mixtral-rejected-opposite-auto`
+- **Scheduler update:**
+  - `rejected` eventually acquired TPU capacity and moved from `JOB_STATE_PENDING` to `JOB_STATE_RUNNING`
+- **Critical behavioral confirmation:**
+  - logs now show:
+    - `Loaded 46 behavior statements for rejected mode (opposite)`
+- **What is now validated live inside F2:**
+  - `chosen` runs with standard guided prompting
+  - `rejected` runs as a separate sibling job with opposite-mode prompting
+  - this is happening under heterogeneous `auto`, not serialized fallback
+- **Remaining live work:**
+  - wait for both response children to finish
+  - confirm chosen/rejected output artifacts land successfully
+  - then watch judgments and final preference-pair filtering
+
+### 2026-03-25 — ALIGN-117: F2 Both Response Children Succeeded; Pipeline Advanced into `judgments`
+
+- **Affected run:**
+  - `/ahmed/align-debug-vllm-70b-mixtral-rejected-opposite-auto`
+- **Chosen response result:**
+  - child:
+    - `/ahmed/align-debug-vllm-70b-mixtral-rejected-opposite-auto/align-debug_vllm_70b_mixtral_rejected_opposite_auto_smoke-chosen_b28ffc4b-a01dc0c1`
+  - succeeded
+  - output artifact:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke/chosen-607ba4`
+  - logs showed:
+    - `Loaded 46 behavior statements for chosen mode (standard)`
+    - one batched `/v1/completions` request for `67` prompts
+    - `Wrote 67 records ... chosen-607ba4`
+- **Rejected response result:**
+  - child:
+    - `/ahmed/align-debug-vllm-70b-mixtral-rejected-opposite-auto/align-debug_vllm_70b_mixtral_rejected_opposite_auto_smoke-rejected_99ce7554-4b01f0bf`
+  - succeeded
+  - output artifact:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke/rejected-67ca91`
+  - logs showed:
+    - `Loaded 46 behavior statements for rejected mode (opposite)`
+    - one batched `/v1/completions` request for `67` prompts
+    - `Wrote 67 records ... rejected-67ca91`
+- **Downstream progression:**
+  - after both response steps succeeded, executor launched:
+    - `/ahmed/align-debug-vllm-70b-mixtral-rejected-opposite-auto/align-debug_vllm_70b_mixtral_rejected_opposite_auto_smoke-judgments_0348aa13-1d4adb2f`
+  - judgments output path:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke/judgments-aca2ba`
+- **Interpretation:**
+  - F2 has now validated the full heterogeneous `auto` response stage with opposite-mode rejected generation
+  - only judge/filter completion remains before the run can be marked complete
+
+### 2026-03-25 — ALIGN-118: F2 Completed Successfully End-to-End with Heterogeneous `auto` and Rejected `opposite`
+
+- **Completed run:**
+  - `/ahmed/align-debug-vllm-70b-mixtral-rejected-opposite-auto`
+- **Terminal result:**
+  - root job `JOB_STATE_SUCCEEDED`
+  - note: the earlier `prompts` child kill remained only as historical evidence of a root preemption; the recovered run completed successfully
+- **Validated orchestration:**
+  - heterogeneous `auto` created separate sibling `chosen` and `rejected` jobs
+  - `chosen` ran with standard guided prompting
+  - `rejected` ran with opposite-mode prompting
+  - both response steps succeeded independently before judgment/filtering
+- **Output artifacts:**
+  - prompts:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke/prompts-e27535`
+  - chosen:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke/chosen-607ba4`
+  - rejected:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke/rejected-67ca91`
+  - judgments:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke/judgments-aca2ba`
+  - preference pairs:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke/preference_pairs-52b7d7`
+- **Key completion evidence from logs:**
+  - `Loaded 46 behavior statements for chosen mode (standard)`
+  - `Loaded 46 behavior statements for rejected mode (opposite)`
+  - `Wrote 67 records ... chosen-607ba4`
+  - `Wrote 67 records ... rejected-67ca91`
+  - `Loaded 67 chosen, 67 rejected responses`
+  - `Wrote 67 judgment records ... judgments-aca2ba`
+  - `Built 67 preference pairs ... preference_pairs-52b7d7`
+  - `Wrote 67 records ... preference_pairs-52b7d7/artifacts/filter_decisions`
+- **Interpretation:**
+  - O2 and F2 together validate the rejected-only opposite-mode design locally and end-to-end
+  - the fail-closed plumbing correctly keeps chosen on standard prompting while letting rejected opt into opposite-mode prompting
+  - heterogeneous `auto` is now validated on the real Llama-chosen / Mixtral-rejected smoke path
+- **Next logical follow-up:**
+  - audit one written rejected shard from F2 for metadata fields:
+    - `response_role = rejected`
+    - `behavior_prompt_mode_resolved = opposite`
+    - `rejected_prompt_strategy = opposite`
+  - then decide whether to:
+    - keep opposite mode as an optional adversarial benchmark only, or
+    - route it into the main alignment dataset pipeline by default for rejected generation
+
+### 2026-03-25 — ALIGN-119: Standardized Structured `vllm_metrics.json` Artifacts Across All Local-vLLM Alignment Stages
+
+- **Goal:**
+  - stop relying on ad hoc log scraping for local `vllm serve` stages
+  - define one shared metrics contract for prompt generation, response generation, and local judging
+- **Implementation:**
+  - added shared metrics dataclasses and artifact writer in:
+    - `lib/marin/src/marin/alignment/batched_vllm_serve.py`
+  - instrumented `BatchedVllmServeSession` to accumulate:
+    - `tokenizer_load_seconds`
+    - `server_start_seconds`
+    - per-stage `render_seconds`
+    - per-stage `request_seconds`
+    - `request_count`
+    - `request_prompt_count`
+    - `completion_count`
+    - `input_token_count`
+    - `output_token_count`
+    - derived `input_tokens_per_second`
+    - derived `output_tokens_per_second`
+- **Stage labeling now emitted by the shared wrapper:**
+  - prompt generation:
+    - `understanding`
+    - `concretize`
+    - `extract`
+  - response generation:
+    - `chosen`
+    - `rejected`
+  - judge:
+    - `judge`
+- **Artifact locations:**
+  - prompt generation:
+    - `<prompts_output>/artifacts/vllm_metrics.json`
+  - standalone response generation:
+    - `<responses_output>/artifacts/vllm_metrics.json`
+  - combined chosen/rejected response generation:
+    - `<shared_parent>/artifacts/vllm_metrics.json`
+  - judgments:
+    - `<judgments_output>/artifacts/vllm_metrics.json`
+- **Artifact schema:**
+  - top level:
+    - `logical_stage`
+    - `session_count`
+    - `sessions`
+  - each session:
+    - `session_name`
+    - `backend = vllm_serve`
+    - `model`
+    - `tensor_parallel_size`
+    - `max_model_len`
+    - `tokenizer_load_seconds`
+    - `server_start_seconds`
+    - `session_enter_seconds`
+    - `totals`
+    - `stages`
+- **Design notes:**
+  - same-model reused sessions naturally accumulate metrics across multiple labeled stages in one session artifact
+  - split-model flows write multiple named sessions into the same `vllm_metrics.json`
+  - token counts are computed with the same tokenizer staged for the local `vllm serve` session
+- **Verification:**
+  - `./infra/pre-commit.py --fix lib/marin/src/marin/alignment/batched_vllm_serve.py lib/marin/src/marin/alignment/generate_prompts.py lib/marin/src/marin/alignment/generate_responses.py lib/marin/src/marin/alignment/judge.py tests/test_alignment.py`
+  - `uv run pytest tests/test_alignment.py -q`
+  - result:
+    - `86 passed`
+- **Interpretation:**
+  - the local open-weight alignment pipeline now has one standardized structured metrics story across prompt generation, response generation, and judging
+  - Experiment G no longer needs custom one-off timing helpers just to recover basic `vllm` startup/request/token metrics
+- **Next logical follow-up:**
+  - materialize one fresh end-to-end run after this patch and inspect the new `vllm_metrics.json` artifacts in GCS
+  - then use those artifacts as the primary source for Experiment G runtime characterization
+
+### 2026-03-25 — ALIGN-120: Launch Fresh One-Statement End-to-End Opposite-Mode Smoke to Materialize Standardized vLLM Metrics
+
+- **Goal:**
+  - rerun the full one-statement open-weight alignment pipeline after `ALIGN-119`
+  - verify that the new standardized `artifacts/vllm_metrics.json` files are emitted for:
+    - prompt generation
+    - chosen response generation
+    - rejected response generation
+    - judgments
+- **Chosen experiment script:**
+  - `experiments/align_debug_vllm_70b_mixtral_rejected_opposite.py`
+- **Why this script:**
+  - already validated end-to-end
+  - runs the full pipeline on exactly one statement:
+    - `statement_ids = ["ask_clarifying_questions"]`
+  - exercises the current intended production shape:
+    - chosen = Llama 3.3 70B
+    - rejected = Mixtral 8x7B Instruct
+    - `response_execution_mode = auto`
+    - `rejected_prompt_strategy = opposite`
+- **Fresh launch policy:**
+  - submit under a new Iris root job name so this rerun is operationally distinct from the earlier F2 smoke
+  - allow cached infra/spec/model steps to skip if unchanged, but expect pipeline code changes from `ALIGN-119` to force fresh prompt/response/judge outputs
+- **Planned checks after launch:**
+  - confirm prompt generation writes `artifacts/vllm_metrics.json`
+  - confirm both chosen and rejected write response-side metrics artifacts
+  - confirm judgments write `artifacts/vllm_metrics.json`
+  - compare emitted stage names and token/sec fields against the new standardized schema
+
+### 2026-03-25 — ALIGN-121: Initial Metrics Rerun Was a Cache Hit; Forced a Fresh One-Statement Experiment Name
+
+- **Affected run:**
+  - `/ahmed/align-debug-vllm-70b-mixtral-rejected-opposite-auto-metrics`
+- **Observed behavior:**
+  - root job finished in about `27s`
+  - no child jobs were launched
+  - this was not a real end-to-end rerun
+- **Interpretation:**
+  - the previous validated one-statement smoke outputs were reused
+  - this did not materialize fresh `vllm_metrics.json` artifacts tied to the new standardized instrumentation patch
+- **Recovery:**
+  - added a dedicated experiment script:
+    - `experiments/align_debug_vllm_70b_mixtral_rejected_opposite_metrics.py`
+  - forced a fresh logical align dataset name:
+    - `debug_vllm_70b_mixtral_rejected_opposite_auto_smoke_metrics`
+  - plan is to relaunch under a new Iris root job name so the entire one-statement pipeline executes again
+
+### 2026-03-25 — ALIGN-122: Fresh One-Statement End-to-End Metrics Run Succeeded and Wrote Standardized `vllm_metrics.json` Artifacts
+
+- **Completed run:**
+  - `/ahmed/align-debug-vllm-70b-mixtral-rejected-opposite-auto-metrics-fresh`
+- **Terminal state:**
+  - root `JOB_STATE_SUCCEEDED`
+- **Stage outcomes:**
+  - prompts:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke_metrics/prompts-de3dec`
+  - chosen:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke_metrics/chosen-59160b`
+  - rejected:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke_metrics/rejected-6ff395`
+  - judgments:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke_metrics/judgments-63ec12`
+  - preference pairs:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke_metrics/preference_pairs-e83fe6`
+- **Observed pipeline shape:**
+  - one-statement prompt generation succeeded and wrote `67` prompts
+  - heterogeneous `auto` ran separate `chosen` and `rejected` response jobs
+  - chosen ran in standard mode
+  - rejected ran in opposite mode
+  - judgments loaded `67 chosen, 67 rejected responses`
+  - final filter step built `67` preference pairs
+- **Verified standardized metrics artifacts in GCS:**
+  - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke_metrics/prompts-de3dec/artifacts/vllm_metrics.json`
+  - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke_metrics/chosen-59160b/artifacts/vllm_metrics.json`
+  - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke_metrics/rejected-6ff395/artifacts/vllm_metrics.json`
+  - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_opposite_auto_smoke_metrics/judgments-63ec12/artifacts/vllm_metrics.json`
+- **Schema spot-check:**
+  - chosen metrics artifact reported:
+    - `logical_stage = response_generation`
+    - `session_count = 1`
+    - `session_names = ["chosen"]`
+    - `stage_keys = ["chosen"]`
+- **Naming clarification:**
+  - the metrics field should be interpreted as “prompts sent to vLLM,” not “final rows written”
+  - follow-up code change will rename `prompt_count` to `request_prompt_count` in the emitted schema so prompt-generation artifacts are less easy to misread
+- **Interpretation:**
+  - the standardized `vllm_metrics.json` contract is now validated on a real end-to-end one-statement open-weight alignment run
+  - prompt generation, chosen generation, rejected generation, and local judge all emitted structured metrics artifacts in the intended locations
+- **Next logical follow-up:**
+  - inspect the actual metric payload values across all four stage artifacts
+  - then launch the larger full-spec runtime characterization run using those artifacts as the primary timing source
+
+### 2026-03-25 — ALIGN-123: Renamed Metrics Field to `request_prompt_count` to Avoid Confusing Request Volume with Final Artifact Rows
+
+- **Reason for change:**
+  - the original field name `prompt_count` was easy to misread as “rows written”
+  - that was especially confusing for prompt generation, where the metrics artifact measures requests sent to `vllm serve`, not final prompts emitted downstream
+- **Code change:**
+  - renamed the structured metrics schema field from:
+    - `prompt_count`
+  - to:
+    - `request_prompt_count`
+  - implementation lives in:
+    - `lib/marin/src/marin/alignment/batched_vllm_serve.py`
+- **Interpretation:**
+  - `request_prompt_count` now unambiguously means the number of prompts sent over the OpenAI-compatible `vllm serve` interface during that stage/session
+  - it should not be compared directly with final artifact row counts unless the stage is one-request-per-row by design
+
+### 2026-03-25 — ALIGN-124: Next Major Experiment Is Full-Spec Runtime Characterization on the Refactored Open-Weight Pipeline
+
+- **What is next:**
+  - run the entire alignment pipeline over all statements in `openai_model_spec.jsonl`
+  - do not limit to a single statement
+- **Validated configuration to carry forward:**
+  - chosen model:
+    - Llama 3.3 70B Instruct
+  - rejected model:
+    - Mixtral 8x7B Instruct
+  - response execution policy:
+    - `response_execution_mode = auto`
+  - rejected prompt policy:
+    - `rejected_prompt_strategy = opposite`
+  - local inference backend:
+    - batched `vllm serve`
+- **Primary objective:**
+  - characterize real full-spec cost and timing using the new structured `vllm_metrics.json` artifacts rather than one-off log scraping
+- **Key questions for the full-spec run:**
+  - total prompt-generation cost and stage breakdown
+  - chosen vs rejected startup and request cost
+  - overlap behavior of heterogeneous `auto`
+  - local judge cost at scale
+  - final prompt / judgment / preference-pair counts
+- **Planned base script:**
+  - `experiments/align_vllm_70b_mixtral_rejected_full_spec.py`

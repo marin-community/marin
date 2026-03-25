@@ -38,7 +38,12 @@ from iris.marin_fs import url_to_fs
 
 from experiments.models import llama_3_3_70b_instruct
 from marin.alignment.generate_prompts import load_sharded_jsonl_gz, write_sharded_jsonl_gz
-from marin.alignment.generate_responses import _build_messages, _make_response_record
+from marin.alignment.generate_responses import (
+    RejectedPromptStrategy,
+    ResponseRole,
+    _build_rejected_messages,
+    _make_response_record,
+)
 from marin.alignment.inference_config import VLLMConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
@@ -91,7 +96,7 @@ def _request_one(
     max_tokens: int,
     n: int,
 ) -> dict[str, Any]:
-    messages = _build_messages(prompt, behavior_statements=None)
+    messages = _build_rejected_messages(prompt, RejectedPromptStrategy.UNGUIDED, None)
     response = requests.post(
         f"{server_url}/chat/completions",
         json={
@@ -108,7 +113,13 @@ def _request_one(
     responses = [
         {"content": choice["message"]["content"] or "", "index": idx} for idx, choice in enumerate(payload["choices"])
     ]
-    return _make_response_record(prompt, model_path, responses)
+    return _make_response_record(
+        prompt,
+        model_path,
+        responses,
+        role=ResponseRole.REJECTED,
+        rejected_prompt_strategy=RejectedPromptStrategy.UNGUIDED,
+    )
 
 
 def generate_responses_via_vllm_serve(config: VllmServeResponseGenConfig) -> None:

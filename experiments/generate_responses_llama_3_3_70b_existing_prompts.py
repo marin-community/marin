@@ -23,7 +23,12 @@ Submit to Iris:
 from __future__ import annotations
 
 from experiments.models import llama_3_3_70b_instruct
-from marin.alignment.generate_responses import ResponseGenConfig, generate_responses
+from marin.alignment.generate_responses import (
+    RejectedPromptStrategy,
+    ResponseGenConfig,
+    ResponseRole,
+    generate_responses,
+)
 from marin.alignment.inference_config import VLLMConfig
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.execution.remote import remote
@@ -54,10 +59,11 @@ response_step = ExecutorStep(
         prompts_path=PROMPTS_PATH,
         output_path=this_output_path(),
         model_config=llama_3_3_70b_vllm,
+        role=ResponseRole.REJECTED,
+        rejected_prompt_strategy=RejectedPromptStrategy.UNGUIDED,
         n=1,
         temperature=0.7,
         max_tokens=512,
-        behavior_statements_path=None,
     ),
 )
 
