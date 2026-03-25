@@ -8,20 +8,14 @@ import os.path
 
 from experiments.defaults import DEFAULT_NEW_RUN_DATA_SHUFFLE
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
-from marin.datakit.download.nemotron_cc import NemotronIngressConfig, download_nemotron_cc
+from marin.datakit.download.nemotron_cc import nemotron_cc_step
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, lm_mixture_data_config, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
 # Raw dataset download step
 downloads = {
-    "nemotron_cc": ExecutorStep(
-        name="raw/nemotro-cc",
-        fn=download_nemotron_cc,
-        config=NemotronIngressConfig(
-            output_path=this_output_path(),
-        ),
-    )
+    "nemotron_cc": nemotron_cc_step("raw/nemotro-cc").as_executor_step(),
 }
 
 _nemotron_cc_path = output_path_of(downloads["nemotron_cc"], "contrib/Nemotron/Nemotron-CC/data-jsonl/")

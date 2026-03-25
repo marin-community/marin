@@ -35,12 +35,6 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class DCLMHQDownloadConfig:
-    input_path: str
-    output_path: str
-
-
-@dataclass
 class FileTask:
     """Represents a single file processing task."""
 
@@ -172,21 +166,8 @@ def process_file(task: FileTask) -> None:
         raise
 
 
-def extract_dclm_hq_dump(input_path_or_cfg: str | DCLMHQDownloadConfig, output_path: str | None = None) -> None:
-    """Process the DCLM HQ dump and enrich with HTML from Common Crawl.
-
-    Args:
-        input_path_or_cfg: Input directory path, or a DCLMHQDownloadConfig for backward compat.
-        output_path: Output directory path. Required when input_path_or_cfg is a string.
-    """
-    if isinstance(input_path_or_cfg, DCLMHQDownloadConfig):
-        input_path = input_path_or_cfg.input_path
-        output_path = input_path_or_cfg.output_path
-    else:
-        input_path = input_path_or_cfg
-        if output_path is None:
-            raise ValueError("output_path is required when input_path_or_cfg is a string")
-
+def extract_dclm_hq_dump(input_path: str, output_path: str) -> None:
+    """Process the DCLM HQ dump and enrich with HTML from Common Crawl."""
     logger.info(f"Starting processing of DCLM HQ dump in {input_path}")
 
     all_files = []

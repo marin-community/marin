@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 import pytest
 import zstandard as zstd
 from iris.marin_fs import open_url as _real_open_url
-from marin.datakit.download.nemotron_cc import NemotronIngressConfig, download_nemotron_cc
+from marin.datakit.download.nemotron_cc import download_nemotron_cc
 
 _OPEN_URL_TARGET = "marin.datakit.download.nemotron_cc.open_url"
 _REQUESTS_SESSION_TARGET = "marin.datakit.download.nemotron_cc.requests.Session"
@@ -114,8 +114,7 @@ def test_download_nemotron_cc_pipeline(tmp_path, mock_paths_open):
         patch(_OPEN_URL_TARGET, side_effect=mock_paths_open(paths)),
         patch(_REQUESTS_SESSION_TARGET, _mock_session_for({"file1": file1_data, "file2": file2_data})),
     ):
-        cfg = NemotronIngressConfig(output_path=str(output_dir))
-        download_nemotron_cc(cfg)
+        download_nemotron_cc(str(output_dir))
 
     all_records = read_all_jsonl_zst(output_dir / "contrib" / "Nemotron")
 
@@ -152,8 +151,7 @@ def test_download_nemotron_cc_dolma_format(tmp_path, mock_paths_open):
         patch(_OPEN_URL_TARGET, side_effect=mock_paths_open(paths)),
         patch(_REQUESTS_SESSION_TARGET, _mock_session_for({"test": compressed_data})),
     ):
-        cfg = NemotronIngressConfig(output_path=str(output_dir))
-        download_nemotron_cc(cfg)
+        download_nemotron_cc(str(output_dir))
 
     records = read_all_jsonl_zst(output_dir / "contrib" / "Nemotron")
     assert len(records) == 1
@@ -188,8 +186,7 @@ def test_download_nemotron_cc_skips_existing(tmp_path, mock_paths_open):
         patch(_OPEN_URL_TARGET, side_effect=mock_paths_open(paths)),
         patch(_REQUESTS_SESSION_TARGET) as mock_session,
     ):
-        cfg = NemotronIngressConfig(output_path=str(output_dir))
-        download_nemotron_cc(cfg)
+        download_nemotron_cc(str(output_dir))
 
     mock_session.return_value.get.assert_not_called()
     assert existing_output.read_text() == "existing"

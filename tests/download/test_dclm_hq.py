@@ -7,7 +7,7 @@ import json
 from unittest.mock import patch
 
 import zstandard as zstd
-from marin.datakit.download.dclm_hq import DCLMHQDownloadConfig, extract_dclm_hq_dump
+from marin.datakit.download.dclm_hq import extract_dclm_hq_dump
 
 SAMPLE_DCLM_RECORDS = [
     {
@@ -171,8 +171,7 @@ def test_extract_dclm_hq_pipeline(tmp_path, read_all_jsonl_gz):
         raise ValueError(f"Unexpected URL: {url}")
 
     with patch("marin.datakit.download.dclm_hq.requests.get", side_effect=mock_requests_get):
-        cfg = DCLMHQDownloadConfig(input_path=str(tmp_path / "input"), output_path=str(output_dir))
-        extract_dclm_hq_dump(cfg)
+        extract_dclm_hq_dump(str(tmp_path / "input"), str(output_dir))
 
     # Verify output files were created in nested structure
     shard1_output = output_dir / "shard1"

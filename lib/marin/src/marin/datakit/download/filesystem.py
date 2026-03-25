@@ -5,7 +5,6 @@ import logging
 import os
 import random
 import time
-from dataclasses import dataclass
 
 from iris.marin_fs import url_to_fs
 from marin.execution.step_spec import StepSpec
@@ -14,16 +13,6 @@ from zephyr import Dataset, ZephyrContext
 from marin.utils import fsspec_exists, fsspec_glob
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class TransferConfig:
-    """Kept for backward compatibility. Prefer ``transfer_files()`` with flat params."""
-
-    input_path: str
-    output_path: str
-    num_random_files: int | None = None
-    filetype: str = "jsonl.zst"
 
 
 def transfer_files(

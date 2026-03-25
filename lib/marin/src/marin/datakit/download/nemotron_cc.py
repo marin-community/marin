@@ -14,12 +14,10 @@ import json
 import logging
 import os
 from collections.abc import Iterator
-from dataclasses import dataclass
 
 import requests
 import zstandard
 from iris.marin_fs import open_url
-from marin.execution import THIS_OUTPUT_PATH
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_exists
 from requests.adapters import HTTPAdapter
@@ -85,22 +83,8 @@ def download_single_nemotron_path(input_file_path: str, output_file_path: str) -
     return {"input_file": input_file_path, "output_file": output_file_path, "num_records": num_records}
 
 
-@dataclass
-class NemotronIngressConfig:
-    """Kept for backward compatibility with ExecutorStep callers."""
-
-    output_path: str = THIS_OUTPUT_PATH
-
-
-def download_nemotron_cc(output_path_or_cfg: str | NemotronIngressConfig) -> None:
-    """Download and process Nemotron-CC dataset from Common Crawl.
-
-    Args:
-        output_path_or_cfg: Output directory path, or a NemotronIngressConfig for backward compat.
-    """
-    output_path = (
-        output_path_or_cfg.output_path if isinstance(output_path_or_cfg, NemotronIngressConfig) else output_path_or_cfg
-    )
+def download_nemotron_cc(output_path: str) -> None:
+    """Download and process Nemotron-CC dataset from Common Crawl."""
 
     paths_file_path = os.path.join(output_path, "data-jsonl.paths")
     logger.info(f"Downloading Nemotron CC path file {paths_file_path}")
