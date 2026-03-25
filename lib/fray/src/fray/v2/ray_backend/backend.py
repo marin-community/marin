@@ -611,17 +611,36 @@ class RayActorGroup:
         """Ray actors managed by Zephyr don't have an independent job lifecycle."""
         return False
 
-    def shutdown(self) -> None:
-        """Gracefully terminate all Ray actors.
+    def shutdown(self, graceful_timeout_s: float = 30.0) -> None:
+        """Gracefully terminate all Ray actors, with force-kill fallback.
 
         Uses __ray_terminate__ instead of ray.kill() so that in-flight tasks
         finish before the actor exits.  ray.kill() races with task completion
         callbacks in Ray's C++ task_manager, triggering a fatal assertion
         (ray-project/ray#54260).  __ray_terminate__ queues behind pending
-        tasks and escalates to a force-kill after 30 s.
+        tasks; we wait up to *graceful_timeout_s* then force-kill stragglers.
         """
+        # Phase 1: request graceful termination for all actors.
+        terminate_refs: list[tuple[RayActorHandle, ray.ObjectRef]] = []
         for handle in self._handles:
             try:
-                handle._actor_ref.__ray_terminate__.remote()
+                ref = handle._resolve().__ray_terminate__.remote()
+                terminate_refs.append((handle, ref))
             except Exception as e:
-                logger.warning("Failed to terminate Ray actor: %s", e)
+                logger.warning("Failed to send terminate to Ray actor: %s", e)
+
+        # Phase 2: wait for graceful termination with a timeout.
+        pending = [ref for _, ref in terminate_refs]
+        if pending:
+            try:
+                _, still_pending = ray.wait(pending, num_returns=len(pending), timeout=graceful_timeout_s)
+            except Exception:
+                still_pending = pending
+            # Phase 3: force-kill actors that did not terminate in time.
+            still_pending_set = set(still_pending)
+            for handle, ref in terminate_refs:
+                if ref in still_pending_set:
+                    try:
+                        ray.kill(handle._resolve())
+                    except Exception as e:
+                        logger.warning("Failed to force-kill Ray actor: %s", e)
