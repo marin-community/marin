@@ -757,7 +757,9 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
     "DCAgent/exp_tas_optimal_combined_traces": InstructionDatasetConfig(
         hf_dataset_id="DCAgent/exp_tas_optimal_combined_traces",
         revision="ebbeebd",
-        adapter=multi_turn_adapter(conversation_column="conversations"),
+        # replacements={} disables DEFAULT_TEXT_REPLACEMENTS which converts
+        # <think> → <|start_think|>, breaking the Qwen3 special token (ID 151667).
+        adapter=multi_turn_adapter(conversation_column="conversations", replacements={}),
         metadata_columns=[
             "agent",
             "model",
@@ -779,7 +781,9 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
     "DCAgent2/GLM-4.7-r2egym_sandboxes-maxeps-131k": InstructionDatasetConfig(
         hf_dataset_id="DCAgent2/GLM-4.7-r2egym_sandboxes-maxeps-131k",
         revision="167ff86",
-        adapter=multi_turn_adapter(conversation_column="conversations"),
+        # replacements={} disables DEFAULT_TEXT_REPLACEMENTS which converts
+        # <think> → <|start_think|>, breaking the Qwen3 special token (ID 151667).
+        adapter=multi_turn_adapter(conversation_column="conversations", replacements={}),
         metadata_columns=[
             "agent",
             "model",

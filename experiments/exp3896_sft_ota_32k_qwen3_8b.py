@@ -7,19 +7,26 @@ Reproduce OpenThoughts-Agent's best 32K context SFT (laion/exp_tas_optimal_combi
 Base model: Qwen/Qwen3-8B
 Dataset: DCAgent/exp_tas_optimal_combined_traces (9,046 rows)
 Hyperparams from model card: lr=4e-5, cosine + 10% warmup, 7 epochs, batch=16,
-    AdamW (β=0.9/0.98), seed=42, 32K context.
+    AdamW (beta=0.9/0.98), seed=42, 32K context.
 
 Reported results: 23.8% TB-Lite, 12.6% TB2.
 
 Tracked in: https://github.com/marin-community/marin/issues/3896
 
-Usage:
-    uv run lib/marin/src/marin/run/ray_run.py \
-        --env_vars WANDB_ENTITY marin-community \
-        --env_vars WANDB_PROJECT marin \
-        --env_vars TPU_CI true \
-        --cluster us-east5-a \
-        --no_wait \
+v2 fixes (compared to initial run that overfit to loss=0.00003):
+    - Fix 1: max_grad_norm=1e-4 (matching OT-Agent; was 1.0 Levanter default)
+    - Fix 3: replacements={} on dataset adapter to preserve native <think> tokens
+             (was DEFAULT_TEXT_REPLACEMENTS converting <think> to <|start_think|>)
+
+Usage (Iris):
+    uv run iris --config lib/iris/examples/marin.yaml job run \
+        --tpu v5p-32 \
+        --region us-central1 \
+        -e WANDB_ENTITY marin-community \
+        -e WANDB_PROJECT marin \
+        -e WANDB_API_KEY ${WANDB_API_KEY} \
+        -e MARIN_PREFIX gs://marin-us-central1 \
+        --no-wait \
         -- python experiments/exp3896_sft_ota_32k_qwen3_8b.py
 """
 
@@ -39,7 +46,7 @@ from experiments.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
 from experiments.simple_sft_config import SimpleSFTConfig, compute_per_device_parallelism
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
-from marin.processing.tokenize import TokenizerStep, lm_mixture_data_config
+from marin.processing.tokenize import lm_mixture_data_config
 
 # Dataset: DCAgent/exp_tas_optimal_combined_traces (9,046 rows)
 DATASET_ID = "DCAgent/exp_tas_optimal_combined_traces"
@@ -54,7 +61,7 @@ def build_dataset_specs() -> tuple[dict[str, str], dict[str, float]]:
     return datasets, weights
 
 
-def create_tokenization_step(dataset_identifier: str, short_name: str) -> TokenizerStep:
+def create_tokenization_step(dataset_identifier: str, short_name: str):
     dataset_config = INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_identifier]
     dataset = get_instruction_dataset(dataset_identifier, splits=dataset_config.splits)
     return default_tokenize(
@@ -81,7 +88,7 @@ TRAIN_BATCH_SIZE = 16
 MICROBATCH_SIZE = 16
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
-# v5p-32 (16 chips) - batch=16 matches chip count exactly, same as exp2601
+# v5p-32 (16 chips) - batch=16 matches chip count exactly
 RESOURCES = ResourceConfig.with_tpu("v5p-32")
 
 sft_config = SimpleSFTConfig(
@@ -100,6 +107,7 @@ sft_config = SimpleSFTConfig(
     warmup=0.1,  # Model card: 10% warmup
     decay=0.9,
     weight_decay=0.0,
+    max_grad_norm=1e-4,  # OT-Agent uses 1e-4 (acts as strong regularizer on small datasets)
     beta1=0.9,  # Model card: 0.9
     beta2=0.98,  # Model card: 0.98
     epsilon=1e-8,
@@ -122,21 +130,22 @@ qwen3_8b_32k = dataclasses.replace(
 
 RESOURCE_SUFFIX = RESOURCES.device.variant.replace("-", "") if RESOURCES.device.kind == "tpu" else "gpu"
 
-exp3896_sft_ota_32k = default_sft(
-    name=f"exp3896_sft_ota_32k_qwen3_8b_32768tokens_{RESOURCE_SUFFIX}",
+exp3896_sft_ota_32k_v2 = default_sft(
+    name=f"exp3896v2_sft_ota_32k_qwen3_8b_32768tokens_{RESOURCE_SUFFIX}",
     tokenized=mixture_config,
     model_config=qwen3_8b_32k,
     sft_config=sft_config,
-    tags=["qwen", "openthoughts-agent", "sft", "ota-32k", RESOURCE_SUFFIX],
+    tags=["qwen", "openthoughts-agent", "sft", "ota-32k", "v2", RESOURCE_SUFFIX],
 )
 
-exp3896_checkpoint = exp3896_sft_ota_32k.cd(f"hf/step-{NUM_TRAIN_STEPS - 1}").nonblocking()
+exp3896_checkpoint = exp3896_sft_ota_32k_v2.cd(f"hf/step-{NUM_TRAIN_STEPS - 1}").nonblocking()
 
 if __name__ == "__main__":
-    print("=== exp3896: OT-Agent 32K SFT Reproduction ===")
+    print("=== exp3896v2: OT-Agent 32K SFT Reproduction (v2) ===")
     print(f"Dataset: {DATASET_ID} ({NUM_SAMPLES:,} samples)")
     print(f"Training steps: {NUM_TRAIN_STEPS:,}")
     print(f"Epochs: {TARGET_EPOCHS}")
     print(f"Batch size: {TRAIN_BATCH_SIZE}")
     print(f"Resources: {RESOURCES.device.variant}")
-    executor_main(steps=[exp3896_sft_ota_32k])
+    print(f"max_grad_norm: {sft_config.max_grad_norm}")
+    executor_main(steps=[exp3896_sft_ota_32k_v2])

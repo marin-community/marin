@@ -7,44 +7,41 @@ Reproduce OpenThoughts-Agent's best 131K context SFT (laion/GLM-4_7-r2egym_sandb
 Base model: Qwen/Qwen3-8B (despite "GLM-4_7" in the model name, base is Qwen3-8B)
 Dataset: DCAgent2/GLM-4.7-r2egym_sandboxes-maxeps-131k (4,521 rows)
 Hyperparams from model card: lr=4e-5, cosine + 10% warmup, 7 epochs, batch=16,
-    AdamW (β=0.9/0.98), seed=42.
+    AdamW (beta=0.9/0.98), seed=42.
 
-OOM Prevention Strategy:
-    131K context on Qwen3-8B requires aggressive memory optimization.
-    - gradient_checkpointing="offload": offload layer carries to host memory
-    - per_device_parallelism=1: minimize per-chip activation memory
-    - Splash attention (default on TPU): O(seq*d) not O(seq^2) memory
-    - per_device_eval_parallelism=1: avoid OOM during eval
-    If OOM persists, escalate to gradient_checkpointing="recompute".
+v2 fixes:
+    - Fix 1: max_grad_norm=1e-4 (matching OT-Agent; was 1.0 Levanter default)
+    - Fix 2: v5p-32 with batch=16 (matching OT-Agent's 16 GPUs; was v5p-256 batch=128)
+    - Fix 3: replacements={} on dataset adapter to preserve native <think> tokens
+    - Fix 4: YaRN RoPE scaling factor=4 from 32K base (matching OT-Agent's FP8+YARN config)
+
+OOM Prevention Strategy (v5p-32 at 131K):
+    - ScanCheckpointPolicy(save_carries="offload"): offload layer carries to host
+    - per_device_parallelism=1: 1 example per chip
+    - Splash attention (default on TPU)
+    - ram="256g": XLA compilation needs >128 GB host RAM
 
 Tracked in: https://github.com/marin-community/marin/issues/3897
 
-Usage (Iris, preferred for stability):
+Usage (Iris):
     uv run iris --config lib/iris/examples/marin.yaml job run \
-        --tpu v5p-64 \
+        --tpu v5p-32 \
+        --memory 256GB \
+        --region us-central1 \
         -e WANDB_ENTITY marin-community \
         -e WANDB_PROJECT marin \
         -e WANDB_API_KEY ${WANDB_API_KEY} \
+        -e MARIN_PREFIX gs://marin-us-central1 \
         --no-wait \
-        -- python experiments/exp3897_sft_ota_131k_qwen3_8b.py
-
-Usage (Ray, fallback):
-    uv run lib/marin/src/marin/run/ray_run.py \
-        --env_vars WANDB_ENTITY=marin-community \
-        --env_vars WANDB_PROJECT=marin \
-        --env_vars TPU_CI=true \
-        --cluster us-east5-a \
-        --no_wait \
         -- python experiments/exp3897_sft_ota_131k_qwen3_8b.py
 """
 
 import dataclasses
 import math
-import os
 
 from haliax.nn.scan import ScanCheckpointPolicy
 from levanter.data.text import ChatLmDatasetFormat
-from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
+from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
 
 from experiments.defaults import default_sft, default_tokenize
 from experiments.posttrain.instruction_datasets import (
@@ -62,23 +59,12 @@ from marin.processing.tokenize import lm_mixture_data_config
 DATASET_ID = "DCAgent2/GLM-4.7-r2egym_sandboxes-maxeps-131k"
 NUM_SAMPLES = 4521
 
-# --- TPU and batch configuration ---
-# v5p-64 (32 chips, 95 GB HBM each = 3.04 TB total): preferred for 131K context.
-# batch=32 is the minimum for v5p-64 (1 example per chip, no accumulation).
-# The model card used batch=16 on 16 GPUs; we use batch=32 on 32 chips.
-# If v5p-64 unavailable, fall back to v5p-32 via TPU_VARIANT env var.
-# v5p-256 (128 chips, 95 GB HBM each = 12.2 TB total).
-# v5p-64 (8 VMs, 128 GB host RAM each) OOM-kills during XLA compilation because
-# the 131K graph is too large for 128 GB host RAM per VM.
-TPU_VARIANT = os.environ.get("TPU_VARIANT", "v5p-256")
-# 256 GB host RAM per VM: XLA compilation of the 131K graph with host offloading
-# exceeds the default 128 GB. The compiler holds the full graph in host memory.
-RESOURCES = ResourceConfig.with_tpu(TPU_VARIANT, ram="256g")
-NUM_CHIPS = RESOURCES.chip_count()
-
-# Minimum batch = num_chips (1 example per chip, no gradient accumulation).
-TRAIN_BATCH_SIZE = NUM_CHIPS
-MICROBATCH_SIZE = NUM_CHIPS
+# v5p-32 (16 chips) with batch=16: matches OT-Agent's 16 GPU setup.
+# 256 GB host RAM: XLA compilation of the 131K graph with host offloading
+# exceeds the default 128 GB.
+RESOURCES = ResourceConfig.with_tpu("v5p-32", ram="256g")
+TRAIN_BATCH_SIZE = 16
+MICROBATCH_SIZE = 16
 
 
 def build_dataset_specs() -> tuple[dict[str, str], dict[str, float]]:
@@ -131,6 +117,7 @@ sft_config = SimpleSFTConfig(
     warmup=0.1,  # Model card: 10% warmup
     decay=0.9,
     weight_decay=0.0,
+    max_grad_norm=1e-4,  # OT-Agent uses 1e-4 (acts as strong regularizer on small datasets)
     beta1=0.9,  # Model card: 0.9
     beta2=0.98,  # Model card: 0.98
     epsilon=1e-8,
@@ -145,42 +132,41 @@ mixture_config = lm_mixture_data_config(
     mixture_block_size=12288,
 )
 
-# 131K context model config with aggressive gradient checkpointing.
-# "offload" moves layer carries and inputs to host pinned memory between layers,
-# drastically reducing HBM usage. Splash attention is automatic on TPU.
+# 131K context model config.
+# YaRN RoPE scaling: extends 32K base context to 131K (factor=4.0), matching
+# OT-Agent's FP8+YARN config (sft/llamafactory/examples/extras/fp8/).
+# Carries-only offload: proven pattern from exp1295_32b/exp1395_qwen3_32b.
 qwen3_8b_131k = dataclasses.replace(
     qwen3_8b,
     max_seq_len=131072,
-    rope=DefaultRotaryEmbeddingsConfig(theta=1_000_000.0),
-    # Offload layer carries (hidden states between layers) to host pinned memory.
-    # Only carries are offloaded; inputs are recomputed. This matches the proven
-    # pattern from exp1295_32b/exp1395_qwen3_32b on v4-2048. The string "offload"
-    # offloads BOTH carries and inputs, which triggers an XLA sublane assertion
-    # crash (jax-ml/jax#24115) on v5p TPUs.
+    rope=YarnRotaryEmbeddingsConfig(
+        theta=1_000_000.0,
+        factor=4.0,
+        original_max_position_embeddings=32768,
+    ),
     gradient_checkpointing=ScanCheckpointPolicy(save_carries="offload"),
 )
 
 RESOURCE_SUFFIX = RESOURCES.device.variant.replace("-", "") if RESOURCES.device.kind == "tpu" else "gpu"
 
-exp3897_sft_ota_131k = default_sft(
-    name=f"exp3897_sft_ota_131k_qwen3_8b_131072tokens_{RESOURCE_SUFFIX}",
+exp3897_sft_ota_131k_v2 = default_sft(
+    name=f"exp3897v2_sft_ota_131k_qwen3_8b_131072tokens_{RESOURCE_SUFFIX}",
     tokenized=mixture_config,
     model_config=qwen3_8b_131k,
     sft_config=sft_config,
-    tags=["qwen", "openthoughts-agent", "sft", "ota-131k", "long-context", RESOURCE_SUFFIX],
+    tags=["qwen", "openthoughts-agent", "sft", "ota-131k", "long-context", "v2", RESOURCE_SUFFIX],
 )
 
-exp3897_checkpoint = exp3897_sft_ota_131k.cd(f"hf/step-{NUM_TRAIN_STEPS - 1}").nonblocking()
+exp3897_checkpoint = exp3897_sft_ota_131k_v2.cd(f"hf/step-{NUM_TRAIN_STEPS - 1}").nonblocking()
 
 if __name__ == "__main__":
-    print("=== exp3897: OT-Agent 131K SFT Reproduction ===")
+    print("=== exp3897v2: OT-Agent 131K SFT Reproduction (v2) ===")
     print(f"Dataset: {DATASET_ID} ({NUM_SAMPLES:,} samples)")
     print(f"Training steps: {NUM_TRAIN_STEPS:,}")
     print(f"Epochs: {TARGET_EPOCHS}")
     print(f"Batch size: {TRAIN_BATCH_SIZE}")
-    print(f"Microbatch size: {MICROBATCH_SIZE}")
-    print(f"Resources: {RESOURCES.device.variant} ({NUM_CHIPS} chips)")
+    print(f"Resources: {RESOURCES.device.variant}")
     print("Context length: 131,072")
-    print("Gradient checkpointing: offload")
-    print(f"Per-device parallelism: {sft_config.per_device_parallelism}")
-    executor_main(steps=[exp3897_sft_ota_131k])
+    print("RoPE: YaRN factor=4.0 from 32K base")
+    print(f"max_grad_norm: {sft_config.max_grad_norm}")
+    executor_main(steps=[exp3897_sft_ota_131k_v2])
