@@ -9,7 +9,7 @@ import pytest
 
 from levanter.data import ListAsyncDataset, MixtureDataset
 from levanter.data.dataset import AsyncDataset
-from levanter.data.mixture import StopStrategy, rescale_mixture_schedule_for_batch_schedule
+from levanter.data.mixture import FlatMixture, StopStrategy, rescale_mixture_schedule_for_batch_schedule
 from levanter.schedule import BatchSchedule, ScheduleStep
 
 
@@ -294,3 +294,120 @@ def test_rescale_mixture_schedule_for_batch_schedule():
     expected_schedule = [(0, {"ds1": 0.5, "ds2": 0.5}), (100, {"ds1": 0.2, "ds2": 0.8})]
 
     assert rescaled_schedule == expected_schedule
+
+
+# --- FlatMixture tests ---
+
+
+@pytest.mark.asyncio
+async def test_flat_mixture_length_is_sum_of_children():
+    ds1 = ListAsyncDataset([1, 2, 3])
+    ds2 = ListAsyncDataset([10, 20])
+    flat = FlatMixture({"a": ds1, "b": ds2}, key=key())
+    assert await flat.async_len() == 5
+
+
+@pytest.mark.asyncio
+async def test_flat_mixture_is_finite():
+    ds1 = ListAsyncDataset([1, 2, 3])
+    ds2 = ListAsyncDataset([10, 20])
+    flat = FlatMixture({"a": ds1, "b": ds2}, key=key())
+    assert flat.is_finite()
+
+
+@pytest.mark.asyncio
+async def test_flat_mixture_rejects_infinite_children():
+    flat = FlatMixture({"inf": InfiniteCounterDataset()}, key=key())
+    assert not flat.is_finite()
+    with pytest.raises(ValueError, match="finite"):
+        await flat.async_len()
+
+
+@pytest.mark.asyncio
+async def test_flat_mixture_rejects_empty():
+    with pytest.raises(ValueError, match="at least one"):
+        FlatMixture({}, key=key())
+
+
+@pytest.mark.asyncio
+async def test_flat_mixture_contains_all_elements():
+    ds1 = ListAsyncDataset([1, 2, 3])
+    ds2 = ListAsyncDataset([10, 20])
+    flat = FlatMixture({"a": ds1, "b": ds2}, key=key())
+    total = await flat.async_len()
+    batch = await flat.get_batch(list(range(total)))
+    assert sorted(batch) == [1, 2, 3, 10, 20]
+
+
+@pytest.mark.asyncio
+async def test_flat_mixture_is_a_permutation():
+    """Every index maps to a unique element — no duplicates, no missing."""
+    ds1 = ListAsyncDataset(list(range(50)))
+    ds2 = ListAsyncDataset(list(range(50, 100)))
+    flat = FlatMixture({"a": ds1, "b": ds2}, key=key())
+    total = await flat.async_len()
+    batch = await flat.get_batch(list(range(total)))
+    assert sorted(batch) == list(range(100))
+
+
+@pytest.mark.asyncio
+async def test_flat_mixture_shuffles():
+    """With high probability the output order differs from the input order."""
+    data = list(range(100))
+    ds = ListAsyncDataset(data)
+    flat = FlatMixture({"only": ds}, key=key())
+    batch = await flat.get_batch(list(range(100)))
+    # Extremely unlikely that a random permutation is the identity
+    assert batch != data
+
+
+@pytest.mark.asyncio
+async def test_flat_mixture_deterministic():
+    ds1 = ListAsyncDataset([1, 2, 3])
+    ds2 = ListAsyncDataset([10, 20])
+    flat_a = FlatMixture({"a": ds1, "b": ds2}, key=42)
+    flat_b = FlatMixture({"a": ds1, "b": ds2}, key=42)
+    batch_a = await flat_a.get_batch([0, 1, 2, 3, 4])
+    batch_b = await flat_b.get_batch([0, 1, 2, 3, 4])
+    assert list(batch_a) == list(batch_b)
+
+
+@pytest.mark.asyncio
+async def test_flat_mixture_getitem_consistent_with_get_batch():
+    ds1 = ListAsyncDataset([1, 2, 3])
+    ds2 = ListAsyncDataset([10, 20])
+    flat = FlatMixture({"a": ds1, "b": ds2}, key=key())
+    batch = await flat.get_batch([0, 1, 2, 3, 4])
+    for i in range(5):
+        assert await flat.getitem_async(i) == batch[i]
+
+
+@pytest.mark.asyncio
+async def test_flat_mixture_nests_in_mixture_dataset():
+    """FlatMixture can be used as a component in MixtureDataset."""
+    ds1 = ListAsyncDataset(list(range(10)))
+    ds2 = ListAsyncDataset(list(range(10, 20)))
+    flat = FlatMixture({"a": ds1, "b": ds2}, key=key())
+
+    ds3 = ListAsyncDataset(list(range(100, 110)))
+    mixture = MixtureDataset(
+        {"flat": flat, "other": ds3},
+        {"flat": 0.5, "other": 0.5},
+        block_size=10,
+        key=key(),
+        randomize_blocks=False,
+    )
+
+    batch = await mixture.get_batch(list(range(20)))
+    assert len(batch) == 20
+    all_values = set(range(20)) | set(range(100, 110))
+    assert all(item in all_values for item in batch)
+
+
+@pytest.mark.asyncio
+async def test_flat_mixture_single_child():
+    ds = ListAsyncDataset([1, 2, 3, 4, 5])
+    flat = FlatMixture({"only": ds}, key=key())
+    assert await flat.async_len() == 5
+    batch = await flat.get_batch(list(range(5)))
+    assert sorted(batch) == [1, 2, 3, 4, 5]

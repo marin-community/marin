@@ -4,7 +4,7 @@
 from ._preprocessor import BatchProcessor
 from .dataset import AsyncDataset, ListAsyncDataset, MappedAsyncDataset, SyncDataset
 from .loader import DataLoader
-from .mixture import MixtureDataset, StopStrategy
+from .mixture import FlatMixture, MixtureDataset, StopStrategy
 from .permutation import BlockShufflingDataset, EraShufflingDataset, PermutationDataset
 from .sharded_datasource import ShardedDataSource, datasource_from_hf, datasource_from_json, datasource_from_jsonl
 from .utils import batched
@@ -15,6 +15,7 @@ __all__ = [
     "BatchProcessor",
     "BlockShufflingDataset",
     "DataLoader",
+    "FlatMixture",
     "EraShufflingDataset",
     "ListAsyncDataset",
     "MappedAsyncDataset",
