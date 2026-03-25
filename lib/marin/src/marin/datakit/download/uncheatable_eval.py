@@ -427,12 +427,3 @@ def make_uncheatable_eval_step(
         github_token=github_token,
         skip_existing=skip_existing,
     ).as_executor_step()
-
-
-__all__ = [
-    "UncheatableEvalDataset",
-    "UncheatableEvalDownloadConfig",
-    "download_latest_uncheatable_eval",
-    "make_uncheatable_eval_step",
-    "uncheatable_eval_step",
-]
