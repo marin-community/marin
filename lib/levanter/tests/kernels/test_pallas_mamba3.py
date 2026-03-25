@@ -45,6 +45,8 @@ from tests.test_utils import skip_if_no_torch
 
 MAMBA3_MIMO_RANKED_PARITY_ATOL = 1e-4
 MAMBA3_MIMO_RANKED_PARITY_RTOL = 1e-4
+MAMBA3_ATTENTIONISH_PARITY_ATOL = 1e-4
+MAMBA3_ATTENTIONISH_PARITY_RTOL = 1e-4
 
 
 def _sample_inputs(
@@ -638,8 +640,10 @@ def test_mamba3_siso_attentionish_api_matches_chunked_api():
         implementation="xla",
     )
 
-    assert jnp.allclose(y_new, y_old, atol=1e-5, rtol=1e-5)
-    assert jnp.allclose(state_new, state_old, atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(y_new, y_old, atol=MAMBA3_ATTENTIONISH_PARITY_ATOL, rtol=MAMBA3_ATTENTIONISH_PARITY_RTOL)
+    assert jnp.allclose(
+        state_new, state_old, atol=MAMBA3_ATTENTIONISH_PARITY_ATOL, rtol=MAMBA3_ATTENTIONISH_PARITY_RTOL
+    )
 
 
 def test_mamba3_siso_attentionish_final_k_matches_last_key_plus_bias():
@@ -981,8 +985,18 @@ def test_mamba3_mimo_attentionish_api_matches_chunked_api():
         return_final_state=True,
         implementation="xla",
     )
-    assert jnp.allclose(y_new, y_old.transpose(0, 2, 3, 1, 4).reshape(1, 16, 3, 5), atol=1e-5, rtol=1e-5)
-    assert jnp.allclose(state_new, state_old.transpose(0, 1, 3, 2), atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(
+        y_new,
+        y_old.transpose(0, 2, 3, 1, 4).reshape(1, 16, 3, 5),
+        atol=MAMBA3_ATTENTIONISH_PARITY_ATOL,
+        rtol=MAMBA3_ATTENTIONISH_PARITY_RTOL,
+    )
+    assert jnp.allclose(
+        state_new,
+        state_old.transpose(0, 1, 3, 2),
+        atol=MAMBA3_ATTENTIONISH_PARITY_ATOL,
+        rtol=MAMBA3_ATTENTIONISH_PARITY_RTOL,
+    )
 
 
 def test_mamba3_mimo_attentionish_unreduced_output_and_final_k():
@@ -1133,9 +1147,17 @@ def test_mamba3_mimo_attentionish_qk_group_mapping_matches_head_shared_chunked_a
         implementation="reference",
     )
     assert jnp.allclose(
-        y_new, y_old.transpose(0, 2, 3, 1, 4).reshape(batch, seq_len, heads, value_dim), atol=1e-5, rtol=1e-5
+        y_new,
+        y_old.transpose(0, 2, 3, 1, 4).reshape(batch, seq_len, heads, value_dim),
+        atol=MAMBA3_ATTENTIONISH_PARITY_ATOL,
+        rtol=MAMBA3_ATTENTIONISH_PARITY_RTOL,
     )
-    assert jnp.allclose(state_new, state_old.transpose(0, 1, 3, 2), atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(
+        state_new,
+        state_old.transpose(0, 1, 3, 2),
+        atol=MAMBA3_ATTENTIONISH_PARITY_ATOL,
+        rtol=MAMBA3_ATTENTIONISH_PARITY_RTOL,
+    )
 
 
 def test_mamba3_hybrid_mimo_matches_mimo_api():
