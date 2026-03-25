@@ -23,7 +23,7 @@ Download raw dataset from Hugging Face (or other sources). Raw downloads are pre
 
 Convert raw data into the **datakit standard format**:
 
-* **File format**: Vortex \- columnar, supports pushdown filters and column projection, efficient lookup.
+* **File format**: Parquet \- columnar, widely supported, supports pushdown filters and column projection.
 * **Mandatory columns**:
   * `id` \- unique document identifier (see [ID Column](#id-column) below)
   * `text` \- primary text content \- we enforce UTF-8
@@ -35,7 +35,7 @@ Convert raw data into the **datakit standard format**:
 * **Sort invariant**: each partition is sorted by `id`
 * **Typed output:** in the code the data has typed representation via `Artifact`
 
-This is the "intake" step \- all downstream stages operate on normalized Vortex datasets.
+This is the "intake" step \- all downstream stages operate on normalized Parquet datasets.
 
 ## 3\. Embed
 
@@ -56,7 +56,7 @@ Join attributes datasets back to the source documents and apply filters:
 * Filter by classifier thresholds (e.g., quality score \> 0.8)
 * Remove duplicate spans/documents
 
-Output is a clean, filtered Vortex dataset \- still sorted by `id`, still co-partitioned.
+Output is a clean, filtered Parquet dataset \- still sorted by `id`, still co-partitioned.
 
 ## 8\. Tokenize
 
@@ -66,15 +66,16 @@ Convert clean text into tokenized Levanter cache format.
 
 # Core Design Decisions
 
-## Vortex as the Standard Format
+## Parquet as the Standard Format
 
-All intermediate datasets (from normalization through consolidation) use the Vortex columnar format. Benefits:
+All intermediate datasets (from normalization through consolidation) use the Parquet columnar format. Benefits:
 
 * Column projection (only read the columns you need)
 * Filter pushdown
 * Efficient sorted merge joins via Zephyr
+* Mature ecosystem with broad tooling support
 
-NOTE: Vortex is much less mature than Parquet. This is a major concern. We will start with Vortex and if we hit roadblocks, revert to Parquet.
+NOTE: We initially considered Vortex for its pushdown and lookup capabilities, but encountered blocking issues with Zephyr pipeline integration (see [vortex\#6905](https://github.com/vortex-data/vortex/issues/6905)). Parquet provides the same columnar benefits with a proven ecosystem. If Vortex matures, we can revisit.
 
 ## ID Column {#id-column}
 
@@ -96,14 +97,14 @@ This is enforced by convention: each processing stage reads source partitions 1:
 
 ## Attributes Datasets {#attributes-datasets}
 
-Processing stages (embed, classify, dedup) produce **attributes datasets** \- lightweight Vortex files containing:
+Processing stages (embed, classify, dedup) produce **attributes datasets** \- lightweight Parquet files containing:
 
 * `id` — matching the source document ID
 * Stage-specific output columns (e.g., `quality_score`, `is_duplicate`, `topic_label`)
 
 Attributes datasets:
 
-* Use Vortex format
+* Use Parquet format
 * Are co-partitioned with the source (same shard count and key ranges)
 * Are sorted by `id` within each partition
 * Can be joined back to source documents via `sorted_merge_join`
@@ -133,7 +134,7 @@ download = StepSpec(
 normalize = StepSpec(
     name="fineweb/normalize",
     deps=[download],
-    fn=lambda output_path: normalize_to_vortex(
+    fn=lambda output_path: normalize_to_parquet(
         input_path=download.output_path, output_path=output_path, text_field="text",
     ),
     hash_attrs={"text_field": "text"},
@@ -188,7 +189,7 @@ Core primitives — the reusable building blocks:
 
 ```
 lib/marin/datakit/
-  normalize       # Raw format -> standard Vortex (id, text, ...)
+  normalize       # Raw format -> standard Parquet (id, text, ...)
   embed           # Document embedding
   classify        # Quality/topic classification
   dedup           # Deduplication (exact + fuzzy)
@@ -201,7 +202,7 @@ Dataset-specific wiring \- which transforms to apply for a given dataset, expres
 
 # Execution Plan
 
-* Implement `datakit/normalize.py` \- standard schema definitions, ID generation, raw format to Vortex conversion with mandatory columns
+* Implement `datakit/normalize.py` \- standard schema definitions, ID generation, raw format to Parquet conversion with mandatory columns
 * Integration tests for the normalize step
 * Integration tests covering download, normalize, dedup and tokenize at reasonable scale
 * Update Grug/ferry experiment definitions to consume datakit pipeline outputs directly
