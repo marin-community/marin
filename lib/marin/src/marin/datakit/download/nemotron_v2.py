@@ -71,7 +71,7 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
             "4plus": "4plus/**/*.parquet",
             "4plus_mind": "4plus_MIND/**/*.parquet",
         },
-        override_output_path="nemotron_cc_math_v1-322fe4",
+        override_output_path="raw/nemotron_cc_math_v1-322fe4",
     ),
     "nemotron_pretraining_code_v1": NemotronV2Dataset(
         hf_dataset_id="nvidia/Nemotron-Pretraining-Code-v1",
@@ -93,6 +93,7 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
             "synthetic_rewriting": "Synthetic-Rewriting/**/*.parquet",
             "synthetic_transpilation": "Synthetic-Transpilation/**/*.parquet",
         },
+        override_output_path="raw/nemotron_pretraining_code_v2-d15a24",
     ),
     "nemotron_pretraining_specialized_v1": NemotronV2Dataset(
         hf_dataset_id="nvidia/Nemotron-Pretraining-Specialized-v1",
@@ -105,6 +106,7 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
             "rqa": "Nemotron-Pretraining-RQA/**/*.parquet",
             "infinibyte_reasoning": "Nemotron-Pretraining-InfiniByte-Reasoning/**/*.parquet",
         },
+        override_output_path="raw/nemotron_pretraining_specialized_v1-a31fae",
     ),
     "nemotron_pretraining_sft_v1": NemotronV2Dataset(
         hf_dataset_id="nvidia/Nemotron-Pretraining-SFT-v1",
@@ -114,6 +116,7 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
             "sft_general": "Nemotron-SFT-General/**/*.parquet",
             "sft_math": "Nemotron-SFT-MATH/**/*.parquet",
         },
+        override_output_path="raw/nemotron_pretraining_sft_v1-10f77e",
     ),
 }
 
@@ -125,4 +128,5 @@ def download_nemotron_v2_step(family: str) -> StepSpec:
         f"raw/{family}",
         hf_dataset_id=info.hf_dataset_id,
         revision=info.revision,
+        override_output_path=info.override_output_path,
     )
