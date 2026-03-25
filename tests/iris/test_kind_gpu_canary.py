@@ -17,7 +17,9 @@ import subprocess
 import time
 import urllib.request
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -37,8 +39,50 @@ from iris.cluster.providers.k8s.tasks import K8sTaskProvider, _LABEL_MANAGED, _L
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec, TaskAttempt
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration
-from tests.cluster.conftest import ServiceTestHarness, _HarnessController
-from tests.cluster.controller.conftest import make_test_entrypoint
+
+
+# ---------------------------------------------------------------------------
+# Inlined helpers from lib/iris/tests/cluster/ to avoid cross-package imports
+# (the iris test helpers aren't importable from top-level tests/).
+# ---------------------------------------------------------------------------
+
+
+class _HarnessController:
+    """Minimal controller mock satisfying the ControllerProtocol surface."""
+
+    def __init__(self) -> None:
+        self.wake = Mock()
+        self.kill_tasks_on_workers = Mock()
+        self.create_scheduling_context = Mock(return_value=Mock())
+        self.get_job_scheduling_diagnostics = Mock(return_value=None)
+        self.autoscaler = None
+        self.provider: object = Mock()
+        self.has_direct_provider = False
+
+
+@dataclass
+class ServiceTestHarness:
+    """Controller service backed by either GCP or K8s, without booting a cluster."""
+
+    service: ControllerServiceImpl
+    state: ControllerTransitions
+    db: ControllerDB
+    provider_type: str
+
+    k8s: InMemoryK8sService | None = None
+    k8s_provider: K8sTaskProvider | None = None
+
+    def sync_k8s(self) -> None:
+        assert self.k8s_provider is not None, "sync_k8s requires K8s harness"
+        batch = self.state.drain_for_direct_provider()
+        result = self.k8s_provider.sync(batch)
+        self.state.apply_direct_provider_updates(result.updates)
+
+
+def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
+    entrypoint = cluster_pb2.RuntimeEntrypoint()
+    entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
+    return entrypoint
 
 pytestmark = pytest.mark.e2e
 
@@ -274,7 +318,7 @@ def test_gpu_pod_attributes_with_in_memory_k8s(tmp_path: Path) -> None:
         launcher_id = JobName.root("runner", "canary-launcher")
         launcher_request = cluster_pb2.Controller.LaunchJobRequest(
             name=launcher_id.to_wire(),
-            entrypoint=make_test_entrypoint(),
+            entrypoint=_make_test_entrypoint(),
             resources=_cpu_resources(),
             environment=cluster_pb2.EnvironmentConfig(),
             replicas=1,
@@ -284,7 +328,7 @@ def test_gpu_pod_attributes_with_in_memory_k8s(tmp_path: Path) -> None:
 
         child_request = cluster_pb2.Controller.LaunchJobRequest(
             name=launcher_id.child("grug-train").to_wire(),
-            entrypoint=make_test_entrypoint(),
+            entrypoint=_make_test_entrypoint(),
             resources=_gpu_resources(),
             environment=cluster_pb2.EnvironmentConfig(),
             replicas=1,
