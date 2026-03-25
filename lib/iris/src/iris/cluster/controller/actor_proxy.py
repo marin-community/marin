@@ -29,14 +29,16 @@ PROXY_ROUTE = "/iris.actor.ActorService/{method}"
 PROXY_TIMEOUT_SECONDS = 60.0
 
 # Headers that should not be forwarded to upstream (hop-by-hop or routing-specific).
-_HOP_BY_HOP_HEADERS = frozenset({
-    "host",
-    "transfer-encoding",
-    "connection",
-    "keep-alive",
-    "upgrade",
-    ACTOR_ENDPOINT_HEADER,
-})
+_HOP_BY_HOP_HEADERS = frozenset(
+    {
+        "host",
+        "transfer-encoding",
+        "connection",
+        "keep-alive",
+        "upgrade",
+        ACTOR_ENDPOINT_HEADER,
+    }
+)
 
 
 class ActorProxy:
@@ -68,9 +70,7 @@ class ActorProxy:
 
         upstream_url = f"http://{address}/iris.actor.ActorService/{method}"
         body = await request.body()
-        forward_headers = {
-            k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP_HEADERS
-        }
+        forward_headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP_HEADERS}
 
         try:
             upstream_resp = await self._client.post(
