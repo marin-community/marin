@@ -108,7 +108,7 @@ def download_nemotron_cc(output_path: str) -> None:
     logger.info(f"Downloaded Nemotron CC files to {output_path}")
 
 
-def download_nemotron_cc_step(name: str = "raw/nemotron-cc") -> StepSpec:
+def download_nemotron_v1_step(name: str = "raw/nemotron-cc") -> StepSpec:
     """Create a StepSpec that downloads the Nemotron-CC dataset from Common Crawl."""
 
     return StepSpec(

@@ -112,7 +112,7 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
 }
 
 
-def nemotron_v2_download_step(family: str) -> StepSpec:
+def download_nemotron_v2_step(family: str) -> StepSpec:
     """Create a download StepSpec for a Nemotron v2 dataset family."""
     info = NEMOTRON_V2_DATASETS[family]
     return download_hf_step(

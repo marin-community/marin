@@ -10,7 +10,7 @@ This file wires them into tokenization steps for experiment pipelines.
 
 import os.path
 
-from marin.datakit.download.nemotron_v2 import NEMOTRON_V2_DATASETS, nemotron_v2_download_step
+from marin.datakit.download.nemotron_v2 import NEMOTRON_V2_DATASETS, download_nemotron_v2_step
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
@@ -20,7 +20,7 @@ from marin.processing.tokenize.data_configs import TokenizerStep
 # ============================================================================
 
 downloads: dict[str, ExecutorStep] = {
-    family: nemotron_v2_download_step(family).as_executor_step() for family in NEMOTRON_V2_DATASETS
+    family: download_nemotron_v2_step(family).as_executor_step() for family in NEMOTRON_V2_DATASETS
 }
 
 
