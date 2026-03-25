@@ -869,14 +869,19 @@ class HFCheckpointConverter(Generic[LevConfig]):
         # Preserve token IDs from the source model config when available.
         # Chat models often set eos_token_id to a turn-boundary token (e.g.
         # <|eot_id|>) or a list of stop tokens that differs from the
-        # tokenizer's default eos_token. The source model's values take
-        # priority; the tokenizer values above serve as fallbacks for
-        # training-from-scratch where no base config exists.
+        # tokenizer's default eos_token.
         if base_config is not None:
             for k in ("eos_token_id", "bos_token_id", "pad_token_id"):
-                val = getattr(base_config, k, None)
-                if val is not None:
-                    dict_config[k] = val
+                base_val = getattr(base_config, k, None)
+                tok_val = dict_config.get(k)
+                if base_val is not None and tok_val is not None and base_val != tok_val:
+                    logger.warning(
+                        f"Tokenizer has {k}={tok_val} but source model config has {k}={base_val}. "
+                        f"Using source model value. Set config_overrides to change this."
+                    )
+                    dict_config[k] = base_val
+                elif base_val is not None and tok_val is None:
+                    dict_config[k] = base_val
 
         if self.config_overrides:
             dict_config = mergedeep.merge({}, dict_config, self.config_overrides)
