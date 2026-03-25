@@ -262,8 +262,10 @@ class ControllerDashboard:
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         self._actor_proxy = ActorProxy(self._service._db)
-        # Auth policy: proxy route requires authentication (checked by _RouteAuthMiddleware).
-        requires_auth(self._actor_proxy.handle)
+
+        @requires_auth
+        async def _proxy_actor_rpc(request: Request) -> Response:
+            return await self._actor_proxy.handle(request)
 
         routes = [
             Route("/", self._dashboard),
@@ -275,7 +277,7 @@ class ControllerDashboard:
             Route("/worker/{worker_id:path}", self._worker_detail_page),
             Route("/bundles/{bundle_id:str}.zip", self._bundle_download),
             Route("/health", self._health),
-            Route(PROXY_ROUTE, self._actor_proxy.handle, methods=["POST"]),
+            Route(PROXY_ROUTE, _proxy_actor_rpc, methods=["POST"]),
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),
         ]
