@@ -94,6 +94,9 @@ jobs:
             -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
             -e HF_TOKEN "$HF_TOKEN" \
+            -e AWS_ACCESS_KEY_ID "$R2_ACCESS_KEY_ID" \
+            -e AWS_SECRET_ACCESS_KEY "$R2_SECRET_ACCESS_KEY" \
+            -e AWS_ENDPOINT_URL "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com" \
             -- python -m experiments.ferries.canary_ferry)
           echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
           echo "Submitted job: $JOB_ID"
