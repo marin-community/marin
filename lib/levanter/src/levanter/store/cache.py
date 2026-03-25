@@ -9,6 +9,7 @@ import operator
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, TypeVar, Union
 
@@ -43,6 +44,7 @@ T_co = TypeVar("T_co", covariant=True)
 logger = pylogging.getLogger(__name__)
 
 LEDGER_FILE_NAME = "shard_ledger.json"
+CONSOLIDATE_DATA_SIZE_WORKERS = 32
 
 DEFAULT_LOG_LEVEL = pylogging.INFO
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
@@ -430,7 +432,16 @@ def consolidate_shard_caches(
 
     shard_ledgers = [CacheLedger.load(p, metadata) for p in shard_cache_paths]
 
-    for shard_path, ledger in zip(shard_cache_paths, shard_ledgers):
+    # Parallel: open each TreeStore to read data_size (dominates wall time on remote storage)
+    def _get_data_sizes(shard_path):
+        store = TreeStore.open(exemplar, shard_path, mode="r", cache_metadata=True)
+        return jax.tree.map(lambda x: x.data_size, store.tree)
+
+    with ThreadPoolExecutor(max_workers=CONSOLIDATE_DATA_SIZE_WORKERS) as executor:
+        per_shard_sizes = list(executor.map(_get_data_sizes, shard_cache_paths))
+
+    # Serial: accumulate row_offset and data_offset_tree (order-dependent)
+    for shard_path, ledger, this_offsets in zip(shard_cache_paths, shard_ledgers, per_shard_sizes):
         shard_name = os.path.basename(shard_path)
         shard_info.append(
             {
@@ -442,9 +453,6 @@ def consolidate_shard_caches(
             }
         )
         total_rows += ledger.total_num_rows
-
-        this_cache = TreeStore.open(exemplar, shard_path, mode="r", cache_metadata=True)
-        this_offsets = jax.tree.map(lambda x: x.data_size, this_cache.tree)
         data_offset_tree = jax.tree.map(operator.add, data_offset_tree, this_offsets)
 
     TreeStore.open(exemplar, output_path, mode="w", cache_metadata=True)
