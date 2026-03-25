@@ -19,6 +19,10 @@ const routes = [
     component: () => import('./components/controller/AutoscalerTab.vue'),
   },
   {
+    path: '/cluster',
+    component: () => import('./components/controller/KubernetesClusterTab.vue'),
+  },
+  {
     path: '/endpoints',
     component: () => import('./components/controller/EndpointsTab.vue'),
   },

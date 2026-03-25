@@ -177,7 +177,6 @@ message ScaleGroupResources {
 
 message WorkerSettings {
   map<string, string> attributes = 1;
-  map<string, string> env = 2;
 }
 
 // Configuration for a scale group
@@ -241,7 +240,7 @@ message WorkerConfig {
 
   // Task defaults
   string default_task_image = 9;
-  map<string, string> default_task_env = 10;
+  map<string, string> task_env = 10;
   string runtime = 11;                       // "docker" or "kubernetes"
 
   // Accelerator (from scale group resources, not env vars)
@@ -354,6 +353,7 @@ message DefaultsConfig {
   reserved 4;  // was: BootstrapConfig bootstrap
   reserved 5;  // was: string default_task_image
   WorkerConfig worker = 6;
+  map<string, string> task_env = 7;  // Env vars injected into every task container
 }
 
 // ============================================================================
@@ -375,6 +375,37 @@ message AuthConfig {
     StaticAuthConfig static = 2;
   }
   repeated string admin_users = 3;
+
+  // When true, authentication is attempted but not required. Requests with
+  // valid tokens get the authenticated identity; requests without tokens
+  // fall through as anonymous admin. Invalid tokens are still rejected.
+  // This allows gradual rollout of auth on clusters that currently rely on
+  // SSH tunnels.
+  bool optional = 4;
+}
+
+// ============================================================================
+// PROVIDER CONFIGURATION
+// ============================================================================
+
+// Configuration for WorkerProvider: RPC-based worker daemons managed by the autoscaler.
+// No fields needed — all configuration is in defaults.worker and scale_groups.
+message WorkerProviderConfig {}
+
+// Configuration for KubernetesProvider: direct Pod dispatch without worker daemons.
+message KubernetesProviderConfig {
+  string namespace = 1;    // Kubernetes namespace for task pods (default: "iris")
+  string kubeconfig = 2;   // Path to kubeconfig file; empty string uses in-cluster auth
+  string default_image = 3; // Default container image for task pods
+  // Topology key for pod affinity on multi-VM gang-scheduled jobs.
+  // When set, sibling task pods for the same job prefer scheduling on nodes
+  // sharing this topology (e.g. "coreweave.cloud/spine" for IB colocation).
+  // Leave empty to disable. Default: "coreweave.cloud/spine".
+  string colocation_topology_key = 4;
+  string service_account = 5;    // K8s ServiceAccount for task pods (default: "")
+  bool host_network = 6;         // Run task pods with hostNetwork (for NCCL/IB)
+  string cache_dir = 7;          // hostPath base for cache mounts (default: "/cache")
+  string controller_address = 8; // Controller URL injected into task pods
 }
 
 // ============================================================================
@@ -399,4 +430,10 @@ message IrisClusterConfig {
 
   // Authentication (optional — when absent, no auth is required)
   AuthConfig auth = 60;
+
+  // Task provider — required. Exactly one must be set.
+  oneof provider {
+    KubernetesProviderConfig kubernetes_provider = 70;
+    WorkerProviderConfig worker_provider = 71;
+  }
 }

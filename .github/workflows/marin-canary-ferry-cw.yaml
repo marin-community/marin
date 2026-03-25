@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     concurrency:
-      group: canary-ferry-cw
+      group: canary-ferry-cw-iris-canary
       cancel-in-progress: true
     env:
       RUN_ID: canary-gpu-${{ github.run_id }}-${{ github.run_attempt }}
@@ -35,7 +35,11 @@ jobs:
       CANARY_MAX_WALL_CLOCK: "7200"
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
-      IRIS_CONFIG: lib/iris/examples/coreweave.yaml
+      IRIS_CONFIG: lib/iris/examples/coreweave-canary.yaml
+      # Must match the label_prefix and namespace in IRIS_CONFIG so teardown
+      # targets only this cluster's resources.
+      IRIS_LABEL_PREFIX: iris-canary
+      IRIS_NAMESPACE: iris-canary
 
     steps:
       - name: Checkout code
@@ -59,6 +63,9 @@ jobs:
           mkdir -p ~/.kube
           echo "${{ secrets.CW_KUBECONFIG }}" > ~/.kube/coreweave-iris
           chmod 600 ~/.kube/coreweave-iris
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -90,6 +97,9 @@ jobs:
             -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
             -e HF_TOKEN "$HF_TOKEN" \
+            -e AWS_ACCESS_KEY_ID "$R2_ACCESS_KEY_ID" \
+            -e AWS_SECRET_ACCESS_KEY "$R2_SECRET_ACCESS_KEY" \
+            -e AWS_ENDPOINT_URL "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com" \
             -- python -m experiments.ferries.canary_ferry)
           echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
           echo "Submitted job: $JOB_ID"
@@ -156,11 +166,20 @@ jobs:
       - name: Capture failure diagnostics
         if: failure()
         run: |
-          kubectl --kubeconfig ~/.kube/coreweave-iris -n iris \
+          echo "=== Controller logs ==="
+          kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
             logs -l app=iris-controller --tail=500 || true
-          kubectl --kubeconfig ~/.kube/coreweave-iris -n iris \
+          echo "=== Controller pod describe ==="
+          kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
             describe pod -l app=iris-controller || true
-          kubectl --kubeconfig ~/.kube/coreweave-iris -n iris \
+          echo "=== Task pod logs ==="
+          kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
+            logs -l iris.managed=true --tail=200 || true
+          echo "=== Task pod describe ==="
+          kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
+            describe pod -l iris.managed=true || true
+          echo "=== Warning events ==="
+          kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
             get events --sort-by='.lastTimestamp' --field-selector type!=Normal || true
 
       # `cluster stop` only deletes Pods; NodePools survive and rely on the
@@ -172,7 +191,7 @@ jobs:
           .venv/bin/iris -v --config=${{ env.IRIS_CONFIG }} cluster stop || true
           if [ "${{ inputs.keep_nodepool }}" != "true" ]; then
             kubectl --kubeconfig ~/.kube/coreweave-iris \
-              delete nodepool -l iris-iris-managed=true
+              delete nodepool -l iris-${{ env.IRIS_LABEL_PREFIX }}-managed=true
           else
             echo "Keeping node pool alive (keep_nodepool=true)"
           fi

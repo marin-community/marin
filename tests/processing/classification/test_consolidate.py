@@ -6,7 +6,8 @@ import json
 import os
 from pathlib import Path
 
-from marin.processing.classification.deduplication.dedup_commons import DedupMode, DedupConfig, deduplicate
+from marin.processing.classification.deduplication.dedup_commons import DedupMode
+from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
 import pytest
 from ddsketch import DDSketch
 from marin.processing.classification.consolidate import (
@@ -147,14 +148,11 @@ def test_dedupe_consolidate_integration(fox_corpus):
     consolidated_dir = os.path.join(fox_corpus["output_dir"], "consolidation")
 
     # Run deduplication to generate attributes using fixture's test data
-    dedupe_config = DedupConfig(
+    result = dedup_exact_paragraph(
         input_paths=fox_corpus["test_dir"],
         output_path=dedupe_output_dir,
-        mode=DedupMode.EXACT_PARAGRAPH,
-        processes=1,
+        max_parallelism=4,
     )
-
-    result = deduplicate(dedupe_config)
     assert result["success"]
     assert result["mode"] == DedupMode.EXACT_PARAGRAPH
 

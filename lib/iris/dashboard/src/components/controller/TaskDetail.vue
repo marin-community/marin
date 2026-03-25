@@ -101,6 +101,17 @@ onMounted(async () => {
   await fetchTask()
   if (isActive.value) startRefresh()
 })
+
+// Re-fetch when navigating between tasks (Vue Router reuses the component).
+// Clear stale data first so loading/error states render correctly if the fetch fails.
+watch(() => props.taskId, async () => {
+  taskResponse.value = null
+  cpuHistory.value = []
+  memHistory.value = []
+  stopRefresh()
+  await fetchTask()
+  if (isActive.value) startRefresh()
+})
 </script>
 
 <template>

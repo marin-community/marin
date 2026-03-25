@@ -42,7 +42,6 @@ from experiments.evals.task_configs import (
     CORE_TASKS,
     convert_to_levanter_task_config,
 )
-from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_dpo_config import SimpleDPOConfig
 from experiments.simple_sft_config import SimpleSFTConfig
@@ -64,7 +63,6 @@ from marin.processing.tokenize import (
     TokenizeConfig,
     TokenizerStep,
     add_validation_sets_to_mixture,
-    get_vocab_size_for_tokenizer,
     lm_data_config,
     tokenize,
 )
@@ -77,6 +75,20 @@ from marin.training.training import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+HF_BUCKET_URI_PREFIX = "hf://buckets/"
+HF_BUCKET_PATH_PREFIX = "buckets/"
+
+
+def _is_hf_bucket_path(path: str) -> bool:
+    return path.startswith(HF_BUCKET_URI_PREFIX) or path.startswith(HF_BUCKET_PATH_PREFIX)
+
+
+def _normalize_hf_bucket_path(path: str) -> str:
+    if path.startswith(HF_BUCKET_URI_PREFIX):
+        return path.removeprefix("hf://")
+    return path
 
 
 DEFAULT_NEW_RUN_DATA_SHUFFLE = BlockShuffleConfig(
@@ -141,7 +153,7 @@ def _validate_train_length(train_seq_len: int | None, model_config: LmConfig) ->
 def default_download(
     name: str,
     hf_dataset_id: str,
-    revision: str,
+    revision: str | None = None,
     override_output_path: str | None = None,
     **kwargs: Any,
 ) -> InputName:
@@ -151,25 +163,41 @@ def default_download(
     Args:
         name: The name of the Download step. It forms the basis of the output path
             unless override_output_path is explicitly specified.
-        hf_dataset_id: The HuggingFace dataset ID to download. As `$ORG/$DATASET` on HF Hub
-        revision: The revision of the dataset to download.
-            Short Commit Hash from HF Dataset Repo (7 characters)
+        hf_dataset_id: Hugging Face source. Either `$ORG/$DATASET` on HF Hub or `hf://buckets/...`.
+        revision: The revision of the dataset to download for Hub datasets.
+            Optional for bucket paths.
         override_output_path: Optional. The output path for the dataset.
         **kwargs: Additional keyword arguments that are passed to the download config.
 
     The final output data will reside in '{output_path}/{revision}'.
     """
 
+    download_kwargs = dict(kwargs)
+    hf_repo_type_prefix = download_kwargs.pop("hf_repo_type_prefix", None)
+    if _is_hf_bucket_path(hf_dataset_id):
+        normalized_dataset_id = _normalize_hf_bucket_path(hf_dataset_id)
+        description = f"Download {hf_dataset_id}"
+        resolved_hf_repo_type_prefix = "" if hf_repo_type_prefix is None else hf_repo_type_prefix
+        resolved_revision = "main" if revision is None else revision
+    else:
+        if revision is None:
+            raise ValueError("revision is required for non-bucket Hugging Face dataset downloads.")
+        normalized_dataset_id = hf_dataset_id
+        description = f"Download {hf_dataset_id} revision {revision}"
+        resolved_hf_repo_type_prefix = "datasets" if hf_repo_type_prefix is None else hf_repo_type_prefix
+        resolved_revision = revision
+
     step = ExecutorStep(
         name=name,
-        description=f"Download {hf_dataset_id} revision {revision}",
+        description=description,
         fn=download_hf,
         config=DownloadConfig(
-            hf_dataset_id=hf_dataset_id,
-            revision=revision,
+            hf_dataset_id=normalized_dataset_id,
+            revision=resolved_revision,
             gcs_output_path=this_output_path(),
             wait_for_completion=True,
-            **kwargs,
+            hf_repo_type_prefix=resolved_hf_repo_type_prefix,
+            **download_kwargs,
         ),
         override_output_path=override_output_path,
     )
@@ -217,7 +245,12 @@ def default_tokenize(
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
         )
-    elif isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
+    elif (
+        isinstance(dataset, str)
+        and not _is_hf_bucket_path(dataset)
+        and dataset.count("/") == 1
+        and not fsspec_utils.exists(dataset)
+    ):
         config = HfTokenizeConfig(
             id=dataset,
             cache_path=this_output_path(),
@@ -367,8 +400,7 @@ def default_train(
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
-    vocab_size = _get_vocab_size(pretraining_data)
-
+    tokenizer_name = unwrap_versioned_value(pretraining_data.tokenizer)
     steps_per_export = train_config.steps_per_export
 
     if wandb_group is None:
@@ -432,12 +464,13 @@ def default_train(
             ),
             model_averaging=model_averaging,
             mesh=MeshConfig(
+                axes={"replica": 1, "data": -1, "model": train_config.tensor_parallel_size},
                 # Special axes for MoEs
                 # TODO: this is actually bad and we should remove, but keeping for now
                 compute_mapping={
                     "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
                     "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
-                }
+                },
             ),
             allow_partial_checkpoint=train_config.allow_partial_checkpoint,
             per_device_eval_parallelism=per_device_eval_parallelism,
@@ -498,6 +531,7 @@ def default_train(
         train_config=inner_config,
         resources=pod_config,
         output_path=this_output_path(),
+        env_vars=train_config.env_vars,
     )
 
     model_config = unwrap_versioned_value(model_config)
@@ -505,7 +539,7 @@ def default_train(
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
-            f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
+            f"Train a model (tokenizer={tokenizer_name}) for "
             f"{unwrap_versioned_value(train_config.num_train_steps)} (steps) * "
             f"{unwrap_versioned_value(train_config.train_batch_size)} (batch_size) * "
             f"{train_length} (train_seq_len) "
@@ -627,7 +661,7 @@ def default_dpo(
     pretraining_data = _prepare_data_config(tokenized, use_default_validation=False)
     preference_data = PreferenceLmDataConfig.from_lm_data_config(pretraining_data)
     preference_data = dataclasses.replace(preference_data, permutation_type="feistel")
-    vocab_size = _get_vocab_size(preference_data)
+    dpo_tokenizer_name = unwrap_versioned_value(preference_data.tokenizer)
 
     wandb_display_name = _truncate_wandb_name(name)
 
@@ -706,7 +740,7 @@ def default_dpo(
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
-            f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
+            f"Train a model (tokenizer={dpo_tokenizer_name}) for "
             f"{dpo_config.num_train_steps} (steps) * "
             f"{dpo_config.train_batch_size} (batch_size) * "
             f"{train_length} (train_seq_len) "
@@ -716,11 +750,6 @@ def default_dpo(
         config=config,
         override_output_path=override_output_path,
     )
-
-
-def _get_vocab_size(pretraining_data):
-    tokenizer = unwrap_versioned_value(pretraining_data.tokenizer)
-    return get_vocab_size_for_tokenizer(tokenizer)
 
 
 def _prepare_data_config(

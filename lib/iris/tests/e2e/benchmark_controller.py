@@ -41,8 +41,7 @@ import httpx
 import humanfriendly
 import psutil
 from iris.client.client import IrisClient, Job, ResourceSpec
-from iris.cluster.config import load_config, make_local_config
-from iris.cluster.manager import connect_cluster
+from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.types import Entrypoint, EnvironmentSpec, get_tpu_topology, tpu_device
 from iris.logging import configure_logging
 from iris.rpc import cluster_pb2, config_pb2

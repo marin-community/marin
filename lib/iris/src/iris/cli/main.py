@@ -6,9 +6,7 @@
 Defines the ``iris`` Click group and registers all subcommands.
 """
 
-import json
 import logging as _logging_module
-import os
 import sys
 
 import click
@@ -66,31 +64,10 @@ def create_client_token_provider(
 
 
 def _configure_client_s3(config) -> None:
-    """Configure S3 env vars for fsspec access (e.g. bundle downloads).
+    """Configure S3 env vars for fsspec access. Delegates to the canonical implementation."""
+    from iris.cluster.providers.k8s.controller import configure_client_s3
 
-    fsspec needs AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (mapped from
-    R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY), AWS_ENDPOINT_URL, and FSSPEC_S3
-    with the correct endpoint.
-    """
-    from iris.cluster.platform.coreweave import _needs_virtual_host_addressing
-
-    endpoint = config.platform.coreweave.object_storage_endpoint
-    if not endpoint:
-        return
-
-    r2_key = os.environ.get("R2_ACCESS_KEY_ID", "")
-    r2_secret = os.environ.get("R2_SECRET_ACCESS_KEY", "")
-    if r2_key and r2_secret:
-        os.environ.setdefault("AWS_ACCESS_KEY_ID", r2_key)
-        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", r2_secret)
-
-    os.environ.setdefault("AWS_ENDPOINT_URL", endpoint)
-
-    if "FSSPEC_S3" not in os.environ:
-        fsspec_conf: dict = {"endpoint_url": endpoint}
-        if _needs_virtual_host_addressing(endpoint):
-            fsspec_conf["config_kwargs"] = {"s3": {"addressing_style": "virtual"}}
-        os.environ["FSSPEC_S3"] = json.dumps(fsspec_conf)
+    configure_client_s3(config)
 
 
 def require_controller_url(ctx: click.Context) -> str:
@@ -110,11 +87,11 @@ def require_controller_url(ctx: click.Context) -> str:
         from iris.cluster.config import IrisConfig
 
         iris_config = IrisConfig(config)
-        platform = iris_config.platform()
-        ctx.obj["platform"] = platform
+        bundle = iris_config.provider_bundle()
+        ctx.obj["provider_bundle"] = bundle
 
         if iris_config.proto.controller.WhichOneof("controller") == "local":
-            from iris.cluster.local_cluster import LocalCluster
+            from iris.cluster.providers.local.cluster import LocalCluster
 
             cluster = LocalCluster(iris_config.proto)
             controller_address = cluster.start()
@@ -122,12 +99,12 @@ def require_controller_url(ctx: click.Context) -> str:
         else:
             controller_address = iris_config.controller_address()
             if not controller_address:
-                controller_address = platform.discover_controller(iris_config.proto.controller)
+                controller_address = bundle.controller.discover_controller(iris_config.proto.controller)
 
         # Establish tunnel and keep it alive for command duration
         try:
             logger.info("Establishing tunnel to controller...")
-            tunnel_cm = platform.tunnel(address=controller_address)
+            tunnel_cm = bundle.controller.tunnel(address=controller_address)
             tunnel_url = tunnel_cm.__enter__()
             ctx.obj["controller_url"] = tunnel_url
             # Clean up tunnel when context closes
@@ -267,7 +244,7 @@ def login(ctx):
 
     click.echo(f"Authenticated as {response.user_id}")
     # Token in URL is visible in browser history/logs — acceptable for internal clusters
-    click.echo(f"Dashboard: {controller_url}?session_token={response.token}")
+    click.echo(f"Dashboard: {controller_url}/auth/session_bootstrap?token={response.token}")
     click.echo(f"Token stored for cluster '{cluster_name}'")
 
 
@@ -361,10 +338,14 @@ from iris.cli.build import build  # noqa: E402
 from iris.cli.cluster import cluster  # noqa: E402
 from iris.cli.job import job  # noqa: E402
 from iris.cli.process_status import register_process_status_commands  # noqa: E402
+from iris.cli.query import query_cmd  # noqa: E402
 from iris.cli.rpc import register_rpc_commands  # noqa: E402
+from iris.cli.task import task  # noqa: E402
 
 iris.add_command(cluster)
 iris.add_command(build)
 iris.add_command(job)
+iris.add_command(task)
+iris.add_command(query_cmd)
 register_rpc_commands(iris)
 register_process_status_commands(iris)

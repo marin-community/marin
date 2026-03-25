@@ -31,11 +31,20 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
-from iris.cluster.types import EnvironmentSpec, ResourceSpec, is_job_finished
+from iris.cluster.types import CoschedulingConfig, EnvironmentSpec, ResourceSpec, is_job_finished
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import cluster_pb2
 
-from fray.v2.actor import ActorContext, ActorFuture, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.actor import (
+    ActorContext,
+    ActorFuture,
+    ActorHandle,
+    HostedActor,
+    _clear_shutdown_event,
+    _reset_current_actor,
+    _set_current_actor,
+    _set_shutdown_event,
+)
 from fray.v2.client import JobAlreadyExists as FrayJobAlreadyExists
 from fray.v2.types import (
     ActorConfig,
@@ -53,6 +62,22 @@ from fray.v2.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_coscheduling(device: DeviceConfig, replicas: int) -> CoschedulingConfig | None:
+    """Determine coscheduling config for multi-host jobs.
+
+    Multi-host GPU jobs need coscheduling by pool to ensure all replicas land
+    in the same node pool for NCCL connectivity. Multi-host TPU jobs
+    coschedule by tpu-name so all workers share the same TPU slice.
+    """
+    if replicas <= 1:
+        return None
+    if isinstance(device, TpuConfig):
+        return CoschedulingConfig(group_by="tpu-name")
+    if isinstance(device, GpuConfig):
+        return CoschedulingConfig(group_by="pool")
+    return None
 
 
 def _convert_device(device: DeviceConfig) -> cluster_pb2.DeviceConfig | None:
@@ -200,6 +225,11 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     actor_name = f"{ctx.job_id}/{name_prefix}-{job_info.task_index}"
     logger.info(f"Starting actor: {actor_name} (job_id={ctx.job_id})")
 
+    # Shutdown event lets the actor signal that the hosting process should exit.
+    # request_shutdown() sets this event, unblocking the wait below.
+    shutdown_event = threading.Event()
+    _set_shutdown_event(shutdown_event)
+
     # Create handle BEFORE instance so actor can access it during __init__
     handle = IrisActorHandle(actor_name)
     actor_ctx = ActorContext(handle=handle, index=job_info.task_index, group_name=name_prefix)
@@ -220,8 +250,11 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     ctx.registry.register(actor_name, address)
     logger.info(f"Actor {actor_name} ready and listening")
 
-    # Block forever — job termination kills the process
-    threading.Event().wait()
+    # Block until the actor signals shutdown via request_shutdown()
+    shutdown_event.wait()
+    logger.info(f"Actor {actor_name} shutting down")
+    _clear_shutdown_event()
+    server.stop()
 
 
 class IrisActorHandle:
@@ -369,35 +402,36 @@ class IrisActorGroup:
         Returns only the handles discovered during this call (not previously
         known ones). Call repeatedly to pick up workers as they come online.
 
+        Uses a single prefix-match RPC to discover all actors whose endpoint
+        names start with ``{job_id}/{name}-``.
+
         Args:
             target: Stop probing once this many total actors are discovered.
                 If None, probes all indices.
         """
         client = self._get_client()
-        resolver = client.resolver_for_job(self._job_id)
+        # Single RPC: prefix match all actors for this group
+        # _host_actor registers endpoints as "{job_id}/{name}-{task_index}"
+        prefix = f"{self._job_id}/{self._name}-"
+        endpoints = client._cluster_client.list_endpoints(prefix=prefix, exact=False)
 
         newly_discovered: list[ActorHandle] = []
-        for i in range(self._count):
+        for ep in endpoints:
             if target is not None and len(self._discovered_names) >= target:
                 break
-            # Absolute endpoint name matches what _host_actor registers
-            endpoint_name = f"{self._job_id}/{self._name}-{i}"
-            if endpoint_name in self._discovered_names:
+            if ep.name in self._discovered_names:
                 continue
-            result = resolver.resolve(endpoint_name)
-
-            if not result.is_empty:
-                self._discovered_names.add(endpoint_name)
-                handle = IrisActorHandle(endpoint_name)
-                self._handles.append(handle)
-                newly_discovered.append(handle)
-                logger.info(
-                    "discover_new: found actor=%s job_id=%s (%d/%d ready)",
-                    endpoint_name,
-                    self._job_id,
-                    len(self._discovered_names),
-                    self._count,
-                )
+            self._discovered_names.add(ep.name)
+            handle = IrisActorHandle(ep.name)
+            self._handles.append(handle)
+            newly_discovered.append(handle)
+            logger.info(
+                "discover_new: found actor=%s job_id=%s (%d/%d ready)",
+                ep.name,
+                self._job_id,
+                len(self._discovered_names),
+                self._count,
+            )
 
         return newly_discovered
 
@@ -483,21 +517,15 @@ class FrayIrisClient:
         return instance
 
     def submit(self, request: JobRequest, adopt_existing: bool = True) -> IrisJobHandle:
-        from iris.cluster.types import CoschedulingConfig
-
         iris_resources = convert_resources(request.resources)
         iris_entrypoint = convert_entrypoint(request.entrypoint)
         iris_environment = convert_environment(request.environment, request.resources.device)
         iris_constraints = convert_constraints(request.resources)
 
-        # Auto-enable coscheduling for multi-host TPU jobs.
-        # Without this, replicas can land on different TPU pods and JAX distributed
-        # init fails because workers have different TPU_WORKER_HOSTNAMES.
-        coscheduling = None
         replicas = request.replicas or 1
-        if isinstance(request.resources.device, TpuConfig) and replicas > 1:
-            coscheduling = CoschedulingConfig(group_by="tpu-name")
+        coscheduling = resolve_coscheduling(request.resources.device, replicas)
 
+        policy = cluster_pb2.EXISTING_JOB_POLICY_KEEP if adopt_existing else cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED
         try:
             job = self._iris.submit(
                 entrypoint=iris_entrypoint,
@@ -509,13 +537,44 @@ class FrayIrisClient:
                 replicas=replicas,
                 max_retries_failure=request.max_retries_failure,
                 max_retries_preemption=request.max_retries_preemption,
+                existing_job_policy=policy,
             )
         except IrisJobAlreadyExists as e:
-            if adopt_existing:
-                logger.info("Job %s already exists, adopting existing job", request.name)
-                return IrisJobHandle(e.job)
-            raise FrayJobAlreadyExists(request.name, handle=IrisJobHandle(e.job)) from e
+            raise FrayJobAlreadyExists(request.name) from e
         return IrisJobHandle(job)
+
+    def host_actor(
+        self,
+        actor_class: type,
+        *args: Any,
+        name: str,
+        actor_config: ActorConfig = ActorConfig(),
+        **kwargs: Any,
+    ) -> HostedActor:
+        """Host an actor in the current process with Iris RPC serving."""
+        ctx = iris_ctx()
+        job_info = get_job_info()
+        if job_info is None:
+            raise RuntimeError("host_actor requires an Iris job context")
+
+        actor_name = f"{ctx.job_id}/{name}-0"
+        handle = IrisActorHandle(actor_name)
+        actor_ctx = ActorContext(handle=handle, index=0, group_name=name)
+        token = _set_current_actor(actor_ctx)
+        try:
+            instance = actor_class(*args, **kwargs)
+        finally:
+            _reset_current_actor(token)
+
+        server = ActorServer(host="0.0.0.0", port=0)
+        server.register(actor_name, instance)
+        actual_port = server.serve_background()
+
+        address = f"http://{job_info.advertise_host}:{actual_port}"
+        logger.info("host_actor: registered %s -> %s", actor_name, address)
+        ctx.registry.register(actor_name, address)
+
+        return HostedActor(handle, stop=server.stop)
 
     def create_actor(
         self,
@@ -544,16 +603,12 @@ class FrayIrisClient:
         Uses Iris's multi-replica job feature instead of creating N separate jobs,
         which improves networking and reduces job overhead.
         """
-        from iris.cluster.types import CoschedulingConfig
         from iris.cluster.types import Entrypoint as IrisEntrypoint
 
         iris_resources = convert_resources(resources)
         iris_constraints = convert_constraints(resources)
 
-        # Auto-enable coscheduling for multi-host TPU actor groups.
-        coscheduling = None
-        if isinstance(resources.device, TpuConfig) and count > 1:
-            coscheduling = CoschedulingConfig(group_by="tpu-name")
+        coscheduling = resolve_coscheduling(resources.device, count)
 
         # Create a single job with N replicas
         # Each replica will run _host_actor with a unique task-based actor name

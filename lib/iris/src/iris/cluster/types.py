@@ -12,6 +12,7 @@ This module provides Python types for the Iris cluster API:
 Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.proto.
 """
 
+import hashlib
 import os
 import sys
 from collections.abc import Callable, Sequence
@@ -165,8 +166,14 @@ class JobName:
         return other._parts[: len(self._parts)] == self._parts
 
     def to_safe_token(self) -> str:
-        """Return a filesystem/tag-safe token derived from this name."""
-        return "job__" + "__".join(self._parts)
+        """Return a filesystem/tag-safe token derived from this name.
+
+        Uses ``<user>-<sha256-hex>`` so the token stays short even for deeply
+        nested job hierarchies (avoids ``ENAMETOOLONG`` on workdir creation).
+        The full canonical name is hashed to preserve uniqueness.
+        """
+        digest = hashlib.sha256(str(self).encode()).hexdigest()
+        return f"{self.user}-{digest}"
 
     def require_task(self) -> tuple["JobName", int]:
         """Return (parent_job, task_index) for task names.
@@ -444,12 +451,18 @@ class ResourceSpec:
     disk: str | int = 0
     device: cluster_pb2.DeviceConfig | None = None
 
+    # Accelerator tasks need enough CPU to avoid bottlenecking on data loading.
+    MIN_ACCELERATOR_CPU_MILLICORES = 32_000
+
     def to_proto(self) -> cluster_pb2.ResourceSpecProto:
         """Convert to wire format."""
         memory_bytes = self.memory if isinstance(self.memory, int) else parse_memory_string(self.memory)
         disk_bytes = self.disk if isinstance(self.disk, int) else parse_memory_string(self.disk)
+        cpu_mc = int(self.cpu * 1000)
+        if self.device is not None and cpu_mc < self.MIN_ACCELERATOR_CPU_MILLICORES:
+            cpu_mc = self.MIN_ACCELERATOR_CPU_MILLICORES
         spec = cluster_pb2.ResourceSpecProto(
-            cpu_millicores=int(self.cpu * 1000),
+            cpu_millicores=cpu_mc,
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
         )

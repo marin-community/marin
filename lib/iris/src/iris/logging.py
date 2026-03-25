@@ -188,7 +188,7 @@ def get_global_buffer() -> LogRingBuffer:
 _configured = False
 
 
-def configure_logging(level: int = logging.DEBUG) -> LogRingBuffer:
+def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
     """Configure iris logging: stderr handler + ring buffer. Idempotent."""
     global _configured
     if _configured:

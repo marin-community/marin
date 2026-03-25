@@ -50,13 +50,29 @@ Always run `build:check` after editing `.vue` or `.ts` files to catch type error
 ## Code Conventions
 
 - Use Connect/RPC for APIs and dashboards. Do not use `httpx` or raw HTTP.
-- After changing `.proto` files, regenerate via `lib/iris/scripts/generate_protos.py` (from the repo root).
+- After changing `.proto` files, regenerate from the repo root with `uv run python lib/iris/scripts/generate_protos.py`.
 - Prefer shallow, functional code that returns control quickly; avoid callback-heavy or inheritance-driven designs.
 - Dashboards must be a thin UI over the RPC API, not a second implementation path.
 - Use `iris.time_utils` for all time-related operations (`Timestamp`, `Duration`, `Deadline`, `Timer`, `ExponentialBackoff`) instead of raw `datetime` or `time`.
 - Use `concurrent.futures.ThreadPoolExecutor` (not asyncio) for concurrent platform operations, with hard timeouts.
 - Avoid `TYPE_CHECKING`. Use real imports. If you hit a cycle, prefer refactoring or use a `Protocol` at the boundary.
 - Prefer spiral plans: each stage should be independently testable (proto → server stub → client wiring → end-to-end test).
+
+## Environment Variables
+
+Never use `os.environ` to pass env vars to Iris jobs. Tasks run in Docker containers — the submitter's process environment is not available inside the container.
+
+Use Iris's built-in mechanisms instead:
+
+- **CLI**: `iris job run -e KEY VALUE -- python script.py`
+- **SDK**: `EnvironmentSpec(env_vars={"KEY": "value"})` passed to `client.submit(environment=...)`
+
+Key behaviors:
+- `HF_TOKEN`, `WANDB_API_KEY`, `HF_DATASETS_TRUST_REMOTE_CODE`, and `TOKENIZERS_PARALLELISM` are auto-injected from the submitter's env by `EnvironmentSpec.to_proto()`.
+- Child jobs inherit parent env vars automatically (child values take precedence).
+- The CLI also loads env vars from `.marin.yaml`'s `env:` section.
+
+See https://github.com/marin-community/marin/issues/3859 for context.
 
 ## Architecture Notes
 

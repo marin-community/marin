@@ -67,9 +67,11 @@ A common pattern is:
 import jax
 import optax
 
+from levanter.utils.jax_utils import move_tree_to_memory_kind
+
 s_dev = params_sharding
-s_host = s_dev.with_memory_kind("pinned_host")
-opt_state = jax.device_put(opt_state, s_host)
+s_host = params_sharding.with_memory_kind("pinned_host")
+opt_state = move_tree_to_memory_kind(opt_state, memory_kind="pinned_host")
 
 @jax.jit(donate_argnums=(0,), out_shardings=(s_dev, s_host))
 def train_step(params, opt_state, batch):
@@ -99,7 +101,23 @@ Rule of thumb: sweep a small grid of mesh shapes (for example, more `data` vs mo
 
 The best throughput-at-memory-budget point is often not the "maximum data parallel" point.
 
-## 5) `sqrt(n)` Checkpointing for Scanned Layer Stacks
+## 5) Keep Layer Stacks Scanned (`Stacked` or `ArrayStacked`)
+
+When your model has deep repeated blocks, use a scanned stack container instead of Python-unrolling layer calls.
+
+- Use [`haliax.nn.Stacked`](https://github.com/marin-community/marin/blob/main/lib/haliax/docs/scan.md#stacked) when your stack uses named axes (`Axis` / `NamedArray`).
+- Use [`haliax.nn.ArrayStacked`](https://github.com/marin-community/marin/blob/main/lib/haliax/docs/array-stacked.md) when your stack is array-native (no named axes).
+
+Observed advantages of staying on a scanned stack path:
+
+- Shorter compile time, especially in deep networks.
+- Modestly improved peak MFU (about `+1%` to `+2%` absolute in observed runs).
+- Sometimes significantly reduced peak HBM, particularly in deep networks.
+
+For Grug-specific array-stacked variant wiring, see the reference branch:
+https://github.com/marin-community/marin/tree/codex/array-stacked-grug-variant-pointer
+
+## 6) `sqrt(n)` Checkpointing for Scanned Layer Stacks
 
 For a stack length `N`, nested checkpointing chunks the work into blocks of size `B` and stores only block boundaries.
 
@@ -108,7 +126,7 @@ When `B ~= sqrt(N)`, memory for saved boundaries is `O(sqrt(N))` instead of `O(N
 This is useful for deep scanned stacks where plain checkpointing/offloading still does not fit.
 In Haliax scanned modules, nested checkpointing is available as a policy option.
 
-## 6) Reduce Per-Device Batch (and Sequence Length)
+## 7) Reduce Per-Device Batch (and Sequence Length)
 
 If you are right at the limit:
 
@@ -118,7 +136,7 @@ If you are right at the limit:
 
 These are the most direct and reliable HBM controls.
 
-## 7) Buffer Donation (`donate_argnums`)
+## 8) Buffer Donation (`donate_argnums`)
 
 Donation lets JAX reuse input buffers for outputs at JIT boundaries, reducing peak live memory.
 
@@ -126,7 +144,7 @@ Reference:
 
 - [JAX Buffer Donation](https://docs.jax.dev/en/latest/buffer_donation.html)
 
-## 8) Optimizer Choice Matters for Memory
+## 9) Optimizer Choice Matters for Memory
 
 For equal parameter count, optimizer state memory can differ drastically.
 
@@ -135,7 +153,7 @@ For equal parameter count, optimizer state memory can differ drastically.
 
 If you keep Adam-family optimizers, offloading their state is often the practical compromise.
 
-## 9) Profile Memory Before and After Each Change
+## 10) Profile Memory Before and After Each Change
 
 Use JAX memory profiling tools to confirm what changed:
 
@@ -144,7 +162,7 @@ Use JAX memory profiling tools to confirm what changed:
 
 Memory tuning is much faster when each knob change is measured, not guessed.
 
-## 10) Avoid Giant Temporary Tensors
+## 11) Avoid Giant Temporary Tensors
 
 Large temporaries can dominate peak memory even when parameter state fits.
 
@@ -152,21 +170,21 @@ Large temporaries can dominate peak memory even when parameter state fits.
 - For language models, the full logits tensor (`batch x seq x vocab`) is often the worst offender.
 - Use memory-efficient attention kernels/backends where available in your model stack.
 
-## 11) Keep EMA and Other Replicas Off HBM
+## 12) Keep EMA and Other Replicas Off HBM
 
 Extra full-parameter copies (for example EMA weights) can be expensive in HBM.
 
 - Keep long-lived replicas in host memory when possible.
 - Materialize them on-device only when needed (for eval/export windows).
 
-## 12) Use Lower Precision Where Safe
+## 13) Use Lower Precision Where Safe
 
 HBM scales linearly with dtype size.
 
 - Prefer BF16 activations/weights on hardware where it is standard.
 - Be explicit about which states must remain FP32 (often optimizer moments), then offload those if needed.
 
-## 13) Tune Eval Memory Separately from Train
+## 14) Tune Eval Memory Separately from Train
 
 Evaluation often has different memory pressure than training.
 

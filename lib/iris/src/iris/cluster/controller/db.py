@@ -6,8 +6,10 @@
 from __future__ import annotations
 
 import json
+import logging
+import queue
 import sqlite3
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import MISSING, dataclass, field, fields, replace as dc_replace
 from pathlib import Path
@@ -35,10 +37,6 @@ def _nullable(decoder: RowDecoder) -> RowDecoder:
         return decoder(value)
 
     return inner
-
-
-def _decode_job_name(value: Any) -> JobName:
-    return JobName.from_wire(str(value))
 
 
 def _decode_worker_id(value: Any) -> WorkerId:
@@ -353,12 +351,13 @@ class Row:
 class QuerySnapshot:
     """Read-only snapshot over the controller DB."""
 
-    def __init__(self, conn: sqlite3.Connection, lock: RLock):
+    def __init__(self, conn: sqlite3.Connection, lock: RLock | None):
         self._conn = conn
         self._lock = lock
 
     def __enter__(self) -> QuerySnapshot:
-        self._lock.acquire()
+        if self._lock is not None:
+            self._lock.acquire()
         self._conn.execute("BEGIN")
         return self
 
@@ -366,7 +365,12 @@ class QuerySnapshot:
         try:
             self._conn.rollback()
         finally:
-            self._lock.release()
+            if self._lock is not None:
+                self._lock.release()
+
+    def execute_sql(self, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Cursor:
+        """Execute raw SQL and return the cursor for result inspection."""
+        return self._conn.execute(sql, params)
 
     def _fetchall(self, sql: str, params: Sequence[object]) -> list[sqlite3.Row]:
         return list(self._conn.execute(sql, tuple(params)).fetchall())
@@ -520,10 +524,26 @@ ACTIVE_TASK_STATES: frozenset[int] = frozenset(
     }
 )
 
+# Tasks executing on a worker (subset of ACTIVE that excludes ASSIGNED).
+EXECUTING_TASK_STATES: frozenset[int] = frozenset(
+    {
+        cluster_pb2.TASK_STATE_BUILDING,
+        cluster_pb2.TASK_STATE_RUNNING,
+    }
+)
+
+# Failure states that trigger coscheduled sibling cascades.
+FAILURE_TASK_STATES: frozenset[int] = frozenset(
+    {
+        cluster_pb2.TASK_STATE_FAILED,
+        cluster_pb2.TASK_STATE_WORKER_FAILED,
+    }
+)
+
 
 @db_row_model
 class Attempt:
-    task_id: JobName = db_field("task_id", _decode_job_name)
+    task_id: JobName = db_field("task_id", JobName.from_wire)
     attempt_id: int = db_field("attempt_id", _decode_int)
     worker_id: WorkerId | None = db_field("worker_id", _nullable(_decode_worker_id))
     state: int = db_field("state", _decode_int)
@@ -544,7 +564,7 @@ class Attempt:
 
 @db_row_model
 class Job:
-    job_id: JobName = db_field("job_id", _decode_job_name)
+    job_id: JobName = db_field("job_id", JobName.from_wire)
     request: cluster_pb2.Controller.LaunchJobRequest = db_field(
         "request_proto",
         _proto_decoder(cluster_pb2.Controller.LaunchJobRequest),
@@ -559,6 +579,8 @@ class Job:
     exit_code: int | None = db_field("exit_code", _nullable(_decode_int))
     num_tasks: int = db_field("num_tasks", _decode_int)
     is_reservation_holder: bool = db_field("is_reservation_holder", _decode_bool_int)
+    name: str = db_field("name", _decode_str, default="")
+    depth: int = db_field("depth", _decode_int, default=0)
 
     def is_finished(self) -> bool:
         return self.state in TERMINAL_JOB_STATES
@@ -582,8 +604,8 @@ class Job:
 
 @db_row_model
 class Task:
-    task_id: JobName = db_field("task_id", _decode_job_name)
-    job_id: JobName = db_field("job_id", _decode_job_name)
+    task_id: JobName = db_field("task_id", JobName.from_wire)
+    job_id: JobName = db_field("job_id", JobName.from_wire)
     state: int = db_field("state", _decode_int)
     error: str | None = db_field("error", _nullable(_decode_str))
     exit_code: int | None = db_field("exit_code", _nullable(_decode_int))
@@ -601,6 +623,7 @@ class Task:
     )
     current_worker_id: WorkerId | None = db_field("current_worker_id", _nullable(_decode_worker_id), default=None)
     current_worker_address: str | None = db_field("current_worker_address", _nullable(_decode_str), default=None)
+    container_id: str | None = db_field("container_id", _nullable(_decode_str), default=None)
     attempts: tuple[Attempt, ...] = field(default_factory=tuple)
 
     def is_finished(self) -> bool:
@@ -703,7 +726,7 @@ class Endpoint:
     endpoint_id: str = db_field("endpoint_id", _decode_str)
     name: str = db_field("name", _decode_str)
     address: str = db_field("address", _decode_str)
-    job_id: JobName = db_field("job_id", _decode_job_name)
+    job_id: JobName = db_field("job_id", JobName.from_wire)
     metadata: dict[str, str] = db_field("metadata_json", _decode_json_dict)
     registered_at: Timestamp = db_field("registered_at_ms", _decode_timestamp_ms)
 
@@ -754,7 +777,6 @@ class EndpointQuery:
     job_ids: tuple[JobName, ...] = ()
     job_id: JobName | None = None
     task_ids: tuple[JobName, ...] = ()
-    include_terminal_jobs: bool = False
     limit: int | None = None
 
 
@@ -782,7 +804,7 @@ WORKER_TASK_HISTORY = Table[tuple[str, str]](
     alias="wth",
     columns={
         "worker_id": Column("wth", "worker_id", _decode_worker_id),
-        "task_id": Column("wth", "task_id", _decode_job_name),
+        "task_id": Column("wth", "task_id", JobName.from_wire),
         "assigned_at_ms": Column("wth", "assigned_at_ms", _decode_timestamp_ms),
     },
 )
@@ -790,6 +812,7 @@ WORKER_RESOURCE_HISTORY = Table[tuple[str, str]](
     sql_name="worker_resource_history",
     alias="wrh",
     columns={
+        "id": Column("wrh", "id", _decode_int),
         "worker_id": Column("wrh", "worker_id", _decode_worker_id),
         "snapshot_proto": Column(
             "wrh",
@@ -850,7 +873,7 @@ ENDPOINT_TASKS = Table[tuple[str, str]](
     alias="et",
     columns={
         "endpoint_id": Column("et", "endpoint_id", _decode_str),
-        "task_id": Column("et", "task_id", _decode_job_name),
+        "task_id": Column("et", "task_id", JobName.from_wire),
     },
 )
 TASK_PROFILES = Table[tuple[str, str]](
@@ -862,7 +885,7 @@ TASK_PROFILES = Table[tuple[str, str]](
         "captured_at_ms": Column("tp", "captured_at_ms", _decode_timestamp_ms),
     },
 )
-JOBS.columns["parent_job_id"] = Column("j", "parent_job_id", _nullable(_decode_job_name))
+JOBS.columns["parent_job_id"] = Column("j", "parent_job_id", _nullable(JobName.from_wire))
 TASKS.columns["priority_neg_depth"] = Column("t", "priority_neg_depth", _decode_int)
 TASKS.columns["priority_root_submitted_ms"] = Column("t", "priority_root_submitted_ms", _decode_timestamp_ms)
 TASKS.columns["task_index"] = Column("t", "task_index", _decode_int)
@@ -925,10 +948,6 @@ def endpoint_query_predicate(query: EndpointQuery) -> tuple[list[Join], Predicat
             )
         )
         predicate = ENDPOINT_TASKS.c.task_id.in_([task_id.to_wire() for task_id in query.task_ids])
-        where = predicate if where is None else where & predicate
-    if not query.include_terminal_jobs:
-        joins.append(Join(table=JOBS, on=ENDPOINTS.c.job_id == JOBS.c.job_id))
-        predicate = ~JOBS.c.state.in_(list(TERMINAL_JOB_STATES))
         where = predicate if where is None else where & predicate
     return joins, where
 
@@ -996,18 +1015,53 @@ class TransactionCursor:
 class ControllerDB:
     """Thread-safe SQLite wrapper with typed query and migration helpers."""
 
-    def __init__(self, db_path: Path):
-        self._db_path = db_path
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+    _READ_POOL_SIZE = 4
+    DB_FILENAME = "controller.sqlite3"
+    AUTH_DB_FILENAME = "auth.sqlite3"
+
+    def __init__(self, db_dir: Path):
+        self._db_dir = db_dir
+        self._db_dir.mkdir(parents=True, exist_ok=True)
+        self._db_path = self._db_dir / self.DB_FILENAME
+        self._auth_db_path = self._db_dir / self.AUTH_DB_FILENAME
         self._lock = RLock()
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._configure(self._conn)
+        self._conn.execute("ATTACH DATABASE ? AS auth", (str(self._auth_db_path),))
         self.apply_migrations()
+        # Populate sqlite_stat1 so the query planner picks good join orders.
+        # Without this, queries like running_tasks_by_worker scan thousands of
+        # rows instead of using the narrower index path.
+        self._conn.execute("ANALYZE")
+        self._read_pool: queue.Queue[sqlite3.Connection] = queue.Queue()
+        self._init_read_pool()
+
+    def _init_read_pool(self) -> None:
+        """Create (or recreate) the read-only connection pool."""
+        while True:
+            try:
+                self._read_pool.get_nowait().close()
+            except queue.Empty:
+                break
+        for _ in range(self._READ_POOL_SIZE):
+            conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            self._configure(conn)
+            conn.execute("PRAGMA query_only = ON")
+            self._read_pool.put(conn)
+
+    @property
+    def db_dir(self) -> Path:
+        return self._db_dir
 
     @property
     def db_path(self) -> Path:
         return self._db_path
+
+    @property
+    def auth_db_path(self) -> Path:
+        return self._auth_db_path
 
     @staticmethod
     def _configure(conn: sqlite3.Connection) -> None:
@@ -1016,9 +1070,23 @@ class ControllerDB:
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA foreign_keys = ON")
 
+    def optimize(self) -> None:
+        """Run PRAGMA optimize to refresh statistics for tables with stale data.
+
+        Lightweight operation that SQLite recommends running periodically or on
+        connection close. Only re-analyzes tables whose stats have drifted.
+        """
+        with self._lock:
+            self._conn.execute("PRAGMA optimize")
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+        for _ in range(self._READ_POOL_SIZE):
+            try:
+                self._read_pool.get(timeout=1).close()
+            except queue.Empty:
+                break
 
     @contextmanager
     def transaction(self):
@@ -1049,6 +1117,25 @@ class ControllerDB:
     def snapshot(self) -> QuerySnapshot:
         return QuerySnapshot(self._conn, self._lock)
 
+    @contextmanager
+    def read_snapshot(self) -> Iterator[QuerySnapshot]:
+        """Read-only snapshot that does NOT acquire the write lock.
+
+        Uses a pooled read-only connection with WAL isolation. Safe for
+        concurrent use from dashboard/RPC threads while the scheduling
+        loop holds the write lock.
+        """
+        conn = self._read_pool.get()
+        try:
+            conn.execute("BEGIN")
+            yield QuerySnapshot(conn, lock=None)
+        finally:
+            try:
+                conn.rollback()
+            except sqlite3.OperationalError:
+                logging.getLogger(__name__).warning("read_snapshot rollback failed", exc_info=True)
+            self._read_pool.put(conn)
+
     def decode_worker(self, row: sqlite3.Row) -> Worker:
         return _decode_row(Worker, row)
 
@@ -1059,7 +1146,11 @@ class ControllerDB:
         return _decode_row(Task, row)
 
     def apply_migrations(self) -> None:
-        """Apply pending SQL migrations from the migrations/ directory.
+        """Apply pending migrations from the migrations/ directory.
+
+        Supports Python migration files that define a ``migrate(conn)``
+        function. Migration names are matched by stem so that a migration
+        previously applied as .sql is not re-run when converted to .py.
 
         Migrations run outside a transaction because executescript() implicitly
         commits. This is fine: migrations only run at startup before any
@@ -1068,6 +1159,8 @@ class ControllerDB:
         schema_migrations and the next startup will re-run it (migrations must
         be idempotent via IF NOT EXISTS / IF EXISTS guards).
         """
+        import importlib.util
+
         migrations_dir = Path(__file__).with_name("migrations")
         migrations_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1082,16 +1175,38 @@ class ControllerDB:
             )
             applied = {row[0] for row in cur.execute("SELECT name FROM schema_migrations ORDER BY name").fetchall()}
 
-        for path in sorted(migrations_dir.glob("*.sql")):
-            if path.name in applied:
+        # Match by stem so a migration previously recorded as .sql is not
+        # re-run after conversion to .py.
+        applied_stems = {Path(name).stem for name in applied}
+
+        for path in sorted(migrations_dir.glob("*.py")):
+            if path.name.startswith("__"):
                 continue
-            sql = path.read_text(encoding="utf-8")
-            self._conn.executescript(sql)
+            if path.stem in applied_stems:
+                continue
+
+            spec = importlib.util.spec_from_file_location(path.stem, path)
+            assert spec is not None and spec.loader is not None
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module.migrate(self._conn)
+            # Commit any implicit transaction left open by migrate() (e.g.
+            # row-by-row UPDATEs in 0008) so the next BEGIN IMMEDIATE succeeds.
+            self._conn.commit()
+
             with self.transaction() as cur:
                 cur.execute(
                     "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
                     (path.name, Timestamp.now().epoch_ms()),
                 )
+
+    @property
+    def api_keys_table(self) -> str:
+        return "auth.api_keys"
+
+    @property
+    def secrets_table(self) -> str:
+        return "auth.controller_secrets"
 
     def ensure_user(self, user_id: str, now: Timestamp, role: str = "user") -> None:
         """Create user if not exists. Does not update role for existing users."""
@@ -1134,25 +1249,41 @@ class ControllerDB:
             finally:
                 dest.close()
 
-    def replace_from(self, source: str | Path) -> None:
-        """Replace current DB file with ``source`` and reopen connection.
+    def replace_from(self, source_dir: str | Path) -> None:
+        """Replace current DB files from ``source_dir`` and reopen connection.
 
-        ``source`` may be a remote path (e.g. ``gs://...``) thanks to fsspec.
+        ``source_dir`` is a directory (local or remote) containing
+        ``controller.sqlite3`` and optionally ``auth.sqlite3``. Files are
+        downloaded via fsspec so remote paths (e.g. ``gs://...``) work.
         Only called at startup before concurrent access begins.
         """
         import fsspec.core
 
+        source_dir_str = str(source_dir).rstrip("/")
+
         with self._lock:
-            # Download to a temp file first so a failed copy doesn't leave
-            # the DB connection closed with no file to reopen.
+            # Download main DB
+            main_source = f"{source_dir_str}/{self.DB_FILENAME}"
             tmp_path = self._db_path.with_suffix(".tmp")
-            with fsspec.core.open(str(source), "rb") as src, open(tmp_path, "wb") as dst:
+            with fsspec.core.open(main_source, "rb") as src, open(tmp_path, "wb") as dst:
                 dst.write(src.read())
             self._conn.close()
             tmp_path.rename(self._db_path)
+
+            # Download auth DB if present in source
+            auth_source = f"{source_dir_str}/{self.AUTH_DB_FILENAME}"
+            fs, fs_path = fsspec.core.url_to_fs(auth_source)
+            if fs.exists(fs_path):
+                auth_tmp = self._auth_db_path.with_suffix(".tmp")
+                with fsspec.core.open(auth_source, "rb") as src, open(auth_tmp, "wb") as dst:
+                    dst.write(src.read())
+                auth_tmp.rename(self._auth_db_path)
+
             self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._configure(self._conn)
+            self._conn.execute("ATTACH DATABASE ? AS auth", (str(self._auth_db_path),))
+            self._init_read_pool()
         self.apply_migrations()
 
     # SQL-canonical read access is exposed through ``snapshot()`` and typed table
@@ -1200,7 +1331,7 @@ def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict
             f"JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
             f"WHERE a.worker_id IN ({placeholders}) AND t.state IN (?, ?, ?)",
             (*[str(wid) for wid in worker_ids], *ACTIVE_TASK_STATES),
-            decoders={"worker_id": _decode_worker_id, "task_id": _decode_job_name},
+            decoders={"worker_id": _decode_worker_id, "task_id": JobName.from_wire},
         )
     running: dict[WorkerId, set[JobName]] = {wid: set() for wid in worker_ids}
     for row in rows:
@@ -1210,7 +1341,7 @@ def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict
 
 def tasks_for_job_with_attempts(db: ControllerDB, job_id: JobName) -> list[Task]:
     """Fetch all tasks for a job with their attempt history."""
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         tasks = q.select(
             TASKS,
             where=TASKS.c.job_id == job_id.to_wire(),

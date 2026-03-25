@@ -55,6 +55,20 @@ class ContainerPhase(StrEnum):
     STOPPED = "stopped"
 
 
+class MountKind(StrEnum):
+    WORKDIR = "workdir"  # task working directory (/app); tmpfs on Docker, emptyDir on K8s
+    TMPFS = "tmpfs"  # volatile fast storage; tmpfs on Docker, emptyDir on K8s
+    CACHE = "cache"  # persistent cross-task cache (uv, cargo); hostPath bind mount
+
+
+@dataclass(frozen=True)
+class MountSpec:
+    container_path: str
+    kind: MountKind = MountKind.CACHE
+    read_only: bool = False
+    size_bytes: int = 0  # 0 = no limit; tmpfs size / emptyDir sizeLimit
+
+
 @dataclass
 class ContainerConfig:
     """Configuration for running a container."""
@@ -65,8 +79,9 @@ class ContainerConfig:
     workdir: str = "/app"
     resources: cluster_pb2.ResourceSpecProto | None = None
     timeout_seconds: int | None = None
-    mounts: list[tuple[str, str, str]] = field(default_factory=list)  # (host, container, mode)
+    mounts: list[MountSpec] = field(default_factory=list)
     network_mode: str = "host"  # e.g. "host" for --network=host
+    workdir_host_path: Path | None = None
     task_id: str | None = None
     attempt_id: int | None = None
     job_id: str | None = None
@@ -163,7 +178,12 @@ class ContainerHandle(Protocol):
 
     @property
     def container_id(self) -> str | None:
-        """Return the current container ID, if any."""
+        """Return the platform container identifier.
+
+        Docker: the container ID (hash from docker create).
+        K8s: the pod name.
+        Process: a local-<uuid> string.
+        """
         ...
 
     def build(self) -> list[LogLine]:
@@ -208,6 +228,14 @@ class ContainerHandle(Protocol):
         """Get resource usage statistics."""
         ...
 
+    def disk_usage_mb(self) -> int:
+        """Return disk usage in MB for this container's workdir.
+
+        Docker/Process: shutil.disk_usage on the host workdir path.
+        K8s: 0 (workdir lives inside the pod, not on the worker node).
+        """
+        ...
+
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
         """Profile the running process using py-spy (CPU), memray (memory), or thread dump.
 
@@ -240,6 +268,14 @@ class ContainerRuntime(Protocol):
 
         The handle is not started - call handle.build() then handle.run()
         to execute the container.
+        """
+        ...
+
+    def prepare_workdir(self, workdir: Path, disk_bytes: int) -> None:
+        """Prepare the task workdir before bundle staging.
+
+        Docker: mounts a per-task tmpfs for quota enforcement.
+        Process/K8s: no-op.
         """
         ...
 

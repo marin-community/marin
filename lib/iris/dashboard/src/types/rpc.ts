@@ -94,6 +94,7 @@ export interface TaskStatus {
   attempts?: TaskAttempt[]
   pendingReason?: string
   canBeScheduled?: boolean
+  containerId?: string
 }
 
 // -- Jobs --
@@ -322,6 +323,44 @@ export interface GetAutoscalerStatusResponse {
   status: AutoscalerStatus
 }
 
+// -- Kubernetes Cluster Status --
+
+export interface KubernetesPodStatus {
+  podName: string
+  taskId: string
+  phase: string
+  reason: string
+  message: string
+  lastTransition?: ProtoTimestamp
+  nodeName?: string
+}
+
+export interface NodePoolStatus {
+  name: string
+  instanceType: string
+  scaleGroup: string
+  targetNodes: number
+  currentNodes: number
+  queuedNodes: number
+  inProgressNodes: number
+  autoscaling: boolean
+  minNodes: number
+  maxNodes: number
+  capacity: string
+  quota: string
+}
+
+export interface GetKubernetesClusterStatusResponse {
+  namespace?: string
+  totalNodes?: number
+  schedulableNodes?: number
+  allocatableCpu?: string
+  allocatableMemory?: string
+  podStatuses?: KubernetesPodStatus[]
+  providerVersion?: string
+  nodePools?: NodePoolStatus[]
+}
+
 // -- Users --
 
 export interface UserSummary {
@@ -427,3 +466,4 @@ export interface ApiKeyInfo {
 export interface ListApiKeysResponse {
   keys: ApiKeyInfo[]
 }
+

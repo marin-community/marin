@@ -12,13 +12,13 @@ concurrency:
 jobs:
   doc-drift:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 240
     permissions:
       contents: write
       pull-requests: write
       issues: write
-      actions: read
       id-token: write
+      actions: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -39,4 +39,5 @@ jobs:
       - name: Detect documentation drift
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: python infra/scripts/nightshift_doc_drift.py --run-id ${{ github.run_id }} --run-attempt ${{ github.run_attempt }}

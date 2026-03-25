@@ -3,9 +3,10 @@
 
 """ScalingGroup owns slices and manages scaling state for a single group.
 
-Each ScalingGroup uses a Platform to create/discover slices, storing SliceHandle
-references directly for internal tracking. It maintains scaling stats
-(per-slice idle tracking, backoff, cooldowns) and provides scaling policy helpers.
+Each ScalingGroup uses a WorkerInfraProvider to create/discover slices, storing
+SliceHandle references directly for internal tracking.  It maintains scaling
+stats (per-slice idle tracking, backoff, cooldowns) and provides scaling policy
+helpers.
 """
 
 from __future__ import annotations
@@ -18,7 +19,8 @@ from enum import Enum, StrEnum
 
 from collections.abc import Sequence
 
-from iris.cluster.platform.base import Labels, Platform, SliceHandle
+from iris.cluster.providers.protocols import WorkerInfraProvider
+from iris.cluster.providers.types import Labels, SliceHandle
 from iris.cluster.constraints import (
     AttributeValue,
     CONSTRAINT_REGISTRY,
@@ -126,7 +128,7 @@ def prepare_slice_config(
     parent_config: config_pb2.ScaleGroupConfig,
     label_prefix: str,
 ) -> config_pb2.SliceConfig:
-    """Build a SliceConfig for platform.create_slice() from a template.
+    """Build a SliceConfig for WorkerInfraProvider.create_slice() from a template.
 
     Copies the template and sets the name_prefix and managed/scale-group labels.
     Propagates num_vms from the parent ScaleGroupConfig when the template
@@ -211,7 +213,7 @@ class ScalingGroup:
     """Owns slices for a single scale group.
 
     Each ScalingGroup:
-    - Uses a Platform to create/discover slices
+    - Uses a WorkerInfraProvider to create/discover slices
     - Stores SliceHandle references directly for internal tracking
     - Maintains scaling stats (per-slice idle tracking, backoff, cooldowns)
     - Provides scaling policy helpers (can_scale_up, can_scale_down)
@@ -221,7 +223,7 @@ class ScalingGroup:
     def __init__(
         self,
         config: config_pb2.ScaleGroupConfig,
-        platform: Platform,
+        platform: WorkerInfraProvider,
         label_prefix: str = "iris",
         scale_up_cooldown: Duration = DEFAULT_SCALE_UP_COOLDOWN,
         backoff_initial: Duration = DEFAULT_BACKOFF_INITIAL,
@@ -337,8 +339,8 @@ class ScalingGroup:
             cur.execute("DELETE FROM slices WHERE scale_group = ?", (self.name,))
 
     @property
-    def platform(self) -> Platform:
-        """Platform instance for this scale group."""
+    def platform(self) -> WorkerInfraProvider:
+        """Worker infrastructure provider for this scale group."""
         return self._platform
 
     @property
@@ -483,8 +485,8 @@ class ScalingGroup:
     def reconcile(self) -> None:
         """Discover and adopt existing slices from the cloud.
 
-        Called once at startup to recover state from a previous controller.
-        Uses platform.list_slices() with the managed label to find our slices.
+        Used in tests to populate a scaling group with pre-injected slices.
+        Production restore uses prepare_for_restore() + restore_scaling_group().
         """
         zones = _zones_from_config(self._config)
         labels = {self._labels.iris_scale_group: self._config.name}
@@ -1202,16 +1204,10 @@ class ScalingGroupRestoreResult:
 
 def restore_scaling_group(
     group_snapshot: GroupSnapshot,
-    platform: Platform,
-    config: config_pb2.ScaleGroupConfig,
+    cloud_handles: list[SliceHandle],
     label_prefix: str,
 ) -> ScalingGroupRestoreResult:
-    """Reconcile checkpointed group slices against live cloud slices."""
-    labels = Labels(label_prefix)
-    filter_labels = {labels.iris_scale_group: group_snapshot.name}
-
-    zones = _zones_from_config(config)
-    cloud_handles = platform.list_slices(zones=zones, labels=filter_labels)
+    """Reconcile checkpointed group slices against pre-fetched cloud handles."""
     cloud_by_id: dict[str, SliceHandle] = {h.slice_id: h for h in cloud_handles}
     checkpoint_slices = {s.slice_id: s for s in group_snapshot.slices}
 

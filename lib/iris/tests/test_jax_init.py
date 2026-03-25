@@ -71,13 +71,30 @@ def test_initialize_jax_single_task(
     mock_jax_init: MagicMock,
     mock_atexit: MagicMock,
 ) -> None:
-    """Single-task jobs call jax.distributed.initialize() with defaults."""
+    """Single-task jobs call jax.distributed.initialize with explicit args."""
     mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=1)
 
     initialize_jax()
 
-    mock_jax_init.assert_called_once_with()
+    mock_jax_init.assert_called_once_with("10.0.0.1:8476", num_processes=1, process_id=0)
     mock_iris_ctx.assert_not_called()
+
+
+@pytest.mark.parametrize("env_key,env_val", [("PJRT_DEVICE", "TPU"), ("JAX_PLATFORMS", "tpu")])
+@patch("jax.distributed.initialize")
+@patch("iris.runtime.jax_init.get_job_info")
+def test_initialize_jax_tpu_is_noop(
+    mock_get_job_info: MagicMock,
+    mock_jax_init: MagicMock,
+    env_key: str,
+    env_val: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On TPU, initialize_jax is a no-op — TPU runtime handles distributed init."""
+    monkeypatch.setenv(env_key, env_val)
+    initialize_jax()
+    mock_jax_init.assert_not_called()
+    mock_get_job_info.assert_not_called()
 
 
 @patch("iris.runtime.jax_init.atexit")
@@ -90,12 +107,12 @@ def test_initialize_jax_no_job_info(
     mock_jax_init: MagicMock,
     mock_atexit: MagicMock,
 ) -> None:
-    """No job info means we're not in an Iris job — use JAX defaults."""
+    """No job info means we're not in an Iris job — skip distributed init."""
     mock_get_job_info.return_value = None
 
     initialize_jax()
 
-    mock_jax_init.assert_called_once_with()
+    mock_jax_init.assert_not_called()
     mock_iris_ctx.assert_not_called()
 
 
@@ -188,6 +205,17 @@ def test_initialize_jax_poll_timeout(
         initialize_jax(poll_timeout=0.1, poll_interval=0.01)
 
     mock_jax_init.assert_not_called()
+
+
+def test_poll_for_coordinator_default_interval() -> None:
+    """_poll_for_coordinator works with the default poll_interval=2.0 (must not crash on ExponentialBackoff)."""
+    found = ResolveResult(
+        name="coord",
+        endpoints=[ResolvedEndpoint(url="1.2.3.4:8476", actor_id="ep-1")],
+    )
+    resolver = FakeResolver(results=[found])
+    address = _poll_for_coordinator(resolver, "coord", timeout=10.0, poll_interval=2.0)
+    assert address == "1.2.3.4:8476"
 
 
 def test_poll_for_coordinator_returns_url() -> None:

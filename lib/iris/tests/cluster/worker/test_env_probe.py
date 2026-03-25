@@ -3,7 +3,10 @@
 
 """Tests for worker environment probing."""
 
+import sys
 import time
+
+import pytest
 
 import iris.cluster.worker.env_probe as env_probe
 from iris.cluster.constraints import WellKnownAttribute
@@ -13,6 +16,7 @@ from iris.cluster.worker.env_probe import (
     HostMetricsCollector,
     _read_net_dev_bytes,
     build_worker_metadata,
+    check_worker_health,
     construct_worker_id,
 )
 from iris.rpc import config_pb2
@@ -314,14 +318,11 @@ def test_worker_id_explicit_config_overrides_slice_id(tmp_path, monkeypatch):
 # --- Network metrics ---
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux-only")
 def test_read_net_dev_bytes_returns_nonzero_on_linux():
-    """On Linux, /proc/net/dev should be readable and return non-negative values."""
-    try:
-        recv, sent = _read_net_dev_bytes()
-        assert recv >= 0
-        assert sent >= 0
-    except OSError:
-        pass
+    recv, sent = _read_net_dev_bytes()
+    assert recv >= 0
+    assert sent >= 0
 
 
 def test_host_metrics_collector_network_first_call_returns_zero():
@@ -361,6 +362,34 @@ def test_host_metrics_collector_network_delta(monkeypatch):
     snapshot2 = collector.collect()
     assert snapshot2.net_recv_bps == 1000
     assert snapshot2.net_sent_bps == 2000
+
+
+# --- Network metrics ---
+
+
+# --- Health check ---
+
+
+def test_health_check_nonexistent_path():
+    """Health check skips gracefully when disk_path does not exist."""
+    result = check_worker_health(disk_path="/nonexistent/path/that/does/not/exist")
+    assert result.healthy
+
+
+def test_health_check_file_not_dir(tmp_path):
+    """Health check skips gracefully when disk_path is a file, not a directory."""
+    file_path = tmp_path / "not_a_dir"
+    file_path.write_text("hello")
+    result = check_worker_health(disk_path=str(file_path))
+    assert result.healthy
+
+
+def test_health_check_writable_dir(tmp_path):
+    """Health check succeeds on a writable directory."""
+    result = check_worker_health(disk_path=str(tmp_path))
+    assert result.healthy
+    # Probe file should be cleaned up
+    assert not (tmp_path / ".iris_health_probe").exists()
 
 
 def test_host_metrics_collector_network_graceful_on_non_linux(monkeypatch):
