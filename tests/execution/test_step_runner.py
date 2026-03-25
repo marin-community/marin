@@ -598,7 +598,9 @@ def test_resolve_executor_step_raises_on_inherited_pin_conflict_even_with_overri
             )
 
 
-def test_resolve_executor_step_raises_on_cross_region_inputs_without_pin():
+def test_resolve_executor_step_cpu_allows_cross_region_without_pin():
+    """CPU steps with cross-region inputs resolve to the output region."""
+
     @remote
     def my_fn(config):
         pass
@@ -608,20 +610,42 @@ def test_resolve_executor_step_raises_on_cross_region_inputs_without_pin():
         patch("marin.execution.executor._iris_backend_is_active", return_value=True),
         patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
     ):
-        with pytest.raises(ValueError, match="cross-region GCS dependencies"):
-            resolve_executor_step(
-                step,
-                config={"input_path": "gs://marin-us-central2/data/input"},
-                output_path="gs://marin-us-east1/data/output",
-            )
+        resolved = resolve_executor_step(
+            step,
+            config={"input_path": "gs://marin-us-central2/data/input"},
+            output_path="gs://marin-us-east1/data/output",
+        )
+        assert resolved.override_output_path == "gs://marin-us-east1/data/output"
 
 
-def test_resolve_executor_step_raises_on_cross_region_even_with_override_env(monkeypatch):
+def test_resolve_executor_step_cpu_allows_cross_region_with_override_env(monkeypatch):
+    """CPU steps with cross-region inputs resolve even with override env."""
+
     @remote
     def my_fn(config):
         pass
 
     monkeypatch.setenv(MARIN_CROSS_REGION_OVERRIDE_ENV, "1")
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"input_path": "gs://marin-us-central2/data/input"},
+            output_path="gs://marin-us-east1/data/output",
+        )
+        assert resolved.override_output_path == "gs://marin-us-east1/data/output"
+
+
+def test_resolve_executor_step_tpu_raises_on_cross_region():
+    """Accelerator steps still raise on cross-region GCS dependencies."""
+
+    @remote(resources=ResourceConfig.with_tpu("v4-8"))
+    def my_fn(config):
+        pass
+
     step = ExecutorStep(name="test", fn=my_fn, config=None)
     with (
         patch("marin.execution.executor._iris_backend_is_active", return_value=True),

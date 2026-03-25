@@ -208,8 +208,15 @@ def _infer_gcs_regions(
     output_path: str,
     deps: list[StepSpec] | None,
     dag_tpu_regions: list[str] | None = None,
+    allow_cross_region: bool = False,
 ) -> list[str] | None:
-    """Return inferred GCS regions referenced by config/deps/output, or None if no GCS paths."""
+    """Return inferred GCS regions referenced by config/deps/output, or None if no GCS paths.
+
+    When *allow_cross_region* is True and cross-region paths are detected,
+    the function returns the output_path's region instead of raising.  This
+    lets CPU steps run in the local region and re-process data that only
+    exists in a remote region.
+    """
     # label -> path evidence for useful error messages
     path_to_labels: dict[str, list[str]] = {}
 
@@ -240,13 +247,39 @@ def _infer_gcs_regions(
             gcs_regions = set(region_to_evidence)
 
         if gcs_regions is not None and len(gcs_regions) > 1:
-            detail = "; ".join(
-                f"{region}: {', '.join(sorted(evidence)[:3])}" for region, evidence in sorted(region_to_evidence.items())
-            )
-            raise ValueError(
-                f"Executor step {step_name!r} has cross-region GCS dependencies. "
-                f"Found regions {{{', '.join(sorted(region_to_evidence))}}}. {detail}"
-            )
+            if allow_cross_region:
+                # Use the output_path region so the step runs locally and
+                # the cache check triggers a re-run when local output is missing.
+                output_region = (
+                    _region_for_gcs_path(output_path, step_name=step_name, bucket_region_cache=bucket_region_cache)
+                    if output_path.startswith("gs://")
+                    else None
+                )
+                if output_region is not None:
+                    logger.info(
+                        "Executor step %s has cross-region GCS paths (%s); "
+                        "using output region %s (allow_cross_region=True)",
+                        step_name,
+                        ", ".join(sorted(region_to_evidence)),
+                        output_region,
+                    )
+                    gcs_regions = {output_region}
+                else:
+                    logger.info(
+                        "Executor step %s has cross-region GCS paths but no GCS output; "
+                        "skipping region constraint (allow_cross_region=True)",
+                        step_name,
+                    )
+                    return None
+            else:
+                detail = "; ".join(
+                    f"{region}: {', '.join(sorted(evidence)[:3])}"
+                    for region, evidence in sorted(region_to_evidence.items())
+                )
+                raise ValueError(
+                    f"Executor step {step_name!r} has cross-region GCS dependencies. "
+                    f"Found regions {{{', '.join(sorted(region_to_evidence))}}}. {detail}"
+                )
 
     if dag_tpu_regions:
         tpu_region_set = {r.lower() for r in dag_tpu_regions}
@@ -275,6 +308,7 @@ def _allowed_regions_for_step(
     output_path: str,
     deps: list[StepSpec] | None,
     dag_tpu_regions: list[str] | None = None,
+    allow_cross_region: bool = False,
 ) -> set[str] | None:
     """Return the allowed regional placements for a step after combining all constraints."""
     allowed_regions = _infer_gcs_regions(
@@ -283,6 +317,7 @@ def _allowed_regions_for_step(
         output_path=output_path,
         deps=deps,
         dag_tpu_regions=dag_tpu_regions,
+        allow_cross_region=allow_cross_region,
     )
     allowed = set(allowed_regions) if allowed_regions is not None else None
 
@@ -555,6 +590,7 @@ def _maybe_attach_inferred_region_constraint(
         return remote_fn
 
     inherited_region_pin = _iris_worker_region_pin()
+    is_cpu_step = remote_fn.resources.device.kind == "cpu"
 
     allowed_regions = _allowed_regions_for_step(
         step_name=step_name,
@@ -563,6 +599,7 @@ def _maybe_attach_inferred_region_constraint(
         output_path=output_path,
         deps=deps,
         dag_tpu_regions=dag_tpu_regions,
+        allow_cross_region=is_cpu_step,
     )
     if forced_region is not None:
         pinned_region = forced_region.lower()
