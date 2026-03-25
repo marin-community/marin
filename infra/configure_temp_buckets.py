@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 # Dedicated tmp buckets, one per region.
 BUCKETS: dict[str, str] = {
-    "marin-tmp-asia-northeast-1": "asia-northeast1",
     "marin-tmp-us-central1": "us-central1",
     "marin-tmp-us-central2": "us-central2",
     "marin-tmp-eu-west4": "europe-west4",
