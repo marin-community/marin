@@ -300,9 +300,13 @@ def test_rescale_mixture_schedule_for_batch_schedule():
 
 
 @pytest.mark.asyncio
-async def test_concat_dataset_rejects_infinite_children():
-    with pytest.raises(ValueError, match="finite"):
-        ConcatDataset({"inf": InfiniteCounterDataset()})
+async def test_concat_dataset_getitem_consistent_with_get_batch():
+    ds1 = ListAsyncDataset([1, 2, 3])
+    ds2 = ListAsyncDataset([10, 20])
+    concat = ConcatDataset({"a": ds1, "b": ds2})
+    batch = await concat.get_batch([0, 1, 2, 3, 4])
+    for i in range(5):
+        assert await concat.getitem_async(i) == batch[i]
 
 
 @pytest.mark.asyncio
