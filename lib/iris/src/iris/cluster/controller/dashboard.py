@@ -25,8 +25,9 @@ Auth model:
 
 import logging
 import os
+from collections.abc import AsyncGenerator, Callable
+from contextlib import asynccontextmanager
 from http.cookies import SimpleCookie
-from collections.abc import Callable
 from urllib.parse import urlparse
 
 import httpx
@@ -281,9 +282,15 @@ class ControllerDashboard:
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),
         ]
+
+        @asynccontextmanager
+        async def _lifespan(_app: Starlette) -> AsyncGenerator[None, None]:
+            yield
+            await self._actor_proxy.close()
+
         app: Starlette | _RouteAuthMiddleware = Starlette(
             routes=routes,
-            on_shutdown=[self._actor_proxy.close],
+            lifespan=_lifespan,
         )
         if self._auth_verifier is not None and self._auth_provider is not None:
             app = _RouteAuthMiddleware(app, self._auth_verifier, optional=self._auth_optional)
@@ -429,7 +436,13 @@ class ProxyControllerDashboard:
             Route("/iris.cluster.ControllerService/{method}", self._proxy_rpc, methods=["POST"]),
             static_files_mount(),
         ]
-        return Starlette(routes=routes, on_shutdown=[self._client.aclose])
+
+        @asynccontextmanager
+        async def _lifespan(_app: Starlette) -> AsyncGenerator[None, None]:
+            yield
+            await self._client.aclose()
+
+        return Starlette(routes=routes, lifespan=_lifespan)
 
     def _proxy_html(self, dashboard_type: str) -> HTMLResponse:
         html = html_shell("Iris Controller (Proxy)", dashboard_type)

@@ -6,6 +6,9 @@
 Tests the full round-trip: external client → proxy → actor server.
 """
 
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
 import httpx
 import uvicorn
 from starlette.applications import Starlette
@@ -107,9 +110,14 @@ def _start_proxy_server(proxy: StandaloneActorProxy, threads: ThreadContainer) -
         s.bind(("", 0))
         port = s.getsockname()[1]
 
+    @asynccontextmanager
+    async def _lifespan(_app: Starlette) -> AsyncGenerator[None, None]:
+        yield
+        await proxy.close()
+
     app = Starlette(
         routes=[Route(PROXY_ROUTE, proxy.handle, methods=["POST"])],
-        on_shutdown=[proxy.close],
+        lifespan=_lifespan,
     )
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", log_config=None)
     server = uvicorn.Server(config)
