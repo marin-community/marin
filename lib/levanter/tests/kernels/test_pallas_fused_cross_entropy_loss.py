@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import threading
 import warnings
 
 import jax
@@ -945,8 +946,8 @@ def test_pallas_autotune_skipped_when_tuned_match_exists(monkeypatch: pytest.Mon
     x = jnp.ones((4, 8), dtype=jnp.float32)
     w = jnp.ones((8, 16), dtype=jnp.float32)
     y = jnp.zeros((4,), dtype=jnp.int32)
-
     inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+
     seen_block_sizes: list[fused_api.BlockSizes | None] = []
 
     def fake_impl(x_raw, labels_raw, w_raw, *, block_sizes=None, **_kwargs):
@@ -1106,6 +1107,170 @@ def test_benchmark_candidate_handles_real_shard_map_tracers():
 
     score = mapped(x, y, w)
     assert float(score) >= 0.0
+
+
+def test_autotune_benchmark_uses_shape_dtype_structs_for_real_shard_map_tracers(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    partition_spec = jax.sharding.PartitionSpec
+    mesh = jax.sharding.Mesh(
+        np.array(jax.devices()[:1]),
+        ("data",),
+        axis_types=(jax.sharding.AxisType.Explicit,),
+    )
+    x = jax.device_put(
+        jnp.ones((4, 8), dtype=jnp.float32),
+        jax.sharding.NamedSharding(mesh, partition_spec("data", None)),
+    )
+    y = jax.device_put(
+        jnp.zeros((4,), dtype=jnp.int32),
+        jax.sharding.NamedSharding(mesh, partition_spec("data")),
+    )
+    w = jax.device_put(
+        jnp.ones((8, 16), dtype=jnp.float32),
+        jax.sharding.NamedSharding(mesh, partition_spec(None, None)),
+    )
+    candidate = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+    seen_lower_args: list[tuple[object, ...]] = []
+    seen_thread_ids: list[int] = []
+    seen_mesh_empty: list[bool] = []
+    caller_thread_id = threading.get_ident()
+
+    class FakeLowered:
+        def compile(self):
+            return None
+
+    class FakeJitted:
+        def lower(self, *args):
+            seen_lower_args.append(args)
+            seen_thread_ids.append(threading.get_ident())
+            seen_mesh_empty.append(fused_api.mesh_lib.thread_resources.env.physical_mesh.empty)
+            return FakeLowered()
+
+    monkeypatch.setattr(fused_api.jax, "jit", lambda fn: FakeJitted())
+
+    def fake_impl(x_raw, labels_raw, w_raw, **kwargs):
+        del labels_raw, w_raw, kwargs
+        batch = x_raw.shape[0]
+        return jnp.zeros((batch,), dtype=jnp.float32), jnp.zeros((batch,), dtype=jnp.float32)
+
+    def benchmark_from_shard_map(x_shard, y_shard, w_shard):
+        return fused_api._benchmark_block_sizes_candidate(
+            fn=fake_impl,
+            candidate=candidate,
+            x=x_shard,
+            labels=y_shard,
+            w=w_shard,
+            dtype=jnp.float32,
+            logit_soft_cap=None,
+            precision=None,
+            return_argmax=False,
+        )
+
+    mapped = jax.shard_map(
+        benchmark_from_shard_map,
+        mesh=mesh,
+        in_specs=(partition_spec("data", None), partition_spec("data"), partition_spec(None, None)),
+        out_specs=partition_spec(),
+        check_vma=True,
+    )
+
+    score = mapped(x, y, w)
+    assert float(score) >= 0.0
+    assert len(seen_lower_args) == 1
+
+    lower_x, lower_y, lower_w = seen_lower_args[0]
+    assert isinstance(lower_x, jax.ShapeDtypeStruct)
+    assert isinstance(lower_y, jax.ShapeDtypeStruct)
+    assert isinstance(lower_w, jax.ShapeDtypeStruct)
+    assert getattr(lower_x, "sharding", None) is None
+    assert getattr(lower_y, "sharding", None) is None
+    assert getattr(lower_w, "sharding", None) is None
+    assert len(seen_thread_ids) == 1
+    assert seen_thread_ids[0] != caller_thread_id
+    assert seen_mesh_empty == [True]
+
+
+def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pytest.MonkeyPatch):
+    partition_spec = jax.sharding.PartitionSpec
+    mesh = jax.sharding.Mesh(
+        np.array(jax.devices()[:1]),
+        ("data",),
+        axis_types=(jax.sharding.AxisType.Explicit,),
+    )
+    x = jax.device_put(
+        jnp.ones((4, 8), dtype=jnp.float32),
+        jax.sharding.NamedSharding(mesh, partition_spec("data", None)),
+    )
+    y = jax.device_put(
+        jnp.zeros((4,), dtype=jnp.int32),
+        jax.sharding.NamedSharding(mesh, partition_spec("data")),
+    )
+    w = jax.device_put(
+        jnp.ones((8, 16), dtype=jnp.float32),
+        jax.sharding.NamedSharding(mesh, partition_spec(None, None)),
+    )
+    inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+    seen_block_sizes: list[fused_api.BlockSizes | None] = []
+    benchmarked_candidates: list[fused_api.BlockSizes] = []
+    faster = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)
+    slower = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=512)
+
+    def fake_impl(x_raw, labels_raw, w_raw, *, block_sizes, **kwargs):
+        del labels_raw, w_raw, kwargs
+        seen_block_sizes.append(block_sizes)
+        batch = x_raw.shape[0]
+        zeros = jnp.zeros((batch,), dtype=jnp.float32)
+        return zeros, zeros
+
+    monkeypatch.setattr(
+        fused_api,
+        "infer_block_sizes_with_tuned_match",
+        lambda *args, **kwargs: (inferred, False),
+    )
+    monkeypatch.setattr(
+        fused_api,
+        "_candidate_block_sizes",
+        lambda impl_name, inferred_block_sizes, **kwargs: [inferred_block_sizes, slower, faster],
+    )
+
+    def fake_benchmark(**kwargs):
+        candidate = kwargs["candidate"]
+        benchmarked_candidates.append(candidate)
+        return 1.0 if candidate == faster else 2.0
+
+    monkeypatch.setattr(
+        fused_api,
+        "_benchmark_block_sizes_candidate",
+        fake_benchmark,
+    )
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_impl)
+    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
+
+    def run_from_shard_map(x_shard, y_shard, w_shard):
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_shard,
+            y_shard,
+            w_shard,
+            reduction=None,
+            dtype=jnp.float32,
+            implementation="pallas_tpu",
+        )
+
+    mapped = jax.shard_map(
+        run_from_shard_map,
+        mesh=mesh,
+        in_specs=(partition_spec("data", None), partition_spec("data"), partition_spec(None, None)),
+        out_specs=partition_spec("data"),
+        check_vma=True,
+    )
+
+    out = mapped(x, y, w)
+    out.block_until_ready()
+
+    assert benchmarked_candidates == [inferred, slower, faster]
+    assert seen_block_sizes[-1] == faster
+    assert faster in seen_block_sizes
 
 
 def test_pallas_tpu_vmem_compile_error_falls_back_to_xla_when_requested(monkeypatch: pytest.MonkeyPatch):

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 import hashlib
 import logging
@@ -11,6 +12,7 @@ import warnings
 
 import jax
 from jax import core as jax_core
+from jax._src import mesh as mesh_lib
 import jax.numpy as jnp
 from jax.sharding import NamedSharding
 from jaxtyping import Array, Float, Int
@@ -55,6 +57,7 @@ _AUTOTUNE_BLOCK_SIZE_CACHE: dict[str, BlockSizes] = {}
 _AUTOTUNE_CACHE_LOADED = False
 _AUTOTUNE_COMPILE_HIT_THRESHOLD_S = 0.20
 _VMEM_COMPILE_FALLBACK_WARNINGS_EMITTED: set[str] = set()
+_AUTOTUNE_THREAD_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fused_ce_autotune")
 
 logger = logging.getLogger(__name__)
 _CANONICAL_PALLAS_IMPLEMENTATIONS: dict[str, ArrayImpl] = {}
@@ -437,22 +440,18 @@ def _benchmark_block_sizes_candidate(
         labels=labels,
         w=w,
     )
-    jitted = jax.jit(benchmark_fn)
-
-    use_tracer_lowering = _is_tracer(x) or _is_tracer(labels) or _is_tracer(w)
-    lowering_args = (
-        (x, labels, w)
-        if use_tracer_lowering
-        else (
-            _shape_dtype_struct_for_benchmark(x),
-            _shape_dtype_struct_for_benchmark(labels),
-            _shape_dtype_struct_for_benchmark(w),
-        )
+    abstract_args = (
+        _shape_dtype_struct_for_benchmark(x),
+        _shape_dtype_struct_for_benchmark(labels),
+        _shape_dtype_struct_for_benchmark(w),
     )
-    start = time.perf_counter()
-    lowered = jitted.lower(*lowering_args)
-    lowered.compile()
-    compile_time = time.perf_counter() - start
+    compile_time = _compile_benchmark_fn(
+        benchmark_fn=benchmark_fn,
+        abstract_args=abstract_args,
+        x=x,
+        labels=labels,
+        w=w,
+    )
     if compile_time <= _AUTOTUNE_COMPILE_HIT_THRESHOLD_S:
         logger.info(
             "Fused CE autotune candidate %s likely hit JAX compilation cache (compile %.3fs).",
@@ -463,11 +462,58 @@ def _benchmark_block_sizes_candidate(
     if _is_tracer(x) or _is_tracer(labels) or _is_tracer(w):
         return compile_time
 
+    jitted = jax.jit(benchmark_fn)
     start = time.perf_counter()
     out = jitted(x, labels, w)
     jax.block_until_ready(out)
     run_time = time.perf_counter() - start
     return run_time
+
+
+def _should_offload_autotune_compile(
+    *,
+    x: jax.Array,
+    labels: jax.Array,
+    w: jax.Array,
+) -> bool:
+    return (
+        _is_tracer(x)
+        or _is_tracer(labels)
+        or _is_tracer(w)
+        or _value_uses_manual_sharding(x)
+        or _value_uses_manual_sharding(labels)
+        or _value_uses_manual_sharding(w)
+        or jax_core.unsafe_am_i_under_a_jit_DO_NOT_USE()
+        or not mesh_lib.thread_resources.env.physical_mesh.empty
+    )
+
+
+def _compile_benchmark_fn_current_thread(
+    benchmark_fn: Callable[[jax.Array, jax.Array, jax.Array], jax.Array],
+    abstract_args: tuple[jax.ShapeDtypeStruct, jax.ShapeDtypeStruct, jax.ShapeDtypeStruct],
+) -> float:
+    jitted = jax.jit(benchmark_fn)
+    start = time.perf_counter()
+    lowered = jitted.lower(*abstract_args)
+    lowered.compile()
+    return time.perf_counter() - start
+
+
+def _compile_benchmark_fn(
+    *,
+    benchmark_fn: Callable[[jax.Array, jax.Array, jax.Array], jax.Array],
+    abstract_args: tuple[jax.ShapeDtypeStruct, jax.ShapeDtypeStruct, jax.ShapeDtypeStruct],
+    x: jax.Array,
+    labels: jax.Array,
+    w: jax.Array,
+) -> float:
+    if not _should_offload_autotune_compile(x=x, labels=labels, w=w):
+        return _compile_benchmark_fn_current_thread(benchmark_fn, abstract_args)
+    return _AUTOTUNE_THREAD_POOL.submit(
+        _compile_benchmark_fn_current_thread,
+        benchmark_fn,
+        abstract_args,
+    ).result()
 
 
 def _autotune_block_sizes_on_miss(
