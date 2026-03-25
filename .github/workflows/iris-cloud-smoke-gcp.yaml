@@ -91,7 +91,7 @@ jobs:
 
       - name: Install Playwright system deps
         if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: cd lib/iris && uv run playwright install-deps chromium
+        run: npx playwright install-deps chromium
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
