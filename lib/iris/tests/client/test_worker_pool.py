@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """E2E tests for WorkerPool using IrisClient.local()."""
@@ -10,6 +10,8 @@ from iris.client.worker_pool import (
     WorkerPoolConfig,
 )
 from iris.cluster.types import ResourceSpec
+
+pytestmark = pytest.mark.e2e
 
 
 @pytest.fixture

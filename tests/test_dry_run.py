@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
@@ -51,7 +51,7 @@ def test_run_dry_runs(config_file, monkeypatch):
                 pytest.skip(f"Skipping {script} (requires GCS access)")
             raise
         except OSError as e:
-            # Hugging Face sometimes surfaces gated repo access as OSError
+            # Hugging Face surfaces gated-repo and connectivity errors as OSError
             msg = str(e)
             lower_msg = msg.lower()
             if (
@@ -59,8 +59,9 @@ def test_run_dry_runs(config_file, monkeypatch):
                 or "access to model" in lower_msg
                 or "401 client error" in lower_msg
                 or "you must have access" in lower_msg
+                or "couldn't connect" in lower_msg
             ):
-                pytest.skip(f"Skipping {script} (requires access to a gated Hugging Face repo): {e}")
+                pytest.skip(f"Skipping {script} (requires HuggingFace access): {e}")
             raise
         except SystemExit as e:
             # Some scripts may call `sys.exit()`, so we catch it to treat `exit(0)` as success

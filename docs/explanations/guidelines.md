@@ -33,7 +33,7 @@ guidelines.
 
 # GitHub pull requests
 
-See [docs/recipes/pull-request.md](../recipes/pull-request.md) for PR
+Agents can use the `pull-request` skill for PR
 description style, testing requirements, self-review, and specification
 guidelines.
 

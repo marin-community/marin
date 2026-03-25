@@ -1,16 +1,18 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import gzip
 import io
 import json
 import os
+import threading
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import draccus
 import fsspec
 import requests
+from cachetools import TTLCache
 import zstandard as zstd
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_limiter import Limiter
@@ -64,21 +66,45 @@ class Server:
 
         # Lazily instantiate remote filesystems to avoid triggering cloud
         # auth during local-only development.
-        self.fs_cache = {
-            None: fsspec.filesystem("local"),
+        self._fs_cache = {
+            None: fsspec.filesystem("file"),
         }
+        self._fs_lock = threading.Lock()
+
+        # Response-level caches (thread-safe via locks)
+        self._dir_cache = TTLCache(maxsize=256, ttl=30)
+        self._dir_lock = threading.Lock()
+        self._page_cache = TTLCache(maxsize=512, ttl=120)
+        self._page_lock = threading.Lock()
 
     def fs(self, path: str):
         """Automatically figure out the filesystem to use based on the `path`."""
         protocol, _ = fsspec.core.split_protocol(path)
-        if protocol not in self.fs_cache:
-            if protocol == "gs":
-                self.fs_cache[protocol] = fsspec.filesystem("gcs")
-            elif protocol == "s3":
-                self.fs_cache[protocol] = fsspec.filesystem("s3")
-            else:
-                self.fs_cache[protocol] = fsspec.filesystem("local")
-        return self.fs_cache[protocol]
+        with self._fs_lock:
+            if protocol not in self._fs_cache:
+                if protocol == "gs":
+                    self._fs_cache[protocol] = fsspec.filesystem("gcs")
+                elif protocol == "s3":
+                    self._fs_cache[protocol] = fsspec.filesystem("s3")
+                else:
+                    self._fs_cache[protocol] = fsspec.filesystem("file")
+            return self._fs_cache[protocol]
+
+    def get_dir(self, key: str):
+        with self._dir_lock:
+            return self._dir_cache.get(key)
+
+    def set_dir(self, key: str, value: dict):
+        with self._dir_lock:
+            self._dir_cache[key] = value
+
+    def get_page(self, key: tuple):
+        with self._page_lock:
+            return self._page_cache.get(key)
+
+    def set_page(self, key: tuple, value: dict):
+        with self._page_lock:
+            self._page_cache[key] = value
 
 
 server: Server | None = None
@@ -118,8 +144,11 @@ def canonicalize_request_path(path: str) -> str:
 
 def list_files(path: str) -> dict:
     """List all files in the given path."""
+    cached = server.get_dir(path)
+    if cached is not None:
+        return cached
+
     protocol, _ = fsspec.core.split_protocol(path)  # e.g., "gs"
-    files = server.fs(path).ls(path, detail=True, refresh=True)
 
     # If path = "gs://", the file names listed don't have the "gs://" prefix
     # (but still represents an absolute path), so we add it in.
@@ -128,22 +157,28 @@ def list_files(path: str) -> dict:
             return f"{protocol}://{name}"
         return name
 
-    # Replace file with path and filter out blocked paths
+    # List once, filter out blocked paths
     files = []
-    for file in server.fs(path).ls(path, detail=True, refresh=True):
+    for file in server.fs(path).ls(path, detail=True):
         file_path = name_to_path(file["name"])
-        # Only include files that are not blocked
         if has_permissions(file_path, server.config.root_paths, server.config.blocked_paths):
             files.append({"path": file_path, **file})
 
-    return {
+    result = {
         "type": "directory",
         "files": files,
     }
+    server.set_dir(path, result)
+    return result
 
 
 def read_json_file(path: str) -> dict:
     """Reads a JSON file."""
+    cache_key = (path, "json")
+    cached = server.get_page(cache_key)
+    if cached is not None:
+        return cached
+
     with server.fs(path).open(path) as f:
         if server.config.max_size is None:
             raw = f.read()
@@ -156,10 +191,12 @@ def read_json_file(path: str) -> dict:
                 }
         data = json.loads(raw)
 
-    return {
+    result = {
         "type": "json",
         "data": data,
     }
+    server.set_page(cache_key, result)
+    return result
 
 
 def is_too_many_lines(offset: int, count: int) -> bool:
@@ -174,6 +211,11 @@ def read_executor_status_file(path: str, offset: int, count: int) -> dict:
     # Ensure we only read a max of server.config.max_lines lines
     if is_too_many_lines(offset, count):
         return {"error": f"Only {server.config.max_lines} lines are allowed to be read at a time"}
+
+    cache_key = (path, "executor_status", offset, count)
+    cached = server.get_page(cache_key)
+    if cached is not None:
+        return cached
 
     # Read the lines from the file, enforcing max_size if configured.
     with server.fs(path).open(path, "r") as f:
@@ -203,8 +245,11 @@ def read_executor_status_file(path: str, offset: int, count: int) -> dict:
     # new format: a single status token like SUCCESS/RUNNING/etc.
     if len(lines) == 1 and not lines[0].startswith("{"):
         if offset > 0:
-            return {"type": "jsonl", "items": []}
-        return {"type": "jsonl", "items": [{"status": lines[0]}]}
+            result = {"type": "jsonl", "items": []}
+        else:
+            result = {"type": "jsonl", "items": [{"status": lines[0]}]}
+        server.set_page(cache_key, result)
+        return result
 
     # legacy format: JSON-lines event log.
     events: list[dict] = []
@@ -215,7 +260,9 @@ def read_executor_status_file(path: str, offset: int, count: int) -> dict:
             continue
         if isinstance(event, dict):
             events.append(event)
-    return {"type": "jsonl", "items": events}
+    result = {"type": "jsonl", "items": events}
+    server.set_page(cache_key, result)
+    return result
 
 
 def read_text_file(
@@ -228,6 +275,12 @@ def read_text_file(
     # Ensure we only read a max of server.config.max_lines lines
     if is_too_many_lines(offset, count):
         return {"error": f"Only {server.config.max_lines} lines are allowed to be read at a time"}
+
+    cache_key = (path, "text", offset, count, gzipped, zstded, get_json)
+    cached = server.get_page(cache_key)
+    if cached is not None:
+        return cached
+
     with server.fs(path).open(path, "rb") as f:
         # Unzip
         if gzipped:
@@ -252,10 +305,12 @@ def read_text_file(
 
             items.append(json.loads(line) if get_json else line)
 
-    return {
+    result = {
         "type": "jsonl" if get_json else "text",
         "items": items,
     }
+    server.set_page(cache_key, result)
+    return result
 
 
 def read_parquet_file(path: str, offset: int, count: int) -> dict:
@@ -264,13 +319,20 @@ def read_parquet_file(path: str, offset: int, count: int) -> dict:
     if is_too_many_lines(offset, count):
         return {"error": f"Only {server.config.max_lines} lines are allowed to be read at a time"}
 
+    cache_key = (path, "parquet", offset, count)
+    cached = server.get_page(cache_key)
+    if cached is not None:
+        return cached
+
     pf = ParquetFile(path)
     # Note: can make this more efficient by skipping the first offset without reading into memory
     rows = next(pf.iter_batches(batch_size=offset + count))[offset:]
-    return {
+    result = {
         "type": "parquet",
         "items": json.loads(rows.to_pandas().to_json(orient="records")),
     }
+    server.set_page(cache_key, result)
+    return result
 
 
 def has_permissions(path: str, root_paths: list[str], blocked_paths: list[str] | None = None) -> bool:
@@ -340,10 +402,55 @@ assert not has_permissions(
 )
 
 
+def _make_response(data: dict, max_age: int):
+    """Create a JSON response with Cache-Control header."""
+    response = jsonify(data)
+    response.headers["Cache-Control"] = f"public, max-age={max_age}"
+    return response
+
+
+def _try_serve_file(sanitized_path: str, offset: int, count: int):
+    """Try to serve a file by extension, skipping the info() GCS call.
+
+    Returns a Response if the path matches a known file extension, or None
+    if we need to fall back to info() to determine the type.
+    Also checks the directory cache first — if we've seen this path as a
+    directory before, serve it directly.
+    """
+    # Check dir cache first
+    cached_dir = server.get_dir(sanitized_path)
+    if cached_dir is not None:
+        return _make_response(cached_dir, max_age=30)
+
+    # Known file extensions — skip info() entirely
+    if sanitized_path.endswith(".jsonl"):
+        return _make_response(
+            read_text_file(path=sanitized_path, get_json=True, offset=offset, count=count), max_age=120
+        )
+    if any(sanitized_path.endswith(ext) for ext in (".json.gz", ".ndjson.gz", ".jsonl.gz")):
+        return _make_response(
+            read_text_file(path=sanitized_path, get_json=True, offset=offset, count=count, gzipped=True), max_age=120
+        )
+    if sanitized_path.endswith((".jsonl.zstd", ".jsonl.zst")):
+        return _make_response(
+            read_text_file(path=sanitized_path, get_json=True, offset=offset, count=count, zstded=True), max_age=120
+        )
+    if sanitized_path.endswith(".parquet"):
+        return _make_response(read_parquet_file(path=sanitized_path, offset=offset, count=count), max_age=120)
+    if sanitized_path.endswith((".json", ".SUCCESS")):
+        return _make_response(read_json_file(sanitized_path), max_age=120)
+    if sanitized_path.endswith(".executor_info"):
+        return _make_response(read_json_file(sanitized_path), max_age=120)
+    if sanitized_path.endswith(".executor_status"):
+        return _make_response(read_executor_status_file(path=sanitized_path, offset=offset, count=count), max_age=30)
+
+    return None
+
+
 @app.route("/api/config", methods=["GET"])
 def config():
     # Later: only send the necessary parts of config
-    return jsonify(asdict(server.config))
+    return _make_response(asdict(server.config), max_age=3600)
 
 
 @app.route("/api/download", methods=["GET"])
@@ -381,41 +488,27 @@ def view():
         sanitized_path = canonicalize_request_path(path)
         if not has_permissions(sanitized_path, server.config.root_paths, server.config.blocked_paths):
             return jsonify({"error": f"No permission to access: {path}"})
-        if not server.fs(sanitized_path).exists(sanitized_path):
+
+        # Try to serve from cache or by file extension before calling info() on GCS.
+        # This avoids a network round-trip for cached results and known file types.
+        file_response = _try_serve_file(sanitized_path, offset, count)
+        if file_response is not None:
+            return file_response
+
+        # For paths without a recognized file extension, we need info() to check
+        # if it's a directory vs file (or if it exists at all).
+        try:
+            info = server.fs(sanitized_path).info(sanitized_path)
+        except FileNotFoundError:
             return jsonify({"error": f"Path does not exist: {path}"})
 
-        # Directory - check permissions before listing
-        if server.fs(sanitized_path).isdir(sanitized_path):
-            return jsonify(list_files(sanitized_path))
+        if info.get("type") == "directory":
+            return _make_response(list_files(sanitized_path), max_age=30)
 
-        # jsonl files
-        if sanitized_path.endswith(".jsonl"):
-            return jsonify(read_text_file(path=sanitized_path, get_json=True, offset=offset, count=count))
-        if any(sanitized_path.endswith(ext) for ext in [".json.gz", ".ndjson.gz", ".jsonl.gz"]):
-            # json.gz is because Dolma files are named like this (should be jsonl.gz)
-            return jsonify(read_text_file(path=sanitized_path, get_json=True, offset=offset, count=count, gzipped=True))
-        if sanitized_path.endswith(".jsonl.zstd") or sanitized_path.endswith(".jsonl.zst"):
-            return jsonify(read_text_file(path=sanitized_path, get_json=True, offset=offset, count=count, zstded=True))
-
-        # parquet files (what Hugging Face datasets use)
-        if sanitized_path.endswith(".parquet"):
-            return jsonify(read_parquet_file(path=sanitized_path, offset=offset, count=count))
-
-        # json files (.SUCCESS is used in Marin to keep track of progress)
-        if sanitized_path.endswith(".json") or sanitized_path.endswith(".SUCCESS"):
-            return jsonify(read_json_file(sanitized_path))
-
-        # .executor_info files are also rendered as json
-        if sanitized_path.endswith(".executor_info"):
-            return jsonify(read_json_file(sanitized_path))
-
-        # render .executor_status files as jsonl
-        # Note: there are two formats of .executor_status files; we convert both to jsonl.
-        if sanitized_path.endswith(".executor_status"):
-            return jsonify(read_executor_status_file(path=sanitized_path, offset=offset, count=count))
-
-        # Assume text file (treated as a list of lines)
-        return jsonify(read_text_file(path=sanitized_path, gzipped=False, get_json=False, offset=offset, count=count))
+        # Unrecognized extension — treat as text
+        return _make_response(
+            read_text_file(path=sanitized_path, gzipped=False, get_json=False, offset=offset, count=count), max_age=120
+        )
 
     except Exception as e:
         print(f"EXCEPTION: {e}")

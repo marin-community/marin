@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """RPC error handling utilities with full traceback support."""
@@ -45,6 +45,19 @@ def rpc_error_handler(
         raise
     except Exception as e:
         raise connect_error_with_traceback(code, f"Error {operation}: {e}", exc=e) from e
+
+
+def connect_error_sanitized(
+    code: Code,
+    message: str,
+    exc: Exception | None = None,
+) -> ConnectError:
+    """Create a ConnectError WITHOUT traceback details. For production use."""
+    details = errors_pb2.ErrorDetails(message=message)
+    details.timestamp.CopyFrom(Timestamp.now().to_proto())
+    if exc is not None:
+        details.exception_type = f"{type(exc).__module__}.{type(exc).__name__}"
+    return ConnectError(code, message, details=[details])
 
 
 def connect_error_with_traceback(
@@ -99,6 +112,14 @@ def extract_error_details(error: ConnectError):
     return None
 
 
+def format_connect_error(error: ConnectError) -> str:
+    """Format a ConnectError, including server traceback if available."""
+    details = extract_error_details(error)
+    if details and details.traceback:
+        return f"{error}\n\nServer traceback:\n{details.traceback}"
+    return str(error)
+
+
 def is_retryable_error(exc: Exception) -> bool:
     """Check if an RPC error should trigger retry.
 
@@ -121,7 +142,7 @@ def call_with_retry(
     call_fn: Callable[[], T],
     *,
     on_retry: Callable[[Exception], None] | None = None,
-    max_attempts: int = 5,
+    max_attempts: int = 20,
     backoff: ExponentialBackoff | None = None,
 ) -> T:
     """Execute an RPC call with exponential backoff retry.
@@ -132,10 +153,10 @@ def call_with_retry(
         on_retry: Optional callback invoked with the exception on every retryable
             failure, including the final attempt. Useful for clearing cached
             connections so subsequent calls can re-resolve endpoints.
-        max_attempts: Maximum number of attempts (default: 5)
+        max_attempts: Maximum number of attempts (default: 20)
         backoff: Backoff configuration. A fresh copy is made internally so the
             caller's instance is not mutated. Defaults to
-            ExponentialBackoff(initial=0.1, maximum=5.0, factor=2.0).
+            ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0).
 
     Returns:
         Result from call_fn
@@ -144,7 +165,7 @@ def call_with_retry(
         Exception from call_fn if all retries exhausted or error is not retryable
     """
     if backoff is None:
-        backoff = ExponentialBackoff(initial=0.1, maximum=5.0, factor=2.0)
+        backoff = ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0)
     else:
         backoff = backoff.copy()
     last_exception = None
@@ -165,7 +186,7 @@ def call_with_retry(
 
             if attempt + 1 >= max_attempts:
                 # Final attempt failed, raise
-                logger.warning(
+                logger.exception(
                     "Operation %s failed after %d attempts: %s",
                     operation,
                     max_attempts,
@@ -175,7 +196,7 @@ def call_with_retry(
 
             # Log and retry
             delay = backoff.next_interval()
-            logger.warning(
+            logger.exception(
                 "Operation %s failed (attempt %d/%d), retrying in %.2fs: %s",
                 operation,
                 attempt + 1,

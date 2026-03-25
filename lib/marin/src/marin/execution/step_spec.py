@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -6,7 +6,6 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cached_property
@@ -16,8 +15,30 @@ from iris.marin_fs import marin_prefix
 
 
 @dataclass(frozen=True)
+class _StepSpecMigrationConfig:
+    """Temporary config used by ``StepSpec.as_executor_step()`` during the
+    migration from ``ExecutorStep`` to ``StepSpec``.
+
+    New steps can be authored as ``StepSpec`` and converted to ``ExecutorStep``
+    for use in existing ``Executor.run()`` pipelines.  This config carries
+    the versioning and dependency information that the Executor's
+    ``compute_version`` traversal expects.  Once the migration is complete
+    and all pipelines use ``StepRunner`` directly, this class can be removed.
+    """
+
+    output_path: Any
+    attrs: Any
+    deps: list = dataclasses.field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class StepSpec:
-    """Step identity, dependencies, and execution configuration."""
+    """Step identity, dependencies, and execution configuration.
+
+    StepSpec is a pure data object: it describes *what* to run, not *how*.
+    Caching, locking, heartbeats, and status writes are handled explicitly
+    by the step runner.
+    """
 
     # Identity
     name: str
@@ -40,6 +61,8 @@ class StepSpec:
     Callable that accepts the output path as the only argument, and produces the step output at that path
     when called. Usually this function would then call the specific function e.g. tokenize with the appropriate
     arguments. Usually you would specify this via a `lambda output_path: foo(output_path=output_path, bar=42)`.
+
+    May be a :class:`~marin.execution.remote.RemoteCallable` for Fray dispatch.
     """
 
     @cached_property
@@ -70,31 +93,34 @@ class StepSpec:
         prefix = self.output_path_prefix or marin_prefix()
         return f"{prefix}/{self.name_with_hash}"
 
-    @cached_property
-    def executable_fn(self) -> Callable[[str], Any]:
-        """Fully-wrapped fn: remote(disk_cache(distributed_lock(raw_fn))).
+    def as_executor_step(self) -> ExecutorStep:  # noqa: F821
+        """Convert to an ``ExecutorStep`` for use in ``Executor.run()`` pipelines.
 
-        Caching, distributed locking, heartbeats, artifact saving, and status
-        writes all happen inside the wrapped callable. For remote steps, the
-        entire chain runs inside the Fray job.
+        The resulting ``ExecutorStep`` preserves this step's output path and
+        caching identity via ``override_output_path``.  Round-tripping through
+        ``resolve_executor_step`` returns the original ``StepSpec``.
+
+        The exists to allow for incremental migration from ``ExecutorStep`` to ``StepSpec``:
+        steps can be authored as ``StepSpec`` and used in existing pipelines without modification.
         """
-        from marin.execution.artifact import Artifact
-        from marin.execution.disk_cache import disk_cache
-        from marin.execution.distributed_lock import distributed_lock
-        from marin.execution.remote import RemoteCallable
+        from marin.execution.executor import ExecutorStep, VersionedValue, THIS_OUTPUT_PATH
 
-        raw_fn = self.fn.fn if isinstance(self.fn, RemoteCallable) else self.fn
+        dep_steps = [dep.as_executor_step() for dep in self.deps]
 
-        wrapped = disk_cache(
-            distributed_lock(raw_fn),
-            output_path=self.output_path,
-            save_fn=Artifact.save,
-            load_fn=Artifact.load,
+        config = _StepSpecMigrationConfig(
+            output_path=THIS_OUTPUT_PATH,
+            attrs=VersionedValue(self.hash_attrs),
+            deps=dep_steps,
         )
 
-        if isinstance(self.fn, RemoteCallable):
-            job_name = f"{self.name_with_hash}-{uuid.uuid4().hex[:8]}"
-            remote_callable = self.fn.named(job_name)
-            wrapped = dataclasses.replace(remote_callable, fn=wrapped)
-
-        return wrapped
+        result = ExecutorStep(
+            name=self.name,
+            fn=self.fn,
+            config=config,
+            override_output_path=self.output_path,
+        )
+        # Stash the original StepSpec for round-trip recovery in
+        # resolve_executor_step.  Uses object.__setattr__ because
+        # ExecutorStep is frozen.
+        object.__setattr__(result, "_original_step_spec", self)
+        return result

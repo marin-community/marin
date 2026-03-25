@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import time
@@ -7,7 +7,12 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
-from iris.rpc.errors import call_with_retry, connect_error_with_traceback, extract_error_details
+from iris.rpc.errors import (
+    call_with_retry,
+    connect_error_sanitized,
+    connect_error_with_traceback,
+    extract_error_details,
+)
 from iris.time_utils import ExponentialBackoff
 
 
@@ -21,6 +26,29 @@ def test_connect_error_with_traceback_populates_timestamp() -> None:
     assert details is not None
     assert details.exception_type.endswith("ValueError")
     assert details.timestamp.epoch_ms > 0
+
+
+def test_connect_error_sanitized_omits_traceback() -> None:
+    try:
+        raise ValueError("boom")
+    except ValueError as exc:
+        err = connect_error_sanitized(Code.INTERNAL, "Error launching job", exc=exc)
+
+    details = extract_error_details(err)
+    assert details is not None
+    assert details.traceback == ""
+    assert details.message == "Error launching job"
+    assert details.exception_type.endswith("ValueError")
+    assert details.timestamp.epoch_ms > 0
+
+
+def test_connect_error_sanitized_without_exception() -> None:
+    err = connect_error_sanitized(Code.NOT_FOUND, "Job not found")
+    details = extract_error_details(err)
+    assert details is not None
+    assert details.traceback == ""
+    assert details.message == "Job not found"
+    assert details.exception_type == ""
 
 
 def test_call_with_retry_succeeds_first_attempt() -> None:

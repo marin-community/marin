@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Ray backend for fray v2 Client protocol."""
@@ -16,7 +16,15 @@ import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
 
-from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.actor import (
+    ActorContext,
+    ActorFuture,
+    ActorGroup,
+    ActorHandle,
+    HostedActor,
+    _reset_current_actor,
+    _set_current_actor,
+)
 from fray.v2.ray_backend.deps import build_python_path, build_runtime_env_for_packages
 from fray.v2.ray_backend.tpu import run_on_pod_ray
 from fray.v2.types import (
@@ -29,6 +37,7 @@ from fray.v2.types import (
     create_environment,
     get_tpu_topology,
 )
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -163,13 +172,19 @@ def build_runtime_env(request: JobRequest) -> dict:
 
     env_vars = dict(environment.env_vars)
     extras = list(environment.extras)
+    skip_runtime_extras = os.environ.get("MARIN_SKIP_RUNTIME_EXTRAS", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    ) or env_vars.get("MARIN_SKIP_RUNTIME_EXTRAS", "").lower() in ("1", "true", "yes")
 
-    if isinstance(request.resources.device, TpuConfig):
-        if "tpu" not in extras:
-            extras.append("tpu")
-    elif isinstance(request.resources.device, GpuConfig):
-        if "gpu" not in extras:
-            extras.append("gpu")
+    if not skip_runtime_extras:
+        if isinstance(request.resources.device, TpuConfig):
+            if "tpu" not in extras:
+                extras.append("tpu")
+        elif isinstance(request.resources.device, GpuConfig):
+            if "gpu" not in extras:
+                extras.append("gpu")
 
     for key, value in request.resources.device.default_env_vars().items():
         env_vars.setdefault(key, value)
@@ -327,16 +342,33 @@ class RayClient:
         topo = get_tpu_topology(device.variant)
         replicas = request.replicas or 1
         num_slices = max(1, replicas // topo.vm_count)
+        # Only propagate env_vars to TPU workers. Other runtime_env keys (pip, py_modules,
+        # etc.) reference local temp files that don't exist on the run_on_pod_ray worker node.
+        tpu_runtime_env = {"env_vars": runtime_env["env_vars"]} if "env_vars" in runtime_env else {}
         object_ref = run_on_pod_ray.remote(
             remote_fn,
             tpu_type=device.variant,
             num_slices=num_slices,
             max_retries_preemption=request.max_retries_preemption,
             max_retries_failure=request.max_retries_failure,
+            runtime_env=tpu_runtime_env,
         )
 
         job_id = f"ray-tpu-{request.name}-{uuid.uuid4().hex[:8]}"
         return RayJobHandle(job_id, ref=object_ref)
+
+    def host_actor(
+        self,
+        actor_class: type,
+        *args: Any,
+        name: str,
+        actor_config: ActorConfig = ActorConfig(),
+        **kwargs: Any,
+    ) -> HostedActor:
+        """Ray cannot host actors in-process; falls back to a single-actor group."""
+        group = self.create_actor_group(actor_class, *args, name=name, count=1, actor_config=actor_config, **kwargs)
+        handle = group.wait_ready()[0]
+        return HostedActor(handle, stop=group.shutdown)
 
     def create_actor(
         self,
@@ -413,6 +445,8 @@ def _actor_ray_options(resources: ResourceConfig, actor_config: ActorConfig = Ac
     # initialization beyond __init__.
     if actor_config.max_restarts is not None:
         options["max_restarts"] = actor_config.max_restarts
+    if actor_config.max_task_retries is not None:
+        options["max_task_retries"] = actor_config.max_task_retries
     if actor_config.max_concurrency > 1:
         options["max_concurrency"] = actor_config.max_concurrency
     return options
@@ -445,11 +479,8 @@ class _RayActorHostBase:
         # library code using logging.getLogger(__name__).info() is visible.
         # Ray forwards stdout/stderr to the driver, but Python's root logger
         # defaults to WARNING in fresh processes.
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s %(levelname)s %(name)s:%(lineno)d %(message)s",
-            force=True,
-        )
+
+        configure_logging(level=logging.INFO)
 
         # Create handle by name - will resolve via ray.get_actor() when used
         handle = RayActorHandle(actor_name)
@@ -576,10 +607,40 @@ class RayActorGroup:
         self._yielded = True
         return self._handles
 
-    def shutdown(self) -> None:
-        """Kill all Ray actors."""
+    def is_done(self) -> bool:
+        """Ray actors managed by Zephyr don't have an independent job lifecycle."""
+        return False
+
+    def shutdown(self, graceful_timeout_s: float = 30.0) -> None:
+        """Gracefully terminate all Ray actors, with force-kill fallback.
+
+        Uses __ray_terminate__ instead of ray.kill() so that in-flight tasks
+        finish before the actor exits.  ray.kill() races with task completion
+        callbacks in Ray's C++ task_manager, triggering a fatal assertion
+        (ray-project/ray#54260).  __ray_terminate__ queues behind pending
+        tasks; we wait up to *graceful_timeout_s* then force-kill stragglers.
+        """
+        # Phase 1: request graceful termination for all actors.
+        terminate_refs: list[tuple[RayActorHandle, ray.ObjectRef]] = []
         for handle in self._handles:
             try:
-                ray.kill(handle._actor_ref)
+                ref = handle._resolve().__ray_terminate__.remote()
+                terminate_refs.append((handle, ref))
             except Exception as e:
-                logger.warning("Failed to kill Ray actor: %s", e)
+                logger.warning("Failed to send terminate to Ray actor: %s", e)
+
+        # Phase 2: wait for graceful termination with a timeout.
+        pending = [ref for _, ref in terminate_refs]
+        if pending:
+            try:
+                _, still_pending = ray.wait(pending, num_returns=len(pending), timeout=graceful_timeout_s)
+            except Exception:
+                still_pending = pending
+            # Phase 3: force-kill actors that did not terminate in time.
+            still_pending_set = set(still_pending)
+            for handle, ref in terminate_refs:
+                if ref in still_pending_set:
+                    try:
+                        ray.kill(handle._resolve())
+                    except Exception as e:
+                        logger.warning("Failed to force-kill Ray actor: %s", e)

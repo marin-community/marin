@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Job management via command passthrough (replaces ``iris-run``).
@@ -25,8 +25,15 @@ from iris.cli.bug_report import file_github_issue, format_bug_report, gather_bug
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
-from iris.cluster.types import (
+from iris.cluster.constraints import (
     Constraint,
+    WellKnownAttribute,
+    infer_preemptible_constraint,
+    region_constraint,
+    zone_constraint,
+)
+from iris.cluster.types import (
+    CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
     JobName,
@@ -34,11 +41,10 @@ from iris.cluster.types import (
     ResourceSpec,
     get_tpu_topology,
     gpu_device,
-    region_constraint,
-    zone_constraint,
     tpu_device,
 )
 from iris.rpc import cluster_pb2
+from iris.rpc.auth import TokenProvider
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -230,6 +236,85 @@ def parse_gpu_spec(spec: str) -> tuple[str, int]:
     )
 
 
+def _levenshtein(a: str, b: str) -> int:
+    if len(a) < len(b):
+        return _levenshtein(b, a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a):
+        curr = [i + 1] + [0] * len(b)
+        for j, cb in enumerate(b):
+            curr[j + 1] = min(prev[j + 1] + 1, curr[j] + 1, prev[j] + (ca != cb))
+        prev = curr
+    return prev[-1]
+
+
+def _find_closest(value: str, known: set[str], max_distance: int = 5) -> str | None:
+    """Return the closest match from *known* by edit distance, or None."""
+    best, best_dist = None, max_distance + 1
+    for candidate in sorted(known):
+        dist = _levenshtein(value, candidate)
+        if dist < best_dist:
+            best, best_dist = candidate, dist
+    return best if best_dist <= max_distance else None
+
+
+def _known_regions_and_zones(config) -> tuple[set[str], set[str]]:
+    """Extract known regions and zones from an IrisClusterConfig proto.
+
+    Returns:
+        (regions, zones) sets derived from scale group worker attributes.
+    """
+    regions: set[str] = set()
+    zones: set[str] = set()
+    for sg in config.scale_groups.values():
+        attrs = sg.worker.attributes
+        if WellKnownAttribute.REGION in attrs:
+            regions.add(attrs[WellKnownAttribute.REGION])
+        if WellKnownAttribute.ZONE in attrs:
+            zones.add(attrs[WellKnownAttribute.ZONE])
+    return regions, zones
+
+
+def validate_region_zone(
+    regions: tuple[str, ...] | None,
+    zone: str | None,
+    config,
+) -> None:
+    """Validate --region/--zone CLI values against the cluster config.
+
+    Raises click.BadParameter if a value doesn't match any known region/zone.
+    Only validates when a config is available (i.e. --config was passed).
+    """
+    if config is None:
+        return
+
+    known_regions, known_zones = _known_regions_and_zones(config)
+
+    if not known_regions and not known_zones:
+        return
+
+    if regions:
+        for r in regions:
+            if r not in known_regions:
+                suggestion = _find_closest(r, known_regions)
+                hint = f" Did you mean '{suggestion}'?" if suggestion else ""
+                raise click.BadParameter(
+                    f"'{r}' is not a known region in the cluster config.{hint}"
+                    f" Known regions: {', '.join(sorted(known_regions))}",
+                    param_hint="'--region'",
+                )
+
+    if zone:
+        if zone not in known_zones:
+            suggestion = _find_closest(zone, known_zones)
+            hint = f" Did you mean '{suggestion}'?" if suggestion else ""
+            raise click.BadParameter(
+                f"'{zone}' is not a known zone in the cluster config.{hint}"
+                f" Known zones: {', '.join(sorted(known_zones))}",
+                param_hint="'--zone'",
+            )
+
+
 def build_resources(
     tpu: str | None,
     gpu: str | None,
@@ -288,6 +373,58 @@ def generate_job_name(command: list[str]) -> str:
     return f"iris-run-{script_name}-{timestamp}"
 
 
+def resolve_multinode_defaults(
+    tpu: str | None,
+    gpu: str | None,
+    replicas: int | None,
+) -> tuple[int, CoschedulingConfig | None]:
+    """Auto-detect multinode topology and set replicas/coscheduling.
+
+    For TPUs with vm_count > 1, infers replicas from the topology and enables
+    coscheduling by ``tpu-name`` so that all tasks land on workers in the same
+    TPU slice. For GPUs with replicas > 1, enables coscheduling by ``pool`` so
+    that all replicas are scheduled together.
+
+    Args:
+        tpu: TPU type string (e.g. ``"v6e-32"``), or ``None``.
+        gpu: GPU type string (e.g. ``"H100"``), or ``None``.
+        replicas: Explicit replica count from the caller, or ``None`` if not
+            specified (meaning the default should be inferred).
+
+    Returns:
+        A ``(replicas, coscheduling)`` tuple.  ``coscheduling`` is ``None``
+        for single-host or non-multinode jobs.
+    """
+    if not tpu:
+        if gpu and replicas is not None and replicas > 1:
+            return replicas, CoschedulingConfig(group_by="pool")
+        return replicas or 1, None
+
+    try:
+        topo = get_tpu_topology(tpu)
+    except ValueError:
+        return replicas or 1, None
+
+    if topo.vm_count <= 1:
+        return replicas or 1, None
+
+    # Multinode TPU: auto-set replicas and coscheduling.
+    if replicas is None:
+        replicas = topo.vm_count
+        logger.info(
+            f"Multinode TPU '{tpu}' detected (vm_count={topo.vm_count}). "
+            f"Auto-setting replicas={replicas} and coscheduling by tpu-name."
+        )
+    else:
+        logger.info(
+            f"Multinode TPU '{tpu}' detected (vm_count={topo.vm_count}). "
+            f"Using explicit replicas={replicas} with coscheduling by tpu-name."
+        )
+
+    coscheduling = CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME)
+    return replicas, coscheduling
+
+
 def run_iris_job(
     command: list[str],
     env_vars: dict[str, str],
@@ -299,7 +436,7 @@ def run_iris_job(
     disk: str = "5GB",
     wait: bool = True,
     job_name: str | None = None,
-    replicas: int = 1,
+    replicas: int | None = None,
     max_retries: int = 0,
     timeout: int = 0,
     extras: list[str] | None = None,
@@ -309,6 +446,7 @@ def run_iris_job(
     zone: str | None = None,
     user: str | None = None,
     reserve: tuple[str, ...] | None = None,
+    token_provider: TokenProvider | None = None,
 ) -> int:
     """Core job submission logic.
 
@@ -328,11 +466,22 @@ def run_iris_job(
     job_name = job_name or generate_job_name(command)
     extras = extras or []
 
+    replicas, coscheduling = resolve_multinode_defaults(tpu, gpu, replicas)
+
     constraints: list[Constraint] = []
     if regions:
         constraints.append(region_constraint(list(regions)))
     if zone:
         constraints.append(zone_constraint(zone))
+
+    # Executor heuristic: small CPU-only CLI jobs (no accelerators, 1 replica,
+    # CPU ≤ 0.5 cores, RAM ≤ 4 GiB) are auto-tagged as non-preemptible so
+    # coordinators survive spot reclamation.
+    resources_proto = resources.to_proto()
+    preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    if preemptible is not None:
+        constraints.append(preemptible)
+        logger.info("Executor heuristic: auto-tagging job as non-preemptible")
 
     reservation: list[ReservationEntry] | None = None
     if reserve:
@@ -348,6 +497,10 @@ def run_iris_job(
     if resources.device and resources.device.HasField("gpu"):
         gpu_dev = resources.device.gpu
         logger.info(f"GPU: {gpu_dev.count}x {gpu_dev.variant or 'any'}")
+    if replicas > 1:
+        logger.info(f"Replicas: {replicas}")
+    if coscheduling:
+        logger.info(f"Coscheduling: group_by={coscheduling.group_by}")
     if regions:
         logger.info(f"Region constraint: {', '.join(regions)}")
     if zone:
@@ -370,8 +523,10 @@ def run_iris_job(
         include_children_logs=include_children_logs,
         terminate_on_exit=terminate_on_exit,
         constraints=constraints or None,
+        coscheduling=coscheduling,
         user=user,
         reservation=reservation,
+        token_provider=token_provider,
     )
 
 
@@ -389,16 +544,17 @@ def _submit_and_wait_job(
     include_children_logs: bool = True,
     terminate_on_exit: bool = True,
     constraints: list[Constraint] | None = None,
+    coscheduling: CoschedulingConfig | None = None,
     user: str | None = None,
     reservation: list[ReservationEntry] | None = None,
+    token_provider: TokenProvider | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
-    When terminate_on_exit is True, the job (and its children) are killed on
-    any non-normal exit: KeyboardInterrupt, unexpected exceptions, etc.
-    Normal completion (success or JobFailedError) does not trigger termination.
+    Only KeyboardInterrupt terminates the remote job; connection failures
+    are logged and re-raised without killing the job.
     """
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=token_provider)
     entrypoint = Entrypoint.from_command(*command)
 
     job = client.submit(
@@ -407,6 +563,7 @@ def _submit_and_wait_job(
         resources=resources,
         environment=EnvironmentSpec(env_vars=env_vars, extras=extras or []),
         constraints=constraints,
+        coscheduling=coscheduling,
         replicas=replicas,
         max_retries_failure=max_retries,
         timeout=Duration.from_seconds(timeout) if timeout else None,
@@ -415,12 +572,15 @@ def _submit_and_wait_job(
     )
 
     logger.info(f"Job submitted: {job.job_id}")
+    click.echo(str(job.job_id))
 
     if not wait:
-        logger.info("Job submitted (not waiting for completion)")
         return 0
 
-    logger.info("Streaming logs (Ctrl+C to kill)...")
+    logger.info(
+        "Streaming logs (Ctrl+C to stop). If disconnected, reconnect with: iris job logs -f %s",
+        job.job_id,
+    )
     try:
         try:
             status = job.wait(stream_logs=True, include_children=include_children_logs, timeout=float("inf"))
@@ -429,14 +589,19 @@ def _submit_and_wait_job(
         except JobFailedError as e:
             logger.error(f"Job failed: {e}")
             return 1
-    except BaseException:
+    except KeyboardInterrupt:
         if terminate_on_exit:
             logger.info(f"Terminating job {job.job_id}...")
             terminated = _terminate_jobs(client, (str(job.job_id),), include_children=True)
             for t in terminated:
                 logger.info(f"  Terminated: {t}")
-        if isinstance(sys.exc_info()[1], KeyboardInterrupt):
-            return 130
+        return 130
+    except Exception:
+        logger.warning(
+            "Connection lost; job %s is still running. Reconnect with: iris job logs -f %s",
+            job.job_id,
+            job.job_id,
+        )
         raise
 
 
@@ -484,7 +649,9 @@ Examples:
 @click.option("--no-wait", is_flag=True, help="Don't wait for job completion")
 @click.option("--job-name", type=str, help="Custom job name (default: auto-generated)")
 @click.option("--user", type=str, help="Override the user prefix for the submitted job.")
-@click.option("--replicas", type=int, default=1, help="Number of tasks for gang scheduling (default: 1)")
+@click.option(
+    "--replicas", type=int, default=None, help="Number of tasks for gang scheduling (auto-detected for multinode TPUs)"
+)
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
 @click.option("--timeout", type=int, default=0, show_default=True, help="Job timeout in seconds (0 = no timeout)")
 @click.option("--region", multiple=True, help="Restrict to region(s) (e.g., --region us-central2). Can be repeated.")
@@ -493,7 +660,11 @@ Examples:
 @click.option(
     "--reserve",
     multiple=True,
-    help="Reserve workers before scheduling. Format: [COUNT:]DEVICE (e.g., 4:H100x8, v5litepod-16). Can be repeated.",
+    help=(
+        "Reserve workers before scheduling. Format: [COUNT:]DEVICE "
+        "(e.g., 4:H100x8, v5litepod-16). Can be repeated. Reservation does not "
+        "attach accelerator devices to the task; use --tpu/--gpu for accelerator jobs."
+    ),
 )
 @click.option(
     "--include-children-logs/--no-include-children-logs",
@@ -503,7 +674,7 @@ Examples:
 @click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
-    help="Terminate the job if an unexpected error occurs (default: terminate).",
+    help="Terminate the job on Ctrl+C (default: terminate). Tunnel failures never kill the job.",
 )
 @click.argument("cmd", nargs=-1, type=click.UNPROCESSED, required=True)
 @click.pass_context
@@ -518,7 +689,7 @@ def run(
     no_wait: bool,
     job_name: str | None,
     user: str | None,
-    replicas: int,
+    replicas: int | None,
     max_retries: int,
     timeout: int,
     region: tuple[str, ...],
@@ -531,6 +702,7 @@ def run(
 ):
     """Submit jobs to Iris clusters."""
     controller_url = require_controller_url(ctx)
+    validate_region_zone(region or None, zone, ctx.obj.get("config"))
 
     command = list(cmd)
     if not command:
@@ -571,15 +743,17 @@ def run(
             regions=region or None,
             zone=zone,
             reserve=reserve or None,
+            token_provider=ctx.obj.get("token_provider"),
         )
     except Exception:
-        platform = ctx.obj.get("platform")
-        if platform is not None:
+        bundle = ctx.obj.get("provider_bundle")
+        if bundle is not None:
             try:
-                platform.debug_report()
+                bundle.controller.debug_report()
             except Exception:
                 logger.debug("Controller post-mortem failed", exc_info=True)
         raise
+
     sys.exit(exit_code)
 
 
@@ -594,7 +768,7 @@ def run(
 def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
     """Terminate one or more jobs."""
     controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
     terminated = _terminate_jobs(client, job_id, include_children)
     _print_terminated(terminated)
 
@@ -610,7 +784,7 @@ def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
 def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
     """Terminate one or more jobs (alias for stop)."""
     controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
     terminated = _terminate_jobs(client, job_id, include_children)
     _print_terminated(terminated)
 
@@ -623,7 +797,7 @@ def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
 def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> None:
     """List jobs with optional filtering."""
     controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
 
     states: list[cluster_pb2.JobState] | None = None
     if state is not None:
@@ -688,6 +862,12 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
 )
 @click.option("--follow", "-f", is_flag=True, help="Stream logs continuously.")
 @click.option(
+    "--level",
+    type=click.Choice(["debug", "info", "warning", "error", "critical"], case_sensitive=False),
+    default=None,
+    help="Minimum log level to display (e.g., --level warning).",
+)
+@click.option(
     "--include-children/--no-include-children",
     default=False,
     help="Include logs from child jobs (nested submissions).",
@@ -699,6 +879,7 @@ def logs(
     since_ms: int | None,
     since_seconds: int | None,
     follow: bool,
+    level: str | None,
     include_children: bool,
 ) -> None:
     """Stream task logs for a job using batch log fetching."""
@@ -706,13 +887,15 @@ def logs(
         raise click.UsageError("Specify only one of --since-ms or --since-seconds.")
 
     controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
 
     if since_seconds is not None:
         since_ms = Timestamp.now().epoch_ms() - (since_seconds * 1000)
 
     start_since_ms = since_ms or 0
     job_name = JobName.from_wire(job_id)
+
+    min_level = level.upper() if level else ""
 
     if follow:
         job = Job(client, job_name)
@@ -721,6 +904,7 @@ def logs(
             include_children=include_children,
             timeout=float("inf"),
             raise_on_failure=False,
+            min_level=min_level,
         )
         return
 
@@ -728,6 +912,7 @@ def logs(
         job_name,
         include_children=include_children,
         start=Timestamp.from_ms(start_since_ms) if start_since_ms > 0 else None,
+        min_level=min_level,
     )
     for entry in entries:
         ts = entry.timestamp.as_short_time()
@@ -744,7 +929,9 @@ def logs(
 def bug_report(ctx, job_id: str, file_issue: bool, repo: str | None, tail: int, labels: str):
     """Generate a diagnostic bug report for a job."""
     controller_url = require_controller_url(ctx)
-    report = gather_bug_report(controller_url, JobName.from_wire(job_id), tail=tail)
+    report = gather_bug_report(
+        controller_url, JobName.from_wire(job_id), tail=tail, token_provider=ctx.obj.get("token_provider")
+    )
     markdown = format_bug_report(report)
 
     if file_issue:

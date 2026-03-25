@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Convert user-facing Entrypoint + EnvironmentConfig into a structured RuntimeEntrypoint.
@@ -61,26 +61,23 @@ def build_runtime_entrypoint(
     python_version = env_config.python_version
     python_flag = f"--python {python_version}" if python_version else ""
 
+    # Suppress uv output by default; set IRIS_DEBUG_UV_SYNC=1 in env_vars for verbose output.
+    quiet_flag = "" if env_config.env_vars.get("IRIS_DEBUG_UV_SYNC") else "--quiet"
+
     setup_commands = [
         "cd /app",
-        # Materialize GCP service account credentials from env var if present.
-        # This enables GCS access (e.g. JAX compilation cache) on non-GCP clusters
-        # where the metadata server is unavailable.
-        '[ -n "$GCP_SA_KEY" ] && echo "$GCP_SA_KEY" > /tmp/gcp-sa-key.json'
-        " && export GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-sa-key.json"
-        ' && echo "GCP credentials materialized"',
     ]
     # Use --link-mode symlink to reference cached wheels directly from .venv,
     # avoiding redundant installation. Symlinks work across bind mounts.
     link_mode_flag = "--link-mode symlink"
     setup_commands.append("echo 'syncing deps'")
     if uv_sync_flags:
-        setup_commands.append(f"uv sync {link_mode_flag} {python_flag} {uv_sync_flags}".strip())
+        setup_commands.append(f"uv sync {quiet_flag} {link_mode_flag} {python_flag} {uv_sync_flags}".strip())
     else:
-        setup_commands.append(f"uv sync {link_mode_flag} {python_flag}".strip())
+        setup_commands.append(f"uv sync {quiet_flag} {link_mode_flag} {python_flag}".strip())
     setup_commands.append("echo 'installing pip deps'")
     if pip_install_args:
-        setup_commands.append(f"uv pip install {link_mode_flag} {pip_install_args}")
+        setup_commands.append(f"uv pip install {quiet_flag} {link_mode_flag} {pip_install_args}")
     setup_commands.append("echo 'activating venv'")
     setup_commands.append("source .venv/bin/activate")
     setup_commands.append('echo "python=$(which python)"')

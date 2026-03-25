@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -94,3 +94,10 @@ class SimpleTrainConfig:
 
     Required for models that call `jax.sharding.reshard(..., PartitionSpec(...))`.
     """
+
+    tensor_parallel_size: int = 1
+    """Size of the model (tensor parallel) axis. >1 shards model weights and activations
+    across multiple devices. Useful when batch_size < num_chips."""
+
+    env_vars: dict[str, str] | None = None
+    """Environment variables to pass to the training task."""
