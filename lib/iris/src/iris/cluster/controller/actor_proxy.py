@@ -20,10 +20,14 @@ import httpx
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from iris.actor.resolver import ACTOR_ENDPOINT_HEADER
 from iris.cluster.controller.db import ControllerDB, EndpointQuery, endpoint_query_predicate
 
 logger = logging.getLogger(__name__)
+
+# Header used by ProxyResolver to tell the proxy which endpoint to forward to.
+# Duplicated from iris.actor.resolver.ACTOR_ENDPOINT_HEADER to avoid a
+# cluster → actor import dependency.
+ACTOR_ENDPOINT_HEADER = "x-iris-actor-endpoint"
 
 PROXY_ROUTE = "/iris.actor.ActorService/{method}"
 PROXY_TIMEOUT_SECONDS = 60.0

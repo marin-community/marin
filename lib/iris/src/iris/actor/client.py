@@ -137,7 +137,7 @@ class ActorClient:
 
         def do_call():
             client = self.rpc_client()
-            return client.start_operation(call, headers=self._rpc_headers or None)
+            return client.start_operation(call, headers=self._rpc_headers)
 
         op = call_with_retry(
             f"{self._name}.start_operation({method_name})",
@@ -153,7 +153,7 @@ class ActorClient:
         req = actor_pb2.OperationId(operation_id=operation_id)
 
         def do_call():
-            return self.rpc_client().get_operation(req, headers=self._rpc_headers or None)
+            return self.rpc_client().get_operation(req, headers=self._rpc_headers)
 
         return call_with_retry(
             f"{self._name}.poll_operation_status({operation_id[:8]})",
@@ -182,7 +182,7 @@ class ActorClient:
         req = actor_pb2.OperationId(operation_id=operation_id)
 
         def do_call():
-            return self.rpc_client().cancel_operation(req, headers=self._rpc_headers or None)
+            return self.rpc_client().cancel_operation(req, headers=self._rpc_headers)
 
         return call_with_retry(
             f"{self._name}.cancel_operation({operation_id[:8]})",
@@ -211,7 +211,7 @@ class _RpcMethod:
 
         def do_call():
             client = self._client.rpc_client()
-            resp = client.call(call, headers=self._client._rpc_headers or None)
+            resp = client.call(call, headers=self._client._rpc_headers)
             return unwrap_actor_response(resp)
 
         return call_with_retry(
