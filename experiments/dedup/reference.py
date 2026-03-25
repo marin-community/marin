@@ -4,6 +4,7 @@
 import logging
 
 from marin.execution.executor import ExecutorStep, InputName, executor_main
+from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
 
 from experiments.pretraining_datasets.simple import downloads
@@ -12,15 +13,14 @@ logger = logging.getLogger(__name__)
 
 
 def build_dedup_step(dataset: InputName, max_parallelism: int) -> ExecutorStep:
-    return ExecutorStep(
+    return StepSpec(
         name=f"dedup_{dataset.name}",
         fn=lambda op: dedup_fuzzy_document(
             input_paths=dataset,
             output_path=op,
             max_parallelism=max_parallelism,
         ),
-        description=f"Run dedupe on {dataset.name}",
-    )
+    ).as_executor_step()
 
 
 STEPS = [

@@ -23,6 +23,7 @@ from experiments.isoflop_sweep import (
 )
 from experiments.scaling_law_sweeps.c_adamc import create_isoflop_sweep_steps
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 
@@ -61,14 +62,14 @@ _DEDUP_FN = {
 
 def _get_deduped_data_mixture(*, variant: str, mode: DedupMode, max_parallelism: int = 1024) -> LMMixtureDatasetConfig:
     """Dedup fineweb-edu mixture"""
-    dedup_step = ExecutorStep(
+    dedup_step = StepSpec(
         name=f"dedup/{variant}_{mode.lower()}",
         fn=lambda op: _DEDUP_FN[mode](
             input_paths=downloads[variant],
             output_path=op,
             max_parallelism=max_parallelism,
         ),
-    )
+    ).as_executor_step()
 
     dedup_mode_to_filter_type = {
         DedupMode.EXACT_PARAGRAPH: FilterType.REMOVE_SPANS,
