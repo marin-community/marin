@@ -263,8 +263,7 @@ class StepRunner:
         _write_executor_info(step)
 
         if step.fn is None:
-            logger.info(f"Skip {step_name}: no fn (pre-existing data)")
-            return None
+            raise ValueError(f"Step {step_name} has no callable fn")
 
         # Explicitly propagate the fray client into worker threads.
         # We use set_current_client() inside the worker rather than relying
