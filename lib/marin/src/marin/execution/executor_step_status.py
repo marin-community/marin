@@ -11,12 +11,13 @@ The LOCK file contains JSON with {worker_id, timestamp} and is refreshed periodi
 On GCS, we use generation-based conditional writes for atomicity.
 """
 
+import contextlib
 import functools
 import json
 import logging
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from threading import Event, Thread
 from typing import TypeVar
 
@@ -212,7 +213,47 @@ def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool =
 
 
 class StepAlreadyDone(Exception):
-    """Raised by ``distributed_lock`` when the step has already succeeded."""
+    """Raised by ``step_lock`` / ``distributed_lock`` when the step has already succeeded."""
+
+
+@contextlib.contextmanager
+def step_lock(output_path: str, step_label: str, *, force_run_failed: bool = True) -> Generator[StatusFile, None, None]:
+    """Context manager that acquires a distributed lock with heartbeat refresh.
+
+    Acquires the lock, starts a daemon heartbeat thread, yields the
+    ``StatusFile``, then tears down the heartbeat and releases the lock.
+
+    Raises ``StepAlreadyDone`` if another worker completed the step
+    while we waited for the lock.
+    """
+    status_file = StatusFile(output_path, worker_id())
+    if not should_run(status_file, step_label, force_run_failed=force_run_failed):
+        raise StepAlreadyDone(output_path)
+
+    # Start heartbeat — LeaseLostError is fatal and signals the main thread.
+    stop_event = Event()
+    lease_lost_event = Event()
+
+    def _heartbeat():
+        while not stop_event.wait(HEARTBEAT_INTERVAL):
+            try:
+                status_file.refresh_lock()
+            except LeaseLostError:
+                logger.error("Lease lost for %s — step must terminate", output_path, exc_info=True)
+                lease_lost_event.set()
+                return
+
+    heartbeat_thread = Thread(target=_heartbeat, daemon=True)
+    heartbeat_thread.start()
+
+    try:
+        yield status_file
+    finally:
+        stop_event.set()
+        heartbeat_thread.join(timeout=5)
+        if lease_lost_event.is_set():
+            raise LeaseLostError(f"Lease was lost during execution of {output_path}")
+        status_file.release_lock()
 
 
 def distributed_lock(fn: Callable[[str], T], *, force_run_failed: bool = True) -> Callable[[str], T]:
@@ -232,36 +273,8 @@ def distributed_lock(fn: Callable[[str], T], *, force_run_failed: bool = True) -
 
     @functools.wraps(fn)
     def wrapper(output_path: str) -> T:
-        status_file = StatusFile(output_path, worker_id())
         step_label = output_path.rsplit("/", 1)[-1]
-
-        if not should_run(status_file, step_label, force_run_failed=force_run_failed):
-            raise StepAlreadyDone(output_path)
-
-        stop_event = Event()
-        lease_lost_event = Event()
-
-        def _heartbeat():
-            while not stop_event.wait(HEARTBEAT_INTERVAL):
-                try:
-                    status_file.refresh_lock()
-                except LeaseLostError:
-                    logger.error("Lease lost for %s — step must terminate", output_path, exc_info=True)
-                    lease_lost_event.set()
-                    return
-
-        heartbeat_thread = Thread(target=_heartbeat, daemon=True)
-        heartbeat_thread.start()
-
-        try:
-            result = fn(output_path)
-        finally:
-            stop_event.set()
-            heartbeat_thread.join(timeout=5)
-            if lease_lost_event.is_set():
-                raise LeaseLostError(f"Lease was lost during execution of {output_path}")
-            status_file.release_lock()
-
-        return result
+        with step_lock(output_path, step_label, force_run_failed=force_run_failed):
+            return fn(output_path)
 
     return wrapper

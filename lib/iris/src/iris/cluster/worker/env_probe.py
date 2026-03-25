@@ -462,7 +462,7 @@ class EnvironmentProvider(Protocol):
 
 
 class FixedEnvironmentProvider:
-    """Returns pre-built worker metadata. Used by LocalPlatform and tests."""
+    """Returns pre-built worker metadata. Used by LOCAL mode and tests."""
 
     def __init__(self, metadata: cluster_pb2.WorkerMetadata):
         self._metadata = metadata

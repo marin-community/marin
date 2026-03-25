@@ -230,6 +230,46 @@ def capabilities(smoke_cluster) -> ClusterCapabilities:
 
 
 # ============================================================================
+# Config parity: verify the real cloud smoke config works in local mode.
+# This catches naming issues (GCE 63-char limit, invalid chars from zone
+# expansion) that only surface when the autoscaler tries to create slices
+# with realistic expanded-zone name prefixes.
+# ============================================================================
+
+
+SMOKE_GCP_CONFIG = IRIS_ROOT / "examples" / "smoke-gcp.yaml"
+
+
+def test_smoke_gcp_config_boots_locally():
+    """Load smoke-gcp.yaml, convert to local mode, verify workers join.
+
+    This is the local equivalent of the cloud-smoke-test CI job. If this
+    test fails, the cloud smoke test will also fail — catching GCE naming
+    validation errors without needing real GCP resources.
+    """
+    config = load_config(SMOKE_GCP_CONFIG)
+    config = make_local_config(config)
+
+    with connect_cluster(config) as url:
+        client = ControllerServiceClientSync(address=url, timeout_ms=30000)
+        # The smoke config has min_slices=1 for tpu_v5e_16, so at least
+        # one slice (with 4 workers) should come up.
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            workers = client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
+            healthy = [w for w in workers if w.healthy]
+            if healthy:
+                break
+            time.sleep(0.5)
+        else:
+            raise AssertionError(
+                f"No healthy workers after 30s with smoke-gcp.yaml in local mode. "
+                f"Total workers: {len(workers)}, healthy: {len(healthy)}"
+            )
+        client.close()
+
+
+# ============================================================================
 # ============================================================================
 # Dashboard tests
 # ============================================================================
@@ -239,7 +279,7 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Jobs tab shows diverse states."""
     quick = smoke_cluster.submit(TestJobs.quick, "smoke-simple")
     failed = smoke_cluster.submit(TestJobs.fail, "smoke-failed")
-    running = smoke_cluster.submit(TestJobs.sleep, "smoke-running", 30)
+    running = smoke_cluster.submit(TestJobs.sleep, "smoke-running", 300)
 
     smoke_cluster.wait(quick, timeout=smoke_cluster.job_timeout)
     smoke_cluster.wait(failed, timeout=smoke_cluster.job_timeout)
@@ -670,7 +710,7 @@ def test_checkpoint_restore():
     Phase 2 — restart the controller and verify the job is still SUCCEEDED
               and the cluster can accept new work.
     """
-    from iris.cluster.local_cluster import LocalCluster
+    from iris.cluster.providers.local.cluster import LocalCluster
 
     config = load_config(DEFAULT_CONFIG)
     config = make_local_config(config)
@@ -846,7 +886,7 @@ def test_dashboard_login_flow():
     full browser auth flow: redirect to login, paste token, verify RPC data loads,
     then logout back to the login page.
     """
-    from iris.cluster.local_cluster import LocalCluster
+    from iris.cluster.providers.local.cluster import LocalCluster
 
     try:
         import playwright.sync_api as pw
@@ -942,7 +982,7 @@ def _login_for_jwt(url: str, identity_token: str) -> str:
 
 def test_static_auth_rpc_access():
     """Static auth rejects unauthenticated and wrong-token RPCs, accepts valid JWT."""
-    from iris.cluster.local_cluster import LocalCluster
+    from iris.cluster.providers.local.cluster import LocalCluster
     from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 
     config = _make_controller_only_config()
@@ -955,7 +995,7 @@ def test_static_auth_rpc_access():
 
         # Unauthenticated: should be rejected with 401
         unauth_client = ControllerServiceClientSync(address=url, timeout_ms=5000)
-        with pytest.raises(ConnectError, match=r"(?i)authorization"):
+        with pytest.raises(ConnectError, match=r"(?i)authenticat"):
             unauth_client.list_workers(list_req)
         unauth_client.close()
 
@@ -984,7 +1024,7 @@ def test_static_auth_job_ownership():
     PENDING). Verifies user-b gets PERMISSION_DENIED when trying to terminate
     it, while user-a can terminate their own job.
     """
-    from iris.cluster.local_cluster import LocalCluster
+    from iris.cluster.providers.local.cluster import LocalCluster
     from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 
     _TOKEN_A = "token-user-a"

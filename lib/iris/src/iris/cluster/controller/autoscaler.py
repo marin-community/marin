@@ -10,7 +10,7 @@ Key design principles:
 - Autoscaler does NOT track slices directly - that's ScalingGroup's job
 - Scale-up decisions come from Autoscaler, scale-down is delegated to ScalingGroup
 - ScalingGroup owns per-slice idle tracking and decides which slices to scale down
-- Bootstrap is handled internally by each Platform implementation, not by the autoscaler
+- Bootstrap is handled internally by each provider implementation, not by the autoscaler
 
 The run_once() flow splits into two phases:
 - refresh(): state-read phase — scale down idle slices from tracked state
@@ -28,11 +28,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
-from iris.cluster.platform.base import (
+from iris.cluster.providers.protocols import WorkerInfraProvider
+from iris.cluster.providers.types import (
     CloudSliceState,
     CloudWorkerState,
     CommandResult,
-    Platform,
     QuotaExhaustedError,
     RemoteWorkerHandle,
     SliceHandle,
@@ -764,7 +764,7 @@ class Autoscaler:
         self,
         scale_groups: dict[str, ScalingGroup],
         evaluation_interval: Duration,
-        platform: Platform,
+        platform: WorkerInfraProvider,
         threads: ThreadContainer | None = None,
         base_worker_config: config_pb2.WorkerConfig | None = None,
         db: ControllerDB | None = None,
@@ -775,7 +775,7 @@ class Autoscaler:
         Args:
             scale_groups: Map of scale group name to ScalingGroup instance
             evaluation_interval: How often to evaluate scaling decisions
-            platform: Platform instance for shutdown lifecycle
+            platform: WorkerInfraProvider instance for shutdown lifecycle
             threads: Optional thread container for testing
             base_worker_config: Base worker config merged with per-group overrides
                 and passed to platform.create_slice(). None disables bootstrap (test/local mode).
@@ -807,7 +807,7 @@ class Autoscaler:
         cls,
         scale_groups: dict[str, ScalingGroup],
         config: config_pb2.AutoscalerConfig,
-        platform: Platform,
+        platform: WorkerInfraProvider,
         threads: ThreadContainer | None = None,
         base_worker_config: config_pb2.WorkerConfig | None = None,
         db: ControllerDB | None = None,
@@ -817,7 +817,7 @@ class Autoscaler:
         Args:
             scale_groups: Map of scale group name to ScalingGroup instance
             config: Autoscaler configuration proto (with defaults already applied)
-            platform: Platform instance for shutdown lifecycle
+            platform: WorkerInfraProvider instance for shutdown lifecycle
             threads: Optional thread container for testing
             base_worker_config: Base worker config merged with per-group overrides
             db: Optional DB handle for write-through persistence.
@@ -1068,6 +1068,8 @@ class Autoscaler:
         """
         action = self._log_action("scale_up", group.name, reason=reason, status="pending")
 
+        slice_obj = None
+
         try:
             logger.info("Scaling up %s: %s", group.name, reason)
             wc = self._per_group_worker_config(group)
@@ -1111,12 +1113,10 @@ class Autoscaler:
                 wc.gpu_count = resources.device_count
             wc.preemptible = resources.preemptible
 
-        # Worker settings from scale group
+        # Worker attributes from scale group
         if group.config.HasField("worker"):
             for k, v in group.config.worker.attributes.items():
                 wc.worker_attributes[k] = v
-            for k, v in group.config.worker.env.items():
-                wc.default_task_env[k] = v
 
         if group.config.name:
             wc.worker_attributes["scale-group"] = group.config.name
@@ -1252,7 +1252,7 @@ class Autoscaler:
         """Restore tracked worker state from a snapshot. Called before loops start."""
         self._workers.update(workers)
 
-    def restore_from_db(self, db: ControllerDB, platform: Platform) -> None:
+    def restore_from_db(self, db: ControllerDB, platform: WorkerInfraProvider) -> None:
         """Reconcile DB-checkpointed autoscaler state against live cloud.
 
         Reads scaling group and slice rows from proper DB tables,
