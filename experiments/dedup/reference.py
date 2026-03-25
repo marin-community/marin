@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from iris.logging import configure_logging
+from iris.marin_fs import marin_prefix
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
@@ -14,9 +15,8 @@ def build_steps() -> list[StepSpec]:
     )
     dedup = StepSpec(
         name="dedup_sample/10BT",
-        deps=[raw],
         fn=lambda op: dedup_fuzzy_document(
-            input_paths=raw.output_path,
+            input_paths=f"{marin_prefix()}/{raw.output_path}",
             output_path=op,
             max_parallelism=1024,
         ),
