@@ -23,8 +23,6 @@ from iris.marin_fs import open_url
 
 from marin.execution.executor import Executor
 
-MIRROR_PREFIX = "mirror://"
-
 
 def _env_float(key: str, default: float) -> float:
     raw = os.environ.get(key, "")
@@ -48,8 +46,8 @@ def resolve_canary_output_path() -> str:
     from experiments.ferries.canary_ferry import canary_moe_step
 
     executor = Executor(
-        prefix=MIRROR_PREFIX,
-        executor_info_base_path=f"{MIRROR_PREFIX}experiments",
+        prefix="mirror://",
+        executor_info_base_path="mirror://experiments",
     )
     executor.compute_version(canary_moe_step, is_pseudo_dep=False)
     return executor.output_paths[canary_moe_step]

@@ -469,9 +469,7 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
-            # TODO(#4122): pallas_tpu crashes on multi-chip slices (v5p-8) because
-            # Mosaic kernels cannot be auto-partitioned. Use default until fixed.
-            implementation=None,
+            implementation="pallas_tpu" if jax.default_backend() == "tpu" else None,
         )
         # Keep router metrics raw and apply coefficients only at the final
         # objective composition step (same separation as MaxText/Megatron).
