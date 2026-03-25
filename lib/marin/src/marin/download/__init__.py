@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+# Backward-compat shim. Canonical location: marin.datakit.download
 
-from .huggingface.download_hf import DownloadConfig as HfDownloadConfig
-from .huggingface.download_hf import download_hf
-from .huggingface.download_hf import download_hf as download_hf_ungated
+from marin.datakit.download.huggingface import DownloadConfig as HfDownloadConfig
+from marin.datakit.download.huggingface import download_hf
+from marin.datakit.download.huggingface import download_hf as download_hf_ungated
