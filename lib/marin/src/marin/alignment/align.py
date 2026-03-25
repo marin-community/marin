@@ -74,7 +74,7 @@ def _llm_env_vars() -> dict[str, str]:
 
 def _serialize_inference_config(config: InferenceConfig) -> dict:
     """Serialize an InferenceConfig to a dict for executor config transport."""
-    d = dataclasses.asdict(config)
+    d = {field.name: getattr(config, field.name) for field in dataclasses.fields(config)}
     if isinstance(config, LiteLLMConfig):
         d["backend"] = "litellm"
     elif isinstance(config, VLLMConfig):

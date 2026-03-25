@@ -4011,3 +4011,170 @@ uv run iris --config lib/iris/examples/marin.yaml job run \
   - then F1
   - then F2
   - then F3 only if F2 is flaky or if quota pressure is high
+
+### 2026-03-25 — ALIGN-101: F3 Serialized Heterogeneous Smoke Succeeded End-to-End
+
+- **Successful root run:**
+  - `/ahmed/align-debug-vllm-70b-mixtral-rejected-smoke-refactored-retry-serialized`
+- **Successful child sequence:**
+  - `chosen`:
+    - `/ahmed/align-debug-vllm-70b-mixtral-rejected-smoke-refactored-retry-serialized/align-debug_vllm_70b_mixtral_rejected_smoke-chosen_2a11d777-5edacf79`
+  - `rejected`:
+    - `/ahmed/align-debug-vllm-70b-mixtral-rejected-smoke-refactored-retry-serialized/align-debug_vllm_70b_mixtral_rejected_smoke-rejected_b0db5cf5-3cf23e13`
+  - `judgments`:
+    - `/ahmed/align-debug-vllm-70b-mixtral-rejected-smoke-refactored-retry-serialized/align-debug_vllm_70b_mixtral_rejected_smoke-judgments_170c6c42-7feb8586`
+  - `preference_pairs`:
+    - `/ahmed/align-debug-vllm-70b-mixtral-rejected-smoke-refactored-retry-serialized/align-debug_vllm_70b_mixtral_rejected_smoke-preference_pairs_dfa366bc-90096f55`
+- **Verified DAG behavior from root logs:**
+  - `6 provided steps`
+  - cached `spec` and `prompts` reused
+  - `rejected` launched only after `chosen` succeeded
+- **Successful artifact paths from the final run:**
+  - prompts:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_smoke/prompts-630ada`
+  - chosen:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_smoke/chosen-3bd245`
+  - rejected:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_smoke/rejected-f50036`
+  - judgments:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_smoke/judgments-c4ad9d`
+  - preference pairs:
+    - `gs://marin-us-central1/align/debug_vllm_70b_mixtral_rejected_smoke/preference_pairs-ed6a0e`
+- **Interpretation:**
+  - F3 is now the externally validated reliability baseline for heterogeneous local-local alignment runs
+  - the serialized policy is operationally sound even though it gives up same-host reuse
+
+### 2026-03-25 — ALIGN-102: Preparing F1 Same-Model Local-Local Smoke with `auto`
+
+- **Next target experiment:**
+  - `experiments/align_debug_vllm_70b.py`
+- **Refactor applied before launch:**
+  - switched from HF model id to staged GCS artifact via `output_path_of(llama_3_3_70b_instruct)`
+  - reduced local disk from `500g` to `10g`
+  - aligned prompt-generation settings to the validated refactored smoke envelope
+  - set `response_execution_mode=auto`
+  - renamed the align run to:
+    - `debug_vllm_70b_same_model_auto_smoke`
+- **Expected F1 behavior:**
+  - because chosen and rejected use the exact same local model config, `auto` should collapse them into one combined `/responses` step and reuse a single local `vllm serve` session
+
+### 2026-03-25 — ALIGN-103: Launched F1 Same-Model Local-Local Smoke with `auto`
+
+- **Run launched:**
+  - `/ahmed/align-debug-vllm-70b-same-model-auto`
+- **Experiment script:**
+  - `experiments/align_debug_vllm_70b.py`
+- **What changed in the script before launch:**
+  - switched to staged GCS Llama via `output_path_of(llama_3_3_70b_instruct)`
+  - reduced local disk to `10g`
+  - aligned prompt-generation knobs with the validated refactored envelope
+  - set `response_execution_mode=auto`
+  - renamed align run to:
+    - `debug_vllm_70b_same_model_auto_smoke`
+- **Initial executor signal from root logs:**
+  - `### Inspecting the 5 provided steps ###`
+  - `### Reading 6 statuses ###`
+  - `### Launching 6 steps ###`
+- **Interpretation:**
+  - the extra status is the cached model dependency step for `llama_3_3_70b_instruct`
+  - the logical pipeline still has the expected same-model shape:
+    - `spec`
+    - `prompts`
+    - `responses`
+    - `judgments`
+    - `preference_pairs`
+- **Current state at handoff:**
+  - root is running
+  - model dependency already skipped as succeeded
+  - spec child is running
+  - next validation target is whether `auto` emits one combined `/responses` child once prompt generation clears
+
+### 2026-03-25 — ALIGN-104: F1 Failed Because Combined Response Config Serialized the Model `InputName` as a Plain Dict
+
+- **Failed run:**
+  - `/ahmed/align-debug-vllm-70b-same-model-auto`
+- **What succeeded before failure:**
+  - `spec`
+  - `prompts`
+- **What failed:**
+  - combined same-model `responses` child:
+    - `/ahmed/align-debug-vllm-70b-same-model-auto/align-debug_vllm_70b_same_model_auto_smoke-responses_b343f6c1-6abe9a87`
+- **Observed error:**
+  - `AttributeError: 'dict' object has no attribute 'decode'`
+- **Root cause from child logs:**
+  - the failure happened in `batched_vllm_serve._load_tokenizer()` at `urlparse(model_path)`
+  - `model_path` was not a string or `InputName`; it had already been converted into a plain dict
+  - this came from `_serialize_inference_config()` using `dataclasses.asdict()`, which recursively converted the executor `InputName` in `VLLMConfig.model` into a dict
+- **Interpretation:**
+  - same-model combined `/responses` logic itself is still valid
+  - the bug was only in how the local model config was serialized for executor transport
+
+### 2026-03-25 — ALIGN-105: Fixed Shallow Inference-Config Serialization and Added a Regression Test
+
+- **Code fix:**
+  - `_serialize_inference_config()` in `lib/marin/src/marin/alignment/align.py` now performs a shallow dataclass field copy instead of `dataclasses.asdict()`
+  - this preserves executor-resolvable objects like `InputName` in `VLLMConfig.model`
+- **Regression test added:**
+  - `tests/test_alignment.py` now verifies that same-model combined response configs preserve `chosen_model_config["model"]` and `rejected_model_config["model"]` as `InputName`
+- **Verification:**
+  - `uv run pytest tests/test_alignment.py -q`
+  - result: `80 passed`
+  - `./infra/pre-commit.py --fix lib/marin/src/marin/alignment/align.py tests/test_alignment.py experiments/align_debug_vllm_70b.py`
+  - result: clean
+- **Next action:**
+  - relaunch F1 with the shallow-serialization fix in place
+
+### 2026-03-25 — ALIGN-106: Confirmed F1 Failure Signature and Relaunched the Same-Model `auto` Smoke
+
+- **Failure signature re-confirmed from Iris metadata:**
+  - `/ahmed/align-debug-vllm-70b-same-model-auto/align-debug_vllm_70b_same_model_auto_smoke-responses_b343f6c1-6abe9a87`
+  - `AttributeError: 'dict' object has no attribute 'decode'`
+- **Meaning:**
+  - the failed run was still on the pre-fix codepath where combined-response config transport recursively converted `VLLMConfig.model` from executor `InputName` into a plain dict
+- **Post-fix verification before retry:**
+  - `uv run pytest tests/test_alignment.py -q`
+  - result: `80 passed`
+- **Fresh retry launched:**
+  - `/ahmed/align-debug-vllm-70b-same-model-auto-retry`
+- **Expected retry shape:**
+  - cached `spec` and `prompts` may be reused
+  - the same-model combined `/responses` step should rerun with `InputName` preserved in both chosen and rejected local model configs
+- **Next check:**
+  - verify the retry emits one combined `/responses` child and no longer fails during tokenizer/model-path resolution
+
+### 2026-03-25 — ALIGN-107: F1 Same-Model `auto` Smoke Succeeded with the Combined `/responses` Step
+
+- **Successful retry:**
+  - `/ahmed/align-debug-vllm-70b-same-model-auto-retry`
+- **Child outcomes:**
+  - combined same-model responses:
+    - `/ahmed/align-debug-vllm-70b-same-model-auto-retry/align-debug_vllm_70b_same_model_auto_smoke-responses_59519d45-bf8efbbf`
+    - `JOB_STATE_SUCCEEDED`
+  - judgments:
+    - `/ahmed/align-debug-vllm-70b-same-model-auto-retry/align-debug_vllm_70b_same_model_auto_smoke-judgments_18225761-94e985f8`
+    - `JOB_STATE_SUCCEEDED`
+  - preference pairs:
+    - `/ahmed/align-debug-vllm-70b-same-model-auto-retry/align-debug_vllm_70b_same_model_auto_smoke-preference_pairs_e6ebd40e-f6119b30`
+    - `JOB_STATE_SUCCEEDED`
+- **Key evidence that `auto` took the intended same-model reuse path:**
+  - `Loaded 67 prompts for combined local response generation`
+  - two batched `/v1/completions` calls were issued from the single combined response step
+  - outputs were written to:
+    - `gs://marin-us-central1/align/debug_vllm_70b_same_model_auto_smoke/responses-c8c2e6/chosen`
+    - `gs://marin-us-central1/align/debug_vllm_70b_same_model_auto_smoke/responses-c8c2e6/rejected`
+- **Judging/filter results:**
+  - judgments artifact:
+    - `gs://marin-us-central1/align/debug_vllm_70b_same_model_auto_smoke/judgments-9bb1e8`
+    - `67` judgment records written
+  - final preference-pair artifact:
+    - `gs://marin-us-central1/align/debug_vllm_70b_same_model_auto_smoke/preference_pairs-ad29d9`
+    - `63` preference pairs written
+  - filter sidecars were written under:
+    - `gs://marin-us-central1/align/debug_vllm_70b_same_model_auto_smoke/preference_pairs-ad29d9/artifacts/filter_decisions`
+- **Conclusion:**
+  - F1 validates the robust same-model `auto` architecture:
+    - one combined local-local `/responses` step
+    - one TPU worker for chosen + rejected generation
+    - no `InputName` transport regression after shallow config serialization
+- **Next queued experiment:**
+  - F2: heterogeneous local-local smoke with `response_execution_mode=auto`, which should emit separate parallel `chosen` and `rejected` steps

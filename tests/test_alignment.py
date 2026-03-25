@@ -69,7 +69,7 @@ from marin.alignment.types import (
     Statement,
     StatementType,
 )
-from marin.execution.executor import ExecutorStep, InputName
+from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.execution.remote import remote
 
 # ---------------------------------------------------------------------------
@@ -732,6 +732,39 @@ class TestAlignResponseOrchestration:
         assert judgments_step.config.chosen_responses_path.name == "chosen"
         assert judgments_step.config.rejected_responses_path.step is response_step
         assert judgments_step.config.rejected_responses_path.name == "rejected"
+
+    def test_align_preserves_input_name_model_path_in_combined_response_config(self, sample_spec_jsonl):
+        pretrained_step = ExecutorStep(
+            name="pretrained",
+            fn=remote(_noop_remote, resources=ResourceConfig.with_cpu(cpu=1, ram="4g", disk="4g")),
+            config={},
+        )
+        model_step = ExecutorStep(
+            name="model",
+            fn=remote(_noop_remote, resources=ResourceConfig.with_cpu(cpu=1, ram="4g", disk="4g")),
+            config={},
+        )
+        shared_model = VLLMConfig(model=output_path_of(model_step), tensor_parallel_size=4, tpu_type="v5p-8")
+
+        steps = align(
+            name="same-model-input-name",
+            pretrained_model=pretrained_step,
+            spec=str(sample_spec_jsonl),
+            model_config=object(),
+            teacher_model=shared_model,
+            rejected_model=shared_model,
+            align_config=AlignConfig(
+                ideation_model="openai/gpt-4.1",
+                extract_model="openai/gpt-4.1-mini",
+                judge_model="openai/gpt-4.1",
+            ),
+        )
+
+        response_step = steps[2]
+        assert isinstance(response_step.config.chosen_model_config["model"], InputName)
+        assert response_step.config.chosen_model_config["model"].step is model_step
+        assert isinstance(response_step.config.rejected_model_config["model"], InputName)
+        assert response_step.config.rejected_model_config["model"].step is model_step
 
     def test_align_auto_uses_parallel_separate_steps_for_different_local_models(self, sample_spec_jsonl):
         pretrained_step = ExecutorStep(
