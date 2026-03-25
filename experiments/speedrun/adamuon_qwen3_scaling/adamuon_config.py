@@ -57,11 +57,7 @@ class AdaMuonConfig(MuonConfig):
                     )
                 )
                 if self.weight_decay > 0:
-                    components.append(
-                        optax.add_decayed_weights(
-                            self.weight_decay, self.build_weight_decay_mask()
-                        )
-                    )
+                    components.append(optax.add_decayed_weights(self.weight_decay, self.build_weight_decay_mask()))
                 components.append(optax.scale(-learning_rate))
                 return optax.chain(*components)
 
@@ -69,20 +65,10 @@ class AdaMuonConfig(MuonConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(
-                    optax.scale_by_adam(self.beta1, self.adam_beta2, self.epsilon)
-                )
-                adam_weight_decay = (
-                    self.adam_weight_decay
-                    if self.adam_weight_decay is not None
-                    else self.weight_decay
-                )
+                components.append(optax.scale_by_adam(self.beta1, self.adam_beta2, self.epsilon))
+                adam_weight_decay = self.adam_weight_decay if self.adam_weight_decay is not None else self.weight_decay
                 if adam_weight_decay > 0:
-                    components.append(
-                        optax.add_decayed_weights(
-                            adam_weight_decay, self.build_weight_decay_mask()
-                        )
-                    )
+                    components.append(optax.add_decayed_weights(adam_weight_decay, self.build_weight_decay_mask()))
                 components.append(optax.scale(-adam_lr))
                 return optax.chain(*components)
 
@@ -93,13 +79,9 @@ class AdaMuonConfig(MuonConfig):
 
             # use_kimi_scaling=True disables the out_first assert in create_mask,
             # since AdaMuon uses its own dynamic RMS scaling.
-            return optax.multi_transform(
-                transformations, partial(self.create_mask, use_kimi_scaling=True)
-            )
+            return optax.multi_transform(transformations, partial(self.create_mask, use_kimi_scaling=True))
 
-        return optax.inject_hyperparams(optimizer)(
-            learning_rate=learning_rate_schedule, adam_lr=adam_lr_schedule
-        )
+        return optax.inject_hyperparams(optimizer)(learning_rate=learning_rate_schedule, adam_lr=adam_lr_schedule)
 
 
 class ScaleByAdaMuonState(NamedTuple):
@@ -145,12 +127,8 @@ def scale_with_adamuon(
         # matching the pattern used by Muon's scale_with_muon.
         def orthogonalize_layer(layer: haliax.nn.Linear):
             array = layer.weight.array
-            o_array = zeropower_via_newtonschulz5(
-                jnp.sign(array), steps=steps, eps=eps
-            )
-            return dataclasses.replace(
-                layer, weight=dataclasses.replace(layer.weight, array=o_array)
-            )
+            o_array = zeropower_via_newtonschulz5(jnp.sign(array), steps=steps, eps=eps)
+            return dataclasses.replace(layer, weight=dataclasses.replace(layer.weight, array=o_array))
 
         o_updates = map_flattened_linear_layers(orthogonalize_layer, buf)
 
@@ -184,33 +162,23 @@ def scale_with_adamuon(
             if array.ndim == 2:
                 m, n = array.shape
                 fro = jnp.linalg.norm(array)
-                gamma = 0.2 * jnp.sqrt(
-                    jnp.array(m * n, dtype=array.dtype)
-                ) / jnp.maximum(fro, eps)
+                gamma = 0.2 * jnp.sqrt(jnp.array(m * n, dtype=array.dtype)) / jnp.maximum(fro, eps)
                 scaled = gamma * array
             elif array.ndim == 3:
                 # Stacked scan layers [L, m, n]: scale each slice independently
                 m, n = array.shape[-2], array.shape[-1]
-                fro = jnp.linalg.norm(
-                    array.reshape(array.shape[0], -1), axis=-1
-                )[:, None, None]
-                gamma = 0.2 * jnp.sqrt(
-                    jnp.array(m * n, dtype=array.dtype)
-                ) / jnp.maximum(fro, eps)
+                fro = jnp.linalg.norm(array.reshape(array.shape[0], -1), axis=-1)[:, None, None]
+                gamma = 0.2 * jnp.sqrt(jnp.array(m * n, dtype=array.dtype)) / jnp.maximum(fro, eps)
                 scaled = gamma * array
             else:
                 # Non-matrix params should not reach here (routed to adamw),
                 # but pass through safely.
                 scaled = array
 
-            return dataclasses.replace(
-                layer, weight=dataclasses.replace(layer.weight, array=scaled)
-            )
+            return dataclasses.replace(layer, weight=dataclasses.replace(layer.weight, array=scaled))
 
         final_updates = map_flattened_linear_layers(rms_rescale_layer, o_hat)
 
-        return final_updates, ScaleByAdaMuonState(
-            momentum_buffer=buf, second_momentum=new_v
-        )
+        return final_updates, ScaleByAdaMuonState(momentum_buffer=buf, second_momentum=new_v)
 
     return optax.GradientTransformation(init_fn, update_fn)

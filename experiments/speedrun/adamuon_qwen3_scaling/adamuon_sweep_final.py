@@ -19,7 +19,6 @@ from marin.execution.executor import executor_main
 from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
-
 AUTHOR = Author(
     name="Melanie Sclar",
     affiliation="University of Washington",
@@ -145,9 +144,7 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
 
 if __name__ == "__main__":
-    runs = [
-        build_config("130m")  # including only 130m model, can expand to other sizes
-    ]
+    runs = [build_config("130m")]  # including only 130m model, can expand to other sizes
 
     steps = []
     for name, cfg in runs:
