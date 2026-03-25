@@ -14,6 +14,7 @@ from starlette.routing import Route
 from iris.actor import ActorClient, ActorServer
 from iris.actor.resolver import ACTOR_ENDPOINT_HEADER, ProxyResolver
 from iris.cluster.controller.actor_proxy import PROXY_ROUTE
+from iris.cluster.dashboard_common import on_shutdown
 from iris.managed_thread import ThreadContainer
 from iris.time_utils import Duration, ExponentialBackoff
 
@@ -109,7 +110,7 @@ def _start_proxy_server(proxy: StandaloneActorProxy, threads: ThreadContainer) -
 
     app = Starlette(
         routes=[Route(PROXY_ROUTE, proxy.handle, methods=["POST"])],
-        on_shutdown=[proxy.close],
+        lifespan=on_shutdown(proxy.close),
     )
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", log_config=None)
     server = uvicorn.Server(config)
