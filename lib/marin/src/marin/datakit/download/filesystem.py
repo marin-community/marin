@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 import os
 import random
 import time
@@ -12,61 +13,58 @@ from zephyr import Dataset, ZephyrContext
 
 from marin.utils import fsspec_exists, fsspec_glob
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class TransferConfig:
+    """Kept for backward compatibility. Prefer ``transfer_files()`` with flat params."""
+
     input_path: str
     output_path: str
-
-    # Selectively choose the number of random files to transfer. None means all files
     num_random_files: int | None = None
     filetype: str = "jsonl.zst"
 
 
-def transfer_files(config: TransferConfig) -> None:
-    """Transfers files from the input path to the output path.
+def transfer_files(
+    input_path: str,
+    output_path: str,
+    *,
+    num_random_files: int | None = None,
+    filetype: str = "jsonl.zst",
+) -> None:
+    """Transfer files from input_path to output_path.
 
-    When num_random_files is None, copies the entire directory recursively.
-    When num_random_files is specified, randomly samples that many files and
-    copies them in parallel using zephyr.
+    When num_random_files is None, copies all matching files.
+    When specified, randomly samples that many files.
     """
-    if config.input_path.endswith("/"):
-        input_path = config.input_path[:-1]
-    else:
-        input_path = config.input_path
+    input_path = input_path.rstrip("/")
 
-    print(f"Downloading {input_path} from GCS.")
-    start_time: float = time.time()
+    logger.info("Transferring %s to %s", input_path, output_path)
+    start_time = time.time()
     fs, _ = url_to_fs(input_path)
     if not fs.exists(input_path):
         raise FileNotFoundError(f"{input_path} does not exist.")
 
-    # Glob all matching files
-    filenames = fsspec_glob(os.path.join(input_path, f"**/*.{config.filetype}"))
+    filenames = fsspec_glob(os.path.join(input_path, f"**/*.{filetype}"))
 
-    # Select files: either random sample or all files
-    if config.num_random_files is None:
-        selected_files = filenames
-    else:
+    if num_random_files is not None:
         random.seed(42)
         random.shuffle(filenames)
-        selected_files = filenames[: config.num_random_files]
+        filenames = filenames[:num_random_files]
 
     def copy_file(filename: str) -> None:
-        """Copy a single file if it doesn't already exist at destination."""
-        output_filename = os.path.join(config.output_path, os.path.basename(filename))
+        output_filename = os.path.join(output_path, os.path.basename(filename))
         if not fsspec_exists(output_filename):
-            # Ensure output directory exists
-            fs.makedirs(config.output_path, exist_ok=True)
+            fs.makedirs(output_path, exist_ok=True)
             fs.copy(filename, output_filename)
 
-    # Always use parallel copying via zephyr
-    pipeline = Dataset.from_list(selected_files).map(copy_file)
+    pipeline = Dataset.from_list(filenames).map(copy_file)
     ctx = ZephyrContext(name="fs-transfer")
     ctx.execute(pipeline)
 
-    elapsed_time_seconds: float = time.time() - start_time
-    print(f"Downloaded {input_path} to {config.output_path} ({elapsed_time_seconds}s).")
+    elapsed = time.time() - start_time
+    logger.info("Transferred %s to %s (%.1fs)", input_path, output_path, elapsed)
 
 
 def transfer_step(
@@ -82,14 +80,7 @@ def transfer_step(
     """Create a StepSpec that transfers files between fsspec paths."""
 
     def _run(output_path: str) -> None:
-        transfer_files(
-            TransferConfig(
-                input_path=input_path,
-                output_path=output_path,
-                num_random_files=num_random_files,
-                filetype=filetype,
-            )
-        )
+        transfer_files(input_path, output_path, num_random_files=num_random_files, filetype=filetype)
 
     return StepSpec(
         name=name,

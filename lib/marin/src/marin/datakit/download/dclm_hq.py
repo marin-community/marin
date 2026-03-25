@@ -172,35 +172,40 @@ def process_file(task: FileTask) -> None:
         raise
 
 
-def extract_dclm_hq_dump(cfg: DCLMHQDownloadConfig) -> None:
-    """Process the DCLM HQ dump in the input path and save the results to the output path.
+def extract_dclm_hq_dump(input_path_or_cfg: str | DCLMHQDownloadConfig, output_path: str | None = None) -> None:
+    """Process the DCLM HQ dump and enrich with HTML from Common Crawl.
 
-    Flattens the nested directory structure (shards → files) into a single list of files
-    and processes them in parallel using zephyr.
+    Args:
+        input_path_or_cfg: Input directory path, or a DCLMHQDownloadConfig for backward compat.
+        output_path: Output directory path. Required when input_path_or_cfg is a string.
     """
-    logger.info(f"Starting processing of DCLM HQ dump in {cfg.input_path}")
+    if isinstance(input_path_or_cfg, DCLMHQDownloadConfig):
+        input_path = input_path_or_cfg.input_path
+        output_path = input_path_or_cfg.output_path
+    else:
+        input_path = input_path_or_cfg
+        if output_path is None:
+            raise ValueError("output_path is required when input_path_or_cfg is a string")
 
-    # Flatten nested structure: discover all files upfront
+    logger.info(f"Starting processing of DCLM HQ dump in {input_path}")
+
     all_files = []
-    paths = [i.split("/")[-1] for i in fsspec_glob(os.path.join(cfg.input_path, "*"))]
+    paths = [i.split("/")[-1] for i in fsspec_glob(os.path.join(input_path, "*"))]
 
     logger.info(f"Found {len(paths)} shards to process")
 
     for path in paths:
-        input_path = os.path.join(cfg.input_path, path)
-        shard_paths = fsspec_glob(os.path.join(input_path, "*.json.zst"))
+        shard_input = os.path.join(input_path, path)
+        shard_paths = fsspec_glob(os.path.join(shard_input, "*.json.zst"))
 
         for shard_path in shard_paths:
-            input_file_path = shard_path
-            output_file_path = os.path.join(cfg.output_path, path, os.path.basename(shard_path)).replace(
+            output_file_path = os.path.join(output_path, path, os.path.basename(shard_path)).replace(
                 ".json.zst", ".jsonl.gz"
             )
-
-            all_files.append(FileTask(input_file_path=input_file_path, output_file_path=output_file_path))
+            all_files.append(FileTask(input_file_path=shard_path, output_file_path=output_file_path))
 
     logger.info(f"Found {len(all_files)} files to process")
 
-    # Single-level parallelism over all files
     pipeline = Dataset.from_list(all_files).map(process_file)
 
     ctx = ZephyrContext(name="download-dclm-html")
@@ -220,7 +225,7 @@ def dclm_hq_step(
     """Create a StepSpec that downloads DCLM HQ HTML data from Common Crawl."""
 
     def _run(output_path: str) -> None:
-        extract_dclm_hq_dump(DCLMHQDownloadConfig(input_path=input_path, output_path=output_path))
+        extract_dclm_hq_dump(input_path, output_path)
 
     return StepSpec(
         name=name,

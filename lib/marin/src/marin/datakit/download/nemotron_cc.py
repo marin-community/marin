@@ -87,11 +87,22 @@ def download_single_nemotron_path(input_file_path: str, output_file_path: str) -
 
 @dataclass
 class NemotronIngressConfig:
+    """Kept for backward compatibility with ExecutorStep callers."""
+
     output_path: str = THIS_OUTPUT_PATH
 
 
-def download_nemotron_cc(cfg: NemotronIngressConfig):
-    paths_file_path = os.path.join(cfg.output_path, "data-jsonl.paths")
+def download_nemotron_cc(output_path_or_cfg: str | NemotronIngressConfig) -> None:
+    """Download and process Nemotron-CC dataset from Common Crawl.
+
+    Args:
+        output_path_or_cfg: Output directory path, or a NemotronIngressConfig for backward compat.
+    """
+    output_path = (
+        output_path_or_cfg.output_path if isinstance(output_path_or_cfg, NemotronIngressConfig) else output_path_or_cfg
+    )
+
+    paths_file_path = os.path.join(output_path, "data-jsonl.paths")
     logger.info(f"Downloading Nemotron CC path file {paths_file_path}")
 
     with open_url(NCC_PATH_FILE_URL, "rb") as f, open_url(paths_file_path, "wb") as f_out:
@@ -102,7 +113,7 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
     with open_url(paths_file_path, "r", compression="gzip") as f:
         for line in f:
             file = line.strip()
-            output_file_path = os.path.join(cfg.output_path, file).replace("jsonl.zstd", "jsonl.zst")
+            output_file_path = os.path.join(output_path, file).replace("jsonl.zstd", "jsonl.zst")
             all_files.append((file, output_file_path))
 
     logger.info(f"Processing {len(all_files)} Nemotron CC files")
@@ -111,13 +122,13 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
         Dataset.from_list(all_files)
         .filter(lambda file_info: not fsspec_exists(file_info[1]))
         .map(lambda file_info: download_single_nemotron_path(*file_info))
-        .write_jsonl(os.path.join(cfg.output_path, ".metrics/download-{shard:05d}.jsonl"), skip_existing=True)
+        .write_jsonl(os.path.join(output_path, ".metrics/download-{shard:05d}.jsonl"), skip_existing=True)
     )
 
     ctx = ZephyrContext(name="download-nemotron-cc")
     ctx.execute(pipeline)
 
-    logger.info(f"Downloaded Nemotron CC files to {cfg.output_path}")
+    logger.info(f"Downloaded Nemotron CC files to {output_path}")
 
 
 def nemotron_cc_step(
@@ -130,7 +141,7 @@ def nemotron_cc_step(
     """Create a StepSpec that downloads the Nemotron-CC dataset from Common Crawl."""
 
     def _run(output_path: str) -> None:
-        download_nemotron_cc(NemotronIngressConfig(output_path=output_path))
+        download_nemotron_cc(output_path)
 
     return StepSpec(
         name=name,
