@@ -2,11 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
+import time
 from typing import Any, cast
 
 import jax
 from jax import core as jax_core
+from jax._src import mesh as mesh_lib
 from jax.sharding import NamedSharding
+
+
+_AUTOTUNE_THREAD_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pallas_autotune")
 
 
 def sharding_of(value: jax.Array):
@@ -73,6 +79,44 @@ def benchmark_lowering_args(*values: jax.Array) -> tuple[jax.Array | jax.ShapeDt
     return tuple(shape_dtype_struct_for_benchmark(value) for value in values)
 
 
+def should_offload_compile(*values: jax.Array) -> bool:
+    """Whether benchmark lowering should run on the shared autotune thread."""
+    return (
+        contains_tracer(*values)
+        or any(value_uses_manual_sharding(value) for value in values)
+        or jax_core.unsafe_am_i_under_a_jit_DO_NOT_USE()
+        or not mesh_lib.thread_resources.env.physical_mesh.empty
+    )
+
+
+def compile_benchmark_fn_current_thread(
+    benchmark_fn: Callable[..., jax.Array],
+    lowering_args: tuple[jax.Array | jax.ShapeDtypeStruct, ...],
+) -> float:
+    """Compile a benchmark function on the current thread and return compile time."""
+    jitted = jax.jit(benchmark_fn)
+    start = time.perf_counter()
+    lowered = jitted.lower(*lowering_args)
+    lowered.compile()
+    return time.perf_counter() - start
+
+
+def compile_benchmark_fn(
+    *,
+    benchmark_fn: Callable[..., jax.Array],
+    lowering_args: tuple[jax.Array | jax.ShapeDtypeStruct, ...],
+    args: Sequence[jax.Array],
+) -> float:
+    """Compile a benchmark function, offloading when JAX thread-local state is unsafe."""
+    if not should_offload_compile(*args):
+        return compile_benchmark_fn_current_thread(benchmark_fn, lowering_args)
+    return _AUTOTUNE_THREAD_POOL.submit(
+        compile_benchmark_fn_current_thread,
+        benchmark_fn,
+        lowering_args,
+    ).result()
+
+
 def maybe_wrap_in_shard_map(
     fn: Callable[..., jax.Array],
     *,
@@ -104,11 +148,14 @@ def maybe_wrap_in_shard_map(
 
 __all__ = [
     "benchmark_lowering_args",
+    "compile_benchmark_fn",
+    "compile_benchmark_fn_current_thread",
     "contains_tracer",
     "hlo_sharding_of",
     "maybe_wrap_in_shard_map",
     "named_sharding_of",
     "shape_dtype_struct_for_benchmark",
     "sharding_of",
+    "should_offload_compile",
     "value_uses_manual_sharding",
 ]

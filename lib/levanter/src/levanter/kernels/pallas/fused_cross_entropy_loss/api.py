@@ -356,13 +356,12 @@ def _benchmark_block_sizes_candidate(
         args=(x, labels, w),
         out_specs=autotune_utils.named_sharding_of(labels).spec if autotune_utils.named_sharding_of(labels) else None,
     )
-    jitted = jax.jit(benchmark_fn)
-
-    abstract_args = autotune_utils.benchmark_lowering_args(x, labels, w)
-    start = time.perf_counter()
-    lowered = jitted.lower(*abstract_args)
-    lowered.compile()
-    compile_time = time.perf_counter() - start
+    lowering_args = autotune_utils.benchmark_lowering_args(x, labels, w)
+    compile_time = autotune_utils.compile_benchmark_fn(
+        benchmark_fn=benchmark_fn,
+        lowering_args=lowering_args,
+        args=(x, labels, w),
+    )
     if compile_time <= _AUTOTUNE_COMPILE_HIT_THRESHOLD_S:
         logger.info(
             "Fused CE autotune candidate %s likely hit JAX compilation cache (compile %.3fs).",
@@ -373,6 +372,7 @@ def _benchmark_block_sizes_candidate(
     if autotune_utils.contains_tracer(x, labels, w):
         return compile_time
 
+    jitted = jax.jit(benchmark_fn)
     start = time.perf_counter()
     out = jitted(x, labels, w)
     jax.block_until_ready(out)
