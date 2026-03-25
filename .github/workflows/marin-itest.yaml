@@ -49,6 +49,9 @@ jobs:
       - name: Give Ray tmp space
         run: sudo mkdir -p /mnt/ray && sudo chmod 777 /mnt/ray
 
+      - name: Debug with tmate
+        uses: mxschmitt/action-tmate@v3
+
       - name: Run the quickstart script
         shell: bash -l {0}
         # N.B. You _must not_ use `uv run` here, as that triggers weird behavior from Ray
