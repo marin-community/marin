@@ -48,6 +48,12 @@ def cli():
     type=float,
     help="Periodic checkpoint interval in seconds (default: no periodic checkpointing)",
 )
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Start in dry-run mode: compute scheduling but suppress all side effects",
+)
 def serve(
     host: str,
     port: int,
@@ -56,6 +62,7 @@ def serve(
     log_level: str,
     checkpoint_path: str | None,
     checkpoint_interval: float | None,
+    dry_run: bool,
 ):
     """Start the Iris controller service.
 
@@ -190,6 +197,7 @@ def serve(
         auth_verifier=auth.verifier,
         auth_provider=auth.provider,
         auth=auth,
+        dry_run=dry_run,
     )
 
     try:
@@ -217,17 +225,18 @@ def serve(
 
     def handle_shutdown(_signum, _frame):
         logger.info("Shutdown signal received, writing final checkpoint...")
-        try:
-            path, result = controller.begin_checkpoint()
-            logger.info(
-                "Final checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
-                path,
-                result.job_count,
-                result.task_count,
-                result.worker_count,
-            )
-        except Exception:
-            logger.exception("Final checkpoint on shutdown failed")
+        if not config.dry_run:
+            try:
+                path, result = controller.begin_checkpoint()
+                logger.info(
+                    "Final checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
+                    path,
+                    result.job_count,
+                    result.task_count,
+                    result.worker_count,
+                )
+            except Exception:
+                logger.exception("Final checkpoint on shutdown failed")
         logger.info("Stopping controller...")
         controller.stop()
         logger.info("Controller stopped")
