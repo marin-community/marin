@@ -46,7 +46,7 @@ from experiments.simple_dpo_config import SimpleDPOConfig
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from levanter.utils.mesh import MeshConfig
-from marin.datakit.download.huggingface import DownloadConfig, download_hf
+from marin.datakit.download.huggingface_utils import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,

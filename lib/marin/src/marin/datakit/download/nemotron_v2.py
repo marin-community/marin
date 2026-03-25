@@ -12,7 +12,7 @@ All use parquet format with a "text" field.
 
 from dataclasses import dataclass, field
 
-from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.huggingface_utils import download_hf_step
 from marin.execution.step_spec import StepSpec
 
 
@@ -24,6 +24,7 @@ class NemotronV2Dataset:
     revision: str
     subsets: dict[str, str] = field(default_factory=dict)
     """Maps subset_name -> glob pattern for parquet files within the download."""
+    override_output_path: str | None = None
 
 
 NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
@@ -38,6 +39,7 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
             "medium_quality": "Medium-Quality/**/*.parquet",
             "translated_diverse_qa": "Translated-Diverse-QA/**/*.parquet",
         },
+        override_output_path="raw/nemotron_cc_v2-674913",
     ),
     "nemotron_cc_v2_1": NemotronV2Dataset(
         hf_dataset_id="nvidia/Nemotron-CC-v2.1",
@@ -53,11 +55,13 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
             "medium_high_quality_translated": "Medium-High-Quality-Translated-To-English/**/*.parquet",
             "medium_quality": "Medium-Quality/**/*.parquet",
         },
+        override_output_path="raw/nemotron_cc_v2_1-a7afb6",
     ),
     "nemotron_cc_code_v1": NemotronV2Dataset(
         hf_dataset_id="nvidia/Nemotron-CC-Code-v1",
         revision="5c5bebc",
         subsets={"all": "data/**/*.parquet"},
+        override_output_path="raw/nemotron_cc_code_v1-c55cd9",
     ),
     "nemotron_cc_math_v1": NemotronV2Dataset(
         hf_dataset_id="nvidia/Nemotron-CC-Math-v1",
@@ -67,6 +71,7 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
             "4plus": "4plus/**/*.parquet",
             "4plus_mind": "4plus_MIND/**/*.parquet",
         },
+        override_output_path="nemotron_cc_math_v1-322fe4",
     ),
     "nemotron_pretraining_code_v1": NemotronV2Dataset(
         hf_dataset_id="nvidia/Nemotron-Pretraining-Code-v1",
@@ -75,6 +80,7 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
             "synthetic_code": "Synthetic-Code/**/*.parquet",
             "code_metadata": "Nemotron-Code-Metadata/**/*.parquet",
         },
+        override_output_path="raw/nemotron_pretraining_code_v1-175b37",
     ),
     "nemotron_pretraining_code_v2": NemotronV2Dataset(
         hf_dataset_id="nvidia/Nemotron-Pretraining-Code-v2",
