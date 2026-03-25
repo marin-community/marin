@@ -12,13 +12,13 @@ def build_steps() -> list[StepSpec]:
     raw = StepSpec(
         name="raw/fineweb-edu-sample-10bt",
         # TODO: allow to override via relative override path in StepSpec
-        override_output_path=f"{marin_prefix()}/raw/fineweb-edu-87f0914/sample/10BT",
+        override_output_path=f"{marin_prefix()}/raw/fineweb-edu-87f0914",
     )
     dedup = StepSpec(
         name="dedup_sample/10BT",
         deps=[raw],
         fn=lambda op: dedup_fuzzy_document(
-            input_paths=raw.output_path,
+            input_paths=raw.output_path + "/sample/10BT",
             output_path=op,
             max_parallelism=1024,
         ),
