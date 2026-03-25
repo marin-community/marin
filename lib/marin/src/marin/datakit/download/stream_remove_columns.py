@@ -13,7 +13,6 @@ from huggingface_hub import HfFileSystem
 from tqdm import tqdm
 from zephyr import Dataset, ZephyrContext
 
-hf_fs = HfFileSystem()
 logger = logging.getLogger(__name__)
 
 
@@ -29,7 +28,7 @@ def prune_stream_and_save(input_file: str, output_file: str, keep_columns: list[
         output_file (str): Path where pruned parquet file will be saved
         keep_columns (list[str]): List of column names to retain
     """
-    parquet_file = pq.ParquetFile(hf_fs.open(input_file))
+    parquet_file = pq.ParquetFile(HfFileSystem().open(input_file))
 
     full_df_list = []
     for batch in tqdm(parquet_file.iter_batches(batch_size=10000), desc=f"Processing {input_file}"):
@@ -58,7 +57,7 @@ def get_file_tasks(hf_path: str, output_path: str, keep_columns: list[str]):
         Dict with input_file, output_file, and keep_columns for each parquet file
     """
     logger.info(f"Loading dataset from {hf_path}")
-    parquet_list = hf_fs.glob(f"{hf_path}/*.parquet")
+    parquet_list = HfFileSystem().glob(f"{hf_path}/*.parquet")
 
     for file in parquet_list:
         output_file = os.path.join(output_path, os.path.basename(file))

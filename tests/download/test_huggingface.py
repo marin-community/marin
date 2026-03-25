@@ -189,7 +189,7 @@ def test_prune_hf_dataset(tmp_path):
     mock_fs.glob = Mock(return_value=["hf://datasets/test-org/test-dataset@main/data/file.parquet"])
     mock_fs.open = Mock(side_effect=lambda path, mode="rb": create_buffer())
 
-    with patch("marin.datakit.download.stream_remove_columns.hf_fs", mock_fs):
+    with patch("marin.datakit.download.stream_remove_columns.HfFileSystem", return_value=mock_fs):
         prune_hf_dataset(cfg)
 
     # Verify output

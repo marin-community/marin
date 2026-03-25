@@ -41,7 +41,7 @@ from dataclasses import dataclass
 import draccus
 from iris.marin_fs import open_url, url_to_fs
 from marin.datakit.download.dclm_hq import find_html_in_cc
-from marin.datakit.download.stream_remove_columns import hf_fs
+from huggingface_hub import HfFileSystem
 from marin.schemas.web.convert import ExtractionConfig
 from marin.web.convert import convert_page
 from tqdm import tqdm
@@ -115,6 +115,7 @@ def process_dclm_hq_dump(cfg: DCLMHQExtractionConfig) -> None:
 
     # Glob all files across all shards upfront
     all_files = []
+    hf_fs = HfFileSystem()
     paths = [i.split("/")[-1] for i in hf_fs.ls(cfg.input_hf_path, detail=False)]
     paths = paths[: cfg.max_split] if cfg.max_split else paths
 
