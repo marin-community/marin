@@ -5,6 +5,7 @@ from typing import Any, TypeVar
 
 from collections.abc import Iterator
 from marin.processing.classification.deduplication.dedup_commons import (
+    DEFAULT_COORDINATOR_RESOURCES,
     DEFAULT_FILETYPES,
     DedupMode,
     DupCounters,
@@ -13,6 +14,7 @@ from marin.processing.classification.deduplication.dedup_commons import (
     _get_extension,
     _init_wandb,
     _load_batches,
+    group_files,
 )
 import dupekit
 from marin.utils import rebase_file_path
@@ -51,8 +53,9 @@ def dedup_exact_paragraph(
     output_path: str,
     text_field: str = "text",
     filetypes: list[str] | None = None,
-    max_parallelism: int | None = None,
+    max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
+    coordinator_resources: ResourceConfig | None = None,
 ) -> dict:
     if filetypes is None:
         filetypes = DEFAULT_FILETYPES
@@ -77,6 +80,7 @@ def dedup_exact_paragraph(
         name="exact-para-dedup",
         max_workers=max_parallelism,
         resources=worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
+        coordinator_resources=coordinator_resources or DEFAULT_COORDINATOR_RESOURCES,
     )
 
     def aggregate_and_write_to_corresponding_files(file_idx: int, records: Iterator[dict]) -> dict:
@@ -133,35 +137,37 @@ def dedup_exact_paragraph(
         result = write_vortex_file(group_by_doc_id(counting_iter()), output_file)
         return {**result, "stats": stats}
 
-    def annotate_dups(key_hash: str, records: Iterator[tuple[int, dict[str, Any]]]) -> Iterator[dict[str, Any]]:
-        has_dups, (_, head_record), records = _iter_has_more_than_one(records)
+    def annotate_dups(key_hash: str, records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+        has_dups, head_record, records = _iter_has_more_than_one(records)
 
         # NOTE: we **arbitrarily** select the 1st record as the canonical record
         cano_id = head_record["id"]
 
-        for file_idx, item in records:
+        for item in records:
             is_dup = has_dups and item["id"] != cano_id
             yield {
                 "id": item["id"],
                 "is_dup": is_dup,
-                "span": item["paragraph_span"]["span"] if is_dup else None,
-                "file_idx": file_idx,
+                "span": item["paragraph_span"]["span"] if is_dup else [],
+                "file_idx": item["file_idx"],
             }
 
+    file_groups = group_files(input_files, max_parallelism)
     shard_results = list(
         ctx.execute(
-            Dataset.from_list(input_files)
+            Dataset.from_list(file_groups)
             .flat_map(
-                lambda path: (
-                    (path_to_idx[path], {"id": hash_record.pop("doc_id"), **hash_record})
+                lambda paths: (
+                    {"file_idx": path_to_idx[path], "id": hash_record.pop("doc_id"), **hash_record}
+                    for path in paths
                     for batch in _load_batches(path)
                     for hash_record in compute_paragraph_hashes(batch).to_pylist()
                 )
             )
             .group_by(
-                lambda record: record[1]["hash"],
+                lambda record: record["hash"],
                 # NOTE: selecting the canonical record is deterministic via this sort
-                sort_by=lambda record: record[1]["id"],
+                sort_by=lambda record: record["id"],
                 reducer=annotate_dups,
             )
             .group_by(
@@ -189,8 +195,9 @@ def dedup_exact_document(
     output_path: str,
     text_field: str = "text",
     filetypes: list[str] | None = None,
-    max_parallelism: int | None = None,
+    max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
+    coordinator_resources: ResourceConfig | None = None,
 ) -> dict:
     """Exact document deduplication: identify duplicate documents based on full text hash"""
     if filetypes is None:
@@ -213,6 +220,7 @@ def dedup_exact_document(
         name="exact-doc-dedup",
         max_workers=max_parallelism,
         resources=worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
+        coordinator_resources=coordinator_resources or DEFAULT_COORDINATOR_RESOURCES,
     )
 
     def aggregate_and_write_to_corresponding_files(file_idx: int, records: Iterator[dict[str, Any]]) -> dict:
@@ -251,34 +259,36 @@ def dedup_exact_document(
         result = write_vortex_file(skip_non_dups(counting_iter()), output_file)
         return {**result, "stats": stats}
 
-    def annotate_dups(key_hash: str, records: Iterator[tuple[int, dict[str, Any]]]) -> Iterator[dict[str, Any]]:
-        has_dups, (_, head_record), records = _iter_has_more_than_one(records)
+    def annotate_dups(key_hash: str, records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+        has_dups, head_record, records = _iter_has_more_than_one(records)
 
         # NOTE: we **arbitrarily** select the 1st record as the canonical record
         cano_id = head_record["id"]
 
-        for file_idx, item in records:
+        for item in records:
             is_dup = has_dups and item["id"] != cano_id
             yield {
                 "id": item["id"],
                 "is_dup": is_dup,
-                "file_idx": file_idx,
+                "file_idx": item["file_idx"],
             }
 
+    file_groups = group_files(input_files, max_parallelism)
     shard_results = list(
         ctx.execute(
-            Dataset.from_list(input_files)
+            Dataset.from_list(file_groups)
             .flat_map(
-                lambda path: (
-                    (path_to_idx[path], hash_record)
+                lambda paths: (
+                    {"file_idx": path_to_idx[path], **hash_record}
+                    for path in paths
                     for batch in _load_batches(path)
                     for hash_record in compute_document_hashes(batch).to_pylist()
                 )
             )
             .group_by(
-                lambda record: record[1]["hash"],
+                lambda record: record["hash"],
                 # NOTE: selecting the canonical record is deterministic via this sort
-                sort_by=lambda record: record[1]["id"],
+                sort_by=lambda record: record["id"],
                 reducer=annotate_dups,
             )
             .group_by(

@@ -215,10 +215,10 @@ Jobs can include a `bundle_blob` containing workspace files. The controller stor
 
 ```yaml
 storage:
-  bundle_prefix: gs://my-bucket/iris/bundles  # shared storage for distributed workers
+  remote_state_dir: gs://my-bucket/iris/state  # remote storage for checkpoints and worker profiles
 ```
 
-The controller will **fail at startup** if `storage.bundle_prefix` is not configured.
+The controller will **fail at startup** if `storage.remote_state_dir` is not configured.
 
 ### Multi-Region Bundle Storage
 
@@ -309,8 +309,9 @@ dashboard rendering, log levels, profiling, and constraint routing.
 # Local mode (in-process cluster, default)
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e -o "addopts=" -v
 
-# Cloud mode: start cluster, run tests, stop cluster
-uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-config examples/smoke.yaml --iris-mode full -o "addopts="
+# Cloud mode: start cluster via CLI, then run tests against it
+# iris --config=examples/smoke-gcp.yaml cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url "$(cat /tmp/url)" -o "addopts="
 
 # Cloud mode: connect to existing cluster
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url http://localhost:8080 -o "addopts="
@@ -344,7 +345,7 @@ defaults:
     controller_address: "10.0.0.1:10000"  # Or use env var: "${IRIS_CONTROLLER_ADDRESS}"
 
 storage:
-  bundle_prefix: gs://my-bucket/iris/bundles  # shared storage for distributed workers
+  remote_state_dir: gs://my-bucket/iris/state  # remote storage for checkpoints and worker profiles
 
 controller:
   image: us-central1-docker.pkg.dev/my-project/marin/iris-controller:latest

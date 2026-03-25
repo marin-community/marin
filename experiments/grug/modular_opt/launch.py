@@ -247,6 +247,7 @@ grug_modular_opt_trial = ExecutorStep(
             tags=["grug", "template", "modular_opt", "issue-3075"],
             group="grug-modular-opt-trial",
             name=None,  # filled from run_id in _resolve_tracker
+            replicate_path=this_output_path(),
         ),
         optimizer=versioned(
             GrugParamGroupAdamConfig(

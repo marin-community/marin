@@ -25,7 +25,13 @@ from iris.cli.bug_report import file_github_issue, format_bug_report, gather_bug
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
-from iris.cluster.constraints import Constraint, WellKnownAttribute, region_constraint, zone_constraint
+from iris.cluster.constraints import (
+    Constraint,
+    WellKnownAttribute,
+    infer_preemptible_constraint,
+    region_constraint,
+    zone_constraint,
+)
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -38,6 +44,7 @@ from iris.cluster.types import (
     tpu_device,
 )
 from iris.rpc import cluster_pb2
+from iris.rpc.auth import TokenProvider
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -366,27 +373,31 @@ def generate_job_name(command: list[str]) -> str:
     return f"iris-run-{script_name}-{timestamp}"
 
 
-def resolve_multinode_tpu_defaults(
+def resolve_multinode_defaults(
     tpu: str | None,
+    gpu: str | None,
     replicas: int | None,
 ) -> tuple[int, CoschedulingConfig | None]:
-    """Auto-detect multinode TPU topology and set replicas/coscheduling.
+    """Auto-detect multinode topology and set replicas/coscheduling.
 
-    When a multinode TPU (vm_count > 1) is requested and the caller did not
-    explicitly set replicas, this function sets replicas to the topology's
-    vm_count and enables coscheduling by ``tpu-name`` so that all tasks land
-    on workers in the same TPU slice.
+    For TPUs with vm_count > 1, infers replicas from the topology and enables
+    coscheduling by ``tpu-name`` so that all tasks land on workers in the same
+    TPU slice. For GPUs with replicas > 1, enables coscheduling by ``pool`` so
+    that all replicas are scheduled together.
 
     Args:
         tpu: TPU type string (e.g. ``"v6e-32"``), or ``None``.
+        gpu: GPU type string (e.g. ``"H100"``), or ``None``.
         replicas: Explicit replica count from the caller, or ``None`` if not
             specified (meaning the default should be inferred).
 
     Returns:
         A ``(replicas, coscheduling)`` tuple.  ``coscheduling`` is ``None``
-        for single-host TPUs or non-TPU jobs.
+        for single-host or non-multinode jobs.
     """
     if not tpu:
+        if gpu and replicas is not None and replicas > 1:
+            return replicas, CoschedulingConfig(group_by="pool")
         return replicas or 1, None
 
     try:
@@ -435,6 +446,7 @@ def run_iris_job(
     zone: str | None = None,
     user: str | None = None,
     reserve: tuple[str, ...] | None = None,
+    token_provider: TokenProvider | None = None,
 ) -> int:
     """Core job submission logic.
 
@@ -454,13 +466,22 @@ def run_iris_job(
     job_name = job_name or generate_job_name(command)
     extras = extras or []
 
-    replicas, coscheduling = resolve_multinode_tpu_defaults(tpu, replicas)
+    replicas, coscheduling = resolve_multinode_defaults(tpu, gpu, replicas)
 
     constraints: list[Constraint] = []
     if regions:
         constraints.append(region_constraint(list(regions)))
     if zone:
         constraints.append(zone_constraint(zone))
+
+    # Executor heuristic: small CPU-only CLI jobs (no accelerators, 1 replica,
+    # CPU ≤ 0.5 cores, RAM ≤ 4 GiB) are auto-tagged as non-preemptible so
+    # coordinators survive spot reclamation.
+    resources_proto = resources.to_proto()
+    preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    if preemptible is not None:
+        constraints.append(preemptible)
+        logger.info("Executor heuristic: auto-tagging job as non-preemptible")
 
     reservation: list[ReservationEntry] | None = None
     if reserve:
@@ -505,6 +526,7 @@ def run_iris_job(
         coscheduling=coscheduling,
         user=user,
         reservation=reservation,
+        token_provider=token_provider,
     )
 
 
@@ -525,13 +547,14 @@ def _submit_and_wait_job(
     coscheduling: CoschedulingConfig | None = None,
     user: str | None = None,
     reservation: list[ReservationEntry] | None = None,
+    token_provider: TokenProvider | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
     Only KeyboardInterrupt terminates the remote job; connection failures
     are logged and re-raised without killing the job.
     """
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=token_provider)
     entrypoint = Entrypoint.from_command(*command)
 
     job = client.submit(
@@ -720,12 +743,13 @@ def run(
             regions=region or None,
             zone=zone,
             reserve=reserve or None,
+            token_provider=ctx.obj.get("token_provider"),
         )
     except Exception:
-        platform = ctx.obj.get("platform")
-        if platform is not None:
+        bundle = ctx.obj.get("provider_bundle")
+        if bundle is not None:
             try:
-                platform.debug_report()
+                bundle.controller.debug_report()
             except Exception:
                 logger.debug("Controller post-mortem failed", exc_info=True)
         raise
@@ -744,7 +768,7 @@ def run(
 def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
     """Terminate one or more jobs."""
     controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
     terminated = _terminate_jobs(client, job_id, include_children)
     _print_terminated(terminated)
 
@@ -760,7 +784,7 @@ def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
 def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
     """Terminate one or more jobs (alias for stop)."""
     controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
     terminated = _terminate_jobs(client, job_id, include_children)
     _print_terminated(terminated)
 
@@ -773,7 +797,7 @@ def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
 def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> None:
     """List jobs with optional filtering."""
     controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
 
     states: list[cluster_pb2.JobState] | None = None
     if state is not None:
@@ -863,7 +887,7 @@ def logs(
         raise click.UsageError("Specify only one of --since-ms or --since-seconds.")
 
     controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
 
     if since_seconds is not None:
         since_ms = Timestamp.now().epoch_ms() - (since_seconds * 1000)
@@ -905,7 +929,9 @@ def logs(
 def bug_report(ctx, job_id: str, file_issue: bool, repo: str | None, tail: int, labels: str):
     """Generate a diagnostic bug report for a job."""
     controller_url = require_controller_url(ctx)
-    report = gather_bug_report(controller_url, JobName.from_wire(job_id), tail=tail)
+    report = gather_bug_report(
+        controller_url, JobName.from_wire(job_id), tail=tail, token_provider=ctx.obj.get("token_provider")
+    )
     markdown = format_bug_report(report)
 
     if file_issue:

@@ -1,10 +1,9 @@
-# Iris configuration for CoreWeave CKS clusters.
+# Iris development cluster configuration for CoreWeave CKS.
 #
-# Architecture: Shared NodePool model. `iris cluster start` creates one
-# NodePool per scale group (plus a controller pool) with CoreWeave autoscaling
-# enabled. Iris manages only Pods; CoreWeave manages node provisioning.
-# NodePool names are derived from this config: {label_prefix}-{scale_group_name}.
-# When Pods are deleted, NodePools scale to zero automatically.
+# Architecture: KubernetesProvider dispatches task pods directly to the k8s API.
+# No worker daemons are needed. CoreWeave NodePool autoscaling provisions nodes
+# on demand; when pods are deleted, NodePools scale to zero automatically.
+# CPU nodes are kept always-on (min_slices=2) for monitoring software.
 #
 # Workflow:
 #
@@ -30,15 +29,22 @@
 #   export KUBECONFIG=~/.kube/coreweave-iris
 
 platform:
-  label_prefix: iris
+  label_prefix: coreweave
   coreweave:
     region: US-WEST-04A
     namespace: iris
-    kubeconfig_path: ~/.kube/coreweave-iris  # Set this to your local kubeconfig, or use KUBECONFIG env var
-    object_storage_endpoint: https://a5a1f66f973e2196a26bae21c81b899b.r2.cloudflarestorage.com
+    kubeconfig_path: ~/.kube/coreweave-iris
+    object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
 
 storage:
-  bundle_prefix: s3://marin-test/iris/bundles
+  remote_state_dir: s3://marin-na/iris/coreweave/state
+
+kubernetes_provider:
+  namespace: iris
+  default_image: ghcr.io/marin-community/iris-task:latest
+  host_network: true              # Required for NCCL/IB multi-host traffic
+  cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal GPU nodes
+  controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
@@ -57,6 +63,8 @@ defaults:
       milliseconds: 300000
     startup_grace_period:
       milliseconds: 2400000    # 40 min — covers autoscaler node provisioning + Pod startup
+  task_env:
+    MARIN_PREFIX: s3://marin-na/marin
   worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001
@@ -65,7 +73,6 @@ defaults:
     default_task_image: ghcr.io/marin-community/iris-task:latest
 
 scale_groups:
-  # CPU general-purpose — used for data processing, orchestration, etc.
   cpu-erapids:
     num_vms: 1
     resources:
@@ -73,20 +80,20 @@ scale_groups:
       ram: 256GB
       disk: 1TB
       device_type: cpu
+      preemptible: false
     worker:
       attributes:
         region: US-WEST-04A
         pool: cpu-erapids
-    min_slices: 0
-    max_slices: 1  # Cost-safe default; increase for production workloads
-    priority: 100
+    min_slices: 1
+    max_slices: 4
+    priority: 50
     slice_template:
       num_vms: 1
       coreweave:
         region: US-WEST-04A
         instance_type: cd-gp-i64-erapids
 
-  # 8x H100 with InfiniBand — primary training workhorse
   h100-8x:
     num_vms: 1
     resources:
@@ -96,13 +103,14 @@ scale_groups:
       device_type: gpu
       device_variant: H100
       device_count: 8
+      preemptible: false
     worker:
       attributes:
         region: US-WEST-04A
         pool: h100-8x
     min_slices: 0
-    max_slices: 1  # Cost-safe default; increase for production workloads
-    priority: 50
+    max_slices: 8
+    priority: 100
     slice_template:
       num_vms: 1
       coreweave:

@@ -5,6 +5,7 @@ import warnings
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from levanter.kernels.pallas import autotune_cache_utils
@@ -12,6 +13,7 @@ from levanter.kernels.pallas.fused_cross_entropy_loss import api as fused_api
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_gpu
 from levanter.kernels.pallas.fused_cross_entropy_loss import tuned_block_sizes
+from levanter.kernels.pallas.fused_cross_entropy_loss import xla as fused_xla
 from levanter.kernels.pallas.fused_cross_entropy_loss.reference import (
     linear_softmax_cross_entropy_loss_reference,
     linear_softmax_cross_entropy_loss_streaming,
@@ -206,6 +208,7 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
     def loss_custom(x_raw, w_raw):
         loss, lse = _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
             block_size,
+            6,
             jnp.float32,
             logit_soft_cap,
             None,
@@ -231,6 +234,223 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
 
     assert jnp.allclose(gx_custom, gx_stream, atol=1e-5, rtol=1e-5)
     assert jnp.allclose(gw_custom, gw_stream, atol=1e-5, rtol=1e-5)
+
+
+def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff_with_batch_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    key = jax.random.PRNGKey(1)
+    key_x, key_w, key_y = jax.random.split(key, 3)
+
+    x = jax.random.normal(key_x, (256, 32), dtype=jnp.float32)
+    w = jax.random.normal(key_w, (32, 96), dtype=jnp.float32)
+    y = jax.random.randint(key_y, (256,), 0, 96, dtype=jnp.int32)
+    logsumexp_weight = 0.2
+    logit_soft_cap = 1.5
+    block_size = 32
+
+    monkeypatch.setattr(fused_xla, "infer_xla_b_block_size", lambda b, v_block_size: 64)
+
+    def loss_custom(x_raw, w_raw):
+        loss, lse = _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
+            block_size,
+            64,
+            jnp.float32,
+            logit_soft_cap,
+            None,
+            x_raw,
+            y,
+            w_raw,
+        )
+        return (loss + logsumexp_weight * (lse**2)).mean()
+
+    def loss_streaming(x_raw, w_raw):
+        loss, lse = linear_softmax_cross_entropy_loss_streaming(
+            x_raw,
+            y,
+            w_raw,
+            block_size=block_size,
+            dtype=jnp.float32,
+            logit_soft_cap=logit_soft_cap,
+        )
+        return (loss + logsumexp_weight * (lse**2)).mean()
+
+    gx_custom, gw_custom = jax.grad(loss_custom, argnums=(0, 1))(x, w)
+    gx_stream, gw_stream = jax.grad(loss_streaming, argnums=(0, 1))(x, w)
+
+    assert jnp.allclose(gx_custom, gx_stream, atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(gw_custom, gw_stream, atol=1e-5, rtol=1e-5)
+
+
+def test_fused_cross_entropy_xla_uses_explicit_batch_block_size(monkeypatch: pytest.MonkeyPatch):
+    x, w, y = _make_toy_inputs()
+    x = x.reshape(6, 4)
+    y = y.reshape(6)
+    captured: dict[str, int] = {}
+
+    monkeypatch.setattr(fused_xla, "infer_xla_b_block_size", lambda b, v_block_size: 6)
+
+    def fake_custom_vjp(block_size, batch_block_size, dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg):
+        del dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg
+        captured["block_size"] = block_size
+        captured["batch_block_size"] = batch_block_size
+        return jnp.zeros((6,), dtype=jnp.float32), jnp.zeros((6,), dtype=jnp.float32)
+
+    monkeypatch.setattr(fused_xla, "_linear_softmax_cross_entropy_loss_streaming_custom_vjp", fake_custom_vjp)
+
+    fused_xla.linear_softmax_cross_entropy_loss_xla(
+        x,
+        y,
+        w,
+        block_sizes=fused_api.BlockSizes(b_block_size=2, h_block_size=4, v_block_size=4),
+        dtype=jnp.float32,
+    )
+
+    assert captured == {"block_size": 4, "batch_block_size": 2}
+
+
+def test_fused_cross_entropy_xla_caps_requested_batch_block_size_to_legal_divisor(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    x, w, y = _make_toy_inputs()
+    x = x.reshape(6, 4)
+    y = y.reshape(6)
+    captured: dict[str, int] = {}
+
+    monkeypatch.setattr(fused_xla, "infer_xla_b_block_size", lambda b, v_block_size: 6)
+
+    def fake_custom_vjp(block_size, batch_block_size, dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg):
+        del dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg
+        captured["block_size"] = block_size
+        captured["batch_block_size"] = batch_block_size
+        return jnp.zeros((6,), dtype=jnp.float32), jnp.zeros((6,), dtype=jnp.float32)
+
+    monkeypatch.setattr(fused_xla, "_linear_softmax_cross_entropy_loss_streaming_custom_vjp", fake_custom_vjp)
+
+    fused_xla.linear_softmax_cross_entropy_loss_xla(
+        x,
+        y,
+        w,
+        block_sizes=fused_api.BlockSizes(b_block_size=1024, h_block_size=4, v_block_size=4),
+        dtype=jnp.float32,
+    )
+
+    assert captured == {"block_size": 4, "batch_block_size": 6}
+
+
+def test_fused_cross_entropy_xla_infer_uses_tuned_batch_block_size_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    x, w, y = _make_toy_inputs()
+    x = x.reshape(6, 4)
+    y = y.reshape(6)
+    captured: dict[str, int] = {}
+
+    monkeypatch.setattr(fused_xla, "infer_xla_v_block_size", lambda b, h, v, dtype: 4)
+    monkeypatch.setattr(fused_xla, "infer_xla_b_block_size", lambda b, v_block_size: 6)
+    monkeypatch.setattr(
+        fused_xla,
+        "infer_block_sizes_with_tuned_match",
+        lambda *args, **kwargs: (fused_api.BlockSizes(b_block_size=3, h_block_size=4, v_block_size=8), True),
+    )
+
+    def fake_custom_vjp(block_size, batch_block_size, dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg):
+        del dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg
+        captured["block_size"] = block_size
+        captured["batch_block_size"] = batch_block_size
+        return jnp.zeros((6,), dtype=jnp.float32), jnp.zeros((6,), dtype=jnp.float32)
+
+    monkeypatch.setattr(fused_xla, "_linear_softmax_cross_entropy_loss_streaming_custom_vjp", fake_custom_vjp)
+
+    fused_xla.linear_softmax_cross_entropy_loss_xla(
+        x,
+        y,
+        w,
+        dtype=jnp.float32,
+    )
+
+    assert captured == {"block_size": 4, "batch_block_size": 3}
+
+
+def test_fused_cross_entropy_xla_infer_falls_back_when_tuned_batch_block_size_is_unsafe(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    x, w, y = _make_toy_inputs()
+    x = x.reshape(6, 4)
+    y = y.reshape(6)
+
+    monkeypatch.setattr(fused_xla, "infer_xla_v_block_size", lambda b, h, v, dtype: 4_194_304)
+    monkeypatch.setattr(fused_xla, "infer_xla_b_block_size", lambda b, v_block_size: 6)
+    monkeypatch.setattr(
+        fused_xla,
+        "infer_block_sizes_with_tuned_match",
+        lambda *args, **kwargs: (fused_api.BlockSizes(b_block_size=1024, h_block_size=4, v_block_size=8), True),
+    )
+
+    loss, lse = fused_xla.linear_softmax_cross_entropy_loss_xla(
+        x,
+        y,
+        w,
+        dtype=jnp.float32,
+    )
+    loss_ref, lse_ref = linear_softmax_cross_entropy_loss_reference(
+        x,
+        y,
+        w,
+        dtype=jnp.float32,
+    )
+
+    assert jnp.allclose(loss, loss_ref, atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(lse, lse_ref, atol=1e-5, rtol=1e-5)
+
+
+def test_fused_cross_entropy_xla_rejects_unsafe_explicit_batch_block_size():
+    x = jnp.zeros((1024, 4), dtype=jnp.float32)
+    w = jnp.zeros((4, 4_194_304), dtype=jnp.float32)
+    y = jnp.zeros((1024,), dtype=jnp.int32)
+
+    with pytest.raises(ValueError, match="int32 word-count limit"):
+        fused_xla.linear_softmax_cross_entropy_loss_xla(
+            x,
+            y,
+            w,
+            block_sizes=fused_api.BlockSizes(b_block_size=1024, h_block_size=4, v_block_size=4_194_304),
+            dtype=jnp.float32,
+        )
+
+
+def test_fused_cross_entropy_xla_return_argmax_matches_reference_with_batch_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    x, w, y = _make_toy_inputs()
+    x = x.reshape(6, 4)
+    y = y.reshape(6)
+
+    monkeypatch.setattr(fused_xla, "infer_xla_b_block_size", lambda b, v_block_size: 2)
+
+    loss, _, argmax = fused_xla.linear_softmax_cross_entropy_loss_xla(
+        x,
+        y,
+        w,
+        block_sizes=fused_api.BlockSizes(b_block_size=2, h_block_size=4, v_block_size=4),
+        dtype=jnp.float32,
+        logit_soft_cap=1.3,
+        return_argmax=True,
+    )
+
+    loss_ref, _, argmax_ref = linear_softmax_cross_entropy_loss_reference(
+        x,
+        y,
+        w,
+        dtype=jnp.float32,
+        logit_soft_cap=1.3,
+        return_argmax=True,
+    )
+
+    loss_tol = 6e-5 if jax.default_backend() == "tpu" else 1e-5
+
+    assert jnp.allclose(loss, loss_ref, atol=loss_tol, rtol=loss_tol)
+    assert jnp.array_equal(argmax, argmax_ref)
 
 
 def test_fused_cross_entropy_pallas_requires_tpu():
@@ -755,6 +975,135 @@ def test_pallas_autotune_skipped_when_tuned_match_exists(monkeypatch: pytest.Mon
     assert seen_block_sizes == [inferred]
 
 
+def test_benchmark_candidate_handles_real_shard_map_tracers():
+    partition_spec = jax.sharding.PartitionSpec
+    mesh = jax.sharding.Mesh(
+        np.array(jax.devices()[:1]),
+        ("data",),
+        axis_types=(jax.sharding.AxisType.Explicit,),
+    )
+    x = jax.device_put(
+        jnp.ones((4, 8), dtype=jnp.float32),
+        jax.sharding.NamedSharding(mesh, partition_spec("data", None)),
+    )
+    y = jax.device_put(
+        jnp.zeros((4,), dtype=jnp.int32),
+        jax.sharding.NamedSharding(mesh, partition_spec("data")),
+    )
+    w = jax.device_put(
+        jnp.ones((8, 16), dtype=jnp.float32),
+        jax.sharding.NamedSharding(mesh, partition_spec(None, None)),
+    )
+    candidate = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+
+    def fake_impl(x_raw, labels_raw, w_raw, **kwargs):
+        del labels_raw, w_raw, kwargs
+        batch = x_raw.shape[0]
+        return jnp.zeros((batch,), dtype=jnp.float32), jnp.zeros((batch,), dtype=jnp.float32)
+
+    def benchmark_from_shard_map(x_shard, y_shard, w_shard):
+        return fused_api._benchmark_block_sizes_candidate(
+            fn=fake_impl,
+            candidate=candidate,
+            x=x_shard,
+            labels=y_shard,
+            w=w_shard,
+            dtype=jnp.float32,
+            logit_soft_cap=None,
+            precision=None,
+            return_argmax=False,
+        )
+
+    mapped = jax.shard_map(
+        benchmark_from_shard_map,
+        mesh=mesh,
+        in_specs=(partition_spec("data", None), partition_spec("data"), partition_spec(None, None)),
+        out_specs=partition_spec(),
+        check_vma=True,
+    )
+
+    score = mapped(x, y, w)
+    assert float(score) >= 0.0
+
+
+def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pytest.MonkeyPatch):
+    partition_spec = jax.sharding.PartitionSpec
+    mesh = jax.sharding.Mesh(
+        np.array(jax.devices()[:1]),
+        ("data",),
+        axis_types=(jax.sharding.AxisType.Explicit,),
+    )
+    x = jax.device_put(
+        jnp.ones((4, 8), dtype=jnp.float32),
+        jax.sharding.NamedSharding(mesh, partition_spec("data", None)),
+    )
+    y = jax.device_put(
+        jnp.zeros((4,), dtype=jnp.int32),
+        jax.sharding.NamedSharding(mesh, partition_spec("data")),
+    )
+    w = jax.device_put(
+        jnp.ones((8, 16), dtype=jnp.float32),
+        jax.sharding.NamedSharding(mesh, partition_spec(None, None)),
+    )
+    inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+    seen_block_sizes: list[fused_api.BlockSizes | None] = []
+    benchmarked_candidates: list[fused_api.BlockSizes] = []
+    faster = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)
+    slower = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=512)
+
+    def fake_impl(x_raw, labels_raw, w_raw, *, block_sizes, **kwargs):
+        del labels_raw, w_raw, kwargs
+        seen_block_sizes.append(block_sizes)
+        batch = x_raw.shape[0]
+        zeros = jnp.zeros((batch,), dtype=jnp.float32)
+        return zeros, zeros
+
+    monkeypatch.setattr(
+        fused_api,
+        "infer_block_sizes_with_tuned_match",
+        lambda *args, **kwargs: (inferred, False),
+    )
+    monkeypatch.setattr(
+        fused_api,
+        "_candidate_block_sizes",
+        lambda impl_name, inferred_block_sizes, **kwargs: [inferred_block_sizes, slower, faster],
+    )
+
+    def fake_benchmark(**kwargs):
+        candidate = kwargs["candidate"]
+        benchmarked_candidates.append(candidate)
+        return 1.0 if candidate == faster else 2.0
+
+    monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", fake_benchmark)
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_impl)
+    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
+
+    def run_from_shard_map(x_shard, y_shard, w_shard):
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_shard,
+            y_shard,
+            w_shard,
+            reduction=None,
+            dtype=jnp.float32,
+            implementation="pallas_tpu",
+        )
+
+    mapped = jax.shard_map(
+        run_from_shard_map,
+        mesh=mesh,
+        in_specs=(partition_spec("data", None), partition_spec("data"), partition_spec(None, None)),
+        out_specs=partition_spec("data"),
+        check_vma=True,
+    )
+
+    out = mapped(x, y, w)
+    out.block_until_ready()
+
+    assert benchmarked_candidates == [inferred, slower, faster]
+    assert seen_block_sizes[-1] == faster
+    assert faster in seen_block_sizes
+
+
 def test_pallas_tpu_vmem_compile_error_falls_back_to_xla_when_requested(monkeypatch: pytest.MonkeyPatch):
     x = jnp.ones((4, 8), dtype=jnp.float32)
     w = jnp.ones((8, 16), dtype=jnp.float32)
@@ -1100,9 +1449,9 @@ def test_infer_block_sizes_tpu_v5p_updated_tuning(
     ("b", "h", "v", "expected"),
     [
         (1024, 512, 16_384, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024)),
-        (16_384, 1024, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024)),
-        (65_536, 512, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048)),
-        (262_144, 1024, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024)),
+        (16_384, 1024, 128_256, fused_api.BlockSizes(b_block_size=8192, h_block_size=256, v_block_size=1024)),
+        (65_536, 512, 128_256, fused_api.BlockSizes(b_block_size=4096, h_block_size=512, v_block_size=2048)),
+        (262_144, 1024, 128_256, fused_api.BlockSizes(b_block_size=8192, h_block_size=256, v_block_size=1024)),
         (8_192, 4_096, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512)),
         (16_384, 2_048, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512)),
     ],
@@ -1127,9 +1476,9 @@ def test_infer_block_sizes_tpu_v5e_updated_tuning(
     ("b", "h", "v", "expected"),
     [
         (1024, 512, 16_384, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=2048)),
-        (16_384, 1024, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=1024)),
-        (65_536, 512, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048)),
-        (262_144, 1024, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024)),
+        (16_384, 1024, 128_256, fused_api.BlockSizes(b_block_size=8192, h_block_size=1024, v_block_size=1024)),
+        (65_536, 512, 128_256, fused_api.BlockSizes(b_block_size=4096, h_block_size=512, v_block_size=2048)),
+        (262_144, 1024, 128_256, fused_api.BlockSizes(b_block_size=8192, h_block_size=256, v_block_size=1024)),
         (8_192, 4_096, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512)),
         (16_384, 2_048, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512)),
     ],
@@ -1146,6 +1495,33 @@ def test_infer_block_sizes_tpu_v6_updated_tuning(
         v=v,
         dtype=jnp.bfloat16,
         device_kind="TPU v6e",
+    )
+    assert block_sizes == expected
+
+
+@pytest.mark.parametrize(
+    ("b", "h", "v", "expected"),
+    [
+        (1024, 512, 16_384, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512)),
+        (16_384, 1024, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=256)),
+        (65_536, 512, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512)),
+        (262_144, 1024, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=256)),
+        (8_192, 4_096, 128_256, fused_api.BlockSizes(b_block_size=8192, h_block_size=512, v_block_size=1024)),
+        (16_384, 2_048, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024)),
+    ],
+)
+def test_infer_block_sizes_tpu_v4_updated_tuning(
+    b: int,
+    h: int,
+    v: int,
+    expected: fused_api.BlockSizes,
+):
+    block_sizes = infer_block_sizes(
+        b=b,
+        h=h,
+        v=v,
+        dtype=jnp.bfloat16,
+        device_kind="TPU v4",
     )
     assert block_sizes == expected
 

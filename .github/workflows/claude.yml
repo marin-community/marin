@@ -40,7 +40,6 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
-      id-token: write
       actions: read
     steps:
       - name: Checkout repository
@@ -82,13 +81,13 @@ jobs:
        github.event.issue.author_association == 'COLLABORATOR') &&
       !contains(github.event.issue.body, '@claude') &&
       !contains(github.event.issue.title, '@claude')
-    timeout-minutes: 15
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
       issues: write
-      id-token: write
+
       actions: read
     steps:
       - name: Checkout repository
@@ -104,6 +103,13 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
+      - name: Post initial comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment ${{ github.event.issue.number }} \
+            --body "🤖 I'm looking into this issue. I'll post a task list shortly with my plan and progress."
+
       - name: Triage Issue
         uses: anthropics/claude-code-action@v1
         with:
@@ -112,40 +118,46 @@ jobs:
           additional_permissions: |
             actions: read
           prompt: |
-            ISSUE: #${{ github.event.issue.number }}
-            TITLE: ${{ github.event.issue.title }}
+            Read AGENTS.md, .agents/skills/fix-issue/SKILL.md, and .agents/skills/pull-request/SKILL.md.
+            Then analyze issue #${{ github.event.issue.number }}.
 
-            Read AGENTS.md and .agents/skills/fix-issue/SKILL.md.
+            ## Progress tracking
 
-            ## Step 1: Relevance Check
-            Read the issue title and body. If the issue is NOT obviously about a code change
-            (e.g. "run experiment X", "suggest an alternative backend for Y", "benchmark Z",
-            "investigate performance of W", feature discussions, research questions, or operational requests),
-            then exit immediately without posting any comment.
+            After initial analysis, post a 🤖-prefixed comment with a task list using GitHub checkbox syntax:
 
-            ## Step 2: Scope Assessment
-            Investigate the codebase to understand the issue. Determine whether the fix is
-            small and self-contained (e.g. a bug fix, adding a small feature, changing styles,
-            config tweaks) or whether it requires broader design work.
+            ```
+            🤖 **Plan:**
+            - [ ] Step 1 description
+            - [ ] Step 2 description
+            - ...
+            ```
 
-            ## Step 3a: Small Fix
-            If the change is small and self-contained, follow the fix-issue skill workflow
-            (already loaded above). Post a brief comment on the issue summarizing your fix
-            and linking the PR when done.
+            To update the task list, edit your last comment in place:
+            `gh issue comment <number> --edit-last --body '...'`
 
-            ## Step 3b: Research Report
-            If the change is larger or needs design input:
-            - Analyze the codebase: identify affected files, modules, and interfaces
-            - Use web search if the issue involves external libraries or standards
-            - Post a comment (prefixed "🤖 Research Report:") covering:
-              * Affected files and modules
-              * Viable design directions with trade-offs
-              * Your recommended approach
-            - Do not attempt implementation
+            Check off completed items and add status notes as you progress.
+            Update the task list at least after each major milestone (e.g., root cause identified,
+            fix implemented, tests passing, PR opened).
+
+            ## Respond based on scope
+
+            - **Small/clear changes**: open a PR following the fix-issue skill workflow.
+            - **Large changes** (multi-module design work): post a 🤖-prefixed research comment with root cause, relevant code links, and proposed approach.
+            - **Experiments/research questions**: post a 🤖-prefixed comment with concise feedback on the idea.
+
+            ## PR format (critical)
+
+            When opening a PR, you MUST follow .agents/skills/pull-request/SKILL.md exactly.
+            PR descriptions are plain text — no markdown headers, no bullet lists, no emoji,
+            no "## Summary" or "## Test plan" sections. Violations will be rejected.
+
+            Always produce output — either a PR or a comment. Never silently exit.
           claude_args: |
-            --model claude-sonnet-4-6
-            --max-turns 100
-            --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*),Bash(cat:*)"
+            --model opus
+            --max-turns 250
+            --permission-mode acceptEdits
+            --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
+            --system-prompt "You can commit and push changes. Use MCP tools if available, falling back to git and gh. Always commit and push, even if tests fail. Never post partial or placeholder comments. To update the task list, use gh issue comment <number> --edit-last --body '...'."
 
   autofix:
     if: |
@@ -161,7 +173,7 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
-      id-token: write
+
       actions: read
     steps:
       - name: Checkout PR branch

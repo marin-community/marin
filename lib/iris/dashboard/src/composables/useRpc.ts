@@ -19,12 +19,20 @@ export interface RpcState<T> {
   refresh: () => Promise<void>
 }
 
+function handleUnauthorized(resp: Response): void {
+  if (resp.status === 401) {
+    window.dispatchEvent(new CustomEvent('iris-auth-required'))
+  }
+}
+
 function useRpc<T>(service: string, method: string, body?: RpcBody): RpcState<T> {
   const data = ref<T | null>(null) as Ref<T | null>
   const loading = ref(false)
   const error = ref<string | null>(null)
+  let generation = 0
 
   async function refresh() {
+    const gen = ++generation
     loading.value = true
     error.value = null
     try {
@@ -34,14 +42,21 @@ function useRpc<T>(service: string, method: string, body?: RpcBody): RpcState<T>
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(resolvedBody),
       })
+      if (gen !== generation) return  // superseded by a newer refresh()
+      handleUnauthorized(resp)
       if (!resp.ok) {
         throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
       }
-      data.value = await resp.json()
+      const payload = await resp.json() as T
+      if (gen !== generation) return  // superseded while reading the response body
+      data.value = payload
     } catch (e) {
+      if (gen !== generation) return  // superseded by a newer refresh()
       error.value = e instanceof Error ? e.message : String(e)
     } finally {
-      loading.value = false
+      if (gen === generation) {
+        loading.value = false
+      }
     }
   }
 
@@ -72,6 +87,7 @@ export async function controllerRpcCall<T>(method: string, body?: Record<string,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
   })
+  handleUnauthorized(resp)
   if (!resp.ok) throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
   return resp.json() as Promise<T>
 }
@@ -82,6 +98,7 @@ export async function workerRpcCall<T>(method: string, body?: Record<string, unk
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
   })
+  handleUnauthorized(resp)
   if (!resp.ok) throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
   return resp.json() as Promise<T>
 }

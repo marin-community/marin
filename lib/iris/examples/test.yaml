@@ -20,6 +20,11 @@ defaults:
     port: 10001
     controller_address: "${IRIS_CONTROLLER_ADDRESS}"
 
+storage:
+  remote_state_dir: gs://marin-us-central2/iris/test/state
+
+worker_provider: {}
+
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   gcp:
@@ -28,7 +33,7 @@ controller:
     port: 10000
 
 scale_groups:
-  # Active scale group with capacity
+  # Active scale group with capacity (non-preemptible so executor-style jobs land here)
   tpu_v5e_4:
     num_vms: 1
     resources:
@@ -38,7 +43,7 @@ scale_groups:
       device_type: tpu
       device_variant: v5litepod-4
       device_count: 4
-      preemptible: true
+      preemptible: false
     min_slices: 2
     max_slices: 10
     slice_template:

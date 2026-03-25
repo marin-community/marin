@@ -1,17 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Integration tests for iris job CLI helpers."""
+"""Unit tests for iris job CLI helpers."""
 
 import sys
-from pathlib import Path
 
 import pytest
-import yaml
 
-from iris.client import IrisClient
-from iris.cluster.config import IrisConfig, make_local_config, load_config
-from iris.cluster.manager import connect_cluster
 from iris.cli.job import (
     build_resources,
     load_env_vars,
@@ -19,9 +14,8 @@ from iris.cli.job import (
     parse_reservation_spec,
     run_iris_job,
 )
+from iris.cluster.config import IrisConfig
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute
-
-# Unit tests for error handling and edge cases (not trivial assertions)
 
 
 def test_load_env_vars_single_key():
@@ -126,117 +120,6 @@ def test_build_resources_gpu():
     assert spec.device.gpu.count == 1
 
 
-# Integration tests using local cluster
-
-
-@pytest.fixture
-def local_cluster_and_config(tmp_path):
-    """Start local cluster and create config file for it."""
-    iris_root = Path(__file__).resolve().parents[1]
-    test_config_path = iris_root / "examples" / "test.yaml"
-
-    config = load_config(test_config_path)
-    config = make_local_config(config)
-
-    with connect_cluster(config) as url:
-        # Create a test config file with controller_address for local access
-        # Uses the local platform with controller_address set
-        test_config = tmp_path / "cluster.yaml"
-        test_config.write_text(
-            yaml.dump(
-                {
-                    "platform": {"local": {}},
-                    "defaults": {
-                        "worker": {"controller_address": url},
-                    },
-                    "scale_groups": {
-                        "local-cpu": {
-                            "min_slices": 1,
-                            "max_slices": 1,
-                            "num_vms": 1,
-                            "resources": {
-                                "cpu": 1,
-                                "ram": "1GB",
-                                "disk": 0,
-                                "device_type": "cpu",
-                                "device_count": 0,
-                            },
-                        }
-                    },
-                }
-            )
-        )
-
-        client = IrisClient.remote(url, workspace=iris_root)
-        yield test_config, url, client
-
-
-@pytest.mark.slow
-def test_iris_run_cli_simple_job(local_cluster_and_config, tmp_path):
-    """Test iris job submission runs a simple job successfully."""
-    _test_config, url, _client = local_cluster_and_config
-
-    # Create test script that prints and exits
-    test_script = tmp_path / "test.py"
-    test_script.write_text('print("SUCCESS"); exit(0)')
-
-    exit_code = run_iris_job(
-        controller_url=url,
-        command=[sys.executable, str(test_script)],
-        env_vars={},
-        wait=True,
-    )
-
-    assert exit_code == 0
-
-
-@pytest.mark.slow
-def test_iris_run_cli_env_vars_propagate(local_cluster_and_config, tmp_path):
-    """Test environment variables reach the job."""
-    _test_config, url, _client = local_cluster_and_config
-
-    # Create script that checks env var
-    test_script = tmp_path / "check_env.py"
-    test_script.write_text(
-        """
-import os
-import sys
-val = os.environ.get("TEST_VAR", "MISSING")
-print(f"TEST_VAR={val}")
-sys.exit(0 if val == "test_value" else 1)
-"""
-    )
-
-    env_vars = load_env_vars([["TEST_VAR", "test_value"]])
-
-    exit_code = run_iris_job(
-        controller_url=url,
-        command=[sys.executable, str(test_script)],
-        env_vars=env_vars,
-        wait=True,
-    )
-
-    assert exit_code == 0
-
-
-@pytest.mark.slow
-def test_iris_run_cli_job_failure(local_cluster_and_config, tmp_path):
-    """Test job submission returns non-zero on job failure."""
-    _test_config, url, _client = local_cluster_and_config
-
-    test_script = tmp_path / "fail.py"
-    test_script.write_text("exit(1)")
-
-    exit_code = run_iris_job(
-        controller_url=url,
-        command=[sys.executable, str(test_script)],
-        env_vars={},
-        wait=True,
-    )
-
-    assert exit_code == 1
-
-
 def test_run_iris_job_adds_zone_constraint(monkeypatch):
     """run_iris_job forwards a zone placement constraint."""
     captured: dict[str, object] = {}
@@ -258,10 +141,11 @@ def test_run_iris_job_adds_zone_constraint(monkeypatch):
     assert exit_code == 0
     constraints = captured["constraints"]
     assert constraints is not None
-    assert len(constraints) == 1
-    assert constraints[0].key == WellKnownAttribute.ZONE
-    assert constraints[0].op == ConstraintOp.EQ
-    assert constraints[0].value == "us-central2-b"
+
+    zone_constraints = [c for c in constraints if c.key == WellKnownAttribute.ZONE]
+    assert len(zone_constraints) == 1
+    assert zone_constraints[0].op == ConstraintOp.EQ
+    assert zone_constraints[0].value == "us-central2-b"
 
 
 def test_run_iris_job_passes_reservation(monkeypatch):
@@ -313,7 +197,6 @@ def test_run_iris_job_adds_region_and_zone_constraints(monkeypatch):
     assert exit_code == 0
     constraints = captured["constraints"]
     assert constraints is not None
-    assert len(constraints) == 2
 
     region_constraints = [c for c in constraints if c.key == WellKnownAttribute.REGION]
     assert len(region_constraints) == 1

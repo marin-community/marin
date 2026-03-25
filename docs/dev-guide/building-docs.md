@@ -14,8 +14,10 @@ Before you begin, ensure you have the following installed:
 
 1. Install the documentation dependencies:
    ```bash
-   uv sync --package marin --group docs
+   uv sync --package marin --group dev
    ```
+   Marin's `dev` group includes the docs tooling, and this is the same install
+   command used by the docs CI workflow and the general contributor setup.
 
 ## Building Documentation
 
@@ -115,7 +117,12 @@ def process_data(data: List[str]) -> Dict[str, int]:
    uv run mkdocs build --strict
    ```
 
-2. Validate markdown:
+2. Check GitHub source links after moving, deleting, or relinking docs pages:
+   ```bash
+   uv run python infra/check_docs_source_links.py
+   ```
+
+3. Validate markdown:
    ```bash
    uv run mkdocs build --strict --verbose
    ```
@@ -145,7 +152,8 @@ For the full contributor workflow, including targeted test guidance, see
 ### Broken Links
 - Use relative links for internal documentation
 - Use absolute URLs for external links
-- Test links after making changes
+- Run `uv run python infra/check_docs_source_links.py` after moving, deleting, or relinking docs pages that reference GitHub paths
+- Run `uv run mkdocs build --strict` after docs edits to catch navigation and Markdown link failures
 
 ### Build Errors
 - Check for syntax errors in markdown

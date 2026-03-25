@@ -1,151 +1,100 @@
 ---
 name: pull-request
-description: Authoring and reviewing pull requests in Marin. Use when creating a PR, writing a PR description, running pre-PR checks, or reviewing a PR.
+description: Authoring pull requests in Marin. Use when creating a PR or writing a PR description.
 ---
 
-# Recipe: Pull Requests
+# Skill: Author a Pull Request
 
-Guidelines for authoring and reviewing pull requests in Marin. Applies to both
-human and agent authors.
+This skill defines the exact output format for pull requests. Follow it
+literally when creating or updating a PR.
 
-## PR Descriptions
+## PR Description Format
 
-The PR description doubles as the squash-merge commit message. Write it
-accordingly: no markdown formatting beyond plain text paragraphs and bullets,
-concise, and self-contained.
+The PR description becomes the squash-merge commit message. Write it as
+plain text — no markdown.
 
-**Required elements:**
+**Title:** Short imperative sentence. Optional scope tag in brackets.
 
-1. **Title** -- short imperative sentence, optionally prefixed with a scope tag
-   in brackets (e.g. `[RL] Fix loss normalization`).
-2. **Body** -- one paragraph stating what changed and why. Follow with a few
-   bullets for specific changes if needed. Link the issue with `Fixes #NNNN`.
+**Body:** 1-3 sentences stating what changed and why. End with issue link if one exists.
 
-**Style rules:**
+**Hard rules — violations will be rejected:**
 
-- No markdown headers, tables, or images in the body.
-- No filler ("This PR...", "I noticed..."). State the change directly.
-- Keep it under ~150 words. A reviewer should absorb it in 30 seconds.
-- Include example output or metrics when the change is substantial.
+- No markdown: no headers (`##`), no bullet lists (`-`/`*`), no tables, no images, no `[text](url)` links.
+- No checkboxes (`- [ ]`, `- [x]`).
+- No section headers like `## Summary`, `## Test plan`, `## Changes`.
+- No filler phrases: "This PR...", "I noticed...", "Summary of changes:".
+- No emoji.
+- Under ~80 words total.
 
-### Example
+### Example (follow this exactly)
 
 ```
 Title: [RL] Fix loss: use global token normalization instead of per-example
 
 Body:
-Fixes a regression in the DAPO loss computation by switching from per-example
-normalization (/ n_i) back to global token normalization (/ N). Per-example
-normalization gives shorter responses disproportionately more gradient weight,
-which hurts math reasoning tasks where correct answers often require detailed,
-longer derivations.
-
-- Switch normalization in `compute_dapo_loss()` from per-example to global.
-- Add regression test in `tests/test_dapo_loss.py`.
+Switch DAPO loss from per-example normalization (/ n_i) to global token
+normalization (/ N). Per-example normalization over-weights short responses,
+hurting math reasoning where correct answers need longer derivations.
+Adds regression test.
 
 Fixes #1234
 ```
 
-## Linking Issues
+## Issue Linking
 
-Every PR should reference a GitHub issue. Use `Fixes #NNNN` in the description
-body so GitHub auto-closes the issue on merge. For partial work, use
-`Part of #NNNN` instead.
+If the work originated from a GitHub issue, reference it:
 
-Prefer more specific issues when possible, falling back to general issues like tracking epics if needed.
+- `Fixes #NNNN` — auto-closes the issue on merge.
+- `Part of #NNNN` — for partial work.
 
-If no issue exists yet, create one with `gh issue create` before opening the PR.
+Do not create an issue solely to satisfy this rule. When there is no
+pre-existing issue (e.g., user-directed work in a conversation), omit the
+issue link.
 
-## Testing
+## Pre-Push Checklist
 
-Before marking a PR ready for review:
+Run these before pushing. Do not skip any step.
 
-- Run `./infra/pre-commit.py --all-files --fix` and fix any issues.
-- Do not substitute `uv run pre-commit ...`; use `./infra/pre-commit.py` directly so checks run in all environments.
-- Run `uv run pytest -m 'not slow'` for the relevant test directories.
-- Ensure all CI checks pass after pushing. Monitor with
-  `gh pr view <number> --json statusCheckRollup`.
-- If CI fails, investigate and push fixes. Do not consider the PR complete
-  until relevant checks pass.
+1. `./infra/pre-commit.py --all-files --fix` — resolve all issues. Do not substitute `uv run pre-commit ...`.
+2. `uv run pytest -m 'not slow'` — relevant test directories.
+3. If docs pages were added/deleted/renamed: `uv run python infra/check_docs_source_links.py`
+4. If docs-heavy: `uv run mkdocs build --strict`
 
-### What to test
+After pushing, monitor CI: `gh pr view <number> --json statusCheckRollup`.
+Fix failures before considering the PR complete.
 
-- Write tests _before_ or alongside your fix, not after.
-- Prefer behavioral/integration tests over mocks.
-- Do not test obvious behavior (a type exists, a constant has a value).
-- Do not reimplement the system under test inside your assertions. Tests should
-  verify externally-observable outputs and side effects, not mirror the
-  production logic with `assert` statements.
-- Focus on tests that would catch real regressions: boundary conditions, error
-  paths, and integration points between modules.
-- Use existing test files when appropriate.
+## Specifications (>500 LOC)
 
-## Self-Review
+PRs over ~500 lines must include a specification. Put it in (preferred order):
 
-Before requesting review, go through your own diff:
+1. The associated GitHub issue
+2. First PR comment after the description
+3. `docs/design/<topic>.md` or `.agents/projects/<topic>.md`
 
-- Add high-level comments explaining non-obvious changes (e.g. "moved from
-  file A to file B", "this block handles the edge case where...").
-- Verify the diff matches the PR description. If it doesn't, update one or
-  the other.
+A specification contains:
 
-## Specifications for Large PRs
+1. **Problem** — what is broken or missing, with file/line references.
+2. **Approach** — which modules change, what gets added/removed.
+3. **Key code** — 10-30 line snippets for non-obvious logic.
+4. **Tests** — what is tested, how, and why sufficient.
 
-Any PR that adds or modifies more than ~500 lines of code must include a
-specification. Smaller PRs may include one if the change is architecturally
-significant or touches many modules.
+## Creating the PR
 
-Prefer to put the specification in one of (in preferred order):
+Use `gh pr create` with these flags:
 
-- The associated issue for this work
-- A GitHub PR comment (first comment after the description).
-- `docs/design/<topic>.md` or `.agents/projects/<topic>.md` -- when it is important for the spec to be referenced and used in future work.
+```bash
+gh pr create \
+  --title "<title>" \
+  --body "<plain text body>" \
+  --label agent-generated
+```
 
-A specification must contain:
-
-1. **Problem** -- what is broken or missing, with file/line references.
-2. **Approach** -- concrete plan: which modules change, what gets added/removed.
-3. **Key code** -- short snippets (10-30 lines) for non-obvious logic.
-4. **Tests** -- what is tested, how, and why that set of tests is sufficient.
-
-Optional: non-goals, future work, alternatives considered. Follow the format
-in `.agents/skills/design-doc/` for longer standalone specifications.
-
-A specification passes the **reproduction test**: could a different engineer,
-given only the spec and access to the repo, produce substantially the same PR?
-
-## Review Process
-
-### Human review: specification-first
-
-Human reviewers focus on the specification, not the diff:
-
-1. Is the problem statement accurate?
-2. Is the approach sound?
-3. Is the scope right?
-4. Are the listed files complete?
-
-### Agent review: specification compliance
-
-Automated review validates the implementation matches the specification:
-
-1. Every change in the diff should be traceable to the spec.
-2. The implementation follows the described approach.
-3. Described test scenarios exist and test what they claim. Tests should
-   exercise meaningful behavior, not merely restate production logic.
-4. No bugs, logic errors, resource leaks, or race conditions.
-
-The standard PR review prompt includes specification validation when a spec is present.
-
-## Agent-Specific Rules
-
-- Add the `agent-generated` label when creating a PR.
+- Add the `agent-generated` label.
 - Never credit yourself in commits or PR descriptions.
-- When the PR addresses an issue, include `Fixes #NNNN` in the body.
+- Include `Fixes #NNNN` when addressing a pre-existing issue.
 
 ## See Also
 
-- `.agents/skills/github-pr-review/` -- PR review prompt
-- `.agents/skills/design-doc/` -- design document format
-- `.agents/skills/fix-issue/` -- end-to-end issue fix workflow
-- `AGENTS.md` -- coding guidelines
+- `.agents/skills/github-pr-review/` — PR review skill (separate concern)
+- `.agents/skills/fix-issue/` — end-to-end issue fix workflow
+- `AGENTS.md` — coding guidelines

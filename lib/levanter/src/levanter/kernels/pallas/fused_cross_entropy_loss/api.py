@@ -10,11 +10,10 @@ from typing import Literal, Optional, TypeAlias, cast, overload
 import warnings
 
 import jax
-from jax import core as jax_core
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
-from levanter.kernels.pallas import autotune_cache_utils
+from levanter.kernels.pallas import autotune_cache_utils, autotune_utils
 
 from .config import BlockSizes
 from .tuned_block_sizes import (
@@ -328,10 +327,6 @@ def _candidate_block_sizes(
     return deduped
 
 
-def _is_tracer(x: jax.Array) -> bool:
-    return isinstance(x, jax_core.Tracer)
-
-
 def _benchmark_block_sizes_candidate(
     *,
     fn: ArrayImpl,
@@ -356,17 +351,17 @@ def _benchmark_block_sizes_candidate(
         out = fn(x_value, labels_value, w_value, **kwargs)
         return out[0]
 
-    jitted = jax.jit(_loss_only)
-
-    abstract_args = (
-        jax.ShapeDtypeStruct(x.shape, x.dtype),
-        jax.ShapeDtypeStruct(labels.shape, labels.dtype),
-        jax.ShapeDtypeStruct(w.shape, w.dtype),
+    benchmark_fn = autotune_utils.maybe_wrap_in_shard_map(
+        _loss_only,
+        args=(x, labels, w),
+        out_specs=autotune_utils.named_sharding_of(labels).spec if autotune_utils.named_sharding_of(labels) else None,
     )
-    start = time.perf_counter()
-    lowered = jitted.lower(*abstract_args)
-    lowered.compile()
-    compile_time = time.perf_counter() - start
+    lowering_args = autotune_utils.benchmark_lowering_args(x, labels, w)
+    compile_time = autotune_utils.compile_benchmark_fn(
+        benchmark_fn=benchmark_fn,
+        lowering_args=lowering_args,
+        args=(x, labels, w),
+    )
     if compile_time <= _AUTOTUNE_COMPILE_HIT_THRESHOLD_S:
         logger.info(
             "Fused CE autotune candidate %s likely hit JAX compilation cache (compile %.3fs).",
@@ -374,9 +369,10 @@ def _benchmark_block_sizes_candidate(
             compile_time,
         )
 
-    if _is_tracer(x) or _is_tracer(labels) or _is_tracer(w):
+    if autotune_utils.contains_tracer(x, labels, w):
         return compile_time
 
+    jitted = jax.jit(benchmark_fn)
     start = time.perf_counter()
     out = jitted(x, labels, w)
     jax.block_until_ready(out)
@@ -626,18 +622,25 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             elif has_tuned_match:
                 block_sizes_for_impl = inferred
             else:
-                block_sizes_for_impl = _autotune_block_sizes_on_miss(
-                    impl_name=impl_for_call,
-                    fn=fn,
-                    x=x,
-                    labels=labels,
-                    w=w,
-                    inferred=inferred,
-                    dtype=dtype,
-                    logit_soft_cap=logit_soft_cap,
-                    precision=precision,
-                    return_argmax=return_argmax,
-                )
+                try:
+                    block_sizes_for_impl = _autotune_block_sizes_on_miss(
+                        impl_name=impl_for_call,
+                        fn=fn,
+                        x=x,
+                        labels=labels,
+                        w=w,
+                        inferred=inferred,
+                        dtype=dtype,
+                        logit_soft_cap=logit_soft_cap,
+                        precision=precision,
+                        return_argmax=return_argmax,
+                    )
+                except Exception as exc:
+                    if explicit:
+                        raise
+                    _warn_pallas_fallback_once(exc)
+                    errors.append(exc)
+                    continue
         else:
             block_sizes_for_impl = infer_block_sizes(
                 x.shape[0],

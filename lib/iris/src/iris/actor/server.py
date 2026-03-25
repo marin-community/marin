@@ -10,6 +10,7 @@ Example:
 """
 
 import asyncio
+import functools
 import inspect
 import logging
 import socket
@@ -150,7 +151,7 @@ class ActorServer:
             # We use our own executor instead of asyncio.to_thread() to avoid issues
             # when asyncio's default executor is shut down during process cleanup.
             loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(self._executor, method, *args, **kwargs)
+            result = await loop.run_in_executor(self._executor, functools.partial(method, *args, **kwargs))
 
             return actor_pb2.ActorResponse(serialized_value=cloudpickle.dumps(result))
 
@@ -262,16 +263,24 @@ class ActorServer:
 
         op.future = self._executor.submit(run)
 
-        logger.info("Started operation %s for %s.%s", op_id, request.actor_name, request.method_name)
+        logger.debug("Started operation %s for %s.%s", op_id, request.actor_name, request.method_name)
         return op.to_proto()
 
     async def get_operation(self, request: actor_pb2.OperationId, ctx: RequestContext) -> actor_pb2.Operation:
-        """Poll the state of a long-running operation."""
+        """Poll the state of a long-running operation.
+
+        When the operation reaches a terminal state (SUCCEEDED, FAILED, CANCELLED),
+        the result is returned and the operation is removed from server memory.
+        """
         with self._operations_lock:
             op = self._operations.get(request.operation_id)
         if op is None:
             raise ConnectError(Code.NOT_FOUND, f"Operation '{request.operation_id}' not found")
-        return op.to_proto()
+        proto = op.to_proto()
+        if proto.state not in (actor_pb2.Operation.PENDING, actor_pb2.Operation.RUNNING):
+            with self._operations_lock:
+                self._operations.pop(request.operation_id, None)
+        return proto
 
     async def cancel_operation(self, request: actor_pb2.OperationId, ctx: RequestContext) -> actor_pb2.Operation:
         """Request cancellation of a long-running operation.

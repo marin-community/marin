@@ -177,7 +177,6 @@ message ScaleGroupResources {
 
 message WorkerSettings {
   map<string, string> attributes = 1;
-  map<string, string> env = 2;
 }
 
 // Configuration for a scale group
@@ -241,7 +240,7 @@ message WorkerConfig {
 
   // Task defaults
   string default_task_image = 9;
-  map<string, string> default_task_env = 10;
+  map<string, string> task_env = 10;
   string runtime = 11;                       // "docker" or "kubernetes"
 
   // Accelerator (from scale group resources, not env vars)
@@ -257,12 +256,20 @@ message WorkerConfig {
   iris.time.Duration poll_interval = 40;
   iris.time.Duration heartbeat_timeout = 41;
 
+  // Iris slice_id; used by multi-VM slices (TPU) to construct worker_id
+  // from slice_id + TPU worker index so registration IDs match platform IDs.
+  string slice_id = 8;
+
   // Platform config (for image resolution — worker creates lightweight platform)
   PlatformConfig platform = 50;
 
   // Storage prefix for task artifacts (profiles). Injected by the controller
-  // from the resolved bundle_prefix. Empty disables profile upload.
+  // from the resolved remote_state_dir. Empty disables profile upload.
   string storage_prefix = 60;
+
+  // Bearer token for worker→controller authentication.
+  // Set by the controller when auth is enabled; empty when auth is disabled.
+  string auth_token = 70;
 }
 
 // SSH configuration for manual hosts
@@ -278,7 +285,11 @@ message SshConfig {
 // ============================================================================
 
 message StorageConfig {
-  string bundle_prefix = 1;  // URI prefix for job bundles (e.g. s3://iris/bundles, gs://bucket/path)
+  string local_state_dir = 1;      // Local directory for controller DB, logs, bundle cache.
+                                    // Must be on a volume that survives container restarts.
+                                    // Default: /var/cache/iris/controller
+  string remote_state_dir = 2;     // Remote URI for controller checkpoints and worker profiles
+                                    // (e.g. gs://bucket/iris/state). Required for production.
 }
 
 // ============================================================================
@@ -331,7 +342,7 @@ message ControllerVmConfig {
 message AutoscalerConfig {
   iris.time.Duration evaluation_interval = 1;  // Default: 10s
   iris.time.Duration scale_up_delay = 3;       // Default: 60s
-  iris.time.Duration scale_down_delay = 4;     // Default: 300s
+  iris.time.Duration scale_down_delay = 4;     // Default: 600s (idle threshold before scale-down)
   iris.time.Duration startup_grace_period = 5; // Default: 30min — time for new slices to boot and register workers
   iris.time.Duration heartbeat_grace_period = 6; // Default: 5min — time after last worker heartbeat before reaping slice
 }
@@ -342,6 +353,59 @@ message DefaultsConfig {
   reserved 4;  // was: BootstrapConfig bootstrap
   reserved 5;  // was: string default_task_image
   WorkerConfig worker = 6;
+  map<string, string> task_env = 7;  // Env vars injected into every task container
+}
+
+// ============================================================================
+// AUTHENTICATION CONFIGURATION
+// ============================================================================
+
+message GcpAuthConfig {
+  string project_id = 1;  // GCP project ID — users must have access to this project to log in
+}
+
+message StaticAuthConfig {
+  // Map of token string → username. Useful for local dev and testing.
+  map<string, string> tokens = 1;
+}
+
+message AuthConfig {
+  oneof provider {
+    GcpAuthConfig gcp = 1;
+    StaticAuthConfig static = 2;
+  }
+  repeated string admin_users = 3;
+
+  // When true, authentication is attempted but not required. Requests with
+  // valid tokens get the authenticated identity; requests without tokens
+  // fall through as anonymous admin. Invalid tokens are still rejected.
+  // This allows gradual rollout of auth on clusters that currently rely on
+  // SSH tunnels.
+  bool optional = 4;
+}
+
+// ============================================================================
+// PROVIDER CONFIGURATION
+// ============================================================================
+
+// Configuration for WorkerProvider: RPC-based worker daemons managed by the autoscaler.
+// No fields needed — all configuration is in defaults.worker and scale_groups.
+message WorkerProviderConfig {}
+
+// Configuration for KubernetesProvider: direct Pod dispatch without worker daemons.
+message KubernetesProviderConfig {
+  string namespace = 1;    // Kubernetes namespace for task pods (default: "iris")
+  string kubeconfig = 2;   // Path to kubeconfig file; empty string uses in-cluster auth
+  string default_image = 3; // Default container image for task pods
+  // Topology key for pod affinity on multi-VM gang-scheduled jobs.
+  // When set, sibling task pods for the same job prefer scheduling on nodes
+  // sharing this topology (e.g. "coreweave.cloud/spine" for IB colocation).
+  // Leave empty to disable. Default: "coreweave.cloud/spine".
+  string colocation_topology_key = 4;
+  string service_account = 5;    // K8s ServiceAccount for task pods (default: "")
+  bool host_network = 6;         // Run task pods with hostNetwork (for NCCL/IB)
+  string cache_dir = 7;          // hostPath base for cache mounts (default: "/cache")
+  string controller_address = 8; // Controller URL injected into task pods
 }
 
 // ============================================================================
@@ -350,6 +414,9 @@ message DefaultsConfig {
 
 // Full cluster configuration - single source of truth
 message IrisClusterConfig {
+  // Human-readable cluster name for token store
+  string name = 5;
+
   // Platform settings
   PlatformConfig platform = 10;
   DefaultsConfig defaults = 11;
@@ -360,4 +427,13 @@ message IrisClusterConfig {
 
   // Scale groups (name -> config)
   map<string, ScaleGroupConfig> scale_groups = 50;
+
+  // Authentication (optional — when absent, no auth is required)
+  AuthConfig auth = 60;
+
+  // Task provider — required. Exactly one must be set.
+  oneof provider {
+    KubernetesProviderConfig kubernetes_provider = 70;
+    WorkerProviderConfig worker_provider = 71;
+  }
 }

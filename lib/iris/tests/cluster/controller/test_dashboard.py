@@ -15,70 +15,28 @@ from starlette.testclient import TestClient
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import (
-    TASKS,
-    ATTEMPTS,
-    ControllerDB,
+    JOBS,
     Endpoint,
-    _tasks_with_attempts,
+    healthy_active_workers_with_attributes,
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
-from iris.cluster.log_store import LogStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Timestamp
 
-
-def _query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName):
-    """Read tasks with attempts for a job."""
-    with state._db.snapshot() as q:
-        tasks = q.select(
-            TASKS,
-            where=TASKS.c.job_id == job_id.to_wire(),
-            order_by=(TASKS.c.task_index.asc(),),
-        )
-        if not tasks:
-            return []
-        attempts = q.select(
-            ATTEMPTS,
-            where=ATTEMPTS.c.task_id.in_([t.task_id.to_wire() for t in tasks]),
-            order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
-        )
-    return _tasks_with_attempts(tasks, attempts)
-
-
-def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
-    """Create a minimal RuntimeEntrypoint proto for testing."""
-    entrypoint = cluster_pb2.RuntimeEntrypoint()
-    entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    return entrypoint
-
+from .conftest import (
+    make_test_entrypoint,
+    make_worker_metadata,
+    query_tasks_with_attempts as _query_tasks_with_attempts,
+    register_worker,
+)
 
 # =============================================================================
 # Test Helpers
 # =============================================================================
-
-
-def register_worker(
-    state: ControllerTransitions,
-    worker_id: str,
-    address: str,
-    metadata: cluster_pb2.WorkerMetadata,
-    healthy: bool = True,
-) -> WorkerId:
-    """Register a worker through the state command API."""
-    wid = WorkerId(worker_id)
-    state.register_or_refresh_worker(
-        worker_id=wid,
-        address=address,
-        metadata=metadata,
-        ts=Timestamp.now(),
-    )
-    if not healthy:
-        state._db.execute("UPDATE workers SET healthy = 0 WHERE worker_id = ?", (str(wid),))
-    return wid
 
 
 def submit_job(
@@ -127,17 +85,6 @@ def set_task_state(state: ControllerTransitions, task_id: JobName, new_state: in
 
 
 @pytest.fixture
-def state(tmp_path):
-    db_path = tmp_path / "controller.sqlite3"
-    db = ControllerDB(db_path=db_path)
-    log_store = LogStore(db_path=db_path)
-    s = ControllerTransitions(db=db, log_store=log_store)
-    yield s
-    log_store.close()
-    db.close()
-
-
-@pytest.fixture
 def scheduler():
     return Scheduler()
 
@@ -145,9 +92,9 @@ def scheduler():
 def _make_controller_mock(state, scheduler, autoscaler=None):
     """Build a mock that implements the ControllerProtocol for testing.
 
-    The mock delegates create_scheduling_context and get_job_scheduling_diagnostics
-    to the scheduler, mirroring how the real controller converts worker/job rows
-    into scheduler-native types at the boundary.
+    The mock delegates create_scheduling_context to the scheduler and computes
+    scheduling diagnostics on the fly, mirroring how the real controller caches
+    diagnostics per scheduling cycle.
     """
 
     def _create_scheduling_context(workers):
@@ -167,7 +114,15 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
         building_counts = {row.worker_id: row.c for row in rows}
         return scheduler.create_scheduling_context(workers, building_counts=building_counts)
 
-    def _get_job_scheduling_diagnostics(job, context):
+    def _get_job_scheduling_diagnostics(job_wire_id):
+        """Compute diagnostics on the fly for tests (mirrors real controller cache)."""
+        with state._db.snapshot() as q:
+            rows = q.select(JOBS, where=JOBS.c.job_id == job_wire_id)
+        if not rows:
+            return None
+        job = rows[0]
+        if job.state != cluster_pb2.JOB_STATE_PENDING:
+            return None
         req = JobRequirements(
             resources=job.request.resources,
             constraints=list(job.request.constraints),
@@ -176,6 +131,8 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
         )
         tasks = _query_tasks_with_attempts(state, job.job_id)
         schedulable_task_id = next((t.task_id for t in tasks if t.can_be_scheduled()), None)
+        workers = healthy_active_workers_with_attributes(state._db)
+        context = _create_scheduling_context(workers)
         return scheduler.get_job_scheduling_diagnostics(req, context, schedulable_task_id, num_tasks=len(tasks))
 
     controller_mock = Mock()
@@ -183,7 +140,8 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock.create_scheduling_context = _create_scheduling_context
     controller_mock.get_job_scheduling_diagnostics = _get_job_scheduling_diagnostics
     controller_mock.autoscaler = autoscaler
-    controller_mock.stub_factory = Mock()
+    controller_mock.provider = Mock()
+    controller_mock.has_direct_provider = False
     return controller_mock
 
 
@@ -194,7 +152,7 @@ def service(state, scheduler, tmp_path):
         state,
         state._db,
         controller=controller_mock,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
     )
 
@@ -213,7 +171,7 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
         state,
         state._db,
         controller=controller_mock,
-        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
     )
 
@@ -230,34 +188,10 @@ def rpc_post(client: TestClient, method: str, body: dict | None = None):
 
 
 @pytest.fixture
-def make_worker_metadata():
-    """Create WorkerMetadata for testing."""
-
-    def _make(
-        cpu: int = 10,
-        memory_bytes: int = 10 * 1024**3,
-        disk_bytes: int = 10 * 1024**3,
-    ) -> cluster_pb2.WorkerMetadata:
-        device = cluster_pb2.DeviceConfig()
-        device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
-
-        return cluster_pb2.WorkerMetadata(
-            hostname="test-worker",
-            ip_address="127.0.0.1",
-            cpu_count=cpu,
-            memory_bytes=memory_bytes,
-            disk_bytes=disk_bytes,
-            device=device,
-        )
-
-    return _make
-
-
-@pytest.fixture
 def job_request():
     return cluster_pb2.Controller.LaunchJobRequest(
         name=JobName.root("test-user", "test-job").to_wire(),
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=1,
@@ -315,7 +249,7 @@ def test_list_jobs_includes_terminal_states(client, state, job_request):
         assert j.get("state") in terminal_states
 
 
-def test_list_workers_returns_healthy_status(client, state, make_worker_metadata):
+def test_list_workers_returns_healthy_status(client, state):
     """ListWorkers RPC returns workers with healthy status."""
     register_worker(state, "healthy1", "h1:8080", make_worker_metadata())
     register_worker(state, "healthy2", "h2:8080", make_worker_metadata())
@@ -330,11 +264,10 @@ def test_list_workers_returns_healthy_status(client, state, make_worker_metadata
 
 
 def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
-    """ListEndpoints filters out endpoints for terminal jobs.
+    """ListEndpoints returns endpoints for non-terminal jobs.
 
-    Endpoints are visible for jobs in non-terminal states (PENDING, BUILDING, RUNNING)
-    to support the case where tasks are executing but the job hasn't transitioned to
-    RUNNING yet due to controller-worker communication delay.
+    Endpoints are associated with tasks and deleted when tasks reach terminal states,
+    so only endpoints for pending/running jobs should exist at query time.
     """
     # Create jobs in various states
     pending_id = submit_job(state, "pending", job_request)
@@ -342,10 +275,11 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     running_id = submit_job(state, "running", job_request)
     set_job_state(state, running_id, cluster_pb2.JOB_STATE_RUNNING)
 
+    # No endpoint for succeeded job — endpoints are deleted when tasks go terminal
     succeeded_id = submit_job(state, "succeeded", job_request)
     set_job_state(state, succeeded_id, cluster_pb2.JOB_STATE_SUCCEEDED)
 
-    # Add endpoints for each
+    # Add endpoints only for non-terminal jobs
     state.add_endpoint(
         Endpoint(
             endpoint_id="ep1",
@@ -368,22 +302,10 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
         ),
         task_id=running_id.task(0),
     )
-    state.add_endpoint(
-        Endpoint(
-            endpoint_id="ep3",
-            name="done-svc",
-            address="h:3",
-            job_id=succeeded_id,
-            metadata={},
-            registered_at=Timestamp.now(),
-        ),
-        task_id=succeeded_id.task(0),
-    )
 
     resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
     endpoints = resp.get("endpoints", [])
 
-    # Both pending and running endpoints should be visible (terminal state filtered out)
     assert len(endpoints) == 2
     endpoint_names = {ep["name"] for ep in endpoints}
     assert endpoint_names == {"pending-svc", "running-svc"}
@@ -412,7 +334,7 @@ def test_list_jobs_includes_task_counts(client, state):
     # Submit a job with multiple replicas (replicas is on ResourceSpecProto)
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="multi-replica-job",
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=3,
         environment=cluster_pb2.EnvironmentConfig(),
@@ -443,7 +365,7 @@ def test_list_jobs_includes_task_counts(client, state):
 def test_list_users_returns_aggregates(client, state):
     """ListUsers RPC returns one aggregate row per user."""
     request = cluster_pb2.Controller.LaunchJobRequest(
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=1,
@@ -489,7 +411,7 @@ def test_get_job_status_returns_original_request(client, state):
     """GetJobStatus RPC returns the original LaunchJobRequest for the job detail page."""
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="request-detail-job",
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
             cpu_millicores=4000,
             memory_bytes=8 * 1024**3,
@@ -705,14 +627,13 @@ def test_pending_reason_uses_passive_autoscaler_hint_over_scheduler(
     client_with_autoscaler,
     state,
     mock_autoscaler,
-    make_worker_metadata,
 ):
     """GetJobStatus should use autoscaler passive-wait hint even when no active launch."""
     register_worker(state, "w1", "h1:8080", make_worker_metadata())
 
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="diag-constraint",
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=1,
@@ -785,7 +706,7 @@ def test_worker_detail_page_escapes_id(client):
     assert "onmouseover" not in response.text or "&quot;" in response.text
 
 
-def test_get_worker_status_recent_tasks_have_timestamps(client, state, make_worker_metadata, job_request):
+def test_get_worker_status_recent_tasks_have_timestamps(client, state, job_request):
     """GetWorkerStatus returns recent_tasks with started_at populated from attempt timestamps."""
     wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
     job_id = submit_job(state, "ts-job", job_request)
@@ -815,7 +736,7 @@ def test_get_worker_status_recent_tasks_have_timestamps(client, state, make_work
     assert tasks[0].get("finishedAt"), "finished_at must be populated from attempt timestamps"
 
 
-def test_get_worker_status_by_worker_id(client, state, make_worker_metadata):
+def test_get_worker_status_by_worker_id(client, state):
     """GetWorkerStatus looks up purely by worker ID — no autoscaler cross-referencing."""
     register_worker(state, "w1", "10.0.0.5:8080", make_worker_metadata())
 
@@ -825,7 +746,7 @@ def test_get_worker_status_by_worker_id(client, state, make_worker_metadata):
     assert resp.get("worker", {}).get("address") == "10.0.0.5:8080"
 
 
-def test_get_worker_status_includes_running_tasks_and_resource_history(client, state, make_worker_metadata, job_request):
+def test_get_worker_status_includes_running_tasks_and_resource_history(client, state, job_request):
     """GetWorkerStatus assembles running tasks and resource history explicitly."""
     wid = register_worker(state, "w1", "10.0.0.5:8080", make_worker_metadata())
     job_id = submit_job(state, "worker-detail-res", job_request)
@@ -893,7 +814,7 @@ def test_coscheduling_failure_reason_no_workers(client, state):
     """
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="cosched-job",
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=2,
         environment=cluster_pb2.EnvironmentConfig(),
@@ -914,7 +835,7 @@ def test_coscheduling_failure_reason_no_workers(client, state):
     assert "no workers match constraints" in reason.lower(), f"Expected constraint failure reason, got: {reason}"
 
 
-def test_coscheduling_failure_reason_insufficient_group(client, state, make_worker_metadata):
+def test_coscheduling_failure_reason_insufficient_group(client, state):
     """Pending coscheduled job reports diagnostic when group is too small.
 
     Diagnostics are on the job-level (via GetJobStatus), not per-task in ListTasks.
@@ -929,7 +850,7 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
     # Submit a coscheduled job needing 4 replicas
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="big-cosched",
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
@@ -956,7 +877,7 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
 # =============================================================================
 
 
-def test_worker_attributes_in_list_workers(client, state, make_worker_metadata):
+def test_worker_attributes_in_list_workers(client, state):
     """ListWorkers RPC returns worker attributes in metadata."""
     meta = make_worker_metadata()
     meta.attributes[WellKnownAttribute.TPU_NAME].CopyFrom(cluster_pb2.AttributeValue(string_value="v5litepod-16"))
@@ -982,7 +903,7 @@ def test_list_jobs_returns_all_jobs_for_pagination(client, state):
     for i in range(60):
         request = cluster_pb2.Controller.LaunchJobRequest(
             name=f"job-{i:03d}",
-            entrypoint=_make_test_entrypoint(),
+            entrypoint=make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
             environment=cluster_pb2.EnvironmentConfig(),
         )
@@ -1002,3 +923,60 @@ def test_bundle_download_route_serves_bundle_bytes(client, service):
     assert resp.status_code == 200
     assert resp.content == bundle_bytes
     assert resp.headers["content-type"] == "application/zip"
+
+
+# =============================================================================
+# Auth Config Endpoint Tests
+# =============================================================================
+
+
+def test_auth_config_returns_disabled_by_default(client):
+    """Auth config endpoint reports auth disabled when no verifier is configured."""
+    resp = client.get("/auth/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["auth_enabled"] is False
+    assert data["provider"] is None
+
+
+def test_auth_config_returns_enabled_when_verifier_set(service):
+    """Auth config endpoint reports auth enabled with provider name."""
+    from iris.rpc.auth import StaticTokenVerifier
+
+    verifier = StaticTokenVerifier({"test-token": "test-user"})
+    dashboard = ControllerDashboard(service, auth_verifier=verifier, auth_provider="gcp")
+    authed_client = TestClient(dashboard.app)
+
+    resp = authed_client.get("/auth/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["auth_enabled"] is True
+    assert data["provider"] == "gcp"
+
+
+def test_auth_config_worker_provider_kind(client):
+    """auth/config returns provider_kind=worker when no direct provider."""
+    resp = client.get("/auth/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["provider_kind"] == "worker"
+
+
+def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
+    """auth/config returns provider_kind=kubernetes when controller has direct provider."""
+    controller_mock = _make_controller_mock(state, scheduler)
+    controller_mock.has_direct_provider = True
+    svc = ControllerServiceImpl(
+        state,
+        state._db,
+        controller=controller_mock,
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
+        log_store=state._log_store,
+    )
+    dashboard = ControllerDashboard(svc)
+    k8s_client = TestClient(dashboard.app)
+
+    resp = k8s_client.get("/auth/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["provider_kind"] == "kubernetes"

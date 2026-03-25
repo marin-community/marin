@@ -37,12 +37,9 @@ from iris.cluster.client import (
     get_job_info,
     resolve_job_user,
 )
-from iris.cluster.controller.local import (
-    LocalController,
-    make_local_cluster_config,
-    wait_for_worker_registration,
-)
-from iris.cluster.constraints import Constraint, merge_constraints
+from iris.rpc.auth import AuthTokenInjector, TokenProvider
+from iris.cluster.providers.local.cluster import LocalCluster, make_local_cluster_config
+from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -135,8 +132,7 @@ class JobFailedError(Exception):
 class JobAlreadyExists(Exception):
     """Raised when a job with the same name is already running."""
 
-    def __init__(self, job: "Job", message: str):
-        self.job = job
+    def __init__(self, message: str):
         super().__init__(message)
 
 
@@ -498,7 +494,7 @@ class IrisClient:
         self,
         cluster: ClusterClient,
         namespace: Namespace = Namespace(""),
-        controller: LocalController | None = None,
+        controller: LocalCluster | None = None,
     ):
         """Initialize IrisClient with a cluster client.
 
@@ -506,7 +502,7 @@ class IrisClient:
 
         Args:
             cluster: Low-level cluster client (RemoteClusterClient)
-            controller: Optional LocalController to manage lifecycle for local mode.
+            controller: Optional LocalCluster to manage lifecycle for local mode.
         """
         self._cluster_client = cluster
         self._namespace = namespace
@@ -524,9 +520,8 @@ class IrisClient:
         """
         cfg = config or LocalClientConfig()
         config_proto = make_local_cluster_config(cfg.max_workers)
-        controller = LocalController(config_proto)
+        controller = LocalCluster(config_proto)
         address = controller.start()
-        wait_for_worker_registration(address)
         cluster = RemoteClusterClient(controller_address=address, timeout_ms=30000)
         return cls(cluster, controller=controller)
 
@@ -538,6 +533,7 @@ class IrisClient:
         workspace: Path | None = None,
         bundle_id: str | None = None,
         timeout_ms: int = 30000,
+        token_provider: TokenProvider | None = None,
     ) -> "IrisClient":
         """Create an IrisClient for RPC-based cluster execution.
 
@@ -549,6 +545,7 @@ class IrisClient:
             bundle_id: Workspace bundle identifier for sub-job inheritance.
                 When set, sub-jobs use this bundle ID instead of creating new bundles.
             timeout_ms: RPC timeout in milliseconds
+            token_provider: When set, attaches bearer tokens to all outgoing RPCs.
 
         Returns:
             IrisClient wrapping RemoteClusterClient
@@ -559,11 +556,16 @@ class IrisClient:
             bundle_blob = creator.create_bundle()
             logger.info(f"Workspace bundle size: {len(bundle_blob) / 1024 / 1024:.1f} MB")
 
+        interceptors = []
+        if token_provider is not None:
+            interceptors.append(AuthTokenInjector(token_provider))
+
         cluster = RemoteClusterClient(
             controller_address=controller_address,
             bundle_id=bundle_id,
             bundle_blob=bundle_blob,
             timeout_ms=timeout_ms,
+            interceptors=interceptors,
         )
         return cls(cluster)
 
@@ -605,6 +607,8 @@ class IrisClient:
         timeout: Duration | None = None,
         user: str | None = None,
         reservation: list[ReservationEntry] | None = None,
+        preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
+        existing_job_policy: cluster_pb2.ExistingJobPolicy = cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -678,6 +682,15 @@ class IrisClient:
             else:
                 constraints = merge_constraints(parent_constraints, constraints)
 
+            # Always inherit the parent's region unless the child already has
+            # an explicit region constraint.  This applies even when the caller
+            # passes constraints=[] to clear other inherited constraints —
+            # region pinning ensures children stay co-located with the
+            # reservation's claimed workers.
+            if job_info and job_info.worker_region and not any(c.key == WellKnownAttribute.REGION for c in constraints):
+                inherited_region = region_constraint([job_info.worker_region])
+                constraints = [*constraints, inherited_region]
+
         # Convert to wire format
         resources_proto = resources.to_proto()
         environment_proto = environment.to_proto() if environment else None
@@ -690,7 +703,7 @@ class IrisClient:
             )
 
         try:
-            self._cluster_client.submit_job(
+            canonical_id = self._cluster_client.submit_job(
                 job_id=job_id,
                 entrypoint=entrypoint,
                 resources=resources_proto,
@@ -704,13 +717,15 @@ class IrisClient:
                 max_retries_preemption=max_retries_preemption,
                 timeout=timeout,
                 reservation=reservation_proto,
+                preemption_policy=preemption_policy,
+                existing_job_policy=existing_job_policy,
             )
         except ConnectError as e:
             if e.code == Code.ALREADY_EXISTS:
-                raise JobAlreadyExists(Job(self, job_id), str(e)) from e
+                raise JobAlreadyExists(str(e)) from e
             raise
 
-        return Job(self, job_id)
+        return Job(self, canonical_id)
 
     def status(self, job_id: JobName) -> cluster_pb2.JobStatus:
         """Get job status.
@@ -873,7 +888,7 @@ class IrisClient:
         """
         self._cluster_client.shutdown(wait=wait)
         if self._controller is not None:
-            self._controller.stop()
+            self._controller.close()
 
 
 @dataclass

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
@@ -19,6 +19,7 @@ import InfoRow from '@/components/shared/InfoRow.vue'
 import MetricCard from '@/components/shared/MetricCard.vue'
 import Sparkline from '@/components/shared/Sparkline.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
+import CopyButton from '@/components/shared/CopyButton.vue'
 
 const props = defineProps<{
   workerId: string
@@ -73,6 +74,13 @@ const taskColumns: Column[] = [
 useAutoRefresh(fetchWorker, 5_000)
 onMounted(fetchWorker)
 
+// Re-fetch when navigating between workers (Vue Router reuses the component).
+// Clear stale data first so loading/error states render correctly if the fetch fails.
+watch(() => props.workerId, () => {
+  data.value = null
+  fetchWorker()
+})
+
 function attributeDisplay(val: { stringValue?: string; intValue?: string; floatValue?: string }): string {
   if (val.stringValue !== undefined) return val.stringValue
   if (val.intValue !== undefined) return val.intValue
@@ -118,8 +126,9 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
           />
           {{ worker?.healthy ? 'Healthy' : 'Unhealthy' }}
         </span>
-        <span v-if="worker?.address" class="text-sm text-text-muted font-mono">
+        <span v-if="worker?.address" class="group/addr text-sm text-text-muted font-mono inline-flex items-center gap-1">
           {{ worker.address }}
+          <CopyButton :value="worker.address" />
         </span>
         <button
           class="ml-auto px-3 py-1.5 text-xs border border-surface-border rounded hover:bg-surface-sunken"
@@ -148,10 +157,14 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
             <span class="font-mono">{{ worker?.workerId }}</span>
           </InfoRow>
           <InfoRow label="Address">
-            <span class="font-mono">{{ worker?.address ?? '-' }}</span>
+            <span v-if="worker?.address" class="group/addr inline-flex items-center gap-1">
+              <CopyButton :value="worker.address" />
+              <span class="font-mono">{{ worker.address }}</span>
+            </span>
+            <span v-else class="font-mono">-</span>
           </InfoRow>
-          <InfoRow v-if="worker?.metadata?.gceZone" label="Zone">
-            <span class="font-mono">{{ worker.metadata.gceZone }}</span>
+          <InfoRow v-if="worker?.metadata?.attributes?.zone" label="Zone">
+            <span class="font-mono">{{ worker.metadata.attributes.zone.stringValue }}</span>
           </InfoRow>
           <InfoRow v-if="worker?.metadata?.gceInstanceName" label="Instance">
             <span class="font-mono">{{ worker.metadata.gceInstanceName }}</span>

@@ -10,6 +10,7 @@ holds a set of actor handles with lifecycle tied to underlying jobs.
 
 from __future__ import annotations
 
+import threading
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -35,7 +36,24 @@ class ActorContext:
     """The name of the actor group this actor belongs to."""
 
 
+class HostedActor:
+    """An actor hosted in the current process. Holds handle + cleanup."""
+
+    def __init__(self, handle: ActorHandle, stop: Any = None):
+        self.handle = handle
+        self._stop = stop
+
+    def shutdown(self) -> None:
+        if self._stop is not None:
+            self._stop()
+            self._stop = None
+
+
 _current_actor_ctx: ContextVar[ActorContext | None] = ContextVar("actor_context", default=None)
+
+# Module-level (not ContextVar) so child threads spawned by the actor can call
+# request_shutdown(). _host_actor runs one actor per process, so global scope is correct.
+_actor_shutdown_event: threading.Event | None = None
 
 
 def current_actor() -> ActorContext:
@@ -60,6 +78,27 @@ def _set_current_actor(ctx: ActorContext):
 def _reset_current_actor(token):
     """Reset the current actor context. Used by backends after actor creation."""
     _current_actor_ctx.reset(token)
+
+
+def request_shutdown() -> None:
+    """Signal that the hosting actor process should exit.
+
+    Call from within an actor (e.g. after receiving SHUTDOWN from a coordinator)
+    to unblock _host_actor and trigger a clean server teardown.  No-op when
+    running under a backend that doesn't use _host_actor (Ray, LocalClient).
+    """
+    if _actor_shutdown_event is not None:
+        _actor_shutdown_event.set()
+
+
+def _set_shutdown_event(event: threading.Event) -> None:
+    global _actor_shutdown_event
+    _actor_shutdown_event = event
+
+
+def _clear_shutdown_event() -> None:
+    global _actor_shutdown_event
+    _actor_shutdown_event = None
 
 
 class ActorFuture(Protocol):
@@ -102,6 +141,14 @@ class ActorGroup(Protocol):
         return the remaining handles as they become available. For LocalClient
         all handles are ready immediately, so this returns whatever wait_ready
         didn't return on its first call.
+        """
+        ...
+
+    def is_done(self) -> bool:
+        """Return True if the underlying job has permanently terminated.
+
+        When True, no new actors will ever come online — the group is dead.
+        Local backends always return False (in-process actors don't independently fail).
         """
         ...
 

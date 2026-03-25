@@ -20,6 +20,7 @@ from iris.cluster.types import (
     Entrypoint,
     JobName,
     TaskAttempt,
+    adjust_tpu_replicas,
     gpu_device,
     tpu_device,
 )
@@ -100,9 +101,22 @@ def test_job_name_require_task_errors_on_non_task():
 
 
 def test_job_name_to_safe_token_and_deep_nesting():
+    import hashlib
+
     job = JobName.from_string("/test-user/a/b/c/d/e/0")
-    assert job.to_safe_token() == "job__test-user__a__b__c__d__e__0"
+    expected_hash = hashlib.sha256(str(job).encode()).hexdigest()
+    assert job.to_safe_token() == f"test-user-{expected_hash}"
     assert job.require_task()[1] == 0
+
+    # Deeply nested names still produce short tokens (no ENAMETOOLONG).
+    deep = JobName.from_string("/alice/" + "/".join(f"layer-{i}" for i in range(20)) + "/0")
+    token = deep.to_safe_token()
+    assert token.startswith("alice-")
+    assert len(token) < 128  # well under the 255-byte filesystem limit
+
+    # Different names produce different tokens.
+    job2 = JobName.from_string("/test-user/a/b/c/d/e/1")
+    assert job.to_safe_token() != job2.to_safe_token()
 
 
 def test_job_name_depth():
@@ -542,6 +556,34 @@ def test_merge_child_overrides_device_type():
     dt = [c for c in result if c.key == WellKnownAttribute.DEVICE_TYPE]
     assert len(dt) == 1
     assert dt[0].value == "gpu"
+
+
+# ---------------------------------------------------------------------------
+# adjust_tpu_replicas
+# ---------------------------------------------------------------------------
+
+
+def test_adjust_tpu_replicas_auto_scales_to_vm_count():
+    """replicas=1 auto-scales to vm_count for multi-host topologies."""
+    assert adjust_tpu_replicas(tpu_device("v6e-32"), replicas=1) == 8
+    assert adjust_tpu_replicas(tpu_device("v5litepod-16"), replicas=1) == 4
+
+
+def test_adjust_tpu_replicas_rejects_invalid_count():
+    with pytest.raises(ValueError, match="replicas must be a multiple of 4"):
+        adjust_tpu_replicas(tpu_device("v5litepod-16"), replicas=3)
+
+
+def test_adjust_tpu_replicas_correct_counts_pass_through():
+    assert adjust_tpu_replicas(tpu_device("v6e-32"), replicas=8) == 8
+    assert adjust_tpu_replicas(tpu_device("v6e-32"), replicas=16) == 16
+
+
+def test_adjust_tpu_replicas_single_host_and_edge_cases():
+    """Single-host, no device, and unknown topology return replicas unchanged."""
+    assert adjust_tpu_replicas(tpu_device("v6e-4"), replicas=1) == 1
+    assert adjust_tpu_replicas(None, replicas=1) == 1
+    assert adjust_tpu_replicas(tpu_device("v99-unknown", count=4), replicas=1) == 1
 
 
 def test_merge_auto_constraints_with_user_variant_override():

@@ -25,6 +25,7 @@ from iris.cluster.worker.env_probe import (
     HostMetricsCollector,
     build_worker_metadata,
     check_worker_health,
+    construct_worker_id,
     infer_worker_id,
     probe_hardware,
 )
@@ -35,6 +36,7 @@ from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import slow_log
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
 
@@ -51,8 +53,9 @@ class WorkerConfig:
     port_range: tuple[int, int] = (30000, 40000)
     controller_address: str | None = None
     worker_id: str | None = None
+    slice_id: str | None = None
     worker_attributes: dict[str, str] = field(default_factory=dict)
-    default_task_env: dict[str, str] = field(default_factory=dict)
+    task_env: dict[str, str] = field(default_factory=dict)
     default_task_image: str | None = None
     resolve_image: Callable[[str], str] = field(default_factory=lambda: lambda image: image)
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
@@ -62,6 +65,7 @@ class WorkerConfig:
     gpu_count: int = 0
     preemptible: bool = False
     storage_prefix: str = ""
+    auth_token: str = ""
 
 
 def worker_config_from_proto(
@@ -88,8 +92,9 @@ def worker_config_from_proto(
         port_range=(port_start, port_end),
         controller_address=controller_address or None,
         worker_id=proto.worker_id or None,
+        slice_id=proto.slice_id or None,
         worker_attributes=dict(proto.worker_attributes),
-        default_task_env=dict(proto.default_task_env),
+        task_env=dict(proto.task_env),
         default_task_image=proto.default_task_image or None,
         resolve_image=resolve_image or (lambda image: image),
         poll_interval=(
@@ -107,6 +112,7 @@ def worker_config_from_proto(
         gpu_count=proto.gpu_count,
         preemptible=proto.preemptible,
         storage_prefix=proto.storage_prefix,
+        auth_token=proto.auth_token,
     )
 
 
@@ -132,11 +138,11 @@ class Worker:
 
         # Use overrides if provided, otherwise create defaults
         self._bundle_store = bundle_store or BundleStore(
-            db_path=self._cache_dir / "bundles.sqlite3",
+            storage_dir=str(self._cache_dir / "bundles"),
             controller_address=config.controller_address,
-            max_items=100,
+            max_cache_items=100,
         )
-        self._runtime = container_runtime or DockerRuntime()
+        self._runtime = container_runtime or DockerRuntime(cache_dir=self._cache_dir)
         self._port_allocator = port_allocator or PortAllocator(config.port_range)
 
         # Resolve worker metadata: explicit > environment_provider > hardware probe
@@ -180,9 +186,12 @@ class Worker:
         self._threads = threads if threads is not None else get_thread_container()
         self._task_threads = self._threads.create_child("tasks")
 
-        # Resolve worker_id: config > GCP metadata inference > assigned by controller
+        # Resolve worker_id: config > slice_id + TPU index > GCP metadata inference > assigned by controller
         worker_id = config.worker_id
-        if worker_id is None and hardware is not None:
+        if worker_id is None and config.slice_id and hardware is not None:
+            worker_index = int(hardware.tpu_worker_id) if hardware.tpu_worker_id else 0
+            worker_id = construct_worker_id(config.slice_id, worker_index)
+        elif worker_id is None and hardware is not None:
             worker_id = infer_worker_id(hardware)
         self._worker_id: str | None = worker_id
         self._controller_client: ControllerServiceClientSync | None = None
@@ -217,9 +226,13 @@ class Worker:
 
         # Create controller client if controller configured
         if self._config.controller_address:
+            interceptors = ()
+            if self._config.auth_token:
+                interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
             self._controller_client = ControllerServiceClientSync(
                 address=self._config.controller_address,
                 timeout_ms=5000,
+                interceptors=interceptors,
             )
 
             # Start lifecycle thread: register + serve + reset loop
@@ -450,7 +463,6 @@ class Worker:
             num_tasks=request.num_tasks,
             request=request,
             cache_dir=self._cache_dir,
-            storage_prefix=self._config.storage_prefix,
         )
 
         attempt = TaskAttempt(
@@ -460,7 +472,7 @@ class Worker:
             worker_metadata=self._worker_metadata,
             worker_id=self._worker_id,
             controller_address=self._config.controller_address,
-            default_task_env=self._config.default_task_env,
+            task_env=self._config.task_env,
             default_task_image=self._config.default_task_image,
             resolve_image=self._config.resolve_image,
             port_allocator=self._port_allocator,
@@ -607,6 +619,7 @@ class Worker:
                                 exit_code=task_proto.exit_code,
                                 error=task_proto.error or "",
                                 log_entries=log_entries,
+                                container_id=task_proto.container_id or "",
                             )
                             if task.status in self._TERMINAL_STATES:
                                 entry.finished_at.CopyFrom(task_proto.finished_at)
@@ -762,6 +775,25 @@ class Worker:
         if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
             raise ValueError(f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})")
         return attempt.profile(duration_seconds, profile_type)
+
+    def exec_in_container(
+        self, task_id: str, command: list[str], timeout_seconds: int = 60
+    ) -> cluster_pb2.Worker.ExecInContainerResponse:
+        """Execute a command in a running task's container.
+
+        Delegates to the container handle's underlying runtime (docker exec, subprocess, kubectl exec).
+        """
+        attempt = self._get_current_attempt(task_id)
+        if not attempt:
+            return cluster_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} not found")
+        if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
+            return cluster_pb2.Worker.ExecInContainerResponse(
+                error=f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})"
+            )
+        container_id = attempt.container_id
+        if not container_id:
+            return cluster_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} has no container")
+        return attempt.exec_in_container(command, timeout_seconds)
 
     @property
     def url(self) -> str:

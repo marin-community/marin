@@ -42,6 +42,7 @@ const taskLogState = props.taskId
       id: props.taskId,
       maxTotalLines: tailLines.value || undefined,
       attemptId: selectedAttemptId.value >= 0 ? selectedAttemptId.value : -1,
+      tail: true,
     }))
   : null
 
@@ -63,6 +64,25 @@ const { active: autoRefreshActive, toggle: toggleAutoRefresh } = useAutoRefresh(
 
 watch(selectedAttemptId, () => doRefresh())
 watch(tailLines, () => doRefresh())
+watch(
+  () => [props.taskId, props.currentAttemptId] as const,
+  ([taskId, currentAttemptId], [previousTaskId, previousCurrentAttemptId]) => {
+    if (taskId !== previousTaskId) {
+      selectedAttemptId.value = -1
+      doRefresh()
+      return
+    }
+    if (taskId === undefined || currentAttemptId === previousCurrentAttemptId) return
+    if (selectedAttemptId.value === -1) {
+      doRefresh()
+      return
+    }
+    if (selectedAttemptId.value === previousCurrentAttemptId) {
+      selectedAttemptId.value = currentAttemptId ?? -1
+    }
+  },
+)
+watch(() => props.workerId, () => doRefresh())
 
 onMounted(doRefresh)
 
@@ -119,7 +139,6 @@ const filteredLogs = computed(() => {
         <option :value="1000">1,000 lines</option>
         <option :value="5000">5,000 lines</option>
         <option :value="10000">10,000 lines</option>
-        <option :value="0">All</option>
       </select>
       <select
         v-if="attempts && attempts.length > 0"

@@ -1,14 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from collections.abc import Iterator, Sequence
-from functools import partial
+from collections.abc import Iterator
 import dupekit
 import logging
 from marin.utils import rebase_file_path
 import pyarrow as pa
-from fray.v2.local_backend import LocalClient
 from marin.processing.classification.deduplication.dedup_commons import (
+    DEFAULT_COORDINATOR_RESOURCES,
     DEFAULT_FILETYPES,
     DedupMode,
     DupCounters,
@@ -17,58 +16,15 @@ from marin.processing.classification.deduplication.dedup_commons import (
     _get_extension,
     _init_wandb,
     _load_batches,
+    group_files,
 )
 from fray.v2 import ResourceConfig
 from marin.processing.classification.deduplication.connected_components import connected_components
-from marin.utilities.time_logger import log_time
 import wandb
-from zephyr import ZephyrContext
+from zephyr import ZephyrContext, write_vortex_file
 from zephyr.dataset import Dataset
-from zephyr.readers import InputFileSpec, load_file
 
 logger = logging.getLogger(__name__)
-
-
-def _compute_fuzzy_dedup_stats(shards: list[str] | Sequence[str], method: str, level: str) -> DupCounters:
-    with log_time(f"Compute fuzzy deduplication stats from {len(shards)} shards"):
-        ctx = ZephyrContext(client=LocalClient(), name="fuzzy-dup-counts")
-        result: DupCounters = ctx.execute(  # type: ignore[bad-assignment]
-            Dataset.from_list(shards)
-            .load_parquet(columns=["component_id"])
-            # Compute the per-component statistics and then roll them up into a single counter group
-            .group_by(
-                key=lambda r: r["component_id"],
-                reducer=lambda _, items: DupCounters(
-                    method=method,
-                    level=level,
-                    total=(total := sum(1 for _ in items)),
-                    dups=total if total > 1 else 0,
-                    unique=1,
-                ),
-            )
-            .reduce(partial(sum, start=DupCounters(method=method, level=level))),
-        )[0]
-    return result
-
-
-def _load_fuzzy_dupe_map_shard(shards: list[str]) -> dict[str, bool]:
-    if not shards:
-        logger.warning("No fuzzy duplicate documents found.")
-        return {}
-
-    # Map record ID -> is duplicate (bool)
-    shard_dup_map = {}
-
-    def add_to_dup_map(record: dict):
-        shard_dup_map[record["id"]] = record["fuzzy_duplicate"]
-
-    with log_time(f"Load fuzzy duplicate map from {len(shards)} shards"):
-        ctx = ZephyrContext(client=LocalClient(), name="fuzzy-dup-map")
-        ctx.execute(
-            Dataset.from_list(shards).load_parquet().map(add_to_dup_map),
-        )
-
-    return shard_dup_map
 
 
 def dedup_fuzzy_document(
@@ -81,10 +37,18 @@ def dedup_fuzzy_document(
     fuzzy_minhash_num_bands: int = 26,
     fuzzy_minhash_ngram_size: int = 5,
     fuzzy_minhash_seed: int = 42,
-    max_parallelism: int | None = None,
+    max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
+    coordinator_resources: ResourceConfig | None = None,
 ) -> dict:
-    """Perform fuzzy document-level deduplication"""
+    """Perform fuzzy document-level deduplication.
+
+    Args:
+        worker_resources: Resource config per Zephyr worker. The map stage runs
+            dupekit's Rust MinHash pipeline, which uses a native thread pool and
+            may consume up to ~2 cores beyond the Python thread. Size cpu
+            accordingly (e.g. cpu=5 reserves headroom for this).
+    """
 
     if fuzzy_minhash_num_perms % fuzzy_minhash_num_bands != 0:
         raise ValueError(
@@ -96,6 +60,8 @@ def dedup_fuzzy_document(
         filetypes = DEFAULT_FILETYPES
 
     input_files = _collect_input_files(input_paths=input_paths, filetypes=filetypes)
+    idx_to_path = dict(list(enumerate(sorted(input_files))))
+    path_to_idx = {v: k for k, v in idx_to_path.items()}
 
     _init_wandb(mode=DedupMode.FUZZY_DOCUMENT, input_paths=input_paths)
 
@@ -136,65 +102,84 @@ def dedup_fuzzy_document(
         name="fuzzy-dedup",
         max_workers=max_parallelism,
         resources=worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
+        coordinator_resources=coordinator_resources or DEFAULT_COORDINATOR_RESOURCES,
     )
-    doc_minhash_lsh = (
-        Dataset.from_list(input_files)
-        .flat_map(lambda f: _load_batches(f, columns=[text_field, "id"]))
-        .flat_map(compute_minhash_lsh_batches)
+    # Group input files into at most max_parallelism shards so shard count <= worker count.
+    # Each shard processes a group of files sequentially, reducing coordinator overhead
+    # when num_files >> max_parallelism (e.g. 13k files with 2k workers).
+    file_groups = group_files(input_files, max_parallelism)
+    doc_minhash_lsh = Dataset.from_list(file_groups).flat_map(
+        lambda paths: (
+            {**record, "file_idx": path_to_idx[path]}
+            for path in paths
+            for batch in _load_batches(path, columns=[text_field, "id"])
+            for record in compute_minhash_lsh_batches(batch)
+        )
     )
     converged, cc_files = connected_components(doc_minhash_lsh, ctx, output_dir=f"{output_path}/metadata/cc")
     if not converged:
         # TODO (rav): log the number of changed nodes?
         logger.warning("Connected components did not converge")
-    fuzzy_dup_shards = ctx.execute(
-        Dataset.from_list(cc_files)
-        .flat_map(load_file)
-        .map(
-            lambda r: {
-                "id": r["node_id"]["record_id"],
-                "fuzzy_duplicate": r["component_id"] != r["node_id"]["record_id_norm"],
-            }
+
+    def aggregate_and_write_to_corresponding_files(file_idx: int, records: Iterator[dict]) -> dict:
+        input_path = idx_to_path[file_idx]
+        output_file = rebase_file_path(
+            _find_base_path(input_paths, [input_path]),
+            input_path,
+            f"{output_path}/data/",
+            old_extension=_get_extension(input_path),
+            new_extension=".vortex",
         )
-        .reshard(num_shards=42)
-        .write_parquet(f"{output_path}/metadata/fuzzy-dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
-        verbose=True,
-    )
 
-    fuzzy_cnt = _compute_fuzzy_dedup_stats(cc_files, method="fuzzy", level="document")
-    logger.info(str(fuzzy_cnt))
+        # NOTE: this is per file stat, we aggregate across files later
+        stats = DupCounters(method="fuzzy", level="document")
 
-    if wandb.run:
-        wandb.log(fuzzy_cnt.to_dict())
+        def counting_iter():
+            nonlocal stats
+            for record in records:
+                is_dup: bool = record["is_dup"]
+                stats += DupCounters(
+                    method="fuzzy",
+                    level="document",
+                    total=1,
+                    dups=int(is_dup),
+                    unique=int(not is_dup),
+                )
+                yield record
 
-    def mark_dup_documents(docs: Iterator[dict]) -> Iterator[dict]:
-        fuzzy_dup_map = _load_fuzzy_dupe_map_shard(fuzzy_dup_shards)
+        def skip_non_dups(records: Iterator[dict]) -> Iterator[dict]:
+            for record in records:
+                if record["is_dup"]:
+                    yield {"id": record["id"], "attributes": {"dup_doc": True}}
 
-        for doc in docs:
-            is_fuzzy_dup = fuzzy_dup_map.get(doc["id"], False)
-            doc["attributes"] = doc.get("attributes", {})
-            assert DedupMode.FUZZY_DOCUMENT not in doc["attributes"]
-            doc["attributes"][str(DedupMode.FUZZY_DOCUMENT)] = is_fuzzy_dup
-            yield doc
+        result = write_vortex_file(skip_non_dups(counting_iter()), output_file)
+        return {**result, "stats": stats}
 
-    base_path = _find_base_path(input_paths, input_files)
-    ctx.execute(
-        Dataset.from_list(input_files).flat_map(lambda p: load_file(InputFileSpec(path=p, columns=["id"])))
-        # NOTE/TODO: we can't reshard here to increase parallelism because afaiu we want to match
-        # the shards of the input files for rebase_file_path to work correctly.
-        .map_shard(mark_dup_documents).write_jsonl(
-            output_pattern=lambda shard_idx, total: rebase_file_path(
-                base_path,
-                input_files[shard_idx],
-                f"{output_path}/data",
-                old_extension=_get_extension(input_files[shard_idx]),
-                new_extension=".jsonl.gz",
+    shard_results = list(
+        ctx.execute(
+            Dataset.from_list(cc_files)
+            .load_vortex()
+            .map(
+                lambda r: {
+                    "id": r["record_id"],
+                    "is_dup": r["component_id"] != r["id_norm"],
+                    "file_idx": r["file_idx"],
+                }
+            )
+            .group_by(
+                lambda r: r["file_idx"],
+                sort_by=lambda r: r["id"],
+                reducer=aggregate_and_write_to_corresponding_files,
             ),
-            skip_existing=True,
+            verbose=True,
         ),
-        verbose=True,
     )
 
+    fuzzy_cnts = sum((r["stats"] for r in shard_results), start=DupCounters(method="fuzzy", level="document"))
+    logger.info(str(fuzzy_cnts))
+
     if wandb.run:
+        wandb.log(fuzzy_cnts.to_dict())
         wandb.finish()
 
-    return {"success": True, "mode": str(DedupMode.FUZZY_DOCUMENT)} | fuzzy_cnt.to_dict()
+    return {"success": True, "mode": str(DedupMode.FUZZY_DOCUMENT)} | fuzzy_cnts.to_dict()

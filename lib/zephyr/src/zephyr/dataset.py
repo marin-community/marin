@@ -20,6 +20,19 @@ from zephyr.expr import Expr
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class ShardInfo:
+    """Metadata about the current shard passed to map_shard functions.
+
+    Attributes:
+        shard_idx: Zero-based index of this shard.
+        total_shards: Total number of shards in the dataset.
+    """
+
+    shard_idx: int
+    total_shards: int
+
+
 def format_shard_path(pattern: str, shard_idx: int, total: int) -> str:
     """Format output path with shard information.
 
@@ -186,6 +199,9 @@ class MapShardOp:
 
     Use when you need to maintain state across all items in a shard, such as
     deduplication, reservoir sampling, or loading expensive resources once.
+
+    The function always receives a ShardInfo as the second argument:
+        fn(items: Iterator[T], shard_info: ShardInfo) -> Iterator[R]
     """
 
     fn: Callable
@@ -216,6 +232,7 @@ class GroupByOp:
     reducer_fn: Callable  # Function from (key, Iterator[items]) -> result
     num_output_shards: int | None = None  # None = auto-detect from current shard count
     sort_fn: Callable | None = None  # Optional secondary sort within each group
+    combiner_fn: Callable | None = None  # Optional local pre-aggregation during scatter
 
     def __repr__(self):
         return f"GroupByOp(key={_get_fn_name(self.key_fn)})"
@@ -545,23 +562,28 @@ class Dataset(Generic[T]):
         """Load records from Vortex files."""
         return Dataset(self.source, [*self.operations, LoadFileOp("vortex", columns)])
 
-    def map_shard(self, fn: Callable[[Iterator[T]], Iterator[R]]) -> Dataset[R]:
+    def map_shard(
+        self,
+        fn: Callable[[Iterator[T], ShardInfo], Iterator[R]],
+    ) -> Dataset[R]:
         """Apply function to entire shard iterator.
 
-        The function receives an iterator of all items in the shard and returns
-        an iterator of results. This can be used to perform stateful
-        processing across a shard (deduplication, sampling, windowing, etc.).
+        The function receives an iterator of all items in the shard and a
+        ShardInfo dataclass, and returns an iterator of results. This can be
+        used to perform stateful processing across a shard (deduplication,
+        sampling, windowing, etc.).
 
         Args:
-            fn: Function from Iterator[items] -> Iterator[results]
+            fn: Function with signature fn(items: Iterator[T], shard_info: ShardInfo) -> Iterator[R]
 
         Returns:
             New dataset with map_shard operation appended
 
         Example:
             >>> from zephyr.execution import load_jsonl
+            >>> from zephyr.dataset import ShardInfo
             >>> # Deduplicate items within each shard
-            >>> def deduplicate_shard(items: Iterator):
+            >>> def deduplicate_shard(items: Iterator, _: ShardInfo):
             ...     seen = set()
             ...     for item in items:
             ...         key = item["id"]
@@ -734,6 +756,7 @@ class Dataset(Generic[T]):
         reducer: Callable[[K, Iterator[T]], Iterator[R]],
         sort_by: Callable[[T], Any] | None = None,
         num_output_shards: int | None = None,
+        combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
     ) -> Dataset[R]: ...
 
     @overload
@@ -744,6 +767,7 @@ class Dataset(Generic[T]):
         reducer: Callable[[K, Iterator[T]], R],
         sort_by: Callable[[T], Any] | None = None,
         num_output_shards: int | None = None,
+        combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
     ) -> Dataset[R]: ...
 
     def group_by(
@@ -753,11 +777,15 @@ class Dataset(Generic[T]):
         reducer: Callable[[K, Iterator[T]], R | Iterator[R]],
         sort_by: Callable[[T], Any] | None = None,
         num_output_shards: int | None = None,
+        combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
     ) -> Dataset[R]:
         """Group items by key and apply reducer function.
 
         The reducer receives (key, iterator_of_items) and returns a single result or an iterator of
         results for that group.
+
+        Incoming records are strongly encouraged to be Arrow-serializable (dicts, lists, scalars, etc.).
+        Custom dataclasses and arbitrary objects will have degraded performance (serde via pickle).
 
         Args:
             key: Function extracting grouping key from item (must be hashable)
@@ -765,6 +793,9 @@ class Dataset(Generic[T]):
             sort_by: Optional function extracting a sort key from each item. When provided,
                 items within each group are delivered to the reducer sorted by this key.
             num_output_shards: Number of output shards (None = auto-detect, uses current shard count)
+            combiner: Optional local pre-aggregation applied during scatter. Receives
+                (key, Iterator[items]) and yields reduced items of the same type. Must be
+                associative — partial results are combined with the full reducer on the reduce side.
 
         Returns:
             New dataset with group_by operation appended
@@ -791,7 +822,10 @@ class Dataset(Generic[T]):
             ...     )
             ... )
         """
-        return Dataset(self.source, [*self.operations, GroupByOp(key, reducer, num_output_shards, sort_fn=sort_by)])
+        return Dataset(
+            self.source,
+            [*self.operations, GroupByOp(key, reducer, num_output_shards, sort_fn=sort_by, combiner_fn=combiner)],
+        )
 
     def deduplicate(self, key: Callable[[T], object], num_output_shards: int | None = None) -> Dataset[T]:
         """Deduplicate items by key.
@@ -805,7 +839,7 @@ class Dataset(Generic[T]):
             [{"id": 1, "val": "a"}, {"id": 2, "val": "b"}]  # Or {"id": 1, "val": "c"}
         """
 
-        def streaming_dedup(items: Iterator[T]) -> Iterator[T]:
+        def streaming_dedup(items: Iterator[T], _: ShardInfo) -> Iterator[T]:
             """Deduplicate items within a shard."""
             seen = set()
             for item in items:

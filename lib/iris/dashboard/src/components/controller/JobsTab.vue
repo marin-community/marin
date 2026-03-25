@@ -3,9 +3,10 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { stateToName, statusColors } from '@/types/status'
+import { stateToName } from '@/types/status'
 import type { JobStatus, ListJobsResponse } from '@/types/rpc'
 import { timestampMs, formatDuration, formatRelativeTime } from '@/utils/formatting'
+import { flattenJobTree, getLeafJobName, jobsWithChildren } from '@/utils/jobTree'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 
@@ -21,6 +22,14 @@ const SORT_FIELD_MAP: Record<string, string> = {
 
 type SortField = 'date' | 'name' | 'state' | 'failures' | 'preemptions'
 type SortDir = 'asc' | 'desc'
+
+const copiedJob = ref<string | null>(null)
+
+async function copyJobName(name: string) {
+  await navigator.clipboard.writeText(name)
+  copiedJob.value = name
+  setTimeout(() => { copiedJob.value = null }, 1500)
+}
 
 const EXPANDED_JOBS_KEY = 'iris.controller.expandedJobs'
 
@@ -78,72 +87,10 @@ watch([page, sortField, sortDir, nameFilter], () => {
 
 // -- Job tree --
 
-function getParentName(jobName: string): string | null {
-  if (!jobName) return null
-  const lastSlash = jobName.lastIndexOf('/')
-  if (lastSlash <= 0) return null
-  return jobName.slice(0, lastSlash)
-}
-
-function getLeafName(jobName: string): string {
-  if (!jobName) return jobName
-  const lastSlash = jobName.lastIndexOf('/')
-  return lastSlash >= 0 ? jobName.slice(lastSlash + 1) : jobName
-}
-
-interface JobTreeNode {
-  job: JobStatus
-  depth: number
-}
-
-const flattenedJobs = computed<JobTreeNode[]>(() => {
-  const jobList = jobs.value
-  const jobByName = new Map(jobList.map(j => [j.name, j]))
-  const childrenMap = new Map<string, JobStatus[]>()
-  const rootJobs: JobStatus[] = []
-
-  for (const job of jobList) {
-    const parentName = getParentName(job.name)
-    if (parentName && jobByName.has(parentName)) {
-      const children = childrenMap.get(parentName)
-      if (children) {
-        children.push(job)
-      } else {
-        childrenMap.set(parentName, [job])
-      }
-    } else {
-      rootJobs.push(job)
-    }
-  }
-
-  const result: JobTreeNode[] = []
-
-  function walk(list: JobStatus[], depth: number) {
-    for (const job of list) {
-      result.push({ job, depth })
-      const children = childrenMap.get(job.name)
-      if (children && expandedJobs.value.has(job.name)) {
-        walk(children, depth + 1)
-      }
-    }
-  }
-
-  walk(rootJobs, 0)
-  return result
-})
+const flattenedJobs = computed(() => flattenJobTree(jobs.value, expandedJobs.value))
 
 // Track which jobs have children for expand/collapse UI
-const jobsWithChildren = computed(() => {
-  const jobByName = new Map(jobs.value.map(j => [j.name, j]))
-  const set = new Set<string>()
-  for (const job of jobs.value) {
-    const parentName = getParentName(job.name)
-    if (parentName && jobByName.has(parentName)) {
-      set.add(parentName)
-    }
-  }
-  return set
-})
+const expandableJobs = computed(() => jobsWithChildren(jobs.value))
 
 // -- Interactions --
 
@@ -359,7 +306,7 @@ function sortIndicator(field: SortField): string {
         <tr
           v-for="node in flattenedJobs"
           :key="node.job.jobId"
-          class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
+          class="group/row border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
         >
           <!-- Name -->
           <td
@@ -368,7 +315,7 @@ function sortIndicator(field: SortField): string {
           >
             <span class="inline-flex items-center gap-1">
               <button
-                v-if="jobsWithChildren.has(node.job.name)"
+                v-if="expandableJobs.has(node.job.name)"
                 class="text-text-muted hover:text-text select-none w-4 text-center text-xs"
                 @click.stop="toggleExpanded(node.job.name)"
               >
@@ -379,8 +326,22 @@ function sortIndicator(field: SortField): string {
                 :to="'/job/' + encodeURIComponent(node.job.jobId)"
                 class="text-accent hover:underline font-mono"
               >
-                {{ node.depth > 0 ? getLeafName(node.job.name) : (node.job.name || 'unnamed') }}
+                {{ node.depth > 0 ? getLeafJobName(node.job.name) : (node.job.name || 'unnamed') }}
               </RouterLink>
+              <button
+                v-if="node.job.name"
+                class="ml-1 text-text-muted hover:text-text opacity-0 group-hover/row:opacity-100 transition-opacity"
+                title="Copy job name"
+                @click.stop="copyJobName(node.job.name)"
+              >
+                <svg v-if="copiedJob === node.job.name" class="w-3.5 h-3.5 text-status-success" viewBox="0 0 20 20" fill="currentColor">
+                  <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                </svg>
+                <svg v-else class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                  <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                </svg>
+              </button>
             </span>
           </td>
 

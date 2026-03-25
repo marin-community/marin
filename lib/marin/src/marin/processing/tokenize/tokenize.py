@@ -376,7 +376,7 @@ def tokenize(config: TokenizeConfigBase):
             # NOTE: https://github.com/marin-community/marin/issues/2829#issuecomment-3963661943
             # Window set to 64 ^
             ds.window(64)
-            .map_shard(lambda batches: _tokenize_batches(config=config, batches=batches))
+            .map_shard(lambda batches, _: _tokenize_batches(config=config, batches=batches))
             .write_levanter_cache(
                 f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}",
                 metadata={},
@@ -396,7 +396,7 @@ def tokenize(config: TokenizeConfigBase):
             Dataset.from_list(file_groups[0][0:1])
             .flat_map(load_file)
             .take_per_shard(1)
-            .map_shard(lambda example: _tokenize_batches(config=config, batches=[example])),
+            .map_shard(lambda example, _: _tokenize_batches(config=config, batches=[example])),
             verbose=False,
         )[0]
 

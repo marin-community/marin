@@ -159,7 +159,9 @@ enforces these minimum interfaces:
 
 - Grug principles: [`/.agents/projects/grugformer.md`](../../.agents/projects/grugformer.md)
 - Change workflow: [`.agents/skills/change-grug/`](../../.agents/skills/change-grug/SKILL.md)
+- HBM/OOM tuning guide: [`/docs/references/hbm-optimization.md`](../../docs/references/hbm-optimization.md)
 - Executor mechanics: [`/docs/explanations/executor.md`](../../docs/explanations/executor.md)
 - Executor tutorial: [`/docs/tutorials/executor-101.md`](../../docs/tutorials/executor-101.md)
-- TPU debug workflow: [`/docs/dev-guide/dev_tpu.md`](../../docs/dev-guide/dev_tpu.md)
+- TPU debug workflow: [`.agents/skills/dev-tpu/`](../../.agents/skills/dev-tpu/SKILL.md)
+- Legacy Ray TPU debug workflow: [`.agents/skills/dev-tpu-ray/`](../../.agents/skills/dev-tpu-ray/SKILL.md)
 - Cluster launch details: [`/docs/tutorials/tpu-cluster-setup.md`](../../docs/tutorials/tpu-cluster-setup.md)
