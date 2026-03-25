@@ -30,7 +30,7 @@ from experiments.grug.moe.launch import (
     GRUG_MOE_TRIAL_MODEL,
     NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
     GrugMoeLaunchConfig,
-    run_grug_moe,
+    run_grug_moe_trial,
 )
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.llama import llama3_tokenizer
@@ -122,7 +122,7 @@ def _build_step_from_env() -> ExecutorStep:
 
     return ExecutorStep(
         name=f"{name}-{run_id}",
-        fn=run_grug_moe,
+        fn=run_grug_moe_trial,
         config=GrugMoeLaunchConfig(
             model=versioned(GRUG_MOE_TRIAL_MODEL),
             data=data,
