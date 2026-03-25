@@ -37,7 +37,7 @@ from experiments.pretraining_datasets.nemotron import (
     NEMOTRON_DATASETS,
     NEMOTRON_LLAMA3_OVERRIDES,
     NEMOTRON_WEIGHTS,
-    downloads as nemotron_downloads,
+    nemotron_cc_download,
     nemotron_mix,
     nemotron_mix_block_shuffle,
     tokenize_nemotron,
@@ -119,7 +119,7 @@ DATASETS = {
     },
     "nemotron_cc": {
         "subsets": list(NEMOTRON_DATASETS.keys()),
-        "download": nemotron_downloads["nemotron_cc"],
+        "download": nemotron_cc_download,
         "tokenize_fn": tokenize_nemotron,
     },
     "dolma": {

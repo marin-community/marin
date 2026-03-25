@@ -108,10 +108,12 @@ def download_nemotron_cc(output_path: str) -> None:
     logger.info(f"Downloaded Nemotron CC files to {output_path}")
 
 
-def download_nemotron_v1_step(name: str = "raw/nemotron-cc") -> StepSpec:
+def download_nemotron_v1_step() -> StepSpec:
     """Create a StepSpec that downloads the Nemotron-CC dataset from Common Crawl."""
 
     return StepSpec(
-        name=name,
+        name="raw/nemotron_v1",
         fn=lambda output_path: download_nemotron_cc(output_path=output_path),
+        # NOTE: use the existing output to avoid re-downloading. Yes this is mssing the `n`.
+        override_output_path="raw/nemotro-cc-eeb783",
     )

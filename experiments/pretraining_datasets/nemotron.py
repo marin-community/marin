@@ -13,12 +13,9 @@ from marin.execution.executor import ExecutorStep, output_path_of, this_output_p
 from marin.processing.tokenize import TokenizeConfig, lm_mixture_data_config, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-# Raw dataset download step
-downloads = {
-    "nemotron_cc": download_nemotron_v1_step("raw/nemotro-cc").as_executor_step(),
-}
+nemotron_cc_download = download_nemotron_v1_step().as_executor_step()
 
-_nemotron_cc_path = output_path_of(downloads["nemotron_cc"], "contrib/Nemotron/Nemotron-CC/data-jsonl/")
+_nemotron_cc_path = output_path_of(nemotron_cc_download, "contrib/Nemotron/Nemotron-CC/data-jsonl/")
 
 NEMOTRON_DATASETS = {
     "hq_actual": ["quality=high/kind=actual/**/*.jsonl.*"],
