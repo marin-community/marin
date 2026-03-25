@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-wikipedia/download.py
-
 Download script for the Wikipedia raw HTML data, provided by Wikimedia.
 
 Home Page: https://dumps.wikimedia.org/other/enterprise_html/runs/
@@ -11,14 +9,14 @@ Home Page: https://dumps.wikimedia.org/other/enterprise_html/runs/
 Example Usage (production, large dataset):
 ENWIKI=https://dumps.wikimedia.org/other/enterprise_html/runs/20250320/enwiki-NS0-20250320-ENTERPRISE-HTML.json.tar.gz
 uv run zephyr --backend=ray --max-parallelism=10 \
-    lib/marin/src/marin/download/wikipedia/download.py \
+    lib/marin/src/marin/datakit/download/wikipedia.py \
     --input_urls $ENWIKI \
     --revision 20250320 --output_path gs://path/to/output
 
 Example Usage (local testing, small dataset):
 SIMPLEWIKI=https://dumps.wikimedia.org/other/enterprise_html/runs/20250320/simplewiki-NS0-20250320-ENTERPRISE-HTML.json.tar.gz
-uv run zephyr --backend=threadpool --max-parallelism=4 --entry-point=download \
-    lib/marin/src/marin/download/wikipedia/download.py \
+uv run zephyr --backend=threadpool --max-parallelism=4 --entry-point=main \
+    lib/marin/src/marin/datakit/download/wikipedia.py \
     --input_urls "[$SIMPLEWIKI]" \
     --revision 20250320 --output_path /tmp/wikipedia_test
 
@@ -30,9 +28,7 @@ import logging
 import os
 import tarfile
 from collections.abc import Iterable
-from dataclasses import dataclass
 
-import draccus
 import requests
 from iris.marin_fs import open_url
 from marin.utils import fsspec_size
@@ -42,14 +38,7 @@ from zephyr import Dataset, ZephyrContext, atomic_rename, load_jsonl
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class WikipediaDownloadConfig:
-    input_urls: list[str]
-    revision: str
-    output_path: str
-
-
-def download_tar(url: str, output_prefix) -> str:
+def download_tar(url: str, output_prefix: str) -> str:
     shard_filename = url.split("/")[-1]
     output_filename = os.path.join(output_prefix, shard_filename)
     logger.info(f"Downloading URL: {url} to {output_filename}")
@@ -100,15 +89,14 @@ def process_file(input_file: str, output_path: str) -> Iterable[str]:
         raise e
 
 
-@draccus.wrap()
-def download(cfg: WikipediaDownloadConfig) -> None:
+def download_wikipedia(input_urls: list[str], revision: str, output_path: str) -> None:
     """Download and process Wikipedia data."""
     logger.info("Starting transfer of Wikipedia dump...")
-    output_base = os.path.join(cfg.output_path, cfg.revision)
+    output_base = os.path.join(output_path, revision)
 
     ctx = ZephyrContext(name="download-wikipedia")
     download_metrics = ctx.execute(
-        Dataset.from_list(cfg.input_urls)
+        Dataset.from_list(input_urls)
         .map(lambda url: download_tar(url, output_base))
         .write_jsonl(f"{output_base}/.metrics/download-{{shard:05d}}.jsonl", skip_existing=True),
     )
