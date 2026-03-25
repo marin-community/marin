@@ -187,7 +187,7 @@ class TaskAttempt:
         worker_metadata: WorkerMetadata,
         worker_id: str | None,
         controller_address: str | None,
-        default_task_env: dict[str, str],
+        task_env: dict[str, str],
         default_task_image: str | None,
         resolve_image: Callable[[str], str],
         port_allocator: PortAllocator,
@@ -207,7 +207,7 @@ class TaskAttempt:
             worker_metadata: Worker's hardware/environment metadata
             worker_id: Worker identifier for env injection
             controller_address: Controller address for env injection
-            default_task_env: Worker-level default env vars injected into task containers
+            task_env: Worker-level default env vars injected into task containers
             default_task_image: Fully-qualified task container image from cluster config
             resolve_image: Resolves image tags for the current platform
                 (e.g. GHCR→AR rewriting on GCP). Zone is pre-bound by the worker.
@@ -220,7 +220,7 @@ class TaskAttempt:
         self._worker_metadata = worker_metadata
         self._worker_id = worker_id
         self._controller_address = controller_address
-        self._default_task_env = default_task_env
+        self._task_env = task_env
         self._default_task_image = default_task_image
         self._resolve_image_fn = resolve_image
         self._port_allocator = port_allocator
@@ -444,7 +444,6 @@ class TaskAttempt:
             proto.build_metrics.build_started.CopyFrom(self.build_started.to_proto())
         if self.build_finished is not None:
             proto.build_metrics.build_finished.CopyFrom(self.build_finished.to_proto())
-
         return proto
 
     def _check_cancelled(self) -> None:
@@ -596,7 +595,7 @@ class TaskAttempt:
         if region_attr and region_attr.string_value:
             env["IRIS_WORKER_REGION"] = region_attr.string_value
 
-        env.update(self._default_task_env)
+        env.update(self._task_env)
         env.update(dict(self.request.environment.env_vars))
 
         # Get RuntimeEntrypoint proto directly

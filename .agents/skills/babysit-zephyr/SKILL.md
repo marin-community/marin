@@ -5,7 +5,7 @@ description: Start, monitor, and babysit Zephyr pipeline jobs on Iris. Use when 
 
 # Skill: Babysit Zephyr Job
 
-Start, monitor, and keep Zephyr pipeline jobs running on Iris. If something needs deeper investigation, escalate to debug-zephyr.
+Start, monitor, and keep Zephyr pipeline jobs running on Iris. If something needs deeper investigation, escalate to debug-zephyr-job.
 
 ## Zephyr Job Structure
 
@@ -18,6 +18,13 @@ A single job may execute **multiple pipelines sequentially** (e.g. fuzzy dedup r
 Failed retries show as different **hashes** with the same `p0`. Stale coordinators from previous attempts may linger (#3705).
 
 Child job naming: `<hash>-p<pipeline>-a<attempt>-{coord,workers}`.
+
+## Iris Config
+
+All Iris commands below use `--config <CONFIG>`. Resolve the cluster name the user
+gives to the matching file under `lib/iris/examples/` (see **babysit-iris-job** for
+the full mapping). Examples in this skill use `marin.yaml` — substitute the actual
+config (e.g., `marin-dev.yaml`) as needed.
 
 ## Dashboard
 
@@ -104,7 +111,7 @@ After submitting, monitor in escalating stages:
 
 2. **Steady-state monitoring**: Check stage progress via coordinator logs. Confirm two things: (a) shards are completing within the current stage, and (b) stages are advancing. Calibrate check-in interval to the pipeline — you want to see at least one stage transition between checks. For pipelines with many short stages, check every few minutes. For pipelines with few long stages, every 15-30 minutes may suffice.
 
-3. **Failure detection**: If workers get KILLED or the coordinator goes zombie, the `StepRunner` may retry automatically (new child jobs with a different hash appear). Check the latest attempt. Stale coordinators from previous attempts may accumulate (#3705). If retries keep failing, escalate to debug-zephyr.
+3. **Failure detection**: If workers get KILLED or the coordinator goes zombie, the `StepRunner` may retry automatically (new child jobs with a different hash appear). Check the latest attempt. Stale coordinators from previous attempts may accumulate (#3705). If retries keep failing, escalate to debug-zephyr-job.
 
 **"Terminated by user" is misleading**: This diagnostic does not necessarily mean a human killed the job. The system uses this message for various internal termination reasons. Always check the actual logs at each level (parent job, coordinator, workers) to determine the real cause.
 
@@ -117,7 +124,7 @@ After submitting, monitor in escalating stages:
 
 ## When to Escalate
 
-Escalate to **debug-zephyr** when:
+Escalate to **debug-zephyr-job** when:
 - A stage is stuck (no shard progress for an extended period)
 - Stragglers are holding up a stage (few in-flight, 0 queued, most workers idle)
 - Workers are failing repeatedly with the same error
