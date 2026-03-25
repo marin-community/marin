@@ -8,7 +8,7 @@ This module provides the `pt_vs_hq_components` dictionary containing tokenized
 datasets used by various training experiments.
 """
 
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, mirrored, this_output_path, versioned
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
 from marin.schemas.web.selectors import ARXIV_BLACKLISTED_SELECTORS, WIKI_BLACKLISTED_SELECTORS
 from marin.transform.ar5iv.transform_ar5iv import Ar5ivExtractionConfig, process_ar5iv_dump
@@ -29,7 +29,7 @@ stackexchange_text_resiliparse_custom_fork = ExecutorStep(
     name="documents/stackexchange-resiliparse-custom-fork",
     fn=process_stackexchange_dump,
     config=StackExchangeExtractionConfig(
-        input_path=versioned("gs://marin-us-central2/documents/stackexchange/v2024-04-02/md-complete"),
+        input_path=mirrored(versioned("documents/stackexchange/v2024-04-02/md-complete"), budget_gb=50),
         output_path=this_output_path(),
         extract_method="resiliparse",
         extract_config=ResiliparseConfig(
@@ -48,7 +48,7 @@ wikipedia_resiliparse_custom_fork = (
         name="documents/wikipedia-resiliparse-custom-fork",
         fn=process_wiki_dump,
         config=WikiExtractionConfig(
-            input_path="gs://marin-us-central2/raw/wikipedia-a7dad0/20241201",
+            input_path=mirrored("raw/wikipedia-a7dad0/20241201", budget_gb=1),
             revision=versioned("20241201"),
             output_path=this_output_path(),
             extract_method="resiliparse",
@@ -72,7 +72,7 @@ ar5iv_no_problem_resiliparse_custom_fork = ExecutorStep(
     name="documents/ar5iv/ar5iv-04-2024-no-problem",
     fn=process_ar5iv_dump,
     config=Ar5ivExtractionConfig(
-        input_path="gs://marin-us-central2/raw/ar5iv/ar5iv-04-2024-no-problem-49c4e3/202404",
+        input_path=mirrored("raw/ar5iv/ar5iv-04-2024-no-problem-49c4e3/202404", budget_gb=1),
         revision="042024",
         output_path=this_output_path("resiliparse-custom-fork"),
         extract_method=versioned("resiliparse"),
@@ -88,7 +88,7 @@ ar5iv_no_problem_resiliparse_custom_fork = ExecutorStep(
 # MMLU Science QA tokenization
 medu_mmlu_science_qa_tokenized = default_tokenize(
     name="medu-mmlu-science-qa",
-    dataset="gs://marin-us-east1/documents/medu-mmlu-science-llama8b-qa-whole-1a419d",
+    dataset=mirrored("documents/medu-mmlu-science-llama8b-qa-whole-1a419d", budget_gb=30),
     tokenizer=llama3_tokenizer,
 ).with_output_path("tokenized/medu-mmlu-science-qa-c64fda")
 

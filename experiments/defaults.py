@@ -41,7 +41,6 @@ from experiments.evals.task_configs import (
     CORE_TASKS,
     convert_to_levanter_task_config,
 )
-from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_dpo_config import SimpleDPOConfig
 from experiments.simple_sft_config import SimpleSFTConfig
@@ -63,7 +62,6 @@ from marin.processing.tokenize import (
     TokenizeConfig,
     TokenizerStep,
     add_validation_sets_to_mixture,
-    get_vocab_size_for_tokenizer,
     lm_data_config,
     tokenize,
 )
@@ -357,8 +355,7 @@ def default_train(
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
-    vocab_size = _get_vocab_size(pretraining_data)
-
+    tokenizer_name = unwrap_versioned_value(pretraining_data.tokenizer)
     steps_per_export = train_config.steps_per_export
 
     if wandb_group is None:
@@ -491,7 +488,7 @@ def default_train(
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
-            f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
+            f"Train a model (tokenizer={tokenizer_name}) for "
             f"{unwrap_versioned_value(train_config.num_train_steps)} (steps) * "
             f"{unwrap_versioned_value(train_config.train_batch_size)} (batch_size) * "
             f"{train_length} (train_seq_len) "
@@ -613,7 +610,7 @@ def default_dpo(
     pretraining_data = _prepare_data_config(tokenized, use_default_validation=False)
     preference_data = PreferenceLmDataConfig.from_lm_data_config(pretraining_data)
     preference_data = dataclasses.replace(preference_data, permutation_type="feistel")
-    vocab_size = _get_vocab_size(preference_data)
+    dpo_tokenizer_name = unwrap_versioned_value(preference_data.tokenizer)
 
     name = _truncate_wandb_name(name)
 
@@ -689,7 +686,7 @@ def default_dpo(
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
-            f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
+            f"Train a model (tokenizer={dpo_tokenizer_name}) for "
             f"{dpo_config.num_train_steps} (steps) * "
             f"{dpo_config.train_batch_size} (batch_size) * "
             f"{train_length} (train_seq_len) "
@@ -699,11 +696,6 @@ def default_dpo(
         config=config,
         override_output_path=override_output_path,
     )
-
-
-def _get_vocab_size(pretraining_data):
-    tokenizer = unwrap_versioned_value(pretraining_data.tokenizer)
-    return get_vocab_size_for_tokenizer(tokenizer)
 
 
 def _prepare_data_config(

@@ -42,6 +42,7 @@ VALID_RESOURCE_TYPES = frozenset(
         "nvidia.com/gpu",
         "google.com/tpu",
         "ephemeral-storage",
+        "rdma/ib",
     }
 )
 
@@ -687,6 +688,11 @@ class InMemoryK8sService:
         # Release resources when deleting a pod
         if normalized == "pod":
             self._release_pod_resources(name)
+
+    def delete_many(self, resource: str, names: list[str], *, cluster_scoped: bool = False, wait: bool = False) -> None:
+        """Delete multiple resources by name."""
+        for name in names:
+            self.delete(resource, name)
 
     def logs(self, pod_name: str, *, container: str | None = None, tail: int = 50, previous: bool = False) -> str:
         self._check_failure("logs")

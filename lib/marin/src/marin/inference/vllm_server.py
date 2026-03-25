@@ -470,10 +470,7 @@ def _detect_tpu_environment() -> bool:
 
 def _detect_nvidia_gpu_environment() -> bool:
     for key in ("NVIDIA_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"):
-        value = os.environ.get(key)
-        if not value:
-            continue
-        if value:
+        if os.environ.get(key):
             return True
     return bool(glob.glob("/dev/nvidia[0-9]*"))
 
