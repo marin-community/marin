@@ -130,7 +130,7 @@ DATASETS = {
     # Nemotron v2 datasets (from nvidia/Nemotron-Pre-Training-Datasets collection)
     **{
         family: {
-            "subsets": list(info["subsets"].keys()),
+            "subsets": list(info.subsets.keys()),
             "download": nemotron_v2_downloads[family],
             "tokenize_fn": lambda f=family: tokenize_nemotron_v2_family(f),
         }
