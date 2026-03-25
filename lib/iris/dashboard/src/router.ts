@@ -43,10 +43,6 @@ const routes = [
     component: () => import('./components/controller/AccountTab.vue'),
   },
   {
-    path: '/query',
-    component: () => import('./components/controller/QueryExplorerTab.vue'),
-  },
-  {
     path: '/system/controller/threads',
     component: () => import('./components/controller/ThreadDump.vue'),
   },

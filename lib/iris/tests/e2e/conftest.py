@@ -72,15 +72,34 @@ def _ensure_dashboard_built(tmp_path_factory):
 
 def pytest_addoption(parser):
     """Cloud mode CLI options for running smoke tests against remote clusters."""
-    parser.addoption("--iris-config", default=None, help="Path to cluster config YAML for cloud mode")
-    parser.addoption(
-        "--iris-mode",
-        default="local",
-        choices=["local", "full", "keep", "redeploy"],
-        help="Cluster mode: local (in-process), full (start+stop), keep, redeploy",
-    )
     parser.addoption("--iris-controller-url", default=None, help="Connect to existing controller")
-    parser.addoption("--iris-label-prefix", default=None, help="Override platform.label_prefix in config")
+
+
+# Cloud mode needs much longer timeouts: GCE provisioning can take 20 minutes,
+# and individual tests need time for remote job execution.
+_CLOUD_FIXTURE_TIMEOUT = 1200  # 20 min for cluster provisioning
+_CLOUD_TEST_TIMEOUT = 120  # 2 min per test
+
+
+def pytest_collection_modifyitems(config, items):
+    """Set appropriate timeouts for cloud mode tests."""
+    if config.getoption("--iris-controller-url") is None:
+        return
+
+    import pytest
+
+    first_smoke_test = True
+    for item in items:
+        if item.get_closest_marker("timeout"):
+            continue
+        if "smoke_cluster" in getattr(item, "fixturenames", ()):
+            if first_smoke_test:
+                item.add_marker(pytest.mark.timeout(_CLOUD_FIXTURE_TIMEOUT))
+                first_smoke_test = False
+            else:
+                item.add_marker(pytest.mark.timeout(_CLOUD_TEST_TIMEOUT))
+        else:
+            item.add_marker(pytest.mark.timeout(_CLOUD_TEST_TIMEOUT))
 
 
 @dataclass
@@ -97,13 +116,18 @@ class IrisTestCluster:
     job_timeout: float = 60.0
     is_cloud: bool = False
 
+    # Cloud task pods run uv sync per pod, needing ~4GB. Local workers
+    # share a pre-built venv so 1GB is fine.
+    _CLOUD_MEMORY_DEFAULT = "4g"
+    _LOCAL_MEMORY_DEFAULT = "1g"
+
     def submit(
         self,
         fn,
         name: str,
         *args,
         cpu: float = 1,
-        memory: str = "1g",
+        memory: str | None = None,
         ports: list[str] | None = None,
         scheduling_timeout: Duration | None = None,
         replicas: int = 1,
@@ -115,6 +139,8 @@ class IrisTestCluster:
         reservation: list[ReservationEntry] | None = None,
     ) -> Job:
         """Submit a callable as a job. Returns a Job handle."""
+        if memory is None:
+            memory = self._CLOUD_MEMORY_DEFAULT if self.is_cloud else self._LOCAL_MEMORY_DEFAULT
         return self.client.submit(
             entrypoint=Entrypoint.from_callable(fn, *args),
             name=name,
@@ -240,6 +266,7 @@ class ClusterCapabilities:
     regions: tuple[str, ...]
     device_types: frozenset[str]
     has_coscheduling: bool
+    has_workers: bool
 
     @property
     def has_multi_region(self) -> bool:
@@ -280,6 +307,7 @@ def discover_capabilities(controller_client: ControllerServiceClientSync) -> Clu
         regions=tuple(sorted(regions)),
         device_types=frozenset(device_types),
         has_coscheduling=len(tpu_names) > 0,
+        has_workers=len(healthy) > 0,
     )
 
 

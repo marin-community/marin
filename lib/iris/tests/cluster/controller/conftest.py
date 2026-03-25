@@ -3,68 +3,181 @@
 
 """Shared fixtures for controller unit tests."""
 
+import shutil
 import tempfile
+from contextlib import contextmanager
+from dataclasses import replace as _replace
 from pathlib import Path
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
-from iris.cluster.controller.db import ATTEMPTS, TASKS, ControllerDB
+from iris.cluster.bundle import BundleStore
+from iris.cluster.constraints import (
+    Constraint,
+    ConstraintOp,
+    DeviceType,
+    PlacementRequirements,
+    WellKnownAttribute,
+    constraints_from_resources,
+    device_variant_constraint,
+    merge_constraints,
+    preemptible_constraint,
+    region_constraint,
+    zone_constraint,
+)
+from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
+from iris.cluster.controller.db import (
+    ACTIVE_TASK_STATES,
+    ATTEMPTS,
+    JOBS,
+    TASKS,
+    TERMINAL_TASK_STATES,
+    WORKER_ATTRIBUTES,
+    WORKERS,
+    ControllerDB,
+    Job,
+    Task,
+    Worker,
+    _decode_attribute_rows,
+    _tasks_with_attempts,
+)
 from iris.cluster.controller.provider import ProviderUnsupportedError
-from iris.cluster.controller.transitions import ControllerTransitions
+from iris.cluster.controller.scaling_group import ScalingGroup
+from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.transitions import (
+    Assignment,
+    ControllerTransitions,
+    DispatchBatch,
+    HEARTBEAT_FAILURE_THRESHOLD,
+    HeartbeatApplyRequest,
+    TaskUpdate,
+)
 from iris.cluster.log_store import LogStore
-from iris.cluster.types import JobName
-from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
+from iris.cluster.providers.gcp.fake import InMemoryGcpService
+from iris.cluster.providers.gcp.workers import GcpWorkerProvider
+from iris.cluster.providers.types import CloudSliceState
+from iris.cluster.service_mode import ServiceMode
+from iris.cluster.types import JobName, WorkerId
+from iris.rpc import cluster_pb2, config_pb2, logging_pb2
+from iris.time_utils import Duration, Timestamp
+from tests.cluster.providers.conftest import make_mock_platform
 
 
 class FakeProvider:
     """Minimal TaskProvider for tests that only exercise transitions, not RPCs."""
 
-    def sync(self, batches):
+    def sync(
+        self,
+        batches: list[DispatchBatch],
+    ) -> list[tuple[DispatchBatch, HeartbeatApplyRequest | None, str | None]]:
         return [(b, None, "no stub") for b in batches]
 
-    def fetch_live_logs(self, worker_id, address, task_id, attempt_id, cursor, max_lines):
+    def fetch_live_logs(
+        self,
+        worker_id: WorkerId,
+        address: str | None,
+        task_id: str,
+        attempt_id: int,
+        cursor: int,
+        max_lines: int,
+    ) -> tuple[list[logging_pb2.LogEntry], int]:
         raise ProviderUnsupportedError("fake")
 
-    def fetch_process_logs(self, worker_id, address, request):
+    def fetch_process_logs(
+        self,
+        worker_id: WorkerId,
+        address: str | None,
+        request: cluster_pb2.FetchLogsRequest,
+    ) -> tuple[list[logging_pb2.LogEntry], int]:
         raise ProviderUnsupportedError("fake")
 
-    def get_process_status(self, worker_id, address, request):
+    def get_process_status(
+        self,
+        worker_id: WorkerId,
+        address: str | None,
+        request: cluster_pb2.GetProcessStatusRequest,
+    ) -> cluster_pb2.GetProcessStatusResponse:
         raise ProviderUnsupportedError("fake")
 
-    def on_worker_failed(self, worker_id, address):
+    def on_worker_failed(self, worker_id: WorkerId, address: str | None) -> None:
         pass
 
-    def profile_task(self, address, request, timeout_ms):
+    def profile_task(
+        self,
+        address: str,
+        request: cluster_pb2.ProfileTaskRequest,
+        timeout_ms: int,
+    ) -> cluster_pb2.ProfileTaskResponse:
         raise ProviderUnsupportedError("fake")
 
-    def close(self):
+    def close(self) -> None:
         pass
 
 
 @pytest.fixture
-def fake_provider() -> FakeProvider:
-    return FakeProvider()
+def state():
+    """Create a fresh ControllerTransitions with temp DB and log store."""
+    with make_controller_state() as s:
+        yield s
 
 
-def make_controller_state(**kwargs) -> ControllerTransitions:
-    """Create a ControllerTransitions with a fresh temp DB and log store."""
+class MockController:
+    """Mock that implements the ControllerProtocol surface used by ControllerServiceImpl."""
+
+    def __init__(self):
+        self.wake = Mock()
+        self.kill_tasks_on_workers = Mock()
+        self.create_scheduling_context = Mock(return_value=Mock())
+        self.get_job_scheduling_diagnostics = Mock(return_value=None)
+        self.autoscaler = None
+        self.provider = Mock()
+        self.has_direct_provider = False
+
+
+@pytest.fixture
+def mock_controller() -> MockController:
+    return MockController()
+
+
+@pytest.fixture
+def controller_service(state, mock_controller, tmp_path) -> ControllerServiceImpl:
+    """ControllerServiceImpl with fresh DB, log store, and mock controller."""
+    return ControllerServiceImpl(
+        state,
+        state._db,
+        controller=mock_controller,
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
+        log_store=state._log_store,
+    )
+
+
+# =============================================================================
+# State factory helpers
+# =============================================================================
+
+
+@contextmanager
+def make_controller_state(**kwargs):
+    """Yield a ControllerTransitions with a fresh temp DB and log store, cleaning up on exit."""
     tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
-    db_path = tmp / "controller.sqlite3"
-    db = ControllerDB(db_path=db_path)
-    log_store = LogStore(log_dir=tmp / "logs")
-    return ControllerTransitions(db=db, log_store=log_store, **kwargs)
+    try:
+        db = ControllerDB(db_dir=tmp)
+        log_store = LogStore(log_dir=tmp / "logs")
+        yield ControllerTransitions(db=db, log_store=log_store, **kwargs)
+        log_store.close()
+        db.close()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
-    """Create a minimal RuntimeEntrypoint proto for testing."""
     entrypoint = cluster_pb2.RuntimeEntrypoint()
     entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     return entrypoint
 
 
 def make_direct_job_request(name: str = "test-job", replicas: int = 1) -> cluster_pb2.Controller.LaunchJobRequest:
-    """Create a LaunchJobRequest suitable for direct provider tests."""
     job_name = JobName.root("test-user", name)
     return cluster_pb2.Controller.LaunchJobRequest(
         name=job_name.to_wire(),
@@ -76,7 +189,6 @@ def make_direct_job_request(name: str = "test-job", replicas: int = 1) -> cluste
 
 
 def submit_direct_job(state: ControllerTransitions, name: str, replicas: int = 1) -> list[JobName]:
-    """Submit a job for direct provider testing and return the created task IDs."""
     jid = JobName.root("test-user", name)
     req = make_direct_job_request(name, replicas)
     state.submit_job(jid, req, Timestamp.now())
@@ -85,17 +197,623 @@ def submit_direct_job(state: ControllerTransitions, name: str, replicas: int = 1
     return [t.task_id for t in tasks]
 
 
+# =============================================================================
+# DB query helpers (shared across test_scheduler, test_transitions, etc.)
+# =============================================================================
+
+
 def query_task(state: ControllerTransitions, task_id: JobName):
-    """Query a single task by ID."""
     with state._db.snapshot() as q:
         return q.one(TASKS, where=TASKS.c.task_id == task_id.to_wire())
 
 
 def query_attempt(state: ControllerTransitions, task_id: JobName, attempt_id: int):
-    """Query a single attempt row."""
     with state._db.snapshot() as q:
         rows = q.select(
             ATTEMPTS,
             where=(ATTEMPTS.c.task_id == task_id.to_wire()) & (ATTEMPTS.c.attempt_id == attempt_id),
         )
     return rows[0] if rows else None
+
+
+def query_job(state: ControllerTransitions, job_id: JobName) -> Job | None:
+    with state._db.snapshot() as q:
+        return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
+
+
+def query_worker(state: ControllerTransitions, worker_id: WorkerId) -> Worker | None:
+    with state._db.snapshot() as q:
+        return q.one(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
+
+
+def query_tasks_for_job(state: ControllerTransitions, job_id: JobName) -> list[Task]:
+    with state._db.snapshot() as q:
+        return q.select(TASKS, where=TASKS.c.job_id == job_id.to_wire())
+
+
+def schedulable_tasks(state: ControllerTransitions):
+    """Return non-terminal tasks eligible for scheduling, in priority order."""
+    with state._db.snapshot() as q:
+        tasks = q.select(
+            TASKS,
+            where=TASKS.c.state.not_null() & ~TASKS.c.state.in_(list(TERMINAL_TASK_STATES)),
+            order_by=(
+                TASKS.c.priority_neg_depth.asc(),
+                TASKS.c.priority_root_submitted_ms.asc(),
+                TASKS.c.submitted_at_ms.asc(),
+                TASKS.c.task_id.asc(),
+            ),
+        )
+    return [t for t in tasks if t.can_be_scheduled()]
+
+
+def building_counts(state: ControllerTransitions) -> dict[WorkerId, int]:
+    """Count tasks in BUILDING/ASSIGNED state per worker, excluding reservation holders."""
+    with state._db.snapshot() as snapshot:
+        rows = snapshot.raw(
+            "SELECT a.worker_id, COUNT(*) as c FROM tasks t "
+            "JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
+            "JOIN jobs j ON t.job_id = j.job_id "
+            "WHERE t.state IN (?, ?) AND j.is_reservation_holder = 0 "
+            "GROUP BY a.worker_id ORDER BY a.worker_id ASC",
+            (
+                cluster_pb2.TASK_STATE_BUILDING,
+                cluster_pb2.TASK_STATE_ASSIGNED,
+            ),
+            decoders={"worker_id": WorkerId, "c": int},
+        )
+    return {row.worker_id: row.c for row in rows}
+
+
+def register_worker(
+    state: ControllerTransitions,
+    worker_id: str,
+    address: str,
+    metadata: cluster_pb2.WorkerMetadata,
+    healthy: bool = True,
+) -> WorkerId:
+    wid = WorkerId(worker_id)
+    state.register_or_refresh_worker(
+        worker_id=wid,
+        address=address,
+        metadata=metadata,
+        ts=Timestamp.now(),
+    )
+    if not healthy:
+        state._db.execute("UPDATE workers SET healthy = 0 WHERE worker_id = ?", (str(wid),))
+    return wid
+
+
+def inject_device_constraints(request: cluster_pb2.Controller.LaunchJobRequest) -> None:
+    """Auto-inject device constraints from the resource spec, mirroring service.py.
+
+    In production, the service layer merges auto-generated device constraints
+    into the request before storing the job. Tests bypass the service layer,
+    so we replicate that logic here.
+    """
+    auto = constraints_from_resources(request.resources)
+    if not auto:
+        return
+    user = [Constraint.from_proto(c) for c in request.constraints]
+    merged = merge_constraints(auto, user)
+    del request.constraints[:]
+    for c in merged:
+        request.constraints.append(c.to_proto())
+
+
+def submit_job(
+    state: ControllerTransitions,
+    job_id: str,
+    request: cluster_pb2.Controller.LaunchJobRequest,
+    timestamp_ms: int | None = None,
+) -> list:
+    """Submit a job and return created task rows.
+
+    Auto-injects resource-derived device constraints to mirror service-layer
+    behavior, then submits and returns the created tasks.
+    """
+    inject_device_constraints(request)
+    jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
+    request.name = jid.to_wire()
+    state.submit_job(
+        jid,
+        request,
+        Timestamp.from_ms(timestamp_ms) if timestamp_ms is not None else Timestamp.now(),
+    )
+    return query_tasks_for_job(state, jid)
+
+
+# =============================================================================
+# Shared test helpers (deduplicated from test_transitions, test_scheduler,
+# test_service, test_dashboard, test_reservation)
+# =============================================================================
+
+
+def query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName) -> list[Task]:
+    with state._db.snapshot() as q:
+        tasks = q.select(
+            TASKS,
+            where=TASKS.c.job_id == job_id.to_wire(),
+            order_by=(TASKS.c.task_index.asc(),),
+        )
+        if not tasks:
+            return []
+        attempts = q.select(
+            ATTEMPTS,
+            where=ATTEMPTS.c.task_id.in_([t.task_id.to_wire() for t in tasks]),
+            order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
+        )
+    return _tasks_with_attempts(tasks, attempts)
+
+
+def query_task_with_attempts(state: ControllerTransitions, task_id: JobName) -> Task | None:
+    wire = task_id.to_wire()
+    with state._db.snapshot() as q:
+        tasks = q.select(TASKS, where=TASKS.c.task_id == wire)
+        attempts = q.select(
+            ATTEMPTS,
+            where=ATTEMPTS.c.task_id == wire,
+            order_by=(ATTEMPTS.c.attempt_id.asc(),),
+        )
+    hydrated = _tasks_with_attempts(tasks, attempts)
+    return hydrated[0] if hydrated else None
+
+
+def make_job_request(
+    name: str = "test-job",
+    cpu: int = 1,
+    memory_bytes: int = 1024**3,
+    replicas: int = 1,
+    max_retries_failure: int = 0,
+    max_retries_preemption: int = 0,
+    scheduling_timeout_seconds: int = 0,
+) -> cluster_pb2.Controller.LaunchJobRequest:
+    job_name = JobName.from_string(name) if name.startswith("/") else JobName.root("test-user", name)
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name=job_name.to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=cpu * 1000, memory_bytes=memory_bytes),
+        environment=cluster_pb2.EnvironmentConfig(),
+        max_retries_failure=max_retries_failure,
+        max_retries_preemption=max_retries_preemption,
+        replicas=replicas,
+    )
+    if scheduling_timeout_seconds > 0:
+        request.scheduling_timeout.CopyFrom(Duration.from_seconds(scheduling_timeout_seconds).to_proto())
+    return request
+
+
+def make_worker_metadata(
+    cpu: int = 10,
+    memory_bytes: int = 10 * 1024**3,
+    disk_bytes: int = 10 * 1024**3,
+    gpu_count: int = 0,
+    gpu_name: str = "",
+    tpu_name: str = "",
+) -> cluster_pb2.WorkerMetadata:
+    """Build WorkerMetadata with device config and well-known attributes.
+
+    Populates device-type and device-variant attributes so constraint-based
+    scheduling works the same way as production.
+    """
+    device = cluster_pb2.DeviceConfig()
+    if tpu_name:
+        device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=tpu_name))
+    elif gpu_count > 0:
+        device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant=gpu_name or "auto", count=gpu_count))
+    else:
+        device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
+
+    meta = cluster_pb2.WorkerMetadata(
+        hostname="test-worker",
+        ip_address="127.0.0.1",
+        cpu_count=cpu,
+        memory_bytes=memory_bytes,
+        disk_bytes=disk_bytes,
+        gpu_count=gpu_count,
+        gpu_name=gpu_name,
+        tpu_name=tpu_name,
+        device=device,
+    )
+
+    if tpu_name:
+        meta.attributes[WellKnownAttribute.DEVICE_TYPE].string_value = "tpu"
+        meta.attributes[WellKnownAttribute.DEVICE_VARIANT].string_value = tpu_name.lower()
+    elif gpu_count > 0:
+        meta.attributes[WellKnownAttribute.DEVICE_TYPE].string_value = "gpu"
+        if gpu_name:
+            meta.attributes[WellKnownAttribute.DEVICE_VARIANT].string_value = gpu_name.lower()
+    else:
+        meta.attributes[WellKnownAttribute.DEVICE_TYPE].string_value = "cpu"
+
+    return meta
+
+
+def worker_running_tasks(state: ControllerTransitions, worker_id: WorkerId) -> frozenset[JobName]:
+    with state._db.snapshot() as q:
+        rows = q.raw(
+            "SELECT t.task_id FROM tasks t "
+            "JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
+            "WHERE a.worker_id = ? AND t.state IN (?, ?, ?)",
+            (str(worker_id), *ACTIVE_TASK_STATES),
+            decoders={"task_id": JobName.from_wire},
+        )
+    return frozenset(row.task_id for row in rows)
+
+
+def hydrate_worker_attributes(state: ControllerTransitions, workers: list[Worker]) -> list[Worker]:
+    if not workers:
+        return workers
+    with state._db.snapshot() as q:
+        attrs = q.select(
+            WORKER_ATTRIBUTES,
+            columns=(
+                WORKER_ATTRIBUTES.c.worker_id,
+                WORKER_ATTRIBUTES.c.key,
+                WORKER_ATTRIBUTES.c.value_type,
+                WORKER_ATTRIBUTES.c.str_value,
+                WORKER_ATTRIBUTES.c.int_value,
+                WORKER_ATTRIBUTES.c.float_value,
+            ),
+            where=WORKER_ATTRIBUTES.c.worker_id.in_([str(w.worker_id) for w in workers]),
+        )
+    attrs_by_worker = _decode_attribute_rows(attrs)
+    return [_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
+
+
+def healthy_active_workers(state: ControllerTransitions) -> list[Worker]:
+    with state._db.snapshot() as q:
+        workers = q.select(WORKERS, where=(WORKERS.c.healthy == 1) & (WORKERS.c.active == 1))
+    return hydrate_worker_attributes(state, workers)
+
+
+def dispatch_task(state: ControllerTransitions, task: Task, worker_id: WorkerId) -> None:
+    state.queue_assignments([Assignment(task_id=task.task_id, worker_id=worker_id)])
+    state.apply_task_updates(
+        HeartbeatApplyRequest(
+            worker_id=worker_id,
+            worker_resource_snapshot=None,
+            updates=[
+                TaskUpdate(
+                    task_id=task.task_id,
+                    attempt_id=query_task(state, task.task_id).current_attempt_id,
+                    new_state=cluster_pb2.TASK_STATE_RUNNING,
+                )
+            ],
+        )
+    )
+
+
+def transition_task(
+    state: ControllerTransitions,
+    task_id: JobName,
+    new_state: int,
+    *,
+    error: str | None = None,
+    exit_code: int | None = None,
+) -> object:
+    task = query_task_with_attempts(state, task_id)
+    assert task is not None
+    if new_state == cluster_pb2.TASK_STATE_KILLED:
+        return state.cancel_job(task.job_id, reason=error or "killed")
+    if task.worker_id is None:
+        state.set_task_state_for_test(
+            task_id,
+            new_state,
+            error=error,
+            exit_code=exit_code,
+        )
+        return state
+    return state.apply_task_updates(
+        HeartbeatApplyRequest(
+            worker_id=task.worker_id,
+            worker_resource_snapshot=None,
+            updates=[
+                TaskUpdate(
+                    task_id=task_id,
+                    attempt_id=task.current_attempt_id,
+                    new_state=new_state,
+                    error=error,
+                    exit_code=exit_code,
+                )
+            ],
+        )
+    )
+
+
+def fail_worker(state: ControllerTransitions, worker_id: WorkerId, error: str) -> None:
+    batch = state.drain_dispatch(worker_id)
+    if batch is None:
+        return
+    for _ in range(HEARTBEAT_FAILURE_THRESHOLD):
+        state.record_heartbeat_failure(worker_id, error, batch)
+
+
+# =============================================================================
+# ControllerTestHarness
+# =============================================================================
+
+
+class ControllerTestHarness:
+    """Wraps ControllerTransitions with ergonomic helpers for the common
+    register-workers -> submit-jobs -> dispatch -> transition test pattern."""
+
+    def __init__(self, state: ControllerTransitions):
+        self.state = state
+
+    def add_worker(
+        self,
+        worker_id: str = "w1",
+        address: str | None = None,
+        *,
+        cpu: int = 10,
+        memory_bytes: int = 10 * 1024**3,
+        disk_bytes: int = 10 * 1024**3,
+        gpu_count: int = 0,
+        gpu_name: str = "",
+        tpu_name: str = "",
+        healthy: bool = True,
+    ) -> WorkerId:
+        meta = make_worker_metadata(
+            cpu=cpu,
+            memory_bytes=memory_bytes,
+            disk_bytes=disk_bytes,
+            gpu_count=gpu_count,
+            gpu_name=gpu_name,
+            tpu_name=tpu_name,
+        )
+        return register_worker(self.state, worker_id, address or f"{worker_id}:8080", meta, healthy=healthy)
+
+    def submit(self, name: str = "test-job", *, cpu: int = 1, replicas: int = 1, **kwargs) -> list[Task]:
+        req = make_job_request(name=name, cpu=cpu, replicas=replicas, **kwargs)
+        return submit_job(self.state, name, req)
+
+    def dispatch(self, task: Task, worker_id: WorkerId) -> None:
+        dispatch_task(self.state, task, worker_id)
+
+    def transition(self, task_id: JobName, new_state: int, **kwargs) -> None:
+        transition_task(self.state, task_id, new_state, **kwargs)
+
+    def query_task(self, task_id: JobName) -> Task:
+        return query_task(self.state, task_id)
+
+    def query_job(self, job_id: JobName) -> Job:
+        return query_job(self.state, job_id)
+
+
+@pytest.fixture
+def harness(state) -> ControllerTestHarness:
+    return ControllerTestHarness(state)
+
+
+# =============================================================================
+# Autoscaler helpers (shared by test_autoscaler, test_demand_routing,
+# test_autoscaler_integration)
+# =============================================================================
+
+
+DEFAULT_RESOURCES = config_pb2.ScaleGroupResources(
+    cpu_millicores=128000,
+    memory_bytes=128 * 1024**3,
+    disk_bytes=100 * 1024**3,
+    device_type=config_pb2.ACCELERATOR_TYPE_TPU,
+    device_variant="v5p-8",
+    device_count=8,
+)
+
+
+def ensure_scale_group_resources(config: config_pb2.ScaleGroupConfig) -> config_pb2.ScaleGroupConfig:
+    if not config.HasField("resources"):
+        config.resources.CopyFrom(DEFAULT_RESOURCES)
+    if not config.HasField("num_vms"):
+        config.num_vms = 1
+    return config
+
+
+def make_scale_group_config(**kwargs: object) -> config_pb2.ScaleGroupConfig:
+    accelerator_type = kwargs.pop("accelerator_type", config_pb2.ACCELERATOR_TYPE_TPU)
+    accelerator_variant = kwargs.pop("accelerator_variant", "v5p-8")
+    runtime_version = kwargs.pop("runtime_version", None)
+    zones = kwargs.pop("zones", None)
+    preemptible = kwargs.pop("preemptible", None)
+    config = ensure_scale_group_resources(config_pb2.ScaleGroupConfig(**kwargs))
+    config.resources.device_type = accelerator_type
+    if accelerator_variant:
+        config.resources.device_variant = accelerator_variant
+    if preemptible is not None:
+        config.slice_template.preemptible = preemptible
+        config.resources.preemptible = preemptible
+
+    # Derive slice template fields from resources, matching what
+    # _derive_slice_config_from_resources() does in production config loading.
+    # GcpWorkerProvider validates these fields on create_slice().
+    template = config.slice_template
+    template.accelerator_type = accelerator_type
+    if accelerator_variant:
+        template.accelerator_variant = accelerator_variant
+    if accelerator_type == config_pb2.ACCELERATOR_TYPE_GPU and config.resources.device_count > 0:
+        template.gpu_count = config.resources.device_count
+
+    gcp = template.gcp
+    if runtime_version:
+        gcp.runtime_version = runtime_version
+    elif accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU and not gcp.runtime_version:
+        gcp.runtime_version = "v2-alpha-tpuv5"
+    if zones:
+        gcp.zone = zones[0]
+    elif not gcp.zone:
+        gcp.zone = "us-central1-a"
+
+    return config
+
+
+def make_demand_entries(
+    count: int,
+    *,
+    device_type: DeviceType = DeviceType.TPU,
+    device_variant: str | None = "v5p-8",
+    device_variants: frozenset[str] | None = None,
+    preemptible: bool | None = None,
+    required_regions: frozenset[str] | None = None,
+    required_zones: frozenset[str] | None = None,
+    task_prefix: str = "task",
+) -> list[DemandEntry]:
+    if count <= 0:
+        return []
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
+    if device_type == DeviceType.TPU:
+        resources.device.tpu.variant = device_variant or ""
+    elif device_type == DeviceType.GPU:
+        resources.device.gpu.variant = device_variant or ""
+    elif device_type == DeviceType.CPU:
+        resources.device.cpu.variant = ""
+    effective_variants = device_variants
+    if effective_variants is None and device_variant is not None:
+        effective_variants = frozenset({device_variant})
+    normalized = PlacementRequirements(
+        device_type=device_type,
+        device_variants=effective_variants,
+        preemptible=preemptible,
+        required_regions=required_regions,
+        required_zones=required_zones,
+    )
+
+    constraint_list: list[Constraint] = []
+    if device_type is not None:
+        constraint_list.append(
+            Constraint(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value=device_type.value)
+        )
+    if effective_variants:
+        constraint_list.append(device_variant_constraint(sorted(effective_variants)))
+    if preemptible is not None:
+        constraint_list.append(preemptible_constraint(preemptible))
+    if required_regions:
+        constraint_list.append(region_constraint(sorted(required_regions)))
+    if required_zones:
+        for z in sorted(required_zones):
+            constraint_list.append(zone_constraint(z))
+    proto_constraints = [c.to_proto() for c in constraint_list]
+
+    return [
+        DemandEntry(
+            task_ids=[f"{task_prefix}-{i}"],
+            coschedule_group_id=None,
+            normalized=normalized,
+            constraints=proto_constraints,
+            resources=resources,
+        )
+        for i in range(count)
+    ]
+
+
+def make_big_demand_entries(
+    count: int,
+    *,
+    cpu_millicores: int = 32000,
+    memory_bytes: int = 32 * 1024**3,
+    disk_bytes: int = 0,
+    device_type: DeviceType = DeviceType.CPU,
+    device_variants: frozenset[str] | None = None,
+    task_prefix: str = "task",
+    coschedule_group_id: str | None = None,
+) -> list[DemandEntry]:
+    """Create demand entries with explicit resource sizes for packing tests."""
+    resources = cluster_pb2.ResourceSpecProto(
+        cpu_millicores=cpu_millicores,
+        memory_bytes=memory_bytes,
+        disk_bytes=disk_bytes,
+    )
+    normalized = PlacementRequirements(
+        device_type=device_type,
+        device_variants=device_variants,
+        preemptible=None,
+        required_regions=None,
+        required_zones=None,
+    )
+    if coschedule_group_id:
+        return [
+            DemandEntry(
+                task_ids=[f"{task_prefix}-{i}" for i in range(count)],
+                coschedule_group_id=coschedule_group_id,
+                normalized=normalized,
+                constraints=[],
+                resources=resources,
+            )
+        ]
+    return [
+        DemandEntry(
+            task_ids=[f"{task_prefix}-{i}"],
+            coschedule_group_id=None,
+            normalized=normalized,
+            constraints=[],
+            resources=resources,
+        )
+        for i in range(count)
+    ]
+
+
+def make_autoscaler(
+    scale_groups: dict[str, ScalingGroup],
+    config: config_pb2.AutoscalerConfig | None = None,
+    platform: MagicMock | None = None,
+    base_worker_config: config_pb2.WorkerConfig | None = None,
+) -> Autoscaler:
+    """Create an Autoscaler with the given groups."""
+    mock_platform = platform or make_mock_platform()
+
+    if config:
+        return Autoscaler.from_config(
+            scale_groups=scale_groups,
+            config=config,
+            platform=mock_platform,
+            base_worker_config=base_worker_config,
+        )
+    else:
+        return Autoscaler(
+            scale_groups=scale_groups,
+            evaluation_interval=Duration.from_seconds(0.1),
+            platform=mock_platform,
+            base_worker_config=base_worker_config,
+        )
+
+
+def mark_discovered_ready(group: ScalingGroup, handles: list[MagicMock], timestamp: Timestamp | None = None) -> None:
+    """Mark discovered slices as READY with their worker IDs."""
+    for handle in handles:
+        worker_ids = [w.worker_id for w in handle.describe().workers]
+        group.mark_slice_ready(handle.slice_id, worker_ids, timestamp=timestamp)
+
+
+def mark_all_slices_ready(group: ScalingGroup) -> None:
+    """Mark all tracked slices as READY with their worker IDs.
+
+    Used after advance_all_tpus() to simulate the controller detecting that
+    slices have finished booting and are ready for work.
+    """
+    for handle in group.slice_handles():
+        desc = handle.describe()
+        if desc.state == CloudSliceState.READY:
+            worker_ids = [w.worker_id for w in desc.workers]
+            group.mark_slice_ready(handle.slice_id, worker_ids)
+
+
+def make_gcp_provider(
+    config: config_pb2.ScaleGroupConfig,
+    zone: str = "us-central1-a",
+) -> tuple[GcpWorkerProvider, InMemoryGcpService]:
+    """Create a GcpWorkerProvider backed by InMemoryGcpService(DRY_RUN).
+
+    Returns both the provider and the backing service so tests can inject
+    failures and advance TPU state.
+    """
+    service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project", label_prefix="iris")
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=[zone])
+    provider = GcpWorkerProvider(gcp_config=gcp_config, label_prefix="iris", gcp_service=service)
+    return provider, service
+
+
+def advance_all_tpus(service: InMemoryGcpService, state: str = "READY") -> None:
+    """Transition all TPUs in an InMemoryGcpService to the given state."""
+    for name, zone in list(service._tpus.keys()):
+        if service._tpus[(name, zone)].state != state:
+            service.advance_tpu_state(name, zone, state)

@@ -10,7 +10,12 @@ from unittest.mock import MagicMock, Mock, patch
 import pandas as pd
 import pytest
 
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf, stream_file_to_fsspec
+from marin.download.huggingface.download_hf import (
+    DownloadConfig,
+    _relative_path_in_source,
+    download_hf,
+    stream_file_to_fsspec,
+)
 from marin.download.huggingface.stream_remove_columns import (
     DatasetConfig,
     prune_hf_dataset,
@@ -124,6 +129,30 @@ def test_download_hf_appends_sha_when_configured(mock_hf_fs, tmp_path):
     target_output = base_output_path / revision
     assert (target_output / "data" / "file1.txt").exists()
     assert (target_output / "provenance.json").exists()
+
+
+def test_relative_path_in_source_supports_bucket_paths():
+    file_path = "hf://buckets/demo-user/demo-bucket/data/train/file1.txt"
+    source_path = "hf://buckets/demo-user/demo-bucket/data"
+    assert _relative_path_in_source(file_path, source_path) == "train/file1.txt"
+
+
+def test_relative_path_in_source_supports_revision_qualified_bucket_paths():
+    file_path = "hf://buckets/demo-user/demo-bucket/data@main/train/file1.txt"
+    source_path = "hf://buckets/demo-user/demo-bucket/data"
+    assert _relative_path_in_source(file_path, source_path) == "train/file1.txt"
+
+
+def test_download_hf_bucket_requires_newer_huggingface_hub(tmp_path):
+    cfg = DownloadConfig(
+        hf_dataset_id="buckets/demo-user/demo-bucket/data",
+        revision="main",
+        gcs_output_path=str(tmp_path),
+        hf_repo_type_prefix="",
+    )
+
+    with pytest.raises(RuntimeError, match=r"huggingface_hub>=1\.6\.0"):
+        download_hf(cfg)
 
 
 def test_prune_hf_dataset(tmp_path):

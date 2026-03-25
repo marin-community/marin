@@ -119,4 +119,16 @@ def build_common_iris_env(
             env["PJRT_DEVICE"] = "TPU"
             env["JAX_FORCE_TPU_INIT"] = "1"
 
+    # Expose the task's resource limits so user code can query them via
+    # iris.env_resources.TaskResources.from_environment() without relying
+    # solely on cgroup introspection.
+    # We serialize the proto directly; the reader deserializes it back.
+    # Zero-valued fields are omitted by proto3 JSON so env_resources falls
+    # back to cgroups / host values for unspecified dimensions.
+    if resources is not None:
+        resource_json = json_format.MessageToJson(resources, preserving_proto_field_name=True)
+        # proto3 JSON omits zero-valued fields, so an empty proto yields "{}".
+        if resource_json != "{}":
+            env["IRIS_TASK_RESOURCES"] = resource_json
+
     return env

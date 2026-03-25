@@ -1,4 +1,4 @@
-.PHONY: help clean check fix cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit
+.PHONY: help clean check fix cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit rust-dev rust-user rust-status
 .DEFAULT: help
 
 
@@ -15,6 +15,12 @@ help:
 	@echo "    Run all tests"
 	@echo "make init"
 	@echo "    Init the repo for development"
+	@echo "make rust-dev"
+	@echo "    Switch to dev mode (build dupekit from source)"
+	@echo "make rust-user"
+	@echo "    Switch to user mode (install dupekit from pre-built wheel)"
+	@echo "make rust-status"
+	@echo "    Show current Rust build mode"
 
 init:
 	conda install -c conda-forge pandoc
@@ -220,5 +226,28 @@ install_node:
 		exit 1; \
 	fi
 
+
 dev_setup: install_uv install_gcloud install_node get_secret_key get_ray_auth_token setup_pre_commit
 	@echo "Dev setup complete."
+
+
+# Rust crate build mode (dupekit)
+# User mode (default): pre-built wheels resolved via find-links in pyproject.toml
+# Dev mode: adds dupekit path source to [tool.uv.sources] in pyproject.toml (requires Cargo)
+
+rust-dev:
+	@python3 scripts/rust_mode.py dev
+	uv sync
+	@echo "Done. Run 'make rust-user' before committing."
+
+rust-user:
+	@python3 scripts/rust_mode.py user
+	uv sync
+
+rust-status:
+	@python3 scripts/rust_mode.py status
+	@if command -v cargo > /dev/null 2>&1; then \
+		echo "Cargo: installed ($$(cargo --version))"; \
+	else \
+		echo "Cargo: not found (source builds will fail)"; \
+	fi

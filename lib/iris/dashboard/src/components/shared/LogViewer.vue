@@ -64,6 +64,25 @@ const { active: autoRefreshActive, toggle: toggleAutoRefresh } = useAutoRefresh(
 
 watch(selectedAttemptId, () => doRefresh())
 watch(tailLines, () => doRefresh())
+watch(
+  () => [props.taskId, props.currentAttemptId] as const,
+  ([taskId, currentAttemptId], [previousTaskId, previousCurrentAttemptId]) => {
+    if (taskId !== previousTaskId) {
+      selectedAttemptId.value = -1
+      doRefresh()
+      return
+    }
+    if (taskId === undefined || currentAttemptId === previousCurrentAttemptId) return
+    if (selectedAttemptId.value === -1) {
+      doRefresh()
+      return
+    }
+    if (selectedAttemptId.value === previousCurrentAttemptId) {
+      selectedAttemptId.value = currentAttemptId ?? -1
+    }
+  },
+)
+watch(() => props.workerId, () => doRefresh())
 
 onMounted(doRefresh)
 

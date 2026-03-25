@@ -217,7 +217,7 @@ When you call `ctx.execute(dataset)`:
 
 ```python
 # 1. Create plan from dataset operations
-plan = compute_plan(dataset, hints)
+plan = compute_plan(dataset)
 
 # 2. Get or create coordinator + workers
 coordinator = self._get_or_create_coordinator()

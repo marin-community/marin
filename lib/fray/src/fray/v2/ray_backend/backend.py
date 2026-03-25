@@ -16,7 +16,15 @@ import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
 
-from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.actor import (
+    ActorContext,
+    ActorFuture,
+    ActorGroup,
+    ActorHandle,
+    HostedActor,
+    _reset_current_actor,
+    _set_current_actor,
+)
 from fray.v2.ray_backend.deps import build_python_path, build_runtime_env_for_packages
 from fray.v2.ray_backend.tpu import run_on_pod_ray
 from fray.v2.types import (
@@ -349,6 +357,19 @@ class RayClient:
         job_id = f"ray-tpu-{request.name}-{uuid.uuid4().hex[:8]}"
         return RayJobHandle(job_id, ref=object_ref)
 
+    def host_actor(
+        self,
+        actor_class: type,
+        *args: Any,
+        name: str,
+        actor_config: ActorConfig = ActorConfig(),
+        **kwargs: Any,
+    ) -> HostedActor:
+        """Ray cannot host actors in-process; falls back to a single-actor group."""
+        group = self.create_actor_group(actor_class, *args, name=name, count=1, actor_config=actor_config, **kwargs)
+        handle = group.wait_ready()[0]
+        return HostedActor(handle, stop=group.shutdown)
+
     def create_actor(
         self,
         actor_class: type,
@@ -590,10 +611,36 @@ class RayActorGroup:
         """Ray actors managed by Zephyr don't have an independent job lifecycle."""
         return False
 
-    def shutdown(self) -> None:
-        """Kill all Ray actors."""
+    def shutdown(self, graceful_timeout_s: float = 30.0) -> None:
+        """Gracefully terminate all Ray actors, with force-kill fallback.
+
+        Uses __ray_terminate__ instead of ray.kill() so that in-flight tasks
+        finish before the actor exits.  ray.kill() races with task completion
+        callbacks in Ray's C++ task_manager, triggering a fatal assertion
+        (ray-project/ray#54260).  __ray_terminate__ queues behind pending
+        tasks; we wait up to *graceful_timeout_s* then force-kill stragglers.
+        """
+        # Phase 1: request graceful termination for all actors.
+        terminate_refs: list[tuple[RayActorHandle, ray.ObjectRef]] = []
         for handle in self._handles:
             try:
-                ray.kill(handle._actor_ref)
+                ref = handle._resolve().__ray_terminate__.remote()
+                terminate_refs.append((handle, ref))
             except Exception as e:
-                logger.warning("Failed to kill Ray actor: %s", e)
+                logger.warning("Failed to send terminate to Ray actor: %s", e)
+
+        # Phase 2: wait for graceful termination with a timeout.
+        pending = [ref for _, ref in terminate_refs]
+        if pending:
+            try:
+                _, still_pending = ray.wait(pending, num_returns=len(pending), timeout=graceful_timeout_s)
+            except Exception:
+                still_pending = pending
+            # Phase 3: force-kill actors that did not terminate in time.
+            still_pending_set = set(still_pending)
+            for handle, ref in terminate_refs:
+                if ref in still_pending_set:
+                    try:
+                        ray.kill(handle._resolve())
+                    except Exception as e:
+                        logger.warning("Failed to force-kill Ray actor: %s", e)

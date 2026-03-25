@@ -35,7 +35,16 @@ from iris.cluster.types import CoschedulingConfig, EnvironmentSpec, ResourceSpec
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import cluster_pb2
 
-from fray.v2.actor import ActorContext, ActorFuture, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.actor import (
+    ActorContext,
+    ActorFuture,
+    ActorHandle,
+    HostedActor,
+    _clear_shutdown_event,
+    _reset_current_actor,
+    _set_current_actor,
+    _set_shutdown_event,
+)
 from fray.v2.client import JobAlreadyExists as FrayJobAlreadyExists
 from fray.v2.types import (
     ActorConfig,
@@ -216,6 +225,11 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     actor_name = f"{ctx.job_id}/{name_prefix}-{job_info.task_index}"
     logger.info(f"Starting actor: {actor_name} (job_id={ctx.job_id})")
 
+    # Shutdown event lets the actor signal that the hosting process should exit.
+    # request_shutdown() sets this event, unblocking the wait below.
+    shutdown_event = threading.Event()
+    _set_shutdown_event(shutdown_event)
+
     # Create handle BEFORE instance so actor can access it during __init__
     handle = IrisActorHandle(actor_name)
     actor_ctx = ActorContext(handle=handle, index=job_info.task_index, group_name=name_prefix)
@@ -236,8 +250,11 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     ctx.registry.register(actor_name, address)
     logger.info(f"Actor {actor_name} ready and listening")
 
-    # Block forever — job termination kills the process
-    threading.Event().wait()
+    # Block until the actor signals shutdown via request_shutdown()
+    shutdown_event.wait()
+    logger.info(f"Actor {actor_name} shutting down")
+    _clear_shutdown_event()
+    server.stop()
 
 
 class IrisActorHandle:
@@ -508,6 +525,7 @@ class FrayIrisClient:
         replicas = request.replicas or 1
         coscheduling = resolve_coscheduling(request.resources.device, replicas)
 
+        policy = cluster_pb2.EXISTING_JOB_POLICY_KEEP if adopt_existing else cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED
         try:
             job = self._iris.submit(
                 entrypoint=iris_entrypoint,
@@ -519,13 +537,44 @@ class FrayIrisClient:
                 replicas=replicas,
                 max_retries_failure=request.max_retries_failure,
                 max_retries_preemption=request.max_retries_preemption,
+                existing_job_policy=policy,
             )
         except IrisJobAlreadyExists as e:
-            if adopt_existing:
-                logger.info("Job %s already exists, adopting existing job", request.name)
-                return IrisJobHandle(e.job)
-            raise FrayJobAlreadyExists(request.name, handle=IrisJobHandle(e.job)) from e
+            raise FrayJobAlreadyExists(request.name) from e
         return IrisJobHandle(job)
+
+    def host_actor(
+        self,
+        actor_class: type,
+        *args: Any,
+        name: str,
+        actor_config: ActorConfig = ActorConfig(),
+        **kwargs: Any,
+    ) -> HostedActor:
+        """Host an actor in the current process with Iris RPC serving."""
+        ctx = iris_ctx()
+        job_info = get_job_info()
+        if job_info is None:
+            raise RuntimeError("host_actor requires an Iris job context")
+
+        actor_name = f"{ctx.job_id}/{name}-0"
+        handle = IrisActorHandle(actor_name)
+        actor_ctx = ActorContext(handle=handle, index=0, group_name=name)
+        token = _set_current_actor(actor_ctx)
+        try:
+            instance = actor_class(*args, **kwargs)
+        finally:
+            _reset_current_actor(token)
+
+        server = ActorServer(host="0.0.0.0", port=0)
+        server.register(actor_name, instance)
+        actual_port = server.serve_background()
+
+        address = f"http://{job_info.advertise_host}:{actual_port}"
+        logger.info("host_actor: registered %s -> %s", actor_name, address)
+        ctx.registry.register(actor_name, address)
+
+        return HostedActor(handle, stop=server.stop)
 
     def create_actor(
         self,

@@ -3,9 +3,10 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { stateToName, statusColors } from '@/types/status'
+import { stateToName } from '@/types/status'
 import type { JobStatus, ListJobsResponse } from '@/types/rpc'
 import { timestampMs, formatDuration, formatRelativeTime } from '@/utils/formatting'
+import { flattenJobTree, getLeafJobName, jobsWithChildren } from '@/utils/jobTree'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 
@@ -86,72 +87,10 @@ watch([page, sortField, sortDir, nameFilter], () => {
 
 // -- Job tree --
 
-function getParentName(jobName: string): string | null {
-  if (!jobName) return null
-  const lastSlash = jobName.lastIndexOf('/')
-  if (lastSlash <= 0) return null
-  return jobName.slice(0, lastSlash)
-}
-
-function getLeafName(jobName: string): string {
-  if (!jobName) return jobName
-  const lastSlash = jobName.lastIndexOf('/')
-  return lastSlash >= 0 ? jobName.slice(lastSlash + 1) : jobName
-}
-
-interface JobTreeNode {
-  job: JobStatus
-  depth: number
-}
-
-const flattenedJobs = computed<JobTreeNode[]>(() => {
-  const jobList = jobs.value
-  const jobByName = new Map(jobList.map(j => [j.name, j]))
-  const childrenMap = new Map<string, JobStatus[]>()
-  const rootJobs: JobStatus[] = []
-
-  for (const job of jobList) {
-    const parentName = getParentName(job.name)
-    if (parentName && jobByName.has(parentName)) {
-      const children = childrenMap.get(parentName)
-      if (children) {
-        children.push(job)
-      } else {
-        childrenMap.set(parentName, [job])
-      }
-    } else {
-      rootJobs.push(job)
-    }
-  }
-
-  const result: JobTreeNode[] = []
-
-  function walk(list: JobStatus[], depth: number) {
-    for (const job of list) {
-      result.push({ job, depth })
-      const children = childrenMap.get(job.name)
-      if (children && expandedJobs.value.has(job.name)) {
-        walk(children, depth + 1)
-      }
-    }
-  }
-
-  walk(rootJobs, 0)
-  return result
-})
+const flattenedJobs = computed(() => flattenJobTree(jobs.value, expandedJobs.value))
 
 // Track which jobs have children for expand/collapse UI
-const jobsWithChildren = computed(() => {
-  const jobByName = new Map(jobs.value.map(j => [j.name, j]))
-  const set = new Set<string>()
-  for (const job of jobs.value) {
-    const parentName = getParentName(job.name)
-    if (parentName && jobByName.has(parentName)) {
-      set.add(parentName)
-    }
-  }
-  return set
-})
+const expandableJobs = computed(() => jobsWithChildren(jobs.value))
 
 // -- Interactions --
 
@@ -376,7 +315,7 @@ function sortIndicator(field: SortField): string {
           >
             <span class="inline-flex items-center gap-1">
               <button
-                v-if="jobsWithChildren.has(node.job.name)"
+                v-if="expandableJobs.has(node.job.name)"
                 class="text-text-muted hover:text-text select-none w-4 text-center text-xs"
                 @click.stop="toggleExpanded(node.job.name)"
               >
@@ -387,7 +326,7 @@ function sortIndicator(field: SortField): string {
                 :to="'/job/' + encodeURIComponent(node.job.jobId)"
                 class="text-accent hover:underline font-mono"
               >
-                {{ node.depth > 0 ? getLeafName(node.job.name) : (node.job.name || 'unnamed') }}
+                {{ node.depth > 0 ? getLeafJobName(node.job.name) : (node.job.name || 'unnamed') }}
               </RouterLink>
               <button
                 v-if="node.job.name"

@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from iris.cluster.k8s.provider import PodConfig, _build_pod_manifest
+from iris.cluster.providers.k8s.tasks import PodConfig, _build_pod_manifest
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.rpc import cluster_pb2
 
@@ -221,3 +221,48 @@ def test_standard_paths_always_present():
     assert env["IRIS_BIND_HOST"] == "0.0.0.0"
     assert env["UV_PYTHON_INSTALL_DIR"] == "/uv/cache/python"
     assert env["CARGO_TARGET_DIR"] == "/root/.cargo/target"
+
+
+# ---------------------------------------------------------------------------
+# IRIS_TASK_RESOURCES serialization
+# ---------------------------------------------------------------------------
+
+
+def test_task_resources_uses_proto_json():
+    """IRIS_TASK_RESOURCES should be valid proto-JSON for ResourceSpecProto."""
+    from google.protobuf import json_format as jf
+
+    env = _common_env(_make_req())
+    raw = env["IRIS_TASK_RESOURCES"]
+    proto = cluster_pb2.ResourceSpecProto()
+    jf.Parse(raw, proto)
+    assert proto.cpu_millicores == 1000
+    assert proto.memory_bytes == 4 * 1024**3
+
+
+def test_task_resources_includes_gpu_device():
+    from google.protobuf import json_format as jf
+
+    env = _common_env(_make_req(gpu_count=8))
+    proto = cluster_pb2.ResourceSpecProto()
+    jf.Parse(env["IRIS_TASK_RESOURCES"], proto)
+    assert proto.device.gpu.count == 8
+    assert proto.device.gpu.variant == "H100"
+
+
+def test_task_resources_includes_tpu_device():
+    from google.protobuf import json_format as jf
+
+    env = _common_env(_make_req(tpu=True))
+    proto = cluster_pb2.ResourceSpecProto()
+    jf.Parse(env["IRIS_TASK_RESOURCES"], proto)
+    assert proto.device.tpu.count == 4
+
+
+def test_task_resources_omits_zero_fields():
+    """Zero-valued proto fields should not appear in the JSON, allowing cgroup fallback."""
+    env = _common_env(_make_req())
+    raw = env["IRIS_TASK_RESOURCES"]
+    parsed = json.loads(raw)
+    # disk_bytes is 0 by default and should be omitted
+    assert "disk_bytes" not in parsed
