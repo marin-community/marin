@@ -27,6 +27,7 @@ jobs:
             relevant:
               - 'lib/levanter/**'
               - 'lib/haliax/**'
+              - 'experiments/grug/**'
               - 'uv.lock'
               - '.github/workflows/levanter-tests.yaml'
 

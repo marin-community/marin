@@ -26,6 +26,7 @@ jobs:
           filters: |
             relevant:
               - 'lib/marin/**'
+              - 'experiments/grug/**'
               - 'tests/**'
               - 'uv.lock'
               - 'pyproject.toml'
