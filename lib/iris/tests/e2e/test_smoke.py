@@ -279,7 +279,7 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Jobs tab shows diverse states."""
     quick = smoke_cluster.submit(TestJobs.quick, "smoke-simple")
     failed = smoke_cluster.submit(TestJobs.fail, "smoke-failed")
-    running = smoke_cluster.submit(TestJobs.sleep, "smoke-running", 30)
+    running = smoke_cluster.submit(TestJobs.sleep, "smoke-running", 300)
 
     smoke_cluster.wait(quick, timeout=smoke_cluster.job_timeout)
     smoke_cluster.wait(failed, timeout=smoke_cluster.job_timeout)

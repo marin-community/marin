@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
@@ -73,6 +73,13 @@ const taskColumns: Column[] = [
 
 useAutoRefresh(fetchWorker, 5_000)
 onMounted(fetchWorker)
+
+// Re-fetch when navigating between workers (Vue Router reuses the component).
+// Clear stale data first so loading/error states render correctly if the fetch fails.
+watch(() => props.workerId, () => {
+  data.value = null
+  fetchWorker()
+})
 
 function attributeDisplay(val: { stringValue?: string; intValue?: string; floatValue?: string }): string {
   if (val.stringValue !== undefined) return val.stringValue
