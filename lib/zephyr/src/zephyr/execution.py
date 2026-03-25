@@ -453,6 +453,11 @@ class ZephyrCoordinator:
         """Abort the pipeline if the worker job has permanently terminated."""
         if self._worker_group is None or self._fatal_error is not None:
             return
+        # After the last stage completes, workers exit cleanly via SHUTDOWN.
+        # The worker job finishing at that point is expected, not a crash.
+        with self._lock:
+            if self._total_shards > 0 and self._completed_shards >= self._total_shards:
+                return
         try:
             if self._worker_group.is_done():
                 self.abort(
