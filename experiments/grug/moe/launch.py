@@ -50,6 +50,7 @@ class GrugMoeLaunchConfig:
     mp: str  # jmp policy string, e.g. "params=float32,compute=bfloat16,output=bfloat16".
     tracker: TrackerConfig
     optimizer: OptimizerConfig
+    profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
 
@@ -99,7 +100,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         seed=config.seed,
         train_batch_size=config.batch_size,
         num_train_steps=config.steps,
-        profiler=ProfilerConfig(enabled=False, start_step=5, num_steps=100, perfetto_link=False),
+        profiler=config.profiler,
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
