@@ -19,9 +19,11 @@ import os
 import sys
 from collections.abc import Callable
 
-from iris.marin_fs import marin_prefix, open_url
+from iris.marin_fs import open_url
 
 from marin.execution.executor import Executor
+
+MIRROR_PREFIX = "mirror://"
 
 
 def _env_float(key: str, default: float) -> float:
@@ -38,13 +40,16 @@ def _thresholds() -> list[tuple[str, str, Callable[[float, float], bool], float]
 
 
 def resolve_canary_output_path() -> str:
-    """Resolve the canary ferry's GCS output path via the executor's version hash."""
+    """Resolve the canary ferry's output path via the executor's version hash.
+
+    Uses mirror:// so the read works regardless of which region the canary
+    wrote to.
+    """
     from experiments.ferries.canary_ferry import canary_moe_step
 
-    prefix = marin_prefix()
     executor = Executor(
-        prefix=prefix,
-        executor_info_base_path=f"{prefix}/experiments",
+        prefix=MIRROR_PREFIX,
+        executor_info_base_path=f"{MIRROR_PREFIX}experiments",
     )
     executor.compute_version(canary_moe_step, is_pseudo_dep=False)
     return executor.output_paths[canary_moe_step]
