@@ -25,8 +25,7 @@ Auth model:
 
 import logging
 import os
-from collections.abc import AsyncGenerator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import Callable
 from http.cookies import SimpleCookie
 from urllib.parse import urlparse
 
@@ -40,7 +39,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from iris.cluster.controller.actor_proxy import PROXY_ROUTE, ActorProxy
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.dashboard_common import html_shell, static_files_mount
+from iris.cluster.dashboard_common import html_shell, on_shutdown, static_files_mount
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
@@ -283,14 +282,9 @@ class ControllerDashboard:
             static_files_mount(),
         ]
 
-        @asynccontextmanager
-        async def _lifespan(_app: Starlette) -> AsyncGenerator[None, None]:
-            yield
-            await self._actor_proxy.close()
-
         app: Starlette | _RouteAuthMiddleware = Starlette(
             routes=routes,
-            lifespan=_lifespan,
+            lifespan=on_shutdown(self._actor_proxy.close),
         )
         if self._auth_verifier is not None and self._auth_provider is not None:
             app = _RouteAuthMiddleware(app, self._auth_verifier, optional=self._auth_optional)
@@ -437,12 +431,7 @@ class ProxyControllerDashboard:
             static_files_mount(),
         ]
 
-        @asynccontextmanager
-        async def _lifespan(_app: Starlette) -> AsyncGenerator[None, None]:
-            yield
-            await self._client.aclose()
-
-        return Starlette(routes=routes, lifespan=_lifespan)
+        return Starlette(routes=routes, lifespan=on_shutdown(self._client.aclose))
 
     def _proxy_html(self, dashboard_type: str) -> HTMLResponse:
         html = html_shell("Iris Controller (Proxy)", dashboard_type)
