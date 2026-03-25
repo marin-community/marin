@@ -1621,7 +1621,7 @@ class Controller:
         """Pause loops and write a consistent SQLite checkpoint copy."""
         if self._config.dry_run:
             logger.info("[DRY-RUN] Skipping checkpoint write")
-            return ("dry-run", CheckpointResult(job_count=0, task_count=0, worker_count=0))
+            return ("dry-run", CheckpointResult(created_at=Timestamp.now(), job_count=0, task_count=0, worker_count=0))
         self._checkpoint_in_progress = True
         try:
             # Wait for any in-flight heartbeat round to complete.
