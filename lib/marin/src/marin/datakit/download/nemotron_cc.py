@@ -1,14 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Download and process Nemotron-CC dataset from Common Crawl.
-
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=100 --memory=4GB \
-    lib/marin/src/marin/download/nemotron_cc/download_nemotron_cc.py \
-    --output_path gs://bucket/nemotron-output
-"""
+"""Download and process Nemotron-CC dataset from Common Crawl"""
 
 import json
 import logging
@@ -115,23 +108,10 @@ def download_nemotron_cc(output_path: str) -> None:
     logger.info(f"Downloaded Nemotron CC files to {output_path}")
 
 
-def nemotron_cc_step(
-    name: str = "raw/nemotron-cc",
-    *,
-    deps: list[StepSpec] | None = None,
-    output_path_prefix: str | None = None,
-    override_output_path: str | None = None,
-) -> StepSpec:
+def download_nemotron_cc_step(name: str = "raw/nemotron-cc") -> StepSpec:
     """Create a StepSpec that downloads the Nemotron-CC dataset from Common Crawl."""
-
-    def _run(output_path: str) -> None:
-        download_nemotron_cc(output_path)
 
     return StepSpec(
         name=name,
-        fn=_run,
-        deps=deps or [],
-        hash_attrs={},
-        output_path_prefix=output_path_prefix,
-        override_output_path=override_output_path,
+        fn=lambda output_path: download_nemotron_cc(output_path=output_path),
     )
