@@ -52,7 +52,6 @@ _DEFAULT_LOCAL_PREFIX = "/tmp/marin"
 # Canonical mapping from GCP region to marin-tmp bucket name.
 # Must stay in sync with infra/configure_temp_buckets.py BUCKETS dict.
 REGION_TO_TMP_BUCKET: dict[str, str] = {
-    "asia-northeast1": "marin-tmp-asia-northeast-1",
     "us-central1": "marin-tmp-us-central1",
     "us-central2": "marin-tmp-us-central2",
     "europe-west4": "marin-tmp-eu-west4",
@@ -77,7 +76,6 @@ REGION_TO_DATA_BUCKET: dict[str, str] = {
     "us-east5": "marin-us-east5",
     "us-west4": "marin-us-west4",
     "europe-west4": "marin-eu-west4",
-    "asia-northeast1": "marin-asia-northeast1",
 }
 
 # Reverse lookup: bucket name → canonical GCP region.

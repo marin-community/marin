@@ -19,7 +19,6 @@ from iris.cli.build import (
     build_image,
     find_marin_root,
     get_git_sha,
-    push_to_ghcr,
 )
 from iris.cli.main import require_controller_url
 from iris.cluster.config import IrisConfig, clear_remote_state, make_local_config
@@ -98,14 +97,12 @@ def _build_and_push_for_tag(image_tag: str, image_type: str, verbose: bool = Fal
     build_image(
         image_type=image_type,
         tag=local_tag,
-        push=False,
+        push=True,
         context=None,
         platform="linux/amd64",
         ghcr_org=org,
         verbose=verbose,
     )
-    click.echo()
-    push_to_ghcr(local_tag, ghcr_org=org, image_name=image_name, version=version, verbose=verbose)
     click.echo()
 
 
@@ -129,14 +126,12 @@ def _build_and_push_task_image(task_tag: str, verbose: bool = False) -> None:
     build_image(
         image_type="task",
         tag=local_tag,
-        push=False,
+        push=True,
         context=marin_root,
         platform="linux/amd64",
         ghcr_org=org,
         verbose=verbose,
     )
-    click.echo()
-    push_to_ghcr(local_tag, ghcr_org=org, image_name=image_name, version=version, verbose=verbose)
     click.echo()
 
 
@@ -614,8 +609,17 @@ def controller_checkpoint(ctx, stop: bool):
 
 
 @controller.command("restart")
+@click.option(
+    "--skip-checkpoint",
+    is_flag=True,
+    default=False,
+    help="Skip the pre-restart checkpoint (use if checkpoint is timing out).",
+)
+@click.option(
+    "--checkpoint-timeout", type=int, default=300, show_default=True, help="Checkpoint RPC timeout in seconds."
+)
 @click.pass_context
-def controller_restart(ctx):
+def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
     """Restart controller with state preservation (remote platforms only).
 
     Takes a checkpoint, builds fresh images, stops the controller, and starts
@@ -658,15 +662,22 @@ def controller_restart(ctx):
         return
 
     # Checkpoint
-    client = cluster_connect.ControllerServiceClientSync(controller_url)
-    try:
-        resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest(), timeout_ms=60_000)
-    except Exception as e:
-        click.echo(f"Checkpoint failed: {e}", err=True)
-        raise SystemExit(1) from e
-    finally:
-        client.close()
-    click.echo(f"Checkpoint: {resp.checkpoint_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
+    if skip_checkpoint:
+        click.echo("Skipping pre-restart checkpoint.")
+    else:
+        click.echo(f"Taking checkpoint (timeout {checkpoint_timeout}s)...")
+        client = cluster_connect.ControllerServiceClientSync(controller_url)
+        try:
+            resp = client.begin_checkpoint(
+                cluster_pb2.Controller.BeginCheckpointRequest(),
+                timeout_ms=checkpoint_timeout * 1000,
+            )
+        except Exception as e:
+            click.echo(f"Checkpoint failed: {e}", err=True)
+            raise SystemExit(1) from e
+        finally:
+            client.close()
+        click.echo(f"Checkpoint: {resp.checkpoint_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
 
     # Build fresh images so the new controller VM gets the latest code
     _pin_latest_images(config)
