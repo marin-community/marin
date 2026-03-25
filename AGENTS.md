@@ -39,6 +39,8 @@
 
 - When an agent creates a PR or an issue using the user's auth token, it must add the `agent-generated` label.
 - When an agent comments on a PR or issue using the user's auth token, the comment must begin with an `🤖` emoji unless the exact comment text was explicitly approved by the user. If it cannot be at the very beginning for formatting or workflow reasons, it should come as soon as possible.
+- When an agent needs to push a branch for a Marin PR, prefer pushing that branch to `marin-community/marin` when the current credentials permit it.
+- Use a fork only when pushing to `marin-community/marin` is not possible, such as missing write access or an explicit repo policy requiring fork PRs.
 
 ### Code Style
 
