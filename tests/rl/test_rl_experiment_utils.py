@@ -6,13 +6,16 @@ from types import SimpleNamespace
 
 import pytest
 from levanter.models.llama import LlamaConfig
+from marin.execution.artifact import PathMetadata
 from marin.execution.executor import ExecutorStep, output_path_of
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.model_utils import is_hf_checkpoint
 from marin.rl.rl_experiment_utils import (
     ModelConfig,
     RLExperimentConfig,
+    RLStepConfig,
     _build_rl_job_config,
+    _run_rl_experiment_step,
     config_class_path,
     executor_main_config_for_rl_experiment,
     executor_step_resources_for_rl_experiment,
@@ -190,3 +193,33 @@ def test_build_rl_job_config_uses_dummy_load_format_for_non_object_store_model_p
 
     assert job_config.inference_config.load_format == "dummy"
     assert job_config.inference_config.canonical_model_name == MODEL_NAME
+
+
+def test_run_rl_experiment_step_returns_serializable_path_metadata(monkeypatch):
+    calls = {}
+
+    class _FakeRLJob:
+        def __init__(self, config):
+            calls["job_config"] = config
+
+        def run(self, name):
+            calls["name"] = name
+            return object()
+
+    runtime_config = _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8")
+    step_config = RLStepConfig(
+        name="exec-gcs-small-test",
+        experiment_config=runtime_config,
+        curriculum=_test_curriculum(),
+        model_path="gs://marin-us-central1/models/test-model",
+        output_path="gs://marin-us-central1/rl_testing/exec-gcs-small-test",
+    )
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._build_rl_job_config", lambda **_kwargs: "job-config")
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.RLJob", _FakeRLJob)
+
+    result = _run_rl_experiment_step(step_config)
+
+    assert calls["job_config"] == "job-config"
+    assert calls["name"] == "exec-gcs-small-test"
+    assert result == PathMetadata(path="gs://marin-us-central1/rl_testing/exec-gcs-small-test")

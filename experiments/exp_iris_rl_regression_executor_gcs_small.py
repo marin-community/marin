@@ -10,6 +10,7 @@ This changes only topology relative to the green direct GCS probe:
 - tiny 5-step envelope
 """
 
+import argparse
 import datetime
 import logging
 import os
@@ -29,6 +30,9 @@ from marin.rl.rl_experiment_utils import (
 from marin.rl.rl_losses import RLOOLoss
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_EXPERIMENT_SUFFIX = "exec-gcs-small"
+DEFAULT_NUM_TRAIN_STEPS = 5
 
 llama_3_1_8b = ModelConfig(
     name="meta-llama/Llama-3.1-8B-Instruct",
@@ -70,10 +74,31 @@ def create_debug_curriculum(run_id: str, experiment_config: RLExperimentConfig) 
     )
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--experiment-name-suffix",
+        default=DEFAULT_EXPERIMENT_SUFFIX,
+        help="Run-name suffix used for job and W&B labeling.",
+    )
+    parser.add_argument(
+        "--num-train-steps",
+        type=int,
+        default=DEFAULT_NUM_TRAIN_STEPS,
+        help="Number of RL training steps to execute.",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
     if os.getenv("CI", None) is not None:
         logger.info("Skipping experiment execution on CI environment.")
         return
+
+    args = parse_args()
+    tags = ["rl", "iris-debug", "regression", "e3", args.experiment_name_suffix]
+    if args.num_train_steps != DEFAULT_NUM_TRAIN_STEPS:
+        tags.append(f"steps-{args.num_train_steps}")
 
     debug_config = RLExperimentConfig(
         model_config=llama_3_1_8b,
@@ -87,10 +112,10 @@ def main() -> None:
             do_overlong_filtering=True,
             vocab_tile_size=32064,
         ),
-        experiment_name_suffix="exec-gcs-small",
+        experiment_name_suffix=args.experiment_name_suffix,
         project_name="marin_iris_rl_debug",
-        tags=["rl", "iris-debug", "regression", "e3", "exec-gcs-small"],
-        num_train_steps=5,
+        tags=tags,
+        num_train_steps=args.num_train_steps,
         train_batch_size=64,
         per_device_parallelism=16,
         learning_rate=2e-6,
@@ -107,7 +132,7 @@ def main() -> None:
     )
 
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    name = f"exec-gcs-small-{datestamp}"
+    name = f"{args.experiment_name_suffix}-{datestamp}"
     curriculum = create_debug_curriculum(name, debug_config)
     step = make_rl_step(
         name=name,
@@ -118,7 +143,7 @@ def main() -> None:
     executor_main(
         executor_main_config_for_rl_experiment(debug_config),
         steps=[step],
-        description="Iris RL regression probe E3: executor + GCS + small",
+        description=f"Iris RL regression probe E3: executor + GCS + small ({args.num_train_steps} training steps)",
     )
 
 

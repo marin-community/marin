@@ -35,7 +35,8 @@ from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
-RL_COORDINATOR_CPU_DISK = "100g"
+RL_COORDINATOR_CPU_DISK = "30g"
+RL_COORDINATOR_RESOURCES = ResourceConfig.with_cpu(cpu=0.5, preemptible=False, disk=RL_COORDINATOR_CPU_DISK)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -80,7 +81,7 @@ def submit_rl_job(config: RLJobConfig) -> JobHandle:
         JobRequest(
             name=f"rl-{config.run_id}",
             entrypoint=Entrypoint.from_callable(_run_rl_coordinator, args=(config,)),
-            resources=ResourceConfig.with_cpu(preemptible=False, disk=RL_COORDINATOR_CPU_DISK),
+            resources=RL_COORDINATOR_RESOURCES,
             environment=create_environment(
                 env_vars=env,
                 extras=coordinator_extras,

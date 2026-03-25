@@ -3380,3 +3380,772 @@ is explained by two different layers finishing in two different states:
 ### Most precise single-sentence summary
 
 `E3` proved that executor-wrapped RL works on the small GCS-backed path, but the executor step is currently unusable because it returns a non-serializable `IrisJobHandle` and then crashes while saving that return value as an artifact.
+
+## 2026-03-24T21:19Z — applying the E3 executor serialization fix and rerunning
+
+User asked to make the fix and run the job again.
+
+Fixed code path:
+- [rl_experiment_utils.py:320](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/rl_experiment_utils.py:320)
+- changed `_run_rl_experiment_step(...)` so it no longer returns the live `JobHandle`
+- new behavior:
+  - wait for `RLJob(job_config).run(config.name)` to finish
+  - return `PathMetadata(path=config.output_path)` instead
+
+Why this is the correct fix:
+- the executor remote wrapper requires a serializable artifact result
+- `PathMetadata` is already a supported artifact type in the executor framework
+- the RL step no longer crosses the artifact boundary with a live `IrisJobHandle`
+
+Regression coverage added:
+- [test_rl_experiment_utils.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/tests/rl/test_rl_experiment_utils.py)
+- new test verifies `_run_rl_experiment_step(...)` returns `PathMetadata`, not the raw handle
+
+Validation before relaunch:
+- `uv run pytest -q tests/rl/test_rl_experiment_utils.py`
+  - `9 passed`
+- `./infra/pre-commit.py --fix lib/marin/src/marin/rl/rl_experiment_utils.py tests/rl/test_rl_experiment_utils.py`
+  - `OK`
+
+Rerun intent:
+- rerun the same `E3` topology probe after the serialization fix
+- training-step count remains the same:
+  - `num_train_steps=5`
+- this rerun should answer the narrow executor question:
+  - can the executor-wrapped small GCS-backed RL probe now finish fully green at the root level, not just in the nested RL subtree?
+
+Fresh rerun submitted:
+- root job:
+  - `/ahmed/iris-rl-e3b-exec-gcs-small-20260324-141934`
+- monitoring state file:
+  - `scratch/20260324-1419_e3b_state.json`
+
+Initial post-submit state:
+- root is currently `JOB_STATE_PENDING`
+- current pending reason:
+  - `Scheduler: No worker matches constraints and has sufficient resources`
+  - autoscaler detail:
+    - `Waiting for worker scale-up in scale group 'cpu_vm_e2_highmem_2_ondemand-us-central1-a'`
+
+Interpretation:
+- the fix is in and the rerun is live
+- no result yet on the serialization boundary because the root launcher has not started user code
+
+## 2026-03-24T21:42Z — `E3b` passed end to end after the executor serialization fix
+
+Final result for the rerun:
+- root `/ahmed/iris-rl-e3b-exec-gcs-small-20260324-141934`: `JOB_STATE_SUCCEEDED`
+- executor child `/ahmed/iris-rl-e3b-exec-gcs-small-20260324-141934/rl_testing-exec-gcs-small-20260324-212413_db03625d-642dd6e3`: `JOB_STATE_SUCCEEDED`
+- nested RL coordinator `/ahmed/iris-rl-e3b-exec-gcs-small-20260324-141934/rl_testing-exec-gcs-small-20260324-212413_db03625d-642dd6e3/rl-exec-gcs-small-20260324-212413`: `JOB_STATE_SUCCEEDED`
+- train child `/ahmed/iris-rl-e3b-exec-gcs-small-20260324-141934/rl_testing-exec-gcs-small-20260324-212413_db03625d-642dd6e3/rl-exec-gcs-small-20260324-212413/rl-exec-gcs-small-20260324-212413-train`: `JOB_STATE_SUCCEEDED`
+- rollout child `/ahmed/iris-rl-e3b-exec-gcs-small-20260324-141934/rl_testing-exec-gcs-small-20260324-212413_db03625d-642dd6e3/rl-exec-gcs-small-20260324-212413/rl-exec-gcs-small-20260324-212413-rollout-0`: `JOB_STATE_SUCCEEDED`
+
+Finish timestamps from `iris job list --json --prefix`:
+- rollout finished: `2026-03-24T21:41:21.727Z`
+- train finished: `2026-03-24T21:41:22.294Z`
+- coordinator finished: `2026-03-24T21:41:32.772Z`
+- executor child finished: `2026-03-24T21:41:43.525Z`
+- root finished: `2026-03-24T21:42:02.770Z`
+
+Observed RL progress:
+- rollout loaded the cached regional GCS model artifact successfully
+- rollout completed the first weight transfer and entered inference
+- trainer completed all 5 configured training steps
+- rollout kept receiving updated weights and generating rollouts for steps `-1` through `3`
+- coordinator logged `RL coordinator finished for run exec-gcs-small-20260324-212413`
+- executor child logged `Step rl_testing/exec-gcs-small-20260324-212413_db03625d succeeded`
+
+Important shutdown detail:
+- rollout logged a late `pyarrow._flight.FlightUnavailableError` during teardown
+- this happened after the run state had already been marked completed:
+  - `marin.rl.run_state RL run marked as completed`
+  - `marin.rl.rollout_worker Run state is 'completed', stopping rollout worker`
+- despite the traceback text, the rollout job itself finished `JOB_STATE_SUCCEEDED`
+- interpretation: this is teardown noise after normal completion, not a failure boundary for `E3b`
+
+What `E3b` proves:
+- the `E3` executor failure was correctly diagnosed as the step return-artifact contract bug
+- returning `PathMetadata(path=config.output_path)` instead of the live `IrisJobHandle` fixes the executor wrapper
+- `executor + GCS + small` is now green end to end, not just at the nested RL subtree
+
+Updated matrix status after `E3b`:
+- `E1` (`direct + HF + small`): pass
+- `E2b` (`direct + GCS + small`, canonical-name fixed): pass
+- `E3b` (`executor + GCS + small`, serialization fixed): pass
+
+Implication for the larger investigation:
+- small-run regressions attributable to HF-vs-GCS model source and direct-vs-executor topology have now been eliminated
+- the next remaining divergence to hunt is the production envelope itself (`E4` / `E5`)
+
+UI note observed during `E3b` babysitting:
+- the Iris CLI could see the full nested tree immediately via `job list --json --prefix`
+- the dashboard pages did not reliably surface the train/rollout descendants while the run was live
+- this appears to be a dashboard tree-display limitation/staleness issue, not a job-submission issue in `E3b`
+
+## 2026-03-24T21:59Z — launching `E3c` as a 2-step executor/GCS rerun
+
+User asked to rerun the green `E3b` topology probe, but with only 2 training steps.
+
+To avoid mutating the meaning of the already-established `E3` baseline, I changed
+[exp_iris_rl_regression_executor_gcs_small.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp_iris_rl_regression_executor_gcs_small.py)
+so the probe now accepts explicit CLI arguments:
+- `--experiment-name-suffix`
+- `--num-train-steps`
+
+Validation for the CLI override change:
+- `./infra/pre-commit.py --fix experiments/exp_iris_rl_regression_executor_gcs_small.py` -> `OK`
+- `uv run python experiments/exp_iris_rl_regression_executor_gcs_small.py --help` shows both new flags
+
+Rerun intent:
+- hold topology fixed at `executor + GCS + small`
+- reduce training steps from `5` to `2`
+- keep the run visually distinct in Iris/W&B via a new suffix
+
+Submit command for the new rerun:
+- `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name iris-rl-e3c-exec-gcs-small-2step-<timestamp> --region us-central1 -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- uv run python experiments/exp_iris_rl_regression_executor_gcs_small.py --experiment-name-suffix exec-gcs-small-2step --num-train-steps 2`
+
+Expectation:
+- the nested RL subtree should still succeed
+- the previously-fixed executor artifact boundary should remain green
+- the resulting run names should clearly identify this as the 2-step rerun, not the canonical 5-step `E3b`
+
+Actual launch result:
+- root job submitted:
+  - `/ahmed/iris-rl-e3c-exec-gcs-small-2step-20260324-150008`
+- monitoring state file:
+  - `scratch/20260324-1500_e3c_state.json`
+
+Initial scheduler state immediately after submit:
+- root: `JOB_STATE_PENDING`
+- pending reason:
+  - `Scheduler: No worker matches constraints and has sufficient resources (need cpu=0.5 cores, memory=1073741824, constraints=['region', 'preemptible', 'reservation-job'])`
+  - `Autoscaler: (scaling up) Waiting for worker scale-up in scale group 'cpu_vm_e2_highmem_2_ondemand-us-central1-a' (1 slice(s) requested)`
+
+## 2026-03-24T22:41Z — why `E3c` is slower than `E3b`, and recommended fix direction
+
+`E3c` exposed a scheduling detail that `E3b` happened to dodge:
+- the executor child in `E3b` landed on a TPU worker host CPU
+- the executor child in `E3c` landed on the dedicated CPU worker group
+- once that happened, the nested RL coordinator could no longer fit on the only available CPU slice in `us-central1`
+
+Concrete evidence from live `E3c`:
+- root job worker:
+  - `marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260324-2200-105bf714-worker-0`
+- executor child worker:
+  - `marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260324-2200-105bf714-worker-0`
+- nested coordinator state:
+  - `JOB_STATE_PENDING`
+- pending reason:
+  - `Insufficient CPU (need 1 cores, available 0.5 cores)`
+  - `no_capacity: cpu_vm_e2_highmem_2_ondemand-us-central1-a=at_max_slices`
+
+Autoscaler status for the relevant CPU group:
+- group:
+  - `cpu_vm_e2_highmem_2_ondemand-us-central1-a`
+- machine type:
+  - `e2-highmem-2`
+- `max_slices: 1`
+- current ready slices: `1`
+- availability status:
+  - `at_max_slices`
+- current worker running task count:
+  - `2`
+
+This means the current bottleneck is not “global GCP CPU quota” in the abstract.
+It is the specific Iris autoscaler group for non-preemptible CPU VMs in
+`us-central1-a`, which is capped at one slice.
+
+### Why `E3b` did not hit the same blockage
+
+`E3b` executor child placement:
+- executor child worker:
+  - `marin-tpu_v5p_8-us-central1-a-20260324-1955-df773a09-worker-0`
+
+So in `E3b`:
+- root launcher consumed CPU-worker capacity
+- executor child consumed TPU-host CPU instead
+- nested coordinator could still fit on the one CPU slice
+
+In `E3c`:
+- root launcher is on the CPU slice
+- executor child is also on the same CPU slice
+- only `0.5 CPU` remains available
+- nested coordinator needs `1.0 CPU`
+- therefore the coordinator cannot be scheduled
+
+Important interpretation:
+- “CPU-only jobs can land on TPU workers” is true
+- but it is opportunistic placement, not a guarantee
+- we should not design the RL topology to *require* that lucky placement
+
+### Pressure points in current code
+
+Executor child resource request:
+- [rl_experiment_utils.py:37](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/rl_experiment_utils.py:37)
+- `RL_EXECUTOR_STEP_RESOURCES = ResourceConfig.with_cpu(cpu=1, ram="4g", disk="64g")`
+
+Nested RL coordinator submission:
+- [orchestration.py:79](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/orchestration.py:79)
+- `ResourceConfig.with_cpu(preemptible=False, disk=RL_COORDINATOR_CPU_DISK)`
+
+Observed coordinator runtime resources in Iris:
+- `1 cpu, 4 GiB`
+
+So when root + executor + coordinator overlap on the single `e2-highmem-2`
+worker, the CPU budget is approximately:
+- root: `0.5 CPU`
+- executor child: `1.0 CPU`
+- coordinator: `1.0 CPU`
+- total: `2.5 CPU`
+
+But the worker only has:
+- `2 CPU`
+
+That is why the coordinator starves.
+
+### Recommended fix order
+
+#### Recommended first fix: reduce CPU requirements to fit on one CPU slice
+
+Best immediate change:
+- lower executor child from `1.0 CPU` to `0.5 CPU`
+- lower nested coordinator from `1.0 CPU` to `0.5 CPU`
+
+Why this is the preferred first move:
+- local code change only
+- deterministic
+- does not require cluster/autoscaler config changes
+- removes dependence on TPU-host placement luck
+- still leaves enough RAM headroom on the same CPU VM
+
+If we do that, the overlapping CPU budget becomes approximately:
+- root: `0.5 CPU`
+- executor child: `0.5 CPU`
+- coordinator: `0.5 CPU`
+- total: `1.5 CPU`
+
+That fits comfortably inside a single `e2-highmem-2` slice.
+
+Current recommendation:
+- change CPU only first
+- keep RAM unchanged for now
+
+Why keep RAM unchanged initially:
+- the current bottleneck is CPU, not memory
+- current CPU-layer memory total is already acceptable on the `16 GiB` VM
+- shrinking RAM early would add risk without addressing the observed blocker
+
+#### Second-choice structural fix: collapse the nested coordinator layer
+
+Alternative medium-sized cleanup:
+- for executor-backed RL runs, do not submit a second CPU coordinator job
+- instead, let the executor child act as the RL coordinator directly
+
+Potential upside:
+- removes one CPU job layer entirely
+- simpler job tree:
+  - root
+  - executor/coordinator
+  - train
+  - rollout
+- lower launch latency
+- less scheduler pressure
+
+Why this is not the first recommendation:
+- larger semantic/topology change
+- changes job hierarchy and failure-surfacing behavior
+- unnecessary if the smaller CPU reduction fully solves the issue
+
+#### Infra fallback: raise the CPU group max-slices
+
+Possible infrastructure-side fix:
+- increase `max_slices` for
+  - `cpu_vm_e2_highmem_2_ondemand-us-central1-a`
+
+Why this is lower priority:
+- broader blast radius
+- cluster-cost / autoscaler policy change
+- the tiny RL probe should not require extra CPU slice capacity just to avoid
+  deadlocking the launcher/executor/coordinator layers
+
+### Explicit recommendation
+
+Recommended plan to try next:
+1. lower executor child CPU request from `1.0` to `0.5`
+2. lower nested coordinator CPU request from `1.0` to `0.5`
+3. rerun the 2-step executor/GCS probe
+4. only if that is still flaky, consider collapsing the nested coordinator layer
+5. keep autoscaler-group changes as a fallback, not the first fix
+
+### Key design principle
+
+Do not rely on “CPU jobs landing on TPU workers” as a design assumption.
+Treat that as opportunistic placement luck, not a correctness path.
+
+The RL stack should be schedulable even when:
+- root launcher
+- executor child
+- nested coordinator
+
+all land on the dedicated CPU worker group.
+
+## 2026-03-24T23:03Z — reducing root/executor/coordinator CPU and relaunching the 2-step probe
+
+User asked to rerun the 2-step executor/GCS probe with lower CPU on all three launcher/control-plane layers:
+- root launcher job
+- executor child
+- nested RL coordinator
+
+Applied code changes:
+- [rl_experiment_utils.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/rl_experiment_utils.py)
+  - `RL_EXECUTOR_STEP_RESOURCES`
+  - changed from `cpu=1` to `cpu=0.5`
+- [orchestration.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/orchestration.py)
+  - added `RL_COORDINATOR_RESOURCES`
+  - nested coordinator now requests `cpu=0.5` instead of the default `1.0`
+
+Planned root relaunch change:
+- use explicit `iris job run --cpu 0.25`
+
+New expected overlapping CPU budget if root + executor + coordinator all land on the same dedicated CPU worker:
+- root: `0.25 CPU`
+- executor child: `0.5 CPU`
+- nested coordinator: `0.5 CPU`
+- total: `1.25 CPU`
+
+That should fit on the single `e2-highmem-2` CPU slice where the previous run starved at `2.5 CPU` requested over `2 CPU` capacity.
+
+Validation before relaunch:
+- `./infra/pre-commit.py --fix lib/marin/src/marin/rl/rl_experiment_utils.py lib/marin/src/marin/rl/orchestration.py` -> `OK`
+- `uv run pytest -q tests/rl/test_rl_experiment_utils.py tests/rl/test_orchestration.py` -> `10 passed`
+
+Relaunch intent:
+- keep topology = `executor + GCS + small`
+- keep `num_train_steps = 2`
+- use a new suffix so this low-CPU rerun is distinct from the earlier `E3c`
+
+Follow-up change:
+- user suggested also reducing control-plane disk requests
+- rationale: executor child and nested coordinator are control-plane layers and do not need the previous oversized local disk reservations
+
+Applied disk reductions:
+- [rl_experiment_utils.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/rl_experiment_utils.py)
+  - executor child disk reduced from `64g` to `30g`
+- [orchestration.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/orchestration.py)
+  - nested coordinator disk reduced from `100g` to `30g`
+
+Validation after the disk change:
+- `./infra/pre-commit.py --fix lib/marin/src/marin/rl/rl_experiment_utils.py lib/marin/src/marin/rl/orchestration.py` -> `OK`
+- `uv run pytest -q tests/rl/test_rl_experiment_utils.py tests/rl/test_orchestration.py` -> `10 passed`
+
+Important note about relaunch:
+- the earlier interrupted low-CPU submit actually succeeded in creating a new root job before the shell was interrupted
+- therefore no duplicate relaunch was needed
+
+Live low-CPU/low-disk rerun:
+- root job:
+  - `/ahmed/iris-rl-e3d-exec-gcs-small-2step-lowcpu-20260324-160515`
+- current root resources:
+  - `cpu=0.25`
+  - `memory=1 GiB`
+  - `disk=5 GiB`
+- this run is the active follow-on to the killed `E3c`
+
+## 2026-03-24T23:17Z — E3d low-CPU rerun cleared the CPU bottleneck but failed again on long Iris workdir paths
+
+Live rerun under watch:
+- root job:
+  - `/ahmed/iris-rl-e3d-exec-gcs-small-2step-lowcpu-20260324-160515`
+- intent:
+  - same `E3` topology (`executor + GCS + small`)
+  - but with lower control-plane CPU to remove the single-CPU-slice starvation seen in `E3c`
+
+What changed relative to `E3c`:
+- root launcher requested `0.25 CPU`
+- executor child requested `0.5 CPU`
+- nested coordinator requested `0.5 CPU`
+
+What the live tree showed before failure:
+- root: `RUNNING`
+- executor child: `RUNNING`
+- nested coordinator: `RUNNING`
+- train child: `PENDING`
+- rollout child: `PENDING`
+
+This is the key positive result from `E3d`:
+- the low-CPU change did exactly what it was supposed to do at the scheduling boundary
+- unlike `E3c`, the nested coordinator was no longer stuck behind the dedicated CPU slice
+- train and rollout were both actually created
+
+Observed TPU-capacity progression:
+- initial state:
+  - `Autoscaler: no_capacity: tpu_v5p_8-us-central1-a=backoff`
+- later state:
+  - `Autoscaler: Waiting for workers in scale group 'tpu_v5p_8-us-central1-a' to become ready (selected: demand-routed)`
+- so Iris did eventually route TPU demand and begin trying to place the RL workers
+
+Terminal failure:
+- both train and rollout failed before user code during Iris worker setup with:
+  - `OSError: [Errno 36] File name too long`
+- failing paths were under:
+  - `/dev/shm/iris/workdirs/...`
+- concrete failing examples:
+  - train:
+    - `/dev/shm/iris/workdirs/job__ahmed__iris-rl-e3d-exec-gcs-small-2step-lowcpu-20260324-160515__rl_testing-exec-gcs-small-2step-lowcpu-20260324-230726_2acbc4be-6821a1a9__rl-exec-gcs-small-2step-lowcpu-20260324-230726__rl-exec-gcs-small-2step-lowcpu-20260324-230726-train__0_attempt_3`
+  - rollout:
+    - `/dev/shm/iris/workdirs/job__ahmed__iris-rl-e3d-exec-gcs-small-2step-lowcpu-20260324-160515__rl_testing-exec-gcs-small-2step-lowcpu-20260324-230726_2acbc4be-6821a1a9__rl-exec-gcs-small-2step-lowcpu-20260324-230726__rl-exec-gcs-small-2step-lowcpu-20260324-230726-rollout-0__0_attempt_3`
+
+Failure chain:
+1. train child failed in `task_attempt._setup()` before task startup
+2. rollout child failed the same way
+3. nested coordinator failed because the train child failed
+4. executor child failed because the nested coordinator failed
+5. root failed with `RuntimeError: 1 step(s) failed`
+
+Important interpretation:
+- `E3d` does **not** indicate a regression in the new low-CPU resource settings
+- it indicates that once the CPU-starvation problem was removed, the run once again hit the older long-job-name workdir bug
+- this is the same general failure family observed earlier in the OOM-isolation thread: child jobs fail before user code because the nested Iris job path becomes too long for `/dev/shm/iris/workdirs/...`
+
+What `E3d` proved:
+- lowering root/executor/coordinator CPU was worthwhile and effective
+- the control-plane layers are now schedulable on the constrained CPU side
+- the next blocking issue is still naming/path length, not CPU starvation
+
+Important unresolved observation from the live submitted job:
+- the active `E3d` job list still reported the executor child disk as `64 GiB` and the nested coordinator disk as `100 GiB`
+- that does not match the current source constants after the disk-reduction patch
+- likely explanation: the interrupted submit that produced `E3d` may have captured an older workspace snapshot before the disk changes landed
+- do not infer from `E3d` that the disk reduction code path is definitely wired correctly; the live job metadata did not reflect it
+
+Recommended next fix direction:
+1. shorten the `E3` naming envelope so the full nested Iris job ids are much shorter
+2. keep the low-CPU resource changes, since they solved a real scheduler problem
+3. rerun the same 2-step executor/GCS probe under the shortened naming scheme before moving back to larger envelopes
+
+The high-level picture after `E3d`:
+- CPU-starvation issue: improved / likely fixed for this topology
+- executor artifact-serialization issue: fixed earlier in `E3b`
+- current blocker for executor-backed nested RL runs: still overlong nested Iris job/workdir paths
+
+## 2026-03-24T23:33Z — immediate workaround for the Iris workdir path bug: relaunch E3 with very short names
+
+Workaround strategy:
+- do not wait for an Iris code fix
+- keep the low-CPU control-plane settings from `E3d`
+- relaunch the exact same `executor + GCS + 2-step` probe, but drastically shorten:
+  - the root job name
+  - the internal experiment-name suffix
+
+Reasoning:
+- `E3d` failed because Iris flattened the full nested task id into one workdir basename and crossed the single-component filesystem limit
+- measured flattened train token lengths:
+  - `E3b`: `204`
+  - `E3c`: `228`
+  - `E3d`: `256`
+- a short-name relaunch should bring the basename back down into the ~130-150 range without changing RL semantics
+
+Chosen workaround launch shape:
+- root job name: short `irl-...` form instead of the long `iris-rl-e3d-exec-gcs-small-2step-lowcpu-...`
+- internal experiment suffix: short `e3s`
+- train steps: still `2`
+- root CPU: still `0.25`
+- executor child CPU: still `0.5`
+- nested coordinator CPU: still `0.5`
+
+This workaround is intentionally minimal:
+- no code-path change to RL runtime
+- no topology change
+- only the naming envelope is shortened so the nested workdir basename stays under the filesystem component limit
+
+## 2026-03-24T23:50Z — short-name `E3` workaround succeeded end-to-end; path-length bug confirmed as the blocker
+
+Successful workaround run:
+- root job:
+  - `/ahmed/irl-e3s-2s-0324-163231`
+- internal experiment suffix:
+  - `e3s`
+- train steps:
+  - `2`
+
+Why this run matters:
+- `E3d` had already shown that the low-CPU control-plane settings removed the earlier CPU-slice starvation problem.
+- The only thing changed for this rerun was the naming envelope:
+  - much shorter root job name
+  - much shorter internal experiment suffix
+- This was an intentional workaround for the Iris workdir-path bug from issue `#4103`.
+
+Observed outcome:
+- the run crossed the exact old failure boundary that had killed `E3d`
+- train and rollout both started real user code
+- no `OSError: [Errno 36] File name too long` occurred during Iris worker setup
+- the full subtree finished `SUCCEEDED`
+
+Terminal Iris job tree:
+- `/ahmed/irl-e3s-2s-0324-163231` -> `JOB_STATE_SUCCEEDED`
+- `/ahmed/irl-e3s-2s-0324-163231/rl_testing-e3s-20260324-233847_3e5de1e8-948f62de` -> `JOB_STATE_SUCCEEDED`
+- `/ahmed/irl-e3s-2s-0324-163231/rl_testing-e3s-20260324-233847_3e5de1e8-948f62de/rl-e3s-20260324-233847` -> `JOB_STATE_SUCCEEDED`
+- `/ahmed/irl-e3s-2s-0324-163231/rl_testing-e3s-20260324-233847_3e5de1e8-948f62de/rl-e3s-20260324-233847/rl-e3s-20260324-233847-train` -> `JOB_STATE_SUCCEEDED`
+- `/ahmed/irl-e3s-2s-0324-163231/rl_testing-e3s-20260324-233847_3e5de1e8-948f62de/rl-e3s-20260324-233847/rl-e3s-20260324-233847-rollout-0` -> `JOB_STATE_SUCCEEDED`
+
+Exact resource settings used on the successful run:
+- root:
+  - `cpu=0.25`
+  - `memory=1 GiB`
+  - `disk=5 GiB`
+- executor child:
+  - `cpu=0.5`
+  - `memory=4 GiB`
+  - `disk=30 GiB`
+- nested coordinator:
+  - `cpu=0.5`
+  - `memory=4 GiB`
+  - `disk=30 GiB`
+- train:
+  - `v5p-8`
+  - `disk=50 GiB`
+- rollout:
+  - `v5p-8`
+  - `disk=50 GiB`
+
+Timing from `iris job list --json --prefix /ahmed/irl-e3s-2s-0324-163231`:
+- rollout started at `1774395641131`, finished at `1774396016855`
+- train started at `1774395639212`, finished at `1774396016632`
+- nested coordinator started at `1774395569236`, finished at `1774396037183`
+- executor child started at `1774395532843`, finished at `1774396047242`
+- root started at `1774395309448`, finished at `1774396067398`
+
+Most important interpretation:
+- the path-length bug was the real blocker in `E3d`
+- shortening the naming envelope alone was sufficient to restore a fully successful executor-backed RL run
+- the low-CPU resource reductions remain compatible with success
+- no new RL-runtime regression was exposed by this rerun
+
+This closes the immediate `E3` questions:
+- `E3b` proved the executor return-value serialization bug was fixed
+- `E3d` proved CPU starvation could be removed, but then exposed the Iris workdir path bug
+- this short-name rerun proves that the remaining failure in `E3d` was naming/path length, not RL logic
+
+Dashboard observation:
+- the Iris dashboard now shows the nested subtree correctly under `All descendants`
+- on the successful short-name run it displayed:
+  - executor child
+  - nested coordinator
+  - train child
+  - rollout child
+- so the dashboard visibility problem and the run-stability problem are now both cleared for this `E3` probe family
+
+Current matrix status after the short-name rerun:
+- `E1` (`direct + HF + small`) -> pass
+- `E2b` (`direct + GCS + small`, fixed canonical model name) -> pass
+- `E3b` (`executor + GCS + small`) -> pass
+- `E3d` (`executor + GCS + 2-step + low CPU + long names`) -> fail only because of Iris workdir path length
+- short-name `E3` workaround (`executor + GCS + 2-step + low CPU + short names`) -> pass
+
+Practical next step:
+- carry the short-name discipline forward into the larger-envelope executor probes so we do not trip over the same Iris path bug while debugging the actual 500-step RL target.
+
+## 2026-03-24T16:54PT — moving to `E4`: direct + GCS + prod
+
+Current matrix state before `E4`:
+- `E1` (`direct + HF + small`) -> pass
+- `E2b` (`direct + GCS + small`) -> pass
+- short-name `E3` (`executor + GCS + small`) -> pass
+
+Reason for moving now:
+- small-run topology and model-source questions are sufficiently resolved
+- the remaining meaningful unknown is the heavy production-like envelope itself
+- so the next clean branch is `E4`: keep direct topology, keep GCS-backed model bootstrap, restore the 500-step / 2048-token production-like envelope
+
+`E4` intent:
+- isolate whether the heavy envelope alone is enough to reproduce the active train-side instability / OOM family
+- do this without executor-wrapper behavior as a confounder
+
+Chosen `E4` shape:
+- topology:
+  - direct coordinator in the outer job (`_run_rl_coordinator(...)`)
+- model source:
+  - regional GCS artifact for Llama 3.1 8B Instruct
+- envelope:
+  - `num_train_steps=500`
+  - `train_batch_size=1024`
+  - `max_seq_len=2048`
+  - `max_output_tokens=1024`
+  - `n_prompts=16`
+  - `n_generations_per_prompt=16`
+  - checkpoint save interval `600s`
+- naming:
+  - short root job name
+  - short internal run id / suffix
+  - this is deliberate so we do not reintroduce the already-understood Iris workdir path bug while testing the envelope itself
+
+Implementation note:
+- do not mutate the small direct/GCS probe into a conditional multi-mode script
+- instead add a dedicated `E4` script so the regression matrix remains explicit and the run config is easy to audit later
+
+Launch details for live `E4` run:
+- root job:
+  - `/ahmed/irl-e4p-0324-1656`
+- launch command shape:
+  - direct outer job running `experiments/exp_iris_rl_regression_direct_gcs_prod.py --experiment-name-suffix e4p --num-train-steps 500`
+- root resources:
+  - `cpu=0.5`
+  - `memory=1 GiB`
+  - `disk=5 GiB`
+- region:
+  - `us-central1`
+
+Immediate monitoring goal:
+- verify that the direct coordinator starts cleanly
+- verify train and rollout children are created
+- then watch whether the run reaches the first rollout batches / trainer steps and eventually the first checkpoint-save boundary without reproducing the earlier executor-only confounders
+
+## 2026-03-24T17:00PT — relaunching `E4` at 100 steps instead of 500
+
+Change in plan:
+- the original live `E4` root job `/ahmed/irl-e4p-0324-1656` was killed by user request before any meaningful RL work started
+- next probe keeps the same `direct + GCS + prod` shape, but reduces `num_train_steps` from `500` to `100`
+
+Reason:
+- `500` steps is too long for the immediate regression probe cadence
+- `100` steps is still large enough to move beyond the tiny debug envelope and exercise the heavier direct/GCS production-like path
+- this should give a faster signal on whether the large-envelope branch reproduces train-side instability / OOM / checkpoint-coupled issues
+
+Unchanged aspects of the relaunch:
+- direct coordinator topology
+- GCS-backed Llama 3.1 8B Instruct artifact
+- short naming discipline to avoid the known Iris workdir path bug
+- root region pinned to `us-central1`
+
+Live `E4-100` launch details:
+- root job:
+  - `/ahmed/irl-e4p-100-0324-1701`
+- command:
+  - `uv run python experiments/exp_iris_rl_regression_direct_gcs_prod.py --experiment-name-suffix e4p --num-train-steps 100`
+- monitoring state file:
+  - `scratch/20260324-1701_monitoring_state.json`
+
+`E4-100` babysit update:
+- original root `/ahmed/irl-e4p-100-0324-1701` reached real train/rollout startup, then degraded after the outer direct job was preempted / restarted
+- observed state before recovery:
+  - root `RUNNING` with `preemption_count=1` but task state back to `pending`
+  - train child `KILLED` with `Parent task preempted`
+  - rollout child `KILLED` with `Parent task preempted`
+- this looked like stalled recovery rather than forward progress, so the run was killed and relaunched as:
+  - `/ahmed/irl-e4p-100r1-0324-1710`
+- monitoring state file was updated with `restart_count=1`
+
+## 2026-03-24T17:17PT — deep dive on `E4-100` root preemption / worker-failure recovery semantics
+
+Observed failure chain on the first 100-step `E4` run:
+- root job:
+  - `/ahmed/irl-e4p-100-0324-1701`
+- it progressed into real RL work:
+  - root coordinator started
+  - train child submitted
+  - rollout child submitted
+  - rollout initialized vLLM and loaded the GCS checkpoint
+  - train loaded the initial checkpoint and logged `Progress on:train -/100`
+- then the outer/root worker died before the run reached a stable checkpoint boundary
+
+Exact Iris evidence from `job bug-report`:
+- root task attempt `0` ended as `worker_failed`
+- worker error:
+  - `Worker marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260324-2354-a0ab70dd-worker-0 failed: Request timed out`
+- root job aggregate state before manual kill:
+  - non-terminal
+  - `preemption_count=1`
+- train child terminal state:
+  - `KILLED`
+  - error `Parent task preempted`
+- rollout child terminal state:
+  - `KILLED`
+  - error `Parent task preempted`
+
+Important clarification:
+- this was not observed as a clean RL-code crash
+- and it was not proven to be literal cloud-VM preemption in the GCP sense
+- the concrete low-level event recorded by Iris was a root worker failure / timeout
+- Iris then routed that event through its preemption-retry path
+
+Why the root looked like it "should have restarted" but the children died anyway:
+- the root *was* automatically retrying at the Iris task level
+- the job had not exhausted preemption retries
+- that is why the root was still non-terminal and had `preemption_count=1`
+- however, Iris killed descendant jobs when the parent task was treated as preempted
+
+Relevant Iris controller logic:
+- when an executing task loses its worker, Iris increments `preemption_count` and can set the task back to `PENDING` if retries remain
+- if the effective preemption policy is `JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN`, Iris also cascades a kill to descendants with reason `Parent task preempted`
+- code points:
+  - `lib/iris/src/iris/cluster/controller/transitions.py` around `_resolve_preemption_policy(...)`
+  - `lib/iris/src/iris/cluster/controller/transitions.py` around `_cascade_children(...)`
+  - `lib/iris/src/iris/cluster/controller/transitions.py` around the worker-failure transition that calls `_cascade_children(..., "Parent task preempted")`
+
+Crucial default policy detail:
+- single-task parent jobs default to:
+  - `JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN`
+- direct RL root jobs are single-task jobs
+- so absent an explicit override, child train/rollout jobs are intentionally killed when the root task is lost
+
+Why preserving train/rollout children would not actually be safe in the current direct topology:
+- in the direct topology, the root job is also the RL coordinator
+- that root process hosts critical shared actors in-process via `client.host_actor(...)`:
+  - curriculum actor
+  - run-state actor
+  - Arrow Flight weight-transfer coordinator
+- therefore when the root worker dies, those actor endpoints die with it
+- train and rollout depend on those endpoints
+- so a hypothetical `PRESERVE_CHILDREN` policy would leave train/rollout alive but attached to dead coordinator-hosted infrastructure
+- that would not be a correct recovery model with the current architecture
+
+Most precise conclusion:
+- the direct RL topology is only restart-safe at the granularity of the *whole subtree*
+- it is not child-preserving restart-safe
+- current Iris behavior is therefore coherent with the architecture:
+  - retry the root task
+  - kill child jobs because the parent-hosted control-plane died
+
+Operator/monitoring takeaway:
+- manual restart after the first parent preemption was likely premature if the goal was to observe automatic whole-subtree recovery
+- the root had not yet failed terminally
+- I manually killed `/ahmed/irl-e4p-100-0324-1701` while it was still in the retry path
+- that intervention prevented us from seeing whether the root would have eventually restarted cleanly and re-submitted new train/rollout children
+
+However, the existing state before manual kill was legitimately degraded:
+- root remained `RUNNING` but its only task was back in a retriable/pending state
+- both prior children were already terminal `KILLED`
+- there was no evidence yet that a fresh child-generation cycle had begun
+- so the decision to restart was operationally understandable, but it should not be confused with proof that automatic recovery was impossible
+
+What this means for robustness:
+- current direct/prod runs can survive parent worker loss only if the whole coordinator subtree restarts from the root
+- progress loss before checkpoint is expected under that model
+- because checkpoint interval is still relatively coarse (`600s`), an early root worker loss can discard meaningful startup work
+
+Implications for next fixes / experiments:
+1. Operational policy:
+- for the next direct/prod run, do not manually kill on first root preemption / worker failure
+- allow the root retry path to continue long enough to confirm whether Iris re-runs the coordinator and re-submits fresh children
+
+2. Better fault-tolerance within the current architecture:
+- reduce checkpoint interval for prod probes if we want whole-subtree restarts to lose less work
+- this does not preserve children, but it improves recovery cost
+
+3. Architectural requirement for true child-preserving recovery:
+- move coordinator-hosted shared actors out of the parent/root process into durable standalone jobs/services first
+- only after that would a `PRESERVE_CHILDREN`-style policy become technically safe for train/rollout
+
+4. API / framework gap:
+- Fray `JobRequest` currently does not expose Iris preemption policy directly
+- even if we add that, switching the direct root to preserve children is not safe today because the parent hosts critical runtime state in-process
+
+Cross-reference:
+- detailed note captured in:
+  - `docs/debug-log-e4-root-preemption-recovery.md`
+
+Current live follow-up run state at the time of this note:
+- restarted root:
+  - `/ahmed/irl-e4p-100r1-0324-1710`
+- this follow-up run was submitted after killing the degraded first root
+- its current state should be checked separately when deciding whether to continue passive monitoring or intervene again

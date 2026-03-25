@@ -16,6 +16,7 @@ from levanter.distributed import RayConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from marin.execution.artifact import PathMetadata
 from levanter.utils.fsspec_utils import join_path
 from levanter.utils.mesh import MeshConfig
 
@@ -33,7 +34,7 @@ from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 
 logger = logging.getLogger(__name__)
 
-RL_EXECUTOR_STEP_RESOURCES = ResourceConfig.with_cpu(cpu=1, ram="4g", disk="64g")
+RL_EXECUTOR_STEP_RESOURCES = ResourceConfig.with_cpu(cpu=0.5, ram="4g", disk="30g")
 
 
 ModelArtifact = ExecutorStep | InputName | str
@@ -317,7 +318,7 @@ def _build_rl_job_config(
     return job_config
 
 
-def _run_rl_experiment_step(config: RLStepConfig):
+def _run_rl_experiment_step(config: RLStepConfig) -> PathMetadata:
     job_config = _build_rl_job_config(
         name=config.name,
         config=config.experiment_config,
@@ -325,7 +326,8 @@ def _run_rl_experiment_step(config: RLStepConfig):
         model_path=config.model_path,
         output_path=config.output_path,
     )
-    return RLJob(job_config).run(config.name)
+    RLJob(job_config).run(config.name)
+    return PathMetadata(path=config.output_path)
 
 
 def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumConfig) -> ExecutorStep:
