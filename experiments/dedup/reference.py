@@ -4,7 +4,7 @@
 import logging
 
 from marin.execution.executor import ExecutorStep, InputName, executor_main
-from marin.processing.classification.deduplication.dedup_commons import DedupConfig, DedupMode, deduplicate
+from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
 
 from experiments.pretraining_datasets.simple import downloads
 
@@ -12,23 +12,13 @@ logger = logging.getLogger(__name__)
 
 
 def build_dedup_step(dataset: InputName, max_parallelism: int) -> ExecutorStep:
-    """
-    Builds a deduplication step for the given dataset.
-
-    Args:
-        dataset: The input dataset to deduplicate.
-        max_parallelism: Maximum parallelism for Zephyr tasks.
-    """
-    config = DedupConfig(
-        input_paths=dataset,
-        mode=DedupMode.FUZZY_DOCUMENT,
-        processes=max_parallelism,
-    )
-
     return ExecutorStep(
         name=f"dedup_{dataset.name}",
-        fn=deduplicate,
-        config=config,
+        fn=lambda op: dedup_fuzzy_document(
+            input_paths=dataset,
+            output_path=op,
+            max_parallelism=max_parallelism,
+        ),
         description=f"Run dedupe on {dataset.name}",
     )
 

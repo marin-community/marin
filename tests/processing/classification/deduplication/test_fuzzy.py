@@ -1,19 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from marin.processing.classification.deduplication.dedup_commons import DedupMode, DedupConfig, deduplicate
+from marin.processing.classification.deduplication.dedup_commons import DedupMode
+from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
 from tests.processing.classification.deduplication.conftest import load_dedup_vortex_outputs
 
 
 def test_fuzzy_document_deduplication(fox_corpus):
-    config = DedupConfig(
+    result = dedup_fuzzy_document(
         input_paths=fox_corpus["test_dir"],
         output_path=fox_corpus["output_dir"],
-        mode=DedupMode.FUZZY_DOCUMENT,
-        processes=1,
+        max_parallelism=4,
     )
-
-    result = deduplicate(config)
     assert result["success"]
     assert result["mode"] == DedupMode.FUZZY_DOCUMENT
 

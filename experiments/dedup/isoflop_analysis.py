@@ -9,7 +9,9 @@ on both vanilla fineweb-edu and deduplicated fineweb-edu mixtures.
 
 import logging
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, FilterType, consolidate
-from marin.processing.classification.deduplication.dedup_commons import DedupMode, DedupConfig, deduplicate
+from marin.processing.classification.deduplication.dedup_commons import DedupMode
+from marin.processing.classification.deduplication.exact import dedup_exact_paragraph, dedup_exact_document
+from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
 from marin.processing.tokenize import tokenize
 from marin.processing.tokenize.data_configs import lm_data_config
 from marin.processing.tokenize.tokenize import TokenizeConfig
@@ -50,18 +52,22 @@ def _get_vanilla_data_mixture(*, variant: str) -> LMMixtureDatasetConfig:
     return vanilla_fineweb_edu_mixture_config
 
 
+_DEDUP_FN = {
+    DedupMode.EXACT_PARAGRAPH: dedup_exact_paragraph,
+    DedupMode.EXACT_DOCUMENT: dedup_exact_document,
+    DedupMode.FUZZY_DOCUMENT: dedup_fuzzy_document,
+}
+
+
 def _get_deduped_data_mixture(*, variant: str, mode: DedupMode, max_parallelism: int = 1024) -> LMMixtureDatasetConfig:
     """Dedup fineweb-edu mixture"""
-    dedup_config = DedupConfig(
-        input_paths=downloads[variant],
-        mode=mode,
-        processes=max_parallelism,
-    )
-
     dedup_step = ExecutorStep(
         name=f"dedup/{variant}_{mode.lower()}",
-        fn=deduplicate,
-        config=dedup_config,
+        fn=lambda op: _DEDUP_FN[mode](
+            input_paths=downloads[variant],
+            output_path=op,
+            max_parallelism=max_parallelism,
+        ),
     )
 
     dedup_mode_to_filter_type = {
