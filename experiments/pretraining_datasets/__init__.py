@@ -119,7 +119,7 @@ DATASETS = {
     },
     "nemotron_cc": {
         "subsets": list(NEMOTRON_DATASETS.keys()),
-        "download": nemotron_cc_download,
+        "download": nemotron_cc_download(),
         "tokenize_fn": tokenize_nemotron,
     },
     "dolma": {

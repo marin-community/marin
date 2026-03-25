@@ -81,7 +81,7 @@ DATASET_CONFIGS = [
     DatasetConfig(name="starcoder", path=downloads["starcoderdata"], text_field="content"),
     DatasetConfig(name="proofpile", path=downloads["proofpile_2"]),
     DatasetConfig(name="dolmino", path=dolmino_downloads["dolmino"]),
-    DatasetConfig(name="nemotron_cc", path=nemotron_cc_download),
+    DatasetConfig(name="nemotron_cc", path=nemotron_cc_download()),
 ]
 
 
