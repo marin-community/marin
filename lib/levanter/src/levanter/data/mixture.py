@@ -15,8 +15,6 @@ from haliax.util import StringHolderEnum
 from levanter.utils.jax_utils import local_cpu_mesh
 
 from levanter.data import AsyncDataset
-from levanter.data._prp import Permutation
-from levanter.data.permutation import _key_on_local_cpu
 from levanter.schedule import BatchSchedule
 from levanter.utils.index import Index
 from levanter.utils.thread_utils import blocking_wait, future_from_value
@@ -400,48 +398,40 @@ class MixtureDataset(AsyncDataset[T]):
         return self.datasets[self.dataset_index[id]]
 
 
-class FlatMixture(AsyncDataset[T]):
-    """Virtually concatenates multiple AsyncDatasets with a global shuffle.
+class ConcatDataset(AsyncDataset[T]):
+    """Virtually concatenates multiple AsyncDatasets into a single index space.
 
-    FlatMixture logically concatenates its children into a single index space and
-    applies a deterministic pseudo-random permutation (Feistel network) over the
-    combined indices. This makes it behave as if all the data were shuffled together
-    into one dataset, without copying any data.
+    ConcatDataset logically concatenates its children so that indices
+    ``[0, len(child_0))`` map to the first child, ``[len(child_0), len(child_0) +
+    len(child_1))`` to the second, and so on.  No data is copied.
 
-    Because FlatMixture is itself an AsyncDataset, it can be used as a component
-    inside a regular MixtureDataset, enabling small datasets to be grouped together
-    and treated as a single weighted component.
+    All children must be finite.  To shuffle the concatenated result, wrap with
+    :class:`levanter.data.PermutationDataset`.
 
     Args:
         datasets: Named child datasets to concatenate.
-        key: PRNG key for the global shuffle permutation.
     """
 
     def __init__(
         self,
         datasets: Mapping[str, AsyncDataset[T]],
-        *,
-        key: PRNGKeyArray | int,
     ):
         if len(datasets) == 0:
-            raise ValueError("FlatMixture requires at least one dataset")
+            raise ValueError("ConcatDataset requires at least one dataset")
+
+        for name, ds in datasets.items():
+            if not ds.is_finite():
+                raise ValueError(f"ConcatDataset requires all children to be finite, but '{name}' is not")
 
         self.datasets = dict(datasets)
         self._names = list(self.datasets.keys())
         self._children = list(self.datasets.values())
 
-        with local_cpu_mesh():
-            if isinstance(key, int):
-                self.key = jax.random.PRNGKey(key)
-            else:
-                self.key = _key_on_local_cpu(key)
-
         self._cumulative_lengths: np.ndarray = np.array([])
         self._total_length: int | None = None
-        self._permutation: Permutation | None = None
 
     def is_finite(self) -> bool:
-        return all(child.is_finite() for child in self._children)
+        return True
 
     async def async_len(self) -> int:
         await self._ensure_initialized()
@@ -453,19 +443,15 @@ class FlatMixture(AsyncDataset[T]):
             return []
 
         await self._ensure_initialized()
-        assert self._permutation is not None
-
-        # Apply global permutation
-        permuted = [int(self._permutation(i)) for i in indices]
 
         # Group by child dataset
         child_indices: list[list[int]] = [[] for _ in self._children]
         result_positions: list[list[int]] = [[] for _ in self._children]
 
         cumulative = self._cumulative_lengths
-        for batch_pos, shuffled_idx in enumerate(permuted):
-            child_id = int(np.searchsorted(cumulative, shuffled_idx, side="right"))
-            local_offset = shuffled_idx - (int(cumulative[child_id - 1]) if child_id > 0 else 0)
+        for batch_pos, idx in enumerate(indices):
+            child_id = int(np.searchsorted(cumulative, idx, side="right"))
+            local_offset = idx - (int(cumulative[child_id - 1]) if child_id > 0 else 0)
             child_indices[child_id].append(local_offset)
             result_positions[child_id].append(batch_pos)
 
@@ -489,20 +475,15 @@ class FlatMixture(AsyncDataset[T]):
 
     async def getitem_async(self, index: int) -> T:
         await self._ensure_initialized()
-        assert self._permutation is not None
 
         cumulative = self._cumulative_lengths
-        shuffled_idx = int(self._permutation(index))
-        child_id = int(np.searchsorted(cumulative, shuffled_idx, side="right"))
-        local_offset = shuffled_idx - (int(cumulative[child_id - 1]) if child_id > 0 else 0)
+        child_id = int(np.searchsorted(cumulative, index, side="right"))
+        local_offset = index - (int(cumulative[child_id - 1]) if child_id > 0 else 0)
         return await self._children[child_id].getitem_async(local_offset)
 
     async def _ensure_initialized(self):
         if self._total_length is not None:
             return
-
-        if not self.is_finite():
-            raise ValueError("FlatMixture requires all children to be finite")
 
         lengths = await asyncio.gather(*[child.async_len() for child in self._children])
         cumulative = np.cumsum(lengths)
@@ -510,12 +491,10 @@ class FlatMixture(AsyncDataset[T]):
         self._total_length = int(cumulative[-1])
 
         if self._total_length == 0:
-            raise ValueError("FlatMixture total length is 0 — all children are empty")
-
-        self._permutation = Permutation.make("feistel", self._total_length, self.key)
+            raise ValueError("ConcatDataset total length is 0 — all children are empty")
 
     def __repr__(self):
-        return f"FlatMixture({self._names})"
+        return f"ConcatDataset({self._names})"
 
 
 def _compute_block_assignment(base_ids, index, key):

@@ -7,9 +7,9 @@ import jax
 import numpy as np
 import pytest
 
-from levanter.data import ListAsyncDataset, MixtureDataset
+from levanter.data import ListAsyncDataset, MixtureDataset, PermutationDataset
 from levanter.data.dataset import AsyncDataset
-from levanter.data.mixture import FlatMixture, StopStrategy, rescale_mixture_schedule_for_batch_schedule
+from levanter.data.mixture import ConcatDataset, StopStrategy, rescale_mixture_schedule_for_batch_schedule
 from levanter.schedule import BatchSchedule, ScheduleStep
 
 
@@ -296,102 +296,95 @@ def test_rescale_mixture_schedule_for_batch_schedule():
     assert rescaled_schedule == expected_schedule
 
 
-# --- FlatMixture tests ---
+# --- ConcatDataset tests ---
 
 
 @pytest.mark.asyncio
-async def test_flat_mixture_length_is_sum_of_children():
+async def test_concat_dataset_length_is_sum_of_children():
     ds1 = ListAsyncDataset([1, 2, 3])
     ds2 = ListAsyncDataset([10, 20])
-    flat = FlatMixture({"a": ds1, "b": ds2}, key=key())
-    assert await flat.async_len() == 5
+    concat = ConcatDataset({"a": ds1, "b": ds2})
+    assert await concat.async_len() == 5
 
 
 @pytest.mark.asyncio
-async def test_flat_mixture_is_finite():
-    ds1 = ListAsyncDataset([1, 2, 3])
-    ds2 = ListAsyncDataset([10, 20])
-    flat = FlatMixture({"a": ds1, "b": ds2}, key=key())
-    assert flat.is_finite()
-
-
-@pytest.mark.asyncio
-async def test_flat_mixture_rejects_infinite_children():
-    flat = FlatMixture({"inf": InfiniteCounterDataset()}, key=key())
-    assert not flat.is_finite()
+async def test_concat_dataset_rejects_infinite_children():
     with pytest.raises(ValueError, match="finite"):
-        await flat.async_len()
+        ConcatDataset({"inf": InfiniteCounterDataset()})
 
 
 @pytest.mark.asyncio
-async def test_flat_mixture_rejects_empty():
+async def test_concat_dataset_rejects_empty():
     with pytest.raises(ValueError, match="at least one"):
-        FlatMixture({}, key=key())
+        ConcatDataset({})
 
 
 @pytest.mark.asyncio
-async def test_flat_mixture_contains_all_elements():
+async def test_concat_dataset_contains_all_elements():
     ds1 = ListAsyncDataset([1, 2, 3])
     ds2 = ListAsyncDataset([10, 20])
-    flat = FlatMixture({"a": ds1, "b": ds2}, key=key())
-    total = await flat.async_len()
-    batch = await flat.get_batch(list(range(total)))
+    concat = ConcatDataset({"a": ds1, "b": ds2})
+    total = await concat.async_len()
+    batch = await concat.get_batch(list(range(total)))
     assert sorted(batch) == [1, 2, 3, 10, 20]
 
 
 @pytest.mark.asyncio
-async def test_flat_mixture_is_a_permutation():
+async def test_concat_dataset_preserves_order():
+    """Without a permutation wrapper, indices map in child order."""
+    ds1 = ListAsyncDataset([1, 2, 3])
+    ds2 = ListAsyncDataset([10, 20])
+    concat = ConcatDataset({"a": ds1, "b": ds2})
+    batch = await concat.get_batch([0, 1, 2, 3, 4])
+    assert list(batch) == [1, 2, 3, 10, 20]
+
+
+@pytest.mark.asyncio
+async def test_concat_dataset_getitem_consistent_with_get_batch():
+    ds1 = ListAsyncDataset([1, 2, 3])
+    ds2 = ListAsyncDataset([10, 20])
+    concat = ConcatDataset({"a": ds1, "b": ds2})
+    batch = await concat.get_batch([0, 1, 2, 3, 4])
+    for i in range(5):
+        assert await concat.getitem_async(i) == batch[i]
+
+
+@pytest.mark.asyncio
+async def test_concat_with_permutation_shuffles():
+    """ConcatDataset + PermutationDataset produces a shuffled view."""
+    data = list(range(100))
+    ds = ListAsyncDataset(data)
+    concat = ConcatDataset({"only": ds})
+    shuffled = PermutationDataset(concat, key=key())
+    batch = await shuffled.get_batch(list(range(100)))
+    assert sorted(batch) == data
+    # Extremely unlikely that a random permutation is the identity
+    assert list(batch) != data
+
+
+@pytest.mark.asyncio
+async def test_concat_with_permutation_is_a_permutation():
     """Every index maps to a unique element — no duplicates, no missing."""
     ds1 = ListAsyncDataset(list(range(50)))
     ds2 = ListAsyncDataset(list(range(50, 100)))
-    flat = FlatMixture({"a": ds1, "b": ds2}, key=key())
-    total = await flat.async_len()
-    batch = await flat.get_batch(list(range(total)))
+    concat = ConcatDataset({"a": ds1, "b": ds2})
+    shuffled = PermutationDataset(concat, key=key())
+    total = await shuffled.async_len()
+    batch = await shuffled.get_batch(list(range(total)))
     assert sorted(batch) == list(range(100))
 
 
 @pytest.mark.asyncio
-async def test_flat_mixture_shuffles():
-    """With high probability the output order differs from the input order."""
-    data = list(range(100))
-    ds = ListAsyncDataset(data)
-    flat = FlatMixture({"only": ds}, key=key())
-    batch = await flat.get_batch(list(range(100)))
-    # Extremely unlikely that a random permutation is the identity
-    assert batch != data
-
-
-@pytest.mark.asyncio
-async def test_flat_mixture_deterministic():
-    ds1 = ListAsyncDataset([1, 2, 3])
-    ds2 = ListAsyncDataset([10, 20])
-    flat_a = FlatMixture({"a": ds1, "b": ds2}, key=42)
-    flat_b = FlatMixture({"a": ds1, "b": ds2}, key=42)
-    batch_a = await flat_a.get_batch([0, 1, 2, 3, 4])
-    batch_b = await flat_b.get_batch([0, 1, 2, 3, 4])
-    assert list(batch_a) == list(batch_b)
-
-
-@pytest.mark.asyncio
-async def test_flat_mixture_getitem_consistent_with_get_batch():
-    ds1 = ListAsyncDataset([1, 2, 3])
-    ds2 = ListAsyncDataset([10, 20])
-    flat = FlatMixture({"a": ds1, "b": ds2}, key=key())
-    batch = await flat.get_batch([0, 1, 2, 3, 4])
-    for i in range(5):
-        assert await flat.getitem_async(i) == batch[i]
-
-
-@pytest.mark.asyncio
-async def test_flat_mixture_nests_in_mixture_dataset():
-    """FlatMixture can be used as a component in MixtureDataset."""
+async def test_concat_with_permutation_nests_in_mixture_dataset():
+    """ConcatDataset + PermutationDataset can be used as a MixtureDataset component."""
     ds1 = ListAsyncDataset(list(range(10)))
     ds2 = ListAsyncDataset(list(range(10, 20)))
-    flat = FlatMixture({"a": ds1, "b": ds2}, key=key())
+    concat = ConcatDataset({"a": ds1, "b": ds2})
+    shuffled = PermutationDataset(concat, key=key())
 
     ds3 = ListAsyncDataset(list(range(100, 110)))
     mixture = MixtureDataset(
-        {"flat": flat, "other": ds3},
+        {"flat": shuffled, "other": ds3},
         {"flat": 0.5, "other": 0.5},
         block_size=10,
         key=key(),
@@ -402,12 +395,3 @@ async def test_flat_mixture_nests_in_mixture_dataset():
     assert len(batch) == 20
     all_values = set(range(20)) | set(range(100, 110))
     assert all(item in all_values for item in batch)
-
-
-@pytest.mark.asyncio
-async def test_flat_mixture_single_child():
-    ds = ListAsyncDataset([1, 2, 3, 4, 5])
-    flat = FlatMixture({"only": ds}, key=key())
-    assert await flat.async_len() == 5
-    batch = await flat.get_batch(list(range(5)))
-    assert sorted(batch) == [1, 2, 3, 4, 5]
