@@ -169,3 +169,68 @@ def _find_base_path(input_path: str | list[str], input_files: list[str]) -> str:
         # NOTE: if the base_path is in the input_files, means it's a specific file, so rebase to its directory
         base_path = os.path.dirname(base_path)
     return base_path
+
+
+def _make_doc_level_aggregator(
+    *,
+    method: str,
+    input_paths: str | list[str],
+    idx_to_path: dict[int, str],
+    output_path: str,
+):
+    """Create a reducer that counts doc-level dups and writes non-canonical dups to vortex.
+
+    Used identically by both exact-document and fuzzy-document dedup pipelines.
+    Returns a closure suitable for use as a ``group_by`` reducer keyed by file_idx.
+    """
+    from marin.utils import rebase_file_path
+    from zephyr import write_vortex_file
+
+    def aggregate_and_write(file_idx: int, records: Iterator[dict]) -> dict:
+        input_path = idx_to_path[file_idx]
+        output_file = rebase_file_path(
+            _find_base_path(input_paths, [input_path]),
+            input_path,
+            f"{output_path}/data/",
+            old_extension=_get_extension(input_path),
+            new_extension=".vortex",
+        )
+
+        stats = DupCounters(method=method, level="document")
+
+        def counting_iter():
+            nonlocal stats
+            for record in records:
+                is_dup: bool = record["is_dup"]
+                stats += DupCounters(
+                    method=method,
+                    level="document",
+                    total=1,
+                    dups=int(is_dup),
+                    unique=int(not is_dup),
+                )
+                yield record
+
+        def skip_non_dups(recs: Iterator[dict]) -> Iterator[dict]:
+            for record in recs:
+                if record["is_dup"]:
+                    yield {"id": record["id"], "attributes": {"dup_doc": True}}
+
+        result = write_vortex_file(skip_non_dups(counting_iter()), output_file)
+        return {**result, "stats": stats}
+
+    return aggregate_and_write
+
+
+def _finalize_dedup(shard_results: list[dict], *, method: str, level: str, mode: DedupMode) -> dict:
+    """Aggregate per-shard DupCounters, log to wandb, and return the final result dict."""
+    import wandb
+
+    cnts = sum((r["stats"] for r in shard_results), start=DupCounters(method=method, level=level))
+    logger.info(str(cnts))
+
+    if wandb.run:
+        wandb.log(cnts.to_dict())
+        wandb.finish()
+
+    return {"success": True, "mode": str(mode)} | cnts.to_dict()

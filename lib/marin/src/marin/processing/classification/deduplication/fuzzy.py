@@ -4,24 +4,21 @@
 from collections.abc import Iterator
 import dupekit
 import logging
-from marin.utils import rebase_file_path
 import pyarrow as pa
 from marin.processing.classification.deduplication.dedup_commons import (
     DEFAULT_COORDINATOR_RESOURCES,
     DEFAULT_FILETYPES,
     DedupMode,
-    DupCounters,
     _collect_input_files,
-    _find_base_path,
-    _get_extension,
+    _finalize_dedup,
     _init_wandb,
     _load_batches,
+    _make_doc_level_aggregator,
     group_files,
 )
 from fray.v2 import ResourceConfig
 from marin.processing.classification.deduplication.connected_components import connected_components
-import wandb
-from zephyr import ZephyrContext, write_vortex_file
+from zephyr import ZephyrContext
 from zephyr.dataset import Dataset
 
 logger = logging.getLogger(__name__)
@@ -121,39 +118,12 @@ def dedup_fuzzy_document(
         # TODO (rav): log the number of changed nodes?
         logger.warning("Connected components did not converge")
 
-    def aggregate_and_write_to_corresponding_files(file_idx: int, records: Iterator[dict]) -> dict:
-        input_path = idx_to_path[file_idx]
-        output_file = rebase_file_path(
-            _find_base_path(input_paths, [input_path]),
-            input_path,
-            f"{output_path}/data/",
-            old_extension=_get_extension(input_path),
-            new_extension=".vortex",
-        )
-
-        # NOTE: this is per file stat, we aggregate across files later
-        stats = DupCounters(method="fuzzy", level="document")
-
-        def counting_iter():
-            nonlocal stats
-            for record in records:
-                is_dup: bool = record["is_dup"]
-                stats += DupCounters(
-                    method="fuzzy",
-                    level="document",
-                    total=1,
-                    dups=int(is_dup),
-                    unique=int(not is_dup),
-                )
-                yield record
-
-        def skip_non_dups(records: Iterator[dict]) -> Iterator[dict]:
-            for record in records:
-                if record["is_dup"]:
-                    yield {"id": record["id"], "attributes": {"dup_doc": True}}
-
-        result = write_vortex_file(skip_non_dups(counting_iter()), output_file)
-        return {**result, "stats": stats}
+    aggregate_and_write_to_corresponding_files = _make_doc_level_aggregator(
+        method="fuzzy",
+        input_paths=input_paths,
+        idx_to_path=idx_to_path,
+        output_path=output_path,
+    )
 
     shard_results = list(
         ctx.execute(
@@ -175,11 +145,4 @@ def dedup_fuzzy_document(
         ),
     )
 
-    fuzzy_cnts = sum((r["stats"] for r in shard_results), start=DupCounters(method="fuzzy", level="document"))
-    logger.info(str(fuzzy_cnts))
-
-    if wandb.run:
-        wandb.log(fuzzy_cnts.to_dict())
-        wandb.finish()
-
-    return {"success": True, "mode": str(DedupMode.FUZZY_DOCUMENT)} | fuzzy_cnts.to_dict()
+    return _finalize_dedup(shard_results, method="fuzzy", level="document", mode=DedupMode.FUZZY_DOCUMENT)
