@@ -19,7 +19,6 @@ from iris.cli.build import (
     build_image,
     find_marin_root,
     get_git_sha,
-    push_to_ghcr,
 )
 from iris.cli.main import require_controller_url
 from iris.cluster.config import IrisConfig, clear_remote_state, make_local_config
@@ -98,14 +97,12 @@ def _build_and_push_for_tag(image_tag: str, image_type: str, verbose: bool = Fal
     build_image(
         image_type=image_type,
         tag=local_tag,
-        push=False,
+        push=True,
         context=None,
         platform="linux/amd64",
         ghcr_org=org,
         verbose=verbose,
     )
-    click.echo()
-    push_to_ghcr(local_tag, ghcr_org=org, image_name=image_name, version=version, verbose=verbose)
     click.echo()
 
 
@@ -129,14 +126,12 @@ def _build_and_push_task_image(task_tag: str, verbose: bool = False) -> None:
     build_image(
         image_type="task",
         tag=local_tag,
-        push=False,
+        push=True,
         context=marin_root,
         platform="linux/amd64",
         ghcr_org=org,
         verbose=verbose,
     )
-    click.echo()
-    push_to_ghcr(local_tag, ghcr_org=org, image_name=image_name, version=version, verbose=verbose)
     click.echo()
 
 
