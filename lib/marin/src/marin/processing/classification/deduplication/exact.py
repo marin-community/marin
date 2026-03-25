@@ -53,7 +53,7 @@ def dedup_exact_paragraph(
     output_path: str,
     text_field: str = "text",
     filetypes: list[str] | None = None,
-    max_parallelism: int | None = None,
+    max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
 ) -> dict:
@@ -195,7 +195,7 @@ def dedup_exact_document(
     output_path: str,
     text_field: str = "text",
     filetypes: list[str] | None = None,
-    max_parallelism: int | None = None,
+    max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
 ) -> dict:

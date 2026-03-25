@@ -221,6 +221,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         fn=lambda output_path: dedup_exact_paragraph(
             input_paths=transform_hq_data_spec.output_path,
             output_path=output_path,
+            max_parallelism=4,
             worker_resources=ResourceConfig(cpu=1, ram="1g"),
         ),
     )
@@ -231,6 +232,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         fn=lambda output_path: dedup_fuzzy_document(
             input_paths=transform_hq_data_spec.output_path,
             output_path=output_path,
+            max_parallelism=4,
             worker_resources=ResourceConfig(cpu=1, ram="1g"),
         ),
     )

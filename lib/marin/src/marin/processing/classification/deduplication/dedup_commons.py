@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum, auto
 import logging
 import os
@@ -11,7 +11,6 @@ import pyarrow.json as pa_json
 
 from fray.v2 import ResourceConfig
 from marin.utilities.wandb_utils import init_wandb
-from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utils import fsspec_glob
 from zephyr.readers import SUPPORTED_EXTENSIONS, open_file
 
@@ -36,92 +35,6 @@ class DedupMode(StrEnum):
     """
     Identify documents that are similar but not necessarily identical.
     """
-
-
-@dataclass(frozen=True)
-class DedupConfig:
-    """
-    Configuration class for running deduplication on docs using Zephyr.
-
-    Attributes:
-        input_paths: Path(s) of files to apply deduplication to. This could be across multiple directories/datasets.
-        filetypes: File extensions to consider when collecting input files.
-        output_path: Path for storing results of deduplication (char spans in docs that are duplicate)
-        processes: number of processes to use for deduplication
-        mode: switch between decontamination (build filter) and regular deduplication
-        text_field: field to use for text content in Parquet files
-        fuzzy_minhash_num_perms: Number of permutations for MinHash signature.
-            Must be divisible by fuzzy_minhash_num_bands. Defaults are from OLMo 3: 26 bands x 11 rows = 286.
-        fuzzy_minhash_num_bands: Number of bands for LSH. More bands = higher recall, lower precision.
-        fuzzy_minhash_ngram_size: Size of character n-grams/shingles to extract from text.
-        fuzzy_minhash_seed: Random seed for MinHash permutation generation.
-    """
-
-    input_paths: str | list[str]
-    filetypes: list[str] = field(default_factory=lambda: list(DEFAULT_FILETYPES))
-    output_path: str = THIS_OUTPUT_PATH
-    processes: int = 1
-    mode: DedupMode = DedupMode.EXACT_PARAGRAPH
-    # field to use for text content in Parquet files
-    text_field: str = "text"
-    # Worker resource sizing notes:
-    # - RAM: should be tuned to input file sizes; the fuzzy dedup reduce stage accumulates
-    #   per-bucket dedup sets in memory, so hot LSH buckets can require 10-20 GB.
-    # - CPU: the Rust MinHash library (dupekit) releases the GIL and uses a Rayon thread pool,
-    #   so workers can productively use 2+ CPUs even though the Python pipeline is single-threaded.
-    worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=5, ram="32g", disk="5g"))
-    # Coordinator resource sizing notes:
-    # - RAM: increase when the coordinator OOMs during large pipelines; it accumulates scatter
-    #   metadata proportional to num_shards * num_reduce_buckets.
-    coordinator_resources: ResourceConfig = field(default_factory=lambda: DEFAULT_COORDINATOR_RESOURCES)
-    # MinHash LSH parameters (only used for FUZZY_DOCUMENT mode)
-    fuzzy_minhash_num_perms: int = 286
-    fuzzy_minhash_num_bands: int = 26
-    fuzzy_minhash_ngram_size: int = 5
-    fuzzy_minhash_seed: int = 42
-
-
-def deduplicate(config: DedupConfig):
-    """Main entry point for deduplication. Unpacks config and dispatches to mode-specific functions."""
-    if config.mode == DedupMode.EXACT_PARAGRAPH:
-        from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
-
-        return dedup_exact_paragraph(
-            input_paths=config.input_paths,
-            output_path=config.output_path,
-            text_field=config.text_field,
-            filetypes=config.filetypes,
-            worker_resources=config.worker_resources,
-            coordinator_resources=config.coordinator_resources,
-        )
-    elif config.mode == DedupMode.EXACT_DOCUMENT:
-        from marin.processing.classification.deduplication.exact import dedup_exact_document
-
-        return dedup_exact_document(
-            input_paths=config.input_paths,
-            output_path=config.output_path,
-            text_field=config.text_field,
-            filetypes=config.filetypes,
-            worker_resources=config.worker_resources,
-            coordinator_resources=config.coordinator_resources,
-        )
-    elif config.mode == DedupMode.FUZZY_DOCUMENT:
-        from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
-
-        return dedup_fuzzy_document(
-            input_paths=config.input_paths,
-            output_path=config.output_path,
-            text_field=config.text_field,
-            filetypes=config.filetypes,
-            fuzzy_minhash_num_perms=config.fuzzy_minhash_num_perms,
-            fuzzy_minhash_num_bands=config.fuzzy_minhash_num_bands,
-            fuzzy_minhash_ngram_size=config.fuzzy_minhash_ngram_size,
-            fuzzy_minhash_seed=config.fuzzy_minhash_seed,
-            worker_resources=config.worker_resources,
-            coordinator_resources=config.coordinator_resources,
-        )
-    else:
-        raise ValueError(f"Unknown mode {config.mode}")
 
 
 @dataclass
@@ -160,16 +73,14 @@ class DupCounters:
         }
 
 
-def group_files(files: list[str], num_groups: int | None) -> list[list[str]]:
+def group_files(files: list[str], num_groups: int) -> list[list[str]]:
     """Group files into at most num_groups buckets deterministically.
 
     Files are sorted then distributed round-robin, so the same set of files always
     produces the same grouping. Use this to cap Zephyr shard count when
-    num_files >> max_parallelism. If num_groups is None, each file gets its own group.
+    num_files >> max_parallelism.
     """
     sorted_files = sorted(files)
-    if num_groups is None:
-        return [[f] for f in sorted_files]
     n = min(num_groups, len(sorted_files))
     groups: list[list[str]] = [[] for _ in range(n)]
     for i, f in enumerate(sorted_files):

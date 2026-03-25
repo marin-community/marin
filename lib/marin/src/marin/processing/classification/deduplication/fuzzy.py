@@ -37,7 +37,7 @@ def dedup_fuzzy_document(
     fuzzy_minhash_num_bands: int = 26,
     fuzzy_minhash_ngram_size: int = 5,
     fuzzy_minhash_seed: int = 42,
-    max_parallelism: int | None = None,
+    max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
 ) -> dict:
@@ -107,9 +107,7 @@ def dedup_fuzzy_document(
     # Group input files into at most max_parallelism shards so shard count <= worker count.
     # Each shard processes a group of files sequentially, reducing coordinator overhead
     # when num_files >> max_parallelism (e.g. 13k files with 2k workers).
-    file_groups: list[list[str]] = (
-        group_files(input_files, max_parallelism) if max_parallelism else [[f] for f in sorted(input_files)]
-    )
+    file_groups = group_files(input_files, max_parallelism)
     doc_minhash_lsh = Dataset.from_list(file_groups).flat_map(
         lambda paths: (
             {**record, "file_idx": path_to_idx[path]}
