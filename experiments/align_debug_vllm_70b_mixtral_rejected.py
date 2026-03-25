@@ -15,10 +15,11 @@ Submit to Iris:
 
     uv run iris --config lib/iris/examples/marin.yaml job run \
         --no-wait \
-        --extra marin:tpu \
-        --tpu v5p-8 \
+        --job-name align-debug-vllm-70b-mixtral-rejected-smoke-refactored \
+        --cpu 4 \
+        --memory 16GB \
+        --disk 10GB \
         --region us-central1 \
-        --zone us-central1-a \
         -- python experiments/align_debug_vllm_70b_mixtral_rejected.py
 """
 
@@ -40,7 +41,7 @@ llama_vllm = VLLMConfig(
     max_model_len=4096,
     gpu_memory_utilization=0.9,
     tpu_type="v5p-8",
-    disk="500g",
+    disk="10g",
     ram="256g",
 )
 
@@ -50,7 +51,7 @@ mixtral_vllm = VLLMConfig(
     max_model_len=4096,
     gpu_memory_utilization=0.9,
     tpu_type="v5p-8",
-    disk="500g",
+    disk="10g",
     ram="256g",
 )
 
@@ -63,7 +64,15 @@ align_config = AlignConfig(
     ideation_workers=1,
     concretize_workers=1,
     extract_workers=1,
+    prompt_batch_size=4,
+    understanding_max_tokens=1024,
+    understanding_temperature=1.0,
+    concretize_max_tokens=1536,
+    concretize_temperature=1.0,
+    concretize_max_attempts=5,
+    extract_max_tokens=1024,
     judge_workers=1,
+    judge_batch_size=4,
     teacher_n=1,
     teacher_temperature=0.7,
     teacher_max_tokens=512,

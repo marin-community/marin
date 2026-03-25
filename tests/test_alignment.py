@@ -16,6 +16,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import marin.alignment.llm_client as llm_client_module
+from fray.v2.types import ResourceConfig
+from marin.alignment.align import AlignConfig, ResponseExecutionMode, align
 from marin.alignment.coverage import (
     compute_coverage_stats,
     generate_covering_configs,
@@ -28,14 +30,25 @@ from marin.alignment.generate_prompts import (
     _parse_concretize_response,
     _parse_extraction_response,
     _parse_variation_axes,
+    load_sharded_jsonl_gz,
     load_spec,
     write_sharded_jsonl_gz,
 )
 from marin.alignment.generate_responses import (
     _build_messages,
+    ResponsePairGenConfig,
+    ResponseGenConfig,
+    generate_response_pair,
+    generate_responses,
 )
 from marin.alignment.inference_config import LiteLLMConfig, VLLMConfig
-from marin.alignment.judge import _parse_judge_response
+from marin.alignment.judge import (
+    PreferencePairFilterConfig,
+    JudgeConfig,
+    _parse_judge_response,
+    build_preference_pairs,
+    judge_responses,
+)
 from marin.alignment.llm_client import LLMResponse, llm_chat, llm_chat_single
 from marin.alignment.prompts.concretize import make_concretize_prompt
 from marin.alignment.prompts.extract import make_extraction_prompt
@@ -56,10 +69,16 @@ from marin.alignment.types import (
     Statement,
     StatementType,
 )
+from marin.execution.executor import ExecutorStep, InputName
+from marin.execution.remote import remote
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+def _noop_remote(_config) -> None:
+    return None
 
 
 @pytest.fixture()
@@ -345,15 +364,15 @@ class TestPromptParsing:
 
     def test_parse_concretize_response(self):
         content = """
-        <scenario>A user asks about cooking pasta.</scenario>
-        <rubric>GOOD: Detailed recipe. BAD: Vague answer.</rubric>
-        <scenario>A user asks about astrophysics.</scenario>
-        <rubric>GOOD: Clear explanation. BAD: Jargon-heavy.</rubric>
+        <scenario_cfg_000>A user asks about cooking pasta.</scenario_cfg_000>
+        <rubric_cfg_000>GOOD: Detailed recipe. BAD: Vague answer.</rubric_cfg_000>
+        <scenario_cfg_001>A user asks about astrophysics.</scenario_cfg_001>
+        <rubric_cfg_001>GOOD: Clear explanation. BAD: Jargon-heavy.</rubric_cfg_001>
         """
-        results = _parse_concretize_response(content)
+        results = _parse_concretize_response(content, ["cfg_000", "cfg_001"])
         assert len(results) == 2
-        assert "cooking pasta" in results[0]["description"]
-        assert "GOOD" in results[1]["rubric"]
+        assert "cooking pasta" in results["cfg_000"]["description"]
+        assert "GOOD" in results["cfg_001"]["rubric"]
 
     def test_parse_extraction_response(self):
         content = """
@@ -505,6 +524,144 @@ class TestResponseHelpers:
         assert len(messages) == 1
         assert messages[0]["role"] == "user"
 
+    @patch("marin.alignment.generate_responses.write_sharded_jsonl_gz")
+    @patch("marin.alignment.generate_responses.load_sharded_jsonl_gz")
+    @patch("marin.alignment.generate_responses.BatchedVllmServeSession")
+    def test_generate_responses_vllm_uses_batched_serve(
+        self,
+        mock_session_cls,
+        mock_load_shards,
+        mock_write_shards,
+        sample_prompt,
+    ):
+        mock_load_shards.return_value = [sample_prompt]
+        mock_session = mock_session_cls.return_value.__enter__.return_value
+        mock_session.generate_from_messages.return_value = [["Refactored response"]]
+
+        config = ResponseGenConfig(
+            prompts_path="gs://bucket/prompts",
+            output_path="gs://bucket/output",
+            model_config=VLLMConfig(model="gs://bucket/model", tensor_parallel_size=4, tpu_type="v5p-8"),
+            n=1,
+            temperature=0.7,
+            max_tokens=512,
+        )
+
+        generate_responses(config)
+
+        mock_session_cls.assert_called_once()
+        mock_session.generate_from_messages.assert_called_once()
+        call_kwargs = mock_session.generate_from_messages.call_args.kwargs
+        assert call_kwargs["temperature"] == 0.7
+        assert call_kwargs["max_tokens"] == 512
+        assert call_kwargs["n"] == 1
+
+        write_args = mock_write_shards.call_args.args
+        assert write_args[1] == "gs://bucket/output"
+        assert write_args[0] == [
+            {
+                "prompt_id": "be_helpful/cfg_000",
+                "system_prompt": "You are a customer service agent.",
+                "user_message": "I need help with my order.",
+                "behavior_id": "be_helpful",
+                "rubric": "GOOD: Helpful response. BAD: Dismissive.",
+                "model": "gs://bucket/model",
+                "responses": [{"content": "Refactored response", "index": 0}],
+            }
+        ]
+
+    @patch("marin.alignment.generate_responses.write_sharded_jsonl_gz")
+    @patch("marin.alignment.generate_responses.load_sharded_jsonl_gz")
+    @patch("marin.alignment.generate_responses.BatchedVllmServeSession")
+    def test_generate_response_pair_reuses_session_for_same_local_model(
+        self,
+        mock_session_cls,
+        mock_load_shards,
+        mock_write_shards,
+        sample_prompt,
+        sample_spec_jsonl,
+    ):
+        mock_load_shards.return_value = [sample_prompt]
+        mock_session = mock_session_cls.return_value.__enter__.return_value
+        mock_session.generate_from_messages.side_effect = [
+            [["Chosen response"]],
+            [["Rejected response 1", "Rejected response 2"]],
+        ]
+
+        model_config = VLLMConfig(model="gs://bucket/model", tensor_parallel_size=4, tpu_type="v5p-8")
+        config = ResponsePairGenConfig(
+            prompts_path="gs://bucket/prompts",
+            chosen_output_path="gs://bucket/output/chosen",
+            rejected_output_path="gs://bucket/output/rejected",
+            chosen_model_config=model_config,
+            rejected_model_config=model_config,
+            chosen_n=1,
+            chosen_temperature=0.4,
+            chosen_max_tokens=256,
+            chosen_behavior_statements_path=str(sample_spec_jsonl),
+            rejected_n=2,
+            rejected_temperature=0.8,
+            rejected_max_tokens=512,
+        )
+
+        generate_response_pair(config)
+
+        mock_session_cls.assert_called_once_with(model_config)
+        assert mock_session.generate_from_messages.call_count == 2
+        chosen_call = mock_session.generate_from_messages.call_args_list[0].kwargs
+        rejected_call = mock_session.generate_from_messages.call_args_list[1].kwargs
+        assert chosen_call["temperature"] == 0.4
+        assert chosen_call["max_tokens"] == 256
+        assert chosen_call["n"] == 1
+        assert rejected_call["temperature"] == 0.8
+        assert rejected_call["max_tokens"] == 512
+        assert rejected_call["n"] == 2
+        assert mock_write_shards.call_count == 2
+        assert mock_write_shards.call_args_list[0].args[1] == "gs://bucket/output/chosen"
+        assert mock_write_shards.call_args_list[1].args[1] == "gs://bucket/output/rejected"
+
+    @patch("marin.alignment.generate_responses.write_sharded_jsonl_gz")
+    @patch("marin.alignment.generate_responses.load_sharded_jsonl_gz")
+    @patch("marin.alignment.generate_responses.BatchedVllmServeSession")
+    def test_generate_response_pair_uses_separate_sessions_for_different_local_models(
+        self,
+        mock_session_cls,
+        mock_load_shards,
+        mock_write_shards,
+        sample_prompt,
+        sample_spec_jsonl,
+    ):
+        mock_load_shards.return_value = [sample_prompt]
+        first_context = MagicMock()
+        second_context = MagicMock()
+        first_session = first_context.__enter__.return_value
+        second_session = second_context.__enter__.return_value
+        first_session.generate_from_messages.return_value = [["Chosen response"]]
+        second_session.generate_from_messages.return_value = [["Rejected response"]]
+        mock_session_cls.side_effect = [first_context, second_context]
+
+        config = ResponsePairGenConfig(
+            prompts_path="gs://bucket/prompts",
+            chosen_output_path="gs://bucket/output/chosen",
+            rejected_output_path="gs://bucket/output/rejected",
+            chosen_model_config=VLLMConfig(model="gs://bucket/chosen", tensor_parallel_size=4, tpu_type="v5p-8"),
+            rejected_model_config=VLLMConfig(
+                model="gs://bucket/rejected",
+                tensor_parallel_size=4,
+                tpu_type="v5p-8",
+            ),
+            chosen_n=1,
+            rejected_n=1,
+            chosen_behavior_statements_path=str(sample_spec_jsonl),
+        )
+
+        generate_response_pair(config)
+
+        assert mock_session_cls.call_count == 2
+        assert first_session.generate_from_messages.call_count == 1
+        assert second_session.generate_from_messages.call_count == 1
+        assert mock_write_shards.call_count == 2
+
 
 # ===========================================================================
 # Tests: judge.py — parse judge response
@@ -531,6 +688,233 @@ class TestJudgeParsing:
     def test_parse_invalid_json_raises(self):
         with pytest.raises((json.JSONDecodeError, ValueError)):
             _parse_judge_response("not json at all")
+
+
+class TestAlignResponseOrchestration:
+    def test_align_uses_combined_response_step_for_same_local_teacher_and_rejected(self, sample_spec_jsonl):
+        pretrained_step = ExecutorStep(
+            name="pretrained",
+            fn=remote(_noop_remote, resources=ResourceConfig.with_cpu(cpu=1, ram="4g", disk="4g")),
+            config={},
+        )
+        teacher_model = VLLMConfig(model="gs://bucket/chosen", tensor_parallel_size=4, tpu_type="v5p-8")
+        rejected_model = teacher_model
+
+        steps = align(
+            name="local-local",
+            pretrained_model=pretrained_step,
+            spec=str(sample_spec_jsonl),
+            model_config=object(),
+            teacher_model=teacher_model,
+            rejected_model=rejected_model,
+            align_config=AlignConfig(
+                ideation_model="openai/gpt-4.1",
+                extract_model="openai/gpt-4.1-mini",
+                judge_model="openai/gpt-4.1",
+            ),
+        )
+
+        assert [step.name for step in steps[:5]] == [
+            "align/local-local/spec",
+            "align/local-local/prompts",
+            "align/local-local/responses",
+            "align/local-local/judgments",
+            "align/local-local/preference_pairs",
+        ]
+        response_step = steps[2]
+        judgments_step = steps[3]
+        assert response_step.fn.resources.ram == "128g"
+        assert response_step.fn.resources.disk == "50g"
+        assert response_step.config.chosen_output_path.name == "chosen"
+        assert response_step.config.rejected_output_path.name == "rejected"
+        assert isinstance(judgments_step.config.chosen_responses_path, InputName)
+        assert judgments_step.config.chosen_responses_path.step is response_step
+        assert judgments_step.config.chosen_responses_path.name == "chosen"
+        assert judgments_step.config.rejected_responses_path.step is response_step
+        assert judgments_step.config.rejected_responses_path.name == "rejected"
+
+    def test_align_auto_uses_parallel_separate_steps_for_different_local_models(self, sample_spec_jsonl):
+        pretrained_step = ExecutorStep(
+            name="pretrained",
+            fn=remote(_noop_remote, resources=ResourceConfig.with_cpu(cpu=1, ram="4g", disk="4g")),
+            config={},
+        )
+        teacher_model = VLLMConfig(
+            model="gs://bucket/chosen",
+            tensor_parallel_size=4,
+            tpu_type="v5p-8",
+            disk="50g",
+            ram="128g",
+        )
+        rejected_model = VLLMConfig(
+            model="gs://bucket/rejected",
+            tensor_parallel_size=4,
+            tpu_type="v5p-8",
+            disk="75g",
+            ram="256g",
+        )
+
+        steps = align(
+            name="different-local",
+            pretrained_model=pretrained_step,
+            spec=str(sample_spec_jsonl),
+            model_config=object(),
+            teacher_model=teacher_model,
+            rejected_model=rejected_model,
+            align_config=AlignConfig(
+                ideation_model="openai/gpt-4.1",
+                extract_model="openai/gpt-4.1-mini",
+                judge_model="openai/gpt-4.1",
+            ),
+        )
+
+        assert [step.name for step in steps[:6]] == [
+            "align/different-local/spec",
+            "align/different-local/prompts",
+            "align/different-local/chosen",
+            "align/different-local/rejected",
+            "align/different-local/judgments",
+            "align/different-local/preference_pairs",
+        ]
+        rejected_step = steps[3]
+        assert rejected_step.config.dependency_path is None
+
+    def test_align_parallel_keeps_separate_steps_without_dependency(self, sample_spec_jsonl):
+        pretrained_step = ExecutorStep(
+            name="pretrained",
+            fn=remote(_noop_remote, resources=ResourceConfig.with_cpu(cpu=1, ram="4g", disk="4g")),
+            config={},
+        )
+        teacher_model = VLLMConfig(model="gs://bucket/chosen", tensor_parallel_size=4, tpu_type="v5p-8")
+        rejected_model = VLLMConfig(model="gs://bucket/rejected", tensor_parallel_size=4, tpu_type="v5p-8")
+
+        steps = align(
+            name="parallel-local",
+            pretrained_model=pretrained_step,
+            spec=str(sample_spec_jsonl),
+            model_config=object(),
+            teacher_model=teacher_model,
+            rejected_model=rejected_model,
+            align_config=AlignConfig(
+                ideation_model="openai/gpt-4.1",
+                extract_model="openai/gpt-4.1-mini",
+                judge_model="openai/gpt-4.1",
+                response_execution_mode=ResponseExecutionMode.PARALLEL,
+            ),
+        )
+
+        assert [step.name for step in steps[:6]] == [
+            "align/parallel-local/spec",
+            "align/parallel-local/prompts",
+            "align/parallel-local/chosen",
+            "align/parallel-local/rejected",
+            "align/parallel-local/judgments",
+            "align/parallel-local/preference_pairs",
+        ]
+        assert steps[3].config.dependency_path is None
+
+    def test_align_serializes_different_local_teacher_and_rejected_steps(self, sample_spec_jsonl):
+        pretrained_step = ExecutorStep(
+            name="pretrained",
+            fn=remote(_noop_remote, resources=ResourceConfig.with_cpu(cpu=1, ram="4g", disk="4g")),
+            config={},
+        )
+        teacher_model = VLLMConfig(
+            model="gs://bucket/chosen",
+            tensor_parallel_size=4,
+            tpu_type="v5p-8",
+            disk="50g",
+            ram="128g",
+        )
+        rejected_model = VLLMConfig(
+            model="gs://bucket/rejected",
+            tensor_parallel_size=4,
+            tpu_type="v5p-8",
+            disk="75g",
+            ram="256g",
+        )
+
+        steps = align(
+            name="serialized-local",
+            pretrained_model=pretrained_step,
+            spec=str(sample_spec_jsonl),
+            model_config=object(),
+            teacher_model=teacher_model,
+            rejected_model=rejected_model,
+            align_config=AlignConfig(
+                ideation_model="openai/gpt-4.1",
+                extract_model="openai/gpt-4.1-mini",
+                judge_model="openai/gpt-4.1",
+                response_execution_mode=ResponseExecutionMode.SERIALIZED,
+            ),
+        )
+
+        assert [step.name for step in steps[:6]] == [
+            "align/serialized-local/spec",
+            "align/serialized-local/prompts",
+            "align/serialized-local/chosen",
+            "align/serialized-local/rejected",
+            "align/serialized-local/judgments",
+            "align/serialized-local/preference_pairs",
+        ]
+        chosen_step = steps[2]
+        rejected_step = steps[3]
+        assert rejected_step.config.dependency_path.step is chosen_step
+        assert rejected_step.config.dependency_path.name is None
+
+    def test_align_reuse_same_model_requires_matching_local_models(self, sample_spec_jsonl):
+        pretrained_step = ExecutorStep(
+            name="pretrained",
+            fn=remote(_noop_remote, resources=ResourceConfig.with_cpu(cpu=1, ram="4g", disk="4g")),
+            config={},
+        )
+        with pytest.raises(ValueError, match="reuse_same_model"):
+            align(
+                name="invalid-reuse",
+                pretrained_model=pretrained_step,
+                spec=str(sample_spec_jsonl),
+                model_config=object(),
+                teacher_model=VLLMConfig(model="gs://bucket/chosen", tensor_parallel_size=4, tpu_type="v5p-8"),
+                rejected_model=VLLMConfig(model="gs://bucket/rejected", tensor_parallel_size=4, tpu_type="v5p-8"),
+                align_config=AlignConfig(
+                    ideation_model="openai/gpt-4.1",
+                    extract_model="openai/gpt-4.1-mini",
+                    judge_model="openai/gpt-4.1",
+                    response_execution_mode=ResponseExecutionMode.REUSE_SAME_MODEL,
+                ),
+            )
+
+    def test_align_keeps_separate_response_steps_when_only_teacher_is_local(self, sample_spec_jsonl):
+        pretrained_step = ExecutorStep(
+            name="pretrained",
+            fn=remote(_noop_remote, resources=ResourceConfig.with_cpu(cpu=1, ram="4g", disk="4g")),
+            config={},
+        )
+        teacher_model = VLLMConfig(model="gs://bucket/chosen", tensor_parallel_size=4, tpu_type="v5p-8")
+        rejected_model = LiteLLMConfig(model="openai/gpt-4.1-mini")
+
+        steps = align(
+            name="mixed",
+            pretrained_model=pretrained_step,
+            spec=str(sample_spec_jsonl),
+            model_config=object(),
+            teacher_model=teacher_model,
+            rejected_model=rejected_model,
+            align_config=AlignConfig(
+                ideation_model="openai/gpt-4.1",
+                extract_model="openai/gpt-4.1-mini",
+                judge_model="openai/gpt-4.1",
+            ),
+        )
+
+        assert [step.name for step in steps[:6]] == [
+            "align/mixed/spec",
+            "align/mixed/prompts",
+            "align/mixed/chosen",
+            "align/mixed/rejected",
+            "align/mixed/judgments",
+            "align/mixed/preference_pairs",
+        ]
 
 
 # ===========================================================================
@@ -678,7 +1062,7 @@ class TestPromptTemplates:
             behavior_understanding="The model helps users.",
             scientific_motivation="Testing assistance quality.",
             transcript_analyses=[],
-            configs=[{"complexity": "simple", "tone": "casual"}],
+            indexed_configs=[("cfg_000", {"complexity": "simple", "tone": "casual"})],
             axes_metadata=[
                 {"axis": "complexity", "spectrum": ["simple", "complex"], "description": "Task complexity"},
                 {"axis": "tone", "spectrum": ["casual", "formal"], "description": "Response tone"},
@@ -686,8 +1070,9 @@ class TestPromptTemplates:
         )
         assert "evaluation scenario designer" in system_prompt
         assert "helpfulness" in user_prompt
-        assert "Configuration 1" in user_prompt
+        assert "Configuration cfg_000" in user_prompt
         assert "simple" in user_prompt
+        assert "<scenario_cfg_000>" in user_prompt
 
     def test_extraction_prompt_with_system(self):
         system_prompt, user_prompt = make_extraction_prompt(
@@ -760,8 +1145,20 @@ class TestPromptTemplates:
 class TestPromptGenerationE2E:
     """Test the full 3-stage pipeline with mocked LLM calls."""
 
+    @patch("marin.alignment.generate_prompts.compute_coverage_stats", return_value={"covered": 1})
+    @patch(
+        "marin.alignment.generate_prompts.generate_covering_configs",
+        return_value=[{"request_complexity": "simple", "domain": "general"}],
+    )
     @patch("marin.alignment.generate_prompts.llm_chat_single")
-    def test_full_pipeline(self, mock_llm, sample_spec_jsonl, tmp_path):
+    def test_full_pipeline(
+        self,
+        mock_llm,
+        _mock_covering_configs,
+        _mock_coverage_stats,
+        sample_spec_jsonl,
+        tmp_path,
+    ):
         """Test generate_prompts_from_spec with all 3 stages mocked."""
         # Stage 1: Understanding response
         stage1_response = LLMResponse(
@@ -783,9 +1180,9 @@ class TestPromptGenerationE2E:
         # Stage 2: Concretize response
         stage2_response = LLMResponse(
             content=(
-                "<scenario>A student asks for help with basic math homework. "
-                '"You are a math tutor." The student says "Can you help me with fractions?"</scenario>\n'
-                "<rubric>GOOD: Patient explanation. BAD: Dismissive.</rubric>\n"
+                "<scenario_cfg_000>A student asks for help with basic math homework. "
+                '"You are a math tutor." The student says "Can you help me with fractions?"</scenario_cfg_000>\n'
+                "<rubric_cfg_000>GOOD: Patient explanation. BAD: Dismissive.</rubric_cfg_000>\n"
             ),
             model="openai/gpt-4.1",
         )
@@ -863,6 +1260,282 @@ class TestPromptGenerationE2E:
             assert "user_message" in prompt
             assert "rubric" in prompt
 
+    @patch("marin.alignment.generate_prompts.compute_coverage_stats", return_value={"covered": 1})
+    @patch(
+        "marin.alignment.generate_prompts.generate_covering_configs",
+        return_value=[{"request_complexity": "simple"}],
+    )
+    @patch("marin.alignment.generate_prompts.BatchedVllmServeSession")
+    def test_local_pipeline_reuses_single_session_when_models_match(
+        self,
+        mock_session_cls,
+        _mock_covering_configs,
+        _mock_coverage_stats,
+        sample_spec_jsonl,
+        tmp_path,
+    ):
+        class FakeSession:
+            def __init__(self, outputs):
+                self.outputs = list(outputs)
+                self.batch_sizes: list[int] = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def generate_from_messages(self, message_batches, *, temperature, max_tokens, n):
+                self.batch_sizes.append(len(message_batches))
+                next_outputs = self.outputs.pop(0)
+                return [[text] for text in next_outputs]
+
+        session_instances: list[FakeSession] = []
+        stage1_content = (
+            "<behavior_understanding>Being helpful means assisting users.</behavior_understanding>\n"
+            "<scientific_motivation>Testing helpfulness is important.</scientific_motivation>\n"
+            "<variation_axes>\n"
+            '[{"axis": "request_complexity", "spectrum": ["simple", "complex"], "description": "Complexity"}]\n'
+            "</variation_axes>"
+        )
+        stage2_content = (
+            "<scenario_cfg_000>A student asks for help with fractions.</scenario_cfg_000>\n"
+            "<rubric_cfg_000>GOOD: Explain clearly. BAD: Refuse to help.</rubric_cfg_000>\n"
+        )
+        stage3_content = (
+            "<scenario_0>\n"
+            "<system_prompt>You are a math tutor.</system_prompt>\n"
+            "<user_message>Can you help me with fractions?</user_message>\n"
+            "</scenario_0>\n"
+        )
+
+        def session_factory(_config):
+            session = FakeSession(
+                outputs=[
+                    [stage1_content],
+                    [stage2_content],
+                    [stage3_content],
+                ]
+            )
+            session_instances.append(session)
+            return session
+
+        mock_session_cls.side_effect = session_factory
+
+        shared_model = VLLMConfig(model="gs://bucket/shared", tensor_parallel_size=4, tpu_type="v5p-8")
+        output_path = str(tmp_path / "prompt_local_shared")
+
+        from marin.alignment.generate_prompts import generate_prompts_from_spec
+
+        generate_prompts_from_spec(
+            PromptGenConfig(
+                spec_path=str(sample_spec_jsonl),
+                output_path=output_path,
+                ideation_model=shared_model,
+                extract_model=shared_model,
+                covering_strength=2,
+                concretize_batch_size=1,
+                extract_batch_size=1,
+                local_serve_batch_size=4,
+                statement_ids=["be_helpful"],
+            )
+        )
+
+        assert mock_session_cls.call_count == 1
+        assert session_instances[0].batch_sizes == [1, 1, 1]
+        prompts = load_sharded_jsonl_gz(output_path)
+        assert len(prompts) == 1
+        assert prompts[0]["behavior_id"] == "be_helpful"
+
+    @patch("marin.alignment.generate_prompts.compute_coverage_stats", return_value={"covered": 1})
+    @patch(
+        "marin.alignment.generate_prompts.generate_covering_configs",
+        return_value=[{"request_complexity": "simple"}],
+    )
+    @patch("marin.alignment.generate_prompts.BatchedVllmServeSession")
+    def test_local_pipeline_switches_sessions_when_models_differ(
+        self,
+        mock_session_cls,
+        _mock_covering_configs,
+        _mock_coverage_stats,
+        sample_spec_jsonl,
+        tmp_path,
+    ):
+        class FakeSession:
+            def __init__(self, outputs):
+                self.outputs = list(outputs)
+                self.batch_sizes: list[int] = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def generate_from_messages(self, message_batches, *, temperature, max_tokens, n):
+                self.batch_sizes.append(len(message_batches))
+                next_outputs = self.outputs.pop(0)
+                return [[text] for text in next_outputs]
+
+        session_instances: list[FakeSession] = []
+        stage1_content = (
+            "<behavior_understanding>Being helpful means assisting users.</behavior_understanding>\n"
+            "<scientific_motivation>Testing helpfulness is important.</scientific_motivation>\n"
+            "<variation_axes>\n"
+            '[{"axis": "request_complexity", "spectrum": ["simple", "complex"], "description": "Complexity"}]\n'
+            "</variation_axes>"
+        )
+        stage2_content = (
+            "<scenario_cfg_000>A student asks for help with fractions.</scenario_cfg_000>\n"
+            "<rubric_cfg_000>GOOD: Explain clearly. BAD: Refuse to help.</rubric_cfg_000>\n"
+        )
+        stage3_content = (
+            "<scenario_0>\n"
+            "<system_prompt>You are a math tutor.</system_prompt>\n"
+            "<user_message>Can you help me with fractions?</user_message>\n"
+            "</scenario_0>\n"
+        )
+
+        def session_factory(config):
+            outputs = [[stage1_content], [stage2_content]] if len(session_instances) == 0 else [[stage3_content]]
+            session = FakeSession(outputs=outputs)
+            session_instances.append(session)
+            return session
+
+        mock_session_cls.side_effect = session_factory
+
+        ideation_model = VLLMConfig(model="gs://bucket/ideation", tensor_parallel_size=4, tpu_type="v5p-8")
+        extract_model = VLLMConfig(model="gs://bucket/extract", tensor_parallel_size=4, tpu_type="v5p-8")
+        output_path = str(tmp_path / "prompt_local_split")
+
+        from marin.alignment.generate_prompts import generate_prompts_from_spec
+
+        generate_prompts_from_spec(
+            PromptGenConfig(
+                spec_path=str(sample_spec_jsonl),
+                output_path=output_path,
+                ideation_model=ideation_model,
+                extract_model=extract_model,
+                covering_strength=2,
+                concretize_batch_size=1,
+                extract_batch_size=1,
+                local_serve_batch_size=4,
+                statement_ids=["be_helpful"],
+            )
+        )
+
+        assert mock_session_cls.call_count == 2
+        assert session_instances[0].batch_sizes == [1, 1]
+        assert session_instances[1].batch_sizes == [1]
+
+    @patch("marin.alignment.generate_prompts.compute_coverage_stats", return_value={"covered": 2})
+    @patch(
+        "marin.alignment.generate_prompts.generate_covering_configs",
+        return_value=[
+            {"request_complexity": "simple"},
+            {"request_complexity": "complex"},
+        ],
+    )
+    @patch("marin.alignment.generate_prompts.BatchedVllmServeSession")
+    def test_local_pipeline_retries_missing_concretize_configs(
+        self,
+        mock_session_cls,
+        _mock_covering_configs,
+        _mock_coverage_stats,
+        sample_spec_jsonl,
+        tmp_path,
+    ):
+        class FakeSession:
+            def __init__(self, outputs):
+                self.outputs = list(outputs)
+                self.batch_sizes: list[int] = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def generate_from_messages(self, message_batches, *, temperature, max_tokens, n):
+                self.batch_sizes.append(len(message_batches))
+                next_outputs = self.outputs.pop(0)
+                return [[text] for text in next_outputs]
+
+        session_instances: list[FakeSession] = []
+        stage1_content = (
+            "<behavior_understanding>Being helpful means assisting users.</behavior_understanding>\n"
+            "<scientific_motivation>Testing helpfulness is important.</scientific_motivation>\n"
+            "<variation_axes>\n"
+            '[{"axis": "request_complexity", "spectrum": ["simple", "complex"], "description": "Complexity"}]\n'
+            "</variation_axes>"
+        )
+        stage2_partial_content = (
+            "<scenario_cfg_000>A student asks a simple question.</scenario_cfg_000>\n"
+            "<rubric_cfg_000>GOOD: Answer directly. BAD: Refuse.</rubric_cfg_000>\n"
+        )
+        stage2_retry_content = (
+            "<scenario_cfg_001>A student asks a hard question.</scenario_cfg_001>\n"
+            "<rubric_cfg_001>GOOD: Reason carefully. BAD: Hallucinate.</rubric_cfg_001>\n"
+        )
+        stage3_content = (
+            "<scenario_0>\n"
+            "<system_prompt>You are a math tutor.</system_prompt>\n"
+            "<user_message>Can you help me with the easy problem?</user_message>\n"
+            "</scenario_0>\n"
+            "<scenario_1>\n"
+            "<system_prompt>You are a math tutor.</system_prompt>\n"
+            "<user_message>Can you help me with the hard problem?</user_message>\n"
+            "</scenario_1>\n"
+        )
+
+        def session_factory(_config):
+            session = FakeSession(
+                outputs=[
+                    [stage1_content],
+                    [stage2_partial_content],
+                    [stage2_retry_content],
+                    [stage3_content],
+                ]
+            )
+            session_instances.append(session)
+            return session
+
+        mock_session_cls.side_effect = session_factory
+
+        shared_model = VLLMConfig(model="gs://bucket/shared", tensor_parallel_size=4, tpu_type="v5p-8")
+        output_path = str(tmp_path / "prompt_local_retry")
+
+        from marin.alignment.generate_prompts import generate_prompts_from_spec
+
+        generate_prompts_from_spec(
+            PromptGenConfig(
+                spec_path=str(sample_spec_jsonl),
+                output_path=output_path,
+                ideation_model=shared_model,
+                extract_model=shared_model,
+                covering_strength=2,
+                concretize_batch_size=2,
+                extract_batch_size=2,
+                local_serve_batch_size=4,
+                statement_ids=["be_helpful"],
+                concretize_max_attempts=2,
+            )
+        )
+
+        assert mock_session_cls.call_count == 1
+        assert session_instances[0].batch_sizes == [1, 1, 1, 1]
+        prompts = load_sharded_jsonl_gz(output_path)
+        assert len(prompts) == 2
+
+        ideation_path = Path(output_path) / "artifacts" / "be_helpful" / "ideation.json"
+        ideation = json.loads(ideation_path.read_text())
+        assert [attempt["missing_config_ids"] for attempt in ideation["concretization_attempts"]] == [
+            ["cfg_001"],
+            [],
+        ]
+        assert ideation["variations"][1]["config_id"] == "cfg_001"
+        assert ideation["variations"][1]["description"] == "A student asks a hard question."
+
 
 # ===========================================================================
 # Tests: judge.py — end-to-end pair construction (mocked)
@@ -870,23 +1543,230 @@ class TestPromptGenerationE2E:
 
 
 class TestJudgeE2E:
+    @patch("marin.alignment.judge.BatchedVllmServeSession")
+    def test_local_batched_judge_writes_full_judgments_and_pairs(self, mock_session_cls, sample_spec_jsonl, tmp_path):
+        chosen_record = {
+            "prompt_id": "be_helpful/cfg_000",
+            "behavior_id": "be_helpful",
+            "system_prompt": "You are helpful.",
+            "user_message": "Help me reset my password.",
+            "rubric": "GOOD: clear steps. BAD: refusal or rudeness.",
+            "responses": [
+                {
+                    "content": "Sure. Go to settings, choose reset password, and follow the email link.",
+                    "index": 0,
+                }
+            ],
+        }
+        rejected_record = {
+            "prompt_id": "be_helpful/cfg_000",
+            "behavior_id": "be_helpful",
+            "system_prompt": "You are helpful.",
+            "user_message": "Help me reset my password.",
+            "rubric": "GOOD: clear steps. BAD: refusal or rudeness.",
+            "responses": [{"content": "I will not help you. Figure it out yourself.", "index": 0}],
+        }
+        chosen_path = tmp_path / "chosen"
+        rejected_path = tmp_path / "rejected"
+        judgments_path = tmp_path / "judgments"
+        pairs_path = tmp_path / "pairs"
+        write_sharded_jsonl_gz([chosen_record], str(chosen_path), shard_size=5000)
+        write_sharded_jsonl_gz([rejected_record], str(rejected_path), shard_size=5000)
+
+        mock_session = mock_session_cls.return_value.__enter__.return_value
+        mock_session.generate_from_messages.return_value = [
+            ['{"score": 9, "confidence": 0.9, "explanation": "Helpful", "highlights": []}'],
+            ['{"score": 1, "confidence": 0.9, "explanation": "Rude", "highlights": []}'],
+        ]
+
+        judge_responses(
+            JudgeConfig(
+                chosen_responses_path=str(chosen_path),
+                rejected_responses_path=str(rejected_path),
+                spec_path=str(sample_spec_jsonl),
+                output_path=str(judgments_path),
+                judge_model=VLLMConfig(model="gs://bucket/model", tensor_parallel_size=4, tpu_type="v5p-8"),
+                batch_size=4,
+            )
+        )
+
+        mock_session_cls.assert_called_once()
+        mock_session.generate_from_messages.assert_called_once()
+        call_kwargs = mock_session.generate_from_messages.call_args.kwargs
+        assert call_kwargs["temperature"] == 0.0
+        assert call_kwargs["max_tokens"] == 1000
+        assert call_kwargs["n"] == 1
+
+        written_judgments = load_sharded_jsonl_gz(str(judgments_path))
+        assert len(written_judgments) == 1
+        assert written_judgments[0]["status"] == "ok"
+        assert written_judgments[0]["best_chosen"]["judgment"]["score"] == 9
+        assert written_judgments[0]["worst_rejected"]["judgment"]["score"] == 1
+        assert written_judgments[0]["gap"] == 8
+        assert written_judgments[0]["chosen_candidates"][0]["judgment"]["raw_response"] is not None
+
+        build_preference_pairs(
+            PreferencePairFilterConfig(
+                judgments_path=str(judgments_path),
+                output_path=str(pairs_path),
+                min_chosen_score=7.0,
+                min_gap=2.0,
+            )
+        )
+
+        written_pairs = load_sharded_jsonl_gz(str(pairs_path))
+        assert len(written_pairs) == 1
+        assert written_pairs[0]["chosen"][2]["content"].startswith("Sure.")
+        assert written_pairs[0]["rejected"][2]["content"].startswith("I will not help")
+
+        filter_decisions = load_sharded_jsonl_gz(str(pairs_path / "artifacts" / "filter_decisions"))
+        assert len(filter_decisions) == 1
+        assert filter_decisions[0]["passed"] is True
+        assert filter_decisions[0]["reason"] == "passed"
+
+    def test_build_preference_pairs_preserves_filtered_decisions(self, tmp_path):
+        judgments_path = tmp_path / "judgments"
+        pairs_path = tmp_path / "pairs"
+        judgment_records = [
+            {
+                "prompt_id": "pass",
+                "behavior_id": "be_helpful",
+                "system_prompt": "You are helpful.",
+                "user_message": "Help me.",
+                "rubric": "GOOD",
+                "statement": {
+                    "id": "be_helpful",
+                    "text": "Helpful",
+                    "type": "GUIDELINE",
+                    "authority_level": "PLATFORM",
+                    "section": "Core",
+                    "subsection": "Help",
+                },
+                "status": "ok",
+                "errors": [],
+                "chosen_candidates": [],
+                "rejected_candidates": [],
+                "best_chosen": {
+                    "response_index": 0,
+                    "response_text": "Helpful answer",
+                    "judgment": {
+                        "score": 9,
+                        "compliant": True,
+                        "confidence": 0.9,
+                        "explanation": "good",
+                        "highlights": [],
+                        "raw_response": "{}",
+                    },
+                },
+                "worst_rejected": {
+                    "response_index": 0,
+                    "response_text": "Bad answer",
+                    "judgment": {
+                        "score": 1,
+                        "compliant": False,
+                        "confidence": 0.9,
+                        "explanation": "bad",
+                        "highlights": [],
+                        "raw_response": "{}",
+                    },
+                },
+                "gap": 8,
+            },
+            {
+                "prompt_id": "low_gap",
+                "behavior_id": "be_helpful",
+                "system_prompt": "",
+                "user_message": "Help me.",
+                "rubric": "GOOD",
+                "statement": {
+                    "id": "be_helpful",
+                    "text": "Helpful",
+                    "type": "GUIDELINE",
+                    "authority_level": "PLATFORM",
+                    "section": "Core",
+                    "subsection": "Help",
+                },
+                "status": "ok",
+                "errors": [],
+                "chosen_candidates": [],
+                "rejected_candidates": [],
+                "best_chosen": {
+                    "response_index": 0,
+                    "response_text": "Okay answer",
+                    "judgment": {
+                        "score": 7,
+                        "compliant": True,
+                        "confidence": 0.8,
+                        "explanation": "ok",
+                        "highlights": [],
+                        "raw_response": "{}",
+                    },
+                },
+                "worst_rejected": {
+                    "response_index": 0,
+                    "response_text": "Also okay answer",
+                    "judgment": {
+                        "score": 6,
+                        "compliant": False,
+                        "confidence": 0.8,
+                        "explanation": "close",
+                        "highlights": [],
+                        "raw_response": "{}",
+                    },
+                },
+                "gap": 1,
+            },
+            {
+                "prompt_id": "missing_statement",
+                "behavior_id": "missing",
+                "system_prompt": "",
+                "user_message": "Help me.",
+                "rubric": "GOOD",
+                "statement": None,
+                "status": "missing_statement",
+                "errors": ["No statement found"],
+                "chosen_candidates": [],
+                "rejected_candidates": [],
+                "best_chosen": None,
+                "worst_rejected": None,
+                "gap": None,
+            },
+        ]
+        write_sharded_jsonl_gz(judgment_records, str(judgments_path), shard_size=5000)
+
+        build_preference_pairs(
+            PreferencePairFilterConfig(
+                judgments_path=str(judgments_path),
+                output_path=str(pairs_path),
+                min_chosen_score=7.0,
+                min_gap=2.0,
+            )
+        )
+
+        written_pairs = load_sharded_jsonl_gz(str(pairs_path))
+        assert len(written_pairs) == 1
+        assert written_pairs[0]["chosen"][2]["content"] == "Helpful answer"
+        assert written_pairs[0]["rejected"][1]["content"] == "Help me."
+
+        filter_decisions = load_sharded_jsonl_gz(str(pairs_path / "artifacts" / "filter_decisions"))
+        reasons = {record["prompt_id"]: record["reason"] for record in filter_decisions}
+        assert reasons["pass"] == "passed"
+        assert reasons["low_gap"] == "low_gap"
+        assert reasons["missing_statement"] == "status:missing_statement"
+
+        filter_summary = json.loads((pairs_path / "artifacts" / "filter_summary.json").read_text())
+        assert filter_summary["pair_count"] == 1
+        assert filter_summary["decision_counts"]["passed"] == 1
+        assert filter_summary["decision_counts"]["low_gap"] == 1
+        assert filter_summary["decision_counts"]["status:missing_statement"] == 1
+
     @patch("marin.alignment.judge.llm_chat_single")
-    def test_process_prompt_pair_accepted(self, mock_llm, sample_spec_jsonl):
-        """Test that a good chosen + bad rejected pair passes the filter."""
-        from marin.alignment.judge import _process_prompt_pair
-
-        statements = load_spec(str(sample_spec_jsonl))
-
-        # High score for chosen, low for rejected
+    def test_api_judge_writes_full_judgment_record(self, mock_llm, sample_spec_jsonl, tmp_path):
         call_count = {"n": 0}
 
         def mock_side_effect(**kwargs):
             call_count["n"] += 1
-            # First call is for chosen, rest are for rejected
-            if call_count["n"] == 1:
-                score = 9
-            else:
-                score = 2
+            score = 9 if call_count["n"] == 1 else 2
             return LLMResponse(
                 content=json.dumps({"score": score, "confidence": 0.9, "explanation": "Test", "highlights": []}),
                 model="openai/gpt-4.1",
@@ -910,99 +1790,25 @@ class TestJudgeE2E:
             "rubric": "GOOD: Helps. BAD: Refuses.",
             "responses": [{"content": "No, figure it out yourself.", "index": 0}],
         }
+        chosen_path = tmp_path / "chosen"
+        rejected_path = tmp_path / "rejected"
+        judgments_path = tmp_path / "judgments"
+        write_sharded_jsonl_gz([chosen_record], str(chosen_path), shard_size=5000)
+        write_sharded_jsonl_gz([rejected_record], str(rejected_path), shard_size=5000)
 
-        from marin.alignment.judge import JudgePairConfig
-
-        config = JudgePairConfig(
-            prompts_path="",
-            chosen_responses_path="",
-            rejected_responses_path="",
-            spec_path="",
-            output_path="",
-            min_chosen_score=7.0,
-            min_gap=2.0,
+        judge_responses(
+            JudgeConfig(
+                chosen_responses_path=str(chosen_path),
+                rejected_responses_path=str(rejected_path),
+                spec_path=str(sample_spec_jsonl),
+                output_path=str(judgments_path),
+                judge_model="openai/gpt-4.1",
+                workers=2,
+                batch_size=4,
+            )
         )
 
-        pair = _process_prompt_pair("be_helpful/cfg_000", chosen_record, rejected_record, statements, config)
-
-        assert pair is not None
-        assert len(pair["chosen"]) == 3  # system + user + assistant
-        assert len(pair["rejected"]) == 3
-        assert pair["chosen"][0]["role"] == "system"
-        assert pair["chosen"][2]["content"] == "Of course, I'd be happy to help!"
-        assert pair["rejected"][2]["content"] == "No, figure it out yourself."
-
-    @patch("marin.alignment.judge.llm_chat_single")
-    def test_process_prompt_pair_filtered_low_chosen(self, mock_llm, sample_spec_jsonl):
-        """Test that a low-scoring chosen response gets filtered out."""
-        from marin.alignment.judge import JudgePairConfig, _process_prompt_pair
-
-        statements = load_spec(str(sample_spec_jsonl))
-
-        mock_llm.return_value = LLMResponse(
-            content=json.dumps({"score": 4, "confidence": 0.8, "explanation": "Poor", "highlights": []}),
-            model="openai/gpt-4.1",
-        )
-
-        chosen_record = {
-            "behavior_id": "be_helpful",
-            "system_prompt": "",
-            "user_message": "Help",
-            "rubric": "",
-            "responses": [{"content": "Meh.", "index": 0}],
-        }
-        rejected_record = {
-            "behavior_id": "be_helpful",
-            "responses": [{"content": "No.", "index": 0}],
-        }
-
-        config = JudgePairConfig(
-            prompts_path="",
-            chosen_responses_path="",
-            rejected_responses_path="",
-            spec_path="",
-            output_path="",
-            min_chosen_score=7.0,
-            min_gap=2.0,
-        )
-
-        pair = _process_prompt_pair("test", chosen_record, rejected_record, statements, config)
-        assert pair is None  # filtered out due to low chosen score
-
-    @patch("marin.alignment.judge.llm_chat_single")
-    def test_process_prompt_pair_filtered_small_gap(self, mock_llm, sample_spec_jsonl):
-        """Test that similar chosen/rejected scores get filtered out."""
-        from marin.alignment.judge import JudgePairConfig, _process_prompt_pair
-
-        statements = load_spec(str(sample_spec_jsonl))
-
-        # Both score similarly
-        mock_llm.return_value = LLMResponse(
-            content=json.dumps({"score": 7, "confidence": 0.8, "explanation": "OK", "highlights": []}),
-            model="openai/gpt-4.1",
-        )
-
-        chosen_record = {
-            "behavior_id": "be_helpful",
-            "system_prompt": "",
-            "user_message": "Help",
-            "rubric": "",
-            "responses": [{"content": "Sure.", "index": 0}],
-        }
-        rejected_record = {
-            "behavior_id": "be_helpful",
-            "responses": [{"content": "OK.", "index": 0}],
-        }
-
-        config = JudgePairConfig(
-            prompts_path="",
-            chosen_responses_path="",
-            rejected_responses_path="",
-            spec_path="",
-            output_path="",
-            min_chosen_score=7.0,
-            min_gap=2.0,
-        )
-
-        pair = _process_prompt_pair("test", chosen_record, rejected_record, statements, config)
-        assert pair is None  # filtered: gap = 0 < 2.0
+        written_judgments = load_sharded_jsonl_gz(str(judgments_path))
+        assert len(written_judgments) == 1
+        assert written_judgments[0]["best_chosen"]["response_text"] == "Of course, I'd be happy to help!"
+        assert written_judgments[0]["worst_rejected"]["judgment"]["score"] == 2

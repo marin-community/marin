@@ -24,6 +24,7 @@ import dataclasses
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 from experiments.defaults import default_dpo, default_tokenize
 from fray.v2.types import ResourceConfig
@@ -31,9 +32,19 @@ from iris.marin_fs import url_to_fs
 from levanter.data.text.preference import PreferenceChatLmDatasetFormat
 
 from marin.alignment.generate_prompts import PromptGenConfig, generate_prompts_from_spec
-from marin.alignment.generate_responses import ResponseGenConfig, generate_responses
+from marin.alignment.generate_responses import (
+    ResponseGenConfig,
+    ResponsePairGenConfig,
+    generate_response_pair,
+    generate_responses,
+)
 from marin.alignment.inference_config import InferenceConfig, LiteLLMConfig, VLLMConfig
-from marin.alignment.judge import JudgePairConfig, judge_and_build_pairs
+from marin.alignment.judge import (
+    JudgeConfig,
+    PreferencePairFilterConfig,
+    build_preference_pairs,
+    judge_responses,
+)
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.execution.remote import remote
 
@@ -78,18 +89,102 @@ def _inference_dependency_groups(model: InferenceConfig) -> list[str]:
     return ["cpu"] if model.is_api else ["vllm", "tpu"]
 
 
+_BINARY_SIZE_UNITS = {
+    "k": 1024,
+    "m": 1024**2,
+    "g": 1024**3,
+    "t": 1024**4,
+}
+
+
+def _quantity_bytes(quantity: str) -> int:
+    suffix = quantity[-1].lower()
+    if suffix not in _BINARY_SIZE_UNITS:
+        raise ValueError(f"Unsupported resource quantity: {quantity}")
+    return int(quantity[:-1]) * _BINARY_SIZE_UNITS[suffix]
+
+
+def _max_quantity(left: str, right: str) -> str:
+    return left if _quantity_bytes(left) >= _quantity_bytes(right) else right
+
+
+def _merge_local_response_resources(teacher_model: VLLMConfig, rejected_model: VLLMConfig) -> ResourceConfig:
+    teacher_resources = teacher_model.resources
+    rejected_resources = rejected_model.resources
+    if teacher_resources.device != rejected_resources.device:
+        raise ValueError("Local chosen and rejected models must use the same accelerator type in one response step.")
+    if teacher_resources.replicas != rejected_resources.replicas:
+        raise ValueError("Local chosen and rejected models must request the same replica count in one response step.")
+    if teacher_resources.regions != rejected_resources.regions:
+        raise ValueError("Local chosen and rejected models must use the same regions in one response step.")
+    if teacher_resources.device_alternatives != rejected_resources.device_alternatives:
+        raise ValueError(
+            "Local chosen and rejected models must use the same accelerator alternatives in one response step."
+        )
+
+    return ResourceConfig(
+        cpu=max(teacher_resources.cpu, rejected_resources.cpu),
+        ram=_max_quantity(teacher_resources.ram, rejected_resources.ram),
+        disk=_max_quantity(teacher_resources.disk, rejected_resources.disk),
+        device=teacher_resources.device,
+        preemptible=teacher_resources.preemptible and rejected_resources.preemptible,
+        regions=teacher_resources.regions,
+        replicas=teacher_resources.replicas,
+        device_alternatives=teacher_resources.device_alternatives,
+    )
+
+
+class ResponseExecutionMode(StrEnum):
+    """Execution policy for chosen/rejected response generation."""
+
+    AUTO = "auto"
+    PARALLEL = "parallel"
+    SERIALIZED = "serialized"
+    REUSE_SAME_MODEL = "reuse_same_model"
+
+
+def _resolve_response_execution_mode(
+    teacher_model: InferenceConfig,
+    rejected_model: InferenceConfig,
+    requested_mode: ResponseExecutionMode,
+) -> ResponseExecutionMode:
+    both_local = isinstance(teacher_model, VLLMConfig) and isinstance(rejected_model, VLLMConfig)
+    same_local_model = both_local and teacher_model == rejected_model
+
+    if requested_mode == ResponseExecutionMode.AUTO:
+        if same_local_model:
+            return ResponseExecutionMode.REUSE_SAME_MODEL
+        return ResponseExecutionMode.PARALLEL
+
+    if requested_mode == ResponseExecutionMode.REUSE_SAME_MODEL and not same_local_model:
+        raise ValueError(
+            "response_execution_mode='reuse_same_model' requires teacher_model and rejected_model "
+            "to be the same local VLLMConfig."
+        )
+
+    return requested_mode
+
+
 @dataclass(frozen=True)
 class AlignConfig:
     """Configuration for the full alignment pipeline.
 
     Attributes:
-        ideation_model: API model for prompt generation (stages 1-3). Always API.
-        extract_model: API model for Stage 3 extraction. Can be cheaper/faster.
-        judge_model: API model for scoring responses. Always API.
+        ideation_model: Model for prompt-generation stages 1-2.
+        extract_model: Model for prompt-generation stage 3 extraction.
+        judge_model: Model for scoring responses.
         covering_strength: t-way covering (2=pairwise, 3=3-way).
         ideation_workers: Parallelism for Stage 1 understanding.
         concretize_workers: Parallelism for Stage 2 concretization.
         extract_workers: Parallelism for Stage 3 extraction.
+        prompt_batch_size: Local vLLM serve microbatch size for prompt-generation requests.
+        understanding_max_tokens: Max tokens for prompt-generation Stage 1.
+        understanding_temperature: Sampling temperature for prompt-generation Stage 1.
+        concretize_max_tokens: Max tokens for prompt-generation Stage 2.
+        concretize_temperature: Sampling temperature for prompt-generation Stage 2.
+        concretize_max_attempts: Total Stage 2 attempts before failing unresolved configs.
+        extract_max_tokens: Max tokens for prompt-generation Stage 3.
+        response_execution_mode: Execution policy for chosen/rejected response generation.
         teacher_n: Number of responses per prompt from teacher (1 is usually enough).
         teacher_temperature: Sampling temperature for teacher.
         teacher_max_tokens: Max tokens for teacher responses.
@@ -99,6 +194,7 @@ class AlignConfig:
         judge_min_chosen_score: Teacher response must score >= this (1-10 scale).
         judge_min_gap: chosen_score - worst_rejected_score must be >= this.
         judge_workers: Parallelism for judge API calls.
+        judge_batch_size: Local judge microbatch size when judge_model is vLLM.
         tokenizer: HuggingFace tokenizer name for DPO training data.
         cpu_resources: Resources for CPU-only steps (prompt gen, judging).
     """
@@ -116,7 +212,16 @@ class AlignConfig:
     ideation_workers: int = 32
     concretize_workers: int = 32
     extract_workers: int = 128
+    prompt_batch_size: int = 8
+    understanding_max_tokens: int = 4000
+    understanding_temperature: float = 1.0
+    concretize_max_tokens: int = 16000
+    concretize_temperature: float = 1.0
+    concretize_max_attempts: int = 5
+    extract_max_tokens: int = 16000
     judge_workers: int = 64
+    judge_batch_size: int = 8
+    response_execution_mode: ResponseExecutionMode = ResponseExecutionMode.AUTO
 
     # Teacher response generation
     teacher_n: int = 1
@@ -218,16 +323,28 @@ def align(
         spec_gcs_path = output_path_of(spec_step) / "spec.jsonl"
 
     # Step 1: Generate prompts from spec (stages 1-3)
-    # Use TPU resources if ideation model is local (VLLMConfig)
     ideation_is_local = isinstance(align_config.ideation_model, VLLMConfig)
-    prompts_resources = align_config.ideation_model.resources if ideation_is_local else align_config.cpu_resources
+    extract_is_local = isinstance(align_config.extract_model, VLLMConfig)
+    prompts_use_local = ideation_is_local or extract_is_local
+    if (
+        ideation_is_local
+        and extract_is_local
+        and align_config.ideation_model.resources != align_config.extract_model.resources
+    ):
+        raise ValueError("Local ideation and extraction models must use the same resources within one prompt step.")
+    if ideation_is_local:
+        prompts_resources = align_config.ideation_model.resources
+    elif extract_is_local:
+        prompts_resources = align_config.extract_model.resources
+    else:
+        prompts_resources = align_config.cpu_resources
     prompts_step = ExecutorStep(
         name=f"align/{name}/prompts",
         description=f"Generate eval prompts from spec via {_model_name(align_config.ideation_model)}",
         fn=remote(
             generate_prompts_from_spec,
             resources=prompts_resources,
-            pip_dependency_groups=["cpu"] if not ideation_is_local else ["vllm", "tpu"],
+            pip_dependency_groups=["cpu"] if not prompts_use_local else ["vllm", "tpu"],
             env_vars=_llm_env_vars(),
         ),
         config=PromptGenConfig(
@@ -236,86 +353,146 @@ def align(
             ideation_model=align_config.ideation_model,
             extract_model=align_config.extract_model,
             covering_strength=versioned(align_config.covering_strength),
-            covering_seed=align_config.covering_seed,
-            concretize_batch_size=10,
-            extract_batch_size=10,
+            covering_seed=versioned(align_config.covering_seed),
+            concretize_batch_size=versioned(10),
+            extract_batch_size=versioned(10),
+            local_serve_batch_size=align_config.prompt_batch_size,
             ideation_workers=align_config.ideation_workers,
             concretize_workers=align_config.concretize_workers,
             extract_workers=align_config.extract_workers,
-            statement_ids=align_config.statement_ids,
+            understanding_max_tokens=versioned(align_config.understanding_max_tokens),
+            understanding_temperature=versioned(align_config.understanding_temperature),
+            concretize_max_tokens=versioned(align_config.concretize_max_tokens),
+            concretize_temperature=versioned(align_config.concretize_temperature),
+            concretize_max_attempts=versioned(align_config.concretize_max_attempts),
+            extract_max_tokens=versioned(align_config.extract_max_tokens),
+            statement_ids=versioned(align_config.statement_ids),
         ),
     )
 
-    # Step 2a: Teacher generates chosen responses (with spec guidance)
     teacher_serialized = _serialize_inference_config(teacher_model)
-    chosen_step = ExecutorStep(
-        name=f"align/{name}/chosen",
-        description=f"Generate chosen responses via {teacher_model.model}",
-        fn=remote(
-            generate_responses,
-            resources=teacher_model.resources,
-            pip_dependency_groups=_inference_dependency_groups(teacher_model),
-            env_vars=_llm_env_vars(),
-        ),
-        config=ResponseGenConfig(
-            prompts_path=output_path_of(prompts_step),
-            output_path=this_output_path(),
-            model_config=teacher_serialized,
-            n=align_config.teacher_n,
-            temperature=align_config.teacher_temperature,
-            max_tokens=align_config.teacher_max_tokens,
-            behavior_statements_path=spec_gcs_path,  # teacher sees spec guidance
-        ),
-    )
-
-    # Step 2b: Rejected model generates rejected responses (NO spec guidance)
     rejected_serialized = _serialize_inference_config(rejected_model)
-    rejected_step = ExecutorStep(
-        name=f"align/{name}/rejected",
-        description=f"Generate rejected responses via {rejected_model.model}",
-        fn=remote(
-            generate_responses,
-            resources=rejected_model.resources,
-            pip_dependency_groups=_inference_dependency_groups(rejected_model),
-            env_vars=_llm_env_vars(),
-        ),
-        config=ResponseGenConfig(
-            prompts_path=output_path_of(prompts_step),
-            output_path=this_output_path(),
-            model_config=rejected_serialized,
-            n=align_config.rejected_n,
-            temperature=align_config.rejected_temperature,
-            max_tokens=align_config.rejected_max_tokens,
-            behavior_statements_path=None,  # rejected model gets NO spec guidance
-        ),
+    resolved_response_mode = _resolve_response_execution_mode(
+        teacher_model,
+        rejected_model,
+        align_config.response_execution_mode,
     )
+    if resolved_response_mode == ResponseExecutionMode.REUSE_SAME_MODEL:
+        responses_step = ExecutorStep(
+            name=f"align/{name}/responses",
+            description="Generate chosen and rejected responses sequentially via local vLLM",
+            fn=remote(
+                generate_response_pair,
+                resources=_merge_local_response_resources(teacher_model, rejected_model),
+                pip_dependency_groups=["vllm", "tpu"],
+                env_vars=_llm_env_vars(),
+            ),
+            config=ResponsePairGenConfig(
+                prompts_path=output_path_of(prompts_step),
+                chosen_output_path=this_output_path("chosen"),
+                rejected_output_path=this_output_path("rejected"),
+                chosen_model_config=teacher_serialized,
+                rejected_model_config=rejected_serialized,
+                chosen_n=align_config.teacher_n,
+                chosen_temperature=align_config.teacher_temperature,
+                chosen_max_tokens=align_config.teacher_max_tokens,
+                chosen_behavior_statements_path=spec_gcs_path,
+                rejected_n=align_config.rejected_n,
+                rejected_temperature=align_config.rejected_temperature,
+                rejected_max_tokens=align_config.rejected_max_tokens,
+                rejected_behavior_statements_path=None,
+            ),
+        )
+        chosen_responses_path = output_path_of(responses_step, "chosen")
+        rejected_responses_path = output_path_of(responses_step, "rejected")
+        response_steps = [responses_step]
+    else:
+        chosen_step = ExecutorStep(
+            name=f"align/{name}/chosen",
+            description=f"Generate chosen responses via {teacher_model.model}",
+            fn=remote(
+                generate_responses,
+                resources=teacher_model.resources,
+                pip_dependency_groups=_inference_dependency_groups(teacher_model),
+                env_vars=_llm_env_vars(),
+            ),
+            config=ResponseGenConfig(
+                prompts_path=output_path_of(prompts_step),
+                output_path=this_output_path(),
+                model_config=teacher_serialized,
+                n=align_config.teacher_n,
+                temperature=align_config.teacher_temperature,
+                max_tokens=align_config.teacher_max_tokens,
+                behavior_statements_path=spec_gcs_path,
+            ),
+        )
+        rejected_step = ExecutorStep(
+            name=f"align/{name}/rejected",
+            description=f"Generate rejected responses via {rejected_model.model}",
+            fn=remote(
+                generate_responses,
+                resources=rejected_model.resources,
+                pip_dependency_groups=_inference_dependency_groups(rejected_model),
+                env_vars=_llm_env_vars(),
+            ),
+            config=ResponseGenConfig(
+                prompts_path=output_path_of(prompts_step),
+                output_path=this_output_path(),
+                model_config=rejected_serialized,
+                n=align_config.rejected_n,
+                temperature=align_config.rejected_temperature,
+                max_tokens=align_config.rejected_max_tokens,
+                behavior_statements_path=None,
+                dependency_path=(
+                    output_path_of(chosen_step) if resolved_response_mode == ResponseExecutionMode.SERIALIZED else None
+                ),
+            ),
+        )
+        chosen_responses_path = output_path_of(chosen_step)
+        rejected_responses_path = output_path_of(rejected_step)
+        response_steps = [chosen_step, rejected_step]
 
-    # Step 3: Judge + build preference pairs
+    # Step 3: Judge all responses and persist full score metadata
     judge_is_local = isinstance(align_config.judge_model, VLLMConfig)
     judge_resources = align_config.judge_model.resources if judge_is_local else align_config.cpu_resources
-    pairs_step = ExecutorStep(
-        name=f"align/{name}/preference_pairs",
-        description=f"Judge and build preference pairs via {_model_name(align_config.judge_model)}",
+    judgments_step = ExecutorStep(
+        name=f"align/{name}/judgments",
+        description=f"Judge responses via {_model_name(align_config.judge_model)}",
         fn=remote(
-            judge_and_build_pairs,
+            judge_responses,
             resources=judge_resources,
             pip_dependency_groups=["cpu"] if not judge_is_local else ["vllm", "tpu"],
             env_vars=_llm_env_vars(),
         ),
-        config=JudgePairConfig(
-            prompts_path=output_path_of(prompts_step),
-            chosen_responses_path=output_path_of(chosen_step),
-            rejected_responses_path=output_path_of(rejected_step),
+        config=JudgeConfig(
+            chosen_responses_path=chosen_responses_path,
+            rejected_responses_path=rejected_responses_path,
             spec_path=spec_gcs_path,
             output_path=this_output_path(),
             judge_model=align_config.judge_model,
-            min_chosen_score=align_config.judge_min_chosen_score,
-            min_gap=align_config.judge_min_gap,
             workers=align_config.judge_workers,
+            batch_size=align_config.judge_batch_size,
         ),
     )
 
-    steps = [spec_step, prompts_step, chosen_step, rejected_step, pairs_step]
+    # Step 4: Filter persisted judgments into final preference pairs
+    pairs_step = ExecutorStep(
+        name=f"align/{name}/preference_pairs",
+        description="Build preference pairs from persisted judgments",
+        fn=remote(
+            build_preference_pairs,
+            resources=align_config.cpu_resources,
+            pip_dependency_groups=["cpu"],
+        ),
+        config=PreferencePairFilterConfig(
+            judgments_path=output_path_of(judgments_step),
+            output_path=this_output_path(),
+            min_chosen_score=align_config.judge_min_chosen_score,
+            min_gap=align_config.judge_min_gap,
+        ),
+    )
+
+    steps = [spec_step, prompts_step, *response_steps, judgments_step, pairs_step]
 
     # Steps 4 & 5: Tokenize + DPO (only if dpo_config provided)
     if dpo_config is not None:

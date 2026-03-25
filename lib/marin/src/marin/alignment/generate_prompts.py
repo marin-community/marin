@@ -13,7 +13,6 @@ Implements the 3-stage Bloom pipeline:
 from __future__ import annotations
 
 import concurrent.futures
-import contextlib
 import json
 import logging
 import re
@@ -21,11 +20,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from iris.marin_fs import url_to_fs
+from levanter.data.utils import batched
 from zephyr import load_jsonl, write_jsonl_file
 
+from marin.alignment.batched_vllm_serve import BatchedVllmServeSession
 from marin.alignment.coverage import compute_coverage_stats, generate_covering_configs, make_tags
 from marin.alignment.inference_config import InferenceConfig, VLLMConfig
-from marin.alignment.llm_client import llm_chat_single, vllm_engine
+from marin.alignment.llm_client import llm_chat_single
 from marin.alignment.prompts.concretize import make_concretize_prompt
 from marin.alignment.prompts.extract import make_extraction_prompt
 from marin.alignment.prompts.understanding import (
@@ -56,6 +57,7 @@ class PromptGenConfig:
     # Batch sizes
     concretize_batch_size: int = 10
     extract_batch_size: int = 10
+    local_serve_batch_size: int = 8
 
     # Parallelism
     ideation_workers: int = 32
@@ -68,9 +70,20 @@ class PromptGenConfig:
     concretize_max_tokens: int = 16000
     concretize_temperature: float = 1.0
     extract_max_tokens: int = 16000
+    concretize_max_attempts: int = 5
 
     # Filtering
     statement_ids: list[str] | None = None
+
+
+@dataclass(frozen=True)
+class _ConcretizeConfig:
+    index: int
+    axis_config: dict[str, str]
+
+    @property
+    def config_id(self) -> str:
+        return f"cfg_{self.index:03d}"
 
 
 # ---------------------------------------------------------------------------
@@ -114,25 +127,22 @@ def _parse_variation_axes(text: str) -> list[dict[str, Any]]:
     return out
 
 
-def _run_understanding(
-    statement: Statement,
-    config: PromptGenConfig,
-) -> dict[str, Any]:
-    """Run Stage 1 for a single statement: understanding + variation axes."""
-    system_prompt = make_understanding_system_prompt()
-    user_prompt = make_behavior_understanding_prompt(statement.id, statement.text)
+def _build_chat_messages(system_prompt: str, user_prompt: str) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": user_prompt})
+    return messages
 
-    response = llm_chat_single(
-        config=config.ideation_model,
-        messages=[{"role": "user", "content": user_prompt}],
-        system_prompt=system_prompt,
-        max_tokens=config.understanding_max_tokens,
-        temperature=config.understanding_temperature,
-    )
 
-    understanding = _extract_tag(response.content, "behavior_understanding")
-    scientific_motivation = _extract_tag(response.content, "scientific_motivation")
-    behavior_specific_axes = _parse_variation_axes(response.content)
+def _single_completion_text(outputs: list[str]) -> str:
+    return outputs[0] if outputs else ""
+
+
+def _parse_understanding_response(statement: Statement, content: str, model: InferenceConfig | str) -> dict[str, Any]:
+    understanding = _extract_tag(content, "behavior_understanding")
+    scientific_motivation = _extract_tag(content, "scientific_motivation")
+    behavior_specific_axes = _parse_variation_axes(content)
     variation_axes = behavior_specific_axes + [dict(ax) for ax in STANDARD_DEMOGRAPHIC_AXES]
 
     return {
@@ -140,8 +150,63 @@ def _run_understanding(
         "understanding": understanding,
         "scientific_motivation": scientific_motivation,
         "variation_axes": variation_axes,
-        "model": config.ideation_model,
+        "model": model,
     }
+
+
+def _build_understanding_messages(statement: Statement) -> list[dict[str, str]]:
+    return _build_chat_messages(
+        system_prompt=make_understanding_system_prompt(),
+        user_prompt=make_behavior_understanding_prompt(statement.id, statement.text),
+    )
+
+
+def _run_understanding(
+    statement: Statement,
+    config: PromptGenConfig,
+) -> dict[str, Any]:
+    """Run Stage 1 for a single statement: understanding + variation axes."""
+    response = llm_chat_single(
+        config=config.ideation_model,
+        messages=[{"role": "user", "content": make_behavior_understanding_prompt(statement.id, statement.text)}],
+        system_prompt=make_understanding_system_prompt(),
+        max_tokens=config.understanding_max_tokens,
+        temperature=config.understanding_temperature,
+    )
+    return _parse_understanding_response(statement, response.content, config.ideation_model)
+
+
+def _run_understanding_local(
+    statements: dict[str, Statement],
+    config: PromptGenConfig,
+    session: BatchedVllmServeSession,
+) -> dict[str, dict[str, Any]]:
+    understandings: dict[str, dict[str, Any]] = {}
+    failures: list[tuple[str, str]] = []
+
+    for statement_batch in batched(statements.items(), config.local_serve_batch_size):
+        outputs = session.generate_from_messages(
+            [_build_understanding_messages(statement) for _sid, statement in statement_batch],
+            temperature=config.understanding_temperature,
+            max_tokens=config.understanding_max_tokens,
+            n=1,
+        )
+        for (sid, statement), output in zip(statement_batch, outputs, strict=True):
+            try:
+                understandings[sid] = _parse_understanding_response(
+                    statement,
+                    _single_completion_text(output),
+                    config.ideation_model,
+                )
+            except Exception as exc:
+                failures.append((sid, str(exc)))
+                logger.error("Stage1 failed for '%s': %s", sid, exc)
+
+    if failures:
+        detail = "; ".join(f"{sid}: {msg}" for sid, msg in failures)
+        raise RuntimeError(f"Stage 1 failed for {len(failures)} statement(s): {detail}")
+
+    return understandings
 
 
 # ---------------------------------------------------------------------------
@@ -149,35 +214,101 @@ def _run_understanding(
 # ---------------------------------------------------------------------------
 
 
-def _parse_concretize_response(content: str) -> list[dict[str, Any]]:
-    scenarios = re.findall(r"<scenario>(.*?)</scenario>", content, re.DOTALL)
-    rubrics = re.findall(r"<rubric>(.*?)</rubric>", content, re.DOTALL)
-    out: list[dict[str, Any]] = []
-    for i, scenario_text in enumerate(scenarios):
-        rubric = rubrics[i].strip() if i < len(rubrics) else ""
-        out.append({"description": scenario_text.strip(), "rubric": rubric})
-    return out
+def _parse_concretize_response(content: str, config_ids: list[str]) -> dict[str, dict[str, Any]]:
+    parsed: dict[str, dict[str, Any]] = {}
+    for config_id in config_ids:
+        escaped_config_id = re.escape(config_id)
+        scenario_match = re.search(
+            rf"<scenario_{escaped_config_id}>(.*?)</scenario_{escaped_config_id}>",
+            content,
+            re.DOTALL,
+        )
+        if not scenario_match:
+            continue
+        rubric_match = re.search(
+            rf"<rubric_{escaped_config_id}>(.*?)</rubric_{escaped_config_id}>",
+            content,
+            re.DOTALL,
+        )
+        parsed[config_id] = {
+            "description": scenario_match.group(1).strip(),
+            "rubric": rubric_match.group(1).strip() if rubric_match else "",
+        }
+    return parsed
+
+
+def _build_concretize_messages(
+    statement_id: str,
+    understanding_data: dict[str, Any],
+    axes: list[dict[str, Any]],
+    indexed_configs: list[_ConcretizeConfig],
+) -> list[dict[str, str]]:
+    system_prompt, user_prompt = make_concretize_prompt(
+        behavior_name=statement_id,
+        behavior_understanding=understanding_data.get("understanding", ""),
+        scientific_motivation=understanding_data.get("scientific_motivation", ""),
+        transcript_analyses=understanding_data.get("transcript_analyses", []),
+        indexed_configs=[(config.config_id, config.axis_config) for config in indexed_configs],
+        axes_metadata=axes,
+    )
+    return _build_chat_messages(system_prompt=system_prompt, user_prompt=user_prompt)
+
+
+def _parse_concretize_batch_response(
+    statement_id: str,
+    indexed_configs: list[_ConcretizeConfig],
+    content: str,
+    attempt: int,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    requested_config_ids = [config.config_id for config in indexed_configs]
+    parsed_scenarios = _parse_concretize_response(content, requested_config_ids)
+    returned_config_ids = [config_id for config_id in requested_config_ids if config_id in parsed_scenarios]
+    missing_config_ids = [config_id for config_id in requested_config_ids if config_id not in parsed_scenarios]
+    missing_rubric_config_ids = [
+        config_id for config_id in returned_config_ids if not parsed_scenarios[config_id].get("rubric", "").strip()
+    ]
+
+    if missing_config_ids:
+        logger.warning(
+            "Stage2 attempt %d for '%s' returned %d/%d configs; missing=%s",
+            attempt,
+            statement_id,
+            len(returned_config_ids),
+            len(requested_config_ids),
+            ",".join(missing_config_ids),
+        )
+
+    diagnostic = {
+        "attempt": attempt,
+        "requested_config_ids": requested_config_ids,
+        "requested_configs": [
+            {"config_id": config.config_id, "axis_config": config.axis_config} for config in indexed_configs
+        ],
+        "returned_config_ids": returned_config_ids,
+        "missing_config_ids": missing_config_ids,
+        "missing_rubric_config_ids": missing_rubric_config_ids,
+        "raw_response": content,
+    }
+    return parsed_scenarios, diagnostic
 
 
 def _concretize_batch(
     statement_id: str,
     understanding_data: dict[str, Any],
     axes: list[dict[str, Any]],
-    configs: list[dict[str, str]],
-    batch_start_idx: int,
-    model: str,
+    indexed_configs: list[_ConcretizeConfig],
+    model: InferenceConfig | str,
     temperature: float,
     max_tokens: int = 16000,
-) -> list[dict[str, Any]]:
+) -> str:
     """Concretize a batch of axis configs into scenarios."""
     system_prompt, user_prompt = make_concretize_prompt(
         behavior_name=statement_id,
         behavior_understanding=understanding_data.get("understanding", ""),
         scientific_motivation=understanding_data.get("scientific_motivation", ""),
         transcript_analyses=understanding_data.get("transcript_analyses", []),
-        configs=configs,
+        indexed_configs=[(config.config_id, config.axis_config) for config in indexed_configs],
         axes_metadata=axes,
-        batch_start_idx=batch_start_idx,
     )
     response = llm_chat_single(
         config=model,
@@ -186,20 +317,140 @@ def _concretize_batch(
         max_tokens=max_tokens,
         temperature=temperature,
     )
-    parsed_scenarios = _parse_concretize_response(response.content)
-    if len(parsed_scenarios) < len(configs) // 2:
-        raise RuntimeError(
-            f"Stage2 concretize parsing mismatch for '{statement_id}': "
-            f"expected {len(configs)} scenarios, got {len(parsed_scenarios)} (<50%)"
+    return response.content
+
+
+def _collect_missing_configs(
+    indexed_configs: list[_ConcretizeConfig],
+    missing_config_ids: list[str],
+) -> list[list[_ConcretizeConfig]]:
+    if not missing_config_ids:
+        return []
+    missing_ids = set(missing_config_ids)
+    return [[config] for config in indexed_configs if config.config_id in missing_ids]
+
+
+def _run_concretize_round_api(
+    statement_id: str,
+    understanding: dict[str, Any],
+    axes: list[dict[str, Any]],
+    request_batches: list[list[_ConcretizeConfig]],
+    config: PromptGenConfig,
+    attempt: int,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], list[list[_ConcretizeConfig]], list[str]]:
+    parsed_by_config_id: dict[str, dict[str, Any]] = {}
+    diagnostics: list[dict[str, Any]] = []
+    retry_batches: list[list[_ConcretizeConfig]] = []
+    failures: list[str] = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=config.concretize_workers) as pool:
+        future_map = {
+            pool.submit(
+                _concretize_batch,
+                statement_id,
+                understanding,
+                axes,
+                request_batch,
+                config.ideation_model,
+                config.concretize_temperature,
+                config.concretize_max_tokens,
+            ): request_batch
+            for request_batch in request_batches
+        }
+        for future in concurrent.futures.as_completed(future_map):
+            request_batch = future_map[future]
+            try:
+                content = future.result()
+                parsed, diagnostic = _parse_concretize_batch_response(
+                    statement_id,
+                    request_batch,
+                    content,
+                    attempt,
+                )
+                parsed_by_config_id.update(parsed)
+                diagnostics.append(diagnostic)
+                retry_batches.extend(_collect_missing_configs(request_batch, diagnostic["missing_config_ids"]))
+            except Exception as exc:
+                requested_ids = ",".join(config.config_id for config in request_batch)
+                failures.append(f"attempt {attempt} configs [{requested_ids}]: {exc}")
+
+    return parsed_by_config_id, diagnostics, retry_batches, failures
+
+
+def _run_concretize_round_local(
+    statement_id: str,
+    understanding: dict[str, Any],
+    axes: list[dict[str, Any]],
+    request_batches: list[list[_ConcretizeConfig]],
+    config: PromptGenConfig,
+    session: BatchedVllmServeSession,
+    attempt: int,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], list[list[_ConcretizeConfig]], list[str]]:
+    parsed_by_config_id: dict[str, dict[str, Any]] = {}
+    diagnostics: list[dict[str, Any]] = []
+    retry_batches: list[list[_ConcretizeConfig]] = []
+    failures: list[str] = []
+
+    for request_batch_group in batched(request_batches, config.local_serve_batch_size):
+        outputs = session.generate_from_messages(
+            [
+                _build_concretize_messages(statement_id, understanding, axes, request_batch)
+                for request_batch in request_batch_group
+            ],
+            temperature=config.concretize_temperature,
+            max_tokens=config.concretize_max_tokens,
+            n=1,
         )
-    if len(parsed_scenarios) < len(configs):
-        logger.warning(
-            "Stage2: got %d/%d scenarios for '%s' (minor shortfall, continuing with partial batch)",
-            len(parsed_scenarios),
-            len(configs),
-            statement_id,
+        for request_batch, output in zip(request_batch_group, outputs, strict=True):
+            try:
+                parsed, diagnostic = _parse_concretize_batch_response(
+                    statement_id,
+                    request_batch,
+                    _single_completion_text(output),
+                    attempt,
+                )
+                parsed_by_config_id.update(parsed)
+                diagnostics.append(diagnostic)
+                retry_batches.extend(_collect_missing_configs(request_batch, diagnostic["missing_config_ids"]))
+            except Exception as exc:
+                requested_ids = ",".join(config.config_id for config in request_batch)
+                failures.append(f"attempt {attempt} configs [{requested_ids}]: {exc}")
+
+    return parsed_by_config_id, diagnostics, retry_batches, failures
+
+
+def _build_concretization_result(
+    statement_id: str,
+    config: PromptGenConfig,
+    axes: list[dict[str, Any]],
+    configs: list[dict[str, str]],
+    stats: dict[str, Any],
+    parsed_by_config_id: dict[str, dict[str, Any]],
+    diagnostics: list[dict[str, Any]],
+) -> dict[str, Any]:
+    variations: list[dict[str, Any]] = []
+    for index, axis_config in enumerate(configs):
+        config_id = f"cfg_{index:03d}"
+        scenario = parsed_by_config_id.get(config_id, {})
+        variations.append(
+            {
+                "description": scenario.get("description", ""),
+                "rubric": scenario.get("rubric", ""),
+                "config_id": config_id,
+                "axis_config": axis_config,
+                "tags": make_tags(axis_config, axes),
+            }
         )
-    return parsed_scenarios[: len(configs)]
+
+    return {
+        "behavior_name": statement_id,
+        "model": config.ideation_model,
+        "covering_strength": config.covering_strength,
+        "num_configs": len(configs),
+        "coverage_stats": stats,
+        "concretization_attempts": diagnostics,
+        "variations": variations,
+    }
 
 
 def _run_concretization(
@@ -212,67 +463,113 @@ def _run_concretization(
     configs = generate_covering_configs(axes, t=config.covering_strength, seed=config.covering_seed)
     stats = compute_coverage_stats(configs, axes, t=config.covering_strength)
 
-    # Batch the configs
-    batches: list[tuple[int, list[dict[str, str]]]] = []
+    batches: list[list[_ConcretizeConfig]] = []
     for start in range(0, len(configs), config.concretize_batch_size):
-        batch_configs = configs[start : start + config.concretize_batch_size]
-        batches.append((start + 1, batch_configs))
+        batch_configs = [
+            _ConcretizeConfig(index=index, axis_config=configs[index])
+            for index in range(start, min(start + config.concretize_batch_size, len(configs)))
+        ]
+        batches.append(batch_configs)
 
-    # Concretize in parallel
-    all_scenarios: list[dict[str, Any]] = [{} for _ in range(len(configs))]
+    all_scenarios: dict[str, dict[str, Any]] = {}
+    concretization_diagnostics: list[dict[str, Any]] = []
     failures: list[str] = []
+    pending_batches = batches
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=config.concretize_workers) as pool:
-        future_map = {
-            pool.submit(
-                _concretize_batch,
-                statement_id,
-                understanding,
-                axes,
-                batch_configs,
-                batch_start_idx,
-                config.ideation_model,
-                config.concretize_temperature,
-                config.concretize_max_tokens,
-            ): (batch_start_idx, len(batch_configs))
-            for batch_start_idx, batch_configs in batches
-        }
-        for future in concurrent.futures.as_completed(future_map):
-            batch_start_idx, _batch_size = future_map[future]
-            try:
-                results = future.result()
-                offset = batch_start_idx - 1
-                for i, scenario in enumerate(results):
-                    if offset + i < len(all_scenarios):
-                        all_scenarios[offset + i] = scenario
-            except Exception as exc:
-                failures.append(f"batch {batch_start_idx}: {exc}")
+    for attempt in range(1, config.concretize_max_attempts + 1):
+        if not pending_batches:
+            break
+        parsed, diagnostics, retry_batches, round_failures = _run_concretize_round_api(
+            statement_id,
+            understanding,
+            axes,
+            pending_batches,
+            config,
+            attempt,
+        )
+        all_scenarios.update(parsed)
+        concretization_diagnostics.extend(diagnostics)
+        failures.extend(round_failures)
+        pending_batches = retry_batches
 
     if failures:
         raise RuntimeError(f"Stage2 failed for '{statement_id}': {'; '.join(failures)}")
-
-    # Build variations with tags
-    variations: list[dict[str, Any]] = []
-    for i, cfg in enumerate(configs):
-        scenario = all_scenarios[i] if i < len(all_scenarios) else {}
-        variations.append(
-            {
-                "description": scenario.get("description", ""),
-                "rubric": scenario.get("rubric", ""),
-                "config_id": f"cfg_{i:03d}",
-                "axis_config": cfg,
-                "tags": make_tags(cfg, axes),
-            }
+    if pending_batches:
+        missing_config_ids = [config.config_id for request_batch in pending_batches for config in request_batch]
+        raise RuntimeError(
+            f"Stage2 failed for '{statement_id}': missing scenarios after {config.concretize_max_attempts} "
+            f"attempt(s) for {', '.join(missing_config_ids)}"
         )
 
-    return {
-        "behavior_name": statement_id,
-        "model": config.ideation_model,
-        "covering_strength": config.covering_strength,
-        "num_configs": len(configs),
-        "coverage_stats": stats,
-        "variations": variations,
-    }
+    return _build_concretization_result(
+        statement_id,
+        config,
+        axes,
+        configs,
+        stats,
+        all_scenarios,
+        concretization_diagnostics,
+    )
+
+
+def _run_concretization_local(
+    statement_id: str,
+    understanding: dict[str, Any],
+    config: PromptGenConfig,
+    session: BatchedVllmServeSession,
+) -> dict[str, Any]:
+    axes = understanding["variation_axes"]
+    configs = generate_covering_configs(axes, t=config.covering_strength, seed=config.covering_seed)
+    stats = compute_coverage_stats(configs, axes, t=config.covering_strength)
+
+    batches: list[list[_ConcretizeConfig]] = []
+    for start in range(0, len(configs), config.concretize_batch_size):
+        batch_configs = [
+            _ConcretizeConfig(index=index, axis_config=configs[index])
+            for index in range(start, min(start + config.concretize_batch_size, len(configs)))
+        ]
+        batches.append(batch_configs)
+
+    all_scenarios: dict[str, dict[str, Any]] = {}
+    concretization_diagnostics: list[dict[str, Any]] = []
+    failures: list[str] = []
+    pending_batches = batches
+
+    for attempt in range(1, config.concretize_max_attempts + 1):
+        if not pending_batches:
+            break
+        parsed, diagnostics, retry_batches, round_failures = _run_concretize_round_local(
+            statement_id,
+            understanding,
+            axes,
+            pending_batches,
+            config,
+            session,
+            attempt,
+        )
+        all_scenarios.update(parsed)
+        concretization_diagnostics.extend(diagnostics)
+        failures.extend(round_failures)
+        pending_batches = retry_batches
+
+    if failures:
+        raise RuntimeError(f"Stage2 failed for '{statement_id}': {'; '.join(failures)}")
+    if pending_batches:
+        missing_config_ids = [config.config_id for request_batch in pending_batches for config in request_batch]
+        raise RuntimeError(
+            f"Stage2 failed for '{statement_id}': missing scenarios after {config.concretize_max_attempts} "
+            f"attempt(s) for {', '.join(missing_config_ids)}"
+        )
+
+    return _build_concretization_result(
+        statement_id,
+        config,
+        axes,
+        configs,
+        stats,
+        all_scenarios,
+        concretization_diagnostics,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -304,10 +601,15 @@ def _parse_extraction_response(
     return out
 
 
+def _build_extraction_messages(scenarios: list[dict[str, Any]], batch_start_idx: int) -> list[dict[str, str]]:
+    system_prompt, user_prompt = make_extraction_prompt(scenarios, batch_start_idx, include_system_prompt=True)
+    return _build_chat_messages(system_prompt=system_prompt, user_prompt=user_prompt)
+
+
 def _extract_batch(
     scenarios: list[dict[str, Any]],
     batch_start_idx: int,
-    model: str,
+    model: InferenceConfig | str,
     max_tokens: int = 16000,
 ) -> list[dict[str, str]]:
     """Extract clean prompts from a batch of scenarios."""
@@ -382,6 +684,68 @@ def _run_extraction(
     return prompts
 
 
+def _run_extraction_local(
+    statement_id: str,
+    ideation: dict[str, Any],
+    config: PromptGenConfig,
+    session: BatchedVllmServeSession,
+) -> list[dict[str, Any]]:
+    variations = [v for v in ideation.get("variations", []) if str(v.get("description", "")).strip()]
+
+    batches: list[tuple[int, list[dict[str, Any]]]] = []
+    for start in range(0, len(variations), config.extract_batch_size):
+        batch = variations[start : start + config.extract_batch_size]
+        batches.append((start, batch))
+
+    all_extractions: list[dict[str, str]] = [{"system_prompt": "", "user_message": ""} for _ in range(len(variations))]
+    failures: list[str] = []
+
+    for request_batch in batched(batches, config.local_serve_batch_size):
+        outputs = session.generate_from_messages(
+            [_build_extraction_messages(batch, batch_start) for batch_start, batch in request_batch],
+            temperature=0.0,
+            max_tokens=config.extract_max_tokens,
+            n=1,
+        )
+        for (batch_start, batch), output in zip(request_batch, outputs, strict=True):
+            try:
+                results = _parse_extraction_response(
+                    _single_completion_text(output),
+                    len(batch),
+                    batch_start,
+                    include_system_prompt=True,
+                )
+                for i, extraction in enumerate(results):
+                    if batch_start + i < len(all_extractions):
+                        all_extractions[batch_start + i] = extraction
+            except Exception as exc:
+                failures.append(f"batch {batch_start}: {exc}")
+
+    if failures:
+        raise RuntimeError(f"Stage3 failed for '{statement_id}': {'; '.join(failures)}")
+
+    prompts: list[dict[str, Any]] = []
+    for i, variation in enumerate(variations):
+        extraction = all_extractions[i] if i < len(all_extractions) else {}
+        system_prompt = extraction.get("system_prompt", "")
+        user_message = extraction.get("user_message", "")
+        if not user_message:
+            continue
+        prompts.append(
+            {
+                "behavior_id": statement_id,
+                "system_prompt": system_prompt,
+                "user_message": user_message,
+                "rubric": variation.get("rubric", ""),
+                "config_id": variation.get("config_id", ""),
+                "axis_config": variation.get("axis_config", {}),
+                "tags": variation.get("tags", []),
+            }
+        )
+
+    return prompts
+
+
 # ---------------------------------------------------------------------------
 # Full pipeline: spec → prompts
 # ---------------------------------------------------------------------------
@@ -393,35 +757,53 @@ def generate_prompts_from_spec(config: PromptGenConfig) -> None:
     Reads a specification JSONL, runs understanding → concretization → extraction
     for each behavior statement, and writes the results as sharded JSONL.GZ files.
     """
-    # Keep vLLM engines alive for the duration of all stages
-    with contextlib.ExitStack() as stack:
-        if isinstance(config.ideation_model, VLLMConfig):
-            stack.enter_context(vllm_engine(config.ideation_model))
-        if isinstance(config.extract_model, VLLMConfig):
-            stack.enter_context(vllm_engine(config.extract_model))
-        _generate_prompts_inner(config)
-
-
-def _generate_prompts_inner(config: PromptGenConfig) -> None:
-    """Inner implementation of prompt generation."""
     statements = load_spec(config.spec_path)
     logger.info("Loaded %d statements from spec", len(statements))
 
-    # Filter to requested statements if specified
     if config.statement_ids:
         statements = {sid: s for sid, s in statements.items() if sid in config.statement_ids}
         logger.info("Filtered to %d statements", len(statements))
 
-    all_prompts: list[dict[str, Any]] = []
+    ideation_session: BatchedVllmServeSession | None = None
+    if isinstance(config.ideation_model, VLLMConfig):
+        with BatchedVllmServeSession(config.ideation_model) as active_ideation_session:
+            ideation_session = active_ideation_session
+            understandings = _run_understanding_stage(statements, config, ideation_session)
+            ideations = _run_concretization_stage(understandings, config, ideation_session)
+            if isinstance(config.extract_model, VLLMConfig) and config.extract_model == config.ideation_model:
+                logger.info("Reusing the ideation vLLM serve session for extraction")
+                all_prompts = _run_extraction_stage(ideations, config, ideation_session)
+            else:
+                all_prompts = None
+    else:
+        understandings = _run_understanding_stage(statements, config, None)
+        ideations = _run_concretization_stage(understandings, config, None)
+        all_prompts = None
 
-    # Stage 1: Understanding (sequential for vLLM, parallel for API)
+    if all_prompts is None:
+        if isinstance(config.extract_model, VLLMConfig):
+            with BatchedVllmServeSession(config.extract_model) as extract_session:
+                all_prompts = _run_extraction_stage(ideations, config, extract_session)
+        else:
+            all_prompts = _run_extraction_stage(ideations, config, None)
+
+    logger.info("Total prompts generated: %d", len(all_prompts))
+    write_sharded_jsonl_gz(all_prompts, config.output_path, shard_size=5000)
+    _save_artifacts(config.output_path, statements, understandings, ideations)
+
+
+def _run_understanding_stage(
+    statements: dict[str, Statement],
+    config: PromptGenConfig,
+    session: BatchedVllmServeSession | None,
+) -> dict[str, dict[str, Any]]:
     logger.info("Stage 1: Generating understanding for %d statements", len(statements))
+    if session is not None:
+        return _run_understanding_local(statements, config, session)
+
     understandings: dict[str, dict[str, Any]] = {}
     failures: list[tuple[str, str]] = []
-
-    # vLLM is not thread-safe — use 1 worker when running locally
-    ideation_workers = 1 if isinstance(config.ideation_model, VLLMConfig) else config.ideation_workers
-
+    ideation_workers = config.ideation_workers
     with concurrent.futures.ThreadPoolExecutor(max_workers=ideation_workers) as pool:
         future_map = {pool.submit(_run_understanding, stmt, config): sid for sid, stmt in statements.items()}
         for future in concurrent.futures.as_completed(future_map):
@@ -436,12 +818,31 @@ def _generate_prompts_inner(config: PromptGenConfig) -> None:
         detail = "; ".join(f"{sid}: {msg}" for sid, msg in failures)
         raise RuntimeError(f"Stage 1 failed for {len(failures)} statement(s): {detail}")
 
-    # Stage 2: Concretization (parallel across statements)
+    return understandings
+
+
+def _run_concretization_stage(
+    understandings: dict[str, dict[str, Any]],
+    config: PromptGenConfig,
+    session: BatchedVllmServeSession | None,
+) -> dict[str, dict[str, Any]]:
     logger.info("Stage 2: Concretizing %d statements", len(understandings))
     ideations: dict[str, dict[str, Any]] = {}
-    failures = []
+    failures: list[tuple[str, str]] = []
 
-    concretize_workers = 1 if isinstance(config.ideation_model, VLLMConfig) else min(8, config.concretize_workers)
+    if session is not None:
+        for sid, understanding in understandings.items():
+            try:
+                ideations[sid] = _run_concretization_local(sid, understanding, config, session)
+            except Exception as exc:
+                failures.append((sid, str(exc)))
+                logger.error("Stage2 failed for '%s': %s", sid, exc)
+        if failures:
+            detail = "; ".join(f"{sid}: {msg}" for sid, msg in failures)
+            raise RuntimeError(f"Stage 2 failed for {len(failures)} statement(s): {detail}")
+        return ideations
+
+    concretize_workers = min(8, config.concretize_workers)
     with concurrent.futures.ThreadPoolExecutor(max_workers=concretize_workers) as pool:
         future_map = {
             pool.submit(_run_concretization, sid, understanding, config): sid
@@ -459,11 +860,33 @@ def _generate_prompts_inner(config: PromptGenConfig) -> None:
         detail = "; ".join(f"{sid}: {msg}" for sid, msg in failures)
         raise RuntimeError(f"Stage 2 failed for {len(failures)} statement(s): {detail}")
 
-    # Stage 3: Extraction (parallel across statements)
-    logger.info("Stage 3: Extracting prompts from %d statements", len(ideations))
-    failures = []
+    return ideations
 
-    extract_workers = 1 if isinstance(config.extract_model, VLLMConfig) else min(8, config.extract_workers)
+
+def _run_extraction_stage(
+    ideations: dict[str, dict[str, Any]],
+    config: PromptGenConfig,
+    session: BatchedVllmServeSession | None,
+) -> list[dict[str, Any]]:
+    logger.info("Stage 3: Extracting prompts from %d statements", len(ideations))
+    failures: list[tuple[str, str]] = []
+    all_prompts: list[dict[str, Any]] = []
+
+    if session is not None:
+        for sid, ideation in ideations.items():
+            try:
+                prompts = _run_extraction_local(sid, ideation, config, session)
+                all_prompts.extend(prompts)
+                logger.info("Stage3 completed for '%s': %d prompts", sid, len(prompts))
+            except Exception as exc:
+                failures.append((sid, str(exc)))
+                logger.error("Stage3 failed for '%s': %s", sid, exc)
+        if failures:
+            detail = "; ".join(f"{sid}: {msg}" for sid, msg in failures)
+            raise RuntimeError(f"Stage 3 failed for {len(failures)} statement(s): {detail}")
+        return all_prompts
+
+    extract_workers = min(8, config.extract_workers)
     with concurrent.futures.ThreadPoolExecutor(max_workers=extract_workers) as pool:
         future_map = {pool.submit(_run_extraction, sid, ideation, config): sid for sid, ideation in ideations.items()}
         for future in concurrent.futures.as_completed(future_map):
@@ -480,13 +903,7 @@ def _generate_prompts_inner(config: PromptGenConfig) -> None:
         detail = "; ".join(f"{sid}: {msg}" for sid, msg in failures)
         raise RuntimeError(f"Stage 3 failed for {len(failures)} statement(s): {detail}")
 
-    logger.info("Total prompts generated: %d", len(all_prompts))
-
-    # Write output as sharded JSONL.GZ
-    write_sharded_jsonl_gz(all_prompts, config.output_path, shard_size=5000)
-
-    # Save intermediate artifacts for reproducibility and inspection
-    _save_artifacts(config.output_path, statements, understandings, ideations)
+    return all_prompts
 
 
 def load_sharded_jsonl_gz(path: str) -> list[dict]:

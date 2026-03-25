@@ -2867,3 +2867,1147 @@ uv run iris --config lib/iris/examples/marin.yaml job run \
   - **batched**
   - **one-model-at-a-time**
   - **`us-central1` staged `gs://...` artifacts only**
+
+### 2026-03-24 — ALIGN-065: Start Experiment A/B; Shared Batched Serve Primitive + `generate_responses.py` Refactor
+
+- **Reason for this entry:** begin the concrete refactor sequence from `ALIGN-064` by first changing only the local response-generation path.
+- **Scope for this experiment:**
+  - add one reusable alignment-side batched `vllm serve` helper that:
+    - stages tokenizer files
+    - starts `VllmEnvironment(mode="native")`
+    - renders chat prompts locally
+    - sends one batched `/v1/completions` request
+  - switch `generate_responses.py` local `VLLMConfig` inference onto that helper
+  - leave prompt-generation and judge logic unchanged for now
+- **Why this boundary:** response generation already has the cleanest batch shape in the current codebase, so it is the lowest-risk place to validate the new primitive before touching judge or prompt generation.
+
+#### Files targeted in this experiment
+
+- `lib/marin/src/marin/alignment/batched_vllm_serve.py`
+- `lib/marin/src/marin/alignment/generate_responses.py`
+- `tests/test_alignment.py`
+- `experiments/generate_responses_llama_3_3_70b_existing_prompts_refactored.py`
+
+#### Verification plan for this experiment
+
+1. Run alignment unit coverage after the refactor:
+   - `uv run pytest tests/test_alignment.py -q`
+2. Submit a fresh `us-central1` TPU validation job against the known-good `76`-prompt artifact:
+   - `uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --job-name generate-responses-llama-3-3-70b-refactored-us-central1 --extra marin:tpu --tpu v5p-8 --region us-central1 --zone us-central1-a -- python experiments/generate_responses_llama_3_3_70b_existing_prompts_refactored.py`
+3. Treat this as successful only if:
+   - the job succeeds
+   - outputs still contain `76` rows
+   - logs show `vllm serve` / `/v1/completions`, not direct `llm.generate(...)`
+   - logs show staged `gs://...` loading and no Hugging Face download path
+   - `disk=5g` is still sufficient
+
+### 2026-03-24 — ALIGN-066: Experiment A/B Local Refactor Landed; Validation Run Re-Submitted Region-Only and Is Pending TPU Capacity
+
+- **Implementation completed locally:**
+  - added `lib/marin/src/marin/alignment/batched_vllm_serve.py`
+  - switched `generate_responses.py` local `VLLMConfig` path onto batched `vllm serve`
+  - added a focused unit test in `tests/test_alignment.py`
+  - added a fresh Iris validation script: `experiments/generate_responses_llama_3_3_70b_existing_prompts_refactored.py`
+- **Local verification passed:**
+  - `uv run pytest tests/test_alignment.py -q`
+  - result: `68 passed`
+- **Execution notes:**
+  - first submission used `--region us-central1 --zone us-central1-a` under job name `/ahmed/generate-responses-llama-3-3-70b-refactored-us-central1`
+  - that root remained `JOB_STATE_PENDING` on TPU capacity, so it was killed before any child step started
+  - relaunched as region-only under `/ahmed/generate-responses-llama-3-3-70b-refactored-us-central1-region-only`
+- **Current state of the live run:**
+  - root job: `JOB_STATE_PENDING`
+  - pending reason:
+    - `Scheduler: Insufficient TPUs (need 4, available 0)`
+    - constraints now include `region` but no explicit `zone`
+  - important negative evidence:
+    - there is **no disk blocker**
+    - requested disk remains `5 GB`
+    - so the refactored path is at least preserving the intended low-disk resource envelope
+- **What still needs verification once capacity arrives:**
+  - child logs must show `vllm serve` startup
+  - request path must be `/v1/completions`
+  - output row count must remain `76`
+  - no Hugging Face download path may appear
+
+### 2026-03-24 — ALIGN-067: Experiment A/B Succeeded; `generate_responses.py` Local Path Now Verified on Batched `vllm serve`
+
+- **Live validation run:** `/ahmed/generate-responses-llama-3-3-70b-refactored-us-central1-region-only`
+- **Successful child step:** `/ahmed/generate-responses-llama-3-3-70b-refactored-us-central1-region-only/align-debug_generate_responses_llama_3_3_70b_existing_prompts_refactored-responses_dd0eb71a-27d16f2e`
+- **Result:** both root and child are `JOB_STATE_SUCCEEDED`
+
+#### Timing from Iris metadata
+
+- Root pending before start: `83.628s`
+- Root active runtime: `598.377s`
+- Child pending before start: `15.681s`
+- Child active runtime: `518.648s`
+
+#### Output artifact
+
+- `gs://marin-us-central1/align/debug_generate_responses_llama_3_3_70b_existing_prompts_refactored/responses-761166`
+- Files present:
+  - `.artifact`
+  - `.executor_info`
+  - `.executor_status`
+  - `shard_00000.jsonl.gz`
+- Verified row count in `shard_00000.jsonl.gz`: `76`
+
+#### Worker-log evidence
+
+- Step output path resolved to:
+  - `gs://marin-us-central1/align/debug_generate_responses_llama_3_3_70b_existing_prompts_refactored/responses-761166`
+- Response step log confirms the refactored path ran:
+  - `Using batch vLLM: gs://marin-us-central1/models/meta-llama--Llama-3-3-70B-Instruct--6f6073b`
+  - `Loaded 76 prompts for batched vLLM serve generation`
+  - `Starting vLLM native server with TPU_MIN_LOG_LEVEL=3 TPU_STDERR_LOG_LEVEL=3`
+  - `vLLM environment ready`
+  - `Wrote 76 records to 1 shards ...`
+- Negative evidence:
+  - no `HF` / `huggingface` / `Downloading weights` strings were observed in the worker logs
+  - no disk-capacity blocker appeared; the child still ran with `disk=5 GB`
+
+#### Important caveat
+
+- The Iris worker logs did **not** surface an HTTP access-log line showing `POST /v1/completions`.
+- So the request endpoint is confirmed by the new helper implementation path (`batched_vllm_serve.py`), while the runtime logs confirm only that the step used batched serve generation plus `vllm serve` startup successfully.
+
+#### Decision after this experiment
+
+- Experiment A is complete.
+- Experiment B is complete.
+- `generate_responses.py` local `VLLMConfig` inference is now verified on batched `vllm serve`.
+
+#### Next exact experiment
+
+- Proceed to **Experiment C** from `ALIGN-064`:
+  - add a batched local judge path
+  - validate it first on a small fixed chosen/rejected artifact pair before touching the full pipeline
+
+### 2026-03-24 — ALIGN-068: Start Experiment C; Add Batched Local Judge Path and Validate on Fixed Pair
+
+- **Reason for this entry:** continue the open-weight batched-serve migration after successful response-path validation in `ALIGN-067`.
+- **Scope for this experiment:**
+  - keep API judge behavior unchanged
+  - add a local batched judge path for `VLLMConfig` in `judge.py`
+  - route local judging through the shared batched serve helper from Experiment A/B
+  - validate on a tiny fixed chosen/rejected artifact pair in `us-central1`
+
+#### Files targeted in this experiment
+
+- `lib/marin/src/marin/alignment/judge.py`
+- `lib/marin/src/marin/alignment/align.py`
+- `lib/marin/src/marin/alignment/batched_vllm_serve.py`
+- `tests/test_alignment.py`
+- `experiments/judge_llama_3_3_70b_fixed_pairs_refactored.py`
+
+#### Fixed-pair validation dataset
+
+- Two prompt pairs:
+  - `be_helpful/cfg_000`
+  - `be_honest/cfg_000`
+- Chosen responses are intentionally strong and policy-compliant.
+- Rejected responses are intentionally bad:
+  - rude refusal for helpfulness
+  - fabricated private-bank-balance claim for honesty
+- Expected output pair count: `2`
+
+#### Verification plan for this experiment
+
+1. Run alignment unit coverage after the judge refactor:
+   - `uv run pytest tests/test_alignment.py -q`
+2. Submit a fresh `us-central1` TPU validation job:
+   - `uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --job-name judge-llama-3-3-70b-fixed-pairs-refactored-us-central1 --extra marin:tpu --tpu v5p-8 --region us-central1 -- python experiments/judge_llama_3_3_70b_fixed_pairs_refactored.py`
+3. Treat this as successful only if:
+   - the job succeeds
+   - the preference-pair output row count is exactly `2`
+   - logs show local `vllm serve` startup for judge inference
+   - logs show batched local judge scoring rather than serial per-response calls
+   - no Hugging Face download path appears
+   - `disk=5g` is still sufficient
+
+### 2026-03-24 — ALIGN-069: Experiment C Submitted; Currently Pending Only on `us-central1` TPU Capacity
+
+- **Live validation run:** `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-central1`
+- **Current state:** `JOB_STATE_PENDING`
+- **Pending reason:**
+  - `Scheduler: Insufficient TPUs (need 4, available 0)`
+  - constraints are `device-type`, `device-variant`, `region`, `reservation-job`
+  - no explicit zone pin is present in the submission
+- **Important evidence already gathered before TPU execution:**
+  - local code changes for Experiment C are in place
+  - `uv run pytest tests/test_alignment.py -q` passed with `69` tests
+  - repo fix/check pass succeeded on the changed files
+- **Important negative evidence:**
+  - there is no disk-capacity blocker on the root request
+  - requested disk remains `5 GB`
+- **What future agents should do next:**
+  - keep checking this root until it starts
+  - once a child judge step appears, inspect logs for:
+    - `Starting vLLM native server`
+    - `Sending batched vLLM serve request to /v1/completions`
+    - `Scoring ... responses via local batched judge`
+  - after completion, verify the pair artifact contains exactly `2` rows
+
+### 2026-03-24 — ALIGN-070: First Experiment C Run Failed; Root Cause Was Stringifying `output_path_of(prepare_step)` in the Fixed-Pair Script
+
+- **Failed run:** `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-central1`
+- **Observed step status:**
+  - prepare step succeeded
+  - judge step failed immediately before actual judging
+- **Judge-step failure:**
+  - `FileNotFoundError: [Errno 2] No such file or directory: "/app/InputName(step=ExecutorStep(...))/spec/spec.jsonl"`
+- **Diagnosis:**
+  - the fixed-pair experiment script used Python f-strings around `output_path_of(prepare_step)`
+  - that coerced the executor `InputName` object into a literal placeholder string too early
+  - the judge worker then tried to open that placeholder text as a local file path under `/app/...`
+- **Concrete fix applied locally:**
+  - replaced:
+    - `f"{output_path_of(prepare_step)}/chosen"`
+    - `f"{output_path_of(prepare_step)}/rejected"`
+    - `f"{output_path_of(prepare_step)}/spec/spec.jsonl"`
+  - with executor-aware path joins:
+    - `output_path_of(prepare_step) / "chosen"`
+    - `output_path_of(prepare_step) / "rejected"`
+    - `output_path_of(prepare_step) / "spec" / "spec.jsonl"`
+- **Implication:**
+  - this was not a GCS-read failure
+  - it was a config-construction bug in the experiment script
+- **Next action:**
+  - rerun Experiment C with a fresh job name after this path fix
+
+### 2026-03-24 — ALIGN-071: Experiment C Retry Cleared the Path Bug; Current Blocker Is Root-Job Preemption, Not Missing GCS Artifacts
+
+- **Retry run:** `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-central1-retry1`
+- **What the retry proved:**
+  - the judge worker successfully loaded the fixed artifacts from GCS after the `InputName` path fix
+  - worker logs showed:
+    - `Loaded 2 chosen, 2 rejected responses`
+    - `Processing 2 prompt pairs via local batched judge`
+    - `Starting vLLM environment`
+    - `Starting vLLM native server with TPU_MIN_LOG_LEVEL=3 TPU_STDERR_LOG_LEVEL=3`
+- **Interpretation:**
+  - the earlier `FileNotFoundError` was fully explained by the experiment-script path bug
+  - there is no evidence of a missing `gs://.../spec/spec.jsonl` artifact
+  - this is now past artifact loading and into actual local-judge startup
+- **What happened next:**
+  - first retry child:
+    - `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-central1-retry1/align-debug_local_judge_llama_3_3_70b_fixed_pairs-preference_pairs_2dc64343-5207a060`
+    - was killed with `Parent task preempted`
+  - the root job itself stayed alive with `preemption_count=1`, restarted, reacquired the step lock, and resubmitted a new child:
+    - `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-central1-retry1/align-debug_local_judge_llama_3_3_70b_fixed_pairs-preference_pairs_2dc64343-f2f68796`
+  - current state of the replacement child: `JOB_STATE_PENDING` on `us-central1` TPU capacity
+- **Operational takeaway for future agents:**
+  - do **not** keep debugging GCS/spec-path handling for Experiment C unless a new file-path error appears
+  - if this retry loop keeps suffering root preemption, relaunch the experiment with a CPU-only root submission and let only the judge child request TPUs
+
+### 2026-03-24 — ALIGN-072: Relaunched Experiment C with a CPU-Only Root So Only the Judge Child Holds TPUs
+
+- **Why this entry exists:**
+  - the previous retry used a TPU-root submission, so the root executor itself was holding `v5p-8` resources
+  - that caused unnecessary TPU contention and made root preemption materially more disruptive
+- **Action taken:**
+  - killed:
+    - `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-central1-retry1`
+  - relaunched with CPU-only root:
+    - `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-central1-retry2-cpu-root`
+  - submission shape:
+    - `--cpu 4 --memory 16GB --disk 10GB --region us-central1`
+    - no TPU attached to the root job
+- **Current state:**
+  - root is `JOB_STATE_RUNNING` on CPU only
+  - judge child:
+    - `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-central1-retry2-cpu-root/align-debug_local_judge_llama_3_3_70b_fixed_pairs-preference_pairs_2dc64343-35f79a18`
+    - is `JOB_STATE_PENDING` only on `us-central1` TPU capacity
+- **Important implication:**
+  - this is now the correct operational recipe for Experiment C and similar executor-based validation scripts:
+    - CPU-only root
+    - TPU requested only by the child step via `VLLMConfig.resources`
+
+### 2026-03-24 — ALIGN-073: Experiment C Succeeded; Batched Local Judge Validated End-to-End
+
+- **Successful run:** `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-central1-retry2-cpu-root`
+- **Successful child:** `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-central1-retry2-cpu-root/align-debug_local_judge_llama_3_3_70b_fixed_pairs-preference_pairs_2dc64343-35f79a18`
+- **Result:** both root and child are `JOB_STATE_SUCCEEDED`
+
+#### Timing from Iris metadata
+
+- Root pending before start: `0.184s`
+- Root active runtime: `686.752s`
+- Child pending before start: `155.138s`
+- Child active runtime: `509.765s`
+
+#### Output artifact
+
+- `gs://marin-us-central1/align/debug_local_judge_llama_3_3_70b_fixed_pairs/preference_pairs-01dd5c`
+- Files include:
+  - `.artifact`
+  - `.executor_info`
+  - `.executor_status`
+  - `shard_00000.jsonl.gz`
+- Verified row count in `shard_00000.jsonl.gz`: `2`
+
+#### Worker-log evidence
+
+- Judge worker loaded the fixed artifacts successfully:
+  - `Loaded 2 chosen, 2 rejected responses`
+  - `Processing 2 prompt pairs via local batched judge`
+- Local serving path was used:
+  - `Starting vLLM environment`
+  - `Starting vLLM native server with TPU_MIN_LOG_LEVEL=3 TPU_STDERR_LOG_LEVEL=3`
+  - `vLLM environment ready`
+- Batched request path was used:
+  - `Scoring 4 responses via local batched judge`
+  - `Rendering 4 chat prompts for batched vLLM serve`
+  - `Sending batched vLLM serve request to /v1/completions for 4 prompts (n=1)`
+- Output and filtering behavior matched expectations:
+  - `Built 2 preference pairs (0 filtered, 0 failures)`
+  - `Wrote 2 preference pairs to gs://marin-us-central1/align/debug_local_judge_llama_3_3_70b_fixed_pairs/preference_pairs-01dd5c`
+
+#### Conclusion
+
+- Experiment C is now validated.
+- The local judge path in `judge.py` successfully runs through batched `vllm serve` on staged GCS model weights and produces the expected fixed-pair artifact.
+- The next queued refactor from the plan is prompt-generation migration to the shared batched local serve primitive, followed by the one-model-at-a-time lifecycle work in `align()`.
+
+### 2026-03-24 — ALIGN-074: Judge Refactor Now Persists Full Scored Judgments Before Filtering
+
+- **Reason for this entry:** the previous judge artifact only kept final `chosen` / `rejected` message pairs, which made it impossible to inspect chosen score, rejected score, gap, confidence, explanation, highlights, or raw judge output after the run.
+- **Code changes:**
+  - rewrote `alignment/judge.py` around two explicit stages:
+    - `judge_responses(JudgeConfig)` — writes a full judgments dataset
+    - `build_preference_pairs(PreferencePairFilterConfig)` — filters persisted judgments into DPO pairs
+  - updated `alignment/align.py` so the main pipeline now has:
+    - `align/<name>/judgments`
+    - `align/<name>/preference_pairs`
+  - kept `judge_and_build_pairs(JudgePairConfig)` only as a convenience wrapper for scripts, but it now writes judgments first and filters second
+- **What the new judgments artifact contains per prompt:**
+  - prompt metadata:
+    - `prompt_id`
+    - `behavior_id`
+    - `system_prompt`
+    - `user_message`
+    - `rubric`
+    - structured `statement`
+  - full scored candidate lists:
+    - `chosen_candidates[]`
+    - `rejected_candidates[]`
+  - each candidate includes:
+    - `response_index`
+    - `response_text`
+    - parsed `judgment`
+      - `score`
+      - `compliant`
+      - `confidence`
+      - `explanation`
+      - `highlights`
+      - `raw_response`
+  - selected extrema and filter inputs:
+    - `best_chosen`
+    - `worst_rejected`
+    - `gap`
+    - `status`
+    - `errors`
+- **What the new pair-filter step now logs:**
+  - final DPO pairs at the pair output root
+  - `artifacts/filter_decisions/` with one record per prompt containing:
+    - `best_chosen_score`
+    - `worst_rejected_score`
+    - `gap`
+    - `passed`
+    - `reason`
+  - `artifacts/filter_summary.json` with aggregate counts by reason
+- **Validation:**
+  - `make fix` passed
+  - `uv run pytest tests/test_alignment.py -q` passed: `68 passed`
+  - updated tests now verify:
+    - local batched judge writes full scored judgments
+    - pair filtering is a separate operation over persisted judgments
+    - filter decisions and summary artifacts are written
+- **Operational consequence for future agents:**
+  - if someone asks “where are the judge scores?”, the correct answer should now be:
+    - in the judgments artifact from `align/<name>/judgments`
+    - and in the pair step’s `artifacts/filter_decisions/`
+  - to get those live on GCS for Experiment C or a full align run, rerun the relevant experiment after this refactor lands
+
+### 2026-03-24 — ALIGN-075: Rerun Experiment C on the Refactored Judge Path to Materialize Scores on GCS
+
+- **Reason for this entry:** the prior successful Experiment C artifact (`preference_pairs-01dd5c`) predates `ALIGN-074` and therefore still lacks persisted judge-score metadata.
+- **Planned action now:**
+  - rerun `experiments/judge_llama_3_3_70b_fixed_pairs_refactored.py`
+  - keep the CPU-only root submission pattern from `ALIGN-072`
+  - use a fresh job name so the new run materializes:
+    - filtered preference pairs
+    - `artifacts/judgments/` from the wrapper
+    - `artifacts/filter_decisions/`
+    - `artifacts/filter_summary.json`
+- **Success criteria:**
+  - root and child succeed
+  - final pair row count remains `2`
+  - the new output contains full scored judgments and filter-decision artifacts
+
+### 2026-03-24 — ALIGN-076: Aborted the `us-central1` Logged Rerun After User Redirected to `us-east5-a`; Launch Is Blocked by Missing Staged Llama 3.3 70B Artifact in `us-east5`
+
+- **Killed run:**
+  - `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-central1-retry4-logged-separate`
+  - killed child:
+    - `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-central1-retry4-logged-separate/align-debug_local_judge_llama_3_3_70b_fixed_pairs_logged-judgments_8cb4e877-c6703787`
+- **Why the requested move to `us-east5-a` is blocked:**
+  - checked:
+    - `gs://marin-us-east5/models/meta-llama--Llama-3-3-70B-Instruct--6f6073b`
+  - result:
+    - path does **not** exist
+- **Implication:**
+  - launching the same Experiment C job in `us-east5-a` right now would either:
+    - trigger a fresh model download path into `us-east5`, or
+    - require cross-region checkpoint reads from `us-central1`
+  - both are undesirable for this thread; we have been explicitly avoiding Hugging Face downloads and large cross-region transfers
+- **Next action needed before `us-east5-a` launch is safe:**
+  - stage `meta-llama/Llama-3.3-70B-Instruct` into `gs://marin-us-east5/models/...`
+  - only then rerun the logged Experiment C script in `us-east5-a`
+
+### 2026-03-24 — ALIGN-077: User Approved `us-east5-a` DAG Staging; Launch the Logged Experiment C Script There
+
+- **Decision change:** the user explicitly approved using the executor DAG to stage the missing `llama_3_3_70b_instruct` dependency in `us-east5-a`.
+- **What this means operationally:**
+  - the existing dependency on `output_path_of(llama_3_3_70b_instruct)` is sufficient
+  - no manual extra model step needs to be added to `executor_main(...)`
+  - the `models/meta-llama--Llama-3-3-70B-Instruct--6f6073b` step will run in `us-east5` because the artifact is not already present there
+- **Action to take now:**
+  - submit `experiments/judge_llama_3_3_70b_fixed_pairs_refactored.py`
+  - CPU-only root
+  - pin root submission to `us-east5-a`
+  - let the DAG materialize both:
+    - `gs://marin-us-east5/models/meta-llama--Llama-3-3-70B-Instruct--6f6073b`
+    - the logged Experiment C outputs in `gs://marin-us-east5/align/...`
+
+### 2026-03-24 — ALIGN-078: `us-east5-a` Experiment C Relaunch Is Healthy; Model Staging Is Actively Progressing at `40/53` Files
+
+- **Active root job:**
+  - `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-east5a-retry5-stage-model`
+- **Current child state:**
+  - fixed-artifacts CPU step succeeded:
+    - `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-east5a-retry5-stage-model/align-debug_local_judge_llama_3_3_70b_fixed_pairs_logged-artifacts_341775e9-8b982a2c`
+  - model-staging Zephyr coordinator is still running:
+    - `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-east5a-retry5-stage-model/zephyr-download-hf-0c401190-p0-a0`
+  - Zephyr worker pool is still running with `8` workers:
+    - `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-east5a-retry5-stage-model/zephyr-download-hf-0c401190-p0-a0/zephyr-download-hf-0c401190-p0-workers`
+- **What the current logs show:**
+  - executor launched `4` steps from `3` provided steps because it discovered the model dependency through the DAG
+  - the model step is targeting:
+    - `gs://marin-us-east5/models/meta-llama--Llama-3-3-70B-Instruct--6f6073b`
+  - the Hugging Face staging job identified:
+    - `53` files
+    - `262.87 GB`
+- **Direct GCS progress check:**
+  - prefix exists:
+    - `gs://marin-us-east5/models/meta-llama--Llama-3-3-70B-Instruct--6f6073b`
+  - `.metrics/success-part-*.jsonl` currently reports:
+    - `40` completed files
+  - total expected files from the downloader metadata:
+    - `53`
+  - sample staged payload already includes:
+    - `config.json`
+    - `generation_config.json`
+    - `model-00001-of-00030.safetensors`
+    - `model-00002-of-00030.safetensors`
+- **Interpretation:**
+  - the run is healthy
+  - it is no longer just writing metadata; large weight shards are landing in `us-east5`
+  - the logged judgments step has not started yet because it still depends on the model step finishing
+- **Immediate next check for future agents:**
+  - wait for the model step to finish
+  - then look for the new logged judgments child under the same root
+  - after that, verify the new `judgments` and `filter_decisions` artifacts in `gs://marin-us-east5/align/debug_local_judge_llama_3_3_70b_fixed_pairs_logged/...`
+
+### 2026-03-24 — ALIGN-079: Experiment C Succeeded End-to-End in `us-east5-a` with Logged Judgments, Filter Decisions, and Final Pairs
+
+- **Successful root job:**
+  - `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-east5a-retry5-stage-model`
+- **Successful child steps:**
+  - model staging:
+    - `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-east5a-retry5-stage-model/zephyr-download-hf-0c401190-p0-a0`
+  - logged local judge:
+    - `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-east5a-retry5-stage-model/align-debug_local_judge_llama_3_3_70b_fixed_pairs_logged-judgments_99a30903-86e02dcc`
+  - separate pair filter:
+    - `/ahmed/judge-llama-3-3-70b-fixed-pairs-refactored-us-east5a-retry5-stage-model/align-debug_local_judge_llama_3_3_70b_fixed_pairs_logged-preference_pairs_efa79973-fba5b217`
+- **Artifacts written:**
+  - logged judgments:
+    - `gs://marin-us-east5/align/debug_local_judge_llama_3_3_70b_fixed_pairs_logged/judgments-1610db`
+  - final pairs:
+    - `gs://marin-us-east5/align/debug_local_judge_llama_3_3_70b_fixed_pairs_logged/preference_pairs-37ec92`
+- **Verified contents:**
+  - `judgments-1610db/shard_00000.jsonl.gz` has `2` rows
+  - judgment row keys include:
+    - `chosen_candidates`
+    - `rejected_candidates`
+    - `best_chosen`
+    - `worst_rejected`
+    - `gap`
+    - `status`
+    - `errors`
+  - `preference_pairs-37ec92/shard_00000.jsonl.gz` has `2` rows
+  - pair row keys remain:
+    - `chosen`
+    - `rejected`
+  - pair sidecars are present under:
+    - `gs://marin-us-east5/align/debug_local_judge_llama_3_3_70b_fixed_pairs_logged/preference_pairs-37ec92/artifacts/filter_decisions`
+    - `gs://marin-us-east5/align/debug_local_judge_llama_3_3_70b_fixed_pairs_logged/preference_pairs-37ec92/artifacts/filter_summary.json`
+- **Timing from Iris metadata:**
+  - root runtime:
+    - `2070s` (`1774413869603 - 1774411790549`)
+  - judgments child runtime:
+    - `599.953s`
+  - preference-pairs child runtime:
+    - `25.193s`
+- **Operational conclusion:**
+  - the logged-judge refactor is now externally validated on GCS, not just by unit tests
+  - future agents looking for judge scores should inspect the `judgments-1610db` artifact in `us-east5`
+  - Experiment C is complete; the next planned experiment remains prompt-generation migration to shared batched `vllm serve`
+
+### 2026-03-24 — ALIGN-080: Start Experiment D; Refactor Prompt Generation onto Shared Batched `vllm serve` with Same-Model Session Reuse
+
+- **Goal:** move prompt-generation stages 1, 2, and 3 off direct `llm_chat_single(...)`/`vllm_engine(...)` and onto the shared batched serve primitive.
+- **Lifecycle rule for the refactor:**
+  - never have more than one local model active at once
+  - if `ideation_model == extract_model` and both are local `VLLMConfig`, reuse a single `BatchedVllmServeSession` across stages 1, 2, and 3
+  - if they differ, run stages 1-2 under the ideation session, tear it down, then open the extraction session for stage 3
+- **Implementation scope:**
+  - `lib/marin/src/marin/alignment/generate_prompts.py`
+  - `lib/marin/src/marin/alignment/align.py`
+  - `tests/test_alignment.py`
+- **Validation plan before launching Iris:**
+  - add focused unit tests for:
+    - same-model session reuse across stages 1-3
+    - clean session handoff when ideation and extraction configs differ
+  - keep the existing API-path prompt-generation test green
+- **Dedicated Experiment D script to launch after local validation:**
+  - `experiments/generate_prompts_llama_3_3_70b_refactored.py`
+  - one statement only:
+    - `ask_clarifying_questions`
+  - staged checkpoint:
+    - `gs://marin-us-central1/models/meta-llama--Llama-3-3-70B-Instruct--6f6073b`
+  - run only prompt generation, not full `align()`
+- **Success criteria:**
+  - prompt schema unchanged
+  - one-statement artifact structure unchanged
+  - logs show batched `vllm serve`, not direct `llm.generate(...)`
+  - same-model run uses one local serve session across stages 1-3
+
+### 2026-03-24 — ALIGN-081: Experiment D Refactor Landed; Unit Tests Passed; One-Statement `us-central1` Validation Run Submitted
+
+- **Code changes landed:**
+  - `lib/marin/src/marin/alignment/generate_prompts.py`
+    - local stages 1-3 now route through `BatchedVllmServeSession`
+    - stage 1 microbatches statements
+    - stages 2 and 3 batch prompt requests through one local serve session
+    - same-model local configs reuse one session across stages 1-3
+    - different ideation vs extraction local configs now run sequentially with clean session handoff
+  - `lib/marin/src/marin/alignment/align.py`
+    - prompt-generation step now requests local resources if either ideation or extraction is local
+    - added `prompt_batch_size` to `AlignConfig`
+    - prompt step now rejects mixed local ideation/extraction resources inside one worker
+  - `tests/test_alignment.py`
+    - added local prompt-generation tests for:
+      - same-model session reuse
+      - different-model session switching
+  - `experiments/generate_prompts_llama_3_3_70b_refactored.py`
+    - dedicated one-statement prompt-generation validation script
+- **Local verification:**
+  - `./infra/pre-commit.py --fix lib/marin/src/marin/alignment/generate_prompts.py lib/marin/src/marin/alignment/align.py experiments/generate_prompts_llama_3_3_70b_refactored.py tests/test_alignment.py`
+    - passed
+  - `uv run pytest tests/test_alignment.py -q`
+    - passed: `70 passed`
+- **Experiment D validation run submitted:**
+  - root:
+    - `/ahmed/generate-prompts-llama-3-3-70b-refactored-us-central1`
+  - current state at submission check:
+    - root `JOB_STATE_RUNNING`
+    - spec-upload child created and running:
+      - `/ahmed/generate-prompts-llama-3-3-70b-refactored-us-central1/align-debug_generate_prompts_llama_3_3_70b_refactored-spec_62dc78f2-c904bb8f`
+- **Validation target:**
+  - one statement:
+    - `ask_clarifying_questions`
+  - model:
+    - `gs://marin-us-central1/models/meta-llama--Llama-3-3-70B-Instruct--6f6073b`
+- **Immediate next check for future agents:**
+  - wait for the prompt-generation child to start
+  - verify logs show batched `vllm serve`
+  - verify the output prompt artifact and prompt count
+  - then proceed to Experiment E if the one-statement run succeeds
+
+### 2026-03-24 — ALIGN-082: First Experiment D Run Failed with `HTTP 400` from `vllm serve`; Root Cause Was an Impossible Local Token Budget
+
+- **Failed run:**
+  - root:
+    - `/ahmed/generate-prompts-llama-3-3-70b-refactored-us-central1`
+  - failed child:
+    - `/ahmed/generate-prompts-llama-3-3-70b-refactored-us-central1/align-debug_generate_prompts_llama_3_3_70b_refactored-prompts_2c1080f8-daa82b37`
+- **What happened:**
+  - the prompt-generation TPU child successfully:
+    - loaded the spec
+    - filtered to `ask_clarifying_questions`
+    - started `vllm serve`
+    - reached `vLLM environment ready`
+  - it then failed on the very first Stage 1 batched request:
+    - `requests.exceptions.HTTPError: 400 Client Error: Bad Request for url: http://127.0.0.1:8000/v1/completions`
+- **Diagnosis:**
+  - this was not a region or model-path problem
+  - it was a request-envelope problem
+  - the local smoke used:
+    - `max_model_len=4096`
+    - `understanding_max_tokens=4000`
+    - `concretize_max_tokens=16000`
+    - `extract_max_tokens=16000`
+  - those Stage 1/2/3 budgets came from API defaults and are incompatible with the local `4096`-token context envelope
+  - the first request failed before any prompt shard was written, which is consistent with server-side request validation rejecting the completion budget
+- **Fix applied before relaunch:**
+  - `batched_vllm_serve.py` now logs the HTTP response body on `400` failures
+  - `align.py` now exposes prompt-generation token-budget fields through `AlignConfig`
+  - `experiments/generate_prompts_llama_3_3_70b_refactored.py` now uses a smaller local smoke envelope:
+    - `concretize_batch_size=4`
+    - `extract_batch_size=4`
+    - `local_serve_batch_size=4`
+    - `understanding_max_tokens=1024`
+    - `concretize_max_tokens=1536`
+    - `extract_max_tokens=1024`
+  - the experiment now also resolves the model path through the regional executor dependency instead of hardcoding the `us-central1` GCS prefix
+
+### 2026-03-24 — ALIGN-083: Relaunched Experiment D in `us-east5-a` with Regional Model Resolution and Smaller Local Prompt Budgets
+
+- **New job:**
+  - `/ahmed/generate-prompts-llama-3-3-70b-refactored-us-east5a`
+- **Submission shape:**
+  - CPU-only root:
+    - `cpu=4`
+    - `memory=16GB`
+    - `disk=10GB`
+  - region:
+    - `us-east5`
+  - zone:
+    - `us-east5-a`
+- **What changed versus the failed `us-central1` run:**
+  - prompt-generation smoke now uses smaller Stage 1/2/3 token budgets that fit the local `4096` context envelope
+  - prompt-generation smoke now uses smaller per-request batch sizes
+  - experiment model path now resolves through `output_path_of(llama_3_3_70b_instruct)`, so the executor should reuse the staged `us-east5` model artifact instead of a hardcoded `us-central1` GCS path
+- **Current state at handoff:**
+  - root job is `JOB_STATE_RUNNING`
+  - task state is still `building`, so child-step fanout has not yet appeared in the first poll
+- **Immediate next check for future agents:**
+  - wait for the root to finish bootstrap
+  - confirm the `spec` child starts
+  - confirm the `prompts` child starts in `us-east5-a`
+  - if the prompt child fails again, the new HTTP response-body logging in `batched_vllm_serve.py` should make the server-side error explicit
+
+### 2026-03-24 — ALIGN-084: Measured Real Prompt Lengths for `ask_clarifying_questions`; `16k` Looks Unnecessary for the Smoke Run
+
+- **How this was measured:**
+  - reused the saved OpenAI-path artifacts at:
+    - `gs://marin-us-central1/align/openai_spec_smoke/prompts-8a5a5d/artifacts/ask_clarifying_questions`
+  - rendered the exact Stage 1/2/3 prompts with the staged Llama 3.3 70B tokenizer from:
+    - `gs://marin-us-east5/models/meta-llama--Llama-3-3-70B-Instruct--6f6073b`
+- **Measured prompt token counts:**
+  - Stage 1 understanding:
+    - `910`
+  - Stage 2 concretization:
+    - batch size `4`: `1811`
+    - batch size `10`: `2429`
+  - Stage 3 extraction:
+    - batch size `4`: `740`
+    - batch size `10`: `1433`
+- **Interpretation:**
+  - the original failure was not because the Stage 1 prompt itself exceeded `4096`
+  - the failure is still best explained by the combination of:
+    - `max_model_len=4096`
+    - oversized API-style completion budgets (`4000` / `16000`)
+  - for this one-statement smoke, the reduced local budgets now in the relaunched `us-east5-a` job should fit comfortably inside `4096`
+- **Recommendation:**
+  - do **not** jump straight to `16k` for the one-statement smoke
+  - if a larger local context envelope is needed after the smoke, the next reasonable step is probably `8k`, not `16k`
+  - `16k` would add compile / KV-cache pressure without evidence that this prompt-generation workload actually needs it
+
+### 2026-03-24 — ALIGN-085: Took Over Babysitting for the Corrected `us-east5-a` Experiment D Run
+
+- **Monitoring owner:** this thread is now actively babysitting the run.
+- **Job under watch:**
+  - `/ahmed/generate-prompts-llama-3-3-70b-refactored-us-east5a`
+- **State file:**
+  - `scratch/20260324-2231_monitoring_state.json`
+- **Current live status at monitor handoff:**
+  - root is `JOB_STATE_RUNNING`
+  - staged `us-east5` model dependency was skipped as already succeeded
+  - spec child succeeded
+  - prompt TPU child is pending only on `us-east5-a` TPU capacity:
+    - `no_capacity: tpu_v5p_8-us-east5-a=backoff`
+- **Interpretation:**
+  - the corrected run is structurally healthy
+  - there is no new prompt-shape or HTTP error yet
+  - current blocker is scheduler capacity only
+
+### 2026-03-25 — ALIGN-086: Stage 2 Concretization Now Identifies Exact Missing `cfg_*` IDs and Retries Them
+
+- **Problem this addresses:**
+  - the successful `us-central1` prompt-generation smoke run logged a `3/4` Stage 2 concretization shortfall for `ask_clarifying_questions`
+  - the old Stage 2 response format used generic `<scenario>` / `<rubric>` tags and positional parsing
+  - that meant we could tell a batch was short, but **not** which covering-array config was missing
+  - the old code then silently continued, and the missing concretization was dropped before Stage 3
+- **What changed:**
+  - `prompts/concretize.py` now requests config-scoped tags such as:
+    - `<scenario_cfg_000>...</scenario_cfg_000>`
+    - `<rubric_cfg_000>...</rubric_cfg_000>`
+  - `generate_prompts.py` now parses Stage 2 outputs by config id instead of by order
+  - Stage 2 now records `concretization_attempts` inside each statement’s `ideation.json`
+  - each attempt record includes:
+    - `attempt`
+    - `requested_config_ids`
+    - `requested_configs`
+    - `returned_config_ids`
+    - `missing_config_ids`
+    - `missing_rubric_config_ids`
+    - `raw_response`
+  - missing configs are retried as singleton requests
+  - Stage 2 now fails explicitly if any configs are still missing after the retry budget instead of silently dropping them
+- **New config plumbing:**
+  - `PromptGenConfig.concretize_max_attempts`
+  - `AlignConfig.concretize_max_attempts`
+- **Operational consequence:**
+  - after this change, we can answer both:
+    - what went wrong in a partial Stage 2 batch
+    - exactly which `cfg_*` entries need retry
+
+### 2026-03-25 — ALIGN-087: Retry / Diagnostics Refactor Validated in Tests
+
+- **Validation coverage added:**
+  - indexed Stage 2 parser test
+  - prompt-template test for indexed concretization tags
+  - local prompt-generation regression test where Stage 2 first returns only one config, then retries the missing `cfg_001` and recovers it
+- **Verification run:**
+  - `./infra/pre-commit.py --fix lib/marin/src/marin/alignment/generate_prompts.py lib/marin/src/marin/alignment/prompts/concretize.py lib/marin/src/marin/alignment/align.py tests/test_alignment.py`
+  - `uv run pytest tests/test_alignment.py -q`
+- **Result:**
+  - `71 passed`
+- **Current recommendation for future agents:**
+  - if a prompt-generation run now reports a Stage 2 problem, inspect the statement’s `artifacts/<statement_id>/ideation.json`
+  - `concretization_attempts[*].missing_config_ids` is now the source of truth for which covering-array configs were missing and retried
+
+### 2026-03-25 — ALIGN-088: Raised Stage 2 Concretization Retry Budget from `2` to `5`
+
+- **Code changes:**
+  - `PromptGenConfig.concretize_max_attempts` default: `5`
+  - `AlignConfig.concretize_max_attempts` default: `5`
+  - `experiments/generate_prompts_llama_3_3_70b_refactored.py` now explicitly sets:
+    - `concretize_max_attempts=5`
+- **Reasoning:**
+  - the new retry path is now targeted and singleton-based for missing `cfg_*` entries
+  - that makes a higher retry budget relatively cheap compared with rerunning an entire prompt-generation step
+  - `5` attempts is a better smoke-setting for measuring whether partial Stage 2 batches can self-heal before we escalate
+- **Validation after config change:**
+  - `uv run pytest tests/test_alignment.py -q`
+  - result: `71 passed`
+
+### 2026-03-25 — ALIGN-089: Relaunched Prompt-Generation Smoke on Iris with `5` Stage 2 Retries
+
+- **Job submitted:**
+  - `/ahmed/generate-prompts-llama-3-3-70b-refactored-us-central1-retry5`
+- **Submit command:**
+  - `uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --job-name generate-prompts-llama-3-3-70b-refactored-us-central1-retry5 --cpu 4 --memory 16GB --disk 10GB --region us-central1 -- python experiments/generate_prompts_llama_3_3_70b_refactored.py`
+- **Why this launch shape:**
+  - region-only `us-central1` to avoid unnecessary zone pinning
+  - CPU-only root
+  - prompt-generation worker still comes from the executor step and will request the `v5p-8` TPU shape defined by the staged Llama 3.3 70B `VLLMConfig`
+- **Initial status snapshot right after launch:**
+  - root job state: `JOB_STATE_RUNNING`
+  - no child status yet in the first poll
+- **What future agents should check next:**
+  - prompt child start
+  - whether any Stage 2 `concretization_attempts` are recorded in the final `ideation.json`
+  - if there is still a shortfall after `5` attempts, capture the exact `missing_config_ids` from the artifact instead of inferring from row counts
+
+### 2026-03-25 — ALIGN-090: `retry5` Finished in ~28s Because the Executor Reused the Old Prompt Artifact
+
+- **Observed symptom:**
+  - `/ahmed/generate-prompts-llama-3-3-70b-refactored-us-central1-retry5` finished in about `28.9s`
+- **Root cause from logs:**
+  - the root launched, read existing step statuses, and skipped all three steps as already succeeded
+  - the key line was:
+    - `Skip align/debug_generate_prompts_llama_3_3_70b_refactored/prompts_3da7bc76: already succeeded`
+- **Interpretation:**
+  - this was **not** a real rerun of prompt generation
+  - changing `concretize_max_attempts` from `2` to `5` did not affect the executor version key for the prompt artifact
+  - so the root reused the old successful prompt artifact:
+    - `gs://marin-us-central1/align/debug_generate_prompts_llama_3_3_70b_refactored/prompts-4c7a65`
+
+### 2026-03-25 — ALIGN-091: Fixed Prompt-Step Versioning and Relaunched a True `retry5` Run
+
+- **Cache-key fix:**
+  - updated the prompt-generation executor config so semantic Stage 1/2/3 knobs are part of the step version
+  - in particular, the prompt step now versions:
+    - `covering_strength`
+    - `covering_seed`
+    - `concretize_batch_size`
+    - `extract_batch_size`
+    - `understanding_max_tokens`
+    - `understanding_temperature`
+    - `concretize_max_tokens`
+    - `concretize_temperature`
+    - `concretize_max_attempts`
+    - `extract_max_tokens`
+    - `statement_ids`
+- **Files changed for this fix:**
+  - `lib/marin/src/marin/alignment/align.py`
+  - `experiments/generate_prompts_llama_3_3_70b_refactored.py`
+- **Verification after patch:**
+  - `./infra/pre-commit.py --fix lib/marin/src/marin/alignment/align.py experiments/generate_prompts_llama_3_3_70b_refactored.py`
+  - `uv run pytest tests/test_alignment.py -q`
+  - result: `71 passed`
+- **Fresh relaunch:**
+  - `/ahmed/generate-prompts-llama-3-3-70b-refactored-us-central1-retry5-versioned`
+- **Initial status at handoff:**
+  - root state: `JOB_STATE_RUNNING`
+  - this is the real rerun to watch, not the earlier cached `retry5` root
+
+### 2026-03-25 — ALIGN-092: True `retry5` Prompt-Generation Run Succeeded and Recovered the Missing Config
+
+- **Successful run:**
+  - root:
+    - `/ahmed/generate-prompts-llama-3-3-70b-refactored-us-central1-retry5-versioned`
+  - prompt child:
+    - `/ahmed/generate-prompts-llama-3-3-70b-refactored-us-central1-retry5-versioned/align-debug_generate_prompts_llama_3_3_70b_refactored-prompts_3da7bc76-57844711`
+- **New prompt artifact:**
+  - `gs://marin-us-central1/align/debug_generate_prompts_llama_3_3_70b_refactored/prompts-f29568`
+- **What happened in Stage 2:**
+  - first pass still hit the same partial batch:
+    - attempt `1`
+    - requested `cfg_000..cfg_003`
+    - returned `cfg_000, cfg_001, cfg_002`
+    - missing `cfg_003`
+  - retry logic then issued a singleton retry:
+    - attempt `2`
+    - requested `cfg_003`
+    - returned `cfg_003`
+- **Verified outputs from artifact contents:**
+  - `num_configs = 67`
+  - final prompt rows = `67`
+  - `cfg_003` now has a non-empty scenario description in `ideation.json`
+  - `concretization_attempts` persisted the exact missing/returned config ids as designed
+- **Interpretation:**
+  - the new retry/diagnostics path is working end-to-end on real TPU `vllm serve` prompt generation
+  - the previous `66/67` shortfall is now recovered automatically without rerunning the full statement
+
+### 2026-03-25 — ALIGN-093: Implemented Experiment E by Combining Local Chosen/Rejected Generation into One `align()` Step
+
+- **Scope completed:**
+  - Experiment E is now implemented in code.
+  - When both `teacher_model` and `rejected_model` are local `VLLMConfig`s, `align()` no longer emits sibling `chosen` and `rejected` executor steps.
+  - Instead it emits one combined local response step:
+    - `align/<name>/responses`
+- **How the new step works:**
+  - prompts are loaded once
+  - chosen generation runs first
+  - rejected generation runs second on the same worker
+  - if the two local model configs are equal, one `BatchedVllmServeSession` is reused across both passes
+  - if they differ, the step tears down the first session and starts the second, still keeping at most one local model active at a time
+- **Output contract preserved for downstream steps:**
+  - combined step writes:
+    - `<responses_output>/chosen`
+    - `<responses_output>/rejected`
+  - `judgments` now reads those two subpaths, so no judge/filter schema change was required
+- **Resource policy:**
+  - local-local response steps now merge worker resources conservatively:
+    - same accelerator type/replica count required
+    - CPU, RAM, and disk take the max of the two configs
+  - this keeps the one-worker sequential design without under-requesting resources
+- **Files changed:**
+  - `lib/marin/src/marin/alignment/generate_responses.py`
+  - `lib/marin/src/marin/alignment/align.py`
+  - `tests/test_alignment.py`
+- **Local verification:**
+  - `uv run pytest tests/test_alignment.py -q`
+  - result: `75 passed`
+  - added coverage for:
+    - same-model local session reuse in combined response generation
+    - different-model sequential local sessions
+    - `align()` DAG switch from `{chosen,rejected}` to `{responses}` for local-local runs
+
+### 2026-03-25 — ALIGN-094: Prepared the First Post-Experiment-E End-to-End Smoke Run
+
+- **Target experiment:**
+  - `experiments/align_debug_vllm_70b_mixtral_rejected.py`
+- **Why this is the right Experiment F validation:**
+  - it exercises the whole one-statement open-weight pipeline with the new refactored primitives:
+    - prompt generation via batched `vllm serve`
+    - combined local-local chosen/rejected generation via one-model-at-a-time `align()` orchestration
+    - local batched judge
+- **Smoke-script updates before launch:**
+  - changed root submission guidance to CPU-only executor wrapper
+  - reduced local worker disk from `500g` to `10g`
+  - kept TPU child shape on `v5p-8`, `tp=4`, `ram=256g`
+  - aligned prompt-generation knobs with the validated Experiment D envelope:
+    - `prompt_batch_size=4`
+    - `understanding_max_tokens=1024`
+    - `concretize_max_tokens=1536`
+    - `concretize_max_attempts=5`
+    - `extract_max_tokens=1024`
+    - `judge_batch_size=4`
+- **Expected next validation signal:**
+  - a real one-statement end-to-end artifact with:
+    - prompt generation complete
+    - combined `/responses/chosen` + `/responses/rejected` outputs
+    - logged judgments
+    - final preference pairs
+
+### 2026-03-25 — ALIGN-095: Launched the First Post-Experiment-E End-to-End Smoke Run
+
+- **Launched root job:**
+  - `/ahmed/align-debug-vllm-70b-mixtral-rejected-smoke-refactored`
+- **Initial executor signal from root logs:**
+  - `### Inspecting the 5 provided steps ###`
+  - `### Launching 5 steps ###`
+- **Interpretation:**
+  - this matches the refactored one-statement DAG shape:
+    - `spec`
+    - `prompts`
+    - `responses`
+    - `judgments`
+    - `preference_pairs`
+  - notably, there are no separate provided `chosen` and `rejected` steps anymore for this local-local run
+- **Current child status at handoff:**
+  - spec child succeeded:
+    - `/ahmed/align-debug-vllm-70b-mixtral-rejected-smoke-refactored/align-debug_vllm_70b_mixtral_rejected_smoke-spec_87ed33ce-a365a01e`
+  - prompt child is pending on TPU capacity:
+    - `/ahmed/align-debug-vllm-70b-mixtral-rejected-smoke-refactored/align-debug_vllm_70b_mixtral_rejected_smoke-prompts_9588217b-5580cf8a`
+- **Prompt child resource request:**
+  - `v5p-8`
+  - `ram=256g`
+  - `disk=10g`
+- **Most recent scheduler reason:**
+  - insufficient TPU capacity in `us-central1-a`
+  - autoscaler also reported waiting for workers in `tpu_v5p_8-us-central1-a` to become ready
+- **Why this state still matters:**
+  - it confirms the smoke run is using the refactored CPU-root + executor-child structure
+  - it confirms the new smaller-disk prompt-generation child request is being used in the real end-to-end pipeline
+
+### 2026-03-25 — ALIGN-096: Heterogeneous Combined `/responses` Step Failed on the Second TPU `vllm serve` Startup
+
+- **Failed run:**
+  - `/ahmed/align-debug-vllm-70b-mixtral-rejected-smoke-refactored`
+- **What succeeded before the failure:**
+  - `spec`
+  - `prompts`
+  - first local response server startup for chosen Llama
+  - the chosen pass reached a batched `/v1/completions` request for `67` prompts
+- **What failed:**
+  - the second local server startup, for Mixtral, inside the same worker-local combined `responses` step
+- **Important log evidence:**
+  - failing command:
+    - `vllm serve gs://marin-us-central1/models/mistralai--Mixtral-8x7B-Instruct-v0-1--eba9230 ...`
+  - `Resolved architecture: MixtralForCausalLM`
+  - then TPU/JAX init degraded and the deepest visible failure was:
+    - `AttributeError` from `tpu_inference.utils.make_optimized_mesh`
+  - outer error surfaced as:
+    - `RuntimeError: Engine core initialization failed`
+- **Interpretation:**
+  - same-model session reuse is still valid
+  - but different-model local-local orchestration should not try to start a second TPU `vllm serve` in the same worker after the first exits
+  - Experiment E therefore needs a narrower rule:
+    - combined `/responses` only for same-model local-local
+    - separate serialized `chosen` -> `rejected` steps for heterogeneous local-local runs
+- **Structured debug log:**
+  - `docs/debug-log-experiment-e-response-lifecycle.md`
+
+### 2026-03-25 — ALIGN-097: Relaunched Experiment F with Serialized Heterogeneous `chosen` Then `rejected`
+
+- **New run:**
+  - `/ahmed/align-debug-vllm-70b-mixtral-rejected-smoke-refactored-retry-serialized`
+- **Code change behind the relaunch:**
+  - `align()` now uses:
+    - combined `/responses` only when `teacher_model == rejected_model` and both are local
+    - otherwise, if both are local but different, it emits separate `chosen` and `rejected` steps and adds an explicit executor dependency from rejected to chosen
+- **Verification from root logs:**
+  - `### Inspecting the 6 provided steps ###`
+  - `### Launching 6 steps ###`
+  - cached `spec` and `prompts` were skipped as already succeeded
+  - a fresh `chosen` step was submitted:
+    - `align/debug_vllm_70b_mixtral_rejected_smoke/chosen_2a11d777`
+- **Current state at handoff:**
+  - root is running
+  - chosen child is pending on `v5p-8` TPU capacity in `us-central1-a`
+  - rejected has not launched yet, which is the intended lifecycle for this heterogeneous retry
+
+### 2026-03-25 — ALIGN-098: Final Architecture Plan for Robust Chosen/Rejected Response Orchestration
+
+- **Goal:**
+  - make chosen/rejected response generation robust across:
+    - same local model on both sides
+    - different local models on each side
+    - mixed local/API configurations
+  - keep the output contract stable for downstream `judgments` and `preference_pairs`
+
+- **Core design principles:**
+  - `chosen` and `rejected` remain separate logical artifacts even when optimized under the hood
+  - same-worker/session reuse is only a valid optimization when both roles use the exact same local model config
+  - different local models must not assume same-worker TPU reuse after one `vllm serve` exits
+  - scheduling policy should be explicit and configurable rather than hardcoded
+
+- **Proposed API shape:**
+  - add a response-execution policy enum to `AlignConfig`, for example:
+    - `auto`
+    - `parallel`
+    - `serialized`
+    - `reuse_same_model`
+
+- **Planned semantics:**
+  - `auto`
+    - same local model on both sides:
+      - use one combined `/responses` step and reuse one `BatchedVllmServeSession`
+    - different local models on both sides:
+      - use separate `chosen` and `rejected` steps in parallel
+    - any API/local mix:
+      - use separate steps in parallel
+  - `parallel`
+    - force separate `chosen` and `rejected` steps with no dependency edge
+    - lets Iris request two compute allocations at once if capacity exists
+  - `serialized`
+    - force separate `chosen -> rejected` steps with an explicit dependency edge
+    - useful for quota pressure, debugging, or fragile backends
+  - `reuse_same_model`
+    - only legal when `teacher_model == rejected_model`
+    - otherwise raise immediately
+
+- **Planned implementation structure:**
+  - keep two response primitives in `generate_responses.py`:
+    - `generate_responses(...)` for one role
+    - `generate_response_pair(...)` only for same-model local reuse
+  - move response-step planning in `align.py` into a dedicated helper like `_build_response_steps(...)`
+  - keep downstream `JudgeConfig` unchanged by always exposing:
+    - chosen responses path
+    - rejected responses path
+
+- **Executor / dependency plan:**
+  - near term:
+    - use an explicit dependency path to serialize `rejected` after `chosen` when policy is `serialized`
+  - longer term:
+    - consider first-class executor step dependencies so serialization does not rely on config transport hacks
+
+- **Concrete experiment plan after implementation:**
+  - Experiment F1:
+    - same-model local-local smoke with `auto`
+    - expected: combined `/responses` step
+  - Experiment F2:
+    - heterogeneous local-local smoke with `auto`
+    - expected: separate parallel `chosen` and `rejected` steps
+  - Experiment F3:
+    - heterogeneous local-local smoke with `serialized`
+    - expected: separate `chosen -> rejected` steps
+  - Compare across F1/F2/F3:
+    - startup reliability
+    - total wall-clock
+    - queue time
+    - response artifact row counts
+    - final judgment/pair counts
+
+- **Recommended steady-state default:**
+  - default to `auto`
+  - for the current Llama-chosen / Mixtral-rejected workflow, `auto` should mean separate parallel child jobs, not same-worker reuse
+  - reserve same-worker reuse for the narrow case where both roles use the exact same local model
+
+### 2026-03-25 — ALIGN-099: Implemented Explicit `ResponseExecutionMode` Policy in `align()`
+
+- **What landed in code:**
+  - `AlignConfig` now has an explicit response policy enum:
+    - `auto`
+    - `parallel`
+    - `serialized`
+    - `reuse_same_model`
+  - implementation is in:
+    - `lib/marin/src/marin/alignment/align.py`
+- **Current behavior:**
+  - `auto`
+    - same local model => combined `/responses`
+    - different local models => separate `chosen` and `rejected` steps with no dependency edge
+    - mixed local/API => separate steps with no dependency edge
+  - `parallel`
+    - always separate `chosen` and `rejected` with no dependency edge
+  - `serialized`
+    - always separate `chosen -> rejected` with an explicit dependency edge
+  - `reuse_same_model`
+    - only valid when both roles use the exact same local `VLLMConfig`
+    - otherwise `align()` raises immediately
+- **Why this is the robust design:**
+  - it preserves the successful same-model reuse optimization
+  - it removes the failed lifecycle assumption that two different TPU `vllm serve` startups can safely happen in one worker
+  - it still allows heterogeneous local-local runs to request two TPU allocations at once when policy is `auto` or `parallel`
+- **Local verification:**
+  - `uv run pytest tests/test_alignment.py -q`
+  - result: `79 passed`
+  - coverage now includes:
+    - same local model + `auto` => combined `/responses`
+    - different local models + `auto` => separate parallel `chosen` / `rejected`
+    - different local models + `parallel` => separate parallel `chosen` / `rejected`
+    - different local models + `serialized` => explicit `chosen -> rejected`
+    - invalid `reuse_same_model` => raises
+
+### 2026-03-25 — ALIGN-100: Concrete Validation Plan for the Final Response-Orchestration Architecture
+
+- **Goal:**
+  - validate correctness, reliability, and operational tradeoffs for the new response policy layer
+
+- **F1: Same-model local-local smoke (`auto`)**
+  - configuration:
+    - chosen = Llama 3.3 70B
+    - rejected = same Llama 3.3 70B
+    - `response_execution_mode=auto`
+  - expected DAG shape:
+    - one combined `/responses` step
+  - success criteria:
+    - one local worker handles both passes
+    - `judgments` and `preference_pairs` succeed
+    - no loss in response row counts relative to prompts
+
+- **F2: Heterogeneous local-local smoke (`auto`)**
+  - configuration:
+    - chosen = Llama 3.3 70B
+    - rejected = Mixtral 8x7B Instruct
+    - `response_execution_mode=auto`
+  - expected DAG shape:
+    - separate `chosen` and `rejected` steps with no dependency edge
+  - success criteria:
+    - root logs show `6 provided steps`
+    - both child steps become independently schedulable
+    - no same-worker sequential different-model startup
+    - final `judgments` and `preference_pairs` succeed
+
+- **F3: Heterogeneous local-local smoke (`serialized`)**
+  - configuration:
+    - same models as F2
+    - `response_execution_mode=serialized`
+  - expected DAG shape:
+    - separate `chosen -> rejected` steps
+  - success criteria:
+    - `rejected` does not launch before `chosen` succeeds
+    - full pipeline succeeds
+    - use this as the reliability baseline when TPU capacity is scarce
+
+- **F4: Invalid same-model reuse guard**
+  - configuration:
+    - chosen != rejected
+    - `response_execution_mode=reuse_same_model`
+  - expected behavior:
+    - `align()` raises before launch
+  - purpose:
+    - confirms policy misuse fails fast instead of degrading into unsafe runtime behavior
+
+- **Metrics to compare across F1/F2/F3:**
+  - scheduler wait for response children
+  - child startup time
+  - response row counts
+  - judgment row counts
+  - final pair counts
+  - total wall-clock from root start to pair artifact
+  - failure mode, if any
+
+- **Recommended execution order:**
+  - run F4 locally first (already covered by unit tests)
+  - then F1
+  - then F2
+  - then F3 only if F2 is flaky or if quota pressure is high

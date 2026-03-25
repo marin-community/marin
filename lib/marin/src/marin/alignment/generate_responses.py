@@ -21,9 +21,10 @@ from typing import Any
 
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
+from marin.alignment.batched_vllm_serve import BatchedVllmServeSession
 from marin.alignment.generate_prompts import load_sharded_jsonl_gz, write_sharded_jsonl_gz
 from marin.alignment.inference_config import InferenceConfig, LiteLLMConfig, VLLMConfig
-from marin.alignment.llm_client import get_or_create_vllm_engine, llm_chat
+from marin.alignment.llm_client import llm_chat
 
 logger = logging.getLogger(__name__)
 
@@ -45,20 +46,50 @@ class ResponseGenConfig:
 
     # Spec guidance: path to behavior statements JSON (for teacher only, None for rejected)
     behavior_statements_path: str | None = None
+    dependency_path: str | None = None
+    """Executor-only dependency used to serialize local steps. Ignored at runtime."""
 
     def resolve_inference_config(self) -> InferenceConfig:
         """Resolve model_config to an InferenceConfig instance."""
-        if isinstance(self.model_config, InferenceConfig):
-            return self.model_config
-        # Reconstruct from serialized dict
-        cfg = dict(self.model_config)
-        backend = cfg.pop("backend")
-        if backend == "litellm":
-            return LiteLLMConfig(**cfg)
-        elif backend == "vllm":
-            return VLLMConfig(**cfg)
-        else:
-            raise ValueError(f"Unknown inference backend: {backend}")
+        return _resolve_inference_config(self.model_config)
+
+
+@dataclass(frozen=True)
+class ResponsePairGenConfig:
+    """Configuration for combined local chosen/rejected generation."""
+
+    prompts_path: str
+    chosen_output_path: str
+    rejected_output_path: str
+    chosen_model_config: dict[str, Any] | InferenceConfig
+    rejected_model_config: dict[str, Any] | InferenceConfig
+    chosen_n: int = 1
+    chosen_temperature: float = 0.7
+    chosen_max_tokens: int = 2048
+    chosen_behavior_statements_path: str | None = None
+    rejected_n: int = 1
+    rejected_temperature: float = 0.7
+    rejected_max_tokens: int = 2048
+    rejected_behavior_statements_path: str | None = None
+
+    def resolve_chosen_inference_config(self) -> InferenceConfig:
+        return _resolve_inference_config(self.chosen_model_config)
+
+    def resolve_rejected_inference_config(self) -> InferenceConfig:
+        return _resolve_inference_config(self.rejected_model_config)
+
+
+def _resolve_inference_config(model_config: dict[str, Any] | InferenceConfig) -> InferenceConfig:
+    if isinstance(model_config, InferenceConfig):
+        return model_config
+
+    cfg = dict(model_config)
+    backend = cfg.pop("backend")
+    if backend == "litellm":
+        return LiteLLMConfig(**cfg)
+    if backend == "vllm":
+        return VLLMConfig(**cfg)
+    raise ValueError(f"Unknown inference backend: {backend}")
 
 
 def _load_behavior_statements(path: str) -> dict[str, str]:
@@ -104,6 +135,32 @@ def _make_response_record(
         "model": model_name,
         "responses": responses,
     }
+
+
+def _generate_vllm_response_records(
+    prompts: list[dict[str, Any]],
+    inference_config: VLLMConfig,
+    behavior_statements: dict[str, str] | None,
+    *,
+    session: BatchedVllmServeSession,
+    temperature: float,
+    max_tokens: int,
+    n: int,
+) -> list[dict[str, Any]]:
+    all_message_batches = [_build_messages(prompt, behavior_statements) for prompt in prompts]
+    outputs = session.generate_from_messages(
+        all_message_batches,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        n=n,
+    )
+
+    results: list[dict[str, Any]] = []
+    for prompt, output in zip(prompts, outputs, strict=True):
+        responses = [{"content": completion_text, "index": j} for j, completion_text in enumerate(output)]
+        results.append(_make_response_record(prompt, inference_config.model, responses))
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -154,42 +211,21 @@ def _generate_via_vllm(
     inference_config: VLLMConfig,
     behavior_statements: dict[str, str] | None,
 ) -> None:
-    """Generate responses for all prompts via local vLLM instance.
-
-    Uses batch generation (single llm.generate call) for efficiency.
-    Zephyr's per-record map would call vLLM once per prompt which is much
-    slower than batching, so this path loads all prompts eagerly.
-    """
-    try:
-        from vllm import SamplingParams
-    except ImportError as exc:
-        raise ImportError("vLLM is required for local model inference. Install with: pip install vllm") from exc
+    """Generate responses for all prompts via batched `vllm serve`."""
 
     prompts = load_sharded_jsonl_gz(config.prompts_path)
-    logger.info("Loaded %d prompts for vLLM batch generation", len(prompts))
+    logger.info("Loaded %d prompts for batched vLLM serve generation", len(prompts))
 
-    llm, tokenizer = get_or_create_vllm_engine(inference_config)
-
-    sampling_params = SamplingParams(
-        temperature=config.temperature,
-        max_tokens=config.max_tokens,
-        n=config.n,
-    )
-
-    # Build all message lists and apply chat template
-    all_prompt_texts = []
-    for prompt in prompts:
-        messages = _build_messages(prompt, behavior_statements)
-        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        all_prompt_texts.append(text)
-
-    outputs = llm.generate(all_prompt_texts, sampling_params)
-
-    # Write results using zephyr
-    results: list[dict[str, Any]] = []
-    for prompt, output in zip(prompts, outputs, strict=True):
-        responses = [{"content": completion.text, "index": j} for j, completion in enumerate(output.outputs)]
-        results.append(_make_response_record(prompt, inference_config.model, responses))
+    with BatchedVllmServeSession(inference_config) as session:
+        results = _generate_vllm_response_records(
+            prompts,
+            inference_config,
+            behavior_statements,
+            session=session,
+            temperature=config.temperature,
+            max_tokens=config.max_tokens,
+            n=config.n,
+        )
 
     write_sharded_jsonl_gz(results, config.output_path, shard_size=5000)
 
@@ -221,3 +257,68 @@ def generate_responses(config: ResponseGenConfig) -> None:
         _generate_via_vllm(config, inference_config, behavior_statements)
     else:
         raise ValueError(f"Unknown inference config type: {type(inference_config)}")
+
+
+def generate_response_pair(config: ResponsePairGenConfig) -> None:
+    """Generate chosen and rejected responses in one local vLLM worker."""
+    chosen_inference_config = config.resolve_chosen_inference_config()
+    rejected_inference_config = config.resolve_rejected_inference_config()
+    if not isinstance(chosen_inference_config, VLLMConfig) or not isinstance(rejected_inference_config, VLLMConfig):
+        raise ValueError("Combined response generation only supports local VLLMConfig models.")
+
+    prompts = load_sharded_jsonl_gz(config.prompts_path)
+    logger.info("Loaded %d prompts for combined local response generation", len(prompts))
+
+    chosen_behavior_statements = None
+    if config.chosen_behavior_statements_path:
+        chosen_behavior_statements = _load_behavior_statements(config.chosen_behavior_statements_path)
+    rejected_behavior_statements = None
+    if config.rejected_behavior_statements_path:
+        rejected_behavior_statements = _load_behavior_statements(config.rejected_behavior_statements_path)
+
+    if chosen_inference_config == rejected_inference_config:
+        logger.info("Reusing one local vLLM serve session for chosen and rejected generation")
+        with BatchedVllmServeSession(chosen_inference_config) as session:
+            chosen_records = _generate_vllm_response_records(
+                prompts,
+                chosen_inference_config,
+                chosen_behavior_statements,
+                session=session,
+                temperature=config.chosen_temperature,
+                max_tokens=config.chosen_max_tokens,
+                n=config.chosen_n,
+            )
+            rejected_records = _generate_vllm_response_records(
+                prompts,
+                rejected_inference_config,
+                rejected_behavior_statements,
+                session=session,
+                temperature=config.rejected_temperature,
+                max_tokens=config.rejected_max_tokens,
+                n=config.rejected_n,
+            )
+    else:
+        logger.info("Running chosen and rejected generation sequentially with separate local vLLM serve sessions")
+        with BatchedVllmServeSession(chosen_inference_config) as chosen_session:
+            chosen_records = _generate_vllm_response_records(
+                prompts,
+                chosen_inference_config,
+                chosen_behavior_statements,
+                session=chosen_session,
+                temperature=config.chosen_temperature,
+                max_tokens=config.chosen_max_tokens,
+                n=config.chosen_n,
+            )
+        with BatchedVllmServeSession(rejected_inference_config) as rejected_session:
+            rejected_records = _generate_vllm_response_records(
+                prompts,
+                rejected_inference_config,
+                rejected_behavior_statements,
+                session=rejected_session,
+                temperature=config.rejected_temperature,
+                max_tokens=config.rejected_max_tokens,
+                n=config.rejected_n,
+            )
+
+    write_sharded_jsonl_gz(chosen_records, config.chosen_output_path, shard_size=5000)
+    write_sharded_jsonl_gz(rejected_records, config.rejected_output_path, shard_size=5000)
