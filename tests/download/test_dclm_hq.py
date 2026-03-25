@@ -7,7 +7,7 @@ import json
 from unittest.mock import patch
 
 import zstandard as zstd
-from marin.download.dclm_hq.download_dclm_hq_html import DCLMHQDownloadConfig, extract_dclm_hq_dump
+from marin.datakit.download.dclm_hq import DCLMHQDownloadConfig, extract_dclm_hq_dump
 
 SAMPLE_DCLM_RECORDS = [
     {

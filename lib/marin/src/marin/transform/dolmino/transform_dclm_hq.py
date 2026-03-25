@@ -40,8 +40,8 @@ from dataclasses import dataclass
 
 import draccus
 from iris.marin_fs import open_url, url_to_fs
-from marin.download.dclm_hq.download_dclm_hq_html import find_html_in_cc
-from marin.download.huggingface.stream_remove_columns import hf_fs
+from marin.datakit.download.dclm_hq import find_html_in_cc
+from marin.datakit.download.stream_remove_columns import hf_fs
 from marin.schemas.web.convert import ExtractionConfig
 from marin.web.convert import convert_page
 from tqdm import tqdm

@@ -8,8 +8,8 @@ https://huggingface.co/datasets/allenai/paloma
 """
 
 from experiments.paloma import paloma_tokenized
-from marin.download import HfDownloadConfig
-from marin.download.huggingface.download_hf import download_hf
+from marin.datakit.download.huggingface import DownloadConfig as HfDownloadConfig
+from marin.datakit.download.huggingface import download_hf
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"

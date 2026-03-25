@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 import pytest
 import zstandard as zstd
 from iris.marin_fs import open_url as _real_open_url
-from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
+from marin.datakit.download.nemotron_cc import NemotronIngressConfig, download_nemotron_cc
 
 _OPEN_URL_TARGET = "marin.datakit.download.nemotron_cc.open_url"
 _REQUESTS_SESSION_TARGET = "marin.datakit.download.nemotron_cc.requests.Session"
