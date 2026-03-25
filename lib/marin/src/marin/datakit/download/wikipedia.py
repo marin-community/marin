@@ -35,7 +35,6 @@ from dataclasses import dataclass
 import draccus
 import requests
 from iris.marin_fs import open_url
-from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_size
 from tqdm_loggable.auto import tqdm
 from zephyr import Dataset, ZephyrContext, atomic_rename, load_jsonl
@@ -124,27 +123,3 @@ def download(cfg: WikipediaDownloadConfig) -> None:
     )
 
     logger.info("Wikipedia dump transfer complete, wrote: %s", list(extracted))
-
-
-def wikipedia_step(
-    name: str = "raw/wikipedia",
-    *,
-    input_urls: list[str],
-    revision: str,
-    deps: list[StepSpec] | None = None,
-    output_path_prefix: str | None = None,
-    override_output_path: str | None = None,
-) -> StepSpec:
-    """Create a StepSpec that downloads and processes Wikipedia HTML dumps."""
-
-    def _run(output_path: str) -> None:
-        download(WikipediaDownloadConfig(input_urls=input_urls, revision=revision, output_path=output_path))
-
-    return StepSpec(
-        name=name,
-        fn=_run,
-        deps=deps or [],
-        hash_attrs={"input_urls": input_urls, "revision": revision},
-        output_path_prefix=output_path_prefix,
-        override_output_path=override_output_path,
-    )
