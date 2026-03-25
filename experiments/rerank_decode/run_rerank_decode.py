@@ -106,11 +106,10 @@ def run_rerank_decode(config: RerankDecodeConfig):
             raise ValueError(f"Unknown scorer_type: {config.scorer_type}")
 
         results = []
-        timings = []
+        all_stats = []
         for i, prompt in enumerate(prompts):
             scorer.reset()
-            start = time.monotonic()
-            result = rerank(
+            generated, stats = rerank(
                 proposal_client=proposal_client,
                 proposal_model=config.proposal_model_path,
                 scorer=scorer,
@@ -120,11 +119,18 @@ def run_rerank_decode(config: RerankDecodeConfig):
                 chunk_size=config.chunk_size,
                 temperature=config.temperature,
                 eos_token=eos_token,
+                verbose=True,
             )
-            elapsed = time.monotonic() - start
-            results.append(result)
-            timings.append(elapsed)
-            logger.info("Prompt %d/%d: %.2fs, %d chars", i + 1, len(prompts), elapsed, len(result))
+            results.append(generated)
+            all_stats.append(stats)
+
+        # Print stats for all prompts
+        print("\n=== Rerank Decode Stats ===")
+        print(f"{'Prompt':>6} | {'Chunks':>6} | {'Chars':>6} | {'Stop':>10} | {'Remaining':>9} | {'Proposal':>10} | {'Scoring':>10} | {'Total':>10}")
+        print("-" * 85)
+        for i, (prompt, stats) in enumerate(zip(prompts, all_stats)):
+            total = stats.total_proposal_time + stats.total_scoring_time
+            print(f"{i+1:>6} | {stats.num_chunks:>6} | {len(results[i]):>6} | {stats.stop_reason:>10} | {stats.remaining_tokens:>9} | {stats.total_proposal_time:>9.2f}s | {stats.total_scoring_time:>9.2f}s | {total:>9.2f}s")
 
         output = [
             {"prompt": prompt, "generation": generation}
@@ -134,10 +140,11 @@ def run_rerank_decode(config: RerankDecodeConfig):
         with fsspec.open(f"{config.output_path}/results.json", "wt") as f:
             json.dump(output, f, indent=2)
 
-        with fsspec.open(f"{config.output_path}/timings.json", "wt") as f:
-            json.dump(timings, f, indent=2)
+        with fsspec.open(f"{config.output_path}/stats.json", "wt") as f:
+            from dataclasses import asdict
+            json.dump([asdict(s) for s in all_stats], f, indent=2)
 
-        logger.info("Saved %d results to %s/results.json", len(results), config.output_path)
+        logger.info("Saved %d results to %s", len(results), config.output_path)
 
     finally:
         shutdown_servers(*procs)
