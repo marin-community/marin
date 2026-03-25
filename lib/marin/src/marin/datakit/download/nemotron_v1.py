@@ -114,6 +114,6 @@ def download_nemotron_v1_step() -> StepSpec:
     return StepSpec(
         name="raw/nemotron_v1",
         fn=lambda output_path: download_nemotron_cc(output_path=output_path),
-        # NOTE: use the existing output to avoid re-downloading. Yes this is mssing the `n`.
+        # NOTE: use the existing output to avoid re-downloading. Yes this is missing the `n`.
         override_output_path="raw/nemotro-cc-eeb783",
     )
