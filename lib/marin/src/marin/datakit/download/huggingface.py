@@ -14,7 +14,6 @@ import socket
 import time
 from dataclasses import dataclass, field
 
-import draccus
 import huggingface_hub
 from huggingface_hub import HfFileSystem
 from iris.marin_fs import open_url, url_to_fs
@@ -397,13 +396,3 @@ def download_hf_step(
         output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,
     )
-
-
-@draccus.wrap()
-def main(cfg: DownloadConfig) -> None:
-    """Download HuggingFace dataset."""
-    download_hf(cfg)
-
-
-if __name__ == "__main__":
-    main()
