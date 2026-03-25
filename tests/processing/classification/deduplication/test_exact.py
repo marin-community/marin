@@ -1,20 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from marin.processing.classification.deduplication.dedup_commons import DedupMode, DedupConfig, deduplicate
+from marin.processing.classification.deduplication.dedup_commons import DedupMode
+from marin.processing.classification.deduplication.exact import dedup_exact_paragraph, dedup_exact_document
 from tests.processing.classification.deduplication.conftest import load_dedup_vortex_outputs
 
 
 def test_exact_paragraph_deduplication(fox_corpus):
     """Test exact deduplication using paragraph hashing (exact match)"""
-    dedupe_config = DedupConfig(
+    result = dedup_exact_paragraph(
         input_paths=fox_corpus["test_dir"],
         output_path=fox_corpus["output_dir"],
-        processes=1,
-        mode=DedupMode.EXACT_PARAGRAPH,
+        max_parallelism=4,
     )
-
-    result = deduplicate(dedupe_config)
     assert result["success"]
     assert result["mode"] == DedupMode.EXACT_PARAGRAPH
 
@@ -51,14 +49,11 @@ def test_exact_paragraph_deduplication(fox_corpus):
 
 
 def test_exact_document_deduplication(fox_corpus):
-    config = DedupConfig(
+    result = dedup_exact_document(
         input_paths=fox_corpus["test_dir"],
         output_path=fox_corpus["output_dir"],
-        mode=DedupMode.EXACT_DOCUMENT,
-        processes=1,
+        max_parallelism=4,
     )
-
-    result = deduplicate(config)
     assert result["success"]
     assert result["mode"] == DedupMode.EXACT_DOCUMENT
 

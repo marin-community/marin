@@ -216,7 +216,11 @@ class StepRunner:
                 if not running and waiting:
                     missing = []
                     for s in waiting:
-                        unmet = [_display_name(d) for d in s.deps if d not in completed and d not in failed]
+                        unmet = [
+                            _display_name(d)
+                            for d in s.deps
+                            if d.output_path not in completed and d.output_path not in failed
+                        ]
                         missing.append(f"  {s.name_with_hash}: needs {unmet}")
                     raise RuntimeError(
                         f"Iterable exhausted with {len(waiting)} step(s) with unsatisfied dependencies:\n"

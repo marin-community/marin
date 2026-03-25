@@ -21,7 +21,6 @@ from marin.execution.executor import (
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate, ConsolidateConfig
 from marin.processing.classification.dataset_utils import DatasetConfig
-from marin.processing.classification.deduplication.dedup_commons import DedupMode
 from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
 from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
 from marin.processing.classification.fasttext.train_fasttext import (
@@ -103,27 +102,19 @@ class ValidateFuzzyDedupConfig:
 
 
 def validate_fuzzy_dedup_output(config: ValidateFuzzyDedupConfig):
-    """Validate fuzzy dedup output: directory exists, files are jsonl.gz, has expected dup counts."""
-    import gzip
-    import json
+    """Validate fuzzy dedup output: directory exists, files are vortex, has expected dup counts."""
+    import vortex
 
-    jsonl_files = fsspec_glob(os.path.join(config.data_path, "**/*.jsonl.gz"))
-    assert jsonl_files, f"No jsonl.gz files found in {config.data_path}"
+    vortex_files = fsspec_glob(os.path.join(config.data_path, "**/*.vortex"))
+    assert vortex_files, f"No vortex files found in {config.data_path}"
 
-    total_rows = 0
     total_dups = 0
-    for jf_path in jsonl_files:
-        with gzip.open(jf_path, "rt") as f:
-            for line in f:
-                row = json.loads(line)
-                total_rows += 1
-                if row.get("attributes", {}).get(str(DedupMode.FUZZY_DOCUMENT), False):
-                    total_dups += 1
+    for vf_path in vortex_files:
+        table = vortex.open(vf_path).to_arrow().read_all()
+        total_dups += len(table)
 
     assert total_dups == config.expected_dups, f"Expected {config.expected_dups} dups, got {total_dups}"
-    logger.info(
-        f"Validated fuzzy dedup: {total_dups} dups out of {total_rows} rows in {len(jsonl_files)} jsonl.gz files"
-    )
+    logger.info(f"Validated fuzzy dedup: {total_dups} dups in {len(vortex_files)} vortex files")
 
 
 def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
@@ -230,6 +221,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         fn=lambda output_path: dedup_exact_paragraph(
             input_paths=transform_hq_data_spec.output_path,
             output_path=output_path,
+            max_parallelism=4,
             worker_resources=ResourceConfig(cpu=1, ram="1g"),
         ),
     )
@@ -240,6 +232,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         fn=lambda output_path: dedup_fuzzy_document(
             input_paths=transform_hq_data_spec.output_path,
             output_path=output_path,
+            max_parallelism=4,
             worker_resources=ResourceConfig(cpu=1, ram="1g"),
         ),
     )
@@ -292,7 +285,9 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 FilterConfig(
                     type=FilterType.REMOVE_DOC,
                     attribute_path=dedup_fuzzy_document_step.cd("data"),
-                    name=str(DedupMode.FUZZY_DOCUMENT),
+                    name="dup_doc",
+                    attribute_filetype="vortex",
+                    keep_if_missing=True,
                 ),
             ],
         ),
