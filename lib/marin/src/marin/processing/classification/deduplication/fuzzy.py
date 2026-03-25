@@ -10,7 +10,7 @@ from marin.processing.classification.deduplication.dedup_commons import (
     DEFAULT_COORDINATOR_RESOURCES,
     DEFAULT_FILETYPES,
     DedupMode,
-    DupCounters,
+    _aggregate_shard_counters,
     _collect_input_files,
     _find_base_path,
     _get_extension,
@@ -21,7 +21,7 @@ from marin.processing.classification.deduplication.dedup_commons import (
 from fray.v2 import ResourceConfig
 from marin.processing.classification.deduplication.connected_components import connected_components
 import wandb
-from zephyr import ZephyrContext, write_vortex_file
+from zephyr import ZephyrContext, counters, write_vortex_file
 from zephyr.dataset import Dataset
 
 logger = logging.getLogger(__name__)
@@ -131,20 +131,20 @@ def dedup_fuzzy_document(
             new_extension=".vortex",
         )
 
-        # NOTE: this is per file stat, we aggregate across files later
-        stats = DupCounters(method="fuzzy", level="document")
+        total = 0
+        dups = 0
 
         def counting_iter():
-            nonlocal stats
+            nonlocal total, dups
             for record in records:
                 is_dup: bool = record["is_dup"]
-                stats += DupCounters(
-                    method="fuzzy",
-                    level="document",
-                    total=1,
-                    dups=int(is_dup),
-                    unique=int(not is_dup),
-                )
+                total += 1
+                counters.increment("dedup/fuzzy/document/total")
+                if is_dup:
+                    dups += 1
+                    counters.increment("dedup/fuzzy/document/dups")
+                else:
+                    counters.increment("dedup/fuzzy/document/unique")
                 yield record
 
         def skip_non_dups(records: Iterator[dict]) -> Iterator[dict]:
@@ -153,7 +153,7 @@ def dedup_fuzzy_document(
                     yield {"id": record["id"], "attributes": {"dup_doc": True}}
 
         result = write_vortex_file(skip_non_dups(counting_iter()), output_file)
-        return {**result, "stats": stats}
+        return {**result, "total": total, "dups": dups, "unique": total - dups}
 
     shard_results = list(
         ctx.execute(
@@ -175,11 +175,16 @@ def dedup_fuzzy_document(
         ),
     )
 
-    fuzzy_cnts = sum((r["stats"] for r in shard_results), start=DupCounters(method="fuzzy", level="document"))
-    logger.info(str(fuzzy_cnts))
+    counter_dict = _aggregate_shard_counters(shard_results, method="fuzzy", level="document")
+    logger.info(
+        "Fuzzy document total: %s, dups: %s, unique: %s",
+        counter_dict["dedup/fuzzy/document/total"],
+        counter_dict["dedup/fuzzy/document/dups"],
+        counter_dict["dedup/fuzzy/document/unique"],
+    )
 
     if wandb.run:
-        wandb.log(fuzzy_cnts.to_dict())
+        wandb.log(counter_dict)
         wandb.finish()
 
-    return {"success": True, "mode": str(DedupMode.FUZZY_DOCUMENT)} | fuzzy_cnts.to_dict()
+    return {"success": True, "mode": str(DedupMode.FUZZY_DOCUMENT)} | counter_dict

@@ -8,7 +8,7 @@ from marin.processing.classification.deduplication.dedup_commons import (
     DEFAULT_COORDINATOR_RESOURCES,
     DEFAULT_FILETYPES,
     DedupMode,
-    DupCounters,
+    _aggregate_shard_counters,
     _collect_input_files,
     _find_base_path,
     _get_extension,
@@ -22,7 +22,7 @@ import pyarrow as pa
 import logging
 import wandb
 from fray.v2 import ResourceConfig
-from zephyr import ZephyrContext, write_vortex_file
+from zephyr import ZephyrContext, counters, write_vortex_file
 from zephyr.dataset import Dataset
 
 logger = logging.getLogger(__name__)
@@ -95,20 +95,20 @@ def dedup_exact_paragraph(
             new_extension=".vortex",
         )
 
-        # NOTE: this is per file stat, we aggregate across files later
-        stats = DupCounters(method="exact", level="paragraph")
+        total = 0
+        dups = 0
 
         def counting_iter():
-            nonlocal stats
+            nonlocal total, dups
             for record in records:
                 is_dup: bool = record["is_dup"]
-                stats += DupCounters(
-                    method="exact",
-                    level="paragraph",
-                    total=1,
-                    dups=int(is_dup),
-                    unique=int(not is_dup),
-                )
+                total += 1
+                counters.increment("dedup/exact/paragraph/total")
+                if is_dup:
+                    dups += 1
+                    counters.increment("dedup/exact/paragraph/dups")
+                else:
+                    counters.increment("dedup/exact/paragraph/unique")
                 yield record
 
         def group_by_doc_id(records: Iterator[dict]) -> Iterator[dict]:
@@ -135,7 +135,7 @@ def dedup_exact_paragraph(
                 yield doc_level_record
 
         result = write_vortex_file(group_by_doc_id(counting_iter()), output_file)
-        return {**result, "stats": stats}
+        return {**result, "total": total, "dups": dups, "unique": total - dups}
 
     def annotate_dups(key_hash: str, records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
         has_dups, head_record, records = _iter_has_more_than_one(records)
@@ -179,14 +179,19 @@ def dedup_exact_paragraph(
         ),
     )
 
-    exact_cnts = sum((r["stats"] for r in shard_results), start=DupCounters(method="exact", level="paragraph"))
-    logger.info(str(exact_cnts))
+    counter_dict = _aggregate_shard_counters(shard_results, method="exact", level="paragraph")
+    logger.info(
+        "Exact paragraph total: %s, dups: %s, unique: %s",
+        counter_dict["dedup/exact/paragraph/total"],
+        counter_dict["dedup/exact/paragraph/dups"],
+        counter_dict["dedup/exact/paragraph/unique"],
+    )
 
     if wandb.run:
-        wandb.log(exact_cnts.to_dict())
+        wandb.log(counter_dict)
         wandb.finish()
 
-    return {"success": True, "mode": str(DedupMode.EXACT_PARAGRAPH)} | exact_cnts.to_dict()
+    return {"success": True, "mode": str(DedupMode.EXACT_PARAGRAPH)} | counter_dict
 
 
 def dedup_exact_document(
@@ -235,20 +240,20 @@ def dedup_exact_document(
             new_extension=".vortex",
         )
 
-        # NOTE: this is per file stat, we aggregate across files later
-        stats = DupCounters(method="exact", level="document")
+        total = 0
+        dups = 0
 
         def counting_iter():
-            nonlocal stats
+            nonlocal total, dups
             for record in records:
                 is_dup: bool = record["is_dup"]
-                stats += DupCounters(
-                    method="exact",
-                    level="document",
-                    total=1,
-                    dups=int(is_dup),
-                    unique=int(not is_dup),
-                )
+                total += 1
+                counters.increment("dedup/exact/document/total")
+                if is_dup:
+                    dups += 1
+                    counters.increment("dedup/exact/document/dups")
+                else:
+                    counters.increment("dedup/exact/document/unique")
                 yield record
 
         def skip_non_dups(records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
@@ -257,7 +262,7 @@ def dedup_exact_document(
                     yield {"id": record["id"], "attributes": {"dup_doc": True}}
 
         result = write_vortex_file(skip_non_dups(counting_iter()), output_file)
-        return {**result, "stats": stats}
+        return {**result, "total": total, "dups": dups, "unique": total - dups}
 
     def annotate_dups(key_hash: str, records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
         has_dups, head_record, records = _iter_has_more_than_one(records)
@@ -298,11 +303,16 @@ def dedup_exact_document(
         ),
     )
 
-    exact_cnts = sum((r["stats"] for r in shard_results), start=DupCounters(method="exact", level="document"))
-    logger.info(str(exact_cnts))
+    counter_dict = _aggregate_shard_counters(shard_results, method="exact", level="document")
+    logger.info(
+        "Exact document total: %s, dups: %s, unique: %s",
+        counter_dict["dedup/exact/document/total"],
+        counter_dict["dedup/exact/document/dups"],
+        counter_dict["dedup/exact/document/unique"],
+    )
 
     if wandb.run:
-        wandb.log(exact_cnts.to_dict())
+        wandb.log(counter_dict)
         wandb.finish()
 
-    return {"success": True, "mode": str(DedupMode.EXACT_DOCUMENT)} | exact_cnts.to_dict()
+    return {"success": True, "mode": str(DedupMode.EXACT_DOCUMENT)} | counter_dict

@@ -6,7 +6,7 @@ from collections.abc import Iterator, Sequence
 from typing import Any, TypedDict
 
 import dupekit
-from zephyr import Dataset, ZephyrContext, write_vortex_file, ShardInfo
+from zephyr import Dataset, ZephyrContext, counters, write_vortex_file, ShardInfo
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +151,7 @@ def connected_components(
                 for node in nodes:
                     if node["changed"]:
                         num_changes += 1
+                        counters.increment("cc/changes")
                     yield node
 
             path = f"{output_dir}/it_{iteration}/part-{shard_info.shard_idx:05d}-of-{shard_info.total_shards:05d}.vortex"
