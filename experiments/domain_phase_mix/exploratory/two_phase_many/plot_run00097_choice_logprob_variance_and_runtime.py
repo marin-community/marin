@@ -23,9 +23,13 @@ from experiments.domain_phase_mix.launch_two_phase_many_run_00097_seed_study imp
 )
 
 OUTPUT_DIR = Path(__file__).resolve().parent
-SUMMARY_JSON_PATH = (
+COMPUTE_SCALING_SUMMARY_JSON_PATH = (
     "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_compute_scaling/"
     "compute_scaling_noise_report-0ebf16/compute_scaling_noise_summary.json"
+)
+MODEL_SIZE_SUMMARY_JSON_PATH = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_fixed_subset/"
+    "noise_report-16f29d/noise_summary.json"
 )
 COMPUTE_RESULTS_CSV_PATH = (
     "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_compute_scaling/"
@@ -37,13 +41,27 @@ SEED_STUDY_CHECKPOINT_PREFIX = (
 FIXED_SUBSET_CHECKPOINT_PREFIX = (
     "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_fixed_subset_study"
 )
+PANEL_RESULTS_CSV_PATH = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ngd3dm2_first10_fixed_subset_panel/"
+    "collect_results-5009a7/results.csv"
+)
 SWARM_RESULTS_CSV_PATH = OUTPUT_DIR / "two_phase_many.csv"
-SETTING_ORDER = ("30M 3B", "60M 1.2B", "60M 1.2B Fixed Subset", "60M 1.2B Swarm", "60M 6B")
+SETTING_ORDER = (
+    "30M 3B",
+    "60M 1.2B",
+    "60M 1.2B Fixed Subset",
+    "60M 1.2B First-10 Panel",
+    "60M 1.2B Swarm",
+    "60M 6B",
+    "300M 6B Fixed Subset",
+)
 SETTING_LABELS = {
     "baseline_1x": "60M 1.2B",
     "fixed_subset_1x": "60M 1.2B Fixed Subset",
+    "first10_fixed_subset_panel": "60M 1.2B First-10 Panel",
     "olmo3_30m_3b": "30M 3B",
     "regmix60m_6b": "60M 6B",
+    "regmix300m_6b": "300M 6B Fixed Subset",
     "swarm_241": "60M 1.2B Swarm",
 }
 TARGET_METRIC = "lm_eval/mmlu_5shot/choice_logprob"
@@ -66,9 +84,12 @@ class SettingSummary:
 
 
 def _load_summary_rows() -> pd.DataFrame:
-    with fsspec.open(SUMMARY_JSON_PATH) as f:
-        payload = json.load(f)
-    return pd.DataFrame(payload["rows"])
+    rows: list[pd.DataFrame] = []
+    for path in (COMPUTE_SCALING_SUMMARY_JSON_PATH, MODEL_SIZE_SUMMARY_JSON_PATH):
+        with fsspec.open(path) as f:
+            payload = json.load(f)
+        rows.append(pd.DataFrame(payload["rows"]))
+    return pd.concat(rows, ignore_index=True)
 
 
 def _extract_seed_study_run_ids() -> list[str]:
@@ -110,6 +131,16 @@ def _extract_compute_run_ids() -> dict[str, list[str]]:
         if len(run_ids) != 10:
             raise ValueError(f"Expected 10 completed run IDs for {ladder}, found {len(run_ids)}: {run_ids}")
     return by_ladder
+
+
+def _extract_panel_run_ids_and_metric_stats() -> tuple[list[str], float, float, int]:
+    df = pd.read_csv(PANEL_RESULTS_CSV_PATH, usecols=["wandb_run_id", "status", TARGET_METRIC])
+    completed = df[(df["status"] == "completed") & df["wandb_run_id"].notna()].copy()
+    metric = pd.to_numeric(completed[TARGET_METRIC], errors="coerce").dropna()
+    run_ids = completed.loc[completed[TARGET_METRIC].notna(), "wandb_run_id"].astype(str).tolist()
+    if len(run_ids) != 10:
+        raise ValueError(f"Expected 10 completed panel run IDs, found {len(run_ids)}: {run_ids}")
+    return run_ids, float(metric.mean()), float(metric.std(ddof=1)), len(metric)
 
 
 def _extract_swarm_run_ids_and_metric_stats() -> tuple[list[str], float, float, int]:
@@ -176,21 +207,31 @@ def build_setting_summaries() -> list[SettingSummary]:
     seed_run_ids = _extract_seed_study_run_ids()
     fixed_subset_run_ids = _extract_fixed_subset_run_ids()
     compute_run_ids = _extract_compute_run_ids()
+    panel_run_ids, panel_mean, panel_std, panel_n = _extract_panel_run_ids_and_metric_stats()
     swarm_run_ids, swarm_mean, swarm_std, swarm_n = _extract_swarm_run_ids_and_metric_stats()
     fixed_subset_metric_values = _fetch_metric_values(fixed_subset_run_ids, TARGET_METRIC)
 
     runtime_by_cohort = {
         "baseline_1x": _active_compute_hours(seed_run_ids),
         "fixed_subset_1x": _active_compute_hours(fixed_subset_run_ids),
+        "first10_fixed_subset_panel": _active_compute_hours(panel_run_ids),
         "olmo3_30m_3b": _active_compute_hours(compute_run_ids["olmo3_30m_3b"]),
         "regmix60m_6b": _active_compute_hours(compute_run_ids["regmix60m_6b"]),
         "swarm_241": _active_compute_hours(swarm_run_ids),
     }
 
     summaries: list[SettingSummary] = []
-    for cohort in ("olmo3_30m_3b", "baseline_1x", "fixed_subset_1x", "swarm_241", "regmix60m_6b"):
-        runtime_mean, runtime_std = runtime_by_cohort[cohort]
+    for cohort in (
+        "olmo3_30m_3b",
+        "baseline_1x",
+        "fixed_subset_1x",
+        "first10_fixed_subset_panel",
+        "swarm_241",
+        "regmix60m_6b",
+        "regmix300m_6b",
+    ):
         if cohort == "swarm_241":
+            runtime_mean, runtime_std = runtime_by_cohort[cohort]
             summaries.append(
                 SettingSummary(
                     setting=SETTING_LABELS[cohort],
@@ -204,7 +245,23 @@ def build_setting_summaries() -> list[SettingSummary]:
                 )
             )
             continue
+        if cohort == "first10_fixed_subset_panel":
+            runtime_mean, runtime_std = runtime_by_cohort[cohort]
+            summaries.append(
+                SettingSummary(
+                    setting=SETTING_LABELS[cohort],
+                    cohort=cohort,
+                    metric_mean=panel_mean,
+                    metric_std=panel_std,
+                    metric_n=panel_n,
+                    active_compute_hours_mean=runtime_mean,
+                    active_compute_hours_std=runtime_std,
+                    runtime_n=len(panel_run_ids),
+                )
+            )
+            continue
         if cohort == "fixed_subset_1x":
+            runtime_mean, runtime_std = runtime_by_cohort[cohort]
             summaries.append(
                 SettingSummary(
                     setting=SETTING_LABELS[cohort],
@@ -220,6 +277,12 @@ def build_setting_summaries() -> list[SettingSummary]:
             continue
 
         row = metric_rows.loc[metric_rows["cohort"] == cohort].iloc[0]
+        runtime_mean = float(row["active_compute_hours_mean"])
+        runtime_std = float(row["active_compute_hours_std"])
+        runtime_n = 10 if pd.isna(row["active_compute_hours_n"]) else int(row["active_compute_hours_n"])
+        if cohort in runtime_by_cohort:
+            runtime_mean, runtime_std = runtime_by_cohort[cohort]
+            runtime_n = 10
         summaries.append(
             SettingSummary(
                 setting=SETTING_LABELS[cohort],
@@ -229,7 +292,7 @@ def build_setting_summaries() -> list[SettingSummary]:
                 metric_n=int(row["n"]),
                 active_compute_hours_mean=runtime_mean,
                 active_compute_hours_std=runtime_std,
-                runtime_n=10,
+                runtime_n=runtime_n,
             )
         )
     return summaries
@@ -241,7 +304,6 @@ def plot_summaries(summaries: list[SettingSummary]) -> None:
     df = df.sort_values("setting")
 
     cmap = plt.get_cmap("RdYlGn_r")
-    colors = [cmap(value) for value in np.linspace(0.12, 0.88, len(df))]
     x = np.arange(len(df))
 
     fig, axes = plt.subplots(1, 3, figsize=(17.2, 4.8))
@@ -253,6 +315,16 @@ def plot_summaries(summaries: list[SettingSummary]) -> None:
     ]
 
     for ax, (column, title, note) in zip(axes, panels, strict=True):
+        values = df[column].to_numpy(dtype=float)
+        span = float(values.max() - values.min())
+        if span == 0.0:
+            normalized_badness = np.full_like(values, 0.5, dtype=float)
+        elif note == "higher is better":
+            normalized_badness = (values.max() - values) / span
+        else:
+            normalized_badness = (values - values.min()) / span
+        colors = [cmap(0.12 + 0.76 * badness) for badness in normalized_badness]
+
         if column == "active_compute_hours_mean":
             ax.bar(
                 x,
@@ -279,11 +351,14 @@ def plot_summaries(summaries: list[SettingSummary]) -> None:
                 label = f"{value:.3f}"
             ax.text(xi, value, label, ha="center", va="bottom", fontsize=9)
 
-    fig.suptitle("MMLU Choice-Logprob and Active Runtime Across Compute Settings", fontsize=13, weight="bold")
+    fig.suptitle("MMLU Choice-Logprob and Active Runtime Across Proxy Settings", fontsize=13, weight="bold")
     fig.text(
         0.5,
         0.01,
-        "Active runtime sums throughput/duration across steps. Swarm cohort uses 241 completed runs.",
+        (
+            "Active runtime sums throughput/duration across steps. "
+            "Swarm cohort uses 241 completed runs; first-10 panel uses 10 distinct fixed-subset reruns."
+        ),
         ha="center",
         fontsize=9,
         color="dimgray",
