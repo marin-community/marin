@@ -10,7 +10,7 @@ import pyarrow.parquet as pq
 import pytest
 from levanter.store.cache import CacheLedger, TreeCache
 
-from marin.datakit.download import download_step
+from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import content_hash_id, normalize_step
 from marin.datakit.tokenize import tokenize_step
 from marin.execution.step_runner import StepRunner
@@ -20,7 +20,7 @@ from marin.execution.step_runner import StepRunner
 def test_download_normalize_tokenize(tmp_path):
     """Download → normalize → tokenize as a StepSpec DAG via StepRunner."""
 
-    dl = download_step(
+    dl = download_hf_step(
         "datakit/download",
         hf_dataset_id="wikitext",
         revision="main",
