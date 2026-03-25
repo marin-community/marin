@@ -23,7 +23,6 @@ from dataclasses import dataclass
 
 import requests
 from iris.marin_fs import open_url
-from marin.execution.step_spec import StepSpec
 import warcio
 from marin.utils import fsspec_glob
 from tqdm import tqdm
@@ -193,26 +192,3 @@ def extract_dclm_hq_dump(input_path: str, output_path: str) -> None:
     ctx.execute(pipeline)
 
     logger.info("Processing completed successfully!")
-
-
-def dclm_hq_step(
-    name: str = "raw/dclm-hq-html",
-    *,
-    input_path: str,
-    deps: list[StepSpec] | None = None,
-    output_path_prefix: str | None = None,
-    override_output_path: str | None = None,
-) -> StepSpec:
-    """Create a StepSpec that downloads DCLM HQ HTML data from Common Crawl."""
-
-    def _run(output_path: str) -> None:
-        extract_dclm_hq_dump(input_path, output_path)
-
-    return StepSpec(
-        name=name,
-        fn=_run,
-        deps=deps or [],
-        hash_attrs={"input_path": input_path},
-        output_path_prefix=output_path_prefix,
-        override_output_path=override_output_path,
-    )
