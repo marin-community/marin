@@ -305,6 +305,7 @@ def create_two_phase_dolma3_dolmino_top_level_optimizer_config(
     batch_size: int = BATCH_SIZE,
     seq_len: int = SEQ_LEN,
     phase_schedule: PhaseSchedule | None = None,
+    optimizer_config: MuonHConfig | None = None,
 ) -> MuonHConfig:
     """Create the boundary-aligned WSD optimizer config for this topology."""
     schedule = resolve_two_phase_wsd_boundary_schedule(
@@ -313,8 +314,9 @@ def create_two_phase_dolma3_dolmino_top_level_optimizer_config(
         seq_len=seq_len,
         phase_schedule=phase_schedule,
     )
+    base_optimizer_config = optimizer_config or DEFAULT_MUON_CONFIG
     return replace(
-        DEFAULT_MUON_CONFIG,
+        base_optimizer_config,
         warmup=schedule.warmup_steps,
         decay=schedule.decay_steps,
         rewarmup=WSD_BOUNDARY_ALIGNED_REWARMUP,
@@ -334,6 +336,7 @@ def create_two_phase_dolma3_dolmino_top_level_experiment(
     seq_len: int = SEQ_LEN,
     eval_datasets_cache_path: str | None = EVAL_DATASETS_CACHE_PATH,
     model_config: LmConfig | None = None,
+    optimizer_config: MuonHConfig | None = None,
     resources: ResourceConfig | None = None,
 ) -> MixtureExperiment:
     """Create the top-level Dolma 3 + Dolmino two-phase nextgen experiment."""
@@ -346,6 +349,7 @@ def create_two_phase_dolma3_dolmino_top_level_experiment(
         batch_size=batch_size,
         seq_len=seq_len,
         phase_schedule=phase_schedule,
+        optimizer_config=optimizer_config,
     )
     return MixtureExperiment(
         name=name,

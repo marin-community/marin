@@ -1,19 +1,5 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """
 Proxy/swarm model training configurations based on:
@@ -33,12 +19,13 @@ before training larger models.
 import logging
 import math
 import os
+from dataclasses import replace
 
 from levanter.models.llama import LlamaConfig
 from levanter.models.olmo3 import Olmo3Config
 from levanter.optim import MuonHConfig
 
-from experiments.llama import llama3_tokenizer_vocab_size
+from experiments.llama import llama3_tokenizer_vocab_size, llama_300m
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
@@ -210,6 +197,33 @@ regmix_60m_proxy = LlamaConfig(
     tie_word_embeddings=True,
     gradient_checkpointing=True,  # Larger model, enable checkpointing
     scan_layers=True,
+)
+
+
+# 300M proxy study config:
+# - Reuse the repo's standard LLaMA-family 300M geometry
+# - Match the domain-mix proxy setup with 2048 context, tied embeddings,
+#   scanning, and checkpointing enabled for v5p-8 runs
+regmix_300m_proxy = replace(
+    llama_300m,
+    max_seq_len=2048,
+    tie_word_embeddings=True,
+    scan_layers=True,
+    gradient_checkpointing=True,
+)
+
+
+regmix_300m_muonh_base = MuonHConfig(
+    learning_rate=0.01,
+    adam_lr=0.002,
+    min_lr_ratio=0,
+    momentum=0.98,
+    beta1=0.9,
+    beta2=0.98,
+    epsilon=1e-15,
+    muon_epsilon=1e-5,
+    max_grad_norm=1,
+    warmup=1000,
 )
 
 

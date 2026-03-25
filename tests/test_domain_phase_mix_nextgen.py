@@ -67,7 +67,7 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     create_two_phase_dolma3_dolmino_top_level_experiment,
     resolve_two_phase_wsd_boundary_schedule,
 )
-from experiments.domain_phase_mix.proxy_sweep import olmo3_30m_proxy
+from experiments.domain_phase_mix.proxy_sweep import olmo3_30m_proxy, regmix_300m_muonh_base, regmix_300m_proxy
 from experiments.domain_phase_mix.two_phase_many_olmix_loglinear import (
     OLMIX_LOGLINEAR_PREDICTED_BPB,
     OLMIX_LOGLINEAR_RUN_NAME,
@@ -389,6 +389,28 @@ def test_top_level_experiment_allows_budget_and_model_override():
     assert experiment.experiment_budget == 11_444 * 128 * 2048
     assert experiment.target_budget is not None
     assert experiment.phase_schedule.phases[1].start_fraction == 0.8
+    assert experiment.optimizer_config.lr_schedule == "linear"
+    assert experiment.optimizer_config.warmup == schedule.warmup_steps
+    assert experiment.optimizer_config.decay == schedule.decay_steps
+
+
+def test_top_level_experiment_allows_optimizer_override():
+    experiment_budget = 6_000_000_000
+    experiment = create_two_phase_dolma3_dolmino_top_level_experiment(
+        name="unit-test-300m-6b",
+        experiment_budget=experiment_budget,
+        model_config=regmix_300m_proxy,
+        optimizer_config=regmix_300m_muonh_base,
+    )
+    schedule = resolve_two_phase_wsd_boundary_schedule(
+        experiment_budget=experiment_budget,
+        phase_schedule=experiment.phase_schedule,
+    )
+
+    assert experiment.model_config == regmix_300m_proxy
+    assert experiment.optimizer_config.learning_rate == regmix_300m_muonh_base.learning_rate
+    assert experiment.optimizer_config.adam_lr == regmix_300m_muonh_base.adam_lr
+    assert experiment.optimizer_config.momentum == regmix_300m_muonh_base.momentum
     assert experiment.optimizer_config.lr_schedule == "linear"
     assert experiment.optimizer_config.warmup == schedule.warmup_steps
     assert experiment.optimizer_config.decay == schedule.decay_steps

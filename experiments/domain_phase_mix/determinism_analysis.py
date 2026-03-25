@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 from dataclasses import dataclass
 from typing import Any
@@ -18,6 +19,7 @@ import pandas as pd
 
 from experiments.defaults import _truncate_wandb_name
 from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
+from marin.speedrun.speedrun import get_step_times_from_wandb
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,8 @@ SEED_RUNS_CSV = "seed_runs.csv"
 CONTROL_RUNS_CSV = "control_runs.csv"
 TRAJECTORY_RAW_PARQUET = "trajectory_raw.parquet"
 RESULTS_CSV = "results.csv"
+FIT_DATASET_CSV = "fit_dataset.csv"
+FIT_DATASET_SUMMARY_JSON = "fit_dataset_summary.json"
 SWARM_COMPARISON_JSON = "swarm_comparison.json"
 SWARM_COMPARISON_CSV = "swarm_comparison.csv"
 COMPUTE_SCALING_NOISE_SUMMARY_JSON = "compute_scaling_noise_summary.json"
@@ -40,11 +44,23 @@ MMLU_NOISE_FIXED_SUBSET_VS_ORIGINAL_PNG = "mmlu_noise_fixed_subset_vs_original.p
 PANEL_VS_NOISE_SUMMARY_JSON = "panel_vs_noise_summary.json"
 PANEL_VS_NOISE_SUMMARY_CSV = "panel_vs_noise_summary.csv"
 MMLU_PANEL_VS_NOISE_PNG = "mmlu_panel_vs_noise.png"
+NOISE_SUMMARY_JSON = "noise_summary.json"
+NOISE_SUMMARY_CSV = "noise_summary.csv"
+MMLU_NOISE_VS_RUNTIME_300M_6B_PNG = "mmlu_noise_vs_runtime_300m_6b.png"
 
 DEFAULT_BOOTSTRAP_SAMPLES = 2_000
 DEFAULT_BOOTSTRAP_SEED = 0
 SEED_SWEEP_COHORT = "seed_sweep"
 CONTROL_COHORTS = ("determinism_control", "exact_replay_control")
+PRESERVED_MANIFEST_METADATA_KEYS = (
+    "candidate_run_id",
+    "candidate_run_name",
+    "candidate_source_experiment",
+    "ladder",
+    "model_family",
+    "experiment_budget",
+    "num_train_steps",
+)
 
 
 @dataclass(frozen=True)
@@ -121,6 +137,32 @@ class PanelVsNoiseReportConfig:
     secondary_metrics: tuple[str, ...] = ()
     bootstrap_samples: int = DEFAULT_BOOTSTRAP_SAMPLES
     bootstrap_seed: int = DEFAULT_BOOTSTRAP_SEED
+
+
+@dataclass(frozen=True)
+class ModelSizeNoiseReportConfig:
+    """Executor config for comparing a model-size study against fixed-subset baselines."""
+
+    output_path: str
+    run_manifest_path: InputName | str
+    analysis_output_path: InputName | str
+    wandb_entity: str
+    wandb_project: str
+    fixed_subset_baseline_manifest_json: str
+    compute_baseline_manifest_json: str
+    primary_metrics: tuple[str, ...]
+    secondary_metrics: tuple[str, ...] = ()
+    bootstrap_samples: int = DEFAULT_BOOTSTRAP_SAMPLES
+    bootstrap_seed: int = DEFAULT_BOOTSTRAP_SEED
+
+
+@dataclass(frozen=True)
+class FitDatasetExportConfig:
+    """Executor config for writing a completed long-form fit dataset."""
+
+    output_path: str
+    run_manifest_path: InputName | str
+    analysis_output_path: InputName | str
 
 
 def _maybe_int(value: object) -> int | None:
@@ -225,12 +267,7 @@ def _collect_manifest_results_frame(
             **_phase_weights_to_columns(manifest_row["phase_weights"]),
         }
 
-        for extra_key in (
-            "ladder",
-            "model_family",
-            "experiment_budget",
-            "num_train_steps",
-        ):
+        for extra_key in PRESERVED_MANIFEST_METADATA_KEYS:
             if extra_key in manifest_row:
                 row[extra_key] = manifest_row[extra_key]
 
@@ -275,6 +312,107 @@ def collect_manifest_results(config: CollectManifestResultsConfig) -> None:
     fs.makedirs(config.output_path, exist_ok=True)
     with fsspec.open(os.path.join(config.output_path, RESULTS_CSV), "w") as f:
         results_df.to_csv(f, index=False)
+
+
+def _ordered_fit_dataset_columns(df: pd.DataFrame) -> list[str]:
+    prefix_columns = [
+        "wandb_run_id",
+        "run_id",
+        "run_name",
+        "status",
+        "candidate_run_id",
+        "candidate_run_name",
+        "candidate_source_experiment",
+        "trainer_seed",
+        "data_seed",
+        "simulated_epoch_subset_seed",
+        "cohort",
+        "source_run_name",
+    ]
+    ordered = [column for column in prefix_columns if column in df.columns]
+    ordered.extend(column for column in df.columns if column not in ordered)
+    return ordered
+
+
+def create_fit_dataset_export(config: FitDatasetExportConfig) -> None:
+    """Write a completed long-form fit dataset and completion summary from collected results."""
+    with fsspec.open(str(config.run_manifest_path), "r") as f:
+        manifest_payload = json.load(f)
+
+    results_path = os.path.join(str(config.analysis_output_path), RESULTS_CSV)
+    results_df = pd.read_csv(results_path)
+    results_df["status"] = results_df["status"].fillna("not_found")
+
+    completed = results_df[results_df["status"] == "completed"].copy()
+    sort_columns = [column for column in ("candidate_run_id", "trainer_seed", "run_id") if column in completed.columns]
+    if sort_columns:
+        completed = completed.sort_values(sort_columns).reset_index(drop=True)
+    completed = completed.loc[:, _ordered_fit_dataset_columns(completed)]
+
+    manifest_runs = pd.DataFrame(manifest_payload["runs"])
+    expected_candidate_columns = [
+        column
+        for column in ("candidate_run_id", "candidate_run_name", "candidate_source_experiment")
+        if column in manifest_runs.columns
+    ]
+    expected_seed_columns = [column for column in ("trainer_seed",) if column in manifest_runs.columns]
+
+    per_candidate_completion_counts: list[dict[str, Any]] = []
+    if expected_candidate_columns:
+        expected_candidates = (
+            manifest_runs[expected_candidate_columns]
+            .drop_duplicates()
+            .sort_values(
+                [column for column in ("candidate_run_id", "candidate_run_name") if column in expected_candidate_columns]
+            )
+        )
+        for candidate_row in expected_candidates.itertuples(index=False):
+            candidate = candidate_row._asdict()
+            mask = pd.Series(True, index=results_df.index)
+            for key, value in candidate.items():
+                mask &= results_df[key] == value
+            per_candidate_completion_counts.append(
+                {
+                    **candidate,
+                    "n_expected": int(mask.sum()),
+                    "n_completed": int((results_df.loc[mask, "status"] == "completed").sum()),
+                }
+            )
+
+    per_seed_completion_counts: list[dict[str, Any]] = []
+    if expected_seed_columns:
+        expected_seeds = manifest_runs[expected_seed_columns].drop_duplicates().sort_values(expected_seed_columns)
+        for seed_row in expected_seeds.itertuples(index=False):
+            seed_values = seed_row._asdict()
+            mask = pd.Series(True, index=results_df.index)
+            for key, value in seed_values.items():
+                mask &= results_df[key] == value
+            per_seed_completion_counts.append(
+                {
+                    **seed_values,
+                    "n_expected": int(mask.sum()),
+                    "n_completed": int((results_df.loc[mask, "status"] == "completed").sum()),
+                }
+            )
+
+    summary = {
+        "experiment_name": manifest_payload["experiment_name"],
+        "total_candidates_expected": (
+            len(per_candidate_completion_counts) if per_candidate_completion_counts else len(manifest_payload["runs"])
+        ),
+        "total_seeds_expected": len(per_seed_completion_counts),
+        "total_rows_expected": len(manifest_payload["runs"]),
+        "total_rows_completed": len(completed),
+        "per_candidate_completion_counts": per_candidate_completion_counts,
+        "per_seed_completion_counts": per_seed_completion_counts,
+    }
+
+    fs, _, _ = fsspec.get_fs_token_paths(config.output_path)
+    fs.makedirs(config.output_path, exist_ok=True)
+    with fsspec.open(os.path.join(config.output_path, FIT_DATASET_CSV), "w") as f:
+        completed.to_csv(f, index=False)
+    with fsspec.open(os.path.join(config.output_path, FIT_DATASET_SUMMARY_JSON), "w") as f:
+        json.dump(summary, f, indent=2, sort_keys=True)
 
 
 def _bootstrap_mean_and_std_ci(
@@ -571,6 +709,51 @@ def _statistic_value(values: np.ndarray, statistic: str) -> float:
     raise ValueError(f"Unsupported statistic {statistic!r}")
 
 
+def _fetch_active_compute_hours(
+    *,
+    run_id: str,
+    wandb_entity: str,
+    wandb_project: str,
+) -> float:
+    return float(sum(get_step_times_from_wandb(run_id=run_id, entity=wandb_entity, project=wandb_project)) / 3600.0)
+
+
+def _active_compute_hours_summary(
+    run_ids: list[str],
+    *,
+    wandb_entity: str,
+    wandb_project: str,
+    max_workers: int = 6,
+) -> dict[str, float]:
+    if not run_ids:
+        return {
+            "active_compute_hours_mean": np.nan,
+            "active_compute_hours_std": np.nan,
+            "active_compute_hours_n": 0,
+        }
+
+    durations: list[float] = []
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(run_ids))) as pool:
+        future_by_run_id = {
+            pool.submit(
+                _fetch_active_compute_hours,
+                run_id=run_id,
+                wandb_entity=wandb_entity,
+                wandb_project=wandb_project,
+            ): run_id
+            for run_id in run_ids
+        }
+        for future in as_completed(future_by_run_id):
+            durations.append(float(future.result()))
+
+    duration_array = np.asarray(durations, dtype=np.float64)
+    return {
+        "active_compute_hours_mean": float(duration_array.mean()),
+        "active_compute_hours_std": float(duration_array.std(ddof=1)) if len(duration_array) > 1 else 0.0,
+        "active_compute_hours_n": int(duration_array.size),
+    }
+
+
 def _bootstrap_ratio_ci(
     numerator_values: np.ndarray,
     denominator_values: np.ndarray,
@@ -864,6 +1047,123 @@ def _build_panel_vs_noise_summary_rows(
                 ),
             }
         )
+    return rows
+
+
+def _build_model_size_noise_summary_rows(
+    *,
+    current_runs_df: pd.DataFrame,
+    fixed_subset_baseline_df: pd.DataFrame,
+    compute_baseline_df: pd.DataFrame,
+    runtime_by_cohort: dict[str, dict[str, float]],
+    primary_metrics: tuple[str, ...],
+    secondary_metrics: tuple[str, ...],
+    bootstrap_samples: int,
+    bootstrap_seed: int,
+) -> list[dict[str, Any]]:
+    metrics = tuple(dict.fromkeys((*primary_metrics, *secondary_metrics)))
+    cohort_specs = (
+        ("fixed_subset_1x", "60M / 1.2B Fixed Subset", fixed_subset_baseline_df, "baseline_fixed_subset_1x"),
+        ("regmix60m_6b", "60M / 6B", compute_baseline_df, "baseline_regmix60m_6b"),
+        ("regmix300m_6b", "300M / 6B", current_runs_df, "study_300m_6b"),
+    )
+    baseline_metric_values = {
+        metric: {
+            "fixed_subset_1x": (
+                fixed_subset_baseline_df[metric].dropna().to_numpy(dtype=np.float64)
+                if metric in fixed_subset_baseline_df.columns
+                else np.array([])
+            ),
+            "regmix60m_6b": (
+                compute_baseline_df[metric].dropna().to_numpy(dtype=np.float64)
+                if metric in compute_baseline_df.columns
+                else np.array([])
+            ),
+        }
+        for metric in metrics
+    }
+
+    rows: list[dict[str, Any]] = []
+    for cohort_idx, (cohort_key, cohort_label, cohort_df, role) in enumerate(cohort_specs):
+        runtime_stats = runtime_by_cohort.get(
+            cohort_key,
+            {
+                "active_compute_hours_mean": np.nan,
+                "active_compute_hours_std": np.nan,
+                "active_compute_hours_n": 0,
+            },
+        )
+        for metric_idx, metric in enumerate(metrics):
+            values = (
+                cohort_df[metric].dropna().to_numpy(dtype=np.float64) if metric in cohort_df.columns else np.array([])
+            )
+            stats = _metric_summary(values)
+            mean_ci, std_ci = _bootstrap_mean_and_std_ci(
+                values,
+                n_boot=bootstrap_samples,
+                seed=bootstrap_seed + cohort_idx * 1_000 + metric_idx,
+            )
+            row: dict[str, Any] = {
+                "cohort": cohort_key,
+                "cohort_label": cohort_label,
+                "cohort_role": role,
+                "metric": metric,
+                "is_primary_metric": metric in primary_metrics,
+                **stats,
+                "mean_ci_low": float(mean_ci[0]),
+                "mean_ci_high": float(mean_ci[1]),
+                "std_ci_low": float(std_ci[0]),
+                "std_ci_high": float(std_ci[1]),
+                **runtime_stats,
+                "variance_ratio_vs_fixed_subset_1x": np.nan,
+                "variance_ratio_vs_fixed_subset_1x_ci_low": np.nan,
+                "variance_ratio_vs_fixed_subset_1x_ci_high": np.nan,
+                "range_ratio_vs_fixed_subset_1x": np.nan,
+                "range_ratio_vs_fixed_subset_1x_ci_low": np.nan,
+                "range_ratio_vs_fixed_subset_1x_ci_high": np.nan,
+                "variance_ratio_vs_regmix60m_6b": np.nan,
+                "variance_ratio_vs_regmix60m_6b_ci_low": np.nan,
+                "variance_ratio_vs_regmix60m_6b_ci_high": np.nan,
+                "range_ratio_vs_regmix60m_6b": np.nan,
+                "range_ratio_vs_regmix60m_6b_ci_low": np.nan,
+                "range_ratio_vs_regmix60m_6b_ci_high": np.nan,
+            }
+            if cohort_key == "regmix300m_6b":
+                for baseline_key in ("fixed_subset_1x", "regmix60m_6b"):
+                    baseline_values = baseline_metric_values[metric][baseline_key]
+                    baseline_variance = _statistic_value(baseline_values, "variance")
+                    baseline_range = _statistic_value(baseline_values, "range")
+                    current_variance = _statistic_value(values, "variance")
+                    current_range = _statistic_value(values, "range")
+                    if np.isfinite(current_variance) and np.isfinite(baseline_variance) and baseline_variance != 0.0:
+                        row[f"variance_ratio_vs_{baseline_key}"] = float(current_variance / baseline_variance)
+                        ci_low, ci_high = _bootstrap_ratio_ci(
+                            values,
+                            baseline_values,
+                            statistic="variance",
+                            n_boot=bootstrap_samples,
+                            seed=bootstrap_seed
+                            + 10_000
+                            + metric_idx
+                            + (0 if baseline_key == "fixed_subset_1x" else 1_000),
+                        )
+                        row[f"variance_ratio_vs_{baseline_key}_ci_low"] = ci_low
+                        row[f"variance_ratio_vs_{baseline_key}_ci_high"] = ci_high
+                    if np.isfinite(current_range) and np.isfinite(baseline_range) and baseline_range != 0.0:
+                        row[f"range_ratio_vs_{baseline_key}"] = float(current_range / baseline_range)
+                        ci_low, ci_high = _bootstrap_ratio_ci(
+                            values,
+                            baseline_values,
+                            statistic="range",
+                            n_boot=bootstrap_samples,
+                            seed=bootstrap_seed
+                            + 20_000
+                            + metric_idx
+                            + (0 if baseline_key == "fixed_subset_1x" else 1_000),
+                        )
+                        row[f"range_ratio_vs_{baseline_key}_ci_low"] = ci_low
+                        row[f"range_ratio_vs_{baseline_key}_ci_high"] = ci_high
+            rows.append(row)
     return rows
 
 
@@ -1292,6 +1592,89 @@ def _save_panel_vs_noise_plot(summary_df: pd.DataFrame, output_path: str, primar
         f.write(buffer.getvalue())
 
 
+def _save_model_size_noise_plot(summary_df: pd.DataFrame, output_path: str, primary_metrics: tuple[str, ...]) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    plot_df = summary_df[summary_df["metric"].isin(primary_metrics)].copy()
+    if plot_df.empty:
+        return
+
+    metric_labels = [metric.removeprefix("lm_eval/mmlu_5shot/") for metric in primary_metrics]
+    metric_to_x = {metric: idx for idx, metric in enumerate(primary_metrics)}
+    cohort_order = ["fixed_subset_1x", "regmix60m_6b", "regmix300m_6b"]
+    cohort_labels = {
+        "fixed_subset_1x": "60M / 1.2B Fixed Subset",
+        "regmix60m_6b": "60M / 6B",
+        "regmix300m_6b": "300M / 6B",
+    }
+    cmap = plt.colormaps["RdYlGn_r"]
+    colors = {cohort: cmap(position) for cohort, position in zip(cohort_order, (0.2, 0.5, 0.82), strict=True)}
+    offsets = {
+        "fixed_subset_1x": -0.22,
+        "regmix60m_6b": 0.0,
+        "regmix300m_6b": 0.22,
+    }
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.8), constrained_layout=True)
+
+    for cohort in cohort_order:
+        cohort_df = plot_df[plot_df["cohort"] == cohort]
+        x = [metric_to_x[metric] + offsets[cohort] for metric in cohort_df["metric"]]
+        y = cohort_df["std"].to_numpy(dtype=np.float64)
+        yerr = np.vstack(
+            [
+                y - cohort_df["std_ci_low"].to_numpy(dtype=np.float64),
+                cohort_df["std_ci_high"].to_numpy(dtype=np.float64) - y,
+            ]
+        )
+        axes[0].errorbar(
+            x,
+            y,
+            yerr=yerr,
+            fmt="o",
+            color=colors[cohort],
+            capsize=4,
+            label=cohort_labels[cohort],
+        )
+    axes[0].set_xticks(range(len(primary_metrics)), metric_labels, rotation=15, ha="right")
+    axes[0].set_ylabel("Seed-jitter std")
+    axes[0].set_title("MMLU noise by model/compute setting")
+    axes[0].grid(axis="y", alpha=0.3)
+    axes[0].legend(frameon=False)
+
+    runtime_rows = plot_df.drop_duplicates("cohort").set_index("cohort")
+    runtime_x = np.arange(len(cohort_order))
+    runtime_y = np.array(
+        [runtime_rows.loc[cohort, "active_compute_hours_mean"] for cohort in cohort_order],
+        dtype=np.float64,
+    )
+    runtime_yerr = np.array(
+        [runtime_rows.loc[cohort, "active_compute_hours_std"] for cohort in cohort_order],
+        dtype=np.float64,
+    )
+    axes[1].bar(
+        runtime_x,
+        runtime_y,
+        yerr=runtime_yerr,
+        color=[colors[cohort] for cohort in cohort_order],
+        capsize=4,
+    )
+    axes[1].set_xticks(runtime_x, [cohort_labels[cohort] for cohort in cohort_order], rotation=15, ha="right")
+    axes[1].set_ylabel("Active compute time (hours)")
+    axes[1].set_title("Mean active runtime per run")
+    axes[1].grid(axis="y", alpha=0.3)
+
+    buffer = BytesIO()
+    fig.savefig(buffer, format="png", dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    buffer.seek(0)
+    with fsspec.open(output_path, "wb") as f:
+        f.write(buffer.getvalue())
+
+
 def create_compute_scaling_noise_report(config: ComputeScalingNoiseReportConfig) -> None:
     """Compare seed-jitter noise across higher-compute ladders against the 1x reference study."""
     with fsspec.open(str(config.run_manifest_path), "r") as f:
@@ -1487,6 +1870,107 @@ def create_panel_vs_noise_report(config: PanelVsNoiseReportConfig) -> None:
     )
 
 
+def create_model_size_noise_report(config: ModelSizeNoiseReportConfig) -> None:
+    """Compare a larger-model fixed-subset study against the 60M fixed-subset baselines."""
+    with fsspec.open(str(config.run_manifest_path), "r") as f:
+        manifest_payload = json.load(f)
+    results_path = os.path.join(str(config.analysis_output_path), RESULTS_CSV)
+    merged = pd.read_csv(results_path)
+    merged["status"] = merged["status"].fillna("not_found")
+
+    current_completed = merged[(merged["status"] == "completed") & merged["wandb_run_id"].notna()].copy()
+    current_traj = _collect_trajectory_rows(
+        current_completed,
+        wandb_entity=config.wandb_entity,
+        wandb_project=config.wandb_project,
+        objective_metric=config.primary_metrics[0],
+    )
+
+    fixed_subset_manifest_payload = json.loads(config.fixed_subset_baseline_manifest_json)
+    fixed_subset_results = _collect_manifest_results_frame(
+        manifest_payload=fixed_subset_manifest_payload,
+        wandb_entity=config.wandb_entity,
+        wandb_project=config.wandb_project,
+        metric_prefixes=("eval/", "lm_eval/"),
+        extra_metrics=tuple(dict.fromkeys((*config.primary_metrics, *config.secondary_metrics))),
+    )
+    fixed_subset_completed = fixed_subset_results[
+        (fixed_subset_results["status"] == "completed") & fixed_subset_results["wandb_run_id"].notna()
+    ].copy()
+
+    compute_manifest_payload = json.loads(config.compute_baseline_manifest_json)
+    compute_results = _collect_manifest_results_frame(
+        manifest_payload=compute_manifest_payload,
+        wandb_entity=config.wandb_entity,
+        wandb_project=config.wandb_project,
+        metric_prefixes=("eval/", "lm_eval/"),
+        extra_metrics=tuple(dict.fromkeys((*config.primary_metrics, *config.secondary_metrics))),
+    )
+    compute_completed = compute_results[
+        (compute_results["status"] == "completed") & compute_results["wandb_run_id"].notna()
+    ].copy()
+
+    runtime_by_cohort = {
+        "fixed_subset_1x": _active_compute_hours_summary(
+            fixed_subset_completed["wandb_run_id"].astype(str).tolist(),
+            wandb_entity=config.wandb_entity,
+            wandb_project=config.wandb_project,
+        ),
+        "regmix60m_6b": _active_compute_hours_summary(
+            compute_completed["wandb_run_id"].astype(str).tolist(),
+            wandb_entity=config.wandb_entity,
+            wandb_project=config.wandb_project,
+        ),
+        "regmix300m_6b": _active_compute_hours_summary(
+            current_completed["wandb_run_id"].astype(str).tolist(),
+            wandb_entity=config.wandb_entity,
+            wandb_project=config.wandb_project,
+        ),
+    }
+
+    summary_rows = _build_model_size_noise_summary_rows(
+        current_runs_df=current_completed,
+        fixed_subset_baseline_df=fixed_subset_completed,
+        compute_baseline_df=compute_completed,
+        runtime_by_cohort=runtime_by_cohort,
+        primary_metrics=config.primary_metrics,
+        secondary_metrics=config.secondary_metrics,
+        bootstrap_samples=config.bootstrap_samples,
+        bootstrap_seed=config.bootstrap_seed,
+    )
+    summary_df = pd.DataFrame(summary_rows)
+
+    fs, _, _ = fsspec.get_fs_token_paths(config.output_path)
+    fs.makedirs(config.output_path, exist_ok=True)
+
+    with fsspec.open(os.path.join(config.output_path, RUN_MANIFEST_FILE), "w") as f:
+        json.dump(manifest_payload, f, indent=2, sort_keys=True)
+    with fsspec.open(os.path.join(config.output_path, RESULTS_CSV), "w") as f:
+        merged.to_csv(f, index=False)
+    with fsspec.open(os.path.join(config.output_path, TRAJECTORY_RAW_PARQUET), "wb") as f:
+        current_traj.to_parquet(f, index=False)
+    with fsspec.open(os.path.join(config.output_path, NOISE_SUMMARY_CSV), "w") as f:
+        summary_df.to_csv(f, index=False)
+    with fsspec.open(os.path.join(config.output_path, NOISE_SUMMARY_JSON), "w") as f:
+        json.dump(
+            {
+                "primary_metrics": list(config.primary_metrics),
+                "secondary_metrics": list(config.secondary_metrics),
+                "fixed_subset_baseline_experiment": fixed_subset_manifest_payload["experiment_name"],
+                "compute_baseline_experiment": compute_manifest_payload["experiment_name"],
+                "rows": summary_rows,
+            },
+            f,
+            indent=2,
+            sort_keys=True,
+        )
+    _save_model_size_noise_plot(
+        summary_df,
+        os.path.join(config.output_path, MMLU_NOISE_VS_RUNTIME_300M_6B_PNG),
+        config.primary_metrics,
+    )
+
+
 def create_determinism_report_step(
     *,
     name_prefix: str,
@@ -1601,6 +2085,37 @@ def create_panel_vs_noise_report_step(
     )
 
 
+def create_model_size_noise_report_step(
+    *,
+    name_prefix: str,
+    run_manifest_step: ExecutorStep,
+    analysis_step: ExecutorStep,
+    wandb_entity: str,
+    wandb_project: str,
+    fixed_subset_baseline_manifest_json: str,
+    compute_baseline_manifest_json: str,
+    primary_metrics: tuple[str, ...],
+    secondary_metrics: tuple[str, ...] = (),
+) -> ExecutorStep:
+    """Create an ExecutorStep for model-size noise comparisons against 60M baselines."""
+    return ExecutorStep(
+        name=f"{name_prefix}/noise_report",
+        description="Compare 300M fixed-subset MMLU noise against 60M fixed-subset baselines",
+        fn=create_model_size_noise_report,
+        config=ModelSizeNoiseReportConfig(
+            output_path=this_output_path(),
+            run_manifest_path=output_path_of(run_manifest_step, RUN_MANIFEST_FILE),
+            analysis_output_path=output_path_of(analysis_step),
+            wandb_entity=wandb_entity,
+            wandb_project=wandb_project,
+            fixed_subset_baseline_manifest_json=fixed_subset_baseline_manifest_json,
+            compute_baseline_manifest_json=compute_baseline_manifest_json,
+            primary_metrics=primary_metrics,
+            secondary_metrics=secondary_metrics,
+        ),
+    )
+
+
 def create_manifest_results_step(
     *,
     name_prefix: str,
@@ -1623,5 +2138,24 @@ def create_manifest_results_step(
             wandb_project=wandb_project,
             extra_metrics=extra_metrics,
             depends_on=tuple(output_path_of(step) for step in blocked_on),
+        ),
+    )
+
+
+def create_fit_dataset_export_step(
+    *,
+    name_prefix: str,
+    run_manifest_step: ExecutorStep,
+    analysis_step: ExecutorStep,
+) -> ExecutorStep:
+    """Create an ExecutorStep that exports a completed long-form fit dataset CSV."""
+    return ExecutorStep(
+        name=f"{name_prefix}/fit_dataset_export",
+        description="Export a completed long-form fit dataset for surrogate fitting",
+        fn=create_fit_dataset_export,
+        config=FitDatasetExportConfig(
+            output_path=this_output_path(),
+            run_manifest_path=output_path_of(run_manifest_step, RUN_MANIFEST_FILE),
+            analysis_output_path=output_path_of(analysis_step),
         ),
     )
