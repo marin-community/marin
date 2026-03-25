@@ -12,7 +12,13 @@ fixing small bugs, and escalation procedures.
 ## Required Info
 
 1. `job_id` — Iris job ID in canonical format `/<user>/<job>` (e.g., `/dlwh/iris-run-train_tiny_model_tpu-20260302-185630`)
-2. `config` — Iris config path (e.g., `lib/iris/examples/marin.yaml`)
+2. `config` — Iris config path (e.g., `lib/iris/examples/marin.yaml`). When the user
+   refers to a cluster by shorthand name (e.g., "marin_dev", "marin-dev", "marin",
+   "coreweave"), resolve it to the matching config file under `lib/iris/examples/`.
+   Common mappings:
+   - `marin` / `marin_prod` -> `lib/iris/examples/marin.yaml`
+   - `marin_dev` / `marin-dev` -> `lib/iris/examples/marin-dev.yaml`
+   - `coreweave` -> `lib/iris/examples/coreweave.yaml`
 3. `resubmit_command` — exact Iris submit command for resubmission; must include `--no-wait`
 4. For Marin TPU training jobs, use `--extra marin:tpu` (not `--extra marin:cpu`)
 5. For TPU jobs, the resubmit command must request TPU resources with `--tpu <variant>`.
