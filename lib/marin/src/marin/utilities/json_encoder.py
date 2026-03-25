@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import json
 import logging
 from datetime import timedelta
@@ -20,6 +21,8 @@ class CustomJsonEncoder(json.JSONEncoder):
             return str(obj)
         if obj in (float32, bfloat16):
             return str(obj)
+        if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+            return dataclasses.asdict(obj)
         try:
             return super().default(obj)
         except TypeError:

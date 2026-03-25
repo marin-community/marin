@@ -101,9 +101,22 @@ def test_job_name_require_task_errors_on_non_task():
 
 
 def test_job_name_to_safe_token_and_deep_nesting():
+    import hashlib
+
     job = JobName.from_string("/test-user/a/b/c/d/e/0")
-    assert job.to_safe_token() == "job__test-user__a__b__c__d__e__0"
+    expected_hash = hashlib.sha256(str(job).encode()).hexdigest()
+    assert job.to_safe_token() == f"test-user-{expected_hash}"
     assert job.require_task()[1] == 0
+
+    # Deeply nested names still produce short tokens (no ENAMETOOLONG).
+    deep = JobName.from_string("/alice/" + "/".join(f"layer-{i}" for i in range(20)) + "/0")
+    token = deep.to_safe_token()
+    assert token.startswith("alice-")
+    assert len(token) < 128  # well under the 255-byte filesystem limit
+
+    # Different names produce different tokens.
+    job2 = JobName.from_string("/test-user/a/b/c/d/e/1")
+    assert job.to_safe_token() != job2.to_safe_token()
 
 
 def test_job_name_depth():
