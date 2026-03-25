@@ -581,14 +581,25 @@ def _maybe_attach_inferred_region_constraint(
             resources=dataclasses.replace(remote_fn.resources, regions=[pinned_region]),
         )
 
+    is_cpu_step = remote_fn.resources.device.kind == "cpu"
+
     if remote_fn.resources.regions is not None:
         if inherited_region_pin is not None and allowed_regions is not None:
             pinned_region = inherited_region_pin.lower()
             if pinned_region not in allowed_regions:
-                raise ValueError(
-                    f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
-                    f"but inferred regions are {sorted(allowed_regions)}."
-                )
+                if is_cpu_step:
+                    logger.warning(
+                        "Executor step %s inferred regions %s from GCS paths, but inherited Iris "
+                        "region is %s. Running in inherited region (step will re-process data locally).",
+                        step_name,
+                        sorted(allowed_regions),
+                        pinned_region,
+                    )
+                else:
+                    raise ValueError(
+                        f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
+                        f"but inferred regions are {sorted(allowed_regions)}."
+                    )
         return remote_fn
 
     if allowed_regions is None:
@@ -597,6 +608,15 @@ def _maybe_attach_inferred_region_constraint(
     if inherited_region_pin is not None:
         pinned_region = inherited_region_pin.lower()
         if pinned_region not in allowed_regions:
+            if is_cpu_step:
+                logger.warning(
+                    "Executor step %s inferred regions %s from GCS paths, but inherited Iris "
+                    "region is %s. Running in inherited region (step will re-process data locally).",
+                    step_name,
+                    sorted(allowed_regions),
+                    pinned_region,
+                )
+                return remote_fn
             raise ValueError(
                 f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
                 f"but inferred regions are {sorted(allowed_regions)}."
