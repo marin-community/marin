@@ -80,6 +80,7 @@ class ActorClient:
         self._backoff = backoff
 
         self._rpc_client: ActorServiceClientSync | None = None
+        self._rpc_headers: dict[str, str] = {}
 
     def rpc_client(self) -> ActorServiceClientSync:
         """Resolve actor name to an RPC client (single attempt).
@@ -111,10 +112,11 @@ class ActorClient:
             self._name,
             len(result.endpoints),
         )
-        logger.info("First endpoint: %s", result.first())
-        url = result.first().url
+        endpoint = result.first()
+        logger.info("First endpoint: %s", endpoint)
+        self._rpc_headers = dict(endpoint.metadata)
         self._rpc_client = ActorServiceClientSync(
-            address=url,
+            address=endpoint.url,
             timeout_ms=None if self._call_timeout is None else int(self._call_timeout * 1000),
             accept_compression=[],
         )
@@ -122,6 +124,7 @@ class ActorClient:
 
     def _clear_connection(self, _exc: Exception) -> None:
         self._rpc_client = None
+        self._rpc_headers = {}
 
     def start_operation(self, method_name: str, *args: Any, **kwargs: Any) -> str:
         """Start a long-running operation. Returns the operation ID."""
@@ -134,7 +137,7 @@ class ActorClient:
 
         def do_call():
             client = self.rpc_client()
-            return client.start_operation(call)
+            return client.start_operation(call, headers=self._rpc_headers or None)
 
         op = call_with_retry(
             f"{self._name}.start_operation({method_name})",
@@ -150,7 +153,7 @@ class ActorClient:
         req = actor_pb2.OperationId(operation_id=operation_id)
 
         def do_call():
-            return self.rpc_client().get_operation(req)
+            return self.rpc_client().get_operation(req, headers=self._rpc_headers or None)
 
         return call_with_retry(
             f"{self._name}.poll_operation_status({operation_id[:8]})",
@@ -179,7 +182,7 @@ class ActorClient:
         req = actor_pb2.OperationId(operation_id=operation_id)
 
         def do_call():
-            return self.rpc_client().cancel_operation(req)
+            return self.rpc_client().cancel_operation(req, headers=self._rpc_headers or None)
 
         return call_with_retry(
             f"{self._name}.cancel_operation({operation_id[:8]})",
@@ -208,7 +211,7 @@ class _RpcMethod:
 
         def do_call():
             client = self._client.rpc_client()
-            resp = client.call(call)
+            resp = client.call(call, headers=self._client._rpc_headers or None)
             return unwrap_actor_response(resp)
 
         return call_with_retry(
