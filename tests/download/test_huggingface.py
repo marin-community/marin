@@ -10,13 +10,13 @@ from unittest.mock import MagicMock, Mock, patch
 import pandas as pd
 import pytest
 
-from marin.download.huggingface.download_hf import (
+from marin.datakit.download.huggingface import (
     DownloadConfig,
     _relative_path_in_source,
     download_hf,
     stream_file_to_fsspec,
 )
-from marin.download.huggingface.stream_remove_columns import (
+from marin.datakit.download.stream_remove_columns import (
     DatasetConfig,
     prune_hf_dataset,
 )
@@ -81,7 +81,7 @@ def test_download_hf_basic(mock_hf_fs, tmp_path):
     )
 
     # Mock HfFileSystem creation
-    with patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs):
+    with patch("marin.datakit.download.huggingface.HfFileSystem", return_value=hf_fs):
         download_hf(cfg)
 
     # Verify files were downloaded
@@ -123,7 +123,7 @@ def test_download_hf_appends_sha_when_configured(mock_hf_fs, tmp_path):
         append_sha_to_path=True,
     )
 
-    with patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs):
+    with patch("marin.datakit.download.huggingface.HfFileSystem", return_value=hf_fs):
         download_hf(cfg)
 
     target_output = base_output_path / revision
@@ -189,7 +189,7 @@ def test_prune_hf_dataset(tmp_path):
     mock_fs.glob = Mock(return_value=["hf://datasets/test-org/test-dataset@main/data/file.parquet"])
     mock_fs.open = Mock(side_effect=lambda path, mode="rb": create_buffer())
 
-    with patch("marin.download.huggingface.stream_remove_columns.hf_fs", mock_fs):
+    with patch("marin.datakit.download.stream_remove_columns.hf_fs", mock_fs):
         prune_hf_dataset(cfg)
 
     # Verify output
@@ -229,8 +229,8 @@ def test_stream_file_to_fsspec_retries_on_timeout(tmp_path):
     hf_fs.open.side_effect = lambda path, mode="rb", **_kwargs: FlakyReader()
 
     with (
-        patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs),
-        patch("marin.download.huggingface.download_hf.time.sleep", return_value=None),
+        patch("marin.datakit.download.huggingface.HfFileSystem", return_value=hf_fs),
+        patch("marin.datakit.download.huggingface.time.sleep", return_value=None),
     ):
         result = stream_file_to_fsspec(
             str(output_path),

@@ -170,7 +170,7 @@ def test_extract_dclm_hq_pipeline(tmp_path, read_all_jsonl_gz):
 
         raise ValueError(f"Unexpected URL: {url}")
 
-    with patch("marin.download.dclm_hq.download_dclm_hq_html.requests.get", side_effect=mock_requests_get):
+    with patch("marin.datakit.download.dclm_hq.requests.get", side_effect=mock_requests_get):
         cfg = DCLMHQDownloadConfig(input_path=str(tmp_path / "input"), output_path=str(output_dir))
         extract_dclm_hq_dump(cfg)
 
