@@ -12,8 +12,9 @@ from levanter.store.cache import CacheLedger, TreeCache
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import content_hash_id, normalize_step
-from marin.datakit.tokenize import tokenize_step
 from marin.execution.step_runner import StepRunner
+from marin.execution.step_spec import StepSpec
+from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 
 
 @pytest.mark.slow
@@ -35,11 +36,19 @@ def test_download_normalize_tokenize(tmp_path):
         override_output_path=str(tmp_path / "normalized"),
     )
 
-    tok = tokenize_step(
-        "datakit/tokenize",
-        input_path=norm.output_path,
-        tokenizer="gpt2",
+    tok = StepSpec(
+        name="datakit/tokenize",
+        fn=lambda output_path: tokenize(
+            TokenizeConfig(
+                train_paths=[norm.output_path],
+                validation_paths=[],
+                cache_path=output_path,
+                tokenizer="gpt2",
+                allow_test_in_train=True,
+            )
+        ),
         deps=[norm],
+        hash_attrs={"tokenizer": "gpt2"},
         override_output_path=str(tmp_path / "tokenized"),
     )
 
