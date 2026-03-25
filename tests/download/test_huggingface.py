@@ -7,7 +7,6 @@ import io
 import json
 from unittest.mock import MagicMock, Mock, patch
 
-import pandas as pd
 import pytest
 
 from marin.datakit.download.huggingface import (
@@ -15,10 +14,6 @@ from marin.datakit.download.huggingface import (
     _relative_path_in_source,
     download_hf,
     stream_file_to_fsspec,
-)
-from marin.datakit.download.stream_remove_columns import (
-    DatasetConfig,
-    prune_hf_dataset,
 )
 
 
@@ -153,50 +148,6 @@ def test_download_hf_bucket_requires_newer_huggingface_hub(tmp_path):
 
     with pytest.raises(RuntimeError, match=r"huggingface_hub>=1\.6\.0"):
         download_hf(cfg)
-
-
-def test_prune_hf_dataset(tmp_path):
-    """Test full dataset pruning pipeline."""
-    # Create test parquet data
-    test_data = pd.DataFrame(
-        {
-            "id": [1, 2],
-            "text": ["hello", "world"],
-            "unwanted": ["a", "b"],
-        }
-    )
-
-    # Create multiple buffers since each call needs a fresh one
-    def create_buffer():
-        buffer = io.BytesIO()
-        test_data.to_parquet(buffer, index=False)
-        buffer.seek(0)
-        return buffer
-
-    cfg = DatasetConfig(
-        hf_repo_id="test-org/test-dataset",
-        hf_revision="main",
-        hf_paths=["data"],
-        output_path=str(tmp_path / "output"),
-        keep_columns=["id", "text"],
-    )
-
-    # Create output directory structure
-    output_dir = tmp_path / "output" / "data"
-    output_dir.mkdir(parents=True)
-
-    mock_fs = MagicMock()
-    mock_fs.glob = Mock(return_value=["hf://datasets/test-org/test-dataset@main/data/file.parquet"])
-    mock_fs.open = Mock(side_effect=lambda path, mode="rb": create_buffer())
-
-    with patch("marin.datakit.download.stream_remove_columns.HfFileSystem", return_value=mock_fs):
-        prune_hf_dataset(cfg)
-
-    # Verify output
-    output_file = tmp_path / "output" / "data" / "file.parquet"
-    assert output_file.exists()
-    result_df = pd.read_parquet(output_file)
-    assert list(result_df.columns) == ["id", "text"]
 
 
 def test_stream_file_to_fsspec_retries_on_timeout(tmp_path):
