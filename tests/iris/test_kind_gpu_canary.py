@@ -40,7 +40,6 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpe
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration
 
-
 # ---------------------------------------------------------------------------
 # Inlined helpers from lib/iris/tests/cluster/ to avoid cross-package imports
 # (the iris test helpers aren't importable from top-level tests/).
@@ -83,6 +82,7 @@ def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
     entrypoint = cluster_pb2.RuntimeEntrypoint()
     entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     return entrypoint
+
 
 pytestmark = pytest.mark.e2e
 
