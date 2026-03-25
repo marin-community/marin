@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from marin.datakit.download.huggingface_utils import (
+from marin.datakit.download.huggingface import (
     DownloadConfig,
     _relative_path_in_source,
     download_hf,
@@ -76,7 +76,7 @@ def test_download_hf_basic(mock_hf_fs, tmp_path):
     )
 
     # Mock HfFileSystem creation
-    with patch("marin.datakit.download.huggingface_utils.HfFileSystem", return_value=hf_fs):
+    with patch("marin.datakit.download.huggingface.HfFileSystem", return_value=hf_fs):
         download_hf(cfg)
 
     # Verify files were downloaded
@@ -118,7 +118,7 @@ def test_download_hf_appends_sha_when_configured(mock_hf_fs, tmp_path):
         append_sha_to_path=True,
     )
 
-    with patch("marin.datakit.download.huggingface_utils.HfFileSystem", return_value=hf_fs):
+    with patch("marin.datakit.download.huggingface.HfFileSystem", return_value=hf_fs):
         download_hf(cfg)
 
     target_output = base_output_path / revision
@@ -180,8 +180,8 @@ def test_stream_file_to_fsspec_retries_on_timeout(tmp_path):
     hf_fs.open.side_effect = lambda path, mode="rb", **_kwargs: FlakyReader()
 
     with (
-        patch("marin.datakit.download.huggingface_utils.HfFileSystem", return_value=hf_fs),
-        patch("marin.datakit.download.huggingface_utils.time.sleep", return_value=None),
+        patch("marin.datakit.download.huggingface.HfFileSystem", return_value=hf_fs),
+        patch("marin.datakit.download.huggingface.time.sleep", return_value=None),
     ):
         result = stream_file_to_fsspec(
             str(output_path),

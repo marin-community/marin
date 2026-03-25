@@ -22,7 +22,7 @@ import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from marin.datakit.download.huggingface_utils import DownloadConfig, download_hf
+from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,

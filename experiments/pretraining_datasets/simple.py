@@ -12,7 +12,7 @@ import os.path
 
 from levanter.data.text import TextLmDatasetFormat
 from levanter.store.cache import CacheOptions
-from marin.datakit.download.huggingface_utils import download_hf_step
+from marin.datakit.download.huggingface import download_hf_step
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 

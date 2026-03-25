@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from levanter.store.cache import CacheLedger, TreeCache
 
-from marin.datakit.download.huggingface_utils import download_hf_step
+from marin.datakit.download.huggingface import download_hf_step
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize

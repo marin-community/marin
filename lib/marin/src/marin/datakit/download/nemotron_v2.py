@@ -12,7 +12,7 @@ All use parquet format with a "text" field.
 
 from dataclasses import dataclass, field
 
-from marin.datakit.download.huggingface_utils import download_hf_step
+from marin.datakit.download.huggingface import download_hf_step
 from marin.execution.step_spec import StepSpec
 
 
@@ -25,6 +25,7 @@ class NemotronV2Dataset:
     subsets: dict[str, str] = field(default_factory=dict)
     """Maps subset_name -> glob pattern for parquet files within the download."""
     override_output_path: str | None = None
+    """Allow to point at existing download output to avoid re-downloading"""
 
 
 NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
