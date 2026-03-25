@@ -159,7 +159,12 @@ def _load_batches(file_path: str, columns: list[str] | None = None, **parquet_kw
 
 def _find_base_path(input_path: str | list[str], input_files: list[str]) -> str:
     # Determine base path for rebasing
-    base_path = input_path[0] if isinstance(input_path, list) else input_path
+    if isinstance(input_path, list):
+        # Use common ancestor so rebase_file_path never generates ".." segments in GCS paths.
+        # os.path.commonpath works on GCS paths since it operates on string prefixes.
+        base_path = os.path.commonpath(input_path) if len(input_path) > 1 else input_path[0]
+    else:
+        base_path = input_path
     if base_path in input_files:
         # NOTE: if the base_path is in the input_files, means it's a specific file, so rebase to its directory
         base_path = os.path.dirname(base_path)
