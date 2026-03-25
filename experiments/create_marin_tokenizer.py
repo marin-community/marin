@@ -87,6 +87,12 @@ def create_marin_tokenizer(
     # Assign marin template
     marin_tokenizer.chat_template = MARIN_CHAT_TEMPLATE
 
+    # Set eos_token to <|eot_id|> (128009) instead of the base Llama 3 default
+    # <|end_of_text|> (128001). This is the turn-boundary token used by the chat
+    # template, and ensures that HF config.json gets the correct eos_token_id for
+    # inference stop conditions.
+    marin_tokenizer.eos_token = "<|eot_id|>"
+
     return marin_tokenizer
 
 
