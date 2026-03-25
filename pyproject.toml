@@ -18,10 +18,12 @@ dependencies = [
     "zephyr",
     # top level deps. try to keep these small.
     "watchdog",
+    "dupekit >= 0.1.0",
 ]
 
 [tool.uv]
 fork-strategy = "fewest"
+find-links = ["https://github.com/marin-community/marin/releases/expanded_assets/dupekit-0.1.0-40ac799"]
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
     "antlr4-python3-runtime==4.11",
@@ -48,11 +50,12 @@ haliax = { workspace = true }
 levanter = { workspace = true }
 marin = { workspace = true }
 zephyr = { workspace = true }
-# NOTE: dupekit and harbor are optional dependencies. Declaring them as path
-# dependencies (not workspace members) avoids pulling their dev dependency
-# groups into workspace resolution.
-dupekit = { path = "lib/dupekit", editable = true }
-harbor = { path = "lib/harbor", editable = true }
+# NOTE: harbor is a pinned git dependency (not a workspace member).
+# harbor lives in marin-community/harbor as a pinned git dependency.
+harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
+# ### BEGIN RUST-DEV SOURCES ###
+# ### END RUST-DEV SOURCES ###
+
 
 [tool.black]
 line-length = 121
@@ -207,6 +210,7 @@ log_date_format = "%Y-%m-%d %H:%M:%S"
 markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
     "tpu_ci: mark tests that require a TPU",
+    "integration: mark tests as integration tests that require cluster infrastructure",
 ]
 testpaths = ["tests", "experiments"]
 

@@ -8,7 +8,36 @@ Start with the shared practices below. Consult subproject manuals for directory-
 
 ## Workflow Playbooks
 
-Agent-friendly skills live in `.agents/skills/` (also accessible as `.claude/skills/`). Load a skill by reading its `SKILL.md`.
+Skills are task-focused playbooks in `.agents/skills/` (also accessible as
+`.claude/skills/`). **Before starting any non-trivial task, check whether a
+matching skill exists** by scanning the skill descriptions in your system
+prompt. If a skill matches, invoke it via the Skill tool — do not skip it in
+favor of ad-hoc commands.
+
+Key skills and their triggers:
+
+| Trigger | Skill |
+|---|---|
+| Creating or reviewing a PR | `pull-request` |
+| Fixing / investigating a GitHub issue | `fix-issue` |
+| Filing a new issue | `file-issue` |
+| Writing a design doc or spec | `design-doc` |
+| Debugging subtle code problems | `debugger` |
+| Multi-step plans needing sub-agents | `multi-stage` |
+| Adding a HF dataset | `add-dataset` |
+| Profiling JAX training | `agent-profiling` |
+| Running / monitoring ferries | `ferries` |
+| Babysitting any job (generic practices) | `babysit-job` |
+| Babysitting Ray jobs specifically | `babysit-ray-job` |
+| Babysitting Iris jobs specifically | `babysit-iris-job` |
+| Babysitting Zephyr jobs specifically | `babysit-zephyr` |
+| Debugging Iris jobs (task exec) | `debug-iris-job` |
+| Debugging Zephyr pipelines | `debug-zephyr-job` |
+| Debugging Iris controller | `debug-iris-controller` |
+| TPU bad-node recovery | `debug-tpu` |
+
+For the full list, see `.agents/skills/`. Each skill has a `SKILL.md` with
+detailed workflow steps — read it after invoking for procedural guidance.
 
 ## Development
 
@@ -124,7 +153,7 @@ Before writing any utility function, helper, or data structure:
 
 If a suitable implementation exists, use it. Do not create parallel implementations.
 
-Dependency direction: `iris` → {`levanter`, `zephyr`} → `marin` → `haliax`. Each layer may only import from layers to its right. Never introduce reverse dependencies (e.g., marin importing from iris).
+Dependency direction: {`iris`, `haliax`} → {`levanter`, `zephyr`} → `marin`. Each layer may only import from layers to its left. Never introduce reverse dependencies (e.g., levanter importing from marin).
 
 ## Testing
 

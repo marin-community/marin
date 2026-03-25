@@ -13,9 +13,8 @@ from pathlib import Path
 import click
 from google.protobuf.json_format import ParseDict
 
-from iris.cluster.platform.factory import create_platform
+from iris.cluster.providers.factory import create_provider_bundle
 from iris.cluster.runtime.docker import DockerRuntime
-from iris.cluster.runtime.kubernetes import KubernetesRuntime
 from iris.cluster.worker.env_probe import detect_gcp_zone
 from iris.cluster.worker.worker import Worker, worker_config_from_proto
 from iris.logging import configure_logging
@@ -55,11 +54,11 @@ def serve(worker_config: str):
     with open(worker_config) as f:
         wc_proto = ParseDict(json.load(f), config_pb2.WorkerConfig())
 
-    platform = create_platform(platform_config=wc_proto.platform, ssh_config=config_pb2.SshConfig())
+    bundle = create_provider_bundle(platform_config=wc_proto.platform, ssh_config=config_pb2.SshConfig())
     zone = detect_gcp_zone()
 
     def resolve_image(image: str) -> str:
-        return platform.resolve_image(image, zone=zone)
+        return bundle.controller.resolve_image(image, zone=zone)
 
     if wc_proto.default_task_image:
         resolved = resolve_image(wc_proto.default_task_image)
@@ -68,17 +67,14 @@ def serve(worker_config: str):
 
     config = worker_config_from_proto(wc_proto, resolve_image=resolve_image)
 
-    if wc_proto.runtime == "kubernetes":
-        container_runtime = KubernetesRuntime(cache_dir=config.cache_dir)
-    else:
-        container_runtime = DockerRuntime(cache_dir=config.cache_dir)
+    container_runtime = DockerRuntime(cache_dir=config.cache_dir)
 
     worker = Worker(config, container_runtime=container_runtime)
 
     click.echo(f"Starting Iris worker on {config.host}:{config.port}")
     click.echo(f"  Cache dir: {config.cache_dir}")
     click.echo(f"  Controller: {config.controller_address}")
-    click.echo(f"  Runtime: {wc_proto.runtime or 'docker'}")
+    click.echo("  Runtime: docker")
     worker.start()
     worker.wait()
 

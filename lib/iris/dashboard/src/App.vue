@@ -8,8 +8,9 @@ const route = useRoute()
 const router = useRouter()
 
 const authEnabled = ref(false)
+const providerKind = ref<'worker' | 'kubernetes'>('worker')
 
-const TABS: Tab[] = [
+const WORKER_TABS: Tab[] = [
   { key: 'jobs', label: 'Jobs', to: '/' },
   { key: 'users', label: 'Users', to: '/users' },
   { key: 'fleet', label: 'Workers', to: '/fleet' },
@@ -17,19 +18,32 @@ const TABS: Tab[] = [
   { key: 'autoscaler', label: 'Autoscaler', to: '/autoscaler' },
   { key: 'transactions', label: 'Transactions', to: '/transactions' },
   { key: 'account', label: 'Account', to: '/account' },
-  { key: 'query', label: 'Query Explorer', to: '/query' },
   { key: 'status', label: 'Status', to: '/status' },
 ]
+
+const KUBERNETES_TABS: Tab[] = [
+  { key: 'jobs', label: 'Jobs', to: '/' },
+  { key: 'users', label: 'Users', to: '/users' },
+  { key: 'cluster', label: 'Cluster', to: '/cluster' },
+  { key: 'endpoints', label: 'Endpoints', to: '/endpoints' },
+  { key: 'transactions', label: 'Transactions', to: '/transactions' },
+  { key: 'account', label: 'Account', to: '/account' },
+  { key: 'status', label: 'Status', to: '/status' },
+]
+
+const TABS = computed<Tab[]>(() =>
+  providerKind.value === 'kubernetes' ? KUBERNETES_TABS : WORKER_TABS
+)
 
 const PATH_TO_TAB: Record<string, string> = {
   '/': 'jobs',
   '/users': 'users',
   '/fleet': 'fleet',
+  '/cluster': 'cluster',
   '/endpoints': 'endpoints',
   '/autoscaler': 'autoscaler',
   '/transactions': 'transactions',
   '/account': 'account',
-  '/query': 'query',
   '/status': 'status',
 }
 
@@ -61,18 +75,21 @@ onMounted(async () => {
   window.addEventListener('iris-auth-required', onAuthRequired)
 
   let hasSession = false
+  let authOptional = false
   try {
     const resp = await fetch('/auth/config')
     if (resp.ok) {
       const config = await resp.json()
       authEnabled.value = config.auth_enabled ?? false
       hasSession = config.has_session ?? false
+      authOptional = config.optional ?? false
+      providerKind.value = config.provider_kind === 'kubernetes' ? 'kubernetes' : 'worker'
     }
   } catch {
     // Auth config endpoint unavailable — assume no auth
   }
 
-  if (authEnabled.value && !hasSession && route.path !== '/login') {
+  if (authEnabled.value && !authOptional && !hasSession && route.path !== '/login') {
     router.push('/login')
   }
 })

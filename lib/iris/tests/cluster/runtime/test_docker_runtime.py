@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for DockerRuntime resolve_mounts, prepare_workdir, and stage_bundle."""
+"""Tests for DockerRuntime mount resolution, staging, and container creation."""
+
+from __future__ import annotations
 
 import subprocess
 from unittest.mock import Mock
@@ -22,7 +24,6 @@ def runtime(tmp_path):
 def mock_bundle_store():
     store = Mock(spec=BundleStore)
     store.extract_bundle_to = Mock()
-    store.write_workdir_files = Mock()
     return store
 
 
@@ -59,6 +60,17 @@ def test_resolve_mounts_cache_uses_cache_dir(tmp_path, runtime):
     assert resolved[0].kind == MountKind.CACHE
 
 
+def test_resolve_mounts_tmpfs_has_no_host_path(tmp_path, runtime):
+    """TMPFS mounts get empty host_path (Docker --tmpfs provides per-container isolation)."""
+    mounts = [MountSpec(container_path="/tmp", kind=MountKind.TMPFS)]
+    resolved = runtime.resolve_mounts(mounts)
+
+    assert len(resolved) == 1
+    assert resolved[0].host_path == ""
+    assert resolved[0].container_path == "/tmp"
+    assert resolved[0].kind == MountKind.TMPFS
+
+
 def test_resolve_mounts_workdir_requires_host_path(tmp_path):
     """WORKDIR mount without workdir_host_path raises RuntimeError."""
     runtime = DockerRuntime(cache_dir=tmp_path / "cache")
@@ -71,7 +83,6 @@ def test_prepare_workdir_is_noop(tmp_path, runtime):
     """prepare_workdir is a no-op since cache_dir is already on /dev/shm."""
     workdir = tmp_path / "task-workdir"
     workdir.mkdir()
-    # Should return without doing anything
     runtime.prepare_workdir(workdir, disk_bytes=1024 * 1024 * 512)
 
 
@@ -93,4 +104,3 @@ def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):
     )
     assert len(calls) == 0
     mock_bundle_store.extract_bundle_to.assert_called_once_with("abc", workdir)
-    mock_bundle_store.write_workdir_files.assert_called_once_with(workdir, {})

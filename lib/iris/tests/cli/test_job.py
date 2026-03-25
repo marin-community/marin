@@ -1,12 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for iris.cli.job — validate_region_zone and related CLI validation."""
+"""Tests for iris.cli.job — validate_region_zone, executor heuristic, and related CLI validation."""
 
 import click
 import pytest
 
-from iris.cli.job import validate_region_zone
+from iris.cli.job import build_resources, validate_region_zone
+from iris.cluster.constraints import (
+    Constraint,
+    WellKnownAttribute,
+    infer_preemptible_constraint,
+    preemptible_constraint,
+    region_constraint,
+)
 from iris.rpc import config_pb2
 
 
@@ -62,3 +69,61 @@ def test_validate_region_zone_no_config_skips():
 def test_validate_region_zone_no_constraints_skips():
     config = _make_config_with_zones(["us-central2-b"])
     validate_region_zone(None, None, config)
+
+
+# ---------------------------------------------------------------------------
+# Executor heuristic tests (mirrors the logic in run_iris_job)
+# ---------------------------------------------------------------------------
+
+
+def test_executor_heuristic_small_cpu_job_gets_non_preemptible():
+    resources = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB")
+    resources_proto = resources.to_proto()
+    replicas = 1
+    constraints: list[Constraint] = []
+
+    preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    assert preemptible is not None
+    assert preemptible.key == WellKnownAttribute.PREEMPTIBLE
+    assert preemptible.value == "false"
+
+
+def test_executor_heuristic_skipped_for_gpu_job():
+    resources = build_resources(tpu=None, gpu="H100", cpu=0.5, memory="1GB", disk="5GB")
+    resources_proto = resources.to_proto()
+    replicas = 1
+    constraints: list[Constraint] = []
+
+    preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    assert preemptible is None
+
+
+def test_executor_heuristic_skipped_for_large_cpu_job():
+    resources = build_resources(tpu=None, gpu=None, cpu=4.0, memory="16GB", disk="5GB")
+    resources_proto = resources.to_proto()
+    replicas = 1
+    constraints: list[Constraint] = []
+
+    preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    assert preemptible is None
+
+
+def test_executor_heuristic_skipped_when_user_sets_preemptible():
+    resources = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB")
+    resources_proto = resources.to_proto()
+    replicas = 1
+    constraints: list[Constraint] = [preemptible_constraint(True)]
+
+    preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    assert preemptible is None
+
+
+def test_executor_heuristic_with_region_constraint():
+    resources = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB")
+    resources_proto = resources.to_proto()
+    replicas = 1
+    constraints: list[Constraint] = [region_constraint(["us-central2"])]
+
+    preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    assert preemptible is not None
+    assert preemptible.value == "false"

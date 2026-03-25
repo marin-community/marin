@@ -20,7 +20,7 @@ from marin.processing.classification.deduplication.dedup_commons import (
 )
 from fray.v2 import ResourceConfig
 from marin.processing.classification.deduplication.connected_components import connected_components
-from marin.utilities.time_logger import log_time
+from iris.time_utils import log_time
 import wandb
 from zephyr import ZephyrContext
 from zephyr.dataset import Dataset
@@ -35,7 +35,6 @@ def _compute_fuzzy_dedup_stats(shards: list[str] | Sequence[str], method: str, l
         result: DupCounters = ctx.execute(  # type: ignore[bad-assignment]
             Dataset.from_list(shards)
             .load_parquet(columns=["component_id"])
-            # Compute the per-component statistics and then roll them up into a single counter group
             .group_by(
                 key=lambda r: r["component_id"],
                 reducer=lambda _, items: DupCounters(
@@ -56,19 +55,18 @@ def _load_fuzzy_dupe_map_shard(shards: list[str]) -> dict[str, bool]:
         logger.warning("No fuzzy duplicate documents found.")
         return {}
 
-    # Map record ID -> is duplicate (bool)
-    shard_dup_map = {}
-
-    def add_to_dup_map(record: dict):
-        shard_dup_map[record["id"]] = record["fuzzy_duplicate"]
-
     with log_time(f"Load fuzzy duplicate map from {len(shards)} shards"):
         ctx = ZephyrContext(client=LocalClient(), name="fuzzy-dup-map")
-        ctx.execute(
-            Dataset.from_list(shards).load_parquet().map(add_to_dup_map),
-        )
+        result: dict[str, bool] = ctx.execute(  # type: ignore[bad-assignment]
+            Dataset.from_list(shards)
+            .load_parquet()
+            .reduce(
+                local_reducer=lambda items: {r["id"]: r["fuzzy_duplicate"] for r in items},
+                global_reducer=lambda dicts: {k: v for d in dicts for k, v in d.items()},
+            ),
+        )[0]
 
-    return shard_dup_map
+    return result
 
 
 def dedup_fuzzy_document(
@@ -166,7 +164,7 @@ def dedup_fuzzy_document(
     if wandb.run:
         wandb.log(fuzzy_cnt.to_dict())
 
-    def mark_dup_documents(docs: Iterator[dict]) -> Iterator[dict]:
+    def mark_dup_documents(docs: Iterator[dict], _) -> Iterator[dict]:
         fuzzy_dup_map = _load_fuzzy_dupe_map_shard(fuzzy_dup_shards)
 
         for doc in docs:

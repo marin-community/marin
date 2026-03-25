@@ -24,7 +24,6 @@ import levanter.callbacks as callbacks
 import levanter.tracker
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.checkpoint import load_checkpoint
 from levanter.data import AsyncDataset, DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
 from levanter.data.text import GrugLmExample, LmDataConfig
@@ -38,6 +37,8 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
+import equinox as eqx
+from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 
@@ -232,7 +233,22 @@ class GrugTrainState:
     step: jax.Array
     params: Transformer
     opt_state: optax.OptState
-    ema_params: Transformer
+    ema_params: Transformer | None
+
+
+def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
+    """Set router biases from QB betas (computed on previous step, applied on host)."""
+    new_blocks = list(model.blocks)
+    moe_idx = 0
+    for i, block in enumerate(model.blocks):
+        if block.mlp is None:
+            continue
+        new_bias = -qb_betas[moe_idx]
+        new_bias = new_bias - jnp.mean(new_bias)
+        new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, new_bias)
+        new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
+        moe_idx += 1
+    return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
 
 def initial_state(
@@ -241,13 +257,14 @@ def initial_state(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
     key: PRNGKeyArray,
+    ema_beta: float | None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
         opt_state=optimizer.init(params),
-        ema_params=params,
+        ema_params=params if ema_beta is not None else None,
     )
 
 
@@ -288,8 +305,10 @@ def _make_train_step(
         params = optax.apply_updates(state.params, updates)
 
         if ema_beta is None:
-            ema_params = params
+            ema_params = None
         else:
+            if state.ema_params is None:
+                raise ValueError("ema_params must be initialized when ema_beta is set.")
             ema_params = jax.tree_util.tree_map(
                 lambda old, new: ema_beta * old + (1.0 - ema_beta) * new,
                 state.ema_params,
@@ -373,6 +392,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 optimizer=optimizer,
                 mp=trainer.mp,
                 key=model_rng,
+                ema_beta=config.trainer.ema_beta,
             )
 
         state = _init_state(model_key)
@@ -381,23 +401,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         checkpoint_path = trainer.load_checkpoint_path
         if checkpoint_path is None and checkpointer is not None:
             checkpoint_path = trainer.checkpointer.expanded_path(run_id)
-        if checkpoint_path is None:
-            if trainer.load_checkpoint:
-                raise FileNotFoundError("load_checkpoint=True but no checkpoint path is configured.")
-        elif trainer.load_checkpoint is not False:
-            try:
-                state = load_checkpoint(
-                    state,
-                    checkpoint_path,
-                    discover_latest=True,
-                    axis_mapping=None,
-                    mesh=mesh,
-                    allow_partial=trainer.allow_partial_checkpoint,
-                )
-            except FileNotFoundError:
-                if trainer.load_checkpoint is True:
-                    raise
-                logger.info(f"Checkpoint not found at {checkpoint_path}. Starting from scratch.")
+        state = restore_grug_state_from_checkpoint(
+            state,
+            checkpoint_path=checkpoint_path,
+            load_checkpoint_setting=trainer.load_checkpoint,
+            mesh=mesh,
+            allow_partial=trainer.allow_partial_checkpoint,
+        )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
@@ -424,7 +434,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks = StateCallbackRunner[GrugTrainState](
             step_getter=lambda s: s.step,
             model_getter=lambda s: s.params,
-            eval_model_getter=lambda s: s.ema_params,
+            eval_model_getter=lambda s: s.ema_params if s.ema_params is not None else s.params,
             opt_state_getter=lambda s: s.opt_state,
         )
         state_callbacks.add_hook(
@@ -460,10 +470,22 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
+        pending_qb_betas: jax.Array | None = None
 
         # Main optimization loop.
         try:
             while int(state.step) < trainer.num_train_steps:
+                # QB: apply router bias updates from previous step (on host).
+                if pending_qb_betas is not None:
+                    state = dataclasses.replace(
+                        state,
+                        params=_apply_qb_betas(state.params, pending_qb_betas),
+                        ema_params=(
+                            _apply_qb_betas(state.ema_params, pending_qb_betas) if state.ema_params is not None else None
+                        ),
+                    )
+                    pending_qb_betas = None
+
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
                 step_start = time.perf_counter()
@@ -476,6 +498,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
+                pending_qb_betas = metrics["qb_beta_per_layer"]
+
+                if jnp.isnan(metrics["train/loss"]):
+                    logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
+                    break
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):
@@ -484,7 +511,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     last_step_duration = duration
                     levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
                     levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
-                    router_metrics = {key: value for key, value in metrics.items() if key.startswith("train/router/")}
+                    router_metrics = {
+                        key: value
+                        for key, value in metrics.items()
+                        if (key.startswith("train/router/") or key.startswith("moe_bias/"))
+                        and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
+                    }
                     if router_metrics:
                         levanter.tracker.log(router_metrics, step=step)
                     if "train/cross_entropy_loss" in metrics:
@@ -497,12 +529,17 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         levanter.tracker.log(watch_stats, step=step)
 
                 if checkpointer is not None:
-                    checkpointer.on_step(tree={"train_state": state}, step=int(state.step))
-        finally:
+                    checkpointer.on_step(tree=state, step=int(state.step))
+        except BaseException:
+            logger.exception(
+                "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
+            )
+            raise
+        else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
-                checkpointer.on_step(tree={"train_state": state}, step=int(state.step), force=True)
+                checkpointer.on_step(tree=state, step=int(state.step), force=True)
                 checkpointer.wait_until_finished()
 
     levanter.tracker.current_tracker().finish()

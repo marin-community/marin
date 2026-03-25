@@ -105,7 +105,7 @@ This class defines basic training configuration that is sufficient for most expe
 
         nano_train_config = SimpleTrainConfig(
             # Here we define the hardware resources we need.
-            resources=ResourceConfig.with_gpu(count=1),
+            resources=ResourceConfig.with_gpu("H100", count=1),
             train_batch_size=32,
             num_train_steps=100,
             # set hyperparameters
@@ -132,8 +132,8 @@ This class defines basic training configuration that is sufficient for most expe
         )
         ```
 
-The `CpuOnlyConfig` is a [resource configuration](../references/resource-config.md) that requests a certain number of CPUs;
-`GpuConfig` requests GPUs; and `TpuPodConfig` for requests TPUs.
+`ResourceConfig.with_cpu()` is a [resource configuration](../references/resource-config.md) factory that requests CPUs;
+`ResourceConfig.with_gpu()` requests GPUs; and `ResourceConfig.with_tpu()` requests TPUs.
 
 ### 4. Train the Model
 

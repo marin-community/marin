@@ -25,7 +25,13 @@ from iris.cli.bug_report import file_github_issue, format_bug_report, gather_bug
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
-from iris.cluster.constraints import Constraint, WellKnownAttribute, region_constraint, zone_constraint
+from iris.cluster.constraints import (
+    Constraint,
+    WellKnownAttribute,
+    infer_preemptible_constraint,
+    region_constraint,
+    zone_constraint,
+)
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -367,27 +373,31 @@ def generate_job_name(command: list[str]) -> str:
     return f"iris-run-{script_name}-{timestamp}"
 
 
-def resolve_multinode_tpu_defaults(
+def resolve_multinode_defaults(
     tpu: str | None,
+    gpu: str | None,
     replicas: int | None,
 ) -> tuple[int, CoschedulingConfig | None]:
-    """Auto-detect multinode TPU topology and set replicas/coscheduling.
+    """Auto-detect multinode topology and set replicas/coscheduling.
 
-    When a multinode TPU (vm_count > 1) is requested and the caller did not
-    explicitly set replicas, this function sets replicas to the topology's
-    vm_count and enables coscheduling by ``tpu-name`` so that all tasks land
-    on workers in the same TPU slice.
+    For TPUs with vm_count > 1, infers replicas from the topology and enables
+    coscheduling by ``tpu-name`` so that all tasks land on workers in the same
+    TPU slice. For GPUs with replicas > 1, enables coscheduling by ``pool`` so
+    that all replicas are scheduled together.
 
     Args:
         tpu: TPU type string (e.g. ``"v6e-32"``), or ``None``.
+        gpu: GPU type string (e.g. ``"H100"``), or ``None``.
         replicas: Explicit replica count from the caller, or ``None`` if not
             specified (meaning the default should be inferred).
 
     Returns:
         A ``(replicas, coscheduling)`` tuple.  ``coscheduling`` is ``None``
-        for single-host TPUs or non-TPU jobs.
+        for single-host or non-multinode jobs.
     """
     if not tpu:
+        if gpu and replicas is not None and replicas > 1:
+            return replicas, CoschedulingConfig(group_by="pool")
         return replicas or 1, None
 
     try:
@@ -456,13 +466,22 @@ def run_iris_job(
     job_name = job_name or generate_job_name(command)
     extras = extras or []
 
-    replicas, coscheduling = resolve_multinode_tpu_defaults(tpu, replicas)
+    replicas, coscheduling = resolve_multinode_defaults(tpu, gpu, replicas)
 
     constraints: list[Constraint] = []
     if regions:
         constraints.append(region_constraint(list(regions)))
     if zone:
         constraints.append(zone_constraint(zone))
+
+    # Executor heuristic: small CPU-only CLI jobs (no accelerators, 1 replica,
+    # CPU ≤ 0.5 cores, RAM ≤ 4 GiB) are auto-tagged as non-preemptible so
+    # coordinators survive spot reclamation.
+    resources_proto = resources.to_proto()
+    preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    if preemptible is not None:
+        constraints.append(preemptible)
+        logger.info("Executor heuristic: auto-tagging job as non-preemptible")
 
     reservation: list[ReservationEntry] | None = None
     if reserve:
@@ -727,10 +746,10 @@ def run(
             token_provider=ctx.obj.get("token_provider"),
         )
     except Exception:
-        platform = ctx.obj.get("platform")
-        if platform is not None:
+        bundle = ctx.obj.get("provider_bundle")
+        if bundle is not None:
             try:
-                platform.debug_report()
+                bundle.controller.debug_report()
             except Exception:
                 logger.debug("Controller post-mortem failed", exc_info=True)
         raise

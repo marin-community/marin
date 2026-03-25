@@ -10,6 +10,7 @@ aggregated from task states.
 
 import json
 import logging
+import re
 import secrets
 import uuid
 from dataclasses import dataclass
@@ -68,18 +69,40 @@ from iris.cluster.controller.query import execute_raw_query
 from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.transitions import ControllerTransitions
-from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, task_log_key
+from iris.cluster.controller.provider import ProviderError
+from iris.cluster.log_store import LogStore, task_log_key
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import JobName, TaskAttempt, WorkerId
-from iris.rpc import cluster_pb2, vm_pb2
-from iris.rpc.cluster_connect import WorkerServiceClientSync
+from iris.rpc import cluster_pb2, logging_pb2, vm_pb2
 from iris.rpc.proto_utils import job_state_name, task_state_name
 from iris.time_utils import Timestamp, Timer
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TRANSACTION_LIMIT = 50
+
+# Pattern for env var keys that contain secrets and should be redacted in API responses.
+_SENSITIVE_ENV_KEY_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL", re.IGNORECASE)
+REDACTED_VALUE = "**REDACTED**"
+
+
+def redact_request_env_vars(
+    request: cluster_pb2.Controller.LaunchJobRequest,
+) -> cluster_pb2.Controller.LaunchJobRequest:
+    """Return a copy of *request* with sensitive env var values replaced."""
+    if not request.environment.env_vars:
+        return request
+
+    redacted = cluster_pb2.Controller.LaunchJobRequest()
+    redacted.CopyFrom(request)
+    env_vars = redacted.environment.env_vars
+    for key in list(env_vars):
+        if _SENSITIVE_ENV_KEY_RE.search(key):
+            env_vars[key] = REDACTED_VALUE
+    return redacted
+
+
 DEFAULT_MAX_TOTAL_LINES = 100000
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
@@ -148,6 +171,8 @@ def task_to_proto(task: Task, worker_address: str = "") -> cluster_pb2.TaskStatu
         proto.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
     if task.resource_usage:
         proto.resource_usage.CopyFrom(task.resource_usage)
+    if task.container_id:
+        proto.container_id = task.container_id
     # For pending tasks with prior terminal attempts, surface retry context.
     if task.state == cluster_pb2.TASK_STATE_PENDING and task.attempts and task.attempts[-1].is_terminal:
         last = task.attempts[-1]
@@ -268,7 +293,7 @@ def _read_worker_detail(
             WORKER_RESOURCE_HISTORY,
             columns=(WORKER_RESOURCE_HISTORY.c.snapshot_proto,),
             where=WORKER_RESOURCE_HISTORY.c.worker_id == str(worker_id),
-            order_by=(WORKER_RESOURCE_HISTORY.c.timestamp_ms.desc(),),
+            order_by=(WORKER_RESOURCE_HISTORY.c.id.desc(),),
             limit=max(resource_history_limit, 0),
         )
     resource_history = tuple(reversed([r.snapshot_proto for r in resource_rows]))
@@ -374,16 +399,33 @@ def _jobs_paginated(
     order_expr = _SORT_FIELD_TO_SQL.get(sort_field, "j.submitted_at_ms")
 
     count_sql = f"SELECT COUNT(*) FROM jobs j WHERE {where_clause}"
-    select_sql = f"""
-        SELECT j.*,
-               COALESCE(SUM(t.failure_count), 0) AS agg_failures,
-               COALESCE(SUM(t.preemption_count), 0) AS agg_preemptions
-        FROM jobs j
-        LEFT JOIN tasks t ON j.job_id = t.job_id
-        WHERE {where_clause}
-        GROUP BY j.job_id
-        ORDER BY {order_expr} {direction}
-    """
+
+    # Only join tasks when sorting by failure/preemption aggregates.
+    # The common case (sort by date, name, state) skips the expensive LEFT JOIN + GROUP BY.
+    needs_task_agg = sort_field in (
+        cluster_pb2.Controller.JOB_SORT_FIELD_FAILURES,
+        cluster_pb2.Controller.JOB_SORT_FIELD_PREEMPTIONS,
+    )
+
+    if needs_task_agg:
+        select_sql = f"""
+            SELECT j.*,
+                   COALESCE(SUM(t.failure_count), 0) AS agg_failures,
+                   COALESCE(SUM(t.preemption_count), 0) AS agg_preemptions
+            FROM jobs j
+            LEFT JOIN tasks t ON j.job_id = t.job_id
+            WHERE {where_clause}
+            GROUP BY j.job_id
+            ORDER BY {order_expr} {direction}
+        """
+    else:
+        select_sql = f"""
+            SELECT j.*
+            FROM jobs j
+            WHERE {where_clause}
+            ORDER BY {order_expr} {direction}
+        """
+
     select_params = list(params)
     if limit > 0:
         select_sql += " LIMIT ? OFFSET ?"
@@ -564,13 +606,6 @@ class AutoscalerProtocol(Protocol):
         ...
 
 
-class StubFactoryProtocol(Protocol):
-    """Protocol for getting cached worker RPC stubs."""
-
-    def get_stub(self, address: str) -> WorkerServiceClientSync: ...
-    def evict(self, address: str) -> None: ...
-
-
 class ControllerProtocol(Protocol):
     """Protocol for controller operations used by ControllerServiceImpl."""
 
@@ -587,7 +622,17 @@ class ControllerProtocol(Protocol):
     @property
     def autoscaler(self) -> AutoscalerProtocol | None: ...
 
-    stub_factory: StubFactoryProtocol
+    @property
+    def provider(self) -> Any: ...
+
+    @property
+    def has_direct_provider(self) -> bool: ...
+
+    @property
+    def provider_scheduling_events(self) -> list: ...
+
+    @property
+    def provider_capacity(self) -> Any: ...
 
 
 def _inject_resource_constraints(
@@ -836,7 +881,7 @@ class ControllerServiceImpl:
 
         return cluster_pb2.Controller.GetJobStatusResponse(
             job=proto_job_status,
-            request=job.request,
+            request=redact_request_env_vars(job.request) if job.request else None,
         )
 
     def terminate_job(
@@ -1077,6 +1122,8 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.ListWorkersResponse:
         """List all workers with their running task counts."""
+        if self._controller.has_direct_provider:
+            return cluster_pb2.Controller.ListWorkersResponse()
         workers = []
         worker_rows = _worker_roster(self._db)
         running_by_worker = running_tasks_by_worker(self._db, {worker.worker_id for worker in worker_rows})
@@ -1141,7 +1188,11 @@ class ControllerServiceImpl:
             registered_at=Timestamp.now(),
         )
 
-        self._transitions.add_endpoint(endpoint, task_id=task_id)
+        if not self._transitions.add_endpoint(endpoint, task_id=task_id):
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Task {request.task_id} is already terminal; endpoint not registered",
+            )
 
         return cluster_pb2.Controller.RegisterEndpointResponse(endpoint_id=endpoint_id)
 
@@ -1188,6 +1239,8 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
         """Get current autoscaler status with worker info populated."""
+        if self._controller.has_direct_provider:
+            return cluster_pb2.Controller.GetAutoscalerStatusResponse(status=vm_pb2.AutoscalerStatus())
         autoscaler = self._controller.autoscaler
         if not autoscaler:
             return cluster_pb2.Controller.GetAutoscalerStatusResponse(status=vm_pb2.AutoscalerStatus())
@@ -1216,6 +1269,60 @@ class ControllerServiceImpl:
                         vm.running_task_count = len(running_by_worker.get(wid, set()))
 
         return cluster_pb2.Controller.GetAutoscalerStatusResponse(status=status)
+
+    # --- Provider Status ---
+
+    def get_provider_status(
+        self,
+        request: cluster_pb2.Controller.GetProviderStatusRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetProviderStatusResponse:
+        """Get provider status for direct-dispatch providers."""
+        if not self._controller.has_direct_provider:
+            return cluster_pb2.Controller.GetProviderStatusResponse(has_direct_provider=False)
+        events = [
+            cluster_pb2.Controller.SchedulingEvent(
+                task_id=e.task_id,
+                attempt_id=e.attempt_id,
+                event_type=e.event_type,
+                reason=e.reason,
+                message=e.message,
+                timestamp=e.timestamp.to_proto(),
+            )
+            for e in self._controller.provider_scheduling_events
+        ]
+        resp = cluster_pb2.Controller.GetProviderStatusResponse(
+            has_direct_provider=True,
+            scheduling_events=events,
+        )
+        cap = self._controller.provider_capacity
+        if cap is not None:
+            resp.capacity.CopyFrom(
+                cluster_pb2.Controller.ClusterCapacity(
+                    schedulable_nodes=cap.schedulable_nodes,
+                    total_cpu_millicores=cap.total_cpu_millicores,
+                    available_cpu_millicores=cap.available_cpu_millicores,
+                    total_memory_bytes=cap.total_memory_bytes,
+                    available_memory_bytes=cap.available_memory_bytes,
+                )
+            )
+        return resp
+
+    # --- Kubernetes Cluster Status ---
+
+    def get_kubernetes_cluster_status(
+        self,
+        request: cluster_pb2.Controller.GetKubernetesClusterStatusRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetKubernetesClusterStatusResponse:
+        """Get Kubernetes cluster status: node counts, capacity, and recent pod statuses."""
+        if not self._controller.has_direct_provider:
+            return cluster_pb2.Controller.GetKubernetesClusterStatusResponse()
+
+        # KubernetesProvider exposes get_cluster_status().
+        # Access via the provider after the guard.
+        provider = self._controller.provider
+        return provider.get_cluster_status()  # type: ignore[union-attr]
 
     # --- VM Logs ---
 
@@ -1316,15 +1423,6 @@ class ControllerServiceImpl:
 
     # --- Profiling ---
 
-    def _resolve_worker_stub(self, worker_id_str: str) -> WorkerServiceClientSync:
-        """Resolve a worker ID to a healthy stub, raising ConnectError on failure."""
-        worker = self._transitions.get_worker(WorkerId(worker_id_str))
-        if not worker:
-            raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id_str} not found")
-        if not worker.healthy:
-            raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id_str} is unavailable")
-        return self._controller.stub_factory.get_stub(worker.address)
-
     def profile_task(
         self,
         request: cluster_pb2.ProfileTaskRequest,
@@ -1351,14 +1449,18 @@ class ControllerServiceImpl:
         # /system/worker/<worker_id>: proxy profile to the worker's own process
         worker_id = _parse_worker_target(request.target)
         if worker_id is not None:
-            stub = self._resolve_worker_stub(worker_id)
+            worker = self._transitions.get_worker(WorkerId(worker_id))
+            if not worker:
+                raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id} not found")
+            if not worker.healthy:
+                raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
             forwarded = cluster_pb2.ProfileTaskRequest(
                 target="/system/process",
                 duration_seconds=request.duration_seconds,
                 profile_type=request.profile_type,
             )
             timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
-            resp = stub.profile_task(forwarded, timeout_ms=timeout_ms)
+            resp = self._controller.provider.profile_task(worker.address, forwarded, timeout_ms)
             return cluster_pb2.ProfileTaskResponse(
                 profile_data=resp.profile_data,
                 error=resp.error,
@@ -1376,15 +1478,22 @@ class ControllerServiceImpl:
 
         task_worker_id = task.worker_id
         if not task_worker_id:
-            raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not assigned to a worker")
+            if self._controller.has_direct_provider:
+                provider = self._controller.provider
+                attempt_id = target.attempt_id if target.attempt_id is not None else task.current_attempt_id
+                resp = provider.profile_task(task.task_id.to_wire(), attempt_id, request)
+                return cluster_pb2.ProfileTaskResponse(
+                    profile_data=resp.profile_data,
+                    error=resp.error,
+                )
+            raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not yet assigned to a worker")
 
         worker = _read_worker(self._db, task_worker_id)
         if not worker or not worker.healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
 
         timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
-        stub = self._controller.stub_factory.get_stub(worker.address)
-        resp = stub.profile_task(request, timeout_ms=timeout_ms)
+        resp = self._controller.provider.profile_task(worker.address, request, timeout_ms)
         return cluster_pb2.ProfileTaskResponse(
             profile_data=resp.profile_data,
             error=resp.error,
@@ -1450,17 +1559,20 @@ class ControllerServiceImpl:
         """
         worker_id = _parse_worker_target(request.source)
         if worker_id is not None:
-            stub = self._resolve_worker_stub(worker_id)
-            forwarded = cluster_pb2.FetchLogsRequest(
-                source="/system/process",
-                since_ms=request.since_ms,
-                cursor=request.cursor,
-                substring=request.substring,
-                max_lines=request.max_lines,
-                tail=request.tail,
-                min_level=request.min_level,
-            )
-            return stub.fetch_logs(forwarded, timeout_ms=10000)
+            if self._controller.has_direct_provider:
+                raise ConnectError(Code.UNIMPLEMENTED, "Direct provider: use task log source instead")
+            worker = self._transitions.get_worker(WorkerId(worker_id))
+            if not worker:
+                raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id} not found")
+            if not worker.healthy:
+                raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
+            try:
+                entries, next_cursor = self._controller.provider.fetch_process_logs(
+                    WorkerId(worker_id), worker.address, request
+                )
+            except ProviderError as exc:
+                raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
+            return cluster_pb2.FetchLogsResponse(entries=entries, cursor=next_cursor)
 
         max_lines = request.max_lines if request.max_lines > 0 else 1000
         result = self._log_store.get_logs(
@@ -1487,6 +1599,8 @@ class ControllerServiceImpl:
         worker state (health, tasks, logs). VM status lives on the Autoscaler
         tab.
         """
+        if self._controller.has_direct_provider:
+            raise ConnectError(Code.UNIMPLEMENTED, "Direct provider mode: no workers")
         if not request.id:
             raise ConnectError(Code.INVALID_ARGUMENT, "id is required")
 
@@ -1506,20 +1620,16 @@ class ControllerServiceImpl:
             status_message=worker_status_message(worker),
         )
 
-        # Fetch worker daemon logs via FetchLogs(/system/process) if worker is healthy
-        worker_log_entries: list[cluster_pb2.FetchLogsResponse] = []
+        # Fetch worker daemon logs via the provider if worker is healthy
+        worker_log_entries: list[logging_pb2.LogEntry] = []
         if worker.healthy:
             try:
-                stub = self._controller.stub_factory.get_stub(worker.address)
-                fetch_resp = stub.fetch_logs(
-                    cluster_pb2.FetchLogsRequest(
-                        source=PROCESS_LOG_KEY,
-                        max_lines=200,
-                        tail=True,
-                    ),
-                    timeout_ms=10000,
+                entries, _ = self._controller.provider.fetch_process_logs(
+                    worker.worker_id,
+                    worker.address,
+                    cluster_pb2.FetchLogsRequest(source="/system/process", max_lines=200, tail=True),
                 )
-                worker_log_entries = list(fetch_resp.entries)
+                worker_log_entries = entries
             except Exception:
                 logger.debug("Failed to fetch worker logs for %s", request.id, exc_info=True)
 
@@ -1580,15 +1690,10 @@ class ControllerServiceImpl:
         if not worker.healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
 
-        stub = self._controller.stub_factory.get_stub(worker.address)
-        # Forward with target set to /system/process so the worker returns its own status
-        forwarded = cluster_pb2.GetProcessStatusRequest(
-            max_log_lines=request.max_log_lines,
-            log_substring=request.log_substring,
-            min_log_level=request.min_log_level,
-            target="/system/process",
-        )
-        return stub.get_process_status(forwarded, timeout_ms=10000)
+        try:
+            return self._controller.provider.get_process_status(WorkerId(worker_id), worker.address, request)
+        except ProviderError as exc:
+            raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
 
     # ── Auth RPCs ────────────────────────────────────────────────────────
 
@@ -1693,7 +1798,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Empty:
         identity = require_identity()
-        with self._db.read_snapshot() as q:
+        with self._db.snapshot() as q:
             key = q.one(API_KEYS, where=API_KEYS.c.key_id == request.key_id)
         if key is None:
             raise ConnectError(Code.NOT_FOUND, f"API key not found: {request.key_id}")
@@ -1742,6 +1847,47 @@ class ControllerServiceImpl:
         return cluster_pb2.GetCurrentUserResponse(
             user_id=identity.user_id,
             role=identity.role,
+        )
+
+    def exec_in_container(
+        self,
+        request: cluster_pb2.Controller.ExecInContainerRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.ExecInContainerResponse:
+        """Execute a command in a running task's container.
+
+        Proxies to the worker that owns the task. On K8s, delegates to the provider.
+        """
+        try:
+            task_id = JobName.from_wire(request.task_id)
+            task_id.require_task()
+        except ValueError as exc:
+            raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
+
+        task = _read_task_with_attempts(self._db, task_id)
+        if not task:
+            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+
+        task_worker_id = task.worker_id
+        if not task_worker_id:
+            raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
+
+        worker = _read_worker(self._db, task_worker_id)
+        if not worker or not worker.healthy:
+            raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
+
+        # Proxy to worker
+        worker_request = cluster_pb2.Worker.ExecInContainerRequest(
+            task_id=request.task_id,
+            command=request.command,
+            timeout_seconds=request.timeout_seconds,
+        )
+        resp = self._controller.provider.exec_in_container(worker.address, worker_request, request.timeout_seconds)
+        return cluster_pb2.Controller.ExecInContainerResponse(
+            exit_code=resp.exit_code,
+            stdout=resp.stdout,
+            stderr=resp.stderr,
+            error=resp.error,
         )
 
     def execute_raw_query(
