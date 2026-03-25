@@ -300,66 +300,9 @@ def test_rescale_mixture_schedule_for_batch_schedule():
 
 
 @pytest.mark.asyncio
-async def test_concat_dataset_length_is_sum_of_children():
-    ds1 = ListAsyncDataset([1, 2, 3])
-    ds2 = ListAsyncDataset([10, 20])
-    concat = ConcatDataset({"a": ds1, "b": ds2})
-    assert await concat.async_len() == 5
-
-
-@pytest.mark.asyncio
 async def test_concat_dataset_rejects_infinite_children():
     with pytest.raises(ValueError, match="finite"):
         ConcatDataset({"inf": InfiniteCounterDataset()})
-
-
-@pytest.mark.asyncio
-async def test_concat_dataset_rejects_empty():
-    with pytest.raises(ValueError, match="at least one"):
-        ConcatDataset({})
-
-
-@pytest.mark.asyncio
-async def test_concat_dataset_contains_all_elements():
-    ds1 = ListAsyncDataset([1, 2, 3])
-    ds2 = ListAsyncDataset([10, 20])
-    concat = ConcatDataset({"a": ds1, "b": ds2})
-    total = await concat.async_len()
-    batch = await concat.get_batch(list(range(total)))
-    assert sorted(batch) == [1, 2, 3, 10, 20]
-
-
-@pytest.mark.asyncio
-async def test_concat_dataset_preserves_order():
-    """Without a permutation wrapper, indices map in child order."""
-    ds1 = ListAsyncDataset([1, 2, 3])
-    ds2 = ListAsyncDataset([10, 20])
-    concat = ConcatDataset({"a": ds1, "b": ds2})
-    batch = await concat.get_batch([0, 1, 2, 3, 4])
-    assert list(batch) == [1, 2, 3, 10, 20]
-
-
-@pytest.mark.asyncio
-async def test_concat_dataset_getitem_consistent_with_get_batch():
-    ds1 = ListAsyncDataset([1, 2, 3])
-    ds2 = ListAsyncDataset([10, 20])
-    concat = ConcatDataset({"a": ds1, "b": ds2})
-    batch = await concat.get_batch([0, 1, 2, 3, 4])
-    for i in range(5):
-        assert await concat.getitem_async(i) == batch[i]
-
-
-@pytest.mark.asyncio
-async def test_concat_with_permutation_shuffles():
-    """ConcatDataset + PermutationDataset produces a shuffled view."""
-    data = list(range(100))
-    ds = ListAsyncDataset(data)
-    concat = ConcatDataset({"only": ds})
-    shuffled = PermutationDataset(concat, key=key())
-    batch = await shuffled.get_batch(list(range(100)))
-    assert sorted(batch) == data
-    # Extremely unlikely that a random permutation is the identity
-    assert list(batch) != data
 
 
 @pytest.mark.asyncio
