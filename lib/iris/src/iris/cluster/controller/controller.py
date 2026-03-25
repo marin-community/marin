@@ -65,7 +65,9 @@ from iris.cluster.controller.transitions import (
     Assignment,
     ClusterCapacity,
     ControllerTransitions,
+    DispatchBatch,
     HeartbeatAction,
+    QuarantinedWorker,
     ReservationClaim,
     SchedulingEvent,
 )
@@ -1484,10 +1486,43 @@ class Controller:
 
             # Batch all successful heartbeats in one transaction.
             all_tasks_to_kill: set[JobName] = set()
+            quarantined_workers: list[QuarantinedWorker] = []
             if success_reqs:
                 batch_results = self._transitions.apply_heartbeats_batch(success_reqs)
                 for result in batch_results:
                     all_tasks_to_kill.update(result.tasks_to_kill)
+                    quarantined_workers.extend(result.quarantined_workers)
+
+            # Quarantine workers that hit the crash threshold (e.g. repeated SIGSEGV).
+            # Force-remove them and let the autoscaler reprovision fresh nodes.
+            for qw in quarantined_workers:
+                result = self._transitions.fail_heartbeat_for_worker(
+                    worker_id=qw.worker_id,
+                    error="Quarantined: consecutive task crashes with infrastructure-fatal exit codes",
+                    snapshot=DispatchBatch(
+                        worker_id=qw.worker_id,
+                        worker_address=qw.worker_address,
+                        running_tasks=[],
+                    ),
+                    force_remove=True,
+                )
+                all_tasks_to_kill.update(result.tasks_to_kill)
+                if result.worker_removed:
+                    fail_count += 1
+                    failed_workers.append(str(qw.worker_id))
+                    self._provider.on_worker_failed(qw.worker_id, qw.worker_address)
+                    if self._autoscaler:
+                        sibling_worker_ids = self._autoscaler.notify_worker_failed(str(qw.worker_id))
+                        if sibling_worker_ids:
+                            sibling_failed = self._transitions.fail_workers_by_ids(
+                                sibling_worker_ids,
+                                reason=f"sibling worker {qw.worker_id} quarantined (SIGSEGV), slice terminated",
+                            )
+                            for _wid, addr in sibling_failed:
+                                self._provider.on_worker_failed(_wid, addr)
+                            if sibling_failed:
+                                fail_count += len(sibling_failed)
+                                failed_workers.extend(str(wid) for wid, _ in sibling_failed)
 
             # Handle failures individually (rare, need per-worker side effects).
             for batch, error in failure_entries:

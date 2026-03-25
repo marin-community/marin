@@ -75,6 +75,14 @@ no longer exist — without this, the controller would need 10 consecutive
 RPC failures (50s) per worker to notice, during which they appear healthy
 in the dashboard and block scheduling capacity."""
 
+WORKER_CRASH_QUARANTINE_THRESHOLD = 3
+"""Consecutive task crashes with infrastructure-fatal exit codes (e.g. SIGSEGV)
+before the worker is quarantined and its backing VM deleted."""
+
+QUARANTINE_EXIT_CODES = frozenset({139})
+"""Exit codes that indicate an infrastructure-fatal crash. 139 = 128 + SIGSEGV (11).
+Tasks killed by these signals almost always indicate a bad TPU/GPU node."""
+
 WORKER_TASK_HISTORY_RETENTION = 500
 """Maximum worker_task_history rows retained per worker."""
 
@@ -188,8 +196,17 @@ class WorkerRegistrationResult:
 
 
 @dataclass(frozen=True)
+class QuarantinedWorker:
+    """A worker that hit the crash quarantine threshold during heartbeat processing."""
+
+    worker_id: WorkerId
+    worker_address: str
+
+
+@dataclass(frozen=True)
 class HeartbeatApplyResult(TxResult):
     action: HeartbeatAction = HeartbeatAction.OK
+    quarantined_workers: list[QuarantinedWorker] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -947,17 +964,18 @@ class ControllerTransitions:
 
     def _apply_single_heartbeat(
         self, cur: TransactionCursor, req: HeartbeatApplyRequest, now_ms: int
-    ) -> tuple[TxResult, list[tuple[str, list[logging_pb2.LogEntry]]]]:
+    ) -> tuple[TxResult, list[tuple[str, list[logging_pb2.LogEntry]]], QuarantinedWorker | None]:
         """Process one heartbeat within an existing transaction.
 
-        Returns (TxResult, pending_logs) so the caller can flush logs after commit.
+        Returns (TxResult, pending_logs, quarantined_worker) so the caller can
+        flush logs after commit and handle quarantined workers.
         """
         pending_logs: list[tuple[str, list[logging_pb2.LogEntry]]] = []
         tasks_to_kill: set[JobName] = set()
 
         worker = cur.execute("SELECT * FROM workers WHERE worker_id = ?", (str(req.worker_id),)).fetchone()
         if worker is None:
-            return TxResult(), pending_logs
+            return TxResult(), pending_logs, None
 
         snapshot_payload = (
             req.worker_resource_snapshot.SerializeToString() if req.worker_resource_snapshot is not None else None
@@ -988,6 +1006,9 @@ class ControllerTransitions:
         jobs_to_recompute: set[JobName] = set()
         # Cache job request protos to avoid re-fetching and re-parsing per task.
         job_req_cache: dict[str, cluster_pb2.Controller.LaunchJobRequest | None] = {}
+        # Track crash exit codes and successes for quarantine detection.
+        has_crash_exit_code = False
+        has_task_success = False
 
         for update in req.updates:
             task_row = cur.execute("SELECT * FROM tasks WHERE task_id = ?", (update.task_id.to_wire(),)).fetchone()
@@ -1075,6 +1096,10 @@ class ControllerTransitions:
                     task_error = "Scheduling timeout exceeded"
                 if update.new_state == cluster_pb2.TASK_STATE_FAILED:
                     failure_count += 1
+                    if task_exit is not None and task_exit in QUARANTINE_EXIT_CODES:
+                        has_crash_exit_code = True
+                if update.new_state == cluster_pb2.TASK_STATE_SUCCEEDED:
+                    has_task_success = True
                 if update.new_state == cluster_pb2.TASK_STATE_WORKER_FAILED and prior_state in EXECUTING_TASK_STATES:
                     preemption_count += 1
                 if (
@@ -1226,13 +1251,40 @@ class ControllerTransitions:
                 actions.append(("job_terminated", job_id.to_wire(), {}))
             self._record_transaction(cur, "apply_task_updates", actions)
 
-        return TxResult(tasks_to_kill=tasks_to_kill), pending_logs
+        # Update per-worker crash counter for quarantine detection.
+        quarantined: QuarantinedWorker | None = None
+        if has_task_success:
+            cur.execute(
+                "UPDATE workers SET consecutive_task_crashes = 0 WHERE worker_id = ?",
+                (str(req.worker_id),),
+            )
+        elif has_crash_exit_code:
+            cur.execute(
+                "UPDATE workers SET consecutive_task_crashes = consecutive_task_crashes + 1 " "WHERE worker_id = ?",
+                (str(req.worker_id),),
+            )
+            row = cur.execute(
+                "SELECT consecutive_task_crashes, address FROM workers WHERE worker_id = ?",
+                (str(req.worker_id),),
+            ).fetchone()
+            if row is not None and int(row["consecutive_task_crashes"]) >= WORKER_CRASH_QUARANTINE_THRESHOLD:
+                logger.warning(
+                    "Worker %s hit crash quarantine threshold (%d consecutive SIGSEGV-class failures), " "quarantining",
+                    req.worker_id,
+                    int(row["consecutive_task_crashes"]),
+                )
+                quarantined = QuarantinedWorker(
+                    worker_id=req.worker_id,
+                    worker_address=str(row["address"]),
+                )
+
+        return TxResult(tasks_to_kill=tasks_to_kill), pending_logs, quarantined
 
     def apply_task_updates(self, req: HeartbeatApplyRequest) -> TxResult:
         """Apply a batch of worker task updates atomically."""
         with self._db.transaction() as cur:
             now_ms = Timestamp.now().epoch_ms()
-            result, pending_logs = self._apply_single_heartbeat(cur, req, now_ms)
+            result, pending_logs, _quarantined = self._apply_single_heartbeat(cur, req, now_ms)
 
         if pending_logs and self._log_store is not None:
             self._log_store.append_batch(pending_logs)
@@ -1246,16 +1298,27 @@ class ControllerTransitions:
         """
         all_pending_logs: list[tuple[str, list[logging_pb2.LogEntry]]] = []
         results: list[HeartbeatApplyResult] = []
+        all_quarantined: list[QuarantinedWorker] = []
 
         with self._db.transaction() as cur:
             now_ms = Timestamp.now().epoch_ms()
             for req in requests:
-                tx_result, pending_logs = self._apply_single_heartbeat(cur, req, now_ms)
+                tx_result, pending_logs, quarantined = self._apply_single_heartbeat(cur, req, now_ms)
                 all_pending_logs.extend(pending_logs)
+                if quarantined is not None:
+                    all_quarantined.append(quarantined)
                 results.append(HeartbeatApplyResult(tasks_to_kill=tx_result.tasks_to_kill, action=HeartbeatAction.OK))
 
         if all_pending_logs and self._log_store is not None:
             self._log_store.append_batch(all_pending_logs)
+
+        # Attach quarantined workers to the first result so the controller can handle them.
+        if all_quarantined and results:
+            results[0] = HeartbeatApplyResult(
+                tasks_to_kill=results[0].tasks_to_kill,
+                action=results[0].action,
+                quarantined_workers=all_quarantined,
+            )
 
         return results
 

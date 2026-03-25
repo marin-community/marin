@@ -36,6 +36,7 @@ from iris.cluster.controller.transitions import (
     MAX_REPLICAS_PER_JOB,
     PruneResult,
     TaskUpdate,
+    WORKER_CRASH_QUARANTINE_THRESHOLD,
 )
 from iris.cluster.log_store import LogStore
 from iris.cluster.types import JobName, WorkerId
@@ -3498,3 +3499,76 @@ def test_job_cancel_marks_job_killed(harness) -> None:
     jid = JobName.root("test-user", "killed")
     harness.state.cancel_job(jid, reason="manual")
     assert harness.query_job(jid).state == cluster_pb2.JOB_STATE_KILLED
+
+
+def test_sigsegv_crash_quarantines_worker(state):
+    """Worker is quarantined after WORKER_CRASH_QUARANTINE_THRESHOLD consecutive SIGSEGV task failures."""
+    meta = make_worker_metadata()
+    worker_id = register_worker(state, "w1", "host:8080", meta)
+
+    for crash_num in range(WORKER_CRASH_QUARANTINE_THRESHOLD):
+        # Submit a new job each iteration (previous one is terminal after failure).
+        req = make_job_request(f"job-{crash_num}", max_retries_failure=0)
+        tasks = submit_job(state, f"j-{crash_num}", req)
+        dispatch_task(state, tasks[0], worker_id)
+
+        result = state.apply_heartbeats_batch(
+            [
+                HeartbeatApplyRequest(
+                    worker_id=worker_id,
+                    worker_resource_snapshot=None,
+                    updates=[
+                        TaskUpdate(
+                            task_id=tasks[0].task_id,
+                            attempt_id=_query_task(state, tasks[0].task_id).current_attempt_id,
+                            new_state=cluster_pb2.TASK_STATE_FAILED,
+                            exit_code=139,  # SIGSEGV
+                            error="killed by SIGSEGV",
+                        )
+                    ],
+                )
+            ]
+        )
+
+        if crash_num < WORKER_CRASH_QUARANTINE_THRESHOLD - 1:
+            # Worker should still be alive.
+            assert not result[0].quarantined_workers
+            w = _query_worker(state, worker_id)
+            assert w is not None
+            assert w.consecutive_task_crashes == crash_num + 1
+        else:
+            # Threshold reached — worker should be flagged for quarantine.
+            assert len(result[0].quarantined_workers) == 1
+            assert result[0].quarantined_workers[0].worker_id == worker_id
+
+
+def test_task_success_resets_crash_counter(state):
+    """A successful task resets the consecutive_task_crashes counter."""
+    meta = make_worker_metadata()
+    worker_id = register_worker(state, "w1", "host:8080", meta)
+
+    # Fail once with SIGSEGV.
+    req = make_job_request("crash-job", max_retries_failure=0)
+    tasks = submit_job(state, "j-crash", req)
+    dispatch_task(state, tasks[0], worker_id)
+    transition_task(state, tasks[0].task_id, cluster_pb2.TASK_STATE_FAILED, exit_code=139)
+    assert _query_worker(state, worker_id).consecutive_task_crashes == 1
+
+    # Succeed a task — counter should reset.
+    req2 = make_job_request("ok-job")
+    tasks2 = submit_job(state, "j-ok", req2)
+    dispatch_task(state, tasks2[0], worker_id)
+    transition_task(state, tasks2[0].task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
+    assert _query_worker(state, worker_id).consecutive_task_crashes == 0
+
+
+def test_non_sigsegv_failure_does_not_increment_crash_counter(state):
+    """Non-SIGSEGV task failures (e.g. exit code 1) do not increment the crash counter."""
+    meta = make_worker_metadata()
+    worker_id = register_worker(state, "w1", "host:8080", meta)
+
+    req = make_job_request("normal-fail", max_retries_failure=0)
+    tasks = submit_job(state, "j-normal", req)
+    dispatch_task(state, tasks[0], worker_id)
+    transition_task(state, tasks[0].task_id, cluster_pb2.TASK_STATE_FAILED, exit_code=1)
+    assert _query_worker(state, worker_id).consecutive_task_crashes == 0

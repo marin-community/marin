@@ -694,6 +694,7 @@ class Worker:
     committed_gpu: int = db_field("committed_gpu", _decode_int)
     committed_tpu: int = db_field("committed_tpu", _decode_int)
     active: bool = db_field("active", _decode_bool_int, default=True)
+    consecutive_task_crashes: int = db_field("consecutive_task_crashes", _decode_int, default=0)
     attributes: dict[str, AttributeValue] = field(default_factory=dict)
 
     @property
