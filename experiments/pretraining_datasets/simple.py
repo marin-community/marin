@@ -12,19 +12,7 @@ import os.path
 
 from levanter.data.text import TextLmDatasetFormat
 from levanter.store.cache import CacheOptions
-from marin.datakit.download.pretraining import (
-    dclm_baseline_download,
-    dclm_baseline_wrong_download,
-    dolma3_mix_150b_1025_download,
-    fineweb_download,
-    fineweb_edu_download,
-    proofpile_2_download,
-    slimpajama_6b_download,
-    slimpajama_download,
-    starcoderdata_download,
-    the_pile_openwebtext2_download,
-    the_stack_dedup_download,
-)
+from marin.datakit.download.huggingface import download_hf_step
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
@@ -65,42 +53,60 @@ def _tokenize_simple(
     return step
 
 
+def _dl(name: str, hf_dataset_id: str, revision: str, output_path: str) -> ExecutorStep:
+    """Create a download ExecutorStep from a StepSpec."""
+    return download_hf_step(
+        name, hf_dataset_id=hf_dataset_id, revision=revision, override_output_path=output_path
+    ).as_executor_step()
+
+
 # ============================================================================
 # RAW DATASET DOWNLOADS
 # ============================================================================
 
 
 def _build_downloads() -> dict[str, ExecutorStep | InputName]:
-    """Build the downloads dict from canonical StepSpec definitions in pretraining.py."""
-    fineweb_edu_base = fineweb_edu_download().as_executor_step()
+    fineweb_edu_base = _dl("raw/fineweb-edu", "HuggingFaceFW/fineweb-edu", "87f0914", "raw/fineweb-edu-87f0914")
 
     return {
-        "fineweb": fineweb_download().as_executor_step(),
+        "fineweb": _dl("raw/fineweb", "HuggingFaceFW/fineweb", "cd85054", "raw/fineweb"),
         "fineweb_edu": fineweb_edu_base.cd("data"),
         "fineweb_edu_sample_10bt": fineweb_edu_base.cd("sample/10BT"),
         "fineweb_edu_sample_100bt": fineweb_edu_base.cd("sample/100BT"),
         "fineweb_edu_sample_350bt": fineweb_edu_base.cd("sample/350BT"),
         "slimpajama": (
-            slimpajama_download()
-            .as_executor_step()
-            .cd("2d0accd/huggingface.co/datasets/cerebras/SlimPajama-627B/resolve/2d0accd")
+            _dl("raw/SlimPajama-627B", "cerebras/SlimPajama-627B", "2d0accd", "raw/SlimPajama-627B-262830").cd(
+                "2d0accd/huggingface.co/datasets/cerebras/SlimPajama-627B/resolve/2d0accd"
+            )
         ),
-        "slimpajama_6b": slimpajama_6b_download().as_executor_step().cd("data"),
-        "dolma3_mix_150b_1025": dolma3_mix_150b_1025_download().as_executor_step().cd("15d04ee"),
-        "dclm_baseline_wrong": dclm_baseline_wrong_download().as_executor_step(),
-        "dclm_baseline": dclm_baseline_download().as_executor_step().cd("a3b142c"),
-        "the_stack_dedup": the_stack_dedup_download().as_executor_step().cd("17cad72"),
+        "slimpajama_6b": (
+            _dl("raw/SlimPajama-6B", "DKYoon/SlimPajama-6B", "b5f90f4", "raw/SlimPajama-6B-be35b7").cd("data")
+        ),
+        "dolma3_mix_150b_1025": (
+            _dl(
+                "raw/dolma3_mix-150B-1025", "allenai/dolma3_mix-150B-1025", "15d04ee", "raw/dolma3_mix-150B-1025-15d04ee"
+            ).cd("15d04ee")
+        ),
+        "dclm_baseline_wrong": _dl(
+            "raw/dclm-baseline-1.0", "mlfoundations/dclm-baseline-1.0", "a3b142c", "raw/dclm_WRONG_20250211/"
+        ),
+        "dclm_baseline": (
+            _dl("raw/dclm-baseline-1.0", "mlfoundations/dclm-baseline-1.0", "a3b142c", "raw/dclm").cd("a3b142c")
+        ),
+        "the_stack_dedup": (
+            _dl("raw/the-stack-dedup", "bigcode/the-stack-dedup", "17cad72", "raw/the-stack-dedup-4ba450").cd("17cad72")
+        ),
         "proofpile_2": (
-            proofpile_2_download()
-            .as_executor_step()
-            .cd("901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927")
+            _dl("raw/proof-pile-2", "EleutherAI/proof-pile-2", "901a927", "raw/proof-pile-2-f1b1d8").cd(
+                "901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927"
+            )
         ),
         "the_pile_openwebtext2": (
-            the_pile_openwebtext2_download()
-            .as_executor_step()
-            .cd("1de27c6/huggingface.co/datasets/vietgpt/the_pile_openwebtext2/resolve/1de27c6")
+            _dl("raw/the_pile_openwebtext2", "vietgpt/the_pile_openwebtext2", "1de27c6", "raw/the_pile_openwebtext2").cd(
+                "1de27c6/huggingface.co/datasets/vietgpt/the_pile_openwebtext2/resolve/1de27c6"
+            )
         ),
-        "starcoderdata": starcoderdata_download().as_executor_step(),
+        "starcoderdata": _dl("raw/starcoderdata", "bigcode/starcoderdata", "9fc30b5", "raw/starcoderdata-720c8c"),
     }
 
 
