@@ -74,7 +74,7 @@ jobs:
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
             --memory=16G --disk=16G --cpu=1 --extra=cpu \
-            -e MARIN_PREFIX gs://marin-us-central2 \
+            --reserve v5p-8 \
             -e RUN_ID "$RUN_ID" \
             -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
             -e CANARY_BATCH_SIZE "$CANARY_BATCH_SIZE" \
