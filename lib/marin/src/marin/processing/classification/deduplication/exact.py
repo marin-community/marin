@@ -5,6 +5,7 @@ from typing import Any, TypeVar
 
 from collections.abc import Iterator
 from marin.processing.classification.deduplication.dedup_commons import (
+    DEFAULT_COORDINATOR_RESOURCES,
     DEFAULT_FILETYPES,
     DedupMode,
     DupCounters,
@@ -13,6 +14,7 @@ from marin.processing.classification.deduplication.dedup_commons import (
     _get_extension,
     _init_wandb,
     _load_batches,
+    group_files,
 )
 import dupekit
 from marin.utils import rebase_file_path
@@ -51,8 +53,9 @@ def dedup_exact_paragraph(
     output_path: str,
     text_field: str = "text",
     filetypes: list[str] | None = None,
-    max_parallelism: int | None = None,
+    max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
+    coordinator_resources: ResourceConfig | None = None,
 ) -> dict:
     if filetypes is None:
         filetypes = DEFAULT_FILETYPES
@@ -77,6 +80,7 @@ def dedup_exact_paragraph(
         name="exact-para-dedup",
         max_workers=max_parallelism,
         resources=worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
+        coordinator_resources=coordinator_resources or DEFAULT_COORDINATOR_RESOURCES,
     )
 
     def aggregate_and_write_to_corresponding_files(file_idx: int, records: Iterator[dict]) -> dict:
@@ -148,12 +152,14 @@ def dedup_exact_paragraph(
                 "file_idx": item["file_idx"],
             }
 
+    file_groups = group_files(input_files, max_parallelism)
     shard_results = list(
         ctx.execute(
-            Dataset.from_list(input_files)
+            Dataset.from_list(file_groups)
             .flat_map(
-                lambda path: (
+                lambda paths: (
                     {"file_idx": path_to_idx[path], "id": hash_record.pop("doc_id"), **hash_record}
+                    for path in paths
                     for batch in _load_batches(path)
                     for hash_record in compute_paragraph_hashes(batch).to_pylist()
                 )
@@ -189,8 +195,9 @@ def dedup_exact_document(
     output_path: str,
     text_field: str = "text",
     filetypes: list[str] | None = None,
-    max_parallelism: int | None = None,
+    max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
+    coordinator_resources: ResourceConfig | None = None,
 ) -> dict:
     """Exact document deduplication: identify duplicate documents based on full text hash"""
     if filetypes is None:
@@ -213,6 +220,7 @@ def dedup_exact_document(
         name="exact-doc-dedup",
         max_workers=max_parallelism,
         resources=worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
+        coordinator_resources=coordinator_resources or DEFAULT_COORDINATOR_RESOURCES,
     )
 
     def aggregate_and_write_to_corresponding_files(file_idx: int, records: Iterator[dict[str, Any]]) -> dict:
@@ -265,12 +273,14 @@ def dedup_exact_document(
                 "file_idx": item["file_idx"],
             }
 
+    file_groups = group_files(input_files, max_parallelism)
     shard_results = list(
         ctx.execute(
-            Dataset.from_list(input_files)
+            Dataset.from_list(file_groups)
             .flat_map(
-                lambda path: (
+                lambda paths: (
                     {"file_idx": path_to_idx[path], **hash_record}
+                    for path in paths
                     for batch in _load_batches(path)
                     for hash_record in compute_document_hashes(batch).to_pylist()
                 )
