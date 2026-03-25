@@ -351,7 +351,6 @@ def download_hf_step(
     hf_urls_glob: list[str] | None = None,
     zephyr_max_parallelism: int = 8,
     deps: list[StepSpec] | None = None,
-    output_path_prefix: str | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a StepSpec that downloads a HuggingFace dataset.
@@ -365,7 +364,6 @@ def download_hf_step(
         hf_urls_glob: Glob patterns to select specific files. Empty means all files.
         zephyr_max_parallelism: Maximum download parallelism.
         deps: Optional upstream dependencies.
-        output_path_prefix: Override the default output path prefix.
         override_output_path: Override the computed output path entirely.
 
     Returns:
@@ -393,6 +391,5 @@ def download_hf_step(
             "revision": revision,
             "hf_urls_glob": resolved_glob,
         },
-        output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,
     )
