@@ -4149,3 +4149,183 @@ Current live follow-up run state at the time of this note:
   - `/ahmed/irl-e4p-100r1-0324-1710`
 - this follow-up run was submitted after killing the degraded first root
 - its current state should be checked separately when deciding whether to continue passive monitoring or intervene again
+
+## 2026-03-24 20:45 PT — E4-100r1 postmortem: train OOM at checkpoint save, rollout only collateral
+
+Run under analysis:
+- root: `/ahmed/irl-e4p-100r1-0324-1710`
+- entrypoint: `uv run python experiments/exp_iris_rl_regression_direct_gcs_prod.py --experiment-name-suffix e4p --num-train-steps 100`
+
+Terminal Iris states from `iris job bug-report`:
+- root `/ahmed/irl-e4p-100r1-0324-1710`: `failed`
+- train `/ahmed/irl-e4p-100r1-0324-1710/rl-e4p-20260325-001651-train`: `failed`
+- rollout `/ahmed/irl-e4p-100r1-0324-1710/rl-e4p-20260325-001651-rollout-0`: `killed`
+
+Root summary:
+- submitted: `2026-03-25T00:10:02.434000+00:00`
+- started: `2026-03-25T00:14:23.911000+00:00`
+- finished: `2026-03-25T02:28:12.019000+00:00`
+- duration: `2h 13m 48s`
+- root error: `fray.v2.client.JobFailed: Job /ahmed/irl-e4p-100r1-0324-1710/rl-e4p-20260325-001651-train finished with status failed`
+
+What definitely happened:
+1. The direct + GCS + prod topology launched correctly.
+2. Both child jobs were submitted and started.
+3. Rollout produced initial rollouts; train got past the long initial wait boundary.
+4. Train completed at least step `0` and step `1`.
+5. Train then began checkpoint save for step `2`.
+6. The train container was OOM-killed during that checkpoint save.
+7. The root failed because train failed.
+8. Rollout was then killed as fallout; it was not the primary cause.
+
+Critical failure boundary:
+- train logs show checkpoint start at `2026-03-25 02:27:06 UTC`
+- exact lines observed before death:
+  - `Saving temporary checkpoint at step 2.`
+  - `Saving checkpoint at step 2 to gs://marin-us-central1/checkpoints/e4p-20260325-001651/e4p-20260325-001651-train/step-2`
+  - `Saving checkpoint to .../step-2 for step 2`
+- then the train task terminated with:
+  - `Exit code 137: OOM killed (container exceeded memory limit)`
+
+Train child details:
+- state: `failed`
+- error: `Exit code 137: OOM killed (container exceeded memory limit)`
+- failure_count: `4`
+- preemption_count: `2`
+- finished: `2026-03-25T02:27:57.062000+00:00`
+
+Rollout child details:
+- state: `killed`
+- error: `Job exceeded max_task_failures`
+- finished: `2026-03-25T02:28:12.019000+00:00`
+- interpretation: rollout was not the first failure in the subtree; it died after the train-side failure caused the run to unwind.
+
+Why this matters:
+- this run got far enough to rule out launch-time regressions as the active blocker for E4
+- it was not blocked by:
+  - region placement
+  - GCS bootstrap
+  - direct coordinator startup
+  - initial rollout startup
+  - first train-step execution
+- the live blocker remains the older hypothesis from the long-run thread:
+  - train-side memory blow-up around checkpoint save
+
+Most precise conclusion:
+- `E4-100r1` did not die because rollout was buggy.
+- `E4-100r1` died because train hit an OOM at the step-2 checkpoint boundary.
+- rollout death was secondary fallout, not the root cause.
+
+Implications for next experiments:
+1. If the goal is isolating the long-run blocker, the next probe should change checkpoint behavior first, not rollout.
+2. Best immediate ablations:
+   - disable checkpoint saving entirely
+   - or make checkpoint interval much larger than the run length
+   - or reduce train memory pressure before the next checkpoint boundary
+3. This run is strong evidence that the direct + GCS + prod path is fundamentally alive up to real RL progress, and that the dominant remaining failure mode is checkpoint-coupled train OOM.
+
+## 2026-03-24 20:55 PT — train-memory accounting explains the 8B OOM; zero-KL should not retain extra model copy
+
+Follow-up question investigated:
+- how can an 8B run consume ~116 GiB sampled peak host RAM on the train worker?
+
+What the Iris task record actually showed for the failed train task:
+- last sampled memory (`resource_usage.memory_mb`): `42659 MB` (~41.7 GiB)
+- sampled peak (`resource_usage.memory_peak_mb`): `119193 MB` (~116.4 GiB)
+- note: the dashboard task table currently shows only `memory_mb`, not `memory_peak_mb`, so the default job page is misleading for OOM diagnosis.
+
+Important dashboard/metrics clarification:
+- task-row `MEM` on the job page is the last sampled current memory, not peak
+- Iris samples container stats every `5s`
+- Docker's CLI stats on Linux also subtract cache from total memory usage, so even the sampled current/peak values can understate the cgroup limit pressure at the exact OOM instant
+- therefore `42 GiB visible in the row` is not contradictory with `OOM at 128 GiB limit`
+
+Code-level memory accounting that explains the high train memory:
+1. Trainer params are configured with `p=f32, c=bfloat16` in the E4 probe.
+   - file: `experiments/exp_iris_rl_regression_direct_gcs_prod.py`
+   - line of interest: `mp=jmp.get_policy("p=f32,c=bfloat16")`
+2. Levanter `TrainerState` stores both:
+   - `model`
+   - `opt_state`
+   - file: `lib/levanter/src/levanter/trainer_state.py`
+3. `TrainerState.init(...)` creates Adam optimizer state for the trainable parameters.
+   - file: `lib/levanter/src/levanter/trainer_state.py`
+4. Marin RL train worker also retains a separate bootstrap/reference model object.
+   - file: `lib/marin/src/marin/rl/train_worker.py`
+5. Checkpointing saves the full `info.state.saveable_state`, not only raw model weights.
+   - files:
+     - `lib/levanter/src/levanter/trainer.py`
+     - `lib/levanter/src/levanter/checkpoint.py`
+
+Rough host-RAM budget for an 8B run under this code path:
+- trainable params in `f32`: ~29.8 GiB
+- Adam moments (`m`, `v`) in `f32`: ~59.6 GiB
+- separately retained bootstrap/reference model in `bf16`: ~14.9 GiB (minimum plausible extra copy)
+- subtotal before transient overhead: ~104 GiB
+- add replay/batch/checkpoint staging/transient save-time overhead and the observed sampled peak of ~116 GiB becomes entirely plausible
+
+Key code smell found:
+- the E4 experiment sets `kl_coef=0.0`
+- but the train worker still loads and retains `reference_model`
+- `RLOOLoss.create_loss_fn(...)` captures `reference_model` even though the KL branch is disabled for this run
+- therefore the zero-KL path is paying unnecessary host RAM for a model copy it does not need during training
+
+Planned fix (implemented next in this session):
+1. Teach RL loss modules to declare whether they need a reference model.
+2. In the zero-KL RLOO path, do not retain the bootstrap/reference model after trainer state is created.
+3. Keep checkpoint/OOM as the main remaining hypothesis even after this fix, but recover the wasted zero-KL memory first because it is the cleanest local win.
+
+## 2026-03-24 21:05 PT — implemented zero-KL train-memory reduction
+
+Follow-through on the memory diagnosis:
+- the zero-KL E4 path was retaining an unnecessary extra model object in the train worker
+- the goal of this patch is narrow and explicit:
+  - if `kl_coef == 0`, do not keep a separate reference-model copy resident after the trainer state has been materialized
+
+Implementation details:
+1. RL loss interface now exposes whether a loss requires a retained reference model.
+   - file: `lib/marin/src/marin/rl/rl_losses.py`
+   - `RLOOLoss.needs_reference_model()` returns `self.kl_coef > 0`
+2. `RLOOLoss.create_loss_fn(...)` now accepts `reference_model: eqx.Module | None`.
+   - when `kl_coef > 0`, it fails fast if `reference_model is None`
+   - when `kl_coef == 0`, the zero-KL path is valid without a retained reference model
+3. Train worker bootstrap path was tightened.
+   - file: `lib/marin/src/marin/rl/train_worker.py`
+   - the initial loaded model is now stored as `initial_model`
+   - `reference_model` remains as a compatibility alias during worker construction
+   - immediately after `trainer.initial_state(...)` is created, `_drop_bootstrap_model_references()` runs
+   - for zero-KL runs this clears both:
+     - `initial_model`
+     - `reference_model`
+   - for positive-KL runs it keeps `reference_model`
+
+Why this change is technically sound:
+- the train state already owns the trainable model copy after `trainer.initial_state(...)`
+- the zero-KL loss path does not consume `reference_model`
+- therefore retaining the separate bootstrap/reference object past initialization is wasted host RAM in the zero-KL case
+
+Expected impact:
+- reduce steady-state train-worker host RAM for zero-KL runs by roughly one extra model copy
+- for an 8B-class run under this code path, this should save on the order of tens of GiB, not a few MB
+- checkpoint spikes may still exist, but the baseline memory floor should drop materially
+
+Validation completed:
+- `uv run pytest -q tests/rl/test_loss.py tests/rl/test_train_worker.py`
+  - result: `9 passed`
+- `./infra/pre-commit.py --fix .agents/logbooks/iris-rl-codex.md lib/marin/src/marin/rl/rl_losses.py lib/marin/src/marin/rl/train_worker.py tests/rl/test_loss.py tests/rl/test_train_worker.py`
+  - result: `OK`
+
+Tests added/updated:
+- `tests/rl/test_loss.py`
+  - asserts `RLOOLoss(kl_coef=0).needs_reference_model() == False`
+  - asserts positive-KL rejects missing reference model at loss-construction time
+- `tests/rl/test_train_worker.py`
+  - asserts zero-KL cleanup clears retained bootstrap/reference model references
+  - asserts positive-KL cleanup preserves the retained reference model
+
+Most precise current status:
+- the logbook now contains both:
+  1. the E4-100r1 checkpoint OOM postmortem
+  2. the code change that removes the unnecessary zero-KL retained model copy
+- next empirical question remains unchanged:
+  - is the checkpoint-step OOM fully solved by dropping the extra model copy, or does checkpoint save still need its own ablation?

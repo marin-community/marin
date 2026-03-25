@@ -24,6 +24,7 @@ from levanter import callbacks
 from levanter.layers.attention import DEFAULT_SPLASH_BLOCK_SIZE, AttentionBackend
 from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SIZE
 from levanter.models.lm_model import LmConfig
+from levanter.models.lm_model import LmHeadModel
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from transformers import PreTrainedTokenizer
@@ -178,6 +179,8 @@ class TrainWorker:
     transfer_server: weight_transfer.WeightTransferServer
     tokenizer: PreTrainedTokenizer
     loss_module: RLLossModule
+    initial_model: LmHeadModel | None
+    reference_model: LmHeadModel | None
 
     def __init__(
         self,
@@ -243,7 +246,7 @@ class TrainWorker:
         self._build_models()
 
     def _build_models(self):
-        """Build reference and initial policy models."""
+        """Build the initial policy model and optional retained reference model."""
         config = self.config
         model_key = jrandom.PRNGKey(config.seed)
         vocab_size = config.vocab_size if config.vocab_size is not None else len(self.tokenizer)
@@ -266,7 +269,16 @@ class TrainWorker:
                 key=model_key,
             )
 
-        self.reference_model = _load_model()
+        self.initial_model = _load_model()
+        # Keep compatibility for callers that inspect the worker immediately after construction.
+        # The zero-KL path clears this alias once trainer state has been materialized.
+        self.reference_model = self.initial_model
+
+    def _drop_bootstrap_model_references(self) -> None:
+        """Release one-shot bootstrap model references once trainer state exists."""
+        self.initial_model = None
+        if not self.loss_module.needs_reference_model():
+            self.reference_model = None
 
     def _wait_for_initial_rollouts(self, max_wait_time: float = 7200.0, poll_interval: float = 5.0) -> bool:
         """Wait for initial rollouts from step -1 to be received.
@@ -317,7 +329,8 @@ class TrainWorker:
                 self.replay_loader,
             ):
                 _, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 2)
-                state = trainer.initial_state(training_key, model=self.reference_model)
+                state = trainer.initial_state(training_key, model=self.initial_model)
+                self._drop_bootstrap_model_references()
 
                 # Always transfer initial weights to rollout workers before we attempt to start training
                 self.transfer_server.serve_weights(-1, state.model)
