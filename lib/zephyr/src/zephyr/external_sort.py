@@ -193,7 +193,7 @@ def external_sort_merge_arrow(
         batch_tables = list(islice(chunk_tables_gen, EXTERNAL_SORT_FAN_IN))
         if not batch_tables:
             break
-        combined = pa.concat_tables(batch_tables)
+        combined = pa.concat_tables(batch_tables, promote_options="default")
         indices = pc.sort_indices(combined, sort_keys=sort_keys)
         sorted_table = combined.take(indices)
 
@@ -214,8 +214,9 @@ def external_sort_merge_arrow(
         return
 
     def _read_run(path: str) -> Iterator:
-        table = pq.read_table(path)
-        yield from table.to_pylist()
+        pf = pq.ParquetFile(path)
+        for batch in pf.iter_batches():
+            yield from batch.to_pylist()
 
     run_iters = [_read_run(p) for p in run_paths]
     try:
