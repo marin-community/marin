@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -50,6 +50,8 @@ class SimpleTrainConfig:
     """how often to run task evaluations"""
     steps_per_hf_export: int | None = None
     """None means match steps_per_export, -1 disables"""
+    hf_generation_eos_token_ids: list[int] | None = None
+    """EOS token IDs to write to generation_config.json. None means no generation config."""
     per_device_parallelism: int = -1
     """How many examples to process in parallel on each device. -1 (default) means
     train_batch_size/num_devices (no gradient accumulation). Set to a positive value
@@ -94,3 +96,10 @@ class SimpleTrainConfig:
 
     Required for models that call `jax.sharding.reshard(..., PartitionSpec(...))`.
     """
+
+    tensor_parallel_size: int = 1
+    """Size of the model (tensor parallel) axis. >1 shards model weights and activations
+    across multiple devices. Useful when batch_size < num_chips."""
+
+    env_vars: dict[str, str] | None = None
+    """Environment variables to pass to the training task."""

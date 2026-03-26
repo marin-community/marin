@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Download and normalize the latest Uncheatable Eval data dumps."""
@@ -23,7 +23,7 @@ from urllib3.util import Retry
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 FILENAME_PATTERN = re.compile(r"^(?P<benchmark>.+)_(?P<start>\d{8})to(?P<end>\d{8})(?P<suffix>(?:\.[^.]+)*)$")
 

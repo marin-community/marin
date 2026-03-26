@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
@@ -122,6 +122,10 @@ class SimpleSFTConfig:
 
     steps_per_hf_export: int = 500
     """How often to save HuggingFace checkpoints."""
+
+    hf_generation_eos_token_ids: list[int] | None = None
+    """EOS token IDs to write to generation_config.json. None means no generation config.
+    For chat models, include the turn-boundary token (e.g. [128001, 128009])."""
 
     # Mixture-specific parameters
     mixture_block_size: int = 2048

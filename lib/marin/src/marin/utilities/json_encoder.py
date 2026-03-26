@@ -1,6 +1,7 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import json
 import logging
 from datetime import timedelta
@@ -9,7 +10,7 @@ from pathlib import Path
 # Todo(Percy, dlwh): Can we remove this jax dependency?
 from jax.numpy import bfloat16, float32
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 class CustomJsonEncoder(json.JSONEncoder):
@@ -20,6 +21,8 @@ class CustomJsonEncoder(json.JSONEncoder):
             return str(obj)
         if obj in (float32, bfloat16):
             return str(obj)
+        if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+            return dataclasses.asdict(obj)
         try:
             return super().default(obj)
         except TypeError:

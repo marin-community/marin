@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import numpy as np
@@ -9,7 +9,7 @@ import jax.numpy as jnp
 from jax._src import config as jax_config
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P, use_abstract_mesh
 
-from levanter.grug.grug_moe import moe_mlp
+from levanter.grug.grug_moe import MoeImplementation, _shard_a2a_params, moe_mlp
 from levanter.utils.activation import ActivationFunctionEnum
 
 
@@ -113,7 +113,23 @@ def test_moe_mlp_runs_without_ep_axis():
         np.testing.assert_allclose(np.asarray(out), np.asarray(out_jit), rtol=1e-5, atol=1e-5)
 
 
-def test_moe_ring_ep_path_lowers_on_abstract_mesh():
+def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(8),
+        tokens=16,
+        hidden_dim=16,
+        intermediate_dim=24,
+        num_experts=8,
+        topk=2,
+    )
+
+    y_default = moe_mlp(x, selected_experts, combine_weights, w_up_gate, w_down, mesh=None)
+    y_ring = moe_mlp(x, selected_experts, combine_weights, w_up_gate, w_down, implementation="ring", mesh=None)
+    np.testing.assert_allclose(np.asarray(y_default), np.asarray(y_ring), rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
+def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
 
     tokens = 16
@@ -157,6 +173,7 @@ def test_moe_ring_ep_path_lowers_on_abstract_mesh():
                 up_gate,
                 down,
                 activation=ActivationFunctionEnum.silu,
+                implementation=implementation,
                 mesh=mesh,
             )
 
@@ -167,6 +184,26 @@ def test_moe_ring_ep_path_lowers_on_abstract_mesh():
             .lower(lowering_platforms=(platform,))
         )
         assert lowered is not None
+
+
+def test_shard_a2a_params_uses_receive_axis_for_output_offsets():
+    shard_counts = jnp.array(
+        [
+            [1, 7, 2],
+            [3, 5, 4],
+            [6, 8, 9],
+        ],
+        dtype=jnp.int32,
+    )
+
+    input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(
+        shard_counts, jnp.array(1, dtype=jnp.int32)
+    )
+
+    np.testing.assert_array_equal(np.asarray(send_sizes), np.array([3, 5, 4], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(input_offsets), np.array([0, 3, 8], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(recv_sizes), np.array([7, 5, 8], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(output_offsets), np.array([0, 7, 12], dtype=np.int32))
 
 
 def test_moe_mlp_runs_with_ep_axis_when_available():
@@ -209,6 +246,19 @@ def test_moe_mlp_runs_with_ep_axis_when_available():
         )
         assert out.shape == (tokens, hidden_dim)
         assert jnp.isfinite(out).all()
+
+        out_ragged = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation=ActivationFunctionEnum.silu,
+            implementation="ragged_all_to_all",
+            mesh=None,
+        )
+        assert out_ragged.shape == (tokens, hidden_dim)
+        assert jnp.isfinite(out_ragged).all()
 
 
 def test_functional_moe_mlp_accepts_enum_and_callable_activation():

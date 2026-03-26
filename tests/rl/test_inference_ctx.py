@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for InferenceContext utilities and chat template handling."""
@@ -13,6 +13,8 @@ from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice
 from transformers import AutoTokenizer
 
 from marin.rl.environments.inference_ctx import LevanterInferenceContext, LevanterInferenceContextConfig
+
+_LLAMA3_MODEL_ID = "NousResearch/Meta-Llama-3-8B-Instruct"
 
 
 @dataclass
@@ -34,16 +36,13 @@ class DummyInferenceServer:
         return Config()
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def llama3_tokenizer():
-    """Llama 3 tokenizer with chat template (uses tiktoken, not sentencepiece)."""
-    return AutoTokenizer.from_pretrained("NousResearch/Meta-Llama-3-8B-Instruct")
-
-
-@pytest.fixture
-def gpt2_tokenizer():
-    """GPT-2 tokenizer without chat template (for fallback testing)."""
-    return AutoTokenizer.from_pretrained("gpt2")
+    """Llama 3 tokenizer — skips the test when HF is unreachable."""
+    try:
+        return AutoTokenizer.from_pretrained(_LLAMA3_MODEL_ID)
+    except Exception:
+        pytest.skip(f"Llama-3 tokenizer not accessible ({_LLAMA3_MODEL_ID})")
 
 
 @pytest.fixture

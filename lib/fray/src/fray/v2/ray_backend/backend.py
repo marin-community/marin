@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Ray backend for fray v2 Client protocol."""
@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 import uuid
 from typing import Any, cast
@@ -16,7 +17,15 @@ import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
 
-from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.actor import (
+    ActorContext,
+    ActorFuture,
+    ActorGroup,
+    ActorHandle,
+    HostedActor,
+    _reset_current_actor,
+    _set_current_actor,
+)
 from fray.v2.ray_backend.deps import build_python_path, build_runtime_env_for_packages
 from fray.v2.ray_backend.tpu import run_on_pod_ray
 from fray.v2.types import (
@@ -29,6 +38,7 @@ from fray.v2.types import (
     create_environment,
     get_tpu_topology,
 )
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -163,13 +173,19 @@ def build_runtime_env(request: JobRequest) -> dict:
 
     env_vars = dict(environment.env_vars)
     extras = list(environment.extras)
+    skip_runtime_extras = os.environ.get("MARIN_SKIP_RUNTIME_EXTRAS", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    ) or env_vars.get("MARIN_SKIP_RUNTIME_EXTRAS", "").lower() in ("1", "true", "yes")
 
-    if isinstance(request.resources.device, TpuConfig):
-        if "tpu" not in extras:
-            extras.append("tpu")
-    elif isinstance(request.resources.device, GpuConfig):
-        if "gpu" not in extras:
-            extras.append("gpu")
+    if not skip_runtime_extras:
+        if isinstance(request.resources.device, TpuConfig):
+            if "tpu" not in extras:
+                extras.append("tpu")
+        elif isinstance(request.resources.device, GpuConfig):
+            if "gpu" not in extras:
+                extras.append("gpu")
 
     for key, value in request.resources.device.default_env_vars().items():
         env_vars.setdefault(key, value)
@@ -327,16 +343,33 @@ class RayClient:
         topo = get_tpu_topology(device.variant)
         replicas = request.replicas or 1
         num_slices = max(1, replicas // topo.vm_count)
+        # Only propagate env_vars to TPU workers. Other runtime_env keys (pip, py_modules,
+        # etc.) reference local temp files that don't exist on the run_on_pod_ray worker node.
+        tpu_runtime_env = {"env_vars": runtime_env["env_vars"]} if "env_vars" in runtime_env else {}
         object_ref = run_on_pod_ray.remote(
             remote_fn,
             tpu_type=device.variant,
             num_slices=num_slices,
             max_retries_preemption=request.max_retries_preemption,
             max_retries_failure=request.max_retries_failure,
+            runtime_env=tpu_runtime_env,
         )
 
         job_id = f"ray-tpu-{request.name}-{uuid.uuid4().hex[:8]}"
         return RayJobHandle(job_id, ref=object_ref)
+
+    def host_actor(
+        self,
+        actor_class: type,
+        *args: Any,
+        name: str,
+        actor_config: ActorConfig = ActorConfig(),
+        **kwargs: Any,
+    ) -> HostedActor:
+        """Ray cannot host actors in-process; falls back to a single-actor group."""
+        group = self.create_actor_group(actor_class, *args, name=name, count=1, actor_config=actor_config, **kwargs)
+        handle = group.wait_ready()[0]
+        return HostedActor(handle, stop=group.shutdown)
 
     def create_actor(
         self,
@@ -432,6 +465,13 @@ class _RayActorHostBase:
     Not decorated with @ray.remote directly — use _get_named_actor_host() to
     obtain a Ray remote class whose name matches the wrapped actor class,
     so that `ps` shows e.g. ``ray::my_workers`` instead of ``ray::_RayActorHost``.
+
+    The ``shutdown_event`` on ``ActorContext`` lets actors self-terminate on
+    Ray: the wrapped actor sets it when done (e.g. after receiving SHUTDOWN
+    from a coordinator), and a watchdog thread calls ``exit_actor()`` to
+    cleanly terminate the process.  ``_exit_when_idle`` (called by
+    ``RayActorGroup.shutdown()``) is a safety net for actors that never
+    set the event themselves.
     """
 
     def __init__(
@@ -443,24 +483,38 @@ class _RayActorHostBase:
         args: tuple,
         kwargs: dict,
     ):
-        # Ensure the root logger is configured in this worker process so that
-        # library code using logging.getLogger(__name__).info() is visible.
-        # Ray forwards stdout/stderr to the driver, but Python's root logger
-        # defaults to WARNING in fresh processes.
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s %(levelname)s %(name)s:%(lineno)d %(message)s",
-            force=True,
-        )
+        configure_logging(level=logging.INFO)
 
-        # Create handle by name - will resolve via ray.get_actor() when used
+        self._shutdown_event = threading.Event()
         handle = RayActorHandle(actor_name)
-        ctx = ActorContext(handle=handle, index=actor_index, group_name=group_name)
+        ctx = ActorContext(handle=handle, index=actor_index, group_name=group_name, shutdown_event=self._shutdown_event)
         token = _set_current_actor(ctx)
         try:
             self._instance = actor_class(*args, **kwargs)
         finally:
             _reset_current_actor(token)
+
+        # Watchdog: when the actor sets shutdown_event, exit the actor
+        # process.  This lets actors self-terminate (e.g. workers after
+        # receiving SHUTDOWN) without waiting for external _exit_when_idle.
+        threading.Thread(
+            target=self._watch_shutdown,
+            daemon=True,
+            name=f"ray-shutdown-{actor_name}",
+        ).start()
+
+    def _watch_shutdown(self) -> None:
+        self._shutdown_event.wait()
+        ray.actor.exit_actor()
+
+    def _exit_when_idle(self, timeout_s: float = 5.0) -> None:
+        """Safety net for actors that never set ``shutdown_event``.
+
+        Waits up to *timeout_s* for the event, then exits unconditionally.
+        Called by ``RayActorGroup.shutdown()`` fire-and-forget.
+        """
+        self._shutdown_event.wait(timeout=timeout_s)
+        ray.actor.exit_actor()
 
     def _proxy_call(self, method_name: str, args: tuple, kwargs: dict) -> Any:
         """Proxy method calls to the wrapped actor instance."""
@@ -578,10 +632,30 @@ class RayActorGroup:
         self._yielded = True
         return self._handles
 
-    def shutdown(self) -> None:
-        """Kill all Ray actors."""
+    def is_done(self) -> bool:
+        """Ray actors managed by Zephyr don't have an independent job lifecycle."""
+        return False
+
+    def shutdown(self, graceful_timeout_s: float = 30.0) -> None:
+        """Terminate all Ray actors.
+
+        Calls ``_exit_when_idle`` on each actor, which waits for
+        ``shutdown_event`` (already set by actors that self-terminated,
+        e.g. workers after receiving SHUTDOWN) then calls ``exit_actor()``.
+        Actors that are already dead are silently skipped.
+
+        Does **not** use ``ray.kill()`` or ``__ray_terminate__``:
+        ``ray.kill()`` races with task completion callbacks in Ray's C++
+        task_manager, triggering a fatal assertion (ray-project/ray#54260),
+        and ``__ray_terminate__`` interacts badly with ``max_task_retries``
+        causing a restart+retry storm on already-dead actors.
+        """
         for handle in self._handles:
             try:
-                ray.kill(handle._actor_ref)
-            except Exception as e:
-                logger.warning("Failed to kill Ray actor: %s", e)
+                # Fire-and-forget: _exit_when_idle calls exit_actor() which
+                # kills the process mid-task, so the ref never resolves cleanly.
+                # max_task_retries=0 prevents Ray from retrying the exit task
+                # on a restarted actor (which would cause a restart+retry storm).
+                handle._resolve()._exit_when_idle.options(max_task_retries=0).remote()
+            except Exception:
+                pass  # actor already dead

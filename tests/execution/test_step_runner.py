@@ -1,16 +1,18 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import json
 import os
-from pathlib import Path
-
 from dataclasses import dataclass
+from pathlib import Path
+from unittest.mock import patch
 
+import pytest
 from fray.v2.types import ResourceConfig
+from iris.marin_fs import MARIN_CROSS_REGION_OVERRIDE_ENV
 
 from marin.execution.artifact import Artifact, PathMetadata
-from marin.execution.executor import ExecutorStep, resolve_executor_step
+from marin.execution.executor import _dag_tpu_regions, Executor, ExecutorStep, resolve_executor_step
 from marin.execution.remote import RemoteCallable, remote
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_runner import StepRunner
@@ -208,6 +210,44 @@ def test_resolve_executor_step_preserves_deps():
     assert resolved.dep_paths == ["/out/download-abc123", "/out/tokenize-def456"]
 
 
+def test_step_spec_as_executor_step_round_trip():
+    """StepSpec -> ExecutorStep -> StepSpec should preserve identity."""
+    prefix = "gs://test-bucket"
+    dep = StepSpec(
+        name="download",
+        output_path_prefix=prefix,
+        hash_attrs={"source": "web"},
+        fn=lambda output_path: output_path,
+    )
+    step = StepSpec(
+        name="tokenize",
+        output_path_prefix=prefix,
+        hash_attrs={"tokenizer": "llama3"},
+        deps=[dep],
+        fn=lambda output_path: output_path,
+    )
+
+    executor_step = step.as_executor_step()
+    # override_output_path should be the computed path (prefix/name_hash)
+    assert executor_step.override_output_path == step.output_path
+    assert step.output_path.startswith(f"{prefix}/tokenize_")
+
+    dep_spec = StepSpec(name="download", override_output_path=dep.output_path)
+    resolved = resolve_executor_step(
+        executor_step,
+        config={},
+        output_path=step.output_path,
+        deps=[dep_spec],
+    )
+
+    assert resolved.name == step.name
+    assert resolved.hash_attrs == step.hash_attrs
+    assert resolved.fn is step.fn
+    assert resolved.output_path == step.output_path
+    assert resolved.output_path_prefix == prefix
+    assert resolved.dep_paths == [dep.output_path]
+
+
 # ---------------------------------------------------------------------------
 # StepRunner tests: three-step pipeline
 # ---------------------------------------------------------------------------
@@ -332,6 +372,29 @@ def test_runner_max_concurrent(tmp_path: Path):
     assert train_artifact.tokens_seen > 0
 
 
+def test_runner_preserves_underlying_step_exception(tmp_path: Path):
+    """The top-level runner error should retain the original failing exception as a cause."""
+
+    def failing_step(_output_path: str) -> None:
+        raise ValueError("sentinel step failure")
+
+    step = StepSpec(
+        name="failing_step",
+        override_output_path=(tmp_path / "failing_step").as_posix(),
+        fn=failing_step,
+    )
+
+    runner = StepRunner()
+    with pytest.raises(RuntimeError, match=r"1 step\(s\) failed") as exc_info:
+        runner.run([step])
+
+    step_failure = exc_info.value.__cause__
+    assert isinstance(step_failure, RuntimeError)
+    assert "Step failed: failing_step" in str(step_failure)
+    assert isinstance(step_failure.__cause__, ValueError)
+    assert "sentinel step failure" in str(step_failure.__cause__)
+
+
 # ---------------------------------------------------------------------------
 # Local vs Fray execution tests
 # ---------------------------------------------------------------------------
@@ -394,35 +457,615 @@ def test_resolve_executor_step_picks_up_remote_decorator():
     def my_fn(config):
         pass
 
-    step = ExecutorStep(name="test", fn=my_fn, config=None, resources=None)
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
     resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
 
     assert isinstance(resolved.fn, RemoteCallable)
     assert resolved.fn.resources == ResourceConfig.with_cpu()
 
 
-def test_explicit_resources_override_remote_decorator():
-    """ExecutorStep.resources should take precedence over @remote decorator resources."""
-    explicit = ResourceConfig.with_cpu(cpu=8, ram="32g")
+def test_remote_decorator_resources_are_preserved():
+    """@remote decorator resources should be preserved through resolve_executor_step."""
+    custom = ResourceConfig.with_cpu(cpu=8, ram="32g")
 
-    @remote(resources=ResourceConfig.with_cpu(cpu=2))
+    @remote(resources=custom)
     def my_fn(config):
         pass
 
-    step = ExecutorStep(name="test", fn=my_fn, config=None, resources=explicit)
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
     resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
 
     assert isinstance(resolved.fn, RemoteCallable)
-    assert resolved.fn.resources == explicit
+    assert resolved.fn.resources == custom
 
 
-def test_step_without_remote_or_resources_is_plain_fn():
-    """A plain function with no @remote and no ExecutorStep.resources should not be RemoteCallable."""
+def test_resolve_executor_step_infers_region_for_iris_without_pin():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"input_path": "gs://marin-us-central2/data/input"},
+            output_path="/out/test-abc",
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions == ["us-central2"]
+
+
+def test_resolve_executor_step_preserves_explicit_empty_regions():
+    @remote(resources=ResourceConfig.with_cpu(regions=[]))
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"input_path": "gs://marin-us-central2/data/input"},
+            output_path="/out/test-abc",
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions == []
+
+
+def test_resolve_executor_step_infers_region_from_dependencies():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    dep = StepSpec(name="dep", override_output_path="gs://marin-us-east1/dependency/output")
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"local_only": "/tmp/foo"},
+            output_path="/out/test-abc",
+            deps=[dep],
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions == ["us-east1"]
+
+
+def test_resolve_executor_step_skips_inference_when_iris_already_pinned():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value="us-central2"),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"input_path": "gs://marin-us-central2/data/input"},
+            output_path="/out/test-abc",
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions is None
+
+
+def test_resolve_executor_step_raises_when_inherited_pin_conflicts_with_gcs_region():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value="us-central2"),
+    ):
+        with pytest.raises(ValueError, match="pinned to inherited Iris region"):
+            resolve_executor_step(
+                step,
+                config={"input_path": "gs://marin-us-east1/data/input"},
+                output_path="/out/test-abc",
+            )
+
+
+def test_resolve_executor_step_raises_on_inherited_pin_conflict_even_with_override_env(monkeypatch):
+    @remote
+    def my_fn(config):
+        pass
+
+    monkeypatch.setenv(MARIN_CROSS_REGION_OVERRIDE_ENV, "1")
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value="us-central2"),
+    ):
+        with pytest.raises(ValueError, match="pinned to inherited Iris region"):
+            resolve_executor_step(
+                step,
+                config={"input_path": "gs://marin-us-east1/data/input"},
+                output_path="/out/test-abc",
+            )
+
+
+def test_resolve_executor_step_raises_on_cross_region_inputs_without_pin():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        with pytest.raises(ValueError, match="cross-region GCS dependencies"):
+            resolve_executor_step(
+                step,
+                config={"input_path": "gs://marin-us-central2/data/input"},
+                output_path="gs://marin-us-east1/data/output",
+            )
+
+
+def test_resolve_executor_step_raises_on_cross_region_even_with_override_env(monkeypatch):
+    @remote
+    def my_fn(config):
+        pass
+
+    monkeypatch.setenv(MARIN_CROSS_REGION_OVERRIDE_ENV, "1")
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        with pytest.raises(ValueError, match="cross-region GCS dependencies"):
+            resolve_executor_step(
+                step,
+                config={"input_path": "gs://marin-us-central2/data/input"},
+                output_path="gs://marin-us-east1/data/output",
+            )
+
+
+def test_resolve_executor_step_uses_dag_tpu_regions_without_gcs_inputs():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"local_only": "/tmp/foo"},
+            output_path="/out/test-abc",
+            dag_tpu_regions=["us-west4", "us-central2"],
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions == ["us-central2", "us-west4"]
+
+
+def test_resolve_executor_step_intersects_gcs_and_dag_tpu_regions():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"input_path": "gs://marin-us-central2/data/input"},
+            output_path="/out/test-abc",
+            dag_tpu_regions=["us-west4", "us-central2"],
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions == ["us-central2"]
+
+
+def test_resolve_executor_step_raises_on_disjoint_gcs_and_dag_tpu_regions():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        with pytest.raises(ValueError, match="no overlap between GCS regions"):
+            resolve_executor_step(
+                step,
+                config={"input_path": "gs://marin-us-east1/data/input"},
+                output_path="/out/test-abc",
+                dag_tpu_regions=["us-central2"],
+            )
+
+
+def test_resolve_executor_step_raises_on_disjoint_gcs_and_dag_tpu_regions_even_with_override_env(monkeypatch):
+    @remote
+    def my_fn(config):
+        pass
+
+    monkeypatch.setenv(MARIN_CROSS_REGION_OVERRIDE_ENV, "1")
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        with pytest.raises(ValueError, match="no overlap between GCS regions"):
+            resolve_executor_step(
+                step,
+                config={"input_path": "gs://marin-us-east1/data/input"},
+                output_path="/out/test-abc",
+                dag_tpu_regions=["us-central2"],
+            )
+
+
+def test_resolve_executor_step_raises_for_dual_region_bucket_location():
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+        patch("marin.execution.executor.get_bucket_location", return_value="NAM4"),
+    ):
+        with pytest.raises(ValueError, match="non-regional bucket location"):
+            resolve_executor_step(
+                step,
+                config={"input_path": "gs://external-bucket/path/to/data"},
+                output_path="/out/test-abc",
+            )
+
+
+def test_resolve_executor_step_skips_bucket_location_permission_failures():
+    class Forbidden(Exception):
+        pass
+
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+        patch("marin.execution.executor.get_bucket_location", side_effect=Forbidden("no bucket metadata access")),
+    ):
+        resolved = resolve_executor_step(
+            step,
+            config={"input_path": "gs://external-bucket/path/to/data"},
+            output_path="/out/test-abc",
+        )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions is None
+
+
+def test_executor_resolve_steps_infers_region_from_dependency_output_path():
+    @remote
+    def dep_fn(_config):
+        pass
+
+    @remote
+    def my_fn(_config):
+        pass
+
+    dep = ExecutorStep(name="dep", fn=dep_fn, config=None)
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
+    executor = Executor(prefix="/tmp/executor", executor_info_base_path="/tmp/executor-info")
+    executor.configs = {dep: {}, step: {"local_only": "/tmp/foo"}}
+    executor.dependencies = {dep: [], step: [dep]}
+    executor.output_paths = {dep: "gs://marin-us-east1/dependency/output", step: "/tmp/test-output"}
+
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved_dep, resolved_step = executor._resolve_steps([dep, step])
+
+    assert isinstance(resolved_dep.fn, RemoteCallable)
+    assert isinstance(resolved_step.fn, RemoteCallable)
+    assert resolved_step.fn.resources.regions == ["us-east1"]
+
+
+def test_executor_resolve_steps_uses_downstream_tpu_regions_for_upstream_steps():
+    @remote
+    def prep_fn(_config):
+        pass
+
+    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-central2"]))
+    def train_fn(_config):
+        pass
+
+    prep = ExecutorStep(name="prep", fn=prep_fn, config=None)
+    train = ExecutorStep(name="train", fn=train_fn, config=None)
+    executor = Executor(prefix="/tmp/executor", executor_info_base_path="/tmp/executor-info")
+    executor.configs = {prep: {"local_only": "/tmp/foo"}, train: {"local_only": "/tmp/bar"}}
+    executor.dependencies = {prep: [], train: [prep]}
+    executor.output_paths = {prep: "/tmp/prep-output", train: "/tmp/train-output"}
+
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved_prep, resolved_train = executor._resolve_steps([prep, train])
+
+    assert isinstance(resolved_prep.fn, RemoteCallable)
+    assert isinstance(resolved_train.fn, RemoteCallable)
+    assert resolved_prep.fn.resources.regions == ["us-central2"]
+    assert resolved_train.fn.resources.regions == ["us-central2"]
+
+
+def test_executor_resolve_steps_picks_one_region_for_multi_region_tpu_component():
+    @remote
+    def prep_fn(_config):
+        pass
+
+    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-west4", "us-central2"]))
+    def train_fn(_config):
+        pass
+
+    prep = ExecutorStep(name="prep", fn=prep_fn, config=None)
+    train = ExecutorStep(name="train", fn=train_fn, config=None)
+    executor = Executor(prefix="/tmp/executor", executor_info_base_path="/tmp/executor-info")
+    executor.configs = {prep: {"local_only": "/tmp/foo"}, train: {"local_only": "/tmp/bar"}}
+    executor.dependencies = {prep: [], train: [prep]}
+    executor.output_paths = {prep: "/tmp/prep-output", train: "/tmp/train-output"}
+
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved_prep, resolved_train = executor._resolve_steps([prep, train])
+
+    assert isinstance(resolved_prep.fn, RemoteCallable)
+    assert isinstance(resolved_train.fn, RemoteCallable)
+    assert resolved_prep.fn.resources.regions == ["us-central2"]
+    assert resolved_train.fn.resources.regions == ["us-central2"]
+
+
+def test_executor_resolve_steps_uses_component_gcs_region_to_pick_tpu_region():
+    @remote
+    def prep_fn(_config):
+        pass
+
+    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-west4", "us-central2"]))
+    def train_fn(_config):
+        pass
+
+    prep = ExecutorStep(name="prep", fn=prep_fn, config=None)
+    train = ExecutorStep(name="train", fn=train_fn, config=None)
+    executor = Executor(prefix="/tmp/executor", executor_info_base_path="/tmp/executor-info")
+    executor.configs = {
+        prep: {"input_path": "gs://marin-us-west4/data/input"},
+        train: {"local_only": "/tmp/bar"},
+    }
+    executor.dependencies = {prep: [], train: [prep]}
+    executor.output_paths = {prep: "/tmp/prep-output", train: "/tmp/train-output"}
+
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved_prep, resolved_train = executor._resolve_steps([prep, train])
+
+    assert isinstance(resolved_prep.fn, RemoteCallable)
+    assert isinstance(resolved_train.fn, RemoteCallable)
+    assert resolved_prep.fn.resources.regions == ["us-west4"]
+    assert resolved_train.fn.resources.regions == ["us-west4"]
+
+
+def test_executor_resolve_steps_does_not_apply_unrelated_tpu_regions():
+    @remote
+    def cpu_fn(_config):
+        pass
+
+    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-central2"]))
+    def tpu_fn(_config):
+        pass
+
+    cpu_step = ExecutorStep(name="cpu", fn=cpu_fn, config=None)
+    tpu_step = ExecutorStep(name="tpu", fn=tpu_fn, config=None)
+    executor = Executor(prefix="/tmp/executor", executor_info_base_path="/tmp/executor-info")
+    executor.configs = {
+        cpu_step: {"input_path": "gs://marin-us-east1/data/input"},
+        tpu_step: {"local_only": "/tmp/bar"},
+    }
+    executor.dependencies = {cpu_step: [], tpu_step: []}
+    executor.output_paths = {cpu_step: "/tmp/cpu-output", tpu_step: "/tmp/tpu-output"}
+
+    with (
+        patch("marin.execution.executor._iris_backend_is_active", return_value=True),
+        patch("marin.execution.executor._iris_worker_region_pin", return_value=None),
+    ):
+        resolved_cpu, resolved_tpu = executor._resolve_steps([cpu_step, tpu_step])
+
+    assert isinstance(resolved_cpu.fn, RemoteCallable)
+    assert isinstance(resolved_tpu.fn, RemoteCallable)
+    assert resolved_cpu.fn.resources.regions == ["us-east1"]
+    assert resolved_tpu.fn.resources.regions == ["us-central2"]
+
+
+def test_dag_tpu_regions_intersects_explicit_regions():
+    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-central2", "us-west4"]))
+    def first(_config):
+        pass
+
+    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-central2", "us-east1"]))
+    def second(_config):
+        pass
+
+    steps = [
+        ExecutorStep(name="first", fn=first, config=None),
+        ExecutorStep(name="second", fn=second, config=None),
+    ]
+
+    assert _dag_tpu_regions(steps) == ["us-central2"]
+
+
+def test_dag_tpu_regions_raises_on_disjoint_explicit_regions():
+    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-west4"]))
+    def first(_config):
+        pass
+
+    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-central2"]))
+    def second(_config):
+        pass
+
+    steps = [
+        ExecutorStep(name="first", fn=first, config=None),
+        ExecutorStep(name="second", fn=second, config=None),
+    ]
+
+    with pytest.raises(ValueError, match="No common region satisfies all TPU steps"):
+        _dag_tpu_regions(steps)
+
+
+def test_dag_tpu_regions_raises_on_disjoint_explicit_regions_even_with_override_env(monkeypatch):
+    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-west4"]))
+    def first(_config):
+        pass
+
+    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-central2"]))
+    def second(_config):
+        pass
+
+    monkeypatch.setenv(MARIN_CROSS_REGION_OVERRIDE_ENV, "1")
+    steps = [
+        ExecutorStep(name="first", fn=first, config=None),
+        ExecutorStep(name="second", fn=second, config=None),
+    ]
+
+    with pytest.raises(ValueError, match="No common region satisfies all TPU steps"):
+        _dag_tpu_regions(steps)
+
+
+def test_dag_tpu_regions_uses_iris_variant_regions_when_not_pinned():
+    @remote(resources=ResourceConfig.with_tpu("v5p-8"))
+    def first(_config):
+        pass
+
+    @remote(resources=ResourceConfig.with_tpu("v5p-8"))
+    def second(_config):
+        pass
+
+    steps = [
+        ExecutorStep(name="first", fn=first, config=None),
+        ExecutorStep(name="second", fn=second, config=None),
+    ]
+
+    with patch(
+        "marin.execution.executor._regions_for_tpu_variant_from_iris",
+        return_value={"us-central2", "us-west4"},
+    ):
+        assert _dag_tpu_regions(steps) == ["us-central2", "us-west4"]
+
+
+def test_dag_tpu_regions_unions_device_alternative_regions():
+    @remote(resources=ResourceConfig.with_tpu(["v5p-8", "v6e-4"]))
+    def first(_config):
+        pass
+
+    step = ExecutorStep(name="first", fn=first, config=None)
+
+    with patch(
+        "marin.execution.executor._regions_for_tpu_variant_from_iris",
+        side_effect=lambda variant: {
+            "v5p-8": {"us-central2", "us-west4"},
+            "v6e-4": {"us-east1"},
+        }[variant],
+    ):
+        assert _dag_tpu_regions([step]) == ["us-central2", "us-east1", "us-west4"]
+
+
+def test_step_without_remote_is_plain_fn():
+    """A plain function with no @remote should not be RemoteCallable."""
 
     def my_fn(config):
         pass
 
-    step = ExecutorStep(name="test", fn=my_fn, config=None, resources=None)
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
     resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
 
     assert not isinstance(resolved.fn, RemoteCallable)
+
+
+def test_runner_propagates_context_vars(tmp_path):
+    """StepRunner must propagate contextvars to worker threads.
+
+    This ensures that fray's ``set_current_client`` is visible inside step
+    functions dispatched by the thread pool, so ZephyrContext (and anything
+    else that calls ``current_client()``) picks up the correct client.
+    """
+    import contextvars
+
+    test_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("test_var", default=None)
+    observed: list[str | None] = []
+
+    def capture_ctx(output_path: str):
+        observed.append(test_var.get())
+        return PathMetadata(path=output_path)
+
+    step = StepSpec(
+        name="ctx_check",
+        override_output_path=(tmp_path / "ctx_check").as_posix(),
+        fn=capture_ctx,
+    )
+
+    test_var.set("from_parent")
+    runner = StepRunner()
+    runner.run([step])
+
+    assert observed == ["from_parent"], f"Expected context var to propagate, got {observed}"
+
+
+def test_runner_propagates_fray_client(tmp_path):
+    """StepRunner explicitly propagates the fray v2 client to worker threads.
+
+    This tests the explicit client capture path (not just generic contextvars)
+    to ensure current_client() returns the correct client inside step functions.
+    """
+    from fray.v2.client import current_client, set_current_client
+
+    class FakeClient:
+        """Marker client to verify propagation."""
+
+        pass
+
+    observed_clients: list[type] = []
+
+    def check_client(output_path: str):
+        client = current_client()
+        observed_clients.append(type(client))
+        return PathMetadata(path=output_path)
+
+    step = StepSpec(
+        name="fray_check",
+        override_output_path=(tmp_path / "fray_check").as_posix(),
+        fn=check_client,
+    )
+
+    fake = FakeClient()
+    with set_current_client(fake):
+        runner = StepRunner()
+        runner.run([step])
+
+    assert observed_clients == [FakeClient], f"Expected FakeClient in worker thread, got {observed_clients}"

@@ -712,7 +712,7 @@ elif availability.status == GroupAvailability.AT_MAX_SLICES:
 ```bash
 cd lib/iris
 uv run pytest tests/cluster/controller/test_autoscaler.py -x -v
-uv run pytest tests/cluster/platform/test_scaling_group.py -x -v
+uv run pytest tests/providers/test_scaling_group.py -x -v
 uv run pytest -m 'not slow' -x
 ```
 

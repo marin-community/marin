@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Configuration management for cluster operations."""
@@ -230,7 +230,8 @@ CONFIGS = {
         "tpu_generation": "v5p",
         "min_workers": 8,
         "worker_targets": {
-            "v5p-64": 4,
+            "v5p-8": 8,
+            "v5p-64": 0,
             "v5p-2048": 0,
         },
     },

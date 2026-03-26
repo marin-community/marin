@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -26,7 +26,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.utilities.json_encoder import CustomJsonEncoder
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 # -----------------------------------------------------------------------------

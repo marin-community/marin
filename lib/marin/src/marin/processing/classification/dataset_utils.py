@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 from iris.marin_fs import open_url, url_to_fs
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 class Document(TypedDict):

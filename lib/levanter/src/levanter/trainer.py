@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import atexit
@@ -482,13 +482,15 @@ class Trainer:
         hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks)
 
         with capture_time() as step_time:
-            if hooks_this_time:
-                result = self._maybe_save_jaxpr("train_step", self._jit_train_step_fn, state, batch, batch_kwargs)
-                # force the loss so timing numbers are accurate. laziness isn't going to help here (i think?)
-            else:
-                result = self._maybe_save_jaxpr(
-                    "train_step_hooks", self._jit_train_step_fn_no_hook, state, batch, batch_kwargs
-                )
+            # Annotation scoped to the compiled step only (not hooks/logging below) so
+            # that GPU host-side step_num timing matches TPU device-side "Steps" semantics.
+            with jax.profiler.StepTraceAnnotation("train", step_num=int(state.step)):
+                if hooks_this_time:
+                    result = self._maybe_save_jaxpr("train_step", self._jit_train_step_fn, state, batch, batch_kwargs)
+                else:
+                    result = self._maybe_save_jaxpr(
+                        "train_step_hooks", self._jit_train_step_fn_no_hook, state, batch, batch_kwargs
+                    )
 
             loss = result.loss.item()
 
@@ -516,6 +518,7 @@ class Trainer:
         Generator that yields training steps and runs hooks.
         """
         iter_data = iter(train_loader)
+        is_first_step = True
 
         while int(state.step) < self.num_train_steps:
             with capture_time() as loading_time:
@@ -524,8 +527,19 @@ class Trainer:
                 except StopIteration:
                     logger.info("Reached end of training data loader")
                     break
+
+            if is_first_step:
+                logger.info(
+                    "First batch loaded in %.1fs, starting first train step (includes JIT compilation)...",
+                    loading_time(),
+                )
+
             info = self.train_step(state, example)
             state = info.state
+
+            if is_first_step:
+                logger.info("First train step completed in %.1fs (step %d)", info.step_duration, info.step)
+                is_first_step = False
 
             levanter.tracker.log({"throughput/loading_time": loading_time()}, step=info.step)
 
@@ -747,13 +761,19 @@ class Trainer:
     def _maybe_save_jaxpr(self, name: str, fn, *args, **kwargs):
         logged = False
         if self.config.log_jaxprs and name not in self._logged_jaxprs:
-            jaxpr, _, _ = eqx.filter_make_jaxpr(fn)(*args, **kwargs)
+            logger.info("Tracing %s for jaxpr...", name)
+            with capture_time() as t:
+                jaxpr, _, _ = eqx.filter_make_jaxpr(fn)(*args, **kwargs)
+            logger.info("Traced %s in %.1fs", name, t())
             pretty = jaxpr.pretty_print(name_stack=True, use_color=False)
             self.write_artifact(f"{name}.jaxpr.txt.gz", pretty, type="jaxpr")
             logged = True
 
         if self.config.log_xla_hlo and name not in self._logged_jaxprs:
-            hlo = fn.lower(*args, **kwargs).as_text("stablehlo")
+            logger.info("Lowering %s to HLO...", name)
+            with capture_time() as t:
+                hlo = fn.lower(*args, **kwargs).as_text("stablehlo")
+            logger.info("Lowered %s in %.1fs", name, t())
             self.write_artifact(f"{name}.hlo.txt", hlo, type="hlo")
             logged = True
 

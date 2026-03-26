@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import functools
@@ -10,7 +10,7 @@ from datetime import datetime
 from iris.marin_fs import open_url
 from marin.utils import fsspec_exists
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 @dataclass

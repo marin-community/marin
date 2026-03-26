@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Template: grug-base trial run.
@@ -27,7 +27,7 @@ from marin.processing.tokenize import add_validation_sets_to_mixture
 from experiments.defaults import default_validation_sets
 from experiments.grug.base.model import GrugModelConfig
 from experiments.grug.base.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
-from experiments.tootsie.exp1295_32b import nemotron_mix
+from experiments.pretraining_datasets import nemotron_mix_block_shuffle
 
 
 @dataclass(frozen=True)
@@ -41,6 +41,7 @@ class GrugBaseLaunchConfig:
     data: LmDataConfig
     output_path: str
     run_id: str
+    resources: ResourceConfig
     steps: int
     batch_size: int
     seed: int
@@ -63,8 +64,8 @@ GRUG_130M_MODEL = GrugModelConfig(
 )
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
-    nemotron_mix,
-    default_validation_sets(tokenizer=nemotron_mix.tokenizer),
+    nemotron_mix_block_shuffle,
+    default_validation_sets(tokenizer=nemotron_mix_block_shuffle.tokenizer),
 )
 
 
@@ -109,6 +110,7 @@ def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
     run_config = GrugRunConfig(
         model=config.model,
         data=config.data,
+        resources=config.resources,
         optimizer=config.optimizer,
         trainer=grug_trainer,
         eval=config.eval,
@@ -129,6 +131,7 @@ grug_base_trial = ExecutorStep(
         output_path=this_output_path(),
         # Keep run id out of versioning so changing job metadata doesn't create a new output path.
         run_id=RESOLVED_RUN_ID,
+        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
         steps=versioned(2_000),
         batch_size=versioned(512),
         seed=versioned(0),
@@ -138,6 +141,7 @@ grug_base_trial = ExecutorStep(
             tags=["grug", "template"],
             group="grug-base-trial",
             name=None,  # filled from run_id in _resolve_tracker
+            replicate_path=this_output_path(),
         ),
         optimizer=versioned(
             AdamConfig(
@@ -166,7 +170,6 @@ grug_base_trial = ExecutorStep(
             )
         ),
     ),
-    resources=ResourceConfig.with_tpu("v5p-8"),
 )
 
 

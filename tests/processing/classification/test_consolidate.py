@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import gzip
@@ -6,7 +6,8 @@ import json
 import os
 from pathlib import Path
 
-from marin.processing.classification.deduplication.dedup_commons import DedupMode, DedupConfig, deduplicate
+from marin.processing.classification.deduplication.dedup_commons import DedupMode
+from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
 import pytest
 from ddsketch import DDSketch
 from marin.processing.classification.consolidate import (
@@ -147,19 +148,16 @@ def test_dedupe_consolidate_integration(fox_corpus):
     consolidated_dir = os.path.join(fox_corpus["output_dir"], "consolidation")
 
     # Run deduplication to generate attributes using fixture's test data
-    dedupe_config = DedupConfig(
+    result = dedup_exact_paragraph(
         input_paths=fox_corpus["test_dir"],
         output_path=dedupe_output_dir,
-        mode=DedupMode.EXACT_PARAGRAPH,
-        processes=1,
+        max_parallelism=4,
     )
-
-    result = deduplicate(dedupe_config)
     assert result["success"]
     assert result["mode"] == DedupMode.EXACT_PARAGRAPH
 
     # Verify dedupe output exists and has same structure as input
-    dedupe_output_files = list(Path(dedupe_output_dir).glob("data/*.jsonl.gz"))
+    dedupe_output_files = list(Path(dedupe_output_dir).glob("data/*.vortex"))
     assert len(dedupe_output_files) > 0
 
     # Now run consolidate using the dedupe attributes
@@ -172,7 +170,9 @@ def test_dedupe_consolidate_integration(fox_corpus):
             FilterConfig(
                 type=FilterType.REMOVE_SPANS,
                 attribute_path=f"{dedupe_output_dir}/data",
-                name=DedupMode.EXACT_PARAGRAPH,
+                name="dup_spans",
+                attribute_filetype="vortex",
+                keep_if_missing=True,
             )
         ],
     )

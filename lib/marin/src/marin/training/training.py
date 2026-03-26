@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -260,6 +260,16 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.train_config.trainer.id}")
+
+    model_config = config.train_config.model
+    logger.info(
+        "Model config: type=%s seq_len=%d hidden=%d batch=%s device=%s",
+        type(model_config).__name__,
+        model_config.max_seq_len,
+        model_config.Embed.size,
+        config.train_config.trainer.train_batch_size,
+        config.resources.device,
+    )
 
     train_config = config.train_config
     train_config = _suppress_ray_config(train_config)
