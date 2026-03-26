@@ -17,8 +17,6 @@ import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
 
-from iris.cluster.client.bundle import create_workspace_zip
-
 from fray.v1.cluster.base import (
     Cluster,
     EnvironmentConfig,
@@ -278,6 +276,8 @@ class RayCluster(Cluster):
                 pip_packages=list(environment.pip_packages),
                 env_vars=env_vars,
             )
+            from iris.cluster.client.bundle import create_workspace_zip  # lazy: avoid PyPI iris conflict on workers
+
             runtime_env["working_dir"] = create_workspace_zip(
                 environment.workspace,
                 exclude_dirs={"tests", "docs"},
