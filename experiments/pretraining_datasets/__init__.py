@@ -19,12 +19,12 @@ Use `python -m experiments.pretraining_datasets list` to see all available datas
 
 # Import downloads and tokenized dicts from each module
 from experiments.pretraining_datasets.dolma import (
-    DOLMA_DATASETS,
     DOLMA_LLAMA3_OVERRIDES,
     DOLMA_OLMO_MIXTURE_WEIGHTS,
     downloads as dolma_downloads,
     tokenize_dolma,
 )
+from marin.datakit.download.dolma import DOLMA_DATASETS
 from experiments.pretraining_datasets.dolmino import (
     DOLMINO_DATASETS,
     DOLMINO_LLAMA3_OVERRIDES,
@@ -37,7 +37,7 @@ from experiments.pretraining_datasets.nemotron import (
     NEMOTRON_DATASETS,
     NEMOTRON_LLAMA3_OVERRIDES,
     NEMOTRON_WEIGHTS,
-    downloads as nemotron_downloads,
+    nemotron_cc_download,
     nemotron_mix,
     nemotron_mix_block_shuffle,
     tokenize_nemotron,
@@ -119,7 +119,7 @@ DATASETS = {
     },
     "nemotron_cc": {
         "subsets": list(NEMOTRON_DATASETS.keys()),
-        "download": nemotron_downloads["nemotron_cc"],
+        "download": nemotron_cc_download(),
         "tokenize_fn": tokenize_nemotron,
     },
     "dolma": {
@@ -130,7 +130,7 @@ DATASETS = {
     # Nemotron v2 datasets (from nvidia/Nemotron-Pre-Training-Datasets collection)
     **{
         family: {
-            "subsets": list(info["subsets"].keys()),
+            "subsets": list(info.subsets.keys()),
             "download": nemotron_v2_downloads[family],
             "tokenize_fn": lambda f=family: tokenize_nemotron_v2_family(f),
         }

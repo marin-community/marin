@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 import draccus
 from iris.marin_fs import open_url
+from marin.execution.step_spec import StepSpec
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
 from iris.logging import configure_logging
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class DownloadConfig:
+class Ar5ivDownloadConfig:
     input_path: str
     output_path: str
     max_files: int | None = None  # Maximum number of shards to process
@@ -63,7 +64,7 @@ def process_shard(shard_task: dict) -> dict:
             return {"shard_id": shard_id, "num_files": len(file_list), "output_path": gcs_path}
 
 
-def download(cfg: DownloadConfig) -> None:
+def download(cfg: Ar5ivDownloadConfig) -> None:
     """
     Download and process Ar5iv dataset from a zip file in GCS.
 
@@ -127,8 +128,32 @@ def download(cfg: DownloadConfig) -> None:
     logger.info("Transfer completed successfully!")
 
 
+def ar5iv_step(
+    name: str = "raw/ar5iv",
+    *,
+    input_path: str,
+    max_files: int | None = None,
+    deps: list[StepSpec] | None = None,
+    output_path_prefix: str | None = None,
+    override_output_path: str | None = None,
+) -> StepSpec:
+    """Create a StepSpec that downloads and processes the Ar5iv dataset from a zip file."""
+
+    def _run(output_path: str) -> None:
+        download(Ar5ivDownloadConfig(input_path=input_path, output_path=output_path, max_files=max_files))
+
+    return StepSpec(
+        name=name,
+        fn=_run,
+        deps=deps or [],
+        hash_attrs={"input_path": input_path, "max_files": max_files},
+        output_path_prefix=output_path_prefix,
+        override_output_path=override_output_path,
+    )
+
+
 @draccus.wrap()
-def main(cfg: DownloadConfig) -> None:
+def main(cfg: Ar5ivDownloadConfig) -> None:
     """CLI entrypoint for downloading and processing Ar5iv dataset."""
 
     configure_logging(level=logging.INFO)

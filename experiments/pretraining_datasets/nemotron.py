@@ -8,23 +8,15 @@ import os.path
 
 from experiments.defaults import DEFAULT_NEW_RUN_DATA_SHUFFLE
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
-from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
+from marin.datakit.download.nemotron_v1 import download_nemotron_v1_step
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, lm_mixture_data_config, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-# Raw dataset download step
-downloads = {
-    "nemotron_cc": ExecutorStep(
-        name="raw/nemotro-cc",
-        fn=download_nemotron_cc,
-        config=NemotronIngressConfig(
-            output_path=this_output_path(),
-        ),
-    )
-}
 
-_nemotron_cc_path = output_path_of(downloads["nemotron_cc"], "contrib/Nemotron/Nemotron-CC/data-jsonl/")
+def nemotron_cc_download() -> ExecutorStep:
+    return download_nemotron_v1_step().as_executor_step()
+
 
 NEMOTRON_DATASETS = {
     "hq_actual": ["quality=high/kind=actual/**/*.jsonl.*"],
@@ -61,8 +53,8 @@ NEMOTRON_LLAMA3_OVERRIDES = {
 
 def _get_nemotron_split_paths(split: str):
     """Helper to get file paths for a nemotron split."""
-    patterns = NEMOTRON_DATASETS[split]
-    return [_nemotron_cc_path / pattern for pattern in patterns]
+    base = output_path_of(nemotron_cc_download(), "contrib/Nemotron/Nemotron-CC/data-jsonl/")
+    return [base / pattern for pattern in NEMOTRON_DATASETS[split]]
 
 
 def tokenize_nemotron(
