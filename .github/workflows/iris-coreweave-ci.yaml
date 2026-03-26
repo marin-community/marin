@@ -111,9 +111,9 @@ jobs:
           WANDB_MODE: disabled
           WANDB_API_KEY: ""
           JAX_TRACEBACK_FILTERING: off
-          # The marin-on-iris test uploads fixtures and writes intermediate
-          # data to S3 (R2). The CI runner needs the same credentials the
-          # controller/workers use.
+          # When set, the marin-on-iris test uploads fixtures and writes
+          # intermediate data to S3 (R2) so remote Zephyr pods can access them.
+          MARIN_CI_S3_PREFIX: s3://marin-na/temp/ci
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
