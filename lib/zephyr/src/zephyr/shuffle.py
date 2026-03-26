@@ -656,7 +656,7 @@ def _write_parquet_scatter(
             seg_file = _segment_path(parquet_path, seg_idx)
             seg_paths.append(seg_file)
             ensure_parent_dir(seg_file)
-            writer = pq.ParquetWriter(seg_file, schema)
+            writer = pq.ParquetWriter(seg_file, schema, compression="zstd", compression_level=1)
         elif chunk_schema != schema:
             _flush_pending()
             writer.close()
@@ -668,7 +668,7 @@ def _write_parquet_scatter(
             seg_file = _segment_path(parquet_path, seg_idx)
             seg_paths.append(seg_file)
             ensure_parent_dir(seg_file)
-            writer = pq.ParquetWriter(seg_file, schema)
+            writer = pq.ParquetWriter(seg_file, schema, compression="zstd", compression_level=1)
             logger.info(
                 "[shard %d] Schema evolved after %d chunks; starting segment %d",
                 source_shard,

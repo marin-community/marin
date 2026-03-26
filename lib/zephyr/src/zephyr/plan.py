@@ -291,11 +291,11 @@ def _arrow_reduce_gen(
 
     is_gen = inspect.isgeneratorfunction(reducer_fn)
     for start, end, key_value in _find_group_boundaries(key_col):
-        group_items = item_col[start:end].to_pylist()
+        group_items = (item_col[i].as_py() for i in range(start, end))
         if is_gen:
-            yield from reducer_fn(key_value, iter(group_items))
+            yield from reducer_fn(key_value, group_items)
         else:
-            yield reducer_fn(key_value, iter(group_items))
+            yield reducer_fn(key_value, group_items)
 
 
 def _reduce_gen(
