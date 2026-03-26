@@ -31,6 +31,7 @@ from collections.abc import Iterable
 
 import requests
 from iris.marin_fs import open_url
+from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_size
 from tqdm_loggable.auto import tqdm
 from zephyr import Dataset, ZephyrContext, atomic_rename, load_jsonl
@@ -111,3 +112,31 @@ def download_wikipedia(input_urls: list[str], revision: str, output_path: str) -
     )
 
     logger.info("Wikipedia dump transfer complete, wrote: %s", list(extracted))
+
+
+ENWIKI_20241201_URL = (
+    "https://dumps.wikimedia.org/other/enterprise_html/runs/20241201/" "enwiki-NS0-20241201-ENTERPRISE-HTML.json.tar.gz"
+)
+
+
+def download_wikipedia_step(
+    *,
+    input_urls: list[str] | None = None,
+    revision: str = "20241201",
+) -> StepSpec:
+    """Download Wikipedia HTML dumps.
+
+    Defaults to the English Wikipedia 20241201 dump which is already
+    downloaded at ``raw/wikipedia-a7dad0``.
+    """
+    urls = input_urls or [ENWIKI_20241201_URL]
+
+    def _run(output_path: str) -> None:
+        download_wikipedia(urls, revision, output_path)
+
+    return StepSpec(
+        name="raw/wikipedia",
+        fn=_run,
+        hash_attrs={"input_urls": urls, "revision": revision},
+        override_output_path="raw/wikipedia-a7dad0",
+    )
