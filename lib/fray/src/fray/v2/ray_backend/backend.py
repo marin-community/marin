@@ -17,6 +17,8 @@ import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
 
+from iris.cluster.client.bundle import create_workspace_zip
+
 from fray.v2.actor import (
     ActorContext,
     ActorFuture,
@@ -209,8 +211,12 @@ def build_runtime_env(request: JobRequest) -> dict:
             pip_packages=list(environment.pip_packages),
             env_vars=env_vars,
         )
-        runtime_env["working_dir"] = environment.workspace
-        runtime_env["excludes"] = [".git", "tests/", "docs/", "**/*.pack"]
+        runtime_env["working_dir"] = create_workspace_zip(
+            environment.workspace,
+            exclude_dirs={"tests", "docs"},
+            exclude_extensions={".pack"},
+            max_size_bytes=None,
+        )
         runtime_env["config"] = {"setup_timeout_seconds": 1800}
     else:
         python_path = build_python_path(submodules_dir=os.path.join(environment.workspace, "submodules"))

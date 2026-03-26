@@ -1,15 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for BundleCreator."""
+"""Tests for BundleCreator and create_workspace_zip."""
 
 import io
+import os
 import zipfile
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from iris.cluster.client.bundle import MAX_BUNDLE_SIZE_BYTES, BundleCreator
+from iris.cluster.client.bundle import MAX_BUNDLE_SIZE_BYTES, BundleCreator, create_workspace_zip
 
 
 @pytest.fixture
@@ -24,7 +26,7 @@ def workspace(tmp_path):
 
 
 def test_bundle_creator_uses_fallback_when_git_unavailable(workspace):
-    with patch("iris.cluster.client.bundle._get_git_non_ignored_files", return_value=None):
+    with patch("iris.cluster.client.bundle.get_git_non_ignored_files", return_value=None):
         creator = BundleCreator(workspace)
         bundle_bytes = creator.create_bundle()
 
@@ -37,7 +39,7 @@ def test_bundle_creator_uses_fallback_when_git_unavailable(workspace):
 
 def test_bundle_creator_uses_git_files_when_available(workspace):
     git_files = {workspace / "pyproject.toml", workspace / "src" / "main.py"}
-    with patch("iris.cluster.client.bundle._get_git_non_ignored_files", return_value=git_files):
+    with patch("iris.cluster.client.bundle.get_git_non_ignored_files", return_value=git_files):
         creator = BundleCreator(workspace)
         bundle_bytes = creator.create_bundle()
 
@@ -58,9 +60,9 @@ def test_bundle_includes_generated_proto_files(workspace):
 
     # Simulate git ls-files returning only tracked files (not the generated ones)
     git_files = {workspace / "pyproject.toml", workspace / "src" / "main.py"}
-    with patch("iris.cluster.client.bundle._get_git_non_ignored_files") as mock_git:
+    with patch("iris.cluster.client.bundle.get_git_non_ignored_files") as mock_git:
         # Call the real function's logic but with controlled git output,
-        # then verify generated files are added via _include_generated_build_artifacts.
+        # then verify generated files are added via include_generated_build_artifacts.
         mock_git.return_value = git_files
         creator = BundleCreator(workspace)
         bundle_bytes = creator.create_bundle()
@@ -74,14 +76,43 @@ def test_bundle_includes_generated_proto_files(workspace):
 
 def test_bundle_creator_rejects_oversized_bundles(workspace):
     """Test that bundles exceeding MAX_BUNDLE_SIZE_BYTES are rejected."""
-    # Create a large file with random data that won't compress well
-    import os
-
     large_file = workspace / "large_file.bin"
     # Use urandom to create incompressible data
     large_file.write_bytes(os.urandom(MAX_BUNDLE_SIZE_BYTES + 1024 * 1024))
 
-    with patch("iris.cluster.client.bundle._get_git_non_ignored_files", return_value=None):
+    with patch("iris.cluster.client.bundle.get_git_non_ignored_files", return_value=None):
         creator = BundleCreator(workspace)
         with pytest.raises(ValueError, match=r"Bundle size .* exceeds maximum"):
             creator.create_bundle()
+
+
+def test_create_workspace_zip_returns_path_with_expected_files(workspace):
+    """create_workspace_zip returns a zip path containing workspace files, excluding __pycache__."""
+    with patch("iris.cluster.client.bundle.get_git_non_ignored_files", return_value=None):
+        zip_path = create_workspace_zip(workspace)
+
+    assert Path(zip_path).exists()
+    assert zip_path.endswith(".zip")
+
+    with zipfile.ZipFile(zip_path) as zf:
+        names = zf.namelist()
+        assert "pyproject.toml" in names
+        assert "src/main.py" in names
+        assert not any("__pycache__" in n for n in names)
+        assert not any(n.endswith(".pyc") for n in names)
+
+
+def test_create_workspace_zip_with_custom_exclude_dirs(workspace):
+    """create_workspace_zip respects custom exclude_dirs in addition to the defaults."""
+    (workspace / "experiments").mkdir()
+    (workspace / "experiments" / "run.py").write_text("# experiment")
+    (workspace / "src" / "core.py").write_text("# core")
+
+    with patch("iris.cluster.client.bundle.get_git_non_ignored_files", return_value=None):
+        zip_path = create_workspace_zip(workspace, exclude_dirs={"experiments"})
+
+    with zipfile.ZipFile(zip_path) as zf:
+        names = zf.namelist()
+        assert "src/core.py" in names
+        assert "pyproject.toml" in names
+        assert not any("experiments" in n for n in names)
