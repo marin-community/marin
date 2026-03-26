@@ -24,7 +24,14 @@ class ActorHandle(Protocol):
 
 @dataclass(frozen=True)
 class ActorContext:
-    """Context available to actors during execution."""
+    """Context available to actors during execution.
+
+    ``shutdown_event`` is set by ``request_shutdown()`` to signal that the
+    hosting process should exit.  Backends create the event and block on it
+    (Iris) or use it to trigger ``exit_actor()`` (Ray).  Child threads
+    inherit the ContextVar copy made at ``threading.Thread.__init__`` time,
+    so they can call ``request_shutdown()`` without global state.
+    """
 
     handle: ActorHandle
     """Handle to self, can be passed to other actors for callbacks."""
@@ -34,6 +41,9 @@ class ActorContext:
 
     group_name: str
     """The name of the actor group this actor belongs to."""
+
+    shutdown_event: threading.Event | None = None
+    """Set by request_shutdown() to signal the hosting process to exit."""
 
 
 class HostedActor:
@@ -50,10 +60,6 @@ class HostedActor:
 
 
 _current_actor_ctx: ContextVar[ActorContext | None] = ContextVar("actor_context", default=None)
-
-# Module-level (not ContextVar) so child threads spawned by the actor can call
-# request_shutdown(). _host_actor runs one actor per process, so global scope is correct.
-_actor_shutdown_event: threading.Event | None = None
 
 
 def current_actor() -> ActorContext:
@@ -83,22 +89,14 @@ def _reset_current_actor(token):
 def request_shutdown() -> None:
     """Signal that the hosting actor process should exit.
 
-    Call from within an actor (e.g. after receiving SHUTDOWN from a coordinator)
-    to unblock _host_actor and trigger a clean server teardown.  No-op when
-    running under a backend that doesn't use _host_actor (Ray, LocalClient).
+    Call from within an actor (e.g. after receiving SHUTDOWN from a
+    coordinator).  Sets the ``shutdown_event`` on the current
+    ``ActorContext``, which the backend uses to trigger process exit.
+    No-op when called outside an actor context (e.g. LocalClient).
     """
-    if _actor_shutdown_event is not None:
-        _actor_shutdown_event.set()
-
-
-def _set_shutdown_event(event: threading.Event) -> None:
-    global _actor_shutdown_event
-    _actor_shutdown_event = event
-
-
-def _clear_shutdown_event() -> None:
-    global _actor_shutdown_event
-    _actor_shutdown_event = None
+    ctx = _current_actor_ctx.get()
+    if ctx is not None and ctx.shutdown_event is not None:
+        ctx.shutdown_event.set()
 
 
 class ActorFuture(Protocol):

@@ -1282,11 +1282,14 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
                 f.write(cloudpickle.dumps(e))
         raise
     finally:
+        # Signal coordinator shutdown first so workers receive SHUTDOWN from
+        # pull_task and self-terminate via request_shutdown() → exit_actor()
+        # before worker_group.shutdown() sends __ray_terminate__.
+        with suppress(Exception):
+            coordinator.shutdown.remote().result(timeout=10.0)
         if worker_group is not None:
             with suppress(Exception):
                 worker_group.shutdown()
-        with suppress(Exception):
-            coordinator.shutdown.remote().result()
         with suppress(Exception):
             hosted.shutdown()
 

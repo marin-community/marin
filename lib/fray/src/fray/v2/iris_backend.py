@@ -40,10 +40,8 @@ from fray.v2.actor import (
     ActorFuture,
     ActorHandle,
     HostedActor,
-    _clear_shutdown_event,
     _reset_current_actor,
     _set_current_actor,
-    _set_shutdown_event,
 )
 from fray.v2.client import JobAlreadyExists as FrayJobAlreadyExists
 from fray.v2.types import (
@@ -225,14 +223,15 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     actor_name = f"{ctx.job_id}/{name_prefix}-{job_info.task_index}"
     logger.info(f"Starting actor: {actor_name} (job_id={ctx.job_id})")
 
-    # Shutdown event lets the actor signal that the hosting process should exit.
-    # request_shutdown() sets this event, unblocking the wait below.
+    # Shutdown event: request_shutdown() sets it via the ActorContext,
+    # unblocking the wait below.
     shutdown_event = threading.Event()
-    _set_shutdown_event(shutdown_event)
 
     # Create handle BEFORE instance so actor can access it during __init__
     handle = IrisActorHandle(actor_name)
-    actor_ctx = ActorContext(handle=handle, index=job_info.task_index, group_name=name_prefix)
+    actor_ctx = ActorContext(
+        handle=handle, index=job_info.task_index, group_name=name_prefix, shutdown_event=shutdown_event
+    )
     token = _set_current_actor(actor_ctx)
     try:
         instance = actor_class(*args, **kwargs)
@@ -253,7 +252,6 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     # Block until the actor signals shutdown via request_shutdown()
     shutdown_event.wait()
     logger.info(f"Actor {actor_name} shutting down")
-    _clear_shutdown_event()
     server.stop()
 
 
