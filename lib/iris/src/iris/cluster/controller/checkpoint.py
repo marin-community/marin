@@ -88,11 +88,18 @@ def _fsspec_copy(src: str, dst: str) -> None:
 
 
 def _backup_sqlite_file(source: Path, dest: Path) -> None:
-    """Hot-backup a standalone SQLite file using the backup API."""
+    """Hot-backup a standalone SQLite file using the backup API.
+
+    After the backup, the destination is switched from WAL to DELETE
+    journal mode so the result is a single self-contained file without
+    -wal/-shm sidecars.  This prevents corruption when the file is
+    later compressed and uploaded without its WAL/SHM companions.
+    """
     src_conn = sqlite3.connect(str(source))
     dst_conn = sqlite3.connect(str(dest))
     try:
         src_conn.backup(dst_conn)
+        dst_conn.execute("PRAGMA journal_mode = DELETE")
         dst_conn.commit()
     finally:
         dst_conn.close()
