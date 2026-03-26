@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 import uuid
 from typing import Any, cast
@@ -464,6 +465,13 @@ class _RayActorHostBase:
     Not decorated with @ray.remote directly — use _get_named_actor_host() to
     obtain a Ray remote class whose name matches the wrapped actor class,
     so that `ps` shows e.g. ``ray::my_workers`` instead of ``ray::_RayActorHost``.
+
+    The ``shutdown_event`` on ``ActorContext`` lets actors self-terminate on
+    Ray: the wrapped actor sets it when done (e.g. after receiving SHUTDOWN
+    from a coordinator), and a watchdog thread calls ``exit_actor()`` to
+    cleanly terminate the process.  ``_exit_when_idle`` (called by
+    ``RayActorGroup.shutdown()``) is a safety net for actors that never
+    set the event themselves.
     """
 
     def __init__(
@@ -475,21 +483,38 @@ class _RayActorHostBase:
         args: tuple,
         kwargs: dict,
     ):
-        # Ensure the root logger is configured in this worker process so that
-        # library code using logging.getLogger(__name__).info() is visible.
-        # Ray forwards stdout/stderr to the driver, but Python's root logger
-        # defaults to WARNING in fresh processes.
-
         configure_logging(level=logging.INFO)
 
-        # Create handle by name - will resolve via ray.get_actor() when used
+        self._shutdown_event = threading.Event()
         handle = RayActorHandle(actor_name)
-        ctx = ActorContext(handle=handle, index=actor_index, group_name=group_name)
+        ctx = ActorContext(handle=handle, index=actor_index, group_name=group_name, shutdown_event=self._shutdown_event)
         token = _set_current_actor(ctx)
         try:
             self._instance = actor_class(*args, **kwargs)
         finally:
             _reset_current_actor(token)
+
+        # Watchdog: when the actor sets shutdown_event, exit the actor
+        # process.  This lets actors self-terminate (e.g. workers after
+        # receiving SHUTDOWN) without waiting for external _exit_when_idle.
+        threading.Thread(
+            target=self._watch_shutdown,
+            daemon=True,
+            name=f"ray-shutdown-{actor_name}",
+        ).start()
+
+    def _watch_shutdown(self) -> None:
+        self._shutdown_event.wait()
+        ray.actor.exit_actor()
+
+    def _exit_when_idle(self, timeout_s: float = 5.0) -> None:
+        """Safety net for actors that never set ``shutdown_event``.
+
+        Waits up to *timeout_s* for the event, then exits unconditionally.
+        Called by ``RayActorGroup.shutdown()`` fire-and-forget.
+        """
+        self._shutdown_event.wait(timeout=timeout_s)
+        ray.actor.exit_actor()
 
     def _proxy_call(self, method_name: str, args: tuple, kwargs: dict) -> Any:
         """Proxy method calls to the wrapped actor instance."""
@@ -612,35 +637,25 @@ class RayActorGroup:
         return False
 
     def shutdown(self, graceful_timeout_s: float = 30.0) -> None:
-        """Gracefully terminate all Ray actors, with force-kill fallback.
+        """Terminate all Ray actors.
 
-        Uses __ray_terminate__ instead of ray.kill() so that in-flight tasks
-        finish before the actor exits.  ray.kill() races with task completion
-        callbacks in Ray's C++ task_manager, triggering a fatal assertion
-        (ray-project/ray#54260).  __ray_terminate__ queues behind pending
-        tasks; we wait up to *graceful_timeout_s* then force-kill stragglers.
+        Calls ``_exit_when_idle`` on each actor, which waits for
+        ``shutdown_event`` (already set by actors that self-terminated,
+        e.g. workers after receiving SHUTDOWN) then calls ``exit_actor()``.
+        Actors that are already dead are silently skipped.
+
+        Does **not** use ``ray.kill()`` or ``__ray_terminate__``:
+        ``ray.kill()`` races with task completion callbacks in Ray's C++
+        task_manager, triggering a fatal assertion (ray-project/ray#54260),
+        and ``__ray_terminate__`` interacts badly with ``max_task_retries``
+        causing a restart+retry storm on already-dead actors.
         """
-        # Phase 1: request graceful termination for all actors.
-        terminate_refs: list[tuple[RayActorHandle, ray.ObjectRef]] = []
         for handle in self._handles:
             try:
-                ref = handle._resolve().__ray_terminate__.remote()
-                terminate_refs.append((handle, ref))
-            except Exception as e:
-                logger.warning("Failed to send terminate to Ray actor: %s", e)
-
-        # Phase 2: wait for graceful termination with a timeout.
-        pending = [ref for _, ref in terminate_refs]
-        if pending:
-            try:
-                _, still_pending = ray.wait(pending, num_returns=len(pending), timeout=graceful_timeout_s)
+                # Fire-and-forget: _exit_when_idle calls exit_actor() which
+                # kills the process mid-task, so the ref never resolves cleanly.
+                # max_task_retries=0 prevents Ray from retrying the exit task
+                # on a restarted actor (which would cause a restart+retry storm).
+                handle._resolve()._exit_when_idle.options(max_task_retries=0).remote()
             except Exception:
-                still_pending = pending
-            # Phase 3: force-kill actors that did not terminate in time.
-            still_pending_set = set(still_pending)
-            for handle, ref in terminate_refs:
-                if ref in still_pending_set:
-                    try:
-                        ray.kill(handle._resolve())
-                    except Exception as e:
-                        logger.warning("Failed to force-kill Ray actor: %s", e)
+                pass  # actor already dead
