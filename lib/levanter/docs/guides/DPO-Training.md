@@ -83,6 +83,35 @@ validation_split_fraction: 0.1  # Auto-split from training data; null to disable
   training data for validation. Set to `null` to use separately configured
   validation sets.
 
+### Generation Stop Tokens
+
+Chat models typically use a turn-boundary token (e.g. `<|eot_id|>`, ID 128009)
+to end assistant responses, while the tokenizer's `eos_token` remains the
+pre-training document boundary (e.g. `<|end_of_text|>`, ID 128001). Inference
+tools like vLLM use `eos_token_id` from `config.json` to decide when to stop,
+so they will miss the chat stop token unless told otherwise.
+
+Set `hf_generation_eos_token_ids` to write a `generation_config.json` alongside
+each HF checkpoint with the correct stop tokens:
+
+```yaml
+hf_generation_eos_token_ids: [128001, 128009]  # <|end_of_text|> + <|eot_id|>
+```
+
+The tokenizer's `eos_token_id` is auto-added if not in the list. This field
+defaults to `null` (no `generation_config.json` written), preserving backward
+compatibility with pretraining checkpoints.
+
+To determine the right stop token for your model's chat template:
+
+```python
+tokens = tokenizer.apply_chat_template(
+    [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
+    tokenize=True,
+)
+# The last token is the chat stop token (e.g. 128009 for Llama 3)
+```
+
 ## Running
 
 ```bash

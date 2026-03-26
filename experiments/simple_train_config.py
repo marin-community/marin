@@ -50,6 +50,8 @@ class SimpleTrainConfig:
     """how often to run task evaluations"""
     steps_per_hf_export: int | None = None
     """None means match steps_per_export, -1 disables"""
+    hf_generation_eos_token_ids: list[int] | None = None
+    """EOS token IDs to write to generation_config.json. None means no generation config."""
     per_device_parallelism: int = -1
     """How many examples to process in parallel on each device. -1 (default) means
     train_batch_size/num_devices (no gradient accumulation). Set to a positive value
