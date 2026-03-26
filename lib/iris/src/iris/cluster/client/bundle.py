@@ -3,7 +3,9 @@
 
 """Workspace bundle creation for job submission."""
 
+import atexit
 import logging
+import shutil
 import subprocess
 import tempfile
 import zipfile
@@ -55,9 +57,14 @@ def _should_exclude(
     extra_extensions: set[str] | None = None,
     extra_subpaths: set[str] | None = None,
 ) -> bool:
-    """Check whether a relative path should be excluded from the bundle."""
+    """Check whether a relative path should be excluded from the bundle.
+
+    Default EXCLUDE_DIRS (e.g. __pycache__, .git) are matched at any depth.
+    Caller-supplied extra_dirs are matched only against the top-level directory
+    component, mirroring Ray's excludes behavior (e.g. "tests/" excludes only
+    the top-level tests directory, not lib/foo/tests/).
+    """
     all_extensions = EXCLUDE_EXTENSIONS | (extra_extensions or set())
-    all_dirs = EXCLUDE_DIRS | (extra_dirs or set())
     all_subpaths = EXCLUDE_SUBPATHS | (extra_subpaths or set())
 
     if relative.suffix in all_extensions:
@@ -65,7 +72,11 @@ def _should_exclude(
     # e.g. foo.egg-info
     if any(part.endswith(".egg-info") for part in relative.parts):
         return True
-    if any(part in all_dirs for part in relative.parts):
+    # Default dirs excluded at any depth
+    if any(part in EXCLUDE_DIRS for part in relative.parts):
+        return True
+    # Caller-supplied dirs excluded only at the top level
+    if extra_dirs and relative.parts and relative.parts[0] in extra_dirs:
         return True
     rel_str = str(relative)
     return any(subpath in rel_str for subpath in all_subpaths)
@@ -143,8 +154,8 @@ def create_workspace_zip(
         max_size_bytes: Maximum allowed zip size. Pass None to disable the check.
 
     Returns:
-        Path to the created zip file (in a temp directory; caller should not delete
-        the parent directory while the zip is in use).
+        Path to the created zip file.  The parent temp directory is cleaned up
+        automatically at process exit via atexit.
     """
     workspace = Path(workspace)
 
@@ -163,9 +174,11 @@ def create_workspace_zip(
             exclude_subpaths=exclude_subpaths,
         )
 
-    # Use a persistent temp directory (not a context manager) so the caller
-    # can use the zip path after this function returns.
+    # Use a persistent temp directory so the caller can use the zip path after
+    # this function returns.  Register cleanup on process exit to avoid leaking
+    # temp directories in long-lived processes.
     td = tempfile.mkdtemp(prefix="workspace_zip_")
+    atexit.register(shutil.rmtree, td, ignore_errors=True)
     zip_path = Path(td) / "workspace.zip"
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:

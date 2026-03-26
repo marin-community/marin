@@ -116,3 +116,23 @@ def test_create_workspace_zip_with_custom_exclude_dirs(workspace):
         assert "src/core.py" in names
         assert "pyproject.toml" in names
         assert not any("experiments" in n for n in names)
+
+
+def test_custom_exclude_dirs_only_matches_top_level(workspace):
+    """Custom exclude_dirs should only exclude top-level directories, not nested ones."""
+    # Top-level tests/ should be excluded
+    (workspace / "tests").mkdir()
+    (workspace / "tests" / "test_foo.py").write_text("# top-level test")
+    # Nested lib/pkg/tests/ should NOT be excluded
+    (workspace / "lib").mkdir()
+    (workspace / "lib" / "pkg").mkdir()
+    (workspace / "lib" / "pkg" / "tests").mkdir()
+    (workspace / "lib" / "pkg" / "tests" / "test_bar.py").write_text("# nested test")
+
+    with patch("iris.cluster.client.bundle.get_git_non_ignored_files", return_value=None):
+        zip_path = create_workspace_zip(workspace, exclude_dirs={"tests"})
+
+    with zipfile.ZipFile(zip_path) as zf:
+        names = zf.namelist()
+        assert not any(n.startswith("tests/") for n in names), "top-level tests/ should be excluded"
+        assert "lib/pkg/tests/test_bar.py" in names, "nested tests/ should be included"
