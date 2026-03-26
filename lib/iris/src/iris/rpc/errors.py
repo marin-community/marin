@@ -15,7 +15,7 @@ from connectrpc.errors import ConnectError
 from google.protobuf.any_pb2 import Any as AnyProto
 
 from iris.rpc import errors_pb2
-from iris.time_utils import ExponentialBackoff, Timestamp
+from iris.time_utils import Deadline, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -220,3 +220,95 @@ def call_with_retry(
 
     assert last_exception is not None
     raise last_exception
+
+
+def poll_with_retries(
+    operation: str,
+    poll_fn: Callable[[], T],
+    *,
+    deadline: Deadline,
+    unavailable_tolerance: float = 3600.0,
+    backoff: ExponentialBackoff | None = None,
+) -> T:
+    """Poll an RPC endpoint, tolerating transient unavailability.
+
+    Calls ``poll_fn`` in a loop.  On retryable errors the function backs off
+    and keeps trying for up to ``unavailable_tolerance`` seconds **or** until
+    ``deadline`` expires — whichever comes first.  When the call succeeds the
+    unavailability timer resets.
+
+    This is designed for monitoring loops (e.g. ``wait_for_job``) where the
+    server-side work continues regardless of client polling failures.
+
+    Args:
+        operation: Human-readable description for log messages.
+        poll_fn: Callable that performs the RPC.  Should raise on failure.
+        deadline: Caller-supplied deadline — polling stops with ``TimeoutError``
+            if the deadline expires, even during unavailability.
+        unavailable_tolerance: Maximum seconds to tolerate continuous
+            controller unavailability before re-raising the RPC error.
+        backoff: Backoff for unavailability retries.  Defaults to 1 s → 60 s.
+
+    Returns:
+        The successful result of ``poll_fn``.
+
+    Raises:
+        TimeoutError: If *deadline* expires while the controller is unavailable.
+        Exception: The last RPC error if unavailability exceeds the tolerance,
+            or any non-retryable error from ``poll_fn``.
+    """
+
+    if backoff is None:
+        backoff = ExponentialBackoff(initial=1.0, maximum=60.0, factor=2.0)
+    else:
+        backoff = backoff.copy()
+
+    unavailable_since: float | None = None
+
+    while True:
+        try:
+            result = poll_fn()
+        except Exception as e:
+            if not is_retryable_error(e):
+                raise
+
+            now = time.monotonic()
+            if unavailable_since is None:
+                unavailable_since = now
+            elapsed_unavailable = now - unavailable_since
+
+            if elapsed_unavailable >= unavailable_tolerance:
+                logger.error(
+                    "Controller unavailable for %.0fs, giving up on %s",
+                    elapsed_unavailable,
+                    operation,
+                )
+                raise
+
+            if deadline.expired():
+                raise TimeoutError(
+                    f"{operation}: deadline expired after {elapsed_unavailable:.0f}s of controller unavailability"
+                ) from e
+
+            logger.warning(
+                "Controller unavailable for %s (%.0fs), job is still running server-side: %s",
+                operation,
+                elapsed_unavailable,
+                e,
+            )
+            interval = backoff.next_interval()
+            time.sleep(min(interval, deadline.remaining_seconds()))
+            continue
+
+        # Success — reset unavailability tracking.
+        if unavailable_since is not None:
+            elapsed_unavailable = time.monotonic() - unavailable_since
+            logger.info(
+                "Controller back online for %s after %.0fs of unavailability",
+                operation,
+                elapsed_unavailable,
+            )
+            unavailable_since = None
+            backoff.reset()
+
+        return result

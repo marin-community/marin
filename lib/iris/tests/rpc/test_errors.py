@@ -12,8 +12,9 @@ from iris.rpc.errors import (
     connect_error_sanitized,
     connect_error_with_traceback,
     extract_error_details,
+    poll_with_retries,
 )
-from iris.time_utils import ExponentialBackoff
+from iris.time_utils import Deadline, ExponentialBackoff
 
 
 def test_connect_error_with_traceback_populates_timestamp() -> None:
@@ -172,3 +173,86 @@ def test_call_with_retry_max_elapsed_succeeds_within_window() -> None:
     )
     assert result == "recovered"
     assert call_count == 4
+
+
+# -- poll_with_retries tests --
+
+
+def test_poll_with_retries_succeeds_immediately() -> None:
+    result = poll_with_retries(
+        "test",
+        lambda: "ok",
+        deadline=Deadline.from_seconds(5.0),
+    )
+    assert result == "ok"
+
+
+def test_poll_with_retries_retries_then_succeeds() -> None:
+    call_count = 0
+
+    def flaky():
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 2:
+            raise ConnectError(Code.UNAVAILABLE, "down")
+        return "recovered"
+
+    result = poll_with_retries(
+        "test",
+        flaky,
+        deadline=Deadline.from_seconds(5.0),
+        backoff=ExponentialBackoff(initial=0.01, maximum=0.05),
+    )
+    assert result == "recovered"
+    assert call_count == 3
+
+
+def test_poll_with_retries_respects_deadline() -> None:
+    """Deadline expiry during unavailability raises TimeoutError, not the RPC error."""
+
+    def always_fail():
+        raise ConnectError(Code.UNAVAILABLE, "down")
+
+    with pytest.raises(TimeoutError, match="deadline expired"):
+        poll_with_retries(
+            "test",
+            always_fail,
+            deadline=Deadline.from_seconds(0.3),
+            unavailable_tolerance=3600.0,
+            backoff=ExponentialBackoff(initial=0.01, maximum=0.05),
+        )
+
+
+def test_poll_with_retries_respects_unavailable_tolerance() -> None:
+    """Unavailability tolerance expiry re-raises the RPC error."""
+
+    def always_fail():
+        raise ConnectError(Code.UNAVAILABLE, "down")
+
+    with pytest.raises(ConnectError) as exc_info:
+        poll_with_retries(
+            "test",
+            always_fail,
+            deadline=Deadline.from_seconds(10.0),
+            unavailable_tolerance=0.3,
+            backoff=ExponentialBackoff(initial=0.01, maximum=0.05),
+        )
+    assert exc_info.value.code == Code.UNAVAILABLE
+
+
+def test_poll_with_retries_raises_non_retryable_immediately() -> None:
+    call_count = 0
+
+    def not_found():
+        nonlocal call_count
+        call_count += 1
+        raise ConnectError(Code.NOT_FOUND, "gone")
+
+    with pytest.raises(ConnectError) as exc_info:
+        poll_with_retries(
+            "test",
+            not_found,
+            deadline=Deadline.from_seconds(5.0),
+        )
+    assert exc_info.value.code == Code.NOT_FOUND
+    assert call_count == 1
