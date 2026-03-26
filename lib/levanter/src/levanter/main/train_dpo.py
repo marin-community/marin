@@ -18,7 +18,7 @@ import levanter
 import levanter.callbacks
 from levanter import callbacks
 from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCompatConfig
+from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config
 from levanter.data.dataset import AsyncDataset
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import (
@@ -32,7 +32,6 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.metrics import Metric, ReductionType
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
-from levanter.utils.hf_export import build_generation_config
 from levanter.utils.jax_utils import parameter_count, use_cpu_device
 from levanter.utils.tree_utils import inference_mode
 

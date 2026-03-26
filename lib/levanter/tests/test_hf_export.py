@@ -5,7 +5,7 @@
 
 import pytest
 
-from levanter.utils.hf_export import build_generation_config
+from levanter.compat.hf_checkpoints import build_generation_config
 
 
 class _FakeTokenizer:
