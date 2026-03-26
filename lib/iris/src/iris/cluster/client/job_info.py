@@ -109,7 +109,12 @@ def get_job_info() -> JobInfo | None:
         constraints: list[Constraint] = []
         if constraints_json:
             for item in json.loads(constraints_json):
-                constraints.append(Constraint.from_proto(json_format.ParseDict(item, cluster_pb2.Constraint())))
+                constraint_proto = json_format.ParseDict(
+                    item,
+                    cluster_pb2.Constraint(),
+                    ignore_unknown_fields=True,
+                )
+                constraints.append(Constraint.from_proto(constraint_proto))
 
         info = JobInfo(
             task_id=task_id,

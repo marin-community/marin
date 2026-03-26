@@ -79,6 +79,23 @@ def test_get_job_info_accepts_legacy_iris_job_id_env(monkeypatch):
     set_job_info(None)
 
 
+def test_get_job_info_ignores_unknown_constraint_fields(monkeypatch):
+    set_job_info(None)
+    monkeypatch.delenv("IRIS_JOB_ID", raising=False)
+    monkeypatch.setenv("IRIS_TASK_ID", "/alice/train/0:0")
+    monkeypatch.setenv(
+        "IRIS_JOB_CONSTRAINTS",
+        '[{"key":"region","op":0,"mode":"cohort"}]',
+    )
+
+    info = get_job_info()
+
+    assert info is not None
+    assert len(info.constraints) == 1
+    assert info.constraints[0].key == "region"
+    set_job_info(None)
+
+
 def test_worker_region_from_env(monkeypatch):
     """IRIS_WORKER_REGION is read into JobInfo.worker_region."""
     set_job_info(None)
