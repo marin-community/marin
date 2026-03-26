@@ -104,26 +104,39 @@ def test_marin_pipeline_on_iris(integration_cluster, monkeypatch):
             workspace=REPO_ROOT,
         )
 
-        env_vars = {
-            "MARIN_PREFIX": prefix,
-            "WANDB_MODE": "disabled",
-            "WANDB_API_KEY": "",
-            "JAX_TRACEBACK_FILTERING": "off",
-            **_s3_env_vars(),
-        }
+        config = ExecutorMainConfig(
+            prefix=prefix,
+            executor_info_base_path=f"{prefix}/experiments",
+        )
+        steps = create_steps("quickstart-tests", synth_data)
 
-        with set_current_client(iris_client):
-            handle = iris_client.submit(
-                JobRequest(
-                    name=f"marin-itest-{uuid.uuid4().hex[:8]}",
-                    entrypoint=Entrypoint.from_callable(
-                        _run_executor,
-                        args=(prefix, synth_data),
-                    ),
-                    resources=ResourceConfig.with_cpu(),
-                    environment=create_environment(env_vars=env_vars),
+        if s3_base:
+            # Remote cluster: submit the executor as an Iris job so child jobs
+            # (Zephyr coordinator/workers) inherit S3 env vars automatically.
+            env_vars = {
+                "MARIN_PREFIX": prefix,
+                "WANDB_MODE": "disabled",
+                "WANDB_API_KEY": "",
+                "JAX_TRACEBACK_FILTERING": "off",
+                **_s3_env_vars(),
+            }
+
+            with set_current_client(iris_client):
+                handle = iris_client.submit(
+                    JobRequest(
+                        name=f"marin-itest-{uuid.uuid4().hex[:8]}",
+                        entrypoint=Entrypoint.from_callable(
+                            _run_executor,
+                            args=(prefix, synth_data),
+                        ),
+                        resources=ResourceConfig.with_cpu(),
+                        environment=create_environment(env_vars=env_vars),
+                    )
                 )
-            )
-            handle.wait(raise_on_failure=True)
+                handle.wait(raise_on_failure=True)
+        else:
+            # Local cluster: run in-process (local filesystem is accessible).
+            with set_current_client(iris_client):
+                executor_main(config, steps=steps)
     finally:
         cleanup()
