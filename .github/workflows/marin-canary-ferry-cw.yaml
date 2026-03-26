@@ -185,6 +185,15 @@ jobs:
       # `cluster stop` only deletes Pods; NodePools survive and rely on the
       # CW autoscaler to scale down. Delete them explicitly to avoid lingering
       # H100 costs.
+      - name: Notify Slack on failure
+        if: failure() && github.event_name == 'schedule'
+        uses: slackapi/slack-github-action@v2
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            text: ":red_circle: *GPU Canary failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
       - name: Tear down CoreWeave cluster
         if: always()
         run: |

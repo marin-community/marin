@@ -148,3 +148,12 @@ jobs:
           echo "=== Job list ==="
           .venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job list --json 2>/dev/null | jq '.[0:5]' || true
+
+      - name: Notify Slack on failure
+        if: failure() && github.event_name == 'schedule'
+        uses: slackapi/slack-github-action@v2
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            text: ":red_circle: *TPU Canary failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
