@@ -1240,12 +1240,20 @@ class ControllerDB:
         return value
 
     def backup_to(self, destination: Path) -> None:
-        """Create a hot backup to ``destination`` using SQLite backup API."""
+        """Create a hot backup to ``destination`` using SQLite backup API.
+
+        The source DB uses WAL journal mode, but the backup API copies
+        the WAL flag into the destination header.  We switch the
+        destination to DELETE mode so the result is a single
+        self-contained file (no -wal/-shm sidecars) that survives
+        compression and remote upload without corruption.
+        """
         destination.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
             dest = sqlite3.connect(str(destination))
             try:
                 self._conn.backup(dest)
+                dest.execute("PRAGMA journal_mode = DELETE")
                 dest.commit()
             finally:
                 dest.close()
