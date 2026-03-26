@@ -127,7 +127,7 @@ jobs:
               echo "port-forward process died unexpectedly"
               exit 1
             fi
-            if curl -sf "$IRIS_CONTROLLER_URL/healthz" > /dev/null 2>&1; then
+            if curl -sf "$IRIS_CONTROLLER_URL/health" > /dev/null 2>&1; then
               HEALTHY=true
               break
             fi
