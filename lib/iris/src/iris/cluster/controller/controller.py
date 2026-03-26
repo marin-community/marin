@@ -675,6 +675,9 @@ class ControllerConfig:
     auth: ControllerAuth | None = None
     """Full auth config passed to the service layer for login and API key management."""
 
+    dry_run: bool = False
+    """Start in dry-run mode: compute scheduling but suppress all side effects."""
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
@@ -832,12 +835,15 @@ class Controller:
     def start(self) -> None:
         """Start main controller loop, dashboard server, and optionally autoscaler."""
         self._started = True
+        if self._config.dry_run:
+            logger.info("[DRY-RUN] Controller started in dry-run mode — all side effects suppressed")
         if isinstance(self._provider, K8sTaskProvider):
             self._heartbeat_thread = self._threads.spawn(self._run_direct_provider_loop, name="provider-loop")
         else:
             self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
             self._heartbeat_thread = self._threads.spawn(self._run_provider_loop, name="provider-loop")
-            self._profile_thread = self._threads.spawn(self._run_profile_loop, name="profile-loop")
+            if not self._config.dry_run:
+                self._profile_thread = self._threads.spawn(self._run_profile_loop, name="profile-loop")
 
         # Create and start uvicorn server via spawn_server, which bridges the
         # ManagedThread stop_event to server.should_exit automatically.
@@ -912,6 +918,8 @@ class Controller:
 
     def _atexit_checkpoint(self) -> None:
         """Best-effort checkpoint at interpreter shutdown for post-mortem analysis."""
+        if self._config.dry_run:
+            return
         try:
             path, _result = write_checkpoint(self._db, self._config.remote_state_dir)
             logger.info("atexit checkpoint written: %s", path)
@@ -937,6 +945,8 @@ class Controller:
 
     def _maybe_prune(self) -> None:
         """Run a data pruning sweep if the rate limiter allows."""
+        if self._config.dry_run:
+            return
         if not self._prune_limiter.should_run():
             return
         try:
@@ -964,10 +974,11 @@ class Controller:
                 logger.exception("Autoscaler loop iteration failed")
 
             if self._periodic_checkpoint_limiter is not None and self._periodic_checkpoint_limiter.should_run():
-                try:
-                    write_checkpoint(self._db, self._config.remote_state_dir)
-                except Exception:
-                    logger.exception("Periodic checkpoint failed")
+                if not self._config.dry_run:
+                    try:
+                        write_checkpoint(self._db, self._config.remote_state_dir)
+                    except Exception:
+                        logger.exception("Periodic checkpoint failed")
 
     def _run_provider_loop(self, stop_event: threading.Event) -> None:
         """Provider sync loop on its own thread so slow RPCs don't block scheduling."""
@@ -1003,6 +1014,8 @@ class Controller:
                 logger.exception("Direct provider sync round failed, will retry next interval")
 
     def _sync_direct_provider(self) -> None:
+        if self._config.dry_run:
+            return
         assert isinstance(self._provider, K8sTaskProvider)
         provider = self._provider
         with self._heartbeat_lock:
@@ -1225,7 +1238,10 @@ class Controller:
         claims_changed = self._cleanup_stale_claims(claims)
         claims_changed = self._claim_workers_for_reservations(claims) or claims_changed
         if claims_changed:
-            self._transitions.replace_reservation_claims(claims)
+            if self._config.dry_run:
+                logger.info("[DRY-RUN] Would update %d reservation claims", len(claims))
+            else:
+                self._transitions.replace_reservation_claims(claims)
 
         timer = Timer()
         with slow_log(logger, "scheduling state reads", threshold_ms=50):
@@ -1361,6 +1377,10 @@ class Controller:
         assignments: list[tuple[JobName, WorkerId]],
     ) -> None:
         """Commit assignments and enqueue worker dispatches in one state command."""
+        if self._config.dry_run:
+            for task_id, worker_id in assignments:
+                logger.info("[DRY-RUN] Would assign task %s to worker %s", task_id, worker_id)
+            return
         command = [Assignment(task_id=task_id, worker_id=worker_id) for task_id, worker_id in assignments]
         result = self._transitions.queue_assignments(command)
         if result.has_real_dispatch:
@@ -1368,6 +1388,9 @@ class Controller:
 
     def _mark_task_unschedulable(self, task: Task) -> None:
         """Mark a task as unschedulable due to timeout."""
+        if self._config.dry_run:
+            logger.info("[DRY-RUN] Would mark task %s as unschedulable", task.task_id)
+            return
         job = _jobs_by_id(self._db, {task.job_id}).get(task.job_id)
         if job and job.request.HasField("scheduling_timeout"):
             timeout = Duration.from_proto(job.request.scheduling_timeout)
@@ -1397,6 +1420,9 @@ class Controller:
         heartbeat to that worker. Tasks without a worker assignment are routed
         to the direct kill queue when a K8sTaskProvider is configured.
         """
+        if self._config.dry_run:
+            logger.info("[DRY-RUN] Would kill %d tasks on workers: %s", len(task_ids), list(task_ids)[:5])
+            return
         any_buffered = False
         mapping = _task_worker_mapping(self._db, task_ids)
         workers = _workers_by_id(self._db, set(mapping.values()))
@@ -1430,6 +1456,8 @@ class Controller:
         """
         if isinstance(self._provider, K8sTaskProvider):
             return
+        if self._config.dry_run:
+            return
         threshold_ms = HEARTBEAT_STALENESS_THRESHOLD.to_ms()
         workers = healthy_active_workers_with_attributes(self._db)
         stale = [w for w in workers if w.last_heartbeat.age_ms() > threshold_ms]
@@ -1452,6 +1480,8 @@ class Controller:
                 self._autoscaler.notify_worker_failed(str(wid))
 
     def _sync_all_execution_units(self) -> None:
+        if self._config.dry_run:
+            return
         round_timer = Timer()
 
         # Phase 0: fail workers whose last heartbeat exceeds the staleness
@@ -1560,6 +1590,10 @@ class Controller:
         if not self._autoscaler:
             return
 
+        if self._config.dry_run:
+            logger.info("[DRY-RUN] Skipping autoscaler cycle (refresh + update)")
+            return
+
         worker_status_map = self._build_worker_status_map()
         self._autoscaler.refresh(worker_status_map)
         workers = healthy_active_workers_with_attributes(self._db)
@@ -1586,6 +1620,9 @@ class Controller:
 
     def begin_checkpoint(self) -> tuple[str, CheckpointResult]:
         """Pause loops and write a consistent SQLite checkpoint copy."""
+        if self._config.dry_run:
+            logger.info("[DRY-RUN] Skipping checkpoint write")
+            return ("dry-run", CheckpointResult(created_at=Timestamp.now(), job_count=0, task_count=0, worker_count=0))
         self._checkpoint_in_progress = True
         try:
             # Wait for any in-flight heartbeat round to complete.

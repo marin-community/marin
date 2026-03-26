@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Iterator
-from dataclasses import dataclass
 from enum import StrEnum, auto
 import logging
 import os
@@ -37,40 +36,16 @@ class DedupMode(StrEnum):
     """
 
 
-@dataclass
-class DupCounters:
-    # TODO (rav): make both method and level Enums
-    method: str
-    level: str
-    total: int = 0
-    dups: int = 0
-    unique: int = 0
-
-    def __add__(self, other: "DupCounters") -> "DupCounters":
-        assert isinstance(other, DupCounters)
-
-        return DupCounters(
-            method=self.method,
-            level=self.level,
-            total=self.total + other.total,
-            dups=self.dups + other.dups,
-            unique=self.unique + other.unique,
-        )
-
-    def __str__(self) -> str:
-        if self.total == 0:
-            return f"{self.level} total: 0"
-        return (
-            f"{self.method.capitalize()} {self.level.lower()} total: {self.total:,}, "
-            f"dups: {self.dups:,} ({self.dups / self.total:.2%}), unique: {self.unique:,}"
-        )
-
-    def to_dict(self):
-        return {
-            f"dedup/{self.method}/{self.level}/total": self.total,
-            f"dedup/{self.method}/{self.level}/dups": self.dups,
-            f"dedup/{self.method}/{self.level}/unique": self.unique,
-        }
+def _aggregate_shard_counters(shard_results: list[dict], method: str, level: str) -> dict[str, int]:
+    """Aggregate per-shard counter dicts into a single counter dict."""
+    total = sum(r["total"] for r in shard_results)
+    dups = sum(r["dups"] for r in shard_results)
+    unique = sum(r["unique"] for r in shard_results)
+    return {
+        f"dedup/{method}/{level}/total": total,
+        f"dedup/{method}/{level}/dups": dups,
+        f"dedup/{method}/{level}/unique": unique,
+    }
 
 
 def group_files(files: list[str], num_groups: int) -> list[list[str]]:
