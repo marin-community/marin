@@ -56,6 +56,7 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.jax_utils import best_effort_sharding, sync_global_devices, use_cpu_device
+from levanter.utils.hf_export import GenerationConfigDict
 from levanter.utils.json_utils import ConfigJSONEncoder
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.py_utils import dataclass_with_default_init
@@ -881,6 +882,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         max_shard_size: int = DEFAULT_MAX_SHARD_SIZE,
         save_feature_extractor: bool = False,
         dtype: Optional[jnp.dtype] = None,
+        generation_config: Optional[GenerationConfigDict] = None,
         **hf_upload_kwargs,
     ):
         """
@@ -1055,6 +1057,13 @@ class HFCheckpointConverter(Generic[LevConfig]):
             with open(os.path.join(local_path, "config.json"), "w") as f:
                 json.dump(dict_config, f, cls=ConfigJSONEncoder)
 
+            if generation_config is not None:
+                logger.info(
+                    "Writing generation_config.json with eos_token_id=%s", generation_config.get("eos_token_id")
+                )
+                with open(os.path.join(local_path, "generation_config.json"), "w") as f:
+                    json.dump(generation_config, f)
+
             if index is not None:
                 with open(os.path.join(local_path, SAFE_TENSORS_INDEX_NAME), "w") as f:
                     json.dump(index, f)
@@ -1149,6 +1158,7 @@ def save_hf_checkpoint_callback(
     converter: HFCheckpointConverter,
     upload_to_hf: Union[bool, str, RepoRef] = False,
     save_dtype: Optional[jnp.dtype] = None,
+    generation_config: Optional[GenerationConfigDict] = None,
     **hf_upload_kwargs,
 ):
     """
@@ -1176,6 +1186,7 @@ def save_hf_checkpoint_callback(
             os.path.join(base_path, f"step-{step.step}"),
             upload_to_hf=upload_to_hf,
             dtype=save_dtype,
+            generation_config=generation_config,
             **my_upload_kwargs,
         )
 

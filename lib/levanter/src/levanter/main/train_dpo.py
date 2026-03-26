@@ -32,6 +32,7 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.metrics import Metric, ReductionType
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
+from levanter.utils.hf_export import build_generation_config
 from levanter.utils.jax_utils import parameter_count, use_cpu_device
 from levanter.utils.tree_utils import inference_mode
 
@@ -231,6 +232,7 @@ class TrainDpoConfig:
     hf_upload: Optional[str] = None
     hf_save_steps: int = 10000
     hf_save_dtype: Optional[str] = None
+    hf_generation_eos_token_ids: Optional[list[int]] = None
 
     data_seed: Optional[int] = None
     initialize_from_checkpoint_path: Optional[str] = None
@@ -241,6 +243,8 @@ def main(config: TrainDpoConfig):
         raise ValueError("reference_model_path must be provided for DPO training.")
 
     tokenizer = config.data.the_tokenizer
+
+    _generation_config = build_generation_config(tokenizer, config.hf_generation_eos_token_ids)
 
     if config.initialize_from_hf:
         if config.trainer.initialize_from is not None:
@@ -472,6 +476,7 @@ def main(config: TrainDpoConfig):
                     os.path.join(full_save_path, f"step-{step.step}"),
                     upload_to_hf=upload_to_hf,
                     dtype=save_dtype,
+                    generation_config=_generation_config,
                     **hf_upload_kwargs,
                 )
 

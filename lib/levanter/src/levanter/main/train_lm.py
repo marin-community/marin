@@ -29,6 +29,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
+from levanter.utils.hf_export import build_generation_config
 from levanter.utils.jax_utils import parameter_count
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ class TrainLmConfig:
     hf_upload: Optional[str] = None
     hf_save_steps: int = 10000
     hf_save_dtype: Optional[str] = None
+    hf_generation_eos_token_ids: Optional[list[int]] = None
 
     data_seed: Optional[int] = None  # if provided, will override the data seed from the trainer
     initialize_from_checkpoint_path: Optional[str] = None
@@ -264,9 +266,15 @@ def main(config: TrainLmConfig):
                 except TypeError:
                     logger.warning(f"Invalid hf_save_dtype: {config.hf_save_dtype}. Defaulting to None.")
 
+            _generation_config = build_generation_config(tokenizer, config.hf_generation_eos_token_ids)
+
             trainer.add_hook(
                 save_hf_checkpoint_callback(
-                    full_save_path, converter, upload_to_hf=config.hf_upload or False, save_dtype=save_dtype
+                    full_save_path,
+                    converter,
+                    upload_to_hf=config.hf_upload or False,
+                    save_dtype=save_dtype,
+                    generation_config=_generation_config,
                 ),
                 every=config.hf_save_steps,
             )
