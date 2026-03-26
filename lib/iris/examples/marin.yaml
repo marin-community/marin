@@ -42,7 +42,7 @@ scale_groups:
     priority: 1000
     resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, preemptible: false }
     min_slices: 0
-    max_slices: 1
+    max_slices: 4
     slice_template:
       gcp:
         mode: GCP_SLICE_MODE_VM
