@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "62931db00f1c",
+  "strategy": "manual-commit",
+  "branch": "kevin/sft",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "experiments/exp_menvdata_sft_qwen3_8b.py",
+    "experiments/posttrain/instruction_datasets.py",
+    "lib/marin/src/marin/transform/conversation/adapters.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/62/931db00f1c/0/metadata.json",
+      "transcript": "/62/931db00f1c/0/full.jsonl",
+      "context": "/62/931db00f1c/0/context.md",
+      "content_hash": "/62/931db00f1c/0/content_hash.txt",
+      "prompt": "/62/931db00f1c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1140,
+    "cache_creation_tokens": 9428984,
+    "cache_read_tokens": 301428988,
+    "output_tokens": 245580,
+    "api_call_count": 789
+  }
+}
