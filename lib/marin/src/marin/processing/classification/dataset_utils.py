@@ -74,37 +74,35 @@ def make_json_serializable(row: dict) -> dict:
 
 
 def read_dataset_streaming(input_filename: str, columns: list[str] | None = None):
-    """Read in a dataset as a streaming iterator using datasets library
+    """Read a dataset as a streaming iterator using fsspec.
 
     Args:
-        input_filename: str
-            The path to the input file. Currently supports .jsonl.gz, .jsonl.zst, and .parquet
+        input_filename: Path to the input file. Supports .jsonl(.gz/.zst) and .parquet.
 
-    Returns:
-        Iterator: An iterator over the dataset rows
+    Yields:
+        dict: One row per iteration, filtered to `columns` if specified.
     """
-    import datasets
-
-    # Disable caching for streaming
-    datasets.disable_caching()
-    datasets.logging.set_verbosity_warning()
-
-    # Determine file type and load with streaming
     if input_filename.endswith((".jsonl.gz", ".jsonl.zst", ".jsonl")):
-        # Load as JSON lines with streaming
-        dataset = datasets.load_dataset("json", data_files=input_filename, streaming=True, split="train")
+        with open_url(input_filename, "rt", compression="infer") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                if columns:
+                    row = {k: row[k] for k in columns if k in row}
+                yield row
     elif input_filename.endswith(".parquet"):
-        # Load parquet with streaming
-        dataset = datasets.load_dataset("parquet", data_files=input_filename, streaming=True, split="train")
+        import pyarrow.parquet as pq
+
+        fs, fs_path = url_to_fs(input_filename)
+        pf = pq.ParquetFile(fs.open(fs_path, "rb"))
+        for batch in pf.iter_batches(columns=columns):
+            col_dict = batch.to_pydict()
+            for i in range(batch.num_rows):
+                yield {k: col_dict[k][i] for k in col_dict}
     else:
         raise ValueError(f"Unsupported filetype: {input_filename}")
-
-    # Filter columns if specified
-    if columns:
-        dataset = dataset.select_columns(columns)
-
-    # Yield rows from the streaming dataset
-    yield from dataset
 
 
 def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = False):
