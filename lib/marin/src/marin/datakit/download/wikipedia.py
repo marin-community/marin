@@ -90,16 +90,15 @@ def process_file(input_file: str, output_path: str) -> Iterable[str]:
         raise e
 
 
-def download_wikipedia(input_urls: list[str], revision: str, output_path: str) -> None:
+def download_wikipedia(input_urls: list[str], output_path: str) -> None:
     """Download and process Wikipedia data."""
     logger.info("Starting transfer of Wikipedia dump...")
-    output_base = os.path.join(output_path, revision)
 
     ctx = ZephyrContext(name="download-wikipedia")
     download_metrics = ctx.execute(
         Dataset.from_list(input_urls)
-        .map(lambda url: download_tar(url, output_base))
-        .write_jsonl(f"{output_base}/.metrics/download-{{shard:05d}}.jsonl", skip_existing=True),
+        .map(lambda url: download_tar(url, output_path))
+        .write_jsonl(f"{output_path}/.metrics/download-{{shard:05d}}.jsonl", skip_existing=True),
     )
 
     # load all of the output filenames to process
@@ -107,36 +106,27 @@ def download_wikipedia(input_urls: list[str], revision: str, output_path: str) -
 
     extracted = ctx.execute(
         Dataset.from_list(downloads)
-        .flat_map(lambda file: process_file(file, output_base))
-        .write_jsonl(f"{output_base}/.metrics/process-{{shard:05d}}.jsonl", skip_existing=True),
+        .flat_map(lambda file: process_file(file, output_path))
+        .write_jsonl(f"{output_path}/.metrics/process-{{shard:05d}}.jsonl", skip_existing=True),
     )
 
     logger.info("Wikipedia dump transfer complete, wrote: %s", list(extracted))
 
 
-ENWIKI_20241201_URL = (
-    "https://dumps.wikimedia.org/other/enterprise_html/runs/20241201/" "enwiki-NS0-20241201-ENTERPRISE-HTML.json.tar.gz"
-)
-
-
 def download_wikipedia_step(
     *,
     input_urls: list[str] | None = None,
-    revision: str = "20241201",
 ) -> StepSpec:
-    """Download Wikipedia HTML dumps.
-
-    Defaults to the English Wikipedia 20241201 dump which is already
-    downloaded at ``raw/wikipedia-a7dad0``.
-    """
-    urls = input_urls or [ENWIKI_20241201_URL]
+    """Download Wikipedia HTML dumps"""
 
     def _run(output_path: str) -> None:
-        download_wikipedia(urls, revision, output_path)
+        assert input_urls is not None, "input_urls must be provided to download Wikipedia data"
+        download_wikipedia(input_urls, output_path)
 
     return StepSpec(
         name="raw/wikipedia",
         fn=_run,
-        hash_attrs={"input_urls": urls, "revision": revision},
-        override_output_path="raw/wikipedia-a7dad0",
+        hash_attrs={"input_urls": input_urls},
+        # NOTE: if no inputs are provided, use the previously downloaded and no longer exposed 2024-12-01 data
+        override_output_path="raw/wikipedia-9273e1" if input_urls is None else None,
     )
