@@ -11,21 +11,39 @@ After the run completes, check the HF checkpoint output for generation_config.js
 Expected content: {"eos_token_id": [128001, 128009], "bos_token_id": 128000}
 """
 
-from experiments.defaults import default_dpo
+from levanter.data.text import PreferenceChatLmDatasetFormat
+
+from experiments.defaults import default_dpo, default_tokenize
 from experiments.llama import LLAMA3_CHAT_STOP_TOKEN_IDS, llama_8b
 from experiments.marin_models import marin_tokenizer
+from experiments.posttrain.preference_datasets import get_preference_dataset
 from experiments.simple_dpo_config import SimpleDPOConfig
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_data_config
 
-# Use pre-tokenized bloom speceval v2 data already on us-east5
-TRAIN_CACHE = "gs://marin-us-east5/tokenized/bloom_speceval_v2_train_prefs_marin_tokenizer-12920b"
-VAL_CACHE = "gs://marin-us-east5/tokenized/bloom_speceval_v2_val_prefs_marin_tokenizer-a06ae8"
+DATASET_NAME = "HuggingFaceH4/ultrafeedback_binarized"
+
+preference_dataset = get_preference_dataset(DATASET_NAME, splits=["train_prefs", "test_prefs"])
+
+tokenized_train = default_tokenize(
+    name="ultrafeedback_binarized_train_prefs_marin_tokenizer",
+    dataset=preference_dataset / "train_prefs/*.jsonl.gz",
+    tokenizer=marin_tokenizer,
+    format=PreferenceChatLmDatasetFormat(),
+)
+
+tokenized_val = default_tokenize(
+    name="ultrafeedback_binarized_test_prefs_marin_tokenizer",
+    dataset=preference_dataset / "test_prefs/*.jsonl.gz",
+    tokenizer=marin_tokenizer,
+    format=PreferenceChatLmDatasetFormat(),
+    is_validation=True,
+)
 
 tokenized_preferences = lm_data_config(
-    training_set=TRAIN_CACHE,
-    validation_sets={"bloom_speceval_v2_val": VAL_CACHE},
+    training_set=tokenized_train,
+    validation_sets={"ultrafeedback_test_prefs": tokenized_val},
 )
 
 dpo_config = SimpleDPOConfig(
@@ -61,4 +79,11 @@ training_step = default_dpo(
 
 
 if __name__ == "__main__":
-    executor_main(steps=[training_step])
+    executor_main(
+        steps=[
+            preference_dataset,
+            tokenized_train,
+            tokenized_val,
+            training_step,
+        ]
+    )
