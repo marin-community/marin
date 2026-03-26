@@ -518,6 +518,7 @@ class _ShardBuffer:
 
     shard_idx: int
     pickled: bool = False
+    has_sort: bool = False
     pending: list[tuple[Any, Any, Any | None]] = field(default_factory=list)
     tables: list[pa.RecordBatch] = field(default_factory=list)
     nbytes: int = 0
@@ -534,14 +535,13 @@ class _ShardBuffer:
         if not self.pending:
             return
         items, keys, sorts = zip(*self.pending, strict=True)
-        has_sort = sorts[0] is not None
         envelope_fn = _make_pickle_envelope if self.pickled else _make_envelope
         enveloped = envelope_fn(
             list(items),
             self.shard_idx,
             self.chunk_idx,
             list(keys),
-            list(sorts) if has_sort else None,
+            list(sorts) if self.has_sort else None,
         )
         batch = pa.RecordBatch.from_pylist(enveloped, schema=self.schema)
         if self.schema is None:
@@ -629,7 +629,7 @@ def _write_parquet_scatter(
 
     def _get_buffer(target: int) -> _ShardBuffer:
         if target not in buffers:
-            buffers[target] = _ShardBuffer(shard_idx=target, pickled=pickled)
+            buffers[target] = _ShardBuffer(shard_idx=target, pickled=pickled, has_sort=sort_fn is not None)
         return buffers[target]
 
     def _flush_pending() -> None:
@@ -694,7 +694,7 @@ def _write_parquet_scatter(
                 py_items = [pickle.loads(b) for b in py_items]
             combined = _apply_combiner(py_items, key_fn, combiner_fn)
             # Re-create a fresh buffer from combined items
-            combined_buf = _ShardBuffer(shard_idx=buf.shard_idx, pickled=pickled)
+            combined_buf = _ShardBuffer(shard_idx=buf.shard_idx, pickled=pickled, has_sort=sort_fn is not None)
             combined_buf.chunk_idx = buf.chunk_idx
             for item in combined:
                 k = key_fn(item)

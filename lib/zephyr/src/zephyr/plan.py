@@ -179,16 +179,27 @@ def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
 
 
 def _find_group_boundaries(key_col: pa.ChunkedArray) -> Iterator[tuple[int, int, Any]]:
-    """Yield (start, end, key_value) for each contiguous group in a sorted key column."""
+    """Yield (start, end, key_value) for each contiguous group in a sorted key column.
+
+    Uses Arrow compute to find boundaries vectorized instead of per-element
+    Python scalar extraction, which matters for high-cardinality keys.
+    """
     arr = key_col.combine_chunks()
     n = len(arr)
     if n == 0:
         return
+    if n == 1:
+        yield (0, 1, arr[0].as_py())
+        return
+
+    # Vectorized boundary detection: compare adjacent elements
+    ne_mask = pc.not_equal(arr[:-1], arr[1:])
+    boundary_indices = pc.filter(pa.array(range(1, n), type=pa.int64()), ne_mask).to_pylist()
+
     prev = 0
-    for i in range(1, n):
-        if arr[i].as_py() != arr[prev].as_py():
-            yield (prev, i, arr[prev].as_py())
-            prev = i
+    for idx in boundary_indices:
+        yield (prev, idx, arr[prev].as_py())
+        prev = idx
     yield (prev, n, arr[prev].as_py())
 
 
@@ -223,7 +234,12 @@ def _arrow_reduce_gen(
         ScatterShard,
         _ZEPHYR_SHUFFLE_ITEM_COL,
         _ZEPHYR_SHUFFLE_SORT_KEY_COL,
+        _ZEPHYR_SHUFFLE_SORT_SECONDARY_COL,
     )
+
+    assert not any(
+        it.is_pickled for it in shard.iterators
+    ), "_arrow_reduce_gen requires non-pickled items; use _reduce_gen which routes pickled shards to the Python path"
 
     use_external = (
         external_sort_dir is not None
@@ -233,6 +249,10 @@ def _arrow_reduce_gen(
 
     if use_external:
         sort_keys: list[tuple[str, str]] = [(_ZEPHYR_SHUFFLE_SORT_KEY_COL, "ascending")]
+        # Peek at the first chunk table to check for secondary sort column
+        first_tables = list(islice((t for it in shard.iterators for t in it.get_chunk_tables()), 1))
+        if first_tables and _ZEPHYR_SHUFFLE_SORT_SECONDARY_COL in first_tables[0].column_names:
+            sort_keys.append((_ZEPHYR_SHUFFLE_SORT_SECONDARY_COL, "ascending"))
         logger.info(
             "Arrow external sort triggered for shard with %d iterators, spilling to %s",
             sum(it.chunk_count for it in shard.iterators),
@@ -243,7 +263,11 @@ def _arrow_reduce_gen(
             for it in shard.iterators:
                 yield from it.get_chunk_tables()
 
+        has_secondary = len(sort_keys) > 1
+
         def _merge_key(row: dict) -> Any:
+            if has_secondary:
+                return (row[_ZEPHYR_SHUFFLE_SORT_KEY_COL], row.get(_ZEPHYR_SHUFFLE_SORT_SECONDARY_COL))
             return row[_ZEPHYR_SHUFFLE_SORT_KEY_COL]
 
         merged_stream = external_sort_merge_arrow(
