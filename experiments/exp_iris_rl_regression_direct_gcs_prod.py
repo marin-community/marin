@@ -42,6 +42,11 @@ MODEL_PATH = "gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0
 MARIN_PREFIX = "gs://marin-us-central1"
 DEFAULT_SUFFIX = "e4p"
 DEFAULT_NUM_TRAIN_STEPS = 500
+PROD_TPU_WORKER_RAM = "400g"
+DEFAULT_N_PROMPTS = 16
+DEFAULT_EVAL_FREQUENCY = 1
+DEFAULT_REGION = "us-central1"
+DEFAULT_NUM_ROLLOUT_WORKERS = 1
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,6 +61,34 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_NUM_TRAIN_STEPS,
         help="Number of trainer steps for the direct + GCS + prod probe.",
+    )
+    parser.add_argument(
+        "--n-prompts",
+        type=int,
+        default=DEFAULT_N_PROMPTS,
+        help="Number of prompts sampled per rollout batch.",
+    )
+    parser.add_argument(
+        "--eval-frequency",
+        type=int,
+        default=DEFAULT_EVAL_FREQUENCY,
+        help="Full-eval cadence in rollout-worker iterations.",
+    )
+    parser.add_argument(
+        "--region",
+        default=DEFAULT_REGION,
+        help="Concrete region for trainer and rollout TPU jobs.",
+    )
+    parser.add_argument(
+        "--inflight-weight-updates",
+        action="store_true",
+        help="Enable inflight rollout weight updates.",
+    )
+    parser.add_argument(
+        "--num-rollout-workers",
+        type=int,
+        default=DEFAULT_NUM_ROLLOUT_WORKERS,
+        help="Number of rollout worker jobs to launch.",
     )
     return parser.parse_args()
 
@@ -90,15 +123,15 @@ def main() -> None:
                 dependencies=[],
                 sampling_params=CurriculumSamplingParams(
                     temperature=1.0,
-                    n_prompts=16,
+                    n_prompts=args.n_prompts,
                     n_generations_per_prompt=16,
                     max_output_tokens=1024,
                     top_k=4096,
                 ),
             ),
         },
-        eval_frequency=1,
-        micro_eval_frequency=9999999,
+        eval_frequency=args.eval_frequency,
+        micro_eval_frequency=None,
         actor_name=f"curriculum-{name}",
         eval_n_examples=500,
         max_seq_len=2048,
@@ -172,12 +205,16 @@ def main() -> None:
             max_weight_transfer_wait_time=0,
             coordinator_name=f"wt-coord-{name}",
         ),
+        inflight_weight_updates=args.inflight_weight_updates,
         run_id=name,
         log_freq=1,
         run_config=RunConfig(
             train_tpu_type="v5p-8",
-            num_rollout_workers=1,
+            num_rollout_workers=args.num_rollout_workers,
             inference_tpu_type="v5p-8",
+            train_ram=PROD_TPU_WORKER_RAM,
+            inference_ram=PROD_TPU_WORKER_RAM,
+            regions=[args.region],
         ),
         rollout_tracker=RolloutTrackerConfig(
             project="marin_iris_rl_debug",
@@ -187,7 +224,16 @@ def main() -> None:
         pip_dependency_groups=["vllm", "math"],
     )
 
-    logger.info("Running E4 direct + GCS + prod probe: %s", name)
+    logger.info(
+        "Running E4 direct + GCS + prod probe: %s "
+        "(n_prompts=%d, eval_frequency=%d, inflight=%s, rollout_workers=%d, region=%s)",
+        name,
+        args.n_prompts,
+        args.eval_frequency,
+        args.inflight_weight_updates,
+        args.num_rollout_workers,
+        args.region,
+    )
     _run_rl_coordinator(job_config)
 
 

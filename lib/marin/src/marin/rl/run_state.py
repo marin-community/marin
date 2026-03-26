@@ -5,11 +5,13 @@
 
 Tracks whether the training run is running, completed, or failed.
 Rollout workers poll this to know when to shut down. The trainer
-signals completion or failure. This is separate from weight transfer
-coordination — lifecycle is its own concern.
+signals completion or failure and publishes the latest completed
+training step. This is separate from weight transfer coordination;
+lifecycle is its own concern.
 """
 
 import logging
+from dataclasses import dataclass
 from enum import StrEnum
 
 logger = logging.getLogger(__name__)
@@ -21,6 +23,15 @@ class RunStatus(StrEnum):
     FAILED = "failed"
 
 
+@dataclass(frozen=True)
+class RunStateSnapshot:
+    """Current RL run status and latest completed trainer step."""
+
+    status: str
+    train_step: int
+    failure_message: str | None
+
+
 class RLRunState:
     """Lightweight actor that tracks RL run lifecycle.
 
@@ -30,12 +41,27 @@ class RLRunState:
     def __init__(self):
         self._status: RunStatus = RunStatus.RUNNING
         self._failure_message: str | None = None
+        self._train_step: int = -1
 
     def get_status(self) -> str:
         return self._status.value
 
+    def get_snapshot(self) -> RunStateSnapshot:
+        return RunStateSnapshot(
+            status=self._status.value,
+            train_step=self._train_step,
+            failure_message=self._failure_message,
+        )
+
     def is_terminal(self) -> bool:
         return self._status != RunStatus.RUNNING
+
+    def update_train_step(self, step: int) -> None:
+        if step > self._train_step:
+            self._train_step = step
+
+    def get_train_step(self) -> int:
+        return self._train_step
 
     def mark_completed(self) -> None:
         if self._status == RunStatus.RUNNING:

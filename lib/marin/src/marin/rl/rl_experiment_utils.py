@@ -121,6 +121,8 @@ class RLExperimentConfig:
     inference_tpu_type: str = "v5p-8"
     num_train_slices: int = 1
     num_rollout_workers: int = 1
+    train_ram: str | None = None
+    inference_ram: str | None = None
 
 
 def launcher_region_for_rl_experiment(config: RLExperimentConfig) -> str:
@@ -302,6 +304,8 @@ def _build_rl_job_config(
             num_train_slices=config.num_train_slices,
             num_rollout_workers=config.num_rollout_workers,
             inference_tpu_type=config.inference_tpu_type,
+            train_ram=config.train_ram,
+            inference_ram=config.inference_ram,
             regions=singleton_region_list(launcher_region_for_rl_experiment(config)),
         ),
         inflight_weight_updates=config.inflight_weight_updates,

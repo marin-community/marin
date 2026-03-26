@@ -53,6 +53,12 @@ class RunConfig:
     num_train_slices: int = 1
     """Number of TPU slices for training worker"""
 
+    train_ram: str | None = None
+    """Optional host-RAM request override for training workers (e.g. ``"300g"``)."""
+
+    inference_ram: str | None = None
+    """Optional host-RAM request override for rollout/inference workers."""
+
     regions: list[str] | None = None
     """Concrete region(s) to use for all RL worker jobs."""
 

@@ -138,12 +138,22 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
             tpu_regions = list(run_config.regions)
         else:
             tpu_regions = singleton_region_list(resolve_launcher_region(run_config.train_tpu_type, inference_tpu_type))
+        train_resource_kwargs: dict[str, object] = {"regions": tpu_regions}
+        if run_config.train_ram is not None:
+            train_resource_kwargs["ram"] = run_config.train_ram
         train_resources = ResourceConfig.with_tpu(
             run_config.train_tpu_type,
             slice_count=run_config.num_train_slices,
-            regions=tpu_regions,
+            **train_resource_kwargs,
         )
-        rollout_resources = ResourceConfig.with_tpu(inference_tpu_type, regions=tpu_regions)
+
+        rollout_resource_kwargs: dict[str, object] = {"regions": tpu_regions}
+        if run_config.inference_ram is not None:
+            rollout_resource_kwargs["ram"] = run_config.inference_ram
+        rollout_resources = ResourceConfig.with_tpu(
+            inference_tpu_type,
+            **rollout_resource_kwargs,
+        )
 
         # Submit child jobs
         jobs: list[JobHandle] = []

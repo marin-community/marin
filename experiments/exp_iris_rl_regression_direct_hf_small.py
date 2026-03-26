@@ -74,7 +74,7 @@ def main() -> None:
             ),
         },
         eval_frequency=5,
-        micro_eval_frequency=9999999,
+        micro_eval_frequency=None,
         actor_name=f"curriculum-{name}",
         eval_n_examples=10,
         max_seq_len=1024,

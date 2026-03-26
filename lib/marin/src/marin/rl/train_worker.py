@@ -367,7 +367,7 @@ class TrainWorker:
         )
 
         def _update_current_step(info: levanter.callbacks.StepInfo):
-            self.replay_buffer.set_current_step(info.step)
+            self._record_train_step(info.step)
 
         trainer.add_hook(_update_current_step, every=1)
 
@@ -433,6 +433,11 @@ class TrainWorker:
                 logger.error(f"Failed to save curriculum checkpoint: {e}")
 
         trainer.add_hook(_curriculum_checkpoint_hook, every=self.config.curriculum_config.checkpoint_steps)
+
+    def _record_train_step(self, step: int) -> None:
+        """Publish the latest completed trainer step to local and shared state."""
+        self.replay_buffer.set_current_step(step)
+        self._runtime.run_state.update_train_step.remote(step)
 
     def weight_transfer_hook(self, trainer: Trainer, info: levanter.callbacks.StepInfo):
         step = info.step

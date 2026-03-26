@@ -84,3 +84,34 @@ def test_run_rl_coordinator_shuts_down_hosted_actors_when_child_job_fails(monkey
 
     assert len(client.submissions) == 2
     assert shutdown_calls == ["weight-transfer", "run-state", "curriculum"]
+
+
+def test_run_rl_coordinator_uses_run_config_ram_overrides(monkeypatch):
+    client = _FakeClient()
+    hosted_runtime = _HostedRuntime(runtime=SimpleNamespace(), hosted_actors=[])
+    config = SimpleNamespace(
+        run_id="rl-test",
+        pip_dependency_groups=["math"],
+        run_config=RunConfig(
+            train_tpu_type="v5p-8",
+            inference_tpu_type="v5p-8",
+            num_rollout_workers=1,
+            train_ram="300g",
+            inference_ram="300g",
+            regions=["us-central1"],
+        ),
+    )
+
+    monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
+    monkeypatch.setattr("marin.rl.orchestration.RLJob", _FakeRLJob)
+    monkeypatch.setattr(
+        "marin.rl.orchestration._create_runtime_handles",
+        lambda _client, _config: hosted_runtime,
+    )
+    monkeypatch.setattr("marin.rl.orchestration.wait_all", lambda _jobs, raise_on_failure: None)
+
+    _run_rl_coordinator(config)
+
+    assert len(client.submissions) == 2
+    assert client.submissions[0].resources.ram == "300g"
+    assert client.submissions[1].resources.ram == "300g"

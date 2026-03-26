@@ -124,13 +124,16 @@ class CurriculumConfig:
     """Maximum total sequence length (prompt + response) for training batches."""
 
     eval_frequency: int = 100
-    """How often to run full evaluation across all lessons (in rollout worker steps)."""
+    """How often to run full evaluation across all lessons (in completed trainer steps)."""
 
     eval_n_examples: int = 64
     """Number of examples to use for each lesson during full evaluation."""
 
-    micro_eval_frequency: int = 10
-    """How often to run micro-evaluation on the current lesson (in rollout worker steps)."""
+    micro_eval_frequency: int | None = 10
+    """How often to run micro-evaluation on the current lesson (in rollout worker steps).
+
+    Set to `None` to disable micro-evaluation explicitly.
+    """
 
     micro_eval_n_examples: int = 4
     """Number of examples for micro-evaluation (keep small for speed)."""

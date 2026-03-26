@@ -47,7 +47,13 @@ def _noop(_config: _EmptyConfig) -> None:
     return None
 
 
-def _test_config(*, train_tpu_type: str, inference_tpu_type: str) -> RLExperimentConfig:
+def _test_config(
+    *,
+    train_tpu_type: str,
+    inference_tpu_type: str,
+    train_ram: str | None = None,
+    inference_ram: str | None = None,
+) -> RLExperimentConfig:
     return RLExperimentConfig(
         model_config=ModelConfig(
             name=MODEL_NAME,
@@ -68,6 +74,8 @@ def _test_config(*, train_tpu_type: str, inference_tpu_type: str) -> RLExperimen
         experiment_name_suffix="test",
         train_tpu_type=train_tpu_type,
         inference_tpu_type=inference_tpu_type,
+        train_ram=train_ram,
+        inference_ram=inference_ram,
     )
 
 
@@ -193,6 +201,31 @@ def test_build_rl_job_config_uses_dummy_load_format_for_non_object_store_model_p
 
     assert job_config.inference_config.load_format == "dummy"
     assert job_config.inference_config.canonical_model_name == MODEL_NAME
+
+
+def test_build_rl_job_config_propagates_ram_overrides(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+
+    job_config = _build_rl_job_config(
+        name="rl-test",
+        config=_test_config(
+            train_tpu_type="v5p-8",
+            inference_tpu_type="v5p-8",
+            train_ram="300g",
+            inference_ram="300g",
+        ),
+        curriculum=_test_curriculum(),
+        model_path="gs://marin-us-central1/models/test-model",
+        output_path="gs://marin-us-central1/rl_testing/rl-test",
+    )
+
+    assert job_config.run_config.train_ram == "300g"
+    assert job_config.run_config.inference_ram == "300g"
 
 
 def test_run_rl_experiment_step_returns_serializable_path_metadata(monkeypatch):

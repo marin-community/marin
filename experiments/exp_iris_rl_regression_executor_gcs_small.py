@@ -67,7 +67,7 @@ def create_debug_curriculum(run_id: str, experiment_config: RLExperimentConfig) 
     return CurriculumConfig(
         lessons=lessons,
         eval_frequency=5,
-        micro_eval_frequency=9999999,
+        micro_eval_frequency=None,
         actor_name=f"curriculum-{run_id}",
         eval_n_examples=10,
         max_seq_len=experiment_config.max_input_tokens + experiment_config.max_output_tokens,

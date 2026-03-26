@@ -337,6 +337,43 @@ def _stage_vllm_metadata_locally(model_path: str) -> str:
     return local_dir
 
 
+def _should_run_curriculum_eval(
+    *,
+    current_train_step: int,
+    last_eval_train_step: int | None,
+    eval_frequency: int,
+    worker_index: int,
+) -> bool:
+    """Return whether full eval should run for the current completed trainer step."""
+    if eval_frequency <= 0:
+        raise ValueError("eval_frequency must be positive")
+    if worker_index != 0:
+        return False
+    if current_train_step < 0:
+        return False
+    if current_train_step % eval_frequency != 0:
+        return False
+    return current_train_step != last_eval_train_step
+
+
+def _should_run_micro_eval(
+    *,
+    rollout_step: int,
+    micro_eval_frequency: int | None,
+    worker_index: int,
+) -> bool:
+    """Return whether micro-eval should run for the current rollout step."""
+    if micro_eval_frequency is None:
+        return False
+    if micro_eval_frequency <= 0:
+        raise ValueError("micro_eval_frequency must be positive when enabled")
+    if worker_index != 0:
+        return False
+    if rollout_step <= 0:
+        return False
+    return rollout_step % micro_eval_frequency == 0
+
+
 class RolloutWorker:
     """Asynchronous inference & rollout worker for RL training.
 
@@ -382,6 +419,8 @@ class RolloutWorker:
         self._shutdown_complete = threading.Event()
         self._shutdown_condition = threading.Condition()
         self._current_weight_step: int = -2
+        self._current_train_step: int = -1
+        self._last_eval_train_step: int | None = None
 
         self._tokenizer = config.tokenizer
 
@@ -552,9 +591,10 @@ class RolloutWorker:
     def _check_run_state(self) -> bool:
         """Check if the RL run is still active. Returns False if should stop."""
         try:
-            status = self._runtime.run_state.get_status.remote().result(timeout=5.0)
-            if status in ("completed", "failed"):
-                logger.info("Run state is '%s', stopping rollout worker", status)
+            snapshot = self._runtime.run_state.get_snapshot.remote().result(timeout=5.0)
+            self._current_train_step = snapshot.train_step
+            if snapshot.status in ("completed", "failed"):
+                logger.info("Run state is '%s', stopping rollout worker", snapshot.status)
                 self._running = False
                 return False
         except Exception:
@@ -823,7 +863,11 @@ class RolloutWorker:
                     continue
 
                 # Micro-eval: feedback on current lesson
-                if step > 0 and step % self.config.curriculum_config.micro_eval_frequency == 0:
+                if _should_run_micro_eval(
+                    rollout_step=step,
+                    micro_eval_frequency=self.config.curriculum_config.micro_eval_frequency,
+                    worker_index=self.config.worker_index,
+                ):
                     if use_jax_rng:
                         rng, micro_eval_rng = jrandom.split(rng)
                     else:
@@ -836,14 +880,19 @@ class RolloutWorker:
                         step=self._current_weight_step,
                     )
 
-                # Full eval: comprehensive check on all lessons
-                # Evaluate based on the train worker step
-                if step % self.config.curriculum_config.eval_frequency == 0:
+                # Full eval: comprehensive check on all lessons once per completed trainer step.
+                if _should_run_curriculum_eval(
+                    current_train_step=self._current_train_step,
+                    last_eval_train_step=self._last_eval_train_step,
+                    eval_frequency=self.config.curriculum_config.eval_frequency,
+                    worker_index=self.config.worker_index,
+                ):
                     if use_jax_rng:
                         rng, eval_rng = jrandom.split(rng)
                     else:
                         eval_rng = py_rng.randint(0, 2**31 - 1)
-                    self._evaluate_curriculum(eval_rng, self._current_weight_step)
+                    self._evaluate_curriculum(eval_rng, self._current_train_step)
+                    self._last_eval_train_step = self._current_train_step
 
                 logger.info(f"Sampled lesson '{lesson_id}' from curriculum")
 

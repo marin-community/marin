@@ -4329,3 +4329,1419 @@ Most precise current status:
   2. the code change that removes the unnecessary zero-KL retained model copy
 - next empirical question remains unchanged:
   - is the checkpoint-step OOM fully solved by dropping the extra model copy, or does checkpoint save still need its own ablation?
+
+## 2026-03-24 22:40 PT — second post-fix train OOM captured with live task-memory polling
+
+Current prod probe remains:
+- root: `/ahmed/irl-e4p-100r2-0324-2103`
+- active subtree run id: `e4p-20260325-042445`
+
+Status snapshot at log time:
+- root job: `RUNNING`
+  - `preemption_count=1`
+- train child: `RUNNING`
+  - `failure_count=2`
+- rollout child: `RUNNING`
+
+This matters because it proves the zero-KL memory reduction did **not** eliminate the checkpoint/save-time OOM family. The train task has now failed twice in the same subtree and is running on `attempt_id=2`.
+
+### What happened on the current subtree
+
+Train task id:
+- `/ahmed/irl-e4p-100r2-0324-2103/rl-e4p-20260325-042445-train/0`
+
+Controller state now shows three attempts:
+1. `attempt 0`
+   - `FAILED`
+   - `exit_code=137`
+   - OOM during checkpoint save at step 2
+2. `attempt 1`
+   - `FAILED`
+   - `exit_code=137`
+   - also OOMed
+3. `attempt 2`
+   - currently `RUNNING`
+
+The train job summary now reports:
+- `failure_count=2`
+- job state still `RUNNING` because Iris retried the task rather than failing the entire train child immediately
+
+### New direct evidence: live task-memory poller
+
+Added polling tools in this session:
+- `scripts/iris/poll_task_memory.py`
+- `scripts/iris/run_poll_task_memory.sh`
+
+Purpose:
+- sample Iris controller task status at a fixed cadence
+- write one JSON object per sample to JSONL
+- include UTC timestamps so we can line up memory behavior against train logs
+
+Important schema fix made immediately after first use:
+- the initial version wrote the task-level `error` field directly
+- for retrying tasks, Iris keeps the last failed attempt's error at the task level even while the current attempt is running
+- that made every sample look like a live OOM even when the current attempt was healthy
+- patched output now separates:
+  - `current_attempt_*`
+  - `last_failed_attempt_*`
+  - raw `task_*` fields
+- console output now reports the live attempt cleanly and only annotates the last failed attempt as context
+
+### Memory ramp captured for `attempt 1`
+
+Using the poller on the train task, the following samples were captured right before the second OOM/retry boundary:
+- `2026-03-25T05:35:42.745701+00:00`
+  - `attempt=1`
+  - `mem_mb=85329`
+  - `peak_mb=85329`
+- `2026-03-25T05:35:47.921789+00:00`
+  - `attempt=1`
+  - `mem_mb=102809`
+  - `peak_mb=102809`
+- `2026-03-25T05:35:53.133527+00:00`
+  - `attempt=1`
+  - `mem_mb=124006`
+  - `peak_mb=124006`
+
+Then the task transitioned:
+- `2026-03-25T05:36:13.872538+00:00`
+  - `attempt=2`
+  - `state=TASK_STATE_BUILDING`
+- `2026-03-25T05:36:19.070152+00:00`
+  - `attempt=2`
+  - `state=TASK_STATE_RUNNING`
+  - memory reset near zero as the new attempt began
+
+This is the clearest evidence so far that the second failure was a real second OOM, not just a stale controller error string.
+
+### Current live memory on `attempt 2`
+
+After the retry to `attempt 2`, current controller samples have been much lower than the failed ramp:
+- around `40-45 GB` resident
+- current sampled peak on `attempt 2` so far is in the mid-40-GB range
+
+Example controller read after retry stabilization:
+- `memory_mb=44912`
+- `memory_peak_mb=44912`
+- `current_attempt_id=2`
+- `current_attempt_state=TASK_STATE_RUNNING`
+
+So the current retry is alive and not yet near the old `~124 GB` boundary.
+
+### Interpretation
+
+What this changes:
+- before the poller, the second OOM was strongly suspected from controller retry state
+- after the poller, we have direct sample-by-sample evidence that `attempt 1` climbed to ~`124 GB` immediately before the task rolled into `attempt 2`
+
+What this does **not** yet prove:
+- the exact instantaneous peak that triggered the kernel kill
+- Iris samples every few seconds, so the true kill point could have been slightly higher than the recorded `124006 MB`
+
+But the practical conclusion is now hard to avoid:
+- even after dropping the unnecessary zero-KL retained model copy, `128 GiB` is still not enough margin for this prod train path under its current checkpoint/save behavior
+
+### Operational takeaway
+
+If the goal is to keep this exact prod probe alive without another redesign first, the obvious next trial is:
+1. relaunch with materially higher host RAM for train/rollout TPU jobs
+2. preserve the memory poller so we can verify whether the new headroom clears the old checkpoint boundary
+
+### Tooling usage recorded for next agent
+
+Foreground:
+```bash
+bash scripts/iris/run_poll_task_memory.sh \
+  /ahmed/irl-e4p-100r2-0324-2103/rl-e4p-20260325-042445-train/0
+```
+
+Detached:
+```bash
+DETACH=1 bash scripts/iris/run_poll_task_memory.sh \
+  /ahmed/irl-e4p-100r2-0324-2103/rl-e4p-20260325-042445-train/0
+```
+
+JSONL records include UTC timestamps such as:
+- `2026-03-25T05:37:57.236251+00:00`
+
+Most recent conclusion at this point:
+- root-job preemption recovery is working
+- direct RL subtree recreation is working
+- zero-KL memory reduction was directionally correct but insufficient
+- the active blocker for the prod run remains train-side OOM under `128 GiB`
+- live memory polling is now available, working, and should be kept on for any future relaunch
+
+## 2026-03-24 22:49 PT — raised RL TPU host-RAM request to 300g for prod relaunch
+
+Decision after the second post-fix train OOM:
+- `128g` host RAM is no longer a reasonable request for the prod `v5p-8` train path under current checkpoint behavior
+- instead of continuing to probe the same boundary, the next run should request materially more host RAM on both TPU jobs
+
+Patch applied:
+1. Shared RL deployment config now supports explicit TPU host-RAM overrides.
+   - file: `lib/marin/src/marin/rl/rl_job.py`
+   - added fields on `RunConfig`:
+     - `train_ram: str | None`
+     - `inference_ram: str | None`
+2. RL orchestration now forwards those overrides into `ResourceConfig.with_tpu(...)` when present.
+   - file: `lib/marin/src/marin/rl/orchestration.py`
+3. Executor-backed experiment config can now carry the same override path for future E5-style probes.
+   - file: `lib/marin/src/marin/rl/rl_experiment_utils.py`
+   - added fields on `RLExperimentConfig`:
+     - `train_ram: str | None`
+     - `inference_ram: str | None`
+4. The current direct prod probe script was updated to request `300g` for both trainer and rollout workers.
+   - file: `experiments/exp_iris_rl_regression_direct_gcs_prod.py`
+   - constant: `PROD_TPU_WORKER_RAM = "300g"`
+   - wired into `RunConfig(train_ram=..., inference_ram=...)`
+
+Why this is the chosen next experiment:
+- current RL train attempt hit a measured sampled peak of ~`124 GB` before retrying
+- the worker class is still `v5p-8`, whose host memory budget is substantially higher than the default `128g` request
+- the immediate goal is to stop failing on the host-RAM request boundary and learn whether checkpoint/save logic still fails once headroom exists
+
+Validation completed:
+- `uv run pytest -q tests/rl/test_orchestration.py tests/rl/test_rl_experiment_utils.py`
+  - result: `12 passed`
+- `./infra/pre-commit.py --fix lib/marin/src/marin/rl/rl_job.py lib/marin/src/marin/rl/orchestration.py lib/marin/src/marin/rl/rl_experiment_utils.py experiments/exp_iris_rl_regression_direct_gcs_prod.py tests/rl/test_orchestration.py tests/rl/test_rl_experiment_utils.py`
+  - result: `OK`
+
+Tests added:
+- `tests/rl/test_orchestration.py`
+  - verifies train and rollout submissions honor `RunConfig.train_ram` / `RunConfig.inference_ram`
+- `tests/rl/test_rl_experiment_utils.py`
+  - verifies executor-backed RL config propagation preserves RAM overrides into `RunConfig`
+
+Immediate next step after this entry:
+- relaunch the direct GCS prod probe with the new `300g` train/rollout RAM requests
+- keep the task-memory poller attached from the start
+
+## 2026-03-24 22:51 PT — launching next direct prod probe with 300g TPU host RAM
+
+Executing the next planned experiment after terminating `r2`:
+- same direct + GCS + prod topology
+- same 100-step envelope as the recent prod probe
+- short job-name envelope preserved
+- new change under test: `300g` host RAM request for both train and rollout TPU jobs
+
+Launch intent:
+- determine whether higher host-RAM headroom clears the repeated early train OOM / retry boundary
+- keep memory polling available from the start for the train task
+
+## 2026-03-24 23:43 PT — Overnight Babysit Armed For `r3`
+
+Current live root job:
+- `/ahmed/irl-e4p-100r3-0324-2245`
+
+Current observed state before handoff/end-of-turn:
+- root: `JOB_STATE_RUNNING`
+- rollout: `JOB_STATE_RUNNING`
+- train: `JOB_STATE_RUNNING`, `preemption_count=1`
+
+Important new observations:
+- `300g` TPU host RAM materially changed the failure envelope.
+- The train retry on worker `marin-tpu_v5p_8-us-central1-a-20260325-0602-86a14bb9-worker-0` reached sampled `memory_peak_mb=224972` while staying alive.
+- This is strong evidence that the prior `128 GiB` OOMs were a real host-RAM ceiling, not a misleading dashboard artifact.
+- The run also survived a non-OOM train worker failure (`Request timed out`) via train-task retry.
+- Retry still restarts from the base model because no earlier durable trainer checkpoint existed at that boundary.
+
+Progress boundary cleared on `r3`:
+- Logs show checkpoint save triggered at step `4`:
+  - `Saving temporary checkpoint at step 4`
+  - `Saving checkpoint at step 4 ...`
+- Later logs show:
+  - `Transferring weights at step 4`
+  - `Training step 4 completed`
+- Therefore `r3` has already crossed the old checkpoint-coupled failure boundary that killed the `128 GiB` runs.
+
+Overnight babysitter:
+- scratch script: `scratch/babysit_iris_job.sh`
+- state file: `scratch/20260324-2338_monitoring_state.json`
+- monitor log: `scratch/20260324-2338_babysit.log`
+- behavior: 120s startup check, then 570s cadence, auto-resubmit on terminal root non-success using the saved resubmit command.
+
+Memory pollers still relevant:
+- user-owned JSONL: `scratch/20260325-055054Z_rl-e4p-20260325-054703-train_memory.jsonl`
+- agent-owned JSONL: `scratch/e4p_r3_train_memory_agent.jsonl`
+
+Operational note:
+- The detached babysitter was smoke-tested locally with a short cadence before the real 8-hour launch.
+- It is intentionally in `scratch/` to avoid polluting the repo with one-off operational tooling.
+
+## 2026-03-25 09:44 PT — froze dead `r3` subtrees locally and wrote retry chronology
+
+Root job under analysis:
+- `/ahmed/irl-e4p-100r3-0324-2245`
+
+Reason for this archival pass:
+- the overnight babysitter itself expired after its 8-hour window, which initially made it look like the RL job had died
+- after checking the live Iris tree, the root job was still `RUNNING`
+- to avoid losing evidence from the already-dead child subtrees, I exported all currently retrievable logs for the dead `r3` branches into a stable local bundle
+
+Local bundle index:
+- [E4 r3 Retry Log Bundle](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4p_r3_retry_logs/README.md)
+
+What was archived:
+
+### Subtree `e4p-20260325-054703` (initial long-running subtree)
+Raw logs:
+- [054703 train raw log](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4p_r3_retry_logs/054703_train.log)
+- [054703 rollout raw log](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4p_r3_retry_logs/054703_rollout.log)
+- [054703 train timeline extract](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4p_r3_retry_logs/054703_train_timeline.log)
+- [054703 train memory trace JSONL](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/20260325-055054Z_rl-e4p-20260325-054703-train_memory.jsonl)
+- [054703 controller bug-report note](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4p_r3_retry_logs/054703_train_bug_report.txt)
+
+Important evidence from this subtree:
+- this is the subtree that matches the memory-poller run id the user pasted (`e4p-20260325-054703`)
+- it did not merely run a few minutes; it ran for hours and retried in-place multiple times inside the same child job
+- the raw train log shows the subtree reaching at least step `37`
+- the final visible terminal event in the train raw log is:
+  - `Container was OOM killed by the kernel`
+  during the step-37 checkpoint save path
+- the controller no longer serves `job bug-report` for the exact `054703` child job, but `iris job logs` still returns the raw logs, so those were exported while still available
+
+Condensed chronology from the exported train timeline:
+- initial startup from base model
+- no checkpoints available initially
+- step `0` completed once
+- early worker failure / retry inside the same child job
+- resumed from scratch at first because no trainer checkpoint existed yet
+- later checkpoints at steps `2,4,6,8,...`
+- OOM at step `10`
+- later retry resumes from checkpoint `8`
+- OOM again at step `31`
+- later retries continue, with progress through the 30s
+- final visible OOM occurs during checkpoint save at step `37`
+
+### Subtree `e4p-20260325-125232` (short-lived replacement subtree)
+Raw logs:
+- [125232 train raw log](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4p_r3_retry_logs/125232_train.log)
+- [125232 rollout raw log](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4p_r3_retry_logs/125232_rollout.log)
+- [125232 train timeline extract](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4p_r3_retry_logs/125232_train_timeline.log)
+- [125232 rollout timeline extract](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4p_r3_retry_logs/125232_rollout_timeline.log)
+- [125232 train bug report](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4p_r3_retry_logs/125232_train_bug_report.txt)
+- [125232 rollout bug report](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4p_r3_retry_logs/125232_rollout_bug_report.txt)
+
+Important evidence from this subtree:
+- `125232` is a separate replacement subtree under the same root job
+- train and rollout both started successfully
+- train never got past `Waiting for initial rollouts...`
+- rollout was still in the vLLM/TPU bring-up and ragged-paged-attention compile-warning phase
+- both children were then killed with controller-level reason:
+  - `Parent task preempted`
+- exact controller durations:
+  - train: `5m 54s`
+  - rollout: `5m 45s`
+
+Root-level controller context exported alongside the raw logs:
+- [root retry story grep log](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4p_r3_retry_logs/root_retry_story.log)
+- [root bug report](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4p_r3_retry_logs/root_bug_report.txt)
+
+Most precise retry story we can currently support from the exported evidence:
+1. `r3` root launched initial subtree `e4p-20260325-054703`.
+2. That subtree ran for hours and the train child retried in-place multiple times.
+3. The `054703` train child repeatedly made real progress and checkpointed, eventually reaching at least step `37`.
+4. The final visible terminal event in the `054703` train raw log is another checkpoint-coupled OOM (`Container was OOM killed by the kernel`).
+5. Later, the root itself suffered a parent-level preemption / worker-loss event (documented in the current root bug report as a timed-out CPU worker and `preemption_count=1`).
+6. After that parent-level retry, Iris launched a fresh subtree `e4p-20260325-125232`.
+7. That new subtree was killed quickly with `Parent task preempted` before it got past initial rollout startup.
+8. The root then launched the next replacement subtree `e4p-20260325-130820`, which is the currently live branch.
+
+Clarification for future readers:
+- the user-pasted JSONL from `scripts/iris/run_poll_task_memory.sh` is memory telemetry for one train task, not the raw Iris task logs
+- both forms of evidence are now archived locally and linked above
+
+## 2026-03-25 09:47 PT — clarified `r3` lineage: the 6-minute subtree was not the many-hour run
+
+This needed to be stated explicitly because the dashboard/W&B view made the chronology look contradictory.
+
+Correct interpretation:
+- the many-hour `r3` training run was subtree `e4p-20260325-054703`
+- the ~6 minute train/rollout pair visible in the dashboard was subtree `e4p-20260325-125232`
+- the currently live replacement subtree is `e4p-20260325-130820`
+
+What was confusing:
+- W&B page `e4p-20260325-130820-train` only shows the duration of the current replacement train child
+- the dashboard screenshot showing `rl-e4p-20260325-125232-{train,rollout-0}` with durations around `5m 45s` / `5m 54s` was easy to misread as “the original long run only trained for 6 minutes”
+
+What actually happened:
+1. Root `/ahmed/irl-e4p-100r3-0324-2245` first launched subtree `e4p-20260325-054703`.
+2. `054703` train ran for hours and retried in-place multiple times.
+3. Exported raw train logs for `054703` span:
+   - first visible log line: `05:47:14 UTC`
+   - last visible log line: `12:39:20 UTC`
+4. During that span, `054703` did real training and checkpoint work; it was not idle.
+5. Only later, after a parent/root preemption event, did Iris launch the short-lived replacement subtree `125232`.
+6. `125232` train never got past `Waiting for initial rollouts...` before both children were killed with `Parent task preempted`.
+7. The root then launched the next replacement subtree `130820`, which is the current live branch.
+
+Plain-English takeaway:
+- the hours of training belonged to `054703`
+- the 6-minute durations belonged to a later replacement subtree `125232`
+- they are different child jobs under the same root lineage and must not be compared as if they were the same run
+
+Evidence links:
+- [054703 train raw log](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4p_r3_retry_logs/054703_train.log)
+- [054703 train timeline extract](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4p_r3_retry_logs/054703_train_timeline.log)
+- [125232 train bug report](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4p_r3_retry_logs/125232_train_bug_report.txt)
+- [root bug report](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4p_r3_retry_logs/root_bug_report.txt)
+
+## 2026-03-25 10:24 PT - Relaunch With 400 GiB TPU Host RAM Requests
+
+- Updated [exp_iris_rl_regression_direct_gcs_prod.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp_iris_rl_regression_direct_gcs_prod.py) to raise `PROD_TPU_WORKER_RAM` from `"300g"` to `"400g"`.
+- This affects both `run_config.train_ram` and `run_config.inference_ram`, so both trainer and rollout now request `400 GiB` host RAM.
+- Rationale: the successful on-demand `exp2039-20260318-040100-train` W&B run showed host RSS well above the prior Iris cap:
+  - median RSS `~197.6 GB`
+  - p95 RSS `~298.5 GB`
+  - max RSS `~393.9 GB`
+- Relaunched fresh 100-step direct+GCS+prod probe:
+  - root job: `/ahmed/irl-e4p-100r4-0325-1023`
+  - submit command: `uv run python experiments/exp_iris_rl_regression_direct_gcs_prod.py --experiment-name-suffix e4p --num-train-steps 100`
+- This run is intended to match the successful on-demand memory envelope more closely before claiming a deeper RL pipeline bug.
+
+## 2026-03-25 12:29 PT - R4 Rollout "Crash" Was A Worker Heartbeat Timeout, Not An OOM
+
+Observed on run:
+- root: `/ahmed/irl-e4p-100r4-0325-1023`
+- rollout child: `/ahmed/irl-e4p-100r4-0325-1023/rl-e4p-20260325-172718-rollout-0`
+- trainer child: `/ahmed/irl-e4p-100r4-0325-1023/rl-e4p-20260325-172718-train`
+
+What W&B made visible:
+- the rollout W&B run briefly appeared "crashed", then resumed on the same run id.
+- this looked like a rollout failure from the UI, but Iris state showed the rollout child itself never went terminal.
+
+What Iris state shows:
+- rollout child is still `RUNNING`
+- rollout child has `preemption_count=1`, `failure_count=0`
+- rollout bug report shows:
+  - attempt `0`: `worker_failed`
+  - error: `Worker marin-tpu-v5p-8-us-central1-a-20260325-1730-7efed3e6-worker-0 failed: Request timed out`
+  - attempt `1`: `running` on `marin-tpu-v5p-8-us-central1-a-20260325-1845-d5289490-worker-0`
+- trainer remained alive throughout this event:
+  - train job still `RUNNING`
+  - no train preemption attached to the rollout retry
+
+Interpretation:
+- this was **not** a rollout-model OOM
+- this was **not** an RL application traceback
+- this was a **worker/control-plane failure** on the first rollout TPU host attempt
+- Iris retried the rollout child in place, and W&B continued on the same rollout run id after the retry
+
+Exact controller/worker path for `Request timed out`:
+- controller heartbeats workers through [worker_provider.py:131](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/iris/src/iris/cluster/controller/worker_provider.py:131)
+- worker RPC client timeout is hardcoded to `5.0s` in [worker_provider.py:41](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/iris/src/iris/cluster/controller/worker_provider.py:41)
+- controller heartbeat cadence is `5s` in [controller.py:620](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/iris/src/iris/cluster/controller/controller.py:620)
+- repeated heartbeat failures are counted in [transitions.py:1272](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/iris/src/iris/cluster/controller/transitions.py:1272)
+- once the failure threshold is crossed, Iris marks the worker dead and retries the task in [transitions.py:1278](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/iris/src/iris/cluster/controller/transitions.py:1278) and [transitions.py:1320](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/iris/src/iris/cluster/controller/transitions.py:1320)
+- controller then processes the failed worker in [controller.py:1490](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/iris/src/iris/cluster/controller/controller.py:1490)
+
+Why this may be brittle even if the worker was not actually dead:
+- worker heartbeat handling does real work under the same RPC envelope:
+  - reconciliation, log draining, host metrics, health check
+- see [worker.py:563](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/iris/src/iris/cluster/worker/worker.py:563) through [worker.py:667](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/iris/src/iris/cluster/worker/worker.py:667)
+- worker also resets itself if controller heartbeats stop arriving long enough:
+  - [worker.py:349](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/iris/src/iris/cluster/worker/worker.py:349)
+- so the current system has a narrow control-plane margin for TPU workers under load
+
+Most likely explanations for this specific rollout interruption:
+1. TPU worker host stalled or became unhealthy briefly
+2. network/control-plane hiccup between controller and worker
+3. worker heartbeat handler exceeded the controller-side `5s` RPC timeout enough times in a row
+
+What this incident does **not** support:
+- not evidence of rollout OOM
+- not evidence of trainer OOM
+- not evidence of a deterministic RL rollout logic bug
+
+What this incident **does** support:
+- Iris rollout retry behavior is working: the child was retried in place and resumed
+- Iris heartbeat envelope for TPU workers is probably too aggressive / too opaque for long-running RL
+
+Hardening recommendations:
+1. raise worker heartbeat RPC timeout above `5s` for TPU workers, likely `15-20s`
+2. add controller-side heartbeat latency metrics per worker
+3. add worker-side `handle_heartbeat` duration metrics and warnings that survive task retry
+4. capture worker process status/logs automatically when a worker is declared failed so postmortems have real evidence instead of just `Request timed out`
+5. keep rollout/train as independently retryable child jobs; that part behaved correctly here
+
+## 2026-03-25 12:44 PT - Controller Confirmed The Rollout Worker Loss Exactly
+
+This sharpens the earlier `r4` rollout diagnosis.
+
+Earlier wording said the rollout interruption was the **most likely** result of repeated heartbeat failures. After checking controller-side evidence directly, that is now confirmed rather than inferred.
+
+Controller transaction-log evidence:
+- queried `txn_actions` for worker `marin-tpu-v5p-8-us-central1-a-20260325-1730-7efed3e6-worker-0`
+- controller recorded repeated `worker_heartbeat_failed` actions for that exact worker
+- the first visible failure was stronger than a generic timeout:
+  - `Request failed: ... tcp connect error: Connection refused (os error 111)` to `10.128.0.97:10001`
+- after that, controller recorded repeated heartbeat failures with:
+  - `Request timed out`
+
+Controller process-log evidence:
+- controller log shows the worker registered normally at `10.128.0.97:10001`
+- around `18:45 UTC`, repeated provider-sync failures were recorded for this exact worker, with failed sync durations in the `~5.1s` to `~7.5s` range
+- controller then logged that the worker failed and the autoscaler terminated TPU slice `marin-tpu-v5p-8-us-central1-a-20260325-1730-7efed3e6`
+
+So the Iris-observed event sequence is now clear:
+1. rollout worker initially healthy
+2. controller lost connectivity to the worker endpoint
+3. controller recorded repeated heartbeat failures for that worker
+4. autoscaler terminated the TPU slice
+5. Iris retried rollout on a new worker attempt
+
+This confirms:
+- not a rollout OOM
+- not a rollout Python exception
+- not a trainer failure propagating downward
+- it was a controller/worker connectivity failure on that TPU slice, followed by normal Iris retry behavior
+
+Important precision:
+- controller logs confirm **what Iris observed**
+- they do **not** by themselves prove whether the underlying cause was worker-daemon crash vs TPU-host VM issue vs transient network/control-plane fault
+- but the control-plane event is no longer speculative: repeated heartbeat failures really happened
+
+Implication for hardening:
+- the relevant robustness target is the Iris controller/worker heartbeat path, not RL application logic
+- next platform-level fix still points to:
+  1. larger controller-side worker heartbeat RPC timeout
+  2. heartbeat latency metrics on both controller and worker
+  3. better automatic worker-failure evidence capture
+
+## 2026-03-25 12:51 PT - Same W&B Rollout Run Resumed; Trainer Is Still The Main Remaining Risk
+
+User-facing conclusion from `r4`:
+- the important robustness property held for rollout: the same logical rollout job resumed under the same W&B run id after the first worker-attempt died
+- so from the RL operator perspective, rollout recovery is acceptable for this incident even though the dashboard hid the attempt boundary
+
+Current `r4` live state:
+- root `/ahmed/irl-e4p-100r4-0325-1023` -> `RUNNING`, `failure_count=0`, `preemption_count=0`
+- rollout `/ahmed/irl-e4p-100r4-0325-1023/rl-e4p-20260325-172718-rollout-0` -> `RUNNING`, `failure_count=0`, `preemption_count=1`
+- train `/ahmed/irl-e4p-100r4-0325-1023/rl-e4p-20260325-172718-train` -> `RUNNING`, `failure_count=0`, `preemption_count=0`
+
+Important trainer status:
+- train bug report still shows exactly one live attempt:
+  - attempt `0` on `marin-tpu-v5p-8-us-central1-a-20260325-1727-aae988dc-worker-0`
+- so trainer has not yet demonstrated retry behavior on this run
+
+Important live memory status:
+- train memory poller is still attached:
+  - [e4p_r4_train_memory_agent.jsonl](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4p_r4_train_memory_agent.jsonl)
+- recent samples show the trainer climbing back into the high host-RAM regime but still under the new `400 GiB` cap
+- sampled numbers during the latest observed checkpoint-growth phase:
+  - current memory rose through roughly `205 GB -> 289 GB`
+  - sampled peak remains `333004 MB` (`~325 GiB`)
+- this is consistent with the earlier finding that `400 GiB` is much closer to the successful on-demand envelope than `300 GiB`
+
+Neutral interpretation:
+- rollout robustness is now good enough to stop making it the primary focus
+- the next thing that actually matters is whether trainer can finish the long run under the `400 GiB` cap without:
+  1. checkpoint-coupled OOM
+  2. trainer worker failure / retry
+  3. lost progress on trainer retry
+
+So the practical next concern is no longer "does rollout recover?"; it is "does trainer stay alive and durable through repeated checkpoint/save boundaries and complete the run cleanly?"
+
+## 2026-03-25 16:01 PT - Verified Claude's Performance Diagnosis Against Raw W&B Histories
+
+Checked source:
+- [iris-rl-claude.md](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/.agents/logbooks/iris-rl-claude.md)
+
+Verified directly against W&B API histories for:
+- Iris train: `marin-community/marin_iris_rl_debug/e4p-20260325-172718-train`
+- Iris rollout: `marin-community/marin_iris_rl_debug/e4p-20260325-172718-rollout-0`
+- on-demand fast baseline train: `marin-community/marin_post_training/exp2039-nb-inflight2-train`
+- on-demand fast baseline rollout: `marin-community/marin_post_training/exp2039-nb-inflight2`
+- on-demand finished baseline train: `marin-community/marin_post_training/exp2039nb-20260319-032500-train`
+- on-demand finished baseline rollout: `marin-community/marin_post_training/exp2039nb-20260319-032500`
+
+What is confirmed:
+- Iris `r4` really is much slower wall-clock per train step than the fast on-demand baseline.
+- But trainer-side compute is not the bottleneck.
+- The current Iris rollout shape is definitely pathological for throughput.
+
+Measured train medians from W&B history:
+- Iris `r4` train:
+  - wall-clock/step: `473.1s` (`7.9 min`)
+  - train step duration: `61.0s`
+  - batch prep: `31.8s`
+  - fwd/bwd: `38.8s`
+  - weight transfer: `14.2s`
+  - derived inter-step idle: `401.5s`
+- on-demand `exp2039-nb-inflight2` train:
+  - wall-clock/step: `136.4s` (`2.3 min`)
+  - train step duration: `67.1s`
+  - batch prep: `9.45s`
+  - fwd/bwd: `62.6s`
+  - weight transfer: `14.1s`
+  - derived inter-step idle: `67.0s`
+- on-demand finished baseline `exp2039nb-20260319-032500` train:
+  - wall-clock/step: `215.7s` (`3.6 min`)
+  - train step duration: `66.7s`
+  - batch prep: `21.3s`
+  - fwd/bwd: `51.0s`
+  - weight transfer: `14.4s`
+  - derived inter-step idle: `138.1s`
+
+Interpretation from those numbers:
+- trainer compute on Iris is not slower; it is actually slightly faster on raw step time than the fast on-demand run
+- the large slowdown is real and almost entirely outside trainer compute
+
+What Claude got right:
+- the full-eval trigger in [rollout_worker.py:841](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/rollout_worker.py:841) is keyed to the rollout loop's local `step`, i.e. rollout-batch iteration count, not trainer step count
+- current Iris config in [exp_iris_rl_regression_direct_gcs_prod.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp_iris_rl_regression_direct_gcs_prod.py) uses:
+  - `n_prompts=16`
+  - `n_generations_per_prompt=16`
+  - `train_batch_size=1024`
+- therefore each rollout batch contributes only `256` samples, so trainer needs roughly `4` rollout batches to fill one training batch
+- W&B rollout history confirms this: Iris rollout median `cumulative_batch_count` delta between visible eval rows is `4`, with most deltas `3` or `5`
+- so the eval semantics are a real throughput footgun for this Iris shape
+
+What Claude overstated or mixed together:
+- the prose combines metrics from different on-demand baselines; the `2.3 min` wall-clock baseline is from the crashed `nb-inflight2` run, while the quoted trainer-side `batch_prep` / `fwd_bwd` numbers align better with the finished baseline
+- more importantly, the on-demand W&B histories do not support the simplified statement "1 rollout batch per train step -> 1 eval per train step" as a complete explanation
+- finished on-demand rollout `exp2039nb-20260319-032500` shows eval rows roughly every `8` trainer steps with `cumulative_batch_count` jumping by about `10`
+- therefore the performance gap is not isolated to `n_prompts` and eval cadence alone
+
+Critical missing difference vs on-demand:
+- on-demand `exp2039` used `inflight_weight_updates=True` in [exp2039_rl_math500.py](/Users/ahmed/code/marin3/experiments/exp2039_rl_math500.py)
+- current Iris `r4` is effectively using `inflight_weight_updates=False` (default in [rl_job.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/rl_job.py))
+- with non-inflight mode, rollout does a blocking weight sync before each rollout batch, so with the current small-batch shape the run pays that coordination overhead many more times per trainer step
+
+Current verdict:
+- Claude identified a real bug / footgun
+- Claude did not prove that this one issue fully explains the slowdown
+- the more defensible conclusion is:
+  1. small rollout batch shape (`n_prompts=16`)
+  2. rollout-step-based eval cadence (`eval_frequency=1`)
+  3. non-inflight / blocking sync behavior
+  together explain the current poor throughput much better than any single factor alone
+
+Recommendations from this verification:
+1. clean parity experiment:
+   - rerun Iris with `n_prompts=64`
+   - and `inflight_weight_updates=True`
+   - keep everything else the same
+   - this is the fairest apples-to-apples comparison to the fast on-demand baseline
+2. smallest surgical experiment:
+   - keep current config shape
+   - change only `eval_frequency` from `1` to `4`
+   - this tests Claude's primary hypothesis directly
+3. longer-term code fix:
+   - change full-eval cadence to key off trainer step count or another trainer-aligned progress signal rather than rollout loop iterations
+
+Bottom line:
+- there is enough information to say Claude found a real throughput problem
+- there is not enough information to say Claude completely explained the slowdown without also accounting for inflight-vs-blocking weight sync differences
+
+## 2026-03-25 16:06 PT - Preparing Parity Run Against On-Demand exp2039
+
+User requested a new parity run on the Iris cluster.
+
+Plan for the parity run:
+- keep the stable `400g` TPU host-RAM envelope from `r4`
+- keep `v5p-8` for both trainer and rollout
+- pin RL workers to `us-central1` (best available equivalent to the current `us-central1-a` TPU group; RL worker config takes region, not explicit zone)
+- change rollout shape to match on-demand `exp2039` more closely:
+  - `n_prompts=64`
+  - `n_generations_per_prompt=16`
+  - `inflight_weight_updates=True`
+- keep the rest of the current direct + GCS + prod probe unchanged unless the code requires otherwise
+- launch as a fresh 100-step run so the comparison is fast enough to inspect while still exercising steady-state behavior
+
+Rationale:
+- W&B verification showed Claude found a real throughput issue, but not the full story
+- the cleanest next experiment is a parity run that changes both of the largest known rollout-side deltas from on-demand:
+  1. rollout batch shape
+  2. inflight vs blocking weight sync mode
+
+## 2026-03-25 16:47 PT - Launched Iris Parity Run Against On-Demand exp2039
+
+Patched [exp_iris_rl_regression_direct_gcs_prod.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp_iris_rl_regression_direct_gcs_prod.py) to support controlled parity flags:
+- `--n-prompts`
+- `--eval-frequency`
+- `--region`
+- `--inflight-weight-updates`
+
+Validation before launch:
+- `./infra/pre-commit.py --fix experiments/exp_iris_rl_regression_direct_gcs_prod.py` -> `OK`
+- `uv run python experiments/exp_iris_rl_regression_direct_gcs_prod.py --help` showed all new flags
+
+Launched parity run:
+- root job: `/ahmed/irl-e4par-100-0325-2147`
+- root launch region: `us-central1`
+- TPU worker type requested for both trainer and rollout: `v5p-8`
+- host RAM requested for both trainer and rollout: `400g`
+- root CPU launcher resources: `cpu=0.5`, `memory=1GB`, `disk=5GB`
+
+Exact entrypoint:
+- `uv run python experiments/exp_iris_rl_regression_direct_gcs_prod.py --experiment-name-suffix e4par --num-train-steps 100 --n-prompts 64 --eval-frequency 1 --region us-central1 --inflight-weight-updates`
+
+Purpose of this run:
+- closest available Iris parity check against the faster on-demand `exp2039` rollout/training shape
+- changes from `r4` are intentionally limited to the two largest rollout-side deltas:
+  1. `n_prompts=64` instead of `16`
+  2. `inflight_weight_updates=True` instead of blocking sync mode
+
+Expected interpretation:
+- if this run speeds up materially, that supports the combined rollout-side diagnosis
+- if it remains slow, then Claude's explanation was incomplete even after controlling for the largest known differences
+
+## 2026-03-25 16:49 PT - Exact Parity Launch Command And Immediate Next Steps
+
+Exact Iris submit command used:
+```bash
+uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait \
+  --user ahmed \
+  --job-name irl-e4par-100-0325-2147 \
+  --region us-central1 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -e HF_TOKEN "$HF_TOKEN" \
+  -- uv run python experiments/exp_iris_rl_regression_direct_gcs_prod.py \
+       --experiment-name-suffix e4par \
+       --num-train-steps 100 \
+       --n-prompts 64 \
+       --eval-frequency 1 \
+       --region us-central1 \
+       --inflight-weight-updates
+```
+
+Immediate post-submit state:
+- root `/ahmed/irl-e4par-100-0325-2147` -> `JOB_STATE_RUNNING`
+- root task state counts: `building=1`
+- `failure_count=0`
+- `preemption_count=0`
+
+Next steps for this parity run:
+1. wait for train and rollout child jobs to appear, then record their concrete run ids
+2. attach the existing train memory poller to the parity train task once it exists
+3. compare the first `10-20` completed trainer steps against `r4` on:
+   - wall-clock step cadence
+   - batch prep time
+   - forward/backward time
+   - weight-transfer time
+   - rollout `cumulative_batch_count` growth
+   - eval cadence in the rollout W&B run
+4. decide whether the parity changes (`n_prompts=64` + `inflight_weight_updates=True`) materially reduce the `r4` rollout-side slowdown
+
+Decision rule:
+- if parity run step cadence moves substantially toward on-demand, Claude's diagnosis was directionally right and the remaining gap can be decomposed further
+- if parity run remains near `r4` speed, then the current performance explanation is still incomplete
+
+## 2026-03-25 16:54 PT - Started Babysitter And Train Memory Poller For Parity Run
+
+Current parity run state at monitor start:
+- root `/ahmed/irl-e4par-100-0325-2147` -> `RUNNING`
+- train `/ahmed/irl-e4par-100-0325-2147/rl-e4par-20260326-044831-train` -> `RUNNING`
+- rollout `/ahmed/irl-e4par-100-0325-2147/rl-e4par-20260326-044831-rollout-0` -> `RUNNING`
+- all three with `failure_count=0`
+- train `preemption_count=0`
+- rollout `preemption_count=0`
+
+Babysitter started with existing generic Iris monitor script:
+- monitor script: [babysit_iris_job.sh](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/babysit_iris_job.sh)
+- monitor state: [20260325-2154_monitoring_state.json](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/20260325-2154_monitoring_state.json)
+- monitor log: [20260325-2154_babysit.log](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/20260325-2154_babysit.log)
+- monitor PID: `87455`
+- configured duration: `28800s` (`8h`)
+
+Train memory poller attached:
+- task: `/ahmed/irl-e4par-100-0325-2147/rl-e4par-20260326-044831-train/0`
+- JSONL: [e4par_train_memory_agent.jsonl](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4par_train_memory_agent.jsonl)
+- poller log: [e4par_train_memory_agent.log](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4par_train_memory_agent.log)
+- poller PID: `87453`
+
+Monitoring intent:
+- preserve one active monitor owner for the root job
+- preserve a live host-RAM trace for trainer so parity-run checkpoint behavior can be compared directly with `r4`
+
+## 2026-03-25 22:56 PDT - Patched Rollout Eval Cadence To Deduplicate On Trainer Step
+
+Problem addressed:
+- Full curriculum eval in [rollout_worker.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/rollout_worker.py) was keyed off the rollout loop's local `step`, not trainer progress.
+- With the slow `r4` shape (`n_prompts=16`, `eval_frequency=1`), that caused roughly one full eval per rollout batch instead of once per completed trainer step.
+
+Code changes:
+- [run_state.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/run_state.py)
+  - added monotonic trainer-step tracking on `RLRunState`
+  - added `RunStateSnapshot`
+  - added `get_snapshot()` and `update_train_step()`
+- [train_worker.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/train_worker.py)
+  - trainer step hook now calls `_record_train_step(info.step)`
+  - `_record_train_step()` updates both the local replay buffer step and shared `run_state`
+- [rollout_worker.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/rollout_worker.py)
+  - rollout now refreshes a cached `current_train_step` from `run_state.get_snapshot()` inside `_check_run_state()`
+  - full eval is now gated by `_should_run_curriculum_eval(current_train_step, last_eval_train_step, eval_frequency)`
+  - deduplicates full evals so the same completed trainer step is evaluated at most once per rollout worker
+  - full eval now logs against `current_train_step`, not rollout loop step
+
+Semantics after patch:
+- Full eval runs once per observed completed trainer step that matches `train_step % eval_frequency == 0`.
+- This removes the rollout-batch footgun.
+- Micro-eval semantics were left unchanged; they still key off rollout progression.
+- This patch only affects newly launched jobs; already-running jobs keep their in-memory rollout worker code.
+
+Validation:
+- `uv run pytest -q tests/rl/test_run_state.py tests/rl/test_train_worker.py tests/rl/test_rollout_worker.py` -> `16 passed`
+- `./infra/pre-commit.py --fix lib/marin/src/marin/rl/run_state.py lib/marin/src/marin/rl/train_worker.py lib/marin/src/marin/rl/rollout_worker.py tests/rl/test_run_state.py tests/rl/test_train_worker.py tests/rl/test_rollout_worker.py` -> `OK`
+
+Tests added:
+- [test_run_state.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/tests/rl/test_run_state.py)
+  - verifies monotonic trainer-step tracking and snapshot contents
+- [test_train_worker.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/tests/rl/test_train_worker.py)
+  - verifies `_record_train_step()` updates both replay buffer and shared run-state actor
+- [test_rollout_worker.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/tests/rl/test_rollout_worker.py)
+  - verifies full-eval gating/dedup logic and invalid-frequency rejection
+
+Recommended next step:
+- Let the current parity run finish unchanged for evidence continuity.
+- For the next launch, pick whether to keep `n_prompts=64` for throughput parity or deliberately return to `n_prompts=16` to validate that the eval-cadence fix removes the original slowdown trigger.
+
+## 2026-03-26 00:00 PDT - Cross-Repo Notes From `vllm_tpu_multi` No-Ray Multi-Host vLLM Logbook
+
+Source reviewed:
+- [/Users/ahmed/code/vllm_tpu_multi/.agents/logbooks/no_ray_multihost_vllm.md](/Users/ahmed/code/vllm_tpu_multi/.agents/logbooks/no_ray_multihost_vllm.md)
+
+Why this matters for the Iris RL thread:
+- this external logbook captures the no-Ray / on-demand vLLM work that informed the earlier fast RL baselines
+- several findings there map directly onto the current Iris throughput and lifecycle questions
+
+### Findings that matter directly here
+
+1. Multi-host no-Ray cross-host PP for vLLM was not supported in that stack.
+- `NRM-001` failed and the explicit conclusion was:
+  - no-Ray cross-host PP not supported
+  - the practical alternative for 8B was independent replicas, not PP-across-host inference
+- Relevance here:
+  - for 8B RL sampling, the winning pattern is still "more independent sampler replicas" rather than trying to force one giant multi-host inference server
+
+2. For 8B throughput, independent small-host replicas won decisively.
+- v6e findings in that logbook:
+  - `v6e-8` single host: ~`3,973 tok/s`, ~`104.4s` per 1024-completion batch, ~`5.5h` epoch projection
+  - `v6e-16` as `4x` independent replicas: ~`11,912 tok/s`, ~`35.5s` per batch, ~`1.85h` epoch projection
+- v5p findings in that logbook:
+  - `v5p-8` single host: ~`4,749 tok/s`, ~`89.2s` per batch, ~`4.7h` epoch projection
+  - `v5p-16` as `2x` independent replicas: ~`8,681 tok/s`, ~`48.9s` per batch, ~`2.6h` epoch projection
+- Relevance here:
+  - this strongly supports replica-parallel sampling as the right throughput lever for RL on small models
+  - if Iris parity/prod runs remain sampler-bound after the current fix set, adding rollout replicas is a high-confidence next optimization
+
+3. Concurrency matters a lot; the external sweep found a clear saturation regime.
+- The logbook's concurrency sweep found throughput ceiling near `concurrency=256/replica` on v6e-16.
+- Relevance here:
+  - the current Iris rollout shape and batching knobs are absolutely first-order performance parameters, not secondary tuning
+  - this reinforces the importance of keeping `n_prompts` / batch shape aligned with the sampler hardware envelope
+
+4. Queue-based `LLM.generate()` HTTP serving was confirmed to be the wrong API for high-throughput serving.
+- The external logbook's critical finding was:
+  - queue + sync `LLM.generate()` serialized requests to effective batch-size-1
+  - this caused a roughly `2x` throughput regression versus the async vLLM serving path
+- It concluded the right fix for HTTP serving is `AsyncLLMEngine` / `build_app()`, not sync `LLM.generate()` behind a queue.
+- Relevance here:
+  - this is highly relevant context for Harbor / serving paths, but less directly relevant to the current Iris RL rollout worker because RL is not using the same queue-based HTTP serving architecture
+  - still useful as a warning: avoid concluding that "vLLM itself is slow" when the real issue may be the serving interface shape
+
+5. On-demand RL had an explicit graceful sampler shutdown fix.
+- The logbook records a tri-state coordinator status (`running` / `completed` / `failed`) added to Arrow Flight coordination so samplers exit cleanly and W&B runs close when the trainer finishes.
+- Relevance here:
+  - this is important lineage context for why on-demand runs stopped leaving orphaned sampler runs
+  - it also aligns with our general RL lifecycle concerns around sampler durability and clean shutdown semantics
+
+6. The external on-demand RL throughput bottleneck analysis blamed trainer starvation, not trainer compute.
+- Logged breakdown there:
+  - forward/backward ~`45s`
+  - device-to-host weight copy ~`12.6s`
+  - batch prep fetch ~`15-18s`
+  - batch creation ~`3.7s`
+  - starvation gap `0-60s`
+  - total ~`195s`
+- The proposed fixes were:
+  1. add a second sampler replica
+  2. add background batch preparation / prefetch for streaming RL batches
+  3. fix inflight weight updates in manual mode
+- Relevance here:
+  - this is extremely consistent with the current Iris-side throughput diagnosis:
+    - trainer compute is not the main bottleneck
+    - rollout-side production and trainer starvation dominate wall-clock step time
+  - it also provides a concrete prioritized optimization roadmap after current stability / executor-prod questions are closed
+
+### Interpretation for the current Iris RL investigation
+
+This external logbook strengthens several conclusions already emerging locally:
+- the current Iris throughput problem was unlikely to be a trainer compute problem
+- sampler topology and batch shape matter much more than raw TPU count for 8B RL sampling
+- independent rollout replicas are likely the right scaling primitive if we need more sampling throughput later
+- the fastest on-demand baselines were produced by a system already thinking in terms of:
+  - sampler throughput
+  - starvation elimination
+  - inflight updates
+  - clean sampler lifecycle
+
+### Practical carry-forward into the Iris thread
+
+Near-term:
+- keep focusing the main experiment thread on:
+  1. finishing the current direct parity run
+  2. then re-testing executor-backed prod (`E5`)
+- do not divert immediately into large sampling-topology changes until `E5` is settled
+
+Medium-term, if throughput is still the next bottleneck after `E5`:
+1. add more rollout replicas before trying more exotic topology changes
+2. consider background-prefetch / batch-prep overlap in `StreamingRolloutLoader`
+3. keep `inflight_weight_updates=True` in the high-throughput configuration family
+
+Bottom line from the external logbook:
+- the old fast no-Ray / on-demand results are consistent with a world where RL throughput is sampler-bound and replica-parallelism wins
+- that does not contradict the current Iris findings; it actually supports them
+- the executor-prod question remains separate from these throughput lessons and should still be answered explicitly
+
+## 2026-03-26 01:20 PDT - Plan To Remove Sampling Bottleneck In Direct Mode
+
+User direction:
+- deprioritize `E5` for now
+- focus on removing the sampling bottleneck in direct mode
+- compare two candidate topologies:
+  1. `2 x v5p-8` samplers + `1 x v5p-8` trainer
+  2. `1 x v5p-16` sampler using multi-host vLLM data parallel + `1 x v5p-8` trainer
+
+### Recommendation
+
+I recommend doing the `2 x v5p-8` sampler plan first.
+
+Reasoning:
+- the direct RL coordinator already supports multiple rollout workers today in [orchestration.py:176](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/orchestration.py:176)
+- the current direct prod probe only hardcodes one rollout worker in [exp_iris_rl_regression_direct_gcs_prod.py:206](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp_iris_rl_regression_direct_gcs_prod.py:206)
+- external no-Ray/vLLM work in [/Users/ahmed/code/vllm_tpu_multi/.agents/logbooks/no_ray_multihost_vllm.md](/Users/ahmed/code/vllm_tpu_multi/.agents/logbooks/no_ray_multihost_vllm.md) strongly favored independent replicas for 8B throughput
+- the `v5p-16` multihost-DP sampler path is not just a config toggle in Marin RL today; it requires new inference/runtime plumbing
+
+### Option A: `2 x v5p-8` samplers + `1 x v5p-8` trainer
+
+This is the practical near-term path.
+
+Current support already exists:
+- `RunConfig.num_rollout_workers` is already part of the RL config surface in [rl_job.py:47](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/rl_job.py:47)
+- experiment config also carries `num_rollout_workers` in [rl_experiment_utils.py:123](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/rl_experiment_utils.py:123)
+- coordinator submits one rollout child per worker index in [orchestration.py:176](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/orchestration.py:176)
+- rollout storage is already file/GCS-based and naturally aggregates multiple writers
+
+Concrete implementation plan:
+1. expose `--num-rollout-workers` in [exp_iris_rl_regression_direct_gcs_prod.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp_iris_rl_regression_direct_gcs_prod.py)
+2. keep the current fast parity settings:
+   - trainer `v5p-8`
+   - inference `v5p-8`
+   - `n_prompts=64`
+   - `inflight_weight_updates=True`
+   - `400g` RAM on trainer and samplers
+3. fix eval ownership before launching two samplers
+4. launch `2 x v5p-8` rollout workers and re-measure trainer starvation and step cadence
+
+Non-obvious correctness issue that must be fixed:
+- current full-eval dedupe is only worker-local in [rollout_worker.py:337](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/rollout_worker.py:337) and [rollout_worker.py:858](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/rollout_worker.py:858)
+- with two rollout workers, both workers would currently run full eval once per trainer step
+- simplest fix:
+  - make only `worker_index == 0` run full eval and micro-eval
+
+Expected outcome:
+- trainer should stop waiting on rollout production as often
+- wall-clock step time should improve further
+- if this works, the next bottleneck is likely trainer-side batch preparation in [train_worker.py:115](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/train_worker.py:115), not sampler generation
+
+If trainer is no longer sampler-starved after this:
+- next optimization would be background/prefetched batch preparation in `StreamingRolloutLoader`
+- not a more exotic sampler topology
+
+### Option B: `1 x v5p-16` sampler with multi-host vLLM DP + `1 x v5p-8` trainer
+
+This is a separate feature spike, not the next direct experiment.
+
+Why:
+- current RL vLLM config in [vllm.py:84](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/environments/inference_ctx/vllm.py:84) only exposes TP-style settings
+- current async/inflight wrapper in [worker.py:181](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/environments/inference_ctx/inflight/worker.py:181) builds a single async engine with TP settings only
+- there is no Marin-RL-facing support today for:
+  - `data_parallel_size`
+  - `distributed_executor_backend`
+  - external launcher / multihost rank setup
+
+External evidence from the vLLM multihost repo:
+- generic vLLM does have a DP surface, e.g. `data_parallel_size` plus `distributed_executor_backend=\"external_launcher\"` in [/Users/ahmed/code/vllm_tpu_multi/vllm/examples/offline_inference/torchrun_dp_example.py:96](/Users/ahmed/code/vllm_tpu_multi/vllm/examples/offline_inference/torchrun_dp_example.py:96)
+- but the same repo explicitly warns that generic multihost support does not automatically imply polished TPU-plugin behavior in [/Users/ahmed/code/vllm_tpu_multi/CODEX_VLLM_MULTIHOST.md:64](/Users/ahmed/code/vllm_tpu_multi/CODEX_VLLM_MULTIHOST.md:64)
+
+What Option B would actually require:
+1. extend RL inference config to expose multihost DP knobs
+2. add a new RL inference runtime path for multihost vLLM DP
+3. validate standalone bring-up on Iris outside RL first
+4. only then wire it into the rollout worker
+5. then validate generation, weight sync, retries, and shutdown
+
+My judgment:
+- this is real engineering work, not an experiment-only change
+- for an 8B model, it is also not obviously the right topology even if implemented
+- the external evidence still points toward independent replicas as the better throughput scaling primitive
+
+### Decision
+
+Recommended order:
+1. patch direct prod probe to support `num_rollout_workers`
+2. patch eval ownership so only one rollout worker evaluates
+3. launch `2 x v5p-8` samplers + `1 x v5p-8` trainer
+4. only if that is still sampler-bound, consider background batch prep
+5. treat the `v5p-16` multihost-DP sampler as a separate R&D thread after the simpler replica path
+
+Bottom line:
+- `2 x v5p-8` samplers is the next serious experiment
+- `1 x v5p-16` multihost-DP sampler is not ruled out, but it is not the shortest path to removing the direct-mode sampling bottleneck
+
+## 2026-03-26 01:24 PDT - MS1 Launch Prep: Direct Two-Sampler Run
+
+Current state before launch:
+- existing parity run is still live:
+  - root `/ahmed/irl-e4par-100-0325-2147`
+  - train `rl-e4par-20260326-044831-train`
+  - rollout `rl-e4par-20260326-044831-rollout-0`
+- user requested that the thread move on to the multi-sampler direction and stay under active babysitting for at least 8 hours
+
+Implementation completed before launch:
+1. direct prod experiment now accepts `--num-rollout-workers` in [exp_iris_rl_regression_direct_gcs_prod.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp_iris_rl_regression_direct_gcs_prod.py)
+2. rollout eval is now single-owner:
+   - only `worker_index == 0` runs micro-eval / full eval
+   - this avoids duplicated evaluation work when multiple sampler jobs are active
+3. targeted validation passed:
+   - `uv run pytest -q tests/rl/test_rollout_worker.py` -> `13 passed`
+   - `./infra/pre-commit.py --fix experiments/exp_iris_rl_regression_direct_gcs_prod.py lib/marin/src/marin/rl/rollout_worker.py tests/rl/test_rollout_worker.py` -> `OK`
+
+Planned launch command (`MS1`):
+
+```bash
+uv run python experiments/exp_iris_rl_regression_direct_gcs_prod.py \
+  --experiment-name-suffix e4ms2 \
+  --num-train-steps 100 \
+  --n-prompts 64 \
+  --eval-frequency 1 \
+  --region us-central1 \
+  --inflight-weight-updates \
+  --num-rollout-workers 2
+```
+
+Operational decision:
+- first try to submit `MS1` without killing the live parity run
+- if TPU capacity blocks `MS1`, stop the older parity run and retry
+- once `MS1` is live, hand it to an 8-hour Iris babysitter with exact resubmit metadata and keep the train memory poller attached
+
+Operational correction immediately after this plan:
+- running `uv run python experiments/exp_iris_rl_regression_direct_gcs_prod.py ...` directly from the shell was incorrect for this thread
+- that path fell back to Fray `LocalClient` and attempted to run the coordinator on the laptop
+- visible symptom:
+  - `fray.v2.client current_client: using LocalClient (fallback)`
+  - followed by local rollout failures (`ModuleNotFoundError: No module named 'tpu_inference'`)
+- this was not an Iris cluster failure and not a multi-sampler design failure; it was the wrong launch entrypoint
+- the known-good pattern remains the Iris root-job submit wrapper used for the parity run:
+  - `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait ... -- uv run python experiments/exp_iris_rl_regression_direct_gcs_prod.py ...`
+
+## 2026-03-26 01:31 PDT - MS1 Correctly Launched Under Iris And Handed To Long-Running Monitor
+
+Corrected launch command actually used:
+
+```bash
+uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait \
+  --user ahmed \
+  --job-name irl-e4ms2-100-0326-0125 \
+  --region us-central1 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -e HF_TOKEN "$HF_TOKEN" \
+  -- uv run python experiments/exp_iris_rl_regression_direct_gcs_prod.py \
+       --experiment-name-suffix e4ms2 \
+       --num-train-steps 100 \
+       --n-prompts 64 \
+       --eval-frequency 1 \
+       --region us-central1 \
+       --inflight-weight-updates \
+       --num-rollout-workers 2
+```
+
+Submitted root job:
+- `/ahmed/irl-e4ms2-100-0326-0125`
+
+Subtree created by the root coordinator:
+- trainer:
+  - `/ahmed/irl-e4ms2-100-0326-0125/rl-e4ms2-20260326-082712-train`
+- rollout workers:
+  - `/ahmed/irl-e4ms2-100-0326-0125/rl-e4ms2-20260326-082712-rollout-0`
+  - `/ahmed/irl-e4ms2-100-0326-0125/rl-e4ms2-20260326-082712-rollout-1`
+
+Launch chronology:
+1. first corrected Iris submit succeeded immediately and created the root job
+2. initial scheduler state had:
+   - trainer `PENDING`
+   - rollout-0 `PENDING`
+   - rollout-1 `PENDING`
+   with:
+   - `Insufficient memory (need 400.0GB, available 304.8GB)`
+   - `Insufficient TPUs`
+   - autoscaler backoff on `tpu_v5p_8-us-central1-a`
+3. per the pre-recorded operational plan, the older single-sampler parity run was stopped to free TPU capacity:
+   - stopped root:
+     - `/ahmed/irl-e4par-100-0325-2147`
+   - which also terminated:
+     - `rl-e4par-20260326-044831-train`
+     - `rl-e4par-20260326-044831-rollout-0`
+4. after freeing that capacity, `MS1` converged to:
+   - root `RUNNING`
+   - train `RUNNING`
+   - rollout-0 `RUNNING`
+   - rollout-1 `RUNNING`
+
+Current state at log time:
+- `/ahmed/irl-e4ms2-100-0326-0125` -> `JOB_STATE_RUNNING`
+- `/ahmed/irl-e4ms2-100-0326-0125/rl-e4ms2-20260326-082712-train` -> `JOB_STATE_RUNNING`
+- `/ahmed/irl-e4ms2-100-0326-0125/rl-e4ms2-20260326-082712-rollout-0` -> `JOB_STATE_RUNNING`
+- `/ahmed/irl-e4ms2-100-0326-0125/rl-e4ms2-20260326-082712-rollout-1` -> `JOB_STATE_RUNNING`
+- all visible jobs currently show:
+  - `failure_count=0`
+  - `preemption_count=0`
+
+Train-memory polling:
+- attached task:
+  - `/ahmed/irl-e4ms2-100-0326-0125/rl-e4ms2-20260326-082712-train/0`
+- first live samples:
+  - `2026-03-26T08:31:38.832222+00:00`
+    - `attempt=1`
+    - `mem_mb=34713`
+    - `peak_mb=34723`
+  - `2026-03-26T08:31:43.967062+00:00`
+    - `attempt=1`
+    - `mem_mb=34713`
+    - `peak_mb=34723`
+
+Long-running monitor ownership:
+- Iris babysitter PTY session:
+  - `43809`
+- train-memory poller PTY session:
+  - `85990`
+- state file:
+  - [20260326-0129_monitoring_state.json](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/20260326-0129_monitoring_state.json)
+- monitor log:
+  - [20260326-0129_babysit.log](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/20260326-0129_babysit.log)
+- train-memory poller log:
+  - [e4ms2_train_memory_agent.log](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4ms2_train_memory_agent.log)
+- train-memory JSONL:
+  - [e4ms2_train_memory_agent.jsonl](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4ms2_train_memory_agent.jsonl)
+
+Monitoring contract:
+- babysitter duration set to `28800s` (8 hours)
+- root job will be resubmitted with the exact same `MS1` command if it hits a terminal non-success state
+- this is now the single active monitor owner for the multi-sampler run
+
+## 2026-03-26 05:13 PDT - MS1 Two-Sampler 100-Step Run Finished Cleanly; Extending To 200 Steps
+
+Final controller state for `MS1`:
+- root `/ahmed/irl-e4ms2-100-0326-0125` -> `JOB_STATE_SUCCEEDED`
+- train `/ahmed/irl-e4ms2-100-0326-0125/rl-e4ms2-20260326-082712-train` -> `JOB_STATE_SUCCEEDED`
+- rollout-0 `/ahmed/irl-e4ms2-100-0326-0125/rl-e4ms2-20260326-082712-rollout-0` -> `JOB_STATE_SUCCEEDED`
+- rollout-1 `/ahmed/irl-e4ms2-100-0326-0125/rl-e4ms2-20260326-082712-rollout-1` -> `JOB_STATE_SUCCEEDED`
+- all visible jobs finished with:
+  - `failure_count=0`
+  - `preemption_count=0`
+
+Important interpretation:
+- the two-sampler direct shape completed the full 100-step run without retries
+- this is the strongest direct evidence so far that:
+  - the multi-sampler topology is operationally stable on Iris
+  - the sampler bottleneck can be attacked without destabilizing the run
+
+Immediate next step requested by user:
+- keep the same topology and continue to a longer run:
+  - `2 x v5p-8` rollout workers
+  - `1 x v5p-8` trainer
+  - `400g` RAM on trainer and rollout
+  - `n_prompts=64`
+  - `inflight_weight_updates=True`
+  - `200` train steps
+
+Planned continuation command:
+
+```bash
+uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait \
+  --user ahmed \
+  --job-name irl-e4ms2-200-<timestamp> \
+  --region us-central1 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -e HF_TOKEN "$HF_TOKEN" \
+  -- uv run python experiments/exp_iris_rl_regression_direct_gcs_prod.py \
+       --experiment-name-suffix e4ms2 \
+       --num-train-steps 200 \
+       --n-prompts 64 \
+       --eval-frequency 1 \
+       --region us-central1 \
+       --inflight-weight-updates \
+       --num-rollout-workers 2
+```
+
+## 2026-03-26 05:17 PDT - Launched MS2 200-Step Two-Sampler Continuation And Reattached 8-Hour Monitoring
+
+Executed continuation command:
+
+```bash
+uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait \
+  --user ahmed \
+  --job-name irl-e4ms2-200-0326-0514 \
+  --region us-central1 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -e HF_TOKEN "$HF_TOKEN" \
+  -- uv run python experiments/exp_iris_rl_regression_direct_gcs_prod.py \
+       --experiment-name-suffix e4ms2 \
+       --num-train-steps 200 \
+       --n-prompts 64 \
+       --eval-frequency 1 \
+       --region us-central1 \
+       --inflight-weight-updates \
+       --num-rollout-workers 2
+```
+
+New root job:
+- `/ahmed/irl-e4ms2-200-0326-0514`
+
+Immediate post-launch state:
+- root job entered `JOB_STATE_RUNNING`
+- no child train/rollout jobs were visible yet at first controller check
+- no failures or preemptions recorded on the root job
+
+Current monitoring ownership for the 200-step continuation:
+- babysitter PTY session:
+  - `1018`
+- auto-attach train-memory poller PTY session:
+  - `62393`
+- state file:
+  - [20260326-0515_monitoring_state.json](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/20260326-0515_monitoring_state.json)
+- monitor log:
+  - [20260326-0515_babysit.log](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/20260326-0515_babysit.log)
+- auto-attach helper:
+  - [attach_e4ms2_200_poller.sh](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/attach_e4ms2_200_poller.sh)
+- intended train-memory JSONL once the train child appears:
+  - [e4ms2_200_train_memory_agent.jsonl](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/e4ms2_200_train_memory_agent.jsonl)
+
+Notes:
+- this extends the exact `MS1` topology that already completed 100 steps cleanly
+- no resubmission/retry has happened for `MS2`
+- the same 8-hour babysitting contract is active for the longer run
+
+## 2026-03-26 09:17 PDT - W&B Links For Two-Sampler Direct Run (`e4ms2-20260326-121919`)
+
+Separate reference section for the direct RL run with:
+- `1 x v5p-8` trainer
+- `2 x v5p-8` sampler/rollout workers
+- larger rollout batch shape (`n_prompts=64`)
+- `inflight_weight_updates=True`
+
+W&B runs:
+- trainer:
+  - https://wandb.ai/marin-community/marin_iris_rl_debug/runs/e4ms2-20260326-121919-train?nw=nwuserahmedah
+- rollout worker 0:
+  - https://wandb.ai/marin-community/marin_iris_rl_debug/runs/e4ms2-20260326-121919-rollout-0
+- rollout worker 1:
+  - https://wandb.ai/marin-community/marin_iris_rl_debug/runs/e4ms2-20260326-121919-rollout-1
+
+## 2026-03-26 09:22 PDT - Exact Throughput Calculation For `r4` vs `e4par` vs `e4ms2`
+
+Recomputed directly from raw W&B trainer histories, not from dashboard eyeballing.
+
+Method:
+- use one row per logged `global_step`
+- compute wall-clock per step as delta of W&B `_runtime`
+- compute trainer compute time from `throughput/step_duration_seconds`
+- derive trainer idle/wait as:
+  - `wall_clock_per_step - step_duration`
+
+Runs compared:
+- `r4`:
+  - `e4p-20260325-172718-train`
+- single-sampler parity:
+  - `e4par-20260326-044831-train`
+- two-sampler direct:
+  - `e4ms2-20260326-121919-train`
+
+Median metrics:
+- `r4`
+  - wall-clock/step: `496.1041092910018s` = `8.2684 min`
+  - step duration: `61.00027213749854s`
+  - derived idle: `435.10383715350326s`
+  - batch prep: `30.71908414363861s`
+- `e4par`
+  - wall-clock/step: `182.20604731799995s` = `3.0368 min`
+  - step duration: `60.76345235000008s`
+  - derived idle: `121.44259496799987s`
+  - batch prep: `30.078736543655396s`
+- `e4ms2`
+  - wall-clock/step: `101.08752536799875s` = `1.6848 min`
+  - step duration: `61.082273318999796s`
+  - derived idle: `40.005252048998955s`
+  - batch prep: `3.959851026535034s`
+
+Exact speedup calculations:
+- total speedup, `r4 -> e4ms2`:
+  - `496.1041092910018 / 101.08752536799875 = 4.907675673486169x`
+- parity speedup, `r4 -> e4par`:
+  - `496.1041092910018 / 182.20604731799995 = 2.722684872137125x`
+- two-sampler speedup on top of parity, `e4par -> e4ms2`:
+  - `182.20604731799995 / 101.08752536799875 = 1.8024590165453354x`
+
+Interpretation:
+- the total improvement is real and large:
+  - about `4.9x`
+- the two-sampler configuration materially improves throughput on top of the single-sampler parity run:
+  - about `1.8x`
+- trainer compute is basically unchanged across all three runs:
+  - about `61s` median
+- the gain is therefore almost entirely from reduced trainer waiting
+  - idle dropped:
+    - `435.1s -> 121.4s -> 40.0s`
+- the most visible train-side symptom of the second sampler is batch prep collapse:
+  - `30.7s -> 30.1s -> 4.0s`
+
+Important caveat:
+- `e4ms2` was still in progress when these medians were computed
+- the exact final medians may move slightly by run completion
+- but the direction and magnitude of the speedup are already clear
+
+## 2026-03-26 09:33 PDT - Bottleneck Analysis For `e4ms2` Trainer And Remaining Headroom
+
+Analyzed from:
+- trainer W&B history:
+  - `e4ms2-20260326-121919-train`
+- rollout W&B histories:
+  - `e4ms2-20260326-121919-rollout-0`
+  - `e4ms2-20260326-121919-rollout-1`
+- live trainer logs in:
+  - [20260326-0515_babysit.log](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/scratch/20260326-0515_babysit.log)
+
+Trainer-side medians:
+- wall-clock/step:
+  - `101.08752536799875s`
+- trainer step duration:
+  - `61.08199151200097s`
+- hook time:
+  - `15.379230644997733s`
+- batch prep:
+  - `3.957648992538452s`
+- MFU:
+  - `90.26134442184804%`
+
+Critical interpretation:
+- the trainer TPU is already highly utilized during the actual train step
+  - MFU is about `90%`
+- the trainer is therefore compute-efficient when it is busy
+- the remaining end-to-end loss is mostly not “slow math”
+
+More precise decomposition:
+- steady-state floor implied by trainer metrics:
+  - `step_duration + hook_time ~= 61.08s + 15.38s = 76.46s`
+- current observed median wall-clock/step:
+  - `101.09s`
+- median unexplained residual after compute + hooks:
+  - about `4.03s`
+- but this residual has a fat tail:
+  - `38.5%` of steps have residual `>10s`
+  - `20.0%` of steps have residual `>40s`
+  - `13.1%` of steps have residual `>60s`
+
+Meaning:
+- on median steps, the trainer is close to saturated
+- across the full run, the pipeline is not fully saturated because the tail is still large
+
+Evidence that rollout supply is still a bottleneck in the tail:
+- rollout-0 cumulative batches at comparable runtime:
+  - `77`
+- rollout-1 cumulative batches at comparable runtime:
+  - `110`
+- rollout-0 average seconds per completed batch over run:
+  - `213.55s`
+- rollout-1 average seconds per completed batch over run:
+  - `149.12s`
+
+Interpretation:
+- rollout-0 is materially slower because it is carrying the eval burden
+- with only one sampler doing eval, this is much better than before, but it still creates imbalance
+- if rollout-0 were freed from eval and matched rollout-1 throughput, combined sampler supply would be about:
+  - `74.56s` per rollout batch
+- that is almost exactly the current trainer floor of about `76.46s`
+
+So the most important conclusion is:
+- `2` samplers are close, but not fully sufficient in the current setup because one of them is partially consumed by eval
+- `2` pure rollout samplers with eval moved off the critical path would likely be enough to saturate the trainer
+
+Checkpoint overhead is the other major remaining bottleneck:
+- checkpoint saves show up repeatedly in live logs at steps:
+  - `83`, `89`, `95`, `101`, `107`, `114`, `120`, `126`
+- these coincide with many of the worst wall-clock spikes
+- examples:
+  - step `89`: batch prep `56.21s`, fwd/bwd `4.77s`
+  - step `101`: batch prep `45.20s`, fwd/bwd `36.88s`
+  - step `107`: batch prep `50.70s`, fwd/bwd `10.33s`
+- wall-clock p90 is:
+  - `205.76s`
+- wall-clock max is:
+  - `273.77s`
+
+Practical recommendation order:
+1. Move eval off the critical sampler path.
+   - best version: dedicate a separate eval worker / eval process
+   - cheaper version: reduce eval frequency further
+   - expected effect: make the existing 2-sampler topology much closer to trainer saturation
+2. Reduce checkpoint overhead if throughput matters more than rapid recovery.
+   - easiest knob: checkpoint less frequently
+   - stronger change: make checkpoint commit more asynchronous
+3. Only after that, consider a third sampler.
+   - a third rollout worker would likely saturate the trainer even with current eval placement
+   - but the upside is bounded by the trainer floor
+
+Estimated remaining headroom:
+- current median wall-clock/step:
+  - `101.09s`
+- current trainer floor:
+  - `76.46s`
+- best-case additional speedup from sampler-side saturation alone is therefore only about:
+  - `101.09 / 76.46 = 1.322x`
+
+Neutral conclusion:
+- no, the pipeline has not hit its absolute theoretical limit
+- yes, it is close to the trainer-side floor on typical steps
+- the next gains are now incremental, not another 4-5x jump
+- the cheapest remaining win is probably:
+  - move eval off the critical sampler path
+- the next biggest throughput win after that is probably:
+  - reduce checkpoint frequency / checkpoint cost
+
+## 2026-03-26 09:46 PDT - Replaced Fake Micro-Eval Disable With Explicit `None`
+
+Problem:
+- multiple experiments were “disabling” micro-eval with:
+  - `micro_eval_frequency=9999999`
+- this is a footgun because the config reads as enabled, just with a very large cadence
+
+Change:
+- `CurriculumConfig.micro_eval_frequency` now accepts:
+  - `int | None`
+- explicit semantics:
+  - `None` means micro-eval is disabled
+  - positive integer means enabled every N rollout-worker steps
+- rollout gating now goes through `_should_run_micro_eval(...)`
+  - this returns `False` when `micro_eval_frequency is None`
+  - and rejects nonpositive frequencies when micro-eval is enabled
+
+Files changed:
+- [curriculum.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/curriculum.py)
+- [rollout_worker.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/rollout_worker.py)
+- [test_rollout_worker.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/tests/rl/test_rollout_worker.py)
+
+Experiment callsites updated from fake disable to explicit disable:
+- [exp_iris_rl_regression_direct_gcs_prod.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp_iris_rl_regression_direct_gcs_prod.py)
+- [exp_iris_rl_regression_executor_gcs_small.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp_iris_rl_regression_executor_gcs_small.py)
+- [exp_iris_rl_direct.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp_iris_rl_direct.py)
+- [exp_iris_rl_debug.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp_iris_rl_debug.py)
+- [exp_iris_rl_regression_direct_hf_small.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp_iris_rl_regression_direct_hf_small.py)
+- [exp_iris_rl_regression_direct_gcs_small.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp_iris_rl_regression_direct_gcs_small.py)
+- [exp_iris_rl_oom_isolation.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp_iris_rl_oom_isolation.py)
+- [exp2039_rl_math500.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp2039_rl_math500.py)
+
+Validation:
+- `uv run pytest -q tests/rl/test_rollout_worker.py` -> `20 passed`
+- `./infra/pre-commit.py --fix ...` on touched files -> `OK`
