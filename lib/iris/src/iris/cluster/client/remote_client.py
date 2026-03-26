@@ -17,10 +17,15 @@ from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.rpc.errors import call_with_retry, format_connect_error
+from iris.rpc.errors import call_with_retry, format_connect_error, is_retryable_error
 from iris.time_utils import Deadline, Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
+
+# How long to tolerate controller unavailability before giving up on monitoring.
+# The job itself keeps running server-side; this only affects the client's ability
+# to poll status. One hour gives ample time for controller restarts/upgrades.
+CONTROLLER_UNAVAILABLE_TOLERANCE = 3600.0
 
 
 class RemoteClusterClient:
@@ -133,6 +138,10 @@ class RemoteClusterClient:
     ) -> cluster_pb2.JobStatus:
         """Wait for job to complete with exponential backoff polling.
 
+        If the controller becomes unavailable, retries with backoff for up to
+        ``CONTROLLER_UNAVAILABLE_TOLERANCE`` seconds before giving up. The
+        unavailable timer resets each time a status check succeeds.
+
         Args:
             job_id: Full job ID
             timeout: Maximum time to wait in seconds
@@ -146,9 +155,47 @@ class RemoteClusterClient:
         """
         deadline = Deadline.from_seconds(timeout)
         backoff = ExponentialBackoff(initial=0.1, maximum=poll_interval)
+        unavailable_backoff = ExponentialBackoff(initial=1.0, maximum=60.0, factor=2.0)
+        unavailable_since: float | None = None
 
         while True:
-            job_info = self.get_job_status(job_id)
+            try:
+                job_info = self.get_job_status(job_id)
+            except Exception as e:
+                if not is_retryable_error(e):
+                    raise
+                now = time.monotonic()
+                if unavailable_since is None:
+                    unavailable_since = now
+                elapsed_unavailable = now - unavailable_since
+                if elapsed_unavailable >= CONTROLLER_UNAVAILABLE_TOLERANCE:
+                    logger.error(
+                        "Controller unavailable for %.0fs, giving up on %s",
+                        elapsed_unavailable,
+                        job_id,
+                    )
+                    raise
+                logger.warning(
+                    "Controller unavailable for %s (%.0fs), job is still running server-side: %s",
+                    job_id,
+                    elapsed_unavailable,
+                    e,
+                )
+                interval = unavailable_backoff.next_interval()
+                time.sleep(min(interval, deadline.remaining_seconds()))
+                continue
+
+            # Controller responded — reset unavailability tracking.
+            if unavailable_since is not None:
+                elapsed_unavailable = time.monotonic() - unavailable_since
+                logger.info(
+                    "Controller back online for %s after %.0fs of unavailability",
+                    job_id,
+                    elapsed_unavailable,
+                )
+                unavailable_since = None
+                unavailable_backoff.reset()
+
             if is_job_finished(job_info.state):
                 return job_info
 
@@ -174,6 +221,11 @@ class RemoteClusterClient:
         Delegates log reading to the controller (which has the correct storage
         credentials and endpoint configuration), avoiding client-side S3 access.
 
+        If the controller becomes unavailable, retries with backoff for up to
+        ``CONTROLLER_UNAVAILABLE_TOLERANCE`` seconds before giving up. Log fetch
+        failures are treated the same way — they do not count toward a hard
+        failure limit while the controller is unreachable.
+
         Child job statuses are delivered inline in ``GetTaskLogsResponse`` (when
         *include_children* is True), so detecting state transitions requires no
         additional RPC calls.
@@ -184,16 +236,51 @@ class RemoteClusterClient:
         """
         deadline = Deadline.from_seconds(timeout)
         terminal_status: cluster_pb2.JobStatus | None = None
-        log_fetch_backoff = ExponentialBackoff(initial=1.0, maximum=30.0)
-        consecutive_log_failures = 0
-        max_log_failures = 5
+        unavailable_backoff = ExponentialBackoff(initial=1.0, maximum=60.0, factor=2.0)
+        unavailable_since: float | None = None
         # Track child job states so we fire callbacks once per transition.
         child_job_states: dict[str, int] = {}
         cursor: int = 0
 
         while True:
-            status = self.get_job_status(job_id)
+            try:
+                status = self.get_job_status(job_id)
+            except Exception as e:
+                if not is_retryable_error(e):
+                    raise
+                now = time.monotonic()
+                if unavailable_since is None:
+                    unavailable_since = now
+                elapsed_unavailable = now - unavailable_since
+                if elapsed_unavailable >= CONTROLLER_UNAVAILABLE_TOLERANCE:
+                    logger.error(
+                        "Controller unavailable for %.0fs, giving up on %s",
+                        elapsed_unavailable,
+                        job_id,
+                    )
+                    raise
+                logger.warning(
+                    "Controller unavailable for %s (%.0fs), job is still running server-side: %s",
+                    job_id,
+                    elapsed_unavailable,
+                    e,
+                )
+                interval = unavailable_backoff.next_interval()
+                time.sleep(min(interval, deadline.remaining_seconds()))
+                continue
+
             state_name = cluster_pb2.JobState.Name(status.state)
+
+            # Controller responded — reset unavailability tracking.
+            if unavailable_since is not None:
+                elapsed_unavailable = time.monotonic() - unavailable_since
+                logger.info(
+                    "Controller back online for %s after %.0fs of unavailability",
+                    job_id,
+                    elapsed_unavailable,
+                )
+                unavailable_since = None
+                unavailable_backoff.reset()
 
             try:
                 log_response = self.fetch_task_logs(
@@ -203,20 +290,10 @@ class RemoteClusterClient:
                     cursor=cursor,
                     min_level=min_level,
                 )
-                consecutive_log_failures = 0
-                log_fetch_backoff.reset()
             except Exception as e:
-                consecutive_log_failures += 1
+                # Log fetch failures are non-fatal — we still have the job status.
                 msg = format_connect_error(e) if isinstance(e, ConnectError) else str(e)
-                logger.warning(
-                    "Failed to fetch logs for %s (%d/%d), will retry:\n%s",
-                    job_id,
-                    consecutive_log_failures,
-                    max_log_failures,
-                    msg,
-                )
-                if consecutive_log_failures >= max_log_failures:
-                    raise
+                logger.warning("Failed to fetch logs for %s, will retry: %s", job_id, msg)
                 log_response = None
 
             if log_response is not None:
@@ -252,8 +329,7 @@ class RemoteClusterClient:
                 continue
 
             deadline.raise_if_expired(f"Job {job_id} did not complete in {timeout}s")
-            sleep_time = log_fetch_backoff.next_interval() if consecutive_log_failures > 0 else poll_interval
-            time.sleep(sleep_time)
+            time.sleep(poll_interval)
 
     def terminate_job(self, job_id: JobName) -> None:
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire())

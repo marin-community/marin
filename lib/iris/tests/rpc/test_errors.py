@@ -128,3 +128,47 @@ def test_call_with_retry_no_retry_on_not_found() -> None:
     assert exc_info.value.code == Code.NOT_FOUND
     # Should only call once (no retries)
     assert call_count == 1
+
+
+def test_call_with_retry_max_elapsed_stops_retrying() -> None:
+    """call_with_retry should stop retrying after max_elapsed seconds."""
+    call_count = 0
+
+    def always_fail():
+        nonlocal call_count
+        call_count += 1
+        raise ConnectError(Code.UNAVAILABLE, "Always down")
+
+    with pytest.raises(ConnectError):
+        call_with_retry(
+            "test_op",
+            always_fail,
+            max_attempts=1000,
+            max_elapsed=0.5,
+            backoff=ExponentialBackoff(initial=0.05, maximum=0.1),
+        )
+
+    # Should have retried several times within the 0.5s window, but not all 1000.
+    assert 2 <= call_count <= 30
+
+
+def test_call_with_retry_max_elapsed_succeeds_within_window() -> None:
+    """call_with_retry should succeed if the call recovers within max_elapsed."""
+    call_count = 0
+
+    def fail_then_succeed():
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 3:
+            raise ConnectError(Code.UNAVAILABLE, "Temporarily down")
+        return "recovered"
+
+    result = call_with_retry(
+        "test_op",
+        fail_then_succeed,
+        max_attempts=1000,
+        max_elapsed=5.0,
+        backoff=ExponentialBackoff(initial=0.01, maximum=0.05),
+    )
+    assert result == "recovered"
+    assert call_count == 4

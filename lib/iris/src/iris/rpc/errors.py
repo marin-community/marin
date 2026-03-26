@@ -143,9 +143,13 @@ def call_with_retry(
     *,
     on_retry: Callable[[Exception], None] | None = None,
     max_attempts: int = 20,
+    max_elapsed: float | None = None,
     backoff: ExponentialBackoff | None = None,
 ) -> T:
     """Execute an RPC call with exponential backoff retry.
+
+    Retries stop when either ``max_attempts`` is exhausted **or**
+    ``max_elapsed`` seconds have passed, whichever comes first.
 
     Args:
         operation: Description of the operation for logging
@@ -154,6 +158,8 @@ def call_with_retry(
             failure, including the final attempt. Useful for clearing cached
             connections so subsequent calls can re-resolve endpoints.
         max_attempts: Maximum number of attempts (default: 20)
+        max_elapsed: Maximum wall-clock seconds to keep retrying. ``None``
+            means no time limit (only ``max_attempts`` is used).
         backoff: Backoff configuration. A fresh copy is made internally so the
             caller's instance is not mutated. Defaults to
             ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0).
@@ -169,6 +175,7 @@ def call_with_retry(
     else:
         backoff = backoff.copy()
     last_exception = None
+    start_time = time.monotonic()
 
     for attempt in range(max_attempts):
         try:
@@ -176,36 +183,40 @@ def call_with_retry(
         except Exception as e:
             last_exception = e
             if not is_retryable_error(e):
-                # Non-retryable error, fail immediately
                 raise
 
-            # Always clear stale state on retryable errors, even on the final
-            # attempt, so the next call from the caller can re-resolve.
             if on_retry is not None:
                 on_retry(e)
 
-            if attempt + 1 >= max_attempts:
-                # Final attempt failed, raise
+            elapsed = time.monotonic() - start_time
+            attempts_exhausted = attempt + 1 >= max_attempts
+            time_exhausted = max_elapsed is not None and elapsed >= max_elapsed
+
+            if attempts_exhausted or time_exhausted:
                 logger.exception(
-                    "Operation %s failed after %d attempts: %s",
+                    "Operation %s failed after %d attempts (%.1fs elapsed): %s",
                     operation,
-                    max_attempts,
+                    attempt + 1,
+                    elapsed,
                     e,
                 )
                 raise
 
-            # Log and retry
             delay = backoff.next_interval()
+            if max_elapsed is not None:
+                remaining = max_elapsed - elapsed
+                delay = min(delay, max(0, remaining))
+
             logger.exception(
-                "Operation %s failed (attempt %d/%d), retrying in %.2fs: %s",
+                "Operation %s failed (attempt %d/%d, %.1fs elapsed), retrying in %.2fs: %s",
                 operation,
                 attempt + 1,
                 max_attempts,
+                elapsed,
                 delay,
                 e,
             )
             time.sleep(delay)
 
-    # Should not reach here due to raise in loop, but satisfy type checker
     assert last_exception is not None
     raise last_exception
