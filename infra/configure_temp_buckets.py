@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Provision marin-tmp-* scratch buckets and configure TTL-based lifecycle rules.
@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 # Dedicated tmp buckets, one per region.
 BUCKETS: dict[str, str] = {
-    "marin-tmp-asia-northeast-1": "asia-northeast1",
     "marin-tmp-us-central1": "us-central1",
     "marin-tmp-us-central2": "us-central2",
     "marin-tmp-eu-west4": "europe-west4",

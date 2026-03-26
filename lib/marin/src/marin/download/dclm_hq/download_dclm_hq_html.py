@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -30,7 +30,7 @@ from zephyr import Dataset, ZephyrContext
 from zephyr.writers import ensure_parent_dir
 
 CC_IDX_HOST_URL = "http://34.72.201.218:8080"
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 @dataclass

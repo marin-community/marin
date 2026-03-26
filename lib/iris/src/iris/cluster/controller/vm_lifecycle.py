@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,34 +13,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Controller lifecycle as free functions using Platform.
+"""Controller lifecycle as free functions using WorkerInfraProvider.
 
-Provides start_controller() and stop_controller() — both taking a Platform
-instance. These work uniformly across GCP and Manual platforms. For local
-mode, use LocalController directly (fundamentally different mechanism:
-in-process, no SSH/Docker).
+Provides start_controller() and stop_controller() — both taking a
+WorkerInfraProvider instance plus a resolve_image callable.  These work
+uniformly across GCP and Manual providers.  For local mode, use LocalCluster
+directly (fundamentally different mechanism: in-process, no SSH/Docker).
 """
 
 from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast
 
-from iris.cluster.platform.base import (
+from iris.cluster.providers.protocols import WorkerInfraProvider
+from iris.cluster.providers.types import (
     Labels,
-    Platform,
     RemoteWorkerHandle,
     StandaloneWorkerHandle,
 )
-from iris.cluster.platform.bootstrap import (
+from iris.cluster.providers.gcp.bootstrap import (
     build_controller_bootstrap_script_from_config,
 )
 from iris.rpc import config_pb2
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timer
 
 logger = logging.getLogger(__name__)
+
+
+def _identity_resolve_image(image: str, zone: str | None = None) -> str:
+    return image
+
 
 # Constants
 CONTROLLER_CONTAINER_NAME = "iris-controller"
@@ -251,32 +256,19 @@ def _controller_port(config: config_pb2.IrisClusterConfig) -> int:
     return DEFAULT_CONTROLLER_PORT
 
 
-def _controller_zones(config: config_pb2.IrisClusterConfig) -> list[str]:
-    """Extract zones to search for controller VM."""
-    which = config.controller.WhichOneof("controller")
-    if which == "gcp":
-        zone = config.controller.gcp.zone
-        if zone:
-            return [zone]
-    # Manual/Local don't need zones for list_vms
-    return ["local"]
-
-
 def _discover_controller_vm(
-    platform: Platform,
-    zones: list[str],
+    platform: WorkerInfraProvider,
     label_prefix: str,
 ) -> StandaloneWorkerHandle | None:
-    """Find existing controller VM by labels.
+    """Find existing controller VM by labels via project-wide search.
 
-    list_vms returns RemoteWorkerHandle, but controller VMs were created by
-    create_vm() and support terminate/set_labels. We cast to
-    StandaloneWorkerHandle since we know the controller VM supports these
-    operations.
+    Passes an empty zones list so the platform searches everywhere. This is
+    necessary because the controller may have been created in a zone that no
+    longer matches the current config.
     """
     labels = Labels(label_prefix)
     vms = platform.list_vms(
-        zones=zones,
+        zones=[],
         labels={labels.iris_controller: "true"},
     )
     if len(vms) > 1:
@@ -286,7 +278,7 @@ def _discover_controller_vm(
             f"'{labels.iris_controller}=true': {vm_ids}. "
             f"Expected at most one controller VM. Remove duplicates before proceeding."
         )
-    return cast(StandaloneWorkerHandle, vms[0]) if vms else None
+    return vms[0] if vms else None
 
 
 def _build_controller_vm_config(
@@ -309,7 +301,7 @@ def _build_controller_vm_config(
 
         vm_config.gcp.zone = zone
         vm_config.gcp.machine_type = gcp_ctrl.machine_type or "n2-standard-4"
-        vm_config.gcp.boot_disk_size_gb = gcp_ctrl.boot_disk_size_gb or 50
+        vm_config.gcp.boot_disk_size_gb = gcp_ctrl.boot_disk_size_gb or 100
     elif which == "manual":
         manual_ctrl = config.controller.manual
         if not manual_ctrl.host:
@@ -320,14 +312,16 @@ def _build_controller_vm_config(
         if ssh.key_file:
             vm_config.manual.ssh_key_file = ssh.key_file
     else:
-        raise ValueError(f"start_controller() does not support controller type: {which}. Use LocalController for local.")
+        raise ValueError(f"start_controller() does not support controller type: {which}. Use LocalCluster for local.")
 
     return vm_config
 
 
 def start_controller(
-    platform: Platform,
+    platform: WorkerInfraProvider,
     config: config_pb2.IrisClusterConfig,
+    resolve_image: Callable[[str, str | None], str] | None = None,
+    health_check_timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS,
 ) -> tuple[str, StandaloneWorkerHandle]:
     """Start or discover existing controller. Returns (address, vm_handle).
 
@@ -338,15 +332,15 @@ def start_controller(
     For GCP: creates a GCE instance, SSHs in, bootstraps the controller container.
     For Manual: allocates a host, SSHs in, bootstraps.
     """
+    _resolve_image = resolve_image or _identity_resolve_image
     label_prefix = config.platform.label_prefix or "iris"
-    zones = _controller_zones(config)
     port = _controller_port(config)
 
     # Check for existing controller
-    existing_vm = _discover_controller_vm(platform, zones, label_prefix)
+    existing_vm = _discover_controller_vm(platform, label_prefix)
     if existing_vm:
         logger.info("Found existing controller VM %s, checking health...", existing_vm.vm_id)
-        if wait_healthy(existing_vm, port):
+        if wait_healthy(existing_vm, port, timeout=health_check_timeout):
             address = f"http://{existing_vm.internal_address}:{port}"
             logger.info("Existing controller at %s is healthy", address)
             return address, existing_vm
@@ -364,12 +358,12 @@ def start_controller(
         raise RuntimeError(f"Controller VM {vm_config.name} did not become reachable within 300s")
 
     # Bootstrap
-    bootstrap_script = build_controller_bootstrap_script_from_config(config, platform=platform)
+    bootstrap_script = build_controller_bootstrap_script_from_config(config, resolve_image=_resolve_image)
     vm.bootstrap(bootstrap_script)
 
     # Health check
     address = f"http://{vm.internal_address}:{port}"
-    if not wait_healthy(vm, port):
+    if not wait_healthy(vm, port, timeout=health_check_timeout):
         raise RuntimeError(f"Controller at {address} failed health check after bootstrap")
 
     # Tag for discovery: label for list_vms(), metadata for address
@@ -381,11 +375,48 @@ def start_controller(
     return address, vm
 
 
-def stop_controller(platform: Platform, config: config_pb2.IrisClusterConfig) -> None:
-    """Find and terminate the controller VM."""
+def restart_controller(
+    platform: WorkerInfraProvider,
+    config: config_pb2.IrisClusterConfig,
+    resolve_image: Callable[[str, str | None], str] | None = None,
+    health_check_timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS,
+) -> tuple[str, StandaloneWorkerHandle]:
+    """Restart controller container in-place on existing VM.
+
+    Re-runs the bootstrap script on the existing controller VM, which stops the
+    running container, pulls the latest image, and starts a new container.
+    Much faster than a full stop+start cycle since it skips VM creation.
+    """
+    _resolve_image = resolve_image or _identity_resolve_image
     label_prefix = config.platform.label_prefix or "iris"
-    zones = _controller_zones(config)
-    vm = _discover_controller_vm(platform, zones, label_prefix)
+    port = _controller_port(config)
+
+    vm = _discover_controller_vm(platform, label_prefix)
+    if vm is None:
+        raise RuntimeError("No existing controller VM found. Use 'iris cluster start' to create one first.")
+
+    logger.info("Restarting controller container in-place on VM %s", vm.vm_id)
+
+    bootstrap_script = build_controller_bootstrap_script_from_config(config, resolve_image=_resolve_image)
+    vm.bootstrap(bootstrap_script)
+
+    address = f"http://{vm.internal_address}:{port}"
+    if not wait_healthy(vm, port, timeout=health_check_timeout):
+        raise RuntimeError(f"Controller at {address} failed health check after restart")
+
+    logger.info("Controller container restarted at %s", address)
+    return address, vm
+
+
+def stop_controller(platform: WorkerInfraProvider, config: config_pb2.IrisClusterConfig) -> None:
+    """Find and terminate the controller VM.
+
+    GCE instance deletion is synchronous (no --async), so the VM is fully gone
+    when this returns. This prevents the dying controller from writing stale
+    checkpoints after remote state is cleared.
+    """
+    label_prefix = config.platform.label_prefix or "iris"
+    vm = _discover_controller_vm(platform, label_prefix)
     if vm:
         logger.info("Stopping controller VM %s", vm.vm_id)
         vm.terminate()

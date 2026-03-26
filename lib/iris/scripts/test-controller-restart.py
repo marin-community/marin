@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Manual test: start smoke cluster, restart controller, validate health.
@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", stream
 logger = logging.getLogger("test-restart")
 
 IRIS_ROOT = Path(__file__).parent.parent
-CONFIG = str(IRIS_ROOT / "examples" / "smoke.yaml")
+CONFIG = str(IRIS_ROOT / "examples" / "smoke-gcp.yaml")
 
 
 def iris(*args: str, timeout: float = 300) -> subprocess.CompletedProcess[str]:

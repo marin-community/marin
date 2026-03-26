@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
@@ -119,6 +119,25 @@ def parameter_count(model: PyTree):
     # NB we need to use object identity here, mostly because of ShapedDtypeStruct
     leaves = {id(x): x for x in jax.tree_util.tree_leaves(model) if is_jax_array_like(x)}
     return sum(x.size for x in leaves.values())
+
+
+def move_tree_to_memory_kind(tree: T, *, memory_kind: str) -> T:
+    """Move JAX array leaves in ``tree`` to ``memory_kind`` while preserving structure."""
+
+    def _move_leaf(leaf):
+        if isinstance(leaf, jax.Array):
+            sharding = getattr(leaf, "sharding", None)
+            if sharding is None:
+                # Traced leaves inside jit do not expose concrete sharding metadata.
+                # Treat as no-op and rely on explicit `device_put(..., out_shardings=...)`
+                # at jit boundaries when memory-kind transfers are required.
+                return leaf
+            if sharding.memory_kind == memory_kind:
+                return leaf
+            return jax.device_put(leaf, sharding.with_memory_kind(memory_kind))
+        return leaf
+
+    return jax.tree.map(_move_leaf, tree)
 
 
 _sync_counter = 0

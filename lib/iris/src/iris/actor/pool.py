@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Actor pool for load-balanced and broadcast RPC calls."""
@@ -132,6 +132,7 @@ class ActorPool(Generic[T]):
             client = ActorServiceClientSync(
                 address=url,
                 timeout_ms=int(self._timeout * 1000),
+                accept_compression=[],
             )
             self._clients[url] = client
             return client

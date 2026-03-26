@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Run a function once, cache the result, and return it on subsequent calls."""
@@ -14,8 +14,8 @@ from typing import Generic, TypeVar, ParamSpec
 import cloudpickle
 from iris.marin_fs import marin_temp_bucket, open_url
 
-from marin.execution.distributed_lock import StepAlreadyDone
 from marin.execution.executor_step_status import (
+    StepAlreadyDone,
     STATUS_FAILED,
     STATUS_SUCCESS,
     StatusFile,

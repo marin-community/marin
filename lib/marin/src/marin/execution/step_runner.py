@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Step runner for StepSpec.
@@ -7,9 +7,9 @@ This module provides the execution layer for ``StepSpec`` objects. The main
 entry point is ``StepRunner``, a thin DAG scheduler that launches steps as
 they are yielded from an iterable, as soon as their dependencies are satisfied.
 
-Each step's execution strategy (caching, locking, remote submission) is owned
-by ``StepSpec.executable_fn``.  ``StepRunner`` simply calls that callable and
-polls for completion.
+Caching, distributed locking, heartbeats, and status writes are handled
+explicitly in :func:`run_step` rather than composed as decorators.  This
+makes the control flow easy to follow and debug.
 
 ``ExecutorStep`` objects can be converted to ``StepSpec`` via
 ``resolve_executor_step`` in ``marin.execution.executor``.
@@ -17,10 +17,13 @@ polls for completion.
 
 from __future__ import annotations
 
+import contextvars
+import dataclasses
 import json
 import logging
 import os
 import time
+import uuid
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 
@@ -28,18 +31,22 @@ import levanter.utils.fsspec_utils as fsspec_utils
 from iris.marin_fs import open_url, url_to_fs
 
 from fray.v2.client import JobHandle, JobStatus
+from fray.v2.local_backend import LocalJobHandle
+from marin.execution.artifact import Artifact
 from marin.execution.executor_step_status import (
     STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_SUCCESS,
+    StepAlreadyDone,
     StatusFile,
+    step_lock,
 )
-from fray.v2.local_backend import LocalJobHandle
+from marin.execution.remote import RemoteCallable
 from marin.execution.step_spec import StepSpec
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 # Re-export for backward compatibility
-from marin.execution.executor_step_status import PreviousTaskFailedError, should_run, worker_id  # noqa: F401
+from marin.execution.executor_step_status import PreviousTaskFailedError, worker_id
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +114,15 @@ class StepRunner:
         if max_workers < 1:
             raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
 
+        # Capture the fray client on the calling thread so worker threads can
+        # inherit it explicitly.  This is more robust than contextvars.copy_context()
+        # alone because it survives process/thread-pool boundary edge cases.
+        from fray.v2.client import _current_client_var
+
+        caller_fray_client = _current_client_var.get()
+        if caller_fray_client is not None:
+            logger.info("StepRunner: captured fray client %s for worker threads", type(caller_fray_client).__name__)
+
         local_pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="marin-step-runner")
 
         # Keyed by output_path (guaranteed unique)
@@ -132,11 +148,21 @@ class StepRunner:
                 time.sleep(1)
             for path in done:
                 handle = running.pop(path)
-                status = handle.wait(raise_on_failure=False)
-                if status == JobStatus.FAILED:
-                    logger.error(f"Step failed: {_display_name(path)}")
+                step_name = _display_name(path)
+                try:
+                    status = handle.wait(raise_on_failure=True)
+                except Exception as exc:
+                    logger.exception("Step failed: %s", step_name)
                     failed.add(path)
-                    failures.append(RuntimeError(f"Step failed: {_display_name(path)}"))
+                    wrapped = RuntimeError(f"Step failed: {step_name}")
+                    wrapped.__cause__ = exc
+                    failures.append(wrapped)
+                    continue
+
+                if status in (JobStatus.FAILED, JobStatus.STOPPED):
+                    logger.error("Step failed: %s (status=%s)", step_name, status.value)
+                    failed.add(path)
+                    failures.append(RuntimeError(f"Step failed: {step_name}; status={status.value}"))
                 else:
                     completed.add(path)
 
@@ -157,7 +183,13 @@ class StepRunner:
 
         def _do_launch(step: StepSpec) -> None:
             path = step.output_path
-            handle = self._launch_step(step, force_run_failed=force_run_failed, dry_run=dry_run, local_pool=local_pool)
+            handle = self._launch_step(
+                step,
+                force_run_failed=force_run_failed,
+                dry_run=dry_run,
+                local_pool=local_pool,
+                fray_client=caller_fray_client,
+            )
             if handle is not None:
                 running[path] = handle
             else:
@@ -184,7 +216,11 @@ class StepRunner:
                 if not running and waiting:
                     missing = []
                     for s in waiting:
-                        unmet = [_display_name(d) for d in s.deps if d not in completed and d not in failed]
+                        unmet = [
+                            _display_name(d)
+                            for d in s.deps
+                            if d.output_path not in completed and d.output_path not in failed
+                        ]
                         missing.append(f"  {s.name_with_hash}: needs {unmet}")
                     raise RuntimeError(
                         f"Iterable exhausted with {len(waiting)} step(s) with unsatisfied dependencies:\n"
@@ -198,7 +234,13 @@ class StepRunner:
             raise RuntimeError(f"{len(failures)} step(s) failed") from failures[0]
 
     def _launch_step(
-        self, step: StepSpec, *, force_run_failed: bool, dry_run: bool, local_pool: ThreadPoolExecutor
+        self,
+        step: StepSpec,
+        *,
+        force_run_failed: bool,
+        dry_run: bool,
+        local_pool: ThreadPoolExecutor,
+        fray_client: object | None = None,
     ) -> JobHandle | None:
         """Launch a single step. Returns None if skipped."""
         output_path = step.output_path
@@ -223,15 +265,93 @@ class StepRunner:
         if step.fn is None:
             raise ValueError(f"Step {step_name} has no callable fn")
 
-        executable = step.executable_fn
+        # Explicitly propagate the fray client into worker threads.
+        # We use set_current_client() inside the worker rather than relying
+        # solely on contextvars.copy_context(), because the latter can
+        # silently lose state across certain thread-pool reuse patterns.
+        captured_client = fray_client
 
-        # NOTE: we still wrap to update the names to make logs more readable
         def worker_fn():
-            executable(output_path)
+            if captured_client is not None:
+                from fray.v2.client import set_current_client
+
+                with set_current_client(captured_client):
+                    run_step(step)
+            else:
+                run_step(step)
 
         worker_fn.__qualname__ = step_name
         worker_fn.__name__ = step_name
 
-        # TODO: should this be async to avoid thread pool?
-        future = local_pool.submit(worker_fn)
+        # Also copy the full context for any other context vars (not just fray).
+        ctx = contextvars.copy_context()
+        future = local_pool.submit(ctx.run, worker_fn)
         return LocalJobHandle(f"local-{step_name}", future)
+
+
+# ---------------------------------------------------------------------------
+# Explicit step execution: cache, lock, heartbeat, run, save, status
+# ---------------------------------------------------------------------------
+
+
+def check_cache(output_path: str) -> bool:
+    """Return True if the step already succeeded (cache hit)."""
+    status = StatusFile(output_path, worker_id()).status
+    if status == STATUS_SUCCESS:
+        logger.info(f"Cache hit for {output_path}")
+        return True
+    return False
+
+
+def run_step(step: StepSpec) -> None:
+    """Execute a single step with explicit cache check, locking, heartbeat, and artifact saving.
+
+    For local steps the result is saved via ``Artifact.save``.  For remote
+    steps (``@remote``) the raw function + artifact save are submitted as a
+    Fray job; the executor node only manages the lock and status file.
+    """
+    output_path = step.output_path
+    step_label = step.name_with_hash
+
+    # 1. Cache check
+    if check_cache(output_path):
+        return
+
+    # 2. Acquire distributed lock with heartbeat (blocks until lock obtained or step done)
+    try:
+        with step_lock(output_path, step_label) as status_file:
+            # 3. Run the function
+            try:
+                if isinstance(step.fn, RemoteCallable):
+                    _run_remote_step(step, output_path)
+                else:
+                    result = step.fn(output_path)  # pyrefly: ignore[not-callable]
+                    Artifact.save(result, output_path)
+
+                # 4. Mark success
+                status_file.write_status(STATUS_SUCCESS)
+                logger.info(f"Step {step_label} succeeded")
+            except Exception:
+                status_file.write_status(STATUS_FAILED)
+                raise
+    except StepAlreadyDone:
+        logger.info(f"Step {step_label} completed by another worker")
+
+
+def _run_remote_step(step: StepSpec, output_path: str) -> None:
+    """Submit the step's raw function to Fray with artifact saving inside the job.
+
+    Fray jobs can't return values back to the executor, so the artifact
+    is saved inside the remote job itself.
+    """
+    assert isinstance(step.fn, RemoteCallable)
+    raw_fn = step.fn.fn
+
+    def _fn_with_artifact_save(out_path: str):
+        result = raw_fn(out_path)  # pyrefly: ignore[not-callable]
+        Artifact.save(result, out_path)
+
+    job_name = f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}"
+    remote_callable = step.fn.named(job_name)
+    job = dataclasses.replace(remote_callable, fn=_fn_with_artifact_save)
+    job(output_path)

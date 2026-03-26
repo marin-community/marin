@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -17,10 +17,11 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from iris.logging import configure_logging
 from iris.marin_fs import open_url
 from marin.core.runtime import cached_or_construct_output
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+configure_logging(level=logging.INFO)
 logger = logging.getLogger("fasttext-to-dolma")
 
 

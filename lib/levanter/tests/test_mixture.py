@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Sequence
@@ -7,9 +7,9 @@ import jax
 import numpy as np
 import pytest
 
-from levanter.data import ListAsyncDataset, MixtureDataset
+from levanter.data import ListAsyncDataset, MixtureDataset, PermutationDataset
 from levanter.data.dataset import AsyncDataset
-from levanter.data.mixture import StopStrategy, rescale_mixture_schedule_for_batch_schedule
+from levanter.data.mixture import ConcatDataset, StopStrategy, rescale_mixture_schedule_for_batch_schedule
 from levanter.schedule import BatchSchedule, ScheduleStep
 
 
@@ -294,3 +294,51 @@ def test_rescale_mixture_schedule_for_batch_schedule():
     expected_schedule = [(0, {"ds1": 0.5, "ds2": 0.5}), (100, {"ds1": 0.2, "ds2": 0.8})]
 
     assert rescaled_schedule == expected_schedule
+
+
+# --- ConcatDataset tests ---
+
+
+@pytest.mark.asyncio
+async def test_concat_dataset_getitem_consistent_with_get_batch():
+    ds1 = ListAsyncDataset([1, 2, 3])
+    ds2 = ListAsyncDataset([10, 20])
+    concat = ConcatDataset({"a": ds1, "b": ds2})
+    batch = await concat.get_batch([0, 1, 2, 3, 4])
+    for i in range(5):
+        assert await concat.getitem_async(i) == batch[i]
+
+
+@pytest.mark.asyncio
+async def test_concat_with_permutation_is_a_permutation():
+    """Every index maps to a unique element — no duplicates, no missing."""
+    ds1 = ListAsyncDataset(list(range(50)))
+    ds2 = ListAsyncDataset(list(range(50, 100)))
+    concat = ConcatDataset({"a": ds1, "b": ds2})
+    shuffled = PermutationDataset(concat, key=key())
+    total = await shuffled.async_len()
+    batch = await shuffled.get_batch(list(range(total)))
+    assert sorted(batch) == list(range(100))
+
+
+@pytest.mark.asyncio
+async def test_concat_with_permutation_nests_in_mixture_dataset():
+    """ConcatDataset + PermutationDataset can be used as a MixtureDataset component."""
+    ds1 = ListAsyncDataset(list(range(10)))
+    ds2 = ListAsyncDataset(list(range(10, 20)))
+    concat = ConcatDataset({"a": ds1, "b": ds2})
+    shuffled = PermutationDataset(concat, key=key())
+
+    ds3 = ListAsyncDataset(list(range(100, 110)))
+    mixture = MixtureDataset(
+        {"flat": shuffled, "other": ds3},
+        {"flat": 0.5, "other": 0.5},
+        block_size=10,
+        key=key(),
+        randomize_blocks=False,
+    )
+
+    batch = await mixture.get_batch(list(range(20)))
+    assert len(batch) == 20
+    all_values = set(range(20)) | set(range(100, 110))
+    assert all(item in all_values for item in batch)

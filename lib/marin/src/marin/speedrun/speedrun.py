@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -34,7 +34,7 @@ from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def _num_accelerator_chips(resources: ResourceConfig) -> int:

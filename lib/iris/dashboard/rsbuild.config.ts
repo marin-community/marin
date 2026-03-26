@@ -1,0 +1,31 @@
+import { defineConfig } from '@rsbuild/core'
+import { pluginVue } from '@rsbuild/plugin-vue'
+
+export default defineConfig({
+  plugins: [pluginVue()],
+  source: {
+    entry: {
+      controller: './src/controller-main.ts',
+      worker: './src/worker-main.ts',
+    },
+  },
+  output: {
+    distPath: {
+      root: 'dist',
+    },
+    assetPrefix: '/',
+  },
+  html: {
+    template: './src/template.html',
+    templateParameters: {
+      title: 'Iris Dashboard',
+    },
+  },
+  server: {
+    proxy: {
+      '/iris.cluster.ControllerService': 'http://localhost:8080',
+      '/iris.cluster.WorkerService': 'http://localhost:8081',
+      '/api': 'http://localhost:8080',
+    },
+  },
+})

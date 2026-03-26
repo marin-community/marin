@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -16,7 +16,7 @@ from iris.marin_fs import open_url
 
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)

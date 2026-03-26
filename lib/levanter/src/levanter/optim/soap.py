@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import defaultdict
@@ -106,6 +106,10 @@ def _map_fn(lax_map, bs, n_maps, fn, *args):
         return vmap(mapped_fn)(*args)
 
 
+def _is_scanned_stack(x: object) -> bool:
+    return isinstance(x, (hax.nn.Stacked, hax.nn.ArrayStacked))
+
+
 def scale_by_soap(
     b1: float = 0.95,
     b2: float = 0.95,
@@ -149,11 +153,11 @@ def scale_by_soap(
         scanned_layers_ = jax.tree.map(
             lambda x: (
                 jax.tree.map(lambda _: True, x, is_leaf=lambda x: isinstance(x, jax.Array))
-                if isinstance(x, hax.nn.Stacked)
+                if _is_scanned_stack(x)
                 else jax.tree.map(lambda _: False, x, is_leaf=lambda x: isinstance(x, jax.Array))
             ),
             params,
-            is_leaf=lambda x: isinstance(x, hax.nn.Stacked),
+            is_leaf=_is_scanned_stack,
         )
         params_sharding_ = hax.partitioning.infer_resource_partitions(params)
         params_sharding_ = jax.tree.map(lambda x: x.spec, params_sharding_)
@@ -676,11 +680,11 @@ def scale_by_soap(
         scanned_layers_ = jax.tree.map(
             lambda x: (
                 jax.tree.map(lambda _: True, x, is_leaf=lambda x: isinstance(x, jax.Array))
-                if isinstance(x, hax.nn.Stacked)
+                if _is_scanned_stack(x)
                 else jax.tree.map(lambda _: False, x, is_leaf=lambda x: isinstance(x, jax.Array))
             ),
             params,
-            is_leaf=lambda x: isinstance(x, hax.nn.Stacked),
+            is_leaf=_is_scanned_stack,
         )
 
         updates, new_state = jax.lax.cond(

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for environment loading from EnvConfig."""
@@ -21,8 +21,15 @@ def test_load_mock_environment():
 
 
 def test_load_math_environment():
-    """Test loading MathEnv via EnvConfig."""
-    config = EnvConfig(env_class="marin.rl.environments.math_env.MathEnv", env_args={"seed": 42})
+    """Test loading MathEnv via EnvConfig with inline data (no HF download)."""
+    config = EnvConfig(
+        env_class="marin.rl.environments.math_env.MathEnv",
+        env_args={
+            "seed": 42,
+            "train_dataset": [{"problem": "What is 1+1?", "solution": "\\boxed{2}"}],
+            "eval_dataset": [{"problem": "What is 2+2?", "solution": "\\boxed{4}"}],
+        },
+    )
 
     env = load_environment_from_spec(config)
 

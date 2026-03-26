@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -14,7 +14,7 @@ from levanter.models.llama import LlamaConfig
 from experiments.defaults import default_train, default_tokenize
 from experiments.simple_train_config import SimpleTrainConfig
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 if (backend := jax.default_backend()) not in {"gpu", "cpu"}:
     raise NotImplementedError(f"Only GPU and CPU backends supported, not {backend=}")
