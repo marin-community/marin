@@ -34,7 +34,6 @@ import cloudpickle
 import pyarrow as pa
 from iris.marin_fs import open_url, url_to_fs
 from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
-from fray.v2.actor import request_shutdown
 from fray.v2.client import JobHandle
 from fray.v2.types import Entrypoint, JobRequest
 from iris.marin_fs import marin_temp_bucket
@@ -911,8 +910,10 @@ class ZephyrWorker:
         self._counters_lock = threading.Lock()
         self._last_reported_counters: dict[str, int] = {}
 
-        # Build descriptive worker ID from actor context
+        # Capture shutdown_event from the actor context while the ContextVar
+        # is still set (child threads in Python <3.12 don't inherit it).
         actor_ctx = current_actor()
+        self._host_shutdown_event = actor_ctx.shutdown_event
         self._worker_id = f"{actor_ctx.group_name}-{actor_ctx.index}"
 
         # Register with coordinator - wait is not stricly necessary, but it reduces the complexity
@@ -985,8 +986,9 @@ class ZephyrWorker:
         finally:
             self._shutdown_event.set()
             heartbeat_thread.join(timeout=5.0)
-            logger.debug("[%s] Polling loop ended, requesting host shutdown", self._worker_id)
-            request_shutdown()
+            logger.debug("[%s] Polling loop ended, signaling host shutdown", self._worker_id)
+            if self._host_shutdown_event is not None:
+                self._host_shutdown_event.set()
 
     def _heartbeat_loop(
         self, coordinator: ActorHandle, interval: float = 5.0, max_consecutive_failures: int = 5
@@ -1283,7 +1285,7 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
         raise
     finally:
         # Signal coordinator shutdown first so workers receive SHUTDOWN from
-        # pull_task and self-terminate via request_shutdown() → exit_actor()
+        # pull_task and self-terminate via shutdown_event → exit_actor()
         # before worker_group.shutdown() sends __ray_terminate__.
         with suppress(Exception):
             coordinator.shutdown.remote().result(timeout=10.0)

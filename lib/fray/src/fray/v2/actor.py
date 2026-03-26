@@ -26,11 +26,9 @@ class ActorHandle(Protocol):
 class ActorContext:
     """Context available to actors during execution.
 
-    ``shutdown_event`` is set by ``request_shutdown()`` to signal that the
-    hosting process should exit.  Backends create the event and block on it
-    (Iris) or use it to trigger ``exit_actor()`` (Ray).  Child threads
-    inherit the ContextVar copy made at ``threading.Thread.__init__`` time,
-    so they can call ``request_shutdown()`` without global state.
+    ``shutdown_event`` is set by the actor when it is ready to exit.
+    Backends create the event and block on it (Iris) or use it to trigger
+    ``exit_actor()`` (Ray).
     """
 
     handle: ActorHandle
@@ -43,7 +41,7 @@ class ActorContext:
     """The name of the actor group this actor belongs to."""
 
     shutdown_event: threading.Event | None = None
-    """Set by request_shutdown() to signal the hosting process to exit."""
+    """Set by the actor when ready to exit; backends wait on it."""
 
 
 class HostedActor:
@@ -66,6 +64,9 @@ def current_actor() -> ActorContext:
     """Get the current actor's context. Must be called from within an actor.
 
     Returns the actor's handle (for passing to other actors), index, and group name.
+    Call from ``__init__`` (where the ContextVar is set) and stash anything
+    you need on ``self`` — child threads in Python <3.12 do NOT inherit
+    ContextVars.
 
     Raises:
         RuntimeError: If called outside of an actor context.
@@ -84,19 +85,6 @@ def _set_current_actor(ctx: ActorContext):
 def _reset_current_actor(token):
     """Reset the current actor context. Used by backends after actor creation."""
     _current_actor_ctx.reset(token)
-
-
-def request_shutdown() -> None:
-    """Signal that the hosting actor process should exit.
-
-    Call from within an actor (e.g. after receiving SHUTDOWN from a
-    coordinator).  Sets the ``shutdown_event`` on the current
-    ``ActorContext``, which the backend uses to trigger process exit.
-    No-op when called outside an actor context (e.g. LocalClient).
-    """
-    ctx = _current_actor_ctx.get()
-    if ctx is not None and ctx.shutdown_event is not None:
-        ctx.shutdown_event.set()
 
 
 class ActorFuture(Protocol):

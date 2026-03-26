@@ -466,11 +466,12 @@ class _RayActorHostBase:
     obtain a Ray remote class whose name matches the wrapped actor class,
     so that `ps` shows e.g. ``ray::my_workers`` instead of ``ray::_RayActorHost``.
 
-    The ``shutdown_event`` on ``ActorContext`` lets ``request_shutdown()``
-    work on Ray: when the wrapped actor calls ``request_shutdown()`` (e.g.
-    after receiving SHUTDOWN from a coordinator), the event is set.
-    ``_exit_when_idle`` (called by ``RayActorGroup.shutdown()``) waits on
-    the same event then calls ``exit_actor()`` to terminate the process.
+    The ``shutdown_event`` on ``ActorContext`` lets actors self-terminate on
+    Ray: the wrapped actor sets it when done (e.g. after receiving SHUTDOWN
+    from a coordinator), and a watchdog thread calls ``exit_actor()`` to
+    cleanly terminate the process.  ``_exit_when_idle`` (called by
+    ``RayActorGroup.shutdown()``) is a safety net for actors that never
+    set the event themselves.
     """
 
     def __init__(
@@ -493,7 +494,7 @@ class _RayActorHostBase:
         finally:
             _reset_current_actor(token)
 
-        # Watchdog: when request_shutdown() sets the event, exit the actor
+        # Watchdog: when the actor sets shutdown_event, exit the actor
         # process.  This lets actors self-terminate (e.g. workers after
         # receiving SHUTDOWN) without waiting for external _exit_when_idle.
         threading.Thread(
@@ -507,7 +508,7 @@ class _RayActorHostBase:
         ray.actor.exit_actor()
 
     def _exit_when_idle(self, timeout_s: float = 5.0) -> None:
-        """Safety net for actors that never call ``request_shutdown()``.
+        """Safety net for actors that never set ``shutdown_event``.
 
         Waits up to *timeout_s* for the event, then exits unconditionally.
         Called by ``RayActorGroup.shutdown()`` fire-and-forget.
@@ -639,7 +640,7 @@ class RayActorGroup:
         """Terminate all Ray actors.
 
         Calls ``_exit_when_idle`` on each actor, which waits for
-        ``request_shutdown()`` (already set by actors that self-terminated,
+        ``shutdown_event`` (already set by actors that self-terminated,
         e.g. workers after receiving SHUTDOWN) then calls ``exit_actor()``.
         Actors that are already dead are silently skipped.
 

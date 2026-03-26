@@ -223,7 +223,7 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     actor_name = f"{ctx.job_id}/{name_prefix}-{job_info.task_index}"
     logger.info(f"Starting actor: {actor_name} (job_id={ctx.job_id})")
 
-    # Shutdown event: request_shutdown() sets it via the ActorContext,
+    # Shutdown event: the actor sets it when ready to exit,
     # unblocking the wait below.
     shutdown_event = threading.Event()
 
@@ -249,7 +249,7 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     ctx.registry.register(actor_name, address)
     logger.info(f"Actor {actor_name} ready and listening")
 
-    # Block until the actor signals shutdown via request_shutdown()
+    # Block until the actor signals shutdown via shutdown_event
     shutdown_event.wait()
     logger.info(f"Actor {actor_name} shutting down")
     server.stop()
