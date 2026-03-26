@@ -16,7 +16,7 @@ import sys
 from dataclasses import dataclass, field
 
 from experiments.defaults import default_train
-from experiments.isoflop_sweep import MARIN_2025_RECIPE
+from experiments.scaling_law_sweeps.c_adamc import c_adamc_heuristic
 from experiments.pretraining_datasets.nemotron import tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
@@ -25,7 +25,7 @@ from levanter.optim.cautious import CautiousConfig
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of
 from marin.processing.tokenize import lm_mixture_data_config
 
-RECIPE = MARIN_2025_RECIPE
+RECIPE = c_adamc_heuristic
 SEQ_LEN = 1024
 BATCH_SIZE = 128
 
@@ -48,7 +48,7 @@ class ModelConfig:
 MODELS = [
     ModelConfig(
         name=f"{h}h",
-        config=RECIPE._build_model_config_from_hidden_size(h, SEQ_LEN),
+        config=RECIPE._build_model_config(h, SEQ_LEN),
         hidden_dim=h,
     )
     for h in HIDDEN_SIZES

@@ -14,7 +14,7 @@ import sys
 from dataclasses import dataclass, field
 
 from experiments.defaults import default_train
-from experiments.isoflop_sweep import MARIN_2025_RECIPE
+from experiments.scaling_law_sweeps.c_adamc import c_adamc_heuristic
 from experiments.pretraining_datasets.nemotron import tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
@@ -23,7 +23,7 @@ from levanter.optim.cautious import CautiousConfig
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of
 from marin.processing.tokenize import lm_mixture_data_config
 
-RECIPE = MARIN_2025_RECIPE
+RECIPE = c_adamc_heuristic
 SEQ_LEN = 1024
 BATCH_SIZE = 128
 
@@ -160,7 +160,7 @@ def build_steps(tpu_type: str = DEFAULT_TPU_TYPE) -> list[ExecutorStep]:
 
     run_cfgs = []
     for hidden in HIDDEN_SIZES:
-        model_config = RECIPE._build_model_config_from_hidden_size(hidden, SEQ_LEN)
+        model_config = RECIPE._build_model_config(hidden, SEQ_LEN)
         base_lr = RECIPE._compute_learning_rate(BATCH_SIZE, hidden)
         for num_steps in STEP_COUNTS:
             for hq_steps in HQ_TOTAL_EFFECTIVE_STEPS:

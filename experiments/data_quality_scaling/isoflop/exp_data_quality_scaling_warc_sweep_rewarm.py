@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 import fsspec
 
 from experiments.defaults import default_train
-from experiments.isoflop_sweep import MARIN_2025_RECIPE
+from experiments.scaling_law_sweeps.c_adamc import c_adamc_heuristic
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets.nemotron import tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig
@@ -50,7 +50,7 @@ from experiments.data_quality_scaling.utils import SelectBestLRConfig, select_be
 
 logger = logging.getLogger("ray")
 
-RECIPE = MARIN_2025_RECIPE
+RECIPE = c_adamc_heuristic
 SEQ_LEN = 1024
 BATCH_SIZE = 128
 RAMP_BEFORE = 100
@@ -104,7 +104,7 @@ HIDDEN_SIZES = [128, 256, 512, 768]
 MODELS = [
     ModelConfig(
         name=f"{h}h",
-        config=RECIPE._build_model_config_from_hidden_size(h, SEQ_LEN),
+        config=RECIPE._build_model_config(h, SEQ_LEN),
         hidden_dim=h,
     )
     for h in HIDDEN_SIZES
