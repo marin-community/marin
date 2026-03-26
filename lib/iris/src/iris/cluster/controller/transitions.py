@@ -596,12 +596,13 @@ class ControllerTransitions:
 
             state = cluster_pb2.JOB_STATE_PENDING if validation_error is None else cluster_pb2.JOB_STATE_FAILED
             finished_ms = None if validation_error is None else effective_submission_ms
+            has_reservation = 1 if request.HasField("reservation") and request.reservation.entries else 0
             cur.execute(
                 "INSERT INTO jobs("
                 "job_id, user_id, parent_job_id, root_job_id, depth, request_proto, state, submitted_at_ms, "
                 "root_submitted_at_ms, started_at_ms, finished_at_ms, scheduling_deadline_epoch_ms, "
-                "error, exit_code, num_tasks, is_reservation_holder, name"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 0, ?)",
+                "error, exit_code, num_tasks, is_reservation_holder, has_reservation, name"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 0, ?, ?)",
                 (
                     job_id.to_wire(),
                     job_id.user,
@@ -616,6 +617,7 @@ class ControllerTransitions:
                     deadline_epoch_ms,
                     validation_error,
                     replicas,
+                    has_reservation,
                     request.name,
                 ),
             )

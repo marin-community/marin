@@ -17,10 +17,15 @@ from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.rpc.errors import call_with_retry, format_connect_error
+from iris.rpc.errors import call_with_retry, format_connect_error, poll_with_retries
 from iris.time_utils import Deadline, Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
+
+# How long to tolerate controller unavailability before giving up on monitoring.
+# The job itself keeps running server-side; this only affects the client's ability
+# to poll status. One hour gives ample time for controller restarts/upgrades.
+CONTROLLER_UNAVAILABLE_TOLERANCE = 3600.0
 
 
 class RemoteClusterClient:
@@ -133,6 +138,11 @@ class RemoteClusterClient:
     ) -> cluster_pb2.JobStatus:
         """Wait for job to complete with exponential backoff polling.
 
+        If the controller becomes unavailable, retries with backoff for up to
+        ``CONTROLLER_UNAVAILABLE_TOLERANCE`` seconds or until the caller's
+        *timeout* expires — whichever comes first. The unavailability timer
+        resets each time a status check succeeds.
+
         Args:
             job_id: Full job ID
             timeout: Maximum time to wait in seconds
@@ -148,7 +158,13 @@ class RemoteClusterClient:
         backoff = ExponentialBackoff(initial=0.1, maximum=poll_interval)
 
         while True:
-            job_info = self.get_job_status(job_id)
+            job_info = poll_with_retries(
+                str(job_id),
+                lambda: self.get_job_status(job_id),
+                deadline=deadline,
+                unavailable_tolerance=CONTROLLER_UNAVAILABLE_TOLERANCE,
+            )
+
             if is_job_finished(job_info.state):
                 return job_info
 
@@ -174,6 +190,11 @@ class RemoteClusterClient:
         Delegates log reading to the controller (which has the correct storage
         credentials and endpoint configuration), avoiding client-side S3 access.
 
+        If the controller becomes unavailable, retries with backoff for up to
+        ``CONTROLLER_UNAVAILABLE_TOLERANCE`` seconds or until the caller's
+        *timeout* expires — whichever comes first. Log fetch failures are
+        non-fatal — they log a warning but never abort monitoring.
+
         Child job statuses are delivered inline in ``GetTaskLogsResponse`` (when
         *include_children* is True), so detecting state transitions requires no
         additional RPC calls.
@@ -184,15 +205,18 @@ class RemoteClusterClient:
         """
         deadline = Deadline.from_seconds(timeout)
         terminal_status: cluster_pb2.JobStatus | None = None
-        log_fetch_backoff = ExponentialBackoff(initial=1.0, maximum=30.0)
-        consecutive_log_failures = 0
-        max_log_failures = 5
         # Track child job states so we fire callbacks once per transition.
         child_job_states: dict[str, int] = {}
         cursor: int = 0
 
         while True:
-            status = self.get_job_status(job_id)
+            status = poll_with_retries(
+                str(job_id),
+                lambda: self.get_job_status(job_id),
+                deadline=deadline,
+                unavailable_tolerance=CONTROLLER_UNAVAILABLE_TOLERANCE,
+            )
+
             state_name = cluster_pb2.JobState.Name(status.state)
 
             try:
@@ -203,20 +227,10 @@ class RemoteClusterClient:
                     cursor=cursor,
                     min_level=min_level,
                 )
-                consecutive_log_failures = 0
-                log_fetch_backoff.reset()
             except Exception as e:
-                consecutive_log_failures += 1
+                # Log fetch failures are non-fatal — we still have the job status.
                 msg = format_connect_error(e) if isinstance(e, ConnectError) else str(e)
-                logger.warning(
-                    "Failed to fetch logs for %s (%d/%d), will retry:\n%s",
-                    job_id,
-                    consecutive_log_failures,
-                    max_log_failures,
-                    msg,
-                )
-                if consecutive_log_failures >= max_log_failures:
-                    raise
+                logger.warning("Failed to fetch logs for %s, will retry: %s", job_id, msg)
                 log_response = None
 
             if log_response is not None:
@@ -252,8 +266,7 @@ class RemoteClusterClient:
                 continue
 
             deadline.raise_if_expired(f"Job {job_id} did not complete in {timeout}s")
-            sleep_time = log_fetch_backoff.next_interval() if consecutive_log_failures > 0 else poll_interval
-            time.sleep(sleep_time)
+            time.sleep(poll_interval)
 
     def terminate_job(self, job_id: JobName) -> None:
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire())
