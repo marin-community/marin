@@ -5,7 +5,7 @@
 
 import atexit
 import logging
-import shutil
+import os
 import subprocess
 import tempfile
 import zipfile
@@ -154,8 +154,9 @@ def create_workspace_zip(
         max_size_bytes: Maximum allowed zip size. Pass None to disable the check.
 
     Returns:
-        Path to the created zip file.  The parent temp directory is cleaned up
-        automatically at process exit via atexit.
+        Path to the created zip file.  The file is cleaned up automatically
+        at process exit via atexit.  Ray accepts zip file paths directly as
+        working_dir, so no intermediate directory is needed.
     """
     workspace = Path(workspace)
 
@@ -174,12 +175,12 @@ def create_workspace_zip(
             exclude_subpaths=exclude_subpaths,
         )
 
-    # Use a persistent temp directory so the caller can use the zip path after
-    # this function returns.  Register cleanup on process exit to avoid leaking
-    # temp directories in long-lived processes.
-    td = tempfile.mkdtemp(prefix="workspace_zip_")
-    atexit.register(shutil.rmtree, td, ignore_errors=True)
-    zip_path = Path(td) / "workspace.zip"
+    # Create a temp *file* (not directory) so Ray can use the path directly as
+    # working_dir.  Register cleanup on process exit.
+    fd, zip_path_str = tempfile.mkstemp(suffix=".zip", prefix="workspace_")
+    os.close(fd)
+    zip_path = Path(zip_path_str)
+    atexit.register(lambda p=zip_path_str: os.unlink(p) if os.path.exists(p) else None)
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         if git_files is not None:
