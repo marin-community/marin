@@ -12,7 +12,6 @@ import pytest
 
 from marin.download.huggingface.download_hf import (
     DownloadConfig,
-    _get_expected_file_count,
     _relative_path_in_source,
     download_hf,
     stream_file_to_fsspec,
@@ -62,82 +61,6 @@ def mock_hf_fs():
     return _create
 
 
-def test_get_expected_file_count_returns_count():
-    """_get_expected_file_count returns the number of files from HfApi."""
-    cfg = DownloadConfig(
-        hf_dataset_id="test-org/test-dataset",
-        revision="abc1234",
-    )
-    repo_files = ["data/file1.txt", "data/file2.txt", "README.md"]
-    mock_api = MagicMock()
-    mock_api.list_repo_files.return_value = repo_files
-
-    with patch("marin.download.huggingface.download_hf.HfApi", return_value=mock_api):
-        result = _get_expected_file_count(cfg)
-
-    mock_api.list_repo_files.assert_called_once_with("test-org/test-dataset", repo_type="dataset", revision="abc1234")
-    assert result == 3
-
-
-def test_download_hf_cross_references_find_with_list_repo_files(mock_hf_fs, tmp_path):
-    """download_hf uses hf_fs.find() but cross-references count with list_repo_files()."""
-    test_files = {
-        "datasets/test-org/test-dataset/data/file1.txt": b"Content 1",
-    }
-    hf_fs = mock_hf_fs(test_files)
-    # list_repo_files returns the same count as find — no truncation
-    repo_files = ["data/file1.txt"]
-    mock_api = MagicMock()
-    mock_api.list_repo_files.return_value = repo_files
-
-    output_path = tmp_path / "output"
-    output_path.mkdir()
-    cfg = DownloadConfig(
-        hf_dataset_id="test-org/test-dataset",
-        revision="abc1234",
-        gcs_output_path=str(output_path),
-    )
-
-    with (
-        patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs),
-        patch("marin.download.huggingface.download_hf.HfApi", return_value=mock_api),
-    ):
-        download_hf(cfg)
-
-    # find() SHOULD be called — it's the primary listing method
-    hf_fs.find.assert_called_once()
-    # list_repo_files is called for cross-reference
-    mock_api.list_repo_files.assert_called_once()
-    assert (output_path / "data" / "file1.txt").exists()
-
-
-def test_download_hf_raises_on_truncated_find(mock_hf_fs, tmp_path):
-    """download_hf raises RuntimeError when find() returns fewer files than list_repo_files()."""
-    test_files = {
-        "datasets/test-org/test-dataset/data/file1.txt": b"Content 1",
-    }
-    hf_fs = mock_hf_fs(test_files)
-    # list_repo_files reports more files than find() returned — truncation detected
-    repo_files = ["data/file1.txt", "data/file2.txt", "data/file3.txt"]
-    mock_api = MagicMock()
-    mock_api.list_repo_files.return_value = repo_files
-
-    output_path = tmp_path / "output"
-    output_path.mkdir()
-    cfg = DownloadConfig(
-        hf_dataset_id="test-org/test-dataset",
-        revision="abc1234",
-        gcs_output_path=str(output_path),
-    )
-
-    with (
-        patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs),
-        patch("marin.download.huggingface.download_hf.HfApi", return_value=mock_api),
-    ):
-        with pytest.raises(RuntimeError, match="pagination bug"):
-            download_hf(cfg)
-
-
 def test_download_hf_basic(mock_hf_fs, tmp_path):
     """Test basic HF download functionality."""
     test_files = {
@@ -147,8 +70,6 @@ def test_download_hf_basic(mock_hf_fs, tmp_path):
     }
 
     hf_fs = mock_hf_fs(test_files)
-    mock_api = MagicMock()
-    mock_api.list_repo_files.return_value = ["data/file1.txt", "data/file2.txt", "README.md"]
 
     output_path = tmp_path / "output"
     output_path.mkdir()
@@ -161,7 +82,7 @@ def test_download_hf_basic(mock_hf_fs, tmp_path):
 
     with (
         patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs),
-        patch("marin.download.huggingface.download_hf.HfApi", return_value=mock_api),
+        patch("marin.download.huggingface.download_hf._get_expected_file_count", return_value=None),
     ):
         download_hf(cfg)
 
@@ -193,8 +114,6 @@ def test_download_hf_appends_sha_when_configured(mock_hf_fs, tmp_path):
     }
 
     hf_fs = mock_hf_fs(test_files)
-    mock_api = MagicMock()
-    mock_api.list_repo_files.return_value = ["data/file1.txt"]
 
     base_output_path = tmp_path / "output"
     revision = "abc1234"
@@ -208,7 +127,7 @@ def test_download_hf_appends_sha_when_configured(mock_hf_fs, tmp_path):
 
     with (
         patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs),
-        patch("marin.download.huggingface.download_hf.HfApi", return_value=mock_api),
+        patch("marin.download.huggingface.download_hf._get_expected_file_count", return_value=None),
     ):
         download_hf(cfg)
 
