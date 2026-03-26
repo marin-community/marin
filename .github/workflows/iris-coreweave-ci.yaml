@@ -2,6 +2,7 @@ name: Iris - CoreWeave CI
 
 on:
   pull_request:
+    types: [opened, synchronize]
     paths:
       - "lib/iris/**"
   issue_comment:
@@ -11,7 +12,8 @@ on:
 permissions:
   contents: read
   packages: write
-  statuses: write
+  pull-requests: read   # needed for issue_comment to access PR metadata
+  statuses: write       # post commit status from issue_comment trigger
 
 # Single concurrency group — only one CW CI run at a time across all PRs.
 # The warm cluster is shared; concurrent runs would conflict.
@@ -121,6 +123,10 @@ jobs:
           # this just waits for the port-forward to be usable.
           HEALTHY=false
           for i in $(seq 1 60); do
+            if ! kill -0 "$PF_PID" 2>/dev/null; then
+              echo "port-forward process died unexpectedly"
+              exit 1
+            fi
             if curl -sf "$IRIS_CONTROLLER_URL/healthz" > /dev/null 2>&1; then
               HEALTHY=true
               break
@@ -140,7 +146,9 @@ jobs:
 
       - name: Stop port-forward
         if: always()
-        run: kill $PF_PID 2>/dev/null || true
+        run: |
+          [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null || true
+          pkill -f "kubectl port-forward.*$IRIS_NAMESPACE" 2>/dev/null || true
 
       - name: Capture failure diagnostics
         if: failure()
