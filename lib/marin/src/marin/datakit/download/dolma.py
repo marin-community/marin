@@ -30,25 +30,6 @@ DOLMA_DATASETS = {
     "wiki": ["wiki-{0000..0001}.json.gz"],
 }
 
-# Sampling proportion comes from https://huggingface.co/datasets/allenai/dolma
-DOLMA_OLMO_MIXTURE_WEIGHTS = {
-    "dolma/algebraic-stack": 12.6,
-    "dolma/arxiv": 28.0,
-    "dolma/gutenberg": 5.3,
-    "dolma/c4": 124.95,
-    "dolma/cc": 597.75,
-    "dolma/cc-news": 14.3,
-    "dolma/falcon": 456.4,
-    "dolma/megawika": 4.6,
-    "dolma/open-web-math": 12.6,
-    "dolma/pes2o": 57.2,
-    "dolma/reddit": 79.9,
-    "dolma/stackexchange": 19.6,
-    "dolma/starcoder": 263.8,
-    "dolma/flan": 16.5,
-    "dolma/wiki": 7.4,
-}
-
 
 def download_dolma_step() -> StepSpec:
     """Download the Dolma 1.7 dataset from HuggingFace."""
