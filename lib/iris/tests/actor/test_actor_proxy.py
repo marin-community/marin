@@ -33,23 +33,10 @@ class StatusActor:
         return f"echo: {message}"
 
 
-class FakeEndpointDB:
-    """Minimal fake that satisfies ActorProxy._resolve_endpoint via the same interface as ControllerDB."""
-
-    def __init__(self):
-        self._endpoints: dict[str, str] = {}
-
-    def register(self, name: str, address: str) -> None:
-        self._endpoints[name] = address
-
-    def resolve(self, name: str) -> str | None:
-        return self._endpoints.get(name)
-
-
 class StandaloneActorProxy:
     """A standalone proxy for testing without a full controller.
 
-    Wraps ActorProxy's forwarding logic but uses a simple dict-based
+    Mirrors ActorProxy's forwarding logic but uses a simple dict-based
     endpoint registry instead of ControllerDB.
     """
 
@@ -81,7 +68,8 @@ class StandaloneActorProxy:
                 status_code=404,
             )
 
-        upstream_url = f"http://{address}/iris.actor.ActorService/{method}"
+        base = address if "://" in address else f"http://{address}"
+        upstream_url = f"{base}/iris.actor.ActorService/{method}"
         body = await request.body()
         # Forward all headers except hop-by-hop and routing headers.
         skip = frozenset({"host", "transfer-encoding", "connection", "keep-alive", ACTOR_ENDPOINT_HEADER})
@@ -125,17 +113,19 @@ def _start_proxy_server(proxy: StandaloneActorProxy, threads: ThreadContainer) -
 def test_proxy_round_trip():
     """Full round-trip: client → proxy → actor server → response."""
     threads = ThreadContainer()
+
+    full_name = "test-ns/status"
     actor_server = ActorServer(host="127.0.0.1", threads=threads)
-    actor_server.register("status", StatusActor())
+    actor_server.register(full_name, StatusActor())
     actor_port = actor_server.serve_background()
 
     proxy = StandaloneActorProxy()
-    proxy.register("test-ns/status", f"127.0.0.1:{actor_port}")
+    proxy.register(full_name, f"127.0.0.1:{actor_port}")
     proxy_port = _start_proxy_server(proxy, threads)
 
     try:
-        resolver = ProxyResolver(f"http://127.0.0.1:{proxy_port}", namespace="test-ns")
-        client = ActorClient(resolver, "status")
+        resolver = ProxyResolver(f"http://127.0.0.1:{proxy_port}")
+        client = ActorClient(resolver, full_name)
 
         result = client.get_status()
         assert result["documents_processed"] == 1
@@ -147,6 +137,33 @@ def test_proxy_round_trip():
         # Second call increments the counter
         result = client.get_status()
         assert result["documents_processed"] == 2
+    finally:
+        threads.stop()
+
+
+def test_proxy_namespaced_actor():
+    """Proxy forwards to an actor registered under a full namespaced path.
+
+    This mirrors real iris backend behavior where actors are registered as
+    /user/job/coordinator/actor-0 and the address includes the http:// scheme.
+    """
+    threads = ThreadContainer()
+
+    full_name = "/user/my-job/coordinator/status-0"
+    actor_server = ActorServer(host="127.0.0.1", threads=threads)
+    actor_server.register(full_name, StatusActor())
+    actor_port = actor_server.serve_background()
+
+    proxy = StandaloneActorProxy()
+    proxy.register(full_name, f"http://127.0.0.1:{actor_port}")
+    proxy_port = _start_proxy_server(proxy, threads)
+
+    try:
+        resolver = ProxyResolver(f"http://127.0.0.1:{proxy_port}")
+        client = ActorClient(resolver, full_name)
+
+        result = client.get_status()
+        assert result["documents_processed"] == 1
     finally:
         threads.stop()
 
