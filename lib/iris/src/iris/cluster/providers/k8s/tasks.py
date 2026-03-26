@@ -693,6 +693,26 @@ class K8sTaskProvider:
         except Exception as e:
             return cluster_pb2.ProfileTaskResponse(error=str(e))
 
+    def exec_in_container(
+        self,
+        task_id: str,
+        attempt_id: int,
+        command: list[str],
+        timeout_seconds: int = 60,
+    ) -> cluster_pb2.Worker.ExecInContainerResponse:
+        """Execute a command in a running task pod via kubectl exec."""
+        pod_name = _pod_name(JobName.from_wire(task_id), attempt_id)
+        effective_timeout: float | None = timeout_seconds if timeout_seconds >= 0 else None
+        try:
+            result = self.kubectl.exec(pod_name, command, container="task", timeout=effective_timeout)
+            return cluster_pb2.Worker.ExecInContainerResponse(
+                exit_code=result.returncode,
+                stdout=result.stdout,
+                stderr=result.stderr,
+            )
+        except Exception as e:
+            return cluster_pb2.Worker.ExecInContainerResponse(error=str(e))
+
     def close(self) -> None:
         """No persistent resources to release."""
 
