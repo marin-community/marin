@@ -8,7 +8,9 @@ This module provides the `pt_vs_hq_components` dictionary containing tokenized
 datasets used by various training experiments.
 """
 
+from marin.datakit.download.wikipedia import download_wikipedia_step
 from marin.execution.executor import ExecutorStep, mirrored, this_output_path, versioned
+from marin.execution.step_spec import StepSpec
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
 from marin.schemas.web.selectors import ARXIV_BLACKLISTED_SELECTORS, WIKI_BLACKLISTED_SELECTORS
 from marin.transform.ar5iv.transform_ar5iv import Ar5ivExtractionConfig, process_ar5iv_dump
@@ -42,30 +44,33 @@ stackexchange_text_resiliparse_custom_fork = ExecutorStep(
     ),
 ).with_output_path("documents/stackexchange-resiliparse-custom-fork-ab41ad")
 
-# Wikipedia resiliparse custom fork step (data already exists at hardcoded path)
-wikipedia_resiliparse_custom_fork = (
-    ExecutorStep(
-        name="documents/wikipedia-resiliparse-custom-fork",
-        fn=process_wiki_dump,
-        config=WikiExtractionConfig(
-            input_path=mirrored("raw/wikipedia-a7dad0/20241201", budget_gb=1),
-            revision=versioned("20241201"),
-            output_path=this_output_path(),
+_wikipedia_download = download_wikipedia_step()
+
+# Wikipedia resiliparse custom fork step
+_wikipedia_transform = StepSpec(
+    name="documents/wikipedia-resiliparse-custom-fork",
+    fn=lambda output_path: process_wiki_dump(
+        WikiExtractionConfig(
+            input_path=f"{_wikipedia_download.output_path}/20241201",
+            revision="20241201",
+            output_path=output_path,
             extract_method="resiliparse",
             extract_config=ResiliparseConfig(
                 links=False,
                 skip_elements=WIKI_BLACKLISTED_SELECTORS,
                 markdownify_config=HtmlToMarkdownConfig(include_images=False, include_links=False),
             ),
-            remove_reference_section=versioned(True),
-            digit_threshold=versioned(50),
-            word_threshold=versioned(70),
-            special_char_threshold=versioned(50),
-        ),
-    )
-    .with_output_path("documents/wikipedia-resiliparse-custom-fork-2569de")
-    .cd("20241201")
+            remove_reference_section=True,
+            digit_threshold=50,
+            word_threshold=70,
+            special_char_threshold=50,
+        )
+    ),
+    deps=[_wikipedia_download],
+    hash_attrs={"revision": "20241201", "extract_method": "resiliparse"},
+    override_output_path="documents/wikipedia-resiliparse-custom-fork-2569de",
 )
+wikipedia_resiliparse_custom_fork = _wikipedia_transform.as_executor_step().cd("20241201")
 
 # ar5iv resiliparse custom fork step (data already exists at hardcoded path)
 ar5iv_no_problem_resiliparse_custom_fork = ExecutorStep(
