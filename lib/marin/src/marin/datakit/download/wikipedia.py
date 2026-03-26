@@ -128,5 +128,5 @@ def download_wikipedia_step(
         fn=_run,
         hash_attrs={"input_urls": input_urls},
         # NOTE: if no inputs are provided, use the previously downloaded and no longer exposed 2024-12-01 data
-        override_output_path="raw/wikipedia-a7dad0" if input_urls is None else None,
+        override_output_path="raw/wikipedia-9273e1" if input_urls is None else None,
     )
