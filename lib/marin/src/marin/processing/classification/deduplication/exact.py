@@ -152,18 +152,19 @@ def dedup_exact_paragraph(
                 "file_idx": item["file_idx"],
             }
 
+    def _flat_map_paragraph_hashes(paths: list[str]) -> Iterator[dict]:
+        for path in paths:
+            for batch in _load_batches(path):
+                hashes = compute_paragraph_hashes(batch).to_pylist()
+                counters.increment("hash/paragraphs", len(hashes))
+                for hash_record in hashes:
+                    yield {"file_idx": path_to_idx[path], "id": hash_record.pop("doc_id"), **hash_record}
+
     file_groups = group_files(input_files, max_parallelism)
     shard_results = list(
         ctx.execute(
             Dataset.from_list(file_groups)
-            .flat_map(
-                lambda paths: (
-                    {"file_idx": path_to_idx[path], "id": hash_record.pop("doc_id"), **hash_record}
-                    for path in paths
-                    for batch in _load_batches(path)
-                    for hash_record in compute_paragraph_hashes(batch).to_pylist()
-                )
-            )
+            .flat_map(_flat_map_paragraph_hashes)
             .group_by(
                 lambda record: record["hash"],
                 # NOTE: selecting the canonical record is deterministic via this sort
@@ -278,18 +279,19 @@ def dedup_exact_document(
                 "file_idx": item["file_idx"],
             }
 
+    def _flat_map_document_hashes(paths: list[str]) -> Iterator[dict]:
+        for path in paths:
+            for batch in _load_batches(path):
+                hashes = compute_document_hashes(batch).to_pylist()
+                counters.increment("hash/documents", len(hashes))
+                for hash_record in hashes:
+                    yield {"file_idx": path_to_idx[path], **hash_record}
+
     file_groups = group_files(input_files, max_parallelism)
     shard_results = list(
         ctx.execute(
             Dataset.from_list(file_groups)
-            .flat_map(
-                lambda paths: (
-                    {"file_idx": path_to_idx[path], **hash_record}
-                    for path in paths
-                    for batch in _load_batches(path)
-                    for hash_record in compute_document_hashes(batch).to_pylist()
-                )
-            )
+            .flat_map(_flat_map_document_hashes)
             .group_by(
                 lambda record: record["hash"],
                 # NOTE: selecting the canonical record is deterministic via this sort

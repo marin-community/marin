@@ -94,8 +94,10 @@ def dedup_fuzzy_document(
             if not doc_buckets.is_valid:
                 continue
 
+            counters.increment("minhash/documents")
             doc_id_val = doc_id.as_py()
             for b in doc_buckets.as_py():
+                counters.increment("minhash/buckets")
                 yield {"bucket": str(b), "id": doc_id_val}
 
     ctx = ZephyrContext(
