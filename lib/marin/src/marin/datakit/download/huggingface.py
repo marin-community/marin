@@ -349,6 +349,7 @@ def download_hf_step(
     hf_dataset_id: str,
     revision: str,
     hf_urls_glob: list[str] | None = None,
+    append_sha_to_path: bool = False,
     zephyr_max_parallelism: int = 8,
     deps: list[StepSpec] | None = None,
     override_output_path: str | None = None,
@@ -362,6 +363,7 @@ def download_hf_step(
         hf_dataset_id: HuggingFace dataset identifier (e.g. "HuggingFaceFW/fineweb").
         revision: Commit hash from the HF dataset repo.
         hf_urls_glob: Glob patterns to select specific files. Empty means all files.
+        append_sha_to_path: If True, write outputs under ``output_path/<revision>``.
         zephyr_max_parallelism: Maximum download parallelism.
         deps: Optional upstream dependencies.
         override_output_path: Override the computed output path entirely.
@@ -378,6 +380,7 @@ def download_hf_step(
                 revision=revision,
                 hf_urls_glob=resolved_glob,
                 gcs_output_path=output_path,
+                append_sha_to_path=append_sha_to_path,
                 zephyr_max_parallelism=zephyr_max_parallelism,
             )
         )
@@ -390,6 +393,7 @@ def download_hf_step(
             "hf_dataset_id": hf_dataset_id,
             "revision": revision,
             "hf_urls_glob": resolved_glob,
+            "append_sha_to_path": append_sha_to_path,
         },
         override_output_path=override_output_path,
     )

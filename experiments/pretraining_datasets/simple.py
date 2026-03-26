@@ -53,10 +53,16 @@ def _tokenize_simple(
     return step
 
 
-def _dl(name: str, hf_dataset_id: str, revision: str, output_path: str) -> ExecutorStep:
+def _dl(
+    name: str, hf_dataset_id: str, revision: str, output_path: str, *, append_sha_to_path: bool = False
+) -> ExecutorStep:
     """Create a download ExecutorStep from a StepSpec."""
     return download_hf_step(
-        name, hf_dataset_id=hf_dataset_id, revision=revision, override_output_path=output_path
+        name,
+        hf_dataset_id=hf_dataset_id,
+        revision=revision,
+        append_sha_to_path=append_sha_to_path,
+        override_output_path=output_path,
     ).as_executor_step()
 
 
@@ -83,7 +89,11 @@ def _build_downloads() -> dict[str, ExecutorStep | InputName]:
         ),
         "dolma3_mix_150b_1025": (
             _dl(
-                "raw/dolma3_mix-150B-1025", "allenai/dolma3_mix-150B-1025", "15d04ee", "raw/dolma3_mix-150B-1025-15d04ee"
+                "raw/dolma3_mix-150B-1025",
+                "allenai/dolma3_mix-150B-1025",
+                "15d04ee",
+                "raw/dolma3_mix-150B-1025-15d04ee",
+                append_sha_to_path=True,
             ).cd("15d04ee")
         ),
         "dclm_baseline_wrong": _dl(
