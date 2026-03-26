@@ -1,0 +1,4 @@
+interface:
+  display_name: "Modeling Experiments"
+  short_description: "Run staged Marin modeling experiment lines"
+  default_prompt: "Use $run-modeling-experiment to plan and run a staged Marin modeling experiment line."

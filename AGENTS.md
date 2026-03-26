@@ -24,6 +24,8 @@ Key skills and their triggers:
 | Writing a design doc or spec | `design-doc` |
 | Debugging subtle code problems | `debugger` |
 | Multi-step plans needing sub-agents | `multi-stage` |
+| Running a research thread or benchmark study | `agent-research` |
+| Running a staged modeling experiment line | `run-modeling-experiment` |
 | Adding a HF dataset | `add-dataset` |
 | Profiling JAX training | `agent-profiling` |
 | Running / monitoring ferries | `ferries` |

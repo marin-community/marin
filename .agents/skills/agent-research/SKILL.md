@@ -21,10 +21,14 @@ This workflow optimizes for:
 specialization skills for task-specific constraints while keeping lifecycle
 process here.
 
+- For modeling experiment lines (architecture changes, optimizer changes,
+  train-loop tweaks, isoFLOP studies), use
+  `.agents/skills/run-modeling-experiment/SKILL.md` as a specialization layered
+  on top of this skill.
 - For Pallas kernel work, use `.agents/skills/add-pallas-kernel/SKILL.md` as
   a specialization layered on top of this skill.
 - Keep branch/issue/logbook/snapshot cadence in `agent-research`; keep
-  kernel-specific safety/perf rules in `add-pallas-kernel`.
+  domain-specific design and evaluation rules in the specialization skill.
 
 ## Naming
 Use **research logbook** consistently in prose and file naming.
