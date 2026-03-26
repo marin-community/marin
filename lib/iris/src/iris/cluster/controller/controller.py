@@ -42,6 +42,7 @@ from iris.cluster.controller.db import (
     Job,
     Task,
     Worker,
+    _decode_row,
     _tasks_with_attempts,
     healthy_active_workers_with_attributes,
     insert_task_profile,
@@ -282,6 +283,21 @@ def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, J
     with queries.snapshot() as snapshot:
         jobs = snapshot.select(JOBS, where=JOBS.c.job_id.in_([job_id.to_wire() for job_id in job_ids]))
     return {job.job_id: job for job in jobs}
+
+
+def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list[Job]:
+    """Fetch only jobs that have reservations, filtering at the SQL level.
+
+    Uses the denormalized has_reservation column to avoid deserializing
+    request_proto for all active jobs.
+    """
+    placeholders = ",".join("?" for _ in states)
+    with queries.snapshot() as snapshot:
+        rows = snapshot._fetchall(
+            f"SELECT * FROM jobs WHERE state IN ({placeholders}) AND has_reservation = 1",
+            list(states),
+        )
+    return [_decode_row(Job, row) for row in rows]
 
 
 def _schedulable_tasks(queries: ControllerDB) -> list[Task]:
@@ -1181,11 +1197,8 @@ class Controller:
             cluster_pb2.JOB_STATE_BUILDING,
             cluster_pb2.JOB_STATE_RUNNING,
         )
-        with self._db.snapshot() as snapshot:
-            reservable_jobs = snapshot.select(JOBS, where=JOBS.c.state.in_(list(reservable_states)))
-        for job in reservable_jobs:
-            if not job.request.HasField("reservation"):
-                continue
+        reservation_jobs = _jobs_with_reservations(self._db, reservable_states)
+        for job in reservation_jobs:
 
             job_wire = job.job_id.to_wire()
             for idx, res_entry in enumerate(job.request.reservation.entries):

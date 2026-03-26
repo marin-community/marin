@@ -579,6 +579,7 @@ class Job:
     exit_code: int | None = db_field("exit_code", _nullable(_decode_int))
     num_tasks: int = db_field("num_tasks", _decode_int)
     is_reservation_holder: bool = db_field("is_reservation_holder", _decode_bool_int)
+    has_reservation: bool = db_field("has_reservation", _decode_bool_int, default=False)
     name: str = db_field("name", _decode_str, default="")
     depth: int = db_field("depth", _decode_int, default=0)
 
