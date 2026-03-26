@@ -88,6 +88,10 @@ class TransformAdapter:
     metadata_remap: dict[str, str] = field(default_factory=dict)
     replacements: dict[str, str] | None = None
     extra_metadata_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    message_transform_fn: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None = None
+    """Optional function to transform the raw message list before role mapping.
+    Receives the full conversation (list of message dicts) and returns a transformed list.
+    Useful for converting non-standard tool call formats to OpenAI structured format."""
 
     def transform_conversation_to_openai_format(
         self,
@@ -121,6 +125,8 @@ class TransformAdapter:
                 self.tool_value: "tool",
             }
             conversation = row[self.conversation_column]
+            if self.message_transform_fn is not None:
+                conversation = self.message_transform_fn(conversation)
             for conv in conversation:
                 raw_role = conv[self.role_key]
                 if raw_role in self.drop_roles:
@@ -133,6 +139,8 @@ class TransformAdapter:
                     kwargs["tool_call_id"] = conv["tool_call_id"]
                 if conv.get("name"):
                     kwargs["name"] = conv["name"]
+                if conv.get("reasoning_content"):
+                    kwargs["reasoning_content"] = conv["reasoning_content"]
                 messages.append(OpenAIChatMessage(**kwargs))
             return messages
         elif self.dataset_format == InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE:

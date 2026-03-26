@@ -43,6 +43,7 @@ Current datasets:
 import dataclasses
 import hashlib
 import json
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -146,6 +147,7 @@ def multi_turn_adapter(
     replacements: dict[str, str] | None = None,
     extra_metadata_fn=None,
     drop_roles: tuple[str, ...] | None = None,
+    message_transform_fn=None,
 ) -> TransformAdapter:
     return TransformAdapter(
         dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
@@ -159,6 +161,7 @@ def multi_turn_adapter(
         replacements=replacements,
         extra_metadata_fn=extra_metadata_fn,
         drop_roles=drop_roles or (),
+        message_transform_fn=message_transform_fn,
     )
 
 
@@ -249,6 +252,55 @@ class ReasoningToChatKwargs:
 
 
 reasoning_to_chat_kwargs = ReasoningToChatKwargs()
+
+
+def convert_openhands_xml_to_tool_calls(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert OpenHands XML tool calls to structured tool_calls format.
+
+    Transforms:
+    - Assistant XML ``<functions><function=name><parameter=key>val</parameter></function></functions>``
+      → structured ``tool_calls`` array with ``function.name`` and ``function.arguments``
+    - Following bare tool messages → assigned ``tool_call_id`` and ``name`` by position
+    """
+    converted: list[dict[str, Any]] = []
+    pending_tool_calls: list[dict[str, Any]] = []
+    pending_idx = 0
+
+    for msg in messages:
+        out = dict(msg)
+        if msg.get("role") == "assistant":
+            content = msg.get("content") or ""
+            if "<functions>" in content:
+                parts = content.split("<functions>")
+                text_before = parts[0].rstrip()
+                fn_block = parts[1].split("</functions>")[0] if len(parts) > 1 else ""
+                tool_calls = []
+                for m in re.finditer(r"<function=(\w+)>(.*?)</function>", fn_block, re.DOTALL):
+                    args: dict[str, str] = {}
+                    for p in re.finditer(r"<parameter=(\w+)>(.*?)</parameter>", m.group(2), re.DOTALL):
+                        args[p.group(1)] = p.group(2)
+                    tool_calls.append(
+                        {
+                            "id": f"call_{len(tool_calls)}",
+                            "type": "function",
+                            "function": {"name": m.group(1), "arguments": json.dumps(args)},
+                        }
+                    )
+                out["content"] = text_before
+                if tool_calls:
+                    out["tool_calls"] = tool_calls
+                pending_tool_calls = tool_calls
+                pending_idx = 0
+            else:
+                pending_tool_calls = []
+                pending_idx = 0
+        elif msg.get("role") == "tool" and pending_idx < len(pending_tool_calls):
+            tc = pending_tool_calls[pending_idx]
+            out["tool_call_id"] = tc["id"]
+            out["name"] = tc["function"]["name"]
+            pending_idx += 1
+        converted.append(out)
+    return converted
 
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
@@ -796,6 +848,22 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
             "result",
         ],
         name="DCAgent2/GLM-4.7-r2egym_sandboxes-maxeps-131k",
+        max_parallelism=32,
+    ),
+    # MEnvData SWE-bench trajectories (OpenHands format, Claude Sonnet 4.5)
+    # 3,872 trajectories across 3,005 SWE-bench task instances
+    # XML tool calls are converted to structured tool_calls via message_transform_fn.
+    "ernie-research/MEnvData-SWE-Trajectory": InstructionDatasetConfig(
+        hf_dataset_id="ernie-research/MEnvData-SWE-Trajectory",
+        revision="7da0792",
+        # replacements={} preserves native <think> tokens.
+        # message_transform_fn converts XML <functions> blocks to structured tool_calls.
+        adapter=multi_turn_adapter(
+            replacements={},
+            message_transform_fn=convert_openhands_xml_to_tool_calls,
+        ),
+        metadata_columns=["docker_image"],
+        name="ernie-research/MEnvData-SWE-Trajectory",
         max_parallelism=32,
     ),
     "AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories": InstructionDatasetConfig(
