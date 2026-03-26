@@ -30,6 +30,7 @@ import click
 from iris.cluster.controller.controller import (
     _building_counts,
     _jobs_by_id,
+    _jobs_with_reservations,
     _schedulable_tasks,
 )
 from iris.cluster.controller.db import (
@@ -111,6 +112,30 @@ def benchmark_scheduling(db: ControllerDB, iterations: int) -> list[tuple[str, f
         print_result("_jobs_by_id", p50, p95)
     else:
         print("  _jobs_by_id                                  (skipped, no pending jobs)")
+
+    # Reservation queries: compare old (fetch all + filter) vs new (SQL filter)
+    reservable_states = (
+        cluster_pb2.JOB_STATE_PENDING,
+        cluster_pb2.JOB_STATE_BUILDING,
+        cluster_pb2.JOB_STATE_RUNNING,
+    )
+
+    def _reservation_jobs_old():
+        with db.snapshot() as snapshot:
+            all_jobs = snapshot.select(JOBS, where=JOBS.c.state.in_(list(reservable_states)))
+        return [j for j in all_jobs if j.request.HasField("reservation")]
+
+    p50, p95 = bench("reservation_jobs (old: full scan)", _reservation_jobs_old, iterations=iterations)
+    results.append(("reservation_jobs (old: full scan)", p50, p95))
+    print_result("reservation_jobs (old: full scan)", p50, p95)
+
+    p50, p95 = bench(
+        "reservation_jobs (new: has_reservation)",
+        lambda: _jobs_with_reservations(db, reservable_states),
+        iterations=iterations,
+    )
+    results.append(("reservation_jobs (new: has_reservation)", p50, p95))
+    print_result("reservation_jobs (new: has_reservation)", p50, p95)
 
     return results
 
