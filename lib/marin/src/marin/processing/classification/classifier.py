@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import atexit
 import hashlib
 import os
 import time
@@ -81,7 +80,7 @@ class FasttextClassifier(BaseClassifier):
 
         with FileLock(lock_file):
             if not os.path.exists(success_file):
-                fs.makedirs(f"/tmp/{model_descriptor}", exist_ok=True)
+                os.makedirs(f"/tmp/{model_descriptor}", exist_ok=True)
 
                 if is_remote_or_local_path:
                     fs.get(fs_path, local_filepath)
@@ -92,13 +91,10 @@ class FasttextClassifier(BaseClassifier):
                         local_dir=f"/tmp/{model_descriptor}",
                     )
 
-                atexit.register(lambda: os.unlink(local_filepath))
                 print(f"Downloaded model from {fs_path} to {local_filepath}")
 
                 with open(success_file, "w") as f:
                     f.write("success")
-
-                atexit.register(lambda: os.unlink(success_file))
             else:
                 print(f"Model already downloaded to {local_filepath}")
 
