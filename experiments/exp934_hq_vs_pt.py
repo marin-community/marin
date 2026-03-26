@@ -8,6 +8,7 @@ This module provides the `pt_vs_hq_components` dictionary containing tokenized
 datasets used by various training experiments.
 """
 
+from marin.datakit.download.ar5iv import ar5iv_step
 from marin.datakit.download.wikipedia import download_wikipedia_step
 from marin.execution.executor import ExecutorStep, mirrored, this_output_path, versioned
 from marin.execution.step_spec import StepSpec
@@ -72,23 +73,33 @@ _wikipedia_transform = StepSpec(
 )
 wikipedia_resiliparse_custom_fork = _wikipedia_transform.as_executor_step().cd("20241201")
 
-# ar5iv resiliparse custom fork step (data already exists at hardcoded path)
-ar5iv_no_problem_resiliparse_custom_fork = ExecutorStep(
+_ar5iv_download = ar5iv_step(
+    input_path="gs://marin-us-central2/raw/ar5iv/ar5iv-04-2024-no-problem.zip",
+    override_output_path="raw/ar5iv/ar5iv-04-2024-no-problem-49c4e3",
+)
+
+# ar5iv resiliparse custom fork step
+_ar5iv_transform = StepSpec(
     name="documents/ar5iv/ar5iv-04-2024-no-problem",
-    fn=process_ar5iv_dump,
-    config=Ar5ivExtractionConfig(
-        input_path=mirrored("raw/ar5iv/ar5iv-04-2024-no-problem-49c4e3/202404", budget_gb=1),
-        revision="042024",
-        output_path=this_output_path("resiliparse-custom-fork"),
-        extract_method=versioned("resiliparse"),
-        extract_config=ResiliparseConfig(
-            links=versioned(False),
-            prepend_title=True,
-            skip_elements=ARXIV_BLACKLISTED_SELECTORS,
-        ),
-        remove_reference_section=versioned(True),
+    fn=lambda output_path: process_ar5iv_dump(
+        Ar5ivExtractionConfig(
+            input_path=f"{_ar5iv_download.output_path}/202404",
+            revision="042024",
+            output_path=output_path,
+            extract_method="resiliparse",
+            extract_config=ResiliparseConfig(
+                links=False,
+                prepend_title=True,
+                skip_elements=ARXIV_BLACKLISTED_SELECTORS,
+            ),
+            remove_reference_section=True,
+        )
     ),
-).with_output_path("documents/ar5iv/ar5iv-04-2024-no-problem-3971f")
+    deps=[_ar5iv_download],
+    hash_attrs={"revision": "042024", "extract_method": "resiliparse"},
+    override_output_path="documents/ar5iv/ar5iv-04-2024-no-problem-3971f",
+)
+ar5iv_no_problem_resiliparse_custom_fork = _ar5iv_transform.as_executor_step()
 
 # MMLU Science QA tokenization
 medu_mmlu_science_qa_tokenized = default_tokenize(
