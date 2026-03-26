@@ -19,12 +19,11 @@ Use `python -m experiments.pretraining_datasets list` to see all available datas
 
 # Import downloads and tokenized dicts from each module
 from experiments.pretraining_datasets.dolma import (
-    DOLMA_DATASETS,
     DOLMA_LLAMA3_OVERRIDES,
-    DOLMA_OLMO_MIXTURE_WEIGHTS,
     downloads as dolma_downloads,
     tokenize_dolma,
 )
+from marin.datakit.download.dolma import DOLMA_DATASETS, DOLMA_OLMO_MIXTURE_WEIGHTS
 from experiments.pretraining_datasets.dolmino import (
     DOLMINO_DATASETS,
     DOLMINO_LLAMA3_OVERRIDES,
