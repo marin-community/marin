@@ -16,7 +16,8 @@ from typing import Any
 
 import requests
 from iris.marin_fs import open_url
-from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, ensure_versioned, this_output_path
+from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue
+from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_mkdirs
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
@@ -353,6 +354,52 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
     return {"success": True, "processed": metadata_records}
 
 
+def uncheatable_eval_step(
+    name: str = "raw/uncheatable-eval/latest",
+    *,
+    repo_owner: str = "ziqing-huang",
+    repo_name: str = "uncheatable_eval",
+    data_path: str = "data",
+    branch: str = "master",
+    max_concurrent_downloads: int = 8,
+    request_timeout: int = 120,
+    github_token: str | None = None,
+    skip_existing: bool = True,
+    deps: list[StepSpec] | None = None,
+    output_path_prefix: str | None = None,
+    override_output_path: str | None = None,
+) -> StepSpec:
+    """Create a StepSpec that downloads the latest Uncheatable Eval dumps."""
+
+    def _run(output_path: str) -> dict:
+        cfg = UncheatableEvalDownloadConfig(
+            output_path=output_path,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            data_path=data_path,
+            branch=branch,
+            max_concurrent_downloads=max_concurrent_downloads,
+            request_timeout=request_timeout,
+            github_token=github_token,
+            skip_existing=skip_existing,
+        )
+        return download_latest_uncheatable_eval(cfg)
+
+    return StepSpec(
+        name=name,
+        fn=_run,
+        deps=deps or [],
+        hash_attrs={
+            "repo_owner": repo_owner,
+            "repo_name": repo_name,
+            "data_path": data_path,
+            "branch": branch,
+        },
+        output_path_prefix=output_path_prefix,
+        override_output_path=override_output_path,
+    )
+
+
 def make_uncheatable_eval_step(
     *,
     name: str = "raw/uncheatable-eval/latest",
@@ -364,31 +411,19 @@ def make_uncheatable_eval_step(
     request_timeout: int = 120,
     github_token: str | None = None,
     skip_existing: bool = True,
-) -> ExecutorStep[UncheatableEvalDownloadConfig]:
-    """Create an :class:`ExecutorStep` that downloads the latest Uncheatable Eval dumps."""
+) -> ExecutorStep:
+    """Create an ExecutorStep that downloads the latest Uncheatable Eval dumps.
 
-    config = UncheatableEvalDownloadConfig(
-        output_path=this_output_path(),
-        repo_owner=ensure_versioned(repo_owner),
-        repo_name=ensure_versioned(repo_name),
-        data_path=ensure_versioned(data_path),
-        branch=ensure_versioned(branch),
+    Backward-compat wrapper around uncheatable_eval_step().
+    """
+    return uncheatable_eval_step(
+        name=name,
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        data_path=data_path,
+        branch=branch,
         max_concurrent_downloads=max_concurrent_downloads,
         request_timeout=request_timeout,
         github_token=github_token,
         skip_existing=skip_existing,
-    )
-
-    return ExecutorStep(
-        name=name,
-        fn=download_latest_uncheatable_eval,
-        config=config,
-    )
-
-
-__all__ = [
-    "UncheatableEvalDataset",
-    "UncheatableEvalDownloadConfig",
-    "download_latest_uncheatable_eval",
-    "make_uncheatable_eval_step",
-]
+    ).as_executor_step()
