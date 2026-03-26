@@ -44,7 +44,7 @@ from marin.alignment.generate_responses import (
     generate_response_pair,
     generate_responses,
 )
-from marin.alignment.inference_config import LiteLLMConfig, VLLMConfig
+from marin.alignment.inference_config import OpenAIConfig, VLLMConfig
 from marin.alignment.judge import (
     PreferencePairFilterConfig,
     JudgeConfig,
@@ -165,10 +165,10 @@ def sample_prompt():
 
 
 @pytest.fixture()
-def mock_litellm_response():
-    """Factory for creating mock litellm completion responses."""
+def mock_openai_response():
+    """Factory for creating mock OpenAI chat completion responses."""
 
-    def _create(content: str, model: str = "openai/gpt-4.1"):
+    def _create(content: str, model: str = "gpt-4.1"):
         mock_choice = MagicMock()
         mock_choice.message.content = content
 
@@ -465,8 +465,8 @@ class TestShardedOutput:
 
 
 class TestInferenceConfig:
-    def test_litellm_config_is_api(self):
-        config = LiteLLMConfig(model="openai/gpt-4.1")
+    def test_openai_config_is_api(self):
+        config = OpenAIConfig(model="gpt-4.1")
         assert config.is_api is True
         assert config.is_local is False
 
@@ -475,8 +475,8 @@ class TestInferenceConfig:
         assert config.is_local is True
         assert config.is_api is False
 
-    def test_litellm_config_resources_are_cpu(self):
-        config = LiteLLMConfig(model="openai/gpt-4.1")
+    def test_openai_config_resources_are_cpu(self):
+        config = OpenAIConfig(model="gpt-4.1")
         resources = config.resources
         assert resources is not None
 
@@ -485,8 +485,8 @@ class TestInferenceConfig:
         resources = config.resources
         assert resources is not None
 
-    def test_litellm_config_defaults(self):
-        config = LiteLLMConfig(model="openai/gpt-4.1")
+    def test_openai_config_defaults(self):
+        config = OpenAIConfig(model="gpt-4.1")
         assert config.num_retries == 10
         assert config.workers == 64
 
@@ -543,7 +543,7 @@ class TestResponseHelpers:
             ResponseGenConfig(
                 prompts_path="gs://bucket/prompts",
                 output_path="gs://bucket/output",
-                model_config=LiteLLMConfig(model="openai/gpt-4.1"),
+                model_config=OpenAIConfig(model="gpt-4.1"),
                 role=ResponseRole.CHOSEN,
                 rejected_prompt_strategy=RejectedPromptStrategy.OPPOSITE,
                 behavior_statements_path="gs://bucket/spec.jsonl",
@@ -554,7 +554,7 @@ class TestResponseHelpers:
             ResponseGenConfig(
                 prompts_path="gs://bucket/prompts",
                 output_path="gs://bucket/output",
-                model_config=LiteLLMConfig(model="openai/gpt-4.1"),
+                model_config=OpenAIConfig(model="gpt-4.1"),
                 role=ResponseRole.REJECTED,
                 rejected_prompt_strategy=RejectedPromptStrategy.OPPOSITE,
             )
@@ -564,7 +564,7 @@ class TestResponseHelpers:
             ResponseGenConfig(
                 prompts_path="gs://bucket/prompts",
                 output_path="gs://bucket/output",
-                model_config=LiteLLMConfig(model="openai/gpt-4.1"),
+                model_config=OpenAIConfig(model="gpt-4.1"),
                 role=ResponseRole.REJECTED,
                 rejected_prompt_strategy=RejectedPromptStrategy.UNGUIDED,
                 behavior_statements_path="gs://bucket/spec.jsonl",
@@ -789,9 +789,9 @@ class TestAlignResponseOrchestration:
             teacher_model=teacher_model,
             rejected_model=rejected_model,
             align_config=AlignConfig(
-                ideation_model="openai/gpt-4.1",
-                extract_model="openai/gpt-4.1-mini",
-                judge_model="openai/gpt-4.1",
+                ideation_model="gpt-4.1",
+                extract_model="gpt-4.1-mini",
+                judge_model="gpt-4.1",
             ),
         )
 
@@ -835,9 +835,9 @@ class TestAlignResponseOrchestration:
             teacher_model=shared_model,
             rejected_model=shared_model,
             align_config=AlignConfig(
-                ideation_model="openai/gpt-4.1",
-                extract_model="openai/gpt-4.1-mini",
-                judge_model="openai/gpt-4.1",
+                ideation_model="gpt-4.1",
+                extract_model="gpt-4.1-mini",
+                judge_model="gpt-4.1",
             ),
         )
 
@@ -876,9 +876,9 @@ class TestAlignResponseOrchestration:
             teacher_model=teacher_model,
             rejected_model=rejected_model,
             align_config=AlignConfig(
-                ideation_model="openai/gpt-4.1",
-                extract_model="openai/gpt-4.1-mini",
-                judge_model="openai/gpt-4.1",
+                ideation_model="gpt-4.1",
+                extract_model="gpt-4.1-mini",
+                judge_model="gpt-4.1",
             ),
         )
 
@@ -910,9 +910,9 @@ class TestAlignResponseOrchestration:
             teacher_model=teacher_model,
             rejected_model=rejected_model,
             align_config=AlignConfig(
-                ideation_model="openai/gpt-4.1",
-                extract_model="openai/gpt-4.1-mini",
-                judge_model="openai/gpt-4.1",
+                ideation_model="gpt-4.1",
+                extract_model="gpt-4.1-mini",
+                judge_model="gpt-4.1",
                 response_execution_mode=ResponseExecutionMode.PARALLEL,
             ),
         )
@@ -956,9 +956,9 @@ class TestAlignResponseOrchestration:
             teacher_model=teacher_model,
             rejected_model=rejected_model,
             align_config=AlignConfig(
-                ideation_model="openai/gpt-4.1",
-                extract_model="openai/gpt-4.1-mini",
-                judge_model="openai/gpt-4.1",
+                ideation_model="gpt-4.1",
+                extract_model="gpt-4.1-mini",
+                judge_model="gpt-4.1",
                 response_execution_mode=ResponseExecutionMode.SERIALIZED,
             ),
         )
@@ -991,9 +991,9 @@ class TestAlignResponseOrchestration:
                 teacher_model=VLLMConfig(model="gs://bucket/chosen", tensor_parallel_size=4, tpu_type="v5p-8"),
                 rejected_model=VLLMConfig(model="gs://bucket/rejected", tensor_parallel_size=4, tpu_type="v5p-8"),
                 align_config=AlignConfig(
-                    ideation_model="openai/gpt-4.1",
-                    extract_model="openai/gpt-4.1-mini",
-                    judge_model="openai/gpt-4.1",
+                    ideation_model="gpt-4.1",
+                    extract_model="gpt-4.1-mini",
+                    judge_model="gpt-4.1",
                     response_execution_mode=ResponseExecutionMode.REUSE_SAME_MODEL,
                 ),
             )
@@ -1014,9 +1014,9 @@ class TestAlignResponseOrchestration:
             teacher_model=teacher_model,
             rejected_model=teacher_model,
             align_config=AlignConfig(
-                ideation_model="openai/gpt-4.1",
-                extract_model="openai/gpt-4.1-mini",
-                judge_model="openai/gpt-4.1",
+                ideation_model="gpt-4.1",
+                extract_model="gpt-4.1-mini",
+                judge_model="gpt-4.1",
                 response_execution_mode=ResponseExecutionMode.REUSE_SAME_MODEL,
                 rejected_prompt_strategy=RejectedPromptStrategy.OPPOSITE,
             ),
@@ -1035,7 +1035,7 @@ class TestAlignResponseOrchestration:
             config={},
         )
         teacher_model = VLLMConfig(model="gs://bucket/chosen", tensor_parallel_size=4, tpu_type="v5p-8")
-        rejected_model = LiteLLMConfig(model="openai/gpt-4.1-mini")
+        rejected_model = OpenAIConfig(model="gpt-4.1-mini")
 
         steps = align(
             name="mixed",
@@ -1045,9 +1045,9 @@ class TestAlignResponseOrchestration:
             teacher_model=teacher_model,
             rejected_model=rejected_model,
             align_config=AlignConfig(
-                ideation_model="openai/gpt-4.1",
-                extract_model="openai/gpt-4.1-mini",
-                judge_model="openai/gpt-4.1",
+                ideation_model="gpt-4.1",
+                extract_model="gpt-4.1-mini",
+                judge_model="gpt-4.1",
             ),
         )
 
@@ -1067,55 +1067,63 @@ class TestAlignResponseOrchestration:
 
 
 class TestLLMClient:
-    @patch("marin.alignment.llm_client.litellm.completion")
-    def test_llm_chat_returns_responses(self, mock_completion, mock_litellm_response):
-        mock_completion.return_value = mock_litellm_response("Hello world!")
+    @patch("marin.alignment.llm_client.OpenAI")
+    def test_llm_chat_returns_responses(self, mock_openai, mock_openai_response):
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_openai_response("Hello world!")
+        mock_openai.return_value = mock_client
         responses = llm_chat(
-            config=LiteLLMConfig(model="openai/gpt-4.1"),
+            config=OpenAIConfig(model="gpt-4.1"),
             messages=[{"role": "user", "content": "Hi"}],
         )
         assert len(responses) == 1
         assert responses[0].content == "Hello world!"
-        assert responses[0].model == "openai/gpt-4.1"
-        mock_completion.assert_called_once()
+        assert responses[0].model == "gpt-4.1"
+        mock_client.chat.completions.create.assert_called_once()
 
-    @patch("marin.alignment.llm_client.litellm.completion")
-    def test_llm_chat_with_string_config(self, mock_completion, mock_litellm_response):
-        """Bare string is auto-converted to LiteLLMConfig."""
-        mock_completion.return_value = mock_litellm_response("Response")
+    @patch("marin.alignment.llm_client.OpenAI")
+    def test_llm_chat_with_string_config(self, mock_openai, mock_openai_response):
+        """Bare string is auto-converted to OpenAIConfig."""
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_openai_response("Response")
+        mock_openai.return_value = mock_client
         responses = llm_chat(
-            config="openai/gpt-4.1",
+            config="gpt-4.1",
             messages=[{"role": "user", "content": "Hi"}],
         )
         assert len(responses) == 1
         assert responses[0].content == "Response"
 
-    @patch("marin.alignment.llm_client.litellm.completion")
-    def test_llm_chat_with_system_prompt(self, mock_completion, mock_litellm_response):
-        mock_completion.return_value = mock_litellm_response("Response")
+    @patch("marin.alignment.llm_client.OpenAI")
+    def test_llm_chat_with_system_prompt(self, mock_openai, mock_openai_response):
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_openai_response("Response")
+        mock_openai.return_value = mock_client
         llm_chat(
-            config=LiteLLMConfig(model="openai/gpt-4.1"),
+            config=OpenAIConfig(model="gpt-4.1"),
             messages=[{"role": "user", "content": "Hi"}],
             system_prompt="You are helpful.",
         )
-        call_args = mock_completion.call_args
+        call_args = mock_client.chat.completions.create.call_args
         messages = call_args.kwargs["messages"]
         assert messages[0]["role"] == "system"
         assert messages[0]["content"] == "You are helpful."
         assert messages[1]["role"] == "user"
 
-    @patch("marin.alignment.llm_client.litellm.completion")
-    def test_llm_chat_single(self, mock_completion, mock_litellm_response):
-        mock_completion.return_value = mock_litellm_response("Single response")
+    @patch("marin.alignment.llm_client.OpenAI")
+    def test_llm_chat_single(self, mock_openai, mock_openai_response):
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_openai_response("Single response")
+        mock_openai.return_value = mock_client
         response = llm_chat_single(
-            config=LiteLLMConfig(model="openai/gpt-4.1"),
+            config=OpenAIConfig(model="gpt-4.1"),
             messages=[{"role": "user", "content": "Hi"}],
         )
         assert isinstance(response, LLMResponse)
         assert response.content == "Single response"
 
-    @patch("marin.alignment.llm_client.litellm.completion")
-    def test_llm_chat_multiple_n(self, mock_completion):
+    @patch("marin.alignment.llm_client.OpenAI")
+    def test_llm_chat_multiple_n(self, mock_openai):
         mock_choice1 = MagicMock()
         mock_choice1.message.content = "Response 1"
         mock_choice2 = MagicMock()
@@ -1123,13 +1131,15 @@ class TestLLMClient:
 
         mock_response = MagicMock()
         mock_response.choices = [mock_choice1, mock_choice2]
-        mock_response.model = "openai/gpt-4.1"
+        mock_response.model = "gpt-4.1"
         mock_response.usage.prompt_tokens = 10
         mock_response.usage.completion_tokens = 20
-        mock_completion.return_value = mock_response
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai.return_value = mock_client
 
         responses = llm_chat(
-            config=LiteLLMConfig(model="openai/gpt-4.1"),
+            config=OpenAIConfig(model="gpt-4.1"),
             messages=[{"role": "user", "content": "Hi"}],
             n=2,
         )
@@ -1318,7 +1328,7 @@ class TestPromptGenerationE2E:
                 "]\n"
                 "</variation_axes>"
             ),
-            model="openai/gpt-4.1",
+            model="gpt-4.1",
         )
 
         # Stage 2: Concretize response
@@ -1328,7 +1338,7 @@ class TestPromptGenerationE2E:
                 '"You are a math tutor." The student says "Can you help me with fractions?"</scenario_cfg_000>\n'
                 "<rubric_cfg_000>GOOD: Patient explanation. BAD: Dismissive.</rubric_cfg_000>\n"
             ),
-            model="openai/gpt-4.1",
+            model="gpt-4.1",
         )
 
         # Dispatch mock based on system_prompt content:
@@ -1357,7 +1367,7 @@ class TestPromptGenerationE2E:
                         "<user_message>Can you help me with fractions?</user_message>\n"
                         f"</scenario_{idx}>\n"
                     ),
-                    model="openai/gpt-4.1-mini",
+                    model="gpt-4.1-mini",
                 )
 
         mock_llm.side_effect = mock_side_effect
@@ -1367,8 +1377,8 @@ class TestPromptGenerationE2E:
         config = PromptGenConfig(
             spec_path=str(sample_spec_jsonl),
             output_path=output_path,
-            ideation_model="openai/gpt-4.1",
-            extract_model="openai/gpt-4.1-mini",
+            ideation_model="gpt-4.1",
+            extract_model="gpt-4.1-mini",
             covering_strength=2,
             concretize_batch_size=1,
             extract_batch_size=1,
@@ -1981,7 +1991,7 @@ class TestJudgeE2E:
             score = 9 if call_count["n"] == 1 else 2
             return LLMResponse(
                 content=json.dumps({"score": score, "confidence": 0.9, "explanation": "Test", "highlights": []}),
-                model="openai/gpt-4.1",
+                model="gpt-4.1",
             )
 
         mock_llm.side_effect = mock_side_effect
@@ -2014,7 +2024,7 @@ class TestJudgeE2E:
                 rejected_responses_path=str(rejected_path),
                 spec_path=str(sample_spec_jsonl),
                 output_path=str(judgments_path),
-                judge_model="openai/gpt-4.1",
+                judge_model="gpt-4.1",
                 workers=2,
                 batch_size=4,
             )

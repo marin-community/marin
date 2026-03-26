@@ -4789,3 +4789,221 @@ uv run iris --config lib/iris/examples/marin.yaml job run \
   - final prompt / judgment / preference-pair counts
 - **Planned base script:**
   - `experiments/align_vllm_70b_mixtral_rejected_full_spec.py`
+
+### 2026-03-25 — ALIGN-125: Removed LiteLLM from Alignment and Standardized the API Path on OpenAI + vLLM Only
+
+- **Requested scope:**
+  - remove `litellm` from the alignment install surface
+  - stop modeling API inference as a generic provider layer
+  - support only:
+    - OpenAI API
+    - local `vllm`
+- **Code changes:**
+  - renamed the API inference config from:
+    - `LiteLLMConfig`
+  - to:
+    - `OpenAIConfig`
+  - rewrote the shared alignment client in:
+    - `lib/marin/src/marin/alignment/llm_client.py`
+  - old behavior:
+    - `litellm.completion(...)`
+  - new behavior:
+    - `OpenAI().chat.completions.create(...)`
+  - removed `litellm` from:
+    - `lib/marin/pyproject.toml`
+  - updated alignment serialization to use backend tag:
+    - `openai`
+  - removed Anthropic-specific forwarding from the alignment child-job env var helper
+  - updated alignment defaults and OpenAI experiments to use plain model IDs:
+    - `gpt-4.1`
+    - `gpt-4.1-mini`
+    - instead of provider-prefixed strings like `openai/gpt-4.1`
+- **Behavioral result:**
+  - alignment inference now has only two supported backends:
+    - `OpenAIConfig`
+    - `VLLMConfig`
+  - bare strings in alignment configs are now interpreted as OpenAI model IDs
+- **Verification:**
+  - `make fix`
+  - `uv run pytest tests/test_alignment.py -q`
+    - `86 passed`
+  - `uv pip uninstall litellm`
+  - `uv pip show litellm`
+    - package not found in the active workspace venv
+- **Lockfile nuance:**
+  - the workspace `uv.lock` still mentions `litellm`
+  - that remaining reference is transitive from the pinned optional `harbor` dependency, not from `marin`
+  - the `marin` package itself no longer declares `litellm` as a dependency
+- **Interpretation:**
+  - the alignment pipeline is now explicit about API support instead of routing through a generic provider abstraction
+  - this narrows the supported surface area and matches the intended product decision:
+    - OpenAI API or local `vllm`, nothing else
+
+### 2026-03-25 — ALIGN-126: One-Statement API-Only Iris Smoke Succeeded with `gpt-4.1-mini`
+
+- **Submitted root job:**
+  - `/ahmed/iris-run-align_openai_spec_smoke-20260326-002318`
+- **Launch shape:**
+  - explicit Iris CPU root job via:
+    - `uv run iris --controller-url http://127.0.0.1:10000 job run --cpu 4 --memory 8GB --extra cpu --region us-central1 --no-wait -e OPENAI_API_KEY $OPENAI_API_KEY -- python experiments/align_openai_spec_smoke.py`
+- **Terminal state:**
+  - root `JOB_STATE_SUCCEEDED`
+  - child stage jobs all `JOB_STATE_SUCCEEDED`
+- **Artifacts:**
+  - prompts:
+    - `gs://marin-us-central1/align/openai_spec_smoke/prompts-05480a`
+  - judgments:
+    - `gs://marin-us-central1/align/openai_spec_smoke/judgments-8f7524`
+  - preference pairs:
+    - `gs://marin-us-central1/align/openai_spec_smoke/preference_pairs-48f62b`
+- **Observed counts:**
+  - prompts written:
+    - `66`
+  - judgment records written:
+    - `66`
+  - final preference pairs built:
+    - `19`
+- **Important interpretation:**
+  - this run proves the OpenAI API key and OpenAI-only alignment path work on Iris end-to-end
+  - prompt generation, chosen, rejected, judgments, and final filtering all executed successfully on cluster jobs
+  - however, `gpt-4.1-mini` as judge produced many parse failures, which materially reduced final pair count
+- **Representative issue signal:**
+  - repeated warnings:
+    - `Failed to parse judge response: Expecting value ...`
+- **Recommendation:**
+  - use this run as a successful API/auth/integration smoke
+  - do not treat `gpt-4.1-mini` judge quality as production-ready without either stronger parsing constraints or a stronger judge model
+
+### 2026-03-25 — ALIGN-127: Relaunch One-Statement API-Only Iris Smoke with `gpt-4.1`
+
+- **Motivation:**
+  - `ALIGN-126` proved auth/integration but showed that `gpt-4.1-mini` was too fragile as the judge, with many parse failures and only `19/66` final pairs
+  - next check is the same one-statement Iris smoke with the stronger OpenAI model
+- **Code change:**
+  - updated:
+    - `experiments/align_openai_spec_smoke.py`
+  - added a CLI flag:
+    - `--model`
+  - default remains:
+    - `gpt-4.1-mini`
+  - launch override for this run:
+    - `--model gpt-4.1`
+- **Submitted root job:**
+  - `/ahmed/align-openai-spec-smoke-gpt41`
+- **Launch command:**
+  - `source .env && uv run iris --controller-url http://127.0.0.1:10000 job run --cpu 4 --memory 8GB --disk 5GB --extra cpu --region us-central1 --no-wait --job-name align-openai-spec-smoke-gpt41 -e OPENAI_API_KEY "$OPENAI_API_KEY" -- python experiments/align_openai_spec_smoke.py --model gpt-4.1`
+- **Immediate goal:**
+  - confirm the one-statement end-to-end OpenAI-only path still succeeds on Iris
+  - compare judgment robustness and final pair yield against the `gpt-4.1-mini` smoke
+- **Status:**
+  - running
+
+### 2026-03-25 — ALIGN-128: Fix `gpt-4.1` Smoke Script CLI Handoff and Relaunch
+
+- **Failure on first `gpt-4.1` launch:**
+  - root:
+    - `/ahmed/align-openai-spec-smoke-gpt41`
+  - terminal error:
+    - `align_openai_spec_smoke.py: error: unrecognized arguments: --model gpt-4.1`
+- **Root cause:**
+  - the script added its own `--model` flag, but `executor_main()` also parses CLI flags
+  - the first patch used `argparse.parse_args()`, so `--model` was still present in `sys.argv` when `executor_main()` ran
+- **Fix:**
+  - updated:
+    - `experiments/align_openai_spec_smoke.py`
+  - now uses:
+    - `parse_known_args()`
+  - and resets:
+    - `sys.argv = [sys.argv[0], *executor_args]`
+  - before calling `executor_main()`
+- **Local verification:**
+  - `uv run python -m py_compile experiments/align_openai_spec_smoke.py`
+  - `uv run python experiments/align_openai_spec_smoke.py --model gpt-4.1 --dry_run true`
+- **Relaunched root job:**
+  - `/ahmed/align-openai-spec-smoke-gpt41-retry`
+- **Status:**
+  - running
+
+### 2026-03-25 — ALIGN-129: Avoid Cache Hit and Launch Fresh `gpt-4.1` Iris Smoke
+
+- **Issue on the first retry:**
+  - root:
+    - `/ahmed/align-openai-spec-smoke-gpt41-retry`
+  - result:
+    - `JOB_STATE_SUCCEEDED`
+  - but it was not a real rerun
+- **What happened:**
+  - the executor reused previously succeeded outputs under:
+    - `align/openai_spec_smoke/...`
+  - so the root job finished quickly after skipping:
+    - `spec`
+    - `prompts`
+    - `chosen`
+    - `rejected`
+    - `judgments`
+    - `preference_pairs`
+- **Fix:**
+  - updated:
+    - `experiments/align_openai_spec_smoke.py`
+  - added a second CLI flag:
+    - `--name`
+  - this allows forcing a fresh alignment output prefix for reruns with different API models
+- **Fresh relaunched root job:**
+  - `/ahmed/align-openai-spec-smoke-gpt41-fresh`
+- **Launch command:**
+  - `source .env && uv run iris --controller-url http://127.0.0.1:10000 job run --cpu 4 --memory 8GB --disk 5GB --extra cpu --region us-central1 --no-wait --job-name align-openai-spec-smoke-gpt41-fresh -e OPENAI_API_KEY "$OPENAI_API_KEY" -- python experiments/align_openai_spec_smoke.py --model gpt-4.1 --name openai_spec_smoke_gpt41_fresh`
+- **Current state:**
+  - root `JOB_STATE_RUNNING`
+  - not a cache hit
+  - executor is launching fresh step ids under:
+    - `align/openai_spec_smoke_gpt41_fresh/...`
+
+### 2026-03-25 — ALIGN-130: One-Statement API-Only Iris Smoke Succeeded with `gpt-4.1`
+
+- **Root job:**
+  - `/ahmed/align-openai-spec-smoke-gpt41-fresh`
+- **Terminal state:**
+  - root `JOB_STATE_SUCCEEDED`
+- **Artifacts:**
+  - prompts:
+    - `gs://marin-us-central1/align/openai_spec_smoke_gpt41_fresh/prompts-4774a8`
+  - chosen:
+    - `gs://marin-us-central1/align/openai_spec_smoke_gpt41_fresh/chosen-9558db`
+  - rejected:
+    - `gs://marin-us-central1/align/openai_spec_smoke_gpt41_fresh/rejected-5bcf9d`
+  - judgments:
+    - `gs://marin-us-central1/align/openai_spec_smoke_gpt41_fresh/judgments-4e9476`
+  - preference pairs:
+    - `gs://marin-us-central1/align/openai_spec_smoke_gpt41_fresh/preference_pairs-70992c`
+- **Observed counts:**
+  - prompts written:
+    - `72`
+  - judgment records written:
+    - `72`
+  - final preference pairs built:
+    - `26`
+- **Runtime notes:**
+  - prompt generation succeeded end to end:
+    - Stage 1
+    - Stage 2
+    - Stage 3
+  - chosen and rejected ran as parallel OpenAI API Zephyr lanes with:
+    - `gpt-4.1`
+  - both response lanes completed successfully before judgment
+  - executor wall time:
+    - `689.76s`
+- **Comparison vs `gpt-4.1-mini` smoke:**
+  - prior mini run:
+    - `66` prompts
+    - `66` judgments
+    - `19` final pairs
+  - `gpt-4.1` run:
+    - `72` prompts
+    - `72` judgments
+    - `26` final pairs
+  - importantly, this `gpt-4.1` run did not show the repeated judge parse-failure warnings seen with `gpt-4.1-mini`
+- **Interpretation:**
+  - the OpenAI-only pipeline is now validated on Iris for both:
+    - `gpt-4.1-mini`
+    - `gpt-4.1`
+  - `gpt-4.1` is materially more robust as the judge in this one-statement smoke

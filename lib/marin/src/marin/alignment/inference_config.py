@@ -3,13 +3,13 @@
 
 """Inference backend configuration for the alignment pipeline.
 
-Provides a unified type for specifying how to run inference — either via
-API calls (litellm) or via a local vLLM instance. Both are accepted
-anywhere a model is needed (teacher, rejected, ideation, judge, etc.).
+Provides a unified type for specifying how to run inference — either via the
+OpenAI API or via a local vLLM instance. Both are accepted anywhere a model is
+needed (teacher, rejected, ideation, judge, etc.).
 
 Usage:
-    # API model (OpenAI, Anthropic, etc. via litellm)
-    teacher = LiteLLMConfig(model="openai/gpt-4.1")
+    # OpenAI API model
+    teacher = OpenAIConfig(model="gpt-4.1")
 
     # Local model via vLLM
     teacher = VLLMConfig(model="/path/to/checkpoint", tensor_parallel_size=4)
@@ -37,7 +37,7 @@ class InferenceConfig:
 
     @property
     def is_api(self) -> bool:
-        return isinstance(self, LiteLLMConfig)
+        return isinstance(self, OpenAIConfig)
 
     @property
     def is_local(self) -> bool:
@@ -50,13 +50,11 @@ class InferenceConfig:
 
 
 @dataclass(frozen=True)
-class LiteLLMConfig(InferenceConfig):
-    """Configuration for API-based inference via litellm.
-
-    Supports any provider litellm supports: OpenAI, Anthropic, Google, etc.
+class OpenAIConfig(InferenceConfig):
+    """Configuration for API-based inference via the OpenAI chat completions API.
 
     Args:
-        model: litellm model identifier (e.g. "openai/gpt-4.1", "anthropic/claude-sonnet-4-20250514").
+        model: OpenAI model identifier (for example, ``gpt-4.1``).
         num_retries: Number of retries on transient failures.
         workers: Number of parallel API calls.
     """

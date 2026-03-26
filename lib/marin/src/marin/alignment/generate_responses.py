@@ -4,11 +4,12 @@
 """Steps 2a/2b: Generate chosen and rejected responses.
 
 Supports two backends via InferenceConfig:
-- LiteLLMConfig → API calls via Zephyr pipeline (streaming, parallel workers)
+- OpenAIConfig → API calls via Zephyr pipeline (streaming, parallel workers)
 - VLLMConfig → local vLLM instance (batch generation)
 
 Teacher responses receive spec guidance in the system prompt.
-Rejected responses receive NO spec guidance.
+Rejected responses can be either unguided or explicitly prompted to respond in
+the opposite manner of the behavioral statement.
 The output strips spec guidance from system prompts so the training data
 teaches the model to internalize behavior without needing the spec at inference time.
 """
@@ -24,7 +25,7 @@ from zephyr import Dataset, ZephyrContext, load_jsonl
 
 from marin.alignment.batched_vllm_serve import BatchedVllmServeSession, write_vllm_metrics_artifact
 from marin.alignment.generate_prompts import load_sharded_jsonl_gz, write_sharded_jsonl_gz
-from marin.alignment.inference_config import InferenceConfig, LiteLLMConfig, VLLMConfig
+from marin.alignment.inference_config import InferenceConfig, OpenAIConfig, VLLMConfig
 from marin.alignment.llm_client import llm_chat
 
 logger = logging.getLogger(__name__)
@@ -70,7 +71,7 @@ class ResponseGenConfig:
     prompts_path: str
     output_path: str
 
-    # Inference backend — LiteLLMConfig or VLLMConfig (serialized as dict for executor)
+    # Inference backend — OpenAIConfig or VLLMConfig (serialized as dict for executor)
     model_config: dict[str, Any] | InferenceConfig
 
     # Generation parameters
@@ -140,8 +141,8 @@ def _resolve_inference_config(model_config: dict[str, Any] | InferenceConfig) ->
 
     cfg = dict(model_config)
     backend = cfg.pop("backend")
-    if backend == "litellm":
-        return LiteLLMConfig(**cfg)
+    if backend == "openai":
+        return OpenAIConfig(**cfg)
     if backend == "vllm":
         return VLLMConfig(**cfg)
     raise ValueError(f"Unknown inference backend: {backend}")
@@ -320,10 +321,10 @@ def _generate_vllm_response_records(
 
 def _generate_via_api(
     config: ResponseGenConfig,
-    inference_config: LiteLLMConfig,
+    inference_config: OpenAIConfig,
     behavior_statements: dict[str, str] | None,
 ) -> None:
-    """Generate responses for all prompts via Zephyr pipeline + litellm API calls."""
+    """Generate responses for all prompts via Zephyr pipeline + OpenAI API calls."""
 
     def _process_prompt(prompt: dict) -> dict:
         if config.role == ResponseRole.CHOSEN:
@@ -404,7 +405,7 @@ def _generate_via_vllm(
 def generate_responses(config: ResponseGenConfig) -> None:
     """Generate responses for all prompts.
 
-    Dispatches to Zephyr pipeline (API) or batch vLLM based on InferenceConfig type.
+    Dispatches to Zephyr pipeline (OpenAI API) or batch vLLM based on InferenceConfig type.
     """
     behavior_statements = None
     if config.behavior_statements_path:
@@ -424,8 +425,8 @@ def generate_responses(config: ResponseGenConfig) -> None:
 
     inference_config = config.resolve_inference_config()
 
-    if isinstance(inference_config, LiteLLMConfig):
-        logger.info("Using Zephyr + litellm API: %s", inference_config.model)
+    if isinstance(inference_config, OpenAIConfig):
+        logger.info("Using Zephyr + OpenAI API: %s", inference_config.model)
         _generate_via_api(config, inference_config, behavior_statements)
     elif isinstance(inference_config, VLLMConfig):
         logger.info("Using batch vLLM: %s", inference_config.model)

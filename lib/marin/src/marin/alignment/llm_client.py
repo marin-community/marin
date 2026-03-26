@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unified LLM client dispatching to litellm (API) or vLLM (local).
+"""Unified LLM client dispatching to OpenAI (API) or vLLM (local).
 
 All alignment modules call through this client. The backend is selected
-by the type of InferenceConfig passed in — LiteLLMConfig routes to the
-litellm library, VLLMConfig spins up a local vLLM engine.
+by the type of InferenceConfig passed in — OpenAIConfig routes to the
+OpenAI SDK, VLLMConfig spins up a local vLLM engine.
 
 For repeated vLLM calls within a single step, use VLLMEngine as a context
 manager to avoid re-creating the engine on every call.
@@ -18,14 +18,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
-import litellm
+from openai import OpenAI
 
-from marin.alignment.inference_config import InferenceConfig, LiteLLMConfig, VLLMConfig
+from marin.alignment.inference_config import InferenceConfig, OpenAIConfig, VLLMConfig
 
 logger = logging.getLogger(__name__)
-
-# Suppress litellm's verbose logging
-litellm.suppress_debug_info = True
 
 # Module-level vLLM engine cache keyed by full frozen VLLMConfig.
 # Supports multiple simultaneous engines (e.g. ideation + extraction).
@@ -42,24 +39,24 @@ class LLMResponse:
 
 
 # ---------------------------------------------------------------------------
-# litellm backend
+# OpenAI backend
 # ---------------------------------------------------------------------------
 
 
-def _chat_litellm(
-    config: LiteLLMConfig,
+def _chat_openai(
+    config: OpenAIConfig,
     messages: list[dict[str, str]],
     max_tokens: int,
     temperature: float,
     n: int,
 ) -> list[LLMResponse]:
-    response = litellm.completion(
+    client = OpenAI(max_retries=config.num_retries)
+    response = client.chat.completions.create(
         model=config.model,
         messages=messages,
         max_tokens=max_tokens,
         temperature=temperature,
         n=n,
-        num_retries=config.num_retries,
     )
     results = []
     for choice in response.choices:
@@ -185,8 +182,8 @@ def llm_chat(
     """Call an LLM, dispatching based on config type.
 
     Args:
-        config: LiteLLMConfig for API calls, VLLMConfig for local inference,
-            or a plain string (interpreted as a LiteLLMConfig model ID for convenience).
+        config: OpenAIConfig for API calls, VLLMConfig for local inference,
+            or a plain string (interpreted as an OpenAI model ID for convenience).
         messages: List of message dicts with "role" and "content" keys.
         system_prompt: Optional system prompt prepended to messages.
         max_tokens: Maximum tokens to generate.
@@ -196,21 +193,20 @@ def llm_chat(
     Returns:
         List of LLMResponse objects (length = n).
     """
-    # Convenience: bare string → LiteLLMConfig
+    # Convenience: bare string → OpenAIConfig
     if isinstance(config, str):
-        config = LiteLLMConfig(model=config)
+        config = OpenAIConfig(model=config)
 
     full_messages = []
     if system_prompt:
         full_messages.append({"role": "system", "content": system_prompt})
     full_messages.extend(messages)
 
-    if isinstance(config, LiteLLMConfig):
-        return _chat_litellm(config, full_messages, max_tokens, temperature, n)
-    elif isinstance(config, VLLMConfig):
+    if isinstance(config, OpenAIConfig):
+        return _chat_openai(config, full_messages, max_tokens, temperature, n)
+    if isinstance(config, VLLMConfig):
         return _chat_vllm(config, full_messages, max_tokens, temperature, n)
-    else:
-        raise ValueError(f"Unknown inference config type: {type(config)}")
+    raise ValueError(f"Unknown inference config type: {type(config)}")
 
 
 def llm_chat_single(

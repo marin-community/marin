@@ -46,9 +46,9 @@ class PromptGenConfig:
     spec_path: str
     output_path: str
 
-    # LLM settings — InferenceConfig or string (string → LiteLLMConfig)
-    ideation_model: InferenceConfig | str = "openai/gpt-4.1"
-    extract_model: InferenceConfig | str = "openai/gpt-4.1-mini"
+    # LLM settings — InferenceConfig or string (string → OpenAI model ID)
+    ideation_model: InferenceConfig | str = "gpt-4.1"
+    extract_model: InferenceConfig | str = "gpt-4.1-mini"
 
     # Covering array
     covering_strength: int = 3

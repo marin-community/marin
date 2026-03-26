@@ -27,7 +27,7 @@ from experiments.models import llama_3_1_8b
 from experiments.simple_dpo_config import SimpleDPOConfig
 from fray.v2.types import ResourceConfig
 from marin.alignment.align import AlignConfig, align
-from marin.alignment.inference_config import LiteLLMConfig
+from marin.alignment.inference_config import OpenAIConfig
 from marin.execution.executor import executor_main, output_path_of
 
 # ---------------------------------------------------------------------------
@@ -42,8 +42,8 @@ SPEC_PATH = str(Path(__file__).parent / "posttrain" / "specs" / "openai_model_sp
 
 align_config = AlignConfig(
     # Prompt generation (Bloom stages 1-3)
-    ideation_model="openai/gpt-4.1",
-    extract_model="openai/gpt-4.1-mini",
+    ideation_model="gpt-4.1",
+    extract_model="gpt-4.1-mini",
     covering_strength=3,
     covering_seed=42,
     ideation_workers=32,
@@ -58,7 +58,7 @@ align_config = AlignConfig(
     rejected_temperature=0.7,
     rejected_max_tokens=2048,
     # Judging: filter by quality
-    judge_model="openai/gpt-4.1",
+    judge_model="gpt-4.1",
     judge_min_chosen_score=7.0,
     judge_min_gap=2.0,
     # Tokenizer must match the model being aligned
@@ -99,11 +99,11 @@ dpo_config = SimpleDPOConfig(
 # ---------------------------------------------------------------------------
 
 # --- Inference configs for teacher and rejected models ---
-# Use LiteLLMConfig for API models. For local checkpoints, use VLLMConfig instead:
+# Use OpenAIConfig for API models. For local checkpoints, use VLLMConfig instead:
 #   from marin.alignment.inference_config import VLLMConfig
 #   teacher = VLLMConfig(model="/path/to/checkpoint", tensor_parallel_size=4, tpu_type="v6e-8")
-teacher = LiteLLMConfig(model="openai/gpt-4.1", workers=64)
-rejected = LiteLLMConfig(model="openai/gpt-4.1-mini", workers=64)
+teacher = OpenAIConfig(model="gpt-4.1", workers=64)
+rejected = OpenAIConfig(model="gpt-4.1-mini", workers=64)
 
 aligned_steps = align(
     name="openai_spec_llama3_8b",

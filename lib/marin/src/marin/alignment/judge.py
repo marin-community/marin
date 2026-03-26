@@ -41,7 +41,7 @@ class JudgeConfig:
     spec_path: str
     output_path: str
 
-    judge_model: InferenceConfig | str = "openai/gpt-4.1"
+    judge_model: InferenceConfig | str = "gpt-4.1"
     workers: int = 64
     batch_size: int = 8
     judge_max_tokens: int = 1000
@@ -67,7 +67,7 @@ class JudgePairConfig:
     spec_path: str
     output_path: str
 
-    judge_model: InferenceConfig | str = "openai/gpt-4.1"
+    judge_model: InferenceConfig | str = "gpt-4.1"
     min_chosen_score: float = 7.0
     min_gap: float = 2.0
     workers: int = 64

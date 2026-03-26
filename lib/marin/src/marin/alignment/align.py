@@ -12,7 +12,7 @@ Usage:
         pretrained_model=some_checkpoint_step,
         spec="path/to/spec.jsonl",
         model_config=llama_8b,
-        teacher_model=LiteLLMConfig(model="openai/gpt-4.1"),
+        teacher_model=OpenAIConfig(model="gpt-4.1"),
         align_config=AlignConfig(...),
     )
     executor_main(steps=[some_checkpoint_step, *aligned_steps])
@@ -40,7 +40,7 @@ from marin.alignment.generate_responses import (
     generate_response_pair,
     generate_responses,
 )
-from marin.alignment.inference_config import InferenceConfig, LiteLLMConfig, VLLMConfig
+from marin.alignment.inference_config import InferenceConfig, OpenAIConfig, VLLMConfig
 from marin.alignment.judge import (
     JudgeConfig,
     PreferencePairFilterConfig,
@@ -59,11 +59,10 @@ def _model_name(model: InferenceConfig | str) -> str:
 
 
 def _llm_env_vars() -> dict[str, str]:
-    """Collect LLM API keys from the environment for forwarding to child jobs."""
+    """Collect inference-related environment variables for child jobs."""
     env_vars: dict[str, str] = {}
     for key in (
         "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
         "HF_HOME",
         "HF_HUB_CACHE",
         "HUGGINGFACE_HUB_CACHE",
@@ -77,8 +76,8 @@ def _llm_env_vars() -> dict[str, str]:
 def _serialize_inference_config(config: InferenceConfig) -> dict:
     """Serialize an InferenceConfig to a dict for executor config transport."""
     d = {field.name: getattr(config, field.name) for field in dataclasses.fields(config)}
-    if isinstance(config, LiteLLMConfig):
-        d["backend"] = "litellm"
+    if isinstance(config, OpenAIConfig):
+        d["backend"] = "openai"
     elif isinstance(config, VLLMConfig):
         d["backend"] = "vllm"
     else:
@@ -203,10 +202,10 @@ class AlignConfig:
         cpu_resources: Resources for CPU-only steps (prompt gen, judging).
     """
 
-    # Infrastructure models — LiteLLMConfig for API, VLLMConfig for local, or string (→ LiteLLMConfig)
-    ideation_model: InferenceConfig | str = "openai/gpt-4.1"
-    extract_model: InferenceConfig | str = "openai/gpt-4.1-mini"
-    judge_model: InferenceConfig | str = "openai/gpt-4.1"
+    # Infrastructure models — OpenAIConfig for API, VLLMConfig for local, or string (→ OpenAIConfig)
+    ideation_model: InferenceConfig | str = "gpt-4.1"
+    extract_model: InferenceConfig | str = "gpt-4.1-mini"
+    judge_model: InferenceConfig | str = "gpt-4.1"
 
     # Covering array
     covering_strength: int = 3
@@ -293,7 +292,7 @@ def align(
         spec: Path to specification JSONL or an ExecutorStep that produces one.
         model_config: Levanter model config (e.g. LlamaConfig) for the pretrained model.
         teacher_model: InferenceConfig for chosen response generation.
-            Use LiteLLMConfig for API models, VLLMConfig for local checkpoints.
+            Use OpenAIConfig for API models, VLLMConfig for local checkpoints.
         align_config: Configuration for the alignment pipeline.
         dpo_config: SimpleDPOConfig for DPO training. If None, returns steps up to preference pairs.
         rejected_model: InferenceConfig for rejected response generation.

@@ -28,7 +28,6 @@ dependencies = [
     "jax==0.8.0",  # vllm-tpu currently requires this exact version
     "jaxopt>=0.8.3",
     "levanter[serve]",
-    "litellm==1.81.5",
     "tenacity",
     "lxml[html_clean]",
     "lz4",
