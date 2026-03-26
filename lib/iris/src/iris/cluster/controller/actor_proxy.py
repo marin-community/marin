@@ -11,7 +11,7 @@ transparently (raw byte forwarding, no deserialization).
 Route pattern::
 
     POST /iris.actor.ActorService/{method}
-    X-Iris-Actor-Endpoint: namespace/actor-name
+    X-Iris-Actor-Endpoint: /user/job/actor-name
 """
 
 import logging
@@ -72,7 +72,7 @@ class ActorProxy:
                 status_code=404,
             )
 
-        base = address if address.startswith("http") else f"http://{address}"
+        base = address if "://" in address else f"http://{address}"
         upstream_url = f"{base}/iris.actor.ActorService/{method}"
         body = await request.body()
         forward_headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP_HEADERS}
