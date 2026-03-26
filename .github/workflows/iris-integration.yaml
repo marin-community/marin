@@ -69,7 +69,7 @@ jobs:
         run: |
           uv run pytest tests/integration/iris/ \
             --controller-url "$IRIS_CONTROLLER_URL" \
-            -v --tb=short --timeout=600 \
+            -v -s --log-cli-level=INFO --tb=short --timeout=600 \
             -o "addopts=" \
             -x
         env:

@@ -7,8 +7,12 @@ Ports the pipeline from tests/integration_test.py to dispatch through an Iris
 cluster via FrayIrisClient instead of Ray.
 
 When MARIN_CI_S3_PREFIX is set (e.g. on CoreWeave CI), all paths use S3 so
-remote Zephyr pods can access them. Otherwise falls back to a local tmpdir
-(works when the Iris cluster is local / in-process).
+remote Zephyr pods can access them. The executor is submitted as an Iris job
+so that child jobs (Zephyr coordinator/workers) inherit env vars — including
+S3 credentials — via Iris auto-propagation.
+
+Otherwise falls back to running in-process with a local tmpdir (works when
+the Iris cluster is local / in-process).
 """
 
 import logging
@@ -22,6 +26,7 @@ import fsspec
 import pytest
 from fray import set_current_client
 from fray.v2.iris_backend import FrayIrisClient
+from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from marin.execution.executor import ExecutorMainConfig, executor_main
 from tests.integration_test import create_steps
 
@@ -31,6 +36,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 LOCAL_SYNTH_DATA = REPO_ROOT / "tests" / "quickstart-data"
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
+
+# S3/R2 env vars that must be forwarded to Iris jobs for object storage access.
+_S3_ENV_KEYS = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_ENDPOINT_URL", "FSSPEC_S3"]
 
 
 def _upload_tree(local_root: Path, s3_dest: str) -> None:
@@ -50,6 +58,21 @@ def _rm_s3(s3_prefix: str) -> None:
         fs.rm(s3_prefix, recursive=True)
     except FileNotFoundError:
         pass
+
+
+def _s3_env_vars() -> dict[str, str]:
+    """Collect S3/R2 env vars from the current process."""
+    return {k: os.environ[k] for k in _S3_ENV_KEYS if k in os.environ}
+
+
+def _run_executor(prefix: str, synth_data: str) -> None:
+    """Entry point for the Iris job that runs the full executor pipeline."""
+    config = ExecutorMainConfig(
+        prefix=prefix,
+        executor_info_base_path=f"{prefix}/experiments",
+    )
+    steps = create_steps("quickstart-tests", synth_data)
+    executor_main(config, steps=steps)
 
 
 @pytest.mark.timeout(600)
@@ -81,15 +104,26 @@ def test_marin_pipeline_on_iris(integration_cluster, monkeypatch):
             workspace=REPO_ROOT,
         )
 
-        config = ExecutorMainConfig(
-            prefix=prefix,
-            executor_info_base_path=f"{prefix}/experiments",
-        )
-
-        experiment_prefix = "quickstart-tests"
-        steps = create_steps(experiment_prefix, synth_data)
+        env_vars = {
+            "MARIN_PREFIX": prefix,
+            "WANDB_MODE": "disabled",
+            "WANDB_API_KEY": "",
+            "JAX_TRACEBACK_FILTERING": "off",
+            **_s3_env_vars(),
+        }
 
         with set_current_client(iris_client):
-            executor_main(config, steps=steps)
+            handle = iris_client.submit(
+                JobRequest(
+                    name=f"marin-itest-{uuid.uuid4().hex[:8]}",
+                    entrypoint=Entrypoint.from_callable(
+                        _run_executor,
+                        args=(prefix, synth_data),
+                    ),
+                    resources=ResourceConfig.with_cpu(),
+                    environment=create_environment(env_vars=env_vars),
+                )
+            )
+            handle.wait(raise_on_failure=True)
     finally:
         cleanup()
