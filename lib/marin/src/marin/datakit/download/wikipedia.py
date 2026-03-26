@@ -117,12 +117,13 @@ def download_wikipedia(input_urls: list[str], revision: str, output_path: str) -
 def download_wikipedia_step(
     *,
     input_urls: list[str] | None = None,
-    revision: str = "20241201",
+    revision: str | None = None,
 ) -> StepSpec:
     """Download Wikipedia HTML dumps."""
 
     def _run(output_path: str) -> None:
         assert input_urls is not None, "input_urls must be provided to download Wikipedia data"
+        assert revision is not None, "revision must be provided to download Wikipedia data"
         download_wikipedia(input_urls, revision, output_path)
 
     return StepSpec(
