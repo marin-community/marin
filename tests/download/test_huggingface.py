@@ -80,8 +80,10 @@ def test_download_hf_basic(mock_hf_fs, tmp_path):
         gcs_output_path=str(output_path),
     )
 
-    # Mock HfFileSystem creation
-    with patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs):
+    with (
+        patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs),
+        patch("marin.download.huggingface.download_hf._get_expected_file_count", return_value=None),
+    ):
         download_hf(cfg)
 
     # Verify files were downloaded
@@ -123,7 +125,10 @@ def test_download_hf_appends_sha_when_configured(mock_hf_fs, tmp_path):
         append_sha_to_path=True,
     )
 
-    with patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs):
+    with (
+        patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs),
+        patch("marin.download.huggingface.download_hf._get_expected_file_count", return_value=None),
+    ):
         download_hf(cfg)
 
     target_output = base_output_path / revision
