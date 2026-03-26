@@ -91,16 +91,19 @@ REPO_TYPE_PREFIX_TO_API_TYPE: dict[str, str] = {
 }
 
 
-def _list_repo_files(cfg: DownloadConfig, hf_source_path: str) -> list[str]:
-    """List all files in an HF repo using HfApi (handles pagination correctly).
+def _get_expected_file_count(cfg: DownloadConfig) -> int | None:
+    """Return the expected file count from HfApi.list_repo_files() for truncation detection.
 
-    Returns paths in HfFileSystem format (prefixed with hf_source_path) so that
-    downstream code (hf_fs.info, hf_fs.open, _relative_path_in_source) works unchanged.
+    HfFileSystem.find() has a pagination bug that silently truncates results on large repos.
+    This function uses HfApi.list_repo_files() (which handles pagination correctly) to get the
+    true file count so callers can detect truncation.
+
+    Returns None for bucket paths, which are not standard HF repos.
     """
     api = HfApi(token=os.environ.get("HF_TOKEN", False))
     repo_type = REPO_TYPE_PREFIX_TO_API_TYPE.get(cfg.hf_repo_type_prefix, "model")
     repo_files = list(api.list_repo_files(cfg.hf_dataset_id, repo_type=repo_type, revision=cfg.revision))
-    return [os.path.join(hf_source_path, f) for f in repo_files]
+    return len(repo_files)
 
 
 def _assert_bucket_support_available(source_path: str) -> None:
@@ -292,13 +295,19 @@ def download_hf(cfg: DownloadConfig) -> None:
     _assert_bucket_support_available(hf_source_path)
 
     if not cfg.hf_urls_glob:
-        if hf_source_path.startswith(HF_BUCKET_PATH_PREFIX):
-            # Bucket paths are not standard repos; HfApi.list_repo_files() does not apply.
-            files = hf_fs.find(hf_source_path, revision=cfg.revision)
-        else:
-            # Use HfApi.list_repo_files() instead of HfFileSystem.find() because
-            # find() silently truncates results on large repos (pagination bug).
-            files = _list_repo_files(cfg, hf_source_path)
+        files = hf_fs.find(hf_source_path, revision=cfg.revision)
+
+        # Cross-reference file count with HfApi.list_repo_files() to detect
+        # silent truncation from a pagination bug in HfFileSystem.find().
+        if not hf_source_path.startswith(HF_BUCKET_PATH_PREFIX):
+            expected_count = _get_expected_file_count(cfg)
+            if expected_count is not None and len(files) != expected_count:
+                raise RuntimeError(
+                    f"HfFileSystem.find() returned {len(files)} files but HfApi.list_repo_files() "
+                    f"reports {expected_count} files for {cfg.hf_dataset_id}@{cfg.revision}. "
+                    f"This is likely due to a pagination bug in HfFileSystem.find(). "
+                    f"Consider upgrading huggingface_hub or filing a bug report."
+                )
     else:
         # Get list of files directly from HfFileSystem matching the pattern
         files = []
