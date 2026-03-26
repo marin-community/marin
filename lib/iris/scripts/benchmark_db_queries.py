@@ -35,9 +35,10 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
-    JOBS,
     ControllerDB,
     EndpointQuery,
+    Job,
+    decode_rows,
     healthy_active_workers_with_attributes,
     running_tasks_by_worker,
     tasks_for_job_with_attempts,
@@ -121,8 +122,11 @@ def benchmark_scheduling(db: ControllerDB, iterations: int) -> list[tuple[str, f
     )
 
     def _reservation_jobs_old():
+        placeholders = ",".join("?" for _ in reservable_states)
         with db.snapshot() as snapshot:
-            all_jobs = snapshot.select(JOBS, where=JOBS.c.state.in_(list(reservable_states)))
+            all_jobs = decode_rows(
+                Job, snapshot.fetchall(f"SELECT * FROM jobs WHERE state IN ({placeholders})", reservable_states)
+            )
         return [j for j in all_jobs if j.request.HasField("reservation")]
 
     p50, p95 = bench("reservation_jobs (old: full scan)", _reservation_jobs_old, iterations=iterations)
@@ -145,8 +149,15 @@ def benchmark_dashboard(db: ControllerDB, iterations: int) -> list[tuple[str, fl
     results: list[tuple[str, float, float]] = []
 
     def _bench_jobs_in_states(db):
+        placeholders = ",".join("?" for _ in USER_JOB_STATES)
         with db.read_snapshot() as q:
-            return q.select(JOBS, where=JOBS.c.state.in_(list(USER_JOB_STATES)) & (JOBS.c.depth == 1))
+            return decode_rows(
+                Job,
+                q.fetchall(
+                    f"SELECT * FROM jobs WHERE state IN ({placeholders}) AND depth = 1",
+                    (*USER_JOB_STATES,),
+                ),
+            )
 
     p50, p95 = bench("jobs_in_states (top-level)", lambda: _bench_jobs_in_states(db), iterations=iterations)
     results.append(("jobs_in_states (top-level)", p50, p95))

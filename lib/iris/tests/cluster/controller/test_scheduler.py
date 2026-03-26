@@ -12,7 +12,6 @@ import pytest
 
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.db import (
-    WORKER_ATTRIBUTES,
     _decode_attribute_rows,
 )
 from iris.cluster.controller.scheduler import (
@@ -55,17 +54,10 @@ def _job_requirements_from_job(job) -> JobRequirements:
 
 def _worker_attr(state: ControllerTransitions, worker_id: WorkerId, key: str):
     with state._db.snapshot() as q:
-        rows = q.select(
-            WORKER_ATTRIBUTES,
-            columns=(
-                WORKER_ATTRIBUTES.c.worker_id,
-                WORKER_ATTRIBUTES.c.key,
-                WORKER_ATTRIBUTES.c.value_type,
-                WORKER_ATTRIBUTES.c.str_value,
-                WORKER_ATTRIBUTES.c.int_value,
-                WORKER_ATTRIBUTES.c.float_value,
-            ),
-            where=(WORKER_ATTRIBUTES.c.worker_id == str(worker_id)) & (WORKER_ATTRIBUTES.c.key == key),
+        rows = q.raw(
+            "SELECT worker_id, key, value_type, str_value, int_value, float_value"
+            " FROM worker_attributes WHERE worker_id = ? AND key = ?",
+            (str(worker_id), key),
         )
     if not rows:
         return None

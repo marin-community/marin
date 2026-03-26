@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.db import TASKS, ControllerDB
+from iris.cluster.controller.db import ControllerDB, Task, decode_rows
 from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
 from tests.cluster.controller.conftest import (
@@ -51,7 +51,9 @@ def test_dry_run_scheduling_does_not_dispatch(dry_run_controller):
     controller._run_scheduling()
 
     with state._db.snapshot() as q:
-        tasks = q.select(TASKS, where=TASKS.c.job_id == JobName.root("test-user", "dry-job").to_wire())
+        tasks = decode_rows(
+            Task, q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (JobName.root("test-user", "dry-job").to_wire(),))
+        )
     assert len(tasks) == 1
     assert tasks[0].state == cluster_pb2.TASK_STATE_PENDING
 

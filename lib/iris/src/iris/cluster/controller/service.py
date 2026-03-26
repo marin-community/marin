@@ -40,27 +40,22 @@ from iris.rpc.auth import (
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
-    API_KEYS,
-    ATTEMPTS,
-    ENDPOINTS,
-    JOBS,
-    TASKS,
     TERMINAL_JOB_STATES,
-    TXN_ACTIONS,
-    WORKERS,
-    WORKER_RESOURCE_HISTORY,
-    WORKER_TASK_HISTORY,
+    ApiKey,
+    Attempt,
     ControllerDB,
     Endpoint,
     EndpointQuery,
     Job,
-    Order,
     Task,
     TaskJobSummary,
+    TransactionAction,
     UserStats,
     Worker,
     _tasks_with_attempts,
-    endpoint_query_predicate,
+    decode_one,
+    decode_rows,
+    endpoint_query_sql,
     running_tasks_by_worker,
     tasks_for_job_with_attempts,
 )
@@ -246,26 +241,28 @@ def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str,
 
 def _read_job(db: ControllerDB, job_id: JobName) -> Job | None:
     with db.read_snapshot() as q:
-        return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
+        return decode_one(Job, q.fetchall("SELECT * FROM jobs j WHERE j.job_id = ?", (job_id.to_wire(),)))
 
 
 def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> Task | None:
     task_wire = task_id.to_wire()
     with db.read_snapshot() as q:
-        task = q.one(TASKS, where=TASKS.c.task_id == task_wire)
+        task = decode_one(Task, q.fetchall("SELECT * FROM tasks t WHERE t.task_id = ?", (task_wire,)))
         if task is None:
             return None
-        attempts = q.select(
-            ATTEMPTS,
-            where=ATTEMPTS.c.task_id == task_wire,
-            order_by=(ATTEMPTS.c.attempt_id.asc(),),
+        attempts = decode_rows(
+            Attempt,
+            q.fetchall(
+                "SELECT * FROM task_attempts a WHERE a.task_id = ? ORDER BY a.attempt_id ASC",
+                (task_wire,),
+            ),
         )
     return _tasks_with_attempts([task], attempts)[0]
 
 
 def _read_worker(db: ControllerDB, worker_id: WorkerId) -> Worker | None:
     with db.read_snapshot() as q:
-        return q.one(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
+        return decode_one(Worker, q.fetchall("SELECT * FROM workers w WHERE w.worker_id = ?", (str(worker_id),)))
 
 
 @dataclass(frozen=True)
@@ -279,7 +276,7 @@ def _read_worker_detail(
     db: ControllerDB, worker_id: WorkerId, *, resource_history_limit: int = 200
 ) -> _WorkerDetail | None:
     with db.read_snapshot() as q:
-        worker = q.one(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
+        worker = decode_one(Worker, q.fetchall("SELECT * FROM workers w WHERE w.worker_id = ?", (str(worker_id),)))
         if worker is None:
             return None
         running_rows = q.raw(
@@ -289,12 +286,11 @@ def _read_worker_detail(
             (str(worker_id), *ACTIVE_TASK_STATES),
             decoders={"task_id": JobName.from_wire},
         )
-        resource_rows = q.select(
-            WORKER_RESOURCE_HISTORY,
-            columns=(WORKER_RESOURCE_HISTORY.c.snapshot_proto,),
-            where=WORKER_RESOURCE_HISTORY.c.worker_id == str(worker_id),
-            order_by=(WORKER_RESOURCE_HISTORY.c.id.desc(),),
-            limit=max(resource_history_limit, 0),
+        resource_rows = q.raw(
+            "SELECT wrh.snapshot_proto FROM worker_resource_history wrh "
+            "WHERE wrh.worker_id = ? ORDER BY wrh.id DESC LIMIT ?",
+            (str(worker_id), max(resource_history_limit, 0)),
+            decoders={"snapshot_proto": lambda b: cluster_pb2.WorkerResourceSnapshot.FromString(b)},
         )
     resource_history = tuple(reversed([r.snapshot_proto for r in resource_rows]))
     return _WorkerDetail(
@@ -306,26 +302,38 @@ def _read_worker_detail(
 
 def _child_jobs(db: ControllerDB, job_id: JobName) -> list[Job]:
     with db.read_snapshot() as q:
-        return q.select(
-            JOBS,
-            where=JOBS.c.parent_job_id == job_id.to_wire(),
-            order_by=(Order(JOBS.c.submitted_at_ms), Order(JOBS.c.job_id)),
+        return decode_rows(
+            Job,
+            q.fetchall(
+                "SELECT * FROM jobs j WHERE j.parent_job_id = ? ORDER BY j.submitted_at_ms ASC, j.job_id ASC",
+                (job_id.to_wire(),),
+            ),
         )
 
 
 def _tasks_for_listing(db: ControllerDB, *, job_id: JobName | None = None) -> list[Task]:
     with db.read_snapshot() as q:
-        tasks = q.select(
-            TASKS,
-            where=(TASKS.c.job_id == job_id.to_wire()) if job_id else None,
-            order_by=((TASKS.c.job_id.asc(), TASKS.c.task_index.asc()) if job_id else (TASKS.c.task_id.asc(),)),
-        )
+        if job_id is not None:
+            tasks = decode_rows(
+                Task,
+                q.fetchall(
+                    "SELECT * FROM tasks t WHERE t.job_id = ? ORDER BY t.job_id ASC, t.task_index ASC",
+                    (job_id.to_wire(),),
+                ),
+            )
+        else:
+            tasks = decode_rows(Task, q.fetchall("SELECT * FROM tasks t ORDER BY t.task_id ASC"))
         if not tasks:
             return []
-        attempts = q.select(
-            ATTEMPTS,
-            where=ATTEMPTS.c.task_id.in_([t.task_id.to_wire() for t in tasks]),
-            order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
+        task_wires = [t.task_id.to_wire() for t in tasks]
+        placeholders = ",".join("?" for _ in task_wires)
+        attempts = decode_rows(
+            Attempt,
+            q.fetchall(
+                f"SELECT * FROM task_attempts a WHERE a.task_id IN ({placeholders}) "
+                "ORDER BY a.task_id ASC, a.attempt_id ASC",
+                tuple(task_wires),
+            ),
         )
     return _tasks_with_attempts(tasks, attempts)
 
@@ -435,7 +443,7 @@ def _jobs_paginated(
         total = q.execute_sql(count_sql, tuple(params)).fetchone()[0]
         rows = q.execute_sql(select_sql, tuple(select_params)).fetchall()
 
-    jobs = [db.decode_job(row) for row in rows]
+    jobs = decode_rows(Job, rows)
     return jobs, total
 
 
@@ -450,8 +458,8 @@ def _descendants_for_roots(db: ControllerDB, root_job_ids: list[str]) -> list[Jo
         WHERE j.root_job_id IN ({placeholders}) AND j.depth > 1
     """
     with db.read_snapshot() as q:
-        rows = q.execute_sql(sql, tuple(root_job_ids)).fetchall()
-    return [db.decode_job(row) for row in rows]
+        rows = q.fetchall(sql, tuple(root_job_ids))
+    return decode_rows(Job, rows)
 
 
 def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = None) -> dict[JobName, TaskJobSummary]:
@@ -494,31 +502,31 @@ def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = No
 
 def _worker_roster(db: ControllerDB) -> list[Worker]:
     with db.read_snapshot() as q:
-        return q.select(WORKERS)
+        return decode_rows(Worker, q.fetchall("SELECT * FROM workers w"))
 
 
 def _query_endpoints(db: ControllerDB, query: EndpointQuery = EndpointQuery()) -> list[Endpoint]:
-    joins, where = endpoint_query_predicate(query)
+    sql, params = endpoint_query_sql(query)
     with db.read_snapshot() as q:
-        return q.select(
-            ENDPOINTS,
-            where=where,
-            joins=tuple(joins),
-            limit=query.limit,
-        )
+        return decode_rows(Endpoint, q.fetchall(sql, tuple(params)))
 
 
 def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[Job]:
     with db.read_snapshot() as q:
-        return q.select(JOBS, where=JOBS.c.job_id.like(f"{job_id.to_wire()}/%"))
+        return decode_rows(
+            Job,
+            q.fetchall("SELECT * FROM jobs j WHERE j.job_id LIKE ?", (f"{job_id.to_wire()}/%",)),
+        )
 
 
-def _transaction_actions(db: ControllerDB, limit: int = 100) -> list:
+def _transaction_actions(db: ControllerDB, limit: int = 100) -> list[TransactionAction]:
     with db.read_snapshot() as q:
-        actions = q.select(
-            TXN_ACTIONS,
-            order_by=(TXN_ACTIONS.c.created_at_ms.desc(),),
-            limit=limit,
+        actions = decode_rows(
+            TransactionAction,
+            q.fetchall(
+                "SELECT * FROM txn_actions ta ORDER BY ta.created_at_ms DESC LIMIT ?",
+                (limit,),
+            ),
         )
     return list(reversed(actions))
 
@@ -556,27 +564,32 @@ def _live_user_stats(db: ControllerDB) -> list[UserStats]:
 
 def _tasks_for_worker(db: ControllerDB, worker_id: WorkerId, limit: int = 50) -> list[Task]:
     with db.read_snapshot() as q:
-        history_rows = q.select(
-            WORKER_TASK_HISTORY,
-            columns=(WORKER_TASK_HISTORY.c.task_id,),
-            where=WORKER_TASK_HISTORY.c.worker_id == str(worker_id),
-            order_by=(WORKER_TASK_HISTORY.c.assigned_at_ms.desc(),),
-            limit=limit,
+        history_rows = q.raw(
+            "SELECT wth.task_id FROM worker_task_history wth "
+            "WHERE wth.worker_id = ? ORDER BY wth.assigned_at_ms DESC LIMIT ?",
+            (str(worker_id), limit),
+            decoders={"task_id": JobName.from_wire},
         )
     task_ids = [r.task_id for r in history_rows]
     if not task_ids:
         return []
     task_wires = [tid.to_wire() for tid in task_ids]
+    placeholders = ",".join("?" for _ in task_wires)
     with db.read_snapshot() as q:
-        tasks = q.select(
-            TASKS,
-            where=TASKS.c.task_id.in_(task_wires),
-            order_by=(TASKS.c.task_id.asc(),),
+        tasks = decode_rows(
+            Task,
+            q.fetchall(
+                f"SELECT * FROM tasks t WHERE t.task_id IN ({placeholders}) ORDER BY t.task_id ASC",
+                tuple(task_wires),
+            ),
         )
-        attempts = q.select(
-            ATTEMPTS,
-            where=ATTEMPTS.c.task_id.in_(task_wires),
-            order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
+        attempts = decode_rows(
+            Attempt,
+            q.fetchall(
+                f"SELECT * FROM task_attempts a WHERE a.task_id IN ({placeholders}) "
+                "ORDER BY a.task_id ASC, a.attempt_id ASC",
+                tuple(task_wires),
+            ),
         )
     task_map = {t.task_id: t for t in _tasks_with_attempts(tasks, attempts)}
     return [task for tid in task_ids if (task := task_map.get(tid)) is not None]
@@ -1799,7 +1812,7 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Empty:
         identity = require_identity()
         with self._db.snapshot() as q:
-            key = q.one(API_KEYS, where=API_KEYS.c.key_id == request.key_id)
+            key = decode_one(ApiKey, q.fetchall("SELECT * FROM api_keys ak WHERE ak.key_id = ?", (request.key_id,)))
         if key is None:
             raise ConnectError(Code.NOT_FOUND, f"API key not found: {request.key_id}")
         if key.user_id != identity.user_id:

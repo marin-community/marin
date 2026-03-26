@@ -20,11 +20,14 @@ from iris.cluster.controller.db import (
     FAILURE_TASK_STATES,
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
-    WORKERS,
     ControllerDB,
     Endpoint,
+    Job,
+    Task,
     TransactionCursor,
     Worker,
+    _decode_row,
+    decode_rows,
 )
 from iris.cluster.log_store import LogStore, task_log_key
 from iris.cluster.types import (
@@ -856,7 +859,7 @@ class ControllerTransitions:
                 if task_row is None or worker_row is None:
                     rejected.append(assignment)
                     continue
-                task = self._db.decode_task(task_row)
+                task = _decode_row(Task, task_row)
                 if not task.can_be_scheduled():
                     rejected.append(assignment)
                     continue
@@ -864,7 +867,7 @@ class ControllerTransitions:
                 if job_row is None:
                     rejected.append(assignment)
                     continue
-                job = self._db.decode_job(job_row)
+                job = _decode_row(Job, job_row)
                 attempt_id = int(task_row["current_attempt_id"]) + 1
                 now_ms = Timestamp.now().epoch_ms()
                 cur.execute(
@@ -995,7 +998,7 @@ class ControllerTransitions:
             task_row = cur.execute("SELECT * FROM tasks WHERE task_id = ?", (update.task_id.to_wire(),)).fetchone()
             if task_row is None:
                 continue
-            task = self._db.decode_task(task_row)
+            task = _decode_row(Task, task_row)
             if task.is_finished() or update.new_state in (
                 cluster_pb2.TASK_STATE_UNSPECIFIED,
                 cluster_pb2.TASK_STATE_PENDING,
@@ -1414,7 +1417,7 @@ class ControllerTransitions:
             force_remove=force_remove,
         )
         with self._db.snapshot() as snap:
-            worker_removed = not snap.exists(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
+            worker_removed = snap.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", (str(worker_id),)) is None
         action = HeartbeatAction.WORKER_FAILED if worker_removed else HeartbeatAction.TRANSIENT_FAILURE
         return HeartbeatFailureResult(tasks_to_kill=result.tasks_to_kill, worker_removed=worker_removed, action=action)
 
@@ -1612,7 +1615,7 @@ class ControllerTransitions:
                 return None
             cur.execute("DELETE FROM workers WHERE worker_id = ?", (str(worker_id),))
             self._record_transaction(cur, "remove_worker", [("worker_removed", str(worker_id), {})])
-            return self._db.decode_worker(row)
+            return _decode_row(Worker, row)
 
     def prune_old_data(
         self,
@@ -1852,7 +1855,7 @@ class ControllerTransitions:
             return []
         target_set = set(worker_ids)
         with self._db.snapshot() as snap:
-            all_workers = snap.select(WORKERS, where=WORKERS.c.active == 1)
+            all_workers = decode_rows(Worker, snap.fetchall("SELECT * FROM workers WHERE active = 1"))
         candidates: list[tuple[WorkerId, str]] = []
         for w in all_workers:
             if w.worker_id in target_set:
@@ -2083,7 +2086,7 @@ class ControllerTransitions:
                 task_row = cur.execute("SELECT * FROM tasks WHERE task_id = ?", (update.task_id.to_wire(),)).fetchone()
                 if task_row is None:
                     continue
-                task = self._db.decode_task(task_row)
+                task = _decode_row(Task, task_row)
                 if task.is_finished() or update.new_state in (
                     cluster_pb2.TASK_STATE_UNSPECIFIED,
                     cluster_pb2.TASK_STATE_PENDING,
