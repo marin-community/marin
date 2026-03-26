@@ -27,6 +27,7 @@ def run_one_query(
     docker_image: str | None,
     port: int | None,
     use_completions: bool,
+    extra_engine_kwargs: dict | None = None,
 ) -> str:
     parsed = urlparse(model_name_or_path)
     is_object_store = parsed.scheme in {"gs", "s3"}
@@ -35,6 +36,8 @@ def run_one_query(
         engine_kwargs["load_format"] = load_format
     if max_model_len is not None:
         engine_kwargs["max_model_len"] = max_model_len
+    if extra_engine_kwargs:
+        engine_kwargs.update(extra_engine_kwargs)
 
     if is_object_store:
         model = ModelConfig(name="smoke-test-model", path=model_name_or_path, engine_kwargs=engine_kwargs)
@@ -108,9 +111,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--load-format",
-        choices=["runai_streamer", "runai_streamer_sharded"],
+        choices=["runai_streamer", "runai_streamer_sharded", "dummy"],
         default=None,
         help="Optional vLLM load format (recommended for gs:// or s3://). Defaults to evaluator auto-selection.",
+    )
+    parser.add_argument(
+        "--engine-kwargs-json",
+        default=None,
+        help="Additional engine kwargs as a JSON string (merged into engine_kwargs dict).",
     )
     parser.add_argument(
         "--max-model-len",
@@ -170,6 +178,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.repeat < 1:
         raise ValueError("--repeat must be >= 1")
 
+    import json
+
+    extra_engine_kwargs = json.loads(args.engine_kwargs_json) if args.engine_kwargs_json else None
+
     if args.local:
         if args.local_cache_dir is not None:
             os.environ["JAX_COMPILATION_CACHE_DIR"] = args.local_cache_dir
@@ -186,6 +198,7 @@ def main(argv: list[str] | None = None) -> int:
                 docker_image=args.docker_image,
                 port=args.port,
                 use_completions=args.use_completions,
+                extra_engine_kwargs=extra_engine_kwargs,
             )
             elapsed = time.time() - start
             print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
@@ -232,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         entrypoint=Entrypoint.from_callable(_run),
         resources=resources,
         environment=EnvironmentConfig.create(
-            extras=["eval", "tpu"],
+            extras=["eval", "tpu", "vllm"],
             pip_packages=VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else (),
             env_vars=env_vars or None,
         ),

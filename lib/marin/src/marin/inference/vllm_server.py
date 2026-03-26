@@ -9,7 +9,9 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
+import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -25,7 +27,7 @@ from marin.evaluation.evaluators.evaluator import ModelConfig
 logger = logging.getLogger(__name__)
 DEFAULT_VLLM_TPU_DOCKER_IMAGE: str = "vllm/vllm-tpu:nightly-20260104-4a1e25b-0d4044e"
 DEFAULT_VLLM_GPU_DOCKER_IMAGE: str = "nvcr.io/nvidia/vllm:25.12.post1-py3"
-VLLM_NATIVE_PIP_PACKAGES: tuple[str, ...] = ("vllm-tpu",)
+VLLM_NATIVE_PIP_PACKAGES: tuple[str, ...] = ()
 
 _SENSITIVE_ENV_KEYS = frozenset(
     {
@@ -276,6 +278,8 @@ def _maybe_enable_streaming(model: ModelConfig) -> ModelConfig:
 
 
 def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
+    import json
+
     args: list[str] = []
     load_format = engine_kwargs.get("load_format")
     if load_format is not None:
@@ -286,6 +290,18 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     gpu_memory_utilization = engine_kwargs.get("gpu_memory_utilization")
     if gpu_memory_utilization is not None:
         args.extend(["--gpu-memory-utilization", str(gpu_memory_utilization)])
+    num_gpu_blocks_override = engine_kwargs.get("num_gpu_blocks_override")
+    if num_gpu_blocks_override is not None:
+        args.extend(["--num-gpu-blocks-override", str(num_gpu_blocks_override)])
+    model_loader_extra_config = engine_kwargs.get("model_loader_extra_config")
+    if model_loader_extra_config is not None:
+        args.extend(["--model-loader-extra-config", json.dumps(model_loader_extra_config)])
+    additional_config = engine_kwargs.get("additional_config")
+    if additional_config is not None:
+        args.extend(["--additional-config", json.dumps(additional_config)])
+    tensor_parallel_size = engine_kwargs.get("tensor_parallel_size")
+    if tensor_parallel_size is not None:
+        args.extend(["--tensor-parallel-size", str(tensor_parallel_size)])
     return args
 
 
@@ -744,8 +760,9 @@ def _start_vllm_docker_server(
 def _vllm_jax_env() -> dict[str, str | Any]:
     env: dict[str, str | Any] = {
         "TOKENIZERS_PARALLELISM": "false",
-        # See `_vllm_env`.
-        "MODEL_IMPL_TYPE": os.environ.get("MODEL_IMPL_TYPE", "vllm"),
+        # Let tpu-inference's auto-routing pick flax_nnx for supported
+        # architectures (e.g. Llama) and fall back to vllm for others.
+        "MODEL_IMPL_TYPE": os.environ.get("MODEL_IMPL_TYPE", "auto"),
         "JAX_ENABLE_COMPILATION_CACHE": os.environ.get("JAX_ENABLE_COMPILATION_CACHE", "1"),
         "JAX_COMPILATION_CACHE_DIR": os.environ.get(
             "JAX_COMPILATION_CACHE_DIR",
@@ -778,10 +795,9 @@ def _default_jax_compilation_cache_dir() -> str:
 
 def _vllm_env() -> dict[str, str]:
     env = dict(os.environ)
-    # tpu_inference defaults MODEL_IMPL_TYPE=auto, which selects flax_nnx for many
-    # architectures. flax_nnx currently fails without an auto mesh context, so
-    # default to the vllm implementation unless the user overrides it.
-    env.setdefault("MODEL_IMPL_TYPE", "vllm")
+    # Let tpu-inference's auto-routing pick flax_nnx for supported
+    # architectures (e.g. Llama) and fall back to vllm for others.
+    env.setdefault("MODEL_IMPL_TYPE", "auto")
     # Reduce TPU runtime logging noise by default (match training defaults).
     env.setdefault("TPU_MIN_LOG_LEVEL", "3")
     env.setdefault("TPU_STDERR_LOG_LEVEL", "3")
@@ -823,23 +839,37 @@ def _start_vllm_native_server(
     log_dir = tempfile.mkdtemp(prefix="vllm_server_")
     stdout_path = os.path.join(log_dir, "stdout.log")
     stderr_path = os.path.join(log_dir, "stderr.log")
-    stdout_f = open(stdout_path, "w")
-    stderr_f = open(stderr_path, "w")
     native_env = _vllm_env()
     logger.info(
         "Starting vLLM native server with "
         f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "
         f"TPU_STDERR_LOG_LEVEL={native_env.get('TPU_STDERR_LOG_LEVEL')}"
     )
-    process = subprocess.Popen(cmd, stdout=stdout_f, stderr=stderr_f, text=True, env=native_env)
+    # Tee subprocess output to both log files AND parent stdout/stderr so
+    # Iris can capture vLLM's detailed logs (architecture, weight loading, etc.)
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=native_env)
+    stdout_f = open(stdout_path, "w")
+    stderr_f = open(stderr_path, "w")
+
+    def _tee(src, log_file, dest):
+        """Read from src line by line, writing to both log_file and dest."""
+        for line in src:
+            log_file.write(line)
+            log_file.flush()
+            dest.write(line)
+            dest.flush()
+        log_file.close()
+
+    threading.Thread(target=_tee, args=(process.stdout, stdout_f, sys.stdout), daemon=True).start()
+    threading.Thread(target=_tee, args=(process.stderr, stderr_f, sys.stderr), daemon=True).start()
 
     server_url: str = f"http://{host}:{resolved_port}/v1"
     start_time: float = time.time()
 
     while True:
         if process.poll() is not None:
-            stdout_f.close()
-            stderr_f.close()
+            # Give tee threads a moment to flush remaining output
+            time.sleep(0.5)
             logs = _native_logs_tail(log_dir)
             raise RuntimeError(
                 "vLLM server process exited before becoming ready.\n"

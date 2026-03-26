@@ -194,6 +194,6 @@ class SimpleEvaluator(Evaluator):
             resource_config=resource_config,
             max_eval_instances=max_eval_instances,
             wandb_tags=wandb_tags,
-            extras=("eval", "tpu"),
+            extras=("eval", "tpu", "vllm"),
             pip_packages=pip_packages,
         )

@@ -25,7 +25,7 @@ dependencies = [
     "google-cloud-storage",
     "google-cloud-storage-transfer",
     "haliax",
-    "jax==0.8.0",  # vllm-tpu currently requires this exact version
+    "jax==0.8.1",
     "jaxopt>=0.8.3",
     "levanter[serve]",
     "lxml[html_clean]",
@@ -124,11 +124,11 @@ conflicts = [
 
 [project.optional-dependencies]
 
-gpu = ["jax[cuda12]==0.8.0", "torch==2.9.0", "torchvision==0.24.0"]
-tpu = ["jax[tpu]==0.8.0", "torch==2.9.0", "torchvision==0.24.0"]
+gpu = ["jax[cuda12]==0.8.1", "torch==2.9.0", "torchvision==0.24.0"]
+tpu = ["jax[tpu]==0.8.1", "torch==2.9.0", "torchvision==0.24.0"]
 
 cpu = [
-  "jax==0.8.0",
+  "jax==0.8.1",
   "torch==2.9.0",
   # Linux x86_64
   "torchvision==0.24.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -169,7 +169,7 @@ vizier = [
 ]
 
 vllm =[
-    "vllm-tpu==0.13.2.post6",
+    "vllm-tpu==0.13.3",
     "triton==3.5.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
 ]
 

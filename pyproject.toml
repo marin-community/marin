@@ -31,6 +31,7 @@ override-dependencies = [
     "wheel>=0.46.2",
     "datasets>=3.1.0,<4.0.0",
     "equinox>=0.11.10",  # Override vizier's pin for JAX 0.8 compatibility
+    "tpu-inference @ https://github.com/marin-community/tpu-inference/releases/download/marin-4abb68f4/tpu_inference-0.0.0.dev20260322+4abb68f4-py3-none-any.whl",
 ]
 
 [tool.uv.workspace]
