@@ -15,6 +15,15 @@ def test_fuzzy_document_deduplication(fox_corpus):
     assert result["success"]
     assert result["mode"] == DedupMode.FUZZY_DOCUMENT
 
+    # Verify counters: all docs processed, totals are consistent
+    total = result["dedup/fuzzy/document/total"]
+    dups = result["dedup/fuzzy/document/dups"]
+    unique = result["dedup/fuzzy/document/unique"]
+    assert total == 11
+    assert dups + unique == total
+    # At least 2 gray dups + 1 fuzzy dup (contaminated/high_overlap cluster)
+    assert dups >= 3
+
     by_file = load_dedup_vortex_outputs(fox_corpus["output_dir"] + "/data")
 
     all_records = [r for records in by_file.values() for r in records]

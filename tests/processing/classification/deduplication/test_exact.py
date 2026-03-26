@@ -16,6 +16,11 @@ def test_exact_paragraph_deduplication(fox_corpus):
     assert result["success"]
     assert result["mode"] == DedupMode.EXACT_PARAGRAPH
 
+    # Verify counters: 16 total paragraphs across 11 docs, 5 dups, 11 unique
+    assert result["dedup/exact/paragraph/total"] == 16
+    assert result["dedup/exact/paragraph/dups"] == 5
+    assert result["dedup/exact/paragraph/unique"] == 11
+
     # Load outputs keyed by output file stem (mirrors input shard names)
     by_file = load_dedup_vortex_outputs(fox_corpus["output_dir"])
 
@@ -56,6 +61,11 @@ def test_exact_document_deduplication(fox_corpus):
     )
     assert result["success"]
     assert result["mode"] == DedupMode.EXACT_DOCUMENT
+
+    # Verify counters: 11 docs total, 2 dups (dup_2 and dup_3), 9 unique
+    assert result["dedup/exact/document/total"] == 11
+    assert result["dedup/exact/document/dups"] == 2
+    assert result["dedup/exact/document/unique"] == 9
 
     by_file = load_dedup_vortex_outputs(fox_corpus["output_dir"])
 
