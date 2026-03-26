@@ -67,9 +67,10 @@ class PromptGenConfig:
     # LLM parameters
     understanding_max_tokens: int = 4000
     understanding_temperature: float = 1.0
-    concretize_max_tokens: int = 16000
+    understanding_max_attempts: int = 5
+    concretize_max_tokens: int = 1024
     concretize_temperature: float = 1.0
-    extract_max_tokens: int = 16000
+    extract_max_tokens: int = 1024
     concretize_max_attempts: int = 5
 
     # Filtering
@@ -182,29 +183,37 @@ def _run_understanding_local(
     session: BatchedVllmServeSession,
 ) -> dict[str, dict[str, Any]]:
     understandings: dict[str, dict[str, Any]] = {}
-    failures: list[tuple[str, str]] = []
+    pending_statements = list(statements.items())
+    failures: dict[str, str] = {}
 
-    for statement_batch in batched(statements.items(), config.local_serve_batch_size):
-        outputs = session.generate_from_messages(
-            [_build_understanding_messages(statement) for _sid, statement in statement_batch],
-            stage_name="understanding",
-            temperature=config.understanding_temperature,
-            max_tokens=config.understanding_max_tokens,
-            n=1,
-        )
-        for (sid, statement), output in zip(statement_batch, outputs, strict=True):
-            try:
-                understandings[sid] = _parse_understanding_response(
-                    statement,
-                    _single_completion_text(output),
-                    config.ideation_model,
-                )
-            except Exception as exc:
-                failures.append((sid, str(exc)))
-                logger.error("Stage1 failed for '%s': %s", sid, exc)
+    for attempt in range(1, config.understanding_max_attempts + 1):
+        if not pending_statements:
+            break
+        next_pending: list[tuple[str, Statement]] = []
+        for statement_batch in batched(pending_statements, config.local_serve_batch_size):
+            outputs = session.generate_from_messages(
+                [_build_understanding_messages(statement) for _sid, statement in statement_batch],
+                stage_name="understanding",
+                temperature=config.understanding_temperature,
+                max_tokens=config.understanding_max_tokens,
+                n=1,
+            )
+            for (sid, statement), output in zip(statement_batch, outputs, strict=True):
+                try:
+                    understandings[sid] = _parse_understanding_response(
+                        statement,
+                        _single_completion_text(output),
+                        config.ideation_model,
+                    )
+                    failures.pop(sid, None)
+                except Exception as exc:
+                    failures[sid] = str(exc)
+                    next_pending.append((sid, statement))
+                    logger.warning("Stage1 attempt %d failed for '%s': %s", attempt, sid, exc)
+        pending_statements = next_pending
 
-    if failures:
-        detail = "; ".join(f"{sid}: {msg}" for sid, msg in failures)
+    if pending_statements:
+        detail = "; ".join(f"{sid}: {failures[sid]}" for sid, _statement in pending_statements)
         raise RuntimeError(f"Stage 1 failed for {len(failures)} statement(s): {detail}")
 
     return understandings
@@ -300,7 +309,7 @@ def _concretize_batch(
     indexed_configs: list[_ConcretizeConfig],
     model: InferenceConfig | str,
     temperature: float,
-    max_tokens: int = 16000,
+    max_tokens: int = 1024,
 ) -> str:
     """Concretize a batch of axis configs into scenarios."""
     system_prompt, user_prompt = make_concretize_prompt(
@@ -612,7 +621,7 @@ def _extract_batch(
     scenarios: list[dict[str, Any]],
     batch_start_idx: int,
     model: InferenceConfig | str,
-    max_tokens: int = 16000,
+    max_tokens: int = 1024,
 ) -> list[dict[str, str]]:
     """Extract clean prompts from a batch of scenarios."""
     system_prompt, user_prompt = make_extraction_prompt(scenarios, batch_start_idx, include_system_prompt=True)
@@ -819,20 +828,29 @@ def _run_understanding_stage(
         return _run_understanding_local(statements, config, session)
 
     understandings: dict[str, dict[str, Any]] = {}
-    failures: list[tuple[str, str]] = []
+    failures: dict[str, str] = {}
+    pending_statements = list(statements.items())
     ideation_workers = config.ideation_workers
-    with concurrent.futures.ThreadPoolExecutor(max_workers=ideation_workers) as pool:
-        future_map = {pool.submit(_run_understanding, stmt, config): sid for sid, stmt in statements.items()}
-        for future in concurrent.futures.as_completed(future_map):
-            sid = future_map[future]
-            try:
-                understandings[sid] = future.result()
-            except Exception as exc:
-                failures.append((sid, str(exc)))
-                logger.error("Stage1 failed for '%s': %s", sid, exc)
 
-    if failures:
-        detail = "; ".join(f"{sid}: {msg}" for sid, msg in failures)
+    for attempt in range(1, config.understanding_max_attempts + 1):
+        if not pending_statements:
+            break
+        next_pending: list[tuple[str, Statement]] = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=ideation_workers) as pool:
+            future_map = {pool.submit(_run_understanding, stmt, config): (sid, stmt) for sid, stmt in pending_statements}
+            for future in concurrent.futures.as_completed(future_map):
+                sid, statement = future_map[future]
+                try:
+                    understandings[sid] = future.result()
+                    failures.pop(sid, None)
+                except Exception as exc:
+                    failures[sid] = str(exc)
+                    next_pending.append((sid, statement))
+                    logger.warning("Stage1 attempt %d failed for '%s': %s", attempt, sid, exc)
+        pending_statements = next_pending
+
+    if pending_statements:
+        detail = "; ".join(f"{sid}: {failures[sid]}" for sid, _statement in pending_statements)
         raise RuntimeError(f"Stage 1 failed for {len(failures)} statement(s): {detail}")
 
     return understandings

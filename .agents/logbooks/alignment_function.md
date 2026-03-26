@@ -5007,3 +5007,409 @@ uv run iris --config lib/iris/examples/marin.yaml job run \
     - `gpt-4.1-mini`
     - `gpt-4.1`
   - `gpt-4.1` is materially more robust as the judge in this one-statement smoke
+
+### 2026-03-25 — ALIGN-131: Full-Spec Open-Weight Entrypoint Updated to the Validated Opposite-Mode Configuration
+
+- **Existing script kept, not duplicated:**
+  - `experiments/align_vllm_70b_mixtral_rejected_full_spec.py`
+- **Why this update was needed:**
+  - the full-spec script already existed, but it was stale relative to the validated smoke path
+  - specifically, it still used:
+    - old rejected behavior
+    - older disk settings
+    - older prompt-generation token budgets
+- **Updated to match the validated one-statement heterogeneous pipeline:**
+  - chosen / ideation / extract / judge:
+    - Llama 3.3 70B Instruct
+  - rejected:
+    - Mixtral 8x7B Instruct
+  - rejected strategy:
+    - `RejectedPromptStrategy.OPPOSITE`
+  - response execution policy:
+    - `ResponseExecutionMode.AUTO`
+  - vLLM resource envelope:
+    - `disk="10g"`
+    - `ram="256g"`
+    - `tpu_type="v5p-8"`
+  - prompt-generation settings:
+    - `prompt_batch_size=4`
+    - `understanding_max_tokens=1024`
+    - `concretize_max_tokens=1536`
+    - `concretize_max_attempts=5`
+    - `extract_max_tokens=1024`
+  - judge settings:
+    - `judge_batch_size=4`
+- **Result:**
+  - we now have a full-spec experiment entrypoint for exactly this target configuration:
+    - entire OpenAI model spec
+    - chosen = Llama 3.3 70B
+    - rejected = Mixtral 8x7B Instruct
+    - opposite mode as the default rejected prompting policy
+- **Suggested submit command:**
+  - `source .env && uv run iris --controller-url http://127.0.0.1:10000 job run --no-wait --job-name align-vllm-70b-mixtral-rejected-opposite-full-spec --cpu 4 --memory 16GB --disk 10GB --region us-central1 -- python experiments/align_vllm_70b_mixtral_rejected_full_spec.py`
+
+### 2026-03-25 — ALIGN-132: Launch Full-Spec Open-Weight Runtime Characterization with Opposite-Mode Rejected Responses
+
+- **Goal:**
+  - run the entire refactored alignment pipeline over the full OpenAI model spec:
+    - `spec`
+    - `prompts`
+    - `chosen`
+    - `rejected`
+    - `judgments`
+    - `preference_pairs`
+- **Configuration:**
+  - chosen / ideation / extract / judge:
+    - Llama 3.3 70B Instruct
+  - rejected:
+    - Mixtral 8x7B Instruct
+  - rejected prompt strategy:
+    - `RejectedPromptStrategy.OPPOSITE`
+  - response execution:
+    - `ResponseExecutionMode.AUTO`
+- **Pre-launch safeguard:**
+  - renamed the full-spec experiment namespace from:
+    - `debug_vllm_70b_mixtral_rejected_full_spec`
+  - to:
+    - `debug_vllm_70b_mixtral_rejected_opposite_full_spec`
+  - so this launch cannot silently reuse stale executor outputs from the earlier pre-opposite full-spec script
+- **Launch command:**
+  - `source .env && uv run iris --controller-url http://127.0.0.1:10000 job run --no-wait --job-name align-vllm-70b-mixtral-rejected-opposite-full-spec --cpu 4 --memory 16GB --disk 10GB --region us-central1 -- python experiments/align_vllm_70b_mixtral_rejected_full_spec.py`
+- **Status:**
+  - launching
+
+### 2026-03-25 — ALIGN-133: Full-Spec Opposite-Mode Run Live on Iris Under Root Job `/ahmed/align-vllm-70b-mixtral-rejected-opposite-full-spec`
+
+- **Live Iris root job:**
+  - `/ahmed/align-vllm-70b-mixtral-rejected-opposite-full-spec`
+- **Current observed child states:**
+  - `spec`:
+    - succeeded
+  - `prompts`:
+    - `/ahmed/align-vllm-70b-mixtral-rejected-opposite-full-spec/align-debug_vllm_70b_mixtral_rejected_opposite_full_spec-prompts_a9dd9e03-c931aeb3`
+    - running on `v5p-8` with `ram=256g`, `disk=10g`
+- **Latest healthy signals from logs:**
+  - `Loaded 46 statements from spec`
+  - `Starting vLLM environment`
+- **Latest interpretation:**
+  - the full-spec run has cleared scheduler startup and is currently inside the heavy prompt-generation stage
+  - no TPU/HBM/OOM/traceback signatures have appeared so far
+- **Next babysit checkpoint:**
+  - wait for `prompts` to succeed, then verify that hetero `auto` fans out into sibling `chosen` and `rejected` jobs
+
+### 2026-03-25 — ALIGN-134: First Full-Spec Run Failed in Stage 1 Prompt Understanding on `be_kind`
+
+- **Failed root job:**
+  - `/ahmed/align-vllm-70b-mixtral-rejected-opposite-full-spec`
+- **Failed child:**
+  - `/ahmed/align-vllm-70b-mixtral-rejected-opposite-full-spec/align-debug_vllm_70b_mixtral_rejected_opposite_full_spec-prompts_a9dd9e03-c931aeb3`
+- **Failure signature:**
+  - `RuntimeError: Stage 1 failed for 1 statement(s): be_kind: Stage1 response missing <variation_axes> block`
+- **Observed sequence:**
+  - `spec` succeeded
+  - `prompts` started normally
+  - Llama `vllm serve` reached `vLLM environment ready`
+  - Stage 1 understanding began over all `46` statements
+  - one statement (`be_kind`) returned a malformed Stage 1 response with no `<variation_axes>` block
+  - current code treated that as fatal and aborted the full-spec run
+- **Interpretation:**
+  - this was not a TPU or infra failure
+  - the failure mode is analogous to the Stage 2 partial-return issue we already hardened: one malformed model response should trigger targeted retry, not full-run death
+
+### 2026-03-25 — ALIGN-135: Added Stage 1 Retry-on-Parse-Failure and Prepared Full-Spec Resubmission
+
+- **Code changes:**
+  - `generate_prompts.py`
+    - added `understanding_max_attempts`
+    - Stage 1 understanding now retries only the failed statements instead of failing immediately on the first parse miss
+  - `align.py`
+    - plumbed `understanding_max_attempts` through `AlignConfig` into `PromptGenConfig`
+  - `align_vllm_70b_mixtral_rejected_full_spec.py`
+    - explicitly set `understanding_max_attempts=5`
+- **Regression coverage:**
+  - added a local-vLLM prompt-generation test where the first Stage 1 response omits `<variation_axes>` and the retry succeeds
+- **Verification:**
+  - `uv run pytest tests/test_alignment.py -q`
+    - `87 passed`
+  - `./infra/pre-commit.py --fix lib/marin/src/marin/alignment/generate_prompts.py lib/marin/src/marin/alignment/align.py experiments/align_vllm_70b_mixtral_rejected_full_spec.py tests/test_alignment.py`
+    - passed
+- **Next action:**
+  - relaunch `/ahmed/align-vllm-70b-mixtral-rejected-opposite-full-spec` with the patched Stage 1 retry logic and continue babysitting
+
+### 2026-03-25 — ALIGN-136: Same-Name Root Relaunch Failed Opaquely; Switching to a Fresh Iris Root Job Name
+
+- **What happened:**
+  - resubmitting the patched code under the same Iris root job name:
+    - `/ahmed/align-vllm-70b-mixtral-rejected-opposite-full-spec`
+  - produced an immediate root-level failure with no fresh child logs and no useful traceback beyond:
+    - `RuntimeError: 1 step(s) failed`
+- **Interpretation:**
+  - this does not look like the Stage 1 bug recurring
+  - it looks more like an Iris root-job reuse / stale-state problem from recycling the same fixed job name immediately after a failed run
+- **Recovery plan:**
+  - keep the patched experiment code and executor namespace
+  - switch only the Iris root job name to a fresh retry-specific name
+  - continue babysitting the fresh root job until the patched prompt step either succeeds or exposes a new concrete error
+
+### 2026-03-25 — ALIGN-137: Fresh Full-Spec Retry Root Job Running as `/ahmed/align-vllm-70b-mixtral-rejected-opposite-full-spec-retry1-stage1`
+
+- **Fresh Iris root job:**
+  - `/ahmed/align-vllm-70b-mixtral-rejected-opposite-full-spec-retry1-stage1`
+- **Why this root name changed:**
+  - avoid the opaque immediate root failure seen when reusing the previous fixed root job name
+- **Current state:**
+  - root is `JOB_STATE_RUNNING`
+  - normal root bootstrap has started:
+    - `syncing deps`
+    - `installing pip deps`
+    - `activating venv`
+    - `running user command`
+- **Monitoring owner / state file:**
+  - `scratch/20260325-1801_monitoring_state.json`
+  - updated to point at the fresh retry root job with `restart_count = 2`
+
+### 2026-03-25 — ALIGN-138: Stage 1 Retry Worked Live, Then Full-Spec Stage 2 Hit the 2560-Token Context Ceiling
+
+- **Live evidence that the Stage 1 fix worked:**
+  - `be_kind` failed on `Stage1 attempt 1` with missing `<variation_axes>`
+  - the run did not abort
+  - the failed statement was retried as a singleton
+  - the pipeline advanced into:
+    - `Stage 2: Concretizing 46 statements`
+- **New failure mode in Stage 2:**
+  - multiple concretization requests exceeded the local TPU request limit:
+    - example:
+      - `This model's maximum context length is 2560 tokens. However, your request has 2563 input tokens.`
+  - concrete statement examples from logs:
+    - `assume_best_intentions`
+    - `avoid_overstepping`
+    - `avoid_regulated_advice`
+    - `avoid_sycophancy`
+    - `be_clear`
+    - `be_creative`
+    - `be_empathetic`
+    - `be_engaging`
+    - `be_rationally_optimistic`
+- **Interpretation:**
+  - the old full-spec default of `concretize_batch_size=10` is too large for some full-spec statements under the validated local envelope
+  - this is not an infra issue; it is a prompt-size / batch-size mismatch
+- **Operational action taken:**
+  - stopped the running retry root to avoid burning more TPU time once the failure mode was clear
+
+### 2026-03-25 — ALIGN-139: Added `concretize_batch_size` to `AlignConfig` and Lowered the Full-Spec Run to `4`
+
+- **Code changes:**
+  - `align.py`
+    - exposed `concretize_batch_size` on `AlignConfig`
+    - passed it through into `PromptGenConfig`
+  - `align_vllm_70b_mixtral_rejected_full_spec.py`
+    - set `concretize_batch_size=4`
+- **Why `4`:**
+  - this matches the already validated prompt-generation smoke envelope
+  - it is small enough to pull Stage 2 concretization prompts back under the observed `2560`-token limit
+- **Verification:**
+  - `uv run pytest tests/test_alignment.py -q`
+    - `87 passed`
+  - `./infra/pre-commit.py --fix lib/marin/src/marin/alignment/align.py experiments/align_vllm_70b_mixtral_rejected_full_spec.py tests/test_alignment.py`
+    - passed
+- **Next action:**
+  - relaunch the full-spec job under a fresh retry root name with:
+    - Stage 1 retry enabled
+    - `concretize_batch_size=4`
+
+### 2026-03-25 — ALIGN-140: Retry2 (`batch4`) Is Still Running Cleanly in Prompt Generation
+
+- **Current live root job:**
+  - `/ahmed/align-vllm-70b-mixtral-rejected-opposite-full-spec-retry2-batch4`
+- **Current live prompt child:**
+  - `/ahmed/align-vllm-70b-mixtral-rejected-opposite-full-spec-retry2-batch4/align-debug_vllm_70b_mixtral_rejected_opposite_full_spec-prompts_a9dd9e03-eb3c86e7`
+- **Current observed state:**
+  - root: `JOB_STATE_RUNNING`
+  - prompt child: `JOB_STATE_RUNNING`
+- **Latest positive signals:**
+  - Stage 1 again hit the known `be_kind` parse miss, but only as:
+    - `Stage1 attempt 1 failed for 'be_kind': Stage1 response missing <variation_axes> block`
+  - the run stayed alive and advanced into:
+    - `Stage 2: Concretizing 46 statements`
+- **Most important current read:**
+  - after lowering `concretize_batch_size` from `10` to `4`, the earlier Stage 2 `HTTP 400` / `maximum context length is 2560 tokens` failures have not reappeared in the filtered logs so far
+- **Monitoring status:**
+  - still actively babysitting this retry root
+
+### 2026-03-25 — ALIGN-141: Planned Semantic Refactor for Stage 2 Concretization: Exactly One `cfg_*` per Request
+
+- **Problem statement:**
+  - the current Stage 2 design still uses *semantic batching*:
+    - one prompt can ask the model to generate scenarios for multiple covering-array configs at once
+  - that creates two distinct problems:
+    - prompt-length blowups on local vLLM
+    - weaker guarantees that each returned scenario faithfully matches its intended config
+- **Design decision:**
+  - change Stage 2 so that each covering-array config is its own semantic unit of work:
+    - one `cfg_*`
+    - one concretization prompt
+    - one returned scenario
+    - one returned rubric
+- **Important distinction to preserve:**
+  - remove *semantic batching*
+  - keep *transport/runtime batching*
+  - meaning:
+    - for local vLLM:
+      - still send many one-config prompts together via `local_serve_batch_size`
+      - let vLLM do continuous batching on the backend
+    - for API models:
+      - still use normal request parallelism via the threadpool
+      - but each request prompt should contain exactly one config
+- **Exact implementation plan:**
+  - `prompts/concretize.py`
+    - simplify `make_concretize_prompt(...)` to take exactly one config instead of a list of indexed configs
+    - emit unambiguous single-config output tags:
+      - `<scenario_cfg_123>...</scenario_cfg_123>`
+      - `<rubric_cfg_123>...</rubric_cfg_123>`
+  - `generate_prompts.py`
+    - remove Stage 2 multi-config request construction
+    - replace `list[list[_ConcretizeConfig]]` request batches with `list[_ConcretizeConfig]`
+    - keep `_ConcretizeConfig` as the stable per-config work item and ID source
+    - make retries operate on the same single-config items, not re-sliced sub-batches
+    - keep `concretization_attempts` diagnostics, but record one config per attempt
+  - API path
+    - keep threadpool parallelism
+    - each future should call concretization for exactly one config
+  - local vLLM path
+    - keep `session.generate_from_messages(...)`
+    - each message batch element should correspond to exactly one config
+    - `local_serve_batch_size` remains the runtime batch size knob
+- **Config cleanup after the refactor:**
+  - remove `concretize_batch_size` from the semantic design
+  - if we still want an explicit throughput knob later, name it for what it actually is:
+    - e.g. `concretize_request_parallelism` or rely on existing `local_serve_batch_size` / threadpool workers
+- **Validation plan after the refactor:**
+  - unit tests:
+    - one config per prompt in both API and local paths
+    - retries still recover missing/malformed single-config outputs
+    - `ideation.json` diagnostics remain interpretable
+  - one-statement local smoke:
+    - confirm Stage 2 no longer needs context tuning by config count
+  - full-spec retry:
+    - confirm the earlier `maximum context length is 2560 tokens` failures disappear without depending on semantic batch-size tuning
+- **Interpretation:**
+  - the current `concretize_batch_size=4` retry is only a mitigation
+  - the intended final design is:
+    - one config per concretization request
+    - many requests batched only at the backend/runtime layer
+
+### 2026-03-25 — ALIGN-142: Revised Semantic Refactor Plan: Apply the Same “One Item per Request” Rule to Both Stage 2 and Stage 3
+
+- **Revision to the earlier plan:**
+  - the same semantic-batching problem exists in both:
+    - Stage 2 concretization
+    - Stage 3 extraction
+  - so the refactor should cover both stages together, not just concretization
+- **Core rule after the refactor:**
+  - one semantic work item per request prompt
+  - meaning:
+    - Stage 2:
+      - one covering-array config per concretization prompt
+    - Stage 3:
+      - one concretized scenario per extraction prompt
+- **Why this matters for Stage 3 too:**
+  - the current extraction path still asks the model to process multiple scenarios in one prompt
+  - that has the same downsides:
+    - prompt growth with batch size
+    - higher risk of cross-item drift
+    - weaker guarantee that each extracted `system_prompt` / `user_message` pair matches the intended scenario cleanly
+- **Parser simplification that falls out of this design:**
+  - once there is exactly one semantic item per response, we do not need indexed multi-item response parsing
+  - Stage 2 can simplify from:
+    - many `<scenario_cfg_XXX>` / `<rubric_cfg_XXX>` blocks
+  - to:
+    - one `<scenario>...</scenario>`
+    - one `<rubric>...</rubric>`
+  - Stage 3 can simplify from:
+    - many `<scenario_i>` blocks
+  - to either:
+    - one `<system_prompt>...</system_prompt>` and one `<user_message>...</user_message>`
+    - or one single `<scenario>` wrapper containing those two tags
+  - this is a real reduction in failure surface:
+    - no index matching
+    - no per-batch missing-block bookkeeping
+    - no need to pad or realign results by position inside a multi-item response
+- **Performance note for local vLLM:**
+  - one-item-per-request is not as wasteful as it might sound because the shared prefix for a statement is largely identical across its configs:
+    - behavior understanding
+    - scientific motivation
+    - axes metadata
+    - transcript analyses
+  - vLLM prefix caching should let the backend reuse that shared prefix work across many one-config requests for the same statement
+  - so the refactor trades prompt ambiguity for cleaner semantics without necessarily paying the full repeated-prefix compute cost
+- **Concrete implementation plan:**
+  - `prompts/concretize.py`
+    - change `make_concretize_prompt(...)` to accept exactly one config
+    - change the output contract to one unindexed scenario/rubric pair
+  - `generate_prompts.py` Stage 2
+    - remove multi-config Stage 2 request construction
+    - treat `_ConcretizeConfig` as the one request unit
+    - simplify parsing to one scenario/rubric pair per response
+    - keep retries on individual configs only
+  - `prompts/extract.py`
+    - revise the Stage 3 prompt to target exactly one scenario per request
+  - `generate_prompts.py` Stage 3
+    - remove multi-scenario extraction request construction
+    - simplify parsing to one extracted prompt pair per response
+    - keep retries/failures at the single-scenario level
+  - backend execution model
+    - for local vLLM:
+      - keep `local_serve_batch_size` as the runtime batching knob across many one-item prompts
+    - for API:
+      - keep threadpool parallelism
+      - but each future/request still represents exactly one semantic item
+- **Config cleanup after the refactor:**
+  - remove semantic batch-size knobs:
+    - `concretize_batch_size`
+    - `extract_batch_size`
+  - preserve runtime batching knobs only:
+    - `local_serve_batch_size`
+    - worker counts / concurrency
+- **Token-budget follow-up that should ship with the refactor:**
+  - once Stage 2 and Stage 3 each generate exactly one item per request, the old multi-item token budgets are too generous
+  - after the semantic refactor:
+    - revisit `concretize_max_tokens`
+    - revisit `extract_max_tokens`
+  - expected direction:
+    - lower both budgets to reflect one-item outputs rather than batched outputs
+  - rationale:
+    - reduce latency
+    - reduce filler / rambling outputs
+    - keep request envelopes tighter under local context limits
+  - implementation preference:
+    - keep the knobs explicit
+    - but update the validated defaults and experiment settings to per-item values rather than leaving the old batched-response budgets in place
+- **Validation plan after the refactor:**
+  - unit tests:
+    - Stage 2 one-config response parsing
+    - Stage 3 one-scenario response parsing
+    - single-item retry behavior for both stages
+  - one-statement local smoke:
+    - verify Stage 2 and Stage 3 complete under the current local envelope without semantic batch tuning
+  - full-spec retry:
+    - verify prompt generation no longer depends on semantic batch-size tuning to stay under context limits
+- **Explicitly deferred for now:**
+  - OpenAI API rate-limit tuning
+  - quality-comparison study between old batched prompts and new one-item prompts
+
+### ALIGN-143 - 2026-03-25 18:31 - Per-item Stage 2/3 token budgets set to 1024
+
+- Narrowed the planned one-item prompt-generation budgets to:
+  - `concretize_max_tokens=1024`
+  - `extract_max_tokens=1024`
+- Applied that choice to the canonical defaults in:
+  - `lib/marin/src/marin/alignment/generate_prompts.py`
+  - `lib/marin/src/marin/alignment/align.py`
+- Also aligned the explicit local-vLLM experiment settings that still pinned Stage 2 at `1536`.
+- Rationale:
+  - these are now the intended per-item ceilings for the upcoming semantic refactor
+  - they stay well below the local prompt-generation context ceiling that previously triggered `HTTP 400` failures
+  - they are still generous for one scenario/rubric or one extracted prompt pair
+- Important scope note:
+  - this does not change the currently running full-spec job in flight
+  - it only affects future launches / reruns

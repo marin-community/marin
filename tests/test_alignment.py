@@ -1745,6 +1745,110 @@ class TestPromptGenerationE2E:
         metrics_payload = json.loads((Path(output_path) / "artifacts" / "vllm_metrics.json").read_text())
         assert metrics_payload["logical_stage"] == "prompt_generation"
 
+    @patch("marin.alignment.generate_prompts.compute_coverage_stats", return_value={"covered": 1})
+    @patch(
+        "marin.alignment.generate_prompts.generate_covering_configs",
+        return_value=[{"request_complexity": "simple"}],
+    )
+    @patch("marin.alignment.generate_prompts.BatchedVllmServeSession")
+    def test_local_pipeline_retries_missing_stage1_variation_axes(
+        self,
+        mock_session_cls,
+        _mock_covering_configs,
+        _mock_coverage_stats,
+        sample_spec_jsonl,
+        tmp_path,
+    ):
+        class FakeSession:
+            def __init__(self, outputs):
+                self.outputs = list(outputs)
+                self.batch_sizes: list[int] = []
+                self.stage_names: list[str] = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def generate_from_messages(self, message_batches, *, stage_name, temperature, max_tokens, n):
+                self.batch_sizes.append(len(message_batches))
+                self.stage_names.append(stage_name)
+                next_outputs = self.outputs.pop(0)
+                return [[text] for text in next_outputs]
+
+            def metrics_snapshot(self):
+                return {
+                    "backend": "vllm_serve",
+                    "model": "gs://bucket/shared",
+                    "tensor_parallel_size": 4,
+                    "max_model_len": 4096,
+                    "tokenizer_load_seconds": 0.0,
+                    "server_start_seconds": 0.0,
+                    "session_enter_seconds": 0.0,
+                    "totals": {},
+                    "stages": {stage_name: {} for stage_name in self.stage_names},
+                }
+
+        stage1_missing_axes = (
+            "<behavior_understanding>Being helpful means assisting users.</behavior_understanding>\n"
+            "<scientific_motivation>Testing helpfulness is important.</scientific_motivation>\n"
+        )
+        stage1_retry_content = (
+            "<behavior_understanding>Being helpful means assisting users.</behavior_understanding>\n"
+            "<scientific_motivation>Testing helpfulness is important.</scientific_motivation>\n"
+            "<variation_axes>\n"
+            '[{"axis": "request_complexity", "spectrum": ["simple", "complex"], "description": "Complexity"}]\n'
+            "</variation_axes>"
+        )
+        stage2_content = (
+            "<scenario_cfg_000>A student asks a simple question.</scenario_cfg_000>\n"
+            "<rubric_cfg_000>GOOD: Answer directly. BAD: Refuse.</rubric_cfg_000>\n"
+        )
+        stage3_content = (
+            "<scenario_0>\n"
+            "<system_prompt>You are a math tutor.</system_prompt>\n"
+            "<user_message>Can you help me with the easy problem?</user_message>\n"
+            "</scenario_0>\n"
+        )
+
+        session = FakeSession(
+            outputs=[
+                [stage1_missing_axes],
+                [stage1_retry_content],
+                [stage2_content],
+                [stage3_content],
+            ]
+        )
+        mock_session_cls.return_value = session
+
+        shared_model = VLLMConfig(model="gs://bucket/shared", tensor_parallel_size=4, tpu_type="v5p-8")
+        output_path = str(tmp_path / "prompt_local_stage1_retry")
+
+        from marin.alignment.generate_prompts import generate_prompts_from_spec
+
+        generate_prompts_from_spec(
+            PromptGenConfig(
+                spec_path=str(sample_spec_jsonl),
+                output_path=output_path,
+                ideation_model=shared_model,
+                extract_model=shared_model,
+                covering_strength=2,
+                concretize_batch_size=1,
+                extract_batch_size=1,
+                local_serve_batch_size=4,
+                statement_ids=["be_helpful"],
+                understanding_max_attempts=2,
+            )
+        )
+
+        assert mock_session_cls.call_count == 1
+        assert session.batch_sizes == [1, 1, 1, 1]
+        assert session.stage_names == ["understanding", "understanding", "concretize", "extract"]
+        prompts = load_sharded_jsonl_gz(output_path)
+        assert len(prompts) == 1
+        assert prompts[0]["behavior_id"] == "be_helpful"
+
 
 # ===========================================================================
 # Tests: judge.py — end-to-end pair construction (mocked)

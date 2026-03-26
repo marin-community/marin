@@ -179,8 +179,10 @@ class AlignConfig:
         concretize_workers: Parallelism for Stage 2 concretization.
         extract_workers: Parallelism for Stage 3 extraction.
         prompt_batch_size: Local vLLM serve microbatch size for prompt-generation requests.
+        concretize_batch_size: Number of covering-array configs per Stage 2 concretization prompt.
         understanding_max_tokens: Max tokens for prompt-generation Stage 1.
         understanding_temperature: Sampling temperature for prompt-generation Stage 1.
+        understanding_max_attempts: Total Stage 1 attempts before failing unresolved statements.
         concretize_max_tokens: Max tokens for prompt-generation Stage 2.
         concretize_temperature: Sampling temperature for prompt-generation Stage 2.
         concretize_max_attempts: Total Stage 2 attempts before failing unresolved configs.
@@ -216,12 +218,14 @@ class AlignConfig:
     concretize_workers: int = 32
     extract_workers: int = 128
     prompt_batch_size: int = 8
+    concretize_batch_size: int = 10
     understanding_max_tokens: int = 4000
     understanding_temperature: float = 1.0
-    concretize_max_tokens: int = 16000
+    understanding_max_attempts: int = 5
+    concretize_max_tokens: int = 1024
     concretize_temperature: float = 1.0
     concretize_max_attempts: int = 5
-    extract_max_tokens: int = 16000
+    extract_max_tokens: int = 1024
     judge_workers: int = 64
     judge_batch_size: int = 8
     response_execution_mode: ResponseExecutionMode = ResponseExecutionMode.AUTO
@@ -358,7 +362,7 @@ def align(
             extract_model=align_config.extract_model,
             covering_strength=versioned(align_config.covering_strength),
             covering_seed=versioned(align_config.covering_seed),
-            concretize_batch_size=versioned(10),
+            concretize_batch_size=versioned(align_config.concretize_batch_size),
             extract_batch_size=versioned(10),
             local_serve_batch_size=align_config.prompt_batch_size,
             ideation_workers=align_config.ideation_workers,
@@ -366,6 +370,7 @@ def align(
             extract_workers=align_config.extract_workers,
             understanding_max_tokens=versioned(align_config.understanding_max_tokens),
             understanding_temperature=versioned(align_config.understanding_temperature),
+            understanding_max_attempts=versioned(align_config.understanding_max_attempts),
             concretize_max_tokens=versioned(align_config.concretize_max_tokens),
             concretize_temperature=versioned(align_config.concretize_temperature),
             concretize_max_attempts=versioned(align_config.concretize_max_attempts),
