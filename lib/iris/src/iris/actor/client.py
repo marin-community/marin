@@ -113,7 +113,7 @@ class ActorClient:
             len(result.endpoints),
         )
         endpoint = result.first()
-        logger.info("First endpoint: %s", endpoint)
+        logger.info("First endpoint: url=%s, actor_id=%s", endpoint.url, endpoint.actor_id)
         self._rpc_headers = dict(endpoint.metadata)
         self._rpc_client = ActorServiceClientSync(
             address=endpoint.url,
