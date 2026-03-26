@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 import draccus
 import huggingface_hub
-from huggingface_hub import HfFileSystem
+from huggingface_hub import HfApi, HfFileSystem
 from iris.marin_fs import open_url, url_to_fs
 from huggingface_hub.errors import HfHubHTTPError
 from packaging.version import Version
@@ -83,6 +83,24 @@ def _resolve_hf_source_path(cfg: DownloadConfig) -> str:
         os.path.join(cfg.hf_repo_type_prefix, cfg.hf_dataset_id) if cfg.hf_repo_type_prefix else cfg.hf_dataset_id
     )
     return _strip_hf_protocol(source_path)
+
+
+REPO_TYPE_PREFIX_TO_API_TYPE: dict[str, str] = {
+    "datasets": "dataset",
+    "spaces": "space",
+}
+
+
+def _list_repo_files(cfg: DownloadConfig, hf_source_path: str) -> list[str]:
+    """List all files in an HF repo using HfApi (handles pagination correctly).
+
+    Returns paths in HfFileSystem format (prefixed with hf_source_path) so that
+    downstream code (hf_fs.info, hf_fs.open, _relative_path_in_source) works unchanged.
+    """
+    api = HfApi(token=os.environ.get("HF_TOKEN", False))
+    repo_type = REPO_TYPE_PREFIX_TO_API_TYPE.get(cfg.hf_repo_type_prefix, "model")
+    repo_files = list(api.list_repo_files(cfg.hf_dataset_id, repo_type=repo_type, revision=cfg.revision))
+    return [os.path.join(hf_source_path, f) for f in repo_files]
 
 
 def _assert_bucket_support_available(source_path: str) -> None:
@@ -274,8 +292,13 @@ def download_hf(cfg: DownloadConfig) -> None:
     _assert_bucket_support_available(hf_source_path)
 
     if not cfg.hf_urls_glob:
-        # We get all the files using find
-        files = hf_fs.find(hf_source_path, revision=cfg.revision)
+        if hf_source_path.startswith(HF_BUCKET_PATH_PREFIX):
+            # Bucket paths are not standard repos; HfApi.list_repo_files() does not apply.
+            files = hf_fs.find(hf_source_path, revision=cfg.revision)
+        else:
+            # Use HfApi.list_repo_files() instead of HfFileSystem.find() because
+            # find() silently truncates results on large repos (pagination bug).
+            files = _list_repo_files(cfg, hf_source_path)
     else:
         # Get list of files directly from HfFileSystem matching the pattern
         files = []

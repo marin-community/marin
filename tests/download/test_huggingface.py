@@ -12,6 +12,7 @@ import pytest
 
 from marin.download.huggingface.download_hf import (
     DownloadConfig,
+    _list_repo_files,
     _relative_path_in_source,
     download_hf,
     stream_file_to_fsspec,
@@ -61,6 +62,57 @@ def mock_hf_fs():
     return _create
 
 
+def test_list_repo_files_returns_hf_fs_format_paths():
+    """_list_repo_files prefixes repo-relative paths with hf_source_path."""
+    cfg = DownloadConfig(
+        hf_dataset_id="test-org/test-dataset",
+        revision="abc1234",
+    )
+    repo_files = ["data/file1.txt", "data/file2.txt", "README.md"]
+    mock_api = MagicMock()
+    mock_api.list_repo_files.return_value = repo_files
+
+    with patch("marin.download.huggingface.download_hf.HfApi", return_value=mock_api):
+        result = _list_repo_files(cfg, "datasets/test-org/test-dataset")
+
+    mock_api.list_repo_files.assert_called_once_with("test-org/test-dataset", repo_type="dataset", revision="abc1234")
+    assert result == [
+        "datasets/test-org/test-dataset/data/file1.txt",
+        "datasets/test-org/test-dataset/data/file2.txt",
+        "datasets/test-org/test-dataset/README.md",
+    ]
+
+
+def test_download_hf_uses_list_repo_files_not_find(mock_hf_fs, tmp_path):
+    """download_hf uses HfApi.list_repo_files() instead of HfFileSystem.find() for standard repos."""
+    test_files = {
+        "datasets/test-org/test-dataset/data/file1.txt": b"Content 1",
+    }
+    hf_fs = mock_hf_fs(test_files)
+    repo_files = ["data/file1.txt"]
+    mock_api = MagicMock()
+    mock_api.list_repo_files.return_value = repo_files
+
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    cfg = DownloadConfig(
+        hf_dataset_id="test-org/test-dataset",
+        revision="abc1234",
+        gcs_output_path=str(output_path),
+    )
+
+    with (
+        patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs),
+        patch("marin.download.huggingface.download_hf.HfApi", return_value=mock_api),
+    ):
+        download_hf(cfg)
+
+    # find() should NOT have been called for standard (non-bucket) repos
+    hf_fs.find.assert_not_called()
+    mock_api.list_repo_files.assert_called_once()
+    assert (output_path / "data" / "file1.txt").exists()
+
+
 def test_download_hf_basic(mock_hf_fs, tmp_path):
     """Test basic HF download functionality."""
     test_files = {
@@ -70,6 +122,8 @@ def test_download_hf_basic(mock_hf_fs, tmp_path):
     }
 
     hf_fs = mock_hf_fs(test_files)
+    mock_api = MagicMock()
+    mock_api.list_repo_files.return_value = ["data/file1.txt", "data/file2.txt", "README.md"]
 
     output_path = tmp_path / "output"
     output_path.mkdir()
@@ -80,8 +134,10 @@ def test_download_hf_basic(mock_hf_fs, tmp_path):
         gcs_output_path=str(output_path),
     )
 
-    # Mock HfFileSystem creation
-    with patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs):
+    with (
+        patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs),
+        patch("marin.download.huggingface.download_hf.HfApi", return_value=mock_api),
+    ):
         download_hf(cfg)
 
     # Verify files were downloaded
@@ -112,6 +168,8 @@ def test_download_hf_appends_sha_when_configured(mock_hf_fs, tmp_path):
     }
 
     hf_fs = mock_hf_fs(test_files)
+    mock_api = MagicMock()
+    mock_api.list_repo_files.return_value = ["data/file1.txt"]
 
     base_output_path = tmp_path / "output"
     revision = "abc1234"
@@ -123,7 +181,10 @@ def test_download_hf_appends_sha_when_configured(mock_hf_fs, tmp_path):
         append_sha_to_path=True,
     )
 
-    with patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs):
+    with (
+        patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs),
+        patch("marin.download.huggingface.download_hf.HfApi", return_value=mock_api),
+    ):
         download_hf(cfg)
 
     target_output = base_output_path / revision
