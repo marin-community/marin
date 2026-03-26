@@ -17,16 +17,22 @@ from dataclasses import dataclass
 import pytest
 
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
-from iris.cluster.providers.gcp.handles import _build_gce_resource_name
-from iris.cluster.providers.gcp.workers import GcpWorkerProvider, _validate_slice_config
+from iris.cluster.providers.gcp.handles import GcpVmSliceHandle, _build_gce_resource_name
+from iris.cluster.providers.gcp.workers import (
+    GcpWorkerProvider,
+    _run_vm_slice_bootstrap,
+    _validate_slice_config,
+)
 from iris.cluster.providers.manual.provider import ManualControllerProvider, ManualWorkerProvider
 from iris.cluster.providers.types import (
     CloudSliceState,
+    InfraError,
     Labels,
     QuotaExhaustedError,
 )
 from iris.cluster.service_mode import ServiceMode
 from iris.rpc import config_pb2
+from iris.time_utils import Timestamp
 
 # =============================================================================
 # Fixture infrastructure
@@ -633,3 +639,183 @@ def test_gcp_tpu_slice_passes_startup_script_metadata():
     assert "startup-script" in metadata
     assert "[iris-init]" in metadata["startup-script"]
     assert "test-image:latest" in metadata["startup-script"]
+
+
+# =============================================================================
+# Section 6: VM Slice Bootstrap Tests
+#
+# Tests for _run_vm_slice_bootstrap with split timeouts and health probing.
+# =============================================================================
+
+
+def _make_vm_slice_for_bootstrap(
+    gcp_service: InMemoryGcpService,
+    zone: str = "us-central2-b",
+) -> tuple[GcpVmSliceHandle, str]:
+    """Create a VM in InMemoryGcpService and return a handle + vm_name for bootstrap testing."""
+    from iris.cluster.providers.gcp.service import VmCreateRequest
+
+    vm_name = "test-bootstrap-vm"
+    gcp_service.vm_create(
+        VmCreateRequest(
+            name=vm_name,
+            zone=zone,
+            machine_type="n2-standard-4",
+            labels={Labels("iris").iris_slice_id: vm_name},
+        )
+    )
+    handle = GcpVmSliceHandle(
+        _slice_id=vm_name,
+        _vm_name=vm_name,
+        _zone=zone,
+        _project_id="test-project",
+        _gcp_service=gcp_service,
+        _labels={Labels("iris").iris_slice_id: vm_name},
+        _created_at=Timestamp.now(),
+        _label_prefix="iris",
+        _bootstrapping=True,
+    )
+    return handle, vm_name
+
+
+def test_vm_bootstrap_health_probe_succeeds_without_serial_port():
+    """Bootstrap completes when health probe succeeds, even if serial port never shows 'Bootstrap complete'."""
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    handle, _vm_name = _make_vm_slice_for_bootstrap(gcp_service)
+    worker_config = config_pb2.WorkerConfig(port=10001)
+
+    with unittest.mock.patch(
+        "iris.cluster.providers.gcp.workers._probe_worker_health",
+        return_value=True,
+    ):
+        _run_vm_slice_bootstrap(
+            gcp_service,
+            handle,
+            worker_config,
+            poll_interval=0.01,
+            cloud_ready_timeout=5.0,
+            bootstrap_timeout=5.0,
+        )
+
+    assert handle._bootstrap_state == CloudSliceState.READY
+
+
+def test_vm_bootstrap_serial_port_succeeds_without_health_probe():
+    """Bootstrap completes via serial port 'Bootstrap complete' when health probe fails."""
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    handle, vm_name = _make_vm_slice_for_bootstrap(gcp_service)
+    worker_config = config_pb2.WorkerConfig(port=10001)
+
+    gcp_service.set_serial_port_output(
+        vm_name,
+        "us-central2-b",
+        "[iris-init] Starting bootstrap\n[iris-init] Bootstrap complete\n",
+    )
+
+    with unittest.mock.patch(
+        "iris.cluster.providers.gcp.workers._probe_worker_health",
+        return_value=False,
+    ):
+        _run_vm_slice_bootstrap(
+            gcp_service,
+            handle,
+            worker_config,
+            poll_interval=0.01,
+            cloud_ready_timeout=5.0,
+            bootstrap_timeout=5.0,
+        )
+
+    assert handle._bootstrap_state == CloudSliceState.READY
+
+
+def test_vm_bootstrap_serial_port_error_raises():
+    """Bootstrap fails immediately when serial port shows '[iris-init] ERROR'."""
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    handle, vm_name = _make_vm_slice_for_bootstrap(gcp_service)
+    worker_config = config_pb2.WorkerConfig(port=10001)
+
+    gcp_service.set_serial_port_output(
+        vm_name,
+        "us-central2-b",
+        "[iris-init] ERROR: Docker pull failed\n",
+    )
+
+    with unittest.mock.patch(
+        "iris.cluster.providers.gcp.workers._probe_worker_health",
+        return_value=False,
+    ):
+        with pytest.raises(InfraError, match="bootstrap failed"):
+            _run_vm_slice_bootstrap(
+                gcp_service,
+                handle,
+                worker_config,
+                poll_interval=0.01,
+                cloud_ready_timeout=5.0,
+                bootstrap_timeout=5.0,
+            )
+
+
+def test_vm_bootstrap_phase2_has_independent_timeout():
+    """Phase 2 uses its own timeout, not the remainder from phase 1."""
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    handle, _vm_name = _make_vm_slice_for_bootstrap(gcp_service)
+    worker_config = config_pb2.WorkerConfig(port=10001)
+
+    # Health probe never succeeds, serial port never shows complete.
+    # With a very short bootstrap_timeout, this should fail with phase 2 message.
+    with unittest.mock.patch(
+        "iris.cluster.providers.gcp.workers._probe_worker_health",
+        return_value=False,
+    ):
+        with pytest.raises(InfraError, match=r"bootstrap did not complete within 0\.05s"):
+            _run_vm_slice_bootstrap(
+                gcp_service,
+                handle,
+                worker_config,
+                poll_interval=0.01,
+                cloud_ready_timeout=600.0,
+                bootstrap_timeout=0.05,
+            )
+
+
+def test_vm_bootstrap_cloud_not_ready_raises_phase1_timeout():
+    """Phase 1 timeout triggers when VM never reaches READY."""
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+
+    # Create a VM but set it to non-READY state
+    from iris.cluster.providers.gcp.service import VmCreateRequest
+
+    vm_name = "test-stuck-vm"
+    gcp_service.vm_create(
+        VmCreateRequest(
+            name=vm_name,
+            zone="us-central2-b",
+            machine_type="n2-standard-4",
+            labels={Labels("iris").iris_slice_id: vm_name},
+        )
+    )
+    # Set VM to STAGING so it never reaches READY
+    gcp_service._vms[(vm_name, "us-central2-b")].status = "STAGING"
+
+    handle = GcpVmSliceHandle(
+        _slice_id=vm_name,
+        _vm_name=vm_name,
+        _zone="us-central2-b",
+        _project_id="test-project",
+        _gcp_service=gcp_service,
+        _labels={Labels("iris").iris_slice_id: vm_name},
+        _created_at=Timestamp.now(),
+        _label_prefix="iris",
+        _bootstrapping=True,
+    )
+    worker_config = config_pb2.WorkerConfig(port=10001)
+
+    with pytest.raises(InfraError, match=r"did not reach cloud READY within 0\.05s"):
+        _run_vm_slice_bootstrap(
+            gcp_service,
+            handle,
+            worker_config,
+            poll_interval=0.01,
+            cloud_ready_timeout=0.05,
+            bootstrap_timeout=300.0,
+        )

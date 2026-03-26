@@ -104,6 +104,9 @@ class InMemoryGcpService:
         self._label_prefix = label_prefix
         self._iris_labels = Labels(label_prefix) if mode == ServiceMode.LOCAL else None
 
+        # Serial port output injection for testing bootstrap monitoring
+        self._serial_port_output: dict[tuple[str, str], str] = {}
+
         # LOCAL mode: track spawned workers per slice for cleanup
         self._local_slices: dict[str, LocalSliceHandle] = {}
 
@@ -321,10 +324,14 @@ class InMemoryGcpService:
             raise InfraError(f"VM {name!r} not found in zone {zone!r}")
         vm.metadata.update(metadata)
 
+    def set_serial_port_output(self, name: str, zone: str, output: str) -> None:
+        """Inject serial port output for a VM. Used by tests to simulate GCE serial console."""
+        self._serial_port_output[(name, zone)] = output
+
     def vm_get_serial_port_output(self, name: str, zone: str, start: int = 0) -> str:
         self._check_injected_failure("vm_get_serial_port_output")
-        # DRY_RUN / LOCAL: return empty string (no serial console)
-        return ""
+        full_output = self._serial_port_output.get((name, zone), "")
+        return full_output[start:]
 
     # ========================================================================
     # LOCAL mode: worker spawning
