@@ -79,6 +79,44 @@ dpo_config = SimpleDPOConfig(
 | `model_name_or_path` | HuggingFace model to initialize the policy from. Also used as the reference model unless `reference_model_path` is set separately. |
 | `reference_model_path` | Path to the reference model. Defaults to `model_name_or_path`. |
 | `validation_split_fraction` | Fraction of training data to hold out for validation (default 0.1). Set to `None` to use a separate validation set. |
+| `hf_generation_eos_token_ids` | List of token IDs to write to `generation_config.json` for inference stop conditions. See below. |
+
+### Setting Generation Stop Tokens
+
+Chat models use a turn-boundary token (e.g. `<|eot_id|>`) to end assistant
+responses, but the tokenizer's `eos_token` is typically the pre-training
+document boundary (`<|end_of_text|>`). Inference tools like vLLM need both
+tokens as stop conditions.
+
+Set `hf_generation_eos_token_ids` to write a `generation_config.json` alongside
+each saved checkpoint. The tokenizer's `eos_token_id` is auto-added if not
+already in the list.
+
+For Llama 3 models, use the predefined constant:
+
+```python
+from experiments.llama import LLAMA3_CHAT_STOP_TOKEN_IDS
+
+dpo_config = SimpleDPOConfig(
+    ...
+    hf_generation_eos_token_ids=LLAMA3_CHAT_STOP_TOKEN_IDS,  # [128001, 128009]
+)
+```
+
+For other model families, determine the correct stop token by applying the
+chat template and checking the last token of the assistant turn:
+
+```python
+tokens = tokenizer.apply_chat_template(
+    [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
+    tokenize=True,
+)
+print(f"Chat stop token: {tokens[-1]}")  # e.g. 128009 for <|eot_id|>
+print(f"Tokenizer EOS:   {tokenizer.eos_token_id}")  # e.g. 128001 for <|end_of_text|>
+```
+
+If the two differ, pass both: `hf_generation_eos_token_ids=[eos_token_id, chat_stop_token]`.
+If they match, you don't need to set this field.
 
 ## Creating the Training Pipeline
 
