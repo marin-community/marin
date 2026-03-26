@@ -1,0 +1,207 @@
+{
+  "benchmark_output_dir": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/starcoder_wsd_boundary_aligned_repeat_outputs/two_phase_feature_bayes_linear_20260313_211537",
+  "dataset": "two_phase_starcoder",
+  "n_runs": 11,
+  "name_prefix": "t2s-wsdb-val-two-phase-featur",
+  "policy": "feature_bayes_linear_wsd_boundary_aligned",
+  "runs": [
+    {
+      "run_name": "fbl_wsdba_k004_optimum",
+      "selector_seed": 0,
+      "subset_size": 4,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.5246190339313311,
+            "starcoder": 0.47538096606866886
+          },
+          "phase_1": {
+            "nemotron_full": 0.9921262602271288,
+            "starcoder": 0.00787373977287119
+          }
+        },
+        "run_id": 97004
+      }
+    },
+    {
+      "run_name": "fbl_wsdba_k006_optimum",
+      "selector_seed": 0,
+      "subset_size": 6,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.7453942981346646,
+            "starcoder": 0.2546057018653353
+          }
+        },
+        "run_id": 97006
+      }
+    },
+    {
+      "run_name": "fbl_wsdba_k008_optimum",
+      "selector_seed": 0,
+      "subset_size": 8,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.7819161651039661,
+            "starcoder": 0.21808383489603392
+          }
+        },
+        "run_id": 97008
+      }
+    },
+    {
+      "run_name": "fbl_wsdba_k010_optimum",
+      "selector_seed": 0,
+      "subset_size": 10,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.7482821179278349,
+            "starcoder": 0.2517178820721651
+          }
+        },
+        "run_id": 97010
+      }
+    },
+    {
+      "run_name": "fbl_wsdba_k012_optimum",
+      "selector_seed": 0,
+      "subset_size": 12,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.9510516494815419,
+            "starcoder": 0.048948350518458146
+          },
+          "phase_1": {
+            "nemotron_full": 0.7005082062007032,
+            "starcoder": 0.2994917937992968
+          }
+        },
+        "run_id": 97012
+      }
+    },
+    {
+      "run_name": "fbl_wsdba_k016_optimum",
+      "selector_seed": 0,
+      "subset_size": 16,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.9804528528172417,
+            "starcoder": 0.019547147182758295
+          },
+          "phase_1": {
+            "nemotron_full": 0.761765422200549,
+            "starcoder": 0.23823457779945104
+          }
+        },
+        "run_id": 97016
+      }
+    },
+    {
+      "run_name": "fbl_wsdba_k024_optimum",
+      "selector_seed": 0,
+      "subset_size": 24,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.7391121744760623,
+            "starcoder": 0.26088782552393774
+          }
+        },
+        "run_id": 97024
+      }
+    },
+    {
+      "run_name": "fbl_wsdba_k032_optimum",
+      "selector_seed": 0,
+      "subset_size": 32,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.7375281155831624,
+            "starcoder": 0.26247188441683755
+          }
+        },
+        "run_id": 97032
+      }
+    },
+    {
+      "run_name": "fbl_wsdba_k048_optimum",
+      "selector_seed": 0,
+      "subset_size": 48,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.7508791961047601,
+            "starcoder": 0.24912080389523997
+          }
+        },
+        "run_id": 97048
+      }
+    },
+    {
+      "run_name": "fbl_wsdba_k064_optimum",
+      "selector_seed": 0,
+      "subset_size": 64,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.7489121306968735,
+            "starcoder": 0.25108786930312654
+          }
+        },
+        "run_id": 97064
+      }
+    },
+    {
+      "run_name": "fbl_wsdba_k096_optimum",
+      "selector_seed": 0,
+      "subset_size": 96,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.7458135070128069,
+            "starcoder": 0.25418649298719315
+          }
+        },
+        "run_id": 97096
+      }
+    }
+  ]
+}

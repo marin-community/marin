@@ -473,6 +473,12 @@ class DummyCfg:
     output_path: str = THIS_OUTPUT_PATH
 
 
+@dataclass(frozen=True)
+class TupleDependencyCfg:
+    dep_paths: tuple[str, ...]
+    output_path: str = THIS_OUTPUT_PATH
+
+
 def dummy_fn(cfg: DummyCfg):
     # write one tiny file so the step "does something"
     out_path = os.path.join(cfg.output_path, "dummy")
@@ -480,6 +486,19 @@ def dummy_fn(cfg: DummyCfg):
     with open(os.path.join(out_path, "done.txt"), "w") as f:
         f.write(str(cfg.x))
     return cfg.x
+
+
+def tuple_dependency_fn(cfg: TupleDependencyCfg):
+    dep_path = cfg.dep_paths[0]
+    with open(os.path.join(dep_path, "done.txt")) as f:
+        value = int(f.read())
+
+    out_path = os.path.join(cfg.output_path, "tuple")
+    os.makedirs(out_path, exist_ok=True)
+    with open(os.path.join(out_path, "done.txt"), "w") as f:
+        f.write(str(value + 1))
+
+    return value + 1
 
 
 def shouldnt_run_fn(cfg: DummyCfg):
@@ -514,6 +533,38 @@ def test_collect_deps_skip_vs_block():
 
     assert parent in deps and parent not in pseudo
     assert ver == {"": "DEP[0]/ckpt.pt"}  # same placeholder, but in deps
+
+
+def test_collect_deps_from_tuple_field():
+    parent = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=1))
+    cfg = TupleDependencyCfg(dep_paths=(parent.cd("dummy"),))
+
+    computed_deps = collect_dependencies_and_version(cfg)
+
+    assert computed_deps.dependencies == [parent]
+    assert computed_deps.version["dep_paths.[0]"] == "DEP[0]/dummy"
+
+
+def test_executor_instantiates_tuple_input_names_and_blocks_on_parent():
+    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+        parent = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=7))
+        child = ExecutorStep(
+            name="child",
+            fn=tuple_dependency_fn,
+            config=TupleDependencyCfg(dep_paths=(parent.cd("dummy"),)),
+        )
+
+        executor = create_executor(temp_dir)
+        executor.run(steps=[child])
+
+        assert executor.dependencies[child] == [parent]
+
+        parent_done = os.path.join(executor.output_paths[parent], "dummy", "done.txt")
+        child_done = os.path.join(executor.output_paths[child], "tuple", "done.txt")
+        with open(parent_done) as f:
+            assert f.read() == "7"
+        with open(child_done) as f:
+            assert f.read() == "8"
 
 
 # ----------------------------------------------------------------------

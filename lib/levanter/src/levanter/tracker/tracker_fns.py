@@ -3,6 +3,7 @@
 
 import contextlib
 import dataclasses
+import json
 import logging
 import os
 import tempfile
@@ -204,13 +205,23 @@ def log_configuration(hparams: Any, config_name: Optional[str] = None):
     if dataclasses.is_dataclass(hparams):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = os.path.join(tmpdir, "config.yaml")
+            artifact_name = config_name or "config.yaml"
             try:
                 with open(config_path, "w") as f:
                     draccus.dump(hparams, f, encoding="utf-8")
-                    name = config_name or "config.yaml"
-                    _global_tracker.log_artifact(config_path, name=name, type="config")
-            except Exception:  # noqa
-                logger.warning("Failed to dump config to yaml. Skipping logging as artifact.", exc_info=True)
+                _global_tracker.log_artifact(config_path, name=artifact_name, type="config")
+            except Exception as exc:  # noqa
+                fallback_path = os.path.join(tmpdir, "config.json")
+                with open(fallback_path, "w") as f:
+                    json.dump(hparams_dict, f, indent=2, sort_keys=True, default=str)
+                if config_name is None:
+                    artifact_name = "config.json"
+                _global_tracker.log_artifact(fallback_path, name=artifact_name, type="config")
+                logger.warning(
+                    "Failed to dump config with draccus; uploaded JSON fallback artifact '%s'. Error: %s",
+                    artifact_name,
+                    exc,
+                )
 
 
 def set_global_tracker(tracker: Tracker):

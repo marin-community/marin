@@ -1073,6 +1073,12 @@ def collect_dependencies_and_version(obj: Any) -> _Dependencies:
             # Recurse through lists
             for i, x in enumerate(obj):
                 recurse(x, new_prefix + f"[{i}]")
+        elif isinstance(obj, tuple) and hasattr(obj, "_fields"):
+            for i, x in enumerate(obj):
+                recurse(x, new_prefix + f"[{i}]")
+        elif isinstance(obj, tuple):
+            for i, x in enumerate(obj):
+                recurse(x, new_prefix + f"[{i}]")
         elif isinstance(obj, dict):
             # Recurse through dicts
             for i, x in obj.items():
@@ -1163,6 +1169,10 @@ def instantiate_config(
         elif isinstance(obj, list):
             # Recurse through lists
             return [recurse(x) for x in obj]
+        elif isinstance(obj, tuple) and hasattr(obj, "_fields"):
+            return type(obj)(*(recurse(x) for x in obj))
+        elif isinstance(obj, tuple):
+            return tuple(recurse(x) for x in obj)
         elif isinstance(obj, dict):
             # Recurse through dicts
             return dict((i, recurse(x)) for i, x in obj.items())

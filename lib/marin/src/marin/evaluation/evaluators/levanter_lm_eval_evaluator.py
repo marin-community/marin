@@ -132,10 +132,6 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             logger.error(f"Error running eval harness: {e}")
             raise e
 
-        finally:
-            # Clean up resources
-            self.cleanup(model)
-
 
 def _json_default(value):
     """

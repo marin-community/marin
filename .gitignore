@@ -1,6 +1,8 @@
 # redundant, but Ray looks for this otherwise.
 .git
 
+calvin_artifacts/
+
 logs/
 
 # CPU profiles
@@ -208,6 +210,15 @@ archive/
 
 # wandb logs
 wandb
+
+# Offline RL generated artifacts
+experiments/domain_phase_mix/offline_rl/artifacts/
+experiments/domain_phase_mix/offline_rl/policy_bundle/
+experiments/domain_phase_mix/offline_rl/policy_payloads/
+experiments/domain_phase_mix/exploratory/starcoder_generic_selector_outputs/smoke_*/
+experiments/domain_phase_mix/exploratory/starcoder_generic_selector_outputs/*/validation_monitor_status.json
+experiments/domain_phase_mix/exploratory/starcoder_subset_selection_outputs/**/launch_command.txt
+experiments/domain_phase_mix/exploratory/starcoder_subset_selection_outputs/**/pid.txt
 
 # Generated leaderboard data
 marin/speedrun/static/data/runs.json
