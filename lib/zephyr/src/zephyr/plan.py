@@ -22,10 +22,12 @@ from itertools import groupby, islice
 from typing import Any, Protocol
 
 import msgspec
+import pyarrow as pa
+import pyarrow.compute as pc
 from iris.env_resources import TaskResources as _TaskResources
 from iris.marin_fs import url_to_fs
 
-from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
+from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge, external_sort_merge_arrow
 
 from zephyr.dataset import (
     Dataset,
@@ -176,6 +178,102 @@ def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
         yield from fn(item)
 
 
+def _find_group_boundaries(key_col: pa.ChunkedArray) -> Iterator[tuple[int, int, Any]]:
+    """Yield (start, end, key_value) for each contiguous group in a sorted key column."""
+    arr = key_col.combine_chunks()
+    n = len(arr)
+    if n == 0:
+        return
+    prev = 0
+    for i in range(1, n):
+        if arr[i].as_py() != arr[prev].as_py():
+            yield (prev, i, arr[prev].as_py())
+            prev = i
+    yield (prev, n, arr[prev].as_py())
+
+
+def _arrow_merge_sorted_chunks(shard: Any) -> pa.Table:
+    """Concatenate all chunks and sort in Arrow. Returns sorted table."""
+    from zephyr.shuffle import (
+        _ZEPHYR_SHUFFLE_SORT_KEY_COL,
+        _ZEPHYR_SHUFFLE_SORT_SECONDARY_COL,
+    )
+
+    all_tables: list[pa.Table] = []
+    for it in shard.iterators:
+        for table in it.get_chunk_tables():
+            all_tables.append(table)
+    if not all_tables:
+        return pa.table({})
+    combined = pa.concat_tables(all_tables, promote_options="default")
+    sort_keys: list[tuple[str, str]] = [(_ZEPHYR_SHUFFLE_SORT_KEY_COL, "ascending")]
+    if _ZEPHYR_SHUFFLE_SORT_SECONDARY_COL in combined.column_names:
+        sort_keys.append((_ZEPHYR_SHUFFLE_SORT_SECONDARY_COL, "ascending"))
+    indices = pc.sort_indices(combined, sort_keys=sort_keys)
+    return combined.take(indices)
+
+
+def _arrow_reduce_gen(
+    shard: Any,
+    reducer_fn: Callable,
+    external_sort_dir: str | None = None,
+) -> Iterator:
+    """Arrow-native reduce: sort in Arrow, group by _sort_key, late-materialize for reducer_fn."""
+    from zephyr.shuffle import (
+        ScatterShard,
+        _ZEPHYR_SHUFFLE_ITEM_COL,
+        _ZEPHYR_SHUFFLE_SORT_KEY_COL,
+    )
+
+    use_external = (
+        external_sort_dir is not None
+        and isinstance(shard, ScatterShard)
+        and shard.needs_external_sort(_TaskResources.from_environment().memory_bytes)
+    )
+
+    if use_external:
+        sort_keys: list[tuple[str, str]] = [(_ZEPHYR_SHUFFLE_SORT_KEY_COL, "ascending")]
+        logger.info(
+            "Arrow external sort triggered for shard with %d iterators, spilling to %s",
+            sum(it.chunk_count for it in shard.iterators),
+            external_sort_dir,
+        )
+
+        def _chunk_tables() -> Iterator[pa.Table]:
+            for it in shard.iterators:
+                yield from it.get_chunk_tables()
+
+        def _merge_key(row: dict) -> Any:
+            return row[_ZEPHYR_SHUFFLE_SORT_KEY_COL]
+
+        merged_stream = external_sort_merge_arrow(
+            _chunk_tables(), sort_keys, _merge_key, _ZEPHYR_SHUFFLE_ITEM_COL, external_sort_dir
+        )
+        is_gen = inspect.isgeneratorfunction(reducer_fn)
+        for key, rows in groupby(merged_stream, key=lambda row: row[_ZEPHYR_SHUFFLE_SORT_KEY_COL]):
+            items = (row[_ZEPHYR_SHUFFLE_ITEM_COL] for row in rows)
+            if is_gen:
+                yield from reducer_fn(key, items)
+            else:
+                yield reducer_fn(key, items)
+        return
+
+    sorted_table = _arrow_merge_sorted_chunks(shard)
+    if len(sorted_table) == 0:
+        return
+
+    item_col = sorted_table.column(_ZEPHYR_SHUFFLE_ITEM_COL)
+    key_col = sorted_table.column(_ZEPHYR_SHUFFLE_SORT_KEY_COL)
+
+    is_gen = inspect.isgeneratorfunction(reducer_fn)
+    for start, end, key_value in _find_group_boundaries(key_col):
+        group_items = item_col[start:end].to_pylist()
+        if is_gen:
+            yield from reducer_fn(key_value, iter(group_items))
+        else:
+            yield reducer_fn(key_value, iter(group_items))
+
+
 def _reduce_gen(
     shard: Any,
     key_fn: Callable,
@@ -183,6 +281,14 @@ def _reduce_gen(
     sort_fn: Callable | None = None,
     external_sort_dir: str | None = None,
 ) -> Iterator:
+    from zephyr.shuffle import ScatterShard
+
+    # Use Arrow-native path when sort key columns are available and items aren't pickled
+    if isinstance(shard, ScatterShard) and shard.has_sort_key and not any(it.is_pickled for it in shard.iterators):
+        yield from _arrow_reduce_gen(shard, reducer_fn, external_sort_dir)
+        return
+
+    # Fallback: Python-based merge for old format or pickled items
     is_gen = inspect.isgeneratorfunction(reducer_fn)
     for key, items_iter in _merge_sorted_chunks(shard, key_fn, sort_fn, external_sort_dir=external_sort_dir):
         if is_gen:
