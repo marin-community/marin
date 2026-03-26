@@ -69,7 +69,6 @@ def _build_downloads() -> dict[str, ExecutorStep | InputName]:
     fineweb_edu_base = _dl("raw/fineweb-edu", "HuggingFaceFW/fineweb-edu", "87f0914", "raw/fineweb-edu-87f0914")
 
     return {
-        "fineweb": _dl("raw/fineweb", "HuggingFaceFW/fineweb", "cd85054", "raw/fineweb"),
         "fineweb_edu": fineweb_edu_base.cd("data"),
         "fineweb_edu_sample_10bt": fineweb_edu_base.cd("sample/10BT"),
         "fineweb_edu_sample_100bt": fineweb_edu_base.cd("sample/100BT"),
@@ -93,17 +92,9 @@ def _build_downloads() -> dict[str, ExecutorStep | InputName]:
         "dclm_baseline": (
             _dl("raw/dclm-baseline-1.0", "mlfoundations/dclm-baseline-1.0", "a3b142c", "raw/dclm").cd("a3b142c")
         ),
-        "the_stack_dedup": (
-            _dl("raw/the-stack-dedup", "bigcode/the-stack-dedup", "17cad72", "raw/the-stack-dedup-4ba450").cd("17cad72")
-        ),
         "proofpile_2": (
             _dl("raw/proof-pile-2", "EleutherAI/proof-pile-2", "901a927", "raw/proof-pile-2-f1b1d8").cd(
                 "901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927"
-            )
-        ),
-        "the_pile_openwebtext2": (
-            _dl("raw/the_pile_openwebtext2", "vietgpt/the_pile_openwebtext2", "1de27c6", "raw/the_pile_openwebtext2").cd(
-                "1de27c6/huggingface.co/datasets/vietgpt/the_pile_openwebtext2/resolve/1de27c6"
             )
         ),
         "starcoderdata": _dl("raw/starcoderdata", "bigcode/starcoderdata", "9fc30b5", "raw/starcoderdata-720c8c"),
