@@ -86,6 +86,29 @@ uv run iris --config lib/iris/examples/marin.yaml rpc controller profile-task \
 # Profile types: {"threads":{}}  {"cpu":{"format":"SPEEDSCOPE"}}  {"memory":{"format":"FLAMEGRAPH"}}
 ```
 
+### Actor RPC (Coordinator Queries)
+
+`iris actor call` calls methods on the zephyr coordinator through the controller proxy. Find the coordinator endpoint from logs:
+
+```bash
+uv run iris --config <CONFIG> job logs --include-children <JOB_ID> | grep "host_actor.*coord"
+```
+
+The full path before `->` is the ENDPOINT argument.
+
+```bash
+# Global counters (accumulated across all stages)
+uv run iris --config <CONFIG> actor call <ENDPOINT> get_counters
+
+# Per-worker counters (in-flight heartbeat snapshot)
+uv run iris --config <CONFIG> actor call <ENDPOINT> get_counters '{"worker_id": "<WORKER_ID>"}'
+
+# Pipeline status (stage, completed/total shards, worker states)
+uv run iris --config <CONFIG> actor call <ENDPOINT> get_status
+```
+
+Worker IDs follow the pattern `zephyr-<hash>-p<N>-workers-<INDEX>`. Compare per-worker counters to spot stragglers.
+
 ### Poor Man's Profiling
 
 Take 5-10 THR samples from the same worker with ~2s intervals. The `zephyr-poll-*` thread stack shows where time is spent. Look for `active+gil` vs `idle`:
