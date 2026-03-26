@@ -21,9 +21,8 @@ concurrency:
 
 jobs:
   cw-ci-test:
-    # Run on: PRs touching lib/iris/**, /iris-ci-cw comment, or manual dispatch
     if: >-
-      github.event_name == 'pull_request' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       github.event_name == 'workflow_dispatch' ||
       (
         github.event_name == 'issue_comment' &&
@@ -39,6 +38,8 @@ jobs:
     timeout-minutes: 60
     env:
       IRIS_NAMESPACE: iris-ci
+      # Must match Labels(label_prefix).iris_managed from the cluster config
+      IRIS_MANAGED_LABEL: iris-iris-ci-managed
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -85,7 +86,7 @@ jobs:
       - name: Reset worker pods
         run: |
           export KUBECONFIG=~/.kube/coreweave-iris
-          kubectl delete pods -n "$IRIS_NAMESPACE" -l iris.managed=true --ignore-not-found || true
+          kubectl delete pods -n "$IRIS_NAMESPACE" -l "$IRIS_MANAGED_LABEL=true" --grace-period=0 --ignore-not-found || true
 
       # Rebuild images and (re)start the controller. `cluster start` is fully
       # idempotent on K8s: it applies namespace/RBAC/ConfigMap/Deployment/Service
@@ -147,7 +148,7 @@ jobs:
           echo "=== Controller pod describe ==="
           kubectl -n "$IRIS_NAMESPACE" describe pod -l app=iris-controller || true
           echo "=== Worker pods ==="
-          kubectl -n "$IRIS_NAMESPACE" get pods -l iris.managed=true || true
+          kubectl -n "$IRIS_NAMESPACE" get pods -l "$IRIS_MANAGED_LABEL=true" || true
           echo "=== Warning events ==="
           kubectl -n "$IRIS_NAMESPACE" get events --sort-by='.lastTimestamp' --field-selector type!=Normal || true
 

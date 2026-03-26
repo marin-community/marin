@@ -35,7 +35,7 @@ defaults:
     scale_down_delay:
       milliseconds: 300000
     startup_grace_period:
-      milliseconds: 1200000    # 20 min — CPU nodes provision faster than GPUs
+      milliseconds: 1200000    # 20 min — nodes are pinned warm so this rarely fires
   task_env:
     MARIN_PREFIX: s3://marin-na/marin
   worker:
