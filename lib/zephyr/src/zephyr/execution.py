@@ -578,7 +578,7 @@ class ZephyrCoordinator:
             self._completed_shards += 1
             self._in_flight.pop(worker_id, None)
             self._worker_states[worker_id] = WorkerState.READY
-            # Accumulate final counters for this task into the global total
+            # Accumulate final counters for this task into the global total.
             for name, value in self._worker_counters.pop(worker_id, {}).items():
                 self._global_counters[name] = self._global_counters.get(name, 0) + value
 
@@ -620,9 +620,18 @@ class ZephyrCoordinator:
                 },
             )
 
-    def get_counters(self) -> dict[str, int]:
-        """Return global counter totals: completed-task values plus current in-flight snapshots."""
+    def get_counters(self, worker_id: str | None = None) -> dict[str, int]:
+        """Return counter values, optionally filtered to a single worker.
+
+        Args:
+            worker_id: If provided, return the latest heartbeat snapshot for
+                this worker only. If None, return global totals accumulated
+                across all stages (completed + in-flight).
+        """
         with self._lock:
+            if worker_id is not None:
+                return dict(self._worker_counters.get(worker_id, {}))
+
             totals = dict(self._global_counters)
             for ctrs in self._worker_counters.values():
                 for name, value in ctrs.items():
@@ -657,8 +666,9 @@ class ZephyrCoordinator:
             self._task_attempts = {task.shard_idx: 0 for task in tasks}
             self._fatal_error = None
             self._is_last_stage = is_last_stage
+            # Only reset in-flight worker snapshots; global and per-shard
+            # counters accumulate across stages for full pipeline visibility.
             self._worker_counters = {}
-            self._global_counters = {}
 
     def _wait_for_stage(self) -> None:
         """Block until current stage completes or error occurs."""
