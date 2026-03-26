@@ -568,6 +568,58 @@ def controller(ctx):
     pass
 
 
+@controller.command("serve")
+@click.option("--host", default="0.0.0.0", help="Bind host")
+@click.option("--port", default=10000, type=int, help="Bind port")
+@click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
+@click.option(
+    "--checkpoint-path",
+    default=None,
+    help="Restore from this specific checkpoint directory (e.g. gs://bucket/.../controller-state/1234567890)",
+)
+@click.option(
+    "--checkpoint-interval",
+    default=None,
+    type=float,
+    help="Periodic checkpoint interval in seconds (default: hourly)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Start in dry-run mode: compute scheduling but suppress all side effects",
+)
+@click.pass_context
+def controller_serve(ctx, host, port, scheduler_interval, checkpoint_path, checkpoint_interval, dry_run):
+    """Start a local controller process.
+
+    Loads the cluster config, restores from checkpoint, and runs the full
+    scheduling loop. Use --dry-run to suppress all side effects (no task
+    dispatch, no VM changes, no checkpoint writes) while still serving the
+    dashboard and RPC for inspection.
+
+    Example (dry-run with checkpoint restore)::
+
+        iris --config=cluster.yaml cluster controller serve --dry-run \\
+            --checkpoint-path gs://bucket/controller-state/1234567890
+    """
+    from iris.cluster.controller.main import run_controller_serve
+
+    config = ctx.obj.get("config")
+    if not config:
+        raise click.ClickException("--config is required for controller serve")
+
+    run_controller_serve(
+        config,
+        host=host,
+        port=port,
+        scheduler_interval=scheduler_interval,
+        checkpoint_path=checkpoint_path,
+        checkpoint_interval=checkpoint_interval,
+        dry_run=dry_run,
+    )
+
+
 @controller.command("checkpoint")
 @click.option("--stop", is_flag=True, default=False, help="Stop the controller after taking a checkpoint")
 @click.pass_context
