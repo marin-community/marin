@@ -1590,11 +1590,12 @@ class Controller:
         if not self._autoscaler:
             return
 
+        if self._config.dry_run:
+            logger.info("[DRY-RUN] Skipping autoscaler cycle (refresh + update)")
+            return
+
         worker_status_map = self._build_worker_status_map()
         self._autoscaler.refresh(worker_status_map)
-        if self._config.dry_run:
-            logger.info("[DRY-RUN] Autoscaler refresh complete, skipping update (no VM changes)")
-            return
         workers = healthy_active_workers_with_attributes(self._db)
         demand_entries = compute_demand_entries(
             self._db,

@@ -65,14 +65,14 @@ def test_dry_run_provider_sync_skipped(dry_run_controller):
         spy.assert_not_called()
 
 
-def test_dry_run_autoscaler_refresh_but_no_update(dry_run_controller):
+def test_dry_run_autoscaler_skipped_entirely(dry_run_controller):
     controller = dry_run_controller
     mock_autoscaler = MagicMock()
     controller._autoscaler = mock_autoscaler
 
     controller._run_autoscaler_once()
 
-    mock_autoscaler.refresh.assert_called_once()
+    mock_autoscaler.refresh.assert_not_called()
     mock_autoscaler.update.assert_not_called()
 
 
