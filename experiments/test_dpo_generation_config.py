@@ -47,7 +47,7 @@ tokenized_preferences = lm_data_config(
 )
 
 dpo_config = SimpleDPOConfig(
-    resources=ResourceConfig.with_tpu("v5p-8"),
+    resources=ResourceConfig.with_tpu("v5p-8", ram="400g"),
     train_batch_size=8,
     num_train_steps=2,
     learning_rate=5e-7,
