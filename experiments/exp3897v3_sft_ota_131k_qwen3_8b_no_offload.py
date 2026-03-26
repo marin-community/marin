@@ -56,7 +56,9 @@ NUM_SAMPLES = 4521
 # v5p-32 (16 chips) with batch=16.
 # 512 GB host RAM: generous allocation for XLA compilation of 131K graph
 # without offloading. Can reduce if compilation fits in less.
-RESOURCES = ResourceConfig.with_tpu("v5p-32", ram="512g")
+# 256 GB host RAM: the simpler non-offload XLA graph should compile in less
+# than the offload version. 512 GB was unschedulable (workers don't have it).
+RESOURCES = ResourceConfig.with_tpu("v5p-32", ram="256g")
 TRAIN_BATCH_SIZE = 16
 MICROBATCH_SIZE = 16
 
