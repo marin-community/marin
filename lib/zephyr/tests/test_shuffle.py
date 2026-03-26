@@ -10,10 +10,11 @@ and multi-segment schema evolution — all without spinning up a full coordinato
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from zephyr.plan import deterministic_hash
+from zephyr.plan import deterministic_hash, _merge_sorted_chunks
 from zephyr.shuffle import (
     ScatterParquetIterator,
     ScatterShard,
+    _ZEPHYR_SHUFFLE_SORT_KEY_COL,
     _build_scatter_shard_from_manifest,
     _make_pickle_envelope,
     _write_parquet_scatter,
@@ -225,7 +226,7 @@ def test_avg_item_bytes_written(tmp_path):
 def test_scatter_parquet_iterator_pickle_roundtrip(tmp_path):
     """ScatterParquetIterator with is_pickled=True round-trips non-Arrow-serializable items."""
     items = [frozenset([1, 2]), frozenset([3, 4, 5])]
-    envelope = _make_pickle_envelope(items, target_shard=0, chunk_idx=0)
+    envelope = _make_pickle_envelope(items, target_shard=0, chunk_idx=0, key_values=[0, 1])
     batch = pa.RecordBatch.from_pylist(envelope)
 
     path = str(tmp_path / "test.parquet")
@@ -244,8 +245,180 @@ def test_scatter_parquet_iterator_pickle_roundtrip(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Sort key column and has_sort_key propagation
+# ---------------------------------------------------------------------------
+
+
+def test_scatter_writes_sort_key_column(tmp_path):
+    """Parquet files contain a _sort_key column matching key_fn values."""
+    num_shards = 2
+    items = [{"k": i % 3, "v": i} for i in range(20)]
+    parquet_path = str(tmp_path / "shard-0000.parquet")
+    list_shard = _write_parquet_scatter(
+        iter(items),
+        source_shard=0,
+        parquet_path=parquet_path,
+        key_fn=_key,
+        num_output_shards=num_shards,
+    )
+    seg_paths = list(list_shard)
+    for seg_path in seg_paths:
+        table = pq.read_table(seg_path)
+        assert _ZEPHYR_SHUFFLE_SORT_KEY_COL in table.column_names
+        for row in table.to_pylist():
+            item = row["item"]
+            assert row[_ZEPHYR_SHUFFLE_SORT_KEY_COL] == item["k"]
+
+
+def test_has_sort_key_propagated_to_shard(tmp_path):
+    """has_sort_key is written to meta and propagated through manifest to ScatterShard."""
+    items = [{"k": i, "v": i} for i in range(10)]
+    manifest_path, _ = _build_shard(tmp_path, items, num_output_shards=2)
+    for shard_idx in range(2):
+        shard = _build_scatter_shard_from_manifest(manifest_path, shard_idx)
+        assert shard.has_sort_key is True
+        for it in shard.iterators:
+            assert it.has_sort_key is True
+
+
+def test_get_chunk_tables_returns_arrow(tmp_path):
+    """get_chunk_tables yields pa.Table instances with sort key columns."""
+    items = [{"k": i % 2, "v": i} for i in range(20)]
+    manifest_path, _ = _build_shard(tmp_path, items, num_output_shards=1)
+    shard = _build_scatter_shard_from_manifest(manifest_path, 0)
+    tables = []
+    for it in shard.iterators:
+        tables.extend(list(it.get_chunk_tables()))
+    assert len(tables) > 0
+    for t in tables:
+        assert isinstance(t, pa.Table)
+        assert _ZEPHYR_SHUFFLE_SORT_KEY_COL in t.column_names
+
+
+def test_scatter_with_combiner(tmp_path):
+    """Scatter with combiner_fn produces correct combined output."""
+    # Duplicate keys — combiner keeps only one per key
+    items = [{"k": i % 3, "v": i} for i in range(30)]
+
+    def combiner(key, items_iter):
+        return [next(items_iter)]
+
+    parquet_path = str(tmp_path / "shard-0000.parquet")
+    list_shard = _write_parquet_scatter(
+        iter(items),
+        source_shard=0,
+        parquet_path=parquet_path,
+        key_fn=_key,
+        num_output_shards=1,
+        combiner_fn=combiner,
+    )
+    seg_paths = list(list_shard)
+    manifest_path = str(tmp_path / "scatter_metadata")
+    _write_scatter_manifest(seg_paths, manifest_path)
+
+    shard = _build_scatter_shard_from_manifest(manifest_path, 0)
+    recovered = list(shard)
+    # With combiner keeping first, we get at most 3 unique keys (0,1,2)
+    keys = {item["k"] for item in recovered}
+    assert keys == {0, 1, 2}
+    assert len(recovered) == 3
+
+
+# ---------------------------------------------------------------------------
 # external_sort_merge
 # ---------------------------------------------------------------------------
+
+
+def test_arrow_merge_produces_same_results(tmp_path):
+    """Arrow merge-sort produces the same grouped results as the Python path."""
+    from zephyr.plan import _arrow_reduce_gen
+
+    num_shards = 4
+    items = [{"k": i % 7, "v": i} for i in range(200)]
+    manifest_path, _ = _build_shard(tmp_path, items, num_output_shards=num_shards)
+
+    def keep_first(key, items_iter):
+        return next(items_iter)
+
+    for shard_idx in range(num_shards):
+        shard = _build_scatter_shard_from_manifest(manifest_path, shard_idx)
+        # Arrow path
+        arrow_results = sorted(list(_arrow_reduce_gen(shard, keep_first)), key=lambda x: x["v"])
+        # Python path
+        shard2 = _build_scatter_shard_from_manifest(manifest_path, shard_idx)
+        python_results = []
+        for _k, items_iter in _merge_sorted_chunks(shard2, _key):
+            python_results.append(next(items_iter))
+        python_results.sort(key=lambda x: x["v"])
+        assert arrow_results == python_results, f"shard {shard_idx} mismatch"
+
+
+def test_arrow_external_sort_roundtrip(tmp_path):
+    """Arrow external sort produces correctly sorted output."""
+    from zephyr.external_sort import external_sort_merge_arrow
+    from zephyr.shuffle import _ZEPHYR_SHUFFLE_SORT_KEY_COL, _ZEPHYR_SHUFFLE_ITEM_COL
+
+    tables = [
+        pa.table({_ZEPHYR_SHUFFLE_ITEM_COL: [{"a": 1}, {"a": 4}, {"a": 7}], _ZEPHYR_SHUFFLE_SORT_KEY_COL: [1, 4, 7]}),
+        pa.table({_ZEPHYR_SHUFFLE_ITEM_COL: [{"a": 2}, {"a": 5}, {"a": 8}], _ZEPHYR_SHUFFLE_SORT_KEY_COL: [2, 5, 8]}),
+        pa.table({_ZEPHYR_SHUFFLE_ITEM_COL: [{"a": 3}, {"a": 6}, {"a": 9}], _ZEPHYR_SHUFFLE_SORT_KEY_COL: [3, 6, 9]}),
+    ]
+    sort_dir = str(tmp_path / "ext_sort")
+
+    result = list(
+        external_sort_merge_arrow(
+            iter(tables),
+            sort_keys=[(_ZEPHYR_SHUFFLE_SORT_KEY_COL, "ascending")],
+            merge_key=lambda row: row[_ZEPHYR_SHUFFLE_SORT_KEY_COL],
+            item_col=_ZEPHYR_SHUFFLE_ITEM_COL,
+            external_sort_dir=sort_dir,
+        )
+    )
+    # Result is list of dicts from to_pylist — extract item values
+    items = [row[_ZEPHYR_SHUFFLE_ITEM_COL] for row in result]
+    assert items == [{"a": i} for i in range(1, 10)]
+
+
+def test_arrow_external_sort_cleans_up(tmp_path):
+    """Arrow external sort run files are deleted after merge."""
+    from zephyr.external_sort import external_sort_merge_arrow
+    from zephyr.shuffle import _ZEPHYR_SHUFFLE_SORT_KEY_COL, _ZEPHYR_SHUFFLE_ITEM_COL
+
+    tables = [pa.table({_ZEPHYR_SHUFFLE_ITEM_COL: [i], _ZEPHYR_SHUFFLE_SORT_KEY_COL: [i]}) for i in range(10)]
+    sort_dir = str(tmp_path / "ext_sort")
+
+    list(
+        external_sort_merge_arrow(
+            iter(tables),
+            sort_keys=[(_ZEPHYR_SHUFFLE_SORT_KEY_COL, "ascending")],
+            merge_key=lambda row: row[_ZEPHYR_SHUFFLE_SORT_KEY_COL],
+            item_col=_ZEPHYR_SHUFFLE_ITEM_COL,
+            external_sort_dir=sort_dir,
+        )
+    )
+    import os
+
+    if os.path.exists(sort_dir):
+        remaining = os.listdir(sort_dir)
+        assert remaining == [], f"run files should be deleted, found: {remaining}"
+
+
+def test_needs_external_sort_zero_memory():
+    """needs_external_sort returns False when memory_limit is 0 (unknown)."""
+    shard = ScatterShard(
+        iterators=[
+            ScatterParquetIterator(
+                path="gs://fake/path.parquet",
+                shard_idx=0,
+                chunk_count=1000,
+                is_pickled=False,
+                filesystem=pa.fs.LocalFileSystem(),
+            )
+        ],
+        max_row_group_rows=1000,
+        avg_item_bytes=1000.0,
+    )
+    assert not shard.needs_external_sort(memory_limit=0)
 
 
 def test_external_sort_merge_streaming(tmp_path):

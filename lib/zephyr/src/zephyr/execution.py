@@ -240,7 +240,8 @@ def _write_stage_output(
 
         use_pickle_envelope = False
         try:
-            test_envelope = _make_envelope([first_item], 0, 0)
+            test_key = scatter_op.key_fn(first_item)
+            test_envelope = _make_envelope([first_item], 0, 0, key_values=[test_key])
             pa.RecordBatch.from_pylist(test_envelope)
             logger.info("Using Parquet for scatter serialization for shard %d", source_shard)
         except Exception:

@@ -27,8 +27,12 @@ import logging
 import pickle
 from collections.abc import Callable, Iterator
 from itertools import islice
+from typing import Any
 
 import fsspec
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 import zstandard as zstd
 from iris.env_resources import TaskResources
 from rigging.filesystem import url_to_fs
@@ -149,6 +153,69 @@ def external_sort_merge(
                             yield from chunk
                     except EOFError:
                         break
+
+    run_iters = [_read_run(p) for p in run_paths]
+    try:
+        yield from heapq.merge(*run_iters, key=merge_key)
+    finally:
+        fs, _ = fsspec.core.url_to_fs(external_sort_dir)
+        for path in run_paths:
+            try:
+                _, fs_path = url_to_fs(path)
+                fs.rm(fs_path)
+            except Exception:
+                pass
+
+
+def external_sort_merge_arrow(
+    chunk_tables_gen: Iterator[pa.Table],
+    sort_keys: list[tuple[str, str]],
+    merge_key: Callable[[Any], Any],
+    item_col: str,
+    external_sort_dir: str,
+) -> Iterator:
+    """Two-pass external sort using Parquet spill files instead of pickle.
+
+    Pass 1: batch Arrow table iterators into groups of EXTERNAL_SORT_FAN_IN,
+    concatenate + sort in Arrow, write as Parquet run files.
+    Pass 2: read run files, yield items via heapq.merge over Python iterators.
+
+    The big win over pickle-based external sort is eliminating pickle
+    serialization/deserialization in pass 1. Pass 2 still uses Python heapq
+    for simplicity.
+    """
+    from zephyr.writers import ensure_parent_dir
+
+    run_paths: list[str] = []
+    batch_idx = 0
+
+    while True:
+        batch_tables = list(islice(chunk_tables_gen, EXTERNAL_SORT_FAN_IN))
+        if not batch_tables:
+            break
+        combined = pa.concat_tables(batch_tables)
+        indices = pc.sort_indices(combined, sort_keys=sort_keys)
+        sorted_table = combined.take(indices)
+
+        run_path = f"{external_sort_dir}/run-{batch_idx:04d}.parquet"
+        ensure_parent_dir(run_path)
+        pq.write_table(sorted_table, run_path)
+        run_paths.append(run_path)
+        logger.info(
+            "Arrow external sort: wrote run %d (%d rows) to %s",
+            batch_idx + 1,
+            len(sorted_table),
+            run_path,
+        )
+        batch_idx += 1
+        del combined, sorted_table
+
+    if not run_paths:
+        return
+
+    def _read_run(path: str) -> Iterator:
+        table = pq.read_table(path)
+        yield from table.to_pylist()
 
     run_iters = [_read_run(p) for p in run_paths]
     try:
