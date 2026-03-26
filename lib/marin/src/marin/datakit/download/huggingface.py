@@ -14,13 +14,13 @@ import socket
 import time
 from dataclasses import dataclass, field
 
-import draccus
 import huggingface_hub
 from huggingface_hub import HfFileSystem
 from iris.marin_fs import open_url, url_to_fs
 from huggingface_hub.errors import HfHubHTTPError
 from packaging.version import Version
 from marin.execution.executor import THIS_OUTPUT_PATH
+from marin.execution.step_spec import StepSpec
 from marin.utilities.validation_utils import write_provenance_json
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
@@ -343,11 +343,57 @@ def download_hf(cfg: DownloadConfig) -> None:
     logger.info(f"Streamed all files and wrote provenance JSON; check {output_path}.")
 
 
-@draccus.wrap()
-def main(cfg: DownloadConfig) -> None:
-    """Download HuggingFace dataset."""
-    download_hf(cfg)
+def download_hf_step(
+    name: str,
+    *,
+    hf_dataset_id: str,
+    revision: str,
+    hf_urls_glob: list[str] | None = None,
+    append_sha_to_path: bool = False,
+    zephyr_max_parallelism: int = 8,
+    deps: list[StepSpec] | None = None,
+    override_output_path: str | None = None,
+) -> StepSpec:
+    """Create a StepSpec that downloads a HuggingFace dataset.
 
+    The raw download is preserved as-is in its original format and directory structure.
 
-if __name__ == "__main__":
-    main()
+    Args:
+        name: Step name (e.g. "raw/fineweb").
+        hf_dataset_id: HuggingFace dataset identifier (e.g. "HuggingFaceFW/fineweb").
+        revision: Commit hash from the HF dataset repo.
+        hf_urls_glob: Glob patterns to select specific files. Empty means all files.
+        append_sha_to_path: If True, write outputs under ``output_path/<revision>``.
+        zephyr_max_parallelism: Maximum download parallelism.
+        deps: Optional upstream dependencies.
+        override_output_path: Override the computed output path entirely.
+
+    Returns:
+        A StepSpec whose output_path contains the raw downloaded files.
+    """
+    resolved_glob = hf_urls_glob or []
+
+    def _run(output_path: str) -> None:
+        download_hf(
+            DownloadConfig(
+                hf_dataset_id=hf_dataset_id,
+                revision=revision,
+                hf_urls_glob=resolved_glob,
+                gcs_output_path=output_path,
+                append_sha_to_path=append_sha_to_path,
+                zephyr_max_parallelism=zephyr_max_parallelism,
+            )
+        )
+
+    return StepSpec(
+        name=name,
+        fn=_run,
+        deps=deps or [],
+        hash_attrs={
+            "hf_dataset_id": hf_dataset_id,
+            "revision": revision,
+            "hf_urls_glob": resolved_glob,
+            "append_sha_to_path": append_sha_to_path,
+        },
+        override_output_path=override_output_path,
+    )
