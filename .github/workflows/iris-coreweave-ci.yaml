@@ -38,7 +38,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      IRIS_CONFIG: lib/iris/examples/coreweave-ci.yaml
       IRIS_NAMESPACE: iris-ci
     steps:
       - name: Checkout code
@@ -99,7 +98,6 @@ jobs:
             --config=examples/coreweave-ci.yaml \
             cluster controller restart
 
-      # Port-forward to the controller service and run the integration tests.
       - name: Run integration tests
         env:
           WANDB_MODE: disabled
@@ -113,14 +111,20 @@ jobs:
 
           IRIS_CONTROLLER_URL="http://localhost:10000"
 
-          # Wait for controller to become reachable
-          for i in $(seq 1 120); do
+          # Controller deployment is already confirmed ready by `controller restart`;
+          # this just waits for the port-forward to be usable.
+          HEALTHY=false
+          for i in $(seq 1 60); do
             if curl -sf "$IRIS_CONTROLLER_URL/healthz" > /dev/null 2>&1; then
-              echo "Controller healthy"
+              HEALTHY=true
               break
             fi
             sleep 5
           done
+          if [ "$HEALTHY" != "true" ]; then
+            echo "Controller did not become healthy within timeout"
+            exit 1
+          fi
 
           uv run pytest tests/integration/iris/ \
             --controller-url "$IRIS_CONTROLLER_URL" \

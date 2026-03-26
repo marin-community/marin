@@ -1,8 +1,5 @@
-# Iris CI cluster configuration for CoreWeave.
-#
-# Used by the iris-coreweave-ci GitHub Actions workflow on every Iris PR.
-# Both scale groups are pinned to exactly 1 slice (min=max=1) so the cluster
-# stays warm between runs — no nodepool teardown, just a controller restart.
+# Persistent CoreWeave CI cluster. Both scale groups are pinned at min=max=1
+# so nodes stay warm between runs — only controller and worker pods are reset.
 
 platform:
   label_prefix: iris-ci
