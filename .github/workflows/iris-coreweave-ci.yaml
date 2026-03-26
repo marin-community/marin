@@ -87,16 +87,18 @@ jobs:
           export KUBECONFIG=~/.kube/coreweave-iris
           kubectl delete pods -n "$IRIS_NAMESPACE" -l iris.managed=true --ignore-not-found || true
 
-      # Rebuild images and restart the controller. If no controller exists yet
-      # (first run), this falls back to a fresh start.
-      - name: Restart controller
+      # Rebuild images and (re)start the controller. `cluster start` is fully
+      # idempotent on K8s: it applies namespace/RBAC/ConfigMap/Deployment/Service
+      # and triggers a rollout restart, so both cold starts and warm restarts
+      # work without needing to tunnel to an existing controller first.
+      - name: Start controller
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           cd lib/iris && uv run --group dev iris -v \
             --config=examples/coreweave-ci.yaml \
-            cluster controller restart
+            cluster start
 
       - name: Run integration tests
         env:
@@ -111,7 +113,7 @@ jobs:
 
           IRIS_CONTROLLER_URL="http://localhost:10000"
 
-          # Controller deployment is already confirmed ready by `controller restart`;
+          # Controller deployment is already confirmed ready by `cluster start`;
           # this just waits for the port-forward to be usable.
           HEALTHY=false
           for i in $(seq 1 60); do
