@@ -22,6 +22,7 @@ Usage:
 """
 
 import shutil
+import tempfile
 import time
 from pathlib import Path
 
@@ -491,8 +492,6 @@ def benchmark_heartbeat(db: ControllerDB, iterations: int) -> list[tuple[str, fl
                     cur.execute("SELECT state, COUNT(*) AS c FROM tasks WHERE job_id = ? GROUP BY state", (jid,))
 
         # Create two directory copies — ControllerDB expects a directory, not a file.
-        import tempfile
-
         per_worker_dir = Path(tempfile.mkdtemp(prefix="iris_bench_per_worker_"))
         batched_dir = Path(tempfile.mkdtemp(prefix="iris_bench_batched_"))
         shutil.copy2(db.db_path, per_worker_dir / ControllerDB.DB_FILENAME)

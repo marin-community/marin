@@ -409,11 +409,15 @@ def _batch_worker_health(
     cur: TransactionCursor,
     requests: list["HeartbeatApplyRequest"],
     now_ms: int,
-) -> None:
-    """Batch-update worker health, resource snapshots, and history."""
+) -> set[str]:
+    """Batch-update worker health, resource snapshots, and history.
+
+    Returns the set of worker IDs that actually exist in the DB so callers
+    can skip updates from stale/removed workers.
+    """
     worker_ids = [str(req.worker_id) for req in requests]
     if not worker_ids:
-        return
+        return set()
 
     placeholders = ",".join("?" * len(worker_ids))
     rows = cur.execute(
@@ -457,6 +461,7 @@ def _batch_worker_health(
                     "DELETE FROM worker_resource_history WHERE worker_id = ? AND id <= ?",
                     (wid, cutoff["id"]),
                 )
+    return existing
 
 
 def _bulk_fetch_tasks(cur: TransactionCursor, task_ids: list[str]) -> dict[str, Any]:
@@ -1026,33 +1031,8 @@ class ControllerTransitions:
 
         Returns False if the worker doesn't exist (caller should bail).
         """
-        worker = cur.execute("SELECT * FROM workers WHERE worker_id = ?", (str(req.worker_id),)).fetchone()
-        if worker is None:
-            return False
-
-        snapshot_payload = (
-            req.worker_resource_snapshot.SerializeToString() if req.worker_resource_snapshot is not None else None
-        )
-        cur.execute(
-            "UPDATE workers SET healthy = 1, active = 1, consecutive_failures = 0, last_heartbeat_ms = ?, "
-            "resource_snapshot_proto = COALESCE(?, resource_snapshot_proto) WHERE worker_id = ?",
-            (now_ms, snapshot_payload, str(req.worker_id)),
-        )
-        if snapshot_payload is not None:
-            cur.execute(
-                "INSERT INTO worker_resource_history(worker_id, snapshot_proto, timestamp_ms) VALUES (?, ?, ?)",
-                (str(req.worker_id), snapshot_payload, now_ms),
-            )
-            cutoff = cur.execute(
-                "SELECT id FROM worker_resource_history WHERE worker_id = ? ORDER BY id DESC LIMIT 1 OFFSET ?",
-                (str(req.worker_id), WORKER_RESOURCE_HISTORY_RETENTION),
-            ).fetchone()
-            if cutoff:
-                cur.execute(
-                    "DELETE FROM worker_resource_history WHERE worker_id = ? AND id <= ?",
-                    (str(req.worker_id), cutoff["id"]),
-                )
-        return True
+        existing = _batch_worker_health(cur, [req], now_ms)
+        return str(req.worker_id) in existing
 
     def _apply_task_transitions(
         self,
@@ -1339,17 +1319,20 @@ class ControllerTransitions:
         Worker health updates are also batched via ``executemany``.
         """
         all_pending_logs: list[tuple[str, list[logging_pb2.LogEntry]]] = []
-        results: list[HeartbeatApplyResult] = []
+        _empty = HeartbeatApplyResult(tasks_to_kill=set(), action=HeartbeatAction.OK)
+        results: list[HeartbeatApplyResult] = [_empty] * len(requests)
 
         with self._db.transaction() as cur:
             now_ms = Timestamp.now().epoch_ms()
 
             # ── Batch worker health updates ───────────────────────────────
-            _batch_worker_health(cur, requests, now_ms)
+            existing_workers = _batch_worker_health(cur, requests, now_ms)
 
             # ── Bulk-fetch task rows for classification ───────────────────
             all_task_ids: list[str] = []
             for req in requests:
+                if str(req.worker_id) not in existing_workers:
+                    continue
                 for update in req.updates:
                     if update.new_state not in (
                         cluster_pb2.TASK_STATE_UNSPECIFIED,
@@ -1361,11 +1344,13 @@ class ControllerTransitions:
 
             # ── Classify and split ────────────────────────────────────────
             resource_usage_params: list[tuple[bytes, str]] = []
-            # Requests that need the full state machine, with steady-state
-            # updates stripped out.
-            transition_requests: list[HeartbeatApplyRequest] = []
+            # (request_index, transition_request) pairs so results stay aligned.
+            transition_entries: list[tuple[int, HeartbeatApplyRequest]] = []
 
-            for req in requests:
+            for req_idx, req in enumerate(requests):
+                if str(req.worker_id) not in existing_workers:
+                    continue
+
                 transition_updates: list[TaskUpdate] = []
                 for update in req.updates:
                     task_id_wire = update.task_id.to_wire()
@@ -1397,11 +1382,14 @@ class ControllerTransitions:
                             )
 
                 if transition_updates:
-                    transition_requests.append(
-                        HeartbeatApplyRequest(
-                            worker_id=req.worker_id,
-                            worker_resource_snapshot=None,  # already handled above
-                            updates=transition_updates,
+                    transition_entries.append(
+                        (
+                            req_idx,
+                            HeartbeatApplyRequest(
+                                worker_id=req.worker_id,
+                                worker_resource_snapshot=None,  # already handled above
+                                updates=transition_updates,
+                            ),
                         )
                     )
 
@@ -1413,22 +1401,17 @@ class ControllerTransitions:
                 )
 
             # ── Pass 2b: transitions via existing state machine ───────────
-            for req in transition_requests:
-                tx_result, pending_logs = self._apply_task_transitions(cur, req, now_ms)
+            for req_idx, treq in transition_entries:
+                tx_result, pending_logs = self._apply_task_transitions(cur, treq, now_ms)
                 all_pending_logs.extend(pending_logs)
-                results.append(
-                    HeartbeatApplyResult(
-                        tasks_to_kill=tx_result.tasks_to_kill,
-                        action=HeartbeatAction.OK,
-                    )
+                results[req_idx] = HeartbeatApplyResult(
+                    tasks_to_kill=tx_result.tasks_to_kill,
+                    action=HeartbeatAction.OK,
                 )
 
         if all_pending_logs and self._log_store is not None:
             self._log_store.append_batch(all_pending_logs)
 
-        # Pad results for requests that had no transitions.
-        while len(results) < len(requests):
-            results.append(HeartbeatApplyResult(tasks_to_kill=set(), action=HeartbeatAction.OK))
         return results
 
     def apply_heartbeat(self, req: HeartbeatApplyRequest) -> HeartbeatApplyResult:
