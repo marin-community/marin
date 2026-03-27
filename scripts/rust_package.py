@@ -159,19 +159,19 @@ def build_wheels() -> None:
     host_target = _host_rust_target()
 
     # Install Rust cross-compile targets for linux
-    linux_triples = [t for t, _ in LINUX_TARGETS if t != host_target]
-    if linux_triples:
-        print(f"Installing Rust targets: {', '.join(linux_triples)}")
-        subprocess.run(["rustup", "target", "add", *linux_triples], check=True)
+    linux_triples = [t for t, _ in LINUX_TARGETS]
+    print(f"Installing Rust targets: {', '.join(linux_triples)}")
+    subprocess.run(["rustup", "target", "add", *linux_triples], check=True)
 
     # Put zig's directory on PATH so maturin can find it
     zig_dir = str(Path(zig_bin).parent)
     env = {**os.environ, "PATH": f"{zig_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
 
-    # Cross-compile linux wheels via zig
+    # Always use --zig for linux targets, even on a linux host. The host glibc
+    # may be newer than the manylinux target (e.g. ubuntu-latest has glibc 2.35
+    # which is too new for manylinux_2_28). Zig links against the correct version.
     for target, manylinux in LINUX_TARGETS:
-        is_host = target == host_target
-        print(f"\n--- Building wheel for {target}{' (native)' if is_host else ' (zig)'} ---")
+        print(f"\n--- Building wheel for {target} (zig) ---")
         cmd = [
             maturin,
             "build",
@@ -184,9 +184,8 @@ def build_wheels() -> None:
             target,
             "--manylinux",
             manylinux,
+            "--zig",
         ]
-        if not is_host:
-            cmd.append("--zig")
         subprocess.run(cmd, check=True, cwd=REPO_ROOT, env=env)
 
     # Build native mac wheel (only for the host arch — zig can't cross-compile to macOS)
