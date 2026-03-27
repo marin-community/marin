@@ -9,7 +9,7 @@ import uuid
 
 from collections.abc import Iterable
 
-from connectrpc.errors import ConnectError
+from connectrpc.errors import Code, ConnectError
 from connectrpc.interceptor import InterceptorSync
 
 from iris.cluster.client.protocol import TaskStateLogger
@@ -142,6 +142,14 @@ class RemoteClusterClient:
 
         return call_with_retry(f"get_job_states({len(job_ids)} jobs)", _call)
 
+    def _poll_job_state(self, job_id: JobName) -> int:
+        """Fetch only the state enum for a single job via the lightweight RPC."""
+        states = self.get_job_states([job_id])
+        wire_id = job_id.to_wire()
+        if wire_id not in states:
+            raise ConnectError(Code.NOT_FOUND, f"Job {wire_id} not found")
+        return states[wire_id]
+
     def wait_for_job(
         self,
         job_id: JobName,
@@ -170,15 +178,17 @@ class RemoteClusterClient:
         backoff = ExponentialBackoff(initial=0.1, maximum=poll_interval)
 
         while True:
-            job_info = poll_with_retries(
+            # Poll with lightweight state-only RPC during the loop.
+            state = poll_with_retries(
                 str(job_id),
-                lambda: self.get_job_status(job_id),
+                lambda: self._poll_job_state(job_id),
                 deadline=deadline,
                 unavailable_tolerance=CONTROLLER_UNAVAILABLE_TOLERANCE,
             )
 
-            if is_job_finished(job_info.state):
-                return job_info
+            if is_job_finished(state):
+                # Fetch full status once at the end for error details.
+                return self.get_job_status(job_id)
 
             if deadline.expired():
                 raise TimeoutError(f"Job {job_id} did not complete in {timeout}s")
@@ -222,14 +232,15 @@ class RemoteClusterClient:
         cursor: int = 0
 
         while True:
-            status = poll_with_retries(
+            # Poll with lightweight state-only RPC during the loop.
+            state = poll_with_retries(
                 str(job_id),
-                lambda: self.get_job_status(job_id),
+                lambda: self._poll_job_state(job_id),
                 deadline=deadline,
                 unavailable_tolerance=CONTROLLER_UNAVAILABLE_TOLERANCE,
             )
 
-            state_name = cluster_pb2.JobState.Name(status.state)
+            state_name = cluster_pb2.JobState.Name(state)
 
             try:
                 log_response = self.fetch_task_logs(
@@ -262,7 +273,7 @@ class RemoteClusterClient:
                         if is_job_finished(child.state):
                             state_logger.task_finished(child.job_id, child)
 
-            if is_job_finished(status.state):
+            if is_job_finished(state):
                 total_lines = sum(len(b.logs) for b in log_response.task_logs) if log_response else 0
                 logger.info(
                     "job=%s finished with state=%s, draining logs (total_lines=%d)",
@@ -273,7 +284,8 @@ class RemoteClusterClient:
                 if terminal_status is not None:
                     return terminal_status
                 # Give log writers a moment to flush, then drain once more.
-                terminal_status = status
+                # Fetch full status for error details on the final return.
+                terminal_status = self.get_job_status(job_id)
                 time.sleep(1)
                 continue
 
