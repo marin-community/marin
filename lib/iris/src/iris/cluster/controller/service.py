@@ -1376,16 +1376,17 @@ class ControllerServiceImpl:
         """
         job_name = JobName.from_wire(request.id)
         job_wire = job_name.to_wire()
+        escaped_wire = re.escape(job_wire)
 
-        # Build the LIKE source pattern from the legacy request fields
+        # Build the regex source pattern from the legacy request fields
         if job_name.is_task and request.attempt_id >= 0:
-            source = f"{job_wire}:{request.attempt_id}"  # exact key
+            source = f"{escaped_wire}:{request.attempt_id}"  # exact key
         elif job_name.is_task:
-            source = f"{job_wire}:%"  # all attempts of a single task
+            source = f"{escaped_wire}:.*"  # all attempts of a single task
         elif request.include_children:
-            source = f"{job_wire}/%"  # all tasks + child jobs
+            source = f"{escaped_wire}/.*"  # all tasks + child jobs
         else:
-            source = f"{job_wire}/%"  # query broadly, post-filter below
+            source = f"{escaped_wire}/.*"  # query broadly, post-filter below
 
         max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
 

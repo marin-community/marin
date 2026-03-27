@@ -18,6 +18,7 @@ Example:
 """
 
 import logging
+import re
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -51,7 +52,6 @@ from iris.cluster.types import (
     TaskAttempt,
     adjust_tpu_replicas,
 )
-from iris.cluster.log_store._types import _LIKE_ESCAPE_TABLE
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -79,27 +79,22 @@ class TaskLogEntry:
     key: str = ""
 
 
-def _escape_like_literal(s: str) -> str:
-    """Escape SQL LIKE wildcards in a literal string so it matches exactly."""
-    return s.translate(_LIKE_ESCAPE_TABLE)
-
-
 def _build_log_source(target: JobName, attempt_id: int = -1) -> str:
-    """Build a FetchLogs source pattern from a JobName.
+    """Build a FetchLogs source regex pattern from a JobName.
 
-    Escapes LIKE wildcards (% and _) in the job name so they match literally,
+    Escapes regex metacharacters in the job name so they match literally,
     then appends the appropriate wildcard suffix.
 
     - Task + specific attempt: /user/job/0:<attempt_id>  (exact match)
-    - Task + all attempts:     /user/job/0:%
-    - Job (all tasks):         /user/job/%
+    - Task + all attempts:     /user/job/0:.*
+    - Job (all tasks):         /user/job/.*
     """
-    wire = _escape_like_literal(target.to_wire())
+    wire = re.escape(target.to_wire())
     if target.is_task:
         if attempt_id >= 0:
             return f"{wire}:{attempt_id}"
-        return f"{wire}:%"
-    return f"{wire}/%"
+        return f"{wire}:.*"
+    return f"{wire}/.*"
 
 
 def _task_id_from_entry(entry, fallback: JobName) -> JobName:

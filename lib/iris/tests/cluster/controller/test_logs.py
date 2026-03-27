@@ -177,12 +177,12 @@ def test_has_logs_no_known_attempts(tmp_path: Path):
 
 
 # =============================================================================
-# LIKE pattern query tests
+# Regex pattern query tests
 # =============================================================================
 
 
-def test_get_logs_like_pattern_returns_all_matching(log_store: LogStore):
-    """LIKE pattern query returns entries from all matching keys in id order."""
+def test_get_logs_regex_pattern_returns_all_matching(log_store: LogStore):
+    """Regex pattern query returns entries from all matching keys in id order."""
     t0 = JobName.from_wire("/job/test/task/0")
     t1 = JobName.from_wire("/job/test/task/1")
 
@@ -190,41 +190,41 @@ def test_get_logs_like_pattern_returns_all_matching(log_store: LogStore):
     log_store.append(task_log_key(TaskAttempt(task_id=t0, attempt_id=1)), [_make_entry("t0-a1-line0", epoch_ms=2)])
     log_store.append(task_log_key(TaskAttempt(task_id=t1, attempt_id=0)), [_make_entry("t1-a0-line0", epoch_ms=3)])
 
-    result = log_store.get_logs("/job/test/%")
+    result = log_store.get_logs("/job/test/.*")
     assert len(result.entries) == 3
     assert [e.data for e in result.entries] == ["t0-a0-line0", "t0-a1-line0", "t1-a0-line0"]
 
 
-def test_get_logs_like_pattern_cursor_continuation(log_store: LogStore):
-    """Cursor-based continuation with LIKE pattern returns no duplicates."""
+def test_get_logs_regex_pattern_cursor_continuation(log_store: LogStore):
+    """Cursor-based continuation with regex pattern returns no duplicates."""
     t0 = JobName.from_wire("/job/test/task/0")
     log_store.append(
         task_log_key(TaskAttempt(task_id=t0, attempt_id=0)), [_make_entry(f"line-{i}", epoch_ms=i) for i in range(5)]
     )
 
-    result1 = log_store.get_logs("/job/test/%", max_lines=3)
+    result1 = log_store.get_logs("/job/test/.*", max_lines=3)
     assert len(result1.entries) == 3
 
-    result2 = log_store.get_logs("/job/test/%", cursor=result1.cursor)
+    result2 = log_store.get_logs("/job/test/.*", cursor=result1.cursor)
     assert len(result2.entries) == 2
     assert [e.data for e in result2.entries] == ["line-3", "line-4"]
 
 
-def test_get_logs_like_pattern_isolation(log_store: LogStore):
-    """LIKE pattern /job/test/% does not match /job/testing/."""
+def test_get_logs_regex_pattern_isolation(log_store: LogStore):
+    """Regex pattern /job/test/.* does not match /job/testing/."""
     t_test = JobName.from_wire("/job/test/task/0")
     t_testing = JobName.from_wire("/job/testing/task/0")
 
     log_store.append(task_log_key(TaskAttempt(task_id=t_test, attempt_id=0)), [_make_entry("test-line")])
     log_store.append(task_log_key(TaskAttempt(task_id=t_testing, attempt_id=0)), [_make_entry("testing-line")])
 
-    result = log_store.get_logs("/job/test/%")
+    result = log_store.get_logs("/job/test/.*")
     assert len(result.entries) == 1
     assert result.entries[0].data == "test-line"
 
 
-def test_get_logs_like_pattern_scoping(log_store: LogStore):
-    """LIKE pattern can scope to direct children vs all descendants."""
+def test_get_logs_regex_pattern_scoping(log_store: LogStore):
+    """Regex pattern can scope to direct children vs all descendants."""
     # Direct tasks of /job/parent
     t0 = JobName.from_wire("/job/parent/0")
     # Child job task: /job/parent/child/0
@@ -234,12 +234,12 @@ def test_get_logs_like_pattern_scoping(log_store: LogStore):
     log_store.append(task_log_key(TaskAttempt(task_id=child_t0, attempt_id=0)), [_make_entry("child-line", epoch_ms=2)])
 
     # Broad pattern: both are returned
-    result_all = log_store.get_logs("/job/parent/%")
+    result_all = log_store.get_logs("/job/parent/.*")
     assert len(result_all.entries) == 2
 
 
-def test_get_logs_like_pattern_tail_returns_last_n(log_store: LogStore):
-    """Tail mode with LIKE pattern returns the last N entries across all matching keys."""
+def test_get_logs_regex_pattern_tail_returns_last_n(log_store: LogStore):
+    """Tail mode with regex pattern returns the last N entries across all matching keys."""
     t0 = JobName.from_wire("/job/test/task/0")
     t1 = JobName.from_wire("/job/test/task/1")
 
@@ -252,20 +252,20 @@ def test_get_logs_like_pattern_tail_returns_last_n(log_store: LogStore):
         [_make_entry(f"t1-line-{i}", epoch_ms=10 + i) for i in range(5)],
     )
 
-    result = log_store.get_logs("/job/test/%", max_lines=3, tail=True)
+    result = log_store.get_logs("/job/test/.*", max_lines=3, tail=True)
     assert len(result.entries) == 3
     # Should return the last 3 entries by insertion order (autoincrement id)
     assert [e.data for e in result.entries] == ["t1-line-2", "t1-line-3", "t1-line-4"]
 
 
-def test_get_logs_like_pattern_tail_with_substring_filter(log_store: LogStore):
-    """Tail mode with LIKE pattern + substring filter returns last N matching entries."""
+def test_get_logs_regex_pattern_tail_with_substring_filter(log_store: LogStore):
+    """Tail mode with regex pattern + substring filter returns last N matching entries."""
     t0 = JobName.from_wire("/job/test/task/0")
 
     entries = [_make_entry(f"{'ERROR' if i % 3 == 0 else 'INFO'}: msg-{i}", epoch_ms=i) for i in range(12)]
     log_store.append(task_log_key(TaskAttempt(task_id=t0, attempt_id=0)), entries)
 
-    result = log_store.get_logs("/job/test/%", max_lines=2, tail=True, substring_filter="ERROR")
+    result = log_store.get_logs("/job/test/.*", max_lines=2, tail=True, substring_filter="ERROR")
     assert len(result.entries) == 2
     assert [e.data for e in result.entries] == ["ERROR: msg-6", "ERROR: msg-9"]
 
@@ -287,28 +287,28 @@ def test_substring_filter_escapes_like_wildcards(log_store: LogStore):
     result_us = log_store.get_logs(KEY, substring_filter="a_b")
     assert [e.data for e in result_us.entries] == ["a_b_c"]
 
-    # LIKE pattern key with substring filter containing wildcards
-    result_pattern = log_store.get_logs("/job/test/%", substring_filter="100%")
+    # Regex pattern key with substring filter containing wildcards
+    result_pattern = log_store.get_logs("/job/test/.*", substring_filter="100%")
     assert [e.data for e in result_pattern.entries] == ["100% done"]
 
 
-def test_job_level_like_uses_slash_not_colon(log_store: LogStore):
-    """Job-level LIKE query must use /job/% (slash), not /job:% (colon).
+def test_job_level_regex_uses_slash_not_colon(log_store: LogStore):
+    """Job-level regex query must use /job/.* (slash), not /job:.* (colon).
 
     Reproduces the E2E smoke failure where the dashboard job-level log viewer
-    showed no entries because it used jobId:% instead of jobId/%.
+    showed no entries because it used jobId:.* instead of jobId/.*.
     """
     t0 = JobName.from_wire("/alice/train/0")
     log_store.append(task_log_key(TaskAttempt(task_id=t0, attempt_id=0)), [_make_entry("hello", epoch_ms=1)])
 
-    # Correct pattern: slash-percent matches task keys under the job
-    result_slash = log_store.get_logs("/alice/train/%")
+    # Correct pattern: slash-dotstar matches task keys under the job
+    result_slash = log_store.get_logs("/alice/train/.*")
     assert len(result_slash.entries) == 1
     assert result_slash.entries[0].data == "hello"
 
-    # Wrong pattern: colon-percent matches nothing (task keys use /task_idx:attempt)
-    result_colon = log_store.get_logs("/alice/train:%")
-    assert len(result_colon.entries) == 0, "colon-percent should NOT match task keys stored under /alice/train/0:0"
+    # Wrong pattern: colon-dotstar matches nothing (task keys use /task_idx:attempt)
+    result_colon = log_store.get_logs("/alice/train:.*")
+    assert len(result_colon.entries) == 0, "colon-dotstar should NOT match task keys stored under /alice/train/0:0"
 
 
 def test_cursor_with_since_ms(log_store: LogStore):

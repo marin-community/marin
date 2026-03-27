@@ -46,6 +46,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Condition, Lock
 
+import re
+
 import duckdb
 import fsspec.core
 import pyarrow as pa
@@ -98,6 +100,9 @@ _ROW_GROUP_SIZE = 16_384
 # (max_lines * margin) entries. If the result is short, we fall back to a
 # full scan. 10x covers most realistic filter selectivities.
 _TAIL_SEQ_MARGIN = 10
+
+# Characters that indicate a regex pattern (vs. a literal key).
+_REGEX_META_RE = re.compile(r"[.*+?\[\](){}^$|\\]")
 
 
 def _escape_like(s: str) -> str:
@@ -490,9 +495,14 @@ class DuckDBLogStore:
         tail: bool = False,
         min_level: str = "",
     ) -> LogReadResult:
-        """Fetch logs for a key or LIKE pattern (% and _ are wildcards)."""
+        """Fetch logs for a key or regex pattern.
+
+        If the key contains regex metacharacters, it is interpreted as a
+        regular expression and matched with DuckDB's ``regexp_matches()``.
+        Otherwise it is treated as an exact key lookup.
+        """
         min_level_enum = str_to_log_level(min_level) if min_level else 0
-        is_pattern = "%" in key or "_" in key
+        is_pattern = bool(_REGEX_META_RE.search(key))
 
         if not is_pattern:
             where_parts = ["key = $key", "seq > $cursor"]
@@ -509,8 +519,8 @@ class DuckDBLogStore:
                 exact_key=key,
             )
 
-        # LIKE pattern path.
-        where_parts, params, segment_filter = _like_query(key, cursor)
+        # Regex pattern path.
+        where_parts, params, segment_filter = _regex_query(key, cursor)
         _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
         return self._execute_read(
             where_parts,
@@ -876,37 +886,51 @@ class DuckDBLogStore:
 # ---------------------------------------------------------------------------
 
 
-def _like_query(key: str, cursor: int) -> tuple[list[str], dict, _SegmentFilter]:
-    """Build WHERE clauses and segment filter for a LIKE pattern.
+def _regex_literal_prefix(pattern: str) -> str:
+    """Extract the literal prefix from a regex pattern.
 
-    Pure-prefix patterns (ending with '%' and no other wildcards) are optimized
-    with range predicates that DuckDB can push down to Parquet row-group stats.
-    Other patterns fall back to LIKE with an escape clause.
+    Returns the leading portion of *pattern* that contains no regex
+    metacharacters, so it can be used for Parquet range pushdown.
     """
-    # Find the prefix before the first wildcard character.
-    first_wild = len(key)
-    for i, ch in enumerate(key):
-        if ch in ("%", "_"):
-            first_wild = i
-            break
-    literal_prefix = key[:first_wild]
+    match = _REGEX_META_RE.search(pattern)
+    if match is None:
+        return pattern
+    return pattern[: match.start()]
 
-    # Pure-prefix pattern: "some/prefix%" with no other wildcards.
-    is_pure_prefix = key.endswith("%") and "%" not in key[:-1] and "_" not in key
-    if is_pure_prefix:
-        prefix = literal_prefix
+
+def _regex_query(pattern: str, cursor: int) -> tuple[list[str], dict, _SegmentFilter]:
+    """Build WHERE clauses and segment filter for a regex pattern.
+
+    Extracts a literal prefix for Parquet range pushdown. If the pattern
+    is purely a prefix (literal text followed only by ``.*``), range
+    predicates alone suffice. Otherwise ``regexp_matches()`` is added.
+    """
+    literal_prefix = _regex_literal_prefix(pattern)
+
+    # Pure-prefix pattern: "some/prefix/.*" — the literal prefix covers
+    # everything and the trailing .* matches any suffix.
+    suffix = pattern[len(literal_prefix) :]
+    is_pure_prefix = suffix in (".*", "")
+
+    if is_pure_prefix and literal_prefix:
         where_parts = ["key >= $prefix_lo", "seq > $cursor"]
-        params: dict = {"prefix_lo": prefix, "cursor": cursor}
-        upper = _prefix_upper_bound(prefix)
+        params: dict = {"prefix_lo": literal_prefix, "cursor": cursor}
+        upper = _prefix_upper_bound(literal_prefix)
         if upper is not None:
             where_parts.append("key < $prefix_hi")
             params["prefix_hi"] = upper
-        return where_parts, params, _SegmentFilter(prefix=prefix)
+        return where_parts, params, _SegmentFilter(prefix=literal_prefix)
 
-    # General LIKE pattern.
-    where_parts = ["key LIKE $key_pattern ESCAPE '\\\\'", "seq > $cursor"]
-    params = {"key_pattern": key, "cursor": cursor}
+    # General regex pattern — use regexp_matches with optional prefix pushdown.
+    where_parts = ["regexp_matches(key, $key_pattern)", "seq > $cursor"]
+    params = {"key_pattern": pattern, "cursor": cursor}
     if literal_prefix:
+        upper = _prefix_upper_bound(literal_prefix)
+        where_parts.append("key >= $prefix_lo")
+        params["prefix_lo"] = literal_prefix
+        if upper is not None:
+            where_parts.append("key < $prefix_hi")
+            params["prefix_hi"] = upper
         segment_filter = _SegmentFilter(prefix=literal_prefix)
     else:
         segment_filter = _SEGMENT_FILTER_ALL
