@@ -246,13 +246,13 @@ class DspyEvaluator(Evaluator):
         )
         adapter = ADAPTER_MAP[self.adapter_name]()
 
+        examples = _load_hover(self.split, self.max_eval_instances)
+
         # BM25S runs fully offline — no server needed.
         # ColBERT was avoided because it requires a running server and caused
         # pipeline crashes in earlier experiments.
         rm = _build_bm25s_retriever(examples)
         dspy.configure(lm=lm, adapter=adapter, rm=rm)
-
-        examples = _load_hover(self.split, self.max_eval_instances)
         program = task_cfg["program"]()
         metric  = task_cfg["metric"]
 
