@@ -46,20 +46,14 @@ def normalize(
         subset: Which subset to normalize (``"data"``, ``"sample/10BT"``,
             ``"sample/100BT"``, ``"sample/350BT"``).
         target_partition_bytes: Target size per output partition.
+        override_output_path: Override the computed output path.
     """
     dl = download()
 
-    # The HF download mirrors the repo structure; the actual data files live
-    # under ``<revision>/<subset>/``.
-    subset_download = StepSpec(
-        name=f"raw/fineweb-edu/{subset}",
-        fn=None,
-        override_output_path=f"{dl.output_path}/{HF_REVISION}/{subset}",
-    )
-
     return normalize_step(
         name=f"fineweb-edu/{subset}/normalize",
-        download=subset_download,
+        download=dl,
+        input_path=f"{dl.output_path}/{HF_REVISION}/{subset}",
         target_partition_bytes=target_partition_bytes,
         override_output_path=override_output_path,
     )

@@ -254,6 +254,7 @@ def normalize_step(
     id_field: str = "id",
     target_partition_bytes: int = 256 * 1024 * 1024,
     override_output_path: str | None = None,
+    input_path: str | None = None,
 ) -> StepSpec:
     """Create a StepSpec that normalizes downloaded data to Parquet.
 
@@ -264,11 +265,15 @@ def normalize_step(
         id_field: Name of the field containing the source ID.
         target_partition_bytes: Target size per output partition.
         override_output_path: Override the computed output path.
+        input_path: Override the input path. Defaults to ``download.output_path``.
+            Useful when normalizing a subdirectory of the download output.
     """
+    resolved_input = input_path or download.output_path
+
     return StepSpec(
         name=name,
         fn=lambda output_path: normalize_to_parquet(
-            input_path=download.output_path,
+            input_path=resolved_input,
             output_path=output_path,
             text_field=text_field,
             id_field=id_field,
@@ -279,6 +284,7 @@ def normalize_step(
             "text_field": text_field,
             "id_field": id_field,
             "target_partition_bytes": target_partition_bytes,
+            "input_path": resolved_input,
         },
         override_output_path=override_output_path,
     )
