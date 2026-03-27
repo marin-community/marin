@@ -94,7 +94,7 @@ def test_resolve_cpu_spec_enables_native_by_default():
 
 
 def test_resolve_cpu_spec_disables_native_when_requested():
-    cfg = cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.FLAMEGRAPH, rate_hz=100, disable_native=True)
+    cfg = cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.FLAMEGRAPH, rate_hz=100, native=False)
     spec = resolve_cpu_spec(cfg, duration_seconds=5, pid="1")
     assert spec.native is False
 
@@ -107,7 +107,7 @@ def test_build_pyspy_cmd_includes_native_flag_by_default():
 
 
 def test_build_pyspy_cmd_excludes_native_when_disabled():
-    cfg = cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.FLAMEGRAPH, rate_hz=100, disable_native=True)
+    cfg = cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.FLAMEGRAPH, rate_hz=100, native=False)
     spec = resolve_cpu_spec(cfg, duration_seconds=5, pid="1")
     cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path="/tmp/out.svg")
     assert "--native" not in cmd

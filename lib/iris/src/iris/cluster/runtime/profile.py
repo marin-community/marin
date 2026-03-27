@@ -70,7 +70,7 @@ class MemoryProfileSpec:
 def resolve_cpu_spec(cpu_config: cluster_pb2.CpuProfile, duration_seconds: int, pid: str) -> CpuProfileSpec:
     py_spy_format, ext = CPU_FORMAT_MAP.get(cpu_config.format, ("flamegraph", "svg"))
     rate_hz = cpu_config.rate_hz if cpu_config.rate_hz > 0 else 20
-    native = not cpu_config.disable_native
+    native = cpu_config.native if cpu_config.HasField("native") else True
     return CpuProfileSpec(
         py_spy_format=py_spy_format,
         ext=ext,
