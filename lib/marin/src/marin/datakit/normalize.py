@@ -144,17 +144,22 @@ def _build_pipeline(
     """Build a single Zephyr pipeline for one subdirectory."""
     normalize_record = _make_normalize_fn(text_field, id_field)
 
-    def keep_first(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
-        yield next(iter(items))
+    def dedup_and_sort(_key: int, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+        """Deduplicate by id. Items arrive sorted by id via sort_by."""
+        prev_id: str | None = None
+        for record in items:
+            rid = record["id"]
+            if rid != prev_id:
+                prev_id = rid
+                yield record
 
     return (
         Dataset.from_list(files)
         .flat_map(load_file)
         .map(normalize_record)
         .group_by(
-            key=lambda r: r["id"],
-            reducer=keep_first,
-            combiner=keep_first,
+            key=lambda r: int(r["id"], 16) % num_shards,
+            reducer=dedup_and_sort,
             sort_by=lambda r: r["id"],
             num_output_shards=num_shards,
         )
