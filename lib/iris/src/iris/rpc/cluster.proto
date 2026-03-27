@@ -95,6 +95,7 @@ message CpuProfile {
   }
   Format format = 1;
   int32 rate_hz = 2;    // Sample rate (default: 100)
+  bool disable_native = 3;  // Set true to skip native (C/C++) frames; default false → --native enabled
 }
 
 // Memory profiling configuration (memray)
