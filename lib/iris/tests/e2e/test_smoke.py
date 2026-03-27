@@ -10,6 +10,7 @@ has workers across CPU, TPU coscheduling, and multi-region scale groups.
 
 import logging
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -511,11 +512,9 @@ def test_log_levels_populated(smoke_cluster, verbose_job, capabilities):
     deadline = time.monotonic() + smoke_cluster.job_timeout
     entries = []
     while time.monotonic() < deadline:
-        request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
-        response = smoke_cluster.controller_client.get_task_logs(request)
-        entries = []
-        for batch in response.task_logs:
-            entries.extend(batch.logs)
+        request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+        response = smoke_cluster.controller_client.fetch_logs(request)
+        entries = list(response.entries)
         if any("info-marker" in e.data for e in entries):
             break
         time.sleep(0.5)
@@ -539,11 +538,9 @@ def test_log_level_filter(smoke_cluster, verbose_job, capabilities):
 
     task_id = verbose_job.job_id.task(0).to_wire()
 
-    request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id, min_level="WARNING")
-    response = smoke_cluster.controller_client.get_task_logs(request)
-    filtered = []
-    for batch in response.task_logs:
-        filtered.extend(batch.logs)
+    request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*", min_level="WARNING")
+    response = smoke_cluster.controller_client.fetch_logs(request)
+    filtered = list(response.entries)
 
     filtered_data = [e.data for e in filtered]
     assert any("warning-marker" in d for d in filtered_data), f"warning-marker missing: {filtered_data}"

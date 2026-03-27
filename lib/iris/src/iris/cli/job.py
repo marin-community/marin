@@ -440,7 +440,6 @@ def run_iris_job(
     max_retries: int = 0,
     timeout: int = 0,
     extras: list[str] | None = None,
-    include_children_logs: bool = True,
     terminate_on_exit: bool = True,
     regions: tuple[str, ...] | None = None,
     zone: str | None = None,
@@ -520,7 +519,6 @@ def run_iris_job(
         timeout=timeout,
         wait=wait,
         extras=extras,
-        include_children_logs=include_children_logs,
         terminate_on_exit=terminate_on_exit,
         constraints=constraints or None,
         coscheduling=coscheduling,
@@ -541,7 +539,6 @@ def _submit_and_wait_job(
     timeout: int,
     wait: bool,
     extras: list[str] | None = None,
-    include_children_logs: bool = True,
     terminate_on_exit: bool = True,
     constraints: list[Constraint] | None = None,
     coscheduling: CoschedulingConfig | None = None,
@@ -583,7 +580,7 @@ def _submit_and_wait_job(
     )
     try:
         try:
-            status = job.wait(stream_logs=True, include_children=include_children_logs, timeout=float("inf"))
+            status = job.wait(stream_logs=True, timeout=float("inf"))
             logger.info(f"Job completed with state: {status.state}")
             return 0 if status.state == cluster_pb2.JOB_STATE_SUCCEEDED else 1
         except JobFailedError as e:
@@ -667,11 +664,6 @@ Examples:
     ),
 )
 @click.option(
-    "--include-children-logs/--no-include-children-logs",
-    default=True,
-    help="Stream logs from child jobs (nested submissions).",
-)
-@click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
     help="Terminate the job on Ctrl+C (default: terminate). Tunnel failures never kill the job.",
@@ -696,7 +688,6 @@ def run(
     zone: str | None,
     extra: tuple[str, ...],
     reserve: tuple[str, ...],
-    include_children_logs: bool,
     terminate_on_exit: bool,
     cmd: tuple[str, ...],
 ):
@@ -738,7 +729,6 @@ def run(
             max_retries=max_retries,
             timeout=timeout,
             extras=list(extra),
-            include_children_logs=include_children_logs,
             terminate_on_exit=terminate_on_exit,
             regions=region or None,
             zone=zone,
@@ -867,11 +857,6 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
     default=None,
     help="Minimum log level to display (e.g., --level warning).",
 )
-@click.option(
-    "--include-children/--no-include-children",
-    default=False,
-    help="Include logs from child jobs (nested submissions).",
-)
 @click.pass_context
 def logs(
     ctx,
@@ -880,7 +865,6 @@ def logs(
     since_seconds: int | None,
     follow: bool,
     level: str | None,
-    include_children: bool,
 ) -> None:
     """Stream task logs for a job using batch log fetching."""
     if since_ms is not None and since_seconds is not None:
@@ -901,7 +885,6 @@ def logs(
         job = Job(client, job_name)
         job.wait(
             stream_logs=True,
-            include_children=include_children,
             timeout=float("inf"),
             raise_on_failure=False,
             min_level=min_level,
@@ -910,13 +893,12 @@ def logs(
 
     entries = client.fetch_task_logs(
         job_name,
-        include_children=include_children,
         start=Timestamp.from_ms(start_since_ms) if start_since_ms > 0 else None,
         min_level=min_level,
     )
     for entry in entries:
         ts = entry.timestamp.as_short_time()
-        click.echo(f"[{ts}] worker={entry.worker_id} task={entry.task_id} | {entry.data}")
+        click.echo(f"[{ts}] task={entry.task_id} | {entry.data}")
 
 
 @job.command("bug-report")

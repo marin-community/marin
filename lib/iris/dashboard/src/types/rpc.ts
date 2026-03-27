@@ -381,20 +381,7 @@ export interface LogEntry {
   data: string
   attemptId?: number
   level?: string
-}
-
-export interface TaskLogBatch {
-  taskId: string
-  logs: LogEntry[]
-  error?: string
-  workerId?: string
-}
-
-export interface GetTaskLogsResponse {
-  taskLogs: TaskLogBatch[]
-  truncated?: boolean
-  childJobStatuses?: JobStatus[]
-  cursor?: string
+  key?: string
 }
 
 export interface FetchLogsResponse {

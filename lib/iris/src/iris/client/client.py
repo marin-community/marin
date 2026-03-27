@@ -40,6 +40,7 @@ from iris.cluster.client import (
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.cluster.providers.local.cluster import LocalCluster, make_local_cluster_config
 from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
+from iris.cluster.log_store import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -63,57 +64,27 @@ class TaskLogEntry:
 
     Attributes:
         timestamp: When the log line was produced
-        worker_id: Worker that produced this log
         task_id: Task that produced this log
         source: Log source - "stdout", "stderr", or "build"
         data: Log line content
         attempt_id: Which attempt produced this log (0-indexed)
+        key: Log store key (populated on multi-key queries)
     """
 
     timestamp: Timestamp
-    worker_id: str
     task_id: JobName
     source: str
     data: str
     attempt_id: int = 0
+    key: str = ""
 
 
-class DefaultTaskStateLogger:
-    """Default :class:`~iris.cluster.client.remote_client.TaskStateLogger` that
-    logs task lifecycle events and streamed output to the module logger.
-    """
-
-    def task_started(self, job_id: str, status: cluster_pb2.JobStatus) -> None:
-        state_name = cluster_pb2.JobState.Name(status.state)
-        logger.info("job=%s started with state=%s", job_id, state_name)
-
-    def task_finished(self, job_id: str, status: cluster_pb2.JobStatus) -> None:
-        """Log terminal state; warnings for failures, info for success."""
-        state_name = cluster_pb2.JobState.Name(status.state)
-        if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
-            logger.info("job=%s completed with state=%s", job_id, state_name)
-        else:
-            parts = [f"job={job_id} terminated with state={state_name}"]
-            if status.exit_code:
-                parts.append(f"exit_code={status.exit_code}")
-            if status.error:
-                parts.append(f"error={status.error!r}")
-            logger.warning(" | ".join(parts))
-
-    def task_logging(self, response: cluster_pb2.Controller.GetTaskLogsResponse) -> None:
-        for batch in response.task_logs:
-            task_id = JobName.from_wire(batch.task_id)
-            worker_id = batch.worker_id or "?"
-            if batch.error:
-                logger.warning("task=%s worker=%s | error fetching logs: %s", task_id, worker_id, batch.error)
-            for proto in batch.logs:
-                logger.info(
-                    "worker=%s task=%s attempt=%d | %s",
-                    worker_id,
-                    task_id,
-                    proto.attempt_id,
-                    proto.data,
-                )
+def _task_id_from_key(key: str) -> JobName:
+    """Extract the task JobName from a log entry key (e.g. "/user/job/0:3" -> "/user/job/0")."""
+    colon = key.rfind(":")
+    if colon >= 0:
+        return JobName.from_wire(key[:colon])
+    return JobName.from_wire(key)
 
 
 class JobFailedError(Exception):
@@ -184,7 +155,7 @@ class Task:
         return self.status().state
 
     def logs(self, *, start: Timestamp | None = None, max_lines: int = 0) -> list[TaskLogEntry]:
-        """Fetch logs for this task.
+        """Fetch logs for this task (all attempts).
 
         Args:
             start: Only return logs after this timestamp (None = from beginning)
@@ -193,25 +164,23 @@ class Task:
         Returns:
             List of TaskLogEntry objects from the task
         """
-        response = self._client._cluster_client.fetch_task_logs(
-            self.task_id,
+        source = build_log_source(self._task_name)
+        response = self._client._cluster_client.fetch_logs(
+            source,
             since_ms=start.epoch_ms() if start else 0,
-            max_total_lines=max_lines,
+            max_lines=max_lines,
         )
-        if response.task_logs:
-            batch = response.task_logs[0]
-            return [
-                TaskLogEntry(
-                    timestamp=Timestamp.from_proto(e.timestamp),
-                    worker_id=batch.worker_id or "",
-                    task_id=self.task_id,
-                    source=e.source,
-                    data=e.data,
-                    attempt_id=e.attempt_id,
-                )
-                for e in batch.logs
-            ]
-        return []
+        return [
+            TaskLogEntry(
+                timestamp=Timestamp.from_proto(e.timestamp),
+                task_id=self.task_id,
+                source=e.source,
+                data=e.data,
+                attempt_id=e.attempt_id,
+                key=e.key,
+            )
+            for e in response.entries
+        ]
 
 
 class Job:
@@ -284,7 +253,6 @@ class Job:
         *,
         raise_on_failure: bool = True,
         stream_logs: bool = False,
-        include_children: bool = False,
         min_level: str = "",
     ) -> cluster_pb2.JobStatus:
         """Wait for job to complete.
@@ -306,35 +274,17 @@ class Job:
         if not stream_logs:
             status = self._client._cluster_client.wait_for_job(self._job_id, timeout, poll_interval)
         else:
-            status = self._wait_with_multi_task_streaming(timeout, poll_interval, include_children, min_level)
+            status = self._client._cluster_client.wait_for_job_with_streaming(
+                self._job_id,
+                timeout=timeout,
+                poll_interval=poll_interval,
+                min_level=min_level,
+            )
 
         if raise_on_failure and status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
             raise JobFailedError(self._job_id, status)
 
         return status
-
-    def _wait_with_multi_task_streaming(
-        self,
-        timeout: float,
-        poll_interval: float,
-        include_children: bool,
-        min_level: str = "",
-    ) -> cluster_pb2.JobStatus:
-        """Wait while streaming logs from all tasks using batch log fetching.
-
-        Uses a single batch RPC call per poll interval to fetch logs from all tasks,
-        rather than N individual calls. The batch API uses an autoincrement id cursor
-        for efficient incremental fetching.
-        """
-        return self._client._cluster_client.wait_for_job_with_streaming(
-            self._job_id,
-            timeout=timeout,
-            poll_interval=poll_interval,
-            include_children=include_children,
-            since_ms=0,
-            state_logger=DefaultTaskStateLogger(),
-            min_level=min_level,
-        )
 
     def terminate(self) -> None:
         """Terminate this job."""
@@ -838,18 +788,21 @@ class IrisClient:
         self,
         target: JobName,
         *,
-        include_children: bool = False,
         start: Timestamp | None = None,
         max_lines: int = 0,
-        substring: str | None = None,
+        substring: str = "",
         attempt_id: int = -1,
         min_level: str = "",
     ) -> list[TaskLogEntry]:
         """Fetch logs for a task or job.
 
+        Builds a regex source pattern from the target:
+        - Task + all attempts: /user/job/0:.*
+        - Task + specific attempt: /user/job/0:<attempt_id>  (exact match)
+        - Job (all tasks): /user/job/.*
+
         Args:
-            target: Task ID or Job ID (detected by trailing numeric)
-            include_children: Include logs from child jobs (job ID only)
+            target: Task ID or Job ID
             start: Only return logs after this timestamp (None = from beginning)
             max_lines: Maximum number of log lines to return (0 = unlimited)
             substring: Substring filter for log content
@@ -859,32 +812,26 @@ class IrisClient:
         Returns:
             List of TaskLogEntry objects, sorted by timestamp
         """
-        response = self._cluster_client.fetch_task_logs(
-            target,
-            include_children=include_children,
+        source = build_log_source(target, attempt_id)
+        response = self._cluster_client.fetch_logs(
+            source,
             since_ms=start.epoch_ms() if start else 0,
-            max_total_lines=max_lines,
+            max_lines=max_lines,
             substring=substring,
-            attempt_id=attempt_id,
             min_level=min_level,
         )
 
-        result: list[TaskLogEntry] = []
-        for batch in response.task_logs:
-            task_id = JobName.from_wire(batch.task_id)
-            worker_id = batch.worker_id or ""
-            for proto in batch.logs:
-                result.append(
-                    TaskLogEntry(
-                        timestamp=Timestamp.from_proto(proto.timestamp),
-                        worker_id=worker_id,
-                        task_id=task_id,
-                        source=proto.source,
-                        data=proto.data,
-                        attempt_id=proto.attempt_id,
-                    )
-                )
-
+        result = [
+            TaskLogEntry(
+                timestamp=Timestamp.from_proto(e.timestamp),
+                task_id=_task_id_from_key(e.key),
+                source=e.source,
+                data=e.data,
+                attempt_id=e.attempt_id,
+                key=e.key,
+            )
+            for e in response.entries
+        ]
         result.sort(key=lambda x: x.timestamp.epoch_ms())
         return result
 

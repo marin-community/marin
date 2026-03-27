@@ -8,6 +8,7 @@ Docker mode manually wires up Controller + Workers with DockerRuntime, which is
 needed for tests that exercise container-specific behavior (OOM, JAX env vars).
 """
 
+import re
 import tempfile
 import time
 import uuid
@@ -303,14 +304,10 @@ class E2ECluster:
         """Fetch container logs for a task."""
         job_id = self._to_job_id_str(job_or_id)
         task_id = JobName.from_wire(job_id).task(task_index).to_wire()
-        request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
+        request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
         assert self._controller_client is not None
-        response = self._controller_client.get_task_logs(request)
-        lines = []
-        for batch in response.task_logs:
-            for entry in batch.logs:
-                lines.append(f"{entry.source}: {entry.data}")
-        return lines
+        response = self._controller_client.fetch_logs(request)
+        return [f"{e.source}: {e.data}" for e in response.entries]
 
     def kill(self, job_or_id) -> None:
         job_id = self._to_job_id_str(job_or_id)
