@@ -20,17 +20,18 @@ from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
-HF_DATASET_ID = "HuggingFaceFW/fineweb-edu"
-HF_REVISION = "87f0914"
 
-
-def download() -> StepSpec:
+def download(
+    *,
+    hf_dataset_id: str = "HuggingFaceFW/fineweb-edu",
+    revision: str = "87f0914",
+) -> StepSpec:
     """Download FineWeb-Edu from HuggingFace."""
     return download_hf_step(
         "raw/fineweb-edu",
-        hf_dataset_id=HF_DATASET_ID,
-        revision=HF_REVISION,
-        override_output_path=f"raw/fineweb-edu-{HF_REVISION}",
+        hf_dataset_id=hf_dataset_id,
+        revision=revision,
+        override_output_path=f"raw/fineweb-edu-{revision}",
     )
 
 

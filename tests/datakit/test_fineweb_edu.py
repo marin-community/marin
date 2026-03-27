@@ -11,8 +11,6 @@ import pytest
 from fray.v1.job import create_job_ctx, fray_default_job_ctx
 
 from marin.datakit.canonical.fineweb_edu import (
-    HF_DATASET_ID,
-    HF_REVISION,
     download,
     normalize,
 )
@@ -36,8 +34,8 @@ def test_download_step_identity():
     """Download step has correct name, dataset ID, and revision."""
     dl = download()
     assert dl.name == "raw/fineweb-edu"
-    assert dl.hash_attrs["hf_dataset_id"] == HF_DATASET_ID
-    assert dl.hash_attrs["revision"] == HF_REVISION
+    assert dl.hash_attrs["hf_dataset_id"] == "HuggingFaceFW/fineweb-edu"
+    assert dl.hash_attrs["revision"] == "87f0914"
 
 
 def test_normalize_step_identity():
