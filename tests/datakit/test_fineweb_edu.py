@@ -40,7 +40,7 @@ def test_download_step_identity():
 
 def test_normalize_step_identity():
     """Normalize step has correct name and depends on download."""
-    step = normalize(subset="data")
+    step = normalize(download(), subset="data")
     assert step.name == "normalized/fineweb_edu"
     assert step.hash_attrs["text_field"] == "text"
     assert step.hash_attrs["id_field"] == "id"  # default
@@ -48,8 +48,9 @@ def test_normalize_step_identity():
 
 def test_normalize_step_subset_output_paths():
     """Different subsets produce distinct output paths (via hash_attrs)."""
-    data_step = normalize(subset="data")
-    sample_step = normalize(subset="sample/10BT")
+    dl = download()
+    data_step = normalize(dl, subset="data")
+    sample_step = normalize(dl, subset="sample/10BT")
     assert data_step.name == sample_step.name == "normalized/fineweb_edu"
     # input_path differs in hash_attrs, so output_path differs
     assert data_step.output_path != sample_step.output_path
