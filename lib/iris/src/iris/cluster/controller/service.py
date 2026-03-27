@@ -830,42 +830,13 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.GetJobStatusResponse:
         """Get status of a specific job including all task statuses."""
-        job_id = JobName.from_wire(request.job_id)
+        job = _read_job(self._db, JobName.from_wire(request.job_id))
+        if not job:
+            raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
-        # Single read_snapshot for all DB queries (was 3 separate checkouts).
-        with self._db.read_snapshot() as q:
-            job = q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
-            if not job:
-                raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
-
-            tasks = q.select(
-                TASKS,
-                where=TASKS.c.job_id == job_id.to_wire(),
-                order_by=(TASKS.c.job_id.asc(), TASKS.c.task_index.asc()),
-            )
-            if tasks:
-                attempts = q.select(
-                    ATTEMPTS,
-                    where=ATTEMPTS.c.task_id.in_([t.task_id.to_wire() for t in tasks]),
-                    order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
-                )
-            else:
-                attempts = []
-
-            # Collect worker IDs from DB columns (before attempt hydration).
-            # current_worker_id is the canonical denormalized column on tasks.
-            worker_ids = {t.current_worker_id for t in tasks if t.current_worker_id is not None}
-            if worker_ids:
-                placeholders = ",".join("?" for _ in worker_ids)
-                rows = q.raw(
-                    f"SELECT worker_id, address FROM workers WHERE worker_id IN ({placeholders})",
-                    tuple(str(wid) for wid in worker_ids),
-                )
-                worker_addr_by_id: dict[WorkerId, str] = {WorkerId(str(row.worker_id)): row.address for row in rows}
-            else:
-                worker_addr_by_id = {}
-
-        tasks = _tasks_with_attempts(tasks, attempts)
+        # Build task statuses with attempts, aggregate counts in single pass
+        tasks = tasks_for_job_with_attempts(self._db, job.job_id)
+        worker_addr_by_id = _worker_addresses_for_tasks(self._db, tasks)
 
         task_statuses = []
         total_failure_count = 0
