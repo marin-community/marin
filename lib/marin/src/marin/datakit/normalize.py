@@ -145,42 +145,29 @@ def _build_pipeline(
     """Build a single Zephyr pipeline for one subdirectory."""
     normalize_record = _make_normalize_fn(text_field, id_field)
 
-    def reducer(_key: int, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
-        """Deduplicate by id and yield sorted records."""
-        seen: set[str] = set()
-        records: list[dict[str, Any]] = []
-        dupes = 0
-        for record in items:
-            rid = record["id"]
-            if rid not in seen:
-                seen.add(rid)
-                records.append(record)
-            else:
-                dupes += 1
-        records.sort(key=lambda r: r["id"])
-        counters.increment("normalize/records_out", len(records))
-        counters.increment("normalize/duplicates_removed", dupes)
-        yield from records
-
-    def combiner(_key: int, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
-        """Local pre-aggregation: deduplicate within scatter partition."""
+    def local_dedup(items: Iterator[dict[str, Any]], _shard: object) -> Iterator[dict[str, Any]]:
+        """Deduplicate within a shard and count output."""
         seen: set[str] = set()
         for record in items:
             rid = record["id"]
             if rid not in seen:
                 seen.add(rid)
+                counters.increment("normalize/records_out")
                 yield record
+
+    def keep_first(_key: str, items: Iterator[dict[str, Any]]) -> dict[str, Any]:
+        return next(iter(items))
 
     return (
         Dataset.from_list(files)
         .flat_map(load_file)
         .map(normalize_record)
+        .map_shard(local_dedup)
         .group_by(
-            key=lambda r: int(r["id"], 16) % num_shards,
-            reducer=reducer,
+            key=lambda r: r["id"],
+            reducer=keep_first,
             sort_by=lambda r: r["id"],
             num_output_shards=num_shards,
-            combiner=combiner,
         )
         .write_parquet(
             f"{output_dir}/part-{{shard:05d}}-of-{{total:05d}}.parquet",
@@ -237,7 +224,7 @@ def normalize_to_parquet(
         pipeline = _build_pipeline(files, output_dir, num_shards, text_field, id_field)
         ctx = ZephyrContext(
             name=f"normalize-{subdir or 'root'}",
-            resources=ResourceConfig(cpu=2, ram="16g"),
+            resources=ResourceConfig(cpu=1, ram="4g"),
         )
         ctx.execute(pipeline)
 
