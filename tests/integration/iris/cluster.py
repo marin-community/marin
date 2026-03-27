@@ -3,6 +3,7 @@
 
 """Extracted cluster helper for Iris integration tests."""
 
+import re
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -154,6 +155,6 @@ class IrisIntegrationCluster:
 
     def get_task_logs(self, job: Job, task_index: int = 0) -> list[str]:
         task_id = job.job_id.task(task_index).to_wire()
-        request = cluster_pb2.FetchLogsRequest(source=task_id + ":%")
+        request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
         response = self.controller_client.fetch_logs(request)
         return [f"{e.source}: {e.data}" for e in response.entries]

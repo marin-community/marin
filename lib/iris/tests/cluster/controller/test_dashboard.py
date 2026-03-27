@@ -7,6 +7,7 @@ Tests verify dashboard functionality through the Connect RPC endpoints.
 The dashboard serves a web UI that fetches data via RPC calls.
 """
 
+import re
 from unittest.mock import Mock
 
 import pytest
@@ -794,7 +795,7 @@ def test_fetch_logs_for_missing_task_returns_empty_entries(client):
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     resp = client.post(
         "/iris.cluster.ControllerService/FetchLogs",
-        json={"source": task_id + ":%"},
+        json={"source": re.escape(task_id) + ":.*"},
         headers={"Content-Type": "application/json"},
     )
     assert resp.status_code == 200

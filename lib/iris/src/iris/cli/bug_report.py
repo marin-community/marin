@@ -8,6 +8,7 @@ structured Markdown report suitable for GitHub issues or agent consumption.
 """
 
 import logging
+import re
 import subprocess
 from dataclasses import dataclass, field
 
@@ -139,7 +140,7 @@ def _gather(
     for task in tasks_resp.tasks:
         try:
             # Fetch all attempts for this task, taking only the last `tail` lines.
-            source = task.task_id + ":%"
+            source = re.escape(task.task_id) + ":.*"
             log_resp = client.fetch_logs(
                 cluster_pb2.FetchLogsRequest(
                     source=source,

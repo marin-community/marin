@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from threading import Lock
 
-from iris.cluster.log_store._types import LogReadResult
+from iris.cluster.log_store._types import REGEX_META_RE, LogReadResult
 from iris.cluster.types import TaskAttempt
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
@@ -51,28 +51,6 @@ def _rows_to_entries(rows: list[_Row], include_key: bool, exact_key: str | None 
             entry.attempt_id = fixed_attempt_id
         entries.append(entry)
     return entries
-
-
-def _like_to_regex(pattern: str) -> re.Pattern[str]:
-    """Convert a SQL LIKE pattern (with % and _ wildcards) to a compiled regex."""
-    parts: list[str] = []
-    i = 0
-    while i < len(pattern):
-        ch = pattern[i]
-        if ch == "\\" and i + 1 < len(pattern):
-            # Escaped character: treat next char literally.
-            parts.append(re.escape(pattern[i + 1]))
-            i += 2
-        elif ch == "%":
-            parts.append(".*")
-            i += 1
-        elif ch == "_":
-            parts.append(".")
-            i += 1
-        else:
-            parts.append(re.escape(ch))
-            i += 1
-    return re.compile("".join(parts), re.DOTALL)
 
 
 class MemStore:
@@ -126,10 +104,10 @@ class MemStore:
         min_level: str = "",
     ) -> LogReadResult:
         min_level_enum = str_to_log_level(min_level) if min_level else 0
-        is_pattern = "%" in key or "_" in key
+        is_pattern = bool(REGEX_META_RE.search(key))
 
         if is_pattern:
-            pat = _like_to_regex(key)
+            pat = re.compile(key)
             key_match = lambda k: pat.fullmatch(k) is not None  # noqa: E731
         else:
             key_match = lambda k: k == key  # noqa: E731

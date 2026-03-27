@@ -36,6 +36,7 @@ Locking:
 from __future__ import annotations
 
 import logging
+import re
 import tempfile
 import time
 from collections import deque
@@ -46,7 +47,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Condition, Lock
 
-import re
 
 import duckdb
 import fsspec.core
@@ -54,7 +54,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from iris.cluster.log_store._types import _EST_BYTES_PER_ROW, _LIKE_ESCAPE_TABLE, LogReadResult
+from iris.cluster.log_store._types import _EST_BYTES_PER_ROW, REGEX_META_RE, LogReadResult
 from iris.cluster.types import TaskAttempt
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
@@ -101,21 +101,13 @@ _ROW_GROUP_SIZE = 16_384
 # full scan. 10x covers most realistic filter selectivities.
 _TAIL_SEQ_MARGIN = 10
 
-# Characters that indicate a regex pattern (vs. a literal key).
-_REGEX_META_RE = re.compile(r"[.*+?\[\](){}^$|\\]")
-
-
-def _escape_like(s: str) -> str:
-    """Escape SQL LIKE wildcards so the string matches literally."""
-    return s.translate(_LIKE_ESCAPE_TABLE)
-
 
 def _prefix_upper_bound(prefix: str) -> str | None:
     """Return the exclusive upper bound for a prefix range, or None if unbounded.
 
     All strings starting with ``prefix`` satisfy ``prefix <= s < upper``.
     This lets DuckDB use range predicates on Parquet row-group statistics
-    instead of LIKE, which isn't pushed down through parameterized queries.
+    instead of regexp_matches, which isn't pushed down through parameterized queries.
     """
     if not prefix:
         return None
@@ -502,7 +494,7 @@ class DuckDBLogStore:
         Otherwise it is treated as an exact key lookup.
         """
         min_level_enum = str_to_log_level(min_level) if min_level else 0
-        is_pattern = bool(_REGEX_META_RE.search(key))
+        is_pattern = bool(REGEX_META_RE.search(key))
 
         if not is_pattern:
             where_parts = ["key = $key", "seq > $cursor"]
@@ -892,7 +884,7 @@ def _regex_literal_prefix(pattern: str) -> str:
     Returns the leading portion of *pattern* that contains no regex
     metacharacters, so it can be used for Parquet range pushdown.
     """
-    match = _REGEX_META_RE.search(pattern)
+    match = REGEX_META_RE.search(pattern)
     if match is None:
         return pattern
     return pattern[: match.start()]
@@ -949,8 +941,8 @@ def _add_common_filters(
         where_parts.append("epoch_ms > $since_ms")
         params["since_ms"] = since_ms
     if substring_filter:
-        where_parts.append("data LIKE $substring ESCAPE '\\'")
-        params["substring"] = f"%{_escape_like(substring_filter)}%"
+        where_parts.append("regexp_matches(data, $substring)")
+        params["substring"] = re.escape(substring_filter)
     if min_level_enum > 0:
         where_parts.append("(level = 0 OR level >= $min_level)")
         params["min_level"] = min_level_enum

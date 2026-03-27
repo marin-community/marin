@@ -4,6 +4,7 @@
 """E2E tests for local cluster client functionality."""
 
 import logging
+import re
 import time
 
 import pytest
@@ -53,7 +54,7 @@ def test_command_entrypoint_preserves_env_vars(client):
     # For attempt 0, build_common_iris_env omits the :attempt_id suffix
     # (only appended for retries), so expect just the task_id wire format.
     expected = job_id.task(0).to_wire()
-    response = client.fetch_logs(job_id.task(0).to_wire() + ":%")
+    response = client.fetch_logs(re.escape(job_id.task(0).to_wire()) + ":.*")
     log_text = extract_log_text(response)
     assert f"IRIS_TASK_ID={expected}" in log_text
 
@@ -75,7 +76,7 @@ def test_log_streaming_captures_output_without_trailing_newline(client):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     # Check logs contain the output
-    response = client.fetch_logs(job_id.task(0).to_wire() + ":%")
+    response = client.fetch_logs(re.escape(job_id.task(0).to_wire()) + ":.*")
     log_text = extract_log_text(response)
     assert "output without newline" in log_text
 
@@ -121,7 +122,7 @@ def test_command_entrypoint_with_custom_env_var(client):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     # Check logs contain the custom env var
-    response = client.fetch_logs(job_id.task(0).to_wire() + ":%")
+    response = client.fetch_logs(re.escape(job_id.task(0).to_wire()) + ":.*")
     log_text = extract_log_text(response)
     assert "CUSTOM_VAR=custom_value" in log_text
 
@@ -212,7 +213,7 @@ def test_child_job_logs_sorted_by_timestamp(client):
     status = client.wait_for_job(parent_id, timeout=60.0, poll_interval=0.2)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED, f"Parent job failed: {status}"
 
-    response = client.fetch_logs(parent_id.to_wire() + "/%")
+    response = client.fetch_logs(re.escape(parent_id.to_wire()) + "/.*")
 
     log_text = " ".join(e.data for e in response.entries)
     assert "CHILD_A_LINE_1" in log_text, f"Missing child-a logs in: {log_text}"

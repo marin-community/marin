@@ -1370,7 +1370,7 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.GetTaskLogsRequest,
         ctx: RequestContext,
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
-        """DEPRECATED: use FetchLogs with LIKE patterns instead. Scheduled for removal 2026-05-01.
+        """DEPRECATED: use FetchLogs with regex patterns instead. Scheduled for removal 2026-05-01.
 
         Forwards to fetch_logs internally, wrapping the response in the legacy format.
         """

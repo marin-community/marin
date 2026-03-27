@@ -189,7 +189,7 @@ class Task:
         Returns:
             List of TaskLogEntry objects from the task
         """
-        source = self._task_name.to_wire() + ":%"
+        source = re.escape(self._task_name.to_wire()) + ":.*"
         response = self._client._cluster_client.fetch_logs(
             source,
             since_ms=start.epoch_ms() if start else 0,
@@ -821,10 +821,10 @@ class IrisClient:
     ) -> list[TaskLogEntry]:
         """Fetch logs for a task or job.
 
-        Builds a LIKE source pattern from the target:
-        - Task + all attempts: /user/job/0:%
-        - Task + specific attempt: /user/job/0:<attempt_id>
-        - Job (all tasks): /user/job/%
+        Builds a regex source pattern from the target:
+        - Task + all attempts: /user/job/0:.*
+        - Task + specific attempt: /user/job/0:<attempt_id>  (exact match)
+        - Job (all tasks): /user/job/.*
 
         Args:
             target: Task ID or Job ID

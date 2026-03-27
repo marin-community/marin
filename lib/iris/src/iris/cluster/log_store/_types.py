@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from iris.cluster.types import TaskAttempt
@@ -12,9 +13,10 @@ from iris.rpc import logging_pb2
 
 PROCESS_LOG_KEY = "/system/process"
 
-_EST_BYTES_PER_ROW = 256
+# Characters that indicate a regex pattern (vs. a literal key).
+REGEX_META_RE = re.compile(r"[.*+?\[\](){}^$|\\]")
 
-_LIKE_ESCAPE_TABLE = str.maketrans({"%": "\\%", "_": "\\_", "\\": "\\\\"})
+_EST_BYTES_PER_ROW = 256
 
 
 def task_log_key(task_attempt: TaskAttempt) -> str:
