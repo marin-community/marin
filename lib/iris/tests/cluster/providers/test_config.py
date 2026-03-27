@@ -1407,3 +1407,57 @@ def test_coreweave_worker_provider_rejected():
     sg.slice_template.coreweave.region = "US-WEST-04A"
     with pytest.raises(ValueError, match="does not support worker_provider"):
         validate_config(config)
+
+
+# ---------------------------------------------------------------------------
+# Config parity: verify the real cloud smoke config works in local mode.
+# This catches naming issues (GCE 63-char limit, invalid chars from zone
+# expansion) that only surface when the autoscaler tries to create slices
+# with realistic expanded-zone name prefixes.
+#
+# Moved here from tests/e2e/test_smoke.py: the e2e module applies a blanket
+# `pytestmark = pytest.mark.e2e` and carries an autouse session fixture
+# (_ensure_dashboard_built) that runs npm ci + npm run build. Because
+# pytest-timeout includes fixture setup time and the pyproject.toml default
+# is 30s, the first e2e test bore the npm overhead and the 8-worker cluster
+# boot, reliably timing out on slow CI runners.
+# ---------------------------------------------------------------------------
+
+SMOKE_GCP_CONFIG = Path(__file__).resolve().parents[3] / "examples" / "smoke-gcp.yaml"
+
+
+@pytest.mark.timeout(60)
+def test_smoke_gcp_config_boots_locally():
+    """Load smoke-gcp.yaml, convert to local mode, verify workers join.
+
+    This is the local equivalent of the cloud-smoke-test CI job. If this
+    test fails, the cloud smoke test will also fail — catching GCE naming
+    validation errors without needing real GCP resources.
+    """
+    import time
+
+    from iris.cluster.config import connect_cluster, make_local_config
+    from iris.rpc import cluster_pb2
+    from iris.rpc.cluster_connect import ControllerServiceClientSync
+
+    config = load_config(SMOKE_GCP_CONFIG)
+    config = make_local_config(config)
+
+    with connect_cluster(config) as url:
+        client = ControllerServiceClientSync(address=url, timeout_ms=30000)
+        # The smoke config has min_slices=1 for tpu_v5e_16 across 2 zones,
+        # each with num_vms=4 → 8 workers total.  We only need one healthy
+        # worker to confirm the config boots.
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            workers = client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
+            healthy = [w for w in workers if w.healthy]
+            if healthy:
+                break
+            time.sleep(0.5)
+        else:
+            raise AssertionError(
+                f"No healthy workers after 45s with smoke-gcp.yaml in local mode. "
+                f"Total workers: {len(workers)}, healthy: {len(healthy)}"
+            )
+        client.close()
