@@ -64,9 +64,16 @@ def _check_tool(name: str, install_hint: str) -> None:
 def _zig_platform_key() -> str:
     machine = platform.machine()
     system = platform.system()
-    arch = {"x86_64": "x86_64", "AMD64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64"}[machine]
-    os_name = {"Darwin": "macos", "Linux": "linux"}[system]
-    return f"{arch}-{os_name}"
+    arch_map = {"x86_64": "x86_64", "AMD64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64"}
+    os_map = {"Darwin": "macos", "Linux": "linux"}
+    if machine not in arch_map:
+        raise ValueError(f"Unsupported architecture: {machine}")
+    if system not in os_map:
+        raise ValueError(f"Unsupported platform: {system}")
+    arch = arch_map[machine]
+    os_name = os_map[system]
+    # Zig release artifacts use os-arch ordering (e.g. linux-x86_64, macos-aarch64)
+    return f"{os_name}-{arch}"
 
 
 def _ensure_zig() -> str:
@@ -91,7 +98,7 @@ def _ensure_zig() -> str:
     urllib.request.urlretrieve(url, archive_path)
 
     with tarfile.open(archive_path, "r:xz") as tar:
-        tar.extractall(TOOLS_DIR)
+        tar.extractall(TOOLS_DIR, filter="data")
     archive_path.unlink()
 
     if not zig_bin.exists():
@@ -102,6 +109,12 @@ def _ensure_zig() -> str:
     return str(zig_bin)
 
 
+def _uv_tool_bin_dir() -> str:
+    """Return the directory where uv installs tool binaries."""
+    result = subprocess.run(["uv", "tool", "dir", "--bin"], capture_output=True, text=True, check=True)
+    return result.stdout.strip()
+
+
 def _ensure_maturin() -> str:
     """Return path to maturin, installing via uv tool if missing."""
     existing = shutil.which("maturin")
@@ -110,6 +123,11 @@ def _ensure_maturin() -> str:
 
     print("Installing maturin via uv tool...")
     subprocess.run(["uv", "tool", "install", "maturin"], check=True)
+
+    # uv tool installs to a bin dir that may not be on PATH yet
+    tool_bin = _uv_tool_bin_dir()
+    os.environ["PATH"] = f"{tool_bin}{os.pathsep}{os.environ.get('PATH', '')}"
+
     path = shutil.which("maturin")
     if path is None:
         print("ERROR: maturin not found after installation", file=sys.stderr)
@@ -131,7 +149,7 @@ def _git_short_sha() -> str:
 
 
 def _host_rust_target() -> str:
-    """Return the Rust target triple for the current host."""
+    """Return the Rust target triple for the current host, or empty string if unsupported."""
     machine = platform.machine()
     system = platform.system()
 
@@ -147,9 +165,12 @@ def _host_rust_target() -> str:
 
 
 def build_wheels() -> None:
-    """Build all platform wheels + sdist into dist/."""
+    """Build platform wheels + sdist into dist/.
+
+    On Linux, builds Linux wheels (cross-compiled via zig).
+    On macOS, builds the native mac wheel for the host architecture.
+    """
     maturin = _ensure_maturin()
-    zig_bin = _ensure_zig()
     _check_tool("gh", "https://cli.github.com/")
 
     if DIST_DIR.exists():
@@ -157,36 +178,40 @@ def build_wheels() -> None:
     DIST_DIR.mkdir()
 
     host_target = _host_rust_target()
+    system = platform.system()
 
-    # Install Rust cross-compile targets for linux
-    linux_triples = [t for t, _ in LINUX_TARGETS]
-    print(f"Installing Rust targets: {', '.join(linux_triples)}")
-    subprocess.run(["rustup", "target", "add", *linux_triples], check=True)
+    # Build Linux wheels only on Linux (cross-compiled via zig)
+    if system == "Linux":
+        zig_bin = _ensure_zig()
 
-    # Put zig's directory on PATH so maturin can find it
-    zig_dir = str(Path(zig_bin).parent)
-    env = {**os.environ, "PATH": f"{zig_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+        linux_triples = [t for t, _ in LINUX_TARGETS]
+        print(f"Installing Rust targets: {', '.join(linux_triples)}")
+        subprocess.run(["rustup", "target", "add", *linux_triples], check=True)
 
-    # Always use --zig for linux targets, even on a linux host. The host glibc
-    # may be newer than the manylinux target (e.g. ubuntu-latest has glibc 2.35
-    # which is too new for manylinux_2_28). Zig links against the correct version.
-    for target, manylinux in LINUX_TARGETS:
-        print(f"\n--- Building wheel for {target} (zig) ---")
-        cmd = [
-            maturin,
-            "build",
-            "--release",
-            "--out",
-            str(DIST_DIR),
-            "--manifest-path",
-            str(MANIFEST_PATH),
-            "--target",
-            target,
-            "--manylinux",
-            manylinux,
-            "--zig",
-        ]
-        subprocess.run(cmd, check=True, cwd=REPO_ROOT, env=env)
+        # Put zig's directory on PATH so maturin can find it
+        zig_dir = str(Path(zig_bin).parent)
+        env = {**os.environ, "PATH": f"{zig_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+        # Always use --zig for linux targets, even on a linux host. The host glibc
+        # may be newer than the manylinux target (e.g. ubuntu-latest has glibc 2.35
+        # which is too new for manylinux_2_28). Zig links against the correct version.
+        for target, manylinux in LINUX_TARGETS:
+            print(f"\n--- Building wheel for {target} (zig) ---")
+            cmd = [
+                maturin,
+                "build",
+                "--release",
+                "--out",
+                str(DIST_DIR),
+                "--manifest-path",
+                str(MANIFEST_PATH),
+                "--target",
+                target,
+                "--manylinux",
+                manylinux,
+                "--zig",
+            ]
+            subprocess.run(cmd, check=True, cwd=REPO_ROOT, env=env)
 
     # Build native mac wheel (only for the host arch — zig can't cross-compile to macOS)
     mac_targets = [t for t in MAC_TARGETS if t == host_target]
@@ -281,7 +306,8 @@ def publish_release(tag: str, title: str) -> None:
 
 def update_pyproject(tag: str, version: str) -> None:
     """Update pyproject.toml find-links to point at the new release, then uv lock."""
-    text = PYPROJECT_PATH.read_text()
+    original = PYPROJECT_PATH.read_text()
+    text = original
 
     new_url = f"https://github.com/{REPO}/releases/expanded_assets/{tag}"
 
@@ -298,6 +324,11 @@ def update_pyproject(tag: str, version: str) -> None:
         f'"dupekit >= {version}"',
         text,
     )
+
+    if text == original:
+        print("ERROR: pyproject.toml regex substitutions did not match anything.", file=sys.stderr)
+        print("The find-links or dupekit dependency format may have changed.", file=sys.stderr)
+        sys.exit(1)
 
     PYPROJECT_PATH.write_text(text)
     print(f"\n--- Updated pyproject.toml find-links to {tag} ---")
