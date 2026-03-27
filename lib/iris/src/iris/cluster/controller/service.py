@@ -884,6 +884,30 @@ class ControllerServiceImpl:
             request=redact_request_env_vars(job.request) if job.request else None,
         )
 
+    def get_job_state(
+        self,
+        request: cluster_pb2.Controller.GetJobStateRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetJobStateResponse:
+        """Lightweight batch job state query.
+
+        Returns only the state enum for each requested job, avoiding the cost
+        of loading tasks, attempts, and worker addresses.
+        """
+        wire_ids = list(request.job_ids)
+        if not wire_ids:
+            return cluster_pb2.Controller.GetJobStateResponse()
+
+        with self._db.read_snapshot() as q:
+            placeholders = ",".join("?" for _ in wire_ids)
+            rows = q.raw(
+                f"SELECT job_id, state FROM jobs WHERE job_id IN ({placeholders})",
+                tuple(wire_ids),
+            )
+
+        states = {row.job_id: row.state for row in rows}
+        return cluster_pb2.Controller.GetJobStateResponse(states=states)
+
     def terminate_job(
         self,
         request: cluster_pb2.Controller.TerminateJobRequest,

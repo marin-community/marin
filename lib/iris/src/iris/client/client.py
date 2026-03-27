@@ -255,6 +255,14 @@ class Job:
         """
         return self._client._cluster_client.get_job_status(self._job_id)
 
+    def state_only(self) -> int:
+        """Lightweight state query that avoids loading tasks/attempts/workers."""
+        states = self._client._cluster_client.get_job_states([self._job_id])
+        wire_id = self._job_id.to_wire()
+        if wire_id not in states:
+            raise KeyError(f"Job {wire_id} not found")
+        return states[wire_id]
+
     @property
     def state(self) -> cluster_pb2.JobState:
         """Get current job state (shortcut for status().state)."""

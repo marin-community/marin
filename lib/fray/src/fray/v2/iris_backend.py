@@ -184,8 +184,8 @@ class IrisJobHandle:
         return str(self._job.job_id)
 
     def status(self) -> JobStatus:
-        iris_status = self._job.status()
-        return map_iris_job_state(iris_status.state)
+        iris_state = self._job.state_only()
+        return map_iris_job_state(iris_state)
 
     def wait(
         self, timeout: float | None = None, *, raise_on_failure: bool = True, stream_logs: bool = False
