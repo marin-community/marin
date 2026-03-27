@@ -632,6 +632,11 @@ message Controller {
   message GetJobStatusRequest {
     string job_id = 1;
     reserved 2;  // was include_result (removed: serialized_result no longer exists)
+
+    // When true, populate JobStatus.tasks with per-task detail (attempts, worker
+    // addresses).  Default (false) returns only job-level fields and aggregated
+    // counts, which is significantly cheaper for the controller.
+    bool include_tasks = 3;
   }
 
   message GetJobStatusResponse {
