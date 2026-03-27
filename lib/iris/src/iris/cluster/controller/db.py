@@ -884,6 +884,7 @@ TASK_PROFILES = Table[tuple[str, str]](
         "task_id": Column("tp", "task_id", _decode_str),
         "profile_data": Column("tp", "profile_data", _identity),
         "captured_at_ms": Column("tp", "captured_at_ms", _decode_timestamp_ms),
+        "profile_kind": Column("tp", "profile_kind", _decode_str),
     },
 )
 JOBS.columns["parent_job_id"] = Column("j", "parent_job_id", _nullable(JobName.from_wire))
@@ -1388,23 +1389,40 @@ def healthy_active_workers_with_attributes(db: ControllerDB) -> list[Worker]:
     return [dc_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
 
 
-def insert_task_profile(db: ControllerDB, task_id: str, profile_data: bytes, captured_at: Timestamp) -> None:
+def insert_task_profile(
+    db: ControllerDB, task_id: str, profile_data: bytes, captured_at: Timestamp, profile_kind: str = "cpu"
+) -> None:
     """Insert a captured profile snapshot for a task.
 
-    The DB trigger caps profiles at 10 per task, evicting the oldest automatically.
+    The DB trigger caps profiles at 10 per (task_id, profile_kind), evicting the oldest automatically.
     """
     db.execute(
-        "INSERT INTO task_profiles (task_id, profile_data, captured_at_ms) VALUES (?, ?, ?)",
-        (task_id, profile_data, captured_at.epoch_ms()),
+        "INSERT INTO task_profiles (task_id, profile_data, captured_at_ms, profile_kind) VALUES (?, ?, ?, ?)",
+        (task_id, profile_data, captured_at.epoch_ms(), profile_kind),
     )
 
 
-def get_task_profiles(db: ControllerDB, task_id: str) -> list[tuple[bytes, Timestamp]]:
-    """Return all stored profile snapshots for a task, newest first."""
-    with db.snapshot() as q:
-        rows = q.raw(
-            "SELECT profile_data, captured_at_ms FROM task_profiles WHERE task_id = ? ORDER BY id DESC",
-            (task_id,),
-            decoders={"captured_at_ms": _decode_timestamp_ms},
+def get_task_profiles(
+    db: ControllerDB, task_id: str, profile_kind: str | None = None
+) -> list[tuple[bytes, Timestamp, str]]:
+    """Return stored profile snapshots for a task, newest first.
+
+    Args:
+        db: Controller database.
+        task_id: Task wire string.
+        profile_kind: If set, filter to this kind (e.g. "cpu", "memory"). Returns all kinds when None.
+    """
+    if profile_kind is not None:
+        query = (
+            "SELECT profile_data, captured_at_ms, profile_kind FROM task_profiles"
+            " WHERE task_id = ? AND profile_kind = ? ORDER BY id DESC"
         )
-    return [(row.profile_data, row.captured_at_ms) for row in rows]
+        params: tuple[str, ...] = (task_id, profile_kind)
+    else:
+        query = (
+            "SELECT profile_data, captured_at_ms, profile_kind FROM task_profiles" " WHERE task_id = ? ORDER BY id DESC"
+        )
+        params = (task_id,)
+    with db.snapshot() as q:
+        rows = q.raw(query, params, decoders={"captured_at_ms": _decode_timestamp_ms})
+    return [(row.profile_data, row.captured_at_ms, row.profile_kind) for row in rows]
