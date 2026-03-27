@@ -493,8 +493,6 @@ class EndpointQuery:
     limit: int | None = None
 
 
-
-
 def _decode_attribute_rows(rows: Sequence[Any]) -> dict[WorkerId, dict[str, AttributeValue]]:
     attrs_by_worker: dict[WorkerId, dict[str, AttributeValue]] = {}
     for row in rows:
