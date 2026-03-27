@@ -30,7 +30,7 @@ jobs:
     env:
       RUN_ID: canary-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       CANARY_ACCELERATOR: gpu
-      CANARY_BATCH_SIZE: "32"
+      CANARY_BATCH_SIZE: "16"
       CANARY_TARGET_TOKENS: "6553600"
       CANARY_MIN_STEPS: "40"
       CANARY_MAX_LOSS: "8.0"
