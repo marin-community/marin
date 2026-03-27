@@ -33,6 +33,8 @@ __all__ = [
     # scion
     "ScaleByScionState",
     "ScionConfig",
+    # grug_adamh
+    "GrugAdamHConfig",
     # soap
     "SoapConfig",
     # skipstep
@@ -50,6 +52,7 @@ from .adamh import AdamHConfig
 from .kron import KronConfig
 from .mars import MarsConfig, ScaleByMarsState
 from .muon import MuonConfig, ScaleByMuonState
+from .grug_adamh import GrugAdamHConfig
 from .grugmuon import GrugMuonConfig
 from .muonh import MuonHConfig
 from .namo import NamoConfig, NamoDConfig
