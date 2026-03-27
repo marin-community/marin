@@ -28,19 +28,6 @@ from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 
 logger = logging.getLogger(__name__)
 
-# Candidate field names when auto-detecting the source ID column.
-ID_FIELD_CANDIDATES: tuple[str, ...] = (
-    "id",
-    "uuid",
-    "guid",
-    "doc_id",
-    "document_id",
-    "article_id",
-    "hash",
-    "sha",
-    "uid",
-)
-
 
 def generate_id(text: str) -> str:
     """Generate a deterministic document ID from text content.
@@ -51,54 +38,35 @@ def generate_id(text: str) -> str:
     return format(dupekit.hash_xxh3_128(text.encode("utf-8")), "032x")
 
 
-def _detect_id_field(record: dict[str, Any]) -> str | None:
-    """Return the first key in *record* that matches a known ID field name."""
-    for candidate in ID_FIELD_CANDIDATES:
-        if candidate in record:
-            return candidate
-    return None
-
-
 def _make_normalize_fn(
     text_field: str,
-    id_field: str | None,
+    id_field: str,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """Return a record-level transform function.
 
     The returned function:
     1. Extracts ``text`` from *text_field* (raises on missing/empty).
     2. Generates a deterministic ``id`` via xxh3_128.
-    3. Preserves any existing ID as ``source_id``.
+    3. If *id_field* exists in the record, preserves it as ``source_id``.
     4. Keeps all other columns.
     """
-    detected_id_field: str | None = None
-    id_field_resolved = False
 
     def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
-        nonlocal detected_id_field, id_field_resolved
-
         # --- text ---
         text = record.get(text_field)
         if text is None or not str(text).strip():
             raise ValueError(f"Record missing or empty text in field {text_field!r}: {record!r:.200}")
         text = str(text)
 
-        # --- source_id ---
-        resolved_id_field = id_field
-        if resolved_id_field is None:
-            if not id_field_resolved:
-                detected_id_field = _detect_id_field(record)
-                id_field_resolved = True
-            resolved_id_field = detected_id_field
-
-        source_id = record.get(resolved_id_field) if resolved_id_field else None
+        # --- source_id (skip silently if id_field absent) ---
+        source_id = record.get(id_field)
 
         # --- build output ---
         out: dict[str, Any] = {}
 
         # Copy all original columns except the ones we're replacing
         for k, v in record.items():
-            if k == resolved_id_field:
+            if k == id_field:
                 continue
             if k == text_field and text_field != "text":
                 continue
@@ -225,7 +193,7 @@ def normalize_to_parquet(
     input_path: str,
     output_path: str,
     text_field: str = "text",
-    id_field: str | None = None,
+    id_field: str = "id",
     target_partition_bytes: int = 256 * 1024 * 1024,
 ) -> None:
     """Normalize raw downloaded data to the datakit standard Parquet format.
@@ -241,7 +209,8 @@ def normalize_to_parquet(
         output_path: Root directory for normalized Parquet output.
         text_field: Name of the field containing primary text content.
         id_field: Name of the field containing the source ID (renamed to
-            ``source_id``).  If ``None``, auto-detected from common names.
+            ``source_id``).  If the field is absent from a record, it is
+            silently skipped.
         target_partition_bytes: Target size in bytes per output partition.
             Used to compute the number of output shards per subdirectory.
     """
@@ -282,8 +251,9 @@ def normalize_step(
     name: str,
     download: StepSpec,
     text_field: str = "text",
-    id_field: str | None = None,
+    id_field: str = "id",
     target_partition_bytes: int = 256 * 1024 * 1024,
+    override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a StepSpec that normalizes downloaded data to Parquet.
 
@@ -293,6 +263,7 @@ def normalize_step(
         text_field: Name of the field containing primary text content.
         id_field: Name of the field containing the source ID.
         target_partition_bytes: Target size per output partition.
+        override_output_path: Override the computed output path.
     """
     return StepSpec(
         name=name,
@@ -309,4 +280,5 @@ def normalize_step(
             "id_field": id_field,
             "target_partition_bytes": target_partition_bytes,
         },
+        override_output_path=override_output_path,
     )

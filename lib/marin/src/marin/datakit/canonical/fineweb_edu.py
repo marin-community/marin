@@ -58,7 +58,5 @@ def normalize(
     return normalize_step(
         name=f"fineweb-edu/{subset}/normalize",
         download=subset_download,
-        text_field="text",
-        id_field="id",
         target_partition_bytes=target_partition_bytes,
     )
