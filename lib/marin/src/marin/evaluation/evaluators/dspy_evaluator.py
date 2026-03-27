@@ -1,11 +1,21 @@
+import enum
 import json
 import logging
 import time
 from pathlib import Path
+from typing import Any
 
 import dspy
 import requests
 from openai import AsyncOpenAI
+
+
+class _EnumSafeEncoder(json.JSONEncoder):
+    """JSON encoder that converts Enum values to their .value string."""
+    def default(self, obj: Any) -> Any:
+        if isinstance(obj, enum.Enum):
+            return obj.value
+        return super().default(obj)
 
 from experiments.dspy.adapters.baml import BAMLAdapter
 from experiments.dspy.adapters.toon import ToonAdapter
@@ -121,6 +131,7 @@ class DspyEvaluator(Evaluator):
         task_name: str = "hover",
         split: str = "test",
         max_eval_instances: int | None = 1000,
+        retriever_url: str | None = None,
         wandb_tags: list[str] | None = None,
         **kwargs,
     ):
@@ -141,6 +152,7 @@ class DspyEvaluator(Evaluator):
         self.task_name = task_name
         self.split = split
         self.max_eval_instances = max_eval_instances
+        self.retriever_url = retriever_url
         self.wandb_tags = wandb_tags
 
         self.endpoint = self._validate_endpoint(endpoint)
@@ -198,7 +210,17 @@ class DspyEvaluator(Evaluator):
             cache=False,
         )
         adapter = ADAPTER_MAP[self.adapter_name]()
-        dspy.configure(lm=lm, adapter=adapter)
+
+        if self.retriever_url:
+            rm = dspy.ColBERTv2(url=self.retriever_url)
+            dspy.configure(lm=lm, adapter=adapter, rm=rm)
+        else:
+            logger.warning(
+                "No retriever_url provided. ClaimVerification uses dspy.Retrieve "
+                "internally — evaluation will fail unless a retriever is configured. "
+                "Pass retriever_url='http://...' to fix this."
+            )
+            dspy.configure(lm=lm, adapter=adapter)
 
         examples = _load_hover(self.split, self.max_eval_instances)
         program = task_cfg["program"]()
@@ -263,7 +285,7 @@ class DspyEvaluator(Evaluator):
         traj_file = out_dir / f"{self.task_name}_{self.adapter_name}_{self.split}_trajectories.jsonl"
         with open(traj_file, "w", encoding="utf-8") as f:
             for traj in trajectories:
-                f.write(json.dumps(traj, ensure_ascii=False) + "\n")
+                f.write(json.dumps(traj, cls=_EnumSafeEncoder, ensure_ascii=False) + "\n")
 
         results_file = out_dir / f"{self.task_name}_{self.adapter_name}_{self.split}_results.json"
         with open(results_file, "w", encoding="utf-8") as f:

@@ -57,8 +57,8 @@ class ToonAdapter(Adapter):
     def format(
         self,
         signature: type[Signature],
+        demos: list[dict[str, Any]],
         inputs: dict[str, Any],
-        demos: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, str]]:
         """Return a list of chat messages in TOON format.
 
