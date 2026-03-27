@@ -436,6 +436,8 @@ class ZephyrCoordinator:
                 # the worker as unhealthy via heartbeat and re-registration. If we do not requeue we may silently
                 # lose tasks.
                 self._maybe_requeue_worker_task(worker_id)
+                # Reset generation so the new worker's counters are accepted.
+                self._worker_counter_gen.pop(worker_id, None)
                 return
 
             self._worker_handles[worker_id] = worker_handle
