@@ -718,7 +718,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
-        self._local_prefix = marin_prefix()
+        self._local_prefix = marin_prefix().rstrip("/")
         self._remote_prefixes = [p for p in _all_data_bucket_prefixes() if not self._local_prefix.startswith(p)]
         self._budget = budget if budget is not None else _global_transfer_budget
         self._worker_id = default_worker_id()
