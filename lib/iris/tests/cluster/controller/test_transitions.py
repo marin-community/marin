@@ -16,15 +16,15 @@ from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints
 from iris.cluster.controller.autoscaler import DemandEntry
 from iris.cluster.controller.controller import compute_demand_entries
 from iris.cluster.controller.db import (
-    ATTEMPTS,
+    Attempt,
     ControllerDB,
-    ENDPOINTS,
-    JOBS,
-    TASKS,
-    WORKERS,
     Endpoint,
     EndpointQuery,
-    endpoint_query_predicate,
+    Job,
+    Task,
+    Worker,
+    decode_rows,
+    endpoint_query_sql,
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.transitions import (
@@ -86,15 +86,11 @@ def _queued_dispatch(
 
 
 def _endpoints(state: ControllerTransitions, query: EndpointQuery = EndpointQuery()) -> list[Endpoint]:
-    joins, where = endpoint_query_predicate(query)
+    sql, params = endpoint_query_sql(query)
+    # Add ORDER BY to match original behavior
+    sql += " ORDER BY registered_at_ms DESC, endpoint_id ASC"
     with state._db.snapshot() as q:
-        return q.select(
-            ENDPOINTS,
-            where=where,
-            joins=tuple(joins),
-            order_by=(ENDPOINTS.c.registered_at_ms.desc(), ENDPOINTS.c.endpoint_id.asc()),
-            limit=query.limit,
-        )
+        return decode_rows(Endpoint, q.fetchall(sql, tuple(params)))
 
 
 def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions):
@@ -125,9 +121,10 @@ def test_db_snapshot_select_returns_typed_rows(state) -> None:
     request = make_job_request("typed-rows")
     tasks = submit_job(state, "typed-rows", request)
 
+    job_wire = JobName.root("test-user", "typed-rows").to_wire()
     with state._db.snapshot() as q:
-        jobs = q.select(JOBS, where=JOBS.c.job_id == JobName.root("test-user", "typed-rows").to_wire())
-        task_count = q.count(TASKS, where=TASKS.c.job_id == JobName.root("test-user", "typed-rows").to_wire())
+        jobs = decode_rows(Job, q.fetchall("SELECT * FROM jobs WHERE job_id = ?", (job_wire,)))
+        task_count = q.fetchone("SELECT COUNT(*) FROM tasks WHERE job_id = ?", (job_wire,))[0]
 
     assert len(jobs) == 1
     assert jobs[0].submitted_at is not None
@@ -157,7 +154,7 @@ def test_db_snapshot_exists_for_workers(state) -> None:
     register_worker(state, "exists-worker", "addr", make_worker_metadata())
 
     with state._db.snapshot() as q:
-        assert q.exists(WORKERS, where=WORKERS.c.worker_id == "exists-worker")
+        assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("exists-worker",)) is not None
 
 
 # =============================================================================
@@ -383,7 +380,7 @@ def test_failed_worker_is_pruned_from_state(state):
 
     # list_all_workers only returns w2
     with state._db.snapshot() as q:
-        all_workers = q.select(WORKERS)
+        all_workers = decode_rows(Worker, q.fetchall("SELECT * FROM workers"))
     assert len(all_workers) == 1
     assert all_workers[0].worker_id == w2
 
@@ -396,7 +393,7 @@ def test_failed_worker_is_pruned_from_state(state):
     assert _query_worker(state, w1_again) is not None
     assert _query_worker(state, w1_again).healthy is True
     with state._db.snapshot() as q:
-        assert len(q.select(WORKERS)) == 2
+        assert len(decode_rows(Worker, q.fetchall("SELECT * FROM workers"))) == 2
 
 
 def test_dispatch_failure_marks_worker_failed_and_requeues_task(state):
@@ -817,8 +814,9 @@ def test_hierarchical_job_tracking(state):
     submit_job(state, "/test-user/parent/child1/grandchild", grandchild_req)
 
     # get_children only returns direct children
+    parent_wire = JobName.root("test-user", "parent").to_wire()
     with state._db.snapshot() as q:
-        children = q.select(JOBS, where=JOBS.c.parent_job_id == JobName.root("test-user", "parent").to_wire())
+        children = decode_rows(Job, q.fetchall("SELECT * FROM jobs WHERE parent_job_id = ?", (parent_wire,)))
     assert len(children) == 2
     assert {c.job_id for c in children} == {
         JobName.from_string("/test-user/parent/child1"),
@@ -826,11 +824,9 @@ def test_hierarchical_job_tracking(state):
     }
 
     # No children for leaf nodes
+    grandchild_wire = JobName.from_string("/test-user/parent/child1/grandchild").to_wire()
     with state._db.snapshot() as q:
-        leaf_children = q.select(
-            JOBS,
-            where=JOBS.c.parent_job_id == JobName.from_string("/test-user/parent/child1/grandchild").to_wire(),
-        )
+        leaf_children = decode_rows(Job, q.fetchall("SELECT * FROM jobs WHERE parent_job_id = ?", (grandchild_wire,)))
     assert leaf_children == []
 
 
@@ -1310,7 +1306,9 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
     assert _query_task(state, task.task_id).current_attempt_id == 1
     # The old attempt (0) is still in RUNNING state (non-terminal)
     with state._db.snapshot() as q:
-        attempts = q.select(ATTEMPTS, where=ATTEMPTS.c.task_id == task.task_id.to_wire())
+        attempts = decode_rows(
+            Attempt, q.fetchall("SELECT * FROM task_attempts WHERE task_id = ?", (task.task_id.to_wire(),))
+        )
     assert not attempts[0].is_terminal
 
     with caplog.at_level(logging.ERROR, logger="iris.cluster.controller.transitions"):
@@ -3172,14 +3170,14 @@ def _submit_job_direct(
 
 def _task_state_direct(state: ControllerTransitions, task_id: JobName) -> int:
     with state._db.snapshot() as q:
-        tasks = q.select(TASKS, where=TASKS.c.task_id == task_id.to_wire())
+        tasks = decode_rows(Task, q.fetchall("SELECT * FROM tasks WHERE task_id = ?", (task_id.to_wire(),)))
     assert len(tasks) == 1
     return tasks[0].state
 
 
 def _task_row_direct(state: ControllerTransitions, task_id: JobName):
     with state._db.snapshot() as q:
-        tasks = q.select(TASKS, where=TASKS.c.task_id == task_id.to_wire())
+        tasks = decode_rows(Task, q.fetchall("SELECT * FROM tasks WHERE task_id = ?", (task_id.to_wire(),)))
     assert len(tasks) == 1
     return tasks[0]
 

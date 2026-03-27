@@ -29,18 +29,16 @@ from iris.cluster.constraints import (
 from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
-    ATTEMPTS,
-    JOBS,
-    TASKS,
     TERMINAL_TASK_STATES,
-    WORKER_ATTRIBUTES,
-    WORKERS,
+    Attempt,
     ControllerDB,
     Job,
     Task,
     Worker,
     _decode_attribute_rows,
     _tasks_with_attempts,
+    decode_one,
+    decode_rows,
 )
 from iris.cluster.controller.provider import ProviderUnsupportedError
 from iris.cluster.controller.scaling_group import ScalingGroup
@@ -193,7 +191,7 @@ def submit_direct_job(state: ControllerTransitions, name: str, replicas: int = 1
     req = make_direct_job_request(name, replicas)
     state.submit_job(jid, req, Timestamp.now())
     with state._db.snapshot() as q:
-        tasks = q.select(TASKS, where=TASKS.c.job_id == jid.to_wire())
+        tasks = decode_rows(Task, q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
     return [t.task_id for t in tasks]
 
 
@@ -204,44 +202,46 @@ def submit_direct_job(state: ControllerTransitions, name: str, replicas: int = 1
 
 def query_task(state: ControllerTransitions, task_id: JobName):
     with state._db.snapshot() as q:
-        return q.one(TASKS, where=TASKS.c.task_id == task_id.to_wire())
+        return decode_one(Task, q.fetchall("SELECT * FROM tasks WHERE task_id = ? LIMIT 1", (task_id.to_wire(),)))
 
 
 def query_attempt(state: ControllerTransitions, task_id: JobName, attempt_id: int):
     with state._db.snapshot() as q:
-        rows = q.select(
-            ATTEMPTS,
-            where=(ATTEMPTS.c.task_id == task_id.to_wire()) & (ATTEMPTS.c.attempt_id == attempt_id),
+        rows = decode_rows(
+            Attempt,
+            q.fetchall(
+                "SELECT * FROM task_attempts WHERE task_id = ? AND attempt_id = ?",
+                (task_id.to_wire(), attempt_id),
+            ),
         )
     return rows[0] if rows else None
 
 
 def query_job(state: ControllerTransitions, job_id: JobName) -> Job | None:
     with state._db.snapshot() as q:
-        return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
+        return decode_one(Job, q.fetchall("SELECT * FROM jobs WHERE job_id = ? LIMIT 1", (job_id.to_wire(),)))
 
 
 def query_worker(state: ControllerTransitions, worker_id: WorkerId) -> Worker | None:
     with state._db.snapshot() as q:
-        return q.one(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
+        return decode_one(Worker, q.fetchall("SELECT * FROM workers WHERE worker_id = ? LIMIT 1", (str(worker_id),)))
 
 
 def query_tasks_for_job(state: ControllerTransitions, job_id: JobName) -> list[Task]:
     with state._db.snapshot() as q:
-        return q.select(TASKS, where=TASKS.c.job_id == job_id.to_wire())
+        return decode_rows(Task, q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (job_id.to_wire(),)))
 
 
 def schedulable_tasks(state: ControllerTransitions):
     """Return non-terminal tasks eligible for scheduling, in priority order."""
+    terminal_placeholders = ",".join("?" for _ in TERMINAL_TASK_STATES)
     with state._db.snapshot() as q:
-        tasks = q.select(
-            TASKS,
-            where=TASKS.c.state.not_null() & ~TASKS.c.state.in_(list(TERMINAL_TASK_STATES)),
-            order_by=(
-                TASKS.c.priority_neg_depth.asc(),
-                TASKS.c.priority_root_submitted_ms.asc(),
-                TASKS.c.submitted_at_ms.asc(),
-                TASKS.c.task_id.asc(),
+        tasks = decode_rows(
+            Task,
+            q.fetchall(
+                f"SELECT * FROM tasks WHERE state IS NOT NULL AND state NOT IN ({terminal_placeholders})"
+                " ORDER BY priority_neg_depth ASC, priority_root_submitted_ms ASC, submitted_at_ms ASC, task_id ASC",
+                tuple(TERMINAL_TASK_STATES),
             ),
         )
     return [t for t in tasks if t.can_be_scheduled()]
@@ -331,17 +331,19 @@ def submit_job(
 
 def query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName) -> list[Task]:
     with state._db.snapshot() as q:
-        tasks = q.select(
-            TASKS,
-            where=TASKS.c.job_id == job_id.to_wire(),
-            order_by=(TASKS.c.task_index.asc(),),
+        tasks = decode_rows(
+            Task, q.fetchall("SELECT * FROM tasks WHERE job_id = ? ORDER BY task_index ASC", (job_id.to_wire(),))
         )
         if not tasks:
             return []
-        attempts = q.select(
-            ATTEMPTS,
-            where=ATTEMPTS.c.task_id.in_([t.task_id.to_wire() for t in tasks]),
-            order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
+        task_wires = [t.task_id.to_wire() for t in tasks]
+        placeholders = ",".join("?" for _ in task_wires)
+        attempts = decode_rows(
+            Attempt,
+            q.fetchall(
+                f"SELECT * FROM task_attempts WHERE task_id IN ({placeholders})" " ORDER BY task_id ASC, attempt_id ASC",
+                tuple(task_wires),
+            ),
         )
     return _tasks_with_attempts(tasks, attempts)
 
@@ -349,11 +351,10 @@ def query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName) -> 
 def query_task_with_attempts(state: ControllerTransitions, task_id: JobName) -> Task | None:
     wire = task_id.to_wire()
     with state._db.snapshot() as q:
-        tasks = q.select(TASKS, where=TASKS.c.task_id == wire)
-        attempts = q.select(
-            ATTEMPTS,
-            where=ATTEMPTS.c.task_id == wire,
-            order_by=(ATTEMPTS.c.attempt_id.asc(),),
+        tasks = decode_rows(Task, q.fetchall("SELECT * FROM tasks WHERE task_id = ?", (wire,)))
+        attempts = decode_rows(
+            Attempt,
+            q.fetchall("SELECT * FROM task_attempts WHERE task_id = ? ORDER BY attempt_id ASC", (wire,)),
         )
     hydrated = _tasks_with_attempts(tasks, attempts)
     return hydrated[0] if hydrated else None
@@ -444,18 +445,13 @@ def worker_running_tasks(state: ControllerTransitions, worker_id: WorkerId) -> f
 def hydrate_worker_attributes(state: ControllerTransitions, workers: list[Worker]) -> list[Worker]:
     if not workers:
         return workers
+    worker_ids = [str(w.worker_id) for w in workers]
+    placeholders = ",".join("?" for _ in worker_ids)
     with state._db.snapshot() as q:
-        attrs = q.select(
-            WORKER_ATTRIBUTES,
-            columns=(
-                WORKER_ATTRIBUTES.c.worker_id,
-                WORKER_ATTRIBUTES.c.key,
-                WORKER_ATTRIBUTES.c.value_type,
-                WORKER_ATTRIBUTES.c.str_value,
-                WORKER_ATTRIBUTES.c.int_value,
-                WORKER_ATTRIBUTES.c.float_value,
-            ),
-            where=WORKER_ATTRIBUTES.c.worker_id.in_([str(w.worker_id) for w in workers]),
+        attrs = q.raw(
+            f"SELECT worker_id, key, value_type, str_value, int_value, float_value"
+            f" FROM worker_attributes WHERE worker_id IN ({placeholders})",
+            tuple(worker_ids),
         )
     attrs_by_worker = _decode_attribute_rows(attrs)
     return [_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
@@ -463,7 +459,7 @@ def hydrate_worker_attributes(state: ControllerTransitions, workers: list[Worker
 
 def healthy_active_workers(state: ControllerTransitions) -> list[Worker]:
     with state._db.snapshot() as q:
-        workers = q.select(WORKERS, where=(WORKERS.c.healthy == 1) & (WORKERS.c.active == 1))
+        workers = decode_rows(Worker, q.fetchall("SELECT * FROM workers WHERE healthy = 1 AND active = 1"))
     return hydrate_worker_attributes(state, workers)
 
 
