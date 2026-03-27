@@ -144,6 +144,7 @@ def build_iris_env(
         constraints=req.constraints,
         ports=req.ports,
         resources=req.resources if req.HasField("resources") else None,
+        impersonate_service_account=req.impersonate_service_account,
     )
 
     if worker_id:

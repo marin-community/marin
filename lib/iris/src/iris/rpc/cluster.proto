@@ -80,6 +80,7 @@ message GetCurrentUserResponse {
   string user_id = 1;
   string role = 2;
   string display_name = 3;
+  string gcp_email = 4;              // GCP email from OAuth login
 }
 
 // --- Profiling ---
@@ -1008,6 +1009,7 @@ message Worker {
     repeated string ports = 8;
     int32 attempt_id = 9;
     repeated Constraint constraints = 10; // Original job constraints for child-job inheritance metadata
+    string impersonate_service_account = 11; // GCP service account to impersonate for this task (empty = no impersonation)
   }
 
   message GetTaskStatusRequest {

@@ -1726,6 +1726,8 @@ class ControllerServiceImpl:
 
         now = Timestamp.now()
         self._db.ensure_user(username, now)
+        if self._auth.provider == "gcp":
+            self._db.set_user_gcp_email(username, username)
         role = self._db.get_user_role(username)
 
         # Revoke old login keys and propagate to in-memory revocation set
@@ -1841,9 +1843,11 @@ class ControllerServiceImpl:
         identity = get_verified_identity()
         if identity is None:
             return cluster_pb2.GetCurrentUserResponse(user_id="anonymous", role="")
+        gcp_email = self._db.get_user_gcp_email(identity.user_id) or ""
         return cluster_pb2.GetCurrentUserResponse(
             user_id=identity.user_id,
             role=identity.role,
+            gcp_email=gcp_email,
         )
 
     def exec_in_container(

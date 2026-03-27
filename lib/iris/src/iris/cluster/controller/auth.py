@@ -259,6 +259,7 @@ class ControllerAuth:
     login_verifier: TokenVerifier | None = None
     gcp_project_id: str | None = None
     jwt_manager: JwtTokenManager | None = None
+    enable_task_impersonation: bool = False
     optional: bool = False
 
 
@@ -317,11 +318,13 @@ def create_controller_auth(
 
     login_verifier: TokenVerifier | None = None
     gcp_project_id: str | None = None
+    enable_task_impersonation = False
     if provider == "gcp":
         gcp_project_id = auth_config.gcp.project_id
         if not gcp_project_id:
             raise ValueError("GCP auth config requires a project_id")
         login_verifier = GcpAccessTokenVerifier(project_id=gcp_project_id)
+        enable_task_impersonation = auth_config.gcp.enable_task_impersonation
 
     # For static auth, use StaticTokenVerifier as the login verifier so
     # `iris login` can exchange a raw config token for a JWT.
@@ -344,6 +347,7 @@ def create_controller_auth(
         login_verifier=login_verifier,
         gcp_project_id=gcp_project_id,
         jwt_manager=jwt_mgr,
+        enable_task_impersonation=enable_task_impersonation,
         optional=optional,
     )
 

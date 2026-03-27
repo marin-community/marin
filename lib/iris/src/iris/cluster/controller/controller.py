@@ -762,6 +762,7 @@ class Controller:
             db=self._db,
             log_store=self._log_store,
             heartbeat_failure_threshold=config.heartbeat_failure_threshold,
+            enable_task_impersonation=config.auth.enable_task_impersonation if config.auth else False,
         )
         self._scheduler = Scheduler()
 
