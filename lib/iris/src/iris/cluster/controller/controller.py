@@ -659,7 +659,7 @@ class ControllerConfig:
     """How often the controller captures CPU profiles for all running tasks."""
 
     profile_duration: int = 10
-    """Duration in seconds for each py-spy profile capture."""
+    """Duration in seconds for each profile capture (CPU and memory)."""
 
     prune_interval: Duration = field(default_factory=lambda: Duration.from_seconds(3600))
     """How often to run the data pruning sweep (default: 1 hour)."""
@@ -1048,13 +1048,12 @@ class Controller:
                 self.kill_tasks_on_workers(tx_result.tasks_to_kill)
 
     def _run_profile_loop(self, stop_event: threading.Event) -> None:
-        """Periodically capture CPU profiles for all running tasks.
+        """Periodically capture CPU and memory profiles for all running tasks.
 
-        Runs on its own thread with a 10-minute rate limiter. For each running
-        task, sends a ProfileTask RPC to the task's worker and stores the result
-        in the controller DB. Profile RPCs are dispatched with bounded concurrency.
+        Runs on its own thread with a rate limiter. For each running task, sends
+        ProfileTask RPCs (CPU then memory, sequentially) to the task's worker and
+        stores the results in the controller DB.
         """
-
         limiter = RateLimiter(interval_seconds=self._config.profile_interval.to_seconds())
         while not stop_event.is_set():
             remaining = limiter.time_until_next()
@@ -1071,7 +1070,7 @@ class Controller:
                 logger.exception("Profile loop iteration failed")
 
     def _profile_all_running_tasks(self) -> None:
-        """Capture a CPU profile for every running task and store in the DB."""
+        """Capture CPU and memory profiles for every running task and store in the DB."""
         workers = healthy_active_workers_with_attributes(self._db)
         if not workers:
             return
@@ -1087,42 +1086,68 @@ class Controller:
         if not profile_targets:
             return
 
-        concurrency = min(self._config.profile_concurrency, len(profile_targets))
+        cpu_profile_type = cluster_pb2.ProfileType(
+            cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.RAW),
+        )
+        self._dispatch_profiles(profile_targets, cpu_profile_type, "cpu", self._config.profile_duration)
+
+        memory_profile_type = cluster_pb2.ProfileType(
+            memory=cluster_pb2.MemoryProfile(format=cluster_pb2.MemoryProfile.STATS),
+        )
+        self._dispatch_profiles(profile_targets, memory_profile_type, "memory", self._config.profile_duration)
+
+        logger.info("Profile round (cpu+memory): captured for %d tasks", len(profile_targets))
+
+    def _dispatch_profiles(
+        self,
+        targets: list[tuple[JobName, Worker]],
+        profile_type: cluster_pb2.ProfileType,
+        profile_kind: str,
+        duration: int,
+    ) -> None:
+        """Send profile RPCs for the given targets with bounded concurrency."""
+        concurrency = min(self._config.profile_concurrency, len(targets))
         with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="profile") as pool:
-            futures = [pool.submit(self._capture_one_profile, task_id, worker) for task_id, worker in profile_targets]
+            futures = [
+                pool.submit(self._capture_one_profile, task_id, worker, profile_type, profile_kind, duration)
+                for task_id, worker in targets
+            ]
             for future in as_completed(futures):
                 future.result()
 
-        logger.info("Profile round: captured profiles for %d tasks", len(profile_targets))
-
-    def _capture_one_profile(self, task_id: JobName, worker: Worker) -> None:
+    def _capture_one_profile(
+        self,
+        task_id: JobName,
+        worker: Worker,
+        profile_type: cluster_pb2.ProfileType,
+        profile_kind: str,
+        duration: int,
+    ) -> None:
         """Capture a single task profile via RPC and store it in the DB."""
         try:
-            duration = self._config.profile_duration
             request = cluster_pb2.ProfileTaskRequest(
                 target=task_id.to_wire(),
                 duration_seconds=duration,
-                profile_type=cluster_pb2.ProfileType(
-                    cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.RAW),
-                ),
+                profile_type=profile_type,
             )
             timeout_ms = duration * 1000 + 30000
             resp = self._provider.profile_task(worker.address, request, timeout_ms=timeout_ms)
             if resp.error:
-                logger.debug("Profile failed for %s: %s", task_id, resp.error)
+                logger.debug("Profile (%s) failed for %s: %s", profile_kind, task_id, resp.error)
                 return
             if not resp.profile_data:
-                logger.debug("Empty profile for %s", task_id)
+                logger.debug("Empty %s profile for %s", profile_kind, task_id)
                 return
             insert_task_profile(
                 self._db,
                 task_id=task_id.to_wire(),
                 profile_data=resp.profile_data,
                 captured_at=Timestamp.now(),
+                profile_kind=profile_kind,
             )
-            logger.debug("Stored %d byte profile for %s", len(resp.profile_data), task_id)
+            logger.debug("Stored %d byte %s profile for %s", len(resp.profile_data), profile_kind, task_id)
         except Exception:
-            logger.debug("Profile capture failed for %s", task_id, exc_info=True)
+            logger.debug("Profile capture (%s) failed for %s", profile_kind, task_id, exc_info=True)
 
     def _is_reservation_satisfied(
         self,
