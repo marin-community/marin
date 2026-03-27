@@ -4,8 +4,10 @@
 """Normalize FineWeb-Edu 10BT sample to datakit standard Parquet format."""
 
 from iris.marin_fs import marin_temp_bucket
-from marin.datakit.canonical.fineweb_edu import normalize
+from marin.datakit.canonical.fineweb_edu import download, normalize
 from marin.execution.step_runner import StepRunner
+
+dl = download()
 
 norm = normalize(
     subset="sample/10BT",
@@ -13,4 +15,4 @@ norm = normalize(
 )
 
 if __name__ == "__main__":
-    StepRunner().run([norm])
+    StepRunner().run([dl, norm])
