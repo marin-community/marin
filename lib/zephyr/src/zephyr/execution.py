@@ -121,11 +121,11 @@ from zephyr.shuffle import (  # noqa: E402
 
 @dataclass
 class CounterSnapshot:
-    """Bundled counter values and generation tag.
+    """Bundled counter values and monotonically increasing generation tag.
 
-    The generation is bumped each time a worker starts a new shard task.
-    The coordinator uses it to discard stale heartbeats that arrive after
-    report_result has already consumed the authoritative final snapshot.
+    The generation increments on every snapshot, so each heartbeat and
+    report_result carries a unique tag.  The coordinator uses strict
+    ordering (>) to discard stale or out-of-order updates.
     """
 
     counters: dict[str, int]
