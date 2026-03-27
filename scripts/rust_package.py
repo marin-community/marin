@@ -4,9 +4,11 @@
 
 """Build, publish, and pin dupekit wheels for all platforms.
 
-Builds wheels for linux (x86_64, aarch64) and mac (x86_64, arm64) using
-maturin + zig for cross-compilation, publishes them to a GitHub Release,
-and updates pyproject.toml's find-links to point at the new release.
+Builds all wheels from a single machine:
+  - Linux x86_64 + aarch64 via maturin + zig cross-compilation (any host OS)
+  - macOS x86_64 + arm64 natively (requires macOS host)
+
+Publishes wheels to a GitHub Release and updates pyproject.toml's find-links.
 
 Usage:
     python scripts/rust_package.py              # full flow: build + publish + update pyproject
@@ -46,7 +48,7 @@ LINUX_TARGETS = [
 ]
 
 # Mac targets built natively (zig can't cross-compile to macOS due to SDK requirements).
-# Only the host-arch mac wheel is built; CI can cover the other arch if needed.
+# Rust can cross-compile between macOS architectures, so both are built on any Mac host.
 MAC_TARGETS = [
     "x86_64-apple-darwin",
     "aarch64-apple-darwin",
@@ -165,10 +167,11 @@ def _host_rust_target() -> str:
 
 
 def build_wheels() -> None:
-    """Build platform wheels + sdist into dist/.
+    """Build all platform wheels + sdist into dist/.
 
-    On Linux, builds Linux wheels (cross-compiled via zig).
-    On macOS, builds the native mac wheel for the host architecture.
+    Linux wheels (x86_64 + aarch64) are always cross-compiled via zig.
+    macOS wheels are built natively when running on macOS (both x86_64 and arm64,
+    since Rust can cross-compile between macOS architectures).
     """
     maturin = _ensure_maturin()
     _check_tool("gh", "https://cli.github.com/")
@@ -177,46 +180,21 @@ def build_wheels() -> None:
         shutil.rmtree(DIST_DIR)
     DIST_DIR.mkdir()
 
-    host_target = _host_rust_target()
     system = platform.system()
 
-    # Build Linux wheels only on Linux (cross-compiled via zig)
-    if system == "Linux":
-        zig_bin = _ensure_zig()
+    # Build Linux wheels via zig cross-compilation (works from any host OS)
+    zig_bin = _ensure_zig()
 
-        linux_triples = [t for t, _ in LINUX_TARGETS]
-        print(f"Installing Rust targets: {', '.join(linux_triples)}")
-        subprocess.run(["rustup", "target", "add", *linux_triples], check=True)
+    linux_triples = [t for t, _ in LINUX_TARGETS]
+    print(f"Installing Rust targets: {', '.join(linux_triples)}")
+    subprocess.run(["rustup", "target", "add", *linux_triples], check=True)
 
-        # Put zig's directory on PATH so maturin can find it
-        zig_dir = str(Path(zig_bin).parent)
-        env = {**os.environ, "PATH": f"{zig_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+    # Put zig's directory on PATH so maturin can find it
+    zig_dir = str(Path(zig_bin).parent)
+    env = {**os.environ, "PATH": f"{zig_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
 
-        # Always use --zig for linux targets, even on a linux host. The host glibc
-        # may be newer than the manylinux target (e.g. ubuntu-latest has glibc 2.35
-        # which is too new for manylinux_2_28). Zig links against the correct version.
-        for target, manylinux in LINUX_TARGETS:
-            print(f"\n--- Building wheel for {target} (zig) ---")
-            cmd = [
-                maturin,
-                "build",
-                "--release",
-                "--out",
-                str(DIST_DIR),
-                "--manifest-path",
-                str(MANIFEST_PATH),
-                "--target",
-                target,
-                "--manylinux",
-                manylinux,
-                "--zig",
-            ]
-            subprocess.run(cmd, check=True, cwd=REPO_ROOT, env=env)
-
-    # Build native mac wheel (only for the host arch — zig can't cross-compile to macOS)
-    mac_targets = [t for t in MAC_TARGETS if t == host_target]
-    for target in mac_targets:
-        print(f"\n--- Building wheel for {target} (native) ---")
+    for target, manylinux in LINUX_TARGETS:
+        print(f"\n--- Building wheel for {target} (zig) ---")
         cmd = [
             maturin,
             "build",
@@ -227,8 +205,34 @@ def build_wheels() -> None:
             str(MANIFEST_PATH),
             "--target",
             target,
+            "--manylinux",
+            manylinux,
+            "--zig",
         ]
-        subprocess.run(cmd, check=True, cwd=REPO_ROOT)
+        subprocess.run(cmd, check=True, cwd=REPO_ROOT, env=env)
+
+    # Build macOS wheels natively (both architectures — Rust cross-compiles between macOS arches)
+    if system == "Darwin":
+        mac_triples = [t for t in MAC_TARGETS]
+        print(f"Installing Rust targets: {', '.join(mac_triples)}")
+        subprocess.run(["rustup", "target", "add", *mac_triples], check=True)
+
+        for target in MAC_TARGETS:
+            print(f"\n--- Building wheel for {target} (native) ---")
+            cmd = [
+                maturin,
+                "build",
+                "--release",
+                "--out",
+                str(DIST_DIR),
+                "--manifest-path",
+                str(MANIFEST_PATH),
+                "--target",
+                target,
+            ]
+            subprocess.run(cmd, check=True, cwd=REPO_ROOT)
+    else:
+        print("\nSkipping macOS wheels (not running on macOS)")
 
     print("\n--- Building sdist ---")
     subprocess.run(
