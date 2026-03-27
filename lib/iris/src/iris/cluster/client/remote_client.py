@@ -130,6 +130,18 @@ class RemoteClusterClient:
 
         return call_with_retry(f"get_job_status({job_id})", _call)
 
+    def get_job_states(self, job_ids: list[JobName]) -> dict[str, int]:
+        """Lightweight batch query returning only the state enum per job."""
+
+        def _call():
+            request = cluster_pb2.Controller.GetJobStateRequest(
+                job_ids=[jid.to_wire() for jid in job_ids],
+            )
+            response = self._client.get_job_state(request)
+            return dict(response.states)
+
+        return call_with_retry(f"get_job_states({len(job_ids)} jobs)", _call)
+
     def wait_for_job(
         self,
         job_id: JobName,

@@ -830,13 +830,42 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.GetJobStatusResponse:
         """Get status of a specific job including all task statuses."""
-        job = _read_job(self._db, JobName.from_wire(request.job_id))
-        if not job:
-            raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
+        job_id = JobName.from_wire(request.job_id)
 
-        # Build task statuses with attempts, aggregate counts in single pass
-        tasks = tasks_for_job_with_attempts(self._db, job.job_id)
-        worker_addr_by_id = _worker_addresses_for_tasks(self._db, tasks)
+        # Single read_snapshot for all DB queries (was 3 separate checkouts).
+        with self._db.read_snapshot() as q:
+            job = q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
+            if not job:
+                raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
+
+            tasks = q.select(
+                TASKS,
+                where=TASKS.c.job_id == job_id.to_wire(),
+                order_by=(TASKS.c.job_id.asc(), TASKS.c.task_index.asc()),
+            )
+            if tasks:
+                attempts = q.select(
+                    ATTEMPTS,
+                    where=ATTEMPTS.c.task_id.in_([t.task_id.to_wire() for t in tasks]),
+                    order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
+                )
+            else:
+                attempts = []
+
+            # Collect worker IDs from DB columns (before attempt hydration).
+            # current_worker_id is the canonical denormalized column on tasks.
+            worker_ids = {t.current_worker_id for t in tasks if t.current_worker_id is not None}
+            if worker_ids:
+                placeholders = ",".join("?" for _ in worker_ids)
+                rows = q.raw(
+                    f"SELECT worker_id, address FROM workers WHERE worker_id IN ({placeholders})",
+                    tuple(str(wid) for wid in worker_ids),
+                )
+                worker_addr_by_id: dict[WorkerId, str] = {WorkerId(str(row.worker_id)): row.address for row in rows}
+            else:
+                worker_addr_by_id = {}
+
+        tasks = _tasks_with_attempts(tasks, attempts)
 
         task_statuses = []
         total_failure_count = 0
@@ -883,6 +912,30 @@ class ControllerServiceImpl:
             job=proto_job_status,
             request=redact_request_env_vars(job.request) if job.request else None,
         )
+
+    def get_job_state(
+        self,
+        request: cluster_pb2.Controller.GetJobStateRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetJobStateResponse:
+        """Lightweight batch job state query.
+
+        Returns only the state enum for each requested job, avoiding the cost
+        of loading tasks, attempts, and worker addresses.
+        """
+        wire_ids = list(request.job_ids)
+        if not wire_ids:
+            return cluster_pb2.Controller.GetJobStateResponse()
+
+        with self._db.read_snapshot() as q:
+            placeholders = ",".join("?" for _ in wire_ids)
+            rows = q.raw(
+                f"SELECT job_id, state FROM jobs WHERE job_id IN ({placeholders})",
+                tuple(wire_ids),
+            )
+
+        states = {row.job_id: row.state for row in rows}
+        return cluster_pb2.Controller.GetJobStateResponse(states=states)
 
     def terminate_job(
         self,

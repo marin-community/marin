@@ -176,16 +176,32 @@ def map_iris_job_state(iris_state: int) -> JobStatus:
 class IrisJobHandle:
     """JobHandle wrapping an iris.client.Job."""
 
+    # Client-side TTL for non-terminal states.  Terminal states are cached
+    # forever since a finished job never changes state.
+    _STATE_TTL: float = 0.5
+
     def __init__(self, job: IrisJob):
         self._job = job
+        self._cached_status: JobStatus | None = None
+        self._cache_time: float = 0.0
 
     @property
     def job_id(self) -> str:
         return str(self._job.job_id)
 
     def status(self) -> JobStatus:
-        iris_status = self._job.status()
-        return map_iris_job_state(iris_status.state)
+        now = time.monotonic()
+        if self._cached_status is not None:
+            if JobStatus.finished(self._cached_status):
+                return self._cached_status
+            if now - self._cache_time < self._STATE_TTL:
+                return self._cached_status
+
+        iris_state = self._job.state_only()
+        result = map_iris_job_state(iris_state)
+        self._cached_status = result
+        self._cache_time = now
+        return result
 
     def wait(
         self, timeout: float | None = None, *, raise_on_failure: bool = True, stream_logs: bool = False
@@ -197,6 +213,8 @@ class IrisJobHandle:
             if raise_on_failure:
                 raise
             logger.warning("Job %s failed with exception (raise_on_failure=False)", self.job_id, exc_info=True)
+        # Invalidate cache so we pick up the final state.
+        self._cached_status = None
         return self.status()
 
     def terminate(self) -> None:
