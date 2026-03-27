@@ -203,8 +203,9 @@ def normalize_to_parquet(
         output_dir = os.path.join(output_path, subdir) if subdir else output_path
 
         logger.info(
-            "Normalizing %s: %d files, %d bytes, %d shards",
-            subdir or "(root)",
+            "Normalizing %s → %s: %d files, %d bytes, %d shards",
+            os.path.join(input_path, subdir) if subdir else input_path,
+            output_dir,
             len(files),
             total_bytes,
             num_shards,
@@ -212,7 +213,7 @@ def normalize_to_parquet(
 
         pipeline = _build_pipeline(files, output_dir, num_shards, text_field, id_field)
         ctx = ZephyrContext(
-            name=f"normalize-{subdir or 'root'}",
+            name=f"normalize-{subdir.replace('/', '-') if subdir else 'all'}",
             resources=ResourceConfig(cpu=1, ram="4g"),
         )
         ctx.execute(pipeline)
@@ -223,7 +224,7 @@ def normalize_to_parquet(
         for future in as_completed(futures):
             subdir = futures[future]
             future.result()  # Propagate exceptions
-            logger.info("Completed normalization for %s", subdir or "(root)")
+            logger.info("Completed normalization for %s", os.path.join(output_path, subdir) if subdir else output_path)
 
 
 def normalize_step(
