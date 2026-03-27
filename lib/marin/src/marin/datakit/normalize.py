@@ -24,7 +24,7 @@ import dupekit
 from iris.marin_fs import url_to_fs
 from marin.execution.step_spec import StepSpec
 from fray.v2 import ResourceConfig
-from zephyr import Dataset, ZephyrContext, counters
+from zephyr import Dataset, ZephyrContext
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 
 logger = logging.getLogger(__name__)
@@ -78,7 +78,6 @@ def _make_normalize_fn(
         if source_id is not None:
             out["source_id"] = source_id
 
-        counters.increment("normalize/records_in")
         return out
 
     return normalize_record
