@@ -145,11 +145,7 @@ def _build_pipeline(
     """Build a single Zephyr pipeline for one subdirectory."""
     normalize_record = _make_normalize_fn(text_field, id_field)
 
-    def keep_first(_key: str, items: Iterator[dict[str, Any]]) -> dict[str, Any]:
-        counters.increment("normalize/records_out")
-        return next(iter(items))
-
-    def combiner(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    def keep_first(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
         yield next(iter(items))
 
     return (
@@ -159,7 +155,7 @@ def _build_pipeline(
         .group_by(
             key=lambda r: r["id"],
             reducer=keep_first,
-            combiner=combiner,
+            combiner=keep_first,
             sort_by=lambda r: r["id"],
             num_output_shards=num_shards,
         )
