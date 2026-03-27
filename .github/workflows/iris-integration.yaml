@@ -77,6 +77,15 @@ jobs:
           WANDB_API_KEY: ""
           JAX_TRACEBACK_FILTERING: off
 
+      - name: Run full integration pipeline
+        run: |
+          timeout 600 uv run tests/integration/iris/run_iris_full_integration.py \
+            --controller-url "$IRIS_CONTROLLER_URL"
+        env:
+          WANDB_MODE: disabled
+          WANDB_API_KEY: ""
+          JAX_TRACEBACK_FILTERING: off
+
       - name: Stop cluster
         if: always()
         run: kill $CLUSTER_PID 2>/dev/null || true

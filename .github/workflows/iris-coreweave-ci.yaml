@@ -151,6 +151,21 @@ jobs:
             -o "addopts=" \
             -x
 
+      - name: Run full integration pipeline
+        env:
+          WANDB_MODE: disabled
+          WANDB_API_KEY: ""
+          JAX_TRACEBACK_FILTERING: off
+          MARIN_CI_S3_PREFIX: s3://marin-na/temp/ci
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+          FSSPEC_S3: '{"endpoint_url": "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"}'
+        run: |
+          IRIS_CONTROLLER_URL="http://localhost:10000"
+          timeout 600 uv run tests/integration/iris/run_iris_full_integration.py \
+            --controller-url "$IRIS_CONTROLLER_URL"
+
       - name: Stop port-forward
         if: always()
         run: |
