@@ -23,6 +23,7 @@ from typing import Any
 import dupekit
 from iris.marin_fs import url_to_fs
 from marin.execution.step_spec import StepSpec
+from fray.v2 import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 
@@ -234,7 +235,10 @@ def normalize_to_parquet(
         )
 
         pipeline = _build_pipeline(files, output_dir, num_shards, text_field, id_field)
-        ctx = ZephyrContext(name=f"normalize-{subdir or 'root'}")
+        ctx = ZephyrContext(
+            name=f"normalize-{subdir or 'root'}",
+            resources=ResourceConfig(cpu=2, ram="16g"),
+        )
         ctx.execute(pipeline)
 
     # Launch all subdirectory pipelines concurrently
