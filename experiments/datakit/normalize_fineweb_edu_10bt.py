@@ -3,16 +3,17 @@
 
 """Normalize FineWeb-Edu 10BT sample to datakit standard Parquet format."""
 
+from iris.marin_fs import marin_temp_bucket
 from marin.datakit.normalize import normalize_to_parquet
 
 INPUT_PATH = "gs://marin-us-central2/raw/fineweb-edu-87f0914/sample/10BT"
-OUTPUT_PATH = "gs://marin-us-central2/datakit/fineweb-edu/sample/10BT/normalized"
 
 
 def main():
+    output_path = marin_temp_bucket(ttl_days=7, prefix="datakit/fineweb-edu/sample/10BT/normalized")
     normalize_to_parquet(
         input_path=INPUT_PATH,
-        output_path=OUTPUT_PATH,
+        output_path=output_path,
         text_field="text",
         id_field="id",
     )
