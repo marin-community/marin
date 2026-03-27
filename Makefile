@@ -1,4 +1,4 @@
-.PHONY: help clean check fix cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit rust-dev rust-user rust-status
+.PHONY: help clean check fix cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit rust-dev rust-user rust-status rust-package
 .DEFAULT: help
 
 
@@ -243,6 +243,9 @@ rust-dev:
 rust-user:
 	@python3 scripts/rust_mode.py user
 	uv sync
+
+rust-package:
+	@python3 scripts/rust_package.py
 
 rust-status:
 	@python3 scripts/rust_mode.py status
