@@ -23,7 +23,7 @@ from typing import Any
 import dupekit
 from iris.marin_fs import url_to_fs
 from marin.execution.step_spec import StepSpec
-from zephyr import Dataset, ZephyrContext
+from zephyr import Dataset, ZephyrContext, counters
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 
 logger = logging.getLogger(__name__)
@@ -109,6 +109,7 @@ def _make_normalize_fn(
         if source_id is not None:
             out["source_id"] = source_id
 
+        counters.increment("normalize/records_in")
         return out
 
     return normalize_record
@@ -179,12 +180,17 @@ def _build_pipeline(
         """Deduplicate by id and yield sorted records."""
         seen: set[str] = set()
         records: list[dict[str, Any]] = []
+        dupes = 0
         for record in items:
             rid = record["id"]
             if rid not in seen:
                 seen.add(rid)
                 records.append(record)
+            else:
+                dupes += 1
         records.sort(key=lambda r: r["id"])
+        counters.increment("normalize/records_out", len(records))
+        counters.increment("normalize/duplicates_removed", dupes)
         yield from records
 
     def combiner(_key: int, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
