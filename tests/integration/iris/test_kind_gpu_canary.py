@@ -102,10 +102,13 @@ HAS_DOCKER = (
     ).returncode
     == 0
 )
+# Kind cluster creation fails on many CI runners (cgroup/networking issues)
+# even when the binaries exist. Require explicit opt-in via env var.
+KIND_ENABLED = os.environ.get("IRIS_KIND_TESTS", "") == "1"
 
 skip_no_kind = pytest.mark.skipif(
-    not (HAS_KIND and HAS_KUBECTL and HAS_DOCKER),
-    reason="kind, kubectl, and a running Docker daemon are required",
+    not (KIND_ENABLED and HAS_KIND and HAS_KUBECTL and HAS_DOCKER),
+    reason="Set IRIS_KIND_TESTS=1 with kind, kubectl, and a running Docker daemon",
 )
 
 
