@@ -1382,8 +1382,10 @@ class ControllerServiceImpl:
             source = f"{job_wire}:{request.attempt_id}"  # exact key
         elif job_name.is_task:
             source = f"{job_wire}:%"  # all attempts of a single task
+        elif request.include_children:
+            source = f"{job_wire}/%"  # all tasks + child jobs
         else:
-            source = f"{job_wire}/%"  # all tasks in a job
+            source = f"{job_wire}/%"  # query broadly, post-filter below
 
         max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
 
@@ -1399,9 +1401,15 @@ class ControllerServiceImpl:
 
         fetch_response = self.fetch_logs(fetch_request, ctx)
 
+        entries = fetch_response.entries
+        if not job_name.is_task and not request.include_children:
+            # Only keep direct task entries (key segment after job prefix starts with a digit)
+            prefix = job_wire + "/"
+            entries = [e for e in entries if e.key.startswith(prefix) and e.key[len(prefix) : len(prefix) + 1].isdigit()]
+
         batch = cluster_pb2.Controller.TaskLogBatch(
             task_id=request.id,
-            logs=fetch_response.entries,
+            logs=entries,
         )
 
         truncated = max_lines > 0 and len(fetch_response.entries) >= max_lines
