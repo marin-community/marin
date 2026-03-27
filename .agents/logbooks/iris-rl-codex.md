@@ -5745,3 +5745,604 @@ Experiment callsites updated from fake disable to explicit disable:
 Validation:
 - `uv run pytest -q tests/rl/test_rollout_worker.py` -> `20 passed`
 - `./infra/pre-commit.py --fix ...` on touched files -> `OK`
+
+## 2026-03-26 10:10 PDT - Quantified Rollout Overproduction / Discard In The 2-Sampler Run
+
+Question:
+- with `2` samplers, `n_prompts=64`, and group size `16`, how much rollout data are we actually throwing away?
+
+Relevant config for the current `e4ms2-20260326-121919` run:
+- each rollout batch contains:
+  - `64 * 16 = 1024` completions
+- trainer batch size is:
+  - `1024`
+- replay buffer policy in [exp_iris_rl_regression_direct_gcs_prod.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/exp_iris_rl_regression_direct_gcs_prod.py):
+  - `max_samples=1`
+  - `max_rollout_step_delay=1`
+  - `capacity=4096`
+
+Replay semantics that matter:
+- trainer does **not** consume whole producer batches serially
+- replay buffer samples `1024` **individual** rollouts from the combined pool
+- each rollout can be used at most once (`max_samples=1`)
+- rollouts can survive for at most one trainer-step of lag (`max_rollout_step_delay=1`)
+
+Observed W&B counters at measurement time:
+- trainer `global_step` rows:
+  - `154` completed steps (`0..153`)
+- rollout-0 cumulative rollout batches:
+  - `91`
+- rollout-1 cumulative rollout batches:
+  - `129`
+- total rollout batches produced:
+  - `220`
+
+Produced vs consumed:
+- trainer consumption:
+  - `154 * 1024 = 157,696` rollouts
+- sampler production:
+  - `220 * 1024 = 225,280` rollouts
+- excess produced over consumed:
+  - `225,280 - 157,696 = 67,584` rollouts
+  - equivalently:
+    - `66` extra full minibatches
+
+Bound on actual discarded data:
+- replay capacity is only:
+  - `4096` rollouts
+  - `4` full minibatches
+- so the true discarded amount is bounded by:
+  - minimum discarded:
+    - `67,584 - 4,096 = 63,488`
+  - maximum discarded:
+    - `67,584`
+
+Interpretation:
+- at this point in the run, we have thrown away roughly:
+  - `63k-68k` rollouts
+- that is about:
+  - `28%-30%` of produced rollout data
+- this is the concrete cost of using extra sampler capacity to keep the trainer much closer to saturation
+
+Important nuance:
+- this is not “waste caused by a bug in replay”
+- it is the expected consequence of:
+  - overproducing relative to one trainer step
+  - allowing only `1` use per rollout
+  - allowing only `1` step of rollout staleness
+
+Practical implication:
+- the current 2-sampler topology is buying speed with real inference overproduction
+- if TPU budget matters more than absolute throughput, the next tuning knob is probably:
+  - reduce per-sampler rollout batch size
+- if absolute throughput matters more, the current behavior is acceptable and expected
+
+## 2026-03-26 11:55 PDT - Added Explicit vLLM KV-Cache Metrics Flag
+
+Change:
+- added `kv_cache_metrics: bool = False` to `vLLMInferenceContextConfig`
+- threaded that flag through both sync `LLM(...)` and async/inflight `AsyncEngineArgs(...)`
+- added `--kv-cache-metrics` to the direct prod experiment launcher
+
+Files changed:
+- `lib/marin/src/marin/rl/environments/inference_ctx/vllm.py`
+- `lib/marin/src/marin/rl/environments/inference_ctx/inflight/worker.py`
+- `experiments/exp_iris_rl_regression_direct_gcs_prod.py`
+- `tests/rl/test_inference_ctx.py`
+- `tests/rl/test_rollout_worker.py`
+
+Validation:
+- `uv run pytest -q tests/rl/test_inference_ctx.py tests/rl/test_rollout_worker.py` -> `33 passed`
+- `./infra/pre-commit.py --fix ...` on touched files -> `OK`
+
+Important caveat:
+- this change only passes the vLLM observability flag through to rollout-worker engine creation
+- it does not by itself add a custom W&B exporter for those metrics
+- new launches can now opt in with `--kv-cache-metrics`, after which we can inspect whether the underlying vLLM runtime surfaces the cache metrics in logs or metric endpoints in a way that is useful to us
+
+## 2026-03-26 12:04 PDT - DP-vs-TP Critique and Validation Plan
+
+Question under discussion:
+- should rollout inference stay on `TP=4` per sampler, or is there a better packing / sharing configuration such as DP-style replicas on the same `v5p-8` host?
+
+What is actually established:
+- current sampler HBM is dominated by reserved KV cache, not weights
+- archived rollout logs show:
+  - model-loaded HBM per chip: about `3.74 GiB`
+  - KV init HBM per chip: about `86.17 / 95.74 GiB`
+  - `GPU KV cache size: 2,700,928 tokens`
+- current live sampler W&B system metrics show:
+  - median HBM per chip: about `86.36 GiB`
+  - max HBM per chip: about `90.77 GiB`
+- from the KV init shape, reserved KV cache is about:
+  - `82.43 GiB/chip`
+
+Critique of the TP-vs-DP discussion:
+- the claim that `DP=4` does not fit under the current cache reservation is likely correct
+- the stronger claim that `TP=4` is therefore forced is too strong
+- the more plausible alternative is not pure `DP=4`; it is `TP=2 / DP=2` style packing on one `v5p-8`
+
+Memory arithmetic:
+- current `TP=4` sampler:
+  - weights/chip: about `3.74 GiB`
+  - median observed total/chip: about `86.36 GiB`
+  - peak observed total/chip: about `90.77 GiB`
+- projected `DP=4` on the same host:
+  - add about `11.22 GiB/chip` for full weights instead of TP-sharded weights
+  - projected median: about `97.58 GiB/chip`
+  - projected peak: about `101.99 GiB/chip`
+  - conclusion: does not fit under the current cache budget
+- projected `TP=2 / DP=2`:
+  - add about `3.74 GiB/chip` relative to current TP=4
+  - projected median: about `90.10 GiB/chip`
+  - projected peak: about `94.51 GiB/chip`
+  - conclusion: might fit, but with very little headroom
+
+Important caveat:
+- this is still only memory arithmetic
+- it does not prove throughput wins or losses
+- external vLLM TPU work in `/Users/ahmed/code/vllm_tpu_multi/.agents/logbooks/no_ray_multihost_vllm.md` suggests small independent replicas can beat one bigger TP server for throughput on 8B, but that is not yet an apples-to-apples proof for this exact `v5p-8` RL sampler setup
+
+Role of `kv_cache_metrics`:
+- the new `kv_cache_metrics` flag is useful for answering whether current cache reservation is oversized and whether lower-cache packing is safe
+- it is not by itself enough to tell us whether DP-style packing is faster than TP
+- to answer throughput cleanly, we still need an A/B benchmark
+- to answer memory cleanly, we need the cache metrics to actually be surfaced somewhere we can inspect, plus prompt-token counts on rollout batches
+
+Plan:
+1. Launch one rollout-enabled run with `--kv-cache-metrics`
+2. Verify whether vLLM actually exposes usable cache metrics in logs or metrics endpoints in our embedded rollout-worker setup
+3. Add minimal rollout logging for prompt-token counts so live working-set size is bounded more tightly than response-only lower bounds
+4. Use those metrics to estimate whether KV cache can be reduced enough for `TP=2 / DP=2` packing on one `v5p-8`
+5. If the memory envelope looks viable, run an explicit A/B:
+   - baseline: current `TP=4` sampler layout
+   - candidate: `TP=2 / DP=2` style packing
+6. Compare:
+   - rollout batch time
+   - trainer batch-prep time
+   - end-to-end train step time
+   - HBM headroom and stability
+
+Decision rule:
+- if `TP=2 / DP=2` fits comfortably and improves end-to-end step time, it is the better inference topology
+- if it fits but hurts throughput, stay on `TP=4`
+- if it does not fit with enough safety margin, stop and keep `TP=4`
+
+## 2026-03-26 12:12 PDT - Recommended Pure-Inference Experiment Ladder
+
+Conclusion:
+- for the TP-vs-packed-DP question, the next experiments should be pure inference first, not full RL
+- reason: RL end-to-end step time is materially noisier than sampler throughput because it mixes in trainer hooks, checkpoints, replay timing, and eval cadence
+- current e4ms2 evidence:
+  - trainer wall-clock median: about `101.3s`
+  - trainer wall-clock p90: about `207.0s`
+  - trainer wall-clock CV: about `0.42`
+  - by contrast, rollout-storage write time is only about `0.31s` median per batch and is negligible next to `163-228s` rollout batch times
+
+Recommended experiment ladder:
+
+### INF-001: TP=4 baseline, current sampler shape
+Purpose:
+- establish the real single-engine inference baseline under current RL-like prompt/response shape
+
+Config:
+- `TP=4`
+- current `max_model_len=2048`
+- current batch shape equivalent to RL sampler load
+- enable `kv_cache_metrics`
+- log prompt-token counts and response-token counts
+- run `20-30` rollout-equivalent batches after warmup
+
+Measure:
+- batch wall time
+- tokens/sec
+- HBM per chip
+- KV cache metrics
+- prompt tokens, response tokens, total live-sequence pressure
+
+### INF-002: TP=4 cache-budget sweep
+Purpose:
+- determine whether current KV cache reservation is oversized and how much it can be reduced before throughput degrades
+
+Config sweep:
+- hold topology fixed at `TP=4`
+- vary `gpu_memory_utilization`, e.g. `0.90`, `0.80`, `0.70`
+- optionally lower `max_model_len` only if the cache metrics imply large unused slack at 2048
+
+Measure:
+- same metrics as INF-001
+- especially whether throughput stays flat while cache reservation falls
+
+Decision point:
+- if reducing cache budget does not hurt throughput much, that is evidence current TP=4 reservation is oversized and packed layouts become more plausible
+
+### INF-003: TP=2 single-engine feasibility run
+Purpose:
+- measure the actual cost of moving from TP=4 to TP=2 before attempting any co-location
+
+Config:
+- one engine only
+- `TP=2`
+- same prompt/response shape
+- `kv_cache_metrics` enabled
+
+Measure:
+- batch wall time
+- tokens/sec
+- HBM per chip
+- cache behavior
+
+Decision point:
+- if single-engine TP=2 already looks bad on throughput or HBM margin, stop; there is no reason to attempt packed TP=2x2
+
+### INF-004: Packed TP=2 / DP=2-style co-location
+Purpose:
+- test the real hypothesis: two smaller independent inference replicas on one `v5p-8` host may beat one TP=4 engine
+
+Config:
+- two independent `TP=2` engines on one `v5p-8`
+- same total request load as INF-001
+- route requests across both replicas
+
+Measure:
+- aggregate tokens/sec
+- per-replica tokens/sec
+- HBM headroom per chip
+- cache behavior per replica
+- stability / OOM margin
+
+Decision point:
+- if aggregate throughput improves and HBM remains safe, packed TP=2x2 is the better inference topology
+- if not, keep TP=4
+
+### INF-005: Short RL validation only after an inference winner exists
+Purpose:
+- confirm the inference winner actually improves trainer feed rate in the real loop
+
+Config:
+- short RL run only, about `30-40` train steps
+- push checkpoints out of the measurement window
+- minimize eval noise
+
+Measure:
+- trainer batch-prep time
+- train step wall time
+- end-to-end throughput
+
+Recommended order:
+1. INF-001
+2. INF-002
+3. INF-003
+4. INF-004 only if INF-003 is promising
+5. INF-005 only after an inference winner exists
+
+Smallest high-information run:
+- `20-30` rollout-equivalent batches per inference condition is enough for the first pass
+- do not start with a 100-200 step RL run for this question
+
+## 2026-03-26 - Imported Claude pure-inference benchmark results
+
+Source:
+- `.agents/logbooks/iris-rl-claude.md`
+
+Purpose:
+- carry the newer Claude-side inference benchmarking results into this Codex logbook without duplicating the earlier eval-cadence and `e4par`/`e4ms2` RL findings that were already recorded here
+
+### INF-001: TP=4 pure-inference baseline completed
+
+Artifacts:
+- Iris root job:
+  - `/ahmed/inf-001-tp4-0326-r4`
+- child job:
+  - `/ahmed/inf-001-tp4-0326-r4/inf-001-inf001-tp4-20260326-195258`
+- W&B run:
+  - `inf001-tp4-20260326-195258`
+- script:
+  - `experiments/exp_inf_001_tp4_baseline.py`
+
+Config:
+- model:
+  - `meta-llama/Llama-3.1-8B-Instruct`
+- TPU:
+  - `v5p-8`
+- topology:
+  - `TP=4`
+- `max_model_len=2048`
+- `gpu_memory_utilization=0.90`
+- batch shape:
+  - `64` prompts x `16` generations = `1024` completions per batch
+- batches:
+  - `25` total, `3` warmup + `22` measured
+
+Results:
+- median output throughput:
+  - `3,345 tok/s`
+- mean output throughput:
+  - `3,340 tok/s`
+- p10-p90 throughput:
+  - `3,292-3,405 tok/s`
+- median batch time:
+  - `108.4s`
+- HBM after model load:
+  - `86.2 GiB/chip`
+- throughput CV:
+  - about `3.4%`
+
+Interpretation:
+- pure inference matches the `e4ms2` rollout-worker throughput almost exactly, so rollout-side grading/serialization overhead is not the dominant limit
+- the `TP=4` baseline leaves only about `9 GiB/chip` headroom at `gpu_memory_utilization=0.90`
+
+### INF-002: TP=4 cache-budget sweep completed
+
+Purpose:
+- test whether the current KV cache reservation is oversized by sweeping `gpu_memory_utilization` while holding the rest of the sampler shape fixed
+
+Sweep results:
+
+| `gpu_memory_utilization` | HBM per chip (GiB) | Median tok/s | Median batch time (s) |
+|---|---|---|---|
+| `0.90` | `86.2` | `3,345` | `108.4` |
+| `0.80` | `76.6` | `3,381` | `107.4` |
+| `0.70` | `67.0` | `3,357` | `110.4` |
+| `0.60` | `57.4` | `3,385` | `107.0` |
+
+Important preserved engine details from Claude log:
+- all runs used vLLM `0.13.2.post6`, V1 engine, `dtype=bfloat16`, `TP=4`, `max_seq_len=2048`, `enable_prefix_caching=True`, `enable_chunked_prefill=True`, `enforce_eager=True`, `kv_cache_metrics=True`
+- KV cache capacity by budget:
+  - `0.90` -> `2,700,928` tokens
+  - `0.80` -> `2,387,200` tokens
+  - `0.70` -> `2,073,472` tokens
+  - `0.60` -> `1,759,744` tokens
+
+Key findings:
+- throughput stayed flat across the entire `0.90 -> 0.60` sweep
+  - spread was under about `1.2%`
+- dropping from `0.90` to `0.60` freed about `28.8 GiB/chip` with no measured throughput penalty
+- the KV cache at `0.90` was materially oversized for this RL-like prompt/response shape
+- HBM is therefore not the blocker for packed `TP=2` experiments
+
+Decision imported from Claude:
+- proceed to `INF-003`
+- for feasibility work, use `gpu_memory_utilization=0.70` or `0.60` only if extra headroom is useful operationally; throughput evidence did not require the larger cache budget
+
+### INF-003: TP=2 single-engine feasibility launched, with an important correction
+
+Jobs launched:
+- `INF-003a`
+  - `TP=2`
+  - `gpu_memory_utilization=0.90`
+  - root job: `/ahmed/inf-003-tp2-0326`
+- `INF-003b`
+  - `TP=2`
+  - `gpu_memory_utilization=0.45`
+  - root job: `/ahmed/inf-003-tp2-gpu45-0326`
+
+Important correction from Claude:
+- the original rationale for `INF-003b` was wrong
+- packed `TP=2x2` on one `v5p-8` does not split chip memory in half per engine
+- the intended packed design uses disjoint chip partitions via `TPU_VISIBLE_CHIPS`
+  - engine 1 on chips `0,1`
+  - engine 2 on chips `2,3`
+- each engine therefore still gets full per-chip HBM on its own 2-chip slice
+- so the real packed-topology comparison is:
+  - `2 * throughput(INF-003a)` vs `INF-001`
+- `INF-003b` is still useful only as additional TP=2 cache-sensitivity data
+
+Status at Claude handoff:
+- `INF-003` results were still pending in the Claude logbook
+
+### INF-004 direction imported from Claude
+
+Proposed packed benchmark:
+- one `v5p-8` host
+- two subprocesses, each running independent `TP=2` inference
+- process layout:
+  - subprocess 1: `TPU_VISIBLE_CHIPS=0,1`
+  - subprocess 2: `TPU_VISIBLE_CHIPS=2,3`
+- use offline `LLM.generate()` rather than `vllm serve` so the benchmark stays aligned with the RL rollout-worker API
+
+Decision gate:
+- if aggregate `2 x TP=2` throughput beats the `INF-001` `TP=4` baseline (`3,345 tok/s`) and remains stable, packed `TP=2x2` wins
+- otherwise keep `TP=4`
+
+### Benchmark observability improvement carried over
+
+Claude also noted that the pure-inference benchmark scripts now log KV-cache init details to W&B under `kv_cache/`, including:
+- `kv_cache/num_gpu_blocks`
+- `kv_cache/block_size`
+- `kv_cache/total_tokens`
+- `kv_cache/max_concurrency_2048`
+- `kv_cache/gpu_memory_utilization`
+
+Operational value:
+- this removes dependence on ephemeral Iris logs for future cache-sizing comparisons
+
+## 2026-03-26 - INF-003a live readout and immediate next step
+
+Source:
+- W&B run:
+  - `https://wandb.ai/marin-community/marin_iris_rl_debug/runs/inf003-tp2-20260326-225800`
+
+Status at read time:
+- run state:
+  - `running`
+- final `summary/*` fields were not populated yet because the run had not finished
+- however, the run already had `16` measured batches in W&B history, which is enough to answer the launch-readiness question for `INF-004a`
+
+Measured `INF-003a` throughput from live history:
+- measured batches observed:
+  - `16`
+- median output throughput:
+  - `2985.3 tok/s`
+- mean output throughput:
+  - `2973.6 tok/s`
+- p10-p90 throughput:
+  - `2880.6 - 3040.7 tok/s`
+- median batch time:
+  - `122.4s`
+- mean batch time:
+  - `124.2s`
+- p10-p90 batch time:
+  - `113.6 - 135.4s`
+
+Interpretation:
+- single-engine `TP=2` is clearly viable
+- it is materially slower than the `TP=4` baseline per engine, but not remotely bad enough to stop the packed experiment
+- using the live median as the planning number:
+  - projected packed throughput for `2 x TP=2` is about:
+    - `2 * 2985.3 = 5970.6 tok/s`
+- compare against `INF-001` TP=4 baseline:
+  - `3345 tok/s`
+- projected packed gain:
+  - about `1.78x`
+
+Decision:
+- we have enough information to launch `INF-004a`
+- no need to wait for `INF-003a` to fully finish just to decide whether the packed benchmark is justified
+
+Immediate next steps:
+1. Launch `INF-004a` using the new script:
+   - `experiments/exp_inf_004_tp2x2_packed.py`
+2. Keep the benchmark apples-to-apples with `INF-001` / `INF-003a`:
+   - total prompts `64`
+   - generations `16`
+   - `gpu_memory_utilization=0.90`
+   - `TP=2` per replica
+   - chip groups:
+     - `0,1`
+     - `2,3`
+3. Evaluate packed success on:
+   - aggregate makespan throughput
+   - aggregate index-aligned throughput
+   - per-replica stability
+   - HBM headroom
+   - absence of cross-process TPU initialization/pathology
+4. If `INF-004a` lands near the projected `~6.0k tok/s` and remains stable, the next benchmark should be a short RL confirmation run rather than another pure-inference topology sweep
+
+## 2026-03-26 - INF-004a packed `TP=2x2` completed successfully
+
+Launch command:
+- `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name inf-004a-tp2x2-0326-1646 --region us-central1 -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- uv run python experiments/exp_inf_004_tp2x2_packed.py --experiment-name-suffix inf004-tp2x2 --n-prompts 64 --n-generations 16 --num-batches 25 --warmup-batches 3 --tensor-parallel-size 2 --gpu-memory-utilization 0.90 --chip-groups '0,1;2,3' --region us-central1`
+
+Artifacts:
+- root job:
+  - `/ahmed/inf-004a-tp2x2-0326-1646`
+- child benchmark job:
+  - `/ahmed/inf-004a-tp2x2-0326-1646/inf-004-inf004-tp2x2-20260326-234814`
+- W&B run:
+  - `https://wandb.ai/marin-community/marin_iris_rl_debug/runs/inf004-tp2x2-20260326-234814`
+
+Final status:
+- root job:
+  - `JOB_STATE_SUCCEEDED`
+- child job:
+  - `JOB_STATE_SUCCEEDED`
+- child `failure_count`:
+  - `0`
+- child `preemption_count`:
+  - `0`
+- babysitting outcome:
+  - no code fixes, restarts, or TPU recovery actions were needed
+
+Packed benchmark results from W&B summary:
+- measured batches:
+  - `22`
+- aggregate makespan throughput:
+  - `5672.2 tok/s`
+- aggregate index-aligned median throughput:
+  - `5462.1 tok/s`
+- aggregate index-aligned p10-p90:
+  - `5109.4 - 5619.3 tok/s`
+- aggregate makespan measured elapsed time:
+  - `1430.2s`
+- aggregate total measured output tokens:
+  - `8,112,425`
+- worker 0 median throughput:
+  - `2875.2 tok/s`
+- worker 1 median throughput:
+  - `2840.6 tok/s`
+- worker 0 median batch time:
+  - `65.8s`
+- worker 1 median batch time:
+  - `64.7s`
+- per-worker HBM after init:
+  - `86.16 GiB/chip`
+- per-worker KV cache capacity:
+  - `1,289,088` tokens
+
+Observed end-of-run summaries from job logs:
+- worker 0:
+  - `2875.2 tok/s` median (`2751.1-2947.8` p10-p90), `65.8s/batch` median
+- worker 1:
+  - `2840.6 tok/s` median (`2726.3-2941.2` p10-p90), `64.7s/batch` median
+- packed aggregate:
+  - makespan `5672.2 tok/s`
+  - index-aligned median `5462.1 tok/s`
+
+Comparison against earlier baselines:
+- vs `INF-001` `TP=4` baseline (`3345 tok/s` median):
+  - packed makespan throughput is about `1.70x`
+  - packed index-aligned median is about `1.63x`
+- vs the `INF-003a` live planning projection (`~5970.6 tok/s` from `2 * 2985.3`):
+  - realized packed makespan throughput reached about `95%` of the simple linear projection
+
+Interpretation:
+- packed `2 x TP=2` on one `v5p-8` clearly beats single-engine `TP=4` for this RL-like offline inference shape
+- cross-process interference exists but is modest; aggregate makespan throughput remained close to the sum of the two worker medians
+- the benchmark ran cleanly end-to-end, so the main question is no longer inference feasibility
+- for pure inference on this workload, packed `TP=2x2` is the winning topology
+
+Updated next step:
+- stop spending cycles on more topology-only pure-inference experiments unless a new deployment constraint appears
+- move to a short RL confirmation run that uses the winning packed topology, then compare wall-clock step time and sampler/trainer overlap against `e4ms2`
+
+## 2026-03-26 - Overall next steps after `INF-004a`
+
+Bottom line:
+- `INF-004a` is strong evidence that the rollout side can probably be reduced from:
+  - `2 x v5p-8` rollout workers
+  - to `1 x v5p-8` rollout host running packed `2 x TP=2`
+- but this is only proven for pure inference so far
+- it does **not** yet prove that the full RL system can replace the `e4ms2` sampler topology with one packed rollout job at the same trainer-facing cadence
+
+Current best overall plan:
+1. run a short RL confirmation that preserves the `e4ms2` trainer/curriculum/replay/eval shape as closely as possible while targeting the reduced rollout footprint
+2. compare that run directly against `e4ms2` on:
+   - wall-clock per train step
+   - inter-step idle time
+   - `batch_prep`
+   - rollout throughput
+   - eval interference
+   - IS ratio / freshness behavior
+3. if the proxy run still leaves a meaningful gap to `e4ms2`, implement true packed rollout support inside the RL path
+   - one rollout Iris job
+   - two independent `TP=2` vLLM engines
+   - chip groups `0,1` and `2,3`
+4. once that packed RL path exists, rerun the same short confirmation and then promote:
+   - `1 x v5p-8` trainer
+   - `1 x v5p-8` packed rollout
+   as the new default Llama 3.1 8B Iris RL shape
+
+Separate experiment file created for this next stage:
+- `experiments/exp_iris_rl_regression_direct_gcs_packed_candidate.py`
+
+What that file does:
+- preserves the known-good `e4ms2` RL envelope:
+  - `train_batch_size=1024`
+  - `n_prompts=64`
+  - `n_generations_per_prompt=16`
+  - `eval_frequency=1`
+  - `inflight_weight_updates=True`
+  - replay buffer `max_rollout_step_delay=1`
+  - `1 x v5p-8` trainer
+- but fixes the currently launchable rollout footprint to:
+  - `1 x v5p-8` rollout worker
+- and records the true packed rollout target in the experiment metadata/logging:
+  - `2 x TP=2`
+  - chip groups `0,1` and `2,3`
+
+Important caveat recorded here:
+- the current RL orchestration/config surface still cannot express:
+  - two independent vLLM engines inside one rollout job
+  - each with its own `TPU_VISIBLE_CHIPS`
+- so the new file is a **packed-rollout proxy**, not the final packed rollout implementation

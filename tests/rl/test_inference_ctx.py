@@ -24,6 +24,7 @@ from marin.rl.environments.inference_ctx import (
     vLLMInferenceContext,
     vLLMInferenceContextConfig,
 )
+from marin.rl.environments.inference_ctx.vllm import InferenceMode
 from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
 
 
@@ -279,6 +280,55 @@ def test_vllm_inference_context_uses_canonical_model_name(monkeypatch):
     assert ctx.model_name == "gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f"
     assert ctx.canonical_model_name == "meta-llama/Llama-3.1-8B-Instruct"
     assert ctx.renderer == "meta-llama/Llama-3.1-8B-Instruct"
+
+
+def test_vllm_sync_engine_receives_kv_cache_metrics_flag(monkeypatch):
+    calls = {}
+
+    class _FakeLLM:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    monkeypatch.setattr(vLLMInferenceContext, "_patch_tpu_inference_registry", staticmethod(lambda: None))
+    monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.LLM", _FakeLLM)
+
+    config = vLLMInferenceContextConfig(
+        model_name="test-model",
+        max_model_len=1024,
+        tensor_parallel_size=2,
+        gpu_memory_utilization=0.9,
+        sampling_params=VLLMSamplingConfig(),
+        kv_cache_metrics=True,
+    )
+
+    vLLMInferenceContext._get_llm_engine(config)
+
+    assert calls["kv_cache_metrics"] is True
+
+
+def test_vllm_async_engine_receives_kv_cache_metrics_flag(monkeypatch):
+    calls = {}
+
+    class _FakeSyncVLLMWrapper:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    monkeypatch.setattr(vLLMInferenceContext, "_patch_tpu_inference_registry", staticmethod(lambda: None))
+    monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.SyncVLLMWrapper", _FakeSyncVLLMWrapper)
+
+    config = vLLMInferenceContextConfig(
+        model_name="test-model",
+        max_model_len=1024,
+        tensor_parallel_size=2,
+        gpu_memory_utilization=0.9,
+        sampling_params=VLLMSamplingConfig(),
+        mode=InferenceMode.ASYNC,
+        kv_cache_metrics=True,
+    )
+
+    vLLMInferenceContext._get_llm_engine(config)
+
+    assert calls["kv_cache_metrics"] is True
 
 
 def test_worker_extension_uses_public_sync_weights():

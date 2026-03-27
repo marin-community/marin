@@ -1,11 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Regression probe E4: direct + GCS + production-like RL launch.
+"""Short RL confirmation for the packed-rollout candidate.
 
-This preserves the direct coordinator topology while restoring the heavy 500-step
-production-like envelope. It uses the cached regional GCS model artifact rather
-than live Hugging Face bootstrap.
+Target deployment:
+- `1 x v5p-8` trainer
+- `1 x v5p-8` rollout host partitioned into `2 x TP=2` vLLM engines
+  on chip groups `0,1` and `2,3`
+
+Current RL limitation:
+- the RL rollout-worker path cannot yet express two independent vLLM engines
+  inside a single rollout job with per-engine `TPU_VISIBLE_CHIPS`
+
+So this script launches the closest currently supported confirmation run:
+- preserve the `e4ms2` trainer, curriculum, replay, and eval shape
+- reduce rollout footprint to a single `v5p-8`
+- keep this file as the dedicated landing zone for the eventual packed rollout
+  implementation
 """
 
 import argparse
@@ -40,13 +51,19 @@ logger = logging.getLogger(__name__)
 CANONICAL_MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 MODEL_PATH = "gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f"
 MARIN_PREFIX = "gs://marin-us-central1"
-DEFAULT_SUFFIX = "e4p"
-DEFAULT_NUM_TRAIN_STEPS = 500
-PROD_TPU_WORKER_RAM = "400g"
-DEFAULT_N_PROMPTS = 16
+DEFAULT_SUFFIX = "e4pk1"
+DEFAULT_NUM_TRAIN_STEPS = 40
+DEFAULT_N_PROMPTS = 64
 DEFAULT_EVAL_FREQUENCY = 1
 DEFAULT_REGION = "us-central1"
-DEFAULT_NUM_ROLLOUT_WORKERS = 1
+PROD_TPU_WORKER_RAM = "400g"
+
+TARGET_PACKED_REPLICAS = 2
+TARGET_PACKED_TENSOR_PARALLEL_SIZE = 2
+TARGET_PACKED_CHIP_GROUPS = ("0,1", "2,3")
+
+CURRENT_SUPPORTED_ROLLOUT_WORKERS = 1
+CURRENT_SUPPORTED_TENSOR_PARALLEL_SIZE = 4
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,40 +77,24 @@ def parse_args() -> argparse.Namespace:
         "--num-train-steps",
         type=int,
         default=DEFAULT_NUM_TRAIN_STEPS,
-        help="Number of trainer steps for the direct + GCS + prod probe.",
+        help="Number of trainer steps for the packed-rollout proxy run.",
     )
     parser.add_argument(
         "--n-prompts",
         type=int,
         default=DEFAULT_N_PROMPTS,
-        help="Number of prompts sampled per rollout batch.",
+        help="Number of prompts sampled per rollout batch. Keep at 64 to match e4ms2.",
     )
     parser.add_argument(
         "--eval-frequency",
         type=int,
         default=DEFAULT_EVAL_FREQUENCY,
-        help="Full-eval cadence in rollout-worker iterations.",
+        help="Full-eval cadence in completed trainer steps.",
     )
     parser.add_argument(
         "--region",
         default=DEFAULT_REGION,
         help="Concrete region for trainer and rollout TPU jobs.",
-    )
-    parser.add_argument(
-        "--inflight-weight-updates",
-        action="store_true",
-        help="Enable inflight rollout weight updates.",
-    )
-    parser.add_argument(
-        "--num-rollout-workers",
-        type=int,
-        default=DEFAULT_NUM_ROLLOUT_WORKERS,
-        help="Number of rollout worker jobs to launch.",
-    )
-    parser.add_argument(
-        "--kv-cache-metrics",
-        action="store_true",
-        help="Enable vLLM KV-cache metrics on rollout workers.",
     )
     return parser.parse_args()
 
@@ -142,6 +143,15 @@ def main() -> None:
         max_seq_len=2048,
     )
 
+    tags = [
+        "rl",
+        "iris-debug",
+        "regression",
+        "e4",
+        "packed-candidate",
+        "single-rollout",
+    ]
+
     job_config = RLJobConfig(
         model=model_config,
         vocab_size=hf_config.vocab_size,
@@ -149,7 +159,7 @@ def main() -> None:
             tracker=WandbConfig(
                 project="marin_iris_rl_debug",
                 name=name,
-                tags=["rl", "iris-debug", "regression", "e4", "direct-gcs-prod"],
+                tags=tags,
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=1024,
@@ -186,7 +196,7 @@ def main() -> None:
             model_name=MODEL_PATH,
             canonical_model_name=CANONICAL_MODEL_NAME,
             max_model_len=2048,
-            tensor_parallel_size=4,
+            tensor_parallel_size=CURRENT_SUPPORTED_TENSOR_PARALLEL_SIZE,
             gpu_memory_utilization=0.90,
             sampling_params=VLLMSamplingConfig(
                 temperature=1.0,
@@ -198,7 +208,7 @@ def main() -> None:
                 top_k=4096,
             ),
             load_format="runai_streamer",
-            kv_cache_metrics=args.kv_cache_metrics,
+            kv_cache_metrics=True,
         ),
         initial_checkpoint=MODEL_PATH,
         rollout_storage=RolloutStorageConfig(
@@ -211,12 +221,12 @@ def main() -> None:
             max_weight_transfer_wait_time=0,
             coordinator_name=f"wt-coord-{name}",
         ),
-        inflight_weight_updates=args.inflight_weight_updates,
+        inflight_weight_updates=True,
         run_id=name,
         log_freq=1,
         run_config=RunConfig(
             train_tpu_type="v5p-8",
-            num_rollout_workers=args.num_rollout_workers,
+            num_rollout_workers=CURRENT_SUPPORTED_ROLLOUT_WORKERS,
             inference_tpu_type="v5p-8",
             train_ram=PROD_TPU_WORKER_RAM,
             inference_ram=PROD_TPU_WORKER_RAM,
@@ -225,22 +235,25 @@ def main() -> None:
         rollout_tracker=RolloutTrackerConfig(
             project="marin_iris_rl_debug",
             name=f"{name}-rollout",
-            tags=["rl", "iris-debug", "regression", "e4", "rollout"],
+            tags=[*tags, "rollout"],
         ),
         pip_dependency_groups=["vllm", "math"],
     )
 
     logger.info(
-        "Running E4 direct + GCS + prod probe: %s "
-        "(n_prompts=%d, eval_frequency=%d, inflight=%s, rollout_workers=%d, "
-        "region=%s, kv_cache_metrics=%s)",
+        "Running packed-rollout proxy: %s "
+        "(trainer=v5p-8, rollout_workers=%d x v5p-8, n_prompts=%d, eval_frequency=%d, "
+        "inflight=%s, actual_tp=%d, target_packed=%d x TP=%d on chips=%s, region=%s)",
         name,
+        CURRENT_SUPPORTED_ROLLOUT_WORKERS,
         args.n_prompts,
         args.eval_frequency,
-        args.inflight_weight_updates,
-        args.num_rollout_workers,
+        True,
+        CURRENT_SUPPORTED_TENSOR_PARALLEL_SIZE,
+        TARGET_PACKED_REPLICAS,
+        TARGET_PACKED_TENSOR_PARALLEL_SIZE,
+        ";".join(TARGET_PACKED_CHIP_GROUPS),
         args.region,
-        args.kv_cache_metrics,
     )
     _run_rl_coordinator(job_config)
 

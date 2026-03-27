@@ -184,6 +184,7 @@ class SyncVLLMWrapper:
         gpu_memory_utilization: float = 0.95,
         load_format: str = "auto",
         enforce_eager: bool = True,
+        kv_cache_metrics: bool = False,
     ):
         if AsyncEngineArgs is None:
             raise RuntimeError("vLLM async engine is not available. Please install vLLM v1 with: pip install vllm")
@@ -200,6 +201,7 @@ class SyncVLLMWrapper:
             gpu_memory_utilization=gpu_memory_utilization,
             load_format=load_format,
             enforce_eager=enforce_eager,
+            kv_cache_metrics=kv_cache_metrics,
         )
 
         self.engine = self.bridge.run(self._init_engine(engine_args))

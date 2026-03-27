@@ -53,6 +53,7 @@ def test_create_inference_context_uses_local_metadata_for_remote_inflight_vllm(m
             max_model_len=2048,
             tensor_parallel_size=4,
             gpu_memory_utilization=0.9,
+            kv_cache_metrics=True,
             sampling_params=VLLMSamplingConfig(),
             load_format="runai_streamer",
         ),
@@ -62,6 +63,7 @@ def test_create_inference_context_uses_local_metadata_for_remote_inflight_vllm(m
     assert isinstance(ctx, _FakeAsyncContext)
     assert captured["config"].model_name == "/tmp/staged-model"
     assert captured["config"].load_format == "dummy"
+    assert captured["config"].kv_cache_metrics is True
 
 
 @pytest.mark.parametrize(

@@ -93,6 +93,7 @@ class vLLMInferenceContextConfig:
     mode: InferenceMode = InferenceMode.SYNC
     load_format: str = "auto"
     enforce_eager: bool = True
+    kv_cache_metrics: bool = False
 
 
 class vLLMInferenceContext(BaseInferenceContext):
@@ -191,6 +192,7 @@ class vLLMInferenceContext(BaseInferenceContext):
             gpu_memory_utilization=inference_config.gpu_memory_utilization,
             load_format=inference_config.load_format,
             enforce_eager=inference_config.enforce_eager,
+            kv_cache_metrics=inference_config.kv_cache_metrics,
         )
 
     def _convert_vllm_state_dict_to_trainer_keys(
