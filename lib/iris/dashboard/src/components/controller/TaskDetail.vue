@@ -7,7 +7,6 @@ import { stateToName } from '@/types/status'
 import type {
   TaskStatus,
   GetTaskStatusResponse,
-  GetTaskLogsResponse,
 } from '@/types/rpc'
 import { timestampMs, formatBytes, formatDuration, formatRelativeTime } from '@/utils/formatting'
 

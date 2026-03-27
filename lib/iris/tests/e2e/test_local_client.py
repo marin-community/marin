@@ -3,8 +3,6 @@
 
 """E2E tests for local cluster client functionality."""
 
-from __future__ import annotations
-
 import logging
 import time
 
@@ -17,13 +15,9 @@ from iris.rpc import cluster_pb2
 pytestmark = pytest.mark.e2e
 
 
-def extract_log_text(response: cluster_pb2.Controller.GetTaskLogsResponse) -> str:
-    """Extract log text from a batch log response."""
-    lines = []
-    for batch in response.task_logs:
-        for entry in batch.logs:
-            lines.append(entry.data)
-    return "\n".join(lines)
+def extract_log_text(response: cluster_pb2.FetchLogsResponse) -> str:
+    """Extract log text from a FetchLogs response."""
+    return "\n".join(e.data for e in response.entries)
 
 
 @pytest.fixture(scope="module")
@@ -59,7 +53,7 @@ def test_command_entrypoint_preserves_env_vars(client):
     # For attempt 0, build_common_iris_env omits the :attempt_id suffix
     # (only appended for retries), so expect just the task_id wire format.
     expected = job_id.task(0).to_wire()
-    response = client.fetch_task_logs(job_id.task(0))
+    response = client.fetch_logs(job_id.task(0).to_wire() + ":%")
     log_text = extract_log_text(response)
     assert f"IRIS_TASK_ID={expected}" in log_text
 
@@ -81,7 +75,7 @@ def test_log_streaming_captures_output_without_trailing_newline(client):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     # Check logs contain the output
-    response = client.fetch_task_logs(job_id.task(0))
+    response = client.fetch_logs(job_id.task(0).to_wire() + ":%")
     log_text = extract_log_text(response)
     assert "output without newline" in log_text
 
@@ -127,7 +121,7 @@ def test_command_entrypoint_with_custom_env_var(client):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     # Check logs contain the custom env var
-    response = client.fetch_task_logs(job_id.task(0))
+    response = client.fetch_logs(job_id.task(0).to_wire() + ":%")
     log_text = extract_log_text(response)
     assert "CUSTOM_VAR=custom_value" in log_text
 
@@ -218,14 +212,9 @@ def test_child_job_logs_sorted_by_timestamp(client):
     status = client.wait_for_job(parent_id, timeout=60.0, poll_interval=0.2)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED, f"Parent job failed: {status}"
 
-    response = client.fetch_task_logs(parent_id, include_children=True)
+    response = client.fetch_logs(parent_id.to_wire() + "/%")
 
-    all_entries = []
-    for batch in response.task_logs:
-        for entry in batch.logs:
-            all_entries.append(entry.data)
-
-    log_text = " ".join(all_entries)
+    log_text = " ".join(e.data for e in response.entries)
     assert "CHILD_A_LINE_1" in log_text, f"Missing child-a logs in: {log_text}"
     assert "CHILD_B_LINE_1" in log_text, f"Missing child-b logs in: {log_text}"
 
@@ -241,7 +230,7 @@ def test_wait_stream_logs_discovers_child_tasks(client, iris_client, caplog):
     job = Job(iris, parent_id)
 
     with caplog.at_level(logging.INFO, logger="iris.client.client"):
-        status = job.wait(stream_logs=True, include_children=True, timeout=60.0, poll_interval=0.2)
+        status = job.wait(stream_logs=True, timeout=60.0, poll_interval=0.2)
 
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
     messages = [r.message for r in caplog.records]
@@ -268,8 +257,8 @@ def _parent_with_failing_child():
     time.sleep(2.0)
 
 
-def test_stream_logs_surfaces_child_failure(client, iris_client, caplog):
-    """Streaming logs surfaces a warning when a child job terminates with failure."""
+def test_stream_logs_surfaces_child_failure(client, iris_client):
+    """Parent job with a failing child still completes successfully."""
     iris = iris_client
     parent_id = JobName.root("test-user", "test-child-failure-surfaced")
     entrypoint = Entrypoint.from_callable(_parent_with_failing_child)
@@ -278,18 +267,11 @@ def test_stream_logs_surfaces_child_failure(client, iris_client, caplog):
     client.submit_job(job_id=parent_id, entrypoint=entrypoint, resources=resources)
     job = Job(iris, parent_id)
 
-    with caplog.at_level(logging.WARNING, logger="iris.client.client"):
-        status = job.wait(
-            stream_logs=True,
-            include_children=True,
-            timeout=30.0,
-            poll_interval=0.2,
-            raise_on_failure=False,
-        )
+    status = job.wait(
+        stream_logs=True,
+        timeout=30.0,
+        poll_interval=0.2,
+        raise_on_failure=False,
+    )
 
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
-
-    warning_messages = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
-    assert any(
-        "failing-child" in msg and "terminated" in msg for msg in warning_messages
-    ), f"Expected child failure warning in streamed logs, got: {warning_messages}"

@@ -142,11 +142,13 @@ message ProfileTaskResponse {
 }
 
 // Unified log fetching request, shared by controller and worker services.
-// The source key identifies the log stream:
-//   /system/process                - local process logs (controller or worker)
-//   /job/name/task/0:0      - task attempt logs (task_wire:attempt_id)
+// The source key identifies the log stream and supports SQL LIKE patterns:
+//   /system/process                - exact: local process logs (controller or worker)
+//   /user/job/%                    - pattern: all task logs under a job
+//   /user/job/0:%                  - pattern: all attempts of a single task
+//   /user/job/0:3                  - exact: specific task attempt
 message FetchLogsRequest {
-  string source = 1;           // Log source key
+  string source = 1;           // Log source key or LIKE pattern (% and _ are wildcards)
   int64 since_ms = 2;          // Only return entries after this timestamp (exclusive)
   int64 cursor = 3;            // Autoincrement id cursor (resume after this id)
   string substring = 4;        // Substring filter on log data (matched via SQL LIKE)
@@ -1110,7 +1112,8 @@ service ControllerService {
 
   rpc ListUsers(Controller.ListUsersRequest) returns (Controller.ListUsersResponse);
 
-  // Task logs (proxied to worker)
+  // DEPRECATED: use FetchLogs with LIKE patterns instead.
+  // Forwards to FetchLogs internally. Scheduled for removal 2026-05-01.
   rpc GetTaskLogs(Controller.GetTaskLogsRequest) returns (Controller.GetTaskLogsResponse);
 
   // Unified log fetching (process logs, task logs, etc. by key)

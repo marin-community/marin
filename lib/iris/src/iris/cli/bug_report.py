@@ -138,16 +138,16 @@ def _gather(
     task_logs: dict[str, list[str]] = {}
     for task in tasks_resp.tasks:
         try:
-            log_resp = client.get_task_logs(
-                cluster_pb2.Controller.GetTaskLogsRequest(
-                    id=task.task_id,
-                    max_total_lines=tail,
+            # Fetch all attempts for this task, taking only the last `tail` lines.
+            source = task.task_id + ":%"
+            log_resp = client.fetch_logs(
+                cluster_pb2.FetchLogsRequest(
+                    source=source,
+                    max_lines=tail,
+                    tail=True,
                 )
             )
-            lines: list[str] = []
-            for batch in log_resp.task_logs:
-                for entry in batch.logs:
-                    lines.append(entry.data)
+            lines = [entry.data for entry in log_resp.entries]
             task_logs[task.task_id] = lines[-tail:]
         except Exception:
             logger.warning("Failed to fetch logs for task %s", task.task_id, exc_info=True)

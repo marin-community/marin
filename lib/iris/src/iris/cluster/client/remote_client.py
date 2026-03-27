@@ -13,7 +13,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import InterceptorSync
 
-from iris.cluster.client.protocol import TaskStateLogger
+from iris.cluster.log_store._types import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
 from iris.rpc import cluster_pb2
@@ -208,9 +208,7 @@ class RemoteClusterClient:
         *,
         timeout: float,
         poll_interval: float,
-        include_children: bool,
         since_ms: int = 0,
-        state_logger: TaskStateLogger | None = None,
         min_level: str = "",
     ) -> cluster_pb2.JobStatus:
         """Wait for job completion while streaming task logs via the controller RPC.
@@ -220,21 +218,12 @@ class RemoteClusterClient:
 
         If the controller becomes unavailable, retries with backoff for up to
         ``CONTROLLER_UNAVAILABLE_TOLERANCE`` seconds or until the caller's
-        *timeout* expires — whichever comes first. Log fetch failures are
-        non-fatal — they log a warning but never abort monitoring.
-
-        Child job statuses are delivered inline in ``GetTaskLogsResponse`` (when
-        *include_children* is True), so detecting state transitions requires no
-        additional RPC calls.
-
-        Args:
-            state_logger: Optional observer notified of log batches and child-job
-                state transitions (started / finished).
+        *timeout* expires -- whichever comes first. Log fetch failures are
+        non-fatal -- they log a warning but never abort monitoring.
         """
         deadline = Deadline.from_seconds(timeout)
         terminal_status: cluster_pb2.JobStatus | None = None
-        # Track child job states so we fire callbacks once per transition.
-        child_job_states: dict[str, int] = {}
+        source = build_log_source(job_id)
         cursor: int = 0
 
         while True:
@@ -249,38 +238,22 @@ class RemoteClusterClient:
             state_name = cluster_pb2.JobState.Name(state)
 
             try:
-                log_response = self.fetch_task_logs(
-                    job_id,
-                    include_children=include_children,
-                    since_ms=since_ms,
-                    cursor=cursor,
-                    min_level=min_level,
-                )
+                log_response = self.fetch_logs(source, cursor=cursor, min_level=min_level)
             except Exception as e:
-                # Log fetch failures are non-fatal — we still have the job status.
                 msg = format_connect_error(e) if isinstance(e, ConnectError) else str(e)
                 logger.warning("Failed to fetch logs for %s, will retry: %s", job_id, msg)
                 log_response = None
 
             if log_response is not None:
+                for entry in log_response.entries:
+                    key = entry.key or source
+                    logger.info("task=%s | %s", key, entry.data)
+
                 if log_response.cursor > cursor:
                     cursor = log_response.cursor
 
-                if state_logger is not None:
-                    state_logger.task_logging(log_response)
-
-                    for child in log_response.child_job_statuses:
-                        prev_state = child_job_states.get(child.job_id)
-                        child_job_states[child.job_id] = child.state
-                        if prev_state == child.state:
-                            continue
-                        if prev_state is None:
-                            state_logger.task_started(child.job_id, child)
-                        if is_job_finished(child.state):
-                            state_logger.task_finished(child.job_id, child)
-
             if is_job_finished(state):
-                total_lines = sum(len(b.logs) for b in log_response.task_logs) if log_response else 0
+                total_lines = len(log_response.entries) if log_response else 0
                 logger.info(
                     "job=%s finished with state=%s, draining logs (total_lines=%d)",
                     job_id,
@@ -289,7 +262,6 @@ class RemoteClusterClient:
                 )
                 if terminal_status is not None:
                     return terminal_status
-                # Give log writers a moment to flush, then drain once more.
                 # Fetch full status for error details on the final return.
                 terminal_status = poll_with_retries(
                     str(job_id),
@@ -400,45 +372,31 @@ class RemoteClusterClient:
 
         return call_with_retry(f"list_tasks({job_id})", _call)
 
-    def fetch_task_logs(
+    def fetch_logs(
         self,
-        target: JobName,
+        source: str,
         *,
-        include_children: bool = False,
         since_ms: int = 0,
-        max_total_lines: int = 0,
-        substring: str | None = None,
-        attempt_id: int = -1,
         cursor: int = 0,
+        max_lines: int = 0,
+        substring: str = "",
         min_level: str = "",
-    ) -> cluster_pb2.Controller.GetTaskLogsResponse:
-        """Fetch logs for a task or job via the controller RPC.
-
-        Args:
-            target: Task ID or Job ID
-            include_children: Include logs from child jobs (job ID only)
-            since_ms: Only return logs after this timestamp (exclusive)
-            max_total_lines: Maximum total lines (0 = default 10000)
-            substring: Substring filter for log content
-            attempt_id: Filter to specific attempt (-1 = all attempts)
-            cursor: Autoincrement id cursor for incremental polling
-            min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
-        """
-        request = cluster_pb2.Controller.GetTaskLogsRequest(
-            id=target.to_wire(),
-            include_children=include_children,
+        tail: bool = False,
+    ) -> cluster_pb2.FetchLogsResponse:
+        request = cluster_pb2.FetchLogsRequest(
+            source=source,
             since_ms=since_ms,
-            max_total_lines=max_total_lines,
-            substring=substring or "",
-            attempt_id=attempt_id,
             cursor=cursor,
+            max_lines=max_lines,
+            substring=substring,
             min_level=min_level,
+            tail=tail,
         )
 
         def _call():
-            return self._client.get_task_logs(request)
+            return self._client.fetch_logs(request)
 
-        return call_with_retry(f"get_task_logs({target})", _call)
+        return call_with_retry(f"fetch_logs({source})", _call)
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
         """Get autoscaler status including recent actions and group states.

@@ -237,7 +237,6 @@ def _wait_for_job(job: Job, timeout: float) -> JobResult:
             poll_interval=2.0,
             raise_on_failure=False,
             stream_logs=True,
-            include_children=True,
         )
         state_name = cluster_pb2.JobState.Name(status.state)
         return JobResult(job=job, state_name=state_name, elapsed=time.monotonic() - start)

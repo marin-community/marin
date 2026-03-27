@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useControllerRpc, useWorkerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import type { FetchLogsResponse, GetTaskLogsResponse, LogEntry, TaskAttempt } from '@/types/rpc'
+import type { FetchLogsResponse, LogEntry, TaskAttempt } from '@/types/rpc'
 import { timestampMs, logLevelClass, formatLogTime } from '@/utils/formatting'
 
 const props = withDefaults(defineProps<{
@@ -38,10 +38,11 @@ function levelPriority(lvl: string | undefined): number {
 const useRpc = props.source === 'worker' ? useWorkerRpc : useControllerRpc
 
 const taskLogState = props.taskId
-  ? useRpc<GetTaskLogsResponse>('GetTaskLogs', () => ({
-      id: props.taskId,
-      maxTotalLines: tailLines.value || undefined,
-      attemptId: selectedAttemptId.value >= 0 ? selectedAttemptId.value : -1,
+  ? useRpc<FetchLogsResponse>('FetchLogs', () => ({
+      source: selectedAttemptId.value >= 0
+        ? `${props.taskId}:${selectedAttemptId.value}`
+        : `${props.taskId}:%`,
+      maxLines: tailLines.value || undefined,
       tail: true,
     }))
   : null
@@ -88,8 +89,7 @@ onMounted(doRefresh)
 
 function extractEntries(): LogEntry[] {
   if (taskLogState?.data.value) {
-    const resp = taskLogState.data.value
-    return (resp.taskLogs ?? []).flatMap(batch => batch.logs ?? [])
+    return taskLogState.data.value.entries ?? []
   }
   if (processLogState?.data.value) {
     return processLogState.data.value.entries ?? []

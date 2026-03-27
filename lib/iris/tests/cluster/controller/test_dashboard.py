@@ -789,18 +789,17 @@ def test_health_endpoint_returns_ok(client):
 # =============================================================================
 
 
-def test_get_task_logs_for_missing_task_returns_empty_batch(client):
-    """GetTaskLogs returns a single batch with no logs for a nonexistent task."""
+def test_fetch_logs_for_missing_task_returns_empty_entries(client):
+    """FetchLogs returns empty entries for a nonexistent task."""
+    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     resp = client.post(
-        "/iris.cluster.ControllerService/GetTaskLogs",
-        json={"id": JobName.root("test-user", "nonexistent").task(0).to_wire()},
+        "/iris.cluster.ControllerService/FetchLogs",
+        json={"source": task_id + ":%"},
         headers={"Content-Type": "application/json"},
     )
     assert resp.status_code == 200
     data = resp.json()
-    batches = data.get("taskLogs", [])
-    assert len(batches) == 1
-    assert batches[0].get("logs", []) == []
+    assert data.get("entries", []) == []
 
 
 # =============================================================================

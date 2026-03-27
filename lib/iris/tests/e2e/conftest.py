@@ -250,13 +250,9 @@ class IrisTestCluster:
     def get_task_logs(self, job: Job, task_index: int = 0) -> list[str]:
         """Fetch log lines for a task."""
         task_id = job.job_id.task(task_index).to_wire()
-        request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
-        response = self.controller_client.get_task_logs(request)
-        lines = []
-        for batch in response.task_logs:
-            for entry in batch.logs:
-                lines.append(f"{entry.source}: {entry.data}")
-        return lines
+        request = cluster_pb2.FetchLogsRequest(source=task_id + ":%")
+        response = self.controller_client.fetch_logs(request)
+        return [f"{e.source}: {e.data}" for e in response.entries]
 
 
 @dataclass(frozen=True)
