@@ -230,46 +230,6 @@ def capabilities(smoke_cluster) -> ClusterCapabilities:
 
 
 # ============================================================================
-# Config parity: verify the real cloud smoke config works in local mode.
-# This catches naming issues (GCE 63-char limit, invalid chars from zone
-# expansion) that only surface when the autoscaler tries to create slices
-# with realistic expanded-zone name prefixes.
-# ============================================================================
-
-
-SMOKE_GCP_CONFIG = IRIS_ROOT / "examples" / "smoke-gcp.yaml"
-
-
-def test_smoke_gcp_config_boots_locally():
-    """Load smoke-gcp.yaml, convert to local mode, verify workers join.
-
-    This is the local equivalent of the cloud-smoke-test CI job. If this
-    test fails, the cloud smoke test will also fail — catching GCE naming
-    validation errors without needing real GCP resources.
-    """
-    config = load_config(SMOKE_GCP_CONFIG)
-    config = make_local_config(config)
-
-    with connect_cluster(config) as url:
-        client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        # The smoke config has min_slices=1 for tpu_v5e_16, so at least
-        # one slice (with 4 workers) should come up.
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            workers = client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
-            healthy = [w for w in workers if w.healthy]
-            if healthy:
-                break
-            time.sleep(0.5)
-        else:
-            raise AssertionError(
-                f"No healthy workers after 30s with smoke-gcp.yaml in local mode. "
-                f"Total workers: {len(workers)}, healthy: {len(healthy)}"
-            )
-        client.close()
-
-
-# ============================================================================
 # ============================================================================
 # Dashboard tests
 # ============================================================================

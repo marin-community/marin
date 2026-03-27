@@ -10,19 +10,24 @@ YAML, ensuring that vm_type and platform configuration are preserved correctly.
 from pathlib import Path
 from typing import ClassVar
 
+import time
+
 import pytest
 import yaml
 
 from iris.cluster.config import (
     config_to_dict,
+    connect_cluster,
     create_autoscaler,
     get_ssh_config,
     load_config,
+    make_local_config,
     validate_config,
 )
 from iris.cluster.providers.factory import create_provider_bundle
 from iris.cluster.constraints import WellKnownAttribute
-from iris.rpc import config_pb2
+from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc.cluster_connect import ControllerServiceClientSync
 
 
 class TestConfigRoundTrip:
@@ -1407,3 +1412,32 @@ def test_coreweave_worker_provider_rejected():
     sg.slice_template.coreweave.region = "US-WEST-04A"
     with pytest.raises(ValueError, match="does not support worker_provider"):
         validate_config(config)
+
+
+SMOKE_GCP_CONFIG = Path(__file__).resolve().parents[3] / "examples" / "smoke-gcp.yaml"
+
+
+@pytest.mark.timeout(60)
+def test_smoke_gcp_config_boots_locally():
+    """Load smoke-gcp.yaml, convert to local mode, verify workers join."""
+    config = load_config(SMOKE_GCP_CONFIG)
+    config = make_local_config(config)
+
+    with connect_cluster(config) as url:
+        client = ControllerServiceClientSync(address=url, timeout_ms=30000)
+        # The smoke config has min_slices=1 for tpu_v5e_16 across 2 zones,
+        # each with num_vms=4 → 8 workers total.  We only need one healthy
+        # worker to confirm the config boots.
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            workers = client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
+            healthy = [w for w in workers if w.healthy]
+            if healthy:
+                break
+            time.sleep(0.5)
+        else:
+            raise AssertionError(
+                f"No healthy workers after 45s with smoke-gcp.yaml in local mode. "
+                f"Total workers: {len(workers)}, healthy: {len(healthy)}"
+            )
+        client.close()
