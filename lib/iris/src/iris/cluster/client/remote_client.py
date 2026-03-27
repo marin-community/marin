@@ -9,7 +9,8 @@ import uuid
 
 from collections.abc import Iterable
 
-from connectrpc.errors import Code, ConnectError
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from connectrpc.interceptor import InterceptorSync
 
 from iris.cluster.client.protocol import TaskStateLogger
