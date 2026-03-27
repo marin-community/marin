@@ -4,7 +4,8 @@
 """Normalize FineWeb-Edu 10BT sample to datakit standard Parquet format.
 
 Usage:
-    uv run lib/marin/src/marin/run/ray_run.py -- python experiments/datakit/normalize_fineweb_edu_10bt.py
+    uv run lib/marin/src/marin/run/ray_run.py --cluster=us-central2 --no_wait \
+        -- python experiments/datakit/normalize_fineweb_edu_10bt.py
 """
 
 from marin.datakit.normalize import normalize_to_parquet
@@ -12,10 +13,15 @@ from marin.datakit.normalize import normalize_to_parquet
 INPUT_PATH = "gs://marin-us-central2/raw/fineweb-edu-87f0914/sample/10BT"
 OUTPUT_PATH = "gs://marin-us-central2/datakit/fineweb-edu/sample/10BT/normalized"
 
-if __name__ == "__main__":
+
+def main():
     normalize_to_parquet(
         input_path=INPUT_PATH,
         output_path=OUTPUT_PATH,
         text_field="text",
         id_field="id",
     )
+
+
+if __name__ == "__main__":
+    main()
