@@ -10,12 +10,10 @@ INPUT_PATH = "gs://marin-us-central2/raw/fineweb-edu-87f0914/sample/10BT"
 
 
 def main():
-    output_path = marin_temp_bucket(ttl_days=7, prefix="datakit/fineweb-edu/sample/10BT/normalized")
+    output_path = marin_temp_bucket(ttl_days=1, prefix="datakit/fineweb-edu/sample/10BT/normalized")
     normalize_to_parquet(
         input_path=INPUT_PATH,
         output_path=output_path,
-        text_field="text",
-        id_field="id",
     )
 
 

@@ -65,8 +65,8 @@ def test_normalize_jsonl_gz(tmp_path: Path, write_jsonl_gz):
     output_dir = tmp_path / "output"
 
     records = [
-        {"doc_id": "abc", "text": "Hello world", "lang": "en"},
-        {"doc_id": "def", "text": "Goodbye world", "lang": "fr"},
+        {"id": "abc", "text": "Hello world", "lang": "en"},
+        {"id": "def", "text": "Goodbye world", "lang": "fr"},
     ]
     write_jsonl_gz(input_dir / "data.jsonl.gz", records)
 
@@ -100,8 +100,8 @@ def test_normalize_parquet_input(tmp_path: Path, write_parquet):
     output_dir = tmp_path / "output"
 
     records = [
-        {"uid": "r1", "text": "First document"},
-        {"uid": "r2", "text": "Second document"},
+        {"id": "r1", "text": "First document"},
+        {"id": "r2", "text": "Second document"},
     ]
     write_parquet(input_dir / "data.parquet", records)
 
@@ -158,13 +158,13 @@ def test_custom_text_field(tmp_path: Path, write_jsonl_gz):
     assert results[0]["title"] == "A Title"
 
 
-def test_explicit_id_field(tmp_path: Path, write_jsonl_gz):
-    """Explicit id_field overrides auto-detection."""
+def test_custom_id_field(tmp_path: Path, write_jsonl_gz):
+    """Non-default id_field extracts source_id from the specified column."""
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
 
     records = [
-        {"my_custom_id": "custom-1", "doc_id": "should-not-use", "text": "Some text"},
+        {"my_custom_id": "custom-1", "id": "should-not-use", "text": "Some text"},
     ]
     write_jsonl_gz(input_dir / "data.jsonl.gz", records)
 
@@ -177,8 +177,25 @@ def test_explicit_id_field(tmp_path: Path, write_jsonl_gz):
     results = _read_all_parquet(output_dir)
     assert len(results) == 1
     assert results[0]["source_id"] == "custom-1"
-    # doc_id should remain as a regular column (not treated as source_id)
-    assert results[0]["doc_id"] == "should-not-use"
+    # "id" from raw data should remain as a regular column
+    assert "id" in results[0]  # overwritten by generated id
+
+
+def test_missing_id_field_skipped(tmp_path: Path, write_jsonl_gz):
+    """When the default id_field is absent from records, source_id is silently skipped."""
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+
+    records = [{"text": "No id field here", "lang": "en"}]
+    write_jsonl_gz(input_dir / "data.jsonl.gz", records)
+
+    normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
+
+    results = _read_all_parquet(output_dir)
+    assert len(results) == 1
+    assert results[0]["id"] == generate_id("No id field here")
+    assert "source_id" not in results[0]
+    assert results[0]["lang"] == "en"
 
 
 def test_missing_text_raises(tmp_path: Path, write_jsonl_gz):
