@@ -78,6 +78,18 @@ def build_runtime_entrypoint(
         )
     else:
         setup_commands.append(f"uv sync {quiet_flag} {frozen_flag} {link_mode_flag} {python_flag}".strip())
+    # In rust-dev mode, uv sync creates .pth links for editable path sources but
+    # doesn't invoke the build backend (maturin), so native extensions are missing.
+    # Detect the mode via the RUST-DEV markers in pyproject.toml and explicitly
+    # build any Rust crates found under rust/.
+    setup_commands.append(
+        "if grep -q 'path = \"rust/' pyproject.toml 2>/dev/null; then"
+        " echo 'rust-dev mode: building native extensions';"
+        " for crate in rust/*/pyproject.toml; do"
+        f' uv pip install {quiet_flag} -e "$(dirname "$crate")";'
+        " done;"
+        " fi"
+    )
     setup_commands.append("echo 'installing pip deps'")
     if pip_install_args:
         setup_commands.append(f"uv pip install {quiet_flag} {link_mode_flag} {pip_install_args}")
