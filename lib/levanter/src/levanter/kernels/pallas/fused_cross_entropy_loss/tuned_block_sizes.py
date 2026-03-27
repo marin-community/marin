@@ -92,12 +92,14 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
     "TPU v5e": {
         ("bfloat16", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024),
         ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512),
+        ("bfloat16", "mid-batch-llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512),
         ("bfloat16", "mid-h-large-vocab"): BlockSizes(b_block_size=8192, h_block_size=256, v_block_size=1024),
         ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=4096, h_block_size=512, v_block_size=2048),
         ("bfloat16", "huge-batch-small-h"): BlockSizes(b_block_size=8192, h_block_size=256, v_block_size=1024),
         ("bfloat16", "medium-batch-medium-h"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
         ("float32", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024),
         ("float32", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512),
+        ("float32", "mid-batch-llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512),
         ("float32", "mid-h-large-vocab"): BlockSizes(b_block_size=8192, h_block_size=256, v_block_size=1024),
         ("float32", "large-batch-small-h"): BlockSizes(b_block_size=4096, h_block_size=512, v_block_size=2048),
         ("float32", "huge-batch-small-h"): BlockSizes(b_block_size=8192, h_block_size=256, v_block_size=1024),
@@ -106,12 +108,14 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
     "TPU v6": {
         ("bfloat16", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=2048),
         ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512),
+        ("bfloat16", "mid-batch-llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512),
         ("bfloat16", "mid-h-large-vocab"): BlockSizes(b_block_size=8192, h_block_size=1024, v_block_size=1024),
         ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=4096, h_block_size=512, v_block_size=2048),
         ("bfloat16", "huge-batch-small-h"): BlockSizes(b_block_size=8192, h_block_size=256, v_block_size=1024),
         ("bfloat16", "medium-batch-medium-h"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
         ("float32", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=2048),
         ("float32", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512),
+        ("float32", "mid-batch-llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512),
         ("float32", "mid-h-large-vocab"): BlockSizes(b_block_size=8192, h_block_size=1024, v_block_size=1024),
         ("float32", "large-batch-small-h"): BlockSizes(b_block_size=4096, h_block_size=512, v_block_size=2048),
         ("float32", "huge-batch-small-h"): BlockSizes(b_block_size=8192, h_block_size=256, v_block_size=1024),
@@ -124,6 +128,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             v_block_size=1024,
         ),
         ("bfloat16", "llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=512,
+        ),
+        ("bfloat16", "mid-batch-llama3-ish"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
             v_block_size=512,
@@ -154,6 +163,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             v_block_size=1024,
         ),
         ("float32", "llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=512,
+        ),
+        ("float32", "mid-batch-llama3-ish"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
             v_block_size=512,
@@ -190,6 +204,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             h_block_size=512,
             v_block_size=512,
         ),
+        ("bfloat16", "mid-batch-llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=512,
+        ),
         ("bfloat16", "large-batch-small-h"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
@@ -216,6 +235,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             v_block_size=1024,
         ),
         ("float32", "llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=512,
+        ),
+        ("float32", "mid-batch-llama3-ish"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
             v_block_size=512,
@@ -252,6 +276,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             h_block_size=512,
             v_block_size=1024,
         ),
+        ("bfloat16", "mid-batch-llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=512,
+        ),
         ("bfloat16", "mid-h-large-vocab"): BlockSizes(
             b_block_size=1024,
             h_block_size=1024,
@@ -281,6 +310,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             b_block_size=8192,
             h_block_size=512,
             v_block_size=1024,
+        ),
+        ("float32", "mid-batch-llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=512,
         ),
         ("float32", "mid-h-large-vocab"): BlockSizes(
             b_block_size=1024,
@@ -357,6 +391,15 @@ SHAPE_BUCKETS: list[ShapeBucket] = [
         b_max=32768,
         h_min=768,
         h_max=1536,
+        v_min=120000,
+        v_max=131072,
+    ),
+    ShapeBucket(
+        name="mid-batch-llama3-ish",
+        b_min=16385,
+        b_max=65535,
+        h_min=4096,
+        h_max=4096,
         v_min=120000,
         v_max=131072,
     ),
