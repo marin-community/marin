@@ -1,9 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 
 from marin.processing.tokenize.data_configs import _are_tokenizers_equivalent
+
+pytestmark = pytest.mark.skipif("CI" in os.environ, reason="Requires HF tokenizer download")
 
 
 def test_are_tokenizers_equivalent():

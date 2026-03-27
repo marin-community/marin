@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from collections.abc import Sequence
 
 import pytest
@@ -12,22 +13,19 @@ from experiments.create_marin_tokenizer import (
 )
 from levanter.data.text import ChatProcessor
 
+pytestmark = pytest.mark.skipif("CI" in os.environ, reason="Requires HF tokenizer download")
 
-@pytest.fixture()
-def fresh_marin_tokenizer():
-    try:
-        base = load_llama3_tokenizer()
-    except Exception as exc:
-        pytest.skip(f"Could not load llama3 tokenizer: {exc}", allow_module_level=True)
-    return create_marin_tokenizer(base)
+
+def _load_marin_tokenizer():
+    return create_marin_tokenizer(load_llama3_tokenizer())
 
 
 def decode_sequence(tokenizer, tensor: Sequence[int]) -> str:
     return tokenizer.decode(list(tensor), skip_special_tokens=False)
 
 
-def test_marin_chat_template_handles_tool_calls(fresh_marin_tokenizer):
-    tokenizer = fresh_marin_tokenizer
+def test_marin_chat_template_handles_tool_calls():
+    tokenizer = _load_marin_tokenizer()
     processor = ChatProcessor(tokenizer, mask_user_turns=True)
 
     batch = [
@@ -63,13 +61,13 @@ def test_marin_chat_template_handles_tool_calls(fresh_marin_tokenizer):
     assert result[0]["assistant_masks"].sum() > 0
 
 
-def test_marin_tokenizer_integration_checks(fresh_marin_tokenizer):
-    tokenizer = fresh_marin_tokenizer
+def test_marin_tokenizer_integration_checks():
+    tokenizer = _load_marin_tokenizer()
     run_all_tests(tokenizer)
 
 
-def test_marin_chat_template_ipython_output(fresh_marin_tokenizer):
-    tokenizer = fresh_marin_tokenizer
+def test_marin_chat_template_ipython_output():
+    tokenizer = _load_marin_tokenizer()
     processor = ChatProcessor(tokenizer, mask_user_turns=True)
 
     batch = [
