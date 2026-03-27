@@ -82,6 +82,43 @@ def _load_hover(split: str, max_examples: int | None) -> list[dspy.Example]:
     return examples
 
 
+def _build_bm25s_retriever(examples: list[dspy.Example]):
+    """Build an offline BM25S retriever from HoVer evidence passages.
+
+    Collects all unique passages from the dataset examples, indexes them
+    with BM25S (no server needed), and returns a callable that DSPy can
+    use as dspy.settings.rm.
+    """
+    import bm25s
+
+    # Collect all unique passages from the dataset
+    corpus = []
+    seen = set()
+    for ex in examples:
+        evidence = getattr(ex, "evidence", [])
+        if isinstance(evidence, str):
+            evidence = [evidence]
+        for passage in evidence:
+            if passage not in seen:
+                corpus.append(passage)
+                seen.add(passage)
+
+    if not corpus:
+        raise ValueError("No evidence passages found in dataset to build BM25S index.")
+
+    logger.info(f"Building BM25S index over {len(corpus)} passages...")
+    retriever = bm25s.BM25()
+    retriever.index(bm25s.tokenize(corpus))
+    logger.info("BM25S index ready.")
+
+    def rm(query: str, k: int = 3, **kwargs) -> list[str]:
+        tokens = bm25s.tokenize([query])
+        results, _ = retriever.retrieve(tokens, k=min(k, len(corpus)))
+        return [corpus[i] for i in results[0]]
+
+    return rm
+
+
 def _detect_format_error(pred: dspy.Prediction, task_name: str) -> bool:
     """Return True if the prediction is missing expected output fields."""
     if pred is None:
@@ -131,7 +168,6 @@ class DspyEvaluator(Evaluator):
         task_name: str = "hover",
         split: str = "test",
         max_eval_instances: int | None = 1000,
-        retriever_url: str | None = None,
         wandb_tags: list[str] | None = None,
         **kwargs,
     ):
@@ -152,7 +188,6 @@ class DspyEvaluator(Evaluator):
         self.task_name = task_name
         self.split = split
         self.max_eval_instances = max_eval_instances
-        self.retriever_url = retriever_url
         self.wandb_tags = wandb_tags
 
         self.endpoint = self._validate_endpoint(endpoint)
@@ -211,16 +246,11 @@ class DspyEvaluator(Evaluator):
         )
         adapter = ADAPTER_MAP[self.adapter_name]()
 
-        if self.retriever_url:
-            rm = dspy.ColBERTv2(url=self.retriever_url)
-            dspy.configure(lm=lm, adapter=adapter, rm=rm)
-        else:
-            logger.warning(
-                "No retriever_url provided. ClaimVerification uses dspy.Retrieve "
-                "internally — evaluation will fail unless a retriever is configured. "
-                "Pass retriever_url='http://...' to fix this."
-            )
-            dspy.configure(lm=lm, adapter=adapter)
+        # BM25S runs fully offline — no server needed.
+        # ColBERT was avoided because it requires a running server and caused
+        # pipeline crashes in earlier experiments.
+        rm = _build_bm25s_retriever(examples)
+        dspy.configure(lm=lm, adapter=adapter, rm=rm)
 
         examples = _load_hover(self.split, self.max_eval_instances)
         program = task_cfg["program"]()
