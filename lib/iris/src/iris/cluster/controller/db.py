@@ -1017,7 +1017,7 @@ class TransactionCursor:
 class ControllerDB:
     """Thread-safe SQLite wrapper with typed query and migration helpers."""
 
-    _READ_POOL_SIZE = 4
+    _READ_POOL_SIZE = 8
     DB_FILENAME = "controller.sqlite3"
     AUTH_DB_FILENAME = "auth.sqlite3"
 

@@ -639,6 +639,16 @@ message Controller {
     LaunchJobRequest request = 2;  // Original job request for debugging
   }
 
+  // Lightweight batch state query — returns only the state enum for each job,
+  // avoiding the cost of loading tasks, attempts, and worker addresses.
+  message GetJobStateRequest {
+    repeated string job_ids = 1;
+  }
+
+  message GetJobStateResponse {
+    map<string, JobState> states = 1;
+  }
+
   message TerminateJobRequest {
     string job_id = 1;
   }
@@ -1076,6 +1086,7 @@ service ControllerService {
   // Job lifecycle
   rpc LaunchJob(Controller.LaunchJobRequest) returns (Controller.LaunchJobResponse);
   rpc GetJobStatus(Controller.GetJobStatusRequest) returns (Controller.GetJobStatusResponse);
+  rpc GetJobState(Controller.GetJobStateRequest) returns (Controller.GetJobStateResponse);
   rpc TerminateJob(Controller.TerminateJobRequest) returns (Empty);
   rpc ListJobs(Controller.ListJobsRequest) returns (Controller.ListJobsResponse);
 
