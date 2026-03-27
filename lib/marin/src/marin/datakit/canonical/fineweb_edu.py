@@ -53,7 +53,7 @@ def normalize(
     return normalize_step(
         name=f"fineweb-edu/{subset}/normalize",
         download=dl,
-        input_path=f"{dl.output_path}/{HF_REVISION}/{subset}",
+        input_path=f"{dl.output_path}/{subset}",
         target_partition_bytes=target_partition_bytes,
         override_output_path=override_output_path,
     )
