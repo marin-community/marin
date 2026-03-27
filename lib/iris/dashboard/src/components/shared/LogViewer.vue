@@ -37,11 +37,16 @@ function levelPriority(lvl: string | undefined): number {
 // Choose the right RPC based on what we're viewing
 const useRpc = props.source === 'worker' ? useWorkerRpc : useControllerRpc
 
+// Task IDs end with a numeric segment (e.g. /alice/job/0), job IDs don't.
+const isTask = props.taskId ? /\/\d+$/.test(props.taskId) : false
+
 const taskLogState = props.taskId
   ? useRpc<FetchLogsResponse>('FetchLogs', () => ({
       source: selectedAttemptId.value >= 0
         ? `${props.taskId}:${selectedAttemptId.value}`
-        : `${props.taskId}:%`,
+        : isTask
+          ? `${props.taskId}:%`
+          : `${props.taskId}/%`,
       maxLines: tailLines.value || undefined,
       tail: true,
     }))

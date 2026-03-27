@@ -292,6 +292,25 @@ def test_substring_filter_escapes_like_wildcards(log_store: LogStore):
     assert [e.data for e in result_pattern.entries] == ["100% done"]
 
 
+def test_job_level_like_uses_slash_not_colon(log_store: LogStore):
+    """Job-level LIKE query must use /job/% (slash), not /job:% (colon).
+
+    Reproduces the E2E smoke failure where the dashboard job-level log viewer
+    showed no entries because it used jobId:% instead of jobId/%.
+    """
+    t0 = JobName.from_wire("/alice/train/0")
+    log_store.append(task_log_key(TaskAttempt(task_id=t0, attempt_id=0)), [_make_entry("hello", epoch_ms=1)])
+
+    # Correct pattern: slash-percent matches task keys under the job
+    result_slash = log_store.get_logs("/alice/train/%")
+    assert len(result_slash.entries) == 1
+    assert result_slash.entries[0].data == "hello"
+
+    # Wrong pattern: colon-percent matches nothing (task keys use /task_idx:attempt)
+    result_colon = log_store.get_logs("/alice/train:%")
+    assert len(result_colon.entries) == 0, "colon-percent should NOT match task keys stored under /alice/train/0:0"
+
+
 def test_cursor_with_since_ms(log_store: LogStore):
     """Combined cursor + since_ms filters correctly."""
     log_store.append(KEY, [_make_entry(f"line-{i}", epoch_ms=i * 10) for i in range(10)])
