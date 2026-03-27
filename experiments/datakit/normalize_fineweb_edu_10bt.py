@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Normalize FineWeb-Edu 10BT sample to datakit standard Parquet format.
-
-Usage:
-    uv run lib/marin/src/marin/run/ray_run.py --cluster=us-central2 --no_wait \
-        -- python experiments/datakit/normalize_fineweb_edu_10bt.py
-"""
+"""Normalize FineWeb-Edu 10BT sample to datakit standard Parquet format."""
 
 from marin.datakit.normalize import normalize_to_parquet
 
