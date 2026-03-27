@@ -10,16 +10,20 @@ import pytest
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket, log_time
 
 
+def _records_for(caplog, logger_name: str) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.name == logger_name]
+
+
 def test_log_time_logs_elapsed(caplog):
     """log_time context manager logs the elapsed time at the specified level."""
     with caplog.at_level(logging.INFO, logger="iris.time_utils"):
         with log_time("test-op"):
             time.sleep(0.05)
 
-    assert len(caplog.records) == 1
-    record = caplog.records[0]
-    assert record.levelno == logging.INFO
-    assert "test-op took" in record.message
+    records = _records_for(caplog, "iris.time_utils")
+    assert len(records) == 1
+    assert records[0].levelno == logging.INFO
+    assert "test-op took" in records[0].message
 
 
 def test_log_time_custom_level(caplog):
@@ -28,8 +32,9 @@ def test_log_time_custom_level(caplog):
         with log_time("debug-op", level=logging.DEBUG):
             pass
 
-    assert len(caplog.records) == 1
-    assert caplog.records[0].levelno == logging.DEBUG
+    records = _records_for(caplog, "iris.time_utils")
+    assert len(records) == 1
+    assert records[0].levelno == logging.DEBUG
 
 
 def test_deadline_expires():

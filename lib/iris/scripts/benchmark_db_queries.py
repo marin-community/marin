@@ -22,6 +22,7 @@ Usage:
 """
 
 import shutil
+import tempfile
 import time
 from pathlib import Path
 
@@ -43,6 +44,12 @@ from iris.cluster.controller.db import (
     running_tasks_by_worker,
     tasks_for_job_with_attempts,
 )
+from iris.cluster.controller.transitions import (
+    ControllerTransitions,
+    HeartbeatApplyRequest,
+    TaskUpdate,
+)
+from iris.cluster.types import JobName, WorkerId
 from iris.cluster.controller.service import (
     USER_JOB_STATES,
     _child_jobs,
@@ -495,13 +502,13 @@ def benchmark_heartbeat(db: ControllerDB, iterations: int) -> list[tuple[str, fl
                     cur.execute("SELECT state FROM jobs WHERE job_id = ?", (jid,))
                     cur.execute("SELECT state, COUNT(*) AS c FROM tasks WHERE job_id = ? GROUP BY state", (jid,))
 
-        # Create two copies up front — one for each strategy.
-        per_worker_path = db.db_path.with_suffix(".bench_per_worker.sqlite3")
-        batched_path = db.db_path.with_suffix(".bench_batched.sqlite3")
-        shutil.copy2(db.db_path, per_worker_path)
-        shutil.copy2(db.db_path, batched_path)
-        per_worker_db = ControllerDB(per_worker_path)
-        batched_db = ControllerDB(batched_path)
+        # Create two directory copies — ControllerDB expects a directory, not a file.
+        per_worker_dir = Path(tempfile.mkdtemp(prefix="iris_bench_per_worker_"))
+        batched_dir = Path(tempfile.mkdtemp(prefix="iris_bench_batched_"))
+        shutil.copy2(db.db_path, per_worker_dir / ControllerDB.DB_FILENAME)
+        shutil.copy2(db.db_path, batched_dir / ControllerDB.DB_FILENAME)
+        per_worker_db = ControllerDB(per_worker_dir)
+        batched_db = ControllerDB(batched_dir)
 
         try:
             p50, p95 = bench(
@@ -522,10 +529,55 @@ def benchmark_heartbeat(db: ControllerDB, iterations: int) -> list[tuple[str, fl
         finally:
             per_worker_db.close()
             batched_db.close()
-            for p in (per_worker_path, batched_path):
-                p.unlink(missing_ok=True)
-                p.with_suffix(".sqlite3-wal").unlink(missing_ok=True)
-                p.with_suffix(".sqlite3-shm").unlink(missing_ok=True)
+            shutil.rmtree(per_worker_dir, ignore_errors=True)
+            shutil.rmtree(batched_dir, ignore_errors=True)
+
+        # --- Two-pass benchmark: real apply_heartbeats_batch with resource_usage ---
+        # Builds real HeartbeatApplyRequest objects simulating the common
+        # steady-state case: all tasks RUNNING, reporting RUNNING + resource_usage.
+        resource_usage_proto = cluster_pb2.ResourceUsage()
+        resource_usage_proto.cpu_millicores = 1000
+        resource_usage_proto.memory_mb = 1024
+
+        snapshot_proto = cluster_pb2.WorkerResourceSnapshot()
+
+        heartbeat_requests: list[HeartbeatApplyRequest] = []
+        for wid, task_list in running_tasks_per_worker.items():
+            updates = []
+            for task_id, attempt_id in task_list:
+                updates.append(
+                    TaskUpdate(
+                        task_id=JobName.from_wire(task_id),
+                        attempt_id=attempt_id,
+                        new_state=cluster_pb2.TASK_STATE_RUNNING,
+                        resource_usage=resource_usage_proto,
+                    )
+                )
+            heartbeat_requests.append(
+                HeartbeatApplyRequest(
+                    worker_id=WorkerId(wid),
+                    worker_resource_snapshot=snapshot_proto,
+                    updates=updates,
+                )
+            )
+
+        two_pass_dir = Path(tempfile.mkdtemp(prefix="iris_bench_two_pass_"))
+        shutil.copy2(db.db_path, two_pass_dir / ControllerDB.DB_FILENAME)
+        two_pass_db = ControllerDB(two_pass_dir)
+        two_pass_transitions = ControllerTransitions(two_pass_db, log_store=None)  # type: ignore[arg-type]
+
+        try:
+            p50, p95 = bench(
+                f"phase3 two-pass ({len(heartbeat_requests)} workers, {total_tasks} tasks)",
+                lambda: two_pass_transitions.apply_heartbeats_batch(heartbeat_requests),
+                iterations=iterations,
+            )
+            label = f"phase3 two-pass ({len(heartbeat_requests)}w, {total_tasks}t)"
+            results.append((label, p50, p95))
+            print_result(label, p50, p95)
+        finally:
+            two_pass_db.close()
+            shutil.rmtree(two_pass_dir, ignore_errors=True)
 
     return results
 
