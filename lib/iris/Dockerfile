@@ -137,7 +137,10 @@ ENV PATH="/root/.cargo/bin:$PATH"
 
 ENV UV_CACHE_DIR=/uv/cache
 ENV CARGO_TARGET_DIR=/root/.cargo/target
-ENV PYTHONDONTWRITEBYTECODE=1
+# Only disable bytecode during build to keep image layers clean.
+# At runtime, bytecode compilation is re-enabled so .pyc files accumulate
+# in the persistent uv cache, speeding up repeated imports across pods.
+ARG PYTHONDONTWRITEBYTECODE=1
 
 ARG IRIS_GIT_HASH=unknown
 ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}

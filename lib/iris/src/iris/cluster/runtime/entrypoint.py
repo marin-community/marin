@@ -71,10 +71,13 @@ def build_runtime_entrypoint(
     # avoiding redundant installation. Symlinks work across bind mounts.
     link_mode_flag = "--link-mode symlink"
     setup_commands.append("echo 'syncing deps'")
+    frozen_flag = "--frozen"
     if uv_sync_flags:
-        setup_commands.append(f"uv sync {quiet_flag} {link_mode_flag} {python_flag} {uv_sync_flags}".strip())
+        setup_commands.append(
+            f"uv sync {quiet_flag} {frozen_flag} {link_mode_flag} {python_flag} {uv_sync_flags}".strip()
+        )
     else:
-        setup_commands.append(f"uv sync {quiet_flag} {link_mode_flag} {python_flag}".strip())
+        setup_commands.append(f"uv sync {quiet_flag} {frozen_flag} {link_mode_flag} {python_flag}".strip())
     setup_commands.append("echo 'installing pip deps'")
     if pip_install_args:
         setup_commands.append(f"uv pip install {quiet_flag} {link_mode_flag} {pip_install_args}")
