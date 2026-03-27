@@ -16,9 +16,7 @@ from marin.datakit.canonical.fineweb_edu import (
     download,
     normalize,
 )
-from marin.datakit.normalize import generate_id, normalize_step
-from marin.execution.step_runner import StepRunner
-from marin.execution.step_spec import StepSpec
+from marin.datakit.normalize import generate_id, normalize_to_parquet
 
 
 @pytest.fixture(autouse=True)
@@ -60,10 +58,11 @@ def test_normalize_step_subset_naming():
 
 
 def test_normalize_end_to_end(tmp_path: Path):
-    """Download → normalize as a StepSpec DAG via StepRunner."""
-    raw_dir = tmp_path / "raw"
+    """Normalize FineWeb-Edu parquet files end to end with local data."""
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
 
-    # Simulate a pre-existing download by writing FineWeb-Edu parquet locally
+    # Simulate FineWeb-Edu schema
     records = [
         {
             "id": "fineweb-edu-000001",
@@ -90,27 +89,15 @@ def test_normalize_end_to_end(tmp_path: Path):
             "int_score": 4,
         },
     ]
-    _write_fineweb_edu_parquet(raw_dir / "train-00000.parquet", records)
+    _write_fineweb_edu_parquet(input_dir / "train-00000.parquet", records)
 
-    # Wire as StepSpec DAG: fake download (no-op) → normalize
-    fake_download = StepSpec(
-        name="test/raw/fineweb-edu",
-        fn=lambda output_path: None,  # data already written
-        override_output_path=str(raw_dir),
+    normalize_to_parquet(
+        input_path=str(input_dir),
+        output_path=str(output_dir),
     )
 
-    norm = normalize_step(
-        name="test/fineweb-edu/normalize",
-        download=fake_download,
-        override_output_path=str(tmp_path / "normalized"),
-    )
-
-    StepRunner().run([fake_download, norm])
-
-    # Verify normalized output
-    output_dir = Path(norm.output_path)
     results = []
-    for pf in sorted(output_dir.glob("**/*.parquet")):
+    for pf in sorted(output_dir.glob("*.parquet")):
         results.extend(pq.read_table(str(pf)).to_pylist())
 
     assert len(results) == 2
