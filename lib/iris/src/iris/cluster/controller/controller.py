@@ -659,13 +659,7 @@ class ControllerConfig:
     """How often the controller captures CPU profiles for all running tasks."""
 
     profile_duration: int = 10
-    """Duration in seconds for each py-spy profile capture."""
-
-    memory_profile_interval: Duration = field(default_factory=lambda: Duration.from_seconds(600))
-    """How often the controller captures memory profiles for all running tasks."""
-
-    memory_profile_duration: int = 10
-    """Duration in seconds for each memray profile capture."""
+    """Duration in seconds for each profile capture (CPU and memory)."""
 
     prune_interval: Duration = field(default_factory=lambda: Duration.from_seconds(3600))
     """How often to run the data pruning sweep (default: 1 hour)."""
@@ -1054,46 +1048,13 @@ class Controller:
                 self.kill_tasks_on_workers(tx_result.tasks_to_kill)
 
     def _run_profile_loop(self, stop_event: threading.Event) -> None:
-        """Periodically capture CPU profiles for all running tasks.
+        """Periodically capture CPU and memory profiles for all running tasks.
 
-        Runs on its own thread with a 10-minute rate limiter. For each running
-        task, sends a ProfileTask RPC to the task's worker and stores the result
-        in the controller DB. Profile RPCs are dispatched with bounded concurrency.
+        Runs on its own thread with a rate limiter. For each running task, sends
+        ProfileTask RPCs (CPU then memory, sequentially) to the task's worker and
+        stores the results in the controller DB.
         """
-
-        cpu_limiter = RateLimiter(interval_seconds=self._config.profile_interval.to_seconds())
-        memory_limiter = RateLimiter(interval_seconds=self._config.memory_profile_interval.to_seconds())
-        while not stop_event.is_set():
-            cpu_remaining = cpu_limiter.time_until_next()
-            memory_remaining = memory_limiter.time_until_next()
-            wait_time = min(cpu_remaining, memory_remaining)
-            if wait_time > 0:
-                stop_event.wait(timeout=wait_time)
-            if stop_event.is_set():
-                break
-            if self._checkpoint_in_progress:
-                continue
-
-            capture_cpu = cpu_limiter.time_until_next() <= 0
-            capture_memory = memory_limiter.time_until_next() <= 0
-
-            if capture_cpu:
-                cpu_limiter.mark_run()
-            if capture_memory:
-                memory_limiter.mark_run()
-
-            try:
-                self._profile_all_running_tasks(capture_cpu=capture_cpu, capture_memory=capture_memory)
-            except Exception:
-                logger.exception("Profile loop iteration failed")
-
-    def _run_memory_profile_loop(self, stop_event: threading.Event) -> None:
-        """Periodically capture memory profiles for all running tasks.
-
-        Runs on its own thread. Separate from the CPU profile loop so memory and
-        CPU profile intervals can differ independently.
-        """
-        limiter = RateLimiter(interval_seconds=self._config.memory_profile_interval.to_seconds())
+        limiter = RateLimiter(interval_seconds=self._config.profile_interval.to_seconds())
         while not stop_event.is_set():
             remaining = limiter.time_until_next()
             if remaining > 0:
@@ -1104,12 +1065,12 @@ class Controller:
             if self._checkpoint_in_progress:
                 continue
             try:
-                self._profile_all_running_tasks(capture_cpu=False, capture_memory=True)
+                self._profile_all_running_tasks()
             except Exception:
-                logger.exception("Memory profile loop iteration failed")
+                logger.exception("Profile loop iteration failed")
 
-    def _profile_all_running_tasks(self, capture_cpu: bool = True, capture_memory: bool = False) -> None:
-        """Capture profiles for every running task and store in the DB."""
+    def _profile_all_running_tasks(self) -> None:
+        """Capture CPU and memory profiles for every running task and store in the DB."""
         workers = healthy_active_workers_with_attributes(self._db)
         if not workers:
             return
@@ -1125,23 +1086,17 @@ class Controller:
         if not profile_targets:
             return
 
-        kinds_captured: list[str] = []
+        cpu_profile_type = cluster_pb2.ProfileType(
+            cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.RAW),
+        )
+        self._dispatch_profiles(profile_targets, cpu_profile_type, "cpu", self._config.profile_duration)
 
-        if capture_cpu:
-            cpu_profile_type = cluster_pb2.ProfileType(
-                cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.RAW),
-            )
-            self._dispatch_profiles(profile_targets, cpu_profile_type, "cpu", self._config.profile_duration)
-            kinds_captured.append("cpu")
+        memory_profile_type = cluster_pb2.ProfileType(
+            memory=cluster_pb2.MemoryProfile(format=cluster_pb2.MemoryProfile.STATS),
+        )
+        self._dispatch_profiles(profile_targets, memory_profile_type, "memory", self._config.profile_duration)
 
-        if capture_memory:
-            memory_profile_type = cluster_pb2.ProfileType(
-                memory=cluster_pb2.MemoryProfile(format=cluster_pb2.MemoryProfile.STATS),
-            )
-            self._dispatch_profiles(profile_targets, memory_profile_type, "memory", self._config.memory_profile_duration)
-            kinds_captured.append("memory")
-
-        logger.info("Profile round (%s): captured for %d tasks", "+".join(kinds_captured), len(profile_targets))
+        logger.info("Profile round (cpu+memory): captured for %d tasks", len(profile_targets))
 
     def _dispatch_profiles(
         self,

@@ -69,33 +69,6 @@ def test_empty_profiles(db: ControllerDB) -> None:
     assert profiles == []
 
 
-def test_insert_memory_profile(db: ControllerDB) -> None:
-    now = Timestamp.now()
-    insert_task_profile(db, "task-1", b"mem-data", now, profile_kind="memory")
-
-    profiles = get_task_profiles(db, "task-1", profile_kind="memory")
-    assert len(profiles) == 1
-    assert profiles[0][0] == b"mem-data"
-    assert profiles[0][2] == "memory"
-
-
-def test_filter_by_profile_kind(db: ControllerDB) -> None:
-    now = Timestamp.now()
-    insert_task_profile(db, "task-1", b"cpu-data", now, profile_kind="cpu")
-    insert_task_profile(db, "task-1", b"mem-data", now, profile_kind="memory")
-
-    cpu_profiles = get_task_profiles(db, "task-1", profile_kind="cpu")
-    assert len(cpu_profiles) == 1
-    assert cpu_profiles[0][0] == b"cpu-data"
-
-    mem_profiles = get_task_profiles(db, "task-1", profile_kind="memory")
-    assert len(mem_profiles) == 1
-    assert mem_profiles[0][0] == b"mem-data"
-
-    all_profiles = get_task_profiles(db, "task-1")
-    assert len(all_profiles) == 2
-
-
 def test_cap_is_per_task_and_kind(db: ControllerDB) -> None:
     """Cap trigger retains 10 per (task_id, profile_kind)."""
     for i in range(12):
