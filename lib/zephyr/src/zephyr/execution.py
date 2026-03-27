@@ -17,7 +17,6 @@ import enum
 import itertools
 import logging
 import os
-import pickle
 import re
 from datetime import datetime, timezone
 import threading
@@ -57,45 +56,65 @@ from zephyr.writers import ensure_parent_dir
 logger = logging.getLogger(__name__)
 
 
+_PARQUET_CHUNK_VALUE_COL = "_zephyr_value"
+
+
 @dataclass(frozen=True)
-class PickleDiskChunk:
-    """Reference to a pickle chunk stored on disk.
+class ParquetDiskChunk:
+    """Reference to a Parquet chunk stored on disk.
 
     Each write goes to a UUID-unique path to avoid collisions when multiple
     workers race on the same shard.  No coordinator-side rename is needed;
     the winning result's paths are used directly and the entire execution
     directory is cleaned up after the pipeline completes.
+
+    Items that are dicts are stored as Arrow columns directly. Non-dict items
+    (scalars, frozensets, etc.) are wrapped in a ``_zephyr_value`` column via
+    cloudpickle so that arbitrary Python objects can round-trip through Parquet.
     """
 
     path: str
     count: int
+    wrapped: bool = False
 
     def __iter__(self) -> Iterator:
         return iter(self.read())
 
     @classmethod
-    def write(cls, path: str, data: list) -> PickleDiskChunk:
-        """Write *data* to a UUID-unique path derived from *path*.
+    def write(cls, path: str, data: list) -> ParquetDiskChunk:
+        """Write *data* as a Parquet file at a UUID-unique path derived from *path*."""
+        import pyarrow.parquet as pq
 
-        The UUID suffix avoids collisions when multiple workers race on
-        the same shard.  The resulting path is used directly for reads —
-        no rename step is required.
-        """
         from zephyr.writers import unique_temp_path
 
         ensure_parent_dir(path)
         data = list(data)
         count = len(data)
-
         unique_path = unique_temp_path(path)
-        with open_url(unique_path, "wb") as f:
-            pickle.dump(data, f)
-        return cls(path=unique_path, count=count)
+
+        wrapped = False
+        if not data or not isinstance(data[0], dict):
+            wrapped = True
+        else:
+            try:
+                table = pa.Table.from_pylist(data)
+            except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError):
+                wrapped = True
+
+        if wrapped:
+            table = pa.table({_PARQUET_CHUNK_VALUE_COL: [cloudpickle.dumps(item) for item in data]})
+        pq.write_table(table, unique_path, compression="zstd")
+        return cls(path=unique_path, count=count, wrapped=wrapped)
 
     def read(self) -> list:
-        """Load chunk data from disk."""
-        with open_url(self.path, "rb") as f:
-            return pickle.load(f)
+        import pickle
+
+        import pyarrow.parquet as pq
+
+        table = pq.read_table(self.path)
+        if _PARQUET_CHUNK_VALUE_COL in table.column_names:
+            return [pickle.loads(b) for b in table.column(_PARQUET_CHUNK_VALUE_COL).to_pylist()]
+        return table.to_pylist()
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +127,7 @@ from zephyr.shuffle import (  # noqa: E402
     ScatterParquetIterator,  # noqa: F401 — re-exported for external callers
     ScatterShard,  # noqa: F401 — re-exported for plan.py and external callers
     _build_scatter_shard_from_manifest,  # noqa: F401 — re-exported for plan.py
-    _make_envelope,
+    make_envelope_batch,
     _write_parquet_scatter,
     _write_scatter_manifest,
     _SCATTER_MANIFEST_NAME,
@@ -124,7 +143,7 @@ class TaskResult:
     """Result of a single worker task.
 
     Always contains a ListShard. For non-scatter stages, refs are
-    PickleDiskChunks. For scatter stages, refs contain file paths
+    ParquetDiskChunks. For scatter stages, refs contain file paths
     (the actual metadata lives in ``.scatter_meta`` sidecar files
     read lazily by reducers).
     """
@@ -160,16 +179,12 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
             logger.info(f"Cleaned up execution directory {exec_dir} in {elapsed:.1f}s")
 
 
-def _write_pickle_chunks(
+def _write_parquet_chunks(
     items: Iterator,
     source_shard: int,
     chunk_path_fn: Callable[[int], str],
 ) -> ListShard:
-    """Batch a plain item stream into pickle chunk files.
-
-    Returns a ListShard containing PickleDiskChunk references.
-    """
-    # TODO: make chunk_size configurable per writer
+    """Batch a plain item stream into Parquet chunk files."""
     chunk_size = 100_000
     chunks: list[Iterable] = []
     batch: list = []
@@ -178,20 +193,20 @@ def _write_pickle_chunks(
     for item in items:
         batch.append(item)
         if chunk_size > 0 and len(batch) >= chunk_size:
-            chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), batch)
+            chunk_ref = ParquetDiskChunk.write(chunk_path_fn(pidx), batch)
             chunks.append(chunk_ref)
             pidx += 1
             batch = []
             if pidx % 10 == 0:
                 logger.info(
-                    "[shard %d] Wrote %d pickle chunks so far (latest: %d items)",
+                    "[shard %d] Wrote %d parquet chunks so far (latest: %d items)",
                     source_shard,
                     pidx,
                     chunk_ref.count,
                 )
 
     if batch:
-        chunks.append(PickleDiskChunk.write(chunk_path_fn(pidx), batch))
+        chunks.append(ParquetDiskChunk.write(chunk_path_fn(pidx), batch))
 
     return ListShard(refs=chunks)
 
@@ -210,7 +225,7 @@ def _write_stage_output(
     wrapping and ``.scatter_meta`` sidecars. Returns TaskResult with compact
     scatter metadata.
 
-    For non-scatter stages, batches items into pickle chunk files. Returns
+    For non-scatter stages, batches items into Parquet chunk files. Returns
     TaskResult with a ListShard.
     """
     if scatter_op is not None:
@@ -224,8 +239,7 @@ def _write_stage_output(
         use_pickle_envelope = False
         try:
             test_key = scatter_op.key_fn(first_item)
-            test_envelope = _make_envelope([first_item], 0, 0, key_values=[test_key])
-            pa.RecordBatch.from_pylist(test_envelope)
+            make_envelope_batch([first_item], 0, 0, key_values=[test_key], sort_values=None, pickled=False)
             logger.info("Using Parquet for scatter serialization for shard %d", source_shard)
         except Exception:
             use_pickle_envelope = True
@@ -249,9 +263,9 @@ def _write_stage_output(
         return TaskResult(shard=shard)
 
     def chunk_path_fn(idx: int) -> str:
-        return f"{stage_dir}/shard-{shard_idx:04d}/chunk-{idx:04d}.pkl"
+        return f"{stage_dir}/shard-{shard_idx:04d}/chunk-{idx:04d}.parquet"
 
-    return TaskResult(shard=_write_pickle_chunks(stage_gen, source_shard, chunk_path_fn))
+    return TaskResult(shard=_write_parquet_chunks(stage_gen, source_shard, chunk_path_fn))
 
 
 class WorkerState(enum.Enum):

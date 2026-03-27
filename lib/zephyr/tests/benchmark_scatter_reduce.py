@@ -2,9 +2,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Benchmark scatter/reduce in isolation: serialization, sort, and merge.
+"""Benchmark scatter/reduce in isolation: serialization, sort, and Arrow merge.
 
-Directly exercises _write_parquet_scatter and _merge_sorted_chunks with synthetic
+Directly exercises _write_parquet_scatter and _arrow_reduce_gen with synthetic
 data to measure the performance of the scatter/reduce code paths without the
 overhead of file loading, mapping, or writing final output.
 
@@ -27,7 +27,7 @@ from dataclasses import dataclass
 
 import click
 
-from zephyr.plan import _merge_sorted_chunks, _arrow_reduce_gen
+from zephyr.plan import _arrow_reduce_gen
 from zephyr.shuffle import (
     _build_scatter_shard_from_manifest,
     _write_parquet_scatter,
@@ -118,19 +118,14 @@ def _keep_first(_key: int, items: Iterator) -> dict:
     return next(items)
 
 
-def run_reduce(manifest_path: str, num_shards: int, use_arrow: bool = True) -> tuple[int, float]:
-    """Reduce all shards (keep-first per key), return (unique_keys, elapsed_s)."""
+def run_reduce(manifest_path: str, num_shards: int) -> tuple[int, float]:
+    """Reduce all shards (keep-first per key) using Arrow merge, return (unique_keys, elapsed_s)."""
     t0 = time.monotonic()
     count = 0
     for shard_idx in range(num_shards):
         shard = _build_scatter_shard_from_manifest(manifest_path, shard_idx)
-        if use_arrow and shard.has_sort_key:
-            for _item in _arrow_reduce_gen(shard, _keep_first):
-                count += 1
-        else:
-            for _key, items_iter in _merge_sorted_chunks(shard, _key_fn):
-                next(items_iter)
-                count += 1
+        for _item in _arrow_reduce_gen(shard, _keep_first):
+            count += 1
     elapsed = time.monotonic() - t0
     return count, elapsed
 
@@ -155,14 +150,8 @@ def benchmark(num_items: int, num_shards: int, num_keys: int, seed: int) -> None
         print(f"\nScattering to {num_shards} shards...")
         manifest_path, scatter_time, file_bytes = run_scatter(items, tmp_dir, num_shards)
 
-        # Run both reduce paths for comparison
         print("Reducing with Arrow merge (keep-first per key)...")
-        arrow_keys, arrow_reduce_time = run_reduce(manifest_path, num_shards, use_arrow=True)
-
-        print("Reducing with Python heapq (keep-first per key)...")
-        python_keys, python_reduce_time = run_reduce(manifest_path, num_shards, use_arrow=False)
-
-        assert arrow_keys == python_keys, f"Key count mismatch: arrow={arrow_keys}, python={python_keys}"
+        arrow_keys, arrow_reduce_time = run_reduce(manifest_path, num_shards)
 
         print(f"\n{'=' * 60}")
         print("Scatter/Reduce Benchmark Results")
@@ -177,9 +166,6 @@ def benchmark(num_items: int, num_shards: int, num_keys: int, seed: int) -> None
         print(f"  Scatter throughput: {num_items / scatter_time:>12,.0f} items/s")
         print(f"{'─' * 60}")
         print(f"  Reduce (Arrow):     {arrow_reduce_time:>12.2f} s  ({num_items / arrow_reduce_time:>10,.0f} items/s)")
-        print(f"  Reduce (Python):    {python_reduce_time:>12.2f} s  ({num_items / python_reduce_time:>10,.0f} items/s)")
-        speedup = python_reduce_time / arrow_reduce_time if arrow_reduce_time > 0 else 0
-        print(f"  Reduce speedup:     {speedup:>12.2f}x")
         print(f"{'=' * 60}\n")
 
     finally:
