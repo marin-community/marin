@@ -1,0 +1,3970 @@
+# This is a dag structured plan formatted as a yaml file. It is not actually code but high-level instructions for us as a team
+# Vaguely top-down
+
+# Schema:
+# id:
+# issue: int | str | None
+# candidate_id: int | None  # best-guess issue match; verify before copying into issue:
+# candidate_score: float | None  # match confidence (0..1)
+#  title: <string>
+#  type: literal[epic, task, experiment, milestone] | None
+#  status: literal[planned, active, done] | None
+#  owners: list[str] | None  # GitHub handles
+#  owner_names: list[str] | None  # free-form names when handle unknown
+#  target_date: YYYY-MM-DD | None
+#  labels: list[str] | None
+#  description: <string>
+#  dependencies:
+#    - <id>
+#  definition_of_done: <string>
+
+meta:
+  owner_aliases:
+    abhi: abhinavg4
+    abhinav: abhinavg4
+    ahmed: ahmeda14960
+    chris: BabyChouSr
+    david: dlwh
+    kevin: AlienKevin
+    percy: percyliang
+    will: Helw150
+    rohith: RohithKuditipudi
+    rafal: ravwojdyla
+    rav: ravwojdyla
+    romain: yonromai
+    russell: rjpower
+    rui: ruili33
+    calvin: Calvin-Xu
+    larry: ClassicLarry
+    pranshu: pc0618
+    michael: XenonMolecule
+    "moo jin": moojink
+
+milestone_2026_02:
+  title: "February 2026: baseline MoE pretraining architecture + dense scaling laws"
+  type: milestone
+  status: active
+  target_date: "2026-02-28"
+  labels: [timeline]
+  description: |
+    End-of-February checkpoint:
+    - baseline MoE path runs end-to-end
+    - dense scaling-law suite is stable and releasable
+    MoE scope note: all MoE items in this milestone are pretraining goals.
+  dependencies:
+    - baseline_grug_moe
+    - delphi_dense_scaling_suite
+  definition_of_done: |
+    This milestone is complete when every dependency above is `done` with evidence
+    in linked issues/PRs.
+
+
+milestone_2026_03:
+  title: "March 2026: optimized MoE pretraining arch + small MoE run + data source plan"
+  type: milestone
+  status: planned
+  target_date: "2026-03-31"
+  labels: [timeline]
+  description: |
+    End-of-March checkpoint:
+    - optimized MoE architecture decision is locked
+    - at least one small/medium MoE run is complete
+    - data sources toward 20T are identified with budgets/phasing
+    - data ingestion is tested at scale
+    - MoE scaling laws are usable in-principle for next-stage decisions
+    MoE scope note: MoE dependencies here are pretraining-only.
+  dependencies:
+    - model_architecture
+    - training_throughput_critical_path
+    - train_8x7b
+    - gather_pretraining_data_sources
+    - moe_scaling_laws_issue
+    - milestone_2026_03_sft_posttraining
+    - march_automation_goals
+    - support_nvidia_gpu_clusters
+    - data_ingestion_pipeline_scale
+    - remove_ray_rollout
+
+
+milestone_2026_03_sft_posttraining:
+  title: "March 2026: SFT + post-training track"
+  type: milestone
+  status: planned
+  target_date: "2026-03-31"
+  labels: [timeline, sft, posttraining]
+  dependencies:
+    - sft_feb_track
+    - openthoughts_4_dataset
+    - harbor_evals_setup
+    - posttraining_evalchemy_evals
+    - sft_agentic_evals
+    - release_strong_sft_models
+    - long_context_data_training_evals
+
+
+march_automation_goals:
+  title: "March 2026: automation goals"
+  type: epic
+  status: planned
+  target_date: "2026-03-31"
+  labels: [timeline, infra, automation, agent_friendly]
+  description: |
+    Consolidated March automation/infrastructure execution goals:
+    - long-running jobs across clusters with preemption handling
+    - reliable experimentation baseline
+    - agent-driven intake for datasets/environments and architectures/algorithms
+    - agents can run straightforward experiments end-to-end
+  definition_of_done: |
+    - Long-running jobs survive representative preemption scenarios.
+    - Reliability target for March is met on in-scope job classes.
+    - New datasets/environments and new architectures/algorithms can be ingested via the automated workflows.
+    - At least one straightforward experiment is run end-to-end by an agent.
+  dependencies:
+    - experiments_reliable
+    - marin_as_library
+    - infra_long_running_jobs_preemption
+    - infra_reliability_95
+    - automated_ingestion_datasets_environments
+    - automated_ingestion_architectures_algorithms
+    - agents_run_straightforward_experiments
+
+
+milestone_2026_04:
+  title: "April 2026: 20T data + 50B MoE pretraining + frontier architecture evidence"
+  type: milestone
+  status: planned
+  target_date: "2026-04-30"
+  labels: [timeline, data, pretraining]
+  description: |
+    End-of-April checkpoint:
+    - 20T deduped token pool is assembled
+    - 50B-class MoE run is executed with reproducible artifacts
+    - scaling-law frontier analysis is concrete enough to guide x00B choices
+    MoE scope note: this milestone tracks base-model pretraining, not post-training.
+  dependencies:
+    - dataset_20t_deduped
+    - train_50b_moe
+    - moe_frontier_tradeoff_report
+
+
+milestone_2026_05:
+  title: "May 2026: Strong recipes for pretraining MoEs"
+  type: milestone
+  status: planned
+  target_date: "2026-05-31"
+  labels: [timeline]
+  description: |
+    The goal for this month is to pretrain a "medium large" A8B-100B-ish MoE effectively using the
+    work done in March and April.
+
+    This is pre-training milestone
+  dependencies:
+    - train_100b_moe
+    - regression_mix_optimization
+    - best_sft_recipe
+
+
+pretraining_evals_and_models:
+  title: "Solid inexpensive evals (100 total; core set <1h correlated with full suite)"
+  type: epic
+  status: active
+  owners: [Helw150]
+  target_date: "2026-02-28"
+  issue: 2663
+  labels: [timeline, evals, pretraining, agent_friendly]
+  description: |
+    Maintain a lightweight pretraining eval stack that can be run frequently during
+    development and still predicts movement on the fuller release eval set.
+  definition_of_done: |
+    - Core eval subset runs in under one hour on standard infra.
+    - Full and core eval outputs are tracked in a consistent schema.
+    - Core metrics show useful correlation with the broader eval set.
+
+
+dense_scaling_laws:
+  title: "Stable and usable scaling laws for dense models"
+  type: epic
+  status: done
+  owners: [Helw150]
+  target_date: "2025-12-16"
+  issue: 2166
+  labels: [timeline, scaling_laws, pretraining, agent_friendly]
+
+
+moe_scaling_laws_issue:
+  title: "Stable scaling laws for MoE"
+  type: epic
+  status: planned
+  owners: [Helw150, ClassicLarry]
+  target_date: "2026-03-31"
+  issue: 2167
+  labels: [timeline, scaling_laws, moe, pretraining, agent_friendly]
+  description: |
+    Build an MoE-specific ISOFlop sweep workflow mirroring dense `isoflop_sweep.py`,
+    with correct MoE FLOP and memory accounting plus feasible resource selection.
+
+    This includes routing/dispatch overhead, active-vs-total expert FFN FLOPs, and
+    MoE shape knobs (number of experts, top-k active experts, capacity factor).
+
+    February milestone target is stable sweeps up to 1e20 FLOPs; framework should
+    remain extensible to higher compute budgets after this milestone.
+  definition_of_done: |
+    - MoE ISOFlop sweep module exists with interface parity to dense sweep generation.
+    - FLOP accounting includes attention, routing/dispatch, and active-expert FFN terms.
+    - Generated configs include MoE-specific shape knobs and memory-aware slice selection.
+    - At least one multi-budget sweep runs end-to-end and emits valid configs.
+    - Runbook/docs explain MoE-vs-dense sweep differences and execution steps.
+  dependencies:
+    - grug_moe
+
+
+delphi_dense_scaling_suite:
+  title: "Delphi: dense scaling suite (community artifact)"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-02-28"
+  issue: 1337
+  labels: [timeline, scaling_laws, pretraining, agent_friendly]
+  description: |
+    Build and package the dense scaling suite as a reusable external artifact:
+    smooth scaling curves, reproducible reruns, and model release packaging.
+  definition_of_done: |
+    - Smooth dense scaling behavior is demonstrated up to 1e23 FLOPs.
+    - Nemotron-CC/Common Pile reruns complete with three seeds.
+    - Release artifact and run metadata are published and reproducible.
+  dependencies:
+    - scaling_suite_smooth_1e23
+    - scaling_suite_rerun_nemotron_common_pile_3_seeds
+    - scaling_suite_release
+
+
+scaling_suite_smooth_1e23:
+  title: "Make scaling laws smooth up to 1e23"
+  type: task
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-02-28"
+  labels: [timeline, scaling_laws, pretraining]
+  description: |
+    Eliminate major discontinuities in dense scaling behavior up to 1e23 FLOPs so
+    regression fits and extrapolations are trustworthy.
+  definition_of_done: |
+    Scaling curves and fitted residuals show no major unexplained discontinuities
+    across the targeted 1e23 compute range.
+
+
+scaling_suite_rerun_nemotron_common_pile_3_seeds:
+  title: "Rerun scaling suite on Nemotron-CC and Common Pile (3 seeds)"
+  type: task
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-02-28"
+  labels: [timeline, scaling_laws, pretraining]
+  description: |
+    Re-run key scaling experiments on Nemotron-CC and Common Pile with three seeds
+    to reduce variance and establish robust comparisons.
+  definition_of_done: |
+    Planned reruns complete on both datasets with three seeds each, and aggregate
+    summary tables/plots are checked into the experiment report.
+
+
+scaling_suite_release:
+  title: "Release Delphi"
+  type: task
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-03-15"
+  labels: [timeline, scaling_laws, pretraining, release]
+  description: |
+    Publish a clean release artifact from the dense scaling suite, with metadata and
+    reproducibility pointers suitable for external use.
+  definition_of_done: |
+    Release checkpoint(s), config(s), and provenance metadata are published with
+    enough detail for an external rerun of the headline results.
+
+
+training_throughput_critical_path:
+  title: "Training throughput"
+  type: epic
+  status: planned
+  owners: [dlwh, ClassicLarry]
+  target_date: "2026-03-31"
+  labels: [timeline, systems, pretraining, moe]
+  description: |
+    Drive the shortest path to high-quality MoE throughput: establish a fast Grug MoE
+    path and validate a 500B-class candidate run chosen by frontier evidence.
+  definition_of_done: |
+    - Grug 8x1B throughput baseline is established with reproducible measurement.
+    - A 500B candidate configuration is selected from frontier evidence.
+    - At least one end-to-end candidate training run executes without critical blockers.
+  dependencies:
+    - model_architecture
+    - moe_stable_systems
+    - grug_moe_40_mfu_8x1b
+    - train_500b_moe_candidate
+
+
+grug_moe_40_mfu_8x1b:
+  title: "MoE Grugformer with 40% MFU on 8x1B"
+  type: task
+  status: planned
+  owners: [ClassicLarry]
+  target_date: "2026-02-28"
+  issue: 2371
+  labels: [timeline, grug, moe, pretraining, performance]
+  description: |
+    Establish a strong throughput baseline for Grug MoE on 8x1B with stable training
+    and clear measurement methodology (MFU, tokens/s, and run stability).
+  definition_of_done: |
+    - 8x1B Grug MoE run completes with stable training behavior.
+    - MFU/tokens-per-second measurements are recorded with reproducible settings.
+    - Results are compared against prior baseline in a short report.
+  dependencies:
+    - grug_moe
+
+
+train_500b_moe_candidate:
+  title: "Train a 500B MoE candidate selected from the quality-throughput frontier"
+  type: task
+  status: planned
+  owners: [dlwh, ClassicLarry]
+  target_date: "2026-06-31"
+  issue: null
+  labels: [timeline, moe, performance, pretraining]
+  description: |
+    Objective: maximize model quality under fixed wall-clock and budget constraints.
+
+    MFU is a constraint/diagnostic, not the optimization target. We may select a lower-MFU
+    configuration if it is clearly better on quality-vs-time/cost tradeoff.
+  definition_of_done: |
+    - 500B-scale run is stable for the required horizon.
+    - Selected configuration is justified by frontier evidence (quality, wall-clock, cost, and risk).
+    - If selected config has lower MFU than alternatives, decision notes explain why it still wins.
+  dependencies:
+    - grug_moe
+    - moe_scaling_laws_issue
+
+
+moe_variants_enumeration:
+  title: "Enumerate and prioritize MoE variants for ablation"
+  type: task
+  status: planned
+  owners: [ClassicLarry]
+  target_date: "2026-03-31"
+  issue: null
+  labels: [timeline, moe, architecture, pretraining]
+  description: |
+    Define the concrete MoE variant matrix before running broad ablations.
+    At minimum, enumerate and prioritize:
+    - routing families (top-k, soft/continuous, hashed, etc.)
+    - load-balancing objectives and router regularization choices
+    - optimal allocation for equilibrium style expert allocation
+      (reference: https://datasets.osmarks.net/kexue/site/11619-MoE-Odyssey-6.-Optimal-Allocation-for-Equilibrium.html)
+    - shared-expert variants
+    - null-routing/no-op expert strategies
+    - capacity/drop/overflow handling variants
+    - any required training-system constraints for fair comparison
+  definition_of_done: |
+    A versioned variant matrix exists with:
+    - the shortlist to run first
+    - required config knobs for each variant
+    - comparable run protocol and success criteria
+
+
+moe_variants_ablation:
+  title: "Ablation over all MoE variants"
+  type: epic
+  status: planned
+  owners: [ClassicLarry]
+  target_date: "2026-03-31"
+  issue: null
+  labels: [timeline, moe, scaling_laws, pretraining]
+  definition_of_done: |
+    - Each prioritized variant from `moe_variants_enumeration` has at least one
+      comparable training run with standardized metrics/artifacts.
+    - The most promising variant subset is advanced to an ISOFlop suite with
+      consistent budgets/seeds for apples-to-apples comparison.
+    - Results are summarized in a single comparison table (quality, throughput, MFU,
+      stability, and notable failure modes).
+    - A recommended short list for follow-on scaling work is recorded with rationale.
+  dependencies:
+    - moe_variants_enumeration
+
+
+gather_pretraining_data_sources:
+  title: "Gather all pretraining data sources"
+  type: task
+  status: done
+  owners: [Helw150]
+  target_date: "2026-03-31"
+  issue: null
+  labels: [timeline, data, pretraining]
+  source_of_truth: "Hugging Face collection https://huggingface.co/collections/WillHeld/pretraining-data."
+  description: |
+    Source inventory has been assembled and is tracked in the linked Hugging Face
+    collection. This node tracks the candidate-source aggregation step, not
+    final dedup/token-budget lock.
+  definition_of_done: |
+    Complete when candidate pretraining sources are assembled in a single tracked
+    location and available for mixture planning.
+
+
+data_mixing_midtraining_prediction:
+  title: "Predict mid-training data mixtures"
+  type: task
+  status: planned
+  owners: [Calvin-Xu]
+  target_date: "2026-03-31"
+  issue: 2398
+  labels: [timeline, data, pretraining]
+
+
+html2text_model_feb:
+  title: "raw2quality: train small HTML->rewritten-token model"
+  type: task
+  status: planned
+  owner_names: [Michael]
+  target_date: "2026-02-28"
+  issue: 2351
+  labels: [timeline, data, pretraining]
+  description: |
+    Train the initial raw2quality model that converts raw HTML/web text into
+    rewritten training tokens suitable for downstream pretraining experiments.
+
+
+raw2quality_generate_tokens_200m:
+  title: "raw2quality: generate 200M rewritten tokens"
+  type: task
+  status: planned
+  owner_names: [Michael]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, data, pretraining]
+  description: |
+    Use the trained raw2quality model to generate 200M rewritten tokens for controlled
+    downstream quality comparisons against baseline data sources.
+  dependencies:
+    - html2text_model_feb
+
+
+harbor_evals_setup:
+  title: "Set up Harbor for evals"
+  type: task
+  status: planned
+  owners: [AlienKevin]
+  target_date: "2026-03-31"
+  issue: 2500
+  labels: [timeline, evals, posttraining]
+  description: |
+    Set up Harbor-backed eval execution so post-training and SFT candidates can run
+    standardized eval jobs with consistent outputs.
+  definition_of_done: |
+    Harbor eval pipeline is runnable from Marin workflows and emits standardized
+    result artifacts for at least one representative model family.
+
+
+add_openthoughts_agent_v1_dataset:
+  title: "Add OpenThoughts-Agent-v1 dataset"
+  type: task
+  status: planned
+  owners: [AlienKevin]
+  target_date: "2026-02-28"
+  issue: 2601
+  labels: [timeline, data, sft]
+  description: |
+    Ingest and validate OpenThoughts-Agent-v1 in Marin’s SFT data path, including
+    schema compatibility and artifact generation.
+  definition_of_done: |
+    Dataset is ingested, validated, and available in the SFT pipeline with manifest
+    metadata and a successful smoke training/eval run.
+
+
+synthetic_mixture_ablation:
+  title: "Ablation on synthetic data mixtures"
+  type: task
+  status: planned
+  owners: [AlienKevin]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, data, sft]
+
+
+long_context_data_training_evals:
+  title: "Long-context critical path: data + evals readiness"
+  type: epic
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-03-31"
+  issue: 2062
+  labels: [timeline, long_context, posttraining, critical_path]
+  description: |
+    March critical-path gate for long-context readiness.
+    Ensure we have a usable long-context data plan and runnable eval coverage
+    sufficient to guide model and recipe decisions.
+  definition_of_done: |
+    - Long-context data scope is locked for this cycle.
+    - Core long-context evals are wired and runnable (at least Ruler + HELMET).
+    - Results are usable for go/no-go and recipe decisions in March.
+  dependencies:
+    - long_context_data
+    - long_context_evals
+
+
+sft_feb_track:
+  title: "February SFT track (single-owner rollout + eval loop)"
+  type: epic
+  status: planned
+  owners: [moojink]
+  target_date: "2026-03-31"
+  issue: null
+  labels: [timeline, sft, posttraining]
+  description: |
+    Consolidated February SFT execution track so progress is managed in one place/issue.
+    This groups baseline SFT training, synthetic-data refresh, and evaluation wiring.
+  definition_of_done: |
+    - Baseline SFT runs on existing datasets are complete and reproducible.
+    - Synthetic dataset refresh is integrated into at least one SFT comparison run.
+    - Eval loop (Evalchemy + agentic evals) is runnable and used for candidate selection.
+  dependencies:
+    - sft_existing_datasets_models
+    - sft_synthetic_datasets
+    - sft_agentic_evals
+    - posttraining_evalchemy_evals
+
+
+sft_existing_datasets_models:
+  title: "SFT on existing synthetic datasets"
+  type: epic
+  status: planned
+  owners: [AlienKevin]
+  target_date: "2026-02-28"
+  issue: 2198
+  labels: [timeline, sft, posttraining]
+  description: |
+    Build the first strong SFT baseline using currently available synthetic datasets
+    and standardized evals, prior to larger recipe changes.
+  definition_of_done: |
+    At least one strong SFT baseline model is trained on existing datasets with
+    Harbor/Evalchemy-backed eval outputs and reproducible configs.
+  dependencies:
+    - harbor_evals_setup
+    - add_openthoughts_agent_v1_dataset
+
+
+dedup_pipeline_robust:
+  title: "Dedup pipeline works robustly for basic configurations"
+  type: task
+  status: done
+  owners: [ravwojdyla, yonromai]
+  target_date: "2026-01-27"
+  issue: 2091
+  labels: [timeline, data_pipeline]
+
+
+  source_of_truth: "GitHub [#2091] and the plan-of-record timeline."
+marin_paper:
+  title: "Generate Marin paper using agents"
+  type: epic
+  status: planned
+  owners: [percyliang]
+  target_date: "2026-02-28"
+  issue: 2662
+  labels: [timeline, community, paper]
+
+
+data_mixing_poc_jan:
+  title: "Predict single-phase multi-domain data mixtures (~OLMo 3 style)"
+  type: task
+  status: planned
+  owners: [Calvin-Xu]
+  target_date: "2026-01-31"
+  issue: 2404
+  labels: [timeline, data, pretraining]
+  description: |
+    Reproduce/validate single-phase multi-domain mixture prediction on Marin-relevant
+    data as the baseline for later multi-phase mixture modeling.
+  definition_of_done: |
+    A reproducible single-phase mixture experiment runs end-to-end and produces a
+    baseline predictor/report used by downstream multi-phase tasks.
+
+
+data_mixing_swarm_feb:
+  title: "Predict multi-phase multi-domain data mixtures"
+  type: task
+  status: planned
+  owners: [Calvin-Xu]
+  target_date: "2026-02-28"
+  issue: 2403
+  labels: [timeline, data, pretraining]
+  description: |
+    Extend the mixture predictor to multi-phase, multi-domain settings and validate
+    it on the intended swarm-run dataset family.
+  definition_of_done: |
+    Multi-phase/multi-domain experiments complete with a documented predictor that
+    outperforms or matches naive/proportional baselines on target metrics.
+  dependencies:
+    - data_mixing_poc_jan
+
+
+moe_stable_systems:
+  title: "Stable MoE systems (architecture-aware throughput targets, OLMoE settings)"
+  type: epic
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-03-31"
+  issue: 2314
+  labels: [timeline, moe, pretraining, systems]
+  description: |
+    Build a stable and fast MoE training path for OLMoE-like settings where a fixed
+    MFU target is not universally meaningful (for example, high experts-per-token regimes).
+
+    Optimize for quality-at-wall-clock and cost, with MFU treated as a diagnostic and
+    constraint metric rather than the primary objective.
+  definition_of_done: |
+    - Stable multi-day training runs at target scales with no correctness regressions.
+    - Throughput and cost are benchmarked against relevant architecture baselines.
+    - Configuration choices are justified by quality-vs-time/cost frontier evidence,
+      not by a single global MFU threshold.
+
+
+moe_scaling_systems:
+  title: "MoE scaling systems to 120B parameters"
+  type: epic
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-04-30"
+  issue: null
+  labels: [timeline, moe, pretraining, systems]
+  description: |
+    Scale the MoE training system from smaller validated runs to a 120B-class
+    pretraining-capable path.
+
+    Focus on the systems layer rather than model-quality optimization:
+    - multi-node execution stability on target launch paths
+    - EP/TP/DP scaling behavior and communication bottlenecks
+    - memory/throughput envelope needed for 100B+ class runs
+    - reproducible "one-command" launch configs for larger runs
+
+    This node is the bridge between 50B execution evidence and 100B hero-run
+    system readiness.
+  definition_of_done: |
+    - At least one representative multi-node MoE pretraining run at >=50B class
+      completes through the standard Marin launch path.
+    - A scaling report documents measured throughput, memory headroom, and
+      dominant bottlenecks for the relevant cluster shapes.
+    - Recommended EP/TP/DP configurations are recorded for at least two
+      target classes (50B and 100B+), with reproducible configs.
+    - Remaining system blockers to 120B-class execution are explicitly listed
+      with owners and follow-up issues.
+  dependencies:
+    - grug_moe
+    - training_throughput_critical_path
+    - moe_ep_parallelism_map
+    - support_nvidia_gpu_clusters
+    - iris_multinode_gpu_training
+    - train_50b_moe
+
+
+train_8x7b:
+  title: "Train 8x7B"
+  type: epic
+  status: planned
+  owners: [dlwh, pc0618]
+  target_date: "2026-03-15"
+  issue: 2165
+  labels: [timeline, pretraining, moe]
+
+
+posttraining_evalchemy_evals:
+  title: "Post-training evals with Evalchemy"
+  type: task
+  status: planned
+  owners: [moojink]
+  target_date: "2026-01-31"
+  issue: 2495
+  labels: [timeline, evals, posttraining]
+  description: |
+    Wire post-training model evals into Evalchemy so candidate checkpoints can be
+    compared consistently with shared metrics and reporting.
+  definition_of_done: |
+    Evalchemy runs for post-training checkpoints are automated and produce stable,
+    comparable metrics used in candidate selection.
+
+
+sft_synthetic_datasets:
+  title: "Reannotate existing synthetic datasets"
+  type: epic
+  status: planned
+  owners: [moojink]
+  target_date: "2026-02-28"
+  issue: 2277
+  labels: [timeline, sft, synthetic_data, agent_friendly]
+  description: |
+    Refresh synthetic training data annotations to improve quality/consistency and
+    reduce obvious noise before SFT recipe comparisons.
+  definition_of_done: |
+    Reannotated synthetic datasets are published with quality checks and integrated
+    into SFT runs used for recipe comparison.
+
+
+sft_agentic_datasets:
+  title: "Prepare best agentic datasets"
+  type: task
+  status: done
+  owners: [AlienKevin]
+  target_date: "2026-02-28"
+  issue: 2498
+  labels: [timeline, sft, data]
+
+
+sft_agentic_evals:
+  title: "Set up agentic evaluation"
+  type: task
+  status: planned
+  owners: [moojink]
+  target_date: "2026-03-31"
+  issue: 2500
+  labels: [timeline, sft, evals]
+
+
+release_strong_sft_models:
+  title: "Strong SFT models on top of existing base models (e.g., Qwen)"
+  type: task
+  status: planned
+  owners: [AlienKevin, moojink]
+  target_date: "2026-03-31"
+  issue: null
+  labels: [timeline, sft, release]
+  description: |
+    Train and evaluate strong SFT checkpoints on existing base models, then package
+    the best-performing candidates with reproducible configs/eval reports.
+  definition_of_done: |
+    Candidate SFT models are trained, ranked on agreed evals, and release-ready
+    artifacts/configs are published for the selected model(s).
+
+
+reasoning_data_generation_plan:
+  title: "Reasoning data generation: approach + tradeoffs"
+  type: task
+  status: planned
+  owners: [moojink]
+  target_date: "2026-01-31"
+  issue: 2262
+  labels: [timeline, data, posttraining]
+
+
+reasoning_data_generation_experiments:
+  title: "Reasoning data generation: experiments and best practices"
+  type: task
+  status: planned
+  owners: [moojink]
+  target_date: "2026-01-31"
+  issue: 2339
+  labels: [timeline, data, posttraining]
+  dependencies:
+    - reasoning_data_generation_plan
+
+
+vlms_multimodality:
+  title: "Replicate a LLaVA-OneVision-like VLM setup with evals"
+  type: epic
+  status: planned
+  owners: [ruili33]
+  target_date: "2026-02-28"
+  issue: 2383
+  labels: [timeline, multimodal]
+
+
+iris_multinode_gpu_training:
+  title: "Iris: multi-node GPU training support"
+  type: task
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-03-31"
+  issue: null
+  labels: [timeline, infra, iris]
+  source_of_truth: "gap identified from [#2891] scope limits plus plan decomposition to track remaining multi-node enablement."
+  description: |
+    Enable true multi-node GPU training execution through Iris-managed workflows.
+    This closes the gap between single-node CoreWeave bring-up and distributed
+    training jobs that require multiple GPU nodes.
+  definition_of_done: |
+    - Multi-node GPU slice provisioning works for at least one representative shape.
+    - At least one distributed training run completes on >=2 GPU nodes via Iris.
+    - Launch path uses normal Marin/Iris submission flow (not ad-hoc manual steps).
+    - Basic failure/debugging notes for this path are documented.
+    - Follow-up issues are filed for any remaining constraints.
+  dependencies:
+    - iris_scheduler_mvp
+    - remove_ray_rollout
+
+
+iris_gpu_partial_node_failure_recovery:
+  title: "Iris: partial node failure handling for multi-node GPU runs"
+  type: task
+  status: planned
+  owners: [ravwojdyla, rjpower]
+  target_date: "2026-03-31"
+  issue: null
+  labels: [timeline, infra, iris, reliability]
+  source_of_truth: "Gap identified while scoping NVIDIA multi-node readiness beyond [#2891] single-node-heavy bring-up."
+  description: |
+    Define and implement behavior for partial failures during distributed GPU training
+    (single worker/node death, network partition, straggler stalls).
+
+    Goal is predictable, bounded outcomes: recover/retry when safe, otherwise fail fast
+    with enough state/logging to resume and debug quickly.
+  definition_of_done: |
+    - Failure injection tests cover at least one worker/node loss in a multi-node run.
+    - System behavior is documented for each failure mode (retry, restart, fail-fast, resume path).
+    - At least one representative run recovers automatically or resumes cleanly after failure.
+    - Monitoring/alerts surface the failure class and action taken.
+  dependencies:
+    - iris_multinode_gpu_training
+    - monitoring
+
+
+support_nvidia_gpu_clusters:
+  title: "Iris: support NVIDIA GPU clusters"
+  type: epic
+  status: planned
+  owners: [ravwojdyla]
+  target_date: "2026-03-31"
+  issue: null
+  labels: [timeline, infra, iris]
+  source_of_truth: "CoreWeave integration work in [#2891], Iris epic tracking in [#2836], and plan decomposition for remaining gaps."
+  description: |
+    Iris workstream to enable NVIDIA GPU clusters as a first-class execution target
+    for Marin training and inference, including multi-node setups.
+
+    Current status:
+    - [#2891] covers most baseline CoreWeave/NVIDIA platform runtime integration
+      (single-node bring-up, runtime plumbing, and operational tooling).
+    - The main remaining gap for this node is true multi-node GPU training
+      execution in normal Iris/Marin workflows.
+
+    Scope:
+    - Iris platform/runtime support for NVIDIA environments
+    - Iris scheduling/submission compatibility for GPU-backed jobs
+    - multi-node GPU training execution (not only single-node smoke tests)
+    - robust bootstrap/config for GPU jobs (device/runtime/network assumptions)
+    - throughput/stability validation on representative workloads
+    - basic operational readiness (logs, metrics, debugging path)
+
+    Non-goals for this node:
+    - exhaustive model-quality optimization
+    - hardware-specific kernel research beyond baseline readiness
+    - perfect fault tolerance across all failure modes
+  definition_of_done: |
+    - At least one representative multi-node GPU training workload runs end-to-end in Marin.
+    - At least one representative GPU inference/eval workload runs end-to-end in Marin.
+    - Runs are launched through Iris-managed workflows (not one-off manual paths).
+    - Run configs/instructions are documented and reproducible.
+    - Baseline performance/stability report is published (throughput + key failure modes).
+    - Known gaps are filed as follow-up issues with owners.
+  dependencies:
+    - iris_multinode_gpu_training
+    - iris_gpu_partial_node_failure_recovery
+    - iris_scheduler_mvp
+    - remove_ray_rollout
+
+
+iris_scheduler_mvp:
+  title: "Iris: central scheduler; users request resources on any cluster"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-01-31"
+  issue: "milestone/5"
+  labels: [timeline, infra, iris]
+  source_of_truth: "GitHub `milestone/5` and the plan-of-record timeline."
+  description: |
+    Deliver the first central Iris scheduler so users can request compute without
+    manually selecting specific cluster plumbing.
+  definition_of_done: |
+    Central scheduler accepts user job requests and successfully schedules/runs jobs
+    on at least one target cluster with required queueing/accounting behavior.
+
+data_ingestion_pipeline_scale:
+  title: "Data ingestion pipeline cleanup plan"
+  type: epic
+  status: planned
+  owners: [yonromai, ravwojdyla]
+  target_date: "2026-03-31"
+  issue: 2355
+  labels: [timeline, infra, data_pipeline]
+  source_of_truth: "GitHub [#2355] and the plan-of-record timeline."
+  description: |
+    Marin has most required pieces for end-to-end web/markdown data processing
+    (dedupe, filtering, extraction, normalization), but implementation is scattered.
+
+    Unify remaining important dataset ingestion steps, consolidate shared transforms
+    into a consistent library surface, and keep pipeline wiring in one coherent path.
+  definition_of_done: |
+    - Core stages (dedupe/filter/extract/normalize) are exposed through shared modules.
+    - Pipeline wiring for common datasets is centralized and documented.
+    - Artifacts and schemas are consistent across ingestion paths.
+    - At least one representative dataset is run end-to-end through the unified path.
+
+
+remove_ray_rollout:
+  title: "Remove Ray: Iris rollout across clusters"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-03-31"
+  issue: null
+  labels: [timeline, infra, iris]
+  source_of_truth: "plan-of-record timeline and standup ownership notes (no linked GitHub issue yet)."
+  description: |
+    Roll out Iris in eu-west4, integrate into Fray for Zephyr/RL, and expand to more clusters with
+    multi-cluster support.
+  definition_of_done: |
+    - Iris is running in eu-west4 and integrated for Zephyr/RL workflows.
+    - Additional target clusters are onboarded.
+    - Multi-cluster scheduling support is functional for production-style jobs.
+  dependencies:
+    - iris_scheduler_mvp
+    - iris_test_eu_west4
+    - iris_integrate_fray_zephyr_rl
+    - iris_rollout_more_clusters
+    - iris_multi_cluster_support
+
+
+iris_test_eu_west4:
+  title: "Iris testing in eu-west4"
+  type: task
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-02-07"
+  issue: null
+  labels: [timeline, infra, iris]
+  source_of_truth: "plan-of-record timeline and standup ownership notes (no linked GitHub issue yet)."
+  description: |
+    Validate Iris behavior and operational stability on eu-west4 before wider rollout.
+  definition_of_done: |
+    At least one representative Iris workload runs successfully in eu-west4 with
+    expected scheduling and logs/artifacts.
+
+
+iris_integrate_fray_zephyr_rl:
+  title: "Iris integrated into Fray for Zephyr and RL"
+  type: task
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-02-15"
+  issue: null
+  labels: [timeline, infra, iris]
+  source_of_truth: "plan-of-record timeline and standup ownership notes (no linked GitHub issue yet)."
+  description: |
+    Integrate Iris scheduling into Fray-managed Zephyr/RL workflows to replace
+    cluster-specific submission paths.
+  definition_of_done: |
+    Zephyr/RL jobs can be launched through Fray using Iris scheduling in the default
+    path, with no manual fallback required for routine runs.
+  dependencies:
+    - iris_test_eu_west4
+
+
+iris_rollout_more_clusters:
+  title: "Iris rolled out to more clusters"
+  type: task
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-02-21"
+  issue: null
+  labels: [timeline, infra, iris]
+  source_of_truth: "plan-of-record timeline and standup ownership notes (no linked GitHub issue yet)."
+  description: |
+    Expand Iris adoption beyond the initial region and verify operational parity
+    across the expanded cluster set.
+  definition_of_done: |
+    Iris is enabled on the planned additional clusters and smoke jobs succeed with
+    comparable behavior to the initial rollout region.
+  dependencies:
+    - iris_integrate_fray_zephyr_rl
+
+
+iris_multi_cluster_support:
+  title: "Iris multi-cluster support"
+  type: task
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, infra, iris]
+  source_of_truth: "plan-of-record timeline and standup ownership notes (no linked GitHub issue yet)."
+  description: |
+    Support multi-cluster scheduling semantics and controls so jobs can run with
+    clear placement policy and predictable behavior.
+  definition_of_done: |
+    Scheduler supports explicit multi-cluster placement policy and successfully runs
+    representative jobs across clusters with correct accounting.
+  dependencies:
+    - iris_rollout_more_clusters
+
+
+experiments_reliable:
+  title: "Experiments work reliably end-to-end"
+  type: epic
+  status: planned
+  owners: [yonromai, ravwojdyla]
+  target_date: "2026-03-31"
+  issue: null
+  labels: [timeline, infra]
+  source_of_truth: "plan-of-record timeline and standup ownership notes (no linked GitHub issue yet)."
+  description: |
+    Remove dead data experiments, unify dataset preparation code paths, and validate a new dataset
+    end-to-end through Iris. Add a consistent dataset schema and test an agent-driven dataset addition.
+  definition_of_done: |
+    - Dead/obsolete experiment paths are removed.
+    - Dataset prep path is unified with a consistent schema.
+    - A new dataset has been run end-to-end through Iris.
+    - Agent-driven dataset onboarding succeeds on at least one dataset.
+  dependencies:
+    - remove_dead_data_experiments
+    - unify_dataset_preparation_code_paths
+    - dataset_schema_vortex_and_types
+    - validate_new_dataset_end_to_end
+    - agent_add_dataset_through_iris
+
+
+remove_dead_data_experiments:
+  title: "Remove dead data experiments"
+  type: task
+  status: planned
+  owners: [yonromai, ravwojdyla]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, infra, data_pipeline]
+  source_of_truth: "plan-of-record timeline and standup ownership notes (no linked GitHub issue yet)."
+  description: |
+    Delete stale/unused data experiment paths so the maintained pipeline surface is
+    smaller and less ambiguous.
+  definition_of_done: |
+    Stale experiment paths identified in scope are removed and references/docs are
+    updated so active paths are unambiguous.
+
+
+unify_dataset_preparation_code_paths:
+  title: "Unify dataset preparation code paths"
+  type: task
+  status: planned
+  owners: [yonromai, ravwojdyla]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, infra, data_pipeline]
+  source_of_truth: "plan-of-record timeline and standup ownership notes (no linked GitHub issue yet)."
+  description: |
+    Consolidate duplicated dataset prep flows into one primary implementation path
+    with shared configuration and artifact conventions.
+  definition_of_done: |
+    Duplicate dataset prep flows are replaced by a primary path used by all targeted
+    datasets in this milestone.
+
+
+dataset_schema_vortex_and_types:
+  title: "Dataset schema consistency (Vortex + typed outputs)"
+  type: task
+  status: planned
+  owners: [yonromai, ravwojdyla]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, infra, data_pipeline]
+
+
+  source_of_truth: "plan-of-record timeline and standup ownership notes (no linked GitHub issue yet)."
+validate_new_dataset_end_to_end:
+  title: "Run a new dataset end-to-end and validate through Iris"
+  type: task
+  status: planned
+  owners: [yonromai, ravwojdyla]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, infra, data_pipeline, iris]
+  source_of_truth: "plan-of-record timeline and standup ownership notes (no linked GitHub issue yet)."
+  description: |
+    Execute one new dataset through the full ingestion/prep path via Iris and verify
+    correctness, observability, and artifact compatibility.
+  definition_of_done: |
+    One newly added dataset runs end-to-end via Iris with expected outputs, and the
+    validation report confirms schema/artifact compatibility.
+  dependencies:
+    - unify_dataset_preparation_code_paths
+    - dataset_schema_vortex_and_types
+
+
+agent_add_dataset_through_iris:
+  title: "Test an agent adding a new dataset and running it through Iris"
+  type: task
+  status: planned
+  owners: [yonromai, ravwojdyla]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, infra, data_pipeline, agent_friendly, iris]
+  source_of_truth: "plan-of-record timeline and standup ownership notes (no linked GitHub issue yet)."
+  description: |
+    Validate agent-driven dataset onboarding by having an agent execute the intake
+    workflow and run the dataset through Iris without manual glue.
+  definition_of_done: |
+    An agent successfully performs dataset intake plus Iris execution for a new
+    dataset, with logs/artifacts sufficient for human review.
+  dependencies:
+    - validate_new_dataset_end_to_end
+
+
+marin_as_library:
+  title: "Marin as a library; experiments in other repos"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-03-31"
+  issue: 2442
+  labels: [timeline, infra, developer_experience]
+  source_of_truth: "GitHub [#2442] and the plan-of-record timeline."
+  description: |
+    Make Marin consumable as a stable library so external repos can run experiments
+    without copying or forking core pipeline logic.
+  definition_of_done: |
+    At least one external repo runs experiments via Marin as a library with documented
+    setup and no local forked pipeline code.
+
+
+openthoughts_4_dataset:
+  title: "New OpenThoughts 4 dataset"
+  type: epic
+  status: planned
+  owners: [moojink]
+  target_date: "2026-03-31"
+  issue: null
+  labels: [timeline, data, community]
+  description: |
+    Produce and validate the next OpenThoughts dataset revision for downstream SFT
+    and agentic reasoning recipe experiments.
+  definition_of_done: |
+    OpenThoughts 4 dataset artifact is published with validation stats and is used in
+    at least one downstream training/eval run.
+
+
+train_50b_moe:
+  title: "Train 50B MoE"
+  type: epic
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-04-30"
+  labels: [timeline, pretraining, moe]
+  description: |
+    Execute a 50B-class MoE run as the April bridge between small/medium validation and
+    x00B-scale execution.
+
+    This run should use the Grug MoE path and the current architecture/scaling-law decisions,
+    and should produce concrete evidence on stability, throughput, and quality progression
+    at meaningful scale.
+  definition_of_done: |
+    - A 50B-class MoE training run launches and reaches the planned token horizon without critical instability.
+    - Run includes reproducible config/artifact links and a short execution report.
+    - Report captures: throughput/MFU, stability signals, and core quality trend metrics.
+    - Follow-up blockers for x00B scale are explicitly listed with owners.
+  dependencies:
+    - grug_moe
+    - model_architecture
+    - moe_scaling_laws_issue
+    - moe_block_perf
+    - moe_load_balancing_strategy
+    - moe_ep_parallelism_map
+    - moe_frontier_tradeoff_report
+
+
+dataset_20t_deduped:
+  title: "Scrounge 20T deduped high-quality tokens (coding, agents, multilinguality)"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-04-30"
+  issue: null
+  labels: [timeline, data, pretraining]
+  description: |
+    Assemble a large, deduplicated pretraining corpus focused on high-value domains
+    (coding, agentic traces, multilingual data) with clear provenance and quality filters.
+
+    Useful planning targets:
+    - around 10T English web data, including a math-focused slice (~500B)
+    - around 2T non-English web data
+    - around 2T code data
+    - around 1T HQ/specialized data
+    - remaining tokens from best available high-quality sources to reach 20T deduped
+
+    Execution constraint for this cycle: prioritize sources we can access/process with
+    current people and budget. Prefer low-friction expansion of existing/licensed streams
+    over expensive net-new data collection programs.
+    Quality bar: deduped corpus quality should be competitive with Nemotron-CC-level data,
+    not just raw token count.
+  definition_of_done: |
+    Target token inventory (20T deduped) is assembled with per-source manifests and
+    quality summaries for coding/agentic/multilingual slices.
+    Planned token allocation by major source family is documented and reviewed.
+    The acquisition/processing plan is feasible under current staffing and spend limits.
+
+
+infra_reliability_95:
+  title: "Infrastructure reliability at 95%"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-03-31"
+  issue: null
+  labels: [timeline, infra]
+  source_of_truth: "plan-of-record timeline and standup ownership notes (no linked GitHub issue yet)."
+  description: |
+    Reach a baseline reliability target for routine experimentation by reducing common
+    failure modes and improving recovery/observability for cluster jobs.
+  definition_of_done: |
+    Reliability dashboard/report shows >=95% successful completion for in-scope job
+    classes over an agreed observation window.
+
+
+infra_long_running_jobs_preemption:
+  title: "Support long-running jobs across clusters and preemption"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-03-31"
+  issue: null
+  labels: [timeline, infra, iris]
+  source_of_truth: "plan-of-record timeline and standup ownership notes (no linked GitHub issue yet)."
+  description: |
+    Ensure long-duration jobs can survive preemption and continue across clusters with
+    minimal manual intervention and predictable restart behavior.
+  definition_of_done: |
+    Long-running representative jobs survive planned preemption scenarios and resume
+    correctly across clusters without manual repair steps.
+  dependencies:
+    - remove_ray_rollout
+    - infra_reliability_95
+
+
+infra_reliability_99:
+  title: "Infrastructure reliability at 99%"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-05-31"
+  issue: null
+  labels: [timeline, infra, backburner]
+  source_of_truth: "plan-of-record timeline and standup ownership notes (no linked GitHub issue yet)."
+  dependencies:
+    - infra_reliability_95
+
+
+regression_mix_optimization:
+  title: "Regression-based data mix optimization"
+  type: epic
+  status: planned
+  owners: [Calvin-Xu]
+  target_date: "2026-05-15"
+  labels: [timeline, data, scaling_laws, agent_friendly]
+
+
+automated_ingestion_datasets_environments:
+  title: "Automated ingestion of new datasets and environments"
+  type: epic
+  status: planned
+  target_date: "2026-03-31"
+  labels: [timeline, infra, data_pipeline, agent_friendly]
+  description: |
+    Turn “someone found a dataset / env we should use” into a repeatable workflow that produces ready-to-train
+    artifacts *with a durable paper trail* (provenance + transforms + stats), so we can trust, reproduce, and compare
+    data across runs.
+
+    This should codify and automate the workflow in `docs/recipes/add_dataset.md`, including the *schema inspection*
+    first step, and extend it to cover:
+    - dataset ingestion (download/import), validation, and publishing in our preferred format
+    - environment ingestion (RL environments and other task envs), including a minimal contract and test harness
+
+    The point is not “datasets are uniform so ingestion can be fully automated”. Datasets are special snowflakes.
+    The goal is to make the *repeatable parts* easy and to make the “snowflake” decisions explicit and reviewable,
+    while ensuring every ingestion produces consistent artifacts and metadata.
+  definition_of_done: |
+    - A single documented “intake” workflow exists for datasets that follows `docs/recipes/add_dataset.md` but is mostly
+      runnable end-to-end (CLI/recipe), producing:
+      - a dataset manifest (schema, licensing, source pointers, token counts)
+      - validation reports (sampling sanity, corruption checks)
+      - train/eval splits or slices when applicable
+    - A parallel “intake” workflow exists for environments that:
+      - defines a minimal environment contract
+      - runs contract tests in CI on new/changed envs
+    - Ingestion outputs are standard artifacts that can be consumed by ferries/pipelines without manual glue.
+  dependencies:
+    - automate_add_dataset_recipe
+    - dataset_ingestion_artifact_manifest
+    - dataset_ingestion_validation_gates
+    - environment_ingestion_contract
+    - environment_ingestion_ci_gates
+    - data_validation
+
+
+automate_add_dataset_recipe:
+  title: "Agent-in-the-loop dataset intake scaffold (encode `docs/recipes/add_dataset.md`)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, data_pipeline, agent_friendly, help-wanted]
+  description: |
+    The purpose of `docs/recipes/add_dataset.md` is not “fully automated dataset addition” — datasets are special
+    snowflakes and require intelligence/iteration.
+
+    The goal here is to automate the *repeatable scaffolding* and make the “snowflake” parts explicit, interactive,
+    and reviewable:
+    - scaffold a new dataset addition with the right files/structure and a manifest stub
+    - run schema inspection and emit a summary that an agent can reason about
+    - run standard validation gates and produce a report
+    - provide explicit checkpoints where an agent/human must decide:
+      normalization/mapping, filtering, licensing constraints, splitting strategy, dedupe strategy, etc.
+
+    In other words: encode the recipe as an agent-friendly workflow that is fast to iterate on, without pretending that
+    datasets are uniform.
+  definition_of_done: |
+    - Given a dataset source (HF dataset, GCS bucket, local files, etc.), we can run a documented workflow that:
+      - generates a dataset addition scaffold (files + manifest stub)
+      - runs schema inspection and writes a machine-readable + human-readable summary
+      - runs standard validations and writes a report
+    - The workflow makes “agent decisions” explicit checkpoints (it should pause/fail with actionable guidance rather
+      than silently guessing).
+
+
+dataset_ingestion_artifact_manifest:
+  title: "Dataset manifests for doc + tokenized artifacts (linked provenance)"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, data_pipeline, agent_friendly, help-wanted]
+  description: |
+    Standardize the metadata we emit for every ingested dataset so downstream pipelines can trust and reason about it.
+
+    This is closely related to what `lib/marin/tools/get_hf_dataset_schema.py` already produces (schema inspection),
+    but the “manifest” is the durable, versioned paper trail that we *store alongside the dataset artifact* and keep
+    stable across time.
+
+    Because we separate “doc” artifacts (jsonl/parquet/untokenized) from “tokenized” artifacts, we need manifests for
+    both, with explicit linkage:
+
+    - Doc manifest (source-of-truth provenance for the raw/normalized dataset):
+      - dataset name/version/source pointers (and commit hashes where applicable)
+      - license and usage constraints
+      - schema (fields + types) and any normalization performed
+      - split/slice definitions
+      - basic quality stats (language, length distributions, corruption rate)
+
+    - Tokenized manifest (tokenization-specific paper trail):
+      - tokenizer identity + revision (and any special tokenization settings)
+      - token counts and length distribution stats per split
+      - pointer to the exact doc-manifest version/hash it was tokenized from
+      - (optional) pointer to tokenization logs / validation reports
+  definition_of_done: |
+    - A versioned doc-manifest format exists and is produced by ingestion, stored alongside the doc artifact.
+    - A versioned tokenized-manifest format exists and is produced by tokenization, stored alongside the tokenized
+      artifact, and references the doc-manifest it was derived from.
+    - Pipelines reference the correct manifest(s) for the artifact they consume.
+
+
+dataset_ingestion_validation_gates:
+  title: "Dataset ingestion validation gates (sanity checks + reports)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, data_pipeline, testing, agent_friendly]
+  description: |
+    Add validation steps that run automatically during ingestion so we catch problems before training:
+    - schema and invariants
+    - empty/corrupted samples and encoding issues
+    - tokenization sanity (e.g. pathological length spikes)
+    - dedupe verification and token count stats where relevant
+
+    This should build on `data_validation` and produce agent-readable reports.
+  dependencies:
+    - data_validation
+
+
+automated_ingestion_architectures_algorithms:
+  title: "Automated ingestion of new architectures and training algorithms"
+  type: epic
+  status: planned
+  target_date: "2026-04-30"
+  labels: [timeline, infra, agent_friendly]
+  description: |
+    Make it easy (and safe) to add “new architecture” or “new training algorithm/optimizer” to Marin/Levanter without
+    bespoke glue each time.
+
+    This is not about pretending architectures/algorithms are uniform. It’s about:
+    - a standard *intake scaffold* (where to put code/config, what metadata to record, how to run a minimal test)
+    - explicit “contract tests” and preflight checks (compile, shapes, sharding) so failures happen early
+    - a durable paper trail of what changed and how it was evaluated
+
+    Related foundation:
+    - overall repo structure and executor pattern: `docs/recipes/architecture.md`
+    - this should eventually align with the “gruggification” work on experiment structure.
+
+    Concrete example to emulate:
+    - The Grug/Grugformer project doc (PR #2171) describes a “canonical core + hackable speedrun edit surface +
+      upstreaming agreement” workflow. That is exactly the style we want for architecture/algorithm intake:
+      experiments happen in copy-pasteable speedrun files with a standard gauntlet, and successful changes get upstreamed
+      into the canonical library with tests.
+  definition_of_done: |
+    - There is a documented workflow for adding an architecture or algorithm that produces:
+      - a standardized config entry (or plugin registration)
+      - a minimal smoke benchmark run (train step + eval step) with logged metrics
+      - a machine-readable manifest recording what was run (code version, config hash, hardware, compile status)
+    - CI runs contract tests for new/changed components and rejects changes that break:
+      - compilation (where applicable) or basic shape/sharding invariants
+      - minimal correctness checks on a tiny model
+    - At least one “external” architecture/algorithm is added end-to-end using this workflow as proof.
+  dependencies:
+    - architecture_algorithm_intake_scaffold
+    - architecture_contract_tests
+    - algorithm_contract_tests
+    - benchmark_smoke_suite
+    - aot_compilation
+    - daily_canary_ferry_workflow
+    - experiment_structure_overhaul
+
+
+agents_run_straightforward_experiments:
+  title: "Agents can run straightforward experiments end-to-end"
+  type: epic
+  status: planned
+  target_date: "2026-03-31"
+  labels: [timeline, infra, agent_friendly]
+  source_of_truth: "March 2026 milestone objective in plan-of-record timeline."
+  description: |
+    Agent workflows can propose, launch, monitor, and summarize straightforward experiments
+    without bespoke human glue for each run.
+  definition_of_done: |
+    - An agent can run at least one straightforward experiment end-to-end (propose -> launch -> monitor -> summarize).
+    - The run artifacts and summary are reproducible and linked in a canonical GitHub record.
+  dependencies:
+    - automated_ingestion_datasets_environments
+    - automated_ingestion_architectures_algorithms
+
+
+architecture_algorithm_intake_scaffold:
+  title: "Intake scaffold for architectures/algorithms (where to put things, what to record)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, developer_experience, grug]
+  description: |
+    Provide a clear, repeatable “how to add X” scaffold for:
+    - new model architecture variants (attention, MoE variants, Mamba-like, etc.)
+    - new training algorithms (loss variants, optimizer variants, schedule variants)
+
+    This should include:
+    - recommended directory layout / naming
+    - minimal metadata/manifest expectations
+    - a small example/template that adds a toy architecture/algorithm as a starting point
+
+    We should explicitly support the “canonical core + speedrun edit surface” pattern described in the Grug/Grugformer
+    project doc (PR #2171):
+    - canonical implementation lives in the library
+    - speedrun scripts are the copy/paste surface for A/B experiments (explicit hack points)
+    - upstreaming a win updates the library + tests (speedruns remain snapshots)
+  definition_of_done: |
+    - We write down the canonical “where does this go” guidance (doc + template).
+    - An example/template exists that newcomers and agents can copy.
+
+
+architecture_contract_tests:
+  title: "Contract tests for architecture changes (shapes, sharding, compilation, numerics)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, testing, performance, agent_friendly]
+  description: |
+    Add tests that catch common failure modes when changing model architecture:
+    - shape mismatches / incorrect parameter initialization
+    - sharding rules that fail on common meshes
+    - compilation failures (ideally via preflight)
+    - obvious numeric instability (NaNs, divergence on tiny runs)
+  dependencies:
+    - aot_compilation
+
+
+algorithm_contract_tests:
+  title: "Contract tests for training algorithm changes (optimizer/loss/schedule invariants)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, testing, agent_friendly]
+  description: |
+    Add tests that catch common failure modes when changing training algorithms:
+    - optimizer state shape/type mismatches
+    - loss scaling / KL/regularization invariants
+    - schedule changes that produce invalid values
+    - convergence sanity on tiny runs (not “good”, just “not broken”)
+
+
+benchmark_smoke_suite:
+  title: "Smoke benchmark suite for new architectures/algorithms"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, testing, performance, agent_friendly]
+  description: |
+    A minimal, reproducible benchmark suite (“gauntlet”) that is used for architecture/algorithm intake.
+
+    This should look like the Grug/Grugformer “hackable speedrun gauntlet” idea (PR #2171):
+    - a standard set of checks that every change runs through
+    - a clear edit surface in a speedrun file (copy/paste-friendly) for rapid experimentation
+
+    Minimum gauntlet checks:
+    - correctness sanity (when there is a reference path, compare reference vs fast kernels on tiny shapes)
+    - compile sanity (TTFS for `train_step`, ideally via `aot_compilation` preflight)
+    - throughput sanity (tokens/sec, step time on a fixed micro-benchmark)
+    - memory sanity (best-effort capture of max HBM/VMEM if available)
+
+    Goal is not to predict final quality, but to make it easy to validate:
+    - it compiles
+    - it runs end-to-end
+    - performance is not obviously terrible
+  dependencies:
+    - daily_canary_ferry_workflow
+    - aot_compilation
+
+
+
+train_100b_moe:
+  title: "Hero run of 100B MoE"
+  type: epic
+  status: planned
+  owners: [dlwh, Helw150]
+  target_date: "2026-05-31"
+  labels: [timeline, pretraining, moe]
+  description: |
+    Execute a 100B-scale MoE training run that demonstrates stable training and competitive quality at scale.
+
+    This is the hero run for this MoE cycle, and should be the culmination of all our validation and iteration work.
+    It should produce concrete evidence on stability, throughput, and quality progression at scale, along with
+    clear follow-up actions for any gaps or blockers that arise.
+  dependencies:
+    - moe_100b_readiness
+    - moe_scaling_systems
+    - data_tools_and_mixture_ready
+
+
+moe_100b_readiness:
+  title: "100B MoE readiness checklist"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-05-01"
+  labels: [timeline, pretraining, moe]
+  description: |
+    Close the critical gaps before a 100B-scale MoE run: kernel performance, routing correctness,
+    scaling choices, data mix plan, long-context strategy, and inference/serving path.
+
+    For this run we intentionally do **not** optimize pipeline parallelism (PP). We focus on
+    EP/TP/DP choices and perf-max iteration loops. Hardware conclusions before our target fleet
+    arrives are expected to be partially speculative; keep assumptions explicit.
+
+    Fault tolerance hardening is currently out of scope for this MoE track.
+  dependencies:
+    - model_architecture
+    - moe_block_perf
+    - moe_load_balancing_strategy
+    - moe_correctness_stability_harness
+    - moe_load_balancing_correctness
+    - moe_scaling_granularity_sweep
+    - moe_ep_parallelism_map
+    - moe_prediction_calibration
+    - moe_shape_search_token_wallclock_adjusted
+    - moe_frontier_tradeoff_report
+    - moe_data_mix_stability_check
+    - midtrain_mix_sources
+    - long_context_strategy
+    - moe_inference_story
+    - moe_one_command_sweeps
+
+
+moe_block_perf:
+  title: "MoE block performance (fast fwd/bwd + comm overlap)"
+  type: task
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-04-15"
+  issue: null
+  labels: [pretraining, moe, systems, performance]
+  description: |
+    Ensure MoE dispatch/combiner kernels are fast and stable at target batch sizes.
+    Verify end-to-end MFU on representative runs and reduce all-to-all overhead.
+
+
+moe_load_balancing_strategy:
+  title: "Figure out MoE load balancing strategy"
+  type: task
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-04-15"
+  issue: null
+  labels: [pretraining, moe, architecture, systems]
+  description: |
+    Decide and document the load-balancing approach for this MoE cycle.
+
+    Scope includes:
+    - routing/load-balancing objective choice (including whether to use aux-loss-free style balancing)
+    - overflow/capacity behavior policy (drop, reroute, or equivalent)
+    - stability and utilization targets that are realistic for our architecture
+  definition_of_done: |
+    - Chosen strategy is written down with rationale and rejection notes for main alternatives.
+    - Config knobs/defaults are defined so runs are comparable and reproducible.
+    - A minimal experiment set demonstrates acceptable expert utilization and training stability.
+
+
+moe_load_balancing_correctness:
+  title: "MoE load balancing correctness (routing + overflow policy)"
+  type: task
+  status: planned
+  owners: [ClassicLarry]
+  target_date: "2026-04-15"
+  issue: null
+  labels: [pretraining, moe, correctness]
+  description: |
+    Validate routing determinism, capacity factor behavior, token dropping policy, and expert utilization
+    metrics at scale. Add regression checks for expert collapse and skew.
+  dependencies:
+    - moe_load_balancing_strategy
+
+
+moe_scaling_granularity_sweep:
+  title: "MoE scaling sweep (experts, top-k, capacity factor)"
+  type: task
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-04-30"
+  issue: null
+  labels: [pretraining, moe, scaling_laws]
+  description: |
+    Sweep MoE granularity choices (expert count/width, top-k, capacity factor) under isoFLOP
+    constraints to pick the 100B architecture shape.
+
+
+midtrain_mix_sources:
+  title: "Mid-train data mix plan (explicit sources + schedule)"
+  type: task
+  status: planned
+  owners: [Helw150]
+  owner_names: [Michael]
+  target_date: "2026-04-30"
+  issue: null
+  labels: [pretraining, data]
+  description: |
+    Name the concrete data sources and target ratios for the 100B run, and specify the
+    mid-train schedule (when sources enter/exit the mix).
+
+
+long_context_strategy:
+  title: "Long-context strategy (sliding window vs full, RoPE vs no RoPE)"
+  type: task
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-04-15"
+  issue: null
+  labels: [pretraining, long_context, moe]
+  description: |
+    Decide on long-context approach for 100B MoE:
+    - sliding window vs full attention
+    - RoPE vs no RoPE (or other position scheme)
+    - validation plan with HELMET + core evals
+  dependencies:
+    - decide_sliding_window_attention
+
+
+decide_sliding_window_attention:
+  title: "Decide on SWA and/or sparse attention strategy"
+  type: task
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-04-10"
+  issue: null
+  labels: [pretraining, long_context, architecture, moe]
+  description: |
+    Make an explicit call on long-context attention strategy for this MoE cycle:
+    - sliding-window attention (SWA)
+    - sparse attention variant(s)
+    - or full attention baseline
+
+    Include quality, throughput, memory, and serving implications at target sequence lengths.
+  definition_of_done: |
+    - Decision is recorded (SWA, sparse, hybrid, or full) with rationale and tradeoffs.
+    - At least one representative benchmark comparison backs the decision.
+    - Required config defaults/constraints are documented for downstream runs.
+
+
+moe_inference_story:
+  title: "Inference story for big MoE (vLLM-first serving path)"
+  type: task
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-04-30"
+  issue: null
+  labels: [inference, moe, pretraining]
+  description: |
+    Prioritize a vLLM serving path for the first 100B MoE release and define checkpoint/export
+    requirements accordingly. Validate KV cache behavior, routing latency, and throughput targets
+    on a representative cluster.
+
+
+moe_correctness_stability_harness:
+  title: "MoE correctness and stability harness (value/grad + long-run guards)"
+  type: task
+  status: planned
+  owners: [dlwh, ClassicLarry]
+  target_date: "2026-04-10"
+  issue: null
+  labels: [pretraining, moe, correctness, testing]
+  description: |
+    Build a reusable harness that checks:
+    - value/grad parity vs reference paths
+    - router/drop/overflow correctness
+    - NaN/divergence and instability alerts in long-running jobs
+
+
+moe_ep_parallelism_map:
+  title: "MoE EP/TP/DP scaling map (no PP for this run)"
+  type: task
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-04-20"
+  issue: null
+  labels: [pretraining, moe, systems, performance]
+  description: |
+    Produce a scaling map across EP/TP/DP settings with throughput, MFU, and communication overhead.
+    Pipeline parallelism (PP) is explicitly out of scope for this cycle.
+
+    Because target hardware is not fully available yet, include explicit "speculative" annotations
+    and expected confidence ranges for projected configs.
+
+
+moe_shape_search_token_wallclock_adjusted:
+  title: "Find token- and wall-clock-adjusted MoE shapes (with tuning)"
+  type: task
+  status: planned
+  owners: [Helw150, ClassicLarry]
+  target_date: "2026-04-25"
+  issue: null
+  labels: [pretraining, moe, scaling_laws, performance]
+  description: |
+    Search architecture shapes and key tuning knobs with two objectives:
+    - best quality per token
+    - best quality per wall-clock
+    Include practical tuning budget assumptions in the comparison.
+
+
+moe_prediction_calibration:
+  title: "Calibrate MoE performance predictions against observed runs"
+  type: task
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-04-25"
+  issue: null
+  labels: [pretraining, moe, scaling_laws, evals]
+  description: |
+    Turn scaling-law/shape predictions into calibrated forecasts with uncertainty bands
+    by backtesting against completed runs.
+
+    This is the "can we trust the projection?" checkpoint before committing to larger runs.
+  definition_of_done: |
+    - A prediction-vs-observed report exists for key metrics (quality, throughput, wall-clock).
+    - Error bars are calibrated from held-out runs, not hand-wavy guesses.
+    - Decision guidance is recorded: where forecasts are reliable vs unreliable.
+  dependencies:
+    - moe_scaling_laws_issue
+    - moe_shape_search_token_wallclock_adjusted
+    - moe_data_mix_stability_check
+
+
+moe_frontier_tradeoff_report:
+  title: "MoE throughput-vs-quality frontier report"
+  type: task
+  status: planned
+  owners: [Helw150, ClassicLarry]
+  target_date: "2026-04-30"
+  issue: null
+  labels: [pretraining, moe, evals, performance]
+  description: |
+    Produce a report selecting recommended configs from the observed frontier
+    (quality, throughput, MFU, estimated cost, and risk).
+  dependencies:
+    - moe_correctness_stability_harness
+    - moe_scaling_granularity_sweep
+    - moe_ep_parallelism_map
+    - moe_prediction_calibration
+    - moe_shape_search_token_wallclock_adjusted
+    - moe_data_mix_stability_check
+
+
+moe_data_mix_stability_check:
+  title: "Validate MoE hypers across realistic data phases/mixes"
+  type: task
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-04-30"
+  issue: null
+  labels: [pretraining, moe, data]
+  description: |
+    Confirm that "stable" MoE hyperparameters from sweeps remain stable and performant
+    under realistic multi-phase data mixtures, not only clean benchmark runs.
+
+
+moe_readiness_gates:
+  title: "Optional: define fixed MoE readiness gates (core evals + systems limits)"
+  type: task
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-04-20"
+  issue: null
+  labels: [pretraining, moe, evals, release]
+  description: |
+    Optional track: only needed if we decide to formalize release-candidate gating.
+
+    Lock the required gate set for MoE release candidates:
+    - core quality evals
+    - stability checks
+    - throughput/MFU thresholds
+    - cost or runtime limits
+
+
+moe_one_command_sweeps:
+  title: "One-command MoE sweeps/ablations with reproducible reports"
+  type: task
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-04-15"
+  issue: null
+  labels: [pretraining, moe, infra, agent_friendly]
+  description: |
+    Package the main MoE experiments (isoflop sweeps, ablations, shape runs) as one-command
+    workflows that emit standardized artifacts and comparison summaries.
+
+
+data_tools_and_mixture_ready:
+  title: "End-to-end model-based data transformation"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  owner_names: [Michael]
+  target_date: "2026-05-15"
+  labels: [timeline, data_pipeline, data, paper]
+
+
+best_sft_recipe:
+  title: "Best SFT recipe"
+  type: epic
+  status: planned
+  owners: [moojink]
+  target_date: "2026-05-31"
+  issue: null
+  labels: [timeline, sft, posttraining, paper]
+
+
+
+frontier:
+  title: "Get to the mid-2025 open weight frontier"
+  type: milestone
+  status: planned
+  labels: [north_star]
+  dependencies:
+    - mega_reasoning_model
+
+
+mega_reasoning_model:
+  title: "have a deepseek v3 tier model"
+  type: milestone
+  status: planned
+  labels: [north_star]
+  dependencies:
+    - rl_big_model
+    - eval_big_model
+
+
+eval_big_model:
+  title: "be ~SOTA on same benchmarks as ~deepseek v3"
+  type: milestone
+  status: planned
+  labels: [north_star]
+  dependencies:
+    - rl_big_model
+    - frontier_evals_wired
+
+
+trained_base_model:
+  title: "Have a very large pretrained model that is a good base for agentic/reasoning RL"
+  type: milestone
+  status: planned
+  labels: [pretraining, north_star]
+  description: |
+    Our major milestone for 2026 is to make a competitive-with-best-2025-open-weights model.
+    This issue is for building the base model.
+
+    These days "base model" as distinct from "SFTed model" doesn't really mean anything.
+    Instead, we should aim to build a model using ~the next token objective that has:
+
+    - Excellent performance on base model tasks (like MMLU, MMLU PRO, etc)
+    - Good performance on chat tasks (alpaca eval, if-eval)
+    - Good at prompt following and tool-calling.
+    - Safe on critical safety issues (biological, nuclear, etc)
+    - not too toxic otherwise
+
+    More over (and more importantly), it should serve as a strong base for RL and last-mile SFT.
+
+    In broad strokes, we're talking a large MOE-style model trained on ~1-3e24 flops (~15T tokens).
+
+    ## Pre-Training Phases
+
+    As a strawman of a recipe, we're planning something like:
+
+    - [Phase 1](#dataset_20t_deduped): Broad coverage web etc base training. probably 80% english web, 10% other language web, 5% code, 5% hq data (~11T tokens)
+    - [Phase 2](#hq_data): HQ data training ~60% english web, ~10% other language web, ~15% english HQ, 5% code/reasoning HQ, 10% other language HQ (~3T tokens)
+    - [Phase 3](#sft_data): SFT/Length extension. ~80% previous mix, 20% reasoning/length/chat data (~2T tokens)
+
+    The SFT'd model is not intended to be a fully aligned chat model, but rather one that is aware of chat templates and can follow them and other tasks.
+
+    This splits the data into three broad groups:
+    - Phase 1: ["Pretraining data"](#dataset_20t_deduped):
+    - Phase 2:["HQ data"](#hq_data)
+    - Phase 3:["SFT data"](#sft_data)
+
+    We should plan to release checkpoints for each phase, but only the final will be cooled down.
+
+    ## Architecture
+
+    Strawman architecture is a big ol MOE balanced in terms of training and inference throughput.
+    Because we're aiming to do substantial RL on the model, inference throughput matters a lot.
+    Training throughput is still more important for this model.
+
+  dependencies:
+    - milestone_2026_02
+    - milestone_2026_03
+    - milestone_2026_05
+    - milestone_2026_03_sft_posttraining
+
+
+## Datasets
+sft_data:
+  title: "Make a Stage 3 training mixture"
+  type: epic
+  status: planned
+  labels: [data, sft]
+  description: |
+    We need to make a Stage 3 training mixture.
+    We should consider the following datasets:
+    - chat_data
+    - reasoning_data
+    - long_context_data
+    - format_following_data
+
+  dependencies:
+     - chat_data
+     - reasoning_data
+     - long_context_data
+     - format_following_data
+
+
+chat_data:
+  title: "Decide on a moderate collection of chat data"
+  type: epic
+  status: planned
+  labels: [data, sft, chat]
+  description: |
+    Perhaps this will be mainly handled by #1880 and related work.
+
+    We need to decide on a moderate collection of chat data to be used for the "SFT" phase of training.
+    We should consider the following datasets:
+
+    - smoltalk v2 (the chat portions)
+    - llama-nemotron posttraining datasets (the chat portions)
+    - tulu v3 (once we remove the AllenAI branding parts)
+
+    Most likely, we can just use smoltalk v2 + llama-nemotron posttraining datasets. We should also investigate the data from Olmo 3.
+  definition_of_done: |
+    We've wired up the datasets (See #1880)
+
+
+midtrain_data:
+   title: "Mid-train data"
+   type: epic
+   status: planned
+   labels: [data, pretraining]
+   issue: null
+   description: |
+      We need ~3-4T tokens of midtraining data. Olmo 3 has roughly 2 and is a good starting point!
+
+      If we look at its gaps compared to say Qwen 2.5 it's mostly:
+
+      - Some math
+      - Code: BigCodeBench, MultiPL HumanEval, DeepSeek Leetcode
+      - Medical knowledge: MedQA, MedMCQA
+      - Reasoning tasks (ANLI, MUSR)
+
+      We should focus our efforts on extending Olmo 3's data with these gaps in mind, and also look for other gaps.
+   dependencies:
+    - medical_data
+    - code_data
+    - reasoning_data
+
+long_context_data:
+    title: "Decide on a moderate collection of long context data"
+    type: epic
+    status: planned
+    labels: [data, sft, long_context]
+    description: |
+        We need to decide on a moderate collection of long context data to be used for the "SFT" phase of training.
+        We should consider the following datasets:
+
+        In #2062, I wired up olmo3 longmino and hf finepdfs. We should also consider:
+        - [institutional books](#institutional_books)
+        - [long code bases (stitched together)](#long_code_data)
+
+    dependencies:
+        - institutional_books
+        - long_code_data
+
+long_code_data:
+    title: "Long code data"
+    type: epic
+    status: planned
+    labels: [data, long_context, code, help-wanted, agent_friendly]
+    description: |
+        We need to stitch together some long code bases to get long context code data.
+        We can look at bigcodebench repos, github repos, etc.
+
+        First step is a survey of existing code datasets to see how best to stitch them together.
+        I think also going through and making a coarse/pre-training version of SWEBench or similar would be good.
+        (The idea there is to take GH issues and pair them with code repo and patches).
+
+
+# evals
+loss_datasets:
+  title: Fill out our perplexity loss datasets
+  type: epic
+  status: planned
+  labels: [evals, scaling_laws]
+  issue: null
+  description: |
+    We currently use the following datasets for perplexity loss:
+    - a good chunk of paloma (including c4en)
+    - uncheatable eval (a fixed snapshot)
+
+    This provides decent coverage of:
+
+    - english web
+    - other language web
+    - code
+    - arxiv/academic articles
+    - wiki
+    - stack exchange
+
+    This is pretty good but we need more. In general, we want PPL proxies for any conceivable eval or use case.
+    As a general principle, we want to avoid using actual evals as ppl proxies, but we do we want a loss
+    dataset that is correlated with any conceivable eval or use case.
+    Note: [#2663] added broad eval coverage plus limited PPL/logprob additions (for example wikitext),
+    but it does not yet close long-context/chat/format-following PPL dataset gaps.
+
+    A surely incomplete list of things we want to add:
+
+    - [natural long context data](#natural_long_context_ppl_data)
+    - [reasoning data](#reasoning_ppl_data)
+    - [format following data](#format_following_ppl_data)
+    - [chat data](#chat_ppl_data)
+
+    Generally speaking, we should [establish a process for supporting new tasks](#task_support_process).
+
+  dependencies:
+    - natural_long_context_ppl_data
+    - reasoning_ppl_data
+    - format_following_ppl_data
+    - chat_ppl_data
+    - task_support_process
+
+
+natural_long_context_ppl_data:
+  title: "natural long context ppl eval data"
+  type: task
+  status: planned
+  labels: [evals, long_context, help-wanted]
+  description: |
+    We need to find a good collection of natural long context ppl eval data.
+    Obvious sources include books, scientific articles, stitched together code bases, wikipedia articles, etc.
+
+    The challenge with long context is that almost all generation is in fact local. NIAH and other tasks are fairly synthetic retrieval tasks.
+    Olmo 3 has a simple heuristic for filtering: use gzip compressibility (which we have also looked at in #633, though not for long context), preferring
+    data in the middle of the distribution.
+
+    In particular, we should consider the following datasets:
+
+    - Olmo 3's ocr data
+    - institutional books
+    - stitch together some code bases
+    - FinePDFs Eval sets (wired up in #2148)
+
+    32K context is about 50 pages of text. This is a lot! Longer than most academic articles.
+
+    We may also need to use synthetic data to supplement this.
+
+  dependencies:
+    - olmo_3_ocr_data
+    - institutional_books
+    - long_code_data
+
+reasoning_ppl_data:
+  title: "reasoning ppl eval data"
+  type: task
+  status: planned
+  labels: [evals, reasoning, help-wanted]
+  description: |
+    We need to find a good collection of reasoning ppl eval data. Ideally this would be natural data that correlates reasonably with ANLI, MUSR, etc.
+
+    It's not obvious to me what natural data would be good here and we may need to lean on synthetic/task data.
+
+
+institutional_books:
+  title: "Add Harvard Institutional Books dataset"
+  type: task
+  status: planned
+  labels: [data, long_context]
+  issue: 1394
+  description: |
+    Ingest and validate the institutional books dataset for long-context data coverage,
+    including schema/quality checks and licensing constraints.
+
+
+task_support_process:
+  title: "Establish a process for supporting new tasks/use cases"
+  type: task
+  status: planned
+  labels: [process, docs, agent_friendly]
+  description: |
+    On an ongoing basis, the model development process should look like this:
+
+    1. A new use-case/task comes in. Pick some development data.
+    2. We take our existing scaling suites and see if any of our existing ppl datasets correlate with the new task.
+    3. If there's strong correlation, we're done.
+    4. If there's no strong correlation, we need to add a new ppl dataset to our scaling suites.
+    5. (the hard part): source ppl data for the new task.
+    6. Add the new ppl dataset to our scaling suites.
+
+    We should make a recipe for this process (similar to our other agent recipes) and exercise it.
+
+  definition_of_done: |
+    We have added a recipe for this process and followed it for a new task, adding a new ppl dataset and getting good correlation with the new task.
+
+
+# Architecture
+model_architecture:
+  title: "Settle on MoE pretraining architecture"
+  type: milestone
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-03-31"
+  labels: [architecture, moe, pretraining]
+  description: |
+    Architecture-decision node for the next MoE line, distinct from systems readiness.
+
+    Scope is the core model design choices that determine quality/perf tradeoffs:
+    - dense layer pattern and block structure
+    - activated experts per token (`top-k`) and expert count/width shape
+    - routing/load-balancing strategy (including shared-expert and null-routing choices)
+    - SWA pattern and placement
+    - any architecture-level constraints needed for inference and parameter transfer
+
+    This node should end with a chosen mainline architecture spec and rationale.
+  definition_of_done: |
+    - We publish a versioned architecture spec with explicit values/ranges for:
+      dense pattern, `top-k`, expert shape, routing policy, shared/null-expert policy, and SWA pattern.
+    - We record the rejection rationale for major alternatives.
+    - At least one training config and one inference/export path are updated to the chosen spec.
+    - Dependent tracks (`moe_100b_readiness`, sweeps, throughput work) reference this spec as canonical.
+
+  dependencies:
+    - fast_moe
+    - moe_scaling_laws
+    - sft_amenability_gap_analysis
+
+
+sft_amenability_gap_analysis:
+  title: "Figure out missing pieces for an SFT-amenable base model"
+  type: task
+  status: planned
+  owners: [dlwh]
+  labels: [architecture, sft, posttraining, pretraining]
+  description: |
+    Identify what is still missing for our base model to be reliably SFT-able.
+
+    Scope includes:
+    - architecture choices that impact SFT behavior (e.g. router behavior, dense pattern, SWA interactions)
+    - training/format assumptions required for instruction tuning (masking, packing, chat format, EOS behavior)
+    - compatibility constraints for common post-training/serving flows (LoRA/adapter paths, checkpoint/export assumptions)
+    - failure modes seen in early SFT attempts and how to detect them quickly
+  definition_of_done: |
+    - We publish a concrete gap list with severity and owner for each gap.
+    - Required model/training changes are linked to plan nodes or GitHub issues.
+    - We define a minimal SFT smoke-test protocol and success criteria for future model candidates.
+
+
+moe_scaling_laws:
+  title: "apply the scaling laws framework to find the optimal pretraining MoE configuration for a 1e24 flop model"
+  type: epic
+  status: planned
+  owners: [dlwh]
+  labels: [scaling_laws, moe, pretraining]
+  dependencies:
+    - scaling_law_framework
+
+fast_moe:
+  title: "Fast enough MFU training for pretraining MoEs"
+  type: epic
+  status: planned
+  owners: [dlwh]
+  labels: [moe, pretraining, infra]
+  description: |
+    We need to profile our existing MOE implementation and MaxText's and identify suboptimalities in ours.
+    Then, we should consider ways to improve throughput through architectural changes without compromising quality.
+    To do that, we'll want to study the existing TPU inference kernels for MOEs and see what changes we could
+    make to the architecture to alleviate bottlenecks.
+
+    We also need to consider inference throughput. But, as a starting point, we should focus on training throughput.
+  dependencies:
+    - profile_existing_moes
+    - moe_mlp_kernel
+
+
+fast_inference_architectures:
+  title: "Fast inference architectures (local/global attention, linear attention, Mamba-like)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [architecture, inference, performance, agent_friendly, backburner]
+  description: |
+    Evaluate and (selectively) implement architectures that materially improve inference throughput and/or
+    token-efficiency without tanking quality.
+
+    This is intentionally a “try a few things fast” epic: we want a repeatable harness and a small set of candidate
+    architectures that we can compare apples-to-apples on:
+    - quality (reasoning / code / math / chat)
+    - MFU + inference throughput / latency on our common hardware
+    - training stability and simplicity
+  definition_of_done: |
+    - A small, documented benchmark harness exists to compare candidate architectures (training + inference).
+    - At least 2 candidate architectures are evaluated end-to-end with results logged and reproducible.
+    - We make an explicit decision: adopt one path for “mainline” exploration, and park the rest with notes.
+
+
+low_precision_training:
+  title: "Lower precision training/inference (FP4/FP6/FP8) where it matters"
+  type: epic
+  status: planned
+  issue: null
+  labels: [performance, infra, architecture, agent_friendly]
+  description: |
+    Explore and support lower-precision paths to improve throughput and cost, especially on GPUs.
+
+    Scope includes:
+    - identifying which parts of the stack benefit (weights, activations, optimizer states, KV cache)
+    - correctness tests and numeric stability constraints
+    - hardware-specific implementations (TPU vs NVIDIA GPU)
+  definition_of_done: |
+    - One lower-precision configuration is supported end-to-end for a representative model with clear docs.
+    - Regression tests catch obvious numeric issues (divergence/NaNs) and performance regressions.
+    - We have a measured speed/cost win on at least one real cluster.
+
+
+distillation_program:
+  title: "Distill big models into smaller, fine-tuning-friendly models"
+  type: epic
+  status: planned
+  issue: null
+  labels: [posttraining, community, agent_friendly, backburner]
+  description: |
+    Provide a repeatable distillation workflow so the community can produce smaller models (e.g. 8B/1.7B/0.6B)
+    that inherit useful behaviors from larger Marin models.
+
+    This should focus on being easy to run and easy to evaluate, with strong provenance (exact teacher checkpoint,
+    data recipe, and eval set versioning).
+  definition_of_done: |
+    - A documented recipe exists (teacher -> student) with a small “starter” run that fits modest compute.
+    - At least one distilled model is produced with evals showing meaningful transfer (and no obvious regressions).
+    - Artifacts are easy to reproduce and compare (teacher/student checkpoints + configs + eval reports).
+  dependencies:
+    - trained_base_model
+
+moe_mlp_kernel:
+  title: "implement a custom MLP kernel for our MOE architecture"
+  type: epic
+  status: planned
+  owners: [dlwh]
+  labels: [moe, pretraining, kernels]
+  description: |
+    Implement a custom MoE MLP kernel path that improves throughput while preserving
+    numerical correctness and training stability at target shapes.
+  dependencies:
+    - understand_existing_moe_kernels
+
+
+understand_inference_moe_kernels:
+  title: "understand the inference kernels for MOEs"
+  type: task
+  status: planned
+  owners: [dlwh]
+  labels: [moe, pretraining, kernels, agent_friendly, backburner]
+  description: |
+    We should look at existing inference kernels for MOEs and see what we can learn from them.
+
+    Things to look at
+       -  https://github.com/vllm-project/tpu-inference/tree/main/tpu_inference/kernels/fused_moe
+       - MaxText's kernel
+       - ejkernel's GMM
+
+    Goals are to understand what makes it fast and where we can make architectural changes to make things faster. We don't
+    need to tie ourselves to existing architectures, though obviously we should take them very seriously.
+
+
+
+# Scaling Laws
+
+scaling_law_framework:
+  title: "Scaling Law Framework"
+  type: epic
+  status: planned
+  labels: [scaling_laws, infra]
+  issue: null
+  description: |
+    Build the infrastructure to derive scaling laws and pick compute-optimal model configs.
+    Given a target compute budget, the framework should:
+      - launch large sweeps of tiny models (thousands) on preemptible compute
+      - run the eval harness at any checkpoint (not just final)
+      - fit simple regressions (e.g. linear/power-law) to predict loss/metrics vs compute/params/data
+      - recommend hyperparameters/configs for a target compute budget, with traceable provenance
+  definition_of_done: |
+    - A single workflow launches a scaling-law sweep (tiny model fleet) on preemptible compute.
+    - The eval harness can be triggered for any checkpoint and writes results in a consistent schema.
+    - A regression pipeline fits scaling curves and produces a compute-budget-to-config recommendation.
+    - Artifacts are reproducible (configs, checkpoints, eval reports, regression outputs).
+  dependencies:
+    - reliable_training_infra
+    - loss_datasets
+    - scaling_law_sweep_runner
+    - scaling_law_checkpoint_evals
+    - scaling_law_regression_pipeline
+    - scaling_law_hparam_selector
+
+
+scaling_law_sweep_runner:
+  title: "Scaling law sweep runner (preemptible tiny-model fleet)"
+  type: task
+  status: planned
+  labels: [scaling_laws, infra, agent_friendly]
+  description: |
+    Launch and manage thousands of tiny models across preemptible compute with standardized configs,
+    metadata, and failure handling.
+  dependencies:
+    - reliable_training_infra
+
+
+scaling_law_checkpoint_evals:
+  title: "Eval harness at arbitrary checkpoints"
+  type: task
+  status: planned
+  labels: [scaling_laws, evals, infra, agent_friendly]
+  description: |
+    Make it easy to run the eval harness (ppl + downstream proxies) at any checkpoint across many runs,
+    with consistent output schemas.
+  dependencies:
+    - loss_datasets
+
+
+scaling_law_regression_pipeline:
+  title: "Scaling law regression pipeline"
+  type: task
+  status: done
+  issue: 2243
+  labels: [scaling_laws, infra, agent_friendly]
+  description: |
+    Fit regressions over sweep results (loss/metrics vs compute/params/data) and produce predictions
+    that can be queried for target compute budgets.
+  definition_of_done: |
+    Regression pipeline outputs were integrated into scaling-law workflow and this task
+    was closed as part of dense scaling-law completion (#2166).
+  dependencies:
+    - scaling_law_sweep_runner
+    - scaling_law_checkpoint_evals
+
+
+scaling_law_hparam_selector:
+  title: "Compute-budget -> hyperparameter recommender"
+  type: task
+  status: planned
+  labels: [scaling_laws, infra]
+  description: |
+    Use regression outputs to select configs (params, data mix, training schedule) for a target
+    compute budget, with explicit constraints and trade-offs.
+  dependencies:
+    - scaling_law_regression_pipeline
+
+
+# Process
+ferries:
+  title: "train models regularly of increasing scale and quality."
+  type: epic
+  status: planned
+  labels: [process, infra]
+  description: |
+    Daily 1e17, Weekly 1e21 models, monthly 1e22 models, quarterly 1e23 models, yearly 1e24 models.
+  dependencies:
+    - ferry_framework
+    - reliable_training_infra
+    - automated_daily_ferry_launch
+    - automated_weekly_ferry_launch
+    - automated_monthly_ferry_launch
+
+## Leverage Community
+
+midtraining_dataset_flow:
+  title: "Establish a flow for community contributions of midtraining datasets"
+  type: epic
+  status: planned
+  labels: [community, data]
+  description: |
+    We should establish a flow for community contributions of midtraining datasets.
+    This should include:
+
+    - A clear specification of the data format and quality requirements
+    - A process for submitting datasets
+    - A review process for evaluating and accepting datasets
+    - A way to track contributions and give credit to contributors
+
+    Key challenge is how do we know the data is good quality and high value? Various checks:
+    To first order, it seems like most specific natural datasets are likely to be more valuable than web data.
+    But we should have some process for evaluating the data.
+
+
+## Grug
+
+grugformer:
+    title: 'Grugformer: "pure JAX" transformer implementation'
+    type: epic
+    status: done
+    labels: [grug, architecture]
+    description: |
+
+      I (@dlwh) like my named tensors and stuff, but increasingly I think that the overhead of nn libraries isn't
+      worth it in JAX. Gotta use kernels, of course, but the need for Linear, Conv, etc abstractions seems less
+      important, and coding agents don't seem to care.
+
+      Haliax was designed around named axes, with the idea that every array should have semantic names. Partially
+      this was about "legibility" (I get confused about what `.sum(axis=1)` means, and have been bitten
+      by positional axes before), but also about making it easier to do complex sharding. In Haliax,
+      array axis names can be mapped to JAX's mesh axes, making it easier to reason about sharding. These
+      names get mapped to different mesh axes in different contexts (computation, parameters, etc).
+      Crucially, this meant that all arrays knew their "correct" sharding at all times.
+      At the time I thought it would be natural to experiment with different sharding strategies by remapping
+      axes. Now I understand that usually you just want to create a physical mesh axis for each kind of parallelism
+      you might want, and "logical" axes always map to the same physical axis (during computation, at least.)
+
+      But now that JAX has added [explicit mesh axes](https://docs.jax.dev/en/latest/notebooks/explicit-sharding.html),
+      that latter case for named axes seems less important: arrays will always know their shardings.
+
+      In #2171, I started a "pure JAX" transformer implementation that doesn't use any nn library.
+
+      We need to finish fitting it into the framework.
+
+    definition_of_done: |
+      We have a grugformer model that can be trained and evaluated in the levanter training framework.
+
+
+
+grug_moe:
+    title: "[Grug] wire up MoE for grugformer pretraining path"
+    type: epic
+    status: planned
+    owners: [dlwh, ClassicLarry]
+    target_date: "2026-03-31"
+    labels: [grug, moe, pretraining]
+    description: |
+      We need to wire up MOE for grugformer. Goal is high MFU, load balancing, etc.
+    dependencies:
+        - baseline_grug_moe
+        - fast_grug_moe_block
+
+
+baseline_grug_moe:
+    title: "[Grug] baseline pretraining MoE path that runs end-to-end"
+    type: task
+    status: planned
+    owners: [ClassicLarry, pc0618]
+    target_date: "2026-02-28"
+    labels: [grug, moe, pretraining]
+    description: |
+      Build a baseline Grug-style MoE model that trains/runs end-to-end, prioritizing correctness
+      and integration over speed.
+    dependencies:
+        - grugformer
+
+
+fast_grug_moe_block:
+    title: "[Grug] fast pretraining MoE block path (post-baseline perf-max)"
+    type: task
+    status: planned
+    owners: [dlwh]
+    target_date: "2026-03-31"
+    labels: [grug, moe, pretraining, performance]
+    description: |
+      Build the fast MoE block path focused on throughput/MFU.
+      This track builds on learnings from #2704 / #2710 and potentially #2851.
+    dependencies:
+        - fast_moe
+
+
+# ---- Stub nodes to make the DAG well-formed ----
+
+reliable_training_infra:
+  title: "Reliable training infrastructure"
+  type: epic
+  status: planned
+  labels: [infra]
+  description: |
+    Placeholder for whatever we need so training runs are stable, restartable, observable, and reproducible.
+
+
+
+reasoning_data:
+  title: "Reasoning datasets"
+  type: epic
+  status: planned
+  labels: [data, reasoning]
+
+
+code_data:
+  title: "Code datasets"
+  type: epic
+  status: planned
+  labels: [data, code]
+  issue: null
+  dependencies:
+    - code_capability_playbook
+    - code_data_stack_v2
+
+
+code_capability_playbook:
+  title: "Playbook: what does it mean to be good at code?"
+  type: task
+  status: planned
+  issue: null
+  labels: [process, docs, code, agent_friendly]
+  definition_of_done: |
+    We have a written playbook that defines:
+    - code eval suite / metrics we care about
+    - code data strategy and how we measure quality
+    - minimal ablation plan to validate improvements
+
+
+code_data_stack_v2:
+  title: "Add more code data (The Stack v2)"
+  type: task
+  status: done
+  issue: 1752
+  labels: [data, code]
+
+
+medical_data:
+  title: "Medical datasets"
+  type: epic
+  status: planned
+  labels: [data, medical]
+  issue: null
+  dependencies:
+    - medical_data_quality_process
+    - medical_data_datashop
+
+
+medical_data_quality_process:
+  title: "Medical data: define quality checks and evaluation plan"
+  type: task
+  status: done
+  issue: 1652
+  labels: [data, medical, evals, process]
+
+
+medical_data_datashop:
+  title: "Datashop for medical data"
+  type: task
+  status: done
+  issue: 1361
+  labels: [data, medical]
+
+
+format_following_data:
+  title: "Format-following datasets"
+  type: epic
+  status: planned
+  labels: [data, sft]
+
+
+long_context_evals:
+  title: "Long-context evals"
+  type: epic
+  status: planned
+  labels: [evals, long_context]
+  description: |
+    This tracks long-context evaluation coverage and aligns with broader long-context
+    capability tracking in #1370.
+
+    Candidate long-context evals to wire up:
+    - Ruler (see [#2064])
+    - ∞Bench
+    - HELMET
+    - OpenAI-MRCR
+    - NoCHA
+
+    Suggested initial scope: Ruler + HELMET.
+  definition_of_done: |
+    - Ruler ([#2064]) and HELMET ([#2497]) are wired and runnable in our eval flow.
+    - Remaining candidate evals have explicit disposition (implemented, deferred, or dropped).
+
+  issue: 2025
+
+  dependencies:
+    - ruler_eval
+    - helmet_eval
+
+
+ruler_eval:
+  title: "Wire up Ruler long-context eval"
+  type: task
+  status: planned
+  issue: 2064
+  labels: [evals, long_context]
+  description: |
+    Add Ruler to the long-context eval harness with reproducible invocation and
+    standardized result logging.
+
+
+helmet_eval:
+  title: "Wire up HELMET long-context eval"
+  type: task
+  status: planned
+  owners: [dlwh]
+  issue: 2497
+  labels: [evals, long_context]
+  description: |
+    Add HELMET evaluation to the long-context eval flow and ensure results can be
+    compared across checkpoints and runs.
+
+
+
+chat_ppl_data:
+  title: "Chat perplexity-loss dataset"
+  type: task
+  status: planned
+  labels: [evals, data]
+
+
+format_following_ppl_data:
+  title: "Format-following perplexity-loss dataset"
+  type: task
+  status: planned
+  labels: [evals, data]
+
+
+olmo_3_ocr_data:
+  title: "Olmo 3 OCR data"
+  type: epic
+  status: planned
+  labels: [data, long_context]
+
+
+understand_existing_moe_kernels:
+  title: "Understand existing MoE kernels (training + inference)"
+  type: task
+  status: planned
+  owners: [dlwh]
+  labels: [moe, kernels, agent_friendly]
+  description: |
+    Review existing MoE training/inference kernel designs and document which ideas
+    should be adopted or avoided in Marin’s kernel roadmap.
+
+
+profile_levanter_moe:
+  title: "Profile Levanter MoE"
+  type: task
+  status: planned
+  owners: [dlwh]
+  labels: [moe, infra, agent_friendly]
+  description: |
+    Capture profiling baselines for Levanter/Marin MoE runs at representative shapes
+    to identify highest-leverage bottlenecks.
+
+
+profile_existing_moes:
+  title: "Profile existing MoE implementations"
+  type: epic
+  status: planned
+  owners: [dlwh]
+  labels: [moe, infra]
+  description: |
+    Aggregate profiling baselines for current Marin/Levanter MoE implementations
+    (and any externally available reference traces) into a comparable bottleneck report.
+  dependencies:
+    - profile_levanter_moe
+
+
+crawl_data:
+  title: "Crawl additional web data"
+  type: epic
+  status: planned
+  labels: [data, web, backburner]
+
+
+rephrasing_pipeline:
+  title: "Rephrasing pipeline for web data"
+  type: epic
+  status: planned
+  labels: [data, web, synthetic_data]
+  description: |
+    Build a rephrasing pipeline to augment web data.
+    This could involve using LLMs to paraphrase existing web content to create new, diverse training examples.
+
+  dependencies:
+    - inference_workers
+
+
+inference_workers:
+  title: "Fray Inference workers for data processing"
+  type: task
+  status: planned
+  labels: [data, infra]
+  description: |
+    Set up Fray inference workers to handle data processing tasks such as rephrasing web data.
+  dependencies:
+    - vllm_inference_service_rewrite
+
+
+vllm_inference_service:
+  title: "vLLM inference service (non-RL) for eval + data rewriting"
+  type: epic
+  status: done
+  owners: [dlwh]
+  labels: [infra, infra2026, inference, data, agent_friendly]
+  description: |
+    RL rollout workers are working; focus on vLLM as a standalone inference service for:
+    - evaluation (VllmTpuEvaluator / BaseVllmEvaluator)
+    - large-scale data rewriting
+
+    Finish the in-flight PRs, then factor out a clean service boundary between evaluator logic and the
+    inference server logic. Track compilation caching fixes for vLLM sidecar as part of this stream.
+
+    PR context:
+    - PR 2336 refactors VllmTpuEvaluator into BaseVllmEvaluator and adds GPU/TPU docker sidecar options.
+    - PR 2320 runs vLLM as a docker sidecar via docker-along-docker to avoid tight version pins and improve
+      reliability.
+
+    References:
+    ```
+    https://github.com/marin-community/marin/pull/2336
+    https://github.com/marin-community/marin/pull/2320
+    https://github.com/marin-community/marin/issues/2318
+    ```
+  dependencies:
+
+
+vllm_inference_service_eval:
+  title: "vLLM inference service: evaluation path (BaseVllmEvaluator)"
+  type: task
+  status: done
+  labels: [infra, infra2026, inference]
+  description: |
+    Land PRs 2320/2336 and split evaluator logic from the vLLM server lifecycle into a clean service boundary.
+    This builds on the BaseVllmEvaluator refactor and TPU/GPU sidecar support from PR 2336.
+  dependencies:
+    - vllm_inference_service
+
+
+vllm_inference_service_rewrite:
+  title: "vLLM inference service: bulk data rewriting"
+  type: task
+  status: planned
+  labels: [infra, infra2026, inference, data]
+  description: |
+    Define and implement a reusable vLLM inference service interface for large-scale data rewriting jobs.
+  dependencies:
+    - vllm_inference_service
+
+
+ferry_framework:
+  title: "Ferry framework (repeatable vertical training cadence)"
+  type: epic
+  status: planned
+  labels: [process, infra, infra2026, agent_friendly]
+  description: |
+    In #ferries, we propose training models on a regular cadence of increasing scale and quality.
+    The ferry framework is the process + tooling that makes those launches repeatable, observable, and easy
+    to run across daily/weekly/monthly cadences.
+
+    Contrary to current (~2026-01-01) practice, each scale's ferry experiment should be a "living" experiment
+    where we update it with our best / most promising / highest-value-of-information experiment
+
+    The ferry framework should handle:
+      - creating an issue for the ferry launch, following a naming scheme (e.g. `Ferry: daily 1e17 model - 2024-09-01`)
+        and any reasonable tags
+      - creating a branch for this particular ferry with the particular configuration to run in a predictable place.
+      - launch the run on the appropriate cluster
+      - update the issue with a wandb link, key metrics, and pass/fail signals
+      - maybe also update discord.
+
+    All of this should be automated via a CLI tool.
+
+    The ferry launch process should be encoded as a recipe (in `docs/recipes/ferries/`)
+  definition_of_done: |
+    - There is a single documented “how to run a ferry” entrypoint (manual + scheduled).
+    - Each ferry run creates/updates a GitHub issue as the canonical record (links, metrics, outcomes, next steps).
+    - Each ferry run has a reproducible config location (branch + config path) and a predictable naming scheme.
+    - It’s easy to run the same ferry locally (tiny) and on cluster (small/real) without changing the workflow.
+  dependencies:
+    - experiment_updates_bot
+
+
+
+automated_daily_ferry_launch:
+  title: "Automated daily ferry launch (daily regression run)"
+  type: task
+  status: in_progress
+  issue: 2952
+  owners: [dlwh]
+  labels: [process, infra, infra2026, testing, agent_friendly]
+  description: |
+    Daily scheduled ferry run (this is our “daily regression”).
+
+    This should be the lowest-friction way to catch cluster + pipeline regressions early, and it should always
+    produce a canonical GitHub issue record via `ferry_framework`.
+  definition_of_done: |
+    - A single daily job (cron-style) launches a small end-to-end run (e.g. 10–100M params).
+    - The run creates/updates a GitHub issue with links, key metrics, and pass/fail signals.
+    - Failures trigger an alert and make it obvious what component regressed.
+  dependencies:
+    - ferry_framework
+    - daily_canary_ferry_workflow
+
+
+automated_weekly_ferry_launch:
+  title: "Automated weekly ferry launch"
+  type: task
+  status: planned
+  labels: [process, infra, agent_friendly]
+  description: |
+    Weekly scheduled ferry run with a larger model and more tokens than the daily regression.
+
+    This should validate that the pipeline is healthy at a medium scale and that longer token runs
+    do not regress throughput or stability.
+  definition_of_done: |
+    - A weekly scheduled run launches a medium-scale job (larger params + more tokens than daily).
+    - The run creates/updates a GitHub issue with links, metrics, and pass/fail signals.
+    - Failures trigger alerts and include a short diagnosis summary.
+  dependencies:
+    - automated_daily_ferry_launch
+
+
+automated_monthly_ferry_launch:
+  title: "Automated monthly ferry launch"
+  type: task
+  status: planned
+  labels: [process, infra, agent_friendly]
+  description: |
+    Monthly scheduled ferry run with the largest routine model and token budget we can support.
+
+    This should be the closest thing to “real” training cadence and is expected to surface
+    long-horizon stability issues.
+  definition_of_done: |
+    - A monthly scheduled run launches a large-scale job (bigger params + more tokens than weekly).
+    - The run creates/updates a GitHub issue with links, metrics, and pass/fail signals.
+    - Failures trigger alerts and include a clear root-cause link or follow-up issue.
+  dependencies:
+    - automated_weekly_ferry_launch
+
+
+# -----------------------------------------------------------------------------
+# Marin Infrastructure 2026 (imported from `Marin Infrastructure 2026)
+# -----------------------------------------------------------------------------
+
+# this section is a bit dated. working on updating
+
+
+region_caching_fs:
+  title: "Region caching filesystem: move data to where we train"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, data]
+  description: |
+    Provide filesystem-level or fsspec-level support so checkpoints and datasets are staged into the region
+    where compute runs, with clear cost tradeoffs and documentation.
+
+    This should:
+    - hide cross-region latency/egress surprises
+    - support automatic caching and/or replication policies
+    - integrate cleanly into existing fsspec usage
+
+
+dataset_storage_backend:
+  title: "Dataset/checkpoint storage backend strategy (reduce GCS dependence)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, data, cost, agent_friendly]
+  description: |
+    We currently lean heavily on GCS-style object storage in a way that can create cost/egress surprises and single-cloud
+    coupling.
+
+    Make an explicit, documented choice for storage backends for:
+    - long-lived datasets
+    - caches / regional mirrors
+    - checkpoints (training + RL)
+
+    Candidates include: GCS, S3-compatible stores, Cloudflare R2, and/or per-region caches coordinated by
+    #region_caching_fs.
+  definition_of_done: |
+    - We write down a recommended “default storage” for each artifact type (datasets, checkpoints, caches) with cost
+      and reliability tradeoffs.
+    - The recommended path is supported in code (fsspec URLs, auth/docs) and used by at least one pipeline end-to-end.
+    - We have basic monitoring/alerting for storage failures and egress regressions.
+  dependencies:
+    - region_caching_fs
+
+
+data_validation:
+  title: "Data validation: quality checks and pipeline correctness"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, data_pipeline]
+  description: |
+    Validate dataset quality and detect pipeline correctness issues before training.
+
+    Examples:
+    - schema and invariants for structured data
+    - corrupted/empty/encoding checks
+    - distribution drift and sampling sanity checks
+    - dedupe verification and token count statistics
+    - generate human/agent-readable reports and fail fast when needed
+  dependencies:
+
+
+dependency_manager:
+  title: "Dependency manager: experiment dependency graphs + status queries"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, developer_experience, executor, agent_friendly, help-wanted]
+  description: |
+    Improve experiment dependency management (building on Executor) so we can:
+    - visualize the dependency graph
+    - see status and failure reasons programmatically
+    - support agent tooling to query and repair experiment state
+  dependencies:
+    - visualize_executor_graph
+    - dynamic_executor_graphs
+    - cli_tools
+
+
+visualize_executor_graph:
+  title: "Visualize Executor dependency graph"
+  type: task
+  status: planned
+  labels: [infra, infra2026, developer_experience]
+  description: |
+    Provide a visualization of the Executor dependency graph for a given experiment,
+    showing step status, failures, and dependencies.
+
+
+dynamic_executor_graphs:
+  title: "Dynamic Executor graphs via artifacts"
+  type: task
+  status: planned
+  labels: [infra, infra2026, developer_experience, executor]
+  description: |
+    Add `use_artifact` / `save_artifact` helpers that emit artifacts directly and include the
+    necessary Executor metadata so the dependency graph can be reconstructed on the fly.
+  definition_of_done: |
+    - `use_artifact` / `save_artifact` capture executor_info metadata when writing artifacts.
+    - The dependency graph can be rebuilt from stored artifacts without rerunning steps.
+
+
+aot_compilation:
+  title: "AOT compilation as a pipeline step"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, performance, agent_friendly]
+  description: |
+    Make compilation a first-class pipeline step so accelerators aren’t stranded waiting for XLA.
+
+    Goals:
+    - fail fast on OOM/HBM problems via AOT compile+export using an “abstract mesh”?
+    - cache compile artifacts and reuse them in the subsequent training job
+    - integrate into Executor / standard training recipes
+    - support an “extended dry run” that actually compiles critical steps (train step, eval step, rollout step)
+      without running a full training job
+
+    This should be thought of as a *preflight check*:
+    - If compilation fails, we want the failure on cheap/short-lived resources.
+    - If compilation succeeds, the subsequent training job should be able to reuse artifacts and start quickly.
+  definition_of_done: |
+    - Users can run a Levanter preflight command that compiles the key kernels for a given training config and produces
+      a compile artifact (or a clear failure report).
+    - The compile artifact is cacheable/reusable across jobs with a well-defined cache key and can optionally be staged
+      to a shared object store (via fsspec paths, e.g. GCS/S3-compatible).
+    - Executor/pipelines can include “compile” as an explicit step before training so ferries don’t burn accelerator
+      time waiting for XLA.
+    - We have at least one regression test / smoke workflow that ensures the preflight path stays working.
+  dependencies:
+    - executor_step_preflight
+    - levanter_compile_preflight
+    - compile_artifact_cache
+    - compile_cache_retention
+    - pipeline_compile_gate
+
+
+executor_step_preflight:
+  title: "Executor: step preflight hooks (compile checks, manifests, etc.)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, developer_experience, executor, agent_friendly]
+  description: |
+    Today `Executor` supports `dry_run`, which plans work without executing steps.
+
+    Add a first-class *step preflight* hook that can run short, bounded checks prior to launching the long-running
+    step. This is not a replacement for `dry_run`; it’s a way to fail fast (and produce artifacts) for things that
+    cannot be validated by static planning (notably compilation).
+
+    Principles:
+    - `dry_run` stays as-is (planning only).
+    - Preflight is opt-in per step and should be safe + bounded.
+    - Preflight outputs are treated as step artifacts (manifest, compile artifacts, reports) and can be surfaced to
+      pipelines and agents.
+  definition_of_done: |
+    - Executor exposes a supported API for steps to declare a preflight action (and its outputs) and to mark it as
+      required/optional.
+    - Pipelines can run preflight for a subset of steps (by name or tags like `compile`) without running the full job.
+    - Preflight results are recorded in a machine-readable way (so agents/pipelines can react) and in a human-readable
+      way (so developers can debug quickly).
+
+
+levanter_compile_preflight:
+  title: "Levanter: compile preflight utility for training/eval steps"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, levanter, agent_friendly]
+  description: |
+    Implement a Levanter utility that compiles the train step (and optionally eval step) for a given config, without
+    running a full training job.
+
+    See [JAX's export API](https://docs.jax.dev/en/latest/export/export.html) for one approach to producing reusable
+    compiled artifacts.
+
+    Key idea: extend “dry run” into something that *actually compiles*:
+    - run enough of the model forward/backward once to force compilation
+    - use an “abstract mesh” / representative shapes to surface HBM/OOM and sharding errors early
+    - emit a compile report (time, memory estimates, compilation cache hits)
+    - optionally stage compilation cache artifacts to a shared object store so a subsequent training job can start fast
+  definition_of_done: |
+    - A preflight command exists that compiles the Levanter train step for a representative batch and exits.
+    - Common failure modes produce actionable errors (sharding mismatch, OOM, unsupported dtype, etc.).
+    - The resulting compiled artifacts can be reused by the actual training job when possible, including in a
+      “compile-first, train-second” pipeline.
+
+
+compile_artifact_cache:
+  title: "Compile artifact cache: store and reuse compiled executables"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, data, agent_friendly]
+  description: |
+    Persist compilation outputs (and associated metadata) so they can be reused by subsequent jobs.
+
+    Current state: we already enable JAX's compilation cache in training when possible by setting
+    `JAX_COMPILATION_CACHE_DIR` to `${MARIN_PREFIX}/compilation-cache` (see `lib/marin/src/marin/training/training.py`).
+    This is useful, but it’s mostly a local/per-run cache and not yet a first-class pipeline artifact.
+
+    Requirements:
+    - artifact storage works with our filesystem story (fsspec paths; integrates with #region_caching_fs)
+    - artifacts are immutable and content-addressed (or keyed by a stable cache key)
+    - supports inspection/debugging (what config produced this artifact; when; on what hardware)
+
+    Design goal:
+    - make compilation caches and/or exported executables a durable artifact that can be staged to/from an object store
+      (GCS/S3-compatible/etc.) and hydrated onto local disk at job start (since JAX compilation cache expects a local
+      directory)
+  definition_of_done: |
+    - A “compile cache artifact” (directory + manifest) can be produced from a successful compile preflight and/or a
+      training run and stored in an artifact store path.
+    - A subsequent run can hydrate that cache onto local disk and set `JAX_COMPILATION_CACHE_DIR` appropriately so we
+      observe faster time-to-first-step when the cache key matches.
+    - Basic retention/cleanup policy exists (avoid unbounded growth).
+  dependencies:
+    - region_caching_fs
+
+
+compile_cache_retention:
+  title: "Compilation cache retention policy"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly]
+  description: |
+    JAX compilation cache keys are already correct. We need to set up a retention policy for compilation cache
+    directories so they do not grow without bound.
+  definition_of_done: |
+    - A retention policy is defined and documented (time-based, size-based, or both).
+    - Cache directories are cleaned up automatically (periodic cleanup or at job start).
+
+
+pipeline_compile_gate:
+  title: "Pipeline compile gate: compile before launching expensive training jobs"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, infra2026, pipeline, performance, agent_friendly]
+  description: |
+    Wire the compile preflight into our pipeline conventions so ferries can:
+    1) run compile preflight on cheap/short resources
+    2) only then schedule long-running accelerator jobs
+
+    The gate should:
+    - record compile results in the pipeline UI/status (success/failure, artifact location)
+    - make it easy to retry compilation with debug settings
+  definition_of_done: |
+    - At least one ferry/pipeline uses compile as an explicit step before training.
+    - If compile fails, the pipeline fails early without burning long-running accelerator time.
+
+
+batch_size_calc:
+  title: "Batch size calculator (fit prediction + micro-batch auto-choice)"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, performance]
+  description: |
+    Automate batch-size decisions, especially on TPUs where padding can cause large memory blowups.
+
+    Intended workflow:
+    - user picks effective batch size
+    - system picks micro-batch size that fits (based on compilation/estimation)
+    - cache results between runs
+
+  dependencies:
+    - aot_compilation
+
+
+jax_gpu_performance:
+  title: "JAX performance on NVIDIA GPUs (kernels, sharding, comms)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly]
+  description: |
+    Improve the GPU path so running Marin on NVIDIA clusters is not “second class”.
+
+    This is a grab-bag but should be driven by profiling and concrete bottlenecks, e.g.:
+    - collective communication overhead
+    - slow sharding / resharding
+    - kernel fusion gaps / custom kernels where needed
+    - host<->device transfer overhead and pipeline stalls
+  definition_of_done: |
+    - We pick 1–2 representative workloads (training + inference) and publish a profiling report.
+    - We land fixes that improve throughput by a measurable amount and add regression checks for the bottleneck(s).
+    - The workload runs reliably on a GPU cluster as part of [#daily_canary_ferry_workflow].
+  dependencies:
+    - support_nvidia_gpu_clusters
+    - daily_canary_ferry_workflow
+
+
+agent_driven_profiling:
+  title: "Agent-driven profiling (xprof/TensorBoard/Perfetto -> actionable optimization)"
+  type: epic
+  status: active
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly, help-wanted]
+  description: |
+    Make profiling data *machine-usable* so agents can automatically improve utilization of specific kernels and the
+    full training/inference pipeline.
+
+    The end state is:
+    - a standard way to capture profiles for representative workloads (train/eval/inference/RL)
+    - a parser that turns profiles (e.g. xprof) into structured data and summaries
+    - agent tooling that can answer: “what’s slow, why, and what should we try next?”
+  definition_of_done: |
+    - We have a documented workflow to collect profiles for at least one representative workload.
+    - Agents can ingest a profile artifact and produce a deterministic, structured summary:
+      hot ops, time breakdown (compute/comm/host stalls), and top candidates for optimization.
+    - We run at least one “agent-driven optimization loop” end-to-end (measure -> propose -> patch/flag -> re-measure)
+      and demonstrate a measurable throughput win or a clear root-cause report.
+  dependencies:
+    - agent_profiling_research
+    - xprof_profile_ingestion
+    - profile_summary_schema
+    - agent_profile_query_tooling
+    - profiling_regression_tracking
+
+
+agent_profiling_research:
+  title: "Decide xprof as the profiling source and parse it"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly, help-wanted]
+  description: |
+    We will use xprof as the source of truth. Focus on parsing xprof artifacts into a structured summary.
+
+    Deliverable should include:
+    - how to generate xprof profiles for our common TPU workloads
+    - what artifacts are produced and how to access them
+    - a concrete parsing plan (xprof trace -> structured summary)
+  definition_of_done: |
+    - A short plan document is written (in an issue or in-repo doc) naming:
+      1) the xprof artifacts we will parse, 2) the ingestion approach, 3) the first workload(s), and 4) success metrics.
+
+
+xprof_profile_ingestion:
+  title: "Ingest xprof (and friends) into a structured profile artifact"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly]
+  description: |
+    Implement ingestion of at least xprof outputs into a normalized, versioned internal representation so we can:
+    - store profiles alongside experiment artifacts
+    - compare profiles across runs
+    - build stable tooling for agents and dashboards
+
+    Non-goals for MVP:
+    - perfect support for every profiler format
+    - fancy UI (we can start with CLI + JSON summaries)
+  dependencies:
+    - profile_summary_schema
+
+
+profile_summary_schema:
+  title: "Profile summary schema (normalized timeline + aggregates)"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly]
+  description: |
+    Define a stable, versioned schema for “profile summaries” that agents can consume.
+
+    Minimum fields we likely want:
+    - run metadata: hardware type, mesh/topology, git SHA, config hash
+    - time breakdown: step time, compile time, compute/comm/host waits
+    - hot ops: top-k by time, plus callsite/module attribution when possible
+    - comm breakdown: all-reduce/all-gather/etc time and volume if available
+  definition_of_done: |
+    - A JSON schema (or equivalent) is defined with a version tag.
+    - At least one real profile can be summarized into this schema reproducibly.
+
+
+agent_profile_query_tooling:
+  title: "Agent tooling: query profiles and propose optimizations"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly]
+  description: |
+    Build the agent-facing interface that turns profile summaries into actions.
+
+    Example queries:
+    - “What are the top 10 ops by exclusive time?”
+    - “Is comm or compute dominating? Which collective is worst?”
+    - “Did this change improve step time? What regressed?”
+    - “Which kernels are memory-bound vs compute-bound (when inferable)?”
+
+    Output should be actionable:
+    - targeted hypotheses (e.g. fusion opportunity, sharding change, kernel selection, host->device stall)
+    - small, testable patches or config tweaks
+    - links back to the exact profile evidence (op name, time range, source module)
+  dependencies:
+    - profile_summary_schema
+
+
+profiling_regression_tracking:
+  title: "Profiling regression tracking: store/compare profiles over time"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, observability, agent_friendly]
+  description: |
+    Make it easy to detect regressions and validate improvements.
+
+    This should integrate with `daily_canary_ferry_workflow` over time:
+    - periodically profile a small representative workload
+    - store summaries as artifacts
+    - alert on regressions in step time or key bottlenecks
+  dependencies:
+    - daily_canary_ferry_workflow
+    - profile_summary_schema
+
+daily_canary_ferry_workflow:
+  title: "Daily canary ferry workflow on real accelerators"
+  type: epic
+  status: done
+  issue: 2903
+  labels: [infra, infra2026, testing, ferry]
+  source_of_truth: "Merged canary workflow PR [#2903], implementing proposal [#2873] under milestone epic [#2836]."
+  description: |
+    A daily GitHub Actions workflow submits `experiments/ferries/canary_ferry.py` to the
+    `us-central1` cluster via `ray_run.py`, providing an end-to-end accelerator regression signal.
+
+
+staged_validation:
+  title: "Staged validation: tiny→small→large vertical examples"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, testing, agent_friendly]
+  description: |
+    Provide staged, vertical examples that progress from small to large models when the previous stage
+    succeeds past a given target. This supports both human and agent-driven iteration.
+
+
+robust_alerting:
+  title: "Robust alerting beyond W&B defaults"
+  type: task
+  status: planned
+  labels: [infra, infra2026, observability]
+  description: |
+    Improve alerting reliability and richness (crash detection, soft alerts, and instrumentation checks),
+    avoiding "alerts silently stopped" failure modes. Alerts should ping Discord.
+  dependencies:
+    - monitoring
+    - alerting
+
+
+cli_tools:
+  title: "CLI tools for pipeline/job introspection"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, developer_experience, agent_friendly]
+  description: |
+    Provide a stable CLI surface to query:
+    - running jobs and where they’re scheduled
+    - pipeline step status and failures
+    - dataset locations and cache state
+    so both humans and agents can operate the system without SSH.
+    Outputs should be structured (JSON-friendly) for tooling/agent use, with a human-readable view too.
+  dependencies:
+    - iris_scheduler_mvp
+
+
+cli_logging:
+  title: "Structured CLI/logging for machine-readable failures"
+  type: task
+  status: planned
+  labels: [infra, infra2026, developer_experience, agent_friendly]
+  description: |
+    Standardize logging/events so failures are easy for tools (including agents) to detect and diagnose.
+  dependencies:
+    - monitoring
+
+cluster_alerts:
+  title: "Cluster alerts: surface failures and soft alerts programmatically"
+  type: task
+  status: planned
+  labels: [infra, infra2026, observability]
+  description: |
+    Provide a consistent “alerts” surface (API + CLI + optional notifications) for job/pipeline failures and
+    important warnings, so users/agents don’t need to poll dashboards.
+  dependencies:
+    - alerting
+
+
+monitoring:
+  title: "Iris monitoring: centralized metrics + logs + APIs + dashboard"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, observability, iris]
+  source_of_truth: "Iris monitoring/observability track: [#2830], [#2930], [#2424], with epic [#2836]."
+  description: |
+    This is an Iris-owned monitoring rollup, not a separate monitoring stack.
+
+    Centralized monitoring across training, RL, and infra:
+    - metrics (loss, throughput, HBM, compilation time)
+    - system metrics (CPU/mem/network/accelerator)
+    - job lifecycle events
+    - log aggregation and search
+    - APIs for programmatic access and automation
+    - historical storage for performance analysis
+  dependencies:
+    - iris_scheduler_mvp
+
+
+alerting:
+  title: "Alerting: notify on errors and soft alerts"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, observability]
+  description: |
+    Alerts for important events (task failures, stuck pipelines, suspicious metrics), with API access so tools
+    can query and act on alert state.
+  dependencies:
+    - iris_scheduler_mvp
+
+
+experiment_updates_bot:
+  title: "Experiment updates bot: GitHub → Discord (and optional Discord → GitHub summaries)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, developer_experience, process, automation, help-wanted, agent_friendly]
+  description: |
+    We want GitHub issues to be the single source of truth for experiment results and discussion, but in
+    practice people often post updates only in Discord.
+
+    Build a bot/workflow that makes this easy by:
+    - automatically mirroring key GitHub issue updates into a Discord channel/thread
+    - (optional) summarizing Discord discussion back into GitHub as a comment or a draft PR comment
+
+    The design goal is to remove the “do I have to update two places?” friction while keeping the canonical
+    record in GitHub.
+  definition_of_done: |
+    - GitHub → Discord mirroring is enabled for a configured set of repos/issues/labels and is low-noise.
+    - The bot posts context-rich updates (issue title + link + who + what changed) and threads updates per issue.
+    - There is a documented workflow for enabling/disabling mirroring per issue (e.g. label or checkbox).
+    - (Optional) A summarizer can propose GitHub comments from Discord, with a human-in-the-loop approval step.
+  dependencies:
+    - cli_logging
+    - alerting
+
+
+experiment_updates_github_to_discord:
+  title: "Bot: mirror GitHub issue updates to Discord"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, infra2026, developer_experience, process, automation, help-wanted, agent_friendly]
+  description: |
+    Implement the minimal, high-value integration: when an issue changes in GitHub, post a message to Discord.
+
+    Suggested events:
+    - issue opened/closed/reopened
+    - labels changed (especially experiment/result labels)
+    - new comments (with a short excerpt)
+    - status-style edits (e.g. checklists, title edits)
+
+    Suggested routing:
+    - one Discord channel for “experiment-updates”
+    - each issue maps to a dedicated Discord thread (created on first event)
+  definition_of_done: |
+    - Uses a GitHub App/webhook (or Actions) to detect events and post to Discord.
+    - Includes basic dedupe so edits/bot loops don’t spam.
+    - Includes a simple allowlist mechanism (label-based or explicit list) to keep noise under control.
+    - Includes docs for setup and local testing.
+  dependencies:
+    - experiment_updates_bot
+
+
+experiment_updates_discord_to_github_summaries:
+  title: "Bot: propose Discord → GitHub summaries (human-approved)"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, infra2026, developer_experience, process, automation, agent_friendly]
+  description: |
+    Optional “round-trip” improvement: periodically summarize Discord discussion back into the canonical
+    GitHub issue.
+
+    Key requirement: avoid surprising writes. Prefer:
+    - bot posts a proposed summary as a *draft* (e.g. in Discord) and a human clicks approve
+    - or bot opens a PR / creates a GitHub comment in “pending” state
+  definition_of_done: |
+    - There is a safe human-in-the-loop workflow to publish summaries into GitHub issues.
+    - Summaries include: decisions, current state, next steps, links to relevant logs/PRs.
+    - It’s easy to disable per issue/thread if it’s not useful.
+  dependencies:
+    - experiment_updates_bot
+
+
+experiment_structure_overhaul:
+  title: "Gruggify experiment structure (taxonomy + templates + migration plan)"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  issue: null
+  labels: [process, infra, infra2026, developer_experience]
+  source_of_truth: "plan-of-record timeline and standup ownership notes (no linked GitHub issue yet)."
+  description: |
+    Establish a new, simpler, more legible structure for how we organize “experiments” vs “dependencies”
+    vs “recipes/templates/ferries” vs “artifacts” in Marin.
+
+    Motivation:
+    - Experiments should test a hypothesis and be easy to write/read/modify (often as notebooks).
+    - Dependencies should be reusable producers of artifacts (datasets, model checkpoints, sweeps) that can be
+      resolved from an artifact without necessarily re-running the original code.
+    - Prefer fewer magic defaults/abstractions; favor copy-pasteable templates that make “how it works” obvious.
+    - Improve interactive control (run pieces locally / in notebooks) vs only async background jobs.
+
+    This is the meta-issue to define the directory layout/taxonomy and the migration strategy.
+  definition_of_done: |
+    - We identify ~10 archetypes of experiments we want to run (optimizer swap, datamix change, etc.).
+    - For each archetype, we draft a notebook-style skeleton that uses the intended APIs.
+    - We write a concrete directory taxonomy for Marin: experiments / ferries / templates / recipes / artifacts /
+      libraries / dependency pipelines (with examples).
+    - We list the minimum required API changes (with owners) to make those notebooks feasible.
+    - We define a migration plan (what moves, what stays, compatibility approach) with incremental milestones.
+  dependencies:
+    - ferry_framework
+    - dependency_manager
+    - cli_tools
+milestone_rl_backburner:
+  title: "RL backburner"
+  type: milestone
+  status: planned
+  target_date: null
+  labels: [backburner, rl]
+  dependencies:
+    - rl
+    - rl_environments
+    - rl_rubrics
+    - rl_progress_alerts
+    - rl_big_model
+    - scalable_rl_framework
+    - rl_functional_math_code
+    - rl_marin_32b_more_envs
+    - rl_moes_multi_environment
+    - rl_speedrun
+    - rl_on_50b_moe
+    - rl_100b_moe
+    - posttrain_yolo_sft_rl
+
+
+rl_functional_math_code:
+  title: "Functional RL on math and code"
+  type: task
+  status: planned
+  owners: [AlienKevin]
+  target_date: null
+  issue: 2286
+  labels: [timeline, rl, backburner]
+
+
+rl_marin_32b_more_envs:
+  title: "RL works on Marin 32B with more environments"
+  type: epic
+  status: planned
+  owners: [AlienKevin]
+  target_date: "2026-01-15"
+  labels: [timeline, rl, backburner]
+
+
+rl_moes_multi_environment:
+  title: "RL using MoEs, multi-environment"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  labels: [timeline, rl, infra, backburner]
+  source_of_truth: "plan-of-record timeline and standup ownership notes (no linked GitHub issue yet)."
+
+rl_speedrun:
+  title: "RL speedrun"
+  type: epic
+  status: planned
+  owners: [Calvin-Xu, Helw150]
+  target_date: "2026-01-31"
+  labels: [timeline, community, speedrun, rl, backburner]
+
+
+rl_on_50b_moe:
+  title: "RL on 50B MoE"
+  type: epic
+  status: planned
+  owners: [AlienKevin]
+  labels: [timeline, rl, moe, backburner]
+  dependencies:
+    - train_50b_moe
+
+
+environment_ingestion_contract:
+  title: "Environment contract: minimal interface + fixtures for RL/task environments"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, rl, environments, testing, agent_friendly, backburner]
+  description: |
+    Define a minimal contract for “environment plugins” so we can add environments without bespoke wiring.
+
+    Current state: we already have a minimal `MarinEnv` interface (`sample(...) -> (rollouts, metrics)`) and an
+    environment loader via `EnvConfig` in `lib/marin/src/marin/rl/environments/base.py`.
+
+    We also have an explicit plan to standardize on Prime Intellect / Verifiers “hub environments”, with a wrapper
+    implementation in `lib/marin/src/marin/rl/environments/prime_intellect_env.py`. That wrapper is a *great* direction
+    for reducing bespoke per-env code, but it does not fully replace the need for an explicit contract and test harness.
+
+    The contract is the “quality bar” we enforce for *any* environment source (hub-backed or local):
+    determinism/seeding, bounded episode length, metadata, and a minimal regression slice for CI.
+
+    Examples (exact contract tbd):
+    - deterministic seeding
+    - bounded episode length / max tokens
+    - structured outputs (reward, termination reason, metadata)
+    - a small fixed eval slice for regression tests
+  definition_of_done: |
+    - Contract is written down and enforced in code with a shared test harness/fixtures (ideally runnable without
+      network access).
+    - Prime Intellect hub environments (via `PrimeIntellectEnv`) are either:
+      - demonstrated to satisfy the contract (with shims where needed), or
+      - explicitly documented as “best-effort” with clear gaps (e.g. non-deterministic datasets) and mitigations.
+    - At least one existing environment (not `MockEnv`) is migrated to the contract as proof.
+
+
+posttrain_yolo_sft_rl:
+  title: "Post-train the YOLO run (SFT + RL)"
+  type: epic
+  status: planned
+  target_date: "2026-05-31"
+  issue: null
+  labels: [timeline, posttraining, rl, backburner]
+
+
+rl_100b_moe:
+  title: "RL 100B MoE"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-05-31"
+  labels: [timeline, rl, moe, backburner]
+
+
+rl_max_token_management:
+  title: "Make RL max-token management less error-prone"
+  type: epic
+  status: planned
+  issue: 1707
+  labels: [rl, infra, agent_friendly, help-wanted, backburner]
+
+
+rl_separate_inference_server:
+  title: "Support separate inference server for RL training"
+  type: epic
+  status: planned
+  issue: 1633
+  labels: [rl, inference, infra, backburner]
+
+
+rl_slow_tpu_copy:
+  title: "Investigate slow copies off of TPU in training worker"
+  type: epic
+  status: planned
+  issue: 1747
+  labels: [rl, performance, infra, backburner]
+
+
+rl_inference_backends:
+  title: "Inference backends and serving for RL"
+  type: epic
+  status: planned
+  labels: [rl, inference, infra, backburner]
+  description: |
+    Current state: RL supports both Levanter inference server and vLLM inference contexts under
+    `lib/marin/src/marin/rl/environments/inference_ctx/`.
+
+    Ensure inference is fast and reliable across backends (Levanter inference server, vLLM, etc.).
+    Includes correctness (logprobs), determinism, and cluster compatibility.
+
+
+rl_observability:
+  title: "RL observability (metrics, debugging, determinism)"
+  type: epic
+  status: planned
+  labels: [rl, infra, backburner]
+  description: |
+    Current state: both rollout and training workers log metrics via Levanter trackers, and curriculum exposes
+    summary metrics (`Curriculum.get_metrics()`).
+
+    Remaining work is to make it easy to answer: what envs are we sampling, what’s reward distribution, and
+    why did training regress?
+
+
+rl_in_flight_update_impact:
+  title: "Measure performance impact of in-flight updates in async RL"
+  type: epic
+  status: planned
+  issue: 2253
+  labels: [rl, performance, infra, backburner]
+
+
+frontier_evals:
+  title: "have a set of evals for the final rl model"
+  type: epic
+  status: planned
+  labels: [evals, rl, backburner]
+
+
+rl_capability_playbook:
+  title: "Playbook: what does it mean to be good at agents/RL?"
+  type: task
+  status: planned
+  issue: null
+  labels: [process, docs, rl, agent_friendly, backburner]
+  definition_of_done: |
+    We have a written playbook that defines:
+    - target agentic capabilities and corresponding evals
+    - the RL environment suite and how each env maps to capabilities
+    - an experiment protocol (baselines, ablations, regression tests)
+    - success criteria for \"RL works\" at a given scale
+
+
+environment_ingestion_ci_gates:
+  title: "CI gates for environment additions (contract tests + minimal integration)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, rl, environments, testing, agent_friendly, backburner]
+  description: |
+    When a new environment is added or changed, CI should run:
+    - contract tests (fast, deterministic)
+    - a minimal integration test that exercises rollout + scoring (CPU-only if possible)
+
+    This is meant to keep environment quality high while enabling rapid additions.
+  dependencies:
+    - environment_ingestion_contract
+
+
+rl_job_api:
+  title: "RL job API + local test harness"
+  type: epic
+  status: planned
+  labels: [rl, infra, agent_friendly, backburner]
+  description: |
+    Current state: `RLJob`/`RLJobConfig` exist in `lib/marin/src/marin/rl/rl_job.py`, and we have multiple
+    RL integration tests under `tests/rl/integration/`.
+
+    Make it easy to run and test RL without deploying a full cluster job:
+    - A minimal local/dev workflow for rollouts + training
+    - Config validation and sharp error messages
+    - Small reproducible example runs
+  dependencies:
+    - rl_max_token_management
+
+
+rl_rollout_system:
+  title: "Rollout generation system (workers, environments, sampling)"
+  type: epic
+  status: planned
+  labels: [rl, infra, backburner]
+  description: |
+    Current state: `RolloutWorker` exists in `lib/marin/src/marin/rl/rollout_worker.py`, environments are
+    loaded from specs, and we have unit + integration tests for envs and rollout worker behavior.
+
+    Hardening and scaling of rollout generation, including multi-env support and inference backends.
+  dependencies:
+    - rl_separate_inference_server
+
+
+rl_training_system:
+  title: "Training worker system (replay, batching, training loop)"
+  type: epic
+  status: planned
+  labels: [rl, infra, backburner]
+  description: |
+    Current state: `TrainWorker` exists in `lib/marin/src/marin/rl/train_worker.py`, with replay buffer
+    integration, periodic weight transfer, and curriculum checkpointing.
+
+    Remaining work is mainly hardening and performance (TPU copies, failure modes, monitoring, etc.).
+  dependencies:
+    - rl_slow_tpu_copy
+
+
+rl_weight_transfer_system:
+  title: "Weight transfer for RL (training -> rollout)"
+  type: epic
+  status: planned
+  labels: [rl, infra, backburner]
+  description: |
+    Current state: weight transfer implementations exist under `lib/marin/src/marin/rl/weight_transfer/`
+    (Arrow Flight and JAX paths), and are exercised in RL integration tests.
+
+    Remaining work is robustness, observability, and scaling behavior across different cluster settings.
+  definition_of_done: |
+    - Supported modes (Arrow Flight, JAX transfer server, and checkpoint-based transfer) all work end-to-end with `RLJob`.
+    - Integration tests cover each supported mode and assert that rollouts see at least one successful weight update
+      (e.g. via `tests/rl/integration/test_weight_sync.py` and `tests/rl/integration/test_cats_integration.py`).
+    - Weight transfer metrics (success/failure counts, bytes/sec, and latency breakdown) are emitted in a way we can
+      track over time (logs + tracker integration).
+    - Clear, documented behavior for common failure modes (server restart, partial update, timeout): either retry with
+      backoff or proceed with last-known-good weights without corrupting training state.
+  dependencies: []
+
+
+rl_storage_and_serialization:
+  title: "Stable rollout storage and datatypes"
+  type: epic
+  status: planned
+  labels: [rl, infra, agent_friendly, help-wanted, backburner]
+  description: |
+    Current state: rollout storage exists in `lib/marin/src/marin/rl/rollout_storage.py` with file and
+    in-memory backends, and core rollout types live in `lib/marin/src/marin/rl/types.py`.
+
+    Remaining work is to replace brittle serialization (e.g. pickle) with stable, versioned formats and
+    add compatibility tests.
+  dependencies:
+
+
+rl_progress_alerts:
+  title: "RL progress alerts: detect when RL has gone off the rails"
+  type: epic
+  status: planned
+  labels: [rl, infra2026, observability, backburner]
+  description: |
+    Conservative automatic alerts when RL training is stuck or regressing:
+    - curriculum not progressing
+    - reward spikes/drops
+    - throughput collapses
+    - determinism violations
+  dependencies:
+    - cluster_alerts
+    - rl_observability
+
+
+rl_algorithms_and_losses:
+  title: "RL losses + algorithmic improvements"
+  type: epic
+  status: planned
+  labels: [rl, algorithms, backburner]
+  description: |
+    Current state: RLOO loss exists in `lib/marin/src/marin/rl/rl_losses.py` with importance sampling and KL
+    regularization, and is exercised in RL integration tests.
+
+    Remaining work is algorithmic improvement, ablations, and better evaluation of off-policy behavior.
+  dependencies:
+
+
+full_rl_environments:
+  title: "Full set of RL environments for agentic reasoning"
+  type: epic
+  status: planned
+  labels: [rl, backburner]
+  description: |
+    A curated environment suite that supports training and evaluation of agentic reasoning.
+    This includes task definitions, reward functions, anti-cheating checks, and Train/Eval splits.
+  dependencies:
+
+
+rl_multi_env_and_curriculum:
+  title: "Multi-env curriculum + environment suite"
+  type: epic
+  status: planned
+  labels: [rl, environments, backburner]
+  description: |
+    Current state: curriculum logic exists in `lib/marin/src/marin/rl/curriculum.py` and environments are
+    configured per-lesson via `EnvConfig`, with env loader tests under `tests/rl/environments/`.
+
+    Remaining work is expanding the environment suite and improving curriculum observability and control.
+  dependencies:
+    - full_rl_environments
+
+rl_environments:
+  title: "RL environments: make it easy to add/test new envs"
+  type: epic
+  status: planned
+  labels: [rl, environments, infra2026, backburner]
+  description: |
+    Support a wide range of standard RL environments and make it easy to add and test new ones locally
+    and at scale.
+  dependencies:
+    - full_rl_environments
+
+
+scalable_rl_framework:
+  title: "have a framework for scalable RL"
+  type: epic
+  status: planned
+  labels: [rl, infra, backburner]
+  issue: 1738
+  description: |
+    Make RL training and rollout generation reliable, testable, and scalable across clusters.
+    The codebase already has a functional RL stack (see `lib/marin/src/marin/rl/`), but key missing pieces are:
+    - productionization/reliability (failure handling, determinism, serialization)
+    - multi-env orchestration + observability
+    - throughput measurement + scaling work (async RL)
+    - local/test harnesses to iterate quickly
+
+    Preserve linkage to earlier tracked RL sub-issues so historical progress is still visible.
+  definition_of_done: |
+    - Dependencies under this epic each have clear owner, issue linkage, and completion criteria.
+    - We can run and debug a multi-env RL workload end-to-end with stable artifacts/metrics.
+    - Throughput/scaling bottlenecks are measurable and actionable.
+  dependencies:
+    - rl_job_api
+    - rl_rollout_system
+    - rl_training_system
+    - rl_inference_backends
+    - rl_weight_transfer_system
+    - rl_storage_and_serialization
+    - rl_multi_env_and_curriculum
+    - rl_observability
+    - rl_algorithms_and_losses
+
+
+frontier_evals_wired:
+  title: "Wire frontier eval suite into training/RL runs"
+  type: epic
+  status: planned
+  labels: [evals, rl, agent_friendly, backburner]
+
+
+rl_recipe:
+  title: "RL recipe for big model"
+  type: epic
+  status: planned
+  labels: [rl, recipe, backburner]
+  description: |
+    A playbook-level recipe for doing RL on large models:
+    - success criteria and eval gates (agentic, math, tool use, etc.)
+    - which environments to run, with what curricula
+    - how we measure throughput and stability
+    - how we decide the next experiment
+  dependencies:
+    - rl_capability_playbook
+    - scalable_rl_framework
+    - full_rl_environments
+    - frontier_evals_wired
+
+
+rl_rubrics:
+  title: "RL rubrics: composable reward/grading components"
+  type: epic
+  status: planned
+  labels: [rl, infra2026, backburner]
+  description: |
+    Introduce shared, composable grading “rubrics” so reward computation can be reused across environments
+    (e.g. thinking tokens, non-verifiable rewards, shared anti-cheating checks).
+  dependencies:
+    - scalable_rl_framework
+
+
+rl_big_model:
+  title: "RL a pretrained model on a bunch of agentic reasoning tasks"
+  type: milestone
+  status: planned
+  labels: [north_star, rl, backburner]
+  dependencies:
+    - trained_base_model
+    - scalable_rl_framework
+    - full_rl_environments
+    - rl_recipe
+
+
+rl:
+  title: "RL pipeline"
+  type: epic
+  status: planned
+  labels: [rl, infra2026, backburner]
+  description: |
+    End-to-end RL pipeline support (envs, grading, curricula, monitoring, and scalable execution).
+  dependencies:
+    - scalable_rl_framework
+    - rl_recipe
+    - full_rl_environments
+    - frontier_evals_wired
