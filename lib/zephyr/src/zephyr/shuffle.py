@@ -20,7 +20,7 @@ import os
 import pickle
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import cloudpickle
@@ -56,7 +56,7 @@ class MemChunk:
 
 @dataclass
 class ListShard:
-    """Shard backed by a list of iterable references (PickleDiskChunk, MemChunk, etc.)."""
+    """Shard backed by a list of iterable references (MemChunk, etc.)."""
 
     refs: list[Iterable]
 
@@ -73,20 +73,76 @@ class ListShard:
 # Column names and constants
 # ---------------------------------------------------------------------------
 
-_ZEPHYR_SHUFFLE_SHARD_IDX_COL = "shard_idx"
-_ZEPHYR_SHUFFLE_CHUNK_IDX_COL = "chunk_idx"
-_ZEPHYR_SHUFFLE_ITEM_COL = "item"
-_ZEPHYR_SHUFFLE_PICKLED_COL = "pickled"
+_ZEPHYR_SHARD_IDX = "_zephyr_shard_idx"
+_ZEPHYR_CHUNK_IDX = "_zephyr_chunk_idx"
+_ZEPHYR_PAYLOAD = "_zephyr_payload"
+_ZEPHYR_SORT_KEY = "_zephyr_sort_key"
+_ZEPHYR_SORT_SECONDARY = "_zephyr_sort_secondary"
+
 _SCATTER_META_SUFFIX = ".scatter_meta"
 _SCATTER_MANIFEST_NAME = "scatter_metadata"
 
 _SCATTER_META_READ_CONCURRENCY = 256
-# Number of items sampled from the first flush to estimate avg_item_bytes at scatter-write time
-_SCATTER_SAMPLE_SIZE = 100
-# Conservative item-bytes fallback when avg_item_bytes is not in the manifest
-_ITEM_BYTES_FALLBACK = 500.0
-# Fraction of total memory limit to budget for scatter read buffers
 _SCATTER_READ_BUFFER_FRACTION = 0.25
+_SCATTER_MICRO_BATCH_SIZE = 64
+_SCATTER_ROW_GROUP_BYTES = 2 * 1024 * 1024  # 2 MB
+
+
+def is_zephyr_column(name: str) -> bool:
+    """Return True if the column name is a zephyr metadata column."""
+    return name.startswith("_zephyr_")
+
+
+# ---------------------------------------------------------------------------
+# Envelope helpers
+# ---------------------------------------------------------------------------
+
+
+def make_envelope_batch(
+    items: list,
+    shard_idx: int,
+    chunk_idx: int,
+    key_values: list,
+    sort_values: list | None,
+    pickled: bool,
+) -> pa.RecordBatch:
+    """Build an Arrow batch wrapping items with zephyr metadata columns.
+
+    Flat mode (pickled=False): each item dict's fields become columns alongside _zephyr_* metadata.
+    Pickle mode (pickled=True): items become _zephyr_payload bytes alongside _zephyr_* metadata.
+    """
+    n = len(items)
+    rows = []
+    for i in range(n):
+        row: dict[str, Any] = {
+            _ZEPHYR_SHARD_IDX: shard_idx,
+            _ZEPHYR_CHUNK_IDX: chunk_idx,
+            _ZEPHYR_SORT_KEY: key_values[i],
+        }
+        if sort_values is not None:
+            row[_ZEPHYR_SORT_SECONDARY] = sort_values[i]
+        if pickled:
+            row[_ZEPHYR_PAYLOAD] = cloudpickle.dumps(items[i])
+        else:
+            row.update(items[i])
+        rows.append(row)
+    return pa.RecordBatch.from_pylist(rows)
+
+
+def unwrap_items(table_or_batch: pa.Table | pa.RecordBatch, pickled: bool) -> list:
+    """Extract user items from an envelope table/batch.
+
+    Flat mode: drop _zephyr_* columns, return remaining fields as dicts.
+    Pickle mode: deserialize _zephyr_payload column.
+    """
+    if pickled:
+        payload_col = table_or_batch.column(_ZEPHYR_PAYLOAD)
+        return [pickle.loads(b) for b in payload_col.to_pylist()]
+
+    if isinstance(table_or_batch, pa.RecordBatch):
+        table_or_batch = pa.Table.from_batches([table_or_batch])
+    user_cols = [name for name in table_or_batch.column_names if not is_zephyr_column(name)]
+    return table_or_batch.select(user_cols).to_pylist()
 
 
 # ---------------------------------------------------------------------------
@@ -112,14 +168,14 @@ def _get_scatter_read_fs(num_files: int, sample_path: str, memory_fraction: floa
     budget = int(total_mem * memory_fraction)
     per_file = max(budget // num_files, 64 * 1024)  # floor at 64 KB
 
-    # Only override when we would meaningfully reduce the default (~5 MB).
     if per_file >= 5 * 1024 * 1024:
         return default_fs
 
-    if not hasattr(fs, "blocksize"):
+    # blocksize is a gcsfs/s3fs attribute; not all fsspec implementations have it.
+    # We check via the storage_options dict rather than hasattr to stay explicit.
+    if "block_size" not in getattr(fs, "storage_options", {}):
         return default_fs
 
-    # Recreate the filesystem with the budgeted block_size.
     fsspec_fs = type(fs)(block_size=per_file, **{k: v for k, v in fs.storage_options.items() if k != "block_size"})
     logger.info(
         "Scatter read: %d files, per-file block_size=%d KB (total budget=%.1f GB)",
@@ -150,38 +206,43 @@ class ScatterParquetIterator:
     filesystem: pa.fs.FileSystem
 
     def __iter__(self) -> Iterator:
-        for chunk_iter in self.get_chunk_iterators():
-            yield from chunk_iter
+        for table in self.get_chunk_tables():
+            yield from unwrap_items(table, self.is_pickled)
 
     def get_chunk_iterators(self, batch_size: int = 1024) -> Iterator[Iterator]:
-        """Yield one lazy iterator per sorted chunk.
+        """Yield one lazy iterator per sorted chunk, each backed by get_chunk_tables + unwrap_items."""
+        for table in self.get_chunk_tables(batch_size=batch_size):
+            yield iter(unwrap_items(table, self.is_pickled))
 
-        Opens the file once via ``pyarrow.dataset`` and creates a Scanner
-        per chunk with predicate pushdown on ``(shard_idx, chunk_idx)``.
+    def get_chunk_tables(self, batch_size: int = 1024) -> Iterator[pa.Table]:
+        """Yield Arrow tables per sorted chunk (no Python materialization).
+
+        Always selects all columns; the caller (unwrap_items or the Arrow reduce
+        path) handles column filtering.
         """
         _, fs_path = url_to_fs(self.path)
         dataset: pad.FileSystemDataset = pad.dataset(fs_path, format="parquet", filesystem=self.filesystem)
-        col = _ZEPHYR_SHUFFLE_PICKLED_COL if self.is_pickled else _ZEPHYR_SHUFFLE_ITEM_COL
+
+        # Select item columns + sort columns; filter on shard/chunk metadata
+        if self.is_pickled:
+            item_cols = [_ZEPHYR_PAYLOAD]
+        else:
+            item_cols = [name for name in dataset.schema.names if not is_zephyr_column(name)]
+
+        columns = [*item_cols, _ZEPHYR_SORT_KEY]
+        if _ZEPHYR_SORT_SECONDARY in dataset.schema.names:
+            columns.append(_ZEPHYR_SORT_SECONDARY)
 
         for chunk_idx in range(self.chunk_count):
             scanner = dataset.scanner(
-                columns=[col],
-                filter=(
-                    (pc.field(_ZEPHYR_SHUFFLE_SHARD_IDX_COL) == self.shard_idx)
-                    & (pc.field(_ZEPHYR_SHUFFLE_CHUNK_IDX_COL) == chunk_idx)
-                ),
+                columns=columns,
+                filter=((pc.field(_ZEPHYR_SHARD_IDX) == self.shard_idx) & (pc.field(_ZEPHYR_CHUNK_IDX) == chunk_idx)),
                 batch_size=batch_size,
                 use_threads=False,
             )
-            yield self._iter_scanner(scanner, col)
-
-    def _iter_scanner(self, scanner: pad.Scanner, col: str) -> Iterator:
-        for batch in scanner.to_batches():
-            items = batch.column(col).to_pylist()
-            if self.is_pickled:
-                yield from (pickle.loads(b) for b in items)
-            else:
-                yield from items
+            batches = list(scanner.to_batches())
+            if batches:
+                yield pa.Table.from_batches(batches)
 
 
 # ---------------------------------------------------------------------------
@@ -214,10 +275,9 @@ class ScatterShard:
     def needs_external_sort(self, memory_limit: int, memory_fraction: float = 0.5) -> bool:
         """Return True if opening all chunk iterators simultaneously would exceed memory_fraction of memory_limit."""
         total_chunks = sum(it.chunk_count for it in self.iterators)
-        if total_chunks == 0:
+        if total_chunks == 0 or memory_limit <= 0 or self.avg_item_bytes <= 0:
             return False
-        item_bytes = self.avg_item_bytes if self.avg_item_bytes > 0 else _ITEM_BYTES_FALLBACK
-        estimated = total_chunks * self.max_row_group_rows * item_bytes
+        estimated = total_chunks * self.max_row_group_rows * self.avg_item_bytes
         return estimated > memory_limit * memory_fraction
 
     def _compute_batch_size(self) -> int:
@@ -229,9 +289,9 @@ class ScatterShard:
         We cap this at _SCATTER_READ_BUFFER_FRACTION of the worker's memory limit.
         """
         total_chunks = sum(it.chunk_count for it in self.iterators)
-        if total_chunks == 0:
+        if total_chunks == 0 or self.avg_item_bytes <= 0:
             return 1024
-        bytes_per_item = self.avg_item_bytes if self.avg_item_bytes > 0 else _ITEM_BYTES_FALLBACK
+        bytes_per_item = self.avg_item_bytes
         memory_limit = _TaskResources.from_environment().memory_bytes
         buffer_budget = int(memory_limit * _SCATTER_READ_BUFFER_FRACTION)
         safe = max(1, int(buffer_budget // (total_chunks * bytes_per_item)))
@@ -255,7 +315,7 @@ class ScatterShard:
 def _scatter_meta_path(parquet_path: str) -> str:
     """Return the sidecar metadata path for a scatter Parquet file.
 
-    Replaces the ``.parquet`` extension: ``shard-0000-seg0000.parquet`` →
+    Replaces the ``.parquet`` extension: ``shard-0000-seg0000.parquet`` ->
     ``shard-0000-seg0000.scatter_meta``.
     """
     stem, _ = os.path.splitext(parquet_path)
@@ -286,7 +346,6 @@ def _write_scatter_meta(
             f.write(payload)
 
 
-# Per-worker cache for scatter sidecar metadata (populated on first read, shared across tasks)
 _scatter_meta_cache: dict[str, dict] = {}
 
 
@@ -337,7 +396,6 @@ def _write_scatter_manifest(scatter_paths: list[str], output_path: str) -> None:
             f.write(payload)
 
 
-# Per-worker cache for scatter manifests (populated on first read, shared across tasks)
 _scatter_manifest_cache: dict[str, list[dict]] = {}
 
 
@@ -354,7 +412,6 @@ def _build_scatter_shard_from_manifest(manifest_path: str, target_shard: int) ->
     entries = _read_scatter_manifest(manifest_path)
     iterators: list[ScatterParquetIterator] = []
     with log_time(f"Building ScatterShard for target shard {target_shard} from manifest ({len(entries)} files)"):
-        # First pass: count files that have data for this shard
         file_entries = []
         for entry in entries:
             count = entry["chunk_counts"].get(str(target_shard), 0)
@@ -376,21 +433,13 @@ def _build_scatter_shard_from_manifest(manifest_path: str, target_shard: int) ->
                 )
             )
 
-        # Aggregate stats from manifest entries for this shard.
-        # max_chunk_rows is a per-shard dict so we only look at target_shard's value.
-        # Fall back to the old scalar max_row_group_rows for pre-migration manifests.
         max_rg_rows = 0
         for entry in file_entries:
             per_shard = entry.get("max_chunk_rows", {})
-            if per_shard:
-                max_rg_rows = max(max_rg_rows, per_shard.get(str(target_shard), 0))
-            else:
-                # old manifest: scalar max across all shards — use as conservative fallback
-                max_rg_rows = max(max_rg_rows, entry.get("max_row_group_rows", 0))
+            max_rg_rows = max(max_rg_rows, per_shard.get(str(target_shard), 0))
         if max_rg_rows == 0:
-            max_rg_rows = 100_000  # fallback for old manifests without stats
+            max_rg_rows = 100_000
 
-        # Weighted avg item bytes (weight by chunk_count for this shard)
         total_chunks_for_avg = 0
         weighted_bytes = 0.0
         for entry in file_entries:
@@ -405,40 +454,83 @@ def _build_scatter_shard_from_manifest(manifest_path: str, target_shard: int) ->
 
 
 # ---------------------------------------------------------------------------
-# Envelope helpers
+# Internal write machinery
 # ---------------------------------------------------------------------------
 
 
-def _make_envelope(items: list, target_shard: int, chunk_idx: int) -> list[dict]:
-    return [
-        {
-            _ZEPHYR_SHUFFLE_SHARD_IDX_COL: target_shard,
-            _ZEPHYR_SHUFFLE_CHUNK_IDX_COL: chunk_idx,
-            _ZEPHYR_SHUFFLE_ITEM_COL: item,
-        }
-        for item in items
-    ]
-
-
-def _make_pickle_envelope(items: list, target_shard: int, chunk_idx: int) -> list[dict]:
-    """Wrap items as pickle-serialized bytes for Arrow-incompatible types."""
-    return [
-        {
-            _ZEPHYR_SHUFFLE_SHARD_IDX_COL: target_shard,
-            _ZEPHYR_SHUFFLE_CHUNK_IDX_COL: chunk_idx,
-            _ZEPHYR_SHUFFLE_PICKLED_COL: cloudpickle.dumps(item),
-        }
-        for item in items
-    ]
-
-
 def _segment_path(base_path: str, seg_idx: int) -> str:
-    """Return the file path for a given segment index.
-
-    ``shard-0000.parquet`` → ``shard-0000-seg0000.parquet``
-    """
+    """``shard-0000.parquet`` -> ``shard-0000-seg0000.parquet``"""
     stem, ext = os.path.splitext(base_path)
     return f"{stem}-seg{seg_idx:04d}{ext}"
+
+
+@dataclass
+class _ShardBuffer:
+    """Per-shard buffer that accumulates Arrow micro-batches and flushes when a byte threshold is reached.
+
+    Items are appended one at a time with their sort key (and optional secondary sort value).
+    Every _SCATTER_MICRO_BATCH_SIZE items, they are converted to an Arrow RecordBatch via
+    make_envelope_batch. When total buffered bytes exceed _SCATTER_ROW_GROUP_BYTES,
+    take_sorted_batch() drains the buffer, sorts in Arrow, and returns a single RecordBatch.
+    """
+
+    shard_idx: int
+    pickled: bool = False
+    has_sort: bool = False
+    pending: list[tuple[Any, Any, Any | None]] = field(default_factory=list)
+    tables: list[pa.RecordBatch] = field(default_factory=list)
+    nbytes: int = 0
+    chunk_idx: int = 0
+    schema: pa.Schema | None = None
+    max_rows: int = 0
+
+    def append(self, item: Any, key_value: Any, sort_value: Any | None = None) -> None:
+        self.pending.append((item, key_value, sort_value))
+        if len(self.pending) >= _SCATTER_MICRO_BATCH_SIZE:
+            self._flush_micro()
+
+    def _flush_micro(self) -> None:
+        if not self.pending:
+            return
+        items, keys, sorts = zip(*self.pending, strict=True)
+        batch = make_envelope_batch(
+            list(items),
+            self.shard_idx,
+            self.chunk_idx,
+            list(keys),
+            list(sorts) if self.has_sort else None,
+            pickled=self.pickled,
+        )
+        if self.schema is None:
+            self.schema = batch.schema
+        self.tables.append(batch)
+        self.nbytes += batch.nbytes
+        self.pending = []
+
+    def should_flush(self) -> bool:
+        return self.nbytes >= _SCATTER_ROW_GROUP_BYTES
+
+    def take_sorted_batch(self) -> pa.RecordBatch | None:
+        """Drain buffer, sort by _zephyr_sort_key in Arrow, return single batch."""
+        self._flush_micro()
+        if not self.tables:
+            return None
+        table = pa.Table.from_batches(self.tables, schema=self.schema)
+        sort_cols: list[tuple[str, str]] = [(_ZEPHYR_SORT_KEY, "ascending")]
+        if _ZEPHYR_SORT_SECONDARY in table.column_names:
+            sort_cols.append((_ZEPHYR_SORT_SECONDARY, "ascending"))
+        indices = pc.sort_indices(table, sort_keys=sort_cols)
+        sorted_table = table.take(indices)
+        num_rows = len(sorted_table)
+        self.max_rows = max(self.max_rows, num_rows)
+        self.chunk_idx += 1
+        self.tables = []
+        self.nbytes = 0
+        return sorted_table.to_batches()[0]
+
+    @property
+    def item_count(self) -> int:
+        return len(self.pending) + sum(len(t) for t in self.tables)
 
 
 def _apply_combiner(buffer: list, key_fn: Callable, combiner_fn: Callable) -> list:
@@ -465,31 +557,16 @@ def _write_parquet_scatter(
 ) -> ListShard:
     """Route items to target shards, buffer, sort, and write as Parquet row groups.
 
-    Handles the full scatter pipeline: hash-routing each item to a target shard,
-    buffering per-shard, applying an optional combiner, sorting each buffer, and
-    writing sorted chunks as Parquet row groups with envelope wrapping.
+    Items are accumulated incrementally in per-shard _ShardBuffer instances,
+    converted to Arrow micro-batches every _SCATTER_MICRO_BATCH_SIZE items.
+    When a buffer exceeds _SCATTER_ROW_GROUP_BYTES, it is drained, sorted in
+    Arrow by _zephyr_sort_key (and optionally _zephyr_sort_secondary), and
+    written as a Parquet row group.
 
     Writes ``.scatter_meta`` sidecar files alongside each Parquet segment.
-
-    Returns:
-        A ListShard containing the segment file paths.
     """
-    if sort_fn is not None:
-        captured_sort_fn = sort_fn
-
-        def _sort_key(item):
-            return (key_fn(item), captured_sort_fn(item))
-
-    else:
-        _sort_key = key_fn
-
-    # TODO: make chunk_size configurable per writer
-    chunk_size = 100_000
-
-    # Per-segment per-shard chunk counts
     seg_shard_counts: dict[int, dict[int, int]] = defaultdict(lambda: defaultdict(int))
-    per_shard_chunk_cnt: dict[int, int] = defaultdict(int)
-    buffers: dict[int, list] = defaultdict(list)
+    buffers: dict[int, _ShardBuffer] = {}
     n_chunks_flushed = 0
     seg_idx = 0
     seg_paths: list[str] = []
@@ -501,11 +578,15 @@ def _write_parquet_scatter(
     pending_target: int = -1
     pending_cnt: int = 0
 
-    per_shard_max_rows: dict[int, int] = defaultdict(int)
     avg_item_bytes: float = 0.0
     _sampled_avg = False
 
-    def _flush_pending():
+    def _get_buffer(target: int) -> _ShardBuffer:
+        if target not in buffers:
+            buffers[target] = _ShardBuffer(shard_idx=target, pickled=pickled, has_sort=sort_fn is not None)
+        return buffers[target]
+
+    def _flush_pending() -> None:
         nonlocal n_chunks_flushed, pending_chunk
         if pending_chunk is None:
             return
@@ -522,35 +603,25 @@ def _write_parquet_scatter(
                 pending_cnt,
             )
 
-    def _prepare_batch(target_shard: int, buf: list) -> list[dict]:
-        """Apply combiner, sort, envelope a buffer. Returns enveloped rows."""
-        if combiner_fn is not None:
-            buf = _apply_combiner(buf, key_fn, combiner_fn)
-        buf.sort(key=_sort_key)
-        shard_chunk_idx = per_shard_chunk_cnt[target_shard]
-        per_shard_chunk_cnt[target_shard] += 1
-        envelope_fn = _make_pickle_envelope if pickled else _make_envelope
-        return envelope_fn(buf, target_shard, shard_chunk_idx)
-
     def _ensure_writer(chunk_schema: pa.Schema) -> pa.Schema:
-        """Ensure Parquet writer is open and compatible. Returns the active write schema."""
-        nonlocal schema, writer, seg_file, seg_idx, per_shard_chunk_cnt
+        nonlocal schema, writer, seg_file, seg_idx
         if schema is None:
             schema = chunk_schema
             seg_file = _segment_path(parquet_path, seg_idx)
             seg_paths.append(seg_file)
             ensure_parent_dir(seg_file)
-            writer = pq.ParquetWriter(seg_file, schema)
+            writer = pq.ParquetWriter(seg_file, schema, compression="zstd", compression_level=1)
         elif chunk_schema != schema:
             _flush_pending()
             writer.close()
             schema = pa.unify_schemas([schema, chunk_schema])
             seg_idx += 1
-            per_shard_chunk_cnt = defaultdict(int)  # chunk_idx restarts at 0 in new segment
+            for buf in buffers.values():
+                buf.chunk_idx = 0
             seg_file = _segment_path(parquet_path, seg_idx)
             seg_paths.append(seg_file)
             ensure_parent_dir(seg_file)
-            writer = pq.ParquetWriter(seg_file, schema)
+            writer = pq.ParquetWriter(seg_file, schema, compression="zstd", compression_level=1)
             logger.info(
                 "[shard %d] Schema evolved after %d chunks; starting segment %d",
                 source_shard,
@@ -561,59 +632,73 @@ def _write_parquet_scatter(
             _flush_pending()
         return schema
 
-    def _write_buffer(target_shard: int, buf: list) -> None:
-        """Sort a buffer and write it as a Parquet row group."""
+    def _flush_buffer(buf: _ShardBuffer) -> None:
         nonlocal pending_chunk, pending_target, pending_cnt, avg_item_bytes, _sampled_avg
-        enveloped = _prepare_batch(target_shard, buf)
-        chunk_arrow = pa.RecordBatch.from_pylist(enveloped)
-        write_schema = _ensure_writer(chunk_arrow.schema)
-        if chunk_arrow.schema != write_schema:
-            chunk_arrow = chunk_arrow.cast(write_schema)
-        pending_chunk = chunk_arrow
-        pending_target = target_shard
-        pending_cnt = len(buf)
-        per_shard_max_rows[target_shard] = max(per_shard_max_rows[target_shard], len(buf))
 
-        # Sample avg_item_bytes once on first flush
-        if not _sampled_avg and len(enveloped) > 0:
-            sample_size = min(len(enveloped), _SCATTER_SAMPLE_SIZE)
-            sample_rows = enveloped[:sample_size]
-            if pickled:
-                total_bytes = sum(len(row[_ZEPHYR_SHUFFLE_PICKLED_COL]) for row in sample_rows)
-            else:
-                total_bytes = sum(len(pickle.dumps(row[_ZEPHYR_SHUFFLE_ITEM_COL])) for row in sample_rows)
-            avg_item_bytes = total_bytes / len(sample_rows)
+        if combiner_fn is not None:
+            # Combiner path: drain buffer to Python, apply combiner, re-sort in Arrow
+            buf._flush_micro()
+            if not buf.tables:
+                return
+            table = pa.Table.from_batches(buf.tables, schema=buf.schema)
+            py_items = unwrap_items(table, pickled)
+            combined = _apply_combiner(py_items, key_fn, combiner_fn)
+            combined_buf = _ShardBuffer(shard_idx=buf.shard_idx, pickled=pickled, has_sort=sort_fn is not None)
+            combined_buf.chunk_idx = buf.chunk_idx
+            for item in combined:
+                k = key_fn(item)
+                sv = sort_fn(item) if sort_fn else None
+                combined_buf.append(item, k, sv)
+            batch = combined_buf.take_sorted_batch()
+            buf.chunk_idx = combined_buf.chunk_idx
+            buf.tables = []
+            buf.nbytes = 0
+            buf.pending = []
+            buf.max_rows = max(buf.max_rows, combined_buf.max_rows)
+        else:
+            batch = buf.take_sorted_batch()
+
+        if batch is None:
+            return
+
+        write_schema = _ensure_writer(batch.schema)
+        if batch.schema != write_schema:
+            batch = batch.cast(write_schema)
+        pending_chunk = batch
+        pending_target = buf.shard_idx
+        pending_cnt = len(batch)
+
+        if not _sampled_avg and len(batch) > 0:
+            avg_item_bytes = batch.nbytes / len(batch)
             _sampled_avg = True
 
-    # Route items to target shards, flush buffers at chunk_size
     for item in items:
         key = key_fn(item)
         target = deterministic_hash(key) % num_output_shards
-        buffers[target].append(item)
-        if chunk_size > 0 and len(buffers[target]) >= chunk_size:
-            _write_buffer(target, buffers[target])
-            buffers[target] = []
+        sort_val = sort_fn(item) if sort_fn else None
+        buf = _get_buffer(target)
+        buf.append(item, key, sort_val)
+        if buf.should_flush():
+            _flush_buffer(buf)
 
-    # Flush remaining buffers — write each shard as its own row group so PyArrow
-    # can use min/max statistics on shard_idx to skip non-matching row groups on read.
     with log_time(f"Flushing remaining buffers for {parquet_path}"):
         _flush_pending()
-        for target, buf in sorted(buffers.items()):
-            if not buf:
+        for target in sorted(buffers.keys()):
+            buf = buffers[target]
+            if buf.item_count == 0:
                 continue
-            _write_buffer(target, buf)
+            _flush_buffer(buf)
         _flush_pending()
 
     if writer is not None:
         writer.close()
 
-    # Write sidecar metadata for each segment.
-    # chunk_offsets track where each segment's chunks start in the global
-    # chunk_idx space (cumulative across segments from this source shard).
+    per_shard_max_rows: dict[int, int] = {target: buf.max_rows for target, buf in buffers.items() if buf.max_rows > 0}
+
     with log_time(f"Writing scatter meta for {parquet_path}"):
         for i, path in enumerate(seg_paths):
             counts = dict(seg_shard_counts.get(i, {}))
-            seg_max_rows = {shard: per_shard_max_rows[shard] for shard in counts if per_shard_max_rows[shard] > 0}
+            seg_max_rows = {shard: per_shard_max_rows[shard] for shard in counts if per_shard_max_rows.get(shard, 0) > 0}
             _write_scatter_meta(path, counts, pickled, seg_max_rows, avg_item_bytes)
 
     return ListShard(refs=[MemChunk(items=seg_paths)])

@@ -4,8 +4,14 @@ use pyo3::prelude::*;
 use rand::{Rng, SeedableRng};
 use rand_pcg::Pcg64;
 use regex::Regex;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use xxhash_rust::xxh3;
+
+static WHITESPACE_RE: OnceLock<Regex> = OnceLock::new();
+
+fn whitespace_regex() -> &'static Regex {
+    WHITESPACE_RE.get_or_init(|| Regex::new(r"\s+").unwrap())
+}
 
 /// Clean text using the SlimPajama text cleaning process.
 /// 1. Lowercase
@@ -14,7 +20,7 @@ use xxhash_rust::xxh3;
 /// 4. Trim
 pub fn clean_text(arr: &StringArray) -> PyResult<Arc<StringArray>> {
     let mut builder = StringBuilder::with_capacity(arr.len(), arr.len() * 50);
-    let whitespace_re = Regex::new(r"\s+").map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let whitespace_re = whitespace_regex();
     let punctuation: &[char] = &[
         '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/', ':', ';', '<',
         '=', '>', '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~',
@@ -73,9 +79,15 @@ pub fn compute_minhash(
             let hash = xxh3::xxh3_64(text.as_bytes()) as u128;
             update_signature(&mut signature, hash, &coeffs);
         } else {
+            // Reusable buffer for encoding char windows to bytes, avoiding
+            // a String allocation per ngram.
+            let mut ngram_buf = Vec::with_capacity(ngram_size * 4);
             for window in chars.windows(ngram_size) {
-                let s: String = window.iter().collect();
-                let hash = xxh3::xxh3_64(s.as_bytes()) as u128;
+                ngram_buf.clear();
+                for &ch in window {
+                    ngram_buf.extend_from_slice(ch.encode_utf8(&mut [0; 4]).as_bytes());
+                }
+                let hash = xxh3::xxh3_64(&ngram_buf) as u128;
                 update_signature(&mut signature, hash, &coeffs);
             }
         }

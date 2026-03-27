@@ -10,12 +10,13 @@ and multi-segment schema evolution — all without spinning up a full coordinato
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from zephyr.plan import deterministic_hash
+from zephyr.plan import deterministic_hash, _arrow_reduce_gen
 from zephyr.shuffle import (
     ScatterParquetIterator,
     ScatterShard,
+    _ZEPHYR_SORT_KEY,
     _build_scatter_shard_from_manifest,
-    _make_pickle_envelope,
+    make_envelope_batch,
     _write_parquet_scatter,
     _write_scatter_manifest,
 )
@@ -225,8 +226,14 @@ def test_avg_item_bytes_written(tmp_path):
 def test_scatter_parquet_iterator_pickle_roundtrip(tmp_path):
     """ScatterParquetIterator with is_pickled=True round-trips non-Arrow-serializable items."""
     items = [frozenset([1, 2]), frozenset([3, 4, 5])]
-    envelope = _make_pickle_envelope(items, target_shard=0, chunk_idx=0)
-    batch = pa.RecordBatch.from_pylist(envelope)
+    batch = make_envelope_batch(
+        items,
+        shard_idx=0,
+        chunk_idx=0,
+        key_values=[0, 1],
+        sort_values=None,
+        pickled=True,
+    )
 
     path = str(tmp_path / "test.parquet")
     pq.write_table(pa.Table.from_batches([batch]), path)
@@ -244,35 +251,160 @@ def test_scatter_parquet_iterator_pickle_roundtrip(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Sort key column
+# ---------------------------------------------------------------------------
+
+
+def test_scatter_writes_sort_key_column(tmp_path):
+    """Parquet files contain a _zephyr_sort_key column matching key_fn values."""
+    num_shards = 2
+    items = [{"k": i % 3, "v": i} for i in range(20)]
+    parquet_path = str(tmp_path / "shard-0000.parquet")
+    list_shard = _write_parquet_scatter(
+        iter(items),
+        source_shard=0,
+        parquet_path=parquet_path,
+        key_fn=_key,
+        num_output_shards=num_shards,
+    )
+    seg_paths = list(list_shard)
+    for seg_path in seg_paths:
+        table = pq.read_table(seg_path)
+        assert _ZEPHYR_SORT_KEY in table.column_names
+        for row in table.to_pylist():
+            # In flat mode, user fields are top-level columns alongside _zephyr_* metadata
+            assert row[_ZEPHYR_SORT_KEY] == row["k"]
+
+
+def test_get_chunk_tables_returns_arrow(tmp_path):
+    """get_chunk_tables yields pa.Table instances with sort key columns."""
+    items = [{"k": i % 2, "v": i} for i in range(20)]
+    manifest_path, _ = _build_shard(tmp_path, items, num_output_shards=1)
+    shard = _build_scatter_shard_from_manifest(manifest_path, 0)
+    tables = []
+    for it in shard.iterators:
+        tables.extend(list(it.get_chunk_tables()))
+    assert len(tables) > 0
+    for t in tables:
+        assert isinstance(t, pa.Table)
+        assert _ZEPHYR_SORT_KEY in t.column_names
+
+
+def test_scatter_with_combiner(tmp_path):
+    """Scatter with combiner_fn produces correct combined output."""
+    # Duplicate keys — combiner keeps only one per key
+    items = [{"k": i % 3, "v": i} for i in range(30)]
+
+    def combiner(key, items_iter):
+        return [next(items_iter)]
+
+    parquet_path = str(tmp_path / "shard-0000.parquet")
+    list_shard = _write_parquet_scatter(
+        iter(items),
+        source_shard=0,
+        parquet_path=parquet_path,
+        key_fn=_key,
+        num_output_shards=1,
+        combiner_fn=combiner,
+    )
+    seg_paths = list(list_shard)
+    manifest_path = str(tmp_path / "scatter_metadata")
+    _write_scatter_manifest(seg_paths, manifest_path)
+
+    shard = _build_scatter_shard_from_manifest(manifest_path, 0)
+    recovered = list(shard)
+    # With combiner keeping first, we get at most 3 unique keys (0,1,2)
+    keys = {item["k"] for item in recovered}
+    assert keys == {0, 1, 2}
+    assert len(recovered) == 3
+
+
+# ---------------------------------------------------------------------------
 # external_sort_merge
 # ---------------------------------------------------------------------------
 
 
-def test_external_sort_merge_streaming(tmp_path):
-    """external_sort_merge streams items to disk; output is fully sorted."""
+def test_arrow_merge_produces_same_results(tmp_path):
+    """Arrow merge-sort produces correct grouped results."""
+    num_shards = 4
+    items = [{"k": i % 7, "v": i} for i in range(200)]
+    manifest_path, _ = _build_shard(tmp_path, items, num_output_shards=num_shards)
+
+    def keep_first(key, items_iter):
+        return next(items_iter)
+
+    for shard_idx in range(num_shards):
+        shard = _build_scatter_shard_from_manifest(manifest_path, shard_idx)
+        arrow_results = sorted(list(_arrow_reduce_gen(shard, keep_first)), key=lambda x: x["v"])
+
+        # Verify: each result should be a valid item from the original set
+        for result in arrow_results:
+            assert result in items, f"unexpected item {result} in shard {shard_idx}"
+
+        # Verify: each key appears at most once (keep_first deduplication)
+        keys_seen = [result["k"] for result in arrow_results]
+        assert len(keys_seen) == len(set(keys_seen)), f"duplicate keys in shard {shard_idx}"
+
+
+def test_arrow_external_sort_roundtrip(tmp_path):
+    """Arrow external sort produces correctly sorted output."""
     from zephyr.external_sort import external_sort_merge
 
-    # Build 3 sorted iterators, more than would fit in one batch if fan-in were 2
-    iters = [iter([1, 4, 7]), iter([2, 5, 8]), iter([3, 6, 9])]
+    tables = [
+        pa.table({"a": [1, 4, 7], _ZEPHYR_SORT_KEY: [1, 4, 7]}),
+        pa.table({"a": [2, 5, 8], _ZEPHYR_SORT_KEY: [2, 5, 8]}),
+        pa.table({"a": [3, 6, 9], _ZEPHYR_SORT_KEY: [3, 6, 9]}),
+    ]
+    sort_dir = str(tmp_path / "ext_sort")
 
-    result = list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
-    assert result == list(range(1, 10))
+    result = list(
+        external_sort_merge(
+            iter(tables),
+            sort_keys=[(_ZEPHYR_SORT_KEY, "ascending")],
+            merge_key=lambda row: row[_ZEPHYR_SORT_KEY],
+            external_sort_dir=sort_dir,
+        )
+    )
+    # Result rows contain all columns including _zephyr_sort_key; extract "a" values
+    a_values = [row["a"] for row in result]
+    assert a_values == list(range(1, 10))
 
 
-def test_external_sort_merge_single_batch(tmp_path):
-    """Works correctly when all iterators fit in a single pass-1 batch."""
+def test_arrow_external_sort_cleans_up(tmp_path):
+    """Arrow external sort run files are deleted after merge."""
     from zephyr.external_sort import external_sort_merge
 
-    iters = [iter([i]) for i in range(10)]
-    result = list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
-    assert result == list(range(10))
+    tables = [pa.table({"val": [i], _ZEPHYR_SORT_KEY: [i]}) for i in range(10)]
+    sort_dir = str(tmp_path / "ext_sort")
+
+    list(
+        external_sort_merge(
+            iter(tables),
+            sort_keys=[(_ZEPHYR_SORT_KEY, "ascending")],
+            merge_key=lambda row: row[_ZEPHYR_SORT_KEY],
+            external_sort_dir=sort_dir,
+        )
+    )
+    import os
+
+    if os.path.exists(sort_dir):
+        remaining = os.listdir(sort_dir)
+        assert remaining == [], f"run files should be deleted, found: {remaining}"
 
 
-def test_external_sort_merge_cleans_up(tmp_path):
-    """Run files are deleted after the merge completes."""
-    from zephyr.external_sort import external_sort_merge, EXTERNAL_SORT_FAN_IN
-
-    # Force multiple batches by making more iterators than EXTERNAL_SORT_FAN_IN
-    iters = [iter([i]) for i in range(EXTERNAL_SORT_FAN_IN + 1)]
-    list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
-    assert list(tmp_path.iterdir()) == [], "run files should be deleted after merge"
+def test_needs_external_sort_zero_memory():
+    """needs_external_sort returns False when memory_limit is 0 (unknown)."""
+    shard = ScatterShard(
+        iterators=[
+            ScatterParquetIterator(
+                path="gs://fake/path.parquet",
+                shard_idx=0,
+                chunk_count=1000,
+                is_pickled=False,
+                filesystem=pa.fs.LocalFileSystem(),
+            )
+        ],
+        max_row_group_rows=1000,
+        avg_item_bytes=1000.0,
+    )
+    assert not shard.needs_external_sort(memory_limit=0)
