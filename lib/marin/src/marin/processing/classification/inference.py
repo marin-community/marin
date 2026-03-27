@@ -2,26 +2,27 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
+Classification inference using Fray for job dispatch and actor management.
+
 Usage:
 
-ray job submit --working-dir . --no-wait -- \
 python -m marin.processing.classification.inference \
     --config_path marin/processing/classification/config/dclm_fasttext.yaml
 """
 
 import logging
 import os
+import queue
+import time
 
 import draccus
-import ray
-from ray.util.queue import Queue
+
+from fray.v2 import Entrypoint, JobRequest, JobStatus, ResourceConfig, current_client
 
 from marin.core.runtime import cached_or_construct_output
 from marin.processing.classification.autoscaler import AutoscalingActorPool, AutoscalingActorPoolConfig
 from marin.processing.classification.checkpoint_utils import get_finished_ids, get_id_from_row
-from marin.processing.classification.classifier import (
-    AutoClassifierRayActor,
-)
+from marin.processing.classification.classifier import AutoClassifier
 from marin.processing.classification.config.inference_config import DatasetSchemaConfig, InferenceConfig
 from marin.processing.classification.dataset_utils import read_dataset_streaming, write_dataset_streaming
 from marin.utils import (
@@ -81,11 +82,11 @@ def process_file_with_quality_classifier_streaming(
     total_processed = len(finished_ids)
     total_skipped = 0
 
-    task_queue = Queue()
-    result_queue = Queue()
+    task_queue: queue.Queue = queue.Queue()
+    result_queue: queue.Queue = queue.Queue()
 
     pool = AutoscalingActorPool(
-        AutoClassifierRayActor,
+        AutoClassifier,
         model_name_or_path,
         attribute_name,
         model_type,
@@ -155,35 +156,6 @@ def process_file_with_quality_classifier_streaming(
     )
 
 
-@ray.remote(max_calls=1)
-@cached_or_construct_output(success_suffix="SUCCESS")
-def process_file_ray(
-    input_filename: str,
-    output_filename: str,
-    model_name_or_path: str,
-    attribute_name: str,
-    model_type: str | None,
-    filetype: str,
-    autoscaling_actor_pool_config: AutoscalingActorPoolConfig,
-    dataset_schema: DatasetSchemaConfig,
-    num_batches_per_upload: int,
-    batch_size: int = 512,
-    resume: bool = True,
-):
-    process_file_with_quality_classifier_streaming(
-        input_filename,
-        output_filename,
-        model_name_or_path,
-        attribute_name,
-        model_type,
-        dataset_schema,
-        autoscaling_actor_pool_config,
-        num_batches_per_upload,
-        batch_size,
-        resume,
-    )
-
-
 def run_inference(inference_config: InferenceConfig):
     logger.info(f"Running inference for {inference_config.input_path} to {inference_config.output_path}")
     filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))
@@ -195,67 +167,80 @@ def run_inference(inference_config: InferenceConfig):
     input_path = inference_config.input_path
     output_path = inference_config.output_path
 
-    # Resilient wait/get with per-task retries to tolerate preemptions.
     max_in_flight = inference_config.task.max_in_flight
     max_retries_per_file = 100
 
-    options_kwargs = {
-        "memory": inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
-    }
+    client = current_client()
 
-    pending_refs: dict = {}
+    pending_handles: dict = {}
     attempt_count: dict[str, int] = {}
+
+    memory_gb = inference_config.runtime.memory_limit_gb
+    ram_str = f"{memory_gb}g" if memory_gb >= 1 else f"{int(memory_gb * 1024)}m"
 
     def submit(input_fp: str):
         output_fp = rebase_file_path(input_path, input_fp, output_path)
         fsspec_mkdirs(os.path.dirname(output_fp))
-        ref = process_file_ray.options(**options_kwargs).remote(
-            input_fp,
-            output_fp,
-            inference_config.model_name,
-            inference_config.attribute_name,
-            inference_config.model_type,
-            inference_config.filetype,
-            inference_config.autoscaling_actor_pool_config,
-            inference_config.dataset_schema,
-            inference_config.num_batches_per_upload,
-            inference_config.batch_size,
-            inference_config.resume,
+
+        # Sanitize name for Fray job naming (no spaces, no special chars)
+        job_name = f"classify-{os.path.basename(input_fp).replace('.', '-')}"
+        job_name = job_name.replace(" ", "-")[:60]
+
+        handle = client.submit(
+            JobRequest(
+                name=job_name,
+                entrypoint=Entrypoint.from_callable(
+                    process_file_with_quality_classifier_streaming,
+                    args=[
+                        input_fp,
+                        output_fp,
+                        inference_config.model_name,
+                        inference_config.attribute_name,
+                        inference_config.model_type,
+                        inference_config.dataset_schema,
+                        inference_config.autoscaling_actor_pool_config,
+                        inference_config.num_batches_per_upload,
+                        inference_config.batch_size,
+                        inference_config.resume,
+                    ],
+                ),
+                resources=ResourceConfig(ram=ram_str),
+            )
         )
-        pending_refs[ref] = input_fp
+        pending_handles[handle] = input_fp
 
     def drain_one_completed():
-        """Wait for one pending task, handle its result, and retry on failure."""
-        ready_refs, _ = ray.wait(list(pending_refs.keys()), num_returns=1)
-        ready_ref = ready_refs[0]
-        file_for_ref = pending_refs.pop(ready_ref)
-        try:
-            ray.get(ready_ref)
-            logger.info(f"Completed: {file_for_ref}")
-        except Exception as e:
-            count = attempt_count.get(file_for_ref, 0) + 1
-            attempt_count[file_for_ref] = count
-            logger.warning(f"Task failed for {file_for_ref} (attempt {count}): {e}")
-            if count < max_retries_per_file:
-                submit(file_for_ref)
-            else:
-                logger.error(f"Giving up after {count} attempts for {file_for_ref}")
+        """Wait for one pending job, handle its result, and retry on failure."""
+        while True:
+            for handle in list(pending_handles):
+                status = handle.status()
+                if JobStatus.finished(status):
+                    file_for_handle = pending_handles.pop(handle)
+                    if status == JobStatus.SUCCEEDED:
+                        logger.info(f"Completed: {file_for_handle}")
+                    else:
+                        count = attempt_count.get(file_for_handle, 0) + 1
+                        attempt_count[file_for_handle] = count
+                        logger.warning(f"Task failed for {file_for_handle} (attempt {count})")
+                        if count < max_retries_per_file:
+                            submit(file_for_handle)
+                        else:
+                            logger.error(f"Giving up after {count} attempts for {file_for_handle}")
+                    return
+            time.sleep(0.1)
 
     for input_filepath in filepaths:
-        # Throttle submissions
-        while max_in_flight is not None and len(pending_refs) >= max_in_flight:
+        while max_in_flight is not None and len(pending_handles) >= max_in_flight:
             drain_one_completed()
-
         submit(input_filepath)
 
-    # Drain remaining tasks
-    while pending_refs:
+    while pending_handles:
         drain_one_completed()
 
 
 @draccus.wrap()
 def main(inference_config: InferenceConfig):
-    ray.get(run_inference.remote(inference_config))
+    run_inference(inference_config)
 
 
 if __name__ == "__main__":

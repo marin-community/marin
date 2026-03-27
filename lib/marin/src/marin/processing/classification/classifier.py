@@ -9,7 +9,6 @@ import urllib.parse
 from typing import Any, ClassVar
 
 import lz4.frame
-import ray
 from iris.marin_fs import url_to_fs
 
 
@@ -21,8 +20,14 @@ class BaseClassifier:
     def predict(self, documents: list[str]):
         raise NotImplementedError
 
-    def __call__(self, batch: dict[str, Any]):
+    def classify(self, batch: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
+
+    def __call__(self, batch: dict[str, Any]):
+        return self.classify(batch)
+
+    def ping(self) -> bool:
+        return True
 
 
 class FasttextClassifier(BaseClassifier):
@@ -119,7 +124,7 @@ class FasttextClassifier(BaseClassifier):
     def predict(self, documents: list[str]):
         return self.model.predict(documents, k=self.k)
 
-    def __call__(self, batch: dict[str, Any]):
+    def classify(self, batch: dict[str, Any]) -> dict[str, Any]:
         texts = []
         for text in list(batch["text"]):
             if text:
@@ -153,7 +158,7 @@ class CompressionClassifier(BaseClassifier):
     def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
         super().__init__(model_name, attribute_name)
 
-    def __call__(self, batch):
+    def classify(self, batch):
         compression_ratios = []
         for text in batch["text"]:
             text_bytes = text.encode("utf-8")
@@ -172,7 +177,7 @@ class CompressionClassifier(BaseClassifier):
 
 
 class AutoClassifier(BaseClassifier):
-    _MODEL_NAME_TO_CLS_DICT: ClassVar[dict[str, BaseClassifier]] = {
+    _MODEL_NAME_TO_CLS_DICT: ClassVar[dict[str, type[BaseClassifier]]] = {
         "fasttext": FasttextClassifier,
         "compression": CompressionClassifier,
     }
@@ -183,8 +188,8 @@ class AutoClassifier(BaseClassifier):
         self.attribute_name = attribute_name
         self.cls = self.from_model_path(model_name, attribute_name, model_type, *args, **kwargs)
 
-    def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
-        return self.cls.__call__(batch)
+    def classify(self, batch: dict[str, Any]) -> dict[str, Any]:
+        return self.cls.classify(batch)
 
     @classmethod
     def from_model_path(
@@ -210,21 +215,3 @@ class AutoClassifier(BaseClassifier):
                 f"Model name {model_name_or_path} not supported. "
                 f"Must have one of {cls._MODEL_NAME_TO_CLS_DICT.keys()} in the name."
             ) from e
-
-
-@ray.remote(concurrency_groups={"ping": 2})
-class AutoClassifierRayActor(AutoClassifier):
-    """Ray Actor Wrapper around the AutoClassifier class.
-
-    The mapping operation f(x) is preserved, we just add a ping method to this actor. This ping method
-    is used to check if the actor is alive from the autoscaler in .autoscaler. We set the concurrecy group
-    to 2 which will allow multiple threads to access the ping method concurrently, so when a batch is running
-    on the actor, the ping method can still be accessed by the autoscaler.
-    """
-
-    def __init__(self, model_name: str, attribute_name: str, model_type: str | None, *args, **kwargs):
-        super().__init__(model_name, attribute_name, model_type, *args, **kwargs)
-
-    @ray.method(concurrency_group="ping")
-    def ping(self):
-        return True
