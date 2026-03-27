@@ -189,7 +189,12 @@ class RemoteClusterClient:
 
             if is_job_finished(state):
                 # Fetch full status once at the end for error details.
-                return self.get_job_status(job_id)
+                return poll_with_retries(
+                    str(job_id),
+                    lambda: self.get_job_status(job_id),
+                    deadline=deadline,
+                    unavailable_tolerance=CONTROLLER_UNAVAILABLE_TOLERANCE,
+                )
 
             if deadline.expired():
                 raise TimeoutError(f"Job {job_id} did not complete in {timeout}s")
@@ -286,7 +291,12 @@ class RemoteClusterClient:
                     return terminal_status
                 # Give log writers a moment to flush, then drain once more.
                 # Fetch full status for error details on the final return.
-                terminal_status = self.get_job_status(job_id)
+                terminal_status = poll_with_retries(
+                    str(job_id),
+                    lambda: self.get_job_status(job_id),
+                    deadline=deadline,
+                    unavailable_tolerance=CONTROLLER_UNAVAILABLE_TOLERANCE,
+                )
                 time.sleep(1)
                 continue
 
