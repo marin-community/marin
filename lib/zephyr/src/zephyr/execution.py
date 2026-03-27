@@ -853,6 +853,11 @@ class ZephyrCoordinator:
     def shutdown(self) -> None:
         """Signal workers to exit. Worker group is managed by ZephyrContext."""
         logger.info("[coordinator.shutdown] Starting shutdown")
+
+        counters = self.get_counters()
+        if counters:
+            logger.info("[coordinator.shutdown] Final counters: %s", counters)
+
         self._shutdown_event.set()
 
         # Wait for coordinator thread to exit
