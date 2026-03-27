@@ -1870,6 +1870,18 @@ class ControllerServiceImpl:
 
         task_worker_id = task.worker_id
         if not task_worker_id:
+            if self._controller.has_direct_provider:
+                provider = self._controller.provider
+                timeout = request.timeout_seconds if request.timeout_seconds else 60
+                resp = provider.exec_in_container(
+                    task.task_id.to_wire(), task.current_attempt_id, list(request.command), timeout
+                )
+                return cluster_pb2.Controller.ExecInContainerResponse(
+                    exit_code=resp.exit_code,
+                    stdout=resp.stdout,
+                    stderr=resp.stderr,
+                    error=resp.error,
+                )
             raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
 
         worker = _read_worker(self._db, task_worker_id)

@@ -81,7 +81,7 @@ class FasttextClassifier(BaseClassifier):
 
         with FileLock(lock_file):
             if not os.path.exists(success_file):
-                fs.makedirs(f"/tmp/{model_descriptor}", exist_ok=True)
+                os.makedirs(f"/tmp/{model_descriptor}", exist_ok=True)
 
                 if is_remote_or_local_path:
                     fs.get(fs_path, local_filepath)
