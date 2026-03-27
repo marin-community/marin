@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from dataclasses import MISSING, dataclass, field, fields, replace as dc_replace
 from pathlib import Path
 from threading import RLock
-from typing import Any, Generic, Literal, TypeVar, overload
+from typing import Any, TypeVar
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.types import JobName, WorkerId, get_gpu_count, get_tpu_count
@@ -22,7 +22,6 @@ from iris.rpc import cluster_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
 
 T = TypeVar("T")
-V = TypeVar("V")
 RowDecoder = Callable[[sqlite3.Row], Any]
 
 
@@ -120,214 +119,16 @@ def _decode_row(model_cls: type[T], row: sqlite3.Row) -> T:
     return model_cls(**values)
 
 
-class Predicate:
-    def compile(self) -> tuple[str, list[object]]:
-        raise NotImplementedError
-
-    def __and__(self, other: Predicate) -> Predicate:
-        return _CompositePredicate("AND", (self, other))
-
-    def __or__(self, other: Predicate) -> Predicate:
-        return _CompositePredicate("OR", (self, other))
-
-    def __invert__(self) -> Predicate:
-        return _NotPredicate(self)
+def decode_rows(model_cls: type[T], rows: Iterable[sqlite3.Row]) -> list[T]:
+    """Decode sqlite3.Row objects into model instances."""
+    return [_decode_row(model_cls, row) for row in rows]
 
 
-@dataclass(frozen=True)
-class _SqlPredicate(Predicate):
-    sql: str
-    params: tuple[object, ...] = ()
-
-    def compile(self) -> tuple[str, list[object]]:
-        return self.sql, list(self.params)
-
-
-@dataclass(frozen=True)
-class _CompositePredicate(Predicate):
-    op: Literal["AND", "OR"]
-    parts: tuple[Predicate, ...]
-
-    def compile(self) -> tuple[str, list[object]]:
-        sql_parts: list[str] = []
-        params: list[object] = []
-        for part in self.parts:
-            compiled_sql, compiled_params = part.compile()
-            sql_parts.append(f"({compiled_sql})")
-            params.extend(compiled_params)
-        return f" {self.op} ".join(sql_parts), params
-
-
-@dataclass(frozen=True)
-class _NotPredicate(Predicate):
-    inner: Predicate
-
-    def compile(self) -> tuple[str, list[object]]:
-        sql, params = self.inner.compile()
-        return f"NOT ({sql})", params
-
-
-class SelectExpr(Generic[V]):
-    def __init__(self, sql: str, decoder: Callable[[Any], V], label: str):
-        self.sql = sql
-        self.decoder = decoder
-        self.label = label
-
-    def aliased_sql(self) -> str:
-        return f"{self.sql} AS {self.label}"
-
-
-class Column(SelectExpr[V]):
-    def __init__(self, table_alias: str, column_name: str, decoder: Callable[[Any], V], label: str | None = None):
-        self.table_alias = table_alias
-        self.column_name = column_name
-        super().__init__(f"{table_alias}.{column_name}", decoder, label or column_name)
-
-    def _cmp(self, op: str, value: object) -> Predicate:
-        if isinstance(value, SelectExpr):
-            return _SqlPredicate(f"{self.sql} {op} {value.sql}", ())
-        return _SqlPredicate(f"{self.sql} {op} ?", (value,))
-
-    def __eq__(self, other: object) -> Predicate:  # type: ignore[override]
-        return self.is_null() if other is None else self._cmp("=", other)
-
-    def __ne__(self, other: object) -> Predicate:  # type: ignore[override]
-        return self.not_null() if other is None else self._cmp("!=", other)
-
-    def __lt__(self, other: object) -> Predicate:
-        return self._cmp("<", other)
-
-    def __le__(self, other: object) -> Predicate:
-        return self._cmp("<=", other)
-
-    def __gt__(self, other: object) -> Predicate:
-        return self._cmp(">", other)
-
-    def __ge__(self, other: object) -> Predicate:
-        return self._cmp(">=", other)
-
-    def in_(self, values: Sequence[object]) -> Predicate:
-        if not values:
-            return _SqlPredicate("0")
-        placeholders = ",".join("?" for _ in values)
-        return _SqlPredicate(f"{self.sql} IN ({placeholders})", tuple(values))
-
-    def like(self, pattern: str) -> Predicate:
-        return _SqlPredicate(f"{self.sql} LIKE ?", (pattern,))
-
-    def is_null(self) -> Predicate:
-        return _SqlPredicate(f"{self.sql} IS NULL")
-
-    def not_null(self) -> Predicate:
-        return _SqlPredicate(f"{self.sql} IS NOT NULL")
-
-    def desc(self) -> Order:
-        return Order(self, descending=True)
-
-    def asc(self) -> Order:
-        return Order(self, descending=False)
-
-    def as_(self, label: str) -> SelectExpr[V]:
-        return SelectExpr(self.sql, self.decoder, label)
-
-
-@dataclass(frozen=True)
-class Order:
-    expr: SelectExpr[Any]
-    descending: bool = False
-
-    def compile(self) -> str:
-        direction = "DESC" if self.descending else "ASC"
-        return f"{self.expr.sql} {direction}"
-
-
-@dataclass(frozen=True)
-class Join:
-    table: Table[Any]
-    on: Predicate
-    kind: Literal["JOIN", "LEFT JOIN"] = "JOIN"
-
-    def compile(self) -> tuple[str, list[object]]:
-        on_sql, params = self.on.compile()
-        return f"{self.kind} {self.table.sql_name} {self.table.alias} ON {on_sql}", params
-
-
-@dataclass(frozen=True)
-class JoinedQuery:
-    """Fluent join chain starting from a base table."""
-
-    from_: Table[Any]
-    joins: tuple[Join, ...]
-
-    def join(self, table: Table[Any], *, on: Predicate, kind: Literal["JOIN", "LEFT JOIN"] = "JOIN") -> JoinedQuery:
-        return JoinedQuery(self.from_, (*self.joins, Join(table, on, kind)))
-
-
-class ColumnAccessor:
-    """Attribute-style access to table columns. Raises AttributeError for unknown names."""
-
-    def __init__(self, columns: dict[str, Column[Any]]):
-        self._columns = columns
-
-    def __getattr__(self, name: str) -> Column[Any]:
-        if name not in self._columns:
-            raise AttributeError(f"No column {name!r} in table")
-        return self._columns[name]
-
-
-@dataclass(frozen=True)
-class Table(Generic[T]):
-    sql_name: str
-    alias: str
-    model_cls: type[T] | None = None
-    columns: dict[str, Column[Any]] = field(default_factory=dict)
-    field_columns: tuple[tuple[str, str], ...] = ()
-
-    @property
-    def c(self) -> ColumnAccessor:
-        return ColumnAccessor(self.columns)
-
-    def all_columns(self) -> list[SelectExpr[Any]]:
-        if self.model_cls is None:
-            raise TypeError(f"Table {self.sql_name} does not have a row model")
-        result: list[SelectExpr[Any]] = []
-        for _field_name, column_name in self.field_columns:
-            column = self.columns[column_name]
-            result.append(SelectExpr(column.sql, column.decoder, column_name))
-        return result
-
-    def with_alias(self, alias: str) -> Table[T]:
-        columns = {
-            name: Column(alias, column.column_name, column.decoder, label=column.label)
-            for name, column in self.columns.items()
-        }
-        return Table(
-            sql_name=self.sql_name,
-            alias=alias,
-            model_cls=self.model_cls,
-            columns=columns,
-            field_columns=self.field_columns,
-        )
-
-    def join(self, other: Table[Any], *, on: Predicate, kind: Literal["JOIN", "LEFT JOIN"] = "JOIN") -> JoinedQuery:
-        return JoinedQuery(from_=self, joins=(Join(other, on, kind),))
-
-
-def _table_for_model(model_cls: type[T], sql_name: str, alias: str) -> Table[T]:
-    columns: dict[str, Column[Any]] = {}
-    field_columns: list[tuple[str, str]] = []
-    for item in model_cls.__db_fields__:
-        column_name = item.metadata["db_column"]
-        decoder = item.metadata.get("db_decoder", _identity)
-        columns[column_name] = Column(alias, column_name, decoder)
-        field_columns.append((item.name, column_name))
-    return Table(
-        sql_name=sql_name,
-        alias=alias,
-        model_cls=model_cls,
-        columns=columns,
-        field_columns=tuple(field_columns),
-    )
+def decode_one(model_cls: type[T], rows: Iterable[sqlite3.Row]) -> T | None:
+    """Decode a single row, returning None if empty."""
+    for row in rows:
+        return _decode_row(model_cls, row)
+    return None
 
 
 class Row:
@@ -372,6 +173,14 @@ class QuerySnapshot:
         """Execute raw SQL and return the cursor for result inspection."""
         return self._conn.execute(sql, params)
 
+    def fetchall(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
+        """Execute SQL and return all rows."""
+        return self._fetchall(sql, list(params))
+
+    def fetchone(self, sql: str, params: tuple = ()) -> sqlite3.Row | None:
+        """Execute SQL and return the first row, or None."""
+        return self._conn.execute(sql, params).fetchone()
+
     def _fetchall(self, sql: str, params: Sequence[object]) -> list[sqlite3.Row]:
         return list(self._conn.execute(sql, tuple(params)).fetchall())
 
@@ -397,103 +206,6 @@ class QuerySnapshot:
             }
             rows.append(Row(data))
         return rows
-
-    @overload
-    def select(
-        self,
-        from_: Table[T] | JoinedQuery,
-        *,
-        where: Predicate | None = None,
-        joins: Sequence[Join] = (),
-        order_by: Sequence[Order] = (),
-        limit: int | None = None,
-    ) -> list[T]: ...
-
-    @overload
-    def select(
-        self,
-        from_: Table[Any] | JoinedQuery,
-        *,
-        columns: Sequence[SelectExpr[Any]],
-        where: Predicate | None = None,
-        joins: Sequence[Join] = (),
-        order_by: Sequence[Order] = (),
-        limit: int | None = None,
-    ) -> list[Any]: ...
-
-    def select(
-        self,
-        from_: Table[Any] | JoinedQuery,
-        *,
-        columns: Sequence[SelectExpr[Any]] | None = None,
-        where: Predicate | None = None,
-        joins: Sequence[Join] = (),
-        order_by: Sequence[Order] = (),
-        limit: int | None = None,
-    ) -> list[Any]:
-        base_table: Table[Any]
-        all_joins: list[Join]
-        if isinstance(from_, JoinedQuery):
-            base_table = from_.from_
-            all_joins = list(from_.joins) + list(joins)
-        else:
-            base_table = from_
-            all_joins = list(joins)
-
-        params: list[object] = []
-        select_exprs = list(columns) if columns is not None else base_table.all_columns()
-        cols_sql = ", ".join(expr.aliased_sql() for expr in select_exprs)
-        sql = f"SELECT {cols_sql} FROM {base_table.sql_name} {base_table.alias}"
-        for join in all_joins:
-            join_sql, join_params = join.compile()
-            sql += f" {join_sql}"
-            params.extend(join_params)
-        if where is not None:
-            where_sql, where_params = where.compile()
-            sql += f" WHERE {where_sql}"
-            params.extend(where_params)
-        if order_by:
-            sql += " ORDER BY " + ", ".join(order.compile() for order in order_by)
-        if limit is not None:
-            sql += " LIMIT ?"
-            params.append(limit)
-        rows = self._fetchall(sql, params)
-        if columns is None:
-            return [_decode_row(base_table.model_cls, row) for row in rows]
-        return [Row({expr.label: expr.decoder(row[expr.label]) for expr in select_exprs}) for row in rows]
-
-    def one(
-        self,
-        from_: Table[Any],
-        *,
-        columns: Sequence[SelectExpr[Any]] | None = None,
-        where: Predicate | None = None,
-        joins: Sequence[Join] = (),
-        order_by: Sequence[Order] = (),
-    ) -> Any | None:
-        rows = self.select(from_, columns=columns, where=where, joins=joins, order_by=order_by, limit=1)
-        return rows[0] if rows else None
-
-    def scalar(
-        self,
-        expr: SelectExpr[V],
-        *,
-        from_: Table[Any],
-        where: Predicate | None = None,
-        joins: Sequence[Join] = (),
-    ) -> V | None:
-        row = self.one(from_, columns=(expr,), where=where, joins=joins)
-        if row is None:
-            return None
-        return getattr(row, expr.label)
-
-    def count(self, from_: Table[Any], *, where: Predicate | None = None, joins: Sequence[Join] = ()) -> int:
-        count_expr = SelectExpr[int]("COUNT(*)", int, "count_value")
-        value = self.scalar(count_expr, from_=from_, where=where, joins=joins)
-        return int(value or 0)
-
-    def exists(self, from_: Table[Any], *, where: Predicate | None = None, joins: Sequence[Join] = ()) -> bool:
-        return self.count(from_, where=where, joins=joins) > 0
 
 
 TERMINAL_TASK_STATES: frozenset[int] = frozenset(
@@ -781,129 +493,6 @@ class EndpointQuery:
     limit: int | None = None
 
 
-JOBS = _table_for_model(Job, "jobs", "j")
-TASKS = _table_for_model(Task, "tasks", "t")
-ATTEMPTS = _table_for_model(Attempt, "task_attempts", "a")
-WORKERS = _table_for_model(Worker, "workers", "w")
-ENDPOINTS = _table_for_model(Endpoint, "endpoints", "e")
-TXN_ACTIONS = _table_for_model(TransactionAction, "txn_actions", "ta")
-API_KEYS = _table_for_model(ApiKey, "api_keys", "ak")
-WORKER_ATTRIBUTES = Table[tuple[str, str]](
-    sql_name="worker_attributes",
-    alias="wa",
-    columns={
-        "worker_id": Column("wa", "worker_id", _decode_worker_id),
-        "key": Column("wa", "key", _decode_str),
-        "value_type": Column("wa", "value_type", _decode_str),
-        "str_value": Column("wa", "str_value", _nullable(_decode_str)),
-        "int_value": Column("wa", "int_value", _nullable(_decode_int)),
-        "float_value": Column("wa", "float_value", _nullable(float)),
-    },
-)
-WORKER_TASK_HISTORY = Table[tuple[str, str]](
-    sql_name="worker_task_history",
-    alias="wth",
-    columns={
-        "worker_id": Column("wth", "worker_id", _decode_worker_id),
-        "task_id": Column("wth", "task_id", JobName.from_wire),
-        "assigned_at_ms": Column("wth", "assigned_at_ms", _decode_timestamp_ms),
-    },
-)
-WORKER_RESOURCE_HISTORY = Table[tuple[str, str]](
-    sql_name="worker_resource_history",
-    alias="wrh",
-    columns={
-        "id": Column("wrh", "id", _decode_int),
-        "worker_id": Column("wrh", "worker_id", _decode_worker_id),
-        "snapshot_proto": Column(
-            "wrh",
-            "snapshot_proto",
-            _proto_decoder(cluster_pb2.WorkerResourceSnapshot),
-        ),
-        "timestamp_ms": Column("wrh", "timestamp_ms", _decode_timestamp_ms),
-    },
-)
-RESERVATION_CLAIMS = Table[tuple[str, str]](
-    sql_name="reservation_claims",
-    alias="rc",
-    columns={
-        "worker_id": Column("rc", "worker_id", _decode_worker_id),
-        "job_id": Column("rc", "job_id", _decode_str),
-        "entry_idx": Column("rc", "entry_idx", _decode_int),
-    },
-)
-SCALING_GROUPS = Table(
-    sql_name="scaling_groups",
-    alias="sg",
-    columns={
-        "name": Column("sg", "name", _decode_str),
-        "consecutive_failures": Column("sg", "consecutive_failures", _decode_int),
-        "backoff_until_ms": Column("sg", "backoff_until_ms", _decode_timestamp_ms),
-        "last_scale_up_ms": Column("sg", "last_scale_up_ms", _decode_timestamp_ms),
-        "last_scale_down_ms": Column("sg", "last_scale_down_ms", _decode_timestamp_ms),
-        "quota_exceeded_until_ms": Column("sg", "quota_exceeded_until_ms", _decode_timestamp_ms),
-        "quota_reason": Column("sg", "quota_reason", _decode_str),
-        "updated_at_ms": Column("sg", "updated_at_ms", _decode_timestamp_ms),
-    },
-)
-SLICES = Table(
-    sql_name="slices",
-    alias="sl",
-    columns={
-        "slice_id": Column("sl", "slice_id", _decode_str),
-        "scale_group": Column("sl", "scale_group", _decode_str),
-        "lifecycle": Column("sl", "lifecycle", _decode_str),
-        "worker_ids": Column("sl", "worker_ids", _decode_json_list),
-        "created_at_ms": Column("sl", "created_at_ms", _decode_timestamp_ms),
-        "last_active_ms": Column("sl", "last_active_ms", _decode_timestamp_ms),
-        "error_message": Column("sl", "error_message", _decode_str),
-    },
-)
-TRACKED_WORKERS = Table[tuple[str, str]](
-    sql_name="tracked_workers",
-    alias="tw",
-    columns={
-        "worker_id": Column("tw", "worker_id", _decode_str),
-        "slice_id": Column("tw", "slice_id", _decode_str),
-        "scale_group": Column("tw", "scale_group", _decode_str),
-        "internal_address": Column("tw", "internal_address", _decode_str),
-    },
-)
-ENDPOINT_TASKS = Table[tuple[str, str]](
-    sql_name="endpoints",
-    alias="et",
-    columns={
-        "endpoint_id": Column("et", "endpoint_id", _decode_str),
-        "task_id": Column("et", "task_id", JobName.from_wire),
-    },
-)
-TASK_PROFILES = Table[tuple[str, str]](
-    sql_name="task_profiles",
-    alias="tp",
-    columns={
-        "task_id": Column("tp", "task_id", _decode_str),
-        "profile_data": Column("tp", "profile_data", _identity),
-        "captured_at_ms": Column("tp", "captured_at_ms", _decode_timestamp_ms),
-        "profile_kind": Column("tp", "profile_kind", _decode_str),
-    },
-)
-JOBS.columns["parent_job_id"] = Column("j", "parent_job_id", _nullable(JobName.from_wire))
-TASKS.columns["priority_neg_depth"] = Column("t", "priority_neg_depth", _decode_int)
-TASKS.columns["priority_root_submitted_ms"] = Column("t", "priority_root_submitted_ms", _decode_timestamp_ms)
-TASKS.columns["task_index"] = Column("t", "task_index", _decode_int)
-TASKS.columns.pop("current_worker_id", None)
-TASKS.columns.pop("current_worker_address", None)
-object.__setattr__(
-    TASKS,
-    "field_columns",
-    tuple(
-        (field_name, column_name)
-        for field_name, column_name in TASKS.field_columns
-        if column_name not in {"current_worker_id", "current_worker_address"}
-    ),
-)
-
-
 def _decode_attribute_rows(rows: Sequence[Any]) -> dict[WorkerId, dict[str, AttributeValue]]:
     attrs_by_worker: dict[WorkerId, dict[str, AttributeValue]] = {}
     for row in rows:
@@ -924,74 +513,53 @@ def _tasks_with_attempts(tasks: Sequence[Task], attempts: Sequence[Attempt]) -> 
     return [Task(**{**task.__dict__, "attempts": tuple(attempts_by_task.get(task.task_id, ()))}) for task in tasks]
 
 
-def endpoint_query_predicate(query: EndpointQuery) -> tuple[list[Join], Predicate | None]:
-    """Translate EndpointQuery to (joins, where) for snapshot.select(ENDPOINTS, ...)."""
-    joins: list[Join] = []
-    where: Predicate | None = None
+def endpoint_query_sql(query: EndpointQuery) -> tuple[str, list[object]]:
+    """Build SQL query for endpoint lookups."""
+    from_clause = "SELECT e.* FROM endpoints e"
+    conditions: list[str] = []
+    params: list[object] = []
+
+    if query.task_ids:
+        from_clause += " JOIN endpoints et ON e.endpoint_id = et.endpoint_id"
+        placeholders = ",".join("?" for _ in query.task_ids)
+        conditions.append(f"et.task_id IN ({placeholders})")
+        params.extend(tid.to_wire() for tid in query.task_ids)
+
     if query.endpoint_ids:
-        where = ENDPOINTS.c.endpoint_id.in_(list(query.endpoint_ids))
+        placeholders = ",".join("?" for _ in query.endpoint_ids)
+        conditions.append(f"e.endpoint_id IN ({placeholders})")
+        params.extend(query.endpoint_ids)
+
     if query.name_prefix:
-        predicate = ENDPOINTS.c.name.like(f"{query.name_prefix}%")
-        where = predicate if where is None else where & predicate
+        conditions.append("e.name LIKE ?")
+        params.append(f"{query.name_prefix}%")
+
     if query.exact_name:
-        predicate = ENDPOINTS.c.name == query.exact_name
-        where = predicate if where is None else where & predicate
+        conditions.append("e.name = ?")
+        params.append(query.exact_name)
+
     job_ids = list(query.job_ids)
     if query.job_id is not None:
         job_ids.append(query.job_id)
     if job_ids:
-        predicate = ENDPOINTS.c.job_id.in_([job_id.to_wire() for job_id in job_ids])
-        where = predicate if where is None else where & predicate
-    if query.task_ids:
-        joins.append(
-            Join(
-                table=ENDPOINT_TASKS,
-                on=ENDPOINTS.c.endpoint_id == ENDPOINT_TASKS.c.endpoint_id,
-            )
-        )
-        predicate = ENDPOINT_TASKS.c.task_id.in_([task_id.to_wire() for task_id in query.task_ids])
-        where = predicate if where is None else where & predicate
-    return joins, where
+        placeholders = ",".join("?" for _ in job_ids)
+        conditions.append(f"e.job_id IN ({placeholders})")
+        params.extend(jid.to_wire() for jid in job_ids)
+
+    sql = from_clause
+    if conditions:
+        sql += " WHERE " + " AND ".join(conditions)
+    if query.limit is not None:
+        sql += " LIMIT ?"
+        params.append(query.limit)
+    return sql, params
 
 
 class TransactionCursor:
-    """Wraps a raw sqlite3.Cursor and adds typed mutation helpers.
-
-    The insert/update/delete methods are thin SQL builders that accept
-    SQL-compatible Python values directly. Use execute/executemany/executescript
-    as an escape hatch when the builders don't cover the needed SQL shape.
-    """
+    """Wraps a raw sqlite3.Cursor for use within controller transactions."""
 
     def __init__(self, cursor: sqlite3.Cursor):
         self._cursor = cursor
-
-    def insert(self, table: str, values: dict[str, Any]) -> None:
-        """Insert a single row. Values must already be SQL-compatible types."""
-        cols = ", ".join(values.keys())
-        placeholders = ", ".join("?" for _ in values)
-        self._cursor.execute(
-            f"INSERT INTO {table} ({cols}) VALUES ({placeholders})",
-            tuple(values.values()),
-        )
-
-    def update(self, table: str, updates: dict[str, Any], where: Predicate) -> int:
-        """Update rows matching predicate. Returns number of rows affected."""
-        set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
-        where_sql, where_params = where.compile()
-        self._cursor.execute(
-            f"UPDATE {table} SET {set_clause} WHERE {where_sql}",
-            tuple(updates.values()) + tuple(where_params),
-        )
-        return self._cursor.rowcount
-
-    def delete(self, table: str, where: Predicate) -> int:
-        """Delete rows matching predicate. Returns number of rows affected."""
-        where_sql, where_params = where.compile()
-        self._cursor.execute(
-            f"DELETE FROM {table} WHERE {where_sql}",
-            tuple(where_params),
-        )
-        return self._cursor.rowcount
 
     def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         """Raw SQL escape hatch."""
@@ -1137,15 +705,6 @@ class ControllerDB:
             except sqlite3.OperationalError:
                 logging.getLogger(__name__).warning("read_snapshot rollback failed", exc_info=True)
             self._read_pool.put(conn)
-
-    def decode_worker(self, row: sqlite3.Row) -> Worker:
-        return _decode_row(Worker, row)
-
-    def decode_job(self, row: sqlite3.Row) -> Job:
-        return _decode_row(Job, row)
-
-    def decode_task(self, row: sqlite3.Row) -> Task:
-        return _decode_row(Task, row)
 
     def apply_migrations(self) -> None:
         """Apply pending migrations from the migrations/ directory.
@@ -1352,17 +911,22 @@ def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict
 def tasks_for_job_with_attempts(db: ControllerDB, job_id: JobName) -> list[Task]:
     """Fetch all tasks for a job with their attempt history."""
     with db.read_snapshot() as q:
-        tasks = q.select(
-            TASKS,
-            where=TASKS.c.job_id == job_id.to_wire(),
-            order_by=(TASKS.c.job_id.asc(), TASKS.c.task_index.asc()),
+        tasks = decode_rows(
+            Task,
+            q.fetchall(
+                "SELECT * FROM tasks WHERE job_id = ? ORDER BY task_index, task_id",
+                (job_id.to_wire(),),
+            ),
         )
         if not tasks:
             return []
-        attempts = q.select(
-            ATTEMPTS,
-            where=ATTEMPTS.c.task_id.in_([t.task_id.to_wire() for t in tasks]),
-            order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
+        placeholders = ",".join("?" for _ in tasks)
+        attempts = decode_rows(
+            Attempt,
+            q.fetchall(
+                f"SELECT * FROM task_attempts WHERE task_id IN ({placeholders}) ORDER BY task_id, attempt_id",
+                tuple(t.task_id.to_wire() for t in tasks),
+            ),
         )
     return _tasks_with_attempts(tasks, attempts)
 
@@ -1370,22 +934,16 @@ def tasks_for_job_with_attempts(db: ControllerDB, job_id: JobName) -> list[Task]
 def healthy_active_workers_with_attributes(db: ControllerDB) -> list[Worker]:
     """Fetch all healthy, active workers with their attributes populated."""
     with db.snapshot() as q:
-        workers = q.select(WORKERS, where=(WORKERS.c.healthy == 1) & (WORKERS.c.active == 1))
+        workers = decode_rows(Worker, q.fetchall("SELECT * FROM workers WHERE healthy = 1 AND active = 1"))
         if not workers:
             return []
-        attrs = q.select(
-            WORKER_ATTRIBUTES,
-            columns=(
-                WORKER_ATTRIBUTES.c.worker_id,
-                WORKER_ATTRIBUTES.c.key,
-                WORKER_ATTRIBUTES.c.value_type,
-                WORKER_ATTRIBUTES.c.str_value,
-                WORKER_ATTRIBUTES.c.int_value,
-                WORKER_ATTRIBUTES.c.float_value,
-            ),
-            where=WORKER_ATTRIBUTES.c.worker_id.in_([str(w.worker_id) for w in workers]),
+        placeholders = ",".join("?" for _ in workers)
+        attr_rows = q.raw(
+            f"SELECT worker_id, key, value_type, str_value, int_value, float_value "
+            f"FROM worker_attributes WHERE worker_id IN ({placeholders})",
+            tuple(str(w.worker_id) for w in workers),
         )
-    attrs_by_worker = _decode_attribute_rows(attrs)
+    attrs_by_worker = _decode_attribute_rows(attr_rows)
     return [dc_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
 
 

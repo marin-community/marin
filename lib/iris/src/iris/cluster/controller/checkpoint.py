@@ -33,7 +33,7 @@ from pathlib import Path
 import fsspec.core
 import zstandard
 
-from iris.cluster.controller.db import JOBS, TASKS, WORKERS, ControllerDB
+from iris.cluster.controller.db import ControllerDB
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -158,9 +158,9 @@ def write_checkpoint(
             tmp_zst2.unlink(missing_ok=True)
 
     with db.snapshot() as snapshot:
-        job_count = snapshot.count(JOBS)
-        task_count = snapshot.count(TASKS)
-        worker_count = snapshot.count(WORKERS)
+        job_count = snapshot.fetchone("SELECT COUNT(*) FROM jobs")[0]  # type: ignore[index]
+        task_count = snapshot.fetchone("SELECT COUNT(*) FROM tasks")[0]  # type: ignore[index]
+        worker_count = snapshot.fetchone("SELECT COUNT(*) FROM workers")[0]  # type: ignore[index]
     result = CheckpointResult(
         created_at=created_at,
         job_count=job_count,

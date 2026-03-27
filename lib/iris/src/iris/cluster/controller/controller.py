@@ -32,18 +32,14 @@ from iris.cluster.controller.checkpoint import (
     write_checkpoint,
 )
 from iris.cluster.controller.db import (
-    ATTEMPTS,
-    JOBS,
-    RESERVATION_CLAIMS,
-    TASKS,
-    WORKERS,
+    Attempt,
     ControllerDB,
-    Join,
     Job,
     Task,
     Worker,
     _decode_row,
     _tasks_with_attempts,
+    decode_rows,
     healthy_active_workers_with_attributes,
     insert_task_profile,
     running_tasks_by_worker,
@@ -260,13 +256,9 @@ def compute_demand_entries(
 def _read_reservation_claims(db: ControllerDB) -> dict[WorkerId, ReservationClaim]:
     """Read reservation claims from the canonical DB table."""
     with db.snapshot() as snapshot:
-        rows = snapshot.select(
-            RESERVATION_CLAIMS,
-            columns=(
-                RESERVATION_CLAIMS.c.worker_id,
-                RESERVATION_CLAIMS.c.job_id,
-                RESERVATION_CLAIMS.c.entry_idx,
-            ),
+        rows = snapshot.raw(
+            "SELECT rc.worker_id, rc.job_id, rc.entry_idx FROM reservation_claims rc",
+            decoders={"worker_id": WorkerId},
         )
     return {
         row.worker_id: ReservationClaim(
@@ -280,8 +272,12 @@ def _read_reservation_claims(db: ControllerDB) -> dict[WorkerId, ReservationClai
 def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, Job]:
     if not job_ids:
         return {}
+    wires = [job_id.to_wire() for job_id in job_ids]
+    placeholders = ",".join("?" for _ in wires)
     with queries.snapshot() as snapshot:
-        jobs = snapshot.select(JOBS, where=JOBS.c.job_id.in_([job_id.to_wire() for job_id in job_ids]))
+        jobs = decode_rows(
+            Job, snapshot.fetchall(f"SELECT * FROM jobs j WHERE j.job_id IN ({placeholders})", tuple(wires))
+        )
     return {job.job_id: job for job in jobs}
 
 
@@ -302,16 +298,14 @@ def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> l
 
 def _schedulable_tasks(queries: ControllerDB) -> list[Task]:
     # Only PENDING tasks can pass can_be_scheduled(); no need to fetch ASSIGNED/BUILDING/RUNNING.
-    SCHEDULABLE_STATES = (cluster_pb2.TASK_STATE_PENDING,)
     with queries.snapshot() as snapshot:
-        tasks = snapshot.select(
-            TASKS,
-            where=TASKS.c.state.in_(list(SCHEDULABLE_STATES)),
-            order_by=(
-                TASKS.c.priority_neg_depth.asc(),
-                TASKS.c.priority_root_submitted_ms.asc(),
-                TASKS.c.submitted_at_ms.asc(),
-                TASKS.c.task_id.asc(),
+        tasks = decode_rows(
+            Task,
+            snapshot.fetchall(
+                "SELECT * FROM tasks t WHERE t.state = ? "
+                "ORDER BY t.priority_neg_depth ASC, t.priority_root_submitted_ms ASC, "
+                "t.submitted_at_ms ASC, t.task_id ASC",
+                (cluster_pb2.TASK_STATE_PENDING,),
             ),
         )
     return [task for task in tasks if task.can_be_scheduled()]
@@ -321,16 +315,22 @@ def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -
     if not task_ids:
         return {}
     task_wires = [task_id.to_wire() for task_id in task_ids]
+    placeholders = ",".join("?" for _ in task_wires)
     with queries.snapshot() as snapshot:
-        tasks = snapshot.select(
-            TASKS,
-            where=TASKS.c.task_id.in_(task_wires),
-            order_by=(TASKS.c.task_id.asc(),),
+        tasks = decode_rows(
+            Task,
+            snapshot.fetchall(
+                f"SELECT * FROM tasks t WHERE t.task_id IN ({placeholders}) ORDER BY t.task_id ASC",
+                tuple(task_wires),
+            ),
         )
-        attempts = snapshot.select(
-            ATTEMPTS,
-            where=ATTEMPTS.c.task_id.in_(task_wires),
-            order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
+        attempts = decode_rows(
+            Attempt,
+            snapshot.fetchall(
+                f"SELECT * FROM task_attempts a WHERE a.task_id IN ({placeholders}) "
+                "ORDER BY a.task_id ASC, a.attempt_id ASC",
+                tuple(task_wires),
+            ),
         )
     return {task.task_id: task for task in _tasks_with_attempts(tasks, attempts)}
 
@@ -362,10 +362,11 @@ def _building_counts(queries: ControllerDB, workers: list[Worker]) -> dict[Worke
 def _workers_by_id(queries: ControllerDB, worker_ids: set[WorkerId]) -> dict[WorkerId, Worker]:
     if not worker_ids:
         return {}
+    wires = [str(wid) for wid in worker_ids]
+    placeholders = ",".join("?" for _ in wires)
     with queries.snapshot() as snapshot:
-        workers = snapshot.select(
-            WORKERS,
-            where=WORKERS.c.worker_id.in_([str(worker_id) for worker_id in worker_ids]),
+        workers = decode_rows(
+            Worker, snapshot.fetchall(f"SELECT * FROM workers w WHERE w.worker_id IN ({placeholders})", tuple(wires))
         )
     return {worker.worker_id: worker for worker in workers}
 
@@ -373,14 +374,15 @@ def _workers_by_id(queries: ControllerDB, worker_ids: set[WorkerId]) -> dict[Wor
 def _task_worker_mapping(queries: ControllerDB, task_ids: set[JobName]) -> dict[JobName, WorkerId]:
     if not task_ids:
         return {}
+    task_wires = [task_id.to_wire() for task_id in task_ids]
+    placeholders = ",".join("?" for _ in task_wires)
     with queries.snapshot() as snapshot:
-        rows = snapshot.select(
-            TASKS,
-            columns=(TASKS.c.task_id, ATTEMPTS.c.worker_id),
-            joins=(Join(table=ATTEMPTS, on=TASKS.c.task_id == ATTEMPTS.c.task_id),),
-            where=TASKS.c.task_id.in_([task_id.to_wire() for task_id in task_ids])
-            & (TASKS.c.current_attempt_id == ATTEMPTS.c.attempt_id)
-            & ATTEMPTS.c.worker_id.not_null(),
+        rows = snapshot.raw(
+            f"SELECT t.task_id, a.worker_id FROM tasks t "
+            f"JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
+            f"WHERE t.task_id IN ({placeholders}) AND a.worker_id IS NOT NULL",
+            tuple(task_wires),
+            decoders={"task_id": JobName.from_wire, "worker_id": WorkerId},
         )
     return {row.task_id: row.worker_id for row in rows}
 
@@ -1178,12 +1180,8 @@ class Controller:
             persisted = True
         with self._db.snapshot() as snapshot:
             active_worker_ids = {
-                row.worker_id
-                for row in snapshot.select(
-                    WORKERS,
-                    columns=(WORKERS.c.worker_id,),
-                    where=WORKERS.c.active == 1,
-                )
+                WorkerId(str(row[0]))
+                for row in snapshot.fetchall("SELECT w.worker_id FROM workers w WHERE w.active = 1")
             }
         claimed_job_ids = {JobName.from_wire(claim.job_id) for claim in claims.values()}
         claimed_jobs = list(_jobs_by_id(self._db, claimed_job_ids).values()) if claimed_job_ids else []
@@ -1224,7 +1222,6 @@ class Controller:
         )
         reservation_jobs = _jobs_with_reservations(self._db, reservable_states)
         for job in reservation_jobs:
-
             job_wire = job.job_id.to_wire()
             for idx, res_entry in enumerate(job.request.reservation.entries):
                 if (job_wire, idx) in claimed_entries:
@@ -1610,7 +1607,11 @@ class Controller:
         if _HEALTH_SUMMARY_INTERVAL.should_run():
             workers = healthy_active_workers_with_attributes(self._db)
             with self._db.snapshot() as snap:
-                active = snap.count(JOBS, where=JOBS.c.state == cluster_pb2.JOB_STATE_RUNNING)
+                active = snap.fetchone(
+                    "SELECT COUNT(*) FROM jobs j WHERE j.state = ?", (cluster_pb2.JOB_STATE_RUNNING,)
+                )[
+                    0
+                ]  # type: ignore[index]
             pending = len(_schedulable_tasks(self._db))
             logger.info(
                 "Controller status: %d workers (%d failed), %d active jobs, %d pending tasks",
@@ -1647,7 +1648,7 @@ class Controller:
         """Build a map of worker_id to worker status for autoscaler idle tracking."""
         result: WorkerStatusMap = {}
         with self._db.snapshot() as snapshot:
-            workers = snapshot.select(WORKERS, where=WORKERS.c.active == 1)
+            workers = decode_rows(Worker, snapshot.fetchall("SELECT * FROM workers w WHERE w.active = 1"))
         running_by_worker = running_tasks_by_worker(self._db, {worker.worker_id for worker in workers})
         for worker in workers:
             result[worker.worker_id] = WorkerStatus(

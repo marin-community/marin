@@ -17,7 +17,7 @@ import pytest
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.db import TASKS, WORKERS, ControllerDB
+from iris.cluster.controller.db import ControllerDB, Task, Worker, decode_one, decode_rows
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import (
     Assignment,
@@ -256,11 +256,11 @@ class ServiceTestHarness:
 
     def _query_tasks(self, job_id: JobName):
         with self.db.snapshot() as q:
-            return q.select(TASKS, where=TASKS.c.job_id == job_id.to_wire())
+            return decode_rows(Task, q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (job_id.to_wire(),)))
 
     def _query_task(self, task_id: JobName):
         with self.db.snapshot() as q:
-            return q.one(TASKS, where=TASKS.c.task_id == task_id.to_wire())
+            return decode_one(Task, q.fetchall("SELECT * FROM tasks WHERE task_id = ? LIMIT 1", (task_id.to_wire(),)))
 
     def _drive_k8s(self, task_id: JobName, new_state: int) -> None:
         """K8s: drain to create pod, transition pod, sync to apply."""
@@ -312,7 +312,7 @@ class ServiceTestHarness:
     def _current_attempt_info(self, task_id: JobName) -> tuple[WorkerId | None, int]:
         """Read current worker_id and attempt_id from the task_attempts table.
 
-        The TASKS table definition doesn't join with task_attempts, so
+        SELECT * FROM tasks doesn't join with task_attempts, so
         Task.worker_id is always None when read via _query_task. We read
         the attempt row directly instead.
         """
@@ -334,7 +334,7 @@ class ServiceTestHarness:
         # If still PENDING, assign to an available worker.
         if task.state == cluster_pb2.TASK_STATE_PENDING:
             with self.db.snapshot() as q:
-                workers = q.select(WORKERS)
+                workers = decode_rows(Worker, q.fetchall("SELECT * FROM workers"))
             if not workers:
                 raise ValueError("No GCP workers registered -- call register_gcp_worker first")
             self.state.queue_assignments([Assignment(task_id=task_id, worker_id=WorkerId(workers[0].worker_id))])
