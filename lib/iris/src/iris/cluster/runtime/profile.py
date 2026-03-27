@@ -50,7 +50,7 @@ class CpuProfileSpec:
     rate_hz: int
     duration_seconds: int
     pid: str
-    native: bool = False
+    native: bool = True
 
 
 @dataclass(frozen=True)
@@ -70,12 +70,14 @@ class MemoryProfileSpec:
 def resolve_cpu_spec(cpu_config: cluster_pb2.CpuProfile, duration_seconds: int, pid: str) -> CpuProfileSpec:
     py_spy_format, ext = CPU_FORMAT_MAP.get(cpu_config.format, ("flamegraph", "svg"))
     rate_hz = cpu_config.rate_hz if cpu_config.rate_hz > 0 else 20
+    native = cpu_config.native if cpu_config.HasField("native") else True
     return CpuProfileSpec(
         py_spy_format=py_spy_format,
         ext=ext,
         rate_hz=rate_hz,
         duration_seconds=duration_seconds,
         pid=pid,
+        native=native,
     )
 
 
