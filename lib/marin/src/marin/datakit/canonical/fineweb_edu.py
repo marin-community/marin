@@ -35,7 +35,7 @@ def download(
 
 
 def normalize(
-    dl: StepSpec | None = None,
+    dl: StepSpec,
     *,
     subset: str = "data",
     target_partition_bytes: int = 256 * 1024 * 1024,
@@ -44,14 +44,12 @@ def normalize(
     """Normalize FineWeb-Edu to the datakit standard Parquet format.
 
     Args:
-        dl: Download step. Defaults to ``download()``.
+        dl: Download step (from ``download()``).
         subset: Which subset to normalize (``"data"``, ``"sample/10BT"``,
             ``"sample/100BT"``, ``"sample/350BT"``).
         target_partition_bytes: Target size per output partition.
         override_output_path: Override the computed output path.
     """
-    if dl is None:
-        dl = download()
 
     return normalize_step(
         name="normalized/fineweb_edu",
