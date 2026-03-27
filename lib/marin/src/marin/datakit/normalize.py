@@ -159,9 +159,9 @@ def _build_pipeline(
         .group_by(
             key=lambda r: r["id"],
             reducer=keep_first,
+            combiner=combiner,
             sort_by=lambda r: r["id"],
             num_output_shards=num_shards,
-            combiner=combiner,
         )
         .write_parquet(
             f"{output_dir}/part-{{shard:05d}}-of-{{total:05d}}.parquet",
