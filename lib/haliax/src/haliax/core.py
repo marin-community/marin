@@ -1551,7 +1551,17 @@ def _full_flatten(
             new_axes.append(ax)
 
     array = array.rearrange(intermediate_axes)
-    raw_array = array.array.reshape([ax.size for ax in new_axes])
+    new_sizes = [ax.size for ax in new_axes]
+
+    # Explicit mesh axis types require disambiguated output sharding for some reshapes.
+    # When available, pass an out_sharding derived from the resulting named axes.
+    from haliax.partitioning import get_pspec_for_manual_mesh
+
+    out_sharding = get_pspec_for_manual_mesh(new_axes)
+    if out_sharding is not None:
+        raw_array = jax.lax.reshape(array.array, new_sizes=new_sizes, out_sharding=out_sharding)
+    else:
+        raw_array = array.array.reshape(new_sizes)
     return NamedArray(raw_array, tuple(new_axes))
 
 

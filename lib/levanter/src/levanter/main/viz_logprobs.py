@@ -78,8 +78,10 @@ def main(config: VizLmConfig):
 
         @hax.named_jit(axis_resources=compute_axis_mapping)
         def compute_log_probs(model: LmHeadModel, example: LmExample):
-            model = inference_mode(model, True)
-            model = mp.cast_to_compute(model)
+            with hax.axis_mapping(config.trainer.compute_axis_mapping):
+                model = inference_mode(model, True)
+                model = mp.cast_to_compute(model)
+                model = hax.shard_with_axis_mapping(model, compute_axis_mapping)
 
             activations = model.activations(example.tokens, example.attn_mask, key=key)
             logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed)

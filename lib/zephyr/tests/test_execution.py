@@ -256,6 +256,40 @@ def test_no_duplicate_results_on_heartbeat_timeout(actor_context, tmp_path):
     assert coord._completed_shards == 1
 
 
+def test_coordinator_loop_exits_during_interpreter_finalization(actor_context, monkeypatch, tmp_path):
+    """Coordinator loop should stop without logging once Python is finalizing."""
+    from unittest.mock import MagicMock
+
+    import zephyr.execution as execution_mod
+    from zephyr.execution import ZephyrCoordinator
+
+    coord = ZephyrCoordinator()
+    monkeypatch.setattr(execution_mod.sys, "is_finalizing", lambda: True)
+
+    coord.initialize(str(tmp_path / "chunks"), MagicMock())
+
+    assert coord._coordinator_thread is not None
+    coord._coordinator_thread.join(timeout=1.0)
+    assert not coord._coordinator_thread.is_alive()
+    assert coord._shutdown_event.is_set()
+
+
+def test_log_status_stops_on_closed_stream(actor_context, monkeypatch):
+    """Coordinator status logging should stop cleanly if stderr/stdout is already closed."""
+    from zephyr.execution import ZephyrCoordinator
+
+    coord = ZephyrCoordinator()
+    coord._execution_id = "exec-1"
+    coord._stage_name = "stage0-Map"
+    coord._total_shards = 1
+
+    monkeypatch.setattr("zephyr.execution.logger.info", lambda *args, **kwargs: (_ for _ in ()).throw(ValueError()))
+
+    coord._log_status()
+
+    assert coord._shutdown_event.is_set()
+
+
 def test_disk_chunk_write_uses_unique_paths(tmp_path):
     """Each PickleDiskChunk.write() writes to a unique location, avoiding collisions."""
     from zephyr.execution import PickleDiskChunk

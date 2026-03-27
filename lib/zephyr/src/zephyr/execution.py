@@ -19,6 +19,7 @@ import logging
 import os
 import pickle
 import re
+import sys
 from datetime import datetime, timezone
 import threading
 import time
@@ -433,6 +434,9 @@ class ZephyrCoordinator:
         last_log_time = 0.0
 
         while not self._shutdown_event.is_set():
+            if sys.is_finalizing() or getattr(sys.stderr, "closed", False) or getattr(sys.stdout, "closed", False):
+                self._shutdown_event.set()
+                break
             try:
                 self.check_heartbeats()
                 self._check_worker_group()
@@ -470,22 +474,28 @@ class ZephyrCoordinator:
         return self._execution_id != "" and self._total_shards > 0 and self._completed_shards < self._total_shards
 
     def _log_status(self) -> None:
+        if sys.is_finalizing() or getattr(sys.stderr, "closed", False) or getattr(sys.stdout, "closed", False):
+            self._shutdown_event.set()
+            return
         with self._lock:
             states = list(self._worker_states.values())
         alive = sum(1 for s in states if s in {WorkerState.READY, WorkerState.BUSY})
         dead = sum(1 for s in states if s in {WorkerState.FAILED, WorkerState.DEAD})
-        logger.info(
-            "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead",
-            self._execution_id,
-            self._stage_name,
-            self._completed_shards,
-            self._total_shards,
-            len(self._in_flight),
-            len(self._task_queue),
-            alive,
-            len(self._worker_handles),
-            dead,
-        )
+        try:
+            logger.info(
+                "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead",
+                self._execution_id,
+                self._stage_name,
+                self._completed_shards,
+                self._total_shards,
+                len(self._in_flight),
+                len(self._task_queue),
+                alive,
+                len(self._worker_handles),
+                dead,
+            )
+        except ValueError:
+            self._shutdown_event.set()
 
     def _maybe_requeue_worker_task(self, worker_id: str) -> None:
         """If the worker has a task in-flight, re-queue it and mark the worker as failed."""
