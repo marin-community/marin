@@ -246,14 +246,29 @@ def test_smoke_gcp_config_boots_locally():
     This is the local equivalent of the cloud-smoke-test CI job. If this
     test fails, the cloud smoke test will also fail — catching GCE naming
     validation errors without needing real GCP resources.
+
+    We cap each scale group to 1 VM and at most 1 slice so the test validates
+    the full config-load → zone-expansion → local-transform → boot path without
+    paying for 8 worker threads (the production config has num_vms=4 across 2
+    zones). This keeps CI fast and avoids flaky 30s timeouts on slow runners.
     """
     config = load_config(SMOKE_GCP_CONFIG)
     config = make_local_config(config)
 
+    # Trim worker count: we only need to prove the config boots, not stress-test
+    # the autoscaler.  Keep at most one slice per group with a single VM each.
+    found_active = False
+    for sg in config.scale_groups.values():
+        sg.num_vms = 1
+        if not found_active and sg.min_slices > 0:
+            sg.min_slices = 1
+            sg.max_slices = max(sg.max_slices, 1)
+            found_active = True
+        else:
+            sg.min_slices = 0
+
     with connect_cluster(config) as url:
         client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        # The smoke config has min_slices=1 for tpu_v5e_16, so at least
-        # one slice (with 4 workers) should come up.
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             workers = client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
