@@ -29,7 +29,9 @@ from ray.job_submission import JobSubmissionClient
 from marin.cluster.config import find_config_by_region
 from fray.v1.cluster.ray import DashboardConfig, ray_dashboard
 from fray.v1.cluster.ray.deps import build_runtime_env_for_packages, accelerator_type_from_extra, AcceleratorType
-from iris.cluster.client.bundle import create_workspace_zip
+from iris.cluster.client.bundle import create_workspace_dir
+
+RAY_RUN_EXCLUDE = re.compile(r"^docs(/|$)|\.pack$|^lib/levanter/docs(/|$)")
 from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -157,13 +159,7 @@ async def submit_and_track_job(
     logger.info(f"env_vars: {json.dumps(env_vars, indent=4)}")
 
     runtime_dict = {
-        "working_dir": create_workspace_zip(
-            current_dir,
-            exclude_dirs={"docs"},
-            exclude_extensions={".pack"},
-            exclude_subpaths={"lib/levanter/docs"},
-            max_size_bytes=None,
-        ),
+        "working_dir": create_workspace_dir(current_dir, exclude=RAY_RUN_EXCLUDE),
         "config": {"setup_timeout_seconds": 1800},
     }
 

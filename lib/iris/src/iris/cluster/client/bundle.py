@@ -6,6 +6,8 @@
 import atexit
 import logging
 import os
+import re
+import shutil
 import subprocess
 import tempfile
 import zipfile
@@ -16,26 +18,29 @@ logger = logging.getLogger(__name__)
 # Maximum bundle size in bytes (25 MB)
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
 
-EXCLUDE_EXTENSIONS = {".mov", ".pyc"}
-
-EXCLUDE_DIRS = {
-    "__pycache__",
-    ".git",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".venv",
-    "node_modules",
-    "venv",
-}
-
-EXCLUDE_SUBPATHS = {
-    "docs/figures",
-    "docs/images",
-    "docs/reports",
-    "docs/static",
-    "tests/snapshot",
-}
+# Default exclude pattern applied to all bundles.  Matches against the
+# *relative* path (forward-slash separated, no leading slash).
+DEFAULT_EXCLUDE = re.compile(
+    r"""
+      \.mov$                        # video files
+    | \.pyc$                        # bytecode
+    | \.egg-info(/|$)               # egg metadata
+    | (^|/)__pycache__(/|$)         # pycache at any depth
+    | (^|/)\.git(/|$)               # .git at any depth
+    | (^|/)\.mypy_cache(/|$)
+    | (^|/)\.pytest_cache(/|$)
+    | (^|/)\.ruff_cache(/|$)
+    | (^|/)\.venv(/|$)
+    | (^|/)node_modules(/|$)
+    | (^|/)venv(/|$)
+    | ^docs/figures(/|$)
+    | ^docs/images(/|$)
+    | ^docs/reports(/|$)
+    | ^docs/static(/|$)
+    | ^tests/snapshot(/|$)
+    """,
+    re.VERBOSE,
+)
 
 # Glob patterns for generated files that are gitignored but required at runtime.
 # These are produced by build hooks (e.g. hatch_build.py protobuf generation)
@@ -51,43 +56,109 @@ GENERATED_ARTIFACT_GLOBS = [
 ]
 
 
-def _should_exclude(
-    relative: Path,
-    extra_dirs: set[str] | None = None,
-    extra_extensions: set[str] | None = None,
-    extra_subpaths: set[str] | None = None,
-) -> bool:
-    """Check whether a relative path should be excluded from the bundle.
-
-    Default EXCLUDE_DIRS (e.g. __pycache__, .git) are matched at any depth.
-    Caller-supplied extra_dirs are matched only against the top-level directory
-    component, mirroring Ray's excludes behavior (e.g. "tests/" excludes only
-    the top-level tests directory, not lib/foo/tests/).
-    """
-    all_extensions = EXCLUDE_EXTENSIONS | (extra_extensions or set())
-    all_subpaths = EXCLUDE_SUBPATHS | (extra_subpaths or set())
-
-    if relative.suffix in all_extensions:
-        return True
-    # e.g. foo.egg-info
-    if any(part.endswith(".egg-info") for part in relative.parts):
-        return True
-    # Default dirs excluded at any depth
-    if any(part in EXCLUDE_DIRS for part in relative.parts):
-        return True
-    # Caller-supplied dirs excluded only at the top level
-    if extra_dirs and relative.parts and relative.parts[0] in extra_dirs:
-        return True
-    rel_str = str(relative)
-    return any(subpath in rel_str for subpath in all_subpaths)
+def _should_exclude(relative: str, exclude: re.Pattern[str]) -> bool:
+    return bool(exclude.search(relative))
 
 
-def get_git_non_ignored_files(
-    workspace: Path,
+def _merge_exclude(extra: re.Pattern[str] | None) -> re.Pattern[str]:
+    if extra is None:
+        return DEFAULT_EXCLUDE
+    return re.compile(f"(?:{DEFAULT_EXCLUDE.pattern})|(?:{extra.pattern})", re.VERBOSE)
+
+
+def collect_workspace_files(
+    workspace: str | Path,
     *,
-    exclude_dirs: set[str] | None = None,
-    exclude_extensions: set[str] | None = None,
-    exclude_subpaths: set[str] | None = None,
+    exclude: re.Pattern[str] | None = None,
+) -> list[Path]:
+    """Collect the list of files to include in a workspace bundle.
+
+    Uses git ls-files when available (respecting .gitignore), then adds back
+    generated protobuf artifacts that are gitignored but needed at runtime.
+    Falls back to pattern-based exclusion when git is unavailable.
+
+    Args:
+        workspace: Root directory to bundle.
+        exclude: Extra regex to exclude (merged with DEFAULT_EXCLUDE).
+
+    Returns:
+        Sorted list of absolute paths.
+    """
+    workspace = Path(workspace)
+    merged = _merge_exclude(exclude)
+
+    git_files = _get_git_non_ignored_files(workspace, merged)
+    if git_files is not None:
+        _include_generated_build_artifacts(workspace, git_files, merged)
+        return sorted(f for f in git_files if f.is_file())
+
+    return sorted(
+        f for f in workspace.rglob("*") if f.is_file() and not _should_exclude(str(f.relative_to(workspace)), merged)
+    )
+
+
+def create_workspace_zip(
+    workspace: str | Path,
+    *,
+    exclude: re.Pattern[str] | None = None,
+    max_size_bytes: int | None = MAX_BUNDLE_SIZE_BYTES,
+) -> bytes:
+    """Create a zip of the workspace and return the raw bytes.
+
+    Suitable for Iris bundle uploads where the caller sends bytes directly.
+    """
+    workspace = Path(workspace)
+    files = collect_workspace_files(workspace, exclude=exclude)
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".zip", prefix="workspace_")
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for file in files:
+                zf.write(file, file.relative_to(workspace))
+        buf = Path(tmp_path).read_bytes()
+    finally:
+        os.unlink(tmp_path)
+
+    if max_size_bytes is not None and len(buf) > max_size_bytes:
+        size_mb = len(buf) / (1024 * 1024)
+        max_mb = max_size_bytes / (1024 * 1024)
+        raise ValueError(
+            f"Bundle size {size_mb:.1f}MB exceeds maximum {max_mb:.0f}MB. "
+            "Consider excluding large files or using .gitignore."
+        )
+
+    return buf
+
+
+def create_workspace_dir(
+    workspace: str | Path,
+    *,
+    exclude: re.Pattern[str] | None = None,
+) -> str:
+    """Copy workspace files into a temporary directory for Ray's working_dir.
+
+    Ray's JobSubmissionClient expects a directory path: it zips and uploads it
+    internally. The temp directory is cleaned up at process exit via atexit.
+    """
+    workspace = Path(workspace)
+    files = collect_workspace_files(workspace, exclude=exclude)
+
+    tmp_dir = tempfile.mkdtemp(prefix="workspace_")
+    atexit.register(lambda d=tmp_dir: shutil.rmtree(d, ignore_errors=True))
+
+    for file in files:
+        rel = file.relative_to(workspace)
+        dest = Path(tmp_dir) / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(file, dest)
+
+    return tmp_dir
+
+
+def _get_git_non_ignored_files(
+    workspace: Path,
+    exclude: re.Pattern[str],
 ) -> set[Path] | None:
     """Get files that are not ignored by git.
 
@@ -101,120 +172,31 @@ def get_git_non_ignored_files(
             text=True,
             check=True,
         )
-        files = [Path(f) for f in result.stdout.splitlines() if f]
-        files = [f for f in files if not _should_exclude(f, exclude_dirs, exclude_extensions, exclude_subpaths)]
+        files = [f for f in result.stdout.splitlines() if f and not _should_exclude(f, exclude)]
         return {workspace / f for f in files}
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         logger.debug("Git not available, using pattern-based exclusion: %s", e)
         return None
 
 
-def include_generated_build_artifacts(
+def _include_generated_build_artifacts(
     workspace: Path,
     files: set[Path],
-    *,
-    exclude_dirs: set[str] | None = None,
-    exclude_extensions: set[str] | None = None,
-    exclude_subpaths: set[str] | None = None,
+    exclude: re.Pattern[str],
 ) -> None:
     """Add generated build artifacts that exist on disk but are gitignored."""
     added = 0
     for pattern in GENERATED_ARTIFACT_GLOBS:
         for path in workspace.glob(pattern):
-            if (
-                path.is_file()
-                and path not in files
-                and not _should_exclude(path.relative_to(workspace), exclude_dirs, exclude_extensions, exclude_subpaths)
-            ):
+            if path.is_file() and path not in files and not _should_exclude(str(path.relative_to(workspace)), exclude):
                 files.add(path)
                 added += 1
     if added:
         logger.debug("Included %d generated build artifact(s) in bundle", added)
 
 
-def create_workspace_zip(
-    workspace: str | Path,
-    *,
-    exclude_dirs: set[str] | None = None,
-    exclude_extensions: set[str] | None = None,
-    exclude_subpaths: set[str] | None = None,
-    max_size_bytes: int | None = MAX_BUNDLE_SIZE_BYTES,
-) -> str:
-    """Create a zip of the workspace suitable for Ray's working_dir or Iris bundles.
-
-    Uses git ls-files to determine which files to include (respecting .gitignore),
-    then adds back generated protobuf artifacts that are gitignored but needed at
-    runtime. When git is unavailable, falls back to pattern-based exclusion.
-
-    Args:
-        workspace: Root directory to bundle.
-        exclude_dirs: Additional directory names to exclude (merged with defaults).
-        exclude_extensions: Additional file extensions to exclude (merged with defaults).
-        exclude_subpaths: Additional subpath strings to exclude (merged with defaults).
-        max_size_bytes: Maximum allowed zip size. Pass None to disable the check.
-
-    Returns:
-        Path to the created zip file.  The file is cleaned up automatically
-        at process exit via atexit.  Ray accepts zip file paths directly as
-        working_dir, so no intermediate directory is needed.
-    """
-    workspace = Path(workspace)
-
-    git_files = get_git_non_ignored_files(
-        workspace,
-        exclude_dirs=exclude_dirs,
-        exclude_extensions=exclude_extensions,
-        exclude_subpaths=exclude_subpaths,
-    )
-    if git_files is not None:
-        include_generated_build_artifacts(
-            workspace,
-            git_files,
-            exclude_dirs=exclude_dirs,
-            exclude_extensions=exclude_extensions,
-            exclude_subpaths=exclude_subpaths,
-        )
-
-    # Create a temp *file* (not directory) so Ray can use the path directly as
-    # working_dir.  Register cleanup on process exit.
-    fd, zip_path_str = tempfile.mkstemp(suffix=".zip", prefix="workspace_")
-    os.close(fd)
-    zip_path = Path(zip_path_str)
-    atexit.register(lambda p=zip_path_str: os.unlink(p) if os.path.exists(p) else None)
-
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        if git_files is not None:
-            for file in git_files:
-                if file.is_file():
-                    zf.write(file, file.relative_to(workspace))
-        else:
-            for file in workspace.rglob("*"):
-                rel = file.relative_to(workspace)
-                if file.is_file() and not _should_exclude(rel, exclude_dirs, exclude_extensions, exclude_subpaths):
-                    zf.write(file, rel)
-
-    if max_size_bytes is not None:
-        zip_size = zip_path.stat().st_size
-        if zip_size > max_size_bytes:
-            zip_size_mb = zip_size / (1024 * 1024)
-            max_size_mb = max_size_bytes / (1024 * 1024)
-            raise ValueError(
-                f"Bundle size {zip_size_mb:.1f}MB exceeds maximum {max_size_mb:.0f}MB. "
-                "Consider excluding large files or using .gitignore."
-            )
-
-    return str(zip_path)
-
-
 class BundleCreator:
-    """Helper for creating workspace bundles for Iris job submission.
-
-    Bundles a user's workspace directory (containing pyproject.toml, uv.lock,
-    and source code) into a zip file for job execution.
-
-    The workspace must already have iris as a dependency in pyproject.toml.
-    If uv.lock doesn't exist, it will be generated.
-    """
+    """Helper for creating workspace bundles for Iris job submission."""
 
     def __init__(self, workspace: Path):
         self._workspace = workspace
@@ -228,5 +210,4 @@ class BundleCreator:
         Raises:
             ValueError: If bundle size exceeds MAX_BUNDLE_SIZE_BYTES
         """
-        zip_path = create_workspace_zip(self._workspace, max_size_bytes=MAX_BUNDLE_SIZE_BYTES)
-        return Path(zip_path).read_bytes()
+        return create_workspace_zip(self._workspace, max_size_bytes=MAX_BUNDLE_SIZE_BYTES)

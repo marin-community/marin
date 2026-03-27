@@ -276,13 +276,13 @@ class RayCluster(Cluster):
                 pip_packages=list(environment.pip_packages),
                 env_vars=env_vars,
             )
-            from iris.cluster.client.bundle import create_workspace_zip  # lazy: avoid PyPI iris conflict on workers
+            import re
 
-            runtime_env["working_dir"] = create_workspace_zip(
+            from iris.cluster.client.bundle import create_workspace_dir  # lazy: avoid PyPI iris conflict on workers
+
+            runtime_env["working_dir"] = create_workspace_dir(
                 environment.workspace,
-                exclude_dirs={"tests", "docs"},
-                exclude_extensions={".pack"},
-                max_size_bytes=None,
+                exclude=re.compile(r"^(tests|docs)(/|$)|\.pack$"),
             )
             runtime_env["config"] = {"setup_timeout_seconds": 1800}
         else:
