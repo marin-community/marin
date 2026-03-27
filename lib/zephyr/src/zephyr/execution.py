@@ -1222,6 +1222,34 @@ class _CoordinatorJobConfig:
     pipeline_id: int
 
 
+def _terminate_previous_attempt_workers(
+    config: _CoordinatorJobConfig,
+    current_attempt: int,
+) -> None:
+    """Terminate worker jobs from previous coordinator attempts.
+
+    When the coordinator retries after preemption, the old coordinator process
+    may still be alive (heartbeat failure ≠ process death). Its finally block
+    calls worker_group.shutdown(), which would kill the NEW workers if the job
+    name is reused. Using attempt-scoped names prevents this, but we also
+    explicitly clean up old workers here in case the cascade from
+    record_heartbeat_failure didn't dispatch kill RPCs (known gap: fail_heartbeat
+    drops tasks_to_kill).
+    """
+    from iris.client.client import get_iris_ctx
+
+    ctx = get_iris_ctx()
+    if ctx is None or ctx.client is None or ctx.job_id is None:
+        return
+
+    for prev_attempt in range(current_attempt):
+        old_name = f"zephyr-{config.name}-p{config.pipeline_id}-workers-a{prev_attempt}"
+        old_job_id = ctx.job_id.child(old_name)
+        with suppress(Exception):
+            ctx.client.terminate(old_job_id)
+            logger.info("Terminated previous-attempt workers: %s", old_job_id)
+
+
 def _run_coordinator_job(config_path: str, result_path: str) -> None:
     """Entrypoint for the coordinator job.
 
@@ -1231,16 +1259,21 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
     maintenance loop (no separate watchdog thread).
     """
     from fray.v2.client import current_client
+    from iris.cluster.client.job_info import get_job_info
 
     logger.info("Loading coordinator config from %s", config_path)
     with open_url(config_path, "rb") as f:
         config: _CoordinatorJobConfig = cloudpickle.loads(f.read())
 
+    job_info = get_job_info()
+    attempt_id = job_info.attempt_id if job_info else 0
+
     logger.info(
-        "Coordinator job starting: name=%s, execution_id=%s, pipeline=%d",
+        "Coordinator job starting: name=%s, execution_id=%s, pipeline=%d, attempt=%d",
         config.name,
         config.execution_id,
         config.pipeline_id,
+        attempt_id,
     )
 
     client = current_client()
@@ -1265,11 +1298,19 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
     worker_group = None
 
     if actual_workers > 0:
+        # Kill workers from previous attempts. They may still be running if
+        # the old coordinator process outlived the heartbeat failure detector.
+        if attempt_id > 0:
+            _terminate_previous_attempt_workers(config, attempt_id)
+
+        # Worker name includes attempt ID so stale coordinator processes
+        # (from previous attempts) can't kill this attempt's workers.
+        worker_name = f"zephyr-{config.name}-p{config.pipeline_id}-workers-a{attempt_id}"
         logger.info("Starting %d workers (max=%d, shards=%d)", actual_workers, config.max_workers, num_shards)
         worker_group = client.create_actor_group(
             ZephyrWorker,
             coordinator,
-            name=f"zephyr-{config.name}-p{config.pipeline_id}-workers",
+            name=worker_name,
             count=actual_workers,
             resources=config.worker_resources,
             actor_config=ActorConfig(max_task_retries=10),
