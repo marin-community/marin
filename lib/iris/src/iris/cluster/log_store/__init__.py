@@ -20,6 +20,7 @@ from iris.cluster.log_store._types import (
     PROCESS_LOG_KEY,
     LogReadResult,
     _EST_BYTES_PER_ROW,
+    build_log_source,
     task_log_key,
 )
 from iris.logging import str_to_log_level
@@ -85,5 +86,6 @@ __all__ = [
     "LogReadResult",
     "LogStore",
     "LogStoreHandler",
+    "build_log_source",
     "task_log_key",
 ]

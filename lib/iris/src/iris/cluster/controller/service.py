@@ -65,10 +65,10 @@ from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.controller.provider import ProviderError
-from iris.cluster.log_store import LogStore, task_log_key
+from iris.cluster.log_store import LogStore, build_log_source
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
-from iris.cluster.types import JobName, TaskAttempt, WorkerId
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, logging_pb2, vm_pb2
 from iris.rpc.proto_utils import job_state_name, task_state_name
 from iris.time_utils import Timestamp, Timer
@@ -1370,92 +1370,50 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.GetTaskLogsRequest,
         ctx: RequestContext,
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
-        """Get logs for a task or all tasks in a job from the in-memory log store.
+        """DEPRECATED: use FetchLogs with regex patterns instead. Scheduled for removal 2026-05-01.
 
-        Logs are forwarded from workers via heartbeat and accumulated in the
-        controller's log store.  No remote storage I/O occurs.
-
-        If request.id ends in a numeric index, treat as single task.
-        Otherwise treat as job ID and fetch logs from all tasks.
-
-        When attempt_id is specified (>= 0), fetches logs only from that specific attempt.
+        Forwards to fetch_logs internally, wrapping the response in the legacy format.
         """
         job_name = JobName.from_wire(request.id)
-        max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
-        requested_attempt_id = request.attempt_id
-        log_store = self._log_store
 
-        # Collect child job statuses when requested (for streaming UI).
-        child_job_statuses: list[cluster_pb2.JobStatus] = []
-        if not job_name.is_task and request.include_children:
-            jobs = _descendant_jobs(self._db, job_name)
-            for job in jobs:
-                child_status = cluster_pb2.JobStatus(
-                    job_id=job.job_id.to_wire(),
-                    state=job.state,
-                    exit_code=job.exit_code or 0,
-                    error=job.error or "",
-                )
-                if job.finished_at:
-                    child_status.finished_at.CopyFrom(job.finished_at.to_proto())
-                child_job_statuses.append(child_status)
-
-        # Build the log key or prefix for the query.
-        job_wire = job_name.to_wire()
-        cursor = request.cursor
-        substring_filter = request.substring
-
-        if job_name.is_task and requested_attempt_id >= 0:
-            # Exact key: single task + single attempt
-            log_result = log_store.get_logs(
-                task_log_key(TaskAttempt(task_id=job_name, attempt_id=requested_attempt_id)),
-                since_ms=request.since_ms,
-                cursor=cursor,
-                substring_filter=substring_filter,
-                max_lines=max_lines,
-                tail=request.tail,
-                min_level=request.min_level,
-            )
-            for entry in log_result.entries:
-                entry.attempt_id = requested_attempt_id
-        elif job_name.is_task:
-            # All attempts of a single task: prefix "task_wire:"
-            log_result = log_store.get_logs_by_prefix(
-                job_wire + ":",
-                cursor=cursor,
-                since_ms=request.since_ms,
-                substring_filter=substring_filter,
-                max_lines=max_lines,
-                tail=request.tail,
-                min_level=request.min_level,
-            )
+        # Build the regex source pattern from the legacy request fields
+        if job_name.is_task:
+            source = build_log_source(job_name, request.attempt_id)
+        elif request.include_children:
+            source = build_log_source(job_name)
         else:
-            # All tasks in a job: prefix "job_wire/"
-            # When include_children is False, use shallow=True to exclude
-            # descendant job logs (only match direct task keys).
-            log_result = log_store.get_logs_by_prefix(
-                job_wire + "/",
-                cursor=cursor,
-                since_ms=request.since_ms,
-                substring_filter=substring_filter,
-                max_lines=max_lines,
-                tail=request.tail,
-                min_level=request.min_level,
-                shallow=not request.include_children,
-            )
+            # Direct tasks only: match keys like /user/job/0:attempt but not
+            # /user/job/child-job/0:attempt. Use \d+ to restrict to numeric
+            # task indices, pushing the filter into DuckDB.
+            escaped_wire = re.escape(job_name.to_wire())
+            source = f"{escaped_wire}/\\d+:.*"
 
-        truncated = max_lines > 0 and len(log_result.entries) >= max_lines
+        max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
+
+        fetch_request = cluster_pb2.FetchLogsRequest(
+            source=source,
+            since_ms=request.since_ms,
+            cursor=request.cursor,
+            substring=request.substring,
+            max_lines=max_lines,
+            tail=request.tail,
+            min_level=request.min_level,
+        )
+
+        fetch_response = self.fetch_logs(fetch_request, ctx)
+        entries = fetch_response.entries
 
         batch = cluster_pb2.Controller.TaskLogBatch(
             task_id=request.id,
-            logs=log_result.entries,
+            logs=entries,
         )
+
+        truncated = max_lines > 0 and len(fetch_response.entries) >= max_lines
 
         return cluster_pb2.Controller.GetTaskLogsResponse(
             task_logs=[batch],
             truncated=truncated,
-            child_job_statuses=child_job_statuses,
-            cursor=log_result.cursor,
+            cursor=fetch_response.cursor,
         )
 
     # --- Profiling ---
