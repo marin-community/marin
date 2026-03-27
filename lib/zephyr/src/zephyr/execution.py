@@ -529,7 +529,7 @@ class ZephyrCoordinator:
                 return None
 
             if not self._task_queue:
-                if self._is_last_stage:
+                if self._is_last_stage and not self._in_flight:
                     self._worker_states[worker_id] = WorkerState.DEAD
                     return "SHUTDOWN"
                 return None

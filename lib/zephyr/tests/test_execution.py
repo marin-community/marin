@@ -606,9 +606,43 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
     _task, attempt, _config = pulled
     coord.report_result("worker-A", 0, attempt, TaskResult(shard=ListShard(refs=[])))
 
-    # Queue empty on last stage -> SHUTDOWN
+    # Queue empty on last stage, nothing in-flight -> SHUTDOWN
     result = coord.pull_task("worker-A")
     assert result == "SHUTDOWN"
+
+
+def test_last_shard_requeued_after_worker_crash(actor_context, tmp_path):
+    """Surviving workers pick up requeued shards after a crash on the last stage. #4200."""
+    from zephyr.execution import ListShard, ShardTask, TaskResult, ZephyrCoordinator
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    tasks = [
+        ShardTask(shard_idx=i, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test")
+        for i in range(2)
+    ]
+    coord.start_stage("last-stage", tasks, is_last_stage=True)
+
+    coord.heartbeat("worker-A")
+    coord.heartbeat("worker-B")
+    pulled_a = coord.pull_task("worker-A")
+    coord.pull_task("worker-B")  # put shard 1 in-flight
+
+    # Worker A finishes
+    _task_a, attempt_a, _ = pulled_a
+    coord.report_result("worker-A", _task_a.shard_idx, attempt_a, TaskResult(shard=ListShard(refs=[])))
+
+    # Worker B crashes. Freshen worker-A, expire worker-B.
+    coord.heartbeat("worker-A")
+    coord.check_heartbeats(timeout=0)
+
+    # Worker A picks up the requeued shard and completes the pipeline.
+    pulled = coord.pull_task("worker-A")
+    assert pulled not in (None, "SHUTDOWN")
+    _task, attempt, _ = pulled
+    coord.report_result("worker-A", _task.shard_idx, attempt, TaskResult(shard=ListShard(refs=[])))
+    assert coord.pull_task("worker-A") == "SHUTDOWN"
 
 
 def test_coordinator_loop_crash_aborts_pipeline(actor_context, tmp_path):
