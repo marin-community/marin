@@ -401,6 +401,80 @@ def _compute_max_promotions(capacity: ClusterCapacity | None, active_count: int)
 
 
 # =============================================================================
+# Batch helpers for apply_heartbeats_batch
+# =============================================================================
+
+
+def _batch_worker_health(
+    cur: TransactionCursor,
+    requests: list["HeartbeatApplyRequest"],
+    now_ms: int,
+) -> None:
+    """Batch-update worker health, resource snapshots, and history."""
+    worker_ids = [str(req.worker_id) for req in requests]
+    if not worker_ids:
+        return
+
+    placeholders = ",".join("?" * len(worker_ids))
+    rows = cur.execute(
+        f"SELECT worker_id FROM workers WHERE worker_id IN ({placeholders})",
+        tuple(worker_ids),
+    ).fetchall()
+    existing = {str(r["worker_id"]) for r in rows}
+
+    health_params = []
+    history_params = []
+    for req in requests:
+        wid = str(req.worker_id)
+        if wid not in existing:
+            continue
+        snapshot_payload = (
+            req.worker_resource_snapshot.SerializeToString() if req.worker_resource_snapshot is not None else None
+        )
+        health_params.append((now_ms, snapshot_payload, wid))
+        if snapshot_payload is not None:
+            history_params.append((wid, snapshot_payload, now_ms))
+
+    if health_params:
+        cur.executemany(
+            "UPDATE workers SET healthy = 1, active = 1, consecutive_failures = 0, "
+            "last_heartbeat_ms = ?, resource_snapshot_proto = COALESCE(?, resource_snapshot_proto) "
+            "WHERE worker_id = ?",
+            health_params,
+        )
+    if history_params:
+        cur.executemany(
+            "INSERT INTO worker_resource_history(worker_id, snapshot_proto, timestamp_ms) " "VALUES (?, ?, ?)",
+            history_params,
+        )
+        for wid, _, _ in history_params:
+            cutoff = cur.execute(
+                "SELECT id FROM worker_resource_history " "WHERE worker_id = ? ORDER BY id DESC LIMIT 1 OFFSET ?",
+                (wid, WORKER_RESOURCE_HISTORY_RETENTION),
+            ).fetchone()
+            if cutoff:
+                cur.execute(
+                    "DELETE FROM worker_resource_history WHERE worker_id = ? AND id <= ?",
+                    (wid, cutoff["id"]),
+                )
+
+
+def _bulk_fetch_tasks(cur: TransactionCursor, task_ids: list[str]) -> dict[str, Any]:
+    """Fetch task rows for all given IDs in chunked IN queries."""
+    result: dict[str, Any] = {}
+    for chunk_start in range(0, len(task_ids), 900):
+        chunk = task_ids[chunk_start : chunk_start + 900]
+        ph = ",".join("?" * len(chunk))
+        rows = cur.execute(
+            f"SELECT * FROM tasks WHERE task_id IN ({ph})",
+            tuple(chunk),
+        ).fetchall()
+        for r in rows:
+            result[str(r["task_id"])] = r
+    return result
+
+
+# =============================================================================
 # Controller Transitions
 # =============================================================================
 
@@ -947,19 +1021,14 @@ class ControllerTransitions:
             tasks_to_kill=set(), has_real_dispatch=has_real_dispatch, accepted=accepted, rejected=rejected
         )
 
-    def _apply_single_heartbeat(
-        self, cur: TransactionCursor, req: HeartbeatApplyRequest, now_ms: int
-    ) -> tuple[TxResult, list[tuple[str, list[logging_pb2.LogEntry]]]]:
-        """Process one heartbeat within an existing transaction.
+    def _update_worker_health(self, cur: TransactionCursor, req: HeartbeatApplyRequest, now_ms: int) -> bool:
+        """Update worker health, resource snapshot, and history.
 
-        Returns (TxResult, pending_logs) so the caller can flush logs after commit.
+        Returns False if the worker doesn't exist (caller should bail).
         """
-        pending_logs: list[tuple[str, list[logging_pb2.LogEntry]]] = []
-        tasks_to_kill: set[JobName] = set()
-
         worker = cur.execute("SELECT * FROM workers WHERE worker_id = ?", (str(req.worker_id),)).fetchone()
         if worker is None:
-            return TxResult(), pending_logs
+            return False
 
         snapshot_payload = (
             req.worker_resource_snapshot.SerializeToString() if req.worker_resource_snapshot is not None else None
@@ -983,12 +1052,26 @@ class ControllerTransitions:
                     "DELETE FROM worker_resource_history WHERE worker_id = ? AND id <= ?",
                     (str(req.worker_id), cutoff["id"]),
                 )
+        return True
 
+    def _apply_task_transitions(
+        self,
+        cur: TransactionCursor,
+        req: HeartbeatApplyRequest,
+        now_ms: int,
+    ) -> tuple[TxResult, list[tuple[str, list[logging_pb2.LogEntry]]]]:
+        """Apply task state updates for one worker within an existing transaction.
+
+        Handles the full state machine: state transitions, retry logic,
+        coscheduled cascade, resource decommit, endpoint cleanup, and
+        deduplicated job recompute.
+
+        Returns (TxResult, pending_logs) so the caller can flush logs after commit.
+        """
+        pending_logs: list[tuple[str, list[logging_pb2.LogEntry]]] = []
+        tasks_to_kill: set[JobName] = set()
         cascaded_jobs: set[JobName] = set()
-        # Track jobs that need recomputation. Deduplicate so we only recompute
-        # once per job instead of once per task (2100 tasks / 22 jobs = 95x savings).
         jobs_to_recompute: set[JobName] = set()
-        # Cache job request protos to avoid re-fetching and re-parsing per task.
         job_req_cache: dict[str, cluster_pb2.Controller.LaunchJobRequest | None] = {}
 
         for update in req.updates:
@@ -1019,7 +1102,6 @@ class ControllerTransitions:
             prior_state = int(task_row["state"])
 
             # Fast path: task already in the reported state with no new data to apply.
-            # Skip the SELECT attempt + 2 UPDATEs + job recompute entirely.
             has_new_data = (
                 update.error is not None
                 or update.exit_code is not None
@@ -1234,7 +1316,9 @@ class ControllerTransitions:
         """Apply a batch of worker task updates atomically."""
         with self._db.transaction() as cur:
             now_ms = Timestamp.now().epoch_ms()
-            result, pending_logs = self._apply_single_heartbeat(cur, req, now_ms)
+            if not self._update_worker_health(cur, req, now_ms):
+                return TxResult()
+            result, pending_logs = self._apply_task_transitions(cur, req, now_ms)
 
         if pending_logs and self._log_store is not None:
             self._log_store.append_batch(pending_logs)
@@ -1244,21 +1328,107 @@ class ControllerTransitions:
     def apply_heartbeats_batch(self, requests: list[HeartbeatApplyRequest]) -> list[HeartbeatApplyResult]:
         """Apply multiple heartbeats in a single transaction.
 
-        This avoids per-worker fsync overhead when processing many workers at once.
+        Two-pass architecture to minimise SQL round-trips:
+
+        1. Bulk-fetch all referenced task rows, classify each update as
+           *steady-state* (same state, no error/exit_code) or *transition*.
+        2a. Batch steady-state resource_usage writes via ``executemany``.
+        2b. Feed only transitions through ``_apply_task_transitions``, which
+            retains the full state machine (retry, cascade, decommit, etc.).
+
+        Worker health updates are also batched via ``executemany``.
         """
         all_pending_logs: list[tuple[str, list[logging_pb2.LogEntry]]] = []
         results: list[HeartbeatApplyResult] = []
 
         with self._db.transaction() as cur:
             now_ms = Timestamp.now().epoch_ms()
+
+            # ── Batch worker health updates ───────────────────────────────
+            _batch_worker_health(cur, requests, now_ms)
+
+            # ── Bulk-fetch task rows for classification ───────────────────
+            all_task_ids: list[str] = []
             for req in requests:
-                tx_result, pending_logs = self._apply_single_heartbeat(cur, req, now_ms)
+                for update in req.updates:
+                    if update.new_state not in (
+                        cluster_pb2.TASK_STATE_UNSPECIFIED,
+                        cluster_pb2.TASK_STATE_PENDING,
+                    ):
+                        all_task_ids.append(update.task_id.to_wire())
+
+            task_row_map = _bulk_fetch_tasks(cur, all_task_ids)
+
+            # ── Classify and split ────────────────────────────────────────
+            resource_usage_params: list[tuple[bytes, str]] = []
+            # Requests that need the full state machine, with steady-state
+            # updates stripped out.
+            transition_requests: list[HeartbeatApplyRequest] = []
+
+            for req in requests:
+                transition_updates: list[TaskUpdate] = []
+                for update in req.updates:
+                    task_id_wire = update.task_id.to_wire()
+                    task_row = task_row_map.get(task_id_wire)
+                    if task_row is None:
+                        continue
+
+                    prior_state = int(task_row["state"])
+                    is_state_change = update.new_state != prior_state
+                    has_terminal_data = update.error is not None or update.exit_code is not None
+
+                    if is_state_change or has_terminal_data:
+                        transition_updates.append(update)
+                    else:
+                        # Steady-state: check finished / stale attempt before writing.
+                        task = self._db.decode_task(task_row)
+                        if task.is_finished():
+                            continue
+                        if update.attempt_id != int(task_row["current_attempt_id"]):
+                            continue
+                        if update.resource_usage is not None:
+                            resource_usage_params.append((update.resource_usage.SerializeToString(), task_id_wire))
+                        if update.log_entries and self._log_store is not None:
+                            all_pending_logs.append(
+                                (
+                                    task_log_key(TaskAttempt(task_id=update.task_id, attempt_id=update.attempt_id)),
+                                    update.log_entries,
+                                )
+                            )
+
+                if transition_updates:
+                    transition_requests.append(
+                        HeartbeatApplyRequest(
+                            worker_id=req.worker_id,
+                            worker_resource_snapshot=None,  # already handled above
+                            updates=transition_updates,
+                        )
+                    )
+
+            # ── Pass 2a: batch resource_usage writes ──────────────────────
+            if resource_usage_params:
+                cur.executemany(
+                    "UPDATE tasks SET resource_usage_proto = ? WHERE task_id = ?",
+                    resource_usage_params,
+                )
+
+            # ── Pass 2b: transitions via existing state machine ───────────
+            for req in transition_requests:
+                tx_result, pending_logs = self._apply_task_transitions(cur, req, now_ms)
                 all_pending_logs.extend(pending_logs)
-                results.append(HeartbeatApplyResult(tasks_to_kill=tx_result.tasks_to_kill, action=HeartbeatAction.OK))
+                results.append(
+                    HeartbeatApplyResult(
+                        tasks_to_kill=tx_result.tasks_to_kill,
+                        action=HeartbeatAction.OK,
+                    )
+                )
 
         if all_pending_logs and self._log_store is not None:
             self._log_store.append_batch(all_pending_logs)
 
+        # Pad results for requests that had no transitions.
+        while len(results) < len(requests):
+            results.append(HeartbeatApplyResult(tasks_to_kill=set(), action=HeartbeatAction.OK))
         return results
 
     def apply_heartbeat(self, req: HeartbeatApplyRequest) -> HeartbeatApplyResult:
