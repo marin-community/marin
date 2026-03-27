@@ -32,6 +32,9 @@ _READ_BLOCK_SIZE = 16_000_000
 _READ_CACHE_TYPE = "background"
 _READ_MAX_BLOCKS = 2
 
+# How often per-record counters are flushed (to avoid lock-per-record).
+_COUNTER_FLUSH_INTERVAL = 1024
+
 
 @dataclass
 class InputFileSpec:
@@ -130,13 +133,19 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
     """
     spec = _as_spec(source)
     decoder = msgspec.json.Decoder()
+    pending_counter = 0
 
     with open_file(spec.path, "rt") as f:
         for line in f:
             line = line.strip()
             if line:
-                counters.increment("zephyr/records_in")
+                pending_counter += 1
+                if pending_counter >= _COUNTER_FLUSH_INTERVAL:
+                    counters.increment("zephyr/records_in", pending_counter)
+                    pending_counter = 0
                 yield decoder.decode(line)
+
+    counters.increment("zephyr/records_in", pending_counter)
 
 
 def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
@@ -369,13 +378,19 @@ def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterato
         >>> output_files = list(ctx.execute(ds))
     """
     spec = _as_spec(source)
+    pending_counter = 0
     with open_url(spec.path, "rb") as f:
         with zipfile.ZipFile(f) as zf:
             for member_name in zf.namelist():
                 if not member_name.endswith("/") and fnmatch.fnmatch(member_name, pattern):
                     with zf.open(member_name, "r") as member_file:
-                        counters.increment("zephyr/records_in")
+                        pending_counter += 1
+                        if pending_counter >= _COUNTER_FLUSH_INTERVAL:
+                            counters.increment("zephyr/records_in", pending_counter)
+                            pending_counter = 0
                         yield {
                             "filename": member_name,
                             "content": member_file.read(),
                         }
+
+    counters.increment("zephyr/records_in", pending_counter)
