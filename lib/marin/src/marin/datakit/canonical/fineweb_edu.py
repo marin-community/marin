@@ -30,6 +30,7 @@ def download() -> StepSpec:
         "raw/fineweb-edu",
         hf_dataset_id=HF_DATASET_ID,
         revision=HF_REVISION,
+        override_output_path=f"raw/fineweb-edu-{HF_REVISION}",
     )
 
 
@@ -37,6 +38,7 @@ def normalize(
     *,
     subset: str = "data",
     target_partition_bytes: int = 256 * 1024 * 1024,
+    override_output_path: str | None = None,
 ) -> StepSpec:
     """Normalize FineWeb-Edu to the datakit standard Parquet format.
 
@@ -59,4 +61,5 @@ def normalize(
         name=f"fineweb-edu/{subset}/normalize",
         download=subset_download,
         target_partition_bytes=target_partition_bytes,
+        override_output_path=override_output_path,
     )

@@ -4,18 +4,13 @@
 """Normalize FineWeb-Edu 10BT sample to datakit standard Parquet format."""
 
 from iris.marin_fs import marin_temp_bucket
-from marin.datakit.normalize import normalize_to_parquet
+from marin.datakit.canonical.fineweb_edu import normalize
+from marin.execution.step_runner import StepRunner
 
-INPUT_PATH = "gs://marin-us-central2/raw/fineweb-edu-87f0914/sample/10BT"
-
-
-def main():
-    output_path = marin_temp_bucket(ttl_days=1, prefix="datakit/fineweb-edu/sample/10BT/normalized")
-    normalize_to_parquet(
-        input_path=INPUT_PATH,
-        output_path=output_path,
-    )
-
+norm = normalize(
+    subset="sample/10BT",
+    override_output_path=marin_temp_bucket(ttl_days=1, prefix="datakit/fineweb-edu/sample/10BT/normalized"),
+)
 
 if __name__ == "__main__":
-    main()
+    StepRunner().run([norm])
