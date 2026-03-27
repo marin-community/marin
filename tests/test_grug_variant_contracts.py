@@ -263,3 +263,40 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     ]
     for key in required_keys:
         assert key in summary
+
+
+def test_great_10t_sweep_k_generates_valid_configs():
+    """Verify the great 10T K sweep produces well-formed configs."""
+    from experiments.grug.moe.great_10t_sweep_k import (
+        ALL_STEPS,
+        FLOP_BUDGETS,
+        HIDDEN_DIMS,
+        K_VALUES,
+        _build_model_config,
+        _flops_per_token_for_config,
+    )
+
+    expected_count = len(FLOP_BUDGETS) * len(HIDDEN_DIMS) * len(K_VALUES)
+    assert len(ALL_STEPS) == expected_count
+
+    # No duplicate step names.
+    names = [s.name for s in ALL_STEPS]
+    assert len(names) == len(set(names)), f"Duplicate step names: {[n for n in names if names.count(n) > 1]}"
+
+    # Every config has positive batch/steps and correct K.
+    seen_k = set()
+    for step in ALL_STEPS:
+        cfg = step.config
+        # batch_size and steps are wrapped in VersionedValue; unwrap with .value.
+        assert cfg.batch_size.value > 0
+        assert cfg.steps.value > 0
+        model = cfg.model.value
+        assert model.num_experts == 128
+        assert model.num_experts_per_token in K_VALUES
+        seen_k.add(model.num_experts_per_token)
+    assert seen_k == set(K_VALUES)
+
+    # Higher K yields more FLOPs per token (same architecture otherwise).
+    cfg_k1 = _build_model_config(1024, 1)
+    cfg_k8 = _build_model_config(1024, 8)
+    assert _flops_per_token_for_config(cfg_k1) < _flops_per_token_for_config(cfg_k8)
