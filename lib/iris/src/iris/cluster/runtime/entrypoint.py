@@ -71,7 +71,10 @@ def build_runtime_entrypoint(
     # avoiding redundant installation. Symlinks work across bind mounts.
     link_mode_flag = "--link-mode symlink"
     setup_commands.append("echo 'syncing deps'")
-    frozen_flag = "--frozen"
+    # Use --frozen when uv.lock is present in the workdir. Sub-project bundles
+    # (e.g. lib/iris) may not include the repo-root lockfile, so fall back to
+    # a normal resolve when the lockfile is missing.
+    frozen_flag = "$([ -f uv.lock ] && echo '--frozen' || echo '')"
     if uv_sync_flags:
         setup_commands.append(
             f"uv sync {quiet_flag} {frozen_flag} {link_mode_flag} {python_flag} {uv_sync_flags}".strip()
