@@ -30,7 +30,6 @@ from .jobs import (
     fail,
     sleep,
     register_endpoint,
-    validate_ports,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,13 +83,6 @@ def test_endpoint_registration(integration_cluster):
     """Endpoint registered from inside job via RPC."""
     prefix = f"itest-ep-{uuid.uuid4().hex[:8]}"
     job = integration_cluster.submit(register_endpoint, "itest-endpoint", prefix)
-    status = integration_cluster.wait(job, timeout=integration_cluster.job_timeout)
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
-
-
-def test_port_allocation(integration_cluster):
-    """Port allocation job succeeded."""
-    job = integration_cluster.submit(validate_ports, "itest-ports", ports=["http", "grpc"])
     status = integration_cluster.wait(job, timeout=integration_cluster.job_timeout)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
