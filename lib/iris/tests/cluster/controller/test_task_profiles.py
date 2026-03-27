@@ -28,6 +28,7 @@ def test_insert_and_retrieve_profile(db: ControllerDB) -> None:
     assert len(profiles) == 1
     assert profiles[0][0] == b"profile-data-here"
     assert profiles[0][1].epoch_ms() == now.epoch_ms()
+    assert profiles[0][2] == "cpu"
 
 
 def test_profiles_ordered_newest_first(db: ControllerDB) -> None:
@@ -66,3 +67,45 @@ def test_cap_is_per_task(db: ControllerDB) -> None:
 def test_empty_profiles(db: ControllerDB) -> None:
     profiles = get_task_profiles(db, "nonexistent")
     assert profiles == []
+
+
+def test_insert_memory_profile(db: ControllerDB) -> None:
+    now = Timestamp.now()
+    insert_task_profile(db, "task-1", b"mem-data", now, profile_kind="memory")
+
+    profiles = get_task_profiles(db, "task-1", profile_kind="memory")
+    assert len(profiles) == 1
+    assert profiles[0][0] == b"mem-data"
+    assert profiles[0][2] == "memory"
+
+
+def test_filter_by_profile_kind(db: ControllerDB) -> None:
+    now = Timestamp.now()
+    insert_task_profile(db, "task-1", b"cpu-data", now, profile_kind="cpu")
+    insert_task_profile(db, "task-1", b"mem-data", now, profile_kind="memory")
+
+    cpu_profiles = get_task_profiles(db, "task-1", profile_kind="cpu")
+    assert len(cpu_profiles) == 1
+    assert cpu_profiles[0][0] == b"cpu-data"
+
+    mem_profiles = get_task_profiles(db, "task-1", profile_kind="memory")
+    assert len(mem_profiles) == 1
+    assert mem_profiles[0][0] == b"mem-data"
+
+    all_profiles = get_task_profiles(db, "task-1")
+    assert len(all_profiles) == 2
+
+
+def test_cap_is_per_task_and_kind(db: ControllerDB) -> None:
+    """Cap trigger retains 10 per (task_id, profile_kind)."""
+    for i in range(12):
+        insert_task_profile(db, "task-1", f"cpu-{i}".encode(), Timestamp.from_ms(1000 + i), profile_kind="cpu")
+        insert_task_profile(db, "task-1", f"mem-{i}".encode(), Timestamp.from_ms(1000 + i), profile_kind="memory")
+
+    cpu_profiles = get_task_profiles(db, "task-1", profile_kind="cpu")
+    mem_profiles = get_task_profiles(db, "task-1", profile_kind="memory")
+    assert len(cpu_profiles) == 10
+    assert len(mem_profiles) == 10
+    # Total should be 20 (10 cpu + 10 memory)
+    all_profiles = get_task_profiles(db, "task-1")
+    assert len(all_profiles) == 20
