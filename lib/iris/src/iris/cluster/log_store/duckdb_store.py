@@ -36,7 +36,6 @@ Locking:
 from __future__ import annotations
 
 import logging
-import re
 import tempfile
 import time
 from collections import deque
@@ -941,8 +940,8 @@ def _add_common_filters(
         where_parts.append("epoch_ms > $since_ms")
         params["since_ms"] = since_ms
     if substring_filter:
-        where_parts.append("regexp_matches(data, $substring)")
-        params["substring"] = re.escape(substring_filter)
+        where_parts.append("contains(data, $substring)")
+        params["substring"] = substring_filter
     if min_level_enum > 0:
         where_parts.append("(level = 0 OR level >= $min_level)")
         params["min_level"] = min_level_enum

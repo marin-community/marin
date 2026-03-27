@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from iris.cluster.types import TaskAttempt
+from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import logging_pb2
 
 PROCESS_LOG_KEY = "/system/process"
@@ -23,6 +23,24 @@ def task_log_key(task_attempt: TaskAttempt) -> str:
     """Build a hierarchical key for task attempt logs."""
     task_attempt.require_attempt()
     return task_attempt.to_wire()
+
+
+def build_log_source(target: JobName, attempt_id: int = -1) -> str:
+    """Build a FetchLogs source regex pattern from a JobName.
+
+    Escapes regex metacharacters in the job name so they match literally,
+    then appends the appropriate wildcard suffix.
+
+    - Task + specific attempt: /user/job/0:<attempt_id>  (exact match)
+    - Task + all attempts:     /user/job/0:.*
+    - Job (all tasks):         /user/job/.*
+    """
+    wire = re.escape(target.to_wire())
+    if target.is_task:
+        if attempt_id >= 0:
+            return f"{wire}:{attempt_id}"
+        return f"{wire}:.*"
+    return f"{wire}/.*"
 
 
 @dataclass

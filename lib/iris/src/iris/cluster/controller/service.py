@@ -65,7 +65,7 @@ from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.controller.provider import ProviderError
-from iris.cluster.log_store import LogStore
+from iris.cluster.log_store import LogStore, build_log_source
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import JobName, WorkerId
@@ -1375,18 +1375,18 @@ class ControllerServiceImpl:
         Forwards to fetch_logs internally, wrapping the response in the legacy format.
         """
         job_name = JobName.from_wire(request.id)
-        job_wire = job_name.to_wire()
-        escaped_wire = re.escape(job_wire)
 
         # Build the regex source pattern from the legacy request fields
-        if job_name.is_task and request.attempt_id >= 0:
-            source = f"{escaped_wire}:{request.attempt_id}"  # exact key
-        elif job_name.is_task:
-            source = f"{escaped_wire}:.*"  # all attempts of a single task
+        if job_name.is_task:
+            source = build_log_source(job_name, request.attempt_id)
         elif request.include_children:
-            source = f"{escaped_wire}/.*"  # all tasks + child jobs
+            source = build_log_source(job_name)
         else:
-            source = f"{escaped_wire}/.*"  # query broadly, post-filter below
+            # Direct tasks only: match keys like /user/job/0:attempt but not
+            # /user/job/child-job/0:attempt. Use \d+ to restrict to numeric
+            # task indices, pushing the filter into DuckDB.
+            escaped_wire = re.escape(job_name.to_wire())
+            source = f"{escaped_wire}/\\d+:.*"
 
         max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
 
@@ -1401,12 +1401,7 @@ class ControllerServiceImpl:
         )
 
         fetch_response = self.fetch_logs(fetch_request, ctx)
-
         entries = fetch_response.entries
-        if not job_name.is_task and not request.include_children:
-            # Only keep direct task entries (key segment after job prefix starts with a digit)
-            prefix = job_wire + "/"
-            entries = [e for e in entries if e.key.startswith(prefix) and e.key[len(prefix) : len(prefix) + 1].isdigit()]
 
         batch = cluster_pb2.Controller.TaskLogBatch(
             task_id=request.id,

@@ -8,10 +8,10 @@ structured Markdown report suitable for GitHub issues or agent consumption.
 """
 
 import logging
-import re
 import subprocess
 from dataclasses import dataclass, field
 
+from iris.cluster.log_store import build_log_source
 from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
@@ -140,7 +140,7 @@ def _gather(
     for task in tasks_resp.tasks:
         try:
             # Fetch all attempts for this task, taking only the last `tail` lines.
-            source = re.escape(task.task_id) + ":.*"
+            source = build_log_source(JobName.from_wire(task.task_id))
             log_resp = client.fetch_logs(
                 cluster_pb2.FetchLogsRequest(
                     source=source,

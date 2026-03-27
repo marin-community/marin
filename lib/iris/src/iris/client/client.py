@@ -18,7 +18,6 @@ Example:
 """
 
 import logging
-import re
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -41,6 +40,7 @@ from iris.cluster.client import (
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.cluster.providers.local.cluster import LocalCluster, make_local_cluster_config
 from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
+from iris.cluster.log_store import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -77,24 +77,6 @@ class TaskLogEntry:
     data: str
     attempt_id: int = 0
     key: str = ""
-
-
-def _build_log_source(target: JobName, attempt_id: int = -1) -> str:
-    """Build a FetchLogs source regex pattern from a JobName.
-
-    Escapes regex metacharacters in the job name so they match literally,
-    then appends the appropriate wildcard suffix.
-
-    - Task + specific attempt: /user/job/0:<attempt_id>  (exact match)
-    - Task + all attempts:     /user/job/0:.*
-    - Job (all tasks):         /user/job/.*
-    """
-    wire = re.escape(target.to_wire())
-    if target.is_task:
-        if attempt_id >= 0:
-            return f"{wire}:{attempt_id}"
-        return f"{wire}:.*"
-    return f"{wire}/.*"
 
 
 def _task_id_from_entry(entry, fallback: JobName) -> JobName:
@@ -189,7 +171,7 @@ class Task:
         Returns:
             List of TaskLogEntry objects from the task
         """
-        source = re.escape(self._task_name.to_wire()) + ":.*"
+        source = build_log_source(self._task_name)
         response = self._client._cluster_client.fetch_logs(
             source,
             since_ms=start.epoch_ms() if start else 0,
@@ -837,7 +819,7 @@ class IrisClient:
         Returns:
             List of TaskLogEntry objects, sorted by timestamp
         """
-        source = _build_log_source(target, attempt_id)
+        source = build_log_source(target, attempt_id)
         response = self._cluster_client.fetch_logs(
             source,
             since_ms=start.epoch_ms() if start else 0,
