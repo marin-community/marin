@@ -145,29 +145,23 @@ def _build_pipeline(
     """Build a single Zephyr pipeline for one subdirectory."""
     normalize_record = _make_normalize_fn(text_field, id_field)
 
-    def local_dedup(items: Iterator[dict[str, Any]], _shard: object) -> Iterator[dict[str, Any]]:
-        """Deduplicate within a shard and count output."""
-        seen: set[str] = set()
-        for record in items:
-            rid = record["id"]
-            if rid not in seen:
-                seen.add(rid)
-                counters.increment("normalize/records_out")
-                yield record
-
     def keep_first(_key: str, items: Iterator[dict[str, Any]]) -> dict[str, Any]:
+        counters.increment("normalize/records_out")
         return next(iter(items))
+
+    def combiner(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+        yield next(iter(items))
 
     return (
         Dataset.from_list(files)
         .flat_map(load_file)
         .map(normalize_record)
-        .map_shard(local_dedup)
         .group_by(
             key=lambda r: r["id"],
             reducer=keep_first,
             sort_by=lambda r: r["id"],
             num_output_shards=num_shards,
+            combiner=combiner,
         )
         .write_parquet(
             f"{output_dir}/part-{{shard:05d}}-of-{{total:05d}}.parquet",
