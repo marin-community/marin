@@ -23,13 +23,12 @@ from marin.execution.step_spec import StepSpec
 
 def download(
     *,
-    hf_dataset_id: str = "HuggingFaceFW/fineweb-edu",
     revision: str = "87f0914",
 ) -> StepSpec:
     """Download FineWeb-Edu from HuggingFace."""
     return download_hf_step(
         "raw/fineweb-edu",
-        hf_dataset_id=hf_dataset_id,
+        hf_dataset_id="HuggingFaceFW/fineweb-edu",
         revision=revision,
         override_output_path=f"raw/fineweb-edu-{revision}",
     )
