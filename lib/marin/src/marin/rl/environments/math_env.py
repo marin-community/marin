@@ -17,7 +17,7 @@ from marin.rl.environments.tinker_environments.math_env import (
     _get_hendrycks_math_train,
 )
 from marin.rl.environments.tinker_environments.math_grading import extract_boxed, grade_answer, normalize_answer
-from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext, InferenceRequestKind
 from marin.rl.math_utils import last_boxed_only_string
 from marin.rl.types import Rollout, RolloutGroup
 
@@ -130,6 +130,7 @@ class MathEnv(MarinEnv):
         temperature: float,
         prng_key,
         mode: str = "train",
+        request_kind: InferenceRequestKind = InferenceRequestKind.TRAIN,
         max_tokens: int | None = None,
         top_k: int | None = None,
         stop: list[str] | None = None,
@@ -159,6 +160,7 @@ class MathEnv(MarinEnv):
         ]
         completions = inference_ctx.batch_completions(
             prompts=prompts,
+            request_kind=request_kind,
             temperature=temperature,
             n=n_generations,
             max_tokens=max_tokens,

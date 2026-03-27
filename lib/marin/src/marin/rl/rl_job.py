@@ -24,7 +24,11 @@ from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import TrainerConfig
 from marin.rl.curriculum import CurriculumConfig
-from marin.rl.environments.inference_ctx import LevanterInferenceContextConfig, vLLMInferenceContextConfig
+from marin.rl.environments.inference_ctx import (
+    LevanterInferenceContextConfig,
+    PackedvLLMInferenceContextConfig,
+    vLLMInferenceContextConfig,
+)
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
@@ -127,7 +131,7 @@ class RLJobConfig:
     """Configuration for TPU pod deployment."""
 
     # Inference server (auto-configured by default)
-    inference_config: InferenceServerConfig | vLLMInferenceContextConfig | None = None
+    inference_config: InferenceServerConfig | vLLMInferenceContextConfig | PackedvLLMInferenceContextConfig | None = None
     """Configuration for inference context."""
 
     system_prompt: str | None = None

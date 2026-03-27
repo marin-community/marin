@@ -6,8 +6,8 @@ import jax
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext, InferenceRequestKind
 from marin.rl.types import RolloutGroup
-from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ class MarinEnv(ABC):
         temperature: float,
         prng_key,
         mode: str = "train",
+        request_kind: InferenceRequestKind = InferenceRequestKind.TRAIN,
         max_tokens: int | None = None,
         top_k: int | None = None,
         stop: list[str] | None = None,
@@ -42,6 +43,7 @@ class MarinEnv(ABC):
             temperature: Sampling temperature for generation
             prng_key: JAX random key for sampling
             mode: "train" or "eval" - which dataset to sample from
+            request_kind: Logical request type for inference routing
             max_tokens: Maximum number of tokens to generate
             top_k: Top-k sampling parameter
             stop: Stop tokens to use for generation

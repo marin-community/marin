@@ -12,7 +12,7 @@ import jax
 import numpy as np
 from transformers import PreTrainedTokenizer
 
-from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext, InferenceRequestKind
 from marin.rl.types import RolloutGroup
 
 from .base import MarinEnv
@@ -279,6 +279,7 @@ class MockEnv(MarinEnv):
         temperature: float,
         prng_key,
         mode: str = "train",
+        request_kind: InferenceRequestKind = InferenceRequestKind.TRAIN,
         max_tokens: int | None = None,
         top_k: int | None = None,
         stop: list[str] | None = None,
@@ -306,6 +307,7 @@ class MockEnv(MarinEnv):
         prompts = list(sampled_examples.keys())
         completions = inference_ctx.batch_completions(
             prompts=prompts,
+            request_kind=request_kind,
             temperature=temperature,
             n=n_generations,
             max_tokens=max_tokens,

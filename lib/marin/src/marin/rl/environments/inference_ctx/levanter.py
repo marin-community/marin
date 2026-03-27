@@ -19,7 +19,7 @@ from openai.types.chat import ChatCompletion
 from transformers import PreTrainedTokenizer
 from levanter.models.lm_model import LmHeadModel
 import haliax as hax
-from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext, InferenceRequestKind
 
 # TODO(chris): use a different weight transfer method update model, take it out from here
 from marin.rl.weight_transfer.arrow_flight import update_model
@@ -89,6 +89,7 @@ class LevanterInferenceContext(BaseInferenceContext):
     def batch_completions(
         self,
         prompts: list[str] | list[list[dict]],
+        request_kind: InferenceRequestKind,
         temperature: float,
         n: int,
         max_tokens: int | None = None,
@@ -97,6 +98,7 @@ class LevanterInferenceContext(BaseInferenceContext):
         system_prompt: str | None = None,
     ) -> list[ChatCompletion]:
         """Call OpenAI API in batches with concurrency control."""
+        del request_kind
 
         if max_tokens is None:
             max_tokens = self.max_tokens

@@ -31,6 +31,7 @@ from fray.v2 import (
     create_environment,
     current_client,
 )
+from marin.rl.environments.inference_ctx import InferenceRequestKind
 from marin.training.training import _add_run_env_variables
 
 logger = logging.getLogger(__name__)
@@ -320,6 +321,7 @@ def _run_worker(args: argparse.Namespace) -> None:
                 batch_start = time.time()
                 completions = inference_ctx.batch_completions(
                     prompts=prompts,
+                    request_kind=InferenceRequestKind.TRAIN,
                     temperature=1.0,
                     n=args.n_generations,
                     max_tokens=1024,

@@ -13,7 +13,7 @@ from openai.types.completion_usage import CompletionUsage
 from transformers import AutoTokenizer
 
 from marin.rl.environments.math_env import MathEnv
-from marin.rl.environments.inference_ctx import LevanterInferenceContext
+from marin.rl.environments.inference_ctx import InferenceRequestKind, LevanterInferenceContext
 
 
 def create_mock_chat_completion(tokenizer) -> ChatCompletion:
@@ -50,8 +50,19 @@ class DummyInferenceContext(LevanterInferenceContext):
         self._stop_tokens = None
         self.max_tokens = 512
 
-    def batch_completions(self, prompts, temperature, n, max_tokens=None, stop=None, system_prompt=None, top_k=None):
+    def batch_completions(
+        self,
+        prompts,
+        request_kind,
+        temperature,
+        n,
+        max_tokens=None,
+        stop=None,
+        system_prompt=None,
+        top_k=None,
+    ):
         """Return mock completions for each prompt."""
+        assert request_kind in {InferenceRequestKind.TRAIN, InferenceRequestKind.EVAL, InferenceRequestKind.MICRO_EVAL}
         return [create_mock_chat_completion(self.tokenizer) for prompt in prompts]
 
 

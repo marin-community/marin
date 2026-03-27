@@ -9,8 +9,8 @@ and writes the rollout data to files for training workers to consume.
 """
 
 import dataclasses
+import concurrent.futures
 import faulthandler
-import hashlib
 import logging
 import os
 import random
@@ -19,19 +19,16 @@ import socket
 import sys
 import threading
 import time
-import tempfile
-from dataclasses import dataclass, field
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any
-import wandb
-from urllib.parse import urlparse
 
 import equinox as eqx
 import haliax as hax
 import jax
 import jax.random as jrandom
-from iris.marin_fs import url_to_fs
 import levanter
+import wandb
 from jax.experimental import multihost_utils
 from levanter.inference.openai import InferenceServer
 from levanter.models.lm_model import LmConfig
@@ -46,12 +43,18 @@ from marin.rl.runtime import RLRuntimeHandles
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
 from marin.rl.environments.inference_ctx import (
+    AsyncvLLMInferenceContext,
     LevanterInferenceContext,
     LevanterInferenceContextConfig,
-    vLLMInferenceContextConfig,
-    vLLMInferenceContext,
-    AsyncvLLMInferenceContext,
     BaseInferenceContext,
+    InferenceRequestKind,
+    PackedvLLMInferenceContext,
+    PackedvLLMInferenceContextConfig,
+    vLLMInferenceContext,
+    vLLMInferenceContextConfig,
+)
+from marin.rl.environments.inference_ctx.staging import (
+    prepare_vllm_inference_config_for_inflight,
 )
 from marin.rl.metrics import pass_at_k_estimator
 from marin.rl.model_utils import load_model_from_checkpoint
@@ -67,18 +70,6 @@ from .weight_transfer.base import WeightUpdate
 from .weight_transfer import WeightTransferClient, WeightTransferConfig, create_weight_transfer_client
 
 logger = logging.getLogger(__name__)
-
-_VLLM_METADATA_CACHE_ROOT = os.path.join(tempfile.gettempdir(), "marin-rl-vllm-metadata")
-_VLLM_METADATA_FILES = (
-    "config.json",
-    "generation_config.json",
-    "special_tokens_map.json",
-    "tokenizer.json",
-    "tokenizer.model",
-    "tokenizer_config.json",
-    "model.safetensors.index.json",
-    "params.json",
-)
 
 
 class _NoOpTracker:
@@ -154,7 +145,7 @@ class RolloutWorkerConfig:
     inference_type: Literal["levanter", "vllm"]
     """Type of inference to use."""
 
-    inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig
+    inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig | PackedvLLMInferenceContextConfig
     """Configuration for inference context."""
 
     tracker_config: RolloutTrackerConfig | None = None
@@ -200,6 +191,30 @@ class RolloutBatchStats:
     pass_at_one: float | None = None
     pass_at_k: float | None = None
     avg_at_k: float | None = None
+
+
+@dataclass(frozen=True)
+class ScheduledEvalJob:
+    """One evaluation job queued from the main rollout loop."""
+
+    eval_type: Literal["eval", "micro_eval"]
+    rng: Any
+    step: int
+    tracker_step: int
+    lesson_id: str | None = None
+
+
+@dataclass(frozen=True)
+class CompletedLessonEval:
+    """Completed lesson evaluation waiting to be consumed on the main thread."""
+
+    lesson_id: str
+    eval_type: Literal["eval", "micro_eval"]
+    step: int
+    tracker_step: int
+    batch: RolloutBatch
+    stats: RolloutBatchStats
+    metrics: dict[str, Any]
 
 
 def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
@@ -260,8 +275,10 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
 
 def create_inference_context(
     inference_type: str,
-    inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig,
+    inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig | PackedvLLMInferenceContextConfig,
     inflight_weight_updates: bool,
+    weight_transfer_config: WeightTransferConfig,
+    coordinator_handle: object | None,
 ) -> BaseInferenceContext:
     """Create an inference context based on the configuration.
 
@@ -284,57 +301,24 @@ def create_inference_context(
         return LevanterInferenceContext(
             inference_config=inference_config,
         )
+    elif inference_type == "vllm" and isinstance(inference_config, PackedvLLMInferenceContextConfig):
+        return PackedvLLMInferenceContext(
+            inference_config=inference_config,
+            inflight_weight_updates=inflight_weight_updates,
+            weight_transfer_config=weight_transfer_config,
+            coordinator_handle=coordinator_handle,
+        )
     elif inference_type == "vllm" and not inflight_weight_updates:
         return vLLMInferenceContext(
             inference_config=inference_config,
         )
     elif inference_type == "vllm" and inflight_weight_updates:
-        inference_config = _prepare_vllm_inference_config(inference_config)
+        inference_config = prepare_vllm_inference_config_for_inflight(inference_config)
         return AsyncvLLMInferenceContext(
             inference_config=inference_config,
         )
 
     raise ValueError(f"Invalid inference type: {inference_type}")
-
-
-def _prepare_vllm_inference_config(inference_config: vLLMInferenceContextConfig) -> vLLMInferenceContextConfig:
-    model_path = inference_config.model_name
-    if urlparse(model_path).scheme not in {"gs", "s3"}:
-        return inference_config
-
-    local_model_path = _stage_vllm_metadata_locally(model_path)
-    logger.info(
-        "Using local staged vLLM metadata for inflight rollout startup: %s -> %s",
-        model_path,
-        local_model_path,
-    )
-    return dataclasses.replace(
-        inference_config,
-        model_name=local_model_path,
-        load_format="dummy",
-    )
-
-
-def _stage_vllm_metadata_locally(model_path: str) -> str:
-    fs, fs_path = url_to_fs(model_path)
-    cache_key = hashlib.sha256(model_path.encode("utf-8")).hexdigest()[:16]
-    local_dir = os.path.join(_VLLM_METADATA_CACHE_ROOT, cache_key)
-    os.makedirs(local_dir, exist_ok=True)
-
-    for filename in _VLLM_METADATA_FILES:
-        remote_path = os.path.join(fs_path, filename)
-        local_path = os.path.join(local_dir, filename)
-        if os.path.exists(local_path):
-            continue
-        if not fs.exists(remote_path):
-            continue
-        fs.get(remote_path, local_path)
-
-    config_path = os.path.join(local_dir, "config.json")
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Failed to stage config.json for vLLM metadata from {model_path}")
-
-    return local_dir
 
 
 def _should_run_curriculum_eval(
@@ -374,6 +358,24 @@ def _should_run_micro_eval(
     return rollout_step % micro_eval_frequency == 0
 
 
+def _request_kind_for_eval_type(eval_type: Literal["eval", "micro_eval"]) -> InferenceRequestKind:
+    if eval_type == "eval":
+        return InferenceRequestKind.EVAL
+    return InferenceRequestKind.MICRO_EVAL
+
+
+def _eval_job_priority(job: ScheduledEvalJob) -> tuple[int, int]:
+    return (1 if job.eval_type == "eval" else 0, job.step)
+
+
+def _coalesce_eval_job(existing: ScheduledEvalJob | None, new_job: ScheduledEvalJob) -> ScheduledEvalJob:
+    if existing is None:
+        return new_job
+    if _eval_job_priority(new_job) >= _eval_job_priority(existing):
+        return new_job
+    return existing
+
+
 class RolloutWorker:
     """Asynchronous inference & rollout worker for RL training.
 
@@ -385,7 +387,7 @@ class RolloutWorker:
     _inference_thread: threading.Thread
     _inference_server: InferenceServer
     _policy_model: Any
-    _transfer_client: WeightTransferClient
+    _transfer_client: WeightTransferClient | None
     _rollout_writer: RolloutWriter
     _tokenizer: PreTrainedTokenizer
     _environments: dict[str, MarinEnv]
@@ -421,6 +423,10 @@ class RolloutWorker:
         self._current_weight_step: int = -2
         self._current_train_step: int = -1
         self._last_eval_train_step: int | None = None
+        self._eval_lock = threading.Lock()
+        self._eval_executor: concurrent.futures.ThreadPoolExecutor | None = None
+        self._active_eval_future: concurrent.futures.Future[list[CompletedLessonEval]] | None = None
+        self._pending_eval_job: ScheduledEvalJob | None = None
 
         self._tokenizer = config.tokenizer
 
@@ -428,32 +434,40 @@ class RolloutWorker:
         # For inflight weight updates, we block inference until initial weights are received.
         self._first_weights_received = threading.Event()
 
-        logger.info("Starting weight transfer client with config %s", self.config.weight_transfer)
+        logger.info("Starting rollout policy context with weight transfer config %s", self.config.weight_transfer)
 
         self._rollout_writer = config.rollout_storage.create_writer()
         self._policy_ctx = create_inference_context(
-            self.config.inference_type, self.config.inference_config, self.config.inflight_weight_updates
+            self.config.inference_type,
+            self.config.inference_config,
+            self.config.inflight_weight_updates,
+            self.config.weight_transfer,
+            runtime.weight_transfer.arrow_flight_coordinator,
         )
 
         # Need to build the policy model and then use that to start the inference server
         self._build_models()
         self._policy_ctx.start_server(self._policy_model)
 
-        self._transfer_client = create_weight_transfer_client(
-            config.weight_transfer,
-            mesh=self._policy_ctx.mesh,
-            axis_mapping=self._policy_ctx.axis_mapping,
-            coordinator_handle=runtime.weight_transfer.arrow_flight_coordinator,
-        )
+        self._transfer_client: WeightTransferClient | None = None
+        if not self._policy_ctx.owns_weight_transfer():
+            self._transfer_client = create_weight_transfer_client(
+                config.weight_transfer,
+                mesh=self._policy_ctx.mesh,
+                axis_mapping=self._policy_ctx.axis_mapping,
+                coordinator_handle=runtime.weight_transfer.arrow_flight_coordinator,
+            )
 
         # TODO(power) -- replace this with a wait_until_ready() on the levanter inference server
         time.sleep(1.0)
 
         self._environments = {}
         self._curriculum_actor = runtime.curriculum
+        if isinstance(self._policy_ctx, PackedvLLMInferenceContext):
+            self._eval_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="rollout-eval")
 
         self.weight_transfer_thread: threading.Thread | None = None
-        if self.config.inflight_weight_updates:
+        if self.config.inflight_weight_updates and not self._policy_ctx.owns_weight_transfer():
             self.weight_transfer_thread = threading.Thread(
                 target=self._sync_weights_loop,
                 name=f"{self.config.run_id}-weight-sync",
@@ -472,7 +486,13 @@ class RolloutWorker:
         return env
 
     def _sample_batch(
-        self, lesson_id: str, n_examples: int, n_generations: int, mode: str, rng
+        self,
+        lesson_id: str,
+        n_examples: int,
+        n_generations: int,
+        mode: str,
+        request_kind: InferenceRequestKind,
+        rng,
     ) -> tuple[RolloutBatch | None, dict | None]:
         """Sample a batch of rollouts from the environment for the given lesson ID."""
         env = self._load_environment(lesson_id)
@@ -491,11 +511,19 @@ class RolloutWorker:
             temperature=temperature,
             prng_key=rng,
             mode=mode,
+            request_kind=request_kind,
             max_tokens=max_tokens,
             top_k=top_k,
             stop=stop_tokens,
             system_prompt=self.config.system_prompt,
         )
+
+        batch_weight_step = self._current_weight_step
+        context_weight_id = self._policy_ctx.current_weight_id(request_kind=request_kind)
+        if context_weight_id is not None:
+            batch_weight_step = context_weight_id
+            if request_kind == InferenceRequestKind.TRAIN:
+                self._current_weight_step = context_weight_id
 
         if len(rollout_groups) == 0:
             logger.warning("No valid rollouts generated in this batch...")
@@ -505,14 +533,14 @@ class RolloutWorker:
             "Generated rollout with %d groups from lesson %s at step %d",
             len(rollout_groups),
             lesson_id,
-            self._current_weight_step,
+            batch_weight_step,
         )
 
         # Create metadata once for this batch
         batch_metadata = RolloutMetadata(
             worker_id=f"{socket.gethostname()}_{os.getpid()}",
             timestamp=time.time(),
-            weight_step=self._current_weight_step,
+            weight_step=batch_weight_step,
         )
 
         # Attach metadata to each rollout in each group
@@ -565,7 +593,8 @@ class RolloutWorker:
         """Stop the inference worker loop and server."""
         with self._shutdown_condition:
             self._running = False
-            self._transfer_client.cleanup()
+            if self._transfer_client is not None:
+                self._transfer_client.cleanup()
             self._shutdown_condition.notify()
 
         # Wait for the main loop to finish
@@ -603,6 +632,8 @@ class RolloutWorker:
 
     def _sync_weights(self):
         """Attempt to receive updated weights, optionally waiting for them."""
+        if self._transfer_client is None:
+            raise RuntimeError("Parent-managed weight sync was requested without a transfer client")
         max_wait_time = self.config.weight_transfer.max_weight_transfer_wait_time
 
         def _receive_once():
@@ -722,19 +753,30 @@ class RolloutWorker:
         metrics[f"{prefix}/{lesson_id}/top_k"] = top_k if top_k is not None else -1
         return metrics
 
-    def _evaluate_lesson(self, lesson_id: str, n_examples: int, eval_type: str, rng, step: int) -> RolloutBatchStats:
-        """Evaluate a single lesson and log metrics."""
+    def _compute_lesson_eval(
+        self,
+        lesson_id: str,
+        n_examples: int,
+        eval_type: Literal["eval", "micro_eval"],
+        rng,
+        step: int,
+        tracker_step: int,
+    ) -> CompletedLessonEval:
+        """Compute one lesson eval without mutating trackers or curriculum state."""
         N_EVAL_GENERATIONS = 1
+        request_kind = _request_kind_for_eval_type(eval_type)
 
         batch, _ = self._sample_batch(
             lesson_id=lesson_id,
             n_examples=n_examples,
             n_generations=N_EVAL_GENERATIONS,
             mode="eval",
+            request_kind=request_kind,
             rng=rng,
         )
+        if batch is None:
+            raise RuntimeError(f"Eval batch for lesson {lesson_id} produced no rollouts")
         stats = _compute_batch_stats(batch, lesson_id)
-        self._log_prompt_example(lesson_id, batch, step, eval_type=eval_type)
         sampling_params = self.config.curriculum_config.lessons[lesson_id].sampling_params
         metrics = self._build_eval_metrics(
             prefix=f"inference.{eval_type}",
@@ -744,31 +786,130 @@ class RolloutWorker:
             temperature=sampling_params.temperature,
             top_k=sampling_params.top_k,
         )
-        self.tracker.log(metrics, step=self._current_weight_step)
-        logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, self._current_weight_step, metrics)
-        # only update curriculum for full evals
-        if eval_type == "eval":
-            self._curriculum_actor.update_lesson_stats.remote(
-                stats.rollout_stats, mode="eval", current_step=self._current_weight_step
-            ).result()
-        return stats
+        return CompletedLessonEval(
+            lesson_id=lesson_id,
+            eval_type=eval_type,
+            step=step,
+            tracker_step=tracker_step,
+            batch=batch,
+            stats=stats,
+            metrics=metrics,
+        )
 
-    def _evaluate_curriculum(self, rng, step: int) -> dict:
-        """Evaluate all lessons and update the curriculum actor."""
+    def _consume_lesson_eval(self, result: CompletedLessonEval) -> None:
+        """Apply tracker and curriculum side effects for a completed lesson eval."""
+        self._log_prompt_example(result.lesson_id, result.batch, result.step, eval_type=result.eval_type)
+        self.tracker.log(result.metrics, step=result.tracker_step)
+        logger.info("Eval metrics for lesson %s at step %d: %s", result.lesson_id, result.tracker_step, result.metrics)
+        if result.eval_type == "eval":
+            self._curriculum_actor.update_lesson_stats.remote(
+                result.stats.rollout_stats, mode="eval", current_step=result.tracker_step
+            ).result()
+
+    def _run_eval_job(self, job: ScheduledEvalJob) -> list[CompletedLessonEval]:
+        """Compute one queued eval job on the background executor."""
+        if job.lesson_id is not None:
+            return [
+                self._compute_lesson_eval(
+                    lesson_id=job.lesson_id,
+                    n_examples=self.config.curriculum_config.micro_eval_n_examples,
+                    eval_type=job.eval_type,
+                    rng=job.rng,
+                    step=job.step,
+                    tracker_step=job.tracker_step,
+                )
+            ]
+
         lesson_names = list(self.config.curriculum_config.lessons.keys())
         if not lesson_names:
             logger.info("No lessons to evaluate")
-            return {}
+            return []
 
-        logger.info(f"Evaluating {len(lesson_names)} lessons")
-
+        logger.info("Evaluating %d lessons", len(lesson_names))
+        results = []
         for lesson_id in lesson_names:
-            self._evaluate_lesson(
-                lesson_id, self.config.curriculum_config.eval_n_examples, eval_type="eval", rng=rng, step=step
+            results.append(
+                self._compute_lesson_eval(
+                    lesson_id=lesson_id,
+                    n_examples=self.config.curriculum_config.eval_n_examples,
+                    eval_type=job.eval_type,
+                    rng=job.rng,
+                    step=job.step,
+                    tracker_step=job.tracker_step,
+                )
             )
+        return results
 
-        # NOTE(chris): why do we need this?
-        # barrier_sync()
+    def _supports_async_eval(self) -> bool:
+        return self._eval_executor is not None
+
+    def _enqueue_eval_job(self, job: ScheduledEvalJob) -> None:
+        """Start or coalesce an eval job without blocking train rollout generation."""
+        if self._eval_executor is None:
+            self._consume_eval_results(self._run_eval_job(job))
+            return
+
+        with self._eval_lock:
+            if self._active_eval_future is None:
+                logger.info("Submitting async %s job", job.eval_type)
+                self._active_eval_future = self._eval_executor.submit(self._run_eval_job, job)
+                return
+
+            previous_job = self._pending_eval_job
+            replacement_job = _coalesce_eval_job(previous_job, job)
+            if replacement_job is not None:
+                self._pending_eval_job = replacement_job
+                logger.info(
+                    "Coalesced pending eval job to %s at step %d",
+                    replacement_job.eval_type,
+                    replacement_job.step,
+                )
+
+    def _poll_eval_jobs(self) -> None:
+        """Harvest completed async eval jobs and submit the latest pending one."""
+        if self._eval_executor is None:
+            return
+
+        completed_future: concurrent.futures.Future[list[CompletedLessonEval]] | None = None
+        with self._eval_lock:
+            if self._active_eval_future is None or not self._active_eval_future.done():
+                return
+            completed_future = self._active_eval_future
+            self._active_eval_future = None
+
+        results = completed_future.result()
+        self._consume_eval_results(results)
+
+        with self._eval_lock:
+            if self._pending_eval_job is None or not self._running:
+                return
+            next_job = self._pending_eval_job
+            self._pending_eval_job = None
+            logger.info("Submitting coalesced async %s job", next_job.eval_type)
+            self._active_eval_future = self._eval_executor.submit(self._run_eval_job, next_job)
+
+    def _consume_eval_results(self, results: list[CompletedLessonEval]) -> None:
+        for result in results:
+            self._consume_lesson_eval(result)
+
+    def _shutdown_eval_executor(self) -> None:
+        if self._eval_executor is None:
+            return
+
+        active_future: concurrent.futures.Future[list[CompletedLessonEval]] | None
+        with self._eval_lock:
+            active_future = self._active_eval_future
+            self._active_eval_future = None
+            self._pending_eval_job = None
+
+        if active_future is not None:
+            try:
+                self._consume_eval_results(active_future.result())
+            except Exception:
+                logger.exception("Async eval failed during shutdown")
+
+        self._eval_executor.shutdown(wait=True)
+        self._eval_executor = None
 
     def run(self):
         """Main inference worker loop."""
@@ -786,25 +927,36 @@ class RolloutWorker:
                 max_wait_time = self.config.weight_transfer.max_weight_transfer_wait_time
                 if max_wait_time <= 0:
                     max_wait_time = 1200.0  # 20 minutes default for first-weight wait
-                logger.info(
-                    "Waiting for first weight transfer before starting inference (timeout %.1fs)...",
-                    max_wait_time,
-                )
-                start_time = time.time()
-                while True:
-                    if self._first_weights_received.wait(timeout=10.0):
-                        break
+                if self._policy_ctx.owns_weight_transfer():
+                    logger.info(
+                        "Waiting for packed rollout replicas to synchronize initial weights (timeout %.1fs)...",
+                        max_wait_time,
+                    )
+                    initial_weight_id = self._policy_ctx.wait_for_initial_weights(timeout=max_wait_time)
+                    if initial_weight_id is None or initial_weight_id < -1:
+                        raise RuntimeError("Packed rollout inference context did not become ready for initial weights.")
+                    self._current_weight_step = initial_weight_id
+                    logger.info("Packed rollout replicas ready at weight step %d", initial_weight_id)
+                else:
+                    logger.info(
+                        "Waiting for first weight transfer before starting inference (timeout %.1fs)...",
+                        max_wait_time,
+                    )
+                    start_time = time.time()
+                    while True:
+                        if self._first_weights_received.wait(timeout=10.0):
+                            break
 
-                    if not self._running:
-                        logger.info("Shutdown requested while waiting for first weights")
-                        return
+                        if not self._running:
+                            logger.info("Shutdown requested while waiting for first weights")
+                            return
 
-                    elapsed = time.time() - start_time
-                    if max_wait_time - elapsed <= 0:
-                        raise RuntimeError("Timed out waiting for initial weight transfer.")
+                        elapsed = time.time() - start_time
+                        if max_wait_time - elapsed <= 0:
+                            raise RuntimeError("Timed out waiting for initial weight transfer.")
 
-                    logger.info("Still waiting for first weight transfer (elapsed: %.1fs)", elapsed)
-                logger.info("First weights received, starting inference loop")
+                        logger.info("Still waiting for first weight transfer (elapsed: %.1fs)", elapsed)
+                    logger.info("First weights received, starting inference loop")
 
             use_jax_rng = self.config.inference_type == "levanter"
 
@@ -819,6 +971,7 @@ class RolloutWorker:
 
             while self._running:
                 step_start = time.time()
+                self._poll_eval_jobs()
 
                 # Check if training is done before generating more rollouts
                 if not self._check_run_state():
@@ -835,6 +988,9 @@ class RolloutWorker:
                     break
 
                 # Guard: never generate rollouts with dummy weights
+                context_weight_id = self._policy_ctx.current_weight_id()
+                if context_weight_id is not None:
+                    self._current_weight_step = context_weight_id
                 if self._current_weight_step < -1:
                     logger.warning(
                         "No valid weights received yet (weight_step=%d), retrying sync...",
@@ -872,13 +1028,14 @@ class RolloutWorker:
                         rng, micro_eval_rng = jrandom.split(rng)
                     else:
                         micro_eval_rng = py_rng.randint(0, 2**31 - 1)
-                    self._evaluate_lesson(
-                        lesson_id,
-                        self.config.curriculum_config.micro_eval_n_examples,
+                    micro_eval_job = ScheduledEvalJob(
+                        lesson_id=lesson_id,
                         eval_type="micro_eval",
                         rng=micro_eval_rng,
                         step=self._current_weight_step,
+                        tracker_step=self._current_weight_step,
                     )
+                    self._enqueue_eval_job(micro_eval_job)
 
                 # Full eval: comprehensive check on all lessons once per completed trainer step.
                 if _should_run_curriculum_eval(
@@ -891,7 +1048,13 @@ class RolloutWorker:
                         rng, eval_rng = jrandom.split(rng)
                     else:
                         eval_rng = py_rng.randint(0, 2**31 - 1)
-                    self._evaluate_curriculum(eval_rng, self._current_train_step)
+                    eval_job = ScheduledEvalJob(
+                        eval_type="eval",
+                        rng=eval_rng,
+                        step=self._current_train_step,
+                        tracker_step=self._current_weight_step,
+                    )
+                    self._enqueue_eval_job(eval_job)
                     self._last_eval_train_step = self._current_train_step
 
                 logger.info(f"Sampled lesson '{lesson_id}' from curriculum")
@@ -913,6 +1076,7 @@ class RolloutWorker:
                     n_examples=lesson_config.sampling_params.n_prompts,
                     n_generations=lesson_config.sampling_params.n_generations_per_prompt,
                     mode="train",
+                    request_kind=InferenceRequestKind.TRAIN,
                     rng=input_rng,
                 )
                 batch_time = time.time() - batch_start_time
@@ -960,8 +1124,11 @@ class RolloutWorker:
                 faulthandler.cancel_dump_traceback_later()
 
                 if self.config.log_freq > 0 and step % self.config.log_freq == 0:
+                    self._poll_eval_jobs()
                     log_metrics = eval_metrics
-                    log_metrics.update(self._transfer_client.get_metrics())
+                    if self._transfer_client is not None:
+                        log_metrics.update(self._transfer_client.get_metrics())
+                    log_metrics.update(self._policy_ctx.get_metrics())
                     log_metrics.update({f"env.{k}": v for k, v in (env_metrics or {}).items()})
                     # Add storage metrics if available
                     if hasattr(self._rollout_writer, "get_metrics"):
@@ -982,6 +1149,7 @@ class RolloutWorker:
         finally:
             faulthandler.cancel_dump_traceback_later()
             self._running = False
+            self._shutdown_eval_executor()
             try:
                 if hasattr(self.tracker, "finish"):
                     self.tracker.finish()

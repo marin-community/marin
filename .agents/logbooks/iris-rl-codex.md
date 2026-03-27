@@ -6346,3 +6346,1039 @@ Important caveat recorded here:
   - two independent vLLM engines inside one rollout job
   - each with its own `TPU_VISIBLE_CHIPS`
 - so the new file is a **packed-rollout proxy**, not the final packed rollout implementation
+
+## 2026-03-26 - Implementation plan for RL-side packed rollout support
+
+Goal:
+- replace the current `e4ms2` rollout topology:
+  - `2 x v5p-8` rollout workers
+- with one rollout job on one `v5p-8` that internally runs:
+  - replica 0: `TP=2` on chips `0,1`
+  - replica 1: `TP=2` on chips `2,3`
+- while keeping the trainer-facing RL behavior as close to `e4ms2` as possible
+
+What is easy vs hard:
+- easy:
+  - split prompt batches across two replicas
+  - merge completions back in original prompt order
+  - keep the parent rollout worker API unchanged for environments
+- hard:
+  - weight sync
+- reason:
+  - `INF-004a` proved the working packed topology uses separate subprocesses with `TPU_VISIBLE_CHIPS` set before importing JAX/vLLM
+  - that means we cannot just instantiate two engines in the current rollout-worker process
+  - and we should **not** try to serialize the full 8B state dict from the parent rollout worker into two child subprocesses every step
+
+Main design decision:
+- packed rollout should use persistent inference subprocesses, one per replica
+- each packed child process should own:
+  - its own vLLM engine
+  - its own `WeightTransferClient`
+  - its own weight-sync loop / current weight-step tracking
+- the parent rollout worker should act as:
+  - curriculum + eval coordinator
+  - prompt sharder / completion merger
+  - rollout writer / metric logger
+
+Concrete implementation plan:
+
+### Phase 1 - Add a real packed vLLM config type
+
+Create a separate config type rather than another boolean flag.
+
+Suggested shape:
+
+```python
+@dataclass(frozen=True)
+class PackedvLLMReplicaConfig:
+    visible_chips: str
+    tensor_parallel_size: int
+
+
+@dataclass(frozen=True)
+class PackedvLLMInferenceContextConfig:
+    model_name: str
+    canonical_model_name: str | None
+    max_model_len: int
+    gpu_memory_utilization: float
+    replicas: list[PackedvLLMReplicaConfig]
+    sampling_params: VLLMSamplingConfig
+    load_format: str = "auto"
+    enforce_eager: bool = True
+    kv_cache_metrics: bool = False
+```
+
+Code touchpoints:
+- `lib/marin/src/marin/rl/environments/inference_ctx/vllm.py`
+- `lib/marin/src/marin/rl/rollout_worker.py`
+- `lib/marin/src/marin/rl/rl_job.py`
+
+Required dispatch updates:
+- extend the inference-config unions to include the packed config
+- update `create_inference_context(...)` to construct a packed inference context when this config is provided
+
+### Phase 2 - Build a packed inference subprocess worker
+
+Create a new module for the persistent child process entrypoint, using the exact env pattern that worked in `INF-004a`:
+- set before import:
+  - `TPU_PROCESS_BOUNDS`
+  - `TPU_CHIPS_PER_PROCESS_BOUNDS`
+  - `TPU_VISIBLE_CHIPS`
+  - `VLLM_ENABLE_V1_MULTIPROCESSING=0`
+
+The child process should:
+- build one `vLLMInferenceContext`
+- open one `WeightTransferClient`
+- wait for first weights
+- serve RPC-style commands from the parent:
+  - `generate`
+  - `sync_once` or `current_weight_step`
+  - `metrics`
+  - `shutdown`
+
+Likely file:
+- `lib/marin/src/marin/rl/environments/inference_ctx/packed_vllm_worker.py`
+
+### Phase 3 - Implement `PackedvLLMInferenceContext`
+
+Parent responsibilities:
+- spawn one child per replica
+- own the request routing / result gathering
+- split prompts by prompt index
+- preserve original ordering when merging completions
+- aggregate per-replica metrics
+
+Important behavioral contract:
+- `batch_completions(...)` must still return the same `list[ChatCompletion]` shape expected by `MathEnv.sample(...)`
+- environments should not need to know that the context is packed
+
+Likely file:
+- `lib/marin/src/marin/rl/environments/inference_ctx/packed_vllm.py`
+
+Split/merge rule:
+- partition the prompt list by contiguous slices for stable ordering
+- assign slice `0` to chips `0,1`
+- assign slice `1` to chips `2,3`
+- merge child results back by original prompt position
+
+### Phase 4 - Refactor weight sync for packed mode
+
+This is the real blocker.
+
+Current code path:
+- parent rollout worker owns one `_transfer_client`
+- parent calls `receive_weights(...)`
+- parent passes the resulting state dict into `_policy_ctx.reload_model(...)`
+
+Why that does not scale to packed mode:
+- the state dict is too large to relay into two subprocesses every sync step
+- the packed subprocesses need to fetch weights directly
+
+Packed-mode change:
+- when using `PackedvLLMInferenceContextConfig`, the packed context should own weight-sync orchestration
+- the parent rollout worker should no longer create the normal `_transfer_client` in this mode
+- instead it should ask the packed context for:
+  - `wait_for_initial_weights()`
+  - `sync_weights_if_needed()`
+  - `current_weight_step`
+  - packed weight-transfer metrics
+
+Pragmatic implementation note:
+- this can be done as a packed-specific branch in `RolloutWorker` first
+- it does not need a repo-wide abstraction cleanup in the first pass
+
+### Phase 5 - Keep RL semantics unchanged above the inference layer
+
+Things that should remain unchanged:
+- curriculum lesson sampling
+- eval and micro-eval gating
+- rollout metadata construction
+- replay buffer behavior
+- rollout writing
+- trainer code
+
+Important observation:
+- eval currently runs only when `worker_index == 0`
+- packed rollout will still have exactly one rollout worker job
+- so eval semantics should stay unchanged automatically if the parent rollout worker remains the evaluation owner
+
+### Phase 6 - Wire the real packed config into the experiment launcher
+
+After the packed context exists, update:
+- `experiments/exp_iris_rl_regression_direct_gcs_packed_candidate.py`
+
+so it becomes a real packed rollout launch rather than a proxy:
+- one rollout worker
+- packed replicas:
+  - `0,1`
+  - `2,3`
+- `TP=2` per replica
+- same `e4ms2` trainer/curriculum/replay/eval shape:
+  - `train_batch_size=1024`
+  - `n_prompts=64`
+  - `n_generations_per_prompt=16`
+  - `eval_frequency=1`
+  - `inflight_weight_updates=True`
+
+### Phase 7 - Test plan
+
+Add tests at three levels:
+
+1. config + dispatch tests
+- packed config selects the packed inference context
+- invalid chip-group / TP combinations fail fast
+
+2. split/merge correctness tests
+- a fake packed context should prove:
+  - prompts are partitioned correctly
+  - merged completions preserve original order
+  - per-prompt completion multiplicity stays correct
+
+3. rollout-worker integration tests
+- packed rollout path still logs and writes batches correctly
+- eval still triggers only once per completed trainer step
+- packed metrics are surfaced without crashing the existing logging path
+
+Likely test files:
+- `tests/rl/test_inference_ctx.py`
+- `tests/rl/test_rollout_worker.py`
+
+### Phase 8 - Validation ladder
+
+`PKR-001` startup smoke:
+- `5` train steps
+- `n_prompts=8` or `16`
+- validate:
+  - both packed child replicas start
+  - both receive weights
+  - training advances
+  - no TPU init/pathology
+
+`PKR-002` short parity confirmation:
+- `30-40` train steps
+- production-like shape:
+  - `n_prompts=64`
+  - `16` generations
+- compare against:
+  - `e4par`
+  - `e4ms2`
+
+Primary success metrics:
+- wall-clock/step
+- trainer inter-step idle
+- `batch_prep`
+- rollout throughput
+- eval behavior
+- stability / zero retries
+
+Success criterion for promotion:
+- packed RL should land close enough to `e4ms2` that replacing:
+  - `2 x v5p-8` rollout workers
+with:
+  - `1 x v5p-8` packed rollout
+is operationally worthwhile
+
+Recommended implementation order:
+1. packed config + subprocess worker
+2. packed inference context split/merge
+3. packed-specific weight-sync path in rollout worker
+4. tests
+5. `PKR-001`
+6. `PKR-002`
+
+## 2026-03-26 - Revised packed rollout plan: full inflight parity only
+
+This supersedes the earlier branching plan.
+
+Decision:
+- do **not** build a non-inflight packed mode
+- packed rollout must preserve the `e4ms2` asynchronous weight-update behavior closely enough to replace it, not just approximate the topology
+- the earlier packed-rollout proxy is no longer the main next step; the next real step is the packed RL implementation itself
+
+### Hard requirements
+
+Packed rollout is only considered successful if all of these are true:
+
+1. one rollout Iris job runs on one `v5p-8`
+2. that rollout job owns two persistent inference replicas:
+   - replica 0: `TP=2` on chips `0,1`
+   - replica 1: `TP=2` on chips `2,3`
+3. `inflight_weight_updates=True` remains enabled
+4. the trainer does not block on rollout-side weight sync
+5. every logical rollout batch and eval batch still has one unambiguous `weight_step` in RL metadata
+6. any single child failure kills the whole packed rollout worker and lets Iris retry the rollout job
+
+### Revised architecture
+
+Parent rollout worker responsibilities:
+- curriculum interaction
+- eval scheduling
+- prompt construction
+- prompt sharding across replicas
+- merge completions back into original prompt order
+- rollout writing
+- aggregate metrics logging
+- supervising child process health
+
+Packed child replica responsibilities:
+- set TPU env before JAX/vLLM import
+- create one async/inflight-capable vLLM engine
+- create one `WeightTransferClient`
+- poll for new weights continuously in the background
+- stage fetched weights as pending
+- serve generate requests from the parent
+
+Important design rule:
+- use fresh subprocesses launched with `subprocess.Popen(..., exec)` semantics
+- do **not** use Python multiprocessing/fork inheritance for packed replicas
+- do **not** try to push the 8B state dict from parent to children every sync step
+
+### Stronger inflight synchronization model
+
+The previous plan was underspecified here. This is the actual model we should implement.
+
+Each packed child tracks:
+- `active_weight_id`
+- `pending_weight_id`
+- `busy` flag
+- latest packed-health heartbeat / metrics
+
+Weight updates flow like this:
+1. child polls Arrow Flight in the background
+2. when a newer weight arrives, child decodes it and stores it as `pending`
+3. child does **not** immediately swap `pending -> active` while a request is running
+4. parent coordinates activation so both replicas transition to the same weight id between requests
+
+Generation correctness rule:
+- a logical RL batch must be generated under one shared dispatch weight id `W`
+- parent may only dispatch batch shards once both replicas report:
+  - idle
+  - healthy
+  - same `active_weight_id == W`
+
+Activation rule:
+- if replicas have staged the same newer `pending_weight_id == W_next`, parent sends an explicit activation command to both replicas while both are idle
+- only after both acknowledge activation does parent allow the next batch to start
+
+Why this is the right compromise:
+- keeps asynchronous background fetch/decode overlap
+- avoids trainer-blocking main-thread weight sync
+- preserves one clean batch weight id for RL metadata
+- is stricter than today's single-worker inflight semantics, but necessary once one logical batch is split across two local replicas
+
+### Explicit protocol to implement
+
+Parent <-> child protocol should not stay vague. Minimum RPC surface:
+
+- `status() -> {healthy, busy, active_weight_id, pending_weight_id, metrics}`
+- `activate_pending(expected_weight_id) -> ack`
+- `generate(request_id, prompts, sampling_params, expected_weight_id) -> completions`
+- `shutdown()`
+
+Child-side generate contract:
+- reject generation if `active_weight_id != expected_weight_id`
+- mark replica `busy=True` for the full request lifetime
+- only allow `activate_pending(...)` when idle
+
+Parent-side dispatch contract:
+1. poll both replica statuses
+2. if both idle and both have the same newer pending weight id, activate that weight on both
+3. choose `dispatch_weight_id = common active weight id`
+4. shard prompts by contiguous slices
+5. send one `generate(...)` request to each replica with that exact `dispatch_weight_id`
+6. merge completions in original prompt order
+7. write rollout batch metadata using `dispatch_weight_id`
+
+### Concrete code changes
+
+1. Add a packed inflight config type
+
+Use a separate config type, not a boolean:
+
+```python
+@dataclass(frozen=True)
+class PackedvLLMReplicaConfig:
+    visible_chips: str
+    tensor_parallel_size: int
+
+
+@dataclass(frozen=True)
+class PackedAsyncvLLMInferenceContextConfig:
+    model_name: str
+    canonical_model_name: str | None
+    max_model_len: int
+    gpu_memory_utilization: float
+    replicas: list[PackedvLLMReplicaConfig]
+    sampling_params: VLLMSamplingConfig
+    load_format: str = "auto"
+    enforce_eager: bool = True
+    kv_cache_metrics: bool = False
+```
+
+2. Add a packed child runtime module
+
+Suggested new file:
+- `lib/marin/src/marin/rl/environments/inference_ctx/packed_vllm_worker.py`
+
+Responsibilities:
+- env setup (`TPU_VISIBLE_CHIPS`, etc.)
+- async vLLM engine bring-up
+- local weight-transfer polling thread
+- pending/active weight state machine
+- request loop
+
+3. Add a parent packed inference context
+
+Suggested new file:
+- `lib/marin/src/marin/rl/environments/inference_ctx/packed_vllm.py`
+
+Responsibilities:
+- launch children
+- supervise health
+- activation orchestration
+- prompt sharding / merge
+- aggregate metrics
+- shutdown on any child fault
+
+4. Update inference-context dispatch
+
+Files:
+- `lib/marin/src/marin/rl/environments/inference_ctx/vllm.py`
+- `lib/marin/src/marin/rl/rollout_worker.py`
+- `lib/marin/src/marin/rl/rl_job.py`
+
+Required changes:
+- extend config unions
+- teach `create_inference_context(...)` to build packed mode
+- packed mode should expose the same `BaseInferenceContext.batch_completions(...)` contract to environments
+
+5. Update rollout worker for packed-mode ownership
+
+Packed mode should bypass the current single-context transfer path:
+- parent rollout worker should **not** own the ordinary `_transfer_client`
+- parent rollout worker should obtain packed metrics and current batch weight ids from the packed context
+- packed context becomes the weight-sync owner in this mode
+
+Files:
+- `lib/marin/src/marin/rl/rollout_worker.py`
+
+### Things the plan was previously missing
+
+These are now explicitly in-scope:
+
+- **Batch-level weight consistency**
+  - one logical RL batch cannot mix replica weight ids
+- **Child failure semantics**
+  - any child crash, stuck request, or health-check failure kills both children and crashes the rollout worker
+- **No orphan processes**
+  - shutdown path must terminate children even on parent exception
+- **Request-level atomicity**
+  - a child may fetch/decode future weights while busy, but may not change `active_weight_id` during an in-flight request
+- **Eval correctness**
+  - full eval and micro-eval must use the same packed dispatch path and the same weight-id rules as training batches
+- **Metric shape**
+  - log:
+    - packed aggregate throughput
+    - per-replica throughput
+    - per-replica active/pending weight ids
+    - activation lag / skew
+
+### Test plan, upgraded
+
+1. Packed child state-machine tests
+- pending weights do not activate while busy
+- activation only succeeds when idle
+- generation rejects wrong expected weight id
+
+2. Parent packed-context tests
+- prompt shards preserve ordering on merge
+- batch dispatch only occurs when replicas share the same active weight id
+- parent activates matching pending weights on both replicas before next batch
+
+3. Rollout-worker integration tests
+- packed mode still produces valid `RolloutBatch`
+- metadata `weight_step` equals dispatch weight id
+- eval still fires exactly once per completed trainer step
+- one child failure propagates as rollout-worker failure
+
+Primary test files:
+- `tests/rl/test_inference_ctx.py`
+- `tests/rl/test_rollout_worker.py`
+
+### Validation ladder, upgraded
+
+`PKR-001` packed startup smoke
+- `5` train steps
+- small prompt count
+- must prove:
+  - both children start
+  - both children receive and stage weights
+  - at least one synchronized activation happens
+  - at least one packed rollout batch is written
+
+`PKR-002` packed inflight correctness run
+- `10-20` train steps
+- inspect:
+  - child active/pending weight traces
+  - dispatch weight ids
+  - absence of mixed-weight batches
+
+`PKR-003` packed parity run
+- `30-40` train steps
+- production-like shape:
+  - `n_prompts=64`
+  - `16` generations
+  - `eval_frequency=1`
+  - `inflight_weight_updates=True`
+- compare against `e4ms2`:
+  - wall-clock/step
+  - trainer idle
+  - `batch_prep`
+  - rollout throughput
+  - eval behavior
+  - stability / retries
+
+Promotion criterion:
+- packed RL should be close enough to `e4ms2` that replacing:
+  - `2 x v5p-8` rollout workers
+with:
+  - `1 x v5p-8` packed rollout
+is the new default operational recommendation
+
+### Revised implementation order
+
+1. packed inflight config type
+2. packed child runtime with active/pending weight state machine
+3. parent packed inference context with synchronized activation protocol
+4. packed-mode rollout-worker branch
+5. tests for child state machine, parent dispatch, and rollout integration
+6. `PKR-001`
+7. `PKR-002`
+8. `PKR-003`
+
+## 2026-03-26 - Packed rollout implementation landed locally
+
+### What changed
+
+Implemented the first real RL-side packed rollout path for Iris:
+
+- added `PackedvLLMInferenceContextConfig`
+- added parent packed inference context:
+  - `lib/marin/src/marin/rl/environments/inference_ctx/packed_vllm.py`
+- added child worker process + IPC protocol:
+  - `lib/marin/src/marin/rl/environments/inference_ctx/packed_vllm_worker.py`
+  - `lib/marin/src/marin/rl/environments/inference_ctx/packed_vllm_protocol.py`
+- added shared remote-metadata staging helper:
+  - `lib/marin/src/marin/rl/environments/inference_ctx/staging.py`
+- wired packed config into exports and RL job / rollout worker dispatch:
+  - `lib/marin/src/marin/rl/environments/inference_ctx/__init__.py`
+  - `lib/marin/src/marin/rl/environments/inference_ctx/base.py`
+  - `lib/marin/src/marin/rl/rl_job.py`
+  - `lib/marin/src/marin/rl/rollout_worker.py`
+
+### Implementation shape
+
+Current design is the planned full-inflight-parity shape:
+
+- one rollout Iris job still owns the environment, curriculum, rollout writing, and eval logic
+- inside that rollout job, the packed parent context spawns `2` fresh subprocesses
+- each subprocess sets:
+  - `TPU_VISIBLE_CHIPS`
+  - `TPU_PROCESS_BOUNDS`
+  - `TPU_CHIPS_PER_PROCESS_BOUNDS`
+- each child owns:
+  - one `AsyncvLLMInferenceContext`
+  - one weight-transfer client
+  - background inflight weight polling
+  - `active_weight_id` / `pending_weight_id`
+- the parent:
+  - polls child status
+  - only dispatches a logical batch at one shared weight id
+  - activates matching pending weights on both replicas before dispatch
+  - shards prompts contiguously and merges completions back in original order
+  - treats any child RPC/process failure as fatal
+
+Important rollout-worker change:
+
+- packed mode now owns weight sync in the inference context
+- the rollout worker skips the ordinary parent `_transfer_client` in that mode
+- rollout metadata `weight_step` is taken from the packed context’s dispatch weight id
+
+### Launcher
+
+Added the real packed RL experiment launcher:
+
+- `experiments/exp_iris_rl_regression_direct_gcs_packed.py`
+
+Shape:
+
+- `1 x v5p-8` trainer
+- `1 x v5p-8` rollout
+- rollout packed as:
+  - replica `0`: chips `0,1`, `TP=2`
+  - replica `1`: chips `2,3`, `TP=2`
+- `n_prompts=64`
+- `16` generations / prompt
+- `eval_frequency=1`
+- `inflight_weight_updates=True`
+
+### Local validation
+
+Formatting / typecheck:
+
+- `./infra/pre-commit.py --fix ...` on all touched files: passed
+
+Focused unit coverage:
+
+- `uv run --package marin pytest tests/rl/test_rollout_worker.py tests/rl/test_packed_vllm_inference_ctx.py tests/rl/test_inference_ctx.py`
+- result: `40 passed`
+
+Broader RL package coverage with default repo markers:
+
+- `uv run --package marin pytest tests/rl`
+- result: `144 passed, 2 skipped, 12 deselected`
+
+Slow-inclusive local integration pass:
+
+- `uv run --package marin pytest tests/rl -m 'not tpu_ci'`
+- result: **not clean locally**
+- failure mode was timeout in existing RL integration tests waiting for initial rollouts / local threaded harness progress
+- this did **not** surface a packed-rollout unit failure; the new packed path is not covered by those local levanter integration cases yet
+
+### Next action
+
+Run the real Iris smoke:
+
+- `PKR-001`
+- command target:
+  - `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name iris-rl-packed-pkr001-<timestamp> --region us-central1 -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- uv run python experiments/exp_iris_rl_regression_direct_gcs_packed.py --experiment-name-suffix e4pk2 --num-train-steps 5 --n-prompts 64 --eval-frequency 1 --region us-central1`
+
+## 2026-03-26 19:05 PDT - `PKR-001` packed RL smoke succeeded, but throughput landed near `e4par`, not `e4ms2`
+
+### Launch / artifacts
+
+- root job:
+  - `/ahmed/irl-e4pk2-5-20260326-182126`
+- child jobs:
+  - `/ahmed/irl-e4pk2-5-20260326-182126/rl-pkr001-20260327-012712-train`
+  - `/ahmed/irl-e4pk2-5-20260326-182126/rl-pkr001-20260327-012712-rollout-0`
+- W&B:
+  - trainer: https://wandb.ai/marin-community/marin_iris_rl_debug/runs/pkr001-20260327-012712-train
+  - rollout: https://wandb.ai/marin-community/marin_iris_rl_debug/runs/pkr001-20260327-012712-rollout-0
+
+### Final status
+
+- root, trainer, and rollout all ended `JOB_STATE_SUCCEEDED`
+- `exit_code=0`
+- `failure_count=0`
+- `preemption_count=0`
+
+This was a real end-to-end RL success for the new packed rollout path:
+
+- one trainer `v5p-8`
+- one rollout `v5p-8`
+- rollout pod running `2 x TP=2` local packed replicas
+- inflight weight updates active
+
+### What worked
+
+- packed rollout was functionally correct in RL:
+  - both local replicas started, fetched weights, activated weights, and generated batches
+  - both replicas ended on `active_weight_id=4`
+  - both replicas reported `6` successful weight fetches / activations
+  - both replicas reported `0` failed receives
+- rollout storage writes were cheap:
+  - typical serialize + GCS write cost was about `0.21-0.28s`
+- trainer-side compute was healthy once data existed:
+  - steady-state `throughput/step_duration_seconds` was about `61s`
+  - steady-state `throughput/tokens_per_second` was about `34.4k`
+  - steady-state `throughput/mfu` was about `90%`
+
+### What did not work
+
+This did **not** match `e4ms2` throughput.
+
+The short-smoke wall-clock picture was:
+
+- trainer waited `275s` for initial rollouts
+- trainer progress reached `5/5` at about `18m10s`
+- that is about `218s/step` over the 5-step train loop
+- excluding the startup-heavy first step, the remaining 4 steps were about `171s/step`
+
+That is much slower than:
+
+- `e4ms2`: about `101s/step`
+- and only modestly better than the older single-rollout parity regime (`e4par`: about `182s/step`)
+
+So packed RL currently lands much closer to `e4par` class than `e4ms2` class.
+
+### Why it missed
+
+The bottleneck was **not** trainer math. The bottleneck was rollout-side availability.
+
+Evidence:
+
+- trainer-side compute stayed near `61s/step`
+- but trainer `batch_prep` totals after startup were:
+  - step 2: `60.854s`
+  - step 3: `39.208s`
+  - step 4: `31.538s`
+- those delays were mostly fetch wait, not batch construction:
+  - step 2 fetch: `57.645s`
+  - step 3 fetch: `36.126s`
+  - step 4 fetch: `28.320s`
+
+Rollout logs explain the wait:
+
+- the single packed rollout worker was doing both:
+  - train rollout generation (`32 + 32` prompt shards)
+  - eval generation (`250 + 250` prompt shards)
+- eval used both local packed replicas on the same worker
+- that means the packed rollout topology reproduced sampler throughput, but it did **not** reproduce the scheduling benefit of two independent rollout workers
+
+Concretely:
+
+- in `e4ms2`, eval interference is diluted across two rollout jobs
+- in packed `PKR-001`, one rollout job still owns all rollout and eval work
+- so eval continues to contaminate trainer-facing cadence
+
+### Secondary notes
+
+- rollout W&B ended with:
+  - `inference.packed/replica_count = 2`
+  - `inference.packed/replica_0/total_generate_requests = 15`
+  - `inference.packed/replica_1/total_generate_requests = 15`
+  - `inference.rollout_storage/cumulative_batch_count = 10`
+- rollout W&B also emitted a minor step-order warning around step `-1`
+  - this did not affect job success
+- the TPU scoped-vmem `ragged_paged_attention` messages observed during startup were compile-time warnings, not fatal errors
+
+### Conclusion
+
+`PKR-001` is a **correctness success** and a **throughput miss**.
+
+It proves:
+
+- one `v5p-8` can host the packed sampler path correctly in real RL
+
+It does **not** prove:
+
+- that one packed rollout worker can replace the `e4ms2` two-rollout topology at the same trainer-facing cadence
+
+Current best interpretation:
+
+- packed rollout fixed the hardware-topology problem
+- the remaining throughput problem is eval scheduling / ownership inside the RL stack
+
+### Next action
+
+The next discriminating experiment should isolate pure rollout parity from eval contamination:
+
+- rerun packed RL with eval disabled or made sparse
+- compare resulting wall-clock / `batch_prep` directly against `e4ms2`
+- if packed cadence moves toward `~100-120s/step`, the remaining blocker is eval scheduling, not packed inference
+
+## 2026-03-26 19:28 PDT - Historical postmortem on older `e4par` and `e4p` runs
+
+I checked the older W&B links that looked like unexplained deaths and wrote down the actual Iris-side cause so we do not misclassify them later.
+
+### `e4par-20260326-044831` did not crash; it was manually terminated
+
+- W&B:
+  - trainer: https://wandb.ai/marin-community/marin_iris_rl_debug/runs/e4par-20260326-044831-train
+  - rollout: https://wandb.ai/marin-community/marin_iris_rl_debug/runs/e4par-20260326-044831-rollout-0
+- Iris subtree:
+  - root: `/ahmed/irl-e4par-100-0325-2147`
+  - trainer: `/ahmed/irl-e4par-100-0325-2147/rl-e4par-20260326-044831-train`
+  - rollout: `/ahmed/irl-e4par-100-0325-2147/rl-e4par-20260326-044831-rollout-0`
+- Root, trainer, and rollout all ended `JOB_STATE_KILLED` with `error="Terminated by user"`.
+- `failure_count=0` and `preemption_count=0` on the killed tasks.
+- The run was still healthy when it was stopped:
+  - trainer had already completed step `70`
+  - rollout had just finished eval at step `70` and started the next generation wave
+  - there was no traceback or runtime failure signal in the last logs
+
+Conclusion:
+
+- `e4par-20260326-044831` was a coordinated manual stop, not an Iris failure, OOM, or rollout crash
+- W&B showing an unclean terminal state is just the result of external termination before a graceful final flush
+
+### `e4p-20260325-130820` failed on the trainer, not the rollout
+
+- W&B:
+  - trainer: https://wandb.ai/marin-community/marin_iris_rl_debug/runs/e4p-20260325-130820-train
+  - rollout: https://wandb.ai/marin-community/marin_iris_rl_debug/runs/e4p-20260325-130820-rollout-0
+- Iris lineage:
+  - root: `/ahmed/irl-e4p-100r3-0324-2245`
+  - trainer child: `/ahmed/irl-e4p-100r3-0324-2245/rl-e4p-20260325-130820-train`
+  - rollout child: `/ahmed/irl-e4p-100r3-0324-2245/rl-e4p-20260325-130820-rollout-0`
+- The trainer child exhausted its retry budget and Iris killed the subtree.
+- Archived bug report evidence for the trainer child showed:
+  - `failure_count=2`
+  - `preemption_count=1`
+  - attempt `0`: TPU worker timeout / worker failure
+  - attempt `1`: exit `137` OOM kill shortly after replay-buffer activity
+  - attempt `2`: exit `137` OOM kill during the JAX array-serialization / commit path
+- The rollout child itself looked healthy up to termination:
+  - W&B rollout summary ended around `_runtime ~ 13215s`
+  - `_step=20`
+  - `inference.rollout_storage/cumulative_batch_count=115`
+  - `inference.throughput/tokens_per_second ~3300`
+  - `inference.eval/math_full/avg_at_1=0.47`
+- Once the trainer child exceeded max failures, Iris killed the rollout child as collateral and the root later failed because the `130820` trainer child was no longer present.
+
+Conclusion:
+
+- `e4p-20260325-130820` was a trainer-instability failure, not a rollout failure
+- the relevant failure modes were worker timeout plus repeated trainer OOMs
+- the rollout W&B run looking superficially healthy is expected because rollout was not the first component to fail
+
+## 2026-03-26 23:18 PDT - Concrete plan for packed `v5p-8`: split train across both replicas, pin eval to one replica
+
+Terminology for this plan:
+
+- one Iris rollout job owns one packed rollout worker
+- that packed rollout worker owns two local vLLM replicas on the same `v5p-8`
+- each local replica is `TP=2`
+- use `replica 0` and `replica 1` for the local vLLM instances
+
+Goal:
+
+- preserve packed rollout for train sampling by using both local replicas when possible
+- route eval onto only one local replica so eval no longer consumes all packed sampler capacity
+- keep `LLM.generate()` / in-process vLLM hot weight reloads; do **not** switch to `vllm serve`
+
+Important caveat:
+
+- routing eval to one replica is not sufficient by itself
+- today eval runs inline in the rollout loop, so the rollout worker still blocks while eval is running
+- to get trainer-facing benefit, we need both:
+  - replica-aware request routing in the packed inference context
+  - background eval execution in the rollout worker so train sampling can continue on the other replica
+
+### Desired behavior
+
+- `train` request, no eval active:
+  - shard prompts across `replica 0` and `replica 1`
+- `eval` or `micro_eval` request:
+  - send all prompts only to `replica 1`
+- `train` request while eval is active on `replica 1`:
+  - send all train prompts only to `replica 0`
+- no request should ever dispatch to a replica that is already reserved by another request
+
+This will make one packed rollout worker behave much more like two local samplers:
+
+- `replica 0`: train-priority path
+- `replica 1`: shared train/eval path, but eval-preferred when an eval is scheduled
+
+### Code changes
+
+1. Extend the inference API with request kind.
+
+- file: `lib/marin/src/marin/rl/environments/inference_ctx/base.py`
+- add `request_kind: Literal["train", "eval", "micro_eval"]` to `batch_completions(...)`
+- update all inference-context implementations to accept the new parameter
+- default behavior for non-packed contexts can ignore the value after type acceptance
+
+2. Pass mode through environments.
+
+- file: `lib/marin/src/marin/rl/environments/math_env.py`
+- `MathEnv.sample(...)` already has `mode`
+- forward that mode into `inference_ctx.batch_completions(..., request_kind=mode)`
+- preserve existing `mode in ("train", "eval")` validation
+
+3. Add packed routing policy to the packed inference context.
+
+- file: `lib/marin/src/marin/rl/environments/inference_ctx/packed_vllm.py`
+- add a small routing helper that maps request kind to preferred replica set:
+  - `train` -> `{0,1}` when both free, else `{0}`
+  - `eval` -> `{1}`
+  - `micro_eval` -> `{1}`
+- reject invalid states explicitly rather than silently falling back
+- keep prompt ordering stable by splitting only across the chosen subset and then merging back into original index order
+
+4. Add per-replica reservation / concurrency control.
+
+- file: `lib/marin/src/marin/rl/environments/inference_ctx/packed_vllm.py`
+- current implementation assumes one packed batch at a time across all replicas
+- replace that with per-replica reservation state:
+  - lock for `replica 0`
+  - lock for `replica 1`
+  - request-scoped reservation objects
+- requirements:
+  - train and eval may run concurrently if they target disjoint replicas
+  - two evals may not overlap on `replica 1`
+  - train may use both replicas only when both are available
+  - train must degrade cleanly to `replica 0` only when `replica 1` is reserved by eval
+
+5. Make dispatch-weight resolution subset-aware.
+
+- file: `lib/marin/src/marin/rl/environments/inference_ctx/packed_vllm.py`
+- today `_resolve_dispatch_weight(...)` checks both replicas together
+- change it to resolve activation for a chosen replica subset
+- rules:
+  - train on `{0,1}` requires a shared dispatch weight across both replicas
+  - eval on `{1}` requires only `replica 1` to be activated to the chosen dispatch weight
+  - train metadata continues to use the train request's dispatch weight only
+- keep full inflight parity:
+  - child replicas still own their own weight-transfer clients
+  - no non-inflight fallback
+
+6. Move eval off the synchronous rollout path.
+
+- file: `lib/marin/src/marin/rl/rollout_worker.py`
+- current `_evaluate_lesson(...)` / `_evaluate_curriculum(...)` run inline in the main rollout loop
+- add a dedicated background executor or thread for eval work
+- behavior:
+  - when eval is triggered, submit eval work asynchronously
+  - main rollout loop continues generating train batches immediately
+  - if another eval trigger arrives while one is still running, coalesce or skip the duplicate instead of queuing an unbounded backlog
+- this is the key scheduling fix; without it, `replica 1` isolation helps less than it should
+
+7. Track train and eval dispatch state separately in metrics.
+
+- files:
+  - `lib/marin/src/marin/rl/environments/inference_ctx/packed_vllm.py`
+  - `lib/marin/src/marin/rl/rollout_worker.py`
+- add packed metrics for:
+  - `packed/replica_0/busy`
+  - `packed/replica_1/busy`
+  - `packed/eval_active`
+  - `packed/last_train_dispatch_weight_id`
+  - `packed/last_eval_dispatch_weight_id`
+  - per-replica generate counts split by request kind if easy
+- this is needed so the next RL run can prove whether eval is still contaminating train throughput
+
+8. Keep failure handling strict.
+
+- files:
+  - `lib/marin/src/marin/rl/environments/inference_ctx/packed_vllm.py`
+  - `lib/marin/src/marin/rl/environments/inference_ctx/packed_vllm_worker.py`
+- if either child replica dies, hangs, or returns a weight-consistency error:
+  - kill the packed inference context
+  - crash the rollout worker
+  - let Iris retry the rollout job
+- do not add a degraded one-replica survival mode in v1
+
+### Test plan
+
+1. Routing unit tests.
+
+- file: `tests/rl/test_packed_vllm_inference_ctx.py`
+- cases:
+  - `train` with no eval active uses both replicas
+  - `eval` uses only `replica 1`
+  - `micro_eval` uses only `replica 1`
+  - `train` while eval is active uses only `replica 0`
+  - merged outputs preserve original prompt ordering
+
+2. Weight-resolution unit tests.
+
+- file: `tests/rl/test_packed_vllm_inference_ctx.py`
+- cases:
+  - train subset `{0,1}` requires shared dispatch weight
+  - eval subset `{1}` resolves independently
+  - stale / mismatched status causes deterministic failure, not silent serving
+
+3. Rollout-worker integration tests.
+
+- files:
+  - `tests/rl/test_rollout_worker.py`
+- cases:
+  - eval submission does not block the main train rollout loop
+  - duplicate eval triggers coalesce while one eval job is already running
+  - packed metrics expose eval-active and per-replica busy state
+
+### Validation ladder
+
+1. Local tests.
+
+- `uv run --package marin pytest tests/rl/test_packed_vllm_inference_ctx.py`
+- `uv run --package marin pytest tests/rl/test_rollout_worker.py`
+- `./infra/pre-commit.py --fix` on touched files
+
+2. Short Iris smoke.
+
+- rerun a 5-step packed RL smoke with the new eval-routing behavior
+- success criteria:
+  - job still succeeds cleanly
+  - train rollouts continue while eval is active
+  - metrics show eval bound to `replica 1`
+
+3. Throughput confirmation run.
+
+- run packed RL with the same shape as `PKR-001`
+- compare against prior `PKR-001`:
+  - overall step time
+  - trainer `batch_prep`
+  - rollout-side generate counts per replica
+- if cadence improves materially toward `~100-120s/step`, then eval scheduling was the main remaining bottleneck
+
+### Expected outcome
+
+Best realistic outcome:
+
+- one packed rollout `v5p-8` becomes much closer to an `e4ms2` replacement because eval no longer monopolizes both local replicas
+
+What this still does **not** promise:
+
+- exact `e4ms2` parity under every eval regime
+- during eval windows, train still temporarily loses access to `replica 1`
+- the point of this change is to preserve one train-serving replica during eval, not to make eval free
+
+## 2026-03-26 23:31 PDT - Eval-isolated packed rollout implementation landed locally
+
+I implemented the concrete packed `v5p-8` follow-up from the section above.
+
+### What changed
+
+- added explicit inference request kinds (`train`, `eval`, `micro_eval`) to the RL inference-context API
+- threaded request kind through RL environments so packed routing can distinguish train from eval while still using the eval dataset for both full eval and micro-eval
+- updated packed vLLM parent routing so:
+  - `train` uses both local replicas when eval is idle
+  - `eval` and `micro_eval` pin to `replica 1`
+  - `train` falls back to `replica 0` while eval is active or waiting on `replica 1`
+- made packed dispatch-weight resolution subset-aware instead of globally assuming both replicas serve every request
+- added parent-side packed metrics for:
+  - `packed/eval_active`
+  - per-replica reservation flags
+  - `packed/last_train_dispatch_weight_id`
+  - `packed/last_eval_dispatch_weight_id`
+- added child-side per-request-kind generate counters:
+  - `total_train_generate_requests`
+  - `total_eval_generate_requests`
+  - `total_micro_eval_generate_requests`
+- reworked rollout-worker eval execution:
+  - packed rollout now computes eval work on a background executor
+  - main train rollout loop continues running while async eval is in flight
+  - duplicate eval triggers are coalesced instead of building an unbounded queue
+  - eval computation happens off-thread, but tracker / curriculum side effects are consumed on the main thread after the future completes
+
+### Local validation
+
+- `uv run python -m py_compile ...` on all touched RL / packed files: passed
+- focused tests:
+  - `uv run --package marin pytest tests/rl/test_packed_vllm_inference_ctx.py tests/rl/test_rollout_worker.py tests/rl/environments/test_math_env.py tests/rl/environments/test_mock_env.py`
+  - result: `39 passed`
+- repo checks on touched files:
+  - `./infra/pre-commit.py --fix ...`
+  - result: passed, including `pyrefly`
+- broader RL suite:
+  - `uv run --package marin pytest tests/rl`
+  - result: `150 passed, 2 skipped, 12 deselected`
+
+### Current state
+
+This is ready for the next Iris validation run.
+
+The important unanswered question is now purely empirical:
+
+- does pinning eval to `replica 1` and letting train continue on `replica 0` materially improve packed RL cadence versus `PKR-001`?
+
+### Next step
+
+Run a short packed RL smoke on Iris with the new implementation and check:
+
+- rollout-side metrics show eval requests only on `replica 1`
+- train generate requests continue on `replica 0` during eval windows
+- trainer `batch_prep` improves materially versus `PKR-001`
