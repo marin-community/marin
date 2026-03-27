@@ -40,6 +40,9 @@ _MICRO_BATCH_SIZE = 8
 # Fixed batch size for Levanter cache writes (2^14).
 _LEVANTER_BATCH_SIZE = 16384
 
+# How often per-record counters are flushed (to avoid lock-per-record).
+_COUNTER_FLUSH_INTERVAL = 1024
+
 
 def unique_temp_path(output_path: str) -> str:
     """Return a unique temporary path derived from ``output_path``.
@@ -99,6 +102,8 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
     count = 0
     encoder = msgspec.json.Encoder()
 
+    pending_counter = 0
+
     with atomic_rename(output_path) as temp_path:
         fs, resolved_temp = url_to_fs(temp_path)
         if output_path.endswith(".zst"):
@@ -110,19 +115,30 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
                     for record in records:
                         f.write(encoder.encode(record) + b"\n")
                         count += 1
-                        counters.increment("zephyr/records_out")
+                        pending_counter += 1
+                        if pending_counter >= _COUNTER_FLUSH_INTERVAL:
+                            counters.increment("zephyr/records_out", pending_counter)
+                            pending_counter = 0
         elif output_path.endswith(".gz"):
             with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE, compression="gzip") as f:
                 for record in records:
                     f.write(encoder.encode(record) + b"\n")
                     count += 1
-                    counters.increment("zephyr/records_out")
+                    pending_counter += 1
+                    if pending_counter >= _COUNTER_FLUSH_INTERVAL:
+                        counters.increment("zephyr/records_out", pending_counter)
+                        pending_counter = 0
         else:
             with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
                 for record in records:
                     f.write(encoder.encode(record) + b"\n")
                     count += 1
-                    counters.increment("zephyr/records_out")
+                    pending_counter += 1
+                    if pending_counter >= _COUNTER_FLUSH_INTERVAL:
+                        counters.increment("zephyr/records_out", pending_counter)
+                        pending_counter = 0
+
+    counters.increment("zephyr/records_out", pending_counter)
 
     return {"path": output_path, "count": count}
 
@@ -414,12 +430,18 @@ def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:
     ensure_parent_dir(output_path)
 
     count = 0
+    pending_counter = 0
     with atomic_rename(output_path) as temp_path:
         fs, resolved_temp = url_to_fs(temp_path)
         with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
             for record in records:
                 f.write(record)
                 count += 1
-                counters.increment("zephyr/records_out")
+                pending_counter += 1
+                if pending_counter >= _COUNTER_FLUSH_INTERVAL:
+                    counters.increment("zephyr/records_out", pending_counter)
+                    pending_counter = 0
+
+    counters.increment("zephyr/records_out", pending_counter)
 
     return {"path": output_path, "count": count}
