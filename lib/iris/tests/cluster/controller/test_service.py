@@ -360,8 +360,8 @@ def test_get_job_status_redacts_sensitive_env_vars(service):
     assert env["NUM_WORKERS"] == "4"
 
 
-def test_get_job_status_default_omits_tasks(service):
-    """Default GetJobStatus (include_tasks=false) returns no per-task detail."""
+def test_get_job_status_omits_per_task_detail(service):
+    """GetJobStatus never populates per-task detail (callers use ListTasks)."""
     service.launch_job(make_job_request("task-test"), None)
     job_id = JobName.root("test-user", "task-test")
 
@@ -370,20 +370,6 @@ def test_get_job_status_default_omits_tasks(service):
 
     assert response.job.state == cluster_pb2.JOB_STATE_PENDING
     assert len(response.job.tasks) == 0
-    # Aggregated counts are still populated
-    assert response.job.task_count == 1
-
-
-def test_get_job_status_include_tasks(service):
-    """GetJobStatus with include_tasks=true populates per-task detail."""
-    service.launch_job(make_job_request("task-test"), None)
-    job_id = JobName.root("test-user", "task-test")
-
-    request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire(), include_tasks=True)
-    response = service.get_job_status(request, None)
-
-    assert response.job.state == cluster_pb2.JOB_STATE_PENDING
-    assert len(response.job.tasks) == 1
     assert response.job.task_count == 1
 
 

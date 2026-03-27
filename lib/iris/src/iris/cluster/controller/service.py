@@ -223,14 +223,6 @@ def _active_job_count(job_state_counts: dict[int, int]) -> int:
     return sum(count for state, count in job_state_counts.items() if state not in TERMINAL_JOB_STATES)
 
 
-def _task_state_counts_from_tasks(tasks: list[Task]) -> dict[str, int]:
-    """Build string-keyed task state counts from a list of Task objects."""
-    counts: dict[int, int] = {}
-    for t in tasks:
-        counts[t.state] = counts.get(t.state, 0) + 1
-    return {_task_state_key(state): count for state, count in counts.items()}
-
-
 def _task_state_counts_for_summary(task_state_counts: dict[int, int]) -> dict[str, int]:
     """Convert enum-keyed task counts to the string-keyed RPC shape."""
     counts = {_task_state_key(state): 0 for state in USER_TASK_STATES}
@@ -837,48 +829,24 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.GetJobStatusRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.GetJobStatusResponse:
-        """Get status of a specific job.
+        """Get job-level status with aggregated task counts.
 
-        When request.include_tasks is true, populates JobStatus.tasks with
-        per-task detail (attempts, worker addresses).  Otherwise returns only
-        job-level fields with aggregated counts from a lightweight GROUP BY
-        query — significantly cheaper for the controller.
+        Per-task detail (attempts, worker addresses) is NOT included — callers
+        that need it should use ListTasks instead.  This keeps GetJobStatus
+        cheap: one job row read + one GROUP BY query vs loading every task,
+        attempt, and worker address.
         """
         job = _read_job(self._db, JobName.from_wire(request.job_id))
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
-        if request.include_tasks:
-            # Full path: load every task with attempt history and worker addresses.
-            tasks = tasks_for_job_with_attempts(self._db, job.job_id)
-            worker_addr_by_id = _worker_addresses_for_tasks(self._db, tasks)
+        # Aggregate task counts via a single GROUP BY query.
+        summaries = _task_summaries_for_jobs(self._db, {job.job_id})
+        summary = summaries.get(job.job_id)
 
-            task_statuses = []
-            total_failure_count = 0
-            total_preemption_count = 0
-            for task in tasks:
-                total_failure_count += task.failure_count
-                total_preemption_count += task.preemption_count
-                task_statuses.append(task_to_proto(task, worker_address=worker_addr_by_id.get(task.worker_id, "")))
-
-            task_state_counts = _task_state_counts_from_tasks(tasks)
-            task_count = len(tasks)
-            completed_count = sum(
-                1 for t in tasks if t.state in (cluster_pb2.TASK_STATE_SUCCEEDED, cluster_pb2.TASK_STATE_KILLED)
-            )
-        else:
-            # Lightweight path: aggregate counts via a single GROUP BY query.
-            summaries = _task_summaries_for_jobs(self._db, {job.job_id})
-            summary = summaries.get(job.job_id)
-
-            task_statuses = []
-            total_failure_count = summary.failure_count if summary else 0
-            total_preemption_count = summary.preemption_count if summary else 0
-            task_state_counts = (
-                {_task_state_key(state): count for state, count in summary.task_state_counts.items()} if summary else {}
-            )
-            task_count = summary.task_count if summary else 0
-            completed_count = summary.completed_count if summary else 0
+        task_state_counts = (
+            {_task_state_key(state): count for state, count in summary.task_state_counts.items()} if summary else {}
+        )
 
         # Get scheduling diagnostics for pending jobs from cache
         # (populated each scheduling cycle by the controller).
@@ -891,20 +859,18 @@ class ControllerServiceImpl:
                 scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
                 pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
-        # Build the JobStatus proto and set timestamps
         proto_job_status = cluster_pb2.JobStatus(
             job_id=job.job_id.to_wire(),
             state=job.state,
             error=job.error or "",
             exit_code=job.exit_code or 0,
-            failure_count=total_failure_count,
-            preemption_count=total_preemption_count,
-            tasks=task_statuses,
+            failure_count=summary.failure_count if summary else 0,
+            preemption_count=summary.preemption_count if summary else 0,
             name=job.request.name if job.request else "",
             pending_reason=pending_reason,
             task_state_counts=task_state_counts,
-            task_count=task_count,
-            completed_count=completed_count,
+            task_count=summary.task_count if summary else 0,
+            completed_count=summary.completed_count if summary else 0,
         )
         if job.request:
             proto_job_status.resources.CopyFrom(job.request.resources)
