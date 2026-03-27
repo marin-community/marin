@@ -38,7 +38,6 @@ from fray.v2.types import (
     create_environment,
     get_tpu_topology,
 )
-from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -209,8 +208,14 @@ def build_runtime_env(request: JobRequest) -> dict:
             pip_packages=list(environment.pip_packages),
             env_vars=env_vars,
         )
-        runtime_env["working_dir"] = environment.workspace
-        runtime_env["excludes"] = [".git", "tests/", "docs/", "**/*.pack"]
+        import re
+
+        from iris.cluster.client.bundle import create_workspace_dir  # lazy: avoid PyPI iris conflict on workers
+
+        runtime_env["working_dir"] = create_workspace_dir(
+            environment.workspace,
+            exclude=re.compile(r"^(tests|docs)(/|$)|\.pack$"),
+        )
         runtime_env["config"] = {"setup_timeout_seconds": 1800}
     else:
         python_path = build_python_path(submodules_dir=os.path.join(environment.workspace, "submodules"))
@@ -483,6 +488,8 @@ class _RayActorHostBase:
         args: tuple,
         kwargs: dict,
     ):
+        from iris.logging import configure_logging  # lazy: avoid PyPI iris conflict on workers
+
         configure_logging(level=logging.INFO)
 
         self._shutdown_event = threading.Event()
