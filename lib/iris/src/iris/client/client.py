@@ -79,19 +79,12 @@ class TaskLogEntry:
     key: str = ""
 
 
-def _task_id_from_entry(entry, fallback: JobName) -> JobName:
-    """Extract the task JobName from a LogEntry's key field.
-
-    On multi-key queries the key is populated (e.g. "/user/job/0:3").
-    On single-key queries it may be empty, so we fall back to the caller's target.
-    """
-    if not entry.key:
-        return fallback
-    # Key format: /user/alice/job/0:3 — strip the :attempt suffix to get the task id
-    colon = entry.key.rfind(":")
+def _task_id_from_key(key: str) -> JobName:
+    """Extract the task JobName from a log entry key (e.g. "/user/job/0:3" -> "/user/job/0")."""
+    colon = key.rfind(":")
     if colon >= 0:
-        return JobName.from_wire(entry.key[:colon])
-    return JobName.from_wire(entry.key)
+        return JobName.from_wire(key[:colon])
+    return JobName.from_wire(key)
 
 
 class JobFailedError(Exception):
@@ -831,7 +824,7 @@ class IrisClient:
         result = [
             TaskLogEntry(
                 timestamp=Timestamp.from_proto(e.timestamp),
-                task_id=_task_id_from_entry(e, target),
+                task_id=_task_id_from_key(e.key),
                 source=e.source,
                 data=e.data,
                 attempt_id=e.attempt_id,
