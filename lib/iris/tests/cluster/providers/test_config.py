@@ -10,19 +10,24 @@ YAML, ensuring that vm_type and platform configuration are preserved correctly.
 from pathlib import Path
 from typing import ClassVar
 
+import time
+
 import pytest
 import yaml
 
 from iris.cluster.config import (
     config_to_dict,
+    connect_cluster,
     create_autoscaler,
     get_ssh_config,
     load_config,
+    make_local_config,
     validate_config,
 )
 from iris.cluster.providers.factory import create_provider_bundle
 from iris.cluster.constraints import WellKnownAttribute
-from iris.rpc import config_pb2
+from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc.cluster_connect import ControllerServiceClientSync
 
 
 class TestConfigRoundTrip:
@@ -1409,37 +1414,12 @@ def test_coreweave_worker_provider_rejected():
         validate_config(config)
 
 
-# ---------------------------------------------------------------------------
-# Config parity: verify the real cloud smoke config works in local mode.
-# This catches naming issues (GCE 63-char limit, invalid chars from zone
-# expansion) that only surface when the autoscaler tries to create slices
-# with realistic expanded-zone name prefixes.
-#
-# Moved here from tests/e2e/test_smoke.py: the e2e module applies a blanket
-# `pytestmark = pytest.mark.e2e` and carries an autouse session fixture
-# (_ensure_dashboard_built) that runs npm ci + npm run build. Because
-# pytest-timeout includes fixture setup time and the pyproject.toml default
-# is 30s, the first e2e test bore the npm overhead and the 8-worker cluster
-# boot, reliably timing out on slow CI runners.
-# ---------------------------------------------------------------------------
-
 SMOKE_GCP_CONFIG = Path(__file__).resolve().parents[3] / "examples" / "smoke-gcp.yaml"
 
 
 @pytest.mark.timeout(60)
 def test_smoke_gcp_config_boots_locally():
-    """Load smoke-gcp.yaml, convert to local mode, verify workers join.
-
-    This is the local equivalent of the cloud-smoke-test CI job. If this
-    test fails, the cloud smoke test will also fail — catching GCE naming
-    validation errors without needing real GCP resources.
-    """
-    import time
-
-    from iris.cluster.config import connect_cluster, make_local_config
-    from iris.rpc import cluster_pb2
-    from iris.rpc.cluster_connect import ControllerServiceClientSync
-
+    """Load smoke-gcp.yaml, convert to local mode, verify workers join."""
     config = load_config(SMOKE_GCP_CONFIG)
     config = make_local_config(config)
 
