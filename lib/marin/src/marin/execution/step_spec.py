@@ -100,7 +100,7 @@ class StepSpec:
         start with ``/``), it is automatically prefixed with ``output_path_prefix``
         or ``marin_prefix()``.
         """
-        prefix = self.output_path_prefix or marin_prefix()
+        prefix = (self.output_path_prefix or marin_prefix()).rstrip("/")
         if self.override_output_path is not None:
             if _is_relative_path(self.override_output_path):
                 return f"{prefix}/{self.override_output_path}"

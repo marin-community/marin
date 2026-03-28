@@ -103,11 +103,7 @@ def _build_downloads() -> dict[str, ExecutorStep | InputName]:
         "dclm_baseline": (
             _dl("raw/dclm-baseline-1.0", "mlfoundations/dclm-baseline-1.0", "a3b142c", "raw/dclm").cd("a3b142c")
         ),
-        "proofpile_2": (
-            _dl("raw/proof-pile-2", "EleutherAI/proof-pile-2", "901a927", "raw/proof-pile-2-f1b1d8").cd(
-                "901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927"
-            )
-        ),
+        "proofpile_2": _dl("raw/proof-pile-2", "EleutherAI/proof-pile-2", "901a927", "raw/proof-pile-2-f1b1d8"),
         "starcoderdata": _dl("raw/starcoderdata", "bigcode/starcoderdata", "9fc30b5", "raw/starcoderdata-720c8c"),
     }
 

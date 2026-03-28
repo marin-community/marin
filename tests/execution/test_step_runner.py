@@ -248,6 +248,16 @@ def test_step_spec_as_executor_step_round_trip():
     assert resolved.dep_paths == [dep.output_path]
 
 
+def test_step_spec_relative_output_path_normalizes_trailing_slash_prefix():
+    step = StepSpec(
+        name="download",
+        output_path_prefix="s3://marin-na/marin/",
+        override_output_path="raw/starcoderdata-720c8c",
+    )
+
+    assert step.output_path == "s3://marin-na/marin/raw/starcoderdata-720c8c"
+
+
 # ---------------------------------------------------------------------------
 # StepRunner tests: three-step pipeline
 # ---------------------------------------------------------------------------
