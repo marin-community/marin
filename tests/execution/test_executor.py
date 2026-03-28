@@ -750,6 +750,49 @@ def test_mirrored_input_name_does_not_affect_version():
     assert deps_plain.version == deps_mirrored.version
 
 
+def test_mirrored_value_truediv():
+    """MirroredValue / 'subdir' navigates into the inner value and keeps the wrapper."""
+    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
+    m = step.as_mirrored_value(budget_gb=20) / "hf" / "checkpoint"
+    assert isinstance(m, MirroredValue)
+    assert isinstance(m.value, InputName)
+    assert m.value.name == "hf/checkpoint"
+    assert m.budget_gb == 20
+
+
+def test_mirrored_value_cd():
+    """MirroredValue.cd() navigates into the inner value and keeps the wrapper."""
+    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
+    m = step.as_mirrored_value(budget_gb=15).cd("hf").cd("checkpoint")
+    assert isinstance(m, MirroredValue)
+    assert m.value.name == "hf/checkpoint"
+    assert m.budget_gb == 15
+
+
+def test_mirrored_value_truediv_instantiate():
+    """MirroredValue with / subdirs resolves correctly via instantiate_config."""
+
+    @dataclass(frozen=True)
+    class Cfg:
+        model_path: str
+        output_path: str
+
+    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
+    cfg = Cfg(model_path=step.as_mirrored_value(budget_gb=5) / "hf", output_path="out")
+    output_paths = {step: "/bucket/train/abc123"}
+    resolved = instantiate_config(cfg, output_path="/out", output_paths=output_paths, prefix="/bucket")
+    assert resolved.model_path == "mirror:///bucket/train/abc123/hf"
+
+
+def test_mirrored_value_cd_string_value():
+    """MirroredValue wrapping a string supports cd()."""
+    m = MirroredValue(value="gs://bucket/path", budget_gb=10)
+    m2 = m / "subdir"
+    assert isinstance(m2, MirroredValue)
+    assert m2.value == "gs://bucket/path/subdir"
+    assert m2.budget_gb == 10
+
+
 def test_status_file_takeover_stale_lock_then_refresh(tmp_path):
     """Test taking over a stale lock from a dead worker and then refreshing it."""
     from iris.distributed_lock import HEARTBEAT_TIMEOUT, Lease

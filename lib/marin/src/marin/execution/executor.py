@@ -944,6 +944,19 @@ class MirroredValue(Generic[T_co]):
     value: T_co
     budget_gb: float = 10
 
+    def cd(self, name: str) -> "MirroredValue":
+        """Navigate into a subdirectory, keeping the mirror wrapper."""
+        inner = self.value
+        if isinstance(inner, (ExecutorStep, InputName)):
+            return MirroredValue(value=inner.cd(name), budget_gb=self.budget_gb)
+        if isinstance(inner, str):
+            return MirroredValue(value=os.path.join(inner, name), budget_gb=self.budget_gb)
+        raise TypeError(f"cd() not supported on MirroredValue wrapping {type(inner)}")
+
+    def __truediv__(self, other: str) -> "MirroredValue":
+        """Alias for ``cd`` that looks more Pythonic."""
+        return self.cd(other)
+
 
 def mirrored(value: str | VersionedValue[str] | InputName, budget_gb: float = 10) -> MirroredValue:
     """Mark a path for cross-region mirroring with a transfer budget.
