@@ -7,8 +7,6 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
-import pytest
-
 import haliax as hax
 from haliax import Axis
 
@@ -25,7 +23,6 @@ from levanter.layers.attention import (
     set_attn_logit_tracking,
     simple_attention_with_dropout,
 )
-
 
 Embed = Axis("embed", 32)
 Pos = Axis("position", 8)
@@ -87,9 +84,9 @@ def test_qk_norm_product_scales_with_weight_magnitude():
     model_big = _TwoLayerModel(layer0=big_q, layer1=big_q)
     stats_big = compute_attention_instability_stats(model_big)
 
-    assert float(stats_big["attention/qk_norm_product_max"]) > float(
-        stats_normal["attention/qk_norm_product_max"]
-    ) * 5  # should be ~10x larger
+    assert (
+        float(stats_big["attention/qk_norm_product_max"]) > float(stats_normal["attention/qk_norm_product_max"]) * 5
+    )  # should be ~10x larger
 
 
 def test_no_attention_modules_returns_empty():
@@ -114,7 +111,12 @@ def test_max_attn_logit_tracking_vanilla():
 
         # Run vanilla attention
         simple_attention_with_dropout(
-            Pos, KPos, HeadSize, q, k, v,
+            Pos,
+            KPos,
+            HeadSize,
+            q,
+            k,
+            v,
         )
 
         max_logit = get_max_attn_logit()
@@ -125,9 +127,7 @@ def test_max_attn_logit_tracking_vanilla():
         scale = 1.0 / jnp.sqrt(HeadSize.size)
         qk = hax.dot(q * scale, k, axis=HeadSize)
         expected_max = float(jnp.max(qk.array))
-        assert abs(max_logit - expected_max) < 1e-5, (
-            f"captured {max_logit} vs expected {expected_max}"
-        )
+        assert abs(max_logit - expected_max) < 1e-5, f"captured {max_logit} vs expected {expected_max}"
     finally:
         set_attn_logit_tracking(False)
         reset_max_attn_logit()

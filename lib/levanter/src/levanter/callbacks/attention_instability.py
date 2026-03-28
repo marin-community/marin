@@ -13,7 +13,6 @@ Provides two complementary signals:
    unavailable — the weight-norm proxy covers that case.
 """
 
-import dataclasses
 import math
 from dataclasses import dataclass
 from typing import TypeVar
@@ -26,14 +25,8 @@ from jaxtyping import PyTree
 import haliax as hax
 import levanter.tracker
 from levanter.callbacks._core import JitCallback, StepInfo
-from levanter.layers.attention import (
-    Attention,
-    get_max_attn_logit,
-    reset_max_attn_logit,
-    set_attn_logit_tracking,
-)
+from levanter.layers.attention import Attention, get_max_attn_logit, reset_max_attn_logit
 from levanter.trainer_state import InsideJitInfo, TrainerState
-
 
 S = TypeVar("S", bound=TrainerState)
 M = TypeVar("M", bound=PyTree)
@@ -41,7 +34,7 @@ M = TypeVar("M", bound=PyTree)
 
 def _frobenius_norm(x: hax.NamedArray) -> jax.Array:
     """Frobenius norm of a NamedArray, reduced to a scalar."""
-    return jnp.sqrt(jnp.sum(x.array ** 2))
+    return jnp.sqrt(jnp.sum(x.array**2))
 
 
 def _frobenius_norm_per_layer(x: hax.NamedArray, layer_axis: str) -> jax.Array:
@@ -52,7 +45,7 @@ def _frobenius_norm_per_layer(x: hax.NamedArray, layer_axis: str) -> jax.Array:
     raw = jnp.moveaxis(raw, ax, 0)
     shape = raw.shape
     flat = raw.reshape(shape[0], -1)
-    return jnp.sqrt(jnp.sum(flat ** 2, axis=1))
+    return jnp.sqrt(jnp.sum(flat**2, axis=1))
 
 
 def _find_attention_modules(model: PyTree) -> list[Attention]:
@@ -162,9 +155,7 @@ class AttentionInstabilityCallback(JitCallback[S, M, dict[str, jax.Array]]):
     def __init__(self, track_vanilla_max_logit: bool = False):
         self.track_vanilla_max_logit = track_vanilla_max_logit
 
-    def inside_step(
-        self, state: TrainerState[M], inside_info: InsideJitInfo[M]
-    ) -> dict[str, jax.Array]:
+    def inside_step(self, state: TrainerState[M], inside_info: InsideJitInfo[M]) -> dict[str, jax.Array]:
         return compute_attention_instability_stats(state.model)
 
     def on_step(self, step_info: StepInfo[S], cb_info: dict[str, jax.Array]):
