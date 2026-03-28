@@ -14,6 +14,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import InterceptorSync
 
+from iris.cluster.client.bundle import BundleCreator
 from iris.cluster.log_store._types import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
@@ -109,8 +110,6 @@ class RemoteClusterClient:
         else:
             bundle_blob = b""
             if self._workspace is not None:
-                from iris.cluster.client.bundle import BundleCreator
-
                 creator = BundleCreator(self._workspace)
                 bundle_blob = creator.create_bundle()
                 logger.info(f"Workspace bundle size: {len(bundle_blob) / 1024 / 1024:.1f} MB")
