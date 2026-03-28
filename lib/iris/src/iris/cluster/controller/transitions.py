@@ -1629,15 +1629,25 @@ class ControllerTransitions:
             ).fetchall()
             if dispatch_rows:
                 cur.execute("DELETE FROM dispatch_queue WHERE worker_id = ?", (str(worker_id),))
-            running_rows = cur.execute(
-                "SELECT t.task_id, t.current_attempt_id "
+            running_rows_raw = cur.execute(
+                "SELECT t.task_id, t.current_attempt_id, t.job_id "
                 "FROM tasks t "
                 "JOIN task_attempts ta ON t.task_id = ta.task_id AND t.current_attempt_id = ta.attempt_id "
-                "JOIN jobs j ON j.job_id = t.job_id "
-                "WHERE ta.worker_id = ? AND t.state IN (?, ?, ?) AND j.is_reservation_holder = 0 "
+                "WHERE ta.worker_id = ? AND t.state IN (?, ?, ?) "
                 "ORDER BY t.task_id ASC",
                 (str(worker_id), *ACTIVE_TASK_STATES),
             ).fetchall()
+            running_job_ids = {str(row["job_id"]) for row in running_rows_raw}
+            if running_job_ids:
+                holder_placeholders = ",".join("?" for _ in running_job_ids)
+                holder_rows = cur.execute(
+                    f"SELECT job_id FROM jobs WHERE job_id IN ({holder_placeholders}) AND is_reservation_holder = 1",
+                    tuple(running_job_ids),
+                ).fetchall()
+                holder_ids = {str(r["job_id"]) for r in holder_rows}
+            else:
+                holder_ids = set()
+            running_rows = [r for r in running_rows_raw if str(r["job_id"]) not in holder_ids]
             tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest] = []
             tasks_to_kill: list[str] = []
             for row in dispatch_rows:

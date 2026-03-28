@@ -373,15 +373,14 @@ def benchmark_heartbeat(db: ControllerDB, iterations: int) -> list[tuple[str, fl
     sample_worker_id = str(workers[0].worker_id)
     active_states = tuple(ACTIVE_TASK_STATES)
 
-    # Single-worker running tasks query (simulates drain_dispatch inner query)
+    # Single-worker running tasks query (simulates drain_dispatch inner query, 2-way JOIN)
     def _single_worker_running_tasks():
         with db.read_snapshot() as q:
             q.raw(
-                "SELECT t.task_id, t.current_attempt_id "
+                "SELECT t.task_id, t.current_attempt_id, t.job_id "
                 "FROM tasks t "
                 "JOIN task_attempts ta ON t.task_id = ta.task_id AND t.current_attempt_id = ta.attempt_id "
-                "JOIN jobs j ON j.job_id = t.job_id "
-                "WHERE ta.worker_id = ? AND t.state IN (?, ?, ?) AND j.is_reservation_holder = 0 "
+                "WHERE ta.worker_id = ? AND t.state IN (?, ?, ?) "
                 "ORDER BY t.task_id ASC",
                 (sample_worker_id, *active_states),
             )
@@ -390,16 +389,15 @@ def benchmark_heartbeat(db: ControllerDB, iterations: int) -> list[tuple[str, fl
     results.append(("drain_dispatch running_tasks (1 worker)", p50, p95))
     print_result("drain_dispatch running_tasks (1 worker)", p50, p95)
 
-    # Full loop: running tasks for ALL workers (simulates phase 1)
+    # Full loop: running tasks for ALL workers (simulates phase 1, 2-way JOIN)
     def _all_workers_running_tasks():
         for w in workers:
             with db.read_snapshot() as q:
                 q.raw(
-                    "SELECT t.task_id, t.current_attempt_id "
+                    "SELECT t.task_id, t.current_attempt_id, t.job_id "
                     "FROM tasks t "
                     "JOIN task_attempts ta ON t.task_id = ta.task_id AND t.current_attempt_id = ta.attempt_id "
-                    "JOIN jobs j ON j.job_id = t.job_id "
-                    "WHERE ta.worker_id = ? AND t.state IN (?, ?, ?) AND j.is_reservation_holder = 0 "
+                    "WHERE ta.worker_id = ? AND t.state IN (?, ?, ?) "
                     "ORDER BY t.task_id ASC",
                     (str(w.worker_id), *active_states),
                 )
