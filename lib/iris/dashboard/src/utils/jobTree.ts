@@ -18,7 +18,11 @@ export function getLeafJobName(jobName: string): string {
   return lastSlash >= 0 ? jobName.slice(lastSlash + 1) : jobName
 }
 
-export function flattenJobTree(jobList: JobStatus[], expandedJobNames: ReadonlySet<string>): JobTreeNode[] {
+export function flattenJobTree(
+  jobList: JobStatus[],
+  expandedJobNames: ReadonlySet<string>,
+  comparator?: (a: JobStatus, b: JobStatus) => number,
+): JobTreeNode[] {
   const jobByName = new Map(jobList.map(job => [job.name, job]))
   const childrenMap = new Map<string, JobStatus[]>()
   const rootJobs: JobStatus[] = []
@@ -40,7 +44,8 @@ export function flattenJobTree(jobList: JobStatus[], expandedJobNames: ReadonlyS
   const result: JobTreeNode[] = []
 
   function walk(list: JobStatus[], depth: number) {
-    for (const job of list) {
+    const sorted = comparator ? [...list].sort(comparator) : list
+    for (const job of sorted) {
       result.push({ job, depth })
       const children = childrenMap.get(job.name)
       if (children && expandedJobNames.has(job.name)) {
