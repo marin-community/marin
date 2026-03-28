@@ -105,8 +105,7 @@ class StragglerReporter(Callback):
         if max_dur - min_dur > med_dur * 0.5:
             slow_summary = ", ".join(f"rank {r} ({ewma_val:.3f}s)" for r, ewma_val in top_slow)
             logger.warning(
-                "Straggler detected at step %d: spread=%.3fs (min=%.3f, med=%.3f, max=%.3f). "
-                "Slowest by EWMA: %s",
+                "Straggler detected at step %d: spread=%.3fs (min=%.3f, med=%.3f, max=%.3f). " "Slowest by EWMA: %s",
                 step,
                 max_dur - min_dur,
                 min_dur,
@@ -116,9 +115,7 @@ class StragglerReporter(Callback):
             )
 
 
-def _gather_durations(
-    rank: int, duration: float, process_count: int
-) -> Optional[dict[int, float]]:
+def _gather_durations(rank: int, duration: float, process_count: int) -> Optional[dict[int, float]]:
     """Gather per-rank durations to rank 0.
 
     In single-process mode, returns {0: duration} directly.
