@@ -15,7 +15,8 @@ Usage::
     counters.increment("validation_errors")
 
 Counter values are accumulated in-memory on each worker and sent to the
-coordinator via the heartbeat loop.
+coordinator periodically via heartbeats and as a final snapshot on task
+completion.
 
 Outside of a Zephyr worker context, all calls are silent no-ops.
 """
@@ -30,7 +31,7 @@ logger = logging.getLogger(__name__)
 def increment(name: str, value: int = 1) -> None:
     """Increment a named counter by ``value`` (default 1).
 
-    O(1) in-memory update. Thread-safe. No-op outside a Zephyr worker.
+    O(1) lock-free in-memory update. No-op outside a Zephyr worker.
     """
     worker = _worker_ctx_var.get()
     if worker is None:
@@ -46,4 +47,4 @@ def get_counters() -> dict[str, int]:
     worker = _worker_ctx_var.get()
     if worker is None:
         return {}
-    return worker.get_counter_snapshot()
+    return worker.get_counter_snapshot().counters

@@ -21,7 +21,7 @@ import time
 from unittest.mock import MagicMock
 
 import pytest
-from zephyr.execution import ListShard, ShardTask, TaskResult, ZephyrCoordinator
+from zephyr.execution import CounterSnapshot, ListShard, ShardTask, TaskResult, ZephyrCoordinator
 
 
 @pytest.fixture
@@ -40,7 +40,7 @@ def test_check_worker_group_skips_after_completed_stage(coordinator):
 
     task = ShardTask(shard_idx=0, total_shards=1, shard=ListShard(refs=[]), operations=[], stage_name="test")
     coordinator.start_stage("last-stage", [task], is_last_stage=True)
-    coordinator.report_result("worker-0", 0, 0, TaskResult(shard=ListShard(refs=[])))
+    coordinator.report_result("worker-0", 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
     assert coordinator._completed_shards >= coordinator._total_shards
 
@@ -58,7 +58,7 @@ def test_check_worker_group_still_aborts_mid_stage(coordinator):
     task = ShardTask(shard_idx=0, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test")
     coordinator.start_stage("mid-stage", [task, task], is_last_stage=False)
     # Only 1 of 2 shards completed
-    coordinator.report_result("worker-0", 0, 0, TaskResult(shard=ListShard(refs=[])))
+    coordinator.report_result("worker-0", 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
     coordinator._check_worker_group()
 
@@ -81,7 +81,7 @@ def test_coordinator_loop_no_abort_during_result_collection(coordinator):
 
     task = ShardTask(shard_idx=0, total_shards=1, shard=ListShard(refs=[]), operations=[], stage_name="test")
     coordinator.start_stage("last-stage", [task], is_last_stage=True)
-    coordinator.report_result("worker-0", 0, 0, TaskResult(shard=ListShard(refs=[])))
+    coordinator.report_result("worker-0", 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
     t = threading.Thread(target=coordinator._coordinator_loop, daemon=True)
     t.start()
