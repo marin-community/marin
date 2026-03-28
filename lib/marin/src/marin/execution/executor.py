@@ -769,9 +769,15 @@ class ExecutorStep(Generic[ConfigT]):
     def as_input_name(self) -> "InputName":
         return InputName(step=self, name=None)
 
-    def mirrored(self, budget_gb: float = 10) -> "InputName":
-        """Return an InputName referencing this step's output, marked for cross-region mirroring."""
-        return InputName(step=self, name=None, mirror_budget_gb=budget_gb)
+    def as_mirrored_value(self, budget_gb: float = 10) -> "MirroredValue[InputName]":
+        """Return a ``MirroredValue`` wrapping this step's output as an ``InputName``.
+
+        This is the step-reference analogue of the free ``mirrored()`` helper
+        used for raw paths.  Usage::
+
+            default_eval(step=training_run.as_mirrored_value())
+        """
+        return MirroredValue(value=self.as_input_name(), budget_gb=budget_gb)
 
 
 @dataclass(frozen=True)
@@ -791,17 +797,11 @@ class InputName:
     These "pseudo-dependencies" still impact the hash of the step, but they don't block execution.
     """
 
-    mirror_budget_gb: float | None = None
-    """When set, the resolved path is prefixed with ``mirror://`` so that
-    ``MirrorFileSystem`` copies data from whichever region has it.  The budget
-    caps cross-region transfer in GB."""
-
     def cd(self, name: str) -> "InputName":
         return InputName(
             self.step,
             name=os.path.join(self.name, name) if self.name else name,
             block_on_step=self.block_on_step,
-            mirror_budget_gb=self.mirror_budget_gb,
         )
 
     def __truediv__(self, other: str) -> "InputName":
@@ -824,9 +824,9 @@ class InputName:
         """
         return dataclasses.replace(self, block_on_step=False)
 
-    def mirrored(self, budget_gb: float = 10) -> "InputName":
-        """Mark this input for cross-region mirroring with a transfer budget."""
-        return dataclasses.replace(self, mirror_budget_gb=budget_gb)
+    def as_mirrored_value(self, budget_gb: float = 10) -> "MirroredValue[InputName]":
+        """Wrap this input in a ``MirroredValue`` for cross-region mirroring."""
+        return MirroredValue(value=self, budget_gb=budget_gb)
 
 
 def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
@@ -945,10 +945,13 @@ class MirroredValue(Generic[T_co]):
     budget_gb: float = 10
 
 
-def mirrored(value: str | VersionedValue[str], budget_gb: float = 10) -> MirroredValue:
+def mirrored(value: str | VersionedValue[str] | InputName, budget_gb: float = 10) -> MirroredValue:
     """Mark a path for cross-region mirroring with a transfer budget.
 
-    Usage: input_path=mirrored(versioned("documents/stackexchange/..."), budget_gb=50)
+    Usage::
+
+        input_path=mirrored(versioned("documents/stackexchange/..."), budget_gb=50)
+        model_path=mirrored(training_step.as_input_name() / "hf", budget_gb=25)
     """
     if isinstance(value, MirroredValue):
         raise ValueError("Can't nest MirroredValue")
@@ -1119,9 +1122,6 @@ def _max_mirror_budget(config: Any) -> float | None:
             recurse(obj.value)
             return
         if isinstance(obj, InputName):
-            if obj.mirror_budget_gb is not None:
-                if max_budget is None or obj.mirror_budget_gb > max_budget:
-                    max_budget = obj.mirror_budget_gb
             return
         if isinstance(obj, ExecutorStep):
             return
@@ -1172,8 +1172,6 @@ def instantiate_config(
                 resolved = _make_prefix_absolute_path(prefix, obj.name)
             else:
                 resolved = join_path(output_paths[obj.step], obj.name)
-            if obj.mirror_budget_gb is not None and not resolved.startswith("mirror://"):
-                return f"mirror://{resolved}"
             return resolved
         elif isinstance(obj, OutputName):
             return join_path(output_path, obj.name)

@@ -17,6 +17,7 @@ from marin.execution.executor import (
     Executor,
     ExecutorStep,
     InputName,
+    MirroredValue,
     _get_info_path,
     collect_dependencies_and_version,
     instantiate_config,
@@ -662,46 +663,49 @@ def _dummy_fn(config):
     pass
 
 
-def test_executor_step_mirrored():
-    """ExecutorStep.mirrored() returns an InputName with mirror_budget_gb set."""
+def test_executor_step_as_mirrored_value():
+    """ExecutorStep.as_mirrored_value() returns a MirroredValue wrapping an InputName."""
     step = ExecutorStep(name="train", fn=_dummy_fn, config={})
-    m = step.mirrored(budget_gb=25)
-    assert isinstance(m, InputName)
-    assert m.step is step
-    assert m.name is None
-    assert m.mirror_budget_gb == 25
+    m = step.as_mirrored_value(budget_gb=25)
+    assert isinstance(m, MirroredValue)
+    assert isinstance(m.value, InputName)
+    assert m.value.step is step
+    assert m.value.name is None
+    assert m.budget_gb == 25
 
 
-def test_input_name_mirrored():
-    """InputName.mirrored() returns a copy with mirror_budget_gb set."""
+def test_input_name_as_mirrored_value():
+    """InputName.as_mirrored_value() wraps the InputName in a MirroredValue."""
     step = ExecutorStep(name="train", fn=_dummy_fn, config={})
     inp = output_path_of(step, "hf")
-    m = inp.mirrored(budget_gb=15)
-    assert m.step is step
-    assert m.name == "hf"
-    assert m.mirror_budget_gb == 15
-    # Original unchanged
-    assert inp.mirror_budget_gb is None
+    m = inp.as_mirrored_value(budget_gb=15)
+    assert isinstance(m, MirroredValue)
+    assert m.value.step is step
+    assert m.value.name == "hf"
+    assert m.budget_gb == 15
 
 
-def test_mirrored_input_name_cd_preserves_budget():
-    """cd() on a mirrored InputName preserves the mirror budget."""
+def test_mirrored_input_name_cd_then_wrap():
+    """Build path with cd() first, then wrap with as_mirrored_value()."""
     step = ExecutorStep(name="train", fn=_dummy_fn, config={})
-    m = step.mirrored(budget_gb=20) / "hf" / "checkpoint"
-    assert m.mirror_budget_gb == 20
-    assert m.name == "hf/checkpoint"
+    inp = step.as_input_name() / "hf" / "checkpoint"
+    m = inp.as_mirrored_value(budget_gb=20)
+    assert m.value.name == "hf/checkpoint"
+    assert m.budget_gb == 20
 
 
-def test_mirrored_input_name_nonblocking_preserves_budget():
-    """nonblocking() on a mirrored InputName preserves the mirror budget."""
+def test_mirrored_free_function_with_input_name():
+    """The free mirrored() function accepts InputName."""
     step = ExecutorStep(name="train", fn=_dummy_fn, config={})
-    m = step.mirrored(budget_gb=30).nonblocking()
-    assert m.mirror_budget_gb == 30
-    assert m.block_on_step is False
+    inp = step.as_input_name() / "hf"
+    m = mirrored(inp, budget_gb=30)
+    assert isinstance(m, MirroredValue)
+    assert m.value is inp
+    assert m.budget_gb == 30
 
 
 def test_mirrored_input_name_instantiate_config():
-    """InputName with mirror_budget_gb resolves to mirror:// path."""
+    """MirroredValue wrapping InputName resolves to mirror:// path."""
 
     @dataclass(frozen=True)
     class Cfg:
@@ -709,14 +713,14 @@ def test_mirrored_input_name_instantiate_config():
         output_path: str
 
     step = ExecutorStep(name="train", fn=_dummy_fn, config={})
-    cfg = Cfg(model_path=step.mirrored(), output_path="out")
+    cfg = Cfg(model_path=step.as_mirrored_value(), output_path="out")
     output_paths = {step: "/bucket/train/abc123"}
     resolved = instantiate_config(cfg, output_path="/out", output_paths=output_paths, prefix="/bucket")
     assert resolved.model_path == "mirror:///bucket/train/abc123"
 
 
 def test_mirrored_input_name_with_subdir_instantiate_config():
-    """InputName with cd + mirror resolves to mirror:// path with subdir."""
+    """MirroredValue wrapping InputName with cd resolves to mirror:// path with subdir."""
 
     @dataclass(frozen=True)
     class Cfg:
@@ -724,14 +728,14 @@ def test_mirrored_input_name_with_subdir_instantiate_config():
         output_path: str
 
     step = ExecutorStep(name="train", fn=_dummy_fn, config={})
-    cfg = Cfg(model_path=step.mirrored(budget_gb=5) / "hf", output_path="out")
+    cfg = Cfg(model_path=(step.as_input_name() / "hf").as_mirrored_value(budget_gb=5), output_path="out")
     output_paths = {step: "/bucket/train/abc123"}
     resolved = instantiate_config(cfg, output_path="/out", output_paths=output_paths, prefix="/bucket")
     assert resolved.model_path == "mirror:///bucket/train/abc123/hf"
 
 
 def test_mirrored_input_name_does_not_affect_version():
-    """mirror_budget_gb on InputName should not change the version hash."""
+    """Wrapping InputName in MirroredValue should not change the version hash."""
 
     @dataclass(frozen=True)
     class Cfg:
@@ -741,7 +745,7 @@ def test_mirrored_input_name_does_not_affect_version():
     step = ExecutorStep(name="train", fn=_dummy_fn, config={})
     deps_plain = collect_dependencies_and_version(Cfg(model_path=output_path_of(step, "hf"), output_path="out"))
     deps_mirrored = collect_dependencies_and_version(
-        Cfg(model_path=step.mirrored(budget_gb=50) / "hf", output_path="out")
+        Cfg(model_path=(step.as_input_name() / "hf").as_mirrored_value(budget_gb=50), output_path="out")
     )
     assert deps_plain.version == deps_mirrored.version
 
