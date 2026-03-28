@@ -549,10 +549,13 @@ class TaskAttempt:
         # to BundleStore.extract_bundle_to if long downloads become a problem.)
 
         assert self.workdir is not None
+        workdir_files = dict(self.request.entrypoint.workdir_files)
+        for name, blob_id in self.request.entrypoint.workdir_file_refs.items():
+            workdir_files[name] = self._bundle_store.get_blob(blob_id)
         self._runtime.stage_bundle(
             bundle_id=self.request.bundle_id,
             workdir=self.workdir,
-            workdir_files=dict(self.request.entrypoint.workdir_files),
+            workdir_files=workdir_files,
             bundle_store=self._bundle_store,
         )
 

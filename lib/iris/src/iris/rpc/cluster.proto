@@ -442,6 +442,10 @@ message RuntimeEntrypoint {
 
   // Files to write to $IRIS_WORKDIR/{key} before execution.
   map<string, bytes> workdir_files = 3;
+
+  // References to externalized workdir files stored in the blob store.
+  // key -> blob_id (SHA-256 hash). Worker resolves these via BundleStore.
+  map<string, string> workdir_file_refs = 4;
 }
 
 // ============================================================================

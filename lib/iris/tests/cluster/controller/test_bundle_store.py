@@ -77,3 +77,48 @@ def test_write_zip_skips_upload_when_already_in_storage(tmp_path):
     id_a2 = store.write_zip(blob_a)
     assert id_a2 == id_a
     assert write_calls == [], "write_zip should not re-upload when bundle exists in storage"
+
+
+def test_write_blob_returns_content_hash(store):
+    data = b"large pickle payload"
+
+    blob_id = store.write_blob(data)
+    assert blob_id == hashlib.sha256(data).hexdigest()
+    assert store.get_blob(blob_id) == data
+
+
+def test_write_blob_is_idempotent(store):
+    data = b"same blob bytes"
+
+    id1 = store.write_blob(data)
+    id2 = store.write_blob(data)
+    assert id1 == id2
+
+
+def test_get_blob_missing_raises(store):
+    with pytest.raises(RuntimeError, match="not cached and controller address is not configured"):
+        store.get_blob("b" * 64)
+
+
+def test_blob_survives_restart(tmp_path):
+    storage_dir = str(tmp_path / "bundles")
+    store = BundleStore(storage_dir=storage_dir)
+    data = b"persist this blob"
+    blob_id = store.write_blob(data)
+    store.close()
+
+    store2 = BundleStore(storage_dir=storage_dir)
+    assert store2.get_blob(blob_id) == data
+
+
+def test_blob_and_bundle_namespaces_independent(store):
+    """Blobs and bundles with identical content get separate storage paths."""
+    data = b"shared content"
+
+    bundle_id = store.write_zip(data)
+    blob_id = store.write_blob(data)
+    # Same hash since content is identical
+    assert bundle_id == blob_id
+    # Both retrievable via their respective methods
+    assert store.get_zip(bundle_id) == data
+    assert store.get_blob(blob_id) == data
