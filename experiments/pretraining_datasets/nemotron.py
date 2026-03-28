@@ -9,7 +9,7 @@ import os.path
 from experiments.defaults import DEFAULT_NEW_RUN_DATA_SHUFFLE
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from marin.datakit.download.nemotron_v1 import download_nemotron_v1_step
-from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, lm_mixture_data_config, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
@@ -51,10 +51,14 @@ NEMOTRON_LLAMA3_OVERRIDES = {
 }
 
 
+# Hardcoded path to the nemotron download output so that glob or download
+# step changes don't alter the tokenize step's version hash.
+_NEMOTRON_CC_DATA_PATH = InputName.hardcoded("raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/")
+
+
 def _get_nemotron_split_paths(split: str):
     """Helper to get file paths for a nemotron split."""
-    base = output_path_of(nemotron_cc_download(), "contrib/Nemotron/Nemotron-CC/data-jsonl/")
-    return [base / pattern for pattern in NEMOTRON_DATASETS[split]]
+    return [_NEMOTRON_CC_DATA_PATH / pattern for pattern in NEMOTRON_DATASETS[split]]
 
 
 def tokenize_nemotron(
