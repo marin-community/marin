@@ -22,7 +22,7 @@ from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, 
 from experiments.grug.base.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.pretraining_datasets.nemotron import nemotron_mix
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, MirroredValue, executor_main, this_output_path
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.execution.remote import remote
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
@@ -112,7 +112,7 @@ NEMOTRON_MIX_WITH_EVAL = add_validation_sets_to_mixture(
 class VizierSuggestConfig:
     study_owner: str
     study_id: str
-    input_db_path: str | MirroredValue | None
+    input_db_path: str | None
     output_path: str
     num_suggestions: int
     client_id: str
@@ -138,9 +138,9 @@ class VizierTrainConfig:
 class VizierUpdateConfig:
     study_id: str
     study_resource_name: str
-    input_db_path: str | MirroredValue | None
+    input_db_path: str | None
     suggestions_path: str
-    run_paths: list[str | MirroredValue]
+    run_paths: list[str]
     metric_file: str
     metric_key: str
     mode: str
@@ -152,7 +152,7 @@ class VizierUpdateConfig:
 class VizierOptimalConfig:
     study_id: str
     study_resource_name: str
-    input_db_path: str | MirroredValue
+    input_db_path: str
     output_path: str
 
 
@@ -529,7 +529,7 @@ def run_vizier_optimal(config: VizierOptimalConfig) -> None:
 def _build_suggest_step(
     *,
     loop_index: int,
-    input_db_path: str | MirroredValue | None,
+    input_db_path: str | None,
 ) -> ExecutorStep:
     client_id = f"{SWEEP.client_id_prefix}-loop-{loop_index}"
     return ExecutorStep(
@@ -580,7 +580,7 @@ def _build_update_step(
     *,
     loop_index: int,
     study_resource_name: str,
-    input_db_path: str | MirroredValue | None,
+    input_db_path: str | None,
     suggestions_path: str,
     training_steps: list[ExecutorStep],
 ) -> ExecutorStep:
@@ -604,7 +604,7 @@ def _build_update_step(
 
 def _build_optimal_step(
     *,
-    input_db_path: str | MirroredValue,
+    input_db_path: str,
     study_resource_name: str,
 ) -> ExecutorStep:
     return ExecutorStep(

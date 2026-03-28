@@ -17,11 +17,9 @@ from marin.execution.executor import (
     Executor,
     ExecutorStep,
     InputName,
-    MirroredValue,
     _get_info_path,
     collect_dependencies_and_version,
     instantiate_config,
-    mirrored,
     output_path_of,
     this_output_path,
     versioned,
@@ -616,92 +614,8 @@ def test_parent_will_run_if_some_child_is_not_skippable():
         assert os.path.exists(os.path.join(executor.output_paths[parent], "dummy", "done.txt"))
 
 
-def test_mirrored_versioning():
-    """MirroredValue wrapping VersionedValue should version the inner value."""
-
-    @dataclass(frozen=True)
-    class Cfg:
-        input_path: str
-        output_path: str
-
-    deps = collect_dependencies_and_version(
-        Cfg(input_path=mirrored(versioned("some/path"), budget_gb=50), output_path="out")
-    )
-    assert deps.version == {"input_path": "some/path"}
-
-
-def test_mirrored_instantiate_config():
-    """MirroredValue should resolve to mirror:// path."""
-
-    @dataclass(frozen=True)
-    class Cfg:
-        input_path: str
-        output_path: str
-
-    cfg = Cfg(input_path=mirrored(versioned("documents/data"), budget_gb=10), output_path="out")
-    resolved = instantiate_config(cfg, output_path="/out", output_paths={}, prefix="/bucket")
-    assert resolved.input_path == "mirror://documents/data"
-
-
-def test_mirrored_nesting_raises():
-    with pytest.raises(ValueError, match="nest"):
-        mirrored(mirrored("x"))
-
-
-def test_mirrored_changes_version():
-    """Changing the path inside mirrored() should change the version hash."""
-    deps1 = collect_dependencies_and_version(
-        MyConfig(input_path=mirrored(versioned("data/v1")), output_path="out", n=versioned(1), m=1)
-    )
-    deps2 = collect_dependencies_and_version(
-        MyConfig(input_path=mirrored(versioned("data/v2")), output_path="out", n=versioned(1), m=1)
-    )
-    assert deps1.version != deps2.version
-
-
 def _dummy_fn(config):
     pass
-
-
-def test_executor_step_as_mirrored_value():
-    """ExecutorStep.as_mirrored_value() returns a MirroredValue wrapping an InputName."""
-    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
-    m = step.as_mirrored_value(budget_gb=25)
-    assert isinstance(m, MirroredValue)
-    assert isinstance(m.value, InputName)
-    assert m.value.step is step
-    assert m.value.name is None
-    assert m.budget_gb == 25
-
-
-def test_input_name_as_mirrored_value():
-    """InputName.as_mirrored_value() wraps the InputName in a MirroredValue."""
-    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
-    inp = output_path_of(step, "hf")
-    m = inp.as_mirrored_value(budget_gb=15)
-    assert isinstance(m, MirroredValue)
-    assert m.value.step is step
-    assert m.value.name == "hf"
-    assert m.budget_gb == 15
-
-
-def test_mirrored_input_name_cd_then_wrap():
-    """Build path with cd() first, then wrap with as_mirrored_value()."""
-    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
-    inp = step.as_input_name() / "hf" / "checkpoint"
-    m = inp.as_mirrored_value(budget_gb=20)
-    assert m.value.name == "hf/checkpoint"
-    assert m.budget_gb == 20
-
-
-def test_mirrored_free_function_with_input_name():
-    """The free mirrored() function accepts InputName."""
-    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
-    inp = step.as_input_name() / "hf"
-    m = mirrored(inp, budget_gb=30)
-    assert isinstance(m, MirroredValue)
-    assert m.value is inp
-    assert m.budget_gb == 30
 
 
 def test_mirrored_input_name_instantiate_config():
@@ -717,21 +631,6 @@ def test_mirrored_input_name_instantiate_config():
     output_paths = {step: "/bucket/train/abc123"}
     resolved = instantiate_config(cfg, output_path="/out", output_paths=output_paths, prefix="/bucket")
     assert resolved.model_path == "mirror:///bucket/train/abc123"
-
-
-def test_mirrored_input_name_with_subdir_instantiate_config():
-    """MirroredValue wrapping InputName with cd resolves to mirror:// path with subdir."""
-
-    @dataclass(frozen=True)
-    class Cfg:
-        model_path: str
-        output_path: str
-
-    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
-    cfg = Cfg(model_path=(step.as_input_name() / "hf").as_mirrored_value(budget_gb=5), output_path="out")
-    output_paths = {step: "/bucket/train/abc123"}
-    resolved = instantiate_config(cfg, output_path="/out", output_paths=output_paths, prefix="/bucket")
-    assert resolved.model_path == "mirror:///bucket/train/abc123/hf"
 
 
 def test_mirrored_input_name_does_not_affect_version():
@@ -750,25 +649,6 @@ def test_mirrored_input_name_does_not_affect_version():
     assert deps_plain.version == deps_mirrored.version
 
 
-def test_mirrored_value_truediv():
-    """MirroredValue / 'subdir' navigates into the inner value and keeps the wrapper."""
-    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
-    m = step.as_mirrored_value(budget_gb=20) / "hf" / "checkpoint"
-    assert isinstance(m, MirroredValue)
-    assert isinstance(m.value, InputName)
-    assert m.value.name == "hf/checkpoint"
-    assert m.budget_gb == 20
-
-
-def test_mirrored_value_cd():
-    """MirroredValue.cd() navigates into the inner value and keeps the wrapper."""
-    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
-    m = step.as_mirrored_value(budget_gb=15).cd("hf").cd("checkpoint")
-    assert isinstance(m, MirroredValue)
-    assert m.value.name == "hf/checkpoint"
-    assert m.budget_gb == 15
-
-
 def test_mirrored_value_truediv_instantiate():
     """MirroredValue with / subdirs resolves correctly via instantiate_config."""
 
@@ -782,15 +662,6 @@ def test_mirrored_value_truediv_instantiate():
     output_paths = {step: "/bucket/train/abc123"}
     resolved = instantiate_config(cfg, output_path="/out", output_paths=output_paths, prefix="/bucket")
     assert resolved.model_path == "mirror:///bucket/train/abc123/hf"
-
-
-def test_mirrored_value_cd_string_value():
-    """MirroredValue wrapping a string supports cd()."""
-    m = MirroredValue(value="gs://bucket/path", budget_gb=10)
-    m2 = m / "subdir"
-    assert isinstance(m2, MirroredValue)
-    assert m2.value == "gs://bucket/path/subdir"
-    assert m2.budget_gb == 10
 
 
 def test_status_file_takeover_stale_lock_then_refresh(tmp_path):
