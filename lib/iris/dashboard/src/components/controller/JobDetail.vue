@@ -46,6 +46,10 @@ const sortColumn = ref<SortColumn | null>(null)
 const sortDir = ref<SortDir>('asc')
 const childJobsView = ref<ChildJobsView>('direct')
 
+type ChildSortColumn = 'name' | 'state' | 'duration'
+const childSortColumn = ref<ChildSortColumn | null>(null)
+const childSortDir = ref<SortDir>('asc')
+
 function toggleSort(col: SortColumn) {
   if (sortColumn.value === col) {
     if (sortDir.value === 'asc') sortDir.value = 'desc'
@@ -53,6 +57,16 @@ function toggleSort(col: SortColumn) {
   } else {
     sortColumn.value = col
     sortDir.value = 'asc'
+  }
+}
+
+function toggleChildSort(col: ChildSortColumn) {
+  if (childSortColumn.value === col) {
+    if (childSortDir.value === 'asc') childSortDir.value = 'desc'
+    else { childSortColumn.value = null; childSortDir.value = 'asc' }
+  } else {
+    childSortColumn.value = col
+    childSortDir.value = 'asc'
   }
 }
 
@@ -180,7 +194,35 @@ const visibleChildJobs = computed(() => {
   return descendantJobs.value.filter(child => getParentJobName(child.name) === parentName)
 })
 
-const flattenedChildJobs = computed(() => flattenJobTree(visibleChildJobs.value, expandedChildJobs.value))
+function childJobDurationMs(j: JobStatus): number {
+  const started = timestampMs(j.startedAt)
+  if (!started) return 0
+  const ended = timestampMs(j.finishedAt) || Date.now()
+  return ended - started
+}
+
+const childJobComparator = computed<((a: JobStatus, b: JobStatus) => number) | undefined>(() => {
+  const col = childSortColumn.value
+  if (!col) return undefined
+  const dir = childSortDir.value === 'asc' ? 1 : -1
+  return (a: JobStatus, b: JobStatus) => {
+    let cmp = 0
+    switch (col) {
+      case 'name':
+        cmp = getLeafJobName(a.name).localeCompare(getLeafJobName(b.name))
+        break
+      case 'state':
+        cmp = (STATE_SORT_ORDER[stateToName(a.state)] ?? 99) - (STATE_SORT_ORDER[stateToName(b.state)] ?? 99)
+        break
+      case 'duration':
+        cmp = childJobDurationMs(a) - childJobDurationMs(b)
+        break
+    }
+    return cmp * dir
+  }
+})
+
+const flattenedChildJobs = computed(() => flattenJobTree(visibleChildJobs.value, expandedChildJobs.value, childJobComparator.value))
 const expandableChildJobs = computed(() => jobsWithChildren(visibleChildJobs.value))
 
 function toggleExpandedChildJob(jobName: string) {
@@ -544,9 +586,15 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         <table class="w-full border-collapse">
           <thead>
             <tr class="border-b border-surface-border">
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Name</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">State</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Duration</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleChildSort('name')">
+                Name <span v-if="childSortColumn === 'name'" class="ml-0.5">{{ childSortDir === 'asc' ? '▲' : '▼' }}</span>
+              </th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleChildSort('state')">
+                State <span v-if="childSortColumn === 'state'" class="ml-0.5">{{ childSortDir === 'asc' ? '▲' : '▼' }}</span>
+              </th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleChildSort('duration')">
+                Duration <span v-if="childSortColumn === 'duration'" class="ml-0.5">{{ childSortDir === 'asc' ? '▲' : '▼' }}</span>
+              </th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Tasks</th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Diagnostic</th>
             </tr>
