@@ -706,6 +706,10 @@ class ControllerDB:
                 logging.getLogger(__name__).warning("read_snapshot rollback failed", exc_info=True)
             self._read_pool.put(conn)
 
+    @staticmethod
+    def decode_task(row: sqlite3.Row) -> Task:
+        return _decode_row(Task, row)
+
     def apply_migrations(self) -> None:
         """Apply pending migrations from the migrations/ directory.
 
