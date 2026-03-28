@@ -178,14 +178,23 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
-    ) -> Float[Array, "B S D"]:
+        *,
+        return_activation_metrics: bool = False,
+    ) -> Float[Array, "B S D"] | tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
 
         hidden = self.token_embed.at[token_ids].get(out_sharding=Pbatch)
-        for block in self.blocks:
+        activation_metrics: dict[str, jax.Array] = {}
+        for i, block in enumerate(self.blocks):
             hidden = eqx.filter_checkpoint(block)(hidden, mask)
-        return self.final_norm(hidden)
+            if return_activation_metrics:
+                activation_metrics[f"activations/layer_{i}/rms"] = _activation_rms(hidden)
+        hidden = self.final_norm(hidden)
+        if return_activation_metrics:
+            activation_metrics["activations/final/rms"] = _activation_rms(hidden)
+            return hidden, activation_metrics
+        return hidden
 
     @named_call
     def logits(
@@ -205,13 +214,18 @@ class Transformer(eqx.Module):
         reduction: str = "mean",
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
-    ) -> jax.Array:
+        return_activation_metrics: bool = False,
+    ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array]]:
         """Compute next-token cross-entropy loss for a batch."""
-        hidden = self(token_ids, mask=mask)
+        if return_activation_metrics:
+            hidden, activation_metrics = self(token_ids, mask=mask, return_activation_metrics=True)
+        else:
+            hidden = self(token_ids, mask=mask)
+
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
-        return fused_linear_softmax_cross_entropy_loss(
+        loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
             self.output_proj,
             labels,
@@ -220,6 +234,14 @@ class Transformer(eqx.Module):
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
         )
+        if return_activation_metrics:
+            return loss, activation_metrics
+        return loss
+
+
+def _activation_rms(x: jax.Array) -> jax.Array:
+    """Root-mean-square of a hidden-state tensor, cast to float32."""
+    return jnp.sqrt(jnp.mean(jnp.square(x.astype(jnp.float32))))
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:

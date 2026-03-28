@@ -499,6 +499,8 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
+        *,
+        return_activation_metrics: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
@@ -512,12 +514,15 @@ class Transformer(eqx.Module):
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
 
+        activation_metrics: dict[str, jax.Array] = {}
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
             hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
             if router_stats:
                 moe_router_stats.append(router_stats)
+            if return_activation_metrics:
+                activation_metrics[f"activations/layer_{i}/rms"] = _activation_rms(hidden)
 
         router_metrics = {
             "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
@@ -527,7 +532,9 @@ class Transformer(eqx.Module):
             "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
         }
         hidden = self.final_gated_norm(self.final_norm(hidden))
-        return hidden, router_metrics
+        if return_activation_metrics:
+            activation_metrics["activations/final/rms"] = _activation_rms(hidden)
+        return hidden, router_metrics | activation_metrics
 
     @named_call
     def logits(
@@ -549,8 +556,9 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
+        return_activation_metrics: bool = False,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | Histogram]]:
-        hidden, router_metrics = self(token_ids, mask=mask)
+        hidden, router_metrics = self(token_ids, mask=mask, return_activation_metrics=return_activation_metrics)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
@@ -568,12 +576,22 @@ class Transformer(eqx.Module):
         rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
         aux_loss = self.config.router_z_loss_coef * rzl
         loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
-        if return_router_metrics:
-            summarized_metrics = _summarize_router_metrics(router_metrics)
-            summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
-            summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
+        if return_router_metrics or return_activation_metrics:
+            summarized_metrics: dict[str, jax.Array | Histogram] = {}
+            if return_router_metrics:
+                summarized_metrics.update(_summarize_router_metrics(router_metrics))
+                summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
+                summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
+            if return_activation_metrics:
+                # Activation keys (activations/*) are merged into router_metrics by __call__.
+                summarized_metrics.update({k: v for k, v in router_metrics.items() if k.startswith("activations/")})
             return loss, summarized_metrics
         return loss
+
+
+def _activation_rms(x: jax.Array) -> jax.Array:
+    """Root-mean-square of a hidden-state tensor, cast to float32."""
+    return jnp.sqrt(jnp.mean(jnp.square(x.astype(jnp.float32))))
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:

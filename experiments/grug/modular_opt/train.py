@@ -272,9 +272,13 @@ def _make_train_step(
                 mask=batch.attn_mask,
                 reduction="mean",
                 logsumexp_weight=z_loss,
+                return_activation_metrics=compute_watch,
             )
 
-        loss, grads = jax.value_and_grad(loss_fn)(state.params)
+        if compute_watch:
+            (loss, activation_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+        else:
+            loss, grads = jax.value_and_grad(loss_fn)(state.params)
         updates, opt_state = optimizer.update(grads, state.opt_state, state.params)
         params = optax.apply_updates(state.params, updates)
 
@@ -303,6 +307,7 @@ def _make_train_step(
                 opt_state=state.opt_state,
                 model_tree_type=type(state.params),
             )
+            watch_stats.update(activation_metrics)
 
         next_state = dataclasses.replace(
             state,
