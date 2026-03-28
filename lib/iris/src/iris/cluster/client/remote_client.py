@@ -56,7 +56,8 @@ class RemoteClusterClient:
         """
         self._address = controller_address
         self._bundle_id = bundle_id
-        self._workspace = workspace
+        self._workspace = workspace.resolve() if workspace is not None else None
+        self._bundle_blob: bytes | None = None
         self._timeout_ms = timeout_ms
         self._client = ControllerServiceClientSync(
             address=controller_address,
@@ -108,12 +109,11 @@ class RemoteClusterClient:
         if self._bundle_id:
             request.bundle_id = self._bundle_id
         else:
-            bundle_blob = b""
-            if self._workspace is not None:
+            if self._bundle_blob is None and self._workspace is not None:
                 creator = BundleCreator(self._workspace)
-                bundle_blob = creator.create_bundle()
-                logger.info(f"Workspace bundle size: {len(bundle_blob) / 1024 / 1024:.1f} MB")
-            request.bundle_blob = bundle_blob
+                self._bundle_blob = creator.create_bundle()
+                logger.info(f"Workspace bundle size: {len(self._bundle_blob) / 1024 / 1024:.1f} MB")
+            request.bundle_blob = self._bundle_blob or b""
 
         if scheduling_timeout is not None:
             request.scheduling_timeout.CopyFrom(scheduling_timeout.to_proto())
