@@ -769,6 +769,10 @@ class ExecutorStep(Generic[ConfigT]):
     def as_input_name(self) -> "InputName":
         return InputName(step=self, name=None)
 
+    def mirrored(self, budget_gb: float = 10) -> "InputName":
+        """Return an InputName referencing this step's output, marked for cross-region mirroring."""
+        return InputName(step=self, name=None, mirror_budget_gb=budget_gb)
+
 
 @dataclass(frozen=True)
 class InputName:
@@ -787,8 +791,18 @@ class InputName:
     These "pseudo-dependencies" still impact the hash of the step, but they don't block execution.
     """
 
+    mirror_budget_gb: float | None = None
+    """When set, the resolved path is prefixed with ``mirror://`` so that
+    ``MirrorFileSystem`` copies data from whichever region has it.  The budget
+    caps cross-region transfer in GB."""
+
     def cd(self, name: str) -> "InputName":
-        return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
+        return InputName(
+            self.step,
+            name=os.path.join(self.name, name) if self.name else name,
+            block_on_step=self.block_on_step,
+            mirror_budget_gb=self.mirror_budget_gb,
+        )
 
     def __truediv__(self, other: str) -> "InputName":
         """Alias for `cd` that looks more Pythonic."""
@@ -809,6 +823,10 @@ class InputName:
          (Note that if another step depends on the parent step, it will still block on it.)
         """
         return dataclasses.replace(self, block_on_step=False)
+
+    def mirrored(self, budget_gb: float = 10) -> "InputName":
+        """Mark this input for cross-region mirroring with a transfer budget."""
+        return dataclasses.replace(self, mirror_budget_gb=budget_gb)
 
 
 def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
@@ -1100,7 +1118,12 @@ def _max_mirror_budget(config: Any) -> float | None:
         if isinstance(obj, VersionedValue):
             recurse(obj.value)
             return
-        if isinstance(obj, InputName | ExecutorStep):
+        if isinstance(obj, InputName):
+            if obj.mirror_budget_gb is not None:
+                if max_budget is None or obj.mirror_budget_gb > max_budget:
+                    max_budget = obj.mirror_budget_gb
+            return
+        if isinstance(obj, ExecutorStep):
             return
         if is_dataclass(obj):
             for field in fields(obj):
@@ -1146,9 +1169,12 @@ def instantiate_config(
 
         if isinstance(obj, InputName):
             if obj.step is None:
-                return _make_prefix_absolute_path(prefix, obj.name)
+                resolved = _make_prefix_absolute_path(prefix, obj.name)
             else:
-                return join_path(output_paths[obj.step], obj.name)
+                resolved = join_path(output_paths[obj.step], obj.name)
+            if obj.mirror_budget_gb is not None and not resolved.startswith("mirror://"):
+                return f"mirror://{resolved}"
+            return resolved
         elif isinstance(obj, OutputName):
             return join_path(output_path, obj.name)
         elif isinstance(obj, VersionedValue):

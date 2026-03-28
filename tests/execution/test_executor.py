@@ -658,6 +658,94 @@ def test_mirrored_changes_version():
     assert deps1.version != deps2.version
 
 
+def _dummy_fn(config):
+    pass
+
+
+def test_executor_step_mirrored():
+    """ExecutorStep.mirrored() returns an InputName with mirror_budget_gb set."""
+    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
+    m = step.mirrored(budget_gb=25)
+    assert isinstance(m, InputName)
+    assert m.step is step
+    assert m.name is None
+    assert m.mirror_budget_gb == 25
+
+
+def test_input_name_mirrored():
+    """InputName.mirrored() returns a copy with mirror_budget_gb set."""
+    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
+    inp = output_path_of(step, "hf")
+    m = inp.mirrored(budget_gb=15)
+    assert m.step is step
+    assert m.name == "hf"
+    assert m.mirror_budget_gb == 15
+    # Original unchanged
+    assert inp.mirror_budget_gb is None
+
+
+def test_mirrored_input_name_cd_preserves_budget():
+    """cd() on a mirrored InputName preserves the mirror budget."""
+    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
+    m = step.mirrored(budget_gb=20) / "hf" / "checkpoint"
+    assert m.mirror_budget_gb == 20
+    assert m.name == "hf/checkpoint"
+
+
+def test_mirrored_input_name_nonblocking_preserves_budget():
+    """nonblocking() on a mirrored InputName preserves the mirror budget."""
+    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
+    m = step.mirrored(budget_gb=30).nonblocking()
+    assert m.mirror_budget_gb == 30
+    assert m.block_on_step is False
+
+
+def test_mirrored_input_name_instantiate_config():
+    """InputName with mirror_budget_gb resolves to mirror:// path."""
+
+    @dataclass(frozen=True)
+    class Cfg:
+        model_path: str
+        output_path: str
+
+    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
+    cfg = Cfg(model_path=step.mirrored(), output_path="out")
+    output_paths = {step: "/bucket/train/abc123"}
+    resolved = instantiate_config(cfg, output_path="/out", output_paths=output_paths, prefix="/bucket")
+    assert resolved.model_path == "mirror:///bucket/train/abc123"
+
+
+def test_mirrored_input_name_with_subdir_instantiate_config():
+    """InputName with cd + mirror resolves to mirror:// path with subdir."""
+
+    @dataclass(frozen=True)
+    class Cfg:
+        model_path: str
+        output_path: str
+
+    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
+    cfg = Cfg(model_path=step.mirrored(budget_gb=5) / "hf", output_path="out")
+    output_paths = {step: "/bucket/train/abc123"}
+    resolved = instantiate_config(cfg, output_path="/out", output_paths=output_paths, prefix="/bucket")
+    assert resolved.model_path == "mirror:///bucket/train/abc123/hf"
+
+
+def test_mirrored_input_name_does_not_affect_version():
+    """mirror_budget_gb on InputName should not change the version hash."""
+
+    @dataclass(frozen=True)
+    class Cfg:
+        model_path: str
+        output_path: str
+
+    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
+    deps_plain = collect_dependencies_and_version(Cfg(model_path=output_path_of(step, "hf"), output_path="out"))
+    deps_mirrored = collect_dependencies_and_version(
+        Cfg(model_path=step.mirrored(budget_gb=50) / "hf", output_path="out")
+    )
+    assert deps_plain.version == deps_mirrored.version
+
+
 def test_status_file_takeover_stale_lock_then_refresh(tmp_path):
     """Test taking over a stale lock from a dead worker and then refreshing it."""
     from iris.distributed_lock import HEARTBEAT_TIMEOUT, Lease
