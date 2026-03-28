@@ -3,7 +3,8 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { stateToName } from '@/types/status'
+import { stateToName, stateDisplayName } from '@/types/status'
+import type { JobState } from '@/types/status'
 import type { JobStatus, ListJobsResponse } from '@/types/rpc'
 import { timestampMs, formatDuration, formatRelativeTime } from '@/utils/formatting'
 import { flattenJobTree, getLeafJobName, jobsWithChildren } from '@/utils/jobTree'
@@ -40,7 +41,12 @@ const sortField = ref<SortField>('date')
 const sortDir = ref<SortDir>('desc')
 const nameFilter = ref('')
 const localFilter = ref('')
+const stateFilter = ref('')
 const expandedJobs = ref<Set<string>>(loadExpandedJobs())
+
+const JOB_STATES: JobState[] = [
+  'pending', 'building', 'running', 'succeeded', 'failed', 'killed', 'worker_failed', 'unschedulable',
+]
 
 const {
   data: listResponse,
@@ -53,6 +59,7 @@ const {
   sortField: SORT_FIELD_MAP[sortField.value],
   sortDirection: sortDir.value === 'asc' ? 'SORT_DIRECTION_ASC' : 'SORT_DIRECTION_DESC',
   nameFilter: nameFilter.value || undefined,
+  stateFilter: stateFilter.value || undefined,
 }))
 
 const jobs = computed(() => listResponse.value?.jobs ?? [])
@@ -81,8 +88,12 @@ function saveExpandedJobs() {
 onMounted(fetchJobs)
 useAutoRefresh(fetchJobs, 30_000)
 
-watch([page, sortField, sortDir, nameFilter], () => {
+watch([page, sortField, sortDir, nameFilter, stateFilter], () => {
   fetchJobs()
+})
+
+watch(stateFilter, () => {
+  page.value = 0
 })
 
 // -- Job tree --
@@ -123,8 +134,11 @@ function handleFilterSubmit() {
 function handleFilterClear() {
   localFilter.value = ''
   nameFilter.value = ''
+  stateFilter.value = ''
   page.value = 0
 }
+
+const hasActiveFilter = computed(() => !!nameFilter.value || !!stateFilter.value)
 
 // -- Formatting --
 
@@ -224,6 +238,15 @@ function sortIndicator(field: SortField): string {
   <!-- Filter bar -->
   <div class="mb-4 flex items-center gap-3">
     <form class="flex gap-2" @submit.prevent="handleFilterSubmit">
+      <select
+        v-model="stateFilter"
+        class="px-3 py-1.5 text-sm border border-surface-border rounded
+               bg-surface text-text
+               focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
+      >
+        <option value="">All states</option>
+        <option v-for="s in JOB_STATES" :key="s" :value="s">{{ stateDisplayName(s) }}</option>
+      </select>
       <input
         v-model="localFilter"
         type="text"
@@ -239,12 +262,12 @@ function sortIndicator(field: SortField): string {
         Filter
       </button>
       <button
-        v-if="nameFilter"
+        v-if="hasActiveFilter"
         type="button"
         class="px-3 py-1.5 text-sm border border-surface-border rounded hover:bg-surface-raised text-status-danger"
         @click="handleFilterClear"
       >
-        Clear
+        Reset
       </button>
     </form>
     <span class="text-[13px] text-text-secondary">
@@ -272,7 +295,7 @@ function sortIndicator(field: SortField): string {
   <!-- Empty state -->
   <EmptyState
     v-else-if="!loading && jobs.length === 0"
-    :message="nameFilter ? 'No jobs matching filter' : 'No jobs'"
+    :message="hasActiveFilter ? 'No jobs matching filter' : 'No jobs'"
   />
 
   <!-- Jobs table -->
