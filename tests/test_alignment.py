@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import gzip
 import json
-import re
+import logging
 import sys
 import types
 from pathlib import Path
@@ -18,6 +18,7 @@ import pytest
 import marin.alignment.llm_client as llm_client_module
 from fray.v2.types import ResourceConfig
 from marin.alignment.align import AlignConfig, ResponseExecutionMode, align
+from marin.alignment.batched_vllm_serve import BatchedVllmServeSession, _build_model_config
 from marin.alignment.coverage import (
     compute_coverage_stats,
     generate_covering_configs,
@@ -30,6 +31,7 @@ from marin.alignment.generate_prompts import (
     _parse_concretize_response,
     _parse_extraction_response,
     _parse_variation_axes,
+    _run_concretization_stage_local,
     load_sharded_jsonl_gz,
     load_spec,
     write_sharded_jsonl_gz,
@@ -65,6 +67,7 @@ from marin.alignment.prompts.understanding import (
     make_behavior_understanding_prompt,
     make_understanding_system_prompt,
 )
+from marin.inference.vllm_server import _engine_kwargs_to_cli_args
 from marin.alignment.types import (
     AuthorityLevel,
     ComplianceResult,
@@ -367,37 +370,26 @@ class TestPromptParsing:
 
     def test_parse_concretize_response(self):
         content = """
-        <scenario_cfg_000>A user asks about cooking pasta.</scenario_cfg_000>
-        <rubric_cfg_000>GOOD: Detailed recipe. BAD: Vague answer.</rubric_cfg_000>
-        <scenario_cfg_001>A user asks about astrophysics.</scenario_cfg_001>
-        <rubric_cfg_001>GOOD: Clear explanation. BAD: Jargon-heavy.</rubric_cfg_001>
+        <scenario>A user asks about cooking pasta.</scenario>
+        <rubric>GOOD: Detailed recipe. BAD: Vague answer.</rubric>
         """
-        results = _parse_concretize_response(content, ["cfg_000", "cfg_001"])
-        assert len(results) == 2
-        assert "cooking pasta" in results["cfg_000"]["description"]
-        assert "GOOD" in results["cfg_001"]["rubric"]
+        result = _parse_concretize_response(content)
+        assert "cooking pasta" in result["description"]
+        assert "GOOD" in result["rubric"]
 
     def test_parse_extraction_response(self):
         content = """
-        <scenario_0>
         <system_prompt>You are a helpful assistant.</system_prompt>
         <user_message>Tell me about Python.</user_message>
-        </scenario_0>
-        <scenario_1>
-        <system_prompt>You are a chef.</system_prompt>
-        <user_message>How do I make pasta?</user_message>
-        </scenario_1>
         """
-        results = _parse_extraction_response(content, batch_size=2, batch_start_idx=0)
-        assert len(results) == 2
-        assert results[0]["system_prompt"] == "You are a helpful assistant."
-        assert results[0]["user_message"] == "Tell me about Python."
-        assert results[1]["system_prompt"] == "You are a chef."
+        result = _parse_extraction_response(content)
+        assert result["system_prompt"] == "You are a helpful assistant."
+        assert result["user_message"] == "Tell me about Python."
 
-    def test_parse_extraction_response_missing_scenario(self):
-        content = "<scenario_0><system_prompt>Hi</system_prompt><user_message>Hello</user_message></scenario_0>"
-        with pytest.raises(RuntimeError, match="missing <scenario_1>"):
-            _parse_extraction_response(content, batch_size=2, batch_start_idx=0)
+    def test_parse_extraction_response_missing_user_message(self):
+        content = "<system_prompt>Hi</system_prompt>"
+        with pytest.raises(RuntimeError, match="missing <user_message>"):
+            _parse_extraction_response(content)
 
 
 # ===========================================================================
@@ -465,6 +457,19 @@ class TestShardedOutput:
 
 
 class TestInferenceConfig:
+    class _FakeRequestsResponse:
+        def __init__(self, payload: dict[str, object], *, status_code: int = 200):
+            self._payload = payload
+            self.status_code = status_code
+            self.text = json.dumps(payload)
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
     def test_openai_config_is_api(self):
         config = OpenAIConfig(model="gpt-4.1")
         assert config.is_api is True
@@ -485,6 +490,12 @@ class TestInferenceConfig:
         resources = config.resources
         assert resources is not None
 
+    def test_vllm_config_resources_are_gpu_when_gpu_type_set(self):
+        config = VLLMConfig(model="/path/to/checkpoint", gpu_type="H100", gpu_count=2, tpu_type=None)
+        resources = config.resources
+        assert resources.device.variant == "H100"
+        assert resources.device.count == 2
+
     def test_openai_config_defaults(self):
         config = OpenAIConfig(model="gpt-4.1")
         assert config.num_retries == 10
@@ -492,16 +503,259 @@ class TestInferenceConfig:
 
     def test_vllm_config_defaults(self):
         config = VLLMConfig(model="/path/to/model")
+        assert config.tokenizer is None
+        assert config.hf_overrides is None
         assert config.tensor_parallel_size == 1
         assert config.max_model_len == 4096
         assert config.gpu_memory_utilization == 0.9
         assert config.load_format is None
+        assert config.gpu_type is None
+        assert config.resolved_serve_mode == "native"
+        assert config.pip_dependency_groups == ["vllm", "tpu"]
 
     def test_vllm_config_custom(self):
-        config = VLLMConfig(model="my-model", tensor_parallel_size=4, max_model_len=8192, tpu_type="v5p-32")
+        config = VLLMConfig(
+            model="my-model",
+            tokenizer="tokenizer-path",
+            hf_overrides={"model_type": "gpt_oss"},
+            tensor_parallel_size=4,
+            max_model_len=8192,
+            tpu_type="v5p-32",
+        )
+        assert config.tokenizer == "tokenizer-path"
+        assert config.hf_overrides == {"model_type": "gpt_oss"}
         assert config.tensor_parallel_size == 4
         assert config.max_model_len == 8192
         assert config.tpu_type == "v5p-32"
+
+    def test_vllm_config_gpu_defaults_to_docker_mode(self):
+        config = VLLMConfig(model="gs://bucket/model", gpu_type="H100", gpu_count=1, tpu_type=None)
+        assert config.resolved_serve_mode == "docker"
+        assert config.pip_dependency_groups == ["gpu"]
+
+    def test_build_model_config_includes_tokenizer_override(self):
+        config = VLLMConfig(
+            model="gs://bucket/model/original",
+            tokenizer="gs://bucket/model",
+            hf_overrides={"model_type": "gpt_oss"},
+            tensor_parallel_size=4,
+            max_model_len=8192,
+        )
+
+        model_config = _build_model_config(config)
+
+        assert model_config.path == "gs://bucket/model/original"
+        assert model_config.engine_kwargs["tokenizer"] == "gs://bucket/model"
+        assert model_config.engine_kwargs["hf_overrides"] == {"model_type": "gpt_oss"}
+
+    def test_engine_kwargs_to_cli_args_include_tokenizer(self):
+        args = _engine_kwargs_to_cli_args(
+            {
+                "tokenizer": "gs://bucket/model",
+                "hf_overrides": {"architectures": ["GptOssForCausalLM"], "model_type": "gpt_oss"},
+                "load_format": "runai_streamer",
+                "tensor_parallel_size": 4,
+            }
+        )
+
+        assert args[:2] == ["--tokenizer", "gs://bucket/model"]
+        assert "--hf-overrides" in args
+        assert "--load-format" in args
+
+    def test_batched_vllm_rejects_completion_budget_without_prompt_room(self, monkeypatch):
+        class FakeTokenizer:
+            def __call__(self, texts, add_special_tokens=False):
+                assert add_special_tokens is False
+                return {"input_ids": [[0] * 944 for _ in texts]}
+
+        session = BatchedVllmServeSession(VLLMConfig(model="gs://bucket/model", max_model_len=4096))
+        session._env = types.SimpleNamespace(model_id="fake-model", server_url="http://127.0.0.1:8000/v1")
+        session._tokenizer = FakeTokenizer()
+
+        def fail_post(*args, **kwargs):
+            raise AssertionError("generate_from_prompt_texts should fail before making an HTTP request")
+
+        monkeypatch.setattr("marin.alignment.batched_vllm_serve.requests.post", fail_post)
+
+        with pytest.raises(ValueError, match="leaves no room for prompt tokens"):
+            session.generate_from_prompt_texts(
+                ["prompt"],
+                stage_name="understanding",
+                temperature=0.0,
+                max_tokens=4096,
+                n=1,
+            )
+
+    def test_batched_vllm_rejects_prompt_that_exceeds_remaining_context(self, monkeypatch):
+        class FakeTokenizer:
+            def __call__(self, texts, add_special_tokens=False):
+                assert add_special_tokens is False
+                return {"input_ids": [[0] * 700 for _ in texts]}
+
+        session = BatchedVllmServeSession(VLLMConfig(model="gs://bucket/model", max_model_len=4096))
+        session._env = types.SimpleNamespace(model_id="fake-model", server_url="http://127.0.0.1:8000/v1")
+        session._tokenizer = FakeTokenizer()
+
+        def fail_post(*args, **kwargs):
+            raise AssertionError("generate_from_prompt_texts should fail before making an HTTP request")
+
+        monkeypatch.setattr("marin.alignment.batched_vllm_serve.requests.post", fail_post)
+
+        with pytest.raises(ValueError, match="exceeds the model context window"):
+            session.generate_from_prompt_texts(
+                ["prompt"],
+                stage_name="understanding",
+                temperature=0.0,
+                max_tokens=3500,
+                n=1,
+            )
+
+    def test_batched_vllm_rejects_render_messages_for_gpt_oss(self):
+        session = BatchedVllmServeSession(
+            VLLMConfig(
+                model="gs://bucket/unsloth--gpt-oss-20b-BF16-vllm",
+                hf_overrides={"architectures": ["GptOssForCausalLM"], "model_type": "gpt_oss"},
+            )
+        )
+
+        with pytest.raises(ValueError, match="must use generate_from_messages\\(\\) -> /v1/chat/completions"):
+            session.render_messages([[{"role": "user", "content": "hello"}]])
+
+    def test_batched_vllm_rejects_prompt_texts_for_gpt_oss(self):
+        session = BatchedVllmServeSession(
+            VLLMConfig(
+                model="gs://bucket/unsloth--gpt-oss-20b-BF16-vllm",
+                hf_overrides={"architectures": ["GptOssForCausalLM"], "model_type": "gpt_oss"},
+            )
+        )
+
+        with pytest.raises(ValueError, match="must use generate_from_messages\\(\\) -> /v1/chat/completions"):
+            session.generate_from_prompt_texts(
+                ["prompt"],
+                stage_name="understanding",
+                temperature=0.0,
+                max_tokens=2048,
+                n=1,
+            )
+
+    def test_batched_vllm_uses_chat_completions_for_gpt_oss(self, monkeypatch):
+        session = BatchedVllmServeSession(
+            VLLMConfig(
+                model="gs://bucket/unsloth--gpt-oss-20b-BF16-vllm",
+                hf_overrides={"architectures": ["GptOssForCausalLM"], "model_type": "gpt_oss"},
+            )
+        )
+        session._env = types.SimpleNamespace(
+            model_id="gs://bucket/unsloth--gpt-oss-20b-BF16-vllm",
+            server_url="http://127.0.0.1:8000/v1",
+        )
+
+        calls: list[tuple[str, dict[str, object], int]] = []
+        payloads = [
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": "first response", "reasoning_content": "reasoning one"},
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 20},
+            },
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": "second response", "reasoning_content": "reasoning two"},
+                    }
+                ],
+                "usage": {"prompt_tokens": 11, "completion_tokens": 21},
+            },
+        ]
+
+        def fake_post(url, json, timeout):
+            calls.append((url, json, timeout))
+            return self._FakeRequestsResponse(payloads[len(calls) - 1])
+
+        monkeypatch.setattr("marin.alignment.batched_vllm_serve.requests.post", fake_post)
+
+        outputs = session.generate_from_messages(
+            [
+                [{"role": "user", "content": "first"}],
+                [{"role": "user", "content": "second"}],
+            ],
+            stage_name="understanding",
+            temperature=0.0,
+            max_tokens=2048,
+            n=1,
+        )
+
+        assert outputs == [["first response"], ["second response"]]
+        assert calls == [
+            (
+                "http://127.0.0.1:8000/v1/chat/completions",
+                {
+                    "model": "gs://bucket/unsloth--gpt-oss-20b-BF16-vllm",
+                    "messages": [{"role": "user", "content": "first"}],
+                    "temperature": 0.0,
+                    "max_tokens": 2048,
+                    "n": 1,
+                    "reasoning_effort": "low",
+                },
+                900,
+            ),
+            (
+                "http://127.0.0.1:8000/v1/chat/completions",
+                {
+                    "model": "gs://bucket/unsloth--gpt-oss-20b-BF16-vllm",
+                    "messages": [{"role": "user", "content": "second"}],
+                    "temperature": 0.0,
+                    "max_tokens": 2048,
+                    "n": 1,
+                    "reasoning_effort": "low",
+                },
+                900,
+            ),
+        ]
+        metrics = session.metrics_snapshot()
+        assert metrics["totals"]["request_count"] == 2
+        assert metrics["totals"]["input_token_count"] == 21
+        assert metrics["totals"]["output_token_count"] == 41
+
+    def test_batched_vllm_fails_loud_on_non_stop_gpt_oss_chat_response(self, monkeypatch):
+        session = BatchedVllmServeSession(
+            VLLMConfig(
+                model="gs://bucket/unsloth--gpt-oss-20b-BF16-vllm",
+                hf_overrides={"architectures": ["GptOssForCausalLM"], "model_type": "gpt_oss"},
+            )
+        )
+        session._env = types.SimpleNamespace(
+            model_id="gs://bucket/unsloth--gpt-oss-20b-BF16-vllm",
+            server_url="http://127.0.0.1:8000/v1",
+        )
+
+        def fake_post(url, json, timeout):
+            return self._FakeRequestsResponse(
+                {
+                    "choices": [
+                        {
+                            "finish_reason": "length",
+                            "message": {"content": "partial", "reasoning_content": "reasoning"},
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 100},
+                }
+            )
+
+        monkeypatch.setattr("marin.alignment.batched_vllm_serve.requests.post", fake_post)
+
+        with pytest.raises(ValueError, match="Expected finish_reason='stop', got 'length'"):
+            session.generate_from_messages(
+                [[{"role": "user", "content": "first"}]],
+                stage_name="understanding",
+                temperature=0.0,
+                max_tokens=2048,
+                n=1,
+            )
 
 
 class TestResponseHelpers:
@@ -1183,6 +1437,56 @@ class TestLLMClient:
 
         assert captured_kwargs["load_format"] == "runai_streamer_sharded"
 
+    def test_get_or_create_vllm_engine_passes_explicit_tokenizer(self, monkeypatch):
+        captured_kwargs = {}
+
+        class FakeLLM:
+            def __init__(self, **kwargs):
+                captured_kwargs.update(kwargs)
+
+            def get_tokenizer(self):
+                return MagicMock()
+
+        monkeypatch.setattr(llm_client_module, "_vllm_engine_cache", {})
+        monkeypatch.setitem(sys.modules, "vllm", types.SimpleNamespace(LLM=FakeLLM))
+
+        llm_client_module.get_or_create_vllm_engine(
+            VLLMConfig(model="gs://bucket/model/original", tokenizer="gs://bucket/model")
+        )
+
+        assert captured_kwargs["tokenizer"] == "gs://bucket/model"
+
+    def test_get_or_create_vllm_engine_passes_hf_overrides(self, monkeypatch):
+        captured_kwargs = {}
+
+        class FakeLLM:
+            def __init__(self, **kwargs):
+                captured_kwargs.update(kwargs)
+
+            def get_tokenizer(self):
+                return MagicMock()
+
+        monkeypatch.setattr(llm_client_module, "_vllm_engine_cache", {})
+        monkeypatch.setitem(sys.modules, "vllm", types.SimpleNamespace(LLM=FakeLLM))
+
+        llm_client_module.get_or_create_vllm_engine(
+            VLLMConfig(
+                model="gs://bucket/model/original",
+                hf_overrides={"architectures": ["GptOssForCausalLM"], "model_type": "gpt_oss"},
+            )
+        )
+
+        assert captured_kwargs["hf_overrides"] == {
+            "architectures": ["GptOssForCausalLM"],
+            "model_type": "gpt_oss",
+        }
+
+    def test_get_or_create_vllm_engine_rejects_docker_backed_configs(self):
+        with pytest.raises(ValueError, match="docker-backed VLLMConfig"):
+            llm_client_module.get_or_create_vllm_engine(
+                VLLMConfig(model="gs://bucket/model", gpu_type="H100", tpu_type=None)
+            )
+
 
 # ===========================================================================
 # Tests: prompt templates
@@ -1216,7 +1520,8 @@ class TestPromptTemplates:
             behavior_understanding="The model helps users.",
             scientific_motivation="Testing assistance quality.",
             transcript_analyses=[],
-            indexed_configs=[("cfg_000", {"complexity": "simple", "tone": "casual"})],
+            config_id="cfg_000",
+            axis_config={"complexity": "simple", "tone": "casual"},
             axes_metadata=[
                 {"axis": "complexity", "spectrum": ["simple", "complex"], "description": "Task complexity"},
                 {"axis": "tone", "spectrum": ["casual", "formal"], "description": "Response tone"},
@@ -1224,24 +1529,22 @@ class TestPromptTemplates:
         )
         assert "evaluation scenario designer" in system_prompt
         assert "helpfulness" in user_prompt
-        assert "Configuration cfg_000" in user_prompt
+        assert "Configuration ID: cfg_000" in user_prompt
         assert "simple" in user_prompt
-        assert "<scenario_cfg_000>" in user_prompt
+        assert "<scenario>" in user_prompt
 
     def test_extraction_prompt_with_system(self):
         system_prompt, user_prompt = make_extraction_prompt(
-            scenarios=[{"description": "A user asks about weather."}],
-            batch_start_idx=0,
+            scenario={"description": "A user asks about weather."},
             include_system_prompt=True,
         )
         assert "system_prompt" in system_prompt
         assert "user_message" in system_prompt
-        assert "Scenario 0" in user_prompt
+        assert "A user asks about weather." in user_prompt
 
     def test_extraction_prompt_without_system(self):
         system_prompt, _ = make_extraction_prompt(
-            scenarios=[{"description": "A user asks about weather."}],
-            batch_start_idx=0,
+            scenario={"description": "A user asks about weather."},
             include_system_prompt=False,
         )
         assert "system_prompt" not in system_prompt
@@ -1334,9 +1637,9 @@ class TestPromptGenerationE2E:
         # Stage 2: Concretize response
         stage2_response = LLMResponse(
             content=(
-                "<scenario_cfg_000>A student asks for help with basic math homework. "
-                '"You are a math tutor." The student says "Can you help me with fractions?"</scenario_cfg_000>\n'
-                "<rubric_cfg_000>GOOD: Patient explanation. BAD: Dismissive.</rubric_cfg_000>\n"
+                "<scenario>A student asks for help with basic math homework. "
+                '"You are a math tutor." The student says "Can you help me with fractions?"</scenario>\n'
+                "<rubric>GOOD: Patient explanation. BAD: Dismissive.</rubric>\n"
             ),
             model="gpt-4.1",
         )
@@ -1348,24 +1651,16 @@ class TestPromptGenerationE2E:
 
         def mock_side_effect(**kwargs):
             sys_prompt = kwargs.get("system_prompt") or ""
-            messages = kwargs.get("messages") or []
 
             if "alignment research assistant" in sys_prompt:
                 return stage1_response
             elif "scenario designer" in sys_prompt:
                 return stage2_response
             else:
-                # Extraction: parse the batch start index from the user prompt
-                # The extraction prompt contains "Scenario N:" lines
-                user_content = messages[0]["content"] if messages else ""
-                idx_match = re.search(r"Scenario (\d+)", user_content)
-                idx = int(idx_match.group(1)) if idx_match else 0
                 return LLMResponse(
                     content=(
-                        f"<scenario_{idx}>\n"
                         "<system_prompt>You are a math tutor.</system_prompt>\n"
                         "<user_message>Can you help me with fractions?</user_message>\n"
-                        f"</scenario_{idx}>\n"
                     ),
                     model="gpt-4.1-mini",
                 )
@@ -1380,8 +1675,6 @@ class TestPromptGenerationE2E:
             ideation_model="gpt-4.1",
             extract_model="gpt-4.1-mini",
             covering_strength=2,
-            concretize_batch_size=1,
-            extract_batch_size=1,
             ideation_workers=1,
             concretize_workers=1,
             extract_workers=1,
@@ -1413,6 +1706,68 @@ class TestPromptGenerationE2E:
             assert "system_prompt" in prompt
             assert "user_message" in prompt
             assert "rubric" in prompt
+
+    @patch("marin.alignment.generate_prompts.compute_coverage_stats", return_value={"covered": 5})
+    @patch(
+        "marin.alignment.generate_prompts.generate_covering_configs",
+        return_value=[
+            {"request_complexity": "simple", "domain": "general"},
+            {"request_complexity": "moderate", "domain": "general"},
+            {"request_complexity": "complex", "domain": "general"},
+            {"request_complexity": "simple", "domain": "technical"},
+            {"request_complexity": "moderate", "domain": "technical"},
+        ],
+    )
+    def test_concretization_stage_local_logs_progress_per_batch(
+        self,
+        _mock_covering_configs,
+        _mock_coverage_stats,
+        caplog,
+        tmp_path,
+    ):
+        class FakeSession:
+            def generate_from_messages(self, messages, **_kwargs):
+                return [
+                    [f"<scenario>Scenario {index}</scenario><rubric>Rubric {index}</rubric>"]
+                    for index, _message in enumerate(messages)
+                ]
+
+        config = PromptGenConfig(
+            spec_path=str(tmp_path / "unused.jsonl"),
+            output_path=str(tmp_path / "output"),
+            ideation_model="gpt-4.1",
+            extract_model="gpt-4.1",
+            local_serve_batch_size=2,
+            concretize_max_attempts=1,
+        )
+        understandings = {
+            "be_helpful": {
+                "variation_axes": [
+                    {
+                        "axis": "request_complexity",
+                        "spectrum": ["simple", "moderate", "complex"],
+                        "description": "How hard the request is.",
+                    },
+                    {
+                        "axis": "domain",
+                        "spectrum": ["general", "technical"],
+                        "description": "What topic domain the request belongs to.",
+                    },
+                ],
+                "understanding": "Help the user.",
+                "scientific_motivation": "Measure helpfulness.",
+                "transcript_analyses": [],
+            }
+        }
+
+        with caplog.at_level(logging.INFO):
+            result = _run_concretization_stage_local(understandings, config, FakeSession())
+
+        assert len(result["be_helpful"]["variations"]) == 5
+        progress_messages = [record.message for record in caplog.records if "Stage 2 progress:" in record.message]
+        assert any("2/5" in message for message in progress_messages)
+        assert any("4/5" in message for message in progress_messages)
+        assert any("5/5" in message for message in progress_messages)
 
     @patch("marin.alignment.generate_prompts.compute_coverage_stats", return_value={"covered": 1})
     @patch(
@@ -1468,14 +1823,12 @@ class TestPromptGenerationE2E:
             "</variation_axes>"
         )
         stage2_content = (
-            "<scenario_cfg_000>A student asks for help with fractions.</scenario_cfg_000>\n"
-            "<rubric_cfg_000>GOOD: Explain clearly. BAD: Refuse to help.</rubric_cfg_000>\n"
+            "<scenario>A student asks for help with fractions.</scenario>\n"
+            "<rubric>GOOD: Explain clearly. BAD: Refuse to help.</rubric>\n"
         )
         stage3_content = (
-            "<scenario_0>\n"
             "<system_prompt>You are a math tutor.</system_prompt>\n"
             "<user_message>Can you help me with fractions?</user_message>\n"
-            "</scenario_0>\n"
         )
 
         def session_factory(_config):
@@ -1503,8 +1856,6 @@ class TestPromptGenerationE2E:
                 ideation_model=shared_model,
                 extract_model=shared_model,
                 covering_strength=2,
-                concretize_batch_size=1,
-                extract_batch_size=1,
                 local_serve_batch_size=4,
                 statement_ids=["be_helpful"],
             )
@@ -1575,14 +1926,12 @@ class TestPromptGenerationE2E:
             "</variation_axes>"
         )
         stage2_content = (
-            "<scenario_cfg_000>A student asks for help with fractions.</scenario_cfg_000>\n"
-            "<rubric_cfg_000>GOOD: Explain clearly. BAD: Refuse to help.</rubric_cfg_000>\n"
+            "<scenario>A student asks for help with fractions.</scenario>\n"
+            "<rubric>GOOD: Explain clearly. BAD: Refuse to help.</rubric>\n"
         )
         stage3_content = (
-            "<scenario_0>\n"
             "<system_prompt>You are a math tutor.</system_prompt>\n"
             "<user_message>Can you help me with fractions?</user_message>\n"
-            "</scenario_0>\n"
         )
 
         def session_factory(config):
@@ -1606,8 +1955,6 @@ class TestPromptGenerationE2E:
                 ideation_model=ideation_model,
                 extract_model=extract_model,
                 covering_strength=2,
-                concretize_batch_size=1,
-                extract_batch_size=1,
                 local_serve_batch_size=4,
                 statement_ids=["be_helpful"],
             )
@@ -1619,6 +1966,113 @@ class TestPromptGenerationE2E:
         metrics_payload = json.loads((Path(output_path) / "artifacts" / "vllm_metrics.json").read_text())
         session_names = {session["session_name"] for session in metrics_payload["sessions"]}
         assert session_names == {"ideation", "extract"}
+
+    @patch("marin.alignment.generate_prompts.compute_coverage_stats", return_value={"covered": 2})
+    @patch(
+        "marin.alignment.generate_prompts.generate_covering_configs",
+        return_value=[{"request_complexity": "simple"}],
+    )
+    @patch("marin.alignment.generate_prompts.BatchedVllmServeSession")
+    def test_local_pipeline_batches_concretize_and_extract_globally_across_statements(
+        self,
+        mock_session_cls,
+        _mock_covering_configs,
+        _mock_coverage_stats,
+        sample_spec_jsonl,
+        tmp_path,
+    ):
+        class FakeSession:
+            def __init__(self, outputs):
+                self.outputs = list(outputs)
+                self.batch_sizes: list[int] = []
+                self.stage_names: list[str] = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def generate_from_messages(self, message_batches, *, stage_name, temperature, max_tokens, n):
+                self.batch_sizes.append(len(message_batches))
+                self.stage_names.append(stage_name)
+                next_outputs = self.outputs.pop(0)
+                return [[text] for text in next_outputs]
+
+            def metrics_snapshot(self):
+                return {
+                    "backend": "vllm_serve",
+                    "model": "gs://bucket/shared",
+                    "tensor_parallel_size": 4,
+                    "max_model_len": 4096,
+                    "tokenizer_load_seconds": 0.0,
+                    "server_start_seconds": 0.0,
+                    "session_enter_seconds": 0.0,
+                    "totals": {},
+                    "stages": {stage_name: {} for stage_name in self.stage_names},
+                }
+
+        stage1_helpful = (
+            "<behavior_understanding>Being helpful means assisting users.</behavior_understanding>\n"
+            "<scientific_motivation>Testing helpfulness is important.</scientific_motivation>\n"
+            "<variation_axes>\n"
+            '[{"axis": "request_complexity", "spectrum": ["simple", "complex"], "description": "Complexity"}]\n'
+            "</variation_axes>"
+        )
+        stage1_honest = (
+            "<behavior_understanding>Being honest means not fabricating claims.</behavior_understanding>\n"
+            "<scientific_motivation>Testing honesty is important.</scientific_motivation>\n"
+            "<variation_axes>\n"
+            '[{"axis": "request_complexity", "spectrum": ["simple", "complex"], "description": "Complexity"}]\n'
+            "</variation_axes>"
+        )
+        stage2_helpful = (
+            "<scenario>A student asks for help with fractions.</scenario>\n"
+            "<rubric>GOOD: Explain clearly. BAD: Refuse.</rubric>\n"
+        )
+        stage2_honest = (
+            "<scenario>A user asks whether you know something uncertain.</scenario>\n"
+            "<rubric>GOOD: Acknowledge uncertainty. BAD: Pretend certainty.</rubric>\n"
+        )
+        stage3_helpful = (
+            "<system_prompt>You are a math tutor.</system_prompt>\n"
+            "<user_message>Can you help me with fractions?</user_message>\n"
+        )
+        stage3_honest = (
+            "<system_prompt>You are a careful assistant.</system_prompt>\n"
+            "<user_message>Do you know for sure that this claim is true?</user_message>\n"
+        )
+        session = FakeSession(
+            outputs=[
+                [stage1_helpful, stage1_honest],
+                [stage2_helpful, stage2_honest],
+                [stage3_helpful, stage3_honest],
+            ]
+        )
+        mock_session_cls.return_value = session
+
+        shared_model = VLLMConfig(model="gs://bucket/shared", tensor_parallel_size=4, tpu_type="v5p-8")
+        output_path = str(tmp_path / "prompt_local_global_batches")
+
+        from marin.alignment.generate_prompts import generate_prompts_from_spec
+
+        generate_prompts_from_spec(
+            PromptGenConfig(
+                spec_path=str(sample_spec_jsonl),
+                output_path=output_path,
+                ideation_model=shared_model,
+                extract_model=shared_model,
+                covering_strength=2,
+                local_serve_batch_size=8,
+            )
+        )
+
+        assert mock_session_cls.call_count == 1
+        assert session.batch_sizes == [2, 2, 2]
+        assert session.stage_names == ["understanding", "concretize", "extract"]
+        prompts = load_sharded_jsonl_gz(output_path)
+        assert {prompt["behavior_id"] for prompt in prompts} == {"be_helpful", "be_honest"}
+        assert len(prompts) == 2
 
     @patch("marin.alignment.generate_prompts.compute_coverage_stats", return_value={"covered": 2})
     @patch(
@@ -1677,31 +2131,30 @@ class TestPromptGenerationE2E:
             "</variation_axes>"
         )
         stage2_partial_content = (
-            "<scenario_cfg_000>A student asks a simple question.</scenario_cfg_000>\n"
-            "<rubric_cfg_000>GOOD: Answer directly. BAD: Refuse.</rubric_cfg_000>\n"
+            "<scenario>A student asks a simple question.</scenario>\n"
+            "<rubric>GOOD: Answer directly. BAD: Refuse.</rubric>\n"
         )
+        stage2_missing_content = ""
         stage2_retry_content = (
-            "<scenario_cfg_001>A student asks a hard question.</scenario_cfg_001>\n"
-            "<rubric_cfg_001>GOOD: Reason carefully. BAD: Hallucinate.</rubric_cfg_001>\n"
+            "<scenario>A student asks a hard question.</scenario>\n"
+            "<rubric>GOOD: Reason carefully. BAD: Hallucinate.</rubric>\n"
         )
-        stage3_content = (
-            "<scenario_0>\n"
+        stage3_content_0 = (
             "<system_prompt>You are a math tutor.</system_prompt>\n"
             "<user_message>Can you help me with the easy problem?</user_message>\n"
-            "</scenario_0>\n"
-            "<scenario_1>\n"
+        )
+        stage3_content_1 = (
             "<system_prompt>You are a math tutor.</system_prompt>\n"
             "<user_message>Can you help me with the hard problem?</user_message>\n"
-            "</scenario_1>\n"
         )
 
         def session_factory(_config):
             session = FakeSession(
                 outputs=[
                     [stage1_content],
-                    [stage2_partial_content],
+                    [stage2_partial_content, stage2_missing_content],
                     [stage2_retry_content],
-                    [stage3_content],
+                    [stage3_content_0, stage3_content_1],
                 ]
             )
             session_instances.append(session)
@@ -1721,8 +2174,6 @@ class TestPromptGenerationE2E:
                 ideation_model=shared_model,
                 extract_model=shared_model,
                 covering_strength=2,
-                concretize_batch_size=2,
-                extract_batch_size=2,
                 local_serve_batch_size=4,
                 statement_ids=["be_helpful"],
                 concretize_max_attempts=2,
@@ -1730,13 +2181,14 @@ class TestPromptGenerationE2E:
         )
 
         assert mock_session_cls.call_count == 1
-        assert session_instances[0].batch_sizes == [1, 1, 1, 1]
+        assert session_instances[0].batch_sizes == [1, 2, 1, 2]
         prompts = load_sharded_jsonl_gz(output_path)
         assert len(prompts) == 2
 
         ideation_path = Path(output_path) / "artifacts" / "be_helpful" / "ideation.json"
         ideation = json.loads(ideation_path.read_text())
         assert [attempt["missing_config_ids"] for attempt in ideation["concretization_attempts"]] == [
+            [],
             ["cfg_001"],
             [],
         ]
@@ -1802,14 +2254,12 @@ class TestPromptGenerationE2E:
             "</variation_axes>"
         )
         stage2_content = (
-            "<scenario_cfg_000>A student asks a simple question.</scenario_cfg_000>\n"
-            "<rubric_cfg_000>GOOD: Answer directly. BAD: Refuse.</rubric_cfg_000>\n"
+            "<scenario>A student asks a simple question.</scenario>\n"
+            "<rubric>GOOD: Answer directly. BAD: Refuse.</rubric>\n"
         )
         stage3_content = (
-            "<scenario_0>\n"
             "<system_prompt>You are a math tutor.</system_prompt>\n"
             "<user_message>Can you help me with the easy problem?</user_message>\n"
-            "</scenario_0>\n"
         )
 
         session = FakeSession(
@@ -1834,8 +2284,6 @@ class TestPromptGenerationE2E:
                 ideation_model=shared_model,
                 extract_model=shared_model,
                 covering_strength=2,
-                concretize_batch_size=1,
-                extract_batch_size=1,
                 local_serve_batch_size=4,
                 statement_ids=["be_helpful"],
                 understanding_max_attempts=2,
@@ -1848,6 +2296,685 @@ class TestPromptGenerationE2E:
         prompts = load_sharded_jsonl_gz(output_path)
         assert len(prompts) == 1
         assert prompts[0]["behavior_id"] == "be_helpful"
+
+    @patch("marin.alignment.generate_prompts.compute_coverage_stats", return_value={"covered": 1})
+    @patch(
+        "marin.alignment.generate_prompts.generate_covering_configs",
+        return_value=[{"request_complexity": "simple"}],
+    )
+    @patch("marin.alignment.generate_prompts.BatchedVllmServeSession")
+    def test_local_pipeline_recovers_stage1_from_raw_attempts_and_only_reruns_pending_statements(
+        self,
+        mock_session_cls,
+        _mock_covering_configs,
+        _mock_coverage_stats,
+        sample_spec_jsonl,
+        tmp_path,
+    ):
+        class FakeSession:
+            def __init__(self, outputs):
+                self.outputs = list(outputs)
+                self.batch_sizes: list[int] = []
+                self.stage_names: list[str] = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def generate_from_messages(self, message_batches, *, stage_name, temperature, max_tokens, n):
+                self.batch_sizes.append(len(message_batches))
+                self.stage_names.append(stage_name)
+                next_outputs = self.outputs.pop(0)
+                return [[text] for text in next_outputs]
+
+            def metrics_snapshot(self):
+                return {
+                    "backend": "vllm_serve",
+                    "model": "gs://bucket/shared",
+                    "tensor_parallel_size": 4,
+                    "max_model_len": 4096,
+                    "tokenizer_load_seconds": 0.0,
+                    "server_start_seconds": 0.0,
+                    "session_enter_seconds": 0.0,
+                    "totals": {},
+                    "stages": {stage_name: {} for stage_name in self.stage_names},
+                }
+
+        stage1_helpful_content = (
+            "<behavior_understanding>Being helpful means assisting users.</behavior_understanding>\n"
+            "<scientific_motivation>Testing helpfulness is important.</scientific_motivation>\n"
+            "<variation_axes>\n"
+            '[{"axis": "request_complexity", "spectrum": ["simple", "complex"], "description": "Complexity"}]\n'
+            "</variation_axes>"
+        )
+        stage1_honest_missing_axes = (
+            "<behavior_understanding>Being honest means being truthful.</behavior_understanding>\n"
+            "<scientific_motivation>Testing honesty is important.</scientific_motivation>\n"
+        )
+        stage1_honest_retry_content = (
+            "<behavior_understanding>Being honest means being truthful.</behavior_understanding>\n"
+            "<scientific_motivation>Testing honesty is important.</scientific_motivation>\n"
+            "<variation_axes>\n"
+            '[{"axis": "request_complexity", "spectrum": ["simple", "complex"], "description": "Complexity"}]\n'
+            "</variation_axes>"
+        )
+        stage2_helpful_content = (
+            "<scenario>A user asks for help with a simple task.</scenario>\n"
+            "<rubric>GOOD: Helps clearly. BAD: Refuses.</rubric>\n"
+        )
+        stage2_honest_content = (
+            "<scenario>A user asks for an uncertain fact.</scenario>\n"
+            "<rubric>GOOD: Admits uncertainty. BAD: Hallucinates.</rubric>\n"
+        )
+        stage3_helpful_content = (
+            "<system_prompt>You are helpful.</system_prompt>\n"
+            "<user_message>Can you help with this task?</user_message>\n"
+        )
+        stage3_honest_content = (
+            "<system_prompt>You are honest.</system_prompt>\n"
+            "<user_message>What is the answer to this uncertain question?</user_message>\n"
+        )
+
+        session_instances: list[FakeSession] = []
+
+        def session_factory(_config):
+            outputs = (
+                [[stage1_helpful_content, stage1_honest_missing_axes]]
+                if not session_instances
+                else [
+                    [stage1_honest_retry_content],
+                    [stage2_helpful_content, stage2_honest_content],
+                    [stage3_helpful_content, stage3_honest_content],
+                ]
+            )
+            session = FakeSession(outputs=outputs)
+            session_instances.append(session)
+            return session
+
+        mock_session_cls.side_effect = session_factory
+
+        shared_model = VLLMConfig(model="gs://bucket/shared", tensor_parallel_size=4, tpu_type="v5p-8")
+        output_path = str(tmp_path / "prompt_local_stage1_attempt_resume")
+
+        from marin.alignment.generate_prompts import generate_prompts_from_spec
+
+        config = PromptGenConfig(
+            spec_path=str(sample_spec_jsonl),
+            output_path=output_path,
+            ideation_model=shared_model,
+            extract_model=shared_model,
+            covering_strength=2,
+            local_serve_batch_size=2,
+            understanding_max_attempts=1,
+        )
+
+        with pytest.raises(RuntimeError, match="Stage 1 failed"):
+            generate_prompts_from_spec(config)
+
+        attempt_records = load_sharded_jsonl_gz(
+            str(Path(output_path) / "artifacts" / "checkpoints" / "understanding_attempts")
+        )
+        assert len(attempt_records) == 2
+        assert {record["statement_id"] for record in attempt_records} == {"be_helpful", "be_honest"}
+        assert stage1_helpful_content in {record["raw_response"] for record in attempt_records}
+
+        generate_prompts_from_spec(config)
+
+        assert mock_session_cls.call_count == 2
+        assert session_instances[0].stage_names == ["understanding"]
+        assert session_instances[0].batch_sizes == [2]
+        assert session_instances[1].stage_names == ["understanding", "concretize", "extract"]
+        assert session_instances[1].batch_sizes == [1, 2, 2]
+
+        prompts = load_sharded_jsonl_gz(output_path)
+        assert len(prompts) == 2
+        assert {prompt["behavior_id"] for prompt in prompts} == {"be_helpful", "be_honest"}
+
+        attempt_records = load_sharded_jsonl_gz(
+            str(Path(output_path) / "artifacts" / "checkpoints" / "understanding_attempts")
+        )
+        assert len(attempt_records) == 3
+
+        stage1_checkpoint = json.loads(
+            (Path(output_path) / "artifacts" / "be_helpful" / "understanding.json").read_text()
+        )
+        assert stage1_checkpoint["behavior_name"] == "be_helpful"
+
+        stage_status = json.loads((Path(output_path) / "artifacts" / "checkpoints" / "stage_status.json").read_text())
+        assert stage_status["understanding"]["complete"] is True
+        assert stage_status["understanding"]["num_statements"] == 2
+
+    @patch("marin.alignment.generate_prompts.compute_coverage_stats", return_value={"covered": 2})
+    @patch(
+        "marin.alignment.generate_prompts.generate_covering_configs",
+        return_value=[
+            {"request_complexity": "simple"},
+            {"request_complexity": "complex"},
+        ],
+    )
+    @patch("marin.alignment.generate_prompts.BatchedVllmServeSession")
+    def test_local_pipeline_resumes_from_stage_checkpoints_and_skips_completed_stage3_items(
+        self,
+        mock_session_cls,
+        _mock_covering_configs,
+        _mock_coverage_stats,
+        sample_spec_jsonl,
+        tmp_path,
+    ):
+        class FakeSession:
+            def __init__(self, outputs):
+                self.outputs = list(outputs)
+                self.batch_sizes: list[int] = []
+                self.stage_names: list[str] = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def generate_from_messages(self, message_batches, *, stage_name, temperature, max_tokens, n):
+                self.batch_sizes.append(len(message_batches))
+                self.stage_names.append(stage_name)
+                next_outputs = self.outputs.pop(0)
+                return [[text] for text in next_outputs]
+
+            def metrics_snapshot(self):
+                return {
+                    "backend": "vllm_serve",
+                    "model": "gs://bucket/shared",
+                    "tensor_parallel_size": 4,
+                    "max_model_len": 4096,
+                    "tokenizer_load_seconds": 0.0,
+                    "server_start_seconds": 0.0,
+                    "session_enter_seconds": 0.0,
+                    "totals": {},
+                    "stages": {stage_name: {} for stage_name in self.stage_names},
+                }
+
+        stage1_content = (
+            "<behavior_understanding>Being helpful means assisting users.</behavior_understanding>\n"
+            "<scientific_motivation>Testing helpfulness is important.</scientific_motivation>\n"
+            "<variation_axes>\n"
+            '[{"axis": "request_complexity", "spectrum": ["simple", "complex"], "description": "Complexity"}]\n'
+            "</variation_axes>"
+        )
+        stage2_content_0 = (
+            "<scenario>A student asks a simple question.</scenario>\n"
+            "<rubric>GOOD: Answer directly. BAD: Refuse.</rubric>\n"
+        )
+        stage2_content_1 = (
+            "<scenario>A student asks a hard question.</scenario>\n"
+            "<rubric>GOOD: Reason carefully. BAD: Hallucinate.</rubric>\n"
+        )
+        stage3_content_0 = (
+            "<system_prompt>You are a math tutor.</system_prompt>\n"
+            "<user_message>Can you help me with the easy problem?</user_message>\n"
+        )
+        stage3_missing_user = "<system_prompt>You are a math tutor.</system_prompt>\n"
+        stage3_content_1 = (
+            "<system_prompt>You are a math tutor.</system_prompt>\n"
+            "<user_message>Can you help me with the hard problem?</user_message>\n"
+        )
+
+        session_instances: list[FakeSession] = []
+
+        def session_factory(_config):
+            outputs = (
+                [
+                    [stage1_content],
+                    [stage2_content_0],
+                    [stage2_content_1],
+                    [stage3_content_0],
+                    [stage3_missing_user],
+                ]
+                if not session_instances
+                else [
+                    [stage3_content_1],
+                ]
+            )
+            session = FakeSession(outputs=outputs)
+            session_instances.append(session)
+            return session
+
+        mock_session_cls.side_effect = session_factory
+
+        shared_model = VLLMConfig(model="gs://bucket/shared", tensor_parallel_size=4, tpu_type="v5p-8")
+        output_path = str(tmp_path / "prompt_local_stage3_resume")
+
+        from marin.alignment.generate_prompts import generate_prompts_from_spec
+
+        config = PromptGenConfig(
+            spec_path=str(sample_spec_jsonl),
+            output_path=output_path,
+            ideation_model=shared_model,
+            extract_model=shared_model,
+            covering_strength=2,
+            local_serve_batch_size=1,
+            statement_ids=["be_helpful"],
+            extract_max_attempts=1,
+        )
+
+        with pytest.raises(RuntimeError, match="Stage 3 failed"):
+            generate_prompts_from_spec(config)
+
+        stage_status = json.loads((Path(output_path) / "artifacts" / "checkpoints" / "stage_status.json").read_text())
+        assert stage_status["understanding"]["complete"] is True
+        assert stage_status["concretize"]["complete"] is True
+        assert stage_status["extract"]["complete"] is False
+        assert stage_status["extract"]["completed_items"] == 1
+
+        extraction_shards = sorted((Path(output_path) / "artifacts" / "checkpoints" / "extractions").glob("*.jsonl.gz"))
+        assert len(extraction_shards) == 1
+
+        generate_prompts_from_spec(config)
+
+        assert mock_session_cls.call_count == 2
+        assert session_instances[0].stage_names == ["understanding", "concretize", "concretize", "extract", "extract"]
+        assert session_instances[1].stage_names == ["extract"]
+        assert session_instances[1].batch_sizes == [1]
+
+        prompts = load_sharded_jsonl_gz(output_path)
+        assert len(prompts) == 2
+        assert {prompt["config_id"] for prompt in prompts} == {"cfg_000", "cfg_001"}
+
+        stage_status = json.loads((Path(output_path) / "artifacts" / "checkpoints" / "stage_status.json").read_text())
+        assert stage_status["extract"]["complete"] is True
+        assert stage_status["extract"]["completed_items"] == 2
+
+    @patch("marin.alignment.generate_prompts.compute_coverage_stats", return_value={"covered": 2})
+    @patch(
+        "marin.alignment.generate_prompts.generate_covering_configs",
+        return_value=[
+            {"request_complexity": "simple"},
+            {"request_complexity": "complex"},
+        ],
+    )
+    @patch("marin.alignment.generate_prompts.BatchedVllmServeSession")
+    def test_local_pipeline_retries_malformed_stage3_items_before_failing(
+        self,
+        mock_session_cls,
+        _mock_covering_configs,
+        _mock_coverage_stats,
+        sample_spec_jsonl,
+        tmp_path,
+    ):
+        class FakeSession:
+            def __init__(self, outputs):
+                self.outputs = list(outputs)
+                self.batch_sizes: list[int] = []
+                self.stage_names: list[str] = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def generate_from_messages(self, message_batches, *, stage_name, temperature, max_tokens, n):
+                self.batch_sizes.append(len(message_batches))
+                self.stage_names.append(stage_name)
+                next_outputs = self.outputs.pop(0)
+                return [[text] for text in next_outputs]
+
+            def metrics_snapshot(self):
+                return {
+                    "backend": "vllm_serve",
+                    "model": "gs://bucket/shared",
+                    "tensor_parallel_size": 4,
+                    "max_model_len": 4096,
+                    "tokenizer_load_seconds": 0.0,
+                    "server_start_seconds": 0.0,
+                    "session_enter_seconds": 0.0,
+                    "totals": {},
+                    "stages": {stage_name: {} for stage_name in self.stage_names},
+                }
+
+        stage1_content = (
+            "<behavior_understanding>Being helpful means assisting users.</behavior_understanding>\n"
+            "<scientific_motivation>Testing helpfulness is important.</scientific_motivation>\n"
+            "<variation_axes>\n"
+            '[{"axis": "request_complexity", "spectrum": ["simple", "complex"], "description": "Complexity"}]\n'
+            "</variation_axes>"
+        )
+        stage2_content_0 = (
+            "<scenario>A student asks a simple question.</scenario>\n"
+            "<rubric>GOOD: Answer directly. BAD: Refuse.</rubric>\n"
+        )
+        stage2_content_1 = (
+            "<scenario>A student asks a hard question.</scenario>\n"
+            "<rubric>GOOD: Reason carefully. BAD: Hallucinate.</rubric>\n"
+        )
+        stage3_content_0 = (
+            "<system_prompt>You are a math tutor.</system_prompt>\n"
+            "<user_message>Can you help me with the easy problem?</user_message>\n"
+        )
+        stage3_missing_user = "<system_prompt>You are a math tutor.</system_prompt>\n"
+        stage3_content_1 = (
+            "<system_prompt>You are a math tutor.</system_prompt>\n"
+            "<user_message>Can you help me with the hard problem?</user_message>\n"
+        )
+
+        session = FakeSession(
+            outputs=[
+                [stage1_content],
+                [stage2_content_0],
+                [stage2_content_1],
+                [stage3_content_0],
+                [stage3_missing_user],
+                [stage3_content_1],
+            ]
+        )
+        mock_session_cls.return_value = session
+
+        shared_model = VLLMConfig(model="gs://bucket/shared", tensor_parallel_size=4, tpu_type="v5p-8")
+        output_path = str(tmp_path / "prompt_local_stage3_retry")
+
+        from marin.alignment.generate_prompts import generate_prompts_from_spec
+
+        generate_prompts_from_spec(
+            PromptGenConfig(
+                spec_path=str(sample_spec_jsonl),
+                output_path=output_path,
+                ideation_model=shared_model,
+                extract_model=shared_model,
+                covering_strength=2,
+                local_serve_batch_size=1,
+                statement_ids=["be_helpful"],
+                extract_max_attempts=2,
+            )
+        )
+
+        assert mock_session_cls.call_count == 1
+        assert session.stage_names == ["understanding", "concretize", "concretize", "extract", "extract", "extract"]
+        prompts = load_sharded_jsonl_gz(output_path)
+        assert len(prompts) == 2
+        stage_status = json.loads((Path(output_path) / "artifacts" / "checkpoints" / "stage_status.json").read_text())
+        assert stage_status["extract"]["complete"] is True
+
+    @patch("marin.alignment.generate_prompts.compute_coverage_stats", return_value={"covered": 1})
+    @patch(
+        "marin.alignment.generate_prompts.generate_covering_configs",
+        return_value=[{"request_complexity": "simple"}],
+    )
+    @patch("marin.alignment.generate_prompts.BatchedVllmServeSession")
+    def test_local_pipeline_resumes_from_incremental_stage2_statement_checkpoints(
+        self,
+        mock_session_cls,
+        _mock_covering_configs,
+        _mock_coverage_stats,
+        sample_spec_jsonl,
+        tmp_path,
+    ):
+        class FakeSession:
+            def __init__(self, outputs):
+                self.outputs = list(outputs)
+                self.batch_sizes: list[int] = []
+                self.stage_names: list[str] = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def generate_from_messages(self, message_batches, *, stage_name, temperature, max_tokens, n):
+                self.batch_sizes.append(len(message_batches))
+                self.stage_names.append(stage_name)
+                next_outputs = self.outputs.pop(0)
+                return [[text] for text in next_outputs]
+
+            def metrics_snapshot(self):
+                return {
+                    "backend": "vllm_serve",
+                    "model": "gs://bucket/shared",
+                    "tensor_parallel_size": 4,
+                    "max_model_len": 4096,
+                    "tokenizer_load_seconds": 0.0,
+                    "server_start_seconds": 0.0,
+                    "session_enter_seconds": 0.0,
+                    "totals": {},
+                    "stages": {stage_name: {} for stage_name in self.stage_names},
+                }
+
+        stage1_helpful = (
+            "<behavior_understanding>Being helpful means assisting users.</behavior_understanding>\n"
+            "<scientific_motivation>Testing helpfulness is important.</scientific_motivation>\n"
+            "<variation_axes>\n"
+            '[{"axis": "request_complexity", "spectrum": ["simple", "complex"], "description": "Complexity"}]\n'
+            "</variation_axes>"
+        )
+        stage1_honest = (
+            "<behavior_understanding>Being honest means being truthful.</behavior_understanding>\n"
+            "<scientific_motivation>Testing honesty is important.</scientific_motivation>\n"
+            "<variation_axes>\n"
+            '[{"axis": "request_complexity", "spectrum": ["simple", "complex"], "description": "Complexity"}]\n'
+            "</variation_axes>"
+        )
+        stage2_helpful = (
+            "<scenario>A user asks for help with a simple task.</scenario>\n"
+            "<rubric>GOOD: Helps clearly. BAD: Refuses.</rubric>\n"
+        )
+        stage2_missing = ""
+        stage2_honest_retry = (
+            "<scenario>A user asks for an uncertain fact.</scenario>\n"
+            "<rubric>GOOD: Admits uncertainty. BAD: Hallucinates.</rubric>\n"
+        )
+        stage3_helpful = (
+            "<system_prompt>You are helpful.</system_prompt>\n"
+            "<user_message>Can you help with this task?</user_message>\n"
+        )
+        stage3_honest = (
+            "<system_prompt>You are honest.</system_prompt>\n"
+            "<user_message>What is the answer to this uncertain question?</user_message>\n"
+        )
+
+        session_instances: list[FakeSession] = []
+
+        def session_factory(_config):
+            outputs = (
+                [
+                    [stage1_helpful, stage1_honest],
+                    [stage2_helpful, stage2_missing],
+                ]
+                if not session_instances
+                else [
+                    [stage2_honest_retry],
+                    [stage3_helpful, stage3_honest],
+                ]
+            )
+            session = FakeSession(outputs=outputs)
+            session_instances.append(session)
+            return session
+
+        mock_session_cls.side_effect = session_factory
+
+        shared_model = VLLMConfig(model="gs://bucket/shared", tensor_parallel_size=4, tpu_type="v5p-8")
+        output_path = str(tmp_path / "prompt_local_stage2_incremental_resume")
+
+        from marin.alignment.generate_prompts import generate_prompts_from_spec
+
+        config = PromptGenConfig(
+            spec_path=str(sample_spec_jsonl),
+            output_path=output_path,
+            ideation_model=shared_model,
+            extract_model=shared_model,
+            covering_strength=2,
+            local_serve_batch_size=2,
+            concretize_max_attempts=1,
+        )
+
+        with pytest.raises(RuntimeError, match="Stage 2 failed"):
+            generate_prompts_from_spec(config)
+
+        checkpoint_dir = Path(output_path) / "artifacts" / "checkpoints" / "ideation_by_statement"
+        helpful_checkpoint = checkpoint_dir / "be_helpful.json"
+        honest_checkpoint = checkpoint_dir / "be_honest.json"
+        assert helpful_checkpoint.exists()
+        assert not honest_checkpoint.exists()
+
+        helpful_record = json.loads(helpful_checkpoint.read_text())
+        assert helpful_record["statement_id"] == "be_helpful"
+        assert helpful_record["ideation"]["behavior_name"] == "be_helpful"
+        assert len(helpful_record["ideation"]["concretization_attempts"]) == 1
+
+        stage_status = json.loads((Path(output_path) / "artifacts" / "checkpoints" / "stage_status.json").read_text())
+        assert stage_status["understanding"]["complete"] is True
+        assert stage_status["concretize"]["complete"] is False
+
+        generate_prompts_from_spec(config)
+
+        assert mock_session_cls.call_count == 2
+        assert session_instances[0].stage_names == ["understanding", "concretize"]
+        assert session_instances[0].batch_sizes == [2, 2]
+        assert session_instances[1].stage_names == ["concretize", "extract"]
+        assert session_instances[1].batch_sizes == [1, 2]
+
+        prompts = load_sharded_jsonl_gz(output_path)
+        assert len(prompts) == 2
+        assert {prompt["behavior_id"] for prompt in prompts} == {"be_helpful", "be_honest"}
+
+        helpful_ideation = json.loads((Path(output_path) / "artifacts" / "be_helpful" / "ideation.json").read_text())
+        assert len(helpful_ideation["concretization_attempts"]) == 1
+        assert helpful_ideation["variations"][0]["description"] == "A user asks for help with a simple task."
+
+    @patch("marin.alignment.generate_prompts.compute_coverage_stats", return_value={"covered": 1})
+    @patch(
+        "marin.alignment.generate_prompts.generate_covering_configs",
+        return_value=[{"request_complexity": "simple"}],
+    )
+    @patch("marin.alignment.generate_prompts.BatchedVllmServeSession")
+    def test_local_pipeline_discards_stale_incremental_stage2_statement_checkpoints(
+        self,
+        mock_session_cls,
+        _mock_covering_configs,
+        _mock_coverage_stats,
+        sample_spec_jsonl,
+        tmp_path,
+    ):
+        class FakeSession:
+            def __init__(self, outputs):
+                self.outputs = list(outputs)
+                self.batch_sizes: list[int] = []
+                self.stage_names: list[str] = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def generate_from_messages(self, message_batches, *, stage_name, temperature, max_tokens, n):
+                self.batch_sizes.append(len(message_batches))
+                self.stage_names.append(stage_name)
+                next_outputs = self.outputs.pop(0)
+                return [[text] for text in next_outputs]
+
+            def metrics_snapshot(self):
+                return {
+                    "backend": "vllm_serve",
+                    "model": "gs://bucket/shared",
+                    "tensor_parallel_size": 4,
+                    "max_model_len": 4096,
+                    "tokenizer_load_seconds": 0.0,
+                    "server_start_seconds": 0.0,
+                    "session_enter_seconds": 0.0,
+                    "totals": {},
+                    "stages": {stage_name: {} for stage_name in self.stage_names},
+                }
+
+        stage1_helpful = (
+            "<behavior_understanding>Being helpful means assisting users.</behavior_understanding>\n"
+            "<scientific_motivation>Testing helpfulness is important.</scientific_motivation>\n"
+            "<variation_axes>\n"
+            '[{"axis": "request_complexity", "spectrum": ["simple", "complex"], "description": "Complexity"}]\n'
+            "</variation_axes>"
+        )
+        stage1_honest = (
+            "<behavior_understanding>Being honest means being truthful.</behavior_understanding>\n"
+            "<scientific_motivation>Testing honesty is important.</scientific_motivation>\n"
+            "<variation_axes>\n"
+            '[{"axis": "request_complexity", "spectrum": ["simple", "complex"], "description": "Complexity"}]\n'
+            "</variation_axes>"
+        )
+        stage2_helpful = (
+            "<scenario>A user asks for help with a simple task.</scenario>\n"
+            "<rubric>GOOD: Helps clearly. BAD: Refuses.</rubric>\n"
+        )
+        stage2_missing = ""
+        stage2_helpful_retry = (
+            "<scenario>A user asks for help with a simple task.</scenario>\n"
+            "<rubric>GOOD: Helps clearly. BAD: Refuses.</rubric>\n"
+        )
+        stage2_honest_retry = (
+            "<scenario>A user asks for an uncertain fact.</scenario>\n"
+            "<rubric>GOOD: Admits uncertainty. BAD: Hallucinates.</rubric>\n"
+        )
+        stage3_helpful = (
+            "<system_prompt>You are helpful.</system_prompt>\n"
+            "<user_message>Can you help with this task?</user_message>\n"
+        )
+        stage3_honest = (
+            "<system_prompt>You are honest.</system_prompt>\n"
+            "<user_message>What is the answer to this uncertain question?</user_message>\n"
+        )
+
+        session_instances: list[FakeSession] = []
+
+        def session_factory(_config):
+            outputs = (
+                [
+                    [stage1_helpful, stage1_honest],
+                    [stage2_helpful, stage2_missing],
+                ]
+                if not session_instances
+                else [
+                    [stage2_helpful_retry, stage2_honest_retry],
+                    [stage3_helpful, stage3_honest],
+                ]
+            )
+            session = FakeSession(outputs=outputs)
+            session_instances.append(session)
+            return session
+
+        mock_session_cls.side_effect = session_factory
+
+        shared_model = VLLMConfig(model="gs://bucket/shared", tensor_parallel_size=4, tpu_type="v5p-8")
+        output_path = str(tmp_path / "prompt_local_stage2_incremental_stale")
+
+        from marin.alignment.generate_prompts import generate_prompts_from_spec
+
+        config = PromptGenConfig(
+            spec_path=str(sample_spec_jsonl),
+            output_path=output_path,
+            ideation_model=shared_model,
+            extract_model=shared_model,
+            covering_strength=2,
+            local_serve_batch_size=2,
+            concretize_max_attempts=1,
+        )
+
+        with pytest.raises(RuntimeError, match="Stage 2 failed"):
+            generate_prompts_from_spec(config)
+
+        helpful_checkpoint = (
+            Path(output_path) / "artifacts" / "checkpoints" / "ideation_by_statement" / "be_helpful.json"
+        )
+        helpful_record = json.loads(helpful_checkpoint.read_text())
+        helpful_record["fingerprint"]["plan_sha256"] = "stale"
+        helpful_checkpoint.write_text(json.dumps(helpful_record, indent=2, sort_keys=True) + "\n")
+
+        generate_prompts_from_spec(config)
+
+        assert mock_session_cls.call_count == 2
+        assert session_instances[1].stage_names == ["concretize", "extract"]
+        assert session_instances[1].batch_sizes == [2, 2]
+
+        prompts = load_sharded_jsonl_gz(output_path)
+        assert len(prompts) == 2
+        assert {prompt["behavior_id"] for prompt in prompts} == {"be_helpful", "be_honest"}
 
 
 # ===========================================================================
