@@ -37,3 +37,12 @@ This file is the paper trail for grug experiments.
 - Status: deleted
 - Purpose: historical head-to-head comparison.
 - Superseded by: template-first workflow centered on `experiments/grug/base/`.
+
+### grug-moe-resid-bottleneck
+- Path: `experiments/grug/moe_resid_bottleneck/`
+- Origin: `moe`
+- Introduced: TBD
+- Last known-good: TBD
+- Status: active
+- Purpose: MoE + residual bottleneck (residual lambdas + attention gates) for 10T gate experiments.
+- Issue: #4035
