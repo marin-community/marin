@@ -33,11 +33,11 @@ DEFAULT_EXCLUDE = re.compile(
     | (^|/)\.venv(/|$)
     | (^|/)node_modules(/|$)
     | (^|/)venv(/|$)
-    | ^docs/figures(/|$)
-    | ^docs/images(/|$)
-    | ^docs/reports(/|$)
-    | ^docs/static(/|$)
-    | ^tests/snapshot(/|$)
+    | (^|/)docs/figures(/|$)
+    | (^|/)docs/images(/|$)
+    | (^|/)docs/reports(/|$)
+    | (^|/)docs/static(/|$)
+    | (^|/)tests/snapshots(/|$)
     """,
     re.VERBOSE,
 )
