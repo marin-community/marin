@@ -54,6 +54,7 @@ import levanter.tracker.wandb
 import levanter.utils.logging
 from levanter.callbacks import Callback, CBInfo, JitCallback, LambdaCallback, StepInfo
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.attention_instability import AttentionInstabilityConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
 from levanter.config import JsonAtom
@@ -590,6 +591,15 @@ class Trainer:
         if self.config.watch.is_enabled:
             self.add_hook(self.config.watch.build(), every=self.config.watch.interval)
 
+        # Add attention instability callback if configured
+        if self.config.attention_instability.is_enabled:
+            attn_cb = self.config.attention_instability.build()
+            self.add_hook(attn_cb, every=self.config.attention_instability.interval)
+            if self.config.attention_instability.track_vanilla_max_logit:
+                from levanter.layers.attention import set_attn_logit_tracking
+
+                set_attn_logit_tracking(True)
+
         profiler = self.config.profiler
         total_prof_steps = profiler.resolve_num_profile_steps(num_train_steps=self.config.num_train_steps)
         if profiler.is_enabled and total_prof_steps > 0:
@@ -805,6 +815,7 @@ class TrainerConfig:
 
     tracker: TrackerConfig | Tuple[TrackerConfig, ...] = field(default_factory=WandbConfig)
     watch: WatchConfig = WatchConfig()
+    attention_instability: AttentionInstabilityConfig = AttentionInstabilityConfig()
     profiler: ProfilerConfig = ProfilerConfig()
 
     log_jaxprs: bool = True

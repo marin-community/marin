@@ -11,6 +11,7 @@ import jax
 from tqdm_loggable.auto import tqdm
 
 import levanter.tracker
+from levanter.callbacks.attention_instability import AttentionInstabilityCallback, AttentionInstabilityConfig
 from levanter.callbacks._core import Callback, CBInfo, JitCallback, LambdaCallback, StepInfo
 from levanter.callbacks._metrics import (
     _tqdm_logging_one_time_setup,
@@ -252,4 +253,6 @@ __all__ = [
     "pbar_logger",
     "CallbackStateView",
     "StateCallbackRunner",
+    "AttentionInstabilityCallback",
+    "AttentionInstabilityConfig",
 ]

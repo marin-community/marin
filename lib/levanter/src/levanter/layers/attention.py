@@ -53,6 +53,42 @@ from .rotary import RotaryEmbeddings, RotaryEmbeddingsConfig
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Max attention logit tracking (vanilla backend only)
+# ---------------------------------------------------------------------------
+# When enabled, ``simple_attention_with_dropout`` records the max pre-softmax
+# logit per call via ``jax.debug.callback``.  A host-side accumulator keeps
+# the running maximum across all attention layers in a single training step.
+# Fused backends (SPLASH, NVTE, JAX_FLASH) never materialise the logit
+# tensor, so this metric is unavailable for those paths.
+
+_track_attn_max_logit: bool = False
+_max_attn_logit_accumulator: float = float("-inf")
+
+
+def set_attn_logit_tracking(enabled: bool) -> None:
+    """Enable or disable max attention logit tracking for the vanilla backend."""
+    global _track_attn_max_logit
+    _track_attn_max_logit = enabled
+
+
+def reset_max_attn_logit() -> None:
+    """Reset the host-side max-logit accumulator.  Call once per training step."""
+    global _max_attn_logit_accumulator
+    _max_attn_logit_accumulator = float("-inf")
+
+
+def get_max_attn_logit() -> float:
+    """Return the max pre-softmax logit accumulated since the last reset."""
+    return _max_attn_logit_accumulator
+
+
+def _accumulate_max_logit(val) -> None:
+    """Host-side callback target — accumulates the running max."""
+    global _max_attn_logit_accumulator
+    _max_attn_logit_accumulator = max(_max_attn_logit_accumulator, float(val))
+
+
 class AttentionBackend(StrEnum):
     DEFAULT = "default"  # use the default attention type for the accelerator
     NVTE = "nvte"  # with Transformer Engine on NVIDIA GPUs
@@ -391,6 +427,14 @@ def simple_attention_with_dropout(
 
     if logits_soft_cap is not None:
         weights = hax.tanh(weights / logits_soft_cap) * logits_soft_cap
+
+    # Capture max pre-softmax logit before masking drives values to -1e9
+    if _track_attn_max_logit:
+        # Use the unmasked logits so the metric reflects actual QK magnitudes,
+        # not the mask sentinel.  This is a single reduce-max on an already-
+        # materialised tensor — negligible cost.
+        max_logit = jnp.max(weights.array)
+        jax.debug.callback(_accumulate_max_logit, max_logit)
 
     if m is not None:
         weights = haliax.where(m, weights, -1e9)
