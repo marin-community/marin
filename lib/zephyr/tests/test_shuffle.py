@@ -357,16 +357,15 @@ def test_arrow_external_sort_roundtrip(tmp_path):
     ]
     sort_dir = str(tmp_path / "ext_sort")
 
-    result = list(
+    result_tables = list(
         external_sort_merge(
             iter(tables),
             sort_keys=[(_ZEPHYR_SORT_KEY, "ascending")],
-            merge_key=lambda row: row[_ZEPHYR_SORT_KEY],
             external_sort_dir=sort_dir,
         )
     )
-    # Result rows contain all columns including _zephyr_sort_key; extract "a" values
-    a_values = [row["a"] for row in result]
+    combined = pa.concat_tables(result_tables)
+    a_values = combined.column("a").to_pylist()
     assert a_values == list(range(1, 10))
 
 
@@ -381,7 +380,6 @@ def test_arrow_external_sort_cleans_up(tmp_path):
         external_sort_merge(
             iter(tables),
             sort_keys=[(_ZEPHYR_SORT_KEY, "ascending")],
-            merge_key=lambda row: row[_ZEPHYR_SORT_KEY],
             external_sort_dir=sort_dir,
         )
     )

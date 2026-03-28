@@ -85,7 +85,7 @@ _SCATTER_MANIFEST_NAME = "scatter_metadata"
 _SCATTER_META_READ_CONCURRENCY = 256
 _SCATTER_READ_BUFFER_FRACTION = 0.25
 _SCATTER_MICRO_BATCH_SIZE = 64
-_SCATTER_ROW_GROUP_BYTES = 2 * 1024 * 1024  # 2 MB
+_SCATTER_ROW_GROUP_BYTES = 8 * 1024 * 1024  # 8 MB
 
 
 def is_zephyr_column(name: str) -> bool:
@@ -515,7 +515,7 @@ class _ShardBuffer:
         self._flush_micro()
         if not self.tables:
             return None
-        table = pa.Table.from_batches(self.tables, schema=self.schema)
+        table = pa.concat_tables([pa.Table.from_batches([b]) for b in self.tables], promote_options="default")
         sort_cols: list[tuple[str, str]] = [(_ZEPHYR_SORT_KEY, "ascending")]
         if _ZEPHYR_SORT_SECONDARY in table.column_names:
             sort_cols.append((_ZEPHYR_SORT_SECONDARY, "ascending"))
@@ -640,7 +640,7 @@ def _write_parquet_scatter(
             buf._flush_micro()
             if not buf.tables:
                 return
-            table = pa.Table.from_batches(buf.tables, schema=buf.schema)
+            table = pa.concat_tables([pa.Table.from_batches([b]) for b in buf.tables], promote_options="default")
             py_items = unwrap_items(table, pickled)
             combined = _apply_combiner(py_items, key_fn, combiner_fn)
             combined_buf = _ShardBuffer(shard_idx=buf.shard_idx, pickled=pickled, has_sort=sort_fn is not None)

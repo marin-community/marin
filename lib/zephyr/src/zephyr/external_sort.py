@@ -10,15 +10,13 @@ exhausting worker memory.
 Pass 1: batch Arrow table iterators into groups of EXTERNAL_SORT_FAN_IN,
 concatenate + sort in Arrow, write as Parquet run files.
 
-Pass 2: read run files, yield items via heapq.merge over Python iterators.
-Run files are deleted after the final merge completes.
+Pass 2: read run files back as Arrow tables, concat + sort, yield batches.
+Run files are deleted after the merge completes.
 """
 
-import heapq
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from itertools import islice
-from typing import Any
 
 import fsspec
 import pyarrow as pa
@@ -34,24 +32,16 @@ logger = logging.getLogger(__name__)
 EXTERNAL_SORT_FAN_IN = 500
 
 
-def _read_parquet_run(path: str) -> Iterator:
-    """Yield rows from a Parquet run file as Python dicts, one batch at a time."""
-    pf = pq.ParquetFile(path)
-    for batch in pf.iter_batches():
-        yield from batch.to_pylist()
-
-
 def external_sort_merge(
     chunk_tables_gen: Iterator[pa.Table],
     sort_keys: list[tuple[str, str]],
-    merge_key: Callable[[Any], Any],
     external_sort_dir: str,
-) -> Iterator:
-    """Two-pass external sort using Parquet spill files.
+) -> Iterator[pa.Table]:
+    """Two-pass external sort yielding sorted Arrow tables.
 
-    Pass 1: batch Arrow table iterators into groups of EXTERNAL_SORT_FAN_IN,
-    concatenate + sort in Arrow, write as Parquet run files.
-    Pass 2: read run files, yield items via heapq.merge over Python iterators.
+    Pass 1: batch tables into groups of EXTERNAL_SORT_FAN_IN,
+    concat + sort in Arrow, write as Parquet run files.
+    Pass 2: read run files back as Arrow tables, concat + sort, yield batches.
     """
     from zephyr.writers import ensure_parent_dir
 
@@ -82,9 +72,18 @@ def external_sort_merge(
     if not run_paths:
         return
 
-    run_iters = [_read_parquet_run(p) for p in run_paths]
     try:
-        yield from heapq.merge(*run_iters, key=merge_key)
+        if len(run_paths) == 1:
+            table = pq.read_table(run_paths[0])
+            for batch in table.to_batches(max_chunksize=100_000):
+                yield pa.Table.from_batches([batch], schema=table.schema)
+        else:
+            all_tables = [pq.read_table(p) for p in run_paths]
+            combined = pa.concat_tables(all_tables, promote_options="default")
+            indices = pc.sort_indices(combined, sort_keys=sort_keys)
+            sorted_table = combined.take(indices)
+            for batch in sorted_table.to_batches(max_chunksize=100_000):
+                yield pa.Table.from_batches([batch], schema=sorted_table.schema)
     finally:
         fs, _ = fsspec.core.url_to_fs(external_sort_dir)
         for path in run_paths:

@@ -14,7 +14,6 @@ import heapq
 import inspect
 import logging
 import os
-import pickle
 import zlib
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
@@ -193,7 +192,7 @@ def _find_group_boundaries(key_col: pa.ChunkedArray) -> Iterator[tuple[int, int,
 
     # Vectorized boundary detection: compare adjacent elements
     ne_mask = pc.not_equal(arr[:-1], arr[1:])
-    boundary_indices = pc.filter(pa.array(range(1, n), type=pa.int64()), ne_mask).to_pylist()
+    boundary_indices = pc.add(pc.indices_nonzero(ne_mask), 1).to_pylist()
 
     prev = 0
     for idx in boundary_indices:
@@ -234,14 +233,14 @@ def _arrow_reduce_gen(
         _ZEPHYR_PAYLOAD,
         _ZEPHYR_SORT_KEY,
         _ZEPHYR_SORT_SECONDARY,
-        is_zephyr_column,
         unwrap_items,
     )
 
+    force_external = os.environ.get("ZEPHYR_FORCE_EXTERNAL_MERGE", "").lower() in ("1", "true", "yes")
     use_external = (
         external_sort_dir is not None
         and isinstance(shard, ScatterShard)
-        and shard.needs_external_sort(_TaskResources.from_environment().memory_bytes)
+        and (force_external or shard.needs_external_sort(_TaskResources.from_environment().memory_bytes))
     )
 
     if use_external:
@@ -249,7 +248,6 @@ def _arrow_reduce_gen(
         first_tables = list(islice((t for it in shard.iterators for t in it.get_chunk_tables()), 1))
         if first_tables and _ZEPHYR_SORT_SECONDARY in first_tables[0].column_names:
             sort_keys.append((_ZEPHYR_SORT_SECONDARY, "ascending"))
-        pickled = any(_ZEPHYR_PAYLOAD in t.column_names for t in first_tables) if first_tables else False
 
         logger.info(
             "Arrow external sort triggered for shard with %d iterators, spilling to %s",
@@ -261,27 +259,22 @@ def _arrow_reduce_gen(
             for it in shard.iterators:
                 yield from it.get_chunk_tables()
 
-        has_secondary = len(sort_keys) > 1
+        all_tables = list(external_sort_merge(_chunk_tables(), sort_keys, external_sort_dir))
+        if not all_tables:
+            return
+        sorted_table = pa.concat_tables(all_tables, promote_options="default")
 
-        def _merge_key(row: dict) -> Any:
-            if has_secondary:
-                return (row[_ZEPHYR_SORT_KEY], row.get(_ZEPHYR_SORT_SECONDARY))
-            return row[_ZEPHYR_SORT_KEY]
-
-        merged_stream = external_sort_merge(_chunk_tables(), sort_keys, _merge_key, external_sort_dir)
-
-        def _unwrap_row(row: dict) -> Any:
-            if pickled:
-                return pickle.loads(row[_ZEPHYR_PAYLOAD])
-            return {k: v for k, v in row.items() if not is_zephyr_column(k)}
+        key_col = sorted_table.column(_ZEPHYR_SORT_KEY)
+        pickled = _ZEPHYR_PAYLOAD in sorted_table.column_names
 
         is_gen = inspect.isgeneratorfunction(reducer_fn)
-        for key, rows in groupby(merged_stream, key=lambda row: row[_ZEPHYR_SORT_KEY]):
-            items = (_unwrap_row(row) for row in rows)
+        for start, end, key_value in _find_group_boundaries(key_col):
+            group_table = sorted_table.slice(start, end - start)
+            group_items = unwrap_items(group_table, pickled)
             if is_gen:
-                yield from reducer_fn(key, items)
+                yield from reducer_fn(key_value, iter(group_items))
             else:
-                yield reducer_fn(key, items)
+                yield reducer_fn(key_value, iter(group_items))
         return
 
     sorted_table = _arrow_merge_sorted_chunks(shard)
