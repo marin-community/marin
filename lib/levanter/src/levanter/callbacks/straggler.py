@@ -7,7 +7,6 @@ import collections
 import logging as pylogging
 import statistics
 from dataclasses import dataclass, field
-from typing import Optional
 
 import jax
 

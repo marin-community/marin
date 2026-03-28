@@ -5,7 +5,6 @@
 
 from levanter.callbacks.straggler import (
     CHRONIC_STRAGGLER_THRESHOLD,
-    RankTimingStats,
     compute_rank_stats,
     update_ewma,
 )
