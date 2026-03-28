@@ -107,7 +107,6 @@ def build_pyspy_cmd(spec: CpuProfileSpec, py_spy_bin: str, output_path: str) -> 
         "--output",
         output_path,
         "--subprocesses",
-        "--nonblocking",
         *(["--native"] if spec.native else []),
     ]
 

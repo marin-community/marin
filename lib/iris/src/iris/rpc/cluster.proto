@@ -94,7 +94,7 @@ message CpuProfile {
     RAW = 3;            // Text output
   }
   Format format = 1;
-  int32 rate_hz = 2;    // Sample rate (default: 100)
+  int32 rate_hz = 2;    // Sample rate (default: 20)
   bool native = 3;  // Collect native (C/C++) frames via py-spy --native; default true when unset
 }
 
