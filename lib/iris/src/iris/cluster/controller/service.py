@@ -110,6 +110,7 @@ class UserStats:
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
+WORKDIR_FILE_OFFLOAD_THRESHOLD = 100 * 1024  # 100KB — externalize large workdir files to blob store
 
 # Soft cap on how long launch_job waits for a replaced job's worker-bound
 # attempts to finalize before force-reaping them. Sized to exceed the worst-
@@ -1193,6 +1194,23 @@ class ControllerServiceImpl:
             new_request.CopyFrom(request)
             new_request.ClearField("bundle_blob")
             new_request.bundle_id = bundle_id
+            request = new_request
+
+        # Externalize large workdir files to the blob store so request_proto
+        # (and every RunTaskRequest dispatch) stays small.
+        large_files = {
+            name: data
+            for name, data in request.entrypoint.workdir_files.items()
+            if len(data) > WORKDIR_FILE_OFFLOAD_THRESHOLD
+        }
+        if large_files:
+            new_request = cluster_pb2.Controller.LaunchJobRequest()
+            new_request.CopyFrom(request)
+            for name, data in large_files.items():
+                blob_id = self._bundle_store.write_blob(data)
+                del new_request.entrypoint.workdir_files[name]
+                new_request.entrypoint.workdir_file_refs[name] = blob_id
+                logger.info("Externalized workdir file %s (%d bytes) as blob %s", name, len(data), blob_id[:12])
             request = new_request
 
         # Auto-inject device constraints from the resource spec.
