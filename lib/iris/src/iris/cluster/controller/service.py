@@ -851,7 +851,7 @@ class ControllerServiceImpl:
         return self._bundle_store.get_zip(bundle_id)
 
     def blob_data(self, blob_id: str) -> bytes:
-        return self._bundle_store.get_zip(blob_id)
+        return self._bundle_store.get_blob(blob_id)
 
     def _get_autoscaler_pending_hints(self) -> dict[str, PendingHint]:
         """Build autoscaler-based pending hints keyed by job id."""

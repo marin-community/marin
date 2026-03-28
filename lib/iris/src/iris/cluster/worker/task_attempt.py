@@ -629,7 +629,7 @@ class TaskAttempt:
         assert self.workdir is not None
         workdir_files = dict(self.request.entrypoint.workdir_files)
         for name, blob_id in self.request.entrypoint.workdir_file_refs.items():
-            workdir_files[name] = self._bundle_store.get_or_fetch(blob_id, f"blobs/{blob_id}")
+            workdir_files[name] = self._bundle_store.get_blob(blob_id)
         self._runtime.stage_bundle(
             bundle_id=self.request.bundle_id,
             workdir=self.workdir,
